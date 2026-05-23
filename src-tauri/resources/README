@@ -1,0 +1,2 @@
+# This directory is for bundled Python runtime resources.
+# Run download-python.ps1 (Windows) or download-python.sh (macOS/Linux) to download the Python runtime.

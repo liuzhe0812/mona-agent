@@ -1,0 +1,927 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Nanobot Agent 架构分析</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #232733;
+    --border: #2e3347;
+    --text: #e4e7f1;
+    --text2: #9ca3b8;
+    --accent: #6c8cff;
+    --accent2: #a78bfa;
+    --green: #4ade80;
+    --orange: #fbbf24;
+    --red: #f87171;
+    --cyan: #22d3ee;
+    --pink: #f472b6;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.7;
+    overflow-x: hidden;
+  }
+  .hero {
+    position: relative;
+    padding: 80px 40px 60px;
+    text-align: center;
+    background: linear-gradient(135deg, #1a1d27 0%, #0f1117 50%, #1a1d27 100%);
+    border-bottom: 1px solid var(--border);
+    overflow: hidden;
+  }
+  .hero::before {
+    content: '';
+    position: absolute;
+    top: -50%;
+    left: -50%;
+    width: 200%;
+    height: 200%;
+    background: radial-gradient(ellipse at 30% 50%, rgba(108,140,255,0.06) 0%, transparent 60%),
+                radial-gradient(ellipse at 70% 50%, rgba(167,139,250,0.06) 0%, transparent 60%);
+    animation: drift 20s ease-in-out infinite alternate;
+  }
+  @keyframes drift { 0% { transform: translate(0,0); } 100% { transform: translate(-3%,2%); } }
+  .hero h1 {
+    position: relative;
+    font-size: 3em;
+    font-weight: 800;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin-bottom: 16px;
+  }
+  .hero p {
+    position: relative;
+    font-size: 1.15em;
+    color: var(--text2);
+    max-width: 700px;
+    margin: 0 auto;
+  }
+  .container { max-width: 1100px; margin: 0 auto; padding: 40px 24px; }
+  h2 {
+    font-size: 1.8em;
+    font-weight: 700;
+    margin: 56px 0 24px;
+    padding-bottom: 12px;
+    border-bottom: 2px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  h2 .icon { font-size: 0.85em; }
+  h3 {
+    font-size: 1.3em;
+    font-weight: 600;
+    margin: 32px 0 14px;
+    color: var(--accent);
+  }
+  h4 {
+    font-size: 1.1em;
+    font-weight: 600;
+    margin: 20px 0 10px;
+    color: var(--accent2);
+  }
+  p { margin-bottom: 14px; color: var(--text); }
+  ul, ol { margin: 10px 0 18px 24px; }
+  li { margin-bottom: 6px; }
+  code {
+    background: var(--surface2);
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+    font-size: 0.9em;
+    color: var(--cyan);
+  }
+  pre {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 18px 22px;
+    overflow-x: auto;
+    margin: 14px 0 20px;
+    font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+    font-size: 0.88em;
+    line-height: 1.6;
+  }
+  .card-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 18px;
+    margin: 20px 0;
+  }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 22px;
+    transition: border-color 0.2s, transform 0.2s;
+  }
+  .card:hover { border-color: var(--accent); transform: translateY(-2px); }
+  .card h4 { margin-top: 0; }
+  .card p { color: var(--text2); font-size: 0.93em; margin-bottom: 0; }
+  .badge {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 12px;
+    font-size: 0.78em;
+    font-weight: 600;
+    margin-right: 6px;
+  }
+  .badge-blue { background: rgba(108,140,255,0.15); color: var(--accent); }
+  .badge-green { background: rgba(74,222,128,0.15); color: var(--green); }
+  .badge-orange { background: rgba(251,191,36,0.15); color: var(--orange); }
+  .badge-pink { background: rgba(244,114,182,0.15); color: var(--pink); }
+  .badge-cyan { background: rgba(34,211,238,0.15); color: var(--cyan); }
+  .flow-diagram {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 24px 0;
+    padding: 24px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+  }
+  .flow-node {
+    padding: 10px 18px;
+    border-radius: 8px;
+    font-weight: 600;
+    font-size: 0.9em;
+    text-align: center;
+    white-space: nowrap;
+  }
+  .flow-arrow { color: var(--text2); font-size: 1.3em; }
+  .fn-blue { background: rgba(108,140,255,0.15); border: 1px solid rgba(108,140,255,0.3); color: var(--accent); }
+  .fn-green { background: rgba(74,222,128,0.15); border: 1px solid rgba(74,222,128,0.3); color: var(--green); }
+  .fn-orange { background: rgba(251,191,36,0.15); border: 1px solid rgba(251,191,36,0.3); color: var(--orange); }
+  .fn-pink { background: rgba(244,114,182,0.15); border: 1px solid rgba(244,114,182,0.3); color: var(--pink); }
+  .fn-cyan { background: rgba(34,211,238,0.15); border: 1px solid rgba(34,211,238,0.3); color: var(--cyan); }
+  .fn-purple { background: rgba(167,139,250,0.15); border: 1px solid rgba(167,139,250,0.3); color: var(--accent2); }
+  .state-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 16px 0;
+  }
+  .state-table th, .state-table td {
+    padding: 10px 16px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+  }
+  .state-table th {
+    background: var(--surface2);
+    font-weight: 600;
+    color: var(--accent);
+    font-size: 0.9em;
+  }
+  .state-table td { font-size: 0.93em; }
+  .state-table tr:hover td { background: rgba(108,140,255,0.04); }
+  .toc {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 24px 30px;
+    margin: 24px 0;
+  }
+  .toc h3 { margin-top: 0; color: var(--text); }
+  .toc ol { margin-left: 20px; }
+  .toc li { margin-bottom: 5px; }
+  .toc a { color: var(--accent); text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+  .highlight-box {
+    background: rgba(108,140,255,0.06);
+    border-left: 3px solid var(--accent);
+    padding: 16px 20px;
+    border-radius: 0 8px 8px 0;
+    margin: 16px 0;
+  }
+  .highlight-box p { margin-bottom: 0; }
+  .section-divider {
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--border), transparent);
+    margin: 48px 0;
+  }
+  @media (max-width: 768px) {
+    .hero h1 { font-size: 2em; }
+    .container { padding: 24px 16px; }
+    .card-grid { grid-template-columns: 1fr; }
+    .flow-diagram { flex-direction: column; }
+    .flow-arrow { transform: rotate(90deg); }
+  }
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <h1>🤖 Nanobot Agent 架构分析</h1>
+  <p>一个功能完备的多通道 AI Agent 框架，支持工具调用、记忆管理、子代理调度、定时任务与多平台消息接入</p>
+</div>
+
+<div class="container">
+
+<div class="toc">
+  <h3>📑 目录</h3>
+  <ol>
+    <li><a href="#overview">项目概览</a></li>
+    <li><a href="#architecture">整体架构</a></li>
+    <li><a href="#core-loop">核心处理循环</a></li>
+    <li><a href="#state-machine">状态机机制</a></li>
+    <li><a href="#runner">AgentRunner 执行引擎</a></li>
+    <li><a href="#tools">工具系统</a></li>
+    <li><a href="#memory">记忆与上下文管理</a></li>
+    <li><a href="#channels">多通道系统</a></li>
+    <li><a href="#providers">LLM Provider 抽象层</a></li>
+    <li><a href="#subagent">子代理系统</a></li>
+    <li><a href="#skills">技能系统</a></li>
+    <li><a href="#session">会话管理</a></li>
+    <li><a href="#dream">Dream 记忆整理</a></li>
+    <li><a href="#safety">安全机制</a></li>
+    <li><a href="#summary">总结</a></li>
+  </ol>
+</div>
+
+<!-- ==================== 1. 项目概览 ==================== -->
+<h2 id="overview"><span class="icon">📋</span> 项目概览</h2>
+
+<p>Nanobot 是一个用 Python 编写的生产级 AI Agent 框架，其核心设计理念是<strong>事件驱动 + 状态机 + 工具循环</strong>。它能够同时接入多个聊天平台（Telegram、Discord、Slack、微信、飞书等），通过统一的 MessageBus 进行消息路由，使用 LLM 进行推理和工具调用，并具备长期记忆、上下文压缩、子代理调度等高级能力。</p>
+
+<div class="card-grid">
+  <div class="card">
+    <h4>🔗 多通道接入</h4>
+    <p>支持 15+ 聊天平台：Telegram、Discord、Slack、微信、飞书、钉钉、QQ、WhatsApp、Signal、Matrix、MS Teams、Email、WebSocket WebUI 等</p>
+  </div>
+  <div class="card">
+    <h4>🛠 丰富工具集</h4>
+    <p>文件读写、Shell 执行、代码搜索、Web 搜索/抓取、图片生成、MCP 协议、定时任务、消息发送等，支持插件扩展</p>
+  </div>
+  <div class="card">
+    <h4>🧠 智能记忆</h4>
+    <p>长期记忆 (MEMORY.md)、会话压缩 (Consolidator)、自动整理 (Dream)、历史归档，支持 Git 版本追踪</p>
+  </div>
+  <div class="card">
+    <h4>🤝 子代理调度</h4>
+    <p>支持后台异步子代理执行，结果通过消息总线注入主代理上下文，实现并行任务处理</p>
+  </div>
+</div>
+
+<!-- ==================== 2. 整体架构 ==================== -->
+<h2 id="architecture"><span class="icon">🏗</span> 整体架构</h2>
+
+<p>Nanobot 采用<strong>分层解耦</strong>架构，核心数据流如下：</p>
+
+<div class="flow-diagram">
+  <div class="flow-node fn-green">用户消息<br><small>(Telegram/Slack/...)</small></div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-node fn-blue">Channel<br><small>(BaseChannel)</small></div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-node fn-orange">MessageBus<br><small>(Inbound Queue)</small></div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-node fn-pink">AgentLoop<br><small>(状态机)</small></div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-node fn-cyan">AgentRunner<br><small>(LLM+工具循环)</small></div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-node fn-purple">LLM Provider<br><small>(OpenAI/Anthropic/...)</small></div>
+</div>
+
+<div class="flow-diagram">
+  <div class="flow-node fn-purple">LLM Response<br><small>(工具调用/文本)</small></div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-node fn-cyan">ToolRegistry<br><small>(工具执行)</small></div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-node fn-pink">AgentLoop<br><small>(迭代/响应)</small></div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-node fn-orange">MessageBus<br><small>(Outbound Queue)</small></div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-node fn-blue">Channel<br><small>(发送响应)</small></div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-node fn-green">用户<br><small>(收到回复)</small></div>
+</div>
+
+<h3>核心模块关系</h3>
+
+<pre>
+nanobot/
+├── nanobot.py            # Nanobot 门面类 (SDK 入口)
+├── __main__.py           # CLI 入口
+├── agent/
+│   ├── loop.py           # AgentLoop — 核心处理引擎 + 状态机
+│   ├── runner.py         # AgentRunner — LLM+工具迭代执行器
+│   ├── context.py        # ContextBuilder — 系统提示词与上下文构建
+│   ├── memory.py         # MemoryStore / Consolidator / Dream
+│   ├── subagent.py       # SubagentManager — 子代理管理
+│   ├── hook.py           # AgentHook — 生命周期钩子
+│   ├── autocompact.py    # AutoCompact — 空闲会话自动压缩
+│   ├── skills.py         # SkillsLoader — 技能加载器
+│   ├── model_presets.py  # 模型预设管理
+│   └── tools/            # 工具系统
+│       ├── base.py       # Tool 抽象基类 + Schema 验证
+│       ├── registry.py   # ToolRegistry — 工具注册表
+│       ├── loader.py     # ToolLoader — 插件发现与注册
+│       ├── filesystem.py # 文件读写工具
+│       ├── shell.py      # Shell 执行工具
+│       ├── search.py     # 代码搜索工具
+│       ├── web.py        # Web 搜索/抓取工具
+│       ├── spawn.py      # 子代理生成工具
+│       ├── cron.py       # 定时任务工具
+│       ├── mcp.py        # MCP 协议工具
+│       ├── image_generation.py  # 图片生成工具
+│       └── ...
+├── bus/
+│   ├── events.py         # InboundMessage / OutboundMessage
+│   └── queue.py          # MessageBus — 异步消息队列
+├── channels/             # 多通道实现
+│   ├── base.py           # BaseChannel 抽象基类
+│   ├── manager.py        # ChannelManager — 通道管理器
+│   ├── telegram.py / discord.py / slack.py / ...
+├── providers/            # LLM Provider 抽象层
+│   ├── base.py           # LLMProvider 抽象基类
+│   ├── factory.py        # Provider 工厂
+│   ├── openai_compat_provider.py
+│   ├── anthropic_provider.py
+│   └── ...
+├── session/
+│   ├── manager.py        # SessionManager — 会话持久化
+│   └── goal_state.py     # 目标状态管理
+├── config/               # 配置系统
+├── cron/                 # 定时任务服务
+├── security/             # 安全模块
+├── api/                  # OpenAI 兼容 API
+└── webui/                # Web UI 后端
+</pre>
+
+<!-- ==================== 3. 核心处理循环 ==================== -->
+<h2 id="core-loop"><span class="icon">🔄</span> 核心处理循环</h2>
+
+<p><code>AgentLoop</code> 是整个系统的核心处理引擎，它承担以下职责：</p>
+
+<ol>
+  <li>从 MessageBus 消费入站消息</li>
+  <li>构建上下文（历史、记忆、技能）</li>
+  <li>调用 LLM 进行推理</li>
+  <li>执行工具调用</li>
+  <li>将响应发送回 MessageBus</li>
+</ol>
+
+<h3>消息处理主循环</h3>
+
+<pre>async def run(self):
+    while self._running:
+        msg = await self.bus.consume_inbound()  # 阻塞等待消息
+
+        # 1. 优先级命令直接处理（如 /stop）
+        if self.commands.is_priority(raw):
+            await self._dispatch_command_inline(msg, ...)
+            continue
+
+        # 2. 如果该会话已有活跃任务，注入 pending queue
+        if effective_key in self._pending_queues:
+            self._pending_queues[effective_key].put_nowait(msg)
+            continue
+
+        # 3. 否则创建新任务处理
+        task = asyncio.create_task(self._dispatch(msg))</pre>
+
+<div class="highlight-box">
+  <p><strong>关键设计：</strong>每个会话（session_key）有独立的 asyncio.Lock，保证同一会话的消息串行处理，不同会话之间并发执行。同时通过 <code>_concurrency_gate</code>（Semaphore）限制全局并发请求数。</p>
+</div>
+
+<h3>中途消息注入 (Mid-turn Injection)</h3>
+
+<p>当一个会话正在处理消息时，新到达的消息不会排队等待，而是被路由到 <code>pending_queue</code>。AgentRunner 在每次工具执行完毕后，会通过 <code>injection_callback</code> 检查是否有待注入的消息，将其作为后续 user 消息追加到对话中，实现"边处理边接收"的能力。</p>
+
+<pre># AgentRunner 中的注入检查点
+# 1. 工具执行完毕后
+_drained, injection_cycles = await self._try_drain_injections(
+    spec, messages, None, injection_cycles, phase="after tool execution")
+
+# 2. 最终响应后
+should_continue, injection_cycles = await self._try_drain_injections(
+    spec, messages, assistant_message, injection_cycles,
+    phase="after final response", iteration=iteration)</pre>
+
+<!-- ==================== 4. 状态机机制 ==================== -->
+<h2 id="state-machine"><span class="icon">⚙️</span> 状态机机制</h2>
+
+<p><code>AgentLoop._process_message()</code> 使用事件驱动的有限状态机来处理每条消息。每个状态有对应的 handler 方法，handler 返回事件字符串，驱动状态转换。</p>
+
+<h3>状态定义</h3>
+
+<table class="state-table">
+  <tr><th>状态</th><th>Handler</th><th>说明</th></tr>
+  <tr><td><span class="badge badge-blue">RESTORE</span></td><td><code>_state_restore</code></td><td>恢复检查点、提取文档媒体、初始化会话</td></tr>
+  <tr><td><span class="badge badge-green">COMPACT</span></td><td><code>_state_compact</code></td><td>自动压缩空闲会话（AutoCompact）</td></tr>
+  <tr><td><span class="badge badge-orange">COMMAND</span></td><td><code>_state_command</code></td><td>命令路由：快捷命令直接返回，否则进入 BUILD</td></tr>
+  <tr><td><span class="badge badge-pink">BUILD</span></td><td><code>_state_build</code></td><td>构建 LLM 上下文：历史、系统提示、工具上下文</td></tr>
+  <tr><td><span class="badge badge-cyan">RUN</span></td><td><code>_state_run</code></td><td>执行 AgentRunner（LLM+工具迭代循环）</td></tr>
+  <tr><td><span class="badge badge-blue">SAVE</span></td><td><code>_state_save</code></td><td>保存回合消息到会话、触发后台压缩</td></tr>
+  <tr><td><span class="badge badge-green">RESPOND</span></td><td><code>_state_respond</code></td><td>组装出站消息（处理 MessageTool 抑制等）</td></tr>
+  <tr><td><span class="badge badge-orange">DONE</span></td><td>—</td><td>终态，返回出站消息</td></tr>
+</table>
+
+<h3>状态转换表</h3>
+
+<pre>_TRANSITIONS = {
+    (RESTORE,  "ok"):       COMPACT,
+    (COMPACT,  "ok"):       COMMAND,
+    (COMMAND,  "dispatch"): BUILD,      # 非快捷命令 → 构建上下文
+    (COMMAND,  "shortcut"): DONE,       # 快捷命令 → 直接返回
+    (BUILD,    "ok"):       RUN,
+    (RUN,      "ok"):       SAVE,
+    (SAVE,     "ok"):       RESPOND,
+    (RESPOND,  "ok"):       DONE,
+}</pre>
+
+<div class="highlight-box">
+  <p><strong>设计优势：</strong>状态机模式使消息处理流程清晰可追踪，每个状态的职责单一，便于调试和扩展。通过 <code>StateTraceEntry</code> 记录每个状态的耗时和事件，支持性能分析。</p>
+</div>
+
+<!-- ==================== 5. AgentRunner ==================== -->
+<h2 id="runner"><span class="icon">🏃</span> AgentRunner 执行引擎</h2>
+
+<p><code>AgentRunner</code> 是 LLM + 工具的迭代执行引擎，负责核心的"推理→工具调用→结果反馈→再推理"循环。它是无状态的，所有配置通过 <code>AgentRunSpec</code> 传入。</p>
+
+<h3>执行流程</h3>
+
+<div class="flow-diagram">
+  <div class="flow-node fn-blue">构建请求</div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-node fn-purple">调用 LLM</div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-node fn-orange">解析响应</div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-node fn-green">有工具调用?</div>
+  <div class="flow-arrow">→ 是</div>
+  <div class="flow-node fn-pink">执行工具</div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-node fn-blue">构建请求</div>
+</div>
+<div class="flow-diagram">
+  <div class="flow-node fn-green">有工具调用?</div>
+  <div class="flow-arrow">→ 否</div>
+  <div class="flow-node fn-cyan">返回最终响应</div>
+</div>
+
+<h3>上下文治理 (Context Governance)</h3>
+
+<p>每次迭代前，AgentRunner 会对消息列表进行多层治理，确保不超出上下文窗口：</p>
+
+<ol>
+  <li><strong>清理孤立工具结果</strong> (<code>_drop_orphan_tool_results</code>)：移除没有匹配 assistant tool_call 的 tool 消息</li>
+  <li><strong>回填缺失工具结果</strong> (<code>_backfill_missing_tool_results</code>)：为没有对应 tool 消息的 tool_call 插入错误占位</li>
+  <li><strong>微压缩</strong> (<code>_microcompact</code>)：将旧的 compactable 工具结果替换为一行摘要</li>
+  <li><strong>工具结果预算</strong> (<code>_apply_tool_result_budget</code>)：截断过长的工具结果</li>
+  <li><strong>历史裁剪</strong> (<code>_snip_history</code>)：当 token 估算超出预算时，从头部裁剪历史消息</li>
+</ol>
+
+<h3>工具并发执行</h3>
+
+<p>工具调用支持并发执行。通过 <code>concurrency_safe</code> 属性标记只读工具，多个只读工具可以在同一批次并发执行，非并发安全工具串行执行。</p>
+
+<pre># 工具分批策略
+def _partition_tool_batches(self, spec, tool_calls):
+    for tool_call in tool_calls:
+        tool = spec.tools.get(tool_call.name)
+        can_batch = bool(tool and tool.concurrency_safe)
+        if can_batch:
+            current.append(tool_call)  # 加入并发批次
+        else:
+            batches.append([tool_call])  # 独立批次，串行执行</pre>
+
+<h3>错误恢复机制</h3>
+
+<ul>
+  <li><strong>空响应重试</strong>：LLM 返回空内容时，最多重试 2 次，之后尝试 finalization retry（不带工具调用）</li>
+  <li><strong>输出截断恢复</strong>：<code>finish_reason=length</code> 时，追加恢复消息让 LLM 继续</li>
+  <li><strong>运行时检查点</strong>：在工具执行期间定期保存检查点到会话元数据，中断后可恢复</li>
+</ul>
+
+<!-- ==================== 6. 工具系统 ==================== -->
+<h2 id="tools"><span class="icon">🛠</span> 工具系统</h2>
+
+<p>Nanobot 的工具系统采用<strong>插件化架构</strong>，支持内置工具、MCP 工具和外部插件三种来源。</p>
+
+<h3>Tool 抽象基类</h3>
+
+<pre>class Tool(ABC):
+    @property
+    @abstractmethod
+    def name(self) -> str: ...          # 工具名称
+
+    @property
+    @abstractmethod
+    def description(self) -> str: ...   # 工具描述
+
+    @property
+    @abstractmethod
+    def parameters(self) -> dict: ...   # JSON Schema 参数定义
+
+    @property
+    def read_only(self) -> bool: ...    # 是否只读（可并发）
+
+    @property
+    def concurrency_safe(self) -> bool: # 是否可并发执行
+        return self.read_only and not self.exclusive
+
+    @abstractmethod
+    async def execute(self, **kwargs) -> Any: ...  # 执行工具</pre>
+
+<h3>工具注册与发现</h3>
+
+<p><code>ToolLoader</code> 通过 Python 包扫描 + <code>entry_points</code> 插件机制自动发现和注册工具：</p>
+
+<ol>
+  <li><strong>包扫描</strong>：遍历 <code>nanobot.agent.tools</code> 包下的所有模块，发现 <code>Tool</code> 子类</li>
+  <li><strong>Entry Points</strong>：加载通过 <code>nanobot.tools</code> 组注册的外部插件</li>
+  <li><strong>作用域过滤</strong>：通过 <code>_scopes</code> 属性区分 core/subagent 作用域</li>
+  <li><strong>启用检查</strong>：通过 <code>enabled(ctx)</code> 类方法根据配置决定是否注册</li>
+</ol>
+
+<h3>内置工具一览</h3>
+
+<div class="card-grid">
+  <div class="card">
+    <h4><span class="badge badge-blue">文件</span> filesystem</h4>
+    <p>read_file, write_file, edit_file, list_dir, apply_patch — 文件读写与编辑</p>
+  </div>
+  <div class="card">
+    <h4><span class="badge badge-green">执行</span> shell</h4>
+    <p>exec — 在沙箱中执行 Shell 命令，支持超时、工作目录、环境变量</p>
+  </div>
+  <div class="card">
+    <h4><span class="badge badge-orange">搜索</span> search</h4>
+    <p>grep, find_files — 代码搜索与文件查找</p>
+  </div>
+  <div class="card">
+    <h4><span class="badge badge-pink">Web</span> web</h4>
+    <p>web_search, web_fetch — 网络搜索与网页抓取</p>
+  </div>
+  <div class="card">
+    <h4><span class="badge badge-cyan">调度</span> spawn</h4>
+    <p>spawn — 生成后台子代理执行任务</p>
+  </div>
+  <div class="card">
+    <h4><span class="badge badge-blue">定时</span> cron</h4>
+    <p>cron_schedule, cron_list, cron_remove — 定时任务管理</p>
+  </div>
+  <div class="card">
+    <h4><span class="badge badge-green">消息</span> message</h4>
+    <p>message — 向用户发送消息（支持抑制主响应）</p>
+  </div>
+  <div class="card">
+    <h4><span class="badge badge-orange">图片</span> image_generation</h4>
+    <p>generate_image — AI 图片生成（多 Provider 支持）</p>
+  </div>
+  <div class="card">
+    <h4><span class="badge badge-pink">MCP</span> mcp</h4>
+    <p>Model Context Protocol — 连接外部 MCP 服务器扩展工具</p>
+  </div>
+  <div class="card">
+    <h4><span class="badge badge-cyan">自省</span> self</h4>
+    <p>my — 运行时状态查看与模型切换</p>
+  </div>
+</div>
+
+<!-- ==================== 7. 记忆与上下文管理 ==================== -->
+<h2 id="memory"><span class="icon">🧠</span> 记忆与上下文管理</h2>
+
+<p>Nanobot 拥有三层记忆体系，从短期到长期逐级管理：</p>
+
+<h3>1. 会话历史 (Session History)</h3>
+<p>存储在 <code>SessionManager</code> 中，每个会话独立维护完整的消息历史。支持 token 预算限制和历史回放窗口。</p>
+
+<h3>2. 上下文压缩 (Consolidator)</h3>
+<p>当会话 prompt token 接近上下文窗口限制时，Consolidator 自动触发：</p>
+
+<ol>
+  <li>估算当前 prompt token 数</li>
+  <li>若超出预算，选取用户轮次边界作为压缩点</li>
+  <li>将旧消息通过 LLM 总结为摘要</li>
+  <li>摘要写入 <code>history.jsonl</code>，旧消息从会话中移除</li>
+  <li>最多执行 5 轮压缩，直到 token 在安全范围内</li>
+</ol>
+
+<h3>3. 长期记忆 (MemoryStore)</h3>
+<p>基于文件系统的持久化记忆：</p>
+
+<ul>
+  <li><code>MEMORY.md</code> — 长期事实记忆，由 Dream 自动维护</li>
+  <li><code>SOUL.md</code> — Agent 人格定义</li>
+  <li><code>USER.md</code> — 用户偏好信息</li>
+  <li><code>history.jsonl</code> — 追加式历史日志，带 cursor 游标</li>
+</ul>
+
+<h3>上下文构建 (ContextBuilder)</h3>
+
+<p>每次 LLM 调用前，ContextBuilder 组装完整的系统提示词：</p>
+
+<pre>def build_system_prompt(self):
+    parts = [
+        self._get_identity(channel),       # 身份 + 平台策略
+        self._load_bootstrap_files(),       # AGENTS.md / SOUL.md / USER.md
+        render_template("tool_contract.md"),# 工具使用契约
+        self.memory.get_memory_context(),   # 长期记忆
+        always_skills_content,              # 常驻技能
+        skills_summary,                     # 技能摘要（按需加载）
+        recent_history,                     # 最近历史条目
+        session_summary,                    # 归档上下文摘要
+    ]
+    return "\n\n---\n\n".join(parts)</pre>
+
+<div class="highlight-box">
+  <p><strong>渐进式技能加载：</strong>技能分为"常驻"（always=true）和"按需"两种。常驻技能完整注入系统提示词，按需技能仅提供摘要，Agent 可通过 <code>read_file</code> 工具按需读取完整内容，有效节省 token。</p>
+</div>
+
+<!-- ==================== 8. 多通道系统 ==================== -->
+<h2 id="channels"><span class="icon">📡</span> 多通道系统</h2>
+
+<p>Nanobot 通过 <code>BaseChannel</code> 抽象和 <code>ChannelManager</code> 管理器实现多平台统一接入。</p>
+
+<h3>BaseChannel 抽象接口</h3>
+
+<pre>class BaseChannel(ABC):
+    async def start(self) -> None: ...       # 启动通道监听
+    async def stop(self) -> None: ...        # 停止通道
+    async def send(self, msg) -> None: ...   # 发送消息
+    async def send_delta(self, ...) -> None: # 流式发送（可选）
+    async def send_reasoning_delta(self, ...): # 推理流（可选）
+
+    async def _handle_message(self, sender_id, chat_id, content, ...):
+        # 权限检查 → 配对码 → 发布到 MessageBus
+        if not self.is_allowed(sender_id): ...
+        await self.bus.publish_inbound(msg)</pre>
+
+<h3>ChannelManager 职责</h3>
+
+<ul>
+  <li><strong>通道初始化</strong>：根据配置自动发现和实例化启用的通道</li>
+  <li><strong>出站消息分发</strong>：从 MessageBus 消费出站消息，路由到对应通道</li>
+  <li><strong>流式消息合并</strong>：合并连续的 stream_delta 消息，减少 API 调用</li>
+  <li><strong>重复消息抑制</strong>：基于内容指纹去重，避免重复发送</li>
+  <li><strong>发送重试</strong>：指数退避重试（1s, 2s, 4s）</li>
+</ul>
+
+<h3>权限与配对</h3>
+
+<p>通道支持三种权限模式：</p>
+<ol>
+  <li><strong>白名单模式</strong>：<code>allowFrom: ["*"]</code> 或指定用户 ID</li>
+  <li><strong>配对码模式</strong>：未授权用户收到配对码，需在配置中确认</li>
+  <li><strong>拒绝模式</strong>：群聊中未授权用户的消息被静默忽略</li>
+</ol>
+
+<!-- ==================== 9. LLM Provider ==================== -->
+<h2 id="providers"><span class="icon">🔌</span> LLM Provider 抽象层</h2>
+
+<p>Nanobot 通过 <code>LLMProvider</code> 抽象层支持多种 LLM 后端：</p>
+
+<div class="card-grid">
+  <div class="card">
+    <h4>OpenAI 兼容</h4>
+    <p>OpenAI、Azure OpenAI、vLLM、Ollama 等兼容 API</p>
+  </div>
+  <div class="card">
+    <h4>Anthropic</h4>
+    <p>Claude 系列模型，支持 Extended Thinking</p>
+  </div>
+  <div class="card">
+    <h4>AWS Bedrock</h4>
+    <p>AWS 托管模型服务</p>
+  </div>
+  <div class="card">
+    <h4>GitHub Copilot</h4>
+    <p>GitHub Copilot API 接入</p>
+  </div>
+</div>
+
+<h3>核心能力</h3>
+
+<ul>
+  <li><strong>自动重试</strong>：瞬态错误（429/5xx/超时）自动重试，支持 standard 和 persistent 两种模式</li>
+  <li><strong>流式输出</strong>：<code>chat_stream</code> 支持增量内容、推理思维和工具调用增量</li>
+  <li><strong>角色交替强制</strong>：<code>_enforce_role_alternation</code> 合并连续同角色消息</li>
+  <li><strong>图片降级</strong>：非瞬态错误时自动移除图片内容重试</li>
+  <li><strong>模型预设</strong>：支持运行时切换模型预设（model preset），动态调整 provider/model/参数</li>
+</ul>
+
+<!-- ==================== 10. 子代理系统 ==================== -->
+<h2 id="subagent"><span class="icon">🤝</span> 子代理系统</h2>
+
+<p><code>SubagentManager</code> 支持在后台异步执行独立任务，结果通过消息总线注入主代理上下文。</p>
+
+<h3>执行流程</h3>
+
+<div class="flow-diagram">
+  <div class="flow-node fn-blue">主代理调用<br>spawn 工具</div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-node fn-pink">SubagentManager<br>.spawn()</div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-node fn-orange">创建异步任务<br>asyncio.Task</div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-node fn-cyan">AgentRunner<br>独立执行</div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-node fn-green">结果公告<br>bus.publish_inbound</div>
+</div>
+
+<h3>关键特性</h3>
+
+<ul>
+  <li><strong>独立工具集</strong>：子代理拥有独立的 ToolRegistry，仅包含 subagent 作用域的工具</li>
+  <li><strong>状态追踪</strong>：<code>SubagentStatus</code> 实时记录阶段、迭代数、工具事件和 token 用量</li>
+  <li><strong>结果注入</strong>：完成后通过 <code>system</code> 通道发送 <code>InboundMessage</code>，主代理在 pending_queue 中接收</li>
+  <li><strong>会话关联</strong>：子代理与父会话关联，<code>/stop</code> 命令可同时取消子代理</li>
+  <li><strong>并发限制</strong>：通过 <code>max_concurrent_subagents</code> 控制最大并发数</li>
+</ul>
+
+<!-- ==================== 11. 技能系统 ==================== -->
+<h2 id="skills"><span class="icon">📚</span> 技能系统</h2>
+
+<p>技能 (Skill) 是以 Markdown 文件 (<code>SKILL.md</code>) 形式组织的知识模块，教会 Agent 如何使用特定工具或执行特定任务。</p>
+
+<h3>技能结构</h3>
+
+<pre>skills/
+└── my-skill/
+    ├── SKILL.md          # 技能定义（YAML frontmatter + Markdown 正文）
+    └── references/       # 可选的参考文档
+        └── examples.md</pre>
+
+<h3>SKILL.md 格式</h3>
+
+<pre>---
+description: 技能描述
+always: false            # 是否常驻注入
+metadata:
+  nanobot:
+    requires:
+      bins: [git]        # 依赖的 CLI 工具
+      env: [API_KEY]     # 依赖的环境变量
+---
+
+# 技能标题
+
+技能的详细说明和使用指南...</pre>
+
+<h3>内置技能</h3>
+
+<div class="card-grid">
+  <div class="card">
+    <h4>cron</h4>
+    <p>定时任务调度与管理</p>
+  </div>
+  <div class="card">
+    <h4>memory</h4>
+    <p>长期记忆读写与管理</p>
+  </div>
+  <div class="card">
+    <h4>github</h4>
+    <p>GitHub 仓库操作与 PR 管理</p>
+  </div>
+  <div class="card">
+    <h4>image-generation</h4>
+    <p>AI 图片生成</p>
+  </div>
+  <div class="card">
+    <h4>long-goal</h4>
+    <p>长期目标追踪与执行</p>
+  </div>
+  <div class="card">
+    <h4>skill-creator</h4>
+    <p>自动创建新技能</p>
+  </div>
+  <div class="card">
+    <h4>summarize</h4>
+    <p>内容总结与提炼</p>
+  </div>
+  <div class="card">
+    <h4>tmux</h4>
+    <p>终端会话管理</p>
+  </div>
+</div>
+
+<!-- ==================== 12. 会话管理 ==================== -->
+<h2 id="session"><span class="icon">💾</span> 会话管理</h2>
+
+<p><code>SessionManager</code> 负责会话的持久化和检索，每个会话通过 <code>session_key</code>（格式：<code>channel:chat_id</code>）唯一标识。</p>
+
+<h3>会话模型</h3>
+
+<pre>@dataclass
+class Session:
+    key: str                        # 会话唯一标识
+    messages: list[dict]            # 消息历史
+    created_at: datetime
+    updated_at: datetime
+    metadata: dict                  # 元数据（检查点、摘要等）
+    last_consolidated: int = 0      # 上次压缩位置</pre>
+
+<h3>关键特性</h3>
+
+<ul>
+  <li><strong>统一会话模式</strong>：<code>unified_session</code> 配置可将所有通道的消息合并到同一会话</li>
+  <li><strong>历史回放窗口</strong>：<code>max_messages</code> 和 <code>max_tokens</code> 限制回放给 LLM 的历史量</li>
+  <li><strong>运行时检查点</strong>：工具执行期间保存进度，中断后可恢复部分上下文</li>
+  <li><strong>文件容量限制</strong>：<code>enforce_file_cap</code> 防止会话文件无限增长</li>
+</ul>
+
+<!-- ==================== 13. Dream ==================== -->
+<h2 id="dream"><span class="icon">💭</span> Dream 记忆整理</h2>
+
+<p><code>Dream</code> 是一个定时执行的记忆整理处理器，采用两阶段架构：</p>
+
+<h3>Phase 1: 分析</h3>
+<p>将未处理的历史条目和当前记忆文件内容发送给 LLM，生成分析摘要。此阶段不使用工具，仅产生文本分析。</p>
+
+<h3>Phase 2: 执行</h3>
+<p>将分析结果委托给 AgentRunner，配备 <code>read_file</code>、<code>edit_file</code>、<code>write_file</code> 工具，让 LLM 自主决定如何编辑 MEMORY.md、SOUL.md、USER.md 等文件。</p>
+
+<div class="flow-diagram">
+  <div class="flow-node fn-blue">读取未处理<br>历史条目</div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-node fn-purple">Phase 1<br>LLM 分析</div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-node fn-pink">Phase 2<br>AgentRunner 执行</div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-node fn-green">编辑记忆文件<br>MEMORY/SOUL/USER</div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-node fn-cyan">Git 自动提交</div>
+</div>
+
+<h3>行龄标注</h3>
+<p>Dream 在 Phase 1 中会对 MEMORY.md 的每一行进行 Git blame 标注，超过 14 天的行会附加 <code>← Nd</code> 标记，帮助 LLM 识别过时信息。</p>
+
+<!-- ==================== 14. 安全机制 ==================== -->
+<h2 id="safety"><span class="icon">🔒</span> 安全机制</h2>
+
+<p>Nanobot 在多个层面实现了安全防护：</p>
+
+<h3>1. SSRF 防护</h3>
+<p><code>AgentRunner</code> 检测工具结果中的 SSRF 标记（内部/私有 URL 访问），返回不可重试的错误提示，明确告知 Agent 这是安全边界，不可绕过。</p>
+
+<h3>2. 工作空间限制</h3>
+<p><code>restrict_to_workspace</code> 配置限制文件操作和 Shell 执行只能在工作空间目录内进行。违反限制的操作会被拦截并返回错误。</p>
+
+<h3>3. 重复违规升级</h3>
+<p>当 Agent 反复尝试相同的安全违规操作时，错误提示会逐步升级，最终强制阻止。</p>
+
+<h3>4. 网络安全</h3>
+<p><code>nanobot.security.network</code> 模块提供网络安全策略，包括 URL 白名单和私有地址检测。</p>
+
+<h3>5. 沙箱执行</h3>
+<p>Shell 命令在受限环境中执行，支持超时控制、工作目录限制和环境变量过滤。</p>
+
+<h3>6. 工具结果截断</h3>
+<p><code>max_tool_result_chars</code> 限制工具返回内容的最大长度，防止信息泄露和 token 溢出。</p>
+
+<!-- ==================== 15. 总结 ==================== -->
+<div class="section-divider"></div>
+
+<h2 id="summary"><span class="icon">🎯</span> 总结</h2>
+
+<p>Nanobot 是一个设计精良的生产级 AI Agent 框架，其核心设计亮点包括：</p>
+
+<div class="card-grid">
+  <div class="card">
+    <h4>🔄 事件驱动架构</h4>
+    <p>MessageBus 解耦通道与 Agent，支持异步消息处理和流式输出</p>
+  </div>
+  <div class="card">
+    <h4>⚙️ 状态机处理</h4>
+    <p>清晰的状态转换模型，每个阶段职责单一，便于调试和扩展</p>
+  </div>
+  <div class="card">
+    <h4>🧠 三层记忆体系</h4>
+    <p>会话历史 + 上下文压缩 + 长期记忆，配合 Dream 自动整理</p>
+  </div>
+  <div class="card">
+    <h4>🛠 插件化工具</h4>
+    <p>包扫描 + Entry Points 双重发现机制，支持 MCP 协议扩展</p>
+  </div>
+  <div class="card">
+    <h4>🤝 子代理协作</h4>
+    <p>后台异步执行 + 消息注入，实现并行任务处理</p>
+  </div>
+  <div class="card">
+    <h4>🔒 多层安全</h4>
+    <p>SSRF 防护、工作空间限制、违规升级、沙箱执行</p>
+  </div>
+</div>
+
+<div class="highlight-box">
+  <p><strong>架构哲学：</strong>Nanobot 的设计遵循"关注点分离"原则——AgentLoop 负责消息路由和状态管理，AgentRunner 负责纯 LLM+工具迭代，ContextBuilder 负责上下文组装，Channel 负责平台适配。每个组件都可以独立测试和替换，使得整个系统具备高度的可扩展性和可维护性。</p>
+</div>
+
+<p style="text-align:center; color:var(--text2); margin-top:48px; font-size:0.9em;">
+  Generated from Nanobot source code analysis · 2026
+</p>
+
+</div>
+</body>
+</html>

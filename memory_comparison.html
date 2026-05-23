@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Agent 记忆机制对比：Mona vs OpenClaw vs Hermes</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans SC", sans-serif; background: #f0f2f5; color: #1a1a2e; padding: 32px 16px; }
+  h1 { text-align: center; font-size: 1.75rem; margin-bottom: 8px; color: #16213e; }
+  .subtitle { text-align: center; color: #6b7280; margin-bottom: 32px; font-size: 0.95rem; }
+  .table-wrap { overflow-x: auto; max-width: 1400px; margin: 0 auto; background: #fff; border-radius: 12px; box-shadow: 0 4px 24px rgba(0,0,0,.08); }
+  table { width: 100%; border-collapse: collapse; font-size: 0.88rem; line-height: 1.55; }
+  thead th { background: #16213e; color: #fff; padding: 14px 16px; text-align: left; font-weight: 600; position: sticky; top: 0; z-index: 2; }
+  thead th:first-child { border-radius: 12px 0 0 0; min-width: 140px; }
+  thead th:nth-child(2) { min-width: 240px; background: #0f3460; }
+  thead th:nth-child(3) { min-width: 240px; background: #533483; }
+  thead th:nth-child(4) { min-width: 240px; background: #e94560; }
+  thead th:last-child { min-width: 180px; border-radius: 0 12px 0 0; background: #1a1a2e; }
+  tbody td { padding: 12px 16px; border-bottom: 1px solid #e5e7eb; vertical-align: top; }
+  tbody tr:hover { background: #f8fafc; }
+  tbody td:first-child { font-weight: 600; color: #374151; background: #f9fafb; white-space: nowrap; }
+  tbody td:last-child { font-weight: 700; color: #e94560; white-space: nowrap; }
+  .tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.78rem; font-weight: 500; margin: 1px 2px; }
+  .tag-mona { background: #dbeafe; color: #1e40af; }
+  .tag-openclaw { background: #ede9fe; color: #6d28d9; }
+  .tag-hermes { background: #fce7f3; color: #be185d; }
+  .verdict { font-size: 0.92rem; }
+  .section-row td { background: #16213e !important; color: #fff !important; font-size: 0.95rem; font-weight: 700; letter-spacing: .5px; }
+  .section-row td:last-child { background: #1a1a2e !important; }
+  code { background: #f1f5f9; padding: 1px 5px; border-radius: 3px; font-size: 0.82rem; color: #7c3aed; }
+  ul { padding-left: 18px; margin: 4px 0; }
+  li { margin-bottom: 3px; }
+</style>
+</head>
+<body>
+<h1>🧠 AI Agent 记忆机制对比</h1>
+<p class="subtitle">Mona &nbsp;vs&nbsp; OpenClaw &nbsp;vs&nbsp; Hermes Agent &nbsp;|&nbsp; 2026-05-23</p>
+<div class="table-wrap">
+<table>
+<thead>
+<tr>
+  <th>对比维度</th>
+  <th><span class="tag tag-mona">Mona</span></th>
+  <th><span class="tag tag-openclaw">OpenClaw</span></th>
+  <th><span class="tag tag-hermes">Hermes Agent</span></th>
+  <th>对比结论</th>
+</tr>
+</thead>
+<tbody>
+
+<!-- ========== 架构总览 ========== -->
+<tr class="section-row"><td colspan="5">📐 架构总览</td></tr>
+
+<tr>
+  <td>记忆分层模型</td>
+  <td>三层：会话消息 → <code>history.jsonl</code> → 持久知识文件（SOUL.md / USER.md / MEMORY.md）</td>
+  <td>三层：会话JSONL → 每日日志 <code>YYYY-MM-DD.md</code> → 长期 <code>MEMORY.md</code></td>
+  <td>四层：工作记忆 → 情景记忆(Session Search) → 语义记忆(MEMORY.md/USER.md) → 程序性记忆(Skills)</td>
+  <td>Hermes &gt; Mona &gt; OpenClaw</td>
+</tr>
+
+<tr>
+  <td>存储格式</td>
+  <td>Markdown + JSONL + Git版本控制</td>
+  <td>纯 Markdown + SQLite 索引 + JSONL 会话</td>
+  <td>Markdown + SQLite(FTS5) + 外部Provider</td>
+  <td>Mona &gt; Hermes &gt; OpenClaw</td>
+</tr>
+
+<tr>
+  <td>核心文件</td>
+  <td><code>SOUL.md</code> / <code>USER.md</code> / <code>memory/MEMORY.md</code> / <code>memory/history.jsonl</code></td>
+  <td><code>MEMORY.md</code> / <code>memory/YYYY-MM-DD.md</code> / <code>DREAMS.md</code></td>
+  <td><code>MEMORY.md</code> / <code>USER.md</code> / <code>state.db</code>(SQLite FTS5)</td>
+  <td>Mona &gt; OpenClaw &gt; Hermes</td>
+</tr>
+
+<tr>
+  <td>人格/灵魂文件</td>
+  <td>✅ <code>SOUL.md</code> 独立管理Agent声音和风格，Dream自动维护</td>
+  <td>❌ 无独立人格文件，人格信息混在MEMORY.md中</td>
+  <td>❌ 无独立人格文件，人格通过personality配置</td>
+  <td>Mona &gt; OpenClaw = Hermes</td>
+</tr>
+
+<!-- ========== 记忆写入 ========== -->
+<tr class="section-row"><td colspan="5">✏️ 记忆写入与生成</td></tr>
+
+<tr>
+  <td>写入方式</td>
+  <td>Consolidator自动摘要写入 + Dream两阶段编辑 + 用户命令</td>
+  <td>用户要求记住 + Memory Flush自动写入 + session-memory Hook</td>
+  <td>Agent通过memory工具主动写入(add/replace/remove) + Nudge机制提示用户沉淀</td>
+  <td>Mona &gt; Hermes &gt; OpenClaw</td>
+</tr>
+
+<tr>
+  <td>记忆整理机制</td>
+  <td>Dream两阶段：Phase1分析 → Phase2用AgentRunner+edit_file手术式编辑</td>
+  <td>Dreaming：短→长晋升，阈值门控(分数/频率/多样性)，写入DREAMS.md供审阅</td>
+  <td>容量限制强制整理：超限时需合并/替换/删除旧条目</td>
+  <td>Mona &gt; OpenClaw &gt; Hermes</td>
+</tr>
+
+<tr>
+  <td>自动压缩(Compaction)</td>
+  <td>✅ Consolidator基于token预算自动触发 + AutoCompact空闲会话压缩</td>
+  <td>✅ Compaction前自动Memory Flush保存关键信息</td>
+  <td>✅ 压缩前memory flush + trajectory_compressor</td>
+  <td>Mona &gt; OpenClaw &gt; Hermes</td>
+</tr>
+
+<tr>
+  <td>写入安全扫描</td>
+  <td>⚠️ strip_think清理模板泄漏，无专门注入扫描</td>
+  <td>⚠️ 文档未明确提及注入防护</td>
+  <td>✅ 明确安全策略：Prompt Injection防护、凭证外泄检测、不可见字符过滤</td>
+  <td>Hermes &gt; Mona &gt; OpenClaw</td>
+</tr>
+
+<!-- ========== 记忆检索 ========== -->
+<tr class="section-row"><td colspan="5">🔍 记忆检索与召回</td></tr>
+
+<tr>
+  <td>检索方式</td>
+  <td>grep关键词搜索 + cursor增量读取 + 系统提示词注入</td>
+  <td>混合检索：向量(0.7) + BM25(0.3) + MMR多样性重排 + 时间衰减</td>
+  <td>SQLite FTS5全文搜索 + 外部Provider语义搜索</td>
+  <td>OpenClaw &gt; Hermes &gt; Mona</td>
+</tr>
+
+<tr>
+  <td>语义搜索</td>
+  <td>❌ 无内置向量/语义搜索</td>
+  <td>✅ 内置向量搜索 + 混合检索 + 自动检测Embedding Provider</td>
+  <td>⚠️ 需外部Provider(Honcho/Mem0等)才支持</td>
+  <td>OpenClaw &gt; Hermes &gt; Mona</td>
+</tr>
+
+<tr>
+  <td>时间衰减</td>
+  <td>⚠️ 仅通过Git行龄标注(← Nd)提示LLM判断过期</td>
+  <td>✅ 基于艾宾浩斯遗忘曲线的指数衰减(30天50%, 90天12.5%)</td>
+  <td>❌ 无内置时间衰减机制</td>
+  <td>OpenClaw &gt; Mona &gt; Hermes</td>
+</tr>
+
+<tr>
+  <td>跨会话检索</td>
+  <td>✅ history.jsonl跨会话持久化 + Dream跨会话整合</td>
+  <td>✅ 每日日志跨天保留 + SQLite索引跨会话搜索</td>
+  <td>✅ Session Search(FTS5) + 外部Provider跨会话</td>
+  <td>Hermes &gt; OpenClaw &gt; Mona</td>
+</tr>
+
+<!-- ========== 记忆版本与审计 ========== -->
+<tr class="section-row"><td colspan="5">📋 版本控制与审计</td></tr>
+
+<tr>
+  <td>版本控制</td>
+  <td>✅ GitStore自动版本管理，每次Dream变更自动commit</td>
+  <td>⚠️ 无内置版本控制，依赖文件系统</td>
+  <td>⚠️ 无内置版本控制</td>
+  <td>Mona &gt; OpenClaw = Hermes</td>
+</tr>
+
+<tr>
+  <td>可审计性</td>
+  <td>✅ /dream-log查看变更、/dream-restore恢复历史版本、Git diff对比</td>
+  <td>✅ DREAMS.md人类审阅面、rem-backfill回滚</td>
+  <td>⚠️ 仅文件级可读，无专门审计工具</td>
+  <td>Mona &gt; OpenClaw &gt; Hermes</td>
+</tr>
+
+<tr>
+  <td>可恢复性</td>
+  <td>✅ Git版本回退，精确到单次Dream变更</td>
+  <td>✅ backfill rollback可撤销整批晋升</td>
+  <td>❌ 无恢复机制，删除即丢失</td>
+  <td>Mona &gt; OpenClaw &gt; Hermes</td>
+</tr>
+
+<!-- ========== 扩展性 ========== -->
+<tr class="section-row"><td colspan="5">🔌 扩展性与生态</td></tr>
+
+<tr>
+  <td>外部记忆后端</td>
+  <td>❌ 无插件体系，仅内置文件系统</td>
+  <td>✅ 插件架构：Builtin(SQLite) / QMD / Honcho / LanceDB / Memory Wiki</td>
+  <td>✅ 插件架构：Honcho / OpenViking / Mem0 / ByteRover / Supermemory</td>
+  <td>OpenClaw ≈ Hermes &gt; Mona</td>
+</tr>
+
+<tr>
+  <td>知识库增强</td>
+  <td>❌ 无</td>
+  <td>✅ Memory Wiki插件：结构化声明、证据追踪、矛盾检测、仪表板</td>
+  <td>⚠️ 通过外部Provider间接实现</td>
+  <td>OpenClaw &gt; Hermes &gt; Mona</td>
+</tr>
+
+<tr>
+  <td>上下文工程</td>
+  <td>✅ ContextBuilder统一构建，bootstrap文件 + memory + skills + history</td>
+  <td>✅ ContextEngine 7个生命周期钩子，热插拔，lossless-claw插件</td>
+  <td>✅ prompt_builder冻结快照 + 外部context_engine插件</td>
+  <td>OpenClaw &gt; Mona &gt; Hermes</td>
+</tr>
+
+<tr>
+  <td>Skills/流程记忆</td>
+  <td>✅ Skills系统，Dream可自动创建新Skill</td>
+  <td>✅ Skills系统，ClawHub技能市场</td>
+  <td>✅ Skills系统，agentskills.io开放标准，Skill自我改进</td>
+  <td>Hermes &gt; Mona &gt; OpenClaw</td>
+</tr>
+
+<!-- ========== 容量与性能 ========== -->
+<tr class="section-row"><td colspan="5">⚡ 容量与性能</td></tr>
+
+<tr>
+  <td>容量管理</td>
+  <td>✅ max_history_entries上限 + token预算自动触发consolidation</td>
+  <td>✅ MEMORY.md超预算时截断注入(文件完整保留) + 每日日志自然分隔</td>
+  <td>✅ 硬性字符限制(MEMORY.md~2200字符, USER.md~1375字符)，超限报错</td>
+  <td>Hermes &gt; Mona &gt; OpenClaw</td>
+</tr>
+
+<tr>
+  <td>Token效率</td>
+  <td>✅ Consolidator按token预算精确压缩，consolidation_ratio可调</td>
+  <td>⚠️ 依赖compaction摘要，精度有限</td>
+  <td>✅ 冻结快照保护prompt cache，按需检索减少常驻token</td>
+  <td>Mona &gt; Hermes &gt; OpenClaw</td>
+</tr>
+
+<tr>
+  <td>会话内记忆更新</td>
+  <td>✅ 会话内可实时更新，Consolidator异步运行</td>
+  <td>✅ 会话内可写入memory文件</td>
+  <td>⚠️ 冻结快照：会话内写入不立即生效，需下次会话才注入</td>
+  <td>Mona &gt; OpenClaw &gt; Hermes</td>
+</tr>
+
+<!-- ========== 用户体验 ========== -->
+<tr class="section-row"><td colspan="5">👤 用户体验与可控性</td></tr>
+
+<tr>
+  <td>用户命令</td>
+  <td><code>/dream</code> / <code>/dream-log</code> / <code>/dream-restore</code></td>
+  <td><code>openclaw memory status/search/index</code></td>
+  <td><code>/memory</code> / <code>/compress</code> / <code>/insights</code></td>
+  <td>Mona &gt; OpenClaw &gt; Hermes</td>
+</tr>
+
+<tr>
+  <td>主动提示(Nudge)</td>
+  <td>⚠️ 无主动提示机制</td>
+  <td>⚠️ 无主动提示机制</td>
+  <td>✅ Nudge机制：Agent主动提示用户沉淀高价值知识</td>
+  <td>Hermes &gt; Mona = OpenClaw</td>
+</tr>
+
+<tr>
+  <td>承诺/提醒</td>
+  <td>❌ 无内置承诺机制</td>
+  <td>✅ Commitments：短期随访记忆，心跳自动提醒</td>
+  <td>❌ 无内置承诺机制，依赖cron调度</td>
+  <td>OpenClaw &gt; Mona = Hermes</td>
+</tr>
+
+<tr>
+  <td>多Agent记忆隔离</td>
+  <td>✅ 每个session独立，workspace级隔离</td>
+  <td>✅ 每个Agent独立SQLite + 独立workspace</td>
+  <td>✅ 每个session独立SQLite + 外部Provider多Agent感知</td>
+  <td>OpenClaw ≈ Hermes &gt; Mona</td>
+</tr>
+
+<!-- ========== 综合评价 ========== -->
+<tr class="section-row"><td colspan="5">🏆 综合评价</td></tr>
+
+<tr>
+  <td>记忆自演化能力</td>
+  <td>Dream两阶段自动分析+编辑，Git追踪每次变更，最完整的自演化闭环</td>
+  <td>Dreaming阈值晋升 + Memory Flush + ContextEngine钩子，生态丰富</td>
+  <td>Nudge主动沉淀 + Skill自我改进 + 外部Provider深度建模，最懂用户</td>
+  <td>Mona &gt; Hermes &gt; OpenClaw</td>
+</tr>
+
+<tr>
+  <td>检索能力</td>
+  <td>仅grep关键词搜索，无语义检索，是最大短板</td>
+  <td>混合检索+MMR+时间衰减，开箱即用最强检索</td>
+  <td>FTS5+外部Provider，检索能力依赖插件</td>
+  <td>OpenClaw &gt; Hermes &gt; Mona</td>
+</tr>
+
+<tr>
+  <td>安全与可控</td>
+  <td>Git版本可回退，但无注入扫描</td>
+  <td>有回滚能力，但安全扫描不明确</td>
+  <td>最完善的安全扫描策略，但无版本回退</td>
+  <td>Hermes &gt; Mona &gt; OpenClaw</td>
+</tr>
+
+<tr>
+  <td>整体评价</td>
+  <td><strong>最精致的记忆自演化系统</strong>：Dream两阶段编辑 + Git审计 + token精确管理，但检索能力是短板</td>
+  <td><strong>最丰富的检索与生态</strong>：混合检索 + 插件体系 + 知识库，但记忆整理深度不足</td>
+  <td><strong>最懂用户的记忆系统</strong>：四层架构 + Nudge + 安全扫描 + 外部Provider，但冻结快照限制实时性</td>
+  <td>各有所长，互有胜负</td>
+</tr>
+
+</tbody>
+</table>
+</div>
+
+<div style="max-width:1400px;margin:32px auto 0;padding:0 16px;">
+  <h2 style="font-size:1.15rem;color:#16213e;margin-bottom:12px;">📌 关键发现</h2>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:16px;">
+    <div style="background:#fff;border-radius:10px;padding:20px;box-shadow:0 2px 12px rgba(0,0,0,.06);border-left:4px solid #0f3460;">
+      <h3 style="font-size:.95rem;color:#0f3460;margin-bottom:8px;">Mona 的独特优势</h3>
+      <ul style="font-size:.88rem;color:#374151;">
+        <li><strong>Dream两阶段手术式编辑</strong>：不是重写整个文件，而是用AgentRunner + edit_file做最小化精准修改</li>
+        <li><strong>Git版本控制</strong>：唯一具备完整记忆版本管理的系统，可审计、可回退</li>
+        <li><strong>SOUL.md独立人格文件</strong>：将Agent人格与事实记忆分离，更优雅</li>
+        <li><strong>行龄标注</strong>：通过Git blame自动标注过期行，辅助LLM判断记忆时效</li>
+      </ul>
+    </div>
+    <div style="background:#fff;border-radius:10px;padding:20px;box-shadow:0 2px 12px rgba(0,0,0,.06);border-left:4px solid #533483;">
+      <h3 style="font-size:.95rem;color:#533483;margin-bottom:8px;">OpenClaw 的独特优势</h3>
+      <ul style="font-size:.88rem;color:#374151;">
+        <li><strong>混合检索</strong>：向量(0.7) + BM25(0.3) + MMR重排 + 时间衰减，开箱即用最强</li>
+        <li><strong>插件生态</strong>：5种记忆后端 + Memory Wiki知识库 + ContextEngine钩子</li>
+        <li><strong>Commitments</strong>：短期随访记忆 + 心跳自动提醒，独有功能</li>
+        <li><strong>每日日志</strong>：按天自然分隔，结合时间衰减更符合人类记忆规律</li>
+      </ul>
+    </div>
+    <div style="background:#fff;border-radius:10px;padding:20px;box-shadow:0 2px 12px rgba(0,0,0,.06);border-left:4px solid #e94560;">
+      <h3 style="font-size:.95rem;color:#e94560;margin-bottom:8px;">Hermes 的独特优势</h3>
+      <ul style="font-size:.88rem;color:#374151;">
+        <li><strong>四层记忆架构</strong>：唯一显式区分工作/情景/语义/程序性记忆</li>
+        <li><strong>Nudge机制</strong>：Agent主动提示沉淀知识，减少信息流失</li>
+        <li><strong>安全扫描</strong>：最完善的注入防护、凭证检测、不可见字符过滤</li>
+        <li><strong>Skill自我改进</strong>：程序性记忆可随使用自动优化</li>
+      </ul>
+    </div>
+  </div>
+
+  <div style="background:#fff;border-radius:10px;padding:20px;margin-top:20px;box-shadow:0 2px 12px rgba(0,0,0,.06);border-left:4px solid #16213e;">
+    <h3 style="font-size:.95rem;color:#16213e;margin-bottom:8px;">💡 Mona 改进建议（基于对比）</h3>
+    <ul style="font-size:.88rem;color:#374151;">
+      <li><strong>补齐语义检索</strong>：这是Mona最大的短板，建议引入向量检索（可参考OpenClaw的混合检索方案）</li>
+      <li><strong>增加时间衰减</strong>：history.jsonl中的条目可加入检索权重衰减，避免陈旧信息干扰</li>
+      <li><strong>增加写入安全扫描</strong>：参考Hermes，对进入SOUL.md/USER.md/MEMORY.md的内容做注入和凭证检测</li>
+      <li><strong>考虑Nudge机制</strong>：在关键决策点主动提示用户确认是否沉淀为长期记忆</li>
+      <li><strong>插件化记忆后端</strong>：允许接入Honcho/Mem0等外部Provider增强语义理解</li>
+    </ul>
+  </div>
+</div>
+
+</body>
+</html>

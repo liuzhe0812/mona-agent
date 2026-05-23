@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mona vs OpenAkita — Agent 工作机制对比</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --border: #2a2d3a;
+    --text: #e1e4ed;
+    --text-dim: #8b8fa3;
+    --accent-mona: #6c8cff;
+    --accent-openakita: #f59e42;
+    --accent-result: #4ade80;
+    --highlight: #2a2d3a;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.7;
+    padding: 32px 16px;
+  }
+  .container { max-width: 1400px; margin: 0 auto; }
+  h1 {
+    text-align: center;
+    font-size: 2rem;
+    font-weight: 700;
+    margin-bottom: 8px;
+    background: linear-gradient(135deg, var(--accent-mona), var(--accent-openakita));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .subtitle {
+    text-align: center;
+    color: var(--text-dim);
+    font-size: 0.95rem;
+    margin-bottom: 36px;
+  }
+  table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 4px 24px rgba(0,0,0,.3);
+  }
+  thead th {
+    padding: 16px 18px;
+    font-weight: 600;
+    font-size: 0.92rem;
+    text-transform: uppercase;
+    letter-spacing: .5px;
+    border-bottom: 2px solid var(--border);
+  }
+  thead th:nth-child(1) { background: var(--surface); color: var(--text-dim); text-align: left; width: 14%; }
+  thead th:nth-child(2) { background: linear-gradient(135deg, #1e2235, #1a1d2e); color: var(--accent-mona); text-align: left; width: 28%; }
+  thead th:nth-child(3) { background: linear-gradient(135deg, #2a2218, #1d1a14); color: var(--accent-openakita); text-align: left; width: 28%; }
+  thead th:nth-child(4) { background: linear-gradient(135deg, #152218, #121d15); color: var(--accent-result); text-align: left; width: 30%; }
+  tbody td {
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border);
+    font-size: 0.88rem;
+    vertical-align: top;
+  }
+  tbody tr:hover { background: var(--highlight); }
+  tbody td:nth-child(1) {
+    font-weight: 600;
+    color: var(--text);
+    background: var(--surface);
+    white-space: nowrap;
+  }
+  tbody td:nth-child(2) { color: #b8c0e0; }
+  tbody td:nth-child(3) { color: #e0c8a0; }
+  tbody td:nth-child(4) { color: #a0e0b8; }
+  .tag {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    margin: 2px 2px;
+  }
+  .tag-mona { background: rgba(108,140,255,.15); color: var(--accent-mona); }
+  .tag-openakita { background: rgba(245,158,66,.15); color: var(--accent-openakita); }
+  .tag-equal { background: rgba(74,222,128,.12); color: var(--accent-result); }
+  .tag-diff { background: rgba(255,100,100,.12); color: #ff8888; }
+  code {
+    background: rgba(255,255,255,.06);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 0.84rem;
+    font-family: 'Cascadia Code', 'Fira Code', monospace;
+  }
+  .legend {
+    display: flex;
+    gap: 20px;
+    justify-content: center;
+    margin-bottom: 24px;
+    flex-wrap: wrap;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.85rem;
+    color: var(--text-dim);
+  }
+  .legend-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+  }
+  .section-header td {
+    background: var(--surface) !important;
+    font-weight: 700 !important;
+    font-size: 0.92rem !important;
+    color: var(--text) !important;
+    padding: 10px 18px !important;
+    border-bottom: 2px solid var(--border) !important;
+  }
+  @media (max-width: 768px) {
+    body { padding: 16px 8px; }
+    table { font-size: 0.82rem; }
+    tbody td, thead th { padding: 10px 10px; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Mona vs OpenAkita</h1>
+  <p class="subtitle">Agent 工作机制深度对比分析</p>
+
+  <div class="legend">
+    <div class="legend-item"><div class="legend-dot" style="background:var(--accent-mona)"></div>Mona (nanobot)</div>
+    <div class="legend-item"><div class="legend-dot" style="background:var(--accent-openakita)"></div>OpenAkita</div>
+    <div class="legend-item"><div class="legend-dot" style="background:var(--accent-result)"></div>对比结论</div>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>维度</th>
+        <th>Mona (nanobot)</th>
+        <th>OpenAkita</th>
+        <th>对比结果</th>
+      </tr>
+    </thead>
+    <tbody>
+      <!-- ===== 项目定位 ===== -->
+      <tr class="section-header"><td colspan="4">📦 项目定位与架构</td></tr>
+      <tr>
+        <td>项目定位</td>
+        <td>面向开发者的单 Agent 编码助手框架，核心是 <code>AgentLoop</code> + <code>AgentRunner</code> 的双层架构</td>
+        <td>面向终端用户的多 Agent AI 助手平台，定位"AI 团队"，包含完整的桌面/Web/移动端产品</td>
+        <td><span class="tag tag-diff">方向不同</span> Mona 偏底层框架，OpenAkita 偏完整产品；Mona 更轻量专注，OpenAkita 功能更全面</td>
+      </tr>
+      <tr>
+        <td>技术栈</td>
+        <td>Python (asyncio)，无前端框架，CLI + WebSocket 为主</td>
+        <td>Python (FastAPI + asyncio) 后端 + React/TypeScript 前端 + Tauri 2.x 桌面端</td>
+        <td><span class="tag tag-openakita">OpenAkita 更全</span> OpenAkita 具备完整全栈能力，Mona 专注后端核心</td>
+      </tr>
+
+      <!-- ===== Agent 执行循环 ===== -->
+      <tr class="section-header"><td colspan="4">🔄 Agent 执行循环</td></tr>
+      <tr>
+        <td>核心循环模型</td>
+        <td>事件驱动状态机：<code>TurnState</code> 枚举定义 8 个状态（RESTORE→COMPACT→COMMAND→BUILD→RUN→SAVE→RESPOND→DONE），通过 <code>_TRANSITIONS</code> 转移表驱动</td>
+        <td>Ralph Wiggum 循环引擎：<code>RalphLoop</code> 实现"永不放弃"模式，<code>StopHook</code> 拦截退出尝试，最多 100 次迭代，每次从 MEMORY.md 加载状态</td>
+        <td><span class="tag tag-diff">设计哲学不同</span> Mona 是严谨的状态机，流程清晰可追踪；OpenAkita 是"死磕到底"循环，强调任务完成率。Mona 更工程化，OpenAkita 更激进</td>
+      </tr>
+      <tr>
+        <td>迭代上限</td>
+        <td><code>max_iterations</code> 可配置（默认来自 <code>AgentDefaults</code>），到达上限后返回 <code>max_iterations</code> stop_reason</td>
+        <td>默认 <code>max_iterations=100</code>，<code>max_attempts=10</code>（per-task），另有 TASK_BUDGET_DURATION 预算限制</td>
+        <td><span class="tag tag-openakita">OpenAkita 更高</span> OpenAkita 迭代上限更高且有多层预算控制；Mona 更保守，倾向于快速完成或快速失败</td>
+      </tr>
+      <tr>
+        <td>LLM 调用层</td>
+        <td><code>AgentRunner</code> 是纯 LLM 循环引擎，不关心产品层逻辑；支持流式/非流式/progress-streaming 三种模式</td>
+        <td>LLM 调用封装在 <code>Agent</code> 类内部，30+ provider 支持，smart failover 自动切换</td>
+        <td><span class="tag tag-mona">Mona 更解耦</span> Mona 将 LLM 调用与产品逻辑分离为独立 <code>AgentRunner</code>，可复用性更强；OpenAkita 集成度更高</td>
+      </tr>
+
+      <!-- ===== 多 Agent 协作 ===== -->
+      <tr class="section-header"><td colspan="4">🤝 多 Agent 协作</td></tr>
+      <tr>
+        <td>协作架构</td>
+        <td><code>SubagentManager</code> 管理后台子任务；子 Agent 通过 <code>MessageBus</code> 注入结果（mid-turn injection），主 Agent 在同一 turn 内消费</td>
+        <td><code>AgentOrchestrator</code> 中央协调器 + <code>AgentFactory</code> 工厂 + <code>AgentInstancePool</code> 实例池 + <code>AgentMailbox</code> 邮箱通信</td>
+        <td><span class="tag tag-openakita">OpenAkita 更成熟</span> OpenAkita 有完整的多 Agent 编排体系（工厂/池/邮箱/健康追踪），Mona 是轻量的主从模式</td>
+      </tr>
+      <tr>
+        <td>Agent 差异化</td>
+        <td>子 Agent 与主 Agent 共享相同工具集（通过 <code>ToolLoader</code> scope="subagent" 构建），仅系统提示不同</td>
+        <td><code>AgentProfile</code> 定义身份/技能/工具/MCP/插件/记忆/权限 7 个维度的隔离配置，支持 INCLUSIVE/EXCLUSIVE/ALL 三种技能模式</td>
+        <td><span class="tag tag-openakita">OpenAkita 更灵活</span> OpenAkita 的 Agent 差异化能力远超 Mona，支持角色化分工（CEO/CTO/CFO 等）</td>
+      </tr>
+      <tr>
+        <td>委派深度</td>
+        <td>无显式深度限制，子 Agent 不可再委派（单层）</td>
+        <td><code>MAX_DELEGATION_DEPTH = 5</code>，支持多级嵌套委派</td>
+        <td><span class="tag tag-openakita">OpenAkita 更深</span> OpenAkita 支持递归委派，适合复杂组织架构场景</td>
+      </tr>
+      <tr>
+        <td>结果回传</td>
+        <td>子 Agent 通过 <code>bus.publish_inbound()</code> 发送 system 消息，主 Agent 的 <code>pending_queue</code> 消费（mid-turn injection），最多 3 条/轮，5 轮</td>
+        <td>子 Agent 通过 <code>AgentMailbox</code> 异步通信，<code>DelegationResult</code> 结构化返回（含 exit_reason/artifacts/tools_used）</td>
+        <td><span class="tag tag-equal">各有侧重</span> Mona 的 mid-turn injection 更实时（流式场景友好），OpenAkita 的结构化结果更完整</td>
+      </tr>
+
+      <!-- ===== 工具系统 ===== -->
+      <tr class="section-header"><td colspan="4">🔧 工具系统</td></tr>
+      <tr>
+        <td>工具注册</td>
+        <td><code>ToolRegistry</code> + <code>ToolLoader</code> 插件式加载，<code>ToolContext</code> 注入运行时依赖</td>
+        <td>工具分 handler（<code>tools/handlers/</code>）+ definition（<code>tools/definitions/</code>），89+ 内置工具，8 种插件类型</td>
+        <td><span class="tag tag-openakita">OpenAkita 更丰富</span> OpenAkita 工具数量和类型远多于 Mona，但 Mona 的插件加载机制更简洁</td>
+      </tr>
+      <tr>
+        <td>并发执行</td>
+        <td>支持 <code>concurrent_tools=True</code>，<code>_partition_tool_batches</code> 按 <code>concurrency_safe</code> 标记分批并行执行</td>
+        <td>工具执行在 Agent 内部串行处理（单 Agent 内），多 Agent 并行通过 Orchestrator 实现</td>
+        <td><span class="tag tag-mona">Mona 更细粒度</span> Mona 在单 Agent 内支持工具级并发，OpenAkita 在 Agent 级并发</td>
+      </tr>
+      <tr>
+        <td>MCP 集成</td>
+        <td>内置 MCP 客户端（<code>connect_mcp_servers</code>），支持 stdio/HTTP/SSE 传输，懒加载连接</td>
+        <td>MCP 集成 + <code>mcp_catalog</code> 管理，支持按 profile 过滤 MCP 服务器</td>
+        <td><span class="tag tag-equal">能力相当</span> 两者都支持标准 MCP 协议，OpenAkita 多了 profile 级过滤</td>
+      </tr>
+
+      <!-- ===== 记忆与上下文 ===== -->
+      <tr class="section-header"><td colspan="4">🧠 记忆与上下文管理</td></tr>
+      <tr>
+        <td>记忆存储</td>
+        <td>纯文件 I/O：<code>MEMORY.md</code>（长期事实）、<code>SOUL.md</code>（人格）、<code>USER.md</code>（用户偏好）、<code>history.jsonl</code>（历史）</td>
+        <td>SQLite + SearchBackend（FTS5/向量搜索）：<code>UnifiedStore</code> 统一存储，<code>SemanticMemory</code> 结构化记忆，支持去重/过期/作用域隔离</td>
+        <td><span class="tag tag-openakita">OpenAkita 更强</span> OpenAkita 有数据库级存储和语义搜索，Mona 的文件方案更简单但缺乏查询能力</td>
+      </tr>
+      <tr>
+        <td>上下文压缩</td>
+        <td><code>Consolidator</code> 基于 token 预算触发 LLM 摘要压缩；<code>AutoCompact</code> 空闲会话硬截断；<code>_microcompact</code> 旧工具结果摘要；<code>_snip_history</code> 滑动窗口</td>
+        <td>PromptCompiler 编译身份文件，PromptBuilder 分层组装；MDRM 关系图记忆（因果链/时间线/实体图）；3D 可视化</td>
+        <td><span class="tag tag-mona">Mona 更精细</span> Mona 有 4 层压缩策略（LLM摘要/硬截断/微压缩/滑动窗口），token 治理更精细；OpenAkita 的关系图记忆更高级</td>
+      </tr>
+      <tr>
+        <td>后台记忆处理</td>
+        <td><code>Dream</code> 两阶段处理器：Phase1 分析历史→Phase2 用 AgentRunner + read_file/edit_file 工具增量编辑记忆文件，支持 git blame 行龄标注</td>
+        <td>自进化引擎（<code>evolution/</code>）：每日自检修复、失败根因分析、自动技能生成</td>
+        <td><span class="tag tag-equal">各有特色</span> Mona 的 Dream 更偏向记忆维护，OpenAkita 的自进化更偏向能力扩展</td>
+      </tr>
+
+      <!-- ===== 提示词工程 ===== -->
+      <tr class="section-header"><td colspan="4">📝 提示词工程</td></tr>
+      <tr>
+        <td>系统提示构建</td>
+        <td><code>ContextBuilder</code> 拼装：identity → bootstrap(AGENTS.md/SOUL.md/USER.md) → tool_contract → memory → skills → history → session_summary</td>
+        <td><code>PromptCompiler</code> 编译身份文件 → <code>PromptBuilder</code> 分层组装：Identity → Persona → Runtime → Session Rules → AGENTS.md → Catalogs → Memory → User</td>
+        <td><span class="tag tag-equal">架构相似</span> 两者都是分层组装，OpenAkita 多了 Persona 和 Catalogs 层，Mona 更扁平</td>
+      </tr>
+      <tr>
+        <td>技能系统</td>
+        <td><code>SkillsLoader</code> 加载 SKILL.md，支持 YAML frontmatter 元数据，渐进式加载（summary→按需 read_file），<code>always</code> 标记常驻技能</td>
+        <td>技能市场 + AI 动态生成技能，3 种模式（ALL/INCLUSIVE/EXCLUSIVE），ESSENTIAL_SYSTEM_SKILLS 基础保障</td>
+        <td><span class="tag tag-openakita">OpenAkita 更丰富</span> OpenAkita 有技能市场和动态生成能力，Mona 的渐进式加载设计更节省 token</td>
+      </tr>
+
+      <!-- ===== 安全机制 ===== -->
+      <tr class="section-header"><td colspan="4">🛡️ 安全机制</td></tr>
+      <tr>
+        <td>安全层级</td>
+        <td>工作区限制（<code>restrict_to_workspace</code>）、SSRF 防护（不可绕过的硬边界）、文件状态追踪、沙箱执行（<code>exec_session</code>）</td>
+        <td>6 层沙箱：路径分区 → 确认门 → 命令拦截 → 文件快照 → 自保护 → OS 级沙箱（Linux bwrap / macOS seatbelt / Windows MIC）</td>
+        <td><span class="tag tag-openakita">OpenAkita 更深</span> OpenAkita 的 6 层沙箱纵深防御远超 Mona，但 Mona 的 SSRF 防护更精细（含白名单机制）</td>
+      </tr>
+      <tr>
+        <td>权限控制</td>
+        <td>工具级 <code>prepare_call</code> 前置校验，workspace violation 重复检测升级提示</td>
+        <td>3 层权限模型 + AgentProfile <code>permission_rules</code> 注入 + 工具/技能/MCP 独立过滤</td>
+        <td><span class="tag tag-openakita">OpenAkita 更完善</span> OpenAkita 有细粒度的权限规则系统，Mona 依赖工具级校验</td>
+      </tr>
+
+      <!-- ===== 错误处理 ===== -->
+      <tr class="section-header"><td colspan="4">⚠️ 错误处理与容错</td></tr>
+      <tr>
+        <td>重试策略</td>
+        <td>Provider 级 <code>chat_with_retry</code>；空响应最多重试 2 次 + finalization retry；输出截断自动续写（<code>length_recovery</code> 最多 3 次）</td>
+        <td>RalphLoop <code>StopHook</code> 拦截退出，<code>max_attempts=10</code>；<code>_analyze_and_adapt</code> 错误分析策略调整（TODO: 更智能分析）</td>
+        <td><span class="tag tag-mona">Mona 更精细</span> Mona 针对不同错误类型有专门处理（空响应/截断/SSRF/工作区违规），OpenAkita 的重试更粗暴但更执着</td>
+      </tr>
+      <tr>
+        <td>中断恢复</td>
+        <td><code>runtime_checkpoint</code> 机制：工具执行期间持久化中间状态到 session metadata，<code>/stop</code> 后可恢复部分上下文</td>
+        <td>通过 MEMORY.md 持久化任务状态，每次迭代 fresh context 重新加载</td>
+        <td><span class="tag tag-mona">Mona 更精确</span> Mona 的 checkpoint 粒度到消息级，OpenAkita 是文件级粗粒度恢复</td>
+      </tr>
+      <tr>
+        <td>上下文治理</td>
+        <td>5 步治理链：<code>_drop_orphan_tool_results</code> → <code>_backfill_missing_tool_results</code> → <code>_microcompact</code> → <code>_apply_tool_result_budget</code> → <code>_snip_history</code></td>
+        <td>PromptCompiler 检测编译过期自动重编译；token 预算由 MDRM 和 UnifiedStore 管理</td>
+        <td><span class="tag tag-mona">Mona 更系统</span> Mona 有完整的上下文治理管线，确保 LLM 输入始终合法；OpenAkita 依赖编译器重编译</td>
+      </tr>
+
+      <!-- ===== 人机交互 ===== -->
+      <tr class="section-header"><td colspan="4">💬 人机交互</td></tr>
+      <tr>
+        <td>接入渠道</td>
+        <td>CLI、WebSocket（WebUI）、IM 通道（通过 MessageBus + channels 配置）</td>
+        <td>6 大 IM 平台（Telegram/飞书/企微/钉钉/QQ/OneBot）+ 桌面端 + Web + 移动端，扫码绑定 30 秒接入</td>
+        <td><span class="tag tag-openakita">OpenAkita 更广</span> OpenAkita 的渠道覆盖远超 Mona，尤其 IM 集成和移动端</td>
+      </tr>
+      <tr>
+        <td>流式输出</td>
+        <td>完整流式支持：<code>on_stream</code> 内容增量 + <code>on_stream_end</code> 分段标记 + <code>emit_reasoning</code> 思维链流式 + 文件编辑实时追踪</td>
+        <td>IM 流式推送、深度思考模式实时链式展示、WebUI 流式渲染</td>
+        <td><span class="tag tag-equal">能力相当</span> 两者都支持流式，Mona 的流式钩子更细粒度（文件编辑追踪）</td>
+      </tr>
+      <tr>
+        <td>中途消息注入</td>
+        <td><code>pending_queue</code> 机制：会话活跃期间新消息路由到待处理队列，支持 mid-turn injection（最多 3 条/轮，5 轮）</td>
+        <td><code>AgentMailbox</code> 异步消息队列，<code>drain_all</code> 批量消费</td>
+        <td><span class="tag tag-mona">Mona 更实时</span> Mona 的 mid-turn injection 允许在 LLM turn 中途注入，实时性更强</td>
+      </tr>
+
+      <!-- ===== 模型支持 ===== -->
+      <tr class="section-header"><td colspan="4">🤖 模型支持</td></tr>
+      <tr>
+        <td>Provider 抽象</td>
+        <td><code>LLMProvider</code> 基类 + <code>ProviderFactory</code> 工厂 + <code>ProviderSnapshot</code> 运行时切换</td>
+        <td>30+ LLM provider 注册表，smart failover 自动切换</td>
+        <td><span class="tag tag-openakita">OpenAkita 更广</span> OpenAkita 支持更多 provider，Mona 的运行时切换机制更灵活</td>
+      </tr>
+      <tr>
+        <td>模型预设</td>
+        <td><code>ModelPresetConfig</code> + <code>model_presets</code> 字典，支持运行时切换预设（含 provider/model/context_window 联动更新）</td>
+        <td><code>preferred_endpoint</code> + <code>endpoint_policy</code>（prefer/fallback），per-profile 端点配置</td>
+        <td><span class="tag tag-mona">Mona 更灵活</span> Mona 的预设系统支持多维度联动切换，OpenAkita 的 per-profile 配置更实用</td>
+      </tr>
+
+      <!-- ===== 可观测性 ===== -->
+      <tr class="section-header"><td colspan="4">📊 可观测性</td></tr>
+      <tr>
+        <td>执行追踪</td>
+        <td><code>StateTraceEntry</code> 记录每个状态的耗时和事件；<code>AgentHookContext</code> 暴露迭代级指标；<code>turn_latency_ms</code> 延迟追踪</td>
+        <td>12 种 trace span 类型，全链路 token 统计面板，Agent 仪表盘神经网络可视化</td>
+        <td><span class="tag tag-openakita">OpenAkita 更直观</span> OpenAkita 有可视化仪表盘，Mona 的追踪更偏日志/结构化数据</td>
+      </tr>
+      <tr>
+        <td>Hook 系统</td>
+        <td><code>AgentHook</code> 生命周期钩子（before_iteration/on_stream/before_execute_tools/after_iteration/finalize_content），<code>CompositeHook</code> 错误隔离扇出</td>
+        <td>10 种插件生命周期钩子，8 种插件类型</td>
+        <td><span class="tag tag-equal">各有侧重</span> Mona 的 Hook 更面向执行流程定制，OpenAkita 的 Hook 更面向插件生态扩展</td>
+      </tr>
+
+      <!-- ===== 总结 ===== -->
+      <tr class="section-header"><td colspan="4">🎯 总结评价</td></tr>
+      <tr>
+        <td>核心优势</td>
+        <td>
+          • 状态机架构清晰可追踪<br>
+          • 上下文治理管线完善<br>
+          • 工具级并发执行<br>
+          • 中途消息注入实时性强<br>
+          • Checkpoint 中断恢复精确<br>
+          • AgentRunner 与产品层解耦
+        </td>
+        <td>
+          • 多 Agent 编排体系成熟<br>
+          • 6 层沙箱纵深防御<br>
+          • 语义记忆 + 关系图<br>
+          • 渠道覆盖广泛<br>
+          • Agent 差异化配置丰富<br>
+          • 产品化程度高
+        </td>
+        <td>
+          <span class="tag tag-mona">Mona</span> 更适合作为 Agent 框架底座，工程严谨度高，适合开发者二次开发<br><br>
+          <span class="tag tag-openakita">OpenAkita</span> 更适合作为开箱即用的 AI 助手产品，功能广度和产品化程度更高<br><br>
+          <span class="tag tag-equal">互补</span> Mona 的上下文治理和状态机设计值得 OpenAkita 借鉴；OpenAkita 的多 Agent 编排和安全体系值得 Mona 参考
+        </td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+</body>
+</html>

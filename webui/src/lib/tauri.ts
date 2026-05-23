@@ -1,0 +1,89 @@
+import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
+
+declare global {
+  interface Window {
+    __TAURI_INTERNALS__?: unknown;
+    __TAURI__?: unknown;
+  }
+}
+
+export function isTauri(): boolean {
+  return !!window.__TAURI_INTERNALS__ || !!window.__TAURI__;
+}
+
+export function httpFetch(url: string, init?: RequestInit): Promise<Response> {
+  if (isTauri()) {
+    return tauriFetch(url, init);
+  }
+  return window.fetch(url, init);
+}
+
+async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  if (!isTauri()) {
+    throw new Error("Not running in Tauri environment");
+  }
+  const { invoke: tauriInvoke } = await import("@tauri-apps/api/core");
+  return tauriInvoke<T>(cmd, args);
+}
+
+export interface GatewayStatus {
+  running: boolean;
+  port: number | null;
+  ws_port: number;
+}
+
+export interface MonaConfigStatus {
+  config_exists: boolean;
+  has_provider: boolean;
+  provider_name: string | null;
+}
+
+export interface DesktopAppSettings {
+  run_in_background: boolean;
+  auto_start_gateway: boolean;
+  gateway_port: number;
+  config_path: string | null;
+}
+
+export async function getGatewayStatus(): Promise<GatewayStatus> {
+  return invoke<GatewayStatus>("gateway_status");
+}
+
+export async function getMonaConfigStatus(): Promise<MonaConfigStatus> {
+  return invoke<MonaConfigStatus>("mona_config_status");
+}
+
+export async function getDesktopSettings(): Promise<DesktopAppSettings> {
+  return invoke<DesktopAppSettings>("get_settings");
+}
+
+export async function updateDesktopSettings(settings: DesktopAppSettings): Promise<DesktopAppSettings> {
+  return invoke<DesktopAppSettings>("update_settings", { newSettings: settings });
+}
+
+export async function startGateway(): Promise<number> {
+  return invoke<number>("start_gateway");
+}
+
+export async function stopGateway(): Promise<void> {
+  return invoke<void>("stop_gateway");
+}
+
+export async function writeMonaProviderConfig(
+  provider: string,
+  apiKey: string,
+  apiBase?: string,
+): Promise<void> {
+  return invoke<void>("write_mona_provider_config", {
+    provider,
+    apiKey,
+    apiBase: apiBase ?? null,
+  });
+}
+
+export async function writeMonaModelConfig(
+  model: string,
+  provider: string,
+): Promise<void> {
+  return invoke<void>("write_mona_model_config", { model, provider });
+}
