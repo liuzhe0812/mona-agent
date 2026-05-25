@@ -264,11 +264,19 @@ export function ThreadViewport({
             </div>
           </div>
         ) : (
-          <div ref={contentRef} className="mx-auto flex min-h-full w-full max-w-[72rem] flex-col px-4">
-            <div className="flex w-full flex-1 items-center justify-center pb-[7vh] pt-8">
-              <div className="flex w-full max-w-[58rem] flex-col gap-6">
+          <div ref={contentRef} className="mx-auto flex min-h-full w-full max-w-[72rem] flex-col">
+            <div className="flex w-full flex-1 items-center justify-center px-4 pb-10 pt-8">
+              <div className="flex w-full max-w-[58rem] flex-col">
                 {emptyState}
-                <div className="w-full">{composer}</div>
+              </div>
+            </div>
+            <div
+              ref={composerDockRef}
+              data-testid="thread-composer-dock"
+              className="sticky bottom-0 z-10 mt-auto bg-background/95"
+            >
+              <div className="px-4 pb-4 pt-2">
+                {composer}
               </div>
             </div>
           </div>

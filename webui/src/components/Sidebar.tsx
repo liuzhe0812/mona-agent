@@ -1,11 +1,16 @@
-﻿import { useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import {
   Archive,
+  BookOpen,
+  Bot,
+  FileText,
   ListFilter,
   Menu,
   Search,
   Settings,
   SquarePen,
+  Terminal,
+  Wrench,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -46,6 +51,7 @@ interface SidebarProps {
   onUpdateView: (view: Partial<SidebarViewState>) => void;
   onCollapse: () => void;
   onExpand?: () => void;
+  onGoHome?: () => void;
   containActionMenus?: boolean;
   collapsed?: boolean;
   pinnedKeys?: string[];
@@ -110,6 +116,13 @@ export function Sidebar(props: SidebarProps) {
           </Button>
         )}
       </div>
+
+      <ToolboxNavigation
+        collapsed={collapsed}
+        onOpenSettings={props.onOpenSettings}
+        onGoHome={props.onGoHome ?? (() => {})}
+      />
+      <Separator className="mx-2 mb-2 bg-sidebar-border/50" />
 
       <div
         className={cn(
@@ -196,18 +209,68 @@ export function Sidebar(props: SidebarProps) {
   );
 }
 
+const TOOLBOX_ITEMS: Array<{
+  label: string;
+  icon: ReactNode;
+}> = [
+  { label: "智能体", icon: <Bot className="h-4 w-4" /> },
+  { label: "终端", icon: <Terminal className="h-4 w-4" /> },
+  { label: "笔记", icon: <FileText className="h-4 w-4" /> },
+  { label: "知识库", icon: <BookOpen className="h-4 w-4" /> },
+  { label: "Windows", icon: <Wrench className="h-4 w-4" /> },
+  { label: "设置", icon: <Settings className="h-4 w-4" /> },
+];
+
+function ToolboxNavigation({
+  collapsed,
+  onOpenSettings,
+  onGoHome,
+}: {
+  collapsed: boolean;
+  onOpenSettings: () => void;
+  onGoHome: () => void;
+}) {
+  return (
+    <div
+      className={cn(
+        "space-y-1 px-2 pb-2",
+        collapsed && "flex w-14 flex-col items-center px-0",
+      )}
+    >
+      {TOOLBOX_ITEMS.map((item) => {
+        const onClick = item.label === "智能体"
+          ? onGoHome
+          : item.label === "设置"
+            ? onOpenSettings
+            : undefined;
+        return (
+          <SidebarActionButton
+            key={item.label}
+            collapsed={collapsed}
+            label={item.label}
+            onClick={onClick ?? (() => {})}
+            icon={item.icon}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
 function SidebarActionButton({
   collapsed,
   label,
   icon,
   onClick,
   className,
+  active = false,
 }: {
   collapsed: boolean;
   label: string;
   icon: ReactNode;
   onClick: () => void;
   className?: string;
+  active?: boolean;
 }) {
   return (
     <Button
@@ -219,6 +282,8 @@ function SidebarActionButton({
       className={cn(
         "group h-8 min-w-0 gap-2 overflow-hidden rounded-full font-medium text-sidebar-foreground/85 hover:bg-sidebar-accent/75 hover:text-sidebar-foreground",
         "transition-[width,padding,border-radius,color,background-color] duration-300 ease-out",
+        active &&
+          "bg-sidebar-accent/80 text-sidebar-foreground shadow-[inset_0_0_0_1px_hsl(var(--sidebar-border)/0.35)]",
         collapsed
           ? "w-9 justify-center gap-0 rounded-xl px-0"
           : "w-full justify-start gap-2 px-3 text-[12.5px]",

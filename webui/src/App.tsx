@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import {
+  BookOpen,
+  FileText,
+  Monitor,
+  Server,
+  Wrench,
+} from "lucide-react";
 import { DeleteConfirm } from "@/components/DeleteConfirm";
 import { RenameChatDialog } from "@/components/RenameChatDialog";
 import { SetupWizard } from "@/components/SetupWizard";
@@ -8,6 +15,9 @@ import { SessionSearchDialog } from "@/components/SessionSearchDialog";
 import { SettingsView } from "@/components/settings/SettingsView";
 import { ThreadShell } from "@/components/thread/ThreadShell";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
+import { AgentWorkbench } from "@/components/workspace/AgentWorkbench";
+import { AppTitleBar, type OpenTab, type WorkspaceTabId } from "@/components/workspace/AppTitleBar";
+import { ModulePlaceholder } from "@/components/workspace/ModulePlaceholder";
 
 import { useSessions } from "@/hooks/useSessions";
 import { useDeferredTitleRefresh } from "@/hooks/useDeferredTitleRefresh";
@@ -392,6 +402,14 @@ export default function App() {
   );
 }
 
+const TAB_TEMPLATES: Record<WorkspaceTabId, OpenTab> = {
+  ssh: { id: "ssh", label: "SSH", icon: <Server className="h-3.5 w-3.5" /> },
+  rdp: { id: "rdp", label: "RDP", icon: <Monitor className="h-3.5 w-3.5" /> },
+  note: { id: "note", label: "笔记", icon: <FileText className="h-3.5 w-3.5" /> },
+  kb: { id: "kb", label: "知识库", icon: <BookOpen className="h-3.5 w-3.5" /> },
+  windows: { id: "windows", label: "Windows", icon: <Wrench className="h-3.5 w-3.5" /> },
+};
+
 function Shell({
   onModelNameChange,
   onLogout,
@@ -407,6 +425,8 @@ function Shell({
     useSidebarState(sessions, !loading);
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [view, setView] = useState<ShellView>("chat");
+  const [openTabs, setOpenTabs] = useState<OpenTab[]>([]);
+  const [activeTabId, setActiveTabId] = useState<WorkspaceTabId | null>(null);
   const [desktopSidebarOpen, setDesktopSidebarOpen] =
     useState<boolean>(readSidebarOpen);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
@@ -513,11 +533,37 @@ function Shell({
     }
   }, []);
 
+  const onOpenWorkspaceTab = useCallback((tab: WorkspaceTabId) => {
+    setOpenTabs((current) => {
+      if (current.some((t) => t.id === tab)) return current;
+      return [...current, TAB_TEMPLATES[tab]];
+    });
+    setActiveTabId(tab);
+    setView("chat");
+    setMobileSidebarOpen(false);
+  }, []);
+
+  const onCloseWorkspaceTab = useCallback((tabId: WorkspaceTabId) => {
+    setOpenTabs((current) => current.filter((t) => t.id !== tabId));
+    setActiveTabId((current) => {
+      if (current !== tabId) return current;
+      const remaining = openTabs.filter((t) => t.id !== tabId);
+      return remaining.length > 0 ? remaining[remaining.length - 1].id : null;
+    });
+  }, [openTabs]);
+
+  const onGoHome = useCallback(() => {
+    setActiveTabId(null);
+    setView("chat");
+    setMobileSidebarOpen(false);
+  }, []);
+
   const onCreateChat = useCallback(async () => {
     try {
       const chatId = await createChat();
       setActiveKey(`websocket:${chatId}`);
       setView("chat");
+      setActiveTabId(null);
       setMobileSidebarOpen(false);
       return chatId;
     } catch (e) {
@@ -529,6 +575,7 @@ function Shell({
   const onNewChat = useCallback(() => {
     setActiveKey(null);
     setView("chat");
+    setActiveTabId(null);
     setMobileSidebarOpen(false);
   }, []);
 
@@ -545,6 +592,7 @@ function Shell({
       }
       setActiveKey(key);
       setView("chat");
+      setActiveTabId(null);
       setMobileSidebarOpen(false);
     },
     [sessions],
@@ -678,6 +726,7 @@ function Shell({
 
   const onBackToChat = useCallback(() => {
     setView("chat");
+    setActiveTabId(null);
     setMobileSidebarOpen(false);
     setActiveKey((current) => {
       if (!current) return null;
@@ -811,6 +860,7 @@ function Shell({
     onToggleArchive,
     onOpenSettings,
     onOpenSearch: onOpenSessionSearch,
+    onGoHome,
     onToggleArchived,
     onUpdateView: onUpdateSidebarView,
     pinnedKeys: sidebarState.pinned_keys,
@@ -822,12 +872,11 @@ function Shell({
     showArchived: sidebarState.view.show_archived,
     archivedCount: sidebarState.archived_keys.length,
   };
-  const showMainSidebar = view !== "settings";
+  const showMainSidebar = true;
 
   return (
     <ThemeProvider theme={theme}>
-      <div className="relative flex h-full w-full overflow-hidden">
-        {/* Desktop sidebar: in normal flow, so the thread area width stays honest. */}
+      <div className="relative flex h-full w-full overflow-hidden bg-background">
         {showMainSidebar ? (
           <aside
             className={cn(
@@ -873,6 +922,61 @@ function Shell({
           </Sheet>
         ) : null}
 
+        <div className="flex min-w-0 flex-1 flex-col">
+          <AppTitleBar
+            theme={theme}
+            onToggleTheme={toggle}
+            openTabs={openTabs}
+            activeTabId={activeTabId}
+            onSelectTab={onOpenWorkspaceTab}
+            onCloseTab={onCloseWorkspaceTab}
+          />
+          <div className="flex min-h-0 flex-1 overflow-hidden">
+            <main className="relative flex h-full min-w-0 flex-1 flex-col bg-background">
+              <div
+                className={cn(
+                  "absolute inset-0 flex flex-col",
+                  (view === "settings" || activeTabId !== null) &&
+                    "invisible pointer-events-none",
+                )}
+              >
+                <ThreadShell
+                  session={activeSession}
+                  title={headerTitle}
+                  onToggleSidebar={toggleSidebar}
+                  onNewChat={onNewChat}
+                  onOpenNote={() => onOpenWorkspaceTab("note")}
+                  onCreateChat={onCreateChat}
+                  onTurnEnd={onTurnEnd}
+                  theme={theme}
+                  onToggleTheme={toggle}
+                  hideSidebarToggleOnDesktop
+                  showHeader={false}
+                />
+              </div>
+              {view === "chat" && activeTabId !== null ? (
+                <div className="absolute inset-0 flex flex-col">
+                  <ModulePlaceholder tab={activeTabId} />
+                </div>
+              ) : null}
+              {view === "settings" && (
+                <div className="absolute inset-0 flex flex-col">
+                  <SettingsView
+                    theme={theme}
+                    onToggleTheme={toggle}
+                    onBackToChat={onBackToChat}
+                    onModelNameChange={onModelNameChange}
+                    onLogout={onLogout}
+                    onRestart={onRestart}
+                    isRestarting={isRestarting}
+                  />
+                </div>
+              )}
+            </main>
+            {view === "chat" ? <AgentWorkbench /> : null}
+          </div>
+        </div>
+
         <SessionSearchDialog
           open={sessionSearchOpen}
           onOpenChange={setSessionSearchOpen}
@@ -882,40 +986,6 @@ function Shell({
           titleOverrides={sidebarState.title_overrides}
           onSelect={onSelectSearchResult}
         />
-
-        <main className="relative flex h-full min-w-0 flex-1 flex-col">
-          <div
-            className={cn(
-              "absolute inset-0 flex flex-col",
-              view === "settings" && "invisible pointer-events-none",
-            )}
-          >
-            <ThreadShell
-              session={activeSession}
-              title={headerTitle}
-              onToggleSidebar={toggleSidebar}
-              onNewChat={onNewChat}
-              onCreateChat={onCreateChat}
-              onTurnEnd={onTurnEnd}
-              theme={theme}
-              onToggleTheme={toggle}
-              hideSidebarToggleOnDesktop
-            />
-          </div>
-          {view === "settings" && (
-            <div className="absolute inset-0 flex flex-col">
-              <SettingsView
-                theme={theme}
-                onToggleTheme={toggle}
-                onBackToChat={onBackToChat}
-                onModelNameChange={onModelNameChange}
-                onLogout={onLogout}
-                onRestart={onRestart}
-                isRestarting={isRestarting}
-              />
-            </div>
-          )}
-        </main>
 
         <DeleteConfirm
           open={!!pendingDelete}
