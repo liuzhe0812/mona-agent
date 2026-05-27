@@ -1,6 +1,7 @@
-﻿"""Configuration schema using Pydantic."""
+"""Configuration schema using Pydantic."""
 from __future__ import annotations
 
+from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -266,6 +267,94 @@ def _lazy_default(module_path: str, class_name: str) -> Any:
     return getattr(module, class_name)()
 
 
+class KnowledgeMode(str, Enum):
+    DOCUMENT = "document"
+    NOTEBOOK = "notebook"
+
+
+class TerminalExecMode(str, Enum):
+    AUTO = "auto"
+    APPROVAL = "approval"
+
+
+class KnowledgeInstanceConfig(Base):
+    """单个知识库实例配置."""
+
+    mode: KnowledgeMode = KnowledgeMode.DOCUMENT
+    paths: list[str] = Field(default_factory=list)
+
+    fts5_enabled: bool = True
+    fts5_tokenizer: Literal["simple", "porter", "unicode61"] = "unicode61"
+
+    wiki_enabled: bool = True
+    wiki_model_preset: str | None = None
+    auto_compile_on_ingest: bool = True
+    batch_compile_threshold: int = Field(default=10, ge=1)
+    lazy_compile_enabled: bool = True
+    diff_ratio_minor: float = Field(default=0.1, ge=0.0, le=1.0)
+    diff_ratio_moderate: float = Field(default=0.5, ge=0.0, le=1.0)
+
+    query_max_tokens: int = Field(default=8000, ge=1000)
+    query_top_k: int = Field(default=5, ge=1, le=20)
+
+
+class KnowledgeConfig(Base):
+    """本地 AI 知识库配置."""
+
+    knowledge_dir: str = ".knowledge"
+    instances: dict[str, KnowledgeInstanceConfig] = Field(default_factory=dict)
+    default_mode: KnowledgeMode = KnowledgeMode.DOCUMENT
+
+
+class TerminalToolConfig(Base):
+    enable: bool = True
+    exec_mode: TerminalExecMode = TerminalExecMode.APPROVAL
+    dangerous_patterns: list[str] = Field(
+        default_factory=lambda: [
+            "rm -rf /",
+            "rm -rf /*",
+            "mkfs",
+            "dd if=",
+            "dd of=",
+            "> /dev/sd",
+            "chmod -R 777 /",
+            "chown -R",
+            "shutdown",
+            "reboot",
+            "init 0",
+            "init 6",
+            ":(){ :|:& };:",
+        ],
+    )
+    safe_patterns: list[str] = Field(
+        default_factory=lambda: [
+            "ls",
+            "cat",
+            "head",
+            "tail",
+            "grep",
+            "find",
+            "wc",
+            "ps",
+            "top",
+            "df",
+            "du",
+            "free",
+            "uptime",
+            "echo",
+            "pwd",
+            "whoami",
+            "hostname",
+            "uname",
+            "netstat",
+            "ss",
+            "ping",
+            "curl",
+            "wget",
+        ],
+    )
+
+
 class ToolsConfig(Base):
     """Tools configuration.
 
@@ -283,6 +372,8 @@ class ToolsConfig(Base):
     restrict_to_workspace: bool = False  # restrict all tool access to workspace directory
     mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
     ssrf_whitelist: list[str] = Field(default_factory=list)  # CIDR ranges to exempt from SSRF blocking (e.g. ["100.64.0.0/10"] for Tailscale)
+    knowledge: KnowledgeConfig = Field(default_factory=KnowledgeConfig)
+    terminal: TerminalToolConfig = Field(default_factory=TerminalToolConfig)
 
 
 class Config(BaseSettings):
