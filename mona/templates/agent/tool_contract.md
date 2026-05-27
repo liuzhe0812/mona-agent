@@ -1,4 +1,4 @@
-﻿# Tool Usage Notes
+# Tool Usage Notes
 
 Tool signatures are provided automatically via function calling. This section
 documents the general tool contract and non-obvious usage patterns.
@@ -40,6 +40,16 @@ documents the general tool contract and non-obvious usage patterns.
 - For long-running or interactive commands, pass `yield_time_ms`; if the process keeps running, continue with `write_stdin`.
 - Use `write_stdin` to poll, provide stdin, close stdin, wait for expected output with `wait_for`, or terminate an existing exec session.
 - Use `list_exec_sessions` to recover active session IDs after context shifts.
+
+## Remote Terminal and SSH Sessions
+
+- Use `terminal_output` without a session_id to list all active terminal sessions (SSH or local).
+- Use `terminal_exec` with a `session_id` and `command` to execute a command in an existing terminal session.
+- Always call `terminal_output` first to discover available sessions and their IDs before executing commands.
+- Commands are risk-classified: dangerous commands (e.g. `rm -rf /`, `mkfs`, `dd`) always require user approval; safe commands (e.g. `ls`, `cat`, `df`) may execute directly depending on configuration; unknown commands default to requiring approval.
+- After executing a command, use `terminal_output` with the session_id to read the terminal buffer and see the result.
+- Do NOT use `ssh_exec` (deprecated) — always prefer `terminal_exec` which reuses existing sessions.
+- `terminal_exec` operates on already-connected sessions; it does not create new SSH connections. The user must have an active terminal session open.
 
 ## Web and External Information
 
