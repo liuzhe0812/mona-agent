@@ -1,5 +1,6 @@
 mod db;
 mod gateway;
+mod ipc_bridge;
 mod notes;
 mod python;
 mod settings;
@@ -154,6 +155,10 @@ pub fn run() {
     let terminal_state = terminal::TerminalState::new();
     let db_state = db::DbState::new();
 
+    let ipc_bridge_port = find_available_ipc_port(17860);
+
+    let terminal_state_for_bridge = terminal_state.clone();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
@@ -179,6 +184,7 @@ pub fn run() {
             notes::notes_save_state,
             notes::notes_export_temp,
             terminal::commands::ssh_connect,
+            terminal::commands::ssh_connect_with_id,
             terminal::commands::ssh_disconnect,
             terminal::commands::ssh_open_sftp,
             terminal::commands::ssh_reconnect,
@@ -208,6 +214,31 @@ pub fn run() {
             terminal::commands::terminal_request_exec,
             terminal::commands::terminal_respond_exec,
             terminal::commands::terminal_list_pending_exec,
+            terminal::commands::get_file_icon,
+            terminal::commands::get_file_type_icon,
+            terminal::commands::local_list_dir,
+            terminal::commands::local_home_dir,
+            terminal::commands::sftp_batch_upload,
+            terminal::commands::sftp_batch_cancel,
+            terminal::commands::sftp_batch_pause,
+            terminal::commands::sftp_batch_resume,
+            terminal::commands::sftp_touch,
+            terminal::commands::sftp_chmod,
+            terminal::commands::sftp_stat_detail,
+            terminal::commands::sftp_download_dir,
+            terminal::commands::sftp_upload_dir,
+            terminal::desktop::commands::desktop_connect,
+            terminal::desktop::commands::desktop_disconnect,
+            terminal::desktop::commands::desktop_exec,
+            terminal::desktop::commands::desktop_list_files,
+            terminal::desktop::commands::desktop_get_file_content,
+            terminal::desktop::commands::desktop_save_file_content,
+            terminal::desktop::commands::desktop_get_system_info,
+            terminal::desktop::commands::desktop_get_processes,
+            terminal::desktop::commands::desktop_get_disks,
+            terminal::desktop::commands::desktop_start_terminal,
+            terminal::desktop::commands::desktop_send_terminal_input,
+            terminal::desktop::commands::desktop_resize_terminal,
             db::commands::db_connect,
             db::commands::db_disconnect,
             db::commands::db_test_connection,
@@ -273,8 +304,25 @@ pub fn run() {
                 }
             });
 
+            let bridge = Arc::new(ipc_bridge::IpcBridge::new(ipc_bridge_port));
+            let ts = terminal_state_for_bridge.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = bridge.start(ts).await {
+                    log::error!("IPC bridge failed: {}", e);
+                }
+            });
+
             Ok(())
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+fn find_available_ipc_port(start: u16) -> u16 {
+    for port in start..=(start + 10) {
+        if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
+            return port;
+        }
+    }
+    start
 }

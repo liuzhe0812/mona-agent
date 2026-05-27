@@ -12,6 +12,7 @@ from mona.agent.tools.schema import StringSchema, tool_parameters_schema
 from mona.config.schema import TerminalToolConfig
 
 _GATEWAY_BASE = "http://127.0.0.1"
+_IPC_BRIDGE_PORT = 17860
 
 
 def _gateway_port() -> int:
@@ -25,9 +26,8 @@ def _gateway_port() -> int:
 
 
 def _tauri_invoke(cmd: str, args: dict[str, Any] | None = None) -> Any:
-    port = _gateway_port()
-    url = f"{_GATEWAY_BASE}:{port}/api/tauri/invoke"
     payload = json.dumps({"cmd": cmd, "args": args or {}}).encode()
+    url = f"{_GATEWAY_BASE}:{_IPC_BRIDGE_PORT}"
     req = urllib.request.Request(
         url, data=payload, headers={"Content-Type": "application/json"}
     )
@@ -36,7 +36,7 @@ def _tauri_invoke(cmd: str, args: dict[str, Any] | None = None) -> Any:
             result = json.loads(resp.read().decode())
             if isinstance(result, dict) and "error" in result:
                 return f"Error: {result['error']}"
-            return result
+            return result.get("result", result)
     except Exception as e:
         return f"Error: Tauri invoke failed: {e}"
 
