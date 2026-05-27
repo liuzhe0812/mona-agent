@@ -101,11 +101,15 @@ class TerminalExecTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Execute a command in a Mona terminal session (SSH or local shell). "
-            "Commands are classified by risk level: dangerous commands always require "
-            "approval, safe commands may execute directly in auto mode, and unknown "
-            "commands default to requiring approval. "
-            "Use terminal_list_sessions to discover available sessions."
+            "Execute a shell command in an existing terminal session (SSH or local). "
+            "This is the primary way to run commands on remote servers — it reuses "
+            "the user's active SSH sessions. First call terminal_output without "
+            "session_id to list available sessions, then pass the session_id and "
+            "command. Commands are risk-classified: dangerous commands (rm -rf, "
+            "mkfs, dd, etc.) always require user approval; safe commands (ls, cat, "
+            "df, etc.) may execute directly depending on config; unknown commands "
+            "default to requiring approval. After execution, call terminal_output "
+            "with the session_id to read the result."
         )
 
     @property
