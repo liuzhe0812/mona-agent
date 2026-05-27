@@ -1,6 +1,9 @@
+mod db;
 mod gateway;
+mod notes;
 mod python;
 mod settings;
+mod terminal;
 mod tray;
 
 use gateway::GatewayManager;
@@ -148,13 +151,18 @@ async fn write_mona_model_config(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let gateway_state = GatewayState::new();
+    let terminal_state = terminal::TerminalState::new();
+    let db_state = db::DbState::new();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_http::init())
         .manage(gateway_state.clone())
+        .manage(terminal_state)
+        .manage(db_state)
         .invoke_handler(tauri::generate_handler![
             get_settings,
             update_settings,
@@ -167,6 +175,54 @@ pub fn run() {
             mona_config_status,
             write_mona_provider_config,
             write_mona_model_config,
+            notes::notes_load_state,
+            notes::notes_save_state,
+            notes::notes_export_temp,
+            terminal::commands::ssh_connect,
+            terminal::commands::ssh_disconnect,
+            terminal::commands::ssh_open_sftp,
+            terminal::commands::ssh_reconnect,
+            terminal::commands::ssh_port_forward,
+            terminal::commands::ssh_write,
+            terminal::commands::ssh_resize,
+            terminal::commands::shell_spawn,
+            terminal::commands::shell_write,
+            terminal::commands::shell_resize,
+            terminal::commands::shell_kill,
+            terminal::commands::shell_get_buffer,
+            terminal::commands::sftp_list,
+            terminal::commands::sftp_mkdir,
+            terminal::commands::sftp_remove,
+            terminal::commands::sftp_rename,
+            terminal::commands::sftp_stat,
+            terminal::commands::sftp_canonicalize,
+            terminal::commands::sftp_download,
+            terminal::commands::sftp_upload,
+            terminal::commands::terminal_save_connections,
+            terminal::commands::terminal_load_connections,
+            terminal::commands::ssh_trust_host_key,
+            terminal::commands::ssh_remove_host_key,
+            terminal::commands::terminal_list_sessions,
+            terminal::commands::terminal_get_output,
+            terminal::commands::terminal_exec_command,
+            terminal::commands::terminal_request_exec,
+            terminal::commands::terminal_respond_exec,
+            terminal::commands::terminal_list_pending_exec,
+            db::commands::db_connect,
+            db::commands::db_disconnect,
+            db::commands::db_test_connection,
+            db::commands::db_execute_query,
+            db::commands::db_get_databases,
+            db::commands::db_get_tables,
+            db::commands::db_get_views,
+            db::commands::db_get_table_info,
+            db::commands::db_get_server_stats,
+            db::commands::db_get_processes,
+            db::commands::db_get_users,
+            db::commands::db_kill_process,
+            db::commands::db_list_connections,
+            db::commands::db_save_connections,
+            db::commands::db_load_connections,
         ])
         .setup(move |app| {
             tray::setup_tray(app)?;

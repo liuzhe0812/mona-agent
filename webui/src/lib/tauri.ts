@@ -87,3 +87,15 @@ export async function writeMonaModelConfig(
 ): Promise<void> {
   return invoke<void>("write_mona_model_config", { model, provider });
 }
+
+export async function loadDesktopNotesState(): Promise<unknown | null> {
+  return invoke<unknown>("notes_load_state");
+}
+
+export async function saveDesktopNotesState(state: unknown): Promise<void> {
+  return invoke<void>("notes_save_state", { state });
+}
+
+export async function exportNoteTempFile(noteId: string, content: string): Promise<string> {
+  return invoke<string>("notes_export_temp", { noteId, content });
+}

@@ -34,6 +34,8 @@ export interface UIMessage {
   id: string;
   role: Role;
   content: string;
+  /** Short display text for user messages (e.g. action label). Falls back to ``content``. */
+  displayContent?: string;
   kind?: MessageKind;
   isStreaming?: boolean;
   createdAt: number;

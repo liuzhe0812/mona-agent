@@ -297,6 +297,7 @@ export interface SendImage {
 
 export interface SendOptions {
   imageGeneration?: OutboundImageGeneration;
+  displayContent?: string;
 }
 
 export function useMonaStream(
@@ -835,6 +836,7 @@ export function useMonaStream(
             role: "user",
             content,
             createdAt: Date.now(),
+            ...(options?.displayContent ? { displayContent: options.displayContent } : {}),
             ...(previews ? { images: previews } : {}),
           },
         ];
