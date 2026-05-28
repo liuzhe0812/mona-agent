@@ -1,4 +1,4 @@
-﻿import shlex
+import shlex
 import subprocess
 import sys
 from typing import Any
@@ -650,7 +650,11 @@ async def test_exec_timeout_parameter() -> None:
     """LLM-supplied timeout should override the constructor default."""
     tool = ExecTool(timeout=60)
     # A very short timeout should cause the command to be killed
-    result = await tool.execute(command="sleep 10", timeout=1)
+    if sys.platform == "win32":
+        cmd = f'{subprocess.list2cmdline([sys.executable])} -c "import time; time.sleep(10)"'
+    else:
+        cmd = "sleep 10"
+    result = await tool.execute(command=cmd, timeout=1)
     assert "timed out" in result
     assert "1 seconds" in result
 

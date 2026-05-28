@@ -18,6 +18,7 @@ tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-opener = "2"
+tauri-plugin-clipboard-manager = "2"
 tauri-plugin-http = { version = "2", features = ["unsafe-headers"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -27,6 +28,7 @@ hex = "0.4"
 urlencoding = "2"
 reqwest = { version = "0.12", features = ["json"] }
 tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["rt"] }
 log = "0.4"
 dirs = "6"
 flate2 = "1"
@@ -44,3 +46,13 @@ ring = "0.17"
 sha2 = "0.10"
 data-encoding = "2"
 dashmap = "6"
+file_icon_provider = "1"
+png = "0.17"
+base64 = "0.22"
+windows = { version = "0.61", features = [
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Storage_FileSystem",
+    "Win32_Graphics_Gdi",
+    "Win32_Foundation",
+] }

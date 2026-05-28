@@ -1,4 +1,4 @@
-﻿import type {
+import type {
   ConnectionStatus,
   InboundEvent,
   Outbound,
@@ -278,8 +278,10 @@ export class MonaClient {
     this.setStatus("closed");
   }
 
-  /** Ask the server to provision a new chat_id; resolves with the assigned id. */
-  newChat(timeoutMs: number = 5_000): Promise<string> {
+  /** Ask the server to provision a new chat_id; resolves with the assigned id.
+   *  When ``ephemeral`` is true the session is auto-deleted after the turn ends
+   *  and hidden from the session list. */
+  newChat(timeoutMs: number = 5_000, ephemeral = false): Promise<string> {
     if (this.pendingNewChat) {
       return Promise.reject(new Error("newChat already in flight"));
     }
@@ -289,7 +291,7 @@ export class MonaClient {
         reject(new Error("newChat timed out"));
       }, timeoutMs);
       this.pendingNewChat = { resolve, reject, timer };
-      this.queueSend({ type: "new_chat" });
+      this.queueSend({ type: "new_chat", ...(ephemeral ? { ephemeral: true } : {}) });
     });
   }
 
@@ -304,7 +306,14 @@ export class MonaClient {
     chatId: string,
     content: string,
     media?: OutboundMedia[],
-    options?: { imageGeneration?: OutboundImageGeneration },
+    options?: {
+      imageGeneration?: OutboundImageGeneration;
+      terminalSessionId?: string;
+      terminalExecMode?: string;
+      dbConnectionId?: string;
+      dbDatabase?: string;
+      dbTable?: string;
+    },
   ): void {
     this.knownChats.add(chatId);
     const frame: Outbound = {
@@ -313,6 +322,11 @@ export class MonaClient {
       content,
       ...(media && media.length > 0 ? { media } : {}),
       ...(options?.imageGeneration ? { image_generation: options.imageGeneration } : {}),
+      ...(options?.terminalSessionId ? { terminal_session_id: options.terminalSessionId } : {}),
+      ...(options?.terminalExecMode ? { terminal_exec_mode: options.terminalExecMode } : {}),
+      ...(options?.dbConnectionId ? { db_connection_id: options.dbConnectionId } : {}),
+      ...(options?.dbDatabase ? { db_database: options.dbDatabase } : {}),
+      ...(options?.dbTable ? { db_table: options.dbTable } : {}),
       webui: true,
     };
     this.queueSend(frame);

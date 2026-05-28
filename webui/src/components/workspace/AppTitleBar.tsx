@@ -5,21 +5,9 @@ import { Button } from "@/components/ui/button";
 import { isTauri } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 
-export type WorkspaceTabId = "ssh" | "rdp" | "note" | "kb" | "windows";
-
-export interface OpenTab {
-  id: WorkspaceTabId;
-  label: string;
-  icon: ReactNode;
-}
-
 interface AppTitleBarProps {
   theme: "light" | "dark";
   onToggleTheme: () => void;
-  openTabs: OpenTab[];
-  activeTabId: WorkspaceTabId | null;
-  onSelectTab: (id: WorkspaceTabId) => void;
-  onCloseTab: (id: WorkspaceTabId) => void;
 }
 
 async function withCurrentWindow(
@@ -36,36 +24,12 @@ async function withCurrentWindow(
   }
 }
 
-export function AppTitleBar({
-  theme,
-  onToggleTheme,
-  openTabs,
-  activeTabId,
-  onSelectTab,
-  onCloseTab,
-}: AppTitleBarProps) {
+export function AppTitleBar({ theme, onToggleTheme }: AppTitleBarProps) {
   return (
     <header
       data-tauri-drag-region
       className="flex h-9 shrink-0 items-center border-b border-border/70 bg-sidebar/95 text-sidebar-foreground"
     >
-      {openTabs.length > 0 ? (
-        <div
-          className="flex min-w-0 items-stretch overflow-x-auto overflow-y-hidden scrollbar-thin"
-          onPointerDownCapture={undefined}
-        >
-          {openTabs.map((tab) => (
-            <TitleBarTab
-              key={tab.id}
-              label={tab.label}
-              icon={tab.icon}
-              active={tab.id === activeTabId}
-              onSelect={() => onSelectTab(tab.id)}
-              onClose={() => onCloseTab(tab.id)}
-            />
-          ))}
-        </div>
-      ) : null}
       <div data-tauri-drag-region className="min-w-0 flex-1" />
       <div className="flex h-full items-center">
         <TitleBarButton
@@ -105,51 +69,6 @@ export function AppTitleBar({
         </TitleBarButton>
       </div>
     </header>
-  );
-}
-
-function TitleBarTab({
-  label,
-  icon,
-  active,
-  onSelect,
-  onClose,
-}: {
-  label: string;
-  icon: ReactNode;
-  active: boolean;
-  onSelect: () => void;
-  onClose: () => void;
-}) {
-  return (
-    <div
-      className={cn(
-        "group flex h-9 min-w-0 shrink-0 items-center border-r border-border/70 text-[12.5px] font-medium transition-colors",
-        active
-          ? "bg-background text-foreground"
-          : "bg-sidebar/80 text-muted-foreground hover:bg-sidebar-accent/70 hover:text-foreground",
-      )}
-    >
-      <button
-        type="button"
-        onClick={onSelect}
-        className="flex h-full min-w-0 items-center gap-1.5 px-3 text-left"
-      >
-        <span className="shrink-0">{icon}</span>
-        <span className="min-w-0 max-w-[120px] truncate">{label}</span>
-      </button>
-      <button
-        type="button"
-        aria-label={`关闭 ${label}`}
-        onClick={(event) => {
-          event.stopPropagation();
-          onClose();
-        }}
-        className="mr-1.5 grid h-5 w-5 shrink-0 place-items-center rounded-md text-muted-foreground/55 opacity-0 transition-colors hover:bg-foreground/8 hover:text-foreground group-hover:opacity-100"
-      >
-        <X className="h-3 w-3" />
-      </button>
-    </div>
   );
 }
 

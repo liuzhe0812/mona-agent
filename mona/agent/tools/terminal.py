@@ -3,16 +3,30 @@ from __future__ import annotations
 import json
 import re
 import urllib.request
+from pathlib import Path
 from typing import Any
 
 from loguru import logger
 
 from mona.agent.tools.base import Tool, tool_parameters
+from mona.agent.tools.context import RequestContext
 from mona.agent.tools.schema import StringSchema, tool_parameters_schema
 from mona.config.schema import TerminalToolConfig
 
 _GATEWAY_BASE = "http://127.0.0.1"
-_IPC_BRIDGE_PORT = 17860
+_FALLBACK_IPC_PORT = 17860
+_IPC_PORT_FILE = Path.home() / ".mona" / "ipc_bridge_port"
+
+
+def _read_ipc_port() -> int:
+    try:
+        text = _IPC_PORT_FILE.read_text().strip()
+        port = int(text)
+        if 1 <= port <= 65535:
+            return port
+    except (FileNotFoundError, ValueError, PermissionError):
+        pass
+    return _FALLBACK_IPC_PORT
 
 
 def _gateway_port() -> int:
@@ -26,8 +40,9 @@ def _gateway_port() -> int:
 
 
 def _tauri_invoke(cmd: str, args: dict[str, Any] | None = None) -> Any:
+    port = _read_ipc_port()
     payload = json.dumps({"cmd": cmd, "args": args or {}}).encode()
-    url = f"{_GATEWAY_BASE}:{_IPC_BRIDGE_PORT}"
+    url = f"{_GATEWAY_BASE}:{port}"
     req = urllib.request.Request(
         url, data=payload, headers={"Content-Type": "application/json"}
     )
@@ -63,21 +78,20 @@ def _classify_risk(
 ) -> str:
     cmd_lower = command.lower()
     d_patterns = dangerous_patterns if dangerous_patterns is not None else _DEFAULT_TERMINAL_CONFIG.dangerous_patterns
-    s_patterns = safe_patterns if safe_patterns is not None else _DEFAULT_TERMINAL_CONFIG.safe_patterns
     for pat in d_patterns:
         if _pattern_matches(pat, cmd_lower):
             return "approval"
     if exec_mode == "approval":
         return "approval"
-    for pat in s_patterns:
-        if _pattern_matches(pat, cmd_lower):
-            return "direct"
-    return "approval"
+    return "direct"
 
 
 @tool_parameters(
     tool_parameters_schema(
-        session_id=StringSchema("Terminal session ID to execute the command in"),
+        session_id=StringSchema(
+            "Terminal session ID. If omitted, uses the current active terminal session.",
+            nullable=True,
+        ),
         command=StringSchema("Shell command to execute in the terminal session"),
         source=StringSchema(
             "Source label for the approval dialog (e.g. 'AI Agent')",
@@ -87,12 +101,16 @@ def _classify_risk(
             "Whether to require user approval before executing (true/false)",
             nullable=True,
         ),
-        required=["session_id", "command"],
+        required=["command"],
     )
 )
 class TerminalExecTool(Tool):
     _scopes = {"core", "subagent"}
     config_key = "terminal"
+    _request_ctx: RequestContext | None = None
+
+    def set_context(self, ctx: RequestContext) -> None:
+        self._request_ctx = ctx
 
     @property
     def name(self) -> str:
@@ -101,15 +119,13 @@ class TerminalExecTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Execute a shell command in an existing terminal session (SSH or local). "
-            "This is the primary way to run commands on remote servers — it reuses "
-            "the user's active SSH sessions. First call terminal_output without "
-            "session_id to list available sessions, then pass the session_id and "
-            "command. Commands are risk-classified: dangerous commands (rm -rf, "
-            "mkfs, dd, etc.) always require user approval; safe commands (ls, cat, "
-            "df, etc.) may execute directly depending on config; unknown commands "
-            "default to requiring approval. After execution, call terminal_output "
-            "with the session_id to read the result."
+            "Execute a shell command in the user's current terminal session (SSH or local shell). "
+            "The session_id is automatically set to the active terminal the user is viewing — "
+            "you do NOT need to discover or specify it. Just provide the command. "
+            "Commands are risk-classified: dangerous commands (rm -rf, mkfs, dd, etc.) "
+            "always require user approval; safe commands (ls, cat, df, etc.) may execute "
+            "directly depending on config; unknown commands default to requiring approval. "
+            "After execution, call terminal_output to read the result."
         )
 
     @property
@@ -128,12 +144,18 @@ class TerminalExecTool(Tool):
 
     async def execute(
         self,
-        session_id: str,
         command: str,
+        session_id: str | None = None,
         source: str | None = None,
         require_approval: str | None = None,
         **kwargs: Any,
     ) -> str:
+        effective_session = session_id or (
+            self._request_ctx.terminal_session_id if self._request_ctx else None
+        )
+        if not effective_session:
+            return "Error: No terminal session available. The user is not currently viewing a terminal."
+
         explicit_approval = (
             require_approval is not None
             and require_approval.lower() in ("true", "1", "yes")
@@ -143,9 +165,14 @@ class TerminalExecTool(Tool):
             need_approval = True
         else:
             tcfg = self._load_config()
+            effective_exec_mode = (
+                self._request_ctx.terminal_exec_mode
+                if self._request_ctx and self._request_ctx.terminal_exec_mode
+                else tcfg.exec_mode.value
+            )
             risk = _classify_risk(
                 command,
-                exec_mode=tcfg.exec_mode.value,
+                exec_mode=effective_exec_mode,
                 dangerous_patterns=tcfg.dangerous_patterns,
                 safe_patterns=tcfg.safe_patterns,
             )
@@ -154,14 +181,14 @@ class TerminalExecTool(Tool):
                 "terminal risk classification: command={!r} risk={} exec_mode={}",
                 command,
                 risk,
-                tcfg.exec_mode.value,
+                effective_exec_mode,
             )
 
         if need_approval:
             result = _tauri_invoke(
                 "terminal_request_exec",
                 {
-                    "sessionId": session_id,
+                    "sessionId": effective_session,
                     "command": command,
                     "source": source or "AI Agent",
                 },
@@ -169,7 +196,7 @@ class TerminalExecTool(Tool):
         else:
             result = _tauri_invoke(
                 "terminal_exec_command",
-                {"sessionId": session_id, "command": command},
+                {"sessionId": effective_session, "command": command},
             )
 
         if isinstance(result, str) and result.startswith("Error:"):
@@ -192,6 +219,10 @@ class TerminalExecTool(Tool):
 class TerminalOutputTool(Tool):
     _scopes = {"core", "subagent"}
     config_key = "terminal_output"
+    _request_ctx: RequestContext | None = None
+
+    def set_context(self, ctx: RequestContext) -> None:
+        self._request_ctx = ctx
 
     @property
     def name(self) -> str:
@@ -200,8 +231,9 @@ class TerminalOutputTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Get the current terminal output buffer for a session. "
-            "If session_id is not provided, lists all active sessions instead."
+            "Get the current terminal output buffer. "
+            "If session_id is not provided, uses the user's current active terminal session. "
+            "Returns the visible terminal content so you can read command results."
         )
 
     @property
@@ -213,9 +245,12 @@ class TerminalOutputTool(Tool):
         session_id: str | None = None,
         **kwargs: Any,
     ) -> str:
-        if session_id:
+        effective_session = session_id or (
+            self._request_ctx.terminal_session_id if self._request_ctx else None
+        )
+        if effective_session:
             result = _tauri_invoke(
-                "terminal_get_output", {"sessionId": session_id}
+                "terminal_get_output", {"sessionId": effective_session}
             )
         else:
             result = _tauri_invoke("terminal_list_sessions")

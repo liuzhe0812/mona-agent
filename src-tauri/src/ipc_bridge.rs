@@ -2,26 +2,58 @@ use std::sync::Arc;
 
 use crate::terminal::TerminalState;
 use serde_json::Value;
+use tauri::Emitter;
+use tauri::Manager;
+
+const IPC_PORT_FILE_NAME: &str = "ipc_bridge_port";
+const IPC_PORT_RANGE: std::ops::Range<u16> = 17860..17871;
+
+fn write_port_file(port: u16) {
+    let dir = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from(".")).join(".mona");
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join(IPC_PORT_FILE_NAME);
+    if let Err(e) = std::fs::write(&path, port.to_string()) {
+        log::error!("Failed to write IPC bridge port file {:?}: {}", path, e);
+    } else {
+        log::info!("IPC bridge port {} written to {:?}", port, path);
+    }
+}
+
+pub fn remove_port_file() {
+    let path = dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join(".mona")
+        .join(IPC_PORT_FILE_NAME);
+    let _ = std::fs::remove_file(&path);
+}
 
 pub struct IpcBridge {
-    port: u16,
+    app_handle: tauri::AppHandle,
 }
 
 impl IpcBridge {
-    pub fn new(port: u16) -> Self {
-        Self { port }
-    }
-
-    pub fn port(&self) -> u16 {
-        self.port
+    pub fn new(app_handle: tauri::AppHandle) -> Self {
+        Self { app_handle }
     }
 
     pub async fn start(self: Arc<Self>, terminal_state: TerminalState) -> Result<(), String> {
-        let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", self.port))
-            .await
-            .map_err(|e| format!("IPC bridge bind failed: {}", e))?;
+        let listener = {
+            let mut found = None;
+            for port in IPC_PORT_RANGE {
+                match tokio::net::TcpListener::bind(format!("127.0.0.1:{}", port)).await {
+                    Ok(l) => {
+                        found = Some(l);
+                        break;
+                    }
+                    Err(_) => continue,
+                }
+            }
+            found.ok_or("IPC bridge: no available port in range 17860-17870")?
+        };
 
-        log::info!("IPC bridge listening on http://127.0.0.1:{}", self.port);
+        let actual_port = listener.local_addr().map_err(|e| e.to_string())?.port();
+        log::info!("IPC bridge listening on http://127.0.0.1:{}", actual_port);
+        write_port_file(actual_port);
 
         loop {
             let (stream, _) = listener
@@ -70,7 +102,9 @@ impl IpcBridge {
                     .unwrap_or("");
                 let args = invoke_req.get("args").cloned().unwrap_or_default();
 
-                let result = self.dispatch_command(cmd, args, &terminal_state).await;
+                let result = self
+                    .dispatch_command(cmd, args, &terminal_state)
+                    .await;
 
                 match result {
                     Ok(v) => serde_json::json!({"result": v}),
@@ -181,20 +215,77 @@ impl IpcBridge {
                     .and_then(|v| v.as_str())
                     .unwrap_or("AI Agent");
 
-                let (pending, _rx) = state
+                let (pending, mut rx) = state
                     .approval
                     .manager
                     .submit(session_id.to_string(), command.to_string(), source.to_string())
                     .await;
 
-                Ok(serde_json::json!({
+                let payload = serde_json::json!({
                     "requestId": pending.request_id,
-                    "status": "pending"
-                }))
+                    "sessionId": pending.session_id,
+                    "command": pending.command,
+                    "source": pending.source,
+                });
+                let _ = self.app_handle.emit("terminal-exec-request", &payload);
+
+                match rx.await {
+                    Ok(crate::terminal::approval::ApprovalVerdict::Approved) => {
+                        Ok(serde_json::json!({"status": "approved"}))
+                    }
+                    Ok(crate::terminal::approval::ApprovalVerdict::Rejected { reason }) => {
+                        Err(format!("Command rejected: {}", reason))
+                    }
+                    Err(_) => Err("Approval channel closed".to_string()),
+                }
             }
             "terminal_list_pending_exec" => {
                 let pending = state.approval.manager.list_pending().await;
                 serde_json::to_value(pending).map_err(|e| e.to_string())
+            }
+            "db_execute_query" => {
+                let db_state = self.app_handle.state::<crate::db::DbState>();
+                let connection_id = args.get("connectionId").and_then(|v| v.as_str()).ok_or("Missing connectionId")?;
+                let sql = args.get("sql").and_then(|v| v.as_str()).ok_or("Missing sql")?;
+                let limit = args.get("limit").and_then(|v| v.as_u64());
+                let database = args.get("database").and_then(|v| v.as_str());
+                let handle = {
+                    let manager = db_state.manager.lock().await;
+                    manager.get_handle(connection_id)
+                        .ok_or_else(|| format!("Connection {} not found", connection_id))?
+                };
+                let result = crate::db::manager::execute_on_handle(&handle, sql, limit, database)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                serde_json::to_value(result).map_err(|e| e.to_string())
+            }
+            "db_get_table_info" => {
+                let db_state = self.app_handle.state::<crate::db::DbState>();
+                let connection_id = args.get("connectionId").and_then(|v| v.as_str()).ok_or("Missing connectionId")?;
+                let database = args.get("database").and_then(|v| v.as_str()).ok_or("Missing database")?;
+                let table = args.get("table").and_then(|v| v.as_str()).ok_or("Missing table")?;
+                let handle = {
+                    let manager = db_state.manager.lock().await;
+                    manager.get_handle(connection_id)
+                        .ok_or_else(|| format!("Connection {} not found", connection_id))?
+                };
+                let result = crate::db::manager::get_table_info_on_handle(&handle, database, table)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                serde_json::to_value(result).map_err(|e| e.to_string())
+            }
+            "db_get_server_stats" => {
+                let db_state = self.app_handle.state::<crate::db::DbState>();
+                let connection_id = args.get("connectionId").and_then(|v| v.as_str()).ok_or("Missing connectionId")?;
+                let handle = {
+                    let manager = db_state.manager.lock().await;
+                    manager.get_handle(connection_id)
+                        .ok_or_else(|| format!("Connection {} not found", connection_id))?
+                };
+                let result = crate::db::manager::get_server_stats_on_handle(&handle)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                serde_json::to_value(result).map_err(|e| e.to_string())
             }
             _ => Err(format!("Unknown command: {}", cmd)),
         }

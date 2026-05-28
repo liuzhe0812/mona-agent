@@ -413,7 +413,10 @@ export type Outbound =
       content: string;
       media?: OutboundMedia[];
       image_generation?: OutboundImageGeneration;
-      /** Marks messages sent by the embedded WebUI, without changing the
-       * generic websocket protocol for other clients. */
       webui?: true;
+      terminal_session_id?: string;
+      terminal_exec_mode?: string;
+      db_connection_id?: string;
+      db_database?: string;
+      db_table?: string;
     };

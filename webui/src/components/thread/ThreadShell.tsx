@@ -30,6 +30,8 @@ interface ThreadShellProps {
   onOpenNote?: () => void;
   onCreateChat?: () => Promise<string | null>;
   onTurnEnd?: () => void;
+  queuedPrompt?: QueuedPrompt | null;
+  onQueuedPromptConsumed?: (id: string) => void;
   theme?: "light" | "dark";
   onToggleTheme?: () => void;
   hideSidebarToggleOnDesktop?: boolean;
@@ -50,6 +52,11 @@ interface PendingFirstMessage {
   options?: SendOptions;
 }
 
+interface QueuedPrompt {
+  id: string;
+  content: string;
+}
+
 export function ThreadShell({
   session,
   title,
@@ -58,6 +65,8 @@ export function ThreadShell({
   onOpenNote,
   onCreateChat,
   onTurnEnd,
+  queuedPrompt,
+  onQueuedPromptConsumed,
   theme = "light",
   onToggleTheme = () => {},
   hideSidebarToggleOnDesktop = false,
@@ -79,6 +88,7 @@ export function ThreadShell({
   const [heroImageMode, setHeroImageMode] = useState(false);
   const [scrollToBottomSignal, setScrollToBottomSignal] = useState(0);
   const pendingFirstRef = useRef<PendingFirstMessage | null>(null);
+  const consumedQueuedPromptRef = useRef<string | null>(null);
   const messageCacheRef = useRef<Map<string, UIMessage[]>>(new Map());
   /** Last chatId we associated with the in-memory thread (for cache-on-switch). */
   const prevChatIdForCacheRef = useRef<string | null>(null);
@@ -248,6 +258,16 @@ export function ThreadShell({
     [send],
   );
 
+  useEffect(() => {
+    if (!queuedPrompt || !chatId || booting || isStreaming) return;
+    if (consumedQueuedPromptRef.current === queuedPrompt.id) return;
+
+    consumedQueuedPromptRef.current = queuedPrompt.id;
+    setScrollToBottomSignal((value) => value + 1);
+    send(queuedPrompt.content);
+    onQueuedPromptConsumed?.(queuedPrompt.id);
+  }, [booting, chatId, isStreaming, onQueuedPromptConsumed, queuedPrompt, send]);
+
   const quickEntries = showHeroComposer ? (
     <div className="flex items-center justify-center gap-2 pb-3">
       <button
@@ -327,6 +347,12 @@ export function ThreadShell({
     </div>
   ) : (
     <div className="flex w-full flex-col items-center text-center animate-in fade-in-0 slide-in-from-bottom-2 duration-500">
+      <img
+        src="/brand/mona_app_icon.png"
+        alt=""
+        className="mb-4 h-16 w-16 select-none object-contain opacity-80"
+        draggable={false}
+      />
       <h1 className="text-balance text-[40px] font-normal leading-tight tracking-[-0.045em] text-foreground sm:text-[48px]">
         {t("thread.empty.greeting")}
       </h1>

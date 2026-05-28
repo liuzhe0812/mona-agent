@@ -20,6 +20,8 @@ if (typeof globalThis.crypto !== "undefined" && !("randomUUID" in globalThis.cry
   });
 }
 
+document.addEventListener("contextmenu", (e) => e.preventDefault());
+
 const root = document.getElementById("root");
 if (!root) throw new Error("root element missing");
 

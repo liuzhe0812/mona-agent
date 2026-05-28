@@ -1,0 +1,528 @@
+<h2>AI 工具箱 — 修正版 Mockup</h2>
+<p class="subtitle">Sidebar 顶头 + TabBar 在右侧主区域 + 无首页 Tab</p>
+
+<style>
+  .mf { display:flex; flex-direction:column; border-radius:12px; overflow:hidden; border:1px solid #e5e7eb; background:#fff; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; box-shadow:0 2px 12px rgba(0,0,0,0.06) }
+  .tb { height:32px; background:#f9fafb; display:flex; align-items:center; padding:0 12px; gap:8px; border-bottom:1px solid #f3f4f6 }
+  .tf { display:flex; gap:6px }
+  .tf span { width:12px; height:12px; border-radius:50% }
+  .sb { width:52px; background:#f9fafb; border-right:1px solid #e5e7eb; display:flex; flex-direction:column; align-items:center; padding:10px 0; gap:2px; flex-shrink:0 }
+  .sb-b { width:34px; height:34px; border-radius:10px; display:flex; align-items:center; justify-content:center; cursor:pointer; color:#9ca3af; transition:all 0.15s; font-size:14px }
+  .sb-b.a { background:#3b82f6; color:#fff }
+  .sb-b:hover:not(.a) { background:#f3f4f6; color:#6b7280 }
+  .tabs { height:36px; background:#fff; border-bottom:1px solid #e5e7eb; display:flex; align-items:end; padding:0 8px; gap:1px; overflow-x:auto }
+  .tab { display:flex; align-items:center; gap:6px; padding:6px 14px; font-size:12px; cursor:pointer; border-bottom:2px solid transparent; white-space:nowrap; flex-shrink:0 }
+  .tab.a { color:#111827; border-bottom-color:#3b82f6; font-weight:500 }
+  .tab.i { color:#6b7280 }
+  .tab .x { color:#d1d5db; font-size:13px; margin-left:2px; cursor:pointer }
+  .cp { width:220px; background:#f9fafb; border-right:1px solid #e5e7eb; display:flex; flex-direction:column; flex-shrink:0 }
+  .ci { padding:7px 10px; border-radius:8px; font-size:12px; cursor:pointer; margin-bottom:1px }
+  .ci.a { background:#3b82f6; color:#fff; font-weight:500 }
+  .ci.i { color:#374151 }
+  .ci.m { color:#9ca3af }
+  .qb { padding:6px 14px; display:flex; gap:5px; border-bottom:1px solid #f3f4f6; flex-wrap:wrap }
+  .qb-b { display:flex; align-items:center; gap:4px; background:#f3f4f6; border-radius:7px; padding:4px 9px; font-size:11px; color:#6b7280; cursor:pointer; white-space:nowrap }
+  .cmp { padding:8px 16px 12px }
+  .cmp-b { display:flex; flex-direction:column; background:#fff; border:1px solid #e5e7eb; border-radius:18px; box-shadow:0 4px 16px rgba(0,0,0,0.04); overflow:hidden }
+  .cmp-i { width:100%; border:none; outline:none; resize:none; padding:10px 14px 4px; font-size:13px; color:#1f2937; min-height:38px; font-family:inherit }
+  .cmp-f { display:flex; align-items:center; justify-content:space-between; padding:4px 8px 8px }
+  .sl { font-size:14px; font-weight:600; color:#1e293b; margin:28px 0 12px; padding-bottom:8px; border-bottom:2px solid #e5e7eb }
+</style>
+
+<!-- ==================== 1. AI 助手 — 有会话 ==================== -->
+<div class="sl">① AI 助手 — 会话中（Sidebar 顶头，TabBar 在右侧）</div>
+<div class="mf" style="height:440px">
+  <!-- 标题栏 -->
+  <div class="tb">
+    <div class="tf"><span style="background:#ef4444"></span><span style="background:#f59e0b"></span><span style="background:#22c55e"></span></div>
+    <div style="flex:1;text-align:center;font-size:11px;color:#9ca3af">Mona Toolbox</div>
+    <div style="width:60px"></div>
+  </div>
+  <!-- 主体：sidebar 顶头 + 右侧区域 -->
+  <div style="flex:1;display:flex;overflow:hidden">
+    <!-- Sidebar 顶到标题栏下方 -->
+    <div class="sb">
+      <div class="sb-b a" title="AI 助手">💬</div>
+      <div class="sb-b" title="终端">💻</div>
+      <div class="sb-b" title="知识库">📚</div>
+      <div class="sb-b" title="系统维护">🔧</div>
+      <div style="flex:1"></div>
+      <div class="sb-b" title="设置">⚙️</div>
+    </div>
+    <!-- 右侧主区域 -->
+    <div style="flex:1;display:flex;flex-direction:column;overflow:hidden">
+      <!-- TabBar 在右侧主区域顶部 -->
+      <div class="tabs">
+        <div class="tab i">💻 prod-server <span style="color:#22c55e;font-size:6px">●</span> <span class="x">×</span></div>
+        <div class="tab i">📄 部署文档.md <span class="x">×</span></div>
+        <div class="tab" style="color:#9ca3af;font-size:14px">+</div>
+      </div>
+      <!-- AI 模块内容 -->
+      <div style="flex:1;display:flex;overflow:hidden">
+        <div class="cp">
+          <div style="padding:10px 10px 6px;display:flex;align-items:center;justify-content:space-between">
+            <span style="font-size:12px;font-weight:600;color:#111827">会话</span>
+            <div style="display:flex;gap:3px">
+              <div style="width:22px;height:22px;border-radius:5px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#9ca3af;font-size:13px">🔍</div>
+              <div style="width:22px;height:22px;border-radius:5px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#9ca3af;font-size:13px">✚</div>
+            </div>
+          </div>
+          <div style="flex:1;overflow-y:auto;padding:0 6px">
+            <div class="ci a">服务器运维方案</div>
+            <div class="ci i">部署文档编写</div>
+            <div class="ci i">磁盘清理建议</div>
+            <div class="ci m">网络配置排查</div>
+            <div class="ci m">Python 环境问题</div>
+          </div>
+          <div style="padding:6px 10px;border-top:1px solid #e5e7eb;display:flex;align-items:center;gap:5px">
+            <div style="width:5px;height:5px;border-radius:50%;background:#22c55e"></div>
+            <span style="font-size:10px;color:#9ca3af">已连接 · gpt-4o</span>
+          </div>
+        </div>
+        <div style="flex:1;display:flex;flex-direction:column;overflow:hidden">
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:5px 12px;border-bottom:1px solid #f3f4f6">
+            <span style="font-size:12px;font-weight:500;color:#6b7280">服务器运维方案</span>
+            <div style="width:24px;height:24px;border-radius:6px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#9ca3af;font-size:12px">🌙</div>
+          </div>
+          <div class="qb">
+            <div class="qb-b">💻 新终端</div>
+            <div class="qb-b">🖥️ RDP</div>
+            <div class="qb-b">📤 上传文档</div>
+            <div class="qb-b">🛡️ 系统体检</div>
+            <div class="qb-b">📁 SFTP</div>
+          </div>
+          <div style="flex:1;padding:16px 20px;display:flex;flex-direction:column;gap:12px;overflow-y:auto">
+            <div style="display:flex;gap:10px;align-items:flex-start">
+              <div style="width:28px;height:28px;border-radius:8px;background:#3b82f6;display:flex;align-items:center;justify-content:center;flex-shrink:0;color:#fff;font-size:12px">🤖</div>
+              <div style="background:#f3f4f6;border-radius:14px;padding:10px 14px;max-width:70%;font-size:13px;color:#1f2937;line-height:1.6">你好！有什么可以帮你的？</div>
+            </div>
+            <div style="display:flex;gap:10px;align-items:flex-start;flex-direction:row-reverse">
+              <div style="width:28px;height:28px;border-radius:8px;background:#6b7280;display:flex;align-items:center;justify-content:center;flex-shrink:0;color:#fff;font-size:12px">👤</div>
+              <div style="background:#3b82f6;border-radius:14px;padding:10px 14px;max-width:70%;font-size:13px;color:#fff;line-height:1.6">帮我检查 prod-server 的磁盘空间</div>
+            </div>
+            <div style="display:flex;gap:10px;align-items:flex-start">
+              <div style="width:28px;height:28px;border-radius:8px;background:#3b82f6;display:flex;align-items:center;justify-content:center;flex-shrink:0;color:#fff;font-size:12px">🤖</div>
+              <div style="display:flex;flex-direction:column;gap:6px;max-width:70%">
+                <div style="background:#f3f4f6;border-radius:14px;padding:10px 14px;font-size:13px;color:#1f2937;line-height:1.6">好的，正在连接 prod-server 检查磁盘：</div>
+                <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:8px 12px;font-size:11px">
+                  <div style="display:flex;align-items:center;gap:5px;margin-bottom:6px;color:#6b7280">
+                    <span style="color:#22c55e;font-size:6px">●</span> SSH prod-server
+                    <span style="margin-left:auto;color:#22c55e;font-size:10px">已连接</span>
+                  </div>
+                  <div style="background:#1e293b;border-radius:6px;padding:8px;font-family:monospace;font-size:11px;color:#22c55e;line-height:1.5">
+                    <div style="color:#94a3b8">$ df -h</div>
+                    <div>Filesystem &nbsp;Size &nbsp;Used &nbsp;Avail &nbsp;Use%</div>
+                    <div>/dev/sda1 &nbsp;100G &nbsp;67G &nbsp;33G &nbsp;67%</div>
+                    <div>/dev/sdb1 &nbsp;500G &nbsp;230G &nbsp;270G &nbsp;46%</div>
+                  </div>
+                </div>
+                <div style="background:#f3f4f6;border-radius:14px;padding:10px 14px;font-size:13px;color:#1f2937;line-height:1.6">磁盘使用正常。根分区 67% 已用，建议关注增长趋势。</div>
+              </div>
+            </div>
+          </div>
+          <div class="cmp">
+            <div class="cmp-b">
+              <textarea class="cmp-i" placeholder="输入消息... (Enter 发送)" style="min-height:32px"></textarea>
+              <div class="cmp-f">
+                <div style="display:flex;gap:3px;align-items:center">
+                  <div style="width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#9ca3af;border:1px solid #e5e7eb;font-size:11px">✚</div>
+                  <div style="display:flex;align-items:center;gap:3px;border-radius:12px;padding:2px 7px;cursor:pointer;font-size:10px;height:24px;background:#f0fdf4;color:#22c55e;border:1px solid #bbf7d0">
+                    <span style="width:5px;height:5px;border-radius:50%;background:#22c55e;display:inline-block"></span> gpt-4o
+                  </div>
+                </div>
+                <div style="width:26px;height:26px;border-radius:50%;background:#1f2937;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#fff;font-size:12px">↑</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== 2. AI 助手 — 空状态 ==================== -->
+<div class="sl">② AI 助手 — 空状态 Hero</div>
+<div class="mf" style="height:380px">
+  <div class="tb">
+    <div class="tf"><span style="background:#ef4444"></span><span style="background:#f59e0b"></span><span style="background:#22c55e"></span></div>
+    <div style="flex:1;text-align:center;font-size:11px;color:#9ca3af">Mona Toolbox</div>
+    <div style="width:60px"></div>
+  </div>
+  <div style="flex:1;display:flex;overflow:hidden">
+    <div class="sb">
+      <div class="sb-b a">💬</div>
+      <div class="sb-b">💻</div>
+      <div class="sb-b">📚</div>
+      <div class="sb-b">🔧</div>
+      <div style="flex:1"></div>
+      <div class="sb-b">⚙️</div>
+    </div>
+    <div style="flex:1;display:flex;flex-direction:column;overflow:hidden">
+      <!-- 无 TabBar（没有打开的内容） -->
+      <div style="flex:1;display:flex;overflow:hidden">
+        <div class="cp" style="opacity:0.5">
+          <div style="padding:10px 10px 6px"><span style="font-size:12px;font-weight:600;color:#111827">会话</span></div>
+          <div style="flex:1;padding:0 6px">
+            <div class="ci m" style="text-align:center;margin-top:40px;font-size:11px">暂无会话</div>
+          </div>
+        </div>
+        <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px">
+          <div style="text-align:center;margin-bottom:24px">
+            <div style="font-size:36px;font-weight:300;color:#111827;letter-spacing:-0.03em">你好 👋</div>
+            <div style="font-size:14px;color:#9ca3af;margin-top:6px">有什么可以帮你的？</div>
+          </div>
+          <div style="width:100%;max-width:560px">
+            <div class="cmp-b" style="border-radius:24px">
+              <textarea class="cmp-i" placeholder="输入消息或命令..." style="min-height:60px;font-size:15px;padding:16px 18px 4px"></textarea>
+              <div class="cmp-f" style="padding:4px 14px 12px">
+                <div style="display:flex;gap:4px;align-items:center">
+                  <div style="width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#9ca3af;border:1px solid #e5e7eb;font-size:12px">✚</div>
+                  <div style="display:flex;align-items:center;gap:3px;border-radius:12px;padding:3px 8px;cursor:pointer;font-size:11px;height:28px;background:#f0fdf4;color:#22c55e;border:1px solid #bbf7d0">
+                    <span style="width:5px;height:5px;border-radius:50%;background:#22c55e;display:inline-block"></span> gpt-4o
+                  </div>
+                </div>
+                <div style="width:30px;height:30px;border-radius:50%;background:#1f2937;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#fff;font-size:13px">↑</div>
+              </div>
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;width:100%;max-width:560px;margin-top:20px">
+            <div style="display:flex;flex-direction:column;justify-content:space-between;min-height:100px;border-radius:16px;border:1px solid rgba(0,0,0,0.04);background:#fff;padding:14px;cursor:pointer;box-shadow:0 8px 24px rgba(0,0,0,0.04)">
+              <div style="font-size:15px;color:#f25b8f">📊</div>
+              <div style="font-size:13px;font-weight:500;color:#1f2937">制定计划</div>
+              <div style="font-size:10px;color:#9ca3af">→</div>
+            </div>
+            <div style="display:flex;flex-direction:column;justify-content:space-between;min-height:100px;border-radius:16px;border:1px solid rgba(0,0,0,0.04);background:#fff;padding:14px;cursor:pointer;box-shadow:0 8px 24px rgba(0,0,0,0.04)">
+              <div style="font-size:15px;color:#4f9de8">💻</div>
+              <div style="font-size:13px;font-weight:500;color:#1f2937">新终端</div>
+              <div style="font-size:10px;color:#9ca3af">→</div>
+            </div>
+            <div style="display:flex;flex-direction:column;justify-content:space-between;min-height:100px;border-radius:16px;border:1px solid rgba(0,0,0,0.04);background:#fff;padding:14px;cursor:pointer;box-shadow:0 8px 24px rgba(0,0,0,0.04)">
+              <div style="font-size:15px;color:#53c59d">🛡️</div>
+              <div style="font-size:13px;font-weight:500;color:#1f2937">系统体检</div>
+              <div style="font-size:10px;color:#9ca3af">→</div>
+            </div>
+            <div style="display:flex;flex-direction:column;justify-content:space-between;min-height:100px;border-radius:16px;border:1px solid rgba(0,0,0,0.04);background:#fff;padding:14px;cursor:pointer;box-shadow:0 8px 24px rgba(0,0,0,0.04)">
+              <div style="font-size:15px;color:#eba45d">🖥️</div>
+              <div style="font-size:13px;font-weight:500;color:#1f2937">远程桌面</div>
+              <div style="font-size:10px;color:#9ca3af">→</div>
+            </div>
+            <div style="display:flex;flex-direction:column;justify-content:space-between;min-height:100px;border-radius:16px;border:1px solid rgba(0,0,0,0.04);background:#fff;padding:14px;cursor:pointer;box-shadow:0 8px 24px rgba(0,0,0,0.04)">
+              <div style="font-size:15px;color:#a877e7">📤</div>
+              <div style="font-size:13px;font-weight:500;color:#1f2937">上传文档</div>
+              <div style="font-size:10px;color:#9ca3af">→</div>
+            </div>
+            <div style="display:flex;flex-direction:column;justify-content:space-between;min-height:100px;border-radius:16px;border:1px solid rgba(0,0,0,0.04);background:#fff;padding:14px;cursor:pointer;box-shadow:0 8px 24px rgba(0,0,0,0.04)">
+              <div style="font-size:15px;color:#9ca3af">⋯</div>
+              <div style="font-size:13px;font-weight:500;color:#1f2937">更多</div>
+              <div style="font-size:10px;color:#9ca3af">→</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== 3. 终端模块 ==================== -->
+<div class="sl">③ 终端模块 — SSH 会话</div>
+<div class="mf" style="height:380px">
+  <div class="tb">
+    <div class="tf"><span style="background:#ef4444"></span><span style="background:#f59e0b"></span><span style="background:#22c55e"></span></div>
+    <div style="flex:1;text-align:center;font-size:11px;color:#9ca3af">Mona Toolbox</div>
+    <div style="width:60px"></div>
+  </div>
+  <div style="flex:1;display:flex;overflow:hidden">
+    <div class="sb">
+      <div class="sb-b">💬</div>
+      <div class="sb-b a">💻</div>
+      <div class="sb-b">📚</div>
+      <div class="sb-b">🔧</div>
+      <div style="flex:1"></div>
+      <div class="sb-b">⚙️</div>
+    </div>
+    <div style="flex:1;display:flex;flex-direction:column;overflow:hidden">
+      <div class="tabs">
+        <div class="tab a">💻 prod-server <span style="color:#22c55e;font-size:6px">●</span> <span class="x">×</span></div>
+        <div class="tab i">💻 本地终端 <span class="x">×</span></div>
+        <div class="tab" style="color:#9ca3af;font-size:14px">+</div>
+      </div>
+      <div style="flex:1;display:flex;overflow:hidden">
+        <div style="width:200px;background:#f9fafb;border-right:1px solid #e5e7eb;display:flex;flex-direction:column;flex-shrink:0">
+          <div style="padding:10px 10px 6px;display:flex;align-items:center;justify-content:space-between">
+            <span style="font-size:12px;font-weight:600;color:#111827">连接</span>
+            <div style="width:22px;height:22px;border-radius:5px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#9ca3af;font-size:13px">✚</div>
+          </div>
+          <div style="flex:1;overflow-y:auto;padding:0 6px">
+            <div style="padding:7px 10px;border-radius:8px;background:#3b82f6;font-size:11px;color:#fff;font-weight:500;cursor:pointer;margin-bottom:2px;display:flex;align-items:center;gap:5px">
+              <span style="color:#22c55e;font-size:6px">●</span> prod-server
+              <span style="font-size:9px;opacity:0.7;margin-left:auto">SSH</span>
+            </div>
+            <div style="padding:7px 10px;border-radius:8px;font-size:11px;color:#374151;cursor:pointer;margin-bottom:2px;display:flex;align-items:center;gap:5px">
+              <span style="color:#22c55e;font-size:6px">●</span> 本地终端
+              <span style="font-size:9px;color:#9ca3af;margin-left:auto">Local</span>
+            </div>
+            <div style="padding:7px 10px;border-radius:8px;font-size:11px;color:#9ca3af;cursor:pointer;margin-bottom:2px;display:flex;align-items:center;gap:5px">
+              <span style="color:#9ca3af;font-size:6px">●</span> dev-box
+              <span style="font-size:9px;color:#d1d5db;margin-left:auto">SSH</span>
+            </div>
+            <div style="padding:7px 10px;border-radius:8px;font-size:11px;color:#9ca3af;cursor:pointer;margin-bottom:2px;display:flex;align-items:center;gap:5px">
+              <span style="color:#9ca3af;font-size:6px">●</span> win-server
+              <span style="font-size:9px;color:#d1d5db;margin-left:auto">RDP</span>
+            </div>
+          </div>
+          <div style="padding:6px 10px;border-top:1px solid #e5e7eb;display:flex;flex-direction:column;gap:3px">
+            <div style="font-size:10px;font-weight:500;color:#6b7280;margin-bottom:2px">快速连接</div>
+            <div style="display:flex;align-items:center;gap:4px;padding:5px 8px;border-radius:6px;background:#fff;border:1px solid #e5e7eb;cursor:pointer;font-size:10px;color:#6b7280">💻 新 SSH</div>
+            <div style="display:flex;align-items:center;gap:4px;padding:5px 8px;border-radius:6px;background:#fff;border:1px solid #e5e7eb;cursor:pointer;font-size:10px;color:#6b7280">🖥️ 新 RDP</div>
+            <div style="display:flex;align-items:center;gap:4px;padding:5px 8px;border-radius:6px;background:#fff;border:1px solid #e5e7eb;cursor:pointer;font-size:10px;color:#6b7280">📁 新 SFTP</div>
+          </div>
+        </div>
+        <div style="flex:1;display:flex;flex-direction:column;overflow:hidden">
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:5px 12px;border-bottom:1px solid #f3f4f6">
+            <div style="display:flex;align-items:center;gap:6px">
+              <span style="color:#22c55e;font-size:6px">●</span>
+              <span style="font-size:12px;font-weight:500;color:#6b7280">prod-server · root@192.168.1.100</span>
+            </div>
+            <div style="display:flex;gap:4px">
+              <div style="padding:3px 8px;border-radius:5px;font-size:10px;color:#6b7280;cursor:pointer;background:#f3f4f6">📁 SFTP</div>
+              <div style="padding:3px 8px;border-radius:5px;font-size:10px;color:#6b7280;cursor:pointer;background:#f3f4f6">💬 AI</div>
+            </div>
+          </div>
+          <div style="flex:1;background:#1e293b;padding:12px 16px;font-family:'Cascadia Code',Consolas,monospace;font-size:12px;color:#e2e8f0;line-height:1.6;overflow-y:auto">
+            <div style="color:#94a3b8">Last login: Fri May 24 09:12:33 2026</div>
+            <div><span style="color:#22c55e">root@prod</span>:<span style="color:#60a5fa">~</span>$ df -h</div>
+            <div>Filesystem &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Size &nbsp;Used &nbsp;Avail &nbsp;Use% &nbsp;Mounted on</div>
+            <div>/dev/sda1 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;100G &nbsp;67G &nbsp;&nbsp;33G &nbsp;&nbsp;67% &nbsp;/</div>
+            <div>/dev/sdb1 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;500G &nbsp;230G &nbsp;270G &nbsp;46% &nbsp;/data</div>
+            <div>tmpfs &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;7.8G &nbsp;1.2M &nbsp;7.8G &nbsp;&nbsp;1% &nbsp;/dev/shm</div>
+            <div style="margin-top:4px"><span style="color:#22c55e">root@prod</span>:<span style="color:#60a5fa">~</span>$ <span style="opacity:0.6">▎</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== 4. 知识库模块 ==================== -->
+<div class="sl">④ 知识库模块</div>
+<div class="mf" style="height:380px">
+  <div class="tb">
+    <div class="tf"><span style="background:#ef4444"></span><span style="background:#f59e0b"></span><span style="background:#22c55e"></span></div>
+    <div style="flex:1;text-align:center;font-size:11px;color:#9ca3af">Mona Toolbox</div>
+    <div style="width:60px"></div>
+  </div>
+  <div style="flex:1;display:flex;overflow:hidden">
+    <div class="sb">
+      <div class="sb-b">💬</div>
+      <div class="sb-b">💻</div>
+      <div class="sb-b a">📚</div>
+      <div class="sb-b">🔧</div>
+      <div style="flex:1"></div>
+      <div class="sb-b">⚙️</div>
+    </div>
+    <div style="flex:1;display:flex;flex-direction:column;overflow:hidden">
+      <div class="tabs">
+        <div class="tab a">📄 部署流程.md <span class="x">×</span></div>
+        <div class="tab" style="color:#9ca3af;font-size:14px">+</div>
+      </div>
+      <div style="flex:1;display:flex;overflow:hidden">
+        <div style="width:200px;background:#f9fafb;border-right:1px solid #e5e7eb;display:flex;flex-direction:column;flex-shrink:0">
+          <div style="padding:10px 10px 6px;display:flex;align-items:center;justify-content:space-between">
+            <span style="font-size:12px;font-weight:600;color:#111827">知识库</span>
+            <div style="width:22px;height:22px;border-radius:5px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#9ca3af;font-size:13px">✚</div>
+          </div>
+          <div style="padding:4px 8px">
+            <div style="display:flex;align-items:center;gap:4px;background:#fff;border:1px solid #e5e7eb;border-radius:6px;padding:5px 8px;font-size:11px;color:#9ca3af">🔍 搜索文档...</div>
+          </div>
+          <div style="flex:1;overflow-y:auto;padding:4px 6px">
+            <div style="font-size:10px;font-weight:500;color:#9ca3af;padding:4px 8px;text-transform:uppercase;letter-spacing:0.05em">运维文档</div>
+            <div style="padding:6px 8px;border-radius:6px;font-size:11px;color:#374151;cursor:pointer;display:flex;align-items:center;gap:5px;background:#eff6ff;border:1px solid #bfdbfe">📄 部署流程.md</div>
+            <div style="padding:6px 8px;border-radius:6px;font-size:11px;color:#374151;cursor:pointer;display:flex;align-items:center;gap:5px">📄 监控配置.md</div>
+            <div style="padding:6px 8px;border-radius:6px;font-size:11px;color:#374151;cursor:pointer;display:flex;align-items:center;gap:5px">📄 应急预案.pdf</div>
+            <div style="font-size:10px;font-weight:500;color:#9ca3af;padding:4px 8px;margin-top:6px;text-transform:uppercase;letter-spacing:0.05em">项目文档</div>
+            <div style="padding:6px 8px;border-radius:6px;font-size:11px;color:#374151;cursor:pointer;display:flex;align-items:center;gap:5px">📄 API 设计.docx</div>
+            <div style="padding:6px 8px;border-radius:6px;font-size:11px;color:#374151;cursor:pointer;display:flex;align-items:center;gap:5px">📄 架构图.png</div>
+          </div>
+          <div style="padding:8px 10px;border-top:1px solid #e5e7eb">
+            <div style="display:flex;align-items:center;gap:4px;padding:6px 8px;border-radius:6px;background:#3b82f6;cursor:pointer;font-size:11px;color:#fff;justify-content:center">📤 上传文档</div>
+          </div>
+        </div>
+        <div style="flex:1;display:flex;flex-direction:column;overflow:hidden">
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:5px 12px;border-bottom:1px solid #f3f4f6">
+            <span style="font-size:12px;font-weight:500;color:#6b7280">部署流程.md</span>
+            <div style="display:flex;gap:4px">
+              <div style="padding:3px 8px;border-radius:5px;font-size:10px;color:#6b7280;cursor:pointer;background:#f3f4f6">💬 向 AI 提问</div>
+              <div style="padding:3px 8px;border-radius:5px;font-size:10px;color:#6b7280;cursor:pointer;background:#f3f4f6">📝 编辑</div>
+            </div>
+          </div>
+          <div style="flex:1;padding:20px 28px;overflow-y:auto">
+            <div style="font-size:22px;font-weight:600;color:#111827;margin-bottom:16px">部署流程</div>
+            <div style="font-size:13px;color:#374151;line-height:1.8">
+              <div style="font-size:16px;font-weight:600;color:#111827;margin:16px 0 8px">1. 环境准备</div>
+              <div>确保服务器已安装 Docker 和 Docker Compose：</div>
+              <div style="background:#f3f4f6;border-radius:8px;padding:10px 14px;margin:8px 0;font-family:monospace;font-size:12px;color:#1f2937">
+                docker --version<br>docker compose version
+              </div>
+              <div style="font-size:16px;font-weight:600;color:#111827;margin:16px 0 8px">2. 配置文件</div>
+              <div>复制 <code style="background:#f3f4f6;padding:1px 4px;border-radius:3px;font-size:12px">.env.example</code> 到 <code style="background:#f3f4f6;padding:1px 4px;border-radius:3px;font-size:12px">.env</code> 并修改以下变量...</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== 5. 系统维护模块 ==================== -->
+<div class="sl">⑤ 系统维护模块</div>
+<div class="mf" style="height:380px">
+  <div class="tb">
+    <div class="tf"><span style="background:#ef4444"></span><span style="background:#f59e0b"></span><span style="background:#22c55e"></span></div>
+    <div style="flex:1;text-align:center;font-size:11px;color:#9ca3af">Mona Toolbox</div>
+    <div style="width:60px"></div>
+  </div>
+  <div style="flex:1;display:flex;overflow:hidden">
+    <div class="sb">
+      <div class="sb-b">💬</div>
+      <div class="sb-b">💻</div>
+      <div class="sb-b">📚</div>
+      <div class="sb-b a">🔧</div>
+      <div style="flex:1"></div>
+      <div class="sb-b">⚙️</div>
+    </div>
+    <div style="flex:1;display:flex;flex-direction:column;overflow:hidden">
+      <!-- 系统维护没有打开的 Tab，不显示 TabBar -->
+      <div style="flex:1;padding:20px 24px;overflow-y:auto">
+        <div style="font-size:18px;font-weight:600;color:#111827;margin-bottom:16px">系统状态</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;margin-bottom:20px">
+          <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:12px;padding:14px">
+            <div style="font-size:11px;color:#9ca3af;margin-bottom:4px">CPU</div>
+            <div style="font-size:24px;font-weight:600;color:#111827">23%</div>
+            <div style="height:4px;background:#e5e7eb;border-radius:2px;margin-top:8px"><div style="width:23%;height:100%;background:#22c55e;border-radius:2px"></div></div>
+          </div>
+          <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:12px;padding:14px">
+            <div style="font-size:11px;color:#9ca3af;margin-bottom:4px">内存</div>
+            <div style="font-size:24px;font-weight:600;color:#111827">61%</div>
+            <div style="height:4px;background:#e5e7eb;border-radius:2px;margin-top:8px"><div style="width:61%;height:100%;background:#f59e0b;border-radius:2px"></div></div>
+          </div>
+          <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:12px;padding:14px">
+            <div style="font-size:11px;color:#9ca3af;margin-bottom:4px">磁盘 C:</div>
+            <div style="font-size:24px;font-weight:600;color:#111827">78%</div>
+            <div style="height:4px;background:#e5e7eb;border-radius:2px;margin-top:8px"><div style="width:78%;height:100%;background:#ef4444;border-radius:2px"></div></div>
+          </div>
+          <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:12px;padding:14px">
+            <div style="font-size:11px;color:#9ca3af;margin-bottom:4px">运行时间</div>
+            <div style="font-size:24px;font-weight:600;color:#111827">14d</div>
+            <div style="font-size:11px;color:#9ca3af;margin-top:4px">7h 23m</div>
+          </div>
+        </div>
+        <div style="font-size:14px;font-weight:600;color:#111827;margin-bottom:10px">快捷操作</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:20px">
+          <div style="display:flex;align-items:center;gap:8px;background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:12px 14px;cursor:pointer">
+            <div style="width:32px;height:32px;border-radius:8px;background:#dbeafe;display:flex;align-items:center;justify-content:center;font-size:14px">🧹</div>
+            <div><div style="font-size:12px;font-weight:500;color:#1f2937">磁盘清理</div><div style="font-size:10px;color:#9ca3af">清理临时文件</div></div>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:12px 14px;cursor:pointer">
+            <div style="width:32px;height:32px;border-radius:8px;background:#dcfce7;display:flex;align-items:center;justify-content:center;font-size:14px">🔄</div>
+            <div><div style="font-size:12px;font-weight:500;color:#1f2937">检查更新</div><div style="font-size:10px;color:#9ca3af">系统 & 应用</div></div>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:12px 14px;cursor:pointer">
+            <div style="width:32px;height:32px;border-radius:8px;background:#fef3c7;display:flex;align-items:center;justify-content:center;font-size:14px">🛡️</div>
+            <div><div style="font-size:12px;font-weight:500;color:#1f2937">安全扫描</div><div style="font-size:10px;color:#9ca3af">病毒 & 漏洞</div></div>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:12px 14px;cursor:pointer">
+            <div style="width:32px;height:32px;border-radius:8px;background:#f3e8ff;display:flex;align-items:center;justify-content:center;font-size:14px">📋</div>
+            <div><div style="font-size:12px;font-weight:500;color:#1f2937">启动项管理</div><div style="font-size:10px;color:#9ca3af">开机启动项</div></div>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:12px 14px;cursor:pointer">
+            <div style="width:32px;height:32px;border-radius:8px;background:#ffe4e6;display:flex;align-items:center;justify-content:center;font-size:14px">📊</div>
+            <div><div style="font-size:12px;font-weight:500;color:#1f2937">性能监控</div><div style="font-size:10px;color:#9ca3af">实时资源</div></div>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:12px 14px;cursor:pointer">
+            <div style="width:32px;height:32px;border-radius:8px;background:#e0f2fe;display:flex;align-items:center;justify-content:center;font-size:14px">💬</div>
+            <div><div style="font-size:12px;font-weight:500;color:#1f2937">AI 诊断</div><div style="font-size:10px;color:#9ca3af">智能分析</div></div>
+          </div>
+        </div>
+        <div style="font-size:14px;font-weight:600;color:#111827;margin-bottom:10px">最近告警</div>
+        <div style="display:flex;flex-direction:column;gap:6px">
+          <div style="display:flex;align-items:center;gap:8px;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:8px 12px;font-size:12px">
+            <span style="color:#ef4444">⚠️</span>
+            <span style="color:#991b1b">C 盘空间不足 — 已用 78%，建议清理</span>
+            <span style="margin-left:auto;color:#9ca3af;font-size:10px">2 小时前</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:8px 12px;font-size:12px">
+            <span style="color:#f59e0b">⚡</span>
+            <span style="color:#92400e">内存使用率偏高 — 61%，3 个进程占用过高</span>
+            <span style="margin-left:auto;color:#9ca3af;font-size:10px">5 小时前</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== 6. 侧边栏展开态 ==================== -->
+<div class="sl">⑥ 侧边栏展开态</div>
+<div class="mf" style="height:240px">
+  <div class="tb">
+    <div class="tf"><span style="background:#ef4444"></span><span style="background:#f59e0b"></span><span style="background:#22c55e"></span></div>
+    <div style="flex:1;text-align:center;font-size:11px;color:#9ca3af">Mona Toolbox</div>
+    <div style="width:60px"></div>
+  </div>
+  <div style="flex:1;display:flex;overflow:hidden">
+    <div style="width:160px;background:#f9fafb;border-right:1px solid #e5e7eb;display:flex;flex-direction:column;padding:10px 8px;gap:2px;flex-shrink:0">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:4px 6px;margin-bottom:6px">
+        <span style="font-size:12px;font-weight:600;color:#111827">导航</span>
+        <span style="font-size:12px;color:#9ca3af;cursor:pointer">◂</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;border-radius:8px;padding:8px 10px;background:#3b82f6;color:#fff;font-size:12px;cursor:pointer;font-weight:500">
+        <span>💬</span><span>AI 助手</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;border-radius:8px;padding:8px 10px;color:#6b7280;font-size:12px;cursor:pointer">
+        <span>💻</span><span>终端</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;border-radius:8px;padding:8px 10px;color:#6b7280;font-size:12px;cursor:pointer">
+        <span>📚</span><span>知识库</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;border-radius:8px;padding:8px 10px;color:#6b7280;font-size:12px;cursor:pointer">
+        <span>🔧</span><span>系统维护</span>
+      </div>
+      <div style="flex:1"></div>
+      <div style="display:flex;align-items:center;gap:8px;border-radius:8px;padding:8px 10px;color:#6b7280;font-size:12px;cursor:pointer">
+        <span>⚙️</span><span>设置</span>
+      </div>
+    </div>
+    <div style="flex:1;display:flex;flex-direction:column;overflow:hidden">
+      <div class="tabs">
+        <div class="tab i">💻 prod-server <span style="color:#22c55e;font-size:6px">●</span> <span class="x">×</span></div>
+        <div class="tab" style="color:#9ca3af;font-size:14px">+</div>
+      </div>
+      <div style="flex:1;display:flex;align-items:center;justify-content:center;color:#d1d5db;font-size:13px">... 主内容区 ...</div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== 关键结构说明 ==================== -->
+<div style="margin-top:24px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:20px">
+  <div style="font-size:14px;font-weight:600;color:#1e293b;margin-bottom:12px">📐 布局结构</div>
+  <div style="font-family:monospace;font-size:12px;color:#475569;line-height:2;white-space:pre">┌─────────────────────────────────────────────────┐
+│  Title Bar (自定义, 全宽)                         │
+├──────┬──────────────────────────────────────────┤
+│      │  TabBar (仅右侧主区域, 仅显示打开的内容)    │
+│  S   ├──────────┬───────────────────────────────┤
+│  i   │          │                               │
+│  d   │  模块    │      主内容区                   │
+│  e   │  面板    │  (对话/终端/文档/维护)           │
+│  b   │  (可折叠)│                               │
+│  a   │          │                               │
+│  r   │          │                               │
+│      │          │                               │
+├──────┼──────────┴───────────────────────────────┤
+│      │  Composer (仅 AI 模块)                     │
+└──────┴──────────────────────────────────────────┘
+
+• Sidebar 顶到标题栏，不与 TabBar 同行
+• TabBar 只在右侧主区域，只显示打开的内容 Tab
+• 点击 Sidebar 图标切换模块（= 首页），不需要首页 Tab
+• 模块面板（会话列表/连接列表/文档树）可折叠</div>
+</div>

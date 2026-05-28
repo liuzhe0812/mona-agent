@@ -298,6 +298,11 @@ export interface SendImage {
 export interface SendOptions {
   imageGeneration?: OutboundImageGeneration;
   displayContent?: string;
+  terminalSessionId?: string;
+  terminalExecMode?: string;
+  dbConnectionId?: string;
+  dbDatabase?: string;
+  dbTable?: string;
 }
 
 export function useMonaStream(
@@ -846,7 +851,14 @@ export function useMonaStream(
       setIsStreaming(true);
       const wireMedia = hasImages ? images!.map((i) => i.media) : undefined;
       if (options) {
-        client.sendMessage(chatId, content, wireMedia, options);
+        client.sendMessage(chatId, content, wireMedia, {
+          imageGeneration: options.imageGeneration,
+          terminalSessionId: options.terminalSessionId,
+          terminalExecMode: options.terminalExecMode,
+          dbConnectionId: options.dbConnectionId,
+          dbDatabase: options.dbDatabase,
+          dbTable: options.dbTable,
+        });
       } else {
         client.sendMessage(chatId, content, wireMedia);
       }

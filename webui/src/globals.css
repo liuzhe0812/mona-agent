@@ -30,6 +30,7 @@
     --sidebar-accent: 0 0% 95.8%;
     --sidebar-accent-foreground: 0 0% 9%;
     --sidebar-border: 0 0% 89.8%;
+    --theme: 217 91% 60%;
   }
 
   .dark {
@@ -57,6 +58,7 @@
     --sidebar-accent: 0 0% 15.5%;
     --sidebar-accent-foreground: 0 0% 98%;
     --sidebar-border: 0 0% 18%;
+    --theme: 213 94% 68%;
   }
 }
 
@@ -68,7 +70,7 @@
   html,
   body,
   #root {
-    @apply h-full;
+    @apply h-full overflow-hidden;
   }
 
   body {
@@ -228,6 +230,12 @@
   .scrollbar-thin::-webkit-scrollbar-thumb {
     background-color: hsl(var(--muted-foreground) / 0.4);
     border-radius: 9999px;
+  }
+  .scrollbar-none {
+    scrollbar-width: none;
+  }
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
   }
   .scrollbar-track-transparent {
     scrollbar-gutter: stable;

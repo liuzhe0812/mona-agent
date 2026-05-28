@@ -34,6 +34,13 @@ export interface KnowledgeCategory {
   parentId?: string | null;
 }
 
+export interface KnowledgeLinkedNote {
+  noteId: string;
+  noteTitle: string;
+  description: string;
+  linkedAt: string;
+}
+
 export interface KnowledgeItem {
   id: string;
   categoryId: string;
@@ -45,4 +52,5 @@ export interface KnowledgeItem {
   sourceDescription: string;
   updatedAt: string;
   tags: string[];
+  linkedNotes?: KnowledgeLinkedNote[];
 }

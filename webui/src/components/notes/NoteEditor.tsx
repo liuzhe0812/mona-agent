@@ -9,6 +9,7 @@ import { Markdown } from "@tiptap/markdown";
 import { EditorContent, useEditor, type Editor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import {
+  ArrowLeft,
   Bold,
   CheckSquare,
   Code2,
@@ -33,6 +34,8 @@ import type { OperationNote } from "./notes-data";
 interface NoteEditorProps {
   note: OperationNote;
   saveStatus?: "idle" | "saving" | "saved" | "error";
+  knowledgeReturnTitle?: string;
+  onReturnToKnowledge?: () => void;
   onTitleChange: (title: string) => void;
   onContentChange: (next: {
     contentMarkdown: string;
@@ -46,6 +49,8 @@ type EditorMode = "visual" | "markdown";
 export function NoteEditor({
   note,
   saveStatus = "idle",
+  knowledgeReturnTitle,
+  onReturnToKnowledge,
   onTitleChange,
   onContentChange,
 }: NoteEditorProps) {
@@ -155,30 +160,34 @@ export function NoteEditor({
     <section className="flex min-w-0 flex-1 flex-col bg-background">
       <div className="flex h-10 shrink-0 items-center justify-between border-b border-border/65 px-3">
         <EditorToolbar editor={editor} />
-        <div className="flex items-center rounded-lg border border-border/70 bg-muted/30 p-0.5">
+        <div className="flex items-center gap-0.5 rounded-lg border border-border/70 bg-muted/30 p-0.5">
           <button
             type="button"
+            title="可视化编辑"
+            aria-label="可视化编辑"
             onClick={() => setMode("visual")}
             className={cn(
-              "h-6 rounded-md px-2 text-[11px] font-medium transition-colors",
+              "grid h-6 w-6 place-items-center rounded-md transition-colors",
               mode === "visual"
                 ? "bg-background text-foreground shadow-sm"
                 : "text-muted-foreground hover:text-foreground",
             )}
           >
-            可视化
+            <Type className="h-3.5 w-3.5" />
           </button>
           <button
             type="button"
+            title="MD 源码"
+            aria-label="MD 源码"
             onClick={() => setMode("markdown")}
             className={cn(
-              "h-6 rounded-md px-2 text-[11px] font-medium transition-colors",
+              "grid h-6 w-6 place-items-center rounded-md transition-colors",
               mode === "markdown"
                 ? "bg-background text-foreground shadow-sm"
                 : "text-muted-foreground hover:text-foreground",
             )}
           >
-            MD 源码
+            <FileCode2 className="h-3.5 w-3.5" />
           </button>
         </div>
       </div>
@@ -186,6 +195,12 @@ export function NoteEditor({
       {mode === "visual" ? (
         <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin">
           <div className="mx-auto w-full max-w-[700px] px-5 py-5">
+            {knowledgeReturnTitle && onReturnToKnowledge ? (
+              <KnowledgeReturnBanner
+                title={knowledgeReturnTitle}
+                onReturn={onReturnToKnowledge}
+              />
+            ) : null}
             <NoteTitleBlock
               note={note}
               onTitleChange={onTitleChange}
@@ -199,6 +214,12 @@ export function NoteEditor({
       ) : (
         <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin">
           <div className="mx-auto flex h-full w-full max-w-[700px] flex-col px-5 py-5">
+            {knowledgeReturnTitle && onReturnToKnowledge ? (
+              <KnowledgeReturnBanner
+                title={knowledgeReturnTitle}
+                onReturn={onReturnToKnowledge}
+              />
+            ) : null}
             <NoteTitleBlock
               note={note}
               onTitleChange={onTitleChange}
@@ -229,6 +250,28 @@ export function NoteEditor({
   );
 }
 
+function KnowledgeReturnBanner({
+  title,
+  onReturn,
+}: {
+  title: string;
+  onReturn: () => void;
+}) {
+  return (
+    <div className="mb-3 flex items-center justify-between gap-2 rounded-lg border border-border/70 bg-muted/25 px-3 py-2 text-[12px] text-muted-foreground">
+      <span className="min-w-0 truncate">正在查看关联笔记：{title}</span>
+      <button
+        type="button"
+        onClick={onReturn}
+        className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-border/70 bg-background px-2 font-medium hover:bg-accent hover:text-foreground"
+      >
+        <ArrowLeft className="h-3.5 w-3.5" />
+        返回知识点
+      </button>
+    </div>
+  );
+}
+
 function NoteTitleBlock({
   note,
   onTitleChange,
@@ -237,25 +280,12 @@ function NoteTitleBlock({
   onTitleChange: (title: string) => void;
 }) {
   return (
-    <div>
-      <input
-        value={note.title}
-        onChange={(event) => onTitleChange(event.target.value)}
-        className="w-full bg-transparent text-[22px] font-semibold leading-tight tracking-normal text-foreground outline-none placeholder:text-muted-foreground"
-        placeholder="未命名笔记"
-      />
-      <div className="mt-3 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
-        <span className="rounded-md border border-border/70 bg-muted/35 px-2 py-1">
-          {note.source.label}
-        </span>
-        <span className="rounded-md border border-border/70 bg-muted/35 px-2 py-1">
-          Agent 可写入
-        </span>
-        <span className="rounded-md border border-border/70 bg-muted/35 px-2 py-1">
-          Markdown
-        </span>
-      </div>
-    </div>
+    <input
+      value={note.title}
+      onChange={(event) => onTitleChange(event.target.value)}
+      className="w-full bg-transparent text-[22px] font-semibold leading-tight tracking-normal text-foreground outline-none placeholder:text-muted-foreground"
+      placeholder="未命名笔记"
+    />
   );
 }
 

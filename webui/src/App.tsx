@@ -1,12 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import {
-  BookOpen,
-  FileText,
-  Monitor,
-  Server,
-  Wrench,
-} from "lucide-react";
+import { GripVertical } from "lucide-react";
 import { DeleteConfirm } from "@/components/DeleteConfirm";
 import { RenameChatDialog } from "@/components/RenameChatDialog";
 import { SetupWizard } from "@/components/SetupWizard";
@@ -16,8 +10,8 @@ import { SettingsView } from "@/components/settings/SettingsView";
 import { ThreadShell } from "@/components/thread/ThreadShell";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { AgentWorkbench } from "@/components/workspace/AgentWorkbench";
-import { AppTitleBar, type OpenTab, type WorkspaceTabId } from "@/components/workspace/AppTitleBar";
-import { ModulePlaceholder } from "@/components/workspace/ModulePlaceholder";
+import { AppTitleBar } from "@/components/workspace/AppTitleBar";
+import { TerminalView } from "@/components/terminal/TerminalView";
 
 import { useSessions } from "@/hooks/useSessions";
 import { useDeferredTitleRefresh } from "@/hooks/useDeferredTitleRefresh";
@@ -58,11 +52,34 @@ type BootState =
 const SIDEBAR_STORAGE_KEY = "mona-webui.sidebar";
 const COMPLETED_RUNS_STORAGE_KEY = "mona-webui.sidebar.completed-runs.v1";
 const RESTART_STARTED_KEY = "mona-webui.restartStartedAt";
-const SIDEBAR_WIDTH = 272;
+const SIDEBAR_WIDTH = 220;
 const SIDEBAR_RAIL_WIDTH = 56;
 const TOKEN_REFRESH_MARGIN_MS = 30_000;
 const TOKEN_REFRESH_MIN_DELAY_MS = 5_000;
-type ShellView = "chat" | "settings";
+type ShellView = "chat" | "settings" | "note" | "ssh" | "db" | "kb";
+
+interface QueuedAgentPrompt {
+  id: string;
+  content: string;
+}
+
+const NotesView = lazy(() =>
+  import("@/components/notes/NotesView").then((module) => ({
+    default: module.NotesView,
+  })),
+);
+
+const DbClientView = lazy(() =>
+  import("@/components/db/DbClientView").then((module) => ({
+    default: module.DbClientView,
+  })),
+);
+
+const KnowledgeBaseView = lazy(() =>
+  import("@/components/knowledge/KnowledgeBaseView").then((module) => ({
+    default: module.KnowledgeBaseView,
+  })),
+);
 
 function bootstrapTokenExpiresAt(expiresInSeconds: number): number {
   return Date.now() + Math.max(0, expiresInSeconds) * 1000;
@@ -402,14 +419,6 @@ export default function App() {
   );
 }
 
-const TAB_TEMPLATES: Record<WorkspaceTabId, OpenTab> = {
-  ssh: { id: "ssh", label: "SSH", icon: <Server className="h-3.5 w-3.5" /> },
-  rdp: { id: "rdp", label: "RDP", icon: <Monitor className="h-3.5 w-3.5" /> },
-  note: { id: "note", label: "笔记", icon: <FileText className="h-3.5 w-3.5" /> },
-  kb: { id: "kb", label: "知识库", icon: <BookOpen className="h-3.5 w-3.5" /> },
-  windows: { id: "windows", label: "Windows", icon: <Wrench className="h-3.5 w-3.5" /> },
-};
-
 function Shell({
   onModelNameChange,
   onLogout,
@@ -425,8 +434,6 @@ function Shell({
     useSidebarState(sessions, !loading);
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [view, setView] = useState<ShellView>("chat");
-  const [openTabs, setOpenTabs] = useState<OpenTab[]>([]);
-  const [activeTabId, setActiveTabId] = useState<WorkspaceTabId | null>(null);
   const [desktopSidebarOpen, setDesktopSidebarOpen] =
     useState<boolean>(readSidebarOpen);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
@@ -444,7 +451,12 @@ function Shell({
   const [isRestarting, setIsRestarting] = useState(false);
   const [runningChatIds, setRunningChatIds] = useState<Set<string>>(() => new Set());
   const [completedChatIds, setCompletedChatIds] = useState<Set<string>>(readCompletedRunChatIds);
+  const [queuedAgentPrompt, setQueuedAgentPrompt] = useState<QueuedAgentPrompt | null>(null);
   const runningChatIdsRef = useRef<Set<string>>(new Set());
+  const [workbenchWidth, setWorkbenchWidth] = useState(320);
+  const isDraggingWorkbenchRef = useRef(false);
+  const dragStartXRef = useRef(0);
+  const dragStartWidthRef = useRef(0);
 
   useEffect(() => {
     try {
@@ -518,6 +530,35 @@ function Shell({
     setDesktopSidebarOpen(true);
   }, []);
 
+  useEffect(() => {
+    const onMouseMove = (e: MouseEvent) => {
+      if (!isDraggingWorkbenchRef.current) return;
+      const delta = dragStartXRef.current - e.clientX;
+      const next = Math.max(240, Math.min(600, dragStartWidthRef.current + delta));
+      setWorkbenchWidth(next);
+    };
+    const onMouseUp = () => {
+      isDraggingWorkbenchRef.current = false;
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+    };
+  }, []);
+
+  const onWorkbenchDragStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    isDraggingWorkbenchRef.current = true;
+    dragStartXRef.current = e.clientX;
+    dragStartWidthRef.current = workbenchWidth;
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+  }, [workbenchWidth]);
+
   const closeMobileSidebar = useCallback(() => {
     setMobileSidebarOpen(false);
   }, []);
@@ -533,28 +574,28 @@ function Shell({
     }
   }, []);
 
-  const onOpenWorkspaceTab = useCallback((tab: WorkspaceTabId) => {
-    setOpenTabs((current) => {
-      if (current.some((t) => t.id === tab)) return current;
-      return [...current, TAB_TEMPLATES[tab]];
-    });
-    setActiveTabId(tab);
+  const onGoHome = useCallback(() => {
     setView("chat");
     setMobileSidebarOpen(false);
   }, []);
 
-  const onCloseWorkspaceTab = useCallback((tabId: WorkspaceTabId) => {
-    setOpenTabs((current) => current.filter((t) => t.id !== tabId));
-    setActiveTabId((current) => {
-      if (current !== tabId) return current;
-      const remaining = openTabs.filter((t) => t.id !== tabId);
-      return remaining.length > 0 ? remaining[remaining.length - 1].id : null;
-    });
-  }, [openTabs]);
+  const onOpenNote = useCallback(() => {
+    setView("note");
+    setMobileSidebarOpen(false);
+  }, []);
 
-  const onGoHome = useCallback(() => {
-    setActiveTabId(null);
-    setView("chat");
+  const onOpenSSH = useCallback(() => {
+    setView("ssh");
+    setMobileSidebarOpen(false);
+  }, []);
+
+  const onOpenDb = useCallback(() => {
+    setView("db");
+    setMobileSidebarOpen(false);
+  }, []);
+
+  const onOpenKb = useCallback(() => {
+    setView("kb");
     setMobileSidebarOpen(false);
   }, []);
 
@@ -563,7 +604,6 @@ function Shell({
       const chatId = await createChat();
       setActiveKey(`websocket:${chatId}`);
       setView("chat");
-      setActiveTabId(null);
       setMobileSidebarOpen(false);
       return chatId;
     } catch (e) {
@@ -572,10 +612,33 @@ function Shell({
     }
   }, [createChat]);
 
+  const onSendNoteToAgent = useCallback(
+    async (content: string) => {
+      const prompt = content.trim();
+      if (!prompt) return;
+
+      try {
+        let chatId = activeSession?.chatId ?? null;
+        if (!chatId) {
+          chatId = await createChat();
+          setActiveKey(`websocket:${chatId}`);
+        }
+        setQueuedAgentPrompt({
+          id: crypto.randomUUID(),
+          content: prompt,
+        });
+        setView("chat");
+        setMobileSidebarOpen(false);
+      } catch (e) {
+        console.error("Failed to send note prompt to agent", e);
+      }
+    },
+    [activeSession?.chatId, createChat],
+  );
+
   const onNewChat = useCallback(() => {
     setActiveKey(null);
     setView("chat");
-    setActiveTabId(null);
     setMobileSidebarOpen(false);
   }, []);
 
@@ -592,7 +655,6 @@ function Shell({
       }
       setActiveKey(key);
       setView("chat");
-      setActiveTabId(null);
       setMobileSidebarOpen(false);
     },
     [sessions],
@@ -726,7 +788,6 @@ function Shell({
 
   const onBackToChat = useCallback(() => {
     setView("chat");
-    setActiveTabId(null);
     setMobileSidebarOpen(false);
     setActiveKey((current) => {
       if (!current) return null;
@@ -861,6 +922,10 @@ function Shell({
     onOpenSettings,
     onOpenSearch: onOpenSessionSearch,
     onGoHome,
+    onOpenNote,
+    onOpenSSH,
+    onOpenDb,
+    onOpenKb,
     onToggleArchived,
     onUpdateView: onUpdateSidebarView,
     pinnedKeys: sidebarState.pinned_keys,
@@ -926,17 +991,13 @@ function Shell({
           <AppTitleBar
             theme={theme}
             onToggleTheme={toggle}
-            openTabs={openTabs}
-            activeTabId={activeTabId}
-            onSelectTab={onOpenWorkspaceTab}
-            onCloseTab={onCloseWorkspaceTab}
           />
           <div className="flex min-h-0 flex-1 overflow-hidden">
-            <main className="relative flex h-full min-w-0 flex-1 flex-col bg-background">
+            <main className="relative flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-background">
               <div
                 className={cn(
                   "absolute inset-0 flex flex-col",
-                  (view === "settings" || activeTabId !== null) &&
+                  (view === "settings" || view === "note" || view === "ssh" || view === "db" || view === "kb") &&
                     "invisible pointer-events-none",
                 )}
               >
@@ -945,18 +1006,22 @@ function Shell({
                   title={headerTitle}
                   onToggleSidebar={toggleSidebar}
                   onNewChat={onNewChat}
-                  onOpenNote={() => onOpenWorkspaceTab("note")}
+                  onOpenNote={onOpenNote}
                   onCreateChat={onCreateChat}
                   onTurnEnd={onTurnEnd}
+                  queuedPrompt={queuedAgentPrompt}
+                  onQueuedPromptConsumed={() => setQueuedAgentPrompt(null)}
                   theme={theme}
                   onToggleTheme={toggle}
                   hideSidebarToggleOnDesktop
                   showHeader={false}
                 />
               </div>
-              {view === "chat" && activeTabId !== null ? (
+              {view === "note" ? (
                 <div className="absolute inset-0 flex flex-col">
-                  <ModulePlaceholder tab={activeTabId} />
+                  <Suspense fallback={<ModuleLoading title="正在打开笔记" />}>
+                    <NotesView onSendToAgent={onSendNoteToAgent} />
+                  </Suspense>
                 </div>
               ) : null}
               {view === "settings" && (
@@ -972,8 +1037,40 @@ function Shell({
                   />
                 </div>
               )}
+              <div
+                className={cn(
+                  "absolute inset-0 flex flex-col",
+                  view !== "ssh" && "invisible pointer-events-none",
+                )}
+              >
+                <TerminalView />
+              </div>
+              {view === "db" && (
+                <div className="absolute inset-0 flex flex-col">
+                  <Suspense fallback={<ModuleLoading title="正在打开数据库客户端" />}>
+                    <DbClientView />
+                  </Suspense>
+                </div>
+              )}
+              {view === "kb" && (
+                <div className="absolute inset-0 flex flex-col">
+                  <Suspense fallback={<ModuleLoading title="正在打开知识库" />}>
+                    <KnowledgeBaseView onBack={onBackToChat} />
+                  </Suspense>
+                </div>
+              )}
             </main>
-            {view === "chat" ? <AgentWorkbench /> : null}
+            {view === "chat" ? (
+              <>
+                <div
+                  onMouseDown={onWorkbenchDragStart}
+                  className="flex h-full w-1 shrink-0 cursor-col-resize items-center justify-center border-l border-border/75 bg-transparent transition-colors duration-150 hover:bg-transparent active:bg-accent/20"
+                >
+                  <GripVertical className="h-3.5 w-3.5 text-muted-foreground/30" />
+                </div>
+                <AgentWorkbench width={workbenchWidth} />
+              </>
+            ) : null}
           </div>
         </div>
 
@@ -1009,5 +1106,13 @@ function Shell({
         ) : null}
       </div>
     </ThemeProvider>
+  );
+}
+
+function ModuleLoading({ title }: { title: string }) {
+  return (
+    <div className="flex h-full min-h-0 flex-1 items-center justify-center bg-background text-[13px] text-muted-foreground">
+      {title}...
+    </div>
   );
 }

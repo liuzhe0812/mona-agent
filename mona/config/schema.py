@@ -308,7 +308,7 @@ class KnowledgeConfig(Base):
 
 class TerminalToolConfig(Base):
     enable: bool = True
-    exec_mode: TerminalExecMode = TerminalExecMode.APPROVAL
+    exec_mode: TerminalExecMode = TerminalExecMode.AUTO
     dangerous_patterns: list[str] = Field(
         default_factory=lambda: [
             "rm -rf /",

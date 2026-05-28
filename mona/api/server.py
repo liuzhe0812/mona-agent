@@ -1,4 +1,4 @@
-﻿"""OpenAI-compatible HTTP API server for a fixed mona session.
+"""OpenAI-compatible HTTP API server for a fixed mona session.
 
 Provides /v1/chat/completions and /v1/models endpoints.
 All requests route to a single persistent API session.
@@ -372,6 +372,72 @@ async def handle_health(request: web.Request) -> web.Response:
     return web.json_response({"status": "ok"})
 
 
+async def handle_tauri_invoke(request: web.Request) -> web.Response:
+    """POST /api/tauri/invoke - Proxy Tauri IPC commands from agent tools.
+
+    Accepts JSON body: {"cmd": "command_name", "args": {...}}
+    Returns the Tauri command result or error.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+
+    cmd = body.get("cmd", "")
+    args = body.get("args", {})
+
+    if not cmd:
+        return web.json_response({"error": "Missing 'cmd' field"}, status=400)
+
+    allowed_prefixes = (
+        "terminal_",
+        "shell_",
+        "ssh_",
+        "sftp_",
+        "bridge_",
+    )
+
+    if not any(cmd.startswith(p) for p in allowed_prefixes):
+        return web.json_response(
+            {"error": f"Command '{cmd}' not allowed through proxy"}, status=403
+        )
+
+    try:
+        import subprocess
+
+        tauri_args = ["mona-desktop", cmd]
+        for key, value in args.items():
+            tauri_args.append(f"--{key}")
+            tauri_args.append(str(value) if not isinstance(value, str) else value)
+
+        result = await asyncio.create_subprocess_exec(
+            *tauri_args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(result.communicate(), timeout=30)
+
+        if result.returncode == 0:
+            output = stdout.decode("utf-8", errors="replace").strip()
+            try:
+                parsed = _json.loads(output)
+                return web.json_response(parsed)
+            except (_json.JSONDecodeError, ValueError):
+                return web.json_response({"result": output})
+        else:
+            error_msg = stderr.decode("utf-8", errors="replace").strip()
+            return web.json_response({"error": error_msg}, status=500)
+
+    except asyncio.TimeoutError:
+        return web.json_response({"error": "Tauri command timed out"}, status=504)
+    except FileNotFoundError:
+        return web.json_response(
+            {"error": "Tauri CLI not available - running outside Tauri context"}, status=501
+        )
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+
 # ---------------------------------------------------------------------------
 # App factory
 # ---------------------------------------------------------------------------
@@ -396,4 +462,5 @@ def create_app(
     app.router.add_post("/v1/chat/completions", handle_chat_completions)
     app.router.add_get("/v1/models", handle_models)
     app.router.add_get("/health", handle_health)
+    app.router.add_post("/api/tauri/invoke", handle_tauri_invoke)
     return app

@@ -13,6 +13,8 @@ class RequestContext:
     message_id: str | None = None
     session_key: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    terminal_session_id: str | None = None
+    terminal_exec_mode: str | None = None
 
 
 @runtime_checkable

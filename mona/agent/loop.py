@@ -1,4 +1,4 @@
-﻿"""Agent loop: the core processing engine."""
+"""Agent loop: the core processing engine."""
 
 from __future__ import annotations
 
@@ -512,12 +512,15 @@ class AgentLoop:
         else:
             effective_key = f"{channel}:{chat_id}"
 
+        meta = dict(metadata or {})
         request_ctx = RequestContext(
             channel=channel,
             chat_id=chat_id,
             message_id=message_id,
             session_key=effective_key,
-            metadata=dict(metadata or {}),
+            metadata=meta,
+            terminal_session_id=meta.get("terminal_session_id"),
+            terminal_exec_mode=meta.get("terminal_exec_mode"),
         )
 
         for name in self.tools.tool_names:

@@ -42,12 +42,15 @@ const windowsRows = [
   { label: "Defender", value: "正常", icon: ShieldCheck },
 ];
 
-export function AgentWorkbench() {
+export function AgentWorkbench({ width = 320 }: { width?: number }) {
   return (
-    <aside className="hidden h-full w-[320px] shrink-0 flex-col border-l border-border/75 bg-sidebar/70 xl:flex 2xl:w-[340px]">
+    <aside
+      className="hidden h-full shrink-0 flex-col border-l border-border/75 bg-sidebar/70 xl:flex"
+      style={{ width }}
+    >
       <div className="flex h-11 shrink-0 items-center justify-between border-b border-border/65 px-4">
         <div>
-          <h2 className="text-[13px] font-semibold text-foreground">联动工作台</h2>
+          <h2 className="text-[13px] font-semibold text-foreground">AI 工作台</h2>
           <p className="text-[11px] text-muted-foreground">Agent 会把模块上下文放在这里</p>
         </div>
         <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/20 bg-emerald-500/8 px-2 py-1 text-[11px] font-medium text-emerald-700 dark:text-emerald-300">

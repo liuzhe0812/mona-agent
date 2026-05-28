@@ -252,3 +252,72 @@ export async function updateImageGenerationSettings(
     token,
   );
 }
+
+export async function kbStatus(
+  token: string,
+  base?: string,
+  instance?: string,
+): Promise<{ mode: string; docCount: number; pendingChanges: number; instance: string }> {
+  const effectiveBase = base ?? (await getApiBase());
+  const query = new URLSearchParams();
+  if (instance) query.set("instance", instance);
+  return request(
+    `${effectiveBase}/api/kb/status?${query}`,
+    token,
+  );
+}
+
+export async function kbIngest(
+  token: string,
+  paths: string[],
+  base?: string,
+  instance?: string,
+  recursive = false,
+  mode = "notebook",
+): Promise<{ ingested: string[]; count: number }> {
+  const effectiveBase = base ?? (await getApiBase());
+  const query = new URLSearchParams();
+  query.set("paths", paths.join(","));
+  if (instance) query.set("instance", instance);
+  query.set("recursive", String(recursive));
+  query.set("mode", mode);
+  return request(
+    `${effectiveBase}/api/kb/ingest?${query}`,
+    token,
+  );
+}
+
+export async function kbQuery(
+  token: string,
+  q: string,
+  base?: string,
+  instance?: string,
+  topK = 5,
+  maxTokens = 8000,
+): Promise<{ results: Array<{ path: string; title: string; content: string }>; totalTokens: number }> {
+  const effectiveBase = base ?? (await getApiBase());
+  const query = new URLSearchParams();
+  query.set("q", q);
+  if (instance) query.set("instance", instance);
+  query.set("topK", String(topK));
+  query.set("maxTokens", String(maxTokens));
+  return request(
+    `${effectiveBase}/api/kb/query?${query}`,
+    token,
+  );
+}
+
+export async function kbCompile(
+  token: string,
+  base?: string,
+  instance?: string,
+): Promise<{ compiled: number }> {
+  const effectiveBase = base ?? (await getApiBase());
+  const query = new URLSearchParams();
+  if (instance) query.set("instance", instance);
+  query.set("mode", "document");
+  return request(
+    `${effectiveBase}/api/kb/compile?${query}`,
+    token,
+  );
+}

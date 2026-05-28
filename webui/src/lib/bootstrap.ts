@@ -82,9 +82,6 @@ export async function fetchBootstrap(
   if (!effectiveBase && isTauri()) {
     effectiveBase = await getGatewayBaseUrl();
   }
-  if (!effectiveBase) {
-    throw new Error("无法连接到 Gateway，请确认服务已启动。");
-  }
   const headers: Record<string, string> = {};
   if (secret) {
     headers["X-mona-Auth"] = secret;

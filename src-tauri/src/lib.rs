@@ -155,8 +155,6 @@ pub fn run() {
     let terminal_state = terminal::TerminalState::new();
     let db_state = db::DbState::new();
 
-    let ipc_bridge_port = find_available_ipc_port(17860);
-
     let terminal_state_for_bridge = terminal_state.clone();
 
     tauri::Builder::default()
@@ -164,6 +162,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_http::init())
         .manage(gateway_state.clone())
         .manage(terminal_state)
@@ -251,6 +250,8 @@ pub fn run() {
             db::commands::db_get_processes,
             db::commands::db_get_users,
             db::commands::db_kill_process,
+            db::commands::db_backup_database,
+            db::commands::db_restore_database,
             db::commands::db_list_connections,
             db::commands::db_save_connections,
             db::commands::db_load_connections,
@@ -304,7 +305,7 @@ pub fn run() {
                 }
             });
 
-            let bridge = Arc::new(ipc_bridge::IpcBridge::new(ipc_bridge_port));
+            let bridge = Arc::new(ipc_bridge::IpcBridge::new(app.handle().clone()));
             let ts = terminal_state_for_bridge.clone();
             tauri::async_runtime::spawn(async move {
                 if let Err(e) = bridge.start(ts).await {
@@ -316,13 +317,6 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
-}
 
-fn find_available_ipc_port(start: u16) -> u16 {
-    for port in start..=(start + 10) {
-        if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
-            return port;
-        }
-    }
-    start
+    ipc_bridge::remove_port_file();
 }

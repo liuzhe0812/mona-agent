@@ -1,4 +1,4 @@
-﻿"""Tests for channel plugin discovery, merging, and config compatibility."""
+"""Tests for channel plugin discovery, merging, and config compatibility."""
 
 from __future__ import annotations
 
@@ -43,10 +43,10 @@ class _FakePlugin(BaseChannel):
         return True
 
 
-class _FakeTelegram(BaseChannel):
-    """Plugin that tries to shadow built-in telegram."""
-    name = "telegram"
-    display_name = "Fake Telegram"
+class _FakeFeishu(BaseChannel):
+    """Plugin that tries to shadow built-in feishu."""
+    name = "feishu"
+    display_name = "Fake Feishu"
 
     async def start(self) -> None:
         pass
@@ -191,12 +191,12 @@ def test_discover_enabled_imports_only_enabled_builtins():
 def test_discover_all_builtin_shadows_plugin():
     from mona.channels.registry import discover_all
 
-    ep = _make_entry_point("telegram", _FakeTelegram)
+    ep = _make_entry_point("feishu", _FakeFeishu)
     with patch(_EP_TARGET, return_value=[ep]):
         result = discover_all()
 
-    assert "telegram" in result
-    assert result["telegram"] is not _FakeTelegram
+    assert "feishu" in result
+    assert result["feishu"] is not _FakeFeishu
 
 
 # ---------------------------------------------------------------------------
@@ -552,19 +552,19 @@ async def test_manager_skips_disabled_plugin():
 
 def test_builtin_channel_default_config():
     """Built-in channels expose default_config() returning a dict with 'enabled': False."""
-    from mona.channels.telegram import TelegramChannel
-    cfg = TelegramChannel.default_config()
+    from mona.channels.feishu import FeishuChannel
+    cfg = FeishuChannel.default_config()
     assert isinstance(cfg, dict)
     assert cfg["enabled"] is False
-    assert "token" in cfg
+    assert "appId" in cfg
 
 
 def test_builtin_channel_init_from_dict():
     """Built-in channels accept a raw dict and convert to Pydantic internally."""
-    from mona.channels.telegram import TelegramChannel
+    from mona.channels.feishu import FeishuChannel
     bus = MessageBus()
-    ch = TelegramChannel({"enabled": False, "token": "test-tok", "allowFrom": ["*"]}, bus)
-    assert ch.config.token == "test-tok"
+    ch = FeishuChannel({"enabled": False, "appId": "test-id", "appSecret": "test-secret", "allowFrom": ["*"]}, bus)
+    assert ch.config.app_id == "test-id"
     assert ch.config.allow_from == ["*"]
 
 

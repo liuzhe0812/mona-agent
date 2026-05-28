@@ -7,7 +7,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-import type { WorkspaceTabId } from "@/components/workspace/AppTitleBar";
+type WorkspaceTabId = "ssh" | "rdp" | "note" | "kb" | "windows";
 
 const MODULES: Record<WorkspaceTabId,
   {

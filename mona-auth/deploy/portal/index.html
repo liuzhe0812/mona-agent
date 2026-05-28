@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mona 会员中心</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-50 min-h-screen">
+<div id="app">
+  <div class="max-w-md mx-auto py-12 px-4">
+    <h1 class="text-2xl font-bold text-center mb-8">🐈 Mona 会员中心</h1>
+
+    <div v-if="!token">
+      <div v-if="mode === 'login'">
+        <div class="bg-white rounded-lg shadow p-6 mb-4">
+          <h2 class="text-lg font-semibold mb-4">登录</h2>
+          <input v-model="email" type="email" placeholder="邮箱" class="w-full border rounded px-3 py-2 mb-3" />
+          <input v-model="password" type="password" placeholder="密码" class="w-full border rounded px-3 py-2 mb-4" />
+          <button @click="login" :disabled="loading" class="w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700 disabled:opacity-50">登录</button>
+        </div>
+        <p class="text-center text-sm text-gray-500">没有账号？<a href="#" @click.prevent="mode='register'" class="text-blue-600">注册</a></p>
+      </div>
+
+      <div v-else>
+        <div class="bg-white rounded-lg shadow p-6 mb-4">
+          <h2 class="text-lg font-semibold mb-4">注册</h2>
+          <input v-model="email" type="email" placeholder="邮箱" class="w-full border rounded px-3 py-2 mb-3" />
+          <input v-model="password" type="password" placeholder="密码（至少8位）" class="w-full border rounded px-3 py-2 mb-4" />
+          <button @click="register" :disabled="loading" class="w-full bg-green-600 text-white py-2 rounded hover:bg-green-700 disabled:opacity-50">注册</button>
+        </div>
+        <p class="text-center text-sm text-gray-500">已有账号？<a href="#" @click.prevent="mode='login'" class="text-blue-600">登录</a></p>
+      </div>
+    </div>
+
+    <div v-else>
+      <div class="bg-white rounded-lg shadow p-6 mb-4">
+        <h2 class="text-lg font-semibold mb-2">订阅状态</h2>
+        <p v-if="subscription" class="text-sm">
+          <span :class="subscription.status === 'active' ? 'text-green-600' : 'text-red-600'" class="font-medium">
+            {{ subscription.status === 'active' ? '✅ 已激活' : '❌ 未激活' }}
+          </span>
+          <span v-if="subscription.current_period_end" class="text-gray-500 ml-2">
+            到期：{{ new Date(subscription.current_period_end).toLocaleDateString() }}
+          </span>
+        </p>
+        <p v-else class="text-sm text-gray-500">未订阅</p>
+        <div class="mt-4 flex gap-2">
+          <button v-if="!subscription || subscription.status !== 'active'" @click="checkout" :disabled="loading" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 text-sm disabled:opacity-50">购买订阅</button>
+          <button v-if="subscription?.stripe_customer_id" @click="portal" :disabled="loading" class="bg-gray-600 text-white px-4 py-2 rounded hover:bg-gray-700 text-sm disabled:opacity-50">管理支付</button>
+        </div>
+      </div>
+
+      <div class="bg-white rounded-lg shadow p-6 mb-4">
+        <h2 class="text-lg font-semibold mb-2">授权终端</h2>
+        <div v-if="devices.length === 0" class="text-sm text-gray-500">暂无绑定设备</div>
+        <div v-for="d in devices" :key="d.id" class="flex items-center justify-between py-2 border-b last:border-0">
+          <div>
+            <p class="text-sm font-medium">{{ d.device_name || '未命名设备' }}</p>
+            <p class="text-xs text-gray-400">{{ d.device_fingerprint.slice(0, 16) }}...</p>
+            <p v-if="d.last_verified" class="text-xs text-gray-400">上次验证：{{ new Date(d.last_verified).toLocaleString() }}</p>
+          </div>
+          <button @click="unbind(d.device_fingerprint)" class="text-red-500 text-sm hover:text-red-700">解绑</button>
+        </div>
+      </div>
+
+      <button @click="logout" class="w-full text-center text-sm text-gray-500 hover:text-gray-700 mt-4">退出登录</button>
+    </div>
+
+    <div v-if="error" class="mt-4 bg-red-50 text-red-600 text-sm rounded p-3">{{ error }}</div>
+    <div v-if="success" class="mt-4 bg-green-50 text-green-600 text-sm rounded p-3">{{ success }}</div>
+  </div>
+</div>
+
+<script>
+const API = '';
+
+const { createApp, ref, onMounted } = Vue;
+
+createApp({
+  setup() {
+    const mode = ref('login');
+    const email = ref('');
+    const password = ref('');
+    const token = ref(localStorage.getItem('mona_access_token') || '');
+    const subscription = ref(null);
+    const devices = ref([]);
+    const error = ref('');
+    const success = ref('');
+    const loading = ref(false);
+
+    const headers = () => ({
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token.value}`
+    });
+
+    async function register() {
+      error.value = '';
+      success.value = '';
+      loading.value = true;
+      try {
+        const resp = await fetch(`${API}/auth/register`, {
+          method: 'POST',
+          headers: headers(),
+          body: JSON.stringify({ email: email.value, password: password.value })
+        });
+        const data = await resp.json();
+        if (!resp.ok) { error.value = data.detail || data.error; return; }
+        token.value = data.access_token;
+        localStorage.setItem('mona_access_token', token.value);
+        success.value = '注册成功';
+        loadDashboard();
+      } catch (e) { error.value = '网络错误'; }
+      finally { loading.value = false; }
+    }
+
+    async function login() {
+      error.value = '';
+      success.value = '';
+      loading.value = true;
+      try {
+        const resp = await fetch(`${API}/auth/login`, {
+          method: 'POST',
+          headers: headers(),
+          body: JSON.stringify({ email: email.value, password: password.value })
+        });
+        const data = await resp.json();
+        if (!resp.ok) { error.value = data.detail || data.error; return; }
+        token.value = data.access_token;
+        localStorage.setItem('mona_access_token', token.value);
+        success.value = '登录成功';
+        loadDashboard();
+      } catch (e) { error.value = '网络错误'; }
+      finally { loading.value = false; }
+    }
+
+    function logout() {
+      token.value = '';
+      localStorage.removeItem('mona_access_token');
+      subscription.value = null;
+      devices.value = [];
+      email.value = '';
+      password.value = '';
+    }
+
+    async function loadDashboard() {
+      try {
+        const devResp = await fetch(`${API}/auth/device/list`, { headers: headers() });
+        if (devResp.ok) devices.value = (await devResp.json()).devices;
+        else if (devResp.status === 401) { logout(); }
+      } catch {}
+    }
+
+    async function checkout() {
+      error.value = '';
+      loading.value = true;
+      try {
+        const resp = await fetch(`${API}/stripe/checkout`, {
+          method: 'POST',
+          headers: headers(),
+          body: JSON.stringify({ success_url: window.location.href, cancel_url: window.location.href })
+        });
+        const data = await resp.json();
+        if (!resp.ok) { error.value = data.detail || data.error; return; }
+        window.location.href = data.checkout_url;
+      } catch (e) { error.value = '网络错误'; }
+      finally { loading.value = false; }
+    }
+
+    async function portal() {
+      error.value = '';
+      loading.value = true;
+      try {
+        const resp = await fetch(`${API}/stripe/portal`, {
+          method: 'POST',
+          headers: headers(),
+          body: JSON.stringify({ return_url: window.location.href })
+        });
+        const data = await resp.json();
+        if (!resp.ok) { error.value = data.detail || data.error; return; }
+        window.location.href = data.portal_url;
+      } catch (e) { error.value = '网络错误'; }
+      finally { loading.value = false; }
+    }
+
+    async function unbind(fp) {
+      error.value = '';
+      success.value = '';
+      if (!confirm('确定要解绑此设备吗？')) return;
+      loading.value = true;
+      try {
+        const resp = await fetch(`${API}/auth/device/unbind`, {
+          method: 'POST',
+          headers: headers(),
+          body: JSON.stringify({ device_fingerprint: fp })
+        });
+        if (resp.ok) {
+          success.value = '设备已解绑';
+          loadDashboard();
+        } else {
+          const data = await resp.json();
+          error.value = data.detail || data.error;
+        }
+      } catch (e) { error.value = '网络错误'; }
+      finally { loading.value = false; }
+    }
+
+    onMounted(() => { if (token.value) loadDashboard(); });
+
+    return {
+      mode, email, password, token, subscription, devices,
+      error, success, loading,
+      register, login, logout, checkout, portal, unbind
+    };
+  }
+}).mount('#app');
+</script>
+</body>
+</html>

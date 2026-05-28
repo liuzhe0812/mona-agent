@@ -4,9 +4,16 @@
   "version": "0.1.0",
   "identifier": "com.mona.desktop",
   "build": {
-    "beforeDevCommand": "cd ../webui && npm run build:tauri",
-    "beforeBuildCommand": "cd ../webui && npm run build:tauri",
-    "frontendDist": "../src-tauri/dist"
+    "beforeDevCommand": {
+      "script": "npm run dev",
+      "cwd": "../webui"
+    },
+    "beforeBuildCommand": {
+      "script": "npm run build:tauri",
+      "cwd": "../webui"
+    },
+    "devUrl": "http://127.0.0.1:5173",
+    "frontendDist": "./dist"
   },
   "app": {
     "withGlobalTauri": true,
@@ -18,14 +25,9 @@
         "minWidth": 800,
         "minHeight": 600,
         "center": true,
-        "decorations": true
+        "decorations": false
       }
-    ],
-    "trayIcon": {
-      "iconPath": "icons/icon.png",
-      "iconAsTemplate": false,
-      "tooltip": "Mona"
-    }
+    ]
   },
   "bundle": {
     "active": true,

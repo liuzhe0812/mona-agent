@@ -53,6 +53,26 @@ impl GatewayManager {
 
         cmd.env("PYTHONUNBUFFERED", "1");
 
+        let project_root =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap_or_else(|| {
+                std::path::Path::new(".")
+            });
+        let mona_pkg_dir = project_root.join("mona");
+        if mona_pkg_dir.is_dir() {
+            let sep = if cfg!(windows) { ";" } else { ":" };
+            let existing = std::env::var("PYTHONPATH").unwrap_or_default();
+            let new_path = if existing.is_empty() {
+                project_root.display().to_string()
+            } else {
+                format!("{}{}{}", project_root.display(), sep, existing)
+            };
+            cmd.env("PYTHONPATH", &new_path);
+            log::info!(
+                "Dev mode detected: PYTHONPATH set to {:?}",
+                project_root
+            );
+        }
+
         let child = cmd
             .spawn()
             .map_err(|e| format!("Failed to start gateway: {}", e))?;

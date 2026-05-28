@@ -36,6 +36,7 @@ from mona.channels.base import BaseChannel
 from mona.command.builtin import builtin_command_palette
 from mona.config.paths import get_media_dir
 from mona.config.schema import Base
+from mona.knowledge.models import ChangePriority, ChangeType, FileMeta, PendingChange
 from mona.session.goal_state import goal_state_ws_blob
 from mona.session.webui_turns import websocket_turn_wall_started_at
 from mona.utils.helpers import safe_filename
@@ -60,6 +61,9 @@ from mona.webui.thread_disk import delete_webui_thread
 from mona.webui.transcript import append_transcript_object, build_webui_thread_response
 
 if TYPE_CHECKING:
+    from mona.knowledge.indexer import Indexer
+    from mona.knowledge.models import KnowledgeMeta
+    from mona.knowledge.store import KnowledgeStore
     from mona.session.manager import SessionManager
 
 
@@ -409,6 +413,78 @@ def _b64url_decode(s: str) -> bytes:
     return base64.urlsafe_b64decode(s + pad)
 
 
+def _kb_ingest_file(
+    file_path: Path,
+    workspace: Path,
+    store: "KnowledgeStore",
+    indexer: "Indexer",
+    meta: "KnowledgeMeta",
+    ingested: list[str],
+) -> None:
+    try:
+        rel = file_path.relative_to(workspace).as_posix()
+    except ValueError:
+        return
+    if file_path.suffix not in (
+        ".md", ".txt", ".py", ".js", ".ts", ".json",
+        ".yaml", ".yml", ".toml", ".rst",
+    ):
+        return
+    content = file_path.read_text(encoding="utf-8", errors="replace")
+    h = hashlib.sha256(content.encode()).hexdigest()
+    existing = meta.files.get(rel)
+    if existing and existing.hash == h:
+        return
+    title = _kb_extract_title(file_path)
+    indexer.upsert(path=rel, title=title, content=content, hash=h)
+    if existing:
+        change = PendingChange(
+            path=rel,
+            type=ChangeType.MODIFIED,
+            priority=ChangePriority.MEDIUM,
+            old_hash=existing.hash,
+            new_hash=h,
+        )
+    else:
+        change = PendingChange(
+            path=rel,
+            type=ChangeType.ADDED,
+            priority=ChangePriority.HIGH,
+            new_hash=h,
+        )
+    meta.pending_changes.append(change)
+    meta.files[rel] = FileMeta(hash=h)
+    ingested.append(rel)
+
+
+def _kb_ingest_dir(
+    dir_path: Path,
+    workspace: Path,
+    store: "KnowledgeStore",
+    indexer: "Indexer",
+    meta: "KnowledgeMeta",
+    ingested: list[str],
+    recursive: bool,
+) -> None:
+    for fp in sorted(dir_path.iterdir()):
+        if fp.name.startswith("."):
+            continue
+        if fp.is_file():
+            _kb_ingest_file(fp, workspace, store, indexer, meta, ingested)
+        elif recursive and fp.is_dir():
+            _kb_ingest_dir(fp, workspace, store, indexer, meta, ingested, recursive)
+
+
+def _kb_extract_title(path: Path) -> str:
+    try:
+        first_line = path.read_text(encoding="utf-8").split("\n", 1)[0].strip()
+        if first_line.startswith("#"):
+            return first_line.lstrip("# ").strip()
+    except Exception:
+        pass
+    return path.stem
+
+
 # Allowed MIME types we actually serve from the media endpoint. Anything
 # outside this set is degraded to ``application/octet-stream`` so an
 # attacker who somehow gets a signed URL for an unexpected file type can't
@@ -658,6 +734,18 @@ class WebSocketChannel(BaseChannel):
         if got == "/api/settings/image-generation/update":
             return self._handle_settings_image_generation_update(request)
 
+        if got == "/api/kb/status":
+            return self._handle_kb_status(request)
+
+        if got == "/api/kb/ingest":
+            return self._handle_kb_ingest(request)
+
+        if got == "/api/kb/query":
+            return self._handle_kb_query(request)
+
+        if got == "/api/kb/compile":
+            return self._handle_kb_compile(request)
+
         m = re.match(r"^/api/sessions/([^/]+)/messages$", got)
         if m:
             return self._handle_session_messages(request, m.group(1))
@@ -774,6 +862,8 @@ class WebSocketChannel(BaseChannel):
             key = s.get("key")
             if not (isinstance(key, str) and key.startswith("websocket:")):
                 continue
+            if key.startswith("websocket:ephemeral:"):
+                continue
             row = {k: v for k, v in s.items() if k != "path"}
             chat_id = key.split(":", 1)[1]
             started_at = websocket_turn_wall_started_at(chat_id)
@@ -878,6 +968,160 @@ class WebSocketChannel(BaseChannel):
         except WebUISettingsError as e:
             return _http_error(e.status, e.message)
         return _http_json_response(self._with_settings_restart_state(payload, section="image"))
+
+    def _handle_kb_status(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        try:
+            from mona.config.paths import get_workspace_path
+            from mona.knowledge.indexer import Indexer
+            from mona.knowledge.models import KnowledgeMode
+            from mona.knowledge.store import KnowledgeStore
+
+            workspace = get_workspace_path()
+            query = _parse_query(request.path)
+            instance = _query_first(query, "instance")
+            root = workspace / ".knowledge" / (instance or "default")
+            mode_str = _query_first(query, "mode") or "notebook"
+            mode = KnowledgeMode(mode_str)
+            store = KnowledgeStore(root, mode)
+            store.ensure_dirs()
+            indexer = Indexer(store.db_path)
+            indexer.initialize()
+            meta = store.load_meta()
+            doc_count = indexer.get_doc_count()
+            pending_count = len(meta.pending_changes)
+            mode_label = "document" if meta.mode == KnowledgeMode.DOCUMENT else "notebook"
+            return _http_json_response({
+                "mode": mode_label,
+                "docCount": doc_count,
+                "pendingChanges": pending_count,
+                "instance": instance or "default",
+            })
+        except Exception:
+            logger.exception("kb_status failed")
+            return _http_error(500, "kb_status error")
+
+    def _handle_kb_ingest(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        try:
+            from mona.config.paths import get_workspace_path
+            from mona.knowledge.indexer import Indexer
+            from mona.knowledge.models import KnowledgeMode
+            from mona.knowledge.store import KnowledgeStore
+
+            workspace = get_workspace_path()
+            query = _parse_query(request.path)
+            instance = _query_first(query, "instance")
+            paths_str = _query_first(query, "paths") or ""
+            recursive = _query_first(query, "recursive") == "true"
+            mode_str = _query_first(query, "mode") or "notebook"
+            mode = KnowledgeMode(mode_str)
+            root = workspace / ".knowledge" / (instance or "default")
+            store = KnowledgeStore(root, mode)
+            store.ensure_dirs()
+            indexer = Indexer(store.db_path)
+            indexer.initialize()
+            meta = store.load_meta()
+            paths = [p.strip() for p in paths_str.split(",") if p.strip()] if paths_str else ["."]
+            ingested = []
+            for rel_path in paths:
+                target = workspace / rel_path
+                if not target.exists():
+                    continue
+                if target.is_file():
+                    _kb_ingest_file(target, workspace, store, indexer, meta, ingested)
+                elif target.is_dir():
+                    _kb_ingest_dir(target, workspace, store, indexer, meta, ingested, recursive)
+            store.save_meta(meta)
+            return _http_json_response({
+                "ingested": ingested,
+                "count": len(ingested),
+            })
+        except Exception:
+            logger.exception("kb_ingest failed")
+            return _http_error(500, "kb_ingest error")
+
+    def _handle_kb_query(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        try:
+            from mona.config.paths import get_workspace_path
+            from mona.knowledge.indexer import Indexer
+            from mona.knowledge.models import KnowledgeMode
+            from mona.knowledge.store import KnowledgeStore
+
+            workspace = get_workspace_path()
+            query_params = _parse_query(request.path)
+            q = _query_first(query_params, "q") or ""
+            instance = _query_first(query_params, "instance")
+            top_k = int(_query_first(query_params, "topK") or "5")
+            max_tokens = int(_query_first(query_params, "maxTokens") or "8000")
+            mode_str = _query_first(query_params, "mode") or "notebook"
+            mode = KnowledgeMode(mode_str)
+            root = workspace / ".knowledge" / (instance or "default")
+            store = KnowledgeStore(root, mode)
+            store.ensure_dirs()
+            indexer = Indexer(store.db_path)
+            indexer.initialize()
+            results = indexer.search(q, top_k=top_k)
+            output = []
+            total_tokens = 0
+            for result in results:
+                rel_path = result["path"]
+                file_path = workspace / rel_path
+                if not file_path.exists():
+                    continue
+                content = file_path.read_text(encoding="utf-8", errors="replace")
+                tokens = len(content) // 3
+                if total_tokens + tokens > max_tokens:
+                    remaining = max_tokens - total_tokens
+                    if remaining > 200:
+                        content = content[:remaining * 3] + "\n... (truncated)"
+                    else:
+                        break
+                output.append({"path": rel_path, "title": result["title"], "content": content})
+                total_tokens += tokens
+            return _http_json_response({
+                "results": output,
+                "totalTokens": total_tokens,
+            })
+        except Exception:
+            logger.exception("kb_query failed")
+            return _http_error(500, "kb_query error")
+
+    def _handle_kb_compile(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        try:
+            from mona.config.paths import get_workspace_path
+            from mona.knowledge.models import KnowledgeMode
+
+            workspace = get_workspace_path()
+            query_params = _parse_query(request.path)
+            instance = _query_first(query_params, "instance")
+            mode_str = _query_first(query_params, "mode") or "document"
+            mode = KnowledgeMode(mode_str)
+            if mode != KnowledgeMode.DOCUMENT:
+                return _http_json_response(
+                    {"error": "Notebook mode does not support Wiki compilation"}, status=400
+                )
+            from mona.knowledge.compiler import IncrementalCompiler
+            from mona.knowledge.store import KnowledgeStore
+            from mona.knowledge.wiki import WikiCompiler
+
+            root = workspace / ".knowledge" / (instance or "default")
+            store = KnowledgeStore(root, mode)
+            store.ensure_dirs()
+            meta = store.load_meta()
+            wiki = WikiCompiler(store, workspace)
+            compiler = IncrementalCompiler(store, wiki, meta)
+            count = compiler.compile_pending()
+            return _http_json_response({"compiled": count})
+        except Exception:
+            logger.exception("kb_compile failed")
+            return _http_error(500, "kb_compile error")
 
     @staticmethod
     def _is_websocket_channel_session_key(key: str) -> bool:
@@ -1203,22 +1447,6 @@ class WebSocketChannel(BaseChannel):
         async def handler(connection: ServerConnection) -> None:
             await self._connection_loop(connection)
 
-        self.logger.info(
-            "WebSocket server listening on {}://{}:{}{}",
-            scheme,
-            self.config.host,
-            self.config.port,
-            self.config.path,
-        )
-        if self.config.token_issue_path:
-            self.logger.info(
-                "WebSocket token issue route: {}://{}:{}{}",
-                scheme,
-                self.config.host,
-                self.config.port,
-                _normalize_config_path(self.config.token_issue_path),
-            )
-
         async def runner() -> None:
             async with serve(
                 handler,
@@ -1230,6 +1458,21 @@ class WebSocketChannel(BaseChannel):
                 ping_timeout=self.config.ping_timeout_s,
                 ssl=ssl_context,
             ):
+                self.logger.info(
+                    "WebSocket server listening on {}://{}:{}{}",
+                    scheme,
+                    self.config.host,
+                    self.config.port,
+                    self.config.path,
+                )
+                if self.config.token_issue_path:
+                    self.logger.info(
+                        "WebSocket token issue route: {}://{}:{}{}",
+                        scheme,
+                        self.config.host,
+                        self.config.port,
+                        _normalize_config_path(self.config.token_issue_path),
+                    )
                 assert self._stop_event is not None
                 await self._stop_event.wait()
 
@@ -1375,6 +1618,9 @@ class WebSocketChannel(BaseChannel):
         t = envelope.get("type")
         if t == "new_chat":
             new_id = str(uuid.uuid4())
+            ephemeral = envelope.get("ephemeral") is True
+            if ephemeral:
+                new_id = f"ephemeral:{new_id}"
             self._attach(connection, new_id)
             await self._send_event(connection, "attached", chat_id=new_id)
             await self._hydrate_after_subscribe(new_id)
@@ -1426,6 +1672,21 @@ class WebSocketChannel(BaseChannel):
             metadata: dict[str, Any] = {"remote": getattr(connection, "remote_address", None)}
             if envelope.get("webui") is True:
                 metadata["webui"] = True
+            terminal_session_id = envelope.get("terminal_session_id")
+            if isinstance(terminal_session_id, str) and terminal_session_id:
+                metadata["terminal_session_id"] = terminal_session_id
+            terminal_exec_mode = envelope.get("terminal_exec_mode")
+            if isinstance(terminal_exec_mode, str) and terminal_exec_mode in ("auto", "approval"):
+                metadata["terminal_exec_mode"] = terminal_exec_mode
+            db_connection_id = envelope.get("db_connection_id")
+            if isinstance(db_connection_id, str) and db_connection_id:
+                metadata["connection_id"] = db_connection_id
+            db_database = envelope.get("db_database")
+            if isinstance(db_database, str) and db_database:
+                metadata["database"] = db_database
+            db_table = envelope.get("db_table")
+            if isinstance(db_table, str) and db_table:
+                metadata["table"] = db_table
             image_generation = envelope.get("image_generation")
             if isinstance(image_generation, dict) and image_generation.get("enabled") is True:
                 aspect_ratio = image_generation.get("aspect_ratio")
@@ -1668,6 +1929,16 @@ class WebSocketChannel(BaseChannel):
         raw = json.dumps(body, ensure_ascii=False)
         for connection in conns:
             await self._safe_send_to(connection, raw, label=" turn_end ")
+        if chat_id.startswith("ephemeral:"):
+            self._cleanup_ephemeral_session(chat_id)
+
+    def _cleanup_ephemeral_session(self, chat_id: str) -> None:
+        if self._session_manager is None:
+            return
+        session_key = f"websocket:{chat_id}"
+        self._session_manager.delete_session(session_key)
+        self._subs.pop(chat_id, None)
+        logger.debug("Cleaned up ephemeral session {}", session_key)
 
     async def send_goal_state(self, chat_id: str, blob: dict[str, Any]) -> None:
         """Push persisted goal-state snapshot for *chat_id* (multi-chat isolation)."""

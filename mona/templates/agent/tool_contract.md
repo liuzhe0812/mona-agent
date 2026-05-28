@@ -43,11 +43,11 @@ documents the general tool contract and non-obvious usage patterns.
 
 ## Remote Terminal and SSH Sessions
 
-- Use `terminal_output` without a session_id to list all active terminal sessions (SSH or local).
-- Use `terminal_exec` with a `session_id` and `command` to execute a command in an existing terminal session.
-- Always call `terminal_output` first to discover available sessions and their IDs before executing commands.
+- `terminal_exec` and `terminal_output` automatically target the user's current active terminal session — you do NOT need to discover or specify a session_id.
+- Simply call `terminal_exec` with the `command` parameter; the session is resolved from the user's current terminal view.
+- Call `terminal_output` (without session_id) to read the current terminal buffer and see command results.
 - Commands are risk-classified: dangerous commands (e.g. `rm -rf /`, `mkfs`, `dd`) always require user approval; safe commands (e.g. `ls`, `cat`, `df`) may execute directly depending on configuration; unknown commands default to requiring approval.
-- After executing a command, use `terminal_output` with the session_id to read the terminal buffer and see the result.
+- Commands execute in the user's visible terminal, so the user can see AI actions in real time.
 - Do NOT use `ssh_exec` (deprecated) — always prefer `terminal_exec` which reuses existing sessions.
 - `terminal_exec` operates on already-connected sessions; it does not create new SSH connections. The user must have an active terminal session open.
 

@@ -1,10 +1,18 @@
-import type { NoteAiActionId, OperationNote } from "./notes-data";
+import type { KnowledgeCategory, NoteAiActionId, OperationNote } from "./notes-data";
 
 export interface ExtractedKnowledgeDraft {
   categoryName: string;
   title: string;
   summary: string;
   content: string;
+  sourceDescription: string;
+  tags: string[];
+}
+
+export interface ExtractedKnowledgeCandidateDraft {
+  categoryName: string;
+  title: string;
+  summary: string;
   sourceDescription: string;
   tags: string[];
 }
@@ -30,6 +38,8 @@ export function buildAgentActionPrompt(
   actionId: Exclude<NoteAiActionId, "freeform">,
   note: OperationNote,
   filePath?: string,
+  knowledgeCategories: KnowledgeCategory[] = [],
+  existingTags: string[] = [],
 ): string {
   if (actionId === "summary") {
     if (filePath) {
@@ -45,25 +55,49 @@ export function buildAgentActionPrompt(
   }
 
   if (actionId === "extractKnowledge") {
+    const categoryContext = formatKnowledgeCategoryContext(knowledgeCategories);
+    const tagContext = formatExistingTagContext(existingTags);
     const instruction = [
-      "请从这篇笔记中提取一个最有复用价值的知识点，整理成个人知识库条目。",
+      "请从这篇笔记中提取 1-5 个最有复用价值的候选知识点，供用户确认后保存到个人知识库。",
+      "",
+      categoryContext,
+      "",
+      tagContext,
       "",
       "只输出一个 JSON 对象，不要输出 Markdown 代码块，不要解释，不要追问。",
       "JSON 字段必须是：",
       "{",
-      '  "categoryName": "知识分类名称。请根据笔记内容自动归类；没有合适分类时，创建一个简短自然的新分类名，不要固定套用运维或技术分类",',
-      '  "title": "知识点标题",',
-      '  "summary": "概述，1-3 句话",',
-      '  "content": "正文内容，保留关键观点、定义、步骤、示例、链接或结论，可使用 Markdown",',
-      '  "sourceDescription": "来源链接或来源说明；没有链接时写来自当前笔记",',
-      '  "tags": ["标签1", "标签2"]',
+      '  "items": [',
+      "    {",
+      '      "categoryName": "知识分类路径。必须按内容所属领域分类，使用 / 表示多级分类，例如 技术/人工智能/模型量化；只有和已有分类语义高度匹配时才复用已有分类",',
+      '      "title": "知识点标题",',
+      '      "summary": "精简内容总结，2-5 句话，只保留笔记里最值得沉淀的内容，不按固定格式拆分",',
+      '      "sourceDescription": "来源链接或来源说明；没有链接时写来自当前笔记",',
+      '      "tags": ["标签1"]',
+      "    }",
+      "  ]",
       "}",
       "",
-      "要求：",
-      "- 不要整篇复制原文，只提炼可复用知识点。",
+      "提取要求：",
+      "- 只提取能脱离原文复用的知识点；临时想法、待确认内容、流水账不要保存。",
+      "- 不要整篇复制原文，不要大段搬运笔记，只输出压缩后的知识点。",
       "- 不要编造笔记里没有的信息。",
-      "- categoryName 必须由内容决定，用简短名词短语，不要全部归到通用分类。",
-      "- 如果笔记里有多个知识点，只选最稳定、最适合沉淀的一个。",
+      "- 每个 summary 只写精简内容总结，不要输出“为什么值得保存/关键概念/适用场景/注意事项”等固定分区。",
+      "- 如果笔记只有一个稳定知识点，就只返回 1 个 item；不要为了凑数拆分。",
+      "",
+      "标签要求：",
+      "- tags 必须是 1-4 个。",
+      "- 优先复用上面已有标签；只有没有合适标签时才新增。",
+      "- 如果已有标签里有能准确覆盖当前知识点的标签，必须使用已有标签，不要换个近义词新建。",
+      "- 标签使用领域级或主题级词，不要把参数、型号、缩写、版本号当标签。",
+      "- 例如 BF16、FP16、INT8 这类具体参数不要作为标签，除非整篇笔记主题就是某一个参数。",
+      "",
+      "分类要求：",
+      "- 分类先判断内容所属领域，再看已有分类是否匹配；不要因为已有分类存在就强行复用。",
+      "- 只有已有分类与当前知识点的主题、学科或技术域高度一致时，才复用已有分类路径，并原样返回完整路径。",
+      "- 如果已有分类只是宽泛相关或明显不属于同一领域，必须创建新的多级分类路径。",
+      "- categoryName 默认至少二级分类，用简短名词短语，不要全部归到通用分类或未分类。",
+      "- 技术内容必须从技术角度归类，例如 AI 模型精度格式、FP16、BF16、INT8、量化等内容应归到类似 技术/人工智能/模型量化 或 技术/人工智能/模型压缩，不应归到教育技术。",
     ].join("\n");
 
     if (filePath) {
@@ -100,7 +134,9 @@ export function deriveNotePreview(markdown: string): string {
   return text.slice(0, 46) || "空白笔记";
 }
 
-export function parseExtractedKnowledge(content: string): ExtractedKnowledgeDraft {
+export function parseExtractedKnowledgeCandidates(
+  content: string,
+): ExtractedKnowledgeCandidateDraft[] {
   const raw = extractJsonObject(content);
   let parsed: unknown;
   try {
@@ -109,24 +145,28 @@ export function parseExtractedKnowledge(content: string): ExtractedKnowledgeDraf
     throw new Error("AI 回复不是有效的知识点 JSON");
   }
 
-  if (!isRecord(parsed)) {
-    throw new Error("AI 回复不是有效的知识点对象");
+  if (!isRecord(parsed) || !Array.isArray(parsed.items)) {
+    throw new Error("AI 回复缺少 items 候选知识点列表");
   }
 
-  const draft: ExtractedKnowledgeDraft = {
-    categoryName: readRequiredString(parsed, "categoryName"),
-    title: readRequiredString(parsed, "title"),
-    summary: readRequiredString(parsed, "summary"),
-    content: readRequiredString(parsed, "content"),
-    sourceDescription: readRequiredString(parsed, "sourceDescription"),
-    tags: readStringArray(parsed, "tags"),
+  if (parsed.items.length < 1 || parsed.items.length > 5) {
+    throw new Error("候选知识点数量必须是 1-5 个");
+  }
+
+  return parsed.items.map((item, index) => readKnowledgeCandidate(item, index));
+}
+
+export function createKnowledgeDraftFromCandidate(
+  candidate: ExtractedKnowledgeCandidateDraft,
+): ExtractedKnowledgeDraft {
+  return {
+    categoryName: candidate.categoryName,
+    title: candidate.title,
+    summary: candidate.summary,
+    content: candidate.summary,
+    sourceDescription: candidate.sourceDescription,
+    tags: candidate.tags,
   };
-
-  if (draft.tags.length === 0) {
-    throw new Error("知识点缺少标签");
-  }
-
-  return draft;
 }
 
 export function stripMarkdown(markdown: string): string {
@@ -142,6 +182,29 @@ export function stripMarkdown(markdown: string): string {
     .replace(/[*_~|]/g, " ");
 }
 
+function readKnowledgeCandidate(
+  value: unknown,
+  index: number,
+): ExtractedKnowledgeCandidateDraft {
+  if (!isRecord(value)) {
+    throw new Error(`第 ${index + 1} 个候选知识点不是有效对象`);
+  }
+
+  const candidate: ExtractedKnowledgeCandidateDraft = {
+    categoryName: readRequiredString(value, "categoryName", index),
+    title: readRequiredString(value, "title", index),
+    summary: readRequiredString(value, "summary", index),
+    sourceDescription: readRequiredString(value, "sourceDescription", index),
+    tags: readStringArray(value, "tags", index).slice(0, 4),
+  };
+
+  if (candidate.tags.length === 0) {
+    throw new Error(`第 ${index + 1} 个候选知识点缺少标签`);
+  }
+
+  return candidate;
+}
+
 function extractJsonObject(content: string): string {
   const fenced = content.match(/```(?:json)?\s*([\s\S]*?)```/i);
   const source = fenced?.[1]?.trim() || content.trim();
@@ -153,18 +216,26 @@ function extractJsonObject(content: string): string {
   return source.slice(start, end + 1);
 }
 
-function readRequiredString(value: Record<string, unknown>, key: string): string {
+function readRequiredString(
+  value: Record<string, unknown>,
+  key: string,
+  itemIndex: number,
+): string {
   const field = value[key];
   if (typeof field !== "string" || !field.trim()) {
-    throw new Error(`知识点缺少字段：${key}`);
+    throw new Error(`第 ${itemIndex + 1} 个候选知识点缺少字段：${key}`);
   }
   return field.trim();
 }
 
-function readStringArray(value: Record<string, unknown>, key: string): string[] {
+function readStringArray(
+  value: Record<string, unknown>,
+  key: string,
+  itemIndex: number,
+): string[] {
   const field = value[key];
   if (!Array.isArray(field)) {
-    throw new Error(`知识点字段不是数组：${key}`);
+    throw new Error(`第 ${itemIndex + 1} 个候选知识点字段不是数组：${key}`);
   }
   return Array.from(
     new Set(
@@ -192,4 +263,63 @@ Markdown 内容：
 \`\`\`markdown
 ${content}${truncated ? "\n\n...内容过长，已截断" : ""}
 \`\`\``;
+}
+
+function formatKnowledgeCategoryContext(categories: KnowledgeCategory[]): string {
+  const paths = formatKnowledgeCategoryPaths(categories);
+  if (paths.length === 0) {
+    return [
+      "当前已有知识分类路径：",
+      "- 未分类",
+      "",
+      "分类规则：当前没有可复用分类时，按内容所属领域创建新的多级分类路径。",
+    ].join("\n");
+  }
+
+  return [
+    "当前已有知识分类路径：",
+    ...paths.map((path) => `- ${path}`),
+    "",
+    "分类规则：只有主题、学科或技术域高度一致时才复用已有路径；不匹配时创建新的多级分类路径。",
+  ].join("\n");
+}
+
+function formatExistingTagContext(tags: string[]): string {
+  const uniqueTags = Array.from(new Set(tags.map((tag) => tag.trim()).filter(Boolean)));
+  if (uniqueTags.length === 0) {
+    return [
+      "当前已有标签：",
+      "- 暂无",
+      "",
+      "标签规则：当前没有可复用标签时，创建 1-4 个领域级或主题级标签。",
+    ].join("\n");
+  }
+
+  return [
+    "当前已有标签：",
+    ...uniqueTags.map((tag) => `- ${tag}`),
+    "",
+    "标签规则：优先复用已有标签；已有标签能覆盖当前知识点时必须使用已有标签；确实没有合适标签时才新增，避免标签越积越细。",
+  ].join("\n");
+}
+
+function formatKnowledgeCategoryPaths(categories: KnowledgeCategory[]): string[] {
+  const byId = new Map(categories.map((category) => [category.id, category]));
+  const pathCache = new Map<string, string>();
+
+  const getPath = (category: KnowledgeCategory, seen = new Set<string>()): string => {
+    const cached = pathCache.get(category.id);
+    if (cached) return cached;
+    if (seen.has(category.id)) return category.name;
+    seen.add(category.id);
+
+    const parent = category.parentId ? byId.get(category.parentId) : null;
+    const path = parent ? `${getPath(parent, seen)}/${category.name}` : category.name;
+    pathCache.set(category.id, path);
+    return path;
+  };
+
+  return categories
+    .map((category) => getPath(category))
+    .filter(Boolean);
 }

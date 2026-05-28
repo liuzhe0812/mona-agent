@@ -66,7 +66,8 @@ pub struct NoteSource {
 pub struct KnowledgeCategory {
     pub id: String,
     pub name: String,
-    pub description: String,
+    #[serde(default)]
+    pub parent_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,6 +83,17 @@ pub struct KnowledgeItem {
     pub source_description: String,
     pub updated_at: String,
     pub tags: Vec<String>,
+    #[serde(default)]
+    pub linked_notes: Vec<KnowledgeLinkedNote>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeLinkedNote {
+    pub note_id: String,
+    pub note_title: String,
+    pub description: String,
+    pub linked_at: String,
 }
 
 fn notes_db_path() -> PathBuf {
@@ -141,7 +153,8 @@ fn initialize_schema(conn: &Connection) -> Result<(), String> {
         CREATE TABLE IF NOT EXISTS knowledge_categories (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
-            description TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            parent_id TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
@@ -157,13 +170,50 @@ fn initialize_schema(conn: &Connection) -> Result<(), String> {
             source_description TEXT NOT NULL,
             updated_at_label TEXT NOT NULL,
             tags_json TEXT NOT NULL,
+            linked_notes_json TEXT NOT NULL DEFAULT '[]',
             created_at TEXT NOT NULL,
             modified_at TEXT NOT NULL,
             FOREIGN KEY (category_id) REFERENCES knowledge_categories(id) ON DELETE CASCADE
         );
         "#,
     )
-    .map_err(|e| format!("Failed to initialize notes schema: {}", e))
+    .map_err(|e| format!("Failed to initialize notes schema: {}", e))?;
+
+    ensure_column(conn, "knowledge_categories", "parent_id", "TEXT")?;
+    ensure_column(
+        conn,
+        "knowledge_items",
+        "linked_notes_json",
+        "TEXT NOT NULL DEFAULT '[]'",
+    )
+}
+
+fn ensure_column(
+    conn: &Connection,
+    table: &'static str,
+    column: &'static str,
+    definition: &'static str,
+) -> Result<(), String> {
+    let mut stmt = conn
+        .prepare(&format!("PRAGMA table_info({})", table))
+        .map_err(|e| format!("Failed to inspect {} schema: {}", table, e))?;
+    let rows = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|e| format!("Failed to read {} schema: {}", table, e))?;
+    let columns = rows
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("Failed to collect {} schema: {}", table, e))?;
+
+    if columns.iter().any(|name| name == column) {
+        return Ok(());
+    }
+
+    conn.execute(
+        &format!("ALTER TABLE {} ADD COLUMN {} {}", table, column, definition),
+        [],
+    )
+    .map_err(|e| format!("Failed to add {}.{}: {}", table, column, e))?;
+    Ok(())
 }
 
 fn seed_default_notebooks(conn: &Connection) -> Result<(), String> {
@@ -223,13 +273,13 @@ fn seed_default_knowledge_categories(conn: &Connection) -> Result<(), String> {
     }
 
     let now = chrono::Utc::now().to_rfc3339();
-    let defaults = [("inbox", "未分类", "暂未归类的知识点")];
+    let defaults = [("inbox", "未分类", None::<String>)];
 
-    for (id, name, description) in defaults {
+    for (id, name, parent_id) in defaults {
         conn.execute(
-            "INSERT INTO knowledge_categories (id, name, description, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?4)",
-            params![id, name, description, now],
+            "INSERT INTO knowledge_categories (id, name, description, parent_id, created_at, updated_at)
+             VALUES (?1, ?2, '', ?3, ?4, ?4)",
+            params![id, name, parent_id, now],
         )
         .map_err(|e| format!("Failed to seed knowledge categories: {}", e))?;
     }
@@ -356,20 +406,21 @@ pub async fn notes_save_state(state: NotesState) -> Result<(), String> {
 
     for category in &state.knowledge_categories {
         tx.execute(
-            "INSERT INTO knowledge_categories (id, name, description, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?4)",
-            params![&category.id, &category.name, &category.description, &now],
+            "INSERT INTO knowledge_categories (id, name, description, parent_id, created_at, updated_at)
+             VALUES (?1, ?2, '', ?3, ?4, ?4)",
+            params![&category.id, &category.name, &category.parent_id, &now],
         )
         .map_err(|e| format!("Failed to save knowledge category: {}", e))?;
     }
 
     for item in &state.knowledge_items {
         let tags_json = to_json_string(&item.tags)?;
+        let linked_notes_json = to_json_string(&item.linked_notes)?;
         tx.execute(
             "INSERT INTO knowledge_items (
                 id, category_id, title, summary, content, source_note_id, source_note_title,
-                source_description, updated_at_label, tags_json, created_at, modified_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)",
+                source_description, updated_at_label, tags_json, linked_notes_json, created_at, modified_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12)",
             params![
                 &item.id,
                 &item.category_id,
@@ -381,6 +432,7 @@ pub async fn notes_save_state(state: NotesState) -> Result<(), String> {
                 &item.source_description,
                 &item.updated_at,
                 &tags_json,
+                &linked_notes_json,
                 &now,
             ],
         )
@@ -521,7 +573,7 @@ fn load_notes(conn: &Connection) -> Result<Vec<OperationNote>, String> {
 fn load_knowledge_categories(conn: &Connection) -> Result<Vec<KnowledgeCategory>, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, name, description
+            "SELECT id, name, parent_id
              FROM knowledge_categories
              ORDER BY created_at ASC, id ASC",
         )
@@ -531,7 +583,7 @@ fn load_knowledge_categories(conn: &Connection) -> Result<Vec<KnowledgeCategory>
             Ok(KnowledgeCategory {
                 id: row.get(0)?,
                 name: row.get(1)?,
-                description: row.get(2)?,
+                parent_id: row.get(2)?,
             })
         })
         .map_err(|e| format!("Failed to query knowledge categories: {}", e))?;
@@ -553,13 +605,14 @@ fn load_knowledge_items(conn: &Connection) -> Result<Vec<KnowledgeItem>, String>
         source_description: String,
         updated_at: String,
         tags_json: String,
+        linked_notes_json: String,
     }
 
     let mut stmt = conn
         .prepare(
             "SELECT
                 id, category_id, title, summary, content, source_note_id, source_note_title,
-                source_description, updated_at_label, tags_json
+                source_description, updated_at_label, tags_json, linked_notes_json
              FROM knowledge_items
              ORDER BY modified_at DESC, id ASC",
         )
@@ -577,6 +630,7 @@ fn load_knowledge_items(conn: &Connection) -> Result<Vec<KnowledgeItem>, String>
                 source_description: row.get(7)?,
                 updated_at: row.get(8)?,
                 tags_json: row.get(9)?,
+                linked_notes_json: row.get(10)?,
             })
         })
         .map_err(|e| format!("Failed to query knowledge items: {}", e))?;
@@ -588,6 +642,8 @@ fn load_knowledge_items(conn: &Connection) -> Result<Vec<KnowledgeItem>, String>
     rows.into_iter()
         .map(|row| {
             let tags = parse_json_field(&row.tags_json, "knowledge_tags_json")?;
+            let linked_notes =
+                parse_json_field(&row.linked_notes_json, "knowledge_linked_notes_json")?;
             Ok(KnowledgeItem {
                 id: row.id,
                 category_id: row.category_id,
@@ -599,6 +655,7 @@ fn load_knowledge_items(conn: &Connection) -> Result<Vec<KnowledgeItem>, String>
                 source_description: row.source_description,
                 updated_at: row.updated_at,
                 tags,
+                linked_notes,
             })
         })
         .collect()
@@ -665,6 +722,33 @@ fn validate_state(state: &NotesState) -> Result<(), String> {
         }
     }
 
+    for category in &state.knowledge_categories {
+        if let Some(parent_id) = &category.parent_id {
+            if parent_id.trim().is_empty() {
+                return Err(format!("Knowledge category has empty parent id: {}", category.id));
+            }
+            if !category_ids.contains(parent_id.as_str()) {
+                return Err(format!(
+                    "Knowledge category references missing parent: {}",
+                    category.id
+                ));
+            }
+        }
+
+        let mut seen_parent_ids = HashSet::new();
+        let mut parent_id = category.parent_id.as_deref();
+        while let Some(current_parent_id) = parent_id {
+            if current_parent_id == category.id || !seen_parent_ids.insert(current_parent_id) {
+                return Err(format!("Knowledge category cycle detected: {}", category.id));
+            }
+            parent_id = state
+                .knowledge_categories
+                .iter()
+                .find(|item| item.id == current_parent_id)
+                .and_then(|item| item.parent_id.as_deref());
+        }
+    }
+
     if !category_ids.contains(state.active_knowledge_category_id.as_str()) {
         return Err("Active knowledge category does not exist".to_string());
     }
@@ -686,6 +770,14 @@ fn validate_state(state: &NotesState) -> Result<(), String> {
         }
         if !knowledge_item_ids.insert(item.id.as_str()) {
             return Err(format!("Duplicate knowledge item id: {}", item.id));
+        }
+        for linked_note in &item.linked_notes {
+            if linked_note.note_id.trim().is_empty() || linked_note.note_title.trim().is_empty() {
+                return Err(format!(
+                    "Knowledge item has invalid linked note: {}",
+                    item.id
+                ));
+            }
         }
     }
 

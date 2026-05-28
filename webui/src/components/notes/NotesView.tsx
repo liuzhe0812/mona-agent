@@ -16,10 +16,11 @@ import { NoteAgentPanel } from "./NoteAgentPanel";
 import { NoteEditor } from "./NoteEditor";
 import { NoteList } from "./NoteList";
 import { NotebookSelect } from "./NotebookSelect";
-import { deriveNotePreview, parseExtractedKnowledge } from "./notes-ai";
+import { deriveNotePreview, type ExtractedKnowledgeDraft } from "./notes-ai";
 import type {
   KnowledgeCategory,
   KnowledgeItem,
+  KnowledgeLinkedNote,
   Notebook,
   NoteSourceKind,
   OperationNote,
@@ -50,6 +51,8 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
   const [knowledgeItems, setKnowledgeItems] = useState<KnowledgeItem[]>([]);
   const [activeNoteId, setActiveNoteId] = useState<string | null>(null);
   const [activeKnowledgeCategoryId, setActiveKnowledgeCategoryId] = useState("");
+  const [activeKnowledgeItemId, setActiveKnowledgeItemId] = useState<string | null>(null);
+  const [knowledgeReturnItemId, setKnowledgeReturnItemId] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"notes" | "knowledge">("notes");
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -97,6 +100,25 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
     () => notebookNotes.find((note) => note.id === activeNoteId) ?? notebookNotes[0] ?? null,
     [activeNoteId, notebookNotes],
   );
+
+  const knowledgeReturnItem = useMemo(
+    () =>
+      knowledgeReturnItemId
+        ? knowledgeItems.find((item) => item.id === knowledgeReturnItemId) ?? null
+        : null,
+    [knowledgeItems, knowledgeReturnItemId],
+  );
+
+  const knowledgeTags = useMemo(
+    () => Array.from(new Set(knowledgeItems.flatMap((item) => item.tags))).sort((a, b) =>
+      a.localeCompare(b, "zh-Hans-CN"),
+    ),
+    [knowledgeItems],
+  );
+
+  const shouldShowKnowledgeReturn =
+    Boolean(activeNote && knowledgeReturnItem) &&
+    isKnowledgeItemLinkedToNote(knowledgeReturnItem, activeNote?.id ?? "");
 
   useEffect(() => {
     let cancelled = false;
@@ -429,30 +451,53 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
   );
 
   const saveKnowledgeFromAgent = useCallback(
-    (content: string) => {
-      if (!activeNote) return;
-
-      let draft;
-      try {
-        draft = parseExtractedKnowledge(content);
-      } catch (error) {
-        setNotice(error instanceof Error ? error.message : "无法保存知识点");
-        return;
+    (draft: ExtractedKnowledgeDraft) => {
+      if (!activeNote) return false;
+      const tags = normalizeKnowledgeTags(draft.tags);
+      if (tags.length === 0) {
+        setNotice("知识点标签不能为空");
+        return false;
       }
 
-      let category =
-        knowledgeCategories.find(
-          (item) => item.name.trim().toLowerCase() === draft.categoryName.trim().toLowerCase(),
-        ) ?? null;
+      let categoriesAfterEnsure = knowledgeCategories;
+      let category: KnowledgeCategory;
+      try {
+        const result = ensureKnowledgeCategoryPath(knowledgeCategories, draft.categoryName);
+        categoriesAfterEnsure = result.categories;
+        category = result.category;
+      } catch (error) {
+        setNotice(error instanceof Error ? error.message : "创建知识分类失败");
+        return false;
+      }
+      if (categoriesAfterEnsure !== knowledgeCategories) {
+        setKnowledgeCategories(categoriesAfterEnsure);
+      }
 
-      if (!category) {
-        try {
-          category = createKnowledgeCategory(draft.categoryName, null);
-        } catch (error) {
-          setNotice(error instanceof Error ? error.message : "创建知识分类失败");
-          return;
-        }
-        setKnowledgeCategories((current) => [...current, category as KnowledgeCategory]);
+      const linkedNote = createKnowledgeLinkedNote(activeNote, draft.sourceDescription);
+      const existingItem = knowledgeItems.find(
+        (item) =>
+          item.categoryId === category.id &&
+          normalizeKnowledgeTitle(item.title) === normalizeKnowledgeTitle(draft.title),
+      );
+
+      if (existingItem) {
+        setKnowledgeItems((current) =>
+          current.map((item) =>
+            item.id === existingItem.id
+              ? {
+                  ...item,
+                  tags: mergeTags(item.tags, tags),
+                  linkedNotes: mergeKnowledgeLinkedNotes(item, linkedNote),
+                  updatedAt: "刚刚",
+                }
+              : item,
+          ),
+        );
+        setActiveKnowledgeCategoryId(category.id);
+        setActiveKnowledgeItemId(existingItem.id);
+        setViewMode("knowledge");
+        setNotice("已关联到已有知识点");
+        return true;
       }
 
       let itemId: string;
@@ -460,7 +505,7 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
         itemId = createKnowledgeItemId();
       } catch (error) {
         setNotice(error instanceof Error ? error.message : "保存知识点失败");
-        return;
+        return false;
       }
 
       const nextItem: KnowledgeItem = {
@@ -473,15 +518,18 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
         sourceNoteTitle: activeNote.title || "未命名笔记",
         sourceDescription: draft.sourceDescription,
         updatedAt: "刚刚",
-        tags: draft.tags,
+        tags,
+        linkedNotes: [linkedNote],
       };
 
       setKnowledgeItems((current) => [nextItem, ...current]);
       setActiveKnowledgeCategoryId(category.id);
+      setActiveKnowledgeItemId(nextItem.id);
       setViewMode("knowledge");
       setNotice("知识点已保存");
+      return true;
     },
-    [activeNote, knowledgeCategories],
+    [activeNote, knowledgeCategories, knowledgeItems],
   );
 
   const createKnowledgeCategoryManually = useCallback((parentId: string | null = null) => {
@@ -494,9 +542,7 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
     )?.trim();
     if (!name) return;
     if (
-      knowledgeCategories.some(
-        (category) => category.name.trim().toLowerCase() === name.toLowerCase(),
-      )
+      hasSiblingCategoryName(knowledgeCategories, name, parentCategory?.id ?? null)
     ) {
       setNotice("知识分类已存在");
       return;
@@ -524,10 +570,11 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
       const name = window.prompt("知识分类名称", category.name)?.trim();
       if (!name || name === category.name) return;
       if (
-        knowledgeCategories.some(
-          (item) =>
-            item.id !== categoryId &&
-            item.name.trim().toLowerCase() === name.toLowerCase(),
+        hasSiblingCategoryName(
+          knowledgeCategories,
+          name,
+          category.parentId ?? null,
+          categoryId,
         )
       ) {
         setNotice("知识分类已存在");
@@ -611,13 +658,51 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
     [knowledgeCategories],
   );
 
+  const updateKnowledgeItem = useCallback(
+    (
+      itemId: string,
+      patch: Pick<
+        KnowledgeItem,
+        "title" | "summary" | "content" | "sourceDescription" | "tags"
+      >,
+    ) => {
+      setKnowledgeItems((current) =>
+        current.map((item) =>
+          item.id === itemId ? { ...item, ...patch, updatedAt: "刚刚" } : item,
+        ),
+      );
+      setNotice("知识点已更新");
+    },
+    [],
+  );
+
+  const deleteKnowledgeItem = useCallback(
+    (itemId: string) => {
+      const item = knowledgeItems.find((entry) => entry.id === itemId);
+      if (!item) return;
+      const confirmed = window.confirm(`删除知识点「${item.title}」？`);
+      if (!confirmed) return;
+
+      setKnowledgeItems((current) => current.filter((entry) => entry.id !== itemId));
+      if (activeKnowledgeItemId === itemId) {
+        setActiveKnowledgeItemId(null);
+      }
+      if (knowledgeReturnItemId === itemId) {
+        setKnowledgeReturnItemId(null);
+      }
+      setNotice("知识点已删除");
+    },
+    [activeKnowledgeItemId, knowledgeItems, knowledgeReturnItemId],
+  );
+
   const openSourceNote = useCallback(
-    (noteId: string) => {
+    (noteId: string, knowledgeItemId?: string) => {
       const note = notes.find((item) => item.id === noteId);
       if (!note) {
         setNotice("原始笔记不存在");
         return;
       }
+      setKnowledgeReturnItemId(knowledgeItemId ?? null);
       setActiveNotebookId(note.notebookId);
       setActiveNoteId(note.id);
       setSearchQuery("");
@@ -625,6 +710,14 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
     },
     [notes],
   );
+
+  const returnToKnowledgeItem = useCallback(() => {
+    if (!knowledgeReturnItem) return;
+    setActiveKnowledgeCategoryId(knowledgeReturnItem.categoryId);
+    setActiveKnowledgeItemId(knowledgeReturnItem.id);
+    setKnowledgeReturnItemId(null);
+    setViewMode("knowledge");
+  }, [knowledgeReturnItem]);
 
   const applyAiResult = useCallback(
     (mode: "append" | "replace", markdown: string, messageId: string) => {
@@ -770,6 +863,8 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
               onSelectCategory={setActiveKnowledgeCategoryId}
               onOpenSourceNote={openSourceNote}
               onMoveItem={moveKnowledgeItem}
+              onUpdateItem={updateKnowledgeItem}
+              onDeleteItem={deleteKnowledgeItem}
               onCreateCategory={createKnowledgeCategoryManually}
               onRenameCategory={renameKnowledgeCategory}
               onDeleteCategory={deleteKnowledgeCategory}
@@ -796,6 +891,12 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
                 <NoteEditor
                   note={activeNote}
                   saveStatus={saveStatus}
+                  knowledgeReturnTitle={
+                    shouldShowKnowledgeReturn ? knowledgeReturnItem?.title : undefined
+                  }
+                  onReturnToKnowledge={
+                    shouldShowKnowledgeReturn ? returnToKnowledgeItem : undefined
+                  }
                   onTitleChange={(title) => updateActiveNote({ title })}
                   onContentChange={(next) =>
                     updateActiveNote({
@@ -819,17 +920,20 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
       {!agentPanelCollapsed && (
         <div
           onMouseDown={handleDragStart}
-          className="w-1 shrink-0 cursor-col-resize bg-border/70"
+          className="w-[1px] shrink-0 cursor-col-resize bg-border"
         />
       )}
 
       <NoteAgentPanel
         note={activeNote}
+        knowledgeCategories={knowledgeCategories}
+        knowledgeTags={knowledgeTags}
         collapsed={agentPanelCollapsed}
         width={agentPanelWidth}
         onAgentChatIdChange={(agentChatId) => updateActiveNote({ agentChatId })}
         onApplyResult={applyAiResult}
         onSaveKnowledge={saveKnowledgeFromAgent}
+        onClearChat={() => updateActiveNote({ agentChatId: undefined })}
       />
     </div>
   );
@@ -893,6 +997,132 @@ function IconButton({
 function safeFileName(name: string): string {
   const cleaned = name.trim().replace(/[\\/:*?"<>|]/g, "_").slice(0, 64);
   return cleaned || "未命名笔记";
+}
+
+function ensureKnowledgeCategoryPath(
+  categories: KnowledgeCategory[],
+  categoryName: string,
+): { categories: KnowledgeCategory[]; category: KnowledgeCategory } {
+  const path = normalizeKnowledgeCategoryPath(categoryName);
+  let nextCategories = categories;
+  let parentId: string | null = null;
+  let category: KnowledgeCategory | null = null;
+
+  for (const name of path) {
+    category =
+      nextCategories.find(
+        (item) =>
+          (item.parentId ?? null) === parentId &&
+          item.name.trim().toLowerCase() === name.toLowerCase(),
+      ) ?? null;
+
+    if (!category) {
+      category = createKnowledgeCategory(name, parentId);
+      nextCategories = [...nextCategories, category];
+    }
+    parentId = category.id;
+  }
+
+  if (!category) {
+    throw new Error("知识分类名称无效");
+  }
+
+  return { categories: nextCategories, category };
+}
+
+function normalizeKnowledgeCategoryPath(categoryName: string): string[] {
+  const path = categoryName
+    .split(/[/>｜|]+/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .slice(0, 6);
+
+  if (path.length === 0) {
+    throw new Error("知识分类名称无效");
+  }
+
+  return path;
+}
+
+function hasSiblingCategoryName(
+  categories: KnowledgeCategory[],
+  name: string,
+  parentId: string | null,
+  excludeCategoryId?: string,
+): boolean {
+  const normalizedName = name.trim().toLowerCase();
+  return categories.some(
+    (category) =>
+      category.id !== excludeCategoryId &&
+      (category.parentId ?? null) === parentId &&
+      category.name.trim().toLowerCase() === normalizedName,
+  );
+}
+
+function createKnowledgeLinkedNote(
+  note: OperationNote,
+  description: string,
+): KnowledgeLinkedNote {
+  return {
+    noteId: note.id,
+    noteTitle: note.title || "未命名笔记",
+    description: description.trim() || "来自当前笔记",
+    linkedAt: "刚刚",
+  };
+}
+
+function getKnowledgeLinkedNotes(item: KnowledgeItem): KnowledgeLinkedNote[] {
+  const result: KnowledgeLinkedNote[] = [];
+  const upsert = (linkedNote: KnowledgeLinkedNote) => {
+    if (!linkedNote.noteId) return;
+    const existingIndex = result.findIndex((item) => item.noteId === linkedNote.noteId);
+    if (existingIndex >= 0) {
+      result[existingIndex] = linkedNote;
+      return;
+    }
+    result.push(linkedNote);
+  };
+
+  upsert({
+    noteId: item.sourceNoteId,
+    noteTitle: item.sourceNoteTitle || "未命名笔记",
+    description: item.sourceDescription || "原始笔记",
+    linkedAt: item.updatedAt,
+  });
+  for (const linkedNote of item.linkedNotes ?? []) {
+    upsert(linkedNote);
+  }
+
+  return result;
+}
+
+function mergeKnowledgeLinkedNotes(
+  item: KnowledgeItem,
+  nextLinkedNote: KnowledgeLinkedNote,
+): KnowledgeLinkedNote[] {
+  const byNoteId = new Map<string, KnowledgeLinkedNote>();
+  for (const linkedNote of getKnowledgeLinkedNotes(item)) {
+    byNoteId.set(linkedNote.noteId, linkedNote);
+  }
+  byNoteId.set(nextLinkedNote.noteId, nextLinkedNote);
+  return Array.from(byNoteId.values());
+}
+
+function mergeTags(current: string[], next: string[]): string[] {
+  return normalizeKnowledgeTags([...current, ...next]);
+}
+
+function normalizeKnowledgeTags(tags: string[]): string[] {
+  return Array.from(new Set(tags.map((tag) => tag.trim()).filter(Boolean))).slice(0, 4);
+}
+
+function normalizeKnowledgeTitle(title: string): string {
+  return title.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function isKnowledgeItemLinkedToNote(item: KnowledgeItem | null, noteId: string): boolean {
+  if (!item || !noteId) return false;
+  return getKnowledgeLinkedNotes(item).some((linkedNote) => linkedNote.noteId === noteId);
 }
 
 function serializeNotesState(state: {

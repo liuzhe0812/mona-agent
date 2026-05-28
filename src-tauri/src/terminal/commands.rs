@@ -108,6 +108,160 @@ pub async fn ssh_connect(
 }
 
 #[tauri::command]
+pub async fn ssh_connect_with_id(
+    app_handle: tauri::AppHandle,
+    state: State<'_, TerminalState>,
+    session_id: String,
+    config: ConnectionConfig,
+    cols: u32,
+    rows: u32,
+) -> Result<String, String> {
+    log::info!(
+        "[batch] ssh_connect_with_id called: session_id={}, host={}:{}",
+        session_id,
+        config.host,
+        config.port
+    );
+
+    let connect_result = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        ssh_connect_with_id_inner(app_handle, state, session_id.clone(), config, cols, rows),
+    )
+    .await
+    .map_err(|_| {
+        log::error!(
+            "[batch] ssh_connect_with_id timed out for session_id={}",
+            session_id
+        );
+        format!("连接超时(30秒): session_id={}", session_id)
+    })?;
+
+    connect_result
+}
+
+async fn ssh_connect_with_id_inner(
+    app_handle: tauri::AppHandle,
+    state: State<'_, TerminalState>,
+    session_id: String,
+    config: ConnectionConfig,
+    cols: u32,
+    rows: u32,
+) -> Result<String, String> {
+
+    let config = ConnectionConfig {
+        auth: credential_store::restore_credential(&config.auth, &config.host, config.port, &config.username)
+            .map_err(|e| e)?,
+        ..config
+    };
+
+    let session_type = match config.protocol {
+        Protocol::Ssh => SessionType::Ssh,
+        Protocol::Sftp => SessionType::Sftp,
+        _ => SessionType::Ssh,
+    };
+
+    if session_type == SessionType::Sftp {
+        let client = SftpClient::connect(
+            &config.host,
+            config.port,
+            &config.username,
+            &config.auth,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+
+        let session = Session {
+            id: session_id.clone(),
+            config_id: config.id.clone(),
+            session_type,
+            status: SessionStatus::Connected,
+            created_at: chrono::Utc::now(),
+        };
+
+        state
+            .manager
+            .create(session, SessionHandle::Sftp(Arc::new(client)))
+            .await
+            .map_err(|e| e.to_string())?;
+
+        return Ok(session_id);
+    }
+
+    let client = SshClient::connect_skip_verify(
+        &config.host,
+        config.port,
+        &config.username,
+        &config.auth,
+    )
+    .await
+    .map_err(|e| {
+        log::error!(
+            "[batch] SSH connect failed for session_id={}, host={}: {}",
+            session_id,
+            config.host,
+            e
+        );
+        e.to_string()
+    })?;
+
+    log::info!(
+        "[batch] SSH connected for session_id={}, host={}",
+        session_id,
+        config.host
+    );
+
+    let session = Session {
+        id: session_id.clone(),
+        config_id: config.id.clone(),
+        session_type,
+        status: SessionStatus::Connected,
+        created_at: chrono::Utc::now(),
+    };
+
+    client
+        .start_shell(
+            app_handle,
+            session_id.clone(),
+            cols,
+            rows,
+        )
+        .await
+        .map_err(|e| {
+            log::error!(
+                "[batch] start_shell failed for session_id={}: {}",
+                session_id,
+                e
+            );
+            e.to_string()
+        })?;
+
+    log::info!(
+        "[batch] Shell started for session_id={}, registering session",
+        session_id
+    );
+
+    state
+        .manager
+        .create(session, SessionHandle::Ssh(Arc::new(client)))
+        .await
+        .map_err(|e| {
+            log::error!(
+                "[batch] Session create failed for session_id={}: {}",
+                session_id,
+                e
+            );
+            e.to_string()
+        })?;
+
+    log::info!(
+        "[batch] Session registered successfully: session_id={}",
+        session_id
+    );
+
+    Ok(session_id)
+}
+
+#[tauri::command]
 pub async fn ssh_disconnect(
     state: State<'_, TerminalState>,
     session_id: String,
@@ -1123,6 +1277,8 @@ pub async fn sftp_batch_upload(
 ) -> Result<String, String> {
     let batch_id = uuid::Uuid::new_v4().to_string();
     let max_concurrent = request.max_concurrent.unwrap_or(3);
+    let retry_count: u32 = 2;
+    let retry_delay_ms: u64 = 1000;
 
     let mut sftp_clients: Vec<(BatchSessionInfo, Arc<SftpClient>)> = Vec::new();
     for info in &request.sessions {
@@ -1187,6 +1343,7 @@ pub async fn sftp_batch_upload(
             let resume_notify = resume_notify.clone();
             let session_id = info.session_id.clone();
             let host = info.host.clone();
+            let file_max_concurrent = max_concurrent;
 
             let handle = tokio::spawn(async move {
                 let _permit = permit;
@@ -1198,6 +1355,23 @@ pub async fn sftp_batch_upload(
                     resume_notify.notified().await;
                 }
                 if cancel_token.is_cancelled() {
+                    let _ = app_handle.emit(
+                        "sftp:batch_progress",
+                        BatchTransferProgress {
+                            batch_id: batch_id.clone(),
+                            session_id: session_id.clone(),
+                            host: host.clone(),
+                            status: BatchTransferStatus::Cancelled,
+                            current_file: None,
+                            files_completed: 0,
+                            files_total: files.len(),
+                            bytes_transferred: 0,
+                            bytes_total: 0,
+                            error: Some("任务已取消".to_string()),
+                            speed: None,
+                            eta_seconds: None,
+                        },
+                    );
                     return;
                 }
 
@@ -1219,16 +1393,22 @@ pub async fn sftp_batch_upload(
                     },
                 );
 
-                let mut files_completed: usize = 0;
-                let mut total_bytes: u64 = 0;
+                let files_completed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+                let bytes_transferred = Arc::new(std::sync::atomic::AtomicU64::new(0));
+                let upload_errors: Arc<tokio::sync::RwLock<Vec<String>>> =
+                    Arc::new(tokio::sync::RwLock::new(Vec::new()));
 
+                let mut total_bytes_all_files: u64 = 0;
                 for local_path in &files {
-                    if let Ok(meta) = tokio::fs::metadata(local_path).await {
-                        total_bytes += meta.len();
+                    if let Ok(metadata) = tokio::fs::metadata(local_path).await {
+                        total_bytes_all_files += metadata.len();
                     }
                 }
 
-                for (file_idx, local_path) in files.iter().enumerate() {
+                let file_semaphore = Arc::new(Semaphore::new(file_max_concurrent));
+                let mut file_handles = Vec::new();
+
+                for local_path in &files {
                     if cancel_token.is_cancelled() {
                         break;
                     }
@@ -1243,124 +1423,220 @@ pub async fn sftp_batch_upload(
                         filename
                     );
 
-                    let _ = app_handle.emit(
-                        "sftp:batch_progress",
-                        BatchTransferProgress {
-                            batch_id: batch_id.clone(),
-                            session_id: session_id.clone(),
-                            host: host.clone(),
-                            status: BatchTransferStatus::Transferring,
-                            current_file: Some(filename.to_string()),
-                            files_completed: files_completed,
-                            files_total: files.len(),
-                            bytes_transferred: 0,
-                            bytes_total: total_bytes,
-                            error: None,
-                            speed: None,
-                            eta_seconds: None,
-                        },
-                    );
+                    let file_permit = match file_semaphore.clone().acquire_owned().await {
+                        Ok(p) => p,
+                        Err(_) => break,
+                    };
 
-                    match sftp_client.create_sftp_channel().await {
-                        Ok(channel) => {
-                            let (progress_tx, mut progress_rx) =
-                                tokio::sync::mpsc::channel::<crate::terminal::sftp::batch::FileTransferProgress>(100);
+                    let sftp_client_clone = sftp_client.clone();
+                    let app_handle_clone = app_handle.clone();
+                    let batch_id_clone = batch_id.clone();
+                    let session_id_clone = session_id.clone();
+                    let host_clone = host.clone();
+                    let filename_clone = filename.to_string();
+                    let local_path_clone = local_path.clone();
+                    let cancel_token_clone = cancel_token.clone();
+                    let is_paused_clone = is_paused.clone();
+                    let resume_notify_clone = resume_notify.clone();
+                    let files_completed_clone = files_completed.clone();
+                    let bytes_transferred_clone = bytes_transferred.clone();
+                    let upload_errors_clone = upload_errors.clone();
+                    let files_total = files.len();
 
-                            let progress_app = app_handle.clone();
-                            let progress_batch_id = batch_id.clone();
-                            let progress_session_id = session_id.clone();
-                            let progress_host = host.clone();
-                            let progress_files_total = files.len();
-                            let progress_total_bytes = total_bytes;
-                            let progress_filename = filename.to_string();
-                            let progress_file_idx = file_idx;
+                    let file_handle = tokio::spawn(async move {
+                        let _permit = file_permit;
 
-                            let progress_handle = tokio::spawn(async move {
-                                let mut last_time =
-                                    std::time::Instant::now();
-                                let start_time =
-                                    std::time::Instant::now();
-                                while let Some(p) =
-                                    progress_rx.recv().await
-                                {
-                                    if last_time.elapsed().as_millis()
-                                        >= 500
-                                    {
-                                        let elapsed =
-                                            start_time.elapsed().as_secs();
-                                        let speed = if elapsed > 0 {
-                                            Some(p.bytes_transferred / elapsed)
-                                        } else {
-                                            None
-                                        };
-                                        let _ = progress_app.emit(
-                                            "sftp:batch_progress",
-                                            BatchTransferProgress {
-                                                batch_id: progress_batch_id.clone(),
-                                                session_id: progress_session_id.clone(),
-                                                host: progress_host.clone(),
-                                                status: BatchTransferStatus::Transferring,
-                                                current_file: Some(progress_filename.clone()),
-                                                files_completed: progress_file_idx,
-                                                files_total: progress_files_total,
-                                                bytes_transferred: p.bytes_transferred,
-                                                bytes_total: progress_total_bytes,
-                                                error: None,
-                                                speed,
-                                                eta_seconds: None,
-                                            },
-                                        );
-                                        last_time =
-                                            std::time::Instant::now();
+                        loop {
+                            if !is_paused_clone.load(Ordering::Relaxed) {
+                                break;
+                            }
+                            resume_notify_clone.notified().await;
+                        }
+                        if cancel_token_clone.is_cancelled() {
+                            return;
+                        }
+
+                        let mut last_error: Option<String> = None;
+                        let mut upload_ok = false;
+
+                        for attempt in 0..=retry_count {
+                            if cancel_token_clone.is_cancelled() {
+                                break;
+                            }
+                            if attempt > 0 {
+                                let delay = retry_delay_ms * (1 << (attempt - 1));
+                                log::warn!(
+                                    "[{}] Upload retry {}/{} for {}, waiting {}ms",
+                                    host_clone,
+                                    attempt,
+                                    retry_count,
+                                    filename_clone,
+                                    delay
+                                );
+                                tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                            }
+
+                            match sftp_client_clone.create_sftp_channel().await {
+                                Ok(channel) => {
+                                    let (progress_tx, progress_rx) =
+                                        tokio::sync::mpsc::channel::<crate::terminal::sftp::batch::FileTransferProgress>(100);
+
+                                    let progress_app = app_handle_clone.clone();
+                                    let progress_batch_id = batch_id_clone.clone();
+                                    let progress_session_id = session_id_clone.clone();
+                                    let progress_host = host_clone.clone();
+                                    let progress_filename = filename_clone.clone();
+                                    let progress_files_completed =
+                                        files_completed_clone.clone();
+                                    let progress_bytes_transferred =
+                                        bytes_transferred_clone.clone();
+
+                                    let progress_forward = tokio::spawn(async move {
+                                        let mut last_time = std::time::Instant::now();
+                                        let start_time = std::time::Instant::now();
+                                        let mut rx = progress_rx;
+                                        while let Some(p) = rx.recv().await {
+                                            if last_time.elapsed().as_millis() >= 500 {
+                                                let elapsed = start_time.elapsed().as_secs();
+                                                let speed = if elapsed > 0 {
+                                                    Some(p.bytes_transferred / elapsed)
+                                                } else {
+                                                    None
+                                                };
+                                                let current_completed = progress_files_completed.load(Ordering::Relaxed);
+                                                let current_bytes = progress_bytes_transferred.load(Ordering::Relaxed);
+                                                let _ = progress_app.emit(
+                                                    "sftp:batch_progress",
+                                                    BatchTransferProgress {
+                                                        batch_id: progress_batch_id.clone(),
+                                                        session_id: progress_session_id.clone(),
+                                                        host: progress_host.clone(),
+                                                        status: BatchTransferStatus::Transferring,
+                                                        current_file: Some(progress_filename.clone()),
+                                                        files_completed: current_completed,
+                                                        files_total,
+                                                        bytes_transferred: current_bytes + p.bytes_transferred,
+                                                        bytes_total: total_bytes_all_files,
+                                                        error: None,
+                                                        speed,
+                                                        eta_seconds: None,
+                                                    },
+                                                );
+                                                last_time = std::time::Instant::now();
+                                            }
+                                        }
+                                    });
+
+                                    let result = sftp_client::upload_file_streaming(
+                                        &channel,
+                                        &local_path_clone,
+                                        &remote_path,
+                                        Some(progress_tx),
+                                        Some(cancel_token_clone.clone()),
+                                        Some(is_paused_clone.clone()),
+                                    )
+                                    .await;
+
+                                    let _ = channel.close().await;
+                                    let _ = tokio::time::timeout(
+                                        std::time::Duration::from_secs(1),
+                                        progress_forward,
+                                    )
+                                    .await;
+
+                                    match result {
+                                        Ok(()) => {
+                                            if let Ok(metadata) =
+                                                tokio::fs::metadata(&local_path_clone).await
+                                            {
+                                                bytes_transferred_clone
+                                                    .fetch_add(metadata.len(), Ordering::Relaxed);
+                                            }
+                                            upload_ok = true;
+                                            break;
+                                        }
+                                        Err(e) => {
+                                            last_error = Some(format!("{}", e));
+                                            log::warn!(
+                                                "[{}] Upload failed (attempt {}/{}): {} - {}",
+                                                host_clone,
+                                                attempt + 1,
+                                                retry_count + 1,
+                                                filename_clone,
+                                                e
+                                            );
+                                        }
                                     }
                                 }
-                            });
-
-                            let result = sftp_client::upload_file_streaming(
-                                &channel,
-                                local_path,
-                                &remote_path,
-                                Some(progress_tx),
-                                Some(cancel_token.clone()),
-                                Some(is_paused.clone()),
-                            )
-                            .await;
-
-                            let _ = channel.close().await;
-                            let _ = tokio::time::timeout(
-                                std::time::Duration::from_secs(1),
-                                progress_handle,
-                            )
-                            .await;
-
-                            match result {
-                                Ok(()) => {
-                                    files_completed += 1;
-                                }
                                 Err(e) => {
+                                    last_error = Some(format!("{}", e));
                                     log::warn!(
-                                        "[{}] Upload failed: {} - {}",
-                                        host,
-                                        filename,
+                                        "[{}] Failed to create SFTP channel (attempt {}/{}): {}",
+                                        host_clone,
+                                        attempt + 1,
+                                        retry_count + 1,
                                         e
                                     );
                                 }
                             }
                         }
-                        Err(e) => {
-                            log::warn!(
-                                "[{}] Failed to create SFTP channel: {}",
-                                host,
-                                e
+
+                        if upload_ok {
+                            let new_completed =
+                                files_completed_clone.fetch_add(1, Ordering::Relaxed) + 1;
+                            let current_bytes =
+                                bytes_transferred_clone.load(Ordering::Relaxed);
+                            let _ = app_handle_clone.emit(
+                                "sftp:batch_progress",
+                                BatchTransferProgress {
+                                    batch_id: batch_id_clone.clone(),
+                                    session_id: session_id_clone.clone(),
+                                    host: host_clone.clone(),
+                                    status: BatchTransferStatus::Transferring,
+                                    current_file: Some(filename_clone.clone()),
+                                    files_completed: new_completed,
+                                    files_total,
+                                    bytes_transferred: current_bytes,
+                                    bytes_total: total_bytes_all_files,
+                                    error: None,
+                                    speed: None,
+                                    eta_seconds: None,
+                                },
                             );
+                        } else {
+                            let err_msg = last_error.unwrap_or_default();
+                            let mut errors = upload_errors_clone.write().await;
+                            errors.push(format!("上传 {} 失败: {}", filename_clone, err_msg));
                         }
-                    }
+                    });
+
+                    file_handles.push(file_handle);
                 }
+
+                for handle in file_handles {
+                    let _ = handle.await;
+                }
+
+                let final_files_completed = files_completed.load(Ordering::Relaxed);
+                let final_bytes = bytes_transferred.load(Ordering::Relaxed);
+                let final_errors: Vec<String> = upload_errors.read().await.clone();
 
                 let final_status = if cancel_token.is_cancelled() {
                     BatchTransferStatus::Cancelled
+                } else if !final_errors.is_empty() {
+                    BatchTransferStatus::Error
                 } else {
                     BatchTransferStatus::Completed
+                };
+
+                let error_summary = if final_errors.is_empty() {
+                    None
+                } else {
+                    Some(format!(
+                        "{} 个文件失败: {}",
+                        final_errors.len(),
+                        final_errors.join("; ")
+                    ))
                 };
 
                 let _ = app_handle.emit(
@@ -1371,11 +1647,11 @@ pub async fn sftp_batch_upload(
                         host: host.clone(),
                         status: final_status,
                         current_file: None,
-                        files_completed,
+                        files_completed: final_files_completed,
                         files_total: files.len(),
-                        bytes_transferred: total_bytes,
-                        bytes_total: total_bytes,
-                        error: None,
+                        bytes_transferred: final_bytes,
+                        bytes_total: final_bytes,
+                        error: error_summary,
                         speed: None,
                         eta_seconds: None,
                     },

@@ -3,6 +3,7 @@ import {
   Archive,
   BookOpen,
   Bot,
+  Database,
   FileText,
   ListFilter,
   Menu,
@@ -46,6 +47,10 @@ interface SidebarProps {
   onRequestRename: (key: string, label: string) => void;
   onToggleArchive: (key: string) => void;
   onOpenSettings: () => void;
+  onOpenNote?: () => void;
+  onOpenSSH?: () => void;
+  onOpenDb?: () => void;
+  onOpenKb?: () => void;
   onOpenSearch: () => void;
   onToggleArchived: () => void;
   onUpdateView: (view: Partial<SidebarViewState>) => void;
@@ -94,11 +99,11 @@ export function Sidebar(props: SidebarProps) {
             "flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-xl transition-colors",
             collapsed
               ? "-ml-0.5 hover:bg-sidebar-accent/75"
-              : "pointer-events-none -ml-0.5",
+              : "-ml-0.5",
           )}
         >
           <img
-            src="/brand/mona_icon.png"
+            src="/brand/mona_app_icon.png"
             alt=""
             className="h-8 w-8 select-none object-contain"
             draggable={false}
@@ -120,6 +125,10 @@ export function Sidebar(props: SidebarProps) {
       <ToolboxNavigation
         collapsed={collapsed}
         onOpenSettings={props.onOpenSettings}
+        onOpenNote={props.onOpenNote ?? (() => {})}
+        onOpenSSH={props.onOpenSSH ?? (() => {})}
+        onOpenDb={props.onOpenDb ?? (() => {})}
+        onOpenKb={props.onOpenKb ?? (() => {})}
         onGoHome={props.onGoHome ?? (() => {})}
       />
       <Separator className="mx-2 mb-2 bg-sidebar-border/50" />
@@ -215,6 +224,7 @@ const TOOLBOX_ITEMS: Array<{
 }> = [
   { label: "智能体", icon: <Bot className="h-4 w-4" /> },
   { label: "终端", icon: <Terminal className="h-4 w-4" /> },
+  { label: "数据库", icon: <Database className="h-4 w-4" /> },
   { label: "笔记", icon: <FileText className="h-4 w-4" /> },
   { label: "知识库", icon: <BookOpen className="h-4 w-4" /> },
   { label: "Windows", icon: <Wrench className="h-4 w-4" /> },
@@ -224,10 +234,18 @@ const TOOLBOX_ITEMS: Array<{
 function ToolboxNavigation({
   collapsed,
   onOpenSettings,
+  onOpenNote,
+  onOpenSSH,
+  onOpenDb,
+  onOpenKb,
   onGoHome,
 }: {
   collapsed: boolean;
   onOpenSettings: () => void;
+  onOpenNote: () => void;
+  onOpenSSH: () => void;
+  onOpenDb: () => void;
+  onOpenKb: () => void;
   onGoHome: () => void;
 }) {
   return (
@@ -238,17 +256,23 @@ function ToolboxNavigation({
       )}
     >
       {TOOLBOX_ITEMS.map((item) => {
-        const onClick = item.label === "智能体"
-          ? onGoHome
-          : item.label === "设置"
-            ? onOpenSettings
-            : undefined;
+        const onClick = item.label === "设置"
+          ? onOpenSettings
+          : item.label === "笔记"
+            ? onOpenNote
+          : item.label === "终端"
+            ? onOpenSSH
+          : item.label === "数据库"
+            ? onOpenDb
+          : item.label === "知识库"
+            ? onOpenKb
+          : onGoHome;
         return (
           <SidebarActionButton
             key={item.label}
             collapsed={collapsed}
             label={item.label}
-            onClick={onClick ?? (() => {})}
+            onClick={onClick}
             icon={item.icon}
           />
         );

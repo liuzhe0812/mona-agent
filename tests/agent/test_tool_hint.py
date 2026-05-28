@@ -1,4 +1,4 @@
-﻿"""Tests for tool hint formatting (mona.utils.tool_hints)."""
+"""Tests for tool hint formatting (mona.utils.tool_hints)."""
 
 from mona.utils.tool_hints import format_tool_hints
 from mona.providers.base import ToolCallRequest
@@ -50,7 +50,7 @@ class TestToolHintKnownTools:
 
     def test_exec_abbreviates_paths_in_command(self):
         """Windows paths in exec commands should be folded, not blindly truncated."""
-        cmd = "cd D:\\Documents\\GitHub\\mona\\.worktree\\tomain\\mona && git diff origin/main...pr-2706 --name-only 2>&1"
+        cmd = "cd D:\\Documents\\GitHub\\mona-agent\\.worktree\\tomain\\mona-agent && git diff origin/main...pr-2706 --name-only 2>&1"
         result = _hint([_tc("exec", {"command": cmd})])
         assert "\u2026/" in result  # path should be folded with …/
         assert "worktree" not in result  # middle segments should be collapsed
@@ -64,7 +64,7 @@ class TestToolHintKnownTools:
 
     def test_exec_abbreviates_home_paths(self):
         """~/ paths in exec commands should be folded."""
-        cmd = "cd ~/projects/mona/workspace && pytest tests/"
+        cmd = "cd ~/projects/mona-agent/workspace && pytest tests/"
         result = _hint([_tc("exec", {"command": cmd})])
         assert "\u2026/" in result
 
@@ -302,7 +302,7 @@ class TestToolHintMaxLength:
 
     def test_list_dir_path_respects_max_length(self):
         """list_dir (is_path=True) should honor max_length."""
-        long_path = "/home/user/.local/share/uv/tools/mona/"
+        long_path = "/home/user/.local/share/uv/tools/mona-agent/"
         short = _hint([_tc("list_dir", {"path": long_path})], max_length=40)
         long = _hint([_tc("list_dir", {"path": long_path})], max_length=120)
         assert len(long) > len(short)

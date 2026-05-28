@@ -281,7 +281,7 @@ export function ThreadViewport({
             </div>
           </div>
         )}
-        <div ref={bottomRef} aria-hidden className="h-px" />
+        <div ref={bottomRef} aria-hidden className="h-0" />
       </div>
 
       <div
