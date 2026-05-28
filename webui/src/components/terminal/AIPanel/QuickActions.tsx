@@ -52,7 +52,7 @@ const QUICK_ACTIONS = [
 export function QuickActions({ onAction }: Props) {
   return (
     <div className="space-y-2">
-      <h3 className="text-[11px] font-medium text-muted-foreground">快捷 AI</h3>
+      <h3 className="text-[11px] font-medium text-muted-foreground">AI快捷功能</h3>
       <div className="grid grid-cols-2 gap-1">
         {QUICK_ACTIONS.map((action) => (
           <button

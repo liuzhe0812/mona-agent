@@ -96,11 +96,11 @@ export function TerminalView() {
   }, [sessions.length, addSession, updateSessionStatus]);
 
   return (
-    <div className="flex h-full flex-col">
-      <Toolbar />
-      <SessionTabBar />
-      <div className="flex min-h-0 flex-1">
-        <div className="min-w-0 flex-1">
+    <div className="flex h-full">
+      <div className="flex min-w-0 flex-1 flex-col">
+        <Toolbar />
+        <SessionTabBar />
+        <div className="min-h-0 flex-1">
           {activeSession?.type === "batch" ? (
             <BatchModeView />
           ) : (
@@ -143,22 +143,32 @@ export function TerminalView() {
           )}
           {!activeSession && <TerminalEmptyState />}
         </div>
-        {aiPanelVisible && activeSession?.type !== "batch" && (
-          <>
-            <div
-              onMouseDown={handleDragStart}
-              className="w-px shrink-0 cursor-col-resize bg-border active:bg-primary/40"
-            />
-            <div
-              className="shrink-0 flex-col"
-              style={{ width: aiPanelWidth }}
-            >
-              <AIPanel sessionId={activeSessionId} />
-            </div>
-          </>
-        )}
+        <StatusBar sessionId={activeSessionId} />
       </div>
-      <StatusBar sessionId={activeSessionId} />
+      {aiPanelVisible && activeSession?.type !== "batch" && (
+        <>
+          <div
+            onMouseDown={handleDragStart}
+            className="w-px shrink-0 cursor-col-resize bg-border active:bg-primary/40"
+          />
+          <div
+            className="shrink-0 flex flex-col"
+            style={{ width: aiPanelWidth }}
+          >
+            {sessions
+              .filter((s) => s.type !== "batch")
+              .map((session) => (
+                <div
+                  key={session.id}
+                  className="h-full w-full"
+                  style={{ display: session.id === activeSessionId ? "flex" : "none" }}
+                >
+                  <AIPanel sessionId={session.id} />
+                </div>
+              ))}
+          </div>
+        </>
+      )}
       <NewConnectionDialog />
       <HostKeyConfirmDialog />
       <SshPasswordDialog />

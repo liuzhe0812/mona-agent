@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::terminal::approval::{ApprovalVerdict, PendingCommand};
-use crate::terminal::config::{ConnectionConfig, Protocol};
+use crate::terminal::config::{AuthConfig, ConnectionConfig, Protocol};
 use crate::terminal::credential_store;
 use crate::terminal::error::TerminalError;
 use crate::terminal::session::{
@@ -147,12 +147,43 @@ async fn ssh_connect_with_id_inner(
     cols: u32,
     rows: u32,
 ) -> Result<String, String> {
+    log::info!(
+        "[batch] ssh_connect_with_id_inner: session_id={}, host={}:{}, username={}, auth_type={}",
+        session_id,
+        config.host,
+        config.port,
+        config.username,
+        match &config.auth {
+            AuthConfig::Password { password } => format!("password(len={})", password.len()),
+            AuthConfig::KeyFile { key_path, .. } => format!("key({})", key_path),
+            AuthConfig::Agent => "agent".to_string(),
+        }
+    );
 
     let config = ConnectionConfig {
         auth: credential_store::restore_credential(&config.auth, &config.host, config.port, &config.username)
-            .map_err(|e| e)?,
+            .map_err(|e| {
+                log::error!(
+                    "[batch] restore_credential failed for {}@{}:{}: {}",
+                    config.username,
+                    config.host,
+                    config.port,
+                    e
+                );
+                e
+            })?,
         ..config
     };
+
+    log::info!(
+        "[batch] After restore_credential: session_id={}, auth_type={}",
+        session_id,
+        match &config.auth {
+            AuthConfig::Password { password } => format!("password(len={})", password.len()),
+            AuthConfig::KeyFile { key_path, .. } => format!("key({})", key_path),
+            AuthConfig::Agent => "agent".to_string(),
+        }
+    );
 
     let session_type = match config.protocol {
         Protocol::Ssh => SessionType::Ssh,

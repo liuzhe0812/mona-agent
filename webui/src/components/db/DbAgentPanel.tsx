@@ -206,8 +206,6 @@ export function DbAgentPanel({
     return null;
   }
 
-  const statusText = chatId ? "已连接当前查询会话" : "首次提问自动创建会话";
-
   return (
     <aside
       className="flex h-full shrink-0 flex-col border-l border-border/70 bg-background"
@@ -218,10 +216,7 @@ export function DbAgentPanel({
           <span className="grid h-5 w-5 place-items-center rounded-md border border-border/70 bg-background">
             <Bot className="h-3 w-3 text-muted-foreground" />
           </span>
-          <div className="min-w-0">
-            <h2 className="truncate text-[12px] font-semibold text-foreground">AI 助手</h2>
-            <p className="truncate text-[10px] text-muted-foreground">{statusText}</p>
-          </div>
+          <h2 className="truncate text-[12px] font-semibold text-foreground">AI 助手</h2>
         </div>
         <div className="flex items-center gap-1">
           {notice ? (

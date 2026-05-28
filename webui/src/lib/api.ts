@@ -321,3 +321,47 @@ export async function kbCompile(
     token,
   );
 }
+
+export async function kbList(
+  token: string,
+  base?: string,
+): Promise<{ instances: Array<{ name: string; mode: string; paths: string[]; docCount: number; pendingChanges: number }> }> {
+  const effectiveBase = base ?? (await getApiBase());
+  const query = new URLSearchParams();
+  return request(
+    `${effectiveBase}/api/kb/list?${query}`,
+    token,
+  );
+}
+
+export async function kbCreate(
+  token: string,
+  name: string,
+  mode: string,
+  paths: string[],
+  base?: string,
+): Promise<{ name: string; mode: string }> {
+  const effectiveBase = base ?? (await getApiBase());
+  const query = new URLSearchParams();
+  query.set("name", name);
+  query.set("mode", mode);
+  query.set("paths", paths.join(","));
+  return request(
+    `${effectiveBase}/api/kb/create?${query}`,
+    token,
+  );
+}
+
+export async function kbDelete(
+  token: string,
+  name: string,
+  base?: string,
+): Promise<{ deleted: string }> {
+  const effectiveBase = base ?? (await getApiBase());
+  const query = new URLSearchParams();
+  query.set("name", name);
+  return request(
+    `${effectiveBase}/api/kb/delete?${query}`,
+    token,
+  );
+}

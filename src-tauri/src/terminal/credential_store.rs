@@ -3,7 +3,6 @@ use std::path::PathBuf;
 
 use log::{error, warn};
 use ring::aead::{Aad, LessSafeKey, Nonce, UnboundKey, AES_256_GCM};
-use ring::digest::{digest, SHA256};
 use ring::rand::{SecureRandom, SystemRandom};
 use serde::{Deserialize, Serialize};
 
@@ -12,30 +11,58 @@ use crate::terminal::config::AuthConfig;
 const ENCRYPTED_MARKER: &str = "__encrypted__";
 const LEGACY_KEYRING_MARKER: &str = "__keyring__";
 const VAULT_FILENAME: &str = "credential-vault.json";
+const KEY_FILENAME: &str = "credential-key.bin";
 
-fn vault_path() -> Result<PathBuf, String> {
+fn config_dir() -> Result<PathBuf, String> {
     let config_dir =
         dirs::config_dir().ok_or_else(|| "Cannot determine config directory".to_string())?;
     let dir = config_dir.join("mona");
     fs::create_dir_all(&dir).map_err(|e| format!("Failed to create config dir: {}", e))?;
-    Ok(dir.join(VAULT_FILENAME))
+    Ok(dir)
 }
 
-fn derive_key() -> [u8; 32] {
-    let hostname = hostname::get()
-        .ok()
-        .and_then(|h| h.into_string().ok())
-        .unwrap_or_else(|| "unknown".to_string());
-    let username = whoami::username();
-    let seed = format!("mona-terminal-credentials:{}:{}", hostname, username);
-    let hash = digest(&SHA256, seed.as_bytes());
+fn vault_path() -> Result<PathBuf, String> {
+    Ok(config_dir()?.join(VAULT_FILENAME))
+}
+
+fn key_path() -> Result<PathBuf, String> {
+    Ok(config_dir()?.join(KEY_FILENAME))
+}
+
+fn get_or_create_key() -> Result<[u8; 32], String> {
+    let path = key_path()?;
+
+    if path.exists() {
+        match fs::read(&path) {
+            Ok(data) => {
+                if data.len() == 32 {
+                    let mut key = [0u8; 32];
+                    key.copy_from_slice(&data);
+                    return Ok(key);
+                }
+                warn!(
+                    "Credential key file has invalid length ({}), regenerating",
+                    data.len()
+                );
+            }
+            Err(e) => {
+                warn!("Failed to read credential key file: {}, regenerating", e);
+            }
+        }
+    }
+
+    let rng = SystemRandom::new();
     let mut key = [0u8; 32];
-    key.copy_from_slice(hash.as_ref());
-    key
+    rng.fill(&mut key)
+        .map_err(|e| format!("Failed to generate key: {}", e))?;
+
+    fs::write(&path, key).map_err(|e| format!("Failed to write key file: {}", e))?;
+
+    Ok(key)
 }
 
 fn encrypt(plaintext: &str) -> Result<String, String> {
-    let key_bytes = derive_key();
+    let key_bytes = get_or_create_key()?;
     let unbound_key = UnboundKey::new(&AES_256_GCM, &key_bytes)
         .map_err(|e| format!("Failed to create AES key: {}", e))?;
     let key = LessSafeKey::new(unbound_key);
@@ -73,7 +100,7 @@ fn decrypt(ciphertext: &str) -> Result<String, String> {
             .map_err(|_| "Invalid nonce length")?,
     );
 
-    let key_bytes = derive_key();
+    let key_bytes = get_or_create_key()?;
     let unbound_key = UnboundKey::new(&AES_256_GCM, &key_bytes)
         .map_err(|e| format!("Failed to create AES key: {}", e))?;
     let key = LessSafeKey::new(unbound_key);

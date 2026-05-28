@@ -40,8 +40,6 @@ russh = { version = "0.61", default-features = false, features = ["flate2", "rin
 russh-sftp = "2.3"
 portable-pty = "0.9"
 encoding_rs = "0.8"
-hostname = "0.4"
-whoami = "1"
 ring = "0.17"
 sha2 = "0.10"
 data-encoding = "2"

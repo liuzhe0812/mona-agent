@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import re
 import urllib.request
@@ -268,5 +269,87 @@ class TerminalOutputTool(Tool):
                     f"  {s.get('id', '?')[:8]}... | {s.get('sessionType', '?')} | {s.get('status', '?')}"
                 )
             return "Active sessions:\n" + "\n".join(lines)
+
+        return str(result)
+
+
+@tool_parameters(
+    tool_parameters_schema(
+        session_id=StringSchema(
+            "Terminal session ID. If omitted, uses the current active terminal session.",
+            nullable=True,
+        ),
+        remote_path=StringSchema("Remote file path on the server to upload to"),
+        content=StringSchema("File content to upload (plain text or binary as base64)"),
+        encoding=StringSchema(
+            "Content encoding: 'text' for plain text (default), 'base64' for binary data",
+            nullable=True,
+        ),
+        required=["remote_path", "content"],
+    )
+)
+class TerminalUploadTool(Tool):
+    _scopes = {"core", "subagent"}
+    config_key = "terminal_upload"
+    _request_ctx: RequestContext | None = None
+
+    def set_context(self, ctx: RequestContext) -> None:
+        self._request_ctx = ctx
+
+    @property
+    def name(self) -> str:
+        return "terminal_upload"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Upload a file to the remote server via the current SSH session's SFTP channel. "
+            "The session_id is automatically set to the active terminal the user is viewing — "
+            "you do NOT need to discover or specify it. "
+            "Use encoding='text' (default) for text files, encoding='base64' for binary data. "
+            "This reuses the existing SSH connection, no additional authentication needed."
+        )
+
+    @property
+    def read_only(self) -> bool:
+        return False
+
+    async def execute(
+        self,
+        remote_path: str,
+        content: str,
+        session_id: str | None = None,
+        encoding: str | None = None,
+        **kwargs: Any,
+    ) -> str:
+        effective_session = session_id or (
+            self._request_ctx.terminal_session_id if self._request_ctx else None
+        )
+        if not effective_session:
+            return "Error: No terminal session available. The user is not currently viewing a terminal."
+
+        enc = (encoding or "text").lower()
+        if enc == "base64":
+            content_b64 = content
+        else:
+            content_b64 = base64.b64encode(content.encode("utf-8")).decode("ascii")
+
+        result = _tauri_invoke(
+            "terminal_upload_file",
+            {
+                "sessionId": effective_session,
+                "remotePath": remote_path,
+                "content": content_b64,
+            },
+        )
+
+        if isinstance(result, str) and result.startswith("Error:"):
+            return result
+
+        if isinstance(result, dict):
+            status = result.get("status", "unknown")
+            bytes_uploaded = result.get("bytes", "?")
+            path = result.get("remotePath", remote_path)
+            return f"File uploaded: {path} ({bytes_uploaded} bytes, {status})"
 
         return str(result)

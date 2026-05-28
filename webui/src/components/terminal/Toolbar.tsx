@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { Plus, FolderOpen, Server, Settings, Unplug, PanelRight, ArrowLeftRight, Trash2, HardDrive, Monitor } from "lucide-react";
+import { Plus, FolderOpen, Server, Settings, Unplug, Bot, ArrowLeftRight, Trash2, HardDrive, Monitor } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useTerminalStore } from "./store/terminalStore";
 import { sshDisconnect, shellKill, sshConnect, sshOpenSftp, desktopConnect, desktopDisconnect } from "./ipc";
@@ -25,9 +25,10 @@ export function Toolbar() {
   const connections = useTerminalStore((s) => s.connections);
   const addConnection = useTerminalStore((s) => s.addConnection);
   const showHostKeyDialog = useTerminalStore((s) => s.showHostKeyDialog);
-
-  const [openMenuVisible, setOpenMenuVisible] = useState(false);
+  const showSshPasswordDialog = useTerminalStore((s) => s.showSshPasswordDialog);
+  const saveConnection = useTerminalStore((s) => s.saveConnection);
   const [portForwardOpen, setPortForwardOpen] = useState(false);
+  const [openMenuVisible, setOpenMenuVisible] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -125,8 +126,6 @@ export function Toolbar() {
     }
     removeSession(activeSession.id);
   };
-
-  const showSshPasswordDialog = useTerminalStore((s) => s.showSshPasswordDialog);
 
   const handleOpenSaved = async (config: typeof savedConnections[number]) => {
     setOpenMenuVisible(false);
@@ -317,7 +316,7 @@ export function Toolbar() {
         onClick={toggleAIPanel}
         title={aiPanelVisible ? "隐藏 AI 面板" : "显示 AI 面板"}
       >
-        <PanelRight
+        <Bot
           className={`h-3.5 w-3.5 ${aiPanelVisible ? "text-foreground" : "text-muted-foreground"}`}
         />
       </Button>

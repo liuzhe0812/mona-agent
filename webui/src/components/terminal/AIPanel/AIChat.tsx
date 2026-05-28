@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Send, Loader2, Shield } from "lucide-react";
+import { Send, Loader2, Shield, Square } from "lucide-react";
 import { useClient } from "@/providers/ClientProvider";
 import { useTerminalStore } from "../store/terminalStore";
 import type { InboundEvent } from "@/lib/types";
@@ -118,10 +118,29 @@ export function AIChat({ sessionId, initialMessage, onInitialMessageSent }: Prop
     client.sendMessage(chatId, enriched, undefined, { terminalSessionId: sessionId ?? undefined, terminalExecMode: execMode });
   }, [input, chatId, sessionId, registry, client, execMode]);
 
+  const isLoadingRef = useRef(false);
+  useEffect(() => { isLoadingRef.current = isLoading; }, [isLoading]);
+
+  useEffect(() => {
+    const cid = chatId;
+    const c = client;
+    return () => {
+      if (cid && isLoadingRef.current) {
+        try { c.sendMessage(cid, "/stop"); } catch {}
+      }
+    };
+  }, [chatId, client]);
+
+  const handleStop = useCallback(() => {
+    if (!chatId) return;
+    setIsLoading(false);
+    client.sendMessage(chatId, "/stop");
+  }, [chatId, client]);
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      handleSend();
+      if (!isLoading) handleSend();
     }
   };
 
@@ -137,7 +156,9 @@ export function AIChat({ sessionId, initialMessage, onInitialMessageSent }: Prop
           <div
             key={i}
             className={`text-xs leading-relaxed whitespace-pre-wrap break-words ${
-              msg.role === "user" ? "text-foreground" : "text-muted-foreground"
+              msg.role === "user"
+                ? "bg-sidebar-accent rounded-lg px-3 py-2 text-foreground w-fit"
+                : "text-muted-foreground"
             }`}
           >
             {msg.content}
@@ -150,8 +171,8 @@ export function AIChat({ sessionId, initialMessage, onInitialMessageSent }: Prop
           </div>
         )}
       </div>
-      <div className="border-t">
-        <div className="flex items-center gap-2 px-3 pt-2">
+      <div className="shrink-0 p-2">
+        <div className="flex items-center gap-1.5 px-2.5 pb-1.5">
           <Shield className="h-3 w-3 text-muted-foreground" />
           <select
             value={execMode}
@@ -162,23 +183,29 @@ export function AIChat({ sessionId, initialMessage, onInitialMessageSent }: Prop
             <option value="approval">审批模式（所有命令需确认）</option>
           </select>
         </div>
-        <div className="flex items-center gap-2 px-3 py-2">
-          <input
+        <div className="flex min-h-[52px] items-end gap-1.5 rounded-xl border border-border/75 bg-background px-2.5 py-1.5 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
+          <textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="输入问题..."
-            className="flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground/60"
+            placeholder="输入问题，AI 将基于终端上下文回答..."
+            className="min-h-[36px] flex-1 resize-none bg-transparent text-[12px] leading-5 outline-none placeholder:text-muted-foreground"
+            rows={2}
           />
           <button
-            onClick={handleSend}
-            disabled={!input.trim() || !chatId}
-            className="rounded p-1 hover:bg-sidebar-accent/50 disabled:opacity-40"
+            type="button"
+            onClick={isLoading ? handleStop : handleSend}
+            disabled={!isLoading && (!input.trim() || !chatId)}
+            className={`grid h-6 w-6 shrink-0 place-items-center rounded-lg transition-colors ${
+              isLoading
+                ? "text-destructive hover:bg-destructive/10"
+                : "bg-foreground text-background hover:bg-foreground/90 disabled:bg-muted disabled:text-muted-foreground"
+            }`}
           >
             {isLoading ? (
-              <Loader2 className="h-3 w-3 text-muted-foreground animate-spin" />
+              <Square className="h-3 w-3" />
             ) : (
-              <Send className="h-3 w-3 text-muted-foreground" />
+              <Send className="h-3 w-3" />
             )}
           </button>
         </div>

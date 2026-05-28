@@ -339,7 +339,7 @@ export function BatchModeView() {
       console.log(`[batch] Connecting batch ${Math.floor(i / maxConc) + 1}, hosts:`, batch.map((s) => s.host));
       const results = await Promise.allSettled(
         batch.map(async (session) => {
-          console.log(`[batch] Connecting ${session.host} (id=${session.id})...`);
+          console.log(`[batch] Connecting ${session.host} (id=${session.id}, pwdLen=${(session.password || "").length})...`);
           try {
             const result = await sshConnectWithId(session.id, {
               id: "",

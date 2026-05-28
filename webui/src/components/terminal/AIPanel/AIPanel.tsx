@@ -20,7 +20,7 @@ export function AIPanel({ sessionId }: Props) {
   }, []);
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full w-full flex-col">
       <div className="border-b p-3">
         <QuickActions onAction={handleQuickAction} />
       </div>

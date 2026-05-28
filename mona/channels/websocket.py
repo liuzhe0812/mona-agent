@@ -746,6 +746,15 @@ class WebSocketChannel(BaseChannel):
         if got == "/api/kb/compile":
             return self._handle_kb_compile(request)
 
+        if got == "/api/kb/list":
+            return self._handle_kb_list(request)
+
+        if got == "/api/kb/create":
+            return self._handle_kb_create(request)
+
+        if got == "/api/kb/delete":
+            return self._handle_kb_delete(request)
+
         m = re.match(r"^/api/sessions/([^/]+)/messages$", got)
         if m:
             return self._handle_session_messages(request, m.group(1))
@@ -973,6 +982,7 @@ class WebSocketChannel(BaseChannel):
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         try:
+            from mona.config.loader import load_config
             from mona.config.paths import get_workspace_path
             from mona.knowledge.indexer import Indexer
             from mona.knowledge.models import KnowledgeMode
@@ -980,10 +990,15 @@ class WebSocketChannel(BaseChannel):
 
             workspace = get_workspace_path()
             query = _parse_query(request.path)
-            instance = _query_first(query, "instance")
-            root = workspace / ".knowledge" / (instance or "default")
-            mode_str = _query_first(query, "mode") or "notebook"
-            mode = KnowledgeMode(mode_str)
+            instance = _query_first(query, "instance") or "default"
+            config = load_config()
+            inst_cfg = config.tools.knowledge.instances.get(instance)
+            mode = (
+                KnowledgeMode(inst_cfg.mode.value)
+                if inst_cfg
+                else KnowledgeMode(config.tools.knowledge.default_mode.value)
+            )
+            root = workspace / ".knowledge" / instance
             store = KnowledgeStore(root, mode)
             store.ensure_dirs()
             indexer = Indexer(store.db_path)
@@ -996,7 +1011,7 @@ class WebSocketChannel(BaseChannel):
                 "mode": mode_label,
                 "docCount": doc_count,
                 "pendingChanges": pending_count,
-                "instance": instance or "default",
+                "instance": instance,
             })
         except Exception:
             logger.exception("kb_status failed")
@@ -1006,6 +1021,7 @@ class WebSocketChannel(BaseChannel):
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         try:
+            from mona.config.loader import load_config
             from mona.config.paths import get_workspace_path
             from mona.knowledge.indexer import Indexer
             from mona.knowledge.models import KnowledgeMode
@@ -1013,18 +1029,28 @@ class WebSocketChannel(BaseChannel):
 
             workspace = get_workspace_path()
             query = _parse_query(request.path)
-            instance = _query_first(query, "instance")
+            instance = _query_first(query, "instance") or "default"
             paths_str = _query_first(query, "paths") or ""
             recursive = _query_first(query, "recursive") == "true"
-            mode_str = _query_first(query, "mode") or "notebook"
-            mode = KnowledgeMode(mode_str)
-            root = workspace / ".knowledge" / (instance or "default")
+            config = load_config()
+            inst_cfg = config.tools.knowledge.instances.get(instance)
+            mode = (
+                KnowledgeMode(inst_cfg.mode.value)
+                if inst_cfg
+                else KnowledgeMode(config.tools.knowledge.default_mode.value)
+            )
+            root = workspace / ".knowledge" / instance
             store = KnowledgeStore(root, mode)
             store.ensure_dirs()
             indexer = Indexer(store.db_path)
             indexer.initialize()
             meta = store.load_meta()
-            paths = [p.strip() for p in paths_str.split(",") if p.strip()] if paths_str else ["."]
+            if paths_str:
+                paths = [p.strip() for p in paths_str.split(",") if p.strip()]
+            elif inst_cfg and inst_cfg.paths:
+                paths = inst_cfg.paths
+            else:
+                paths = ["."]
             ingested = []
             for rel_path in paths:
                 target = workspace / rel_path
@@ -1047,6 +1073,7 @@ class WebSocketChannel(BaseChannel):
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         try:
+            from mona.config.loader import load_config
             from mona.config.paths import get_workspace_path
             from mona.knowledge.indexer import Indexer
             from mona.knowledge.models import KnowledgeMode
@@ -1055,12 +1082,17 @@ class WebSocketChannel(BaseChannel):
             workspace = get_workspace_path()
             query_params = _parse_query(request.path)
             q = _query_first(query_params, "q") or ""
-            instance = _query_first(query_params, "instance")
+            instance = _query_first(query_params, "instance") or "default"
             top_k = int(_query_first(query_params, "topK") or "5")
             max_tokens = int(_query_first(query_params, "maxTokens") or "8000")
-            mode_str = _query_first(query_params, "mode") or "notebook"
-            mode = KnowledgeMode(mode_str)
-            root = workspace / ".knowledge" / (instance or "default")
+            config = load_config()
+            inst_cfg = config.tools.knowledge.instances.get(instance)
+            mode = (
+                KnowledgeMode(inst_cfg.mode.value)
+                if inst_cfg
+                else KnowledgeMode(config.tools.knowledge.default_mode.value)
+            )
+            root = workspace / ".knowledge" / instance
             store = KnowledgeStore(root, mode)
             store.ensure_dirs()
             indexer = Indexer(store.db_path)
@@ -1095,14 +1127,20 @@ class WebSocketChannel(BaseChannel):
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         try:
+            from mona.config.loader import load_config
             from mona.config.paths import get_workspace_path
             from mona.knowledge.models import KnowledgeMode
 
             workspace = get_workspace_path()
             query_params = _parse_query(request.path)
-            instance = _query_first(query_params, "instance")
-            mode_str = _query_first(query_params, "mode") or "document"
-            mode = KnowledgeMode(mode_str)
+            instance = _query_first(query_params, "instance") or "default"
+            config = load_config()
+            inst_cfg = config.tools.knowledge.instances.get(instance)
+            mode = (
+                KnowledgeMode(inst_cfg.mode.value)
+                if inst_cfg
+                else KnowledgeMode(config.tools.knowledge.default_mode.value)
+            )
             if mode != KnowledgeMode.DOCUMENT:
                 return _http_json_response(
                     {"error": "Notebook mode does not support Wiki compilation"}, status=400
@@ -1111,7 +1149,7 @@ class WebSocketChannel(BaseChannel):
             from mona.knowledge.store import KnowledgeStore
             from mona.knowledge.wiki import WikiCompiler
 
-            root = workspace / ".knowledge" / (instance or "default")
+            root = workspace / ".knowledge" / instance
             store = KnowledgeStore(root, mode)
             store.ensure_dirs()
             meta = store.load_meta()
@@ -1122,6 +1160,125 @@ class WebSocketChannel(BaseChannel):
         except Exception:
             logger.exception("kb_compile failed")
             return _http_error(500, "kb_compile error")
+
+    def _handle_kb_list(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        try:
+            from mona.config.loader import load_config
+            from mona.config.paths import get_workspace_path
+            from mona.knowledge.indexer import Indexer
+            from mona.knowledge.models import KnowledgeMode
+            from mona.knowledge.store import KnowledgeStore
+
+            config = load_config()
+            workspace = get_workspace_path()
+            result = []
+            for name, inst_cfg in config.tools.knowledge.instances.items():
+                root = workspace / ".knowledge" / name
+                doc_count = 0
+                pending_count = 0
+                meta_path = root / "meta.json"
+                if meta_path.exists():
+                    mode = KnowledgeMode(inst_cfg.mode.value)
+                    store = KnowledgeStore(root, mode)
+                    store.ensure_dirs()
+                    indexer = Indexer(store.db_path)
+                    indexer.initialize()
+                    meta = store.load_meta()
+                    doc_count = indexer.get_doc_count()
+                    pending_count = len(meta.pending_changes)
+                result.append({
+                    "name": name,
+                    "mode": inst_cfg.mode.value,
+                    "paths": inst_cfg.paths,
+                    "docCount": doc_count,
+                    "pendingChanges": pending_count,
+                })
+            return _http_json_response({"instances": result})
+        except Exception:
+            logger.exception("kb_list failed")
+            return _http_error(500, "kb_list error")
+
+    def _handle_kb_create(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        try:
+            from mona.config.loader import get_config_path, load_config
+            from mona.config.paths import get_workspace_path
+            from mona.config.schema import KnowledgeInstanceConfig
+            from mona.config.schema import KnowledgeMode as SchemaKnowledgeMode
+            from mona.knowledge.models import KnowledgeMode
+            from mona.knowledge.store import KnowledgeStore
+
+            query = _parse_query(request.path)
+            name = (_query_first(query, "name") or "").strip()
+            mode_str = _query_first(query, "mode") or "document"
+            paths_str = _query_first(query, "paths") or ""
+            if not name:
+                return _http_error(400, "missing name")
+            config = load_config()
+            if name in config.tools.knowledge.instances:
+                return _http_error(409, "instance already exists")
+            try:
+                schema_mode = SchemaKnowledgeMode(mode_str)
+            except ValueError:
+                return _http_error(400, "invalid mode")
+            paths = [p.strip() for p in paths_str.split(",") if p.strip()]
+            inst_cfg = KnowledgeInstanceConfig(mode=schema_mode, paths=paths)
+            config_path = get_config_path()
+            raw: dict[str, Any] = {}
+            if config_path.exists():
+                with open(config_path, encoding="utf-8") as f:
+                    raw = json.load(f)
+            tools = raw.setdefault("tools", {})
+            knowledge = tools.setdefault("knowledge", {})
+            instances = knowledge.setdefault("instances", {})
+            instances[name] = inst_cfg.model_dump(by_alias=True)
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(config_path, "w", encoding="utf-8") as f:
+                json.dump(raw, f, indent=2, ensure_ascii=False)
+            workspace = get_workspace_path()
+            root = workspace / ".knowledge" / name
+            store = KnowledgeStore(root, KnowledgeMode(schema_mode.value))
+            store.ensure_dirs()
+            return _http_json_response({"name": name, "mode": mode_str})
+        except Exception:
+            logger.exception("kb_create failed")
+            return _http_error(500, "kb_create error")
+
+    def _handle_kb_delete(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        try:
+            from mona.config.loader import get_config_path, load_config
+            from mona.config.paths import get_workspace_path
+
+            query = _parse_query(request.path)
+            name = (_query_first(query, "name") or "").strip()
+            if not name:
+                return _http_error(400, "missing name")
+            config = load_config()
+            if name not in config.tools.knowledge.instances:
+                return _http_error(404, "instance not found")
+            config_path = get_config_path()
+            raw: dict[str, Any] = {}
+            if config_path.exists():
+                with open(config_path, encoding="utf-8") as f:
+                    raw = json.load(f)
+            instances = raw.get("tools", {}).get("knowledge", {}).get("instances", {})
+            instances.pop(name, None)
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(config_path, "w", encoding="utf-8") as f:
+                json.dump(raw, f, indent=2, ensure_ascii=False)
+            workspace = get_workspace_path()
+            kb_dir = workspace / ".knowledge" / name
+            if kb_dir.exists():
+                shutil.rmtree(kb_dir)
+            return _http_json_response({"deleted": name})
+        except Exception:
+            logger.exception("kb_delete failed")
+            return _http_error(500, "kb_delete error")
 
     @staticmethod
     def _is_websocket_channel_session_key(key: str) -> bool:

@@ -170,15 +170,44 @@ impl SshClient {
 
         match auth {
             AuthConfig::Password { password } => {
+                log::info!(
+                    "[batch] Authenticating with password for {}@{}:{} (pwd_len={})",
+                    username,
+                    host,
+                    port,
+                    password.len()
+                );
                 let auth_result = handle
                     .authenticate_password(username, password.as_str())
                     .await
-                    .map_err(|e| TerminalError::AuthFailed(e.to_string()))?;
+                    .map_err(|e| {
+                        log::error!(
+                            "[batch] authenticate_password error for {}@{}:{}: {}",
+                            username,
+                            host,
+                            port,
+                            e
+                        );
+                        TerminalError::AuthFailed(e.to_string())
+                    })?;
                 if !auth_result.success() {
+                    log::error!(
+                        "[batch] Password authentication rejected for {}@{}:{} (pwd_len={})",
+                        username,
+                        host,
+                        port,
+                        password.len()
+                    );
                     return Err(TerminalError::AuthFailed(
                         "Password authentication failed".into(),
                     ));
                 }
+                log::info!(
+                    "[batch] Password authentication succeeded for {}@{}:{}",
+                    username,
+                    host,
+                    port
+                );
             }
             AuthConfig::KeyFile {
                 key_path,

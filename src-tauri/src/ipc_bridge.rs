@@ -239,6 +239,51 @@ impl IpcBridge {
                     Err(_) => Err("Approval channel closed".to_string()),
                 }
             }
+            "terminal_upload_file" => {
+                let session_id = args
+                    .get("sessionId")
+                    .and_then(|v| v.as_str())
+                    .ok_or("Missing sessionId")?;
+                let remote_path = args
+                    .get("remotePath")
+                    .and_then(|v| v.as_str())
+                    .ok_or("Missing remotePath")?;
+                let content_b64 = args
+                    .get("content")
+                    .and_then(|v| v.as_str())
+                    .ok_or("Missing content (base64)")?;
+
+                let data = base64::Engine::decode(
+                    &base64::engine::general_purpose::STANDARD,
+                    content_b64,
+                )
+                .map_err(|e| format!("Invalid base64 content: {}", e))?;
+
+                let handle = state
+                    .manager
+                    .get_handle(session_id)
+                    .await
+                    .ok_or(format!("Session not found: {}", session_id))?;
+
+                match handle {
+                    crate::terminal::session::SessionHandle::Ssh(client) => {
+                        let sftp_session = client
+                            .open_sftp()
+                            .await
+                            .map_err(|e| format!("Failed to open SFTP: {}", e))?;
+                        sftp_session
+                            .write(remote_path, &data)
+                            .await
+                            .map_err(|e| format!("SFTP upload failed: {}", e))?;
+                        Ok(serde_json::json!({
+                            "status": "uploaded",
+                            "remotePath": remote_path,
+                            "bytes": data.len()
+                        }))
+                    }
+                    _ => Err("File upload is only supported for SSH sessions".into()),
+                }
+            }
             "terminal_list_pending_exec" => {
                 let pending = state.approval.manager.list_pending().await;
                 serde_json::to_value(pending).map_err(|e| e.to_string())
