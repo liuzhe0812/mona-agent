@@ -85,7 +85,8 @@ class IncrementalCompiler:
         if not changes:
             return 0
 
-        compiled_pages = self.wiki.compile_batch(changes, self.meta)
+        compiled = self.wiki.compile_batch(changes, self.meta)
+        compiled_count = len(compiled) if isinstance(compiled, list) else int(compiled)
 
         compiled_paths = {c.path for c in changes}
         self.meta.pending_changes = [
@@ -96,7 +97,7 @@ class IncrementalCompiler:
 
         logger.info(
             "Incremental compile done: {} pages from {} changes",
-            compiled_pages,
+            compiled_count,
             len(changes),
         )
-        return compiled_pages
+        return compiled_count

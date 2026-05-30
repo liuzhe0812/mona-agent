@@ -9,9 +9,13 @@ from app.database import Base
 
 class SubscriptionStatus(str, enum.Enum):
     ACTIVE = "active"
-    PAST_DUE = "past_due"
-    CANCELED = "canceled"
     EXPIRED = "expired"
+
+
+class PaymentStatus(str, enum.Enum):
+    PENDING = "pending"
+    PAID = "paid"
+    FAILED = "failed"
 
 
 class User(Base):
@@ -20,12 +24,16 @@ class User(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    is_admin: Mapped[bool] = mapped_column(default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     subscriptions: Mapped[list["Subscription"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
     devices: Mapped[list["Device"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+    payments: Mapped[list["Payment"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
 
@@ -36,10 +44,6 @@ class Subscription(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    stripe_customer_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    stripe_subscription_id: Mapped[str | None] = mapped_column(
-        String(255), unique=True, nullable=True
     )
     status: Mapped[SubscriptionStatus] = mapped_column(
         Enum(SubscriptionStatus), nullable=False, default=SubscriptionStatus.EXPIRED
@@ -68,3 +72,24 @@ class Device(Base):
     bound_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     user: Mapped["User"] = relationship(back_populates="devices")
+
+
+class Payment(Base):
+    __tablename__ = "payments"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    trade_order_id: Mapped[str] = mapped_column(String(128), unique=True, nullable=False, index=True)
+    xhp_order_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    amount: Mapped[float] = mapped_column(nullable=False)
+    duration_months: Mapped[int] = mapped_column(default=1)
+    status: Mapped[PaymentStatus] = mapped_column(
+        Enum(PaymentStatus), nullable=False, default=PaymentStatus.PENDING
+    )
+    pay_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    user: Mapped["User"] = relationship(back_populates="payments")

@@ -18,6 +18,7 @@ import ssl
 import time
 import uuid
 from collections.abc import Callable
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Self
 from urllib.parse import parse_qs, unquote, urlparse
@@ -755,6 +756,12 @@ class WebSocketChannel(BaseChannel):
         if got == "/api/kb/delete":
             return self._handle_kb_delete(request)
 
+        if got == "/api/kb/files":
+            return self._handle_kb_files(request)
+
+        if got == "/api/kb/ingest-files":
+            return self._handle_kb_ingest_files(request)
+
         m = re.match(r"^/api/sessions/([^/]+)/messages$", got)
         if m:
             return self._handle_session_messages(request, m.group(1))
@@ -1048,7 +1055,7 @@ class WebSocketChannel(BaseChannel):
             if paths_str:
                 paths = [p.strip() for p in paths_str.split(",") if p.strip()]
             elif inst_cfg and inst_cfg.paths:
-                paths = inst_cfg.paths
+                paths = [inst_cfg.paths[0]]
             else:
                 paths = ["."]
             ingested = []
@@ -1279,6 +1286,110 @@ class WebSocketChannel(BaseChannel):
         except Exception:
             logger.exception("kb_delete failed")
             return _http_error(500, "kb_delete error")
+
+    _KB_SUPPORTED_SUFFIXES = frozenset({
+        ".md", ".txt", ".py", ".js", ".ts", ".json",
+        ".yaml", ".yml", ".toml", ".rst", ".pdf", ".docx", ".pptx",
+    })
+
+    def _handle_kb_files(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        try:
+            from mona.config.loader import load_config
+            from mona.config.paths import get_workspace_path
+
+            workspace = get_workspace_path()
+            query = _parse_query(request.path)
+            instance = _query_first(query, "instance") or "default"
+            config = load_config()
+            inst_cfg = config.tools.knowledge.instances.get(instance)
+            if not inst_cfg or not inst_cfg.paths:
+                return _http_json_response({"files": []})
+            assoc_dir = workspace / inst_cfg.paths[0]
+            if not assoc_dir.is_dir():
+                return _http_json_response({"files": []})
+            files: list[dict[str, Any]] = []
+            for fp in sorted(assoc_dir.rglob("*")):
+                if not fp.is_file():
+                    continue
+                if fp.suffix.lower() not in self._KB_SUPPORTED_SUFFIXES:
+                    continue
+                rel = fp.relative_to(assoc_dir).as_posix()
+                stat = fp.stat()
+                files.append({
+                    "name": fp.name,
+                    "path": rel,
+                    "size": stat.st_size,
+                    "modified": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+                })
+            return _http_json_response({"files": files})
+        except Exception:
+            logger.exception("kb_files failed")
+            return _http_error(500, "kb_files error")
+
+    def _handle_kb_ingest_files(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        try:
+            from mona.config.loader import load_config
+            from mona.config.paths import get_workspace_path
+            from mona.knowledge.indexer import Indexer
+            from mona.knowledge.models import KnowledgeMode
+            from mona.knowledge.store import KnowledgeStore
+
+            workspace = get_workspace_path()
+            query = _parse_query(request.path)
+            instance = _query_first(query, "instance") or "default"
+            sources_str = _query_first(query, "sources") or ""
+            if not sources_str:
+                return _http_error(400, "missing sources")
+            config = load_config()
+            inst_cfg = config.tools.knowledge.instances.get(instance)
+            if not inst_cfg or not inst_cfg.paths:
+                return _http_error(400, "instance has no associated paths")
+            target_dir = workspace / inst_cfg.paths[0]
+            target_dir.mkdir(parents=True, exist_ok=True)
+            sources = [s.strip() for s in sources_str.split(",") if s.strip()]
+            added: list[str] = []
+            for src_str in sources:
+                src = Path(src_str)
+                if not src.exists():
+                    continue
+                if src.is_file():
+                    if src.suffix.lower() in self._KB_SUPPORTED_SUFFIXES:
+                        dest = target_dir / src.name
+                        shutil.copy2(src, dest)
+                        added.append(src.name)
+                elif src.is_dir():
+                    for fp in sorted(src.rglob("*")):
+                        if not fp.is_file():
+                            continue
+                        if fp.suffix.lower() not in self._KB_SUPPORTED_SUFFIXES:
+                            continue
+                        rel = fp.relative_to(src)
+                        dest = target_dir / rel
+                        dest.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(fp, dest)
+                        added.append(rel.as_posix())
+            mode = (
+                KnowledgeMode(inst_cfg.mode.value)
+                if inst_cfg
+                else KnowledgeMode(config.tools.knowledge.default_mode.value)
+            )
+            root = workspace / ".knowledge" / instance
+            store = KnowledgeStore(root, mode)
+            store.ensure_dirs()
+            indexer = Indexer(store.db_path)
+            indexer.initialize()
+            meta = store.load_meta()
+            ingested: list[str] = []
+            _kb_ingest_dir(target_dir, workspace, store, indexer, meta, ingested, True)
+            store.save_meta(meta)
+            return _http_json_response({"added": added, "count": len(added)})
+        except Exception:
+            logger.exception("kb_ingest_files failed")
+            return _http_error(500, "kb_ingest_files error")
 
     @staticmethod
     def _is_websocket_channel_session_key(key: str) -> bool:
@@ -1860,6 +1971,15 @@ class WebSocketChannel(BaseChannel):
                 is_dm=False,
             )
             return
+        if t == "delete_chat":
+            cid = envelope.get("chat_id")
+            if not _is_valid_chat_id(cid):
+                await self._send_event(connection, "error", detail="invalid chat_id")
+                return
+            if cid.startswith("ephemeral:"):
+                self._cleanup_ephemeral_session(cid)
+            await self._send_event(connection, "deleted", chat_id=cid)
+            return
         await self._send_event(connection, "error", detail=f"unknown type: {t!r}")
 
     async def stop(self) -> None:
@@ -2086,8 +2206,6 @@ class WebSocketChannel(BaseChannel):
         raw = json.dumps(body, ensure_ascii=False)
         for connection in conns:
             await self._safe_send_to(connection, raw, label=" turn_end ")
-        if chat_id.startswith("ephemeral:"):
-            self._cleanup_ephemeral_session(chat_id)
 
     def _cleanup_ephemeral_session(self, chat_id: str) -> None:
         if self._session_manager is None:

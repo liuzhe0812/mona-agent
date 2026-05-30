@@ -279,8 +279,8 @@ export class MonaClient {
   }
 
   /** Ask the server to provision a new chat_id; resolves with the assigned id.
-   *  When ``ephemeral`` is true the session is auto-deleted after the turn ends
-   *  and hidden from the session list. */
+   *  When ``ephemeral`` is true the session is hidden from the session list
+   *  and deleted when the client explicitly calls ``deleteChat``. */
   newChat(timeoutMs: number = 5_000, ephemeral = false): Promise<string> {
     if (this.pendingNewChat) {
       return Promise.reject(new Error("newChat already in flight"));
@@ -300,6 +300,15 @@ export class MonaClient {
     if (this.socket?.readyState === WS_OPEN) {
       this.queueSend({ type: "attach", chat_id: chatId });
     }
+  }
+
+  deleteChat(chatId: string): void {
+    this.knownChats.delete(chatId);
+    this.chatHandlers.delete(chatId);
+    this.pendingInboundByChat.delete(chatId);
+    this.runStartedAtByChatId.delete(chatId);
+    this.goalStateByChatId.delete(chatId);
+    this.queueSend({ type: "delete_chat", chat_id: chatId });
   }
 
   sendMessage(

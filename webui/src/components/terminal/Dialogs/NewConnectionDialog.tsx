@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -43,18 +43,24 @@ const defaultSshForm: SshFormState = {
 export function NewConnectionDialog() {
   const open = useTerminalStore((s) => s.newConnectionDialogOpen);
   const setOpen = useTerminalStore((s) => s.setNewConnectionDialogOpen);
+  const defaultType = useTerminalStore((s) => s.newConnectionDialogDefaultType);
   const addSession = useTerminalStore((s) => s.addSession);
   const addConnection = useTerminalStore((s) => s.addConnection);
   const showHostKeyDialog = useTerminalStore((s) => s.showHostKeyDialog);
   const saveConnection = useTerminalStore((s) => s.saveConnection);
 
-  const [connectionType, setConnectionType] = useState<ConnectionType>("ssh");
+  const [connectionType, setConnectionType] = useState<ConnectionType>(defaultType);
   const [sshForm, setSshForm] = useState<SshFormState>(defaultSshForm);
   const [connecting, setConnecting] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
 
+  useEffect(() => {
+    if (open) {
+      setConnectionType(defaultType);
+    }
+  }, [open, defaultType]);
+
   const resetAndClose = () => {
-    setConnectionType("ssh");
     setSshForm(defaultSshForm);
     setConnecting(false);
     setErrorMsg("");

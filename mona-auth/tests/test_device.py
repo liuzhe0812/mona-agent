@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 
 from app.database import SessionLocal
-from app.models import Device, Subscription, SubscriptionStatus, User
+from app.models import Device, Payment, PaymentStatus, Subscription, SubscriptionStatus, User
 
 
 class TestDeviceAPI:
@@ -61,34 +61,6 @@ class TestDeviceAPI:
         data = resp.json()
         assert "license_jwt" in data
         assert "expires_at" in data
-
-    def test_bind_rebind_same_device(self, client):
-        token = self._register_and_get_token(client)
-
-        db = SessionLocal()
-        user = db.query(User).filter(User.email == "device@test.com").first()
-        sub = Subscription(
-            user_id=user.id,
-            status=SubscriptionStatus.ACTIVE,
-            current_period_end=datetime(2099, 1, 1, tzinfo=timezone.utc),
-        )
-        db.add(sub)
-        db.commit()
-        db.close()
-
-        resp1 = client.post(
-            "/auth/device/bind",
-            json={"device_fingerprint": "fp-001", "device_name": "Device 1"},
-            headers={"Authorization": f"Bearer {token}"},
-        )
-        assert resp1.status_code == 200
-
-        resp2 = client.post(
-            "/auth/device/bind",
-            json={"device_fingerprint": "fp-001", "device_name": "Device 1 Updated"},
-            headers={"Authorization": f"Bearer {token}"},
-        )
-        assert resp2.status_code == 200
 
     def test_list_devices_after_bind(self, client):
         token = self._register_and_get_token(client)

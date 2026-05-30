@@ -18,16 +18,22 @@ import {
   sftpCanonicalize,
   sftpDownload,
   sftpUpload,
+  sftpUploadFile,
+  sftpDownloadFile,
+  sftpCancelTransfer,
+  sftpUploadDir,
+  sftpDownloadDir,
   sftpTouch,
-  onSftpTransferProgress,
+  onTransferProgress,
   localListDir,
-  localHomeDir,
+  localDesktopDir,
 } from "../ipc";
-import { useTerminalStore } from "../store/terminalStore";
 import type { FileInfo } from "../types/terminal";
 import type { LocalFileInfo } from "../ipc";
 import { PropertiesDialog } from "./PropertiesDialog";
 import { PermissionsDialog } from "./PermissionsDialog";
+import { TransferPanel } from "./TransferPanel";
+import type { TransferTask, TransferFileInfo } from "./types";
 
 interface Props {
   sessionId: string;
@@ -110,37 +116,20 @@ export function FileManager({ sessionId }: Props) {
   const [permissionsOpen, setPermissionsOpen] = useState(false);
   const [permissionsTarget, setPermissionsTarget] = useState<UnifiedFileItem | null>(null);
 
-  const transferProgress = useTerminalStore((s) => s.transferProgress);
-  const updateTransferProgress = useTerminalStore((s) => s.updateTransferProgress);
-  const clearTransferProgress = useTerminalStore((s) => s.clearTransferProgress);
+  const [transferTask, setTransferTask] = useState<TransferTask | null>(null);
+  const taskIdRef = useRef<string | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    let unlisten: (() => void) | null = null;
-    onSftpTransferProgress((event) => {
-      if (cancelled) return;
-      if (event.sessionId !== sessionId) return;
-      updateTransferProgress(event.path, {
-        path: event.path,
-        direction: event.direction,
-        bytesTransferred: event.bytesTransferred,
-        totalBytes: event.totalBytes,
-      });
-      if (event.totalBytes != null && event.bytesTransferred >= event.totalBytes) {
-        setTimeout(() => clearTransferProgress(event.path), 500);
-      }
-    }).then((fn) => {
-      if (cancelled) {
-        fn();
-        return;
-      }
-      unlisten = fn;
-    });
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
-  }, [sessionId]);
+  function formatSpeed(bytesPerSec: number): string {
+    if (bytesPerSec === 0) return "-";
+    const units = ["B/s", "KB/s", "MB/s", "GB/s"];
+    let value = bytesPerSec;
+    let unitIndex = 0;
+    while (value >= 1024 && unitIndex < units.length - 1) {
+      value /= 1024;
+      unitIndex++;
+    }
+    return `${value.toFixed(1)} ${units[unitIndex]}`;
+  }
 
   const loadLocalDir = useCallback(async (path: string) => {
     setLocalLoading(true);
@@ -172,14 +161,14 @@ export function FileManager({ sessionId }: Props) {
   );
 
   useEffect(() => {
-    localHomeDir()
-      .then((home) => loadLocalDir(home))
+    localDesktopDir()
+      .then((desktop) => loadLocalDir(desktop))
       .catch(() => loadLocalDir("C:\\"));
   }, [loadLocalDir]);
 
   useEffect(() => {
     if (sessionId) {
-      sftpCanonicalize(sessionId, "/")
+      sftpCanonicalize(sessionId, ".")
         .then((home) => loadRemoteDir(home))
         .catch(() => loadRemoteDir("/"));
     }
@@ -389,6 +378,286 @@ export function FileManager({ sessionId }: Props) {
     [sessionId],
   );
 
+  const handleDropToRemote = useCallback(
+    async (files: UnifiedFileItem[], fromSide: "local" | "remote" | "system") => {
+      if (fromSide === "remote" || taskIdRef.current) return;
+
+      const taskId = `upload-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      taskIdRef.current = taskId;
+
+      const fileInfos: TransferFileInfo[] = files.map((f) => ({
+        name: f.name,
+        localPath: f.path,
+        remotePath: remotePath === "/" ? `/${f.name}` : `${remotePath}/${f.name}`,
+        size: f.size ?? 0,
+        status: "pending" as const,
+      }));
+
+      const task: TransferTask = {
+        id: taskId,
+        type: "upload",
+        status: "waiting",
+        currentFile: fileInfos[0]?.name ?? "",
+        currentFileIndex: 0,
+        totalFiles: fileInfos.length,
+        progress: 0,
+        speed: "-",
+        bytesTransferred: 0,
+        totalBytes: 0,
+        files: fileInfos,
+      };
+      setTransferTask(task);
+
+      for (let i = 0; i < files.length; i++) {
+        if (taskIdRef.current !== taskId) break;
+
+        const file = files[i];
+        const remoteFilePath = remotePath === "/" ? `/${file.name}` : `${remotePath}/${file.name}`;
+        const fileTaskId = `${taskId}-${i}`;
+
+        setTransferTask((prev) =>
+          prev
+            ? {
+                ...prev,
+                status: "transferring",
+                currentFile: file.name,
+                currentFileIndex: i,
+                files: prev.files.map((f, idx) =>
+                  idx === i ? { ...f, status: "transferring" as const } : f,
+                ),
+              }
+            : prev,
+        );
+
+        const cleanup = { fn: null as (() => void) | null };
+        const progressPromise = onTransferProgress(sessionId, fileTaskId, (event) => {
+          setTransferTask((prev) => {
+            if (!prev || prev.id !== taskId) return prev;
+            return {
+              ...prev,
+              progress: event.percentage,
+              speed: formatSpeed(event.speed),
+              bytesTransferred: event.bytesTransferred,
+              totalBytes: event.totalBytes,
+            };
+          });
+        }).then((fn) => {
+          cleanup.fn = fn;
+        });
+
+        try {
+          if (fromSide === "system" && file._rawFile) {
+            const buf = await file._rawFile.arrayBuffer();
+            await sftpUpload(sessionId, remoteFilePath, Array.from(new Uint8Array(buf)), fileTaskId);
+          } else if (fromSide === "system" && file.path && (file.path.includes(":") || file.path.startsWith("/"))) {
+            await sftpUploadFile(sessionId, file.path, remoteFilePath, fileTaskId);
+          } else if (file.isDir) {
+            await sftpUploadDir(sessionId, file.path, remoteFilePath);
+          } else {
+            await sftpUploadFile(sessionId, file.path, remoteFilePath, fileTaskId);
+          }
+
+          setTransferTask((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  files: prev.files.map((f, idx) =>
+                    idx === i ? { ...f, status: "completed" as const } : f,
+                  ),
+                  progress: Math.round(((i + 1) / files.length) * 100),
+                }
+              : prev,
+          );
+        } catch (err: unknown) {
+          const errStr = String(err);
+          if (errStr.includes("cancel") || errStr.includes("Cancel")) {
+            setTransferTask((prev) => (prev ? { ...prev, status: "cancelled" } : prev));
+            break;
+          }
+          setTransferTask((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  files: prev.files.map((f, idx) =>
+                    idx === i ? { ...f, status: "error" as const } : f,
+                  ),
+                  error: errStr,
+                }
+              : prev,
+          );
+        } finally {
+          await progressPromise;
+          cleanup.fn?.();
+        }
+      }
+
+      setTransferTask((prev) => {
+        if (!prev || prev.id !== taskId) return prev;
+        if (prev.status === "cancelled") return prev;
+        const hasError = prev.files.some((f) => f.status === "error");
+        if (hasError) {
+          return { ...prev, status: "error", speed: "-" };
+        }
+        return { ...prev, status: "completed", progress: 100, speed: "-" };
+      });
+
+      taskIdRef.current = null;
+      loadRemoteDir(remotePath);
+    },
+    [sessionId, remotePath, loadRemoteDir],
+  );
+
+  const sanitizeFileName = (name: string): string => {
+    const invalidChars = /[<>:"|?*\x00-\x1F]/g;
+    let result = name.replace(invalidChars, "_");
+    result = result.replace(/[\s.]+$/, "");
+    return result || "_";
+  };
+
+  const handleDropToLocal = useCallback(
+    async (files: UnifiedFileItem[], fromSide: "local" | "remote" | "system") => {
+      if (fromSide === "local" || fromSide === "system" || taskIdRef.current) return;
+
+      const taskId = `download-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      taskIdRef.current = taskId;
+
+      const fileInfos: TransferFileInfo[] = files.map((f) => {
+        const sep = localPath.includes("\\") ? "\\" : "/";
+        const safeName = sanitizeFileName(f.name);
+        return {
+          name: f.name,
+          localPath: `${localPath}${sep}${safeName}`,
+          remotePath: f.path,
+          size: f.size ?? 0,
+          status: "pending" as const,
+        };
+      });
+
+      const task: TransferTask = {
+        id: taskId,
+        type: "download",
+        status: "waiting",
+        currentFile: fileInfos[0]?.name ?? "",
+        currentFileIndex: 0,
+        totalFiles: fileInfos.length,
+        progress: 0,
+        speed: "-",
+        bytesTransferred: 0,
+        totalBytes: 0,
+        files: fileInfos,
+      };
+      setTransferTask(task);
+
+      for (let i = 0; i < files.length; i++) {
+        if (taskIdRef.current !== taskId) break;
+
+        const file = files[i];
+        const sep = localPath.includes("\\") ? "\\" : "/";
+        const localFilePath = `${localPath}${sep}${sanitizeFileName(file.name)}`;
+        const fileTaskId = `${taskId}-${i}`;
+
+        setTransferTask((prev) =>
+          prev
+            ? {
+                ...prev,
+                status: "transferring",
+                currentFile: file.name,
+                currentFileIndex: i,
+                files: prev.files.map((f, idx) =>
+                  idx === i ? { ...f, status: "transferring" as const } : f,
+                ),
+              }
+            : prev,
+        );
+
+        const cleanup = { fn: null as (() => void) | null };
+        const progressPromise = onTransferProgress(sessionId, fileTaskId, (event) => {
+          setTransferTask((prev) => {
+            if (!prev || prev.id !== taskId) return prev;
+            return {
+              ...prev,
+              progress: event.percentage,
+              speed: formatSpeed(event.speed),
+              bytesTransferred: event.bytesTransferred,
+              totalBytes: event.totalBytes,
+            };
+          });
+        }).then((fn) => {
+          cleanup.fn = fn;
+        });
+
+        try {
+          if (file.isDir) {
+            await sftpDownloadDir(sessionId, file.path, localFilePath);
+          } else {
+            await sftpDownloadFile(sessionId, file.path, localFilePath, fileTaskId);
+          }
+
+          setTransferTask((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  files: prev.files.map((f, idx) =>
+                    idx === i ? { ...f, status: "completed" as const } : f,
+                  ),
+                  progress: Math.round(((i + 1) / files.length) * 100),
+                }
+              : prev,
+          );
+        } catch (err: unknown) {
+          const errStr = String(err);
+          if (errStr.includes("cancel") || errStr.includes("Cancel")) {
+            setTransferTask((prev) => (prev ? { ...prev, status: "cancelled" } : prev));
+            break;
+          }
+          setTransferTask((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  files: prev.files.map((f, idx) =>
+                    idx === i ? { ...f, status: "error" as const } : f,
+                  ),
+                  error: errStr,
+                }
+              : prev,
+          );
+        } finally {
+          await progressPromise;
+          cleanup.fn?.();
+        }
+      }
+
+      setTransferTask((prev) => {
+        if (!prev || prev.id !== taskId) return prev;
+        if (prev.status === "cancelled") return prev;
+        const hasError = prev.files.some((f) => f.status === "error");
+        if (hasError) {
+          return { ...prev, status: "error", speed: "-" };
+        }
+        return { ...prev, status: "completed", progress: 100, speed: "-" };
+      });
+
+      taskIdRef.current = null;
+      loadLocalDir(localPath);
+    },
+    [sessionId, localPath, loadLocalDir],
+  );
+
+  const handleCancelTransfer = useCallback(async () => {
+    if (taskIdRef.current) {
+      try {
+        await sftpCancelTransfer(taskIdRef.current);
+      } catch {}
+      setTransferTask((prev) => (prev ? { ...prev, status: "cancelled" } : prev));
+      taskIdRef.current = null;
+    }
+  }, []);
+
+  const handleClearTransfer = useCallback(() => {
+    setTransferTask(null);
+    taskIdRef.current = null;
+  }, []);
+
   const handleCopy = useCallback(
     (side: "local" | "remote", files: UnifiedFileItem[]) => {
       if (files.length === 0) return;
@@ -477,6 +746,26 @@ export function FileManager({ sessionId }: Props) {
   }, []);
 
   useEffect(() => {
+    const onDragOver = (e: DragEvent) => {
+      if (e.dataTransfer?.types.includes("application/x-sftp-files")) {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "copy";
+      }
+    };
+    const onDrop = (e: DragEvent) => {
+      if (e.dataTransfer?.types.includes("application/x-sftp-files")) {
+        e.preventDefault();
+      }
+    };
+    document.addEventListener("dragover", onDragOver);
+    document.addEventListener("drop", onDrop);
+    return () => {
+      document.removeEventListener("dragover", onDragOver);
+      document.removeEventListener("drop", onDrop);
+    };
+  }, []);
+
+  useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === "c") {
         const side = activeSideRef.current;
@@ -527,6 +816,8 @@ export function FileManager({ sessionId }: Props) {
             side="local"
             onSelectionChange={setLocalSelectedPaths}
             onFocus={() => { activeSideRef.current = "local"; }}
+            onDropFiles={handleDropToLocal}
+            isTransferring={transferTask?.status === "transferring" || transferTask?.status === "waiting"}
           />
         </div>
         <div
@@ -574,38 +865,17 @@ export function FileManager({ sessionId }: Props) {
             side="remote"
             onSelectionChange={setRemoteSelectedPaths}
             onFocus={() => { activeSideRef.current = "remote"; }}
+            onDropFiles={handleDropToRemote}
+            isTransferring={transferTask?.status === "transferring" || transferTask?.status === "waiting"}
           />
         </div>
       </div>
 
-      {Object.keys(transferProgress).length > 0 && (
-        <div className="border-t px-3 py-1.5 space-y-1 shrink-0">
-          {Object.entries(transferProgress).map(([key, p]) => {
-            const pct = p.totalBytes
-              ? Math.round((p.bytesTransferred / p.totalBytes) * 100)
-              : 0;
-            return (
-              <div key={key} className="flex items-center gap-2 text-xs">
-                <span className="text-muted-foreground w-12">
-                  {p.direction === "upload" ? "上传" : "下载"}
-                </span>
-                <span className="truncate flex-1">
-                  {key.split(/[/\\]/).pop()}
-                </span>
-                <div className="h-1.5 w-24 rounded-full bg-muted overflow-hidden">
-                  <div
-                    className="h-full bg-primary transition-all"
-                    style={{ width: `${pct}%` }}
-                  />
-                </div>
-                <span className="text-muted-foreground w-8 text-right">
-                  {pct}%
-                </span>
-              </div>
-            );
-          })}
-        </div>
-      )}
+      <TransferPanel
+        task={transferTask}
+        onCancel={handleCancelTransfer}
+        onClear={handleClearTransfer}
+      />
 
       <Dialog open={mkdirDialogOpen} onOpenChange={setMkdirDialogOpen}>
         <DialogContent className="sm:max-w-sm">

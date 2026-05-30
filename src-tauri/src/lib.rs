@@ -1,6 +1,7 @@
 mod db;
 mod gateway;
 mod ipc_bridge;
+mod license;
 mod notes;
 mod python;
 mod settings;
@@ -10,7 +11,10 @@ mod tray;
 use gateway::GatewayManager;
 use settings::AppSettings;
 use std::sync::Arc;
+use tauri::Listener;
 use tauri::Manager;
+use tauri::WebviewUrl;
+use tauri::WebviewWindowBuilder;
 
 #[derive(Clone)]
 pub struct GatewayState {
@@ -149,6 +153,29 @@ async fn write_mona_model_config(
     settings::write_mona_model_config(&model, &provider)
 }
 
+fn open_md_reader_window(app_handle: &tauri::AppHandle, file_path: &str) {
+    let encoded = urlencoding::encode(file_path);
+    let url = format!("#/md-reader?file={}", encoded);
+    let label = format!("md-reader-{}", file_path.replace(|c: char| !c.is_alphanumeric(), "-"));
+    let label_truncated = if label.len() > 64 {
+        &label[..64]
+    } else {
+        &label
+    };
+
+    if let Some(existing) = app_handle.get_webview_window(label_truncated) {
+        let _ = existing.set_focus();
+        return;
+    }
+
+    let _ = WebviewWindowBuilder::new(app_handle, label_truncated, WebviewUrl::App(url.into()))
+        .title("Mona - Markdown 阅读器")
+        .inner_size(1000.0, 700.0)
+        .min_inner_size(600.0, 400.0)
+        .center()
+        .build();
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let gateway_state = GatewayState::new();
@@ -217,6 +244,7 @@ pub fn run() {
             terminal::commands::get_file_type_icon,
             terminal::commands::local_list_dir,
             terminal::commands::local_home_dir,
+            terminal::commands::local_desktop_dir,
             terminal::commands::sftp_batch_upload,
             terminal::commands::sftp_batch_cancel,
             terminal::commands::sftp_batch_pause,
@@ -226,6 +254,9 @@ pub fn run() {
             terminal::commands::sftp_stat_detail,
             terminal::commands::sftp_download_dir,
             terminal::commands::sftp_upload_dir,
+            terminal::commands::sftp_upload_file,
+            terminal::commands::sftp_download_file,
+            terminal::commands::sftp_cancel_transfer,
             terminal::desktop::commands::desktop_connect,
             terminal::desktop::commands::desktop_disconnect,
             terminal::desktop::commands::desktop_exec,
@@ -255,9 +286,40 @@ pub fn run() {
             db::commands::db_list_connections,
             db::commands::db_save_connections,
             db::commands::db_load_connections,
+            license::get_machine_id,
+            license::check_license,
+            license::import_license,
         ])
         .setup(move |app| {
             tray::setup_tray(app)?;
+
+            let app_handle_for_file = app.handle().clone();
+            app.listen("tauri://file-open", move |event| {
+                if let Ok(payload) = serde_json::from_str::<serde_json::Value>(event.payload()) {
+                    if let Some(paths) = payload.get("paths").and_then(|p| p.as_array()) {
+                        for path in paths {
+                            if let Some(path_str) = path.as_str() {
+                                open_md_reader_window(&app_handle_for_file, path_str);
+                            }
+                        }
+                    }
+                }
+            });
+
+            let mut has_md_file = false;
+            for arg in std::env::args().skip(1) {
+                let lower = arg.to_lowercase();
+                if lower.ends_with(".md") || lower.ends_with(".markdown") {
+                    open_md_reader_window(app.handle(), &arg);
+                    has_md_file = true;
+                }
+            }
+
+            if has_md_file {
+                if let Some(main_window) = app.get_webview_window("main") {
+                    let _ = main_window.close();
+                }
+            }
 
             let settings = settings::load_settings();
 

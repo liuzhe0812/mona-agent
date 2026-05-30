@@ -32,6 +32,26 @@ export const NOTE_AI_ACTIONS: Array<{
     label: "提取知识点",
     description: "整理为结构化个人知识库条目",
   },
+  {
+    id: "polish",
+    label: "润色优化",
+    description: "优化表达、修正语法、理顺逻辑",
+  },
+  {
+    id: "translate",
+    label: "翻译",
+    description: "中文译英文，其他语言译中文",
+  },
+  {
+    id: "continue",
+    label: "续写扩展",
+    description: "延续末尾内容和风格继续写",
+  },
+  {
+    id: "autoTag",
+    label: "自动标签",
+    description: "分析全文生成1-3个核心标签",
+  },
 ];
 
 export function buildAgentActionPrompt(
@@ -109,6 +129,123 @@ export function buildAgentActionPrompt(
     }
 
     return `${instruction}\n\n${formatNoteContext(note)}`;
+  }
+
+  if (actionId === "polish") {
+    if (filePath) {
+      return [
+        "请对这篇笔记进行润色优化。",
+        "",
+        `使用 read_file 工具读取文件 ${filePath}，阅读后输出润色后的全文。`,
+        "要求：",
+        "- 保留原文所有信息和结构，不增删内容",
+        "- 优化语言表达，使文字更通顺、简洁、准确",
+        "- 修正语法错误和标点问题",
+        "- 理顺逻辑衔接，但不改变原有逻辑顺序",
+        "- 只输出润色后的内容，不要追问，不要解释修改了什么",
+      ].join("\n");
+    }
+    const context = formatNoteContext(note);
+    return [
+      "请对这篇笔记进行润色优化。",
+      "",
+      context,
+      "",
+      "要求：",
+      "- 保留原文所有信息和结构，不增删内容",
+      "- 优化语言表达，使文字更通顺、简洁、准确",
+      "- 修正语法错误和标点问题",
+      "- 理顺逻辑衔接，但不改变原有逻辑顺序",
+      "- 只输出润色后的内容，不要追问，不要解释修改了什么",
+    ].join("\n");
+  }
+
+  if (actionId === "translate") {
+    if (filePath) {
+      return [
+        "请翻译这篇笔记。",
+        "",
+        `使用 read_file 工具读取文件 ${filePath}，阅读后输出翻译。`,
+        "翻译规则：",
+        "- 如果原文是中文，翻译为英文",
+        "- 如果原文是其他语言，翻译为中文",
+        "- 保持原文的格式和结构",
+        "- 专业术语保留原文并在括号中附上翻译",
+        "- 只输出译文，不要追问，不要解释",
+      ].join("\n");
+    }
+    const context = formatNoteContext(note);
+    return [
+      "请翻译这篇笔记。",
+      "",
+      context,
+      "",
+      "翻译规则：",
+      "- 如果原文是中文，翻译为英文",
+      "- 如果原文是其他语言，翻译为中文",
+      "- 保持原文的格式和结构",
+      "- 专业术语保留原文并在括号中附上翻译",
+      "- 只输出译文，不要追问，不要解释",
+    ].join("\n");
+  }
+
+  if (actionId === "continue") {
+    if (filePath) {
+      return [
+        "请续写这篇笔记。",
+        "",
+        `使用 read_file 工具读取文件 ${filePath}，阅读后从笔记末尾自然续写。`,
+        "要求：",
+        "- 延续笔记末尾的主题和写作风格",
+        "- 内容自然衔接，不重复已有内容",
+        "- 续写长度适中，与原文风格一致",
+        "- 只输出续写部分，不要追问，不要解释",
+      ].join("\n");
+    }
+    const context = formatNoteContext(note);
+    return [
+      "请续写这篇笔记。",
+      "",
+      context,
+      "",
+      "要求：",
+      "- 延续笔记末尾的主题和写作风格",
+      "- 内容自然衔接，不重复已有内容",
+      "- 续写长度适中，与原文风格一致",
+      "- 只输出续写部分，不要追问，不要解释",
+    ].join("\n");
+  }
+
+  if (actionId === "autoTag") {
+    const existingTagsLine = note.tags.length > 0 ? `已有标签：${note.tags.join("、")}` : "已有标签：无";
+    if (filePath) {
+      return [
+        "请为这篇笔记生成1-3个最核心的标签。",
+        "",
+        existingTagsLine,
+        "",
+        `使用 read_file 工具读取文件 ${filePath}，阅读后输出标签。`,
+        "要求：",
+        "- 分析全文核心主题，输出1-3个领域级或主题级标签",
+        "- 如果已有标签能准确概括核心主题，优先复用",
+        "- 标签用逗号分隔，只输出标签本身，不要输出编号、解释或其他内容",
+        "- 不要追问",
+      ].join("\n");
+    }
+    const context = formatNoteContext(note);
+    return [
+      "请为这篇笔记生成1-3个最核心的标签。",
+      "",
+      existingTagsLine,
+      "",
+      context,
+      "",
+      "要求：",
+      "- 分析全文核心主题，输出1-3个领域级或主题级标签",
+      "- 如果已有标签能准确概括核心主题，优先复用",
+      "- 标签用逗号分隔，只输出标签本身，不要输出编号、解释或其他内容",
+      "- 不要追问",
+    ].join("\n");
   }
 
   return "";

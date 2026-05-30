@@ -27,6 +27,6 @@ python scripts/init_db.py
 echo ""
 echo "=== Setup complete! ==="
 echo "Next steps:"
-echo "  1. Edit .env with your MariaDB credentials, Stripe keys, etc."
+echo "  1. Edit .env with your MariaDB credentials, 虎皮椒 keys, etc."
 echo "  2. Run: source venv/bin/activate && uvicorn app.main:app --host 127.0.0.1 --port 8901"
 echo "  3. Or deploy with: bash deploy/deploy.sh"

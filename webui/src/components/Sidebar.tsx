@@ -9,9 +9,7 @@ import {
   Menu,
   Search,
   Settings,
-  SquarePen,
   Terminal,
-  Wrench,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -29,6 +27,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Separator } from "@/components/ui/separator";
+import { useLicense } from "@/hooks/useLicense";
 import type {
   ChatSummary,
   SidebarSortMode,
@@ -124,7 +123,6 @@ export function Sidebar(props: SidebarProps) {
 
       <ToolboxNavigation
         collapsed={collapsed}
-        onOpenSettings={props.onOpenSettings}
         onOpenNote={props.onOpenNote ?? (() => {})}
         onOpenSSH={props.onOpenSSH ?? (() => {})}
         onOpenDb={props.onOpenDb ?? (() => {})}
@@ -139,12 +137,6 @@ export function Sidebar(props: SidebarProps) {
           collapsed && "flex w-14 flex-col items-center px-0",
         )}
       >
-        <SidebarActionButton
-          collapsed={collapsed}
-          label={t("sidebar.newChat")}
-          onClick={props.onNewChat}
-          icon={<SquarePen className="h-4 w-4" />}
-        />
         <SidebarActionButton
           collapsed={collapsed}
           label={t("sidebar.searchAria")}
@@ -222,18 +214,15 @@ const TOOLBOX_ITEMS: Array<{
   label: string;
   icon: ReactNode;
 }> = [
-  { label: "智能体", icon: <Bot className="h-4 w-4" /> },
+  { label: "Mona", icon: <Bot className="h-4 w-4" /> },
+  { label: "笔记", icon: <FileText className="h-4 w-4" /> },
   { label: "终端", icon: <Terminal className="h-4 w-4" /> },
   { label: "数据库", icon: <Database className="h-4 w-4" /> },
-  { label: "笔记", icon: <FileText className="h-4 w-4" /> },
   { label: "知识库", icon: <BookOpen className="h-4 w-4" /> },
-  { label: "Windows", icon: <Wrench className="h-4 w-4" /> },
-  { label: "设置", icon: <Settings className="h-4 w-4" /> },
 ];
 
 function ToolboxNavigation({
   collapsed,
-  onOpenSettings,
   onOpenNote,
   onOpenSSH,
   onOpenDb,
@@ -241,13 +230,18 @@ function ToolboxNavigation({
   onGoHome,
 }: {
   collapsed: boolean;
-  onOpenSettings: () => void;
   onOpenNote: () => void;
   onOpenSSH: () => void;
   onOpenDb: () => void;
   onOpenKb: () => void;
   onGoHome: () => void;
 }) {
+  const { licenseActive } = useLicense();
+  const LICENSE_REQUIRED = new Set(["知识库"]);
+  const visibleItems = licenseActive
+    ? TOOLBOX_ITEMS
+    : TOOLBOX_ITEMS.filter((item) => !LICENSE_REQUIRED.has(item.label));
+
   return (
     <div
       className={cn(
@@ -255,10 +249,8 @@ function ToolboxNavigation({
         collapsed && "flex w-14 flex-col items-center px-0",
       )}
     >
-      {TOOLBOX_ITEMS.map((item) => {
-        const onClick = item.label === "设置"
-          ? onOpenSettings
-          : item.label === "笔记"
+      {visibleItems.map((item) => {
+        const onClick = item.label === "笔记"
             ? onOpenNote
           : item.label === "终端"
             ? onOpenSSH

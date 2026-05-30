@@ -5,13 +5,17 @@ import {
   Clipboard,
   Copy,
   Database,
+  Languages,
   Loader2,
+  Pen,
+  PenLine,
   Replace,
   RotateCcw,
   Send,
   Sparkles,
   Square,
   Tag,
+  Tags,
   X,
 } from "lucide-react";
 
@@ -57,6 +61,7 @@ interface NoteAgentPanelProps {
   onAgentChatIdChange: (chatId: string) => void;
   onApplyResult: (mode: "append" | "replace", markdown: string, messageId: string) => void;
   onSaveKnowledge: (draft: ExtractedKnowledgeDraft) => boolean;
+  onAutoTag?: (tags: string[]) => void;
   onClearChat?: () => void;
 }
 
@@ -69,6 +74,7 @@ export function NoteAgentPanel({
   onAgentChatIdChange,
   onApplyResult,
   onSaveKnowledge,
+  onAutoTag,
   onClearChat,
 }: NoteAgentPanelProps) {
   const [draft, setDraft] = useState("");
@@ -81,6 +87,9 @@ export function NoteAgentPanel({
   const pendingPromptRef = useRef<string | null>(null);
   const pendingDisplayContentRef = useRef<string | null>(null);
   const pendingKnowledgeStartIndexRef = useRef<number | null>(null);
+  const pendingActionRef = useRef<Exclude<NoteAiActionId, "freeform"> | null>(null);
+  const processedAutoTagMessageIdsRef = useRef<Set<string>>(new Set());
+  const autoAppliedMessageIdsRef = useRef<Set<string>>(new Set());
   const processedKnowledgeMessageIdsRef = useRef<Set<string>>(new Set());
   const lastNoteIdRef = useRef<string | null | undefined>(undefined);
   const { client } = useClient();
@@ -114,6 +123,9 @@ export function NoteAgentPanel({
     setKnowledgeCandidateError(null);
     setKnowledgeDialogOpen(false);
     pendingKnowledgeStartIndexRef.current = null;
+    pendingActionRef.current = null;
+    processedAutoTagMessageIdsRef.current = new Set();
+    autoAppliedMessageIdsRef.current = new Set();
     processedKnowledgeMessageIdsRef.current = new Set();
     if (!note?.agentChatId) setMessages([]);
   }, [note?.id, note?.agentChatId, setMessages]);
@@ -183,6 +195,33 @@ export function NoteAgentPanel({
     }
   }, [creatingChat, isStreaming, loading, messages]);
 
+  useEffect(() => {
+    const action = pendingActionRef.current;
+    if (!action || loading || creatingChat || isStreaming) return;
+    if (action !== "polish" && action !== "translate" && action !== "continue") return;
+
+    const completedMessage = messages
+      .filter(
+        (item) =>
+          item.role === "assistant" &&
+          !item.isStreaming &&
+          item.content.trim().length > 0 &&
+          !autoAppliedMessageIdsRef.current.has(item.id),
+      )
+      .pop();
+    if (!completedMessage) return;
+
+    const markdown = buildAgentResultMarkdown(completedMessage.content);
+    if (!markdown) return;
+
+    autoAppliedMessageIdsRef.current.add(completedMessage.id);
+    pendingActionRef.current = null;
+
+    const mode = action === "continue" ? "append" : "replace";
+    onApplyResult(mode, markdown, completedMessage.id);
+    setNotice(mode === "append" ? "已追加到笔记" : "已替换笔记正文");
+  }, [creatingChat, isStreaming, loading, messages, onApplyResult]);
+
   const sendPromptToAgent = useCallback(
     async (prompt: string, displayContent?: string) => {
       if (!note) return false;
@@ -228,6 +267,7 @@ export function NoteAgentPanel({
         setKnowledgeCandidateError(null);
         setKnowledgeDialogOpen(false);
       }
+      pendingActionRef.current = actionId;
       let filePath: string | undefined;
       if (isTauri()) {
         try {
@@ -242,8 +282,11 @@ export function NoteAgentPanel({
         buildAgentActionPrompt(actionId, note, filePath, knowledgeCategories, knowledgeTags),
         label,
       );
-      if (!sent && actionId === "extractKnowledge") {
-        pendingKnowledgeStartIndexRef.current = null;
+      if (!sent) {
+        if (actionId === "extractKnowledge") {
+          pendingKnowledgeStartIndexRef.current = null;
+        }
+        pendingActionRef.current = null;
       }
     },
     [knowledgeCategories, knowledgeTags, messages.length, note, sendPromptToAgent],
@@ -258,12 +301,11 @@ export function NoteAgentPanel({
   }, [draft, note, sendPromptToAgent]);
 
   const applyResult = useCallback(
-    (mode: "append" | "replace", message: UIMessage) => {
+    (mode: "append" | "replace", message: UIMessage, skipConfirm = false) => {
       const markdown = buildAgentResultMarkdown(message.content);
       if (!markdown) return;
-      if (mode === "replace" && !window.confirm("用这段 Agent 结果替换当前笔记正文？")) return;
+      if (!skipConfirm && mode === "replace" && !window.confirm("用这段 Agent 结果替换当前笔记正文？")) return;
       onApplyResult(mode, markdown, message.id);
-      setNotice(mode === "append" ? "已追加到笔记" : "已替换笔记正文");
     },
     [onApplyResult],
   );
@@ -341,7 +383,7 @@ export function NoteAgentPanel({
               aria-label="停止生成"
               title="停止生成"
               onClick={stop}
-              className="grid h-7 w-7 place-items-center rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground"
+              className="grid h-7 w-7 place-items-center rounded-lg text-destructive hover:bg-destructive/10"
             >
               <Square className="h-3.5 w-3.5" />
             </button>
@@ -355,9 +397,8 @@ export function NoteAgentPanel({
         onAction={runAction}
       />
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-2.5 py-2.5 scrollbar-thin">
+      <div className="min-h-0 flex-1 overflow-y-auto p-3 scrollbar-thin">
         <AgentChat
-          note={note}
           messages={messages}
           loading={loading}
           historyError={historyError}
@@ -365,8 +406,14 @@ export function NoteAgentPanel({
           isStreaming={isStreaming}
           creatingChat={creatingChat}
           appliedMessageIds={note?.appliedAgentMessageIds ?? []}
+          autoAppliedMessageIds={autoAppliedMessageIdsRef.current}
+          pendingAction={pendingActionRef.current}
           onAppend={(message) => applyResult("append", message)}
           onReplace={(message) => applyResult("replace", message)}
+          onAutoTag={(tags) => {
+            onAutoTag?.(tags);
+            setNotice(`已添加标签：${tags.join("、")}`);
+          }}
           onCopy={copyResult}
           onDismissStreamError={dismissStreamError}
         />
@@ -387,8 +434,8 @@ export function NoteAgentPanel({
         onIgnore={ignoreKnowledgeCandidate}
       />
 
-      <div className="shrink-0 p-2.5">
-        <div className="flex min-h-10 items-end gap-2 rounded-xl border border-border/75 bg-background px-2.5 py-2 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
+      <div className="shrink-0 p-2">
+        <div className="flex min-h-[52px] items-end gap-1.5 rounded-xl border border-border/75 bg-background px-2.5 py-1.5 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
           <textarea
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
@@ -399,20 +446,29 @@ export function NoteAgentPanel({
               }
             }}
             disabled={!note || creatingChat}
-            className="min-h-5 flex-1 resize-none bg-transparent text-[12px] leading-5 outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
-            rows={1}
+            className="min-h-[36px] flex-1 resize-none bg-transparent text-[12px] leading-5 outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
+            rows={2}
             placeholder="问当前笔记、总结内容或提取知识点..."
           />
-          <Button
+          <button
             type="button"
-            size="icon"
-            aria-label="发送"
-            disabled={!note || !draft.trim() || creatingChat || isStreaming}
-            onClick={sendDraft}
-            className="h-7 w-7 rounded-lg bg-foreground text-background hover:bg-foreground/90 disabled:bg-muted disabled:text-muted-foreground"
+            aria-label={isStreaming ? "停止生成" : "发送"}
+            disabled={!isStreaming && (!note || !draft.trim() || creatingChat)}
+            onClick={isStreaming ? stop : sendDraft}
+            className={`grid h-6 w-6 shrink-0 place-items-center rounded-lg transition-colors ${
+              isStreaming
+                ? "text-destructive hover:bg-destructive/10"
+                : "bg-foreground text-background hover:bg-foreground/90 disabled:bg-muted disabled:text-muted-foreground"
+            }`}
           >
-            {creatingChat ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
-          </Button>
+            {isStreaming ? (
+              <Square className="h-3 w-3" />
+            ) : creatingChat ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <Send className="h-3 w-3" />
+            )}
+          </button>
         </div>
       </div>
     </aside>
@@ -577,7 +633,6 @@ function KnowledgeCandidateCard({
 }
 
 function AgentChat({
-  note,
   messages,
   loading,
   historyError,
@@ -585,12 +640,14 @@ function AgentChat({
   isStreaming,
   creatingChat,
   appliedMessageIds,
+  autoAppliedMessageIds,
+  pendingAction,
   onAppend,
   onReplace,
+  onAutoTag,
   onCopy,
   onDismissStreamError,
 }: {
-  note: OperationNote | null;
   messages: UIMessage[];
   loading: boolean;
   historyError: string | null;
@@ -598,15 +655,16 @@ function AgentChat({
   isStreaming: boolean;
   creatingChat: boolean;
   appliedMessageIds: string[];
+  autoAppliedMessageIds: Set<string>;
+  pendingAction: Exclude<NoteAiActionId, "freeform"> | null;
   onAppend: (message: UIMessage) => void;
   onReplace: (message: UIMessage) => void;
+  onAutoTag: (tags: string[]) => void;
   onCopy: (message: UIMessage) => void;
   onDismissStreamError: () => void;
 }) {
-  const hasMessages = messages.length > 0;
-
   return (
-    <div className="space-y-2.5">
+    <div className="space-y-3">
       {historyError ? (
         <InlineNotice>会话历史加载失败：{historyError}</InlineNotice>
       ) : null}
@@ -614,11 +672,7 @@ function AgentChat({
         <InlineNotice onClose={onDismissStreamError}>消息过大或连接异常，请缩短内容后重试。</InlineNotice>
       ) : null}
 
-      {!hasMessages && !loading ? (
-        <AssistantHint
-          text={note ? `当前笔记：${note.title}。可以直接提问，也可以用下面的快捷功能。` : "先选择或新建一篇笔记。"}
-        />
-      ) : null}
+
 
       {loading ? <AssistantHint text="正在读取这篇笔记的 Agent 会话..." loading /> : null}
 
@@ -627,8 +681,11 @@ function AgentChat({
           key={message.id}
           message={message}
           applied={appliedMessageIds.includes(message.id)}
+          autoApplied={autoAppliedMessageIds.has(message.id)}
+          pendingAction={pendingAction}
           onAppend={onAppend}
           onReplace={onReplace}
+          onAutoTag={onAutoTag}
           onCopy={onCopy}
         />
       ))}
@@ -670,6 +727,42 @@ function QuickActionSection({
           <Database className="h-4 w-4 shrink-0 text-muted-foreground" />
           <span className="min-w-0 truncate">提取知识点</span>
         </button>
+        <button
+          type="button"
+          disabled={!note || disabled}
+          onClick={() => onAction("polish")}
+          className="flex h-9 items-center gap-2 rounded-lg border border-border/70 bg-background px-2.5 text-left text-[11.5px] font-medium text-foreground/82 transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+        >
+          <PenLine className="h-4 w-4 shrink-0 text-muted-foreground" />
+          <span className="min-w-0 truncate">润色优化</span>
+        </button>
+        <button
+          type="button"
+          disabled={!note || disabled}
+          onClick={() => onAction("translate")}
+          className="flex h-9 items-center gap-2 rounded-lg border border-border/70 bg-background px-2.5 text-left text-[11.5px] font-medium text-foreground/82 transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+        >
+          <Languages className="h-4 w-4 shrink-0 text-muted-foreground" />
+          <span className="min-w-0 truncate">翻译</span>
+        </button>
+        <button
+          type="button"
+          disabled={!note || disabled}
+          onClick={() => onAction("continue")}
+          className="flex h-9 items-center gap-2 rounded-lg border border-border/70 bg-background px-2.5 text-left text-[11.5px] font-medium text-foreground/82 transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+        >
+          <Pen className="h-4 w-4 shrink-0 text-muted-foreground" />
+          <span className="min-w-0 truncate">续写扩展</span>
+        </button>
+        <button
+          type="button"
+          disabled={!note || disabled}
+          onClick={() => onAction("autoTag")}
+          className="flex h-9 items-center gap-2 rounded-lg border border-border/70 bg-background px-2.5 text-left text-[11.5px] font-medium text-foreground/82 transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+        >
+          <Tags className="h-4 w-4 shrink-0 text-muted-foreground" />
+          <span className="min-w-0 truncate">自动标签</span>
+        </button>
       </div>
     </div>
   );
@@ -678,14 +771,20 @@ function QuickActionSection({
 function ChatBubble({
   message,
   applied,
+  autoApplied,
+  pendingAction,
   onAppend,
   onReplace,
+  onAutoTag,
   onCopy,
 }: {
   message: UIMessage;
   applied: boolean;
+  autoApplied: boolean;
+  pendingAction: Exclude<NoteAiActionId, "freeform"> | null;
   onAppend: (message: UIMessage) => void;
   onReplace: (message: UIMessage) => void;
+  onAutoTag: (tags: string[]) => void;
   onCopy: (message: UIMessage) => void;
 }) {
   if (message.kind === "trace") {
@@ -710,21 +809,32 @@ function ChatBubble({
 
   const isUser = message.role === "user";
   const isKnowledgeResult = !isUser && isKnowledgeJsonCandidate(message.content);
+  const isAutoTagResult = !isUser && pendingAction === "autoTag";
+  const isAutoApplyResult = !isUser && autoApplied;
   const canApply =
     !isUser &&
     message.role === "assistant" &&
     !message.isStreaming &&
     message.content.trim().length > 0 &&
-    !isKnowledgeResult;
+    !isKnowledgeResult &&
+    !isAutoTagResult &&
+    !isAutoApplyResult;
+
+  const parseAutoTagContent = (content: string): string[] =>
+    content
+      .split(/[,，、\n]/)
+      .map((t) => t.trim().replace(/^[\d.]+\s*/, ""))
+      .filter(Boolean)
+      .slice(0, 3);
 
   return (
-    <div className={cn("flex", isUser ? "justify-end" : "justify-start")}>
+    <div>
       <div
         className={cn(
-          "max-w-[90%] whitespace-pre-wrap rounded-xl px-2.5 py-2 text-[11.5px] leading-5",
+          "whitespace-pre-wrap break-words text-xs leading-relaxed",
           isUser
-            ? "bg-foreground text-background"
-            : "border border-border/70 bg-background text-foreground/86",
+            ? "bg-sidebar-accent rounded-lg px-3 py-2 text-foreground w-fit"
+            : "text-muted-foreground",
         )}
       >
         {message.reasoning ? (
@@ -738,8 +848,29 @@ function ChatBubble({
           : isKnowledgeResult
             ? "已生成候选知识点，请在弹窗中确认保存。"
             : message.content || (message.isStreaming ? "生成中..." : "")}
+        {isAutoApplyResult && !message.isStreaming ? (
+          <div className="mt-2 flex flex-wrap gap-1.5 border-t border-border/40 pt-2">
+            <span className="inline-flex h-7 items-center gap-1 rounded-md border border-[#1f9d7a]/25 bg-[#1f9d7a]/8 px-2 text-[11px] text-[#11745a]">
+              <Check className="h-3.5 w-3.5" />
+              已应用
+            </span>
+            <MiniAction label="复制" onClick={() => onCopy(message)}>
+              <Copy className="h-3.5 w-3.5" />
+            </MiniAction>
+          </div>
+        ) : null}
+        {isAutoTagResult && !message.isStreaming ? (
+          <div className="mt-2 flex flex-wrap gap-1.5 border-t border-border/40 pt-2">
+            <MiniAction
+              label="添加标签"
+              onClick={() => onAutoTag(parseAutoTagContent(message.content))}
+            >
+              <Tags className="h-3.5 w-3.5" />
+            </MiniAction>
+          </div>
+        ) : null}
         {canApply ? (
-          <div className="mt-2 flex flex-wrap gap-1.5 border-t border-border/60 pt-2">
+          <div className="mt-2 flex flex-wrap gap-1.5 border-t border-border/40 pt-2">
             <MiniAction label={applied ? "已追加" : "追加"} disabled={applied} onClick={() => onAppend(message)}>
               <Clipboard className="h-3.5 w-3.5" />
             </MiniAction>
@@ -758,13 +889,9 @@ function ChatBubble({
 
 function AssistantHint({ text, loading = false }: { text: string; loading?: boolean }) {
   return (
-    <div className="flex justify-start">
-      <div className="max-w-[90%] rounded-xl border border-border/70 bg-background px-2.5 py-2 text-[11.5px] leading-5 text-muted-foreground">
-        <span className="inline-flex items-center gap-2">
-          {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Bot className="h-3.5 w-3.5" />}
-          {text}
-        </span>
-      </div>
+    <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+      {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Bot className="h-3 w-3" />}
+      <span>{text}</span>
     </div>
   );
 }
@@ -777,7 +904,7 @@ function InlineNotice({
   onClose?: () => void;
 }) {
   return (
-    <div className="flex items-start gap-2 rounded-lg border border-border/70 bg-background px-3 py-2 text-[11.5px] leading-5 text-muted-foreground">
+    <div className="flex items-start gap-2 text-xs text-muted-foreground">
       <span className="min-w-0 flex-1">{children}</span>
       {onClose ? (
         <button

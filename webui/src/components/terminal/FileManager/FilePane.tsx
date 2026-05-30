@@ -39,6 +39,7 @@ export interface UnifiedFileItem {
   size: number | null;
   modified: string | null;
   permissions: string | null;
+  _rawFile?: File;
 }
 
 interface Props {
@@ -65,6 +66,8 @@ interface Props {
   side: "local" | "remote";
   onSelectionChange?: (paths: Set<string>) => void;
   onFocus?: () => void;
+  onDropFiles?: (files: UnifiedFileItem[], fromSide: "local" | "remote" | "system") => void;
+  isTransferring?: boolean;
 }
 
 function formatSize(size: number | null): string {
@@ -165,12 +168,22 @@ export function FilePane({
   side,
   onSelectionChange,
   onFocus,
+  onDropFiles,
+  isTransferring,
 }: Props) {
   const [editing, setEditing] = useState(false);
   const [editPath, setEditPath] = useState(currentPath);
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
   const lastSelectedIndexRef = useRef(-1);
   const [searchQuery, setSearchQuery] = useState("");
+  const [isDragOver, setIsDragOver] = useState(false);
+  const dragCounterRef = useRef(0);
+
+  const defaultColWidths: Record<string, number> = side === "remote"
+    ? { icon: 28, name: 200, size: 80, permissions: 96, modified: 140 }
+    : { icon: 28, name: 200, size: 80, modified: 140 };
+  const [colWidths, setColWidths] = useState<Record<string, number>>(defaultColWidths);
+  const resizeRef = useRef<{ key: string; startX: number; startWidth: number } | null>(null);
 
   const iconMap = useFileIcons(files);
 
@@ -224,6 +237,65 @@ export function FilePane({
       }
     },
     [displayFiles],
+  );
+
+  const handleDragEnter = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    dragCounterRef.current++;
+    if (dragCounterRef.current === 1) {
+      setIsDragOver(true);
+    }
+  }, []);
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+  }, []);
+
+  const handleDragLeave = useCallback(() => {
+    dragCounterRef.current = Math.max(0, dragCounterRef.current - 1);
+    if (dragCounterRef.current === 0) {
+      setIsDragOver(false);
+    }
+  }, []);
+
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      dragCounterRef.current = 0;
+      setIsDragOver(false);
+      if (!onDropFiles) return;
+      const sftpData = e.dataTransfer.getData("application/x-sftp-files");
+      if (sftpData) {
+        try {
+          const parsed = JSON.parse(sftpData);
+          onDropFiles(parsed.files, parsed.side);
+        } catch (err) {
+          console.error("[FilePane] failed to parse drag data:", err);
+        }
+        return;
+      }
+      if (e.dataTransfer.files.length > 0) {
+        const files: UnifiedFileItem[] = [];
+        for (let i = 0; i < e.dataTransfer.files.length; i++) {
+          const f = e.dataTransfer.files[i];
+          const filePath = (f as File & { path?: string }).path;
+          files.push({
+            name: f.name,
+            path: filePath && filePath.includes(":") ? filePath : f.name,
+            isDir: false,
+            size: f.size,
+            modified: null,
+            permissions: null,
+            _rawFile: filePath ? undefined : f,
+          });
+        }
+        if (files.length > 0) {
+          onDropFiles(files, "system");
+        }
+      }
+    },
+    [onDropFiles],
   );
 
   const getSelectedFilesForContextMenu = useCallback(
@@ -290,10 +362,14 @@ export function FilePane({
 
   return (
     <div
-      className="flex h-full flex-col outline-none"
+      className="flex h-full flex-col outline-none relative"
       tabIndex={0}
       onKeyDown={handleKeyDown}
       onFocus={onFocus}
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
     >
       <div className="flex h-8 shrink-0 items-center gap-1 border-b px-2 bg-muted/20">
         <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider shrink-0">
@@ -459,6 +535,7 @@ export function FilePane({
             <ContextMenuTrigger asChild>
               <table
                 className="w-full text-xs"
+                style={{ tableLayout: "fixed", minWidth: side === "remote" ? 544 : 448 }}
                 onClick={(e) => {
                   if (
                     e.target === e.currentTarget ||
@@ -469,15 +546,89 @@ export function FilePane({
                   }
                 }}
               >
+                <colgroup>
+                  <col style={{ width: colWidths.icon }} />
+                  <col style={{ width: colWidths.name }} />
+                  <col style={{ width: colWidths.size }} />
+                  {side === "remote" && (
+                    <col style={{ width: colWidths.permissions }} />
+                  )}
+                  <col style={{ width: colWidths.modified }} />
+                </colgroup>
                 <thead className="sticky top-0 bg-background z-10">
                   <tr className="border-b text-left text-muted-foreground">
-                    <th className="w-7 px-1.5 py-1" />
-                    <th className="px-1.5 py-1 font-medium">名称</th>
-                    <th className="w-20 px-1.5 py-1 font-medium">大小</th>
+                    <th className="px-1.5 py-1" />
+                    <th className="px-1.5 py-1 font-medium relative group/name">
+                      名称
+                      <span
+                        className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-primary/40 active:bg-primary/60"
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          resizeRef.current = { key: "name", startX: e.clientX, startWidth: colWidths.name };
+                          const onMove = (ev: MouseEvent) => {
+                            if (!resizeRef.current) return;
+                            const delta = ev.clientX - resizeRef.current.startX;
+                            setColWidths((w) => ({ ...w, name: Math.max(60, resizeRef.current!.startWidth + delta) }));
+                          };
+                          const onUp = () => {
+                            resizeRef.current = null;
+                            document.removeEventListener("mousemove", onMove);
+                            document.removeEventListener("mouseup", onUp);
+                          };
+                          document.addEventListener("mousemove", onMove);
+                          document.addEventListener("mouseup", onUp);
+                        }}
+                      />
+                    </th>
+                    <th className="px-1.5 py-1 font-medium relative">
+                      大小
+                      <span
+                        className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-primary/40 active:bg-primary/60"
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          resizeRef.current = { key: "size", startX: e.clientX, startWidth: colWidths.size };
+                          const onMove = (ev: MouseEvent) => {
+                            if (!resizeRef.current) return;
+                            const delta = ev.clientX - resizeRef.current.startX;
+                            setColWidths((w) => ({ ...w, size: Math.max(40, resizeRef.current!.startWidth + delta) }));
+                          };
+                          const onUp = () => {
+                            resizeRef.current = null;
+                            document.removeEventListener("mousemove", onMove);
+                            document.removeEventListener("mouseup", onUp);
+                          };
+                          document.addEventListener("mousemove", onMove);
+                          document.addEventListener("mouseup", onUp);
+                        }}
+                      />
+                    </th>
                     {side === "remote" && (
-                      <th className="w-24 px-1.5 py-1 font-medium">权限</th>
+                      <th className="px-1.5 py-1 font-medium relative">
+                        权限
+                        <span
+                          className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-primary/40 active:bg-primary/60"
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            resizeRef.current = { key: "permissions", startX: e.clientX, startWidth: colWidths.permissions };
+                            const onMove = (ev: MouseEvent) => {
+                              if (!resizeRef.current) return;
+                              const delta = ev.clientX - resizeRef.current.startX;
+                              setColWidths((w) => ({ ...w, permissions: Math.max(40, resizeRef.current!.startWidth + delta) }));
+                            };
+                            const onUp = () => {
+                              resizeRef.current = null;
+                              document.removeEventListener("mousemove", onMove);
+                              document.removeEventListener("mouseup", onUp);
+                            };
+                            document.addEventListener("mousemove", onMove);
+                            document.addEventListener("mouseup", onUp);
+                          }}
+                        />
+                      </th>
                     )}
-                    <th className="w-32 px-1.5 py-1 font-medium">修改时间</th>
+                    <th className="px-1.5 py-1 font-medium">
+                      修改时间
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -504,6 +655,17 @@ export function FilePane({
                       onCreateFolder={onCreateFolder}
                       onCreateFile={onCreateFile}
                       onUploadByPicker={onUploadByPicker}
+                      draggable={!isTransferring}
+                      onDragStart={(e) => {
+                        const filesToDrag = selectedPaths.has(file.path)
+                          ? displayFiles.filter((f) => selectedPaths.has(f.path))
+                          : [file];
+                        e.dataTransfer.setData(
+                          "application/x-sftp-files",
+                          JSON.stringify({ side, files: filesToDrag }),
+                        );
+                        e.dataTransfer.effectAllowed = "copy";
+                      }}
                     />
                   ))}
                 </tbody>
@@ -551,6 +713,13 @@ export function FilePane({
           </>
         )}
       </div>
+      {isDragOver && (
+        <div className="absolute inset-0 z-20 flex items-center justify-center bg-primary/10 border-2 border-dashed border-primary/40 rounded-sm pointer-events-none">
+          <span className="text-sm font-medium text-primary">
+            {side === "remote" ? "拖放以上传" : "拖放以下载"}
+          </span>
+        </div>
+      )}
     </div>
   );
 }
@@ -574,6 +743,8 @@ function FileRow({
   onCreateFolder,
   onCreateFile,
   onUploadByPicker,
+  draggable,
+  onDragStart,
 }: {
   file: UnifiedFileItem;
   side: "local" | "remote";
@@ -593,11 +764,15 @@ function FileRow({
   onCreateFolder?: () => void;
   onCreateFile?: () => void;
   onUploadByPicker?: (() => void) | undefined;
+  draggable?: boolean;
+  onDragStart?: (e: React.DragEvent<HTMLTableRowElement>) => void;
 }) {
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
         <tr
+          draggable={draggable}
+          onDragStart={onDragStart}
           className={`group cursor-pointer border-b border-transparent transition-colors ${
             selected ? "bg-accent/70" : "hover:bg-accent/50"
           }`}
@@ -613,18 +788,18 @@ function FileRow({
               <File className="h-4 w-4 text-muted-foreground" />
             )}
           </td>
-          <td className="max-w-[200px] truncate px-1.5 py-1 font-medium">
+          <td className="truncate px-1.5 py-1 font-medium" title={file.name}>
             {file.name}
           </td>
-          <td className="px-1.5 py-1 text-muted-foreground">
+          <td className="truncate px-1.5 py-1 text-muted-foreground">
             {file.isDir ? "-" : formatSize(file.size)}
           </td>
           {side === "remote" && (
-            <td className="px-1.5 py-1 font-mono text-muted-foreground">
+            <td className="truncate px-1.5 py-1 font-mono text-muted-foreground">
               {file.permissions ?? "-"}
             </td>
           )}
-          <td className="px-1.5 py-1 text-muted-foreground">
+          <td className="truncate px-1.5 py-1 text-muted-foreground">
             {file.modified ?? "-"}
           </td>
         </tr>

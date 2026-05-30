@@ -7,6 +7,7 @@ use tokio::sync::{Notify, RwLock};
 use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum BatchTransferStatus {
     Pending,
     Connecting,
@@ -17,12 +18,14 @@ pub enum BatchTransferStatus {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FileTransferProgress {
     pub bytes_transferred: u64,
     pub total_bytes: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct BatchTransferProgress {
     pub batch_id: String,
     pub session_id: String,

@@ -2,6 +2,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use tokio::io::AsyncWriteExt;
 
 use crate::terminal::approval::{ApprovalVerdict, PendingCommand};
 use crate::terminal::config::{AuthConfig, ConnectionConfig, Protocol};
@@ -12,7 +13,7 @@ use crate::terminal::session::{
 };
 use crate::terminal::shell::local::LocalShell;
 use crate::terminal::sftp::batch::{
-    BatchTransferControl, BatchTransferProgress, BatchTransferStatus,
+    BatchTransferControl, BatchTransferProgress, BatchTransferStatus, FileTransferProgress,
 };
 use crate::terminal::sftp::client::{FileInfo, SftpClient};
 use crate::terminal::sftp::client as sftp_client;
@@ -346,7 +347,7 @@ pub async fn ssh_open_sftp(
         .await
         .map_err(|e| e.to_string())?;
 
-    let sftp_client = SftpClient::from_session(sftp_session);
+    let sftp_client = SftpClient::from_session(sftp_session, ssh_client);
 
     let new_session_id = uuid::Uuid::new_v4().to_string();
     let session = Session {
@@ -632,8 +633,20 @@ pub async fn sftp_list(
         .get_handle(&session_id)
         .await
         .ok_or_else(|| TerminalError::SessionNotFound(session_id).to_string())?;
-    let client = get_sftp_client(&handle)?;
-    client.list_dir(&path).await.map_err(|e| e.to_string())
+    match &handle {
+        SessionHandle::Sftp(client) => {
+            client.list_dir(&path).await.map_err(|e| e.to_string())
+        }
+        SessionHandle::Ssh(ssh_client) => {
+            let sftp_session = ssh_client
+                .open_sftp()
+                .await
+                .map_err(|e| e.to_string())?;
+            let sftp_client = SftpClient::from_session(sftp_session, Arc::clone(ssh_client));
+            sftp_client.list_dir(&path).await.map_err(|e| e.to_string())
+        }
+        _ => Err("Not an SFTP or SSH session".into()),
+    }
 }
 
 #[tauri::command]
@@ -743,21 +756,294 @@ pub async fn sftp_download(
 
 #[tauri::command]
 pub async fn sftp_upload(
+    app_handle: AppHandle,
     state: State<'_, TerminalState>,
     session_id: String,
     remote_path: String,
     data: Vec<u8>,
+    task_id: Option<String>,
 ) -> Result<(), String> {
     let handle = state
         .manager
         .get_handle(&session_id)
         .await
-        .ok_or_else(|| TerminalError::SessionNotFound(session_id).to_string())?;
+        .ok_or_else(|| TerminalError::SessionNotFound(session_id.clone()).to_string())?;
     let client = get_sftp_client(&handle)?;
-    client
-        .upload(&remote_path, data)
+    if let Some(tid) = task_id {
+        let sftp = client.create_sftp_channel().await.map_err(|e| e.to_string())?;
+
+        let cancel_token = CancellationToken::new();
+        {
+            let mut cancels = state.transfer_cancels.write().await;
+            cancels.insert(tid.clone(), cancel_token.clone());
+        }
+
+        let total = data.len() as u64;
+        let chunk_size: usize = 32768;
+        let mut offset: usize = 0;
+        let mut last_emit_time = std::time::Instant::now();
+        let mut last_emit_bytes: u64 = 0;
+
+        let mut file = sftp.create(&remote_path).await.map_err(|e| {
+            TerminalError::SftpOperation(format!("create failed: {}", e)).to_string()
+        })?;
+
+        while offset < data.len() {
+            if cancel_token.is_cancelled() {
+                return Err("Transfer cancelled".to_string());
+            }
+            let end = std::cmp::min(offset + chunk_size, data.len());
+            file.write_all(&data[offset..end]).await.map_err(|e| {
+                TerminalError::SftpOperation(format!("write failed: {}", e)).to_string()
+            })?;
+            offset = end;
+
+            let now = std::time::Instant::now();
+            let elapsed = now.duration_since(last_emit_time);
+            if elapsed >= std::time::Duration::from_millis(200) || offset == data.len() {
+                let speed = if elapsed.as_secs_f64() > 0.0 {
+                    ((offset as u64 - last_emit_bytes) as f64 / elapsed.as_secs_f64()) as u64
+                } else {
+                    0
+                };
+                let percentage = if total > 0 {
+                    (offset as u64 * 100 / total) as u32
+                } else {
+                    100
+                };
+                let event_name = format!("sftp:transfer:{}:{}", session_id, tid);
+                let _ = app_handle.emit(
+                    &event_name,
+                    serde_json::json!({
+                        "taskId": tid,
+                        "sessionId": session_id,
+                        "type": "upload",
+                        "path": remote_path,
+                        "bytesTransferred": offset as u64,
+                        "totalBytes": total,
+                        "percentage": percentage,
+                        "speed": speed,
+                    }),
+                );
+                last_emit_time = now;
+                last_emit_bytes = offset as u64;
+            }
+        }
+
+        file.shutdown().await.map_err(|e| {
+            TerminalError::SftpOperation(format!("close failed: {}", e)).to_string()
+        })?;
+
+        drop(sftp);
+
+        {
+            let mut cancels = state.transfer_cancels.write().await;
+            cancels.remove(&tid);
+        }
+
+        Ok(())
+    } else {
+        client
+            .upload(&remote_path, data)
+            .await
+            .map_err(|e| e.to_string())
+    }
+}
+
+#[tauri::command]
+pub async fn sftp_upload_file(
+    app_handle: AppHandle,
+    state: State<'_, TerminalState>,
+    session_id: String,
+    local_path: String,
+    remote_path: String,
+    task_id: String,
+) -> Result<(), String> {
+    let handle = state
+        .manager
+        .get_handle(&session_id)
         .await
-        .map_err(|e| e.to_string())
+        .ok_or_else(|| TerminalError::SessionNotFound(session_id.clone()).to_string())?;
+    let client = get_sftp_client(&handle)?;
+
+    let sftp = client.create_sftp_channel().await.map_err(|e| e.to_string())?;
+
+    let cancel_token = CancellationToken::new();
+    {
+        let mut cancels = state.transfer_cancels.write().await;
+        cancels.insert(task_id.clone(), cancel_token.clone());
+    }
+
+    let (progress_tx, mut progress_rx) =
+        tokio::sync::mpsc::channel::<FileTransferProgress>(100);
+
+    let app_clone = app_handle.clone();
+    let session_id_clone = session_id.clone();
+    let task_id_clone = task_id.clone();
+    let remote_path_clone = remote_path.clone();
+    let progress_task = tokio::spawn(async move {
+        let mut last_emit_time = std::time::Instant::now();
+        let mut last_emit_bytes: u64 = 0;
+        while let Some(progress) = progress_rx.recv().await {
+            let now = std::time::Instant::now();
+            let elapsed = now.duration_since(last_emit_time);
+            if elapsed >= std::time::Duration::from_millis(200) {
+                let speed = if elapsed.as_secs_f64() > 0.0 {
+                    ((progress.bytes_transferred - last_emit_bytes) as f64
+                        / elapsed.as_secs_f64()) as u64
+                } else {
+                    0
+                };
+                let percentage = if progress.total_bytes > 0 {
+                    (progress.bytes_transferred * 100 / progress.total_bytes) as u32
+                } else {
+                    0
+                };
+                let event_name = format!("sftp:transfer:{}:{}", session_id_clone, task_id_clone);
+                let _ = app_clone.emit(
+                    &event_name,
+                    serde_json::json!({
+                        "taskId": task_id_clone,
+                        "sessionId": session_id_clone,
+                        "type": "upload",
+                        "path": remote_path_clone,
+                        "bytesTransferred": progress.bytes_transferred,
+                        "totalBytes": progress.total_bytes,
+                        "percentage": percentage,
+                        "speed": speed,
+                    }),
+                );
+                last_emit_time = now;
+                last_emit_bytes = progress.bytes_transferred;
+            }
+        }
+    });
+
+    let result = sftp_client::upload_file_streaming(
+        &sftp,
+        &local_path,
+        &remote_path,
+        Some(progress_tx),
+        Some(cancel_token),
+        None,
+    )
+    .await;
+
+    drop(sftp);
+
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(1), progress_task).await;
+
+    {
+        let mut cancels = state.transfer_cancels.write().await;
+        cancels.remove(&task_id);
+    }
+
+    result.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn sftp_download_file(
+    app_handle: AppHandle,
+    state: State<'_, TerminalState>,
+    session_id: String,
+    remote_path: String,
+    local_path: String,
+    task_id: String,
+) -> Result<(), String> {
+    let handle = state
+        .manager
+        .get_handle(&session_id)
+        .await
+        .ok_or_else(|| TerminalError::SessionNotFound(session_id.clone()).to_string())?;
+    let client = get_sftp_client(&handle)?;
+
+    let sftp = client.create_sftp_channel().await.map_err(|e| e.to_string())?;
+
+    let cancel_token = CancellationToken::new();
+    {
+        let mut cancels = state.transfer_cancels.write().await;
+        cancels.insert(task_id.clone(), cancel_token.clone());
+    }
+
+    let (progress_tx, mut progress_rx) =
+        tokio::sync::mpsc::channel::<FileTransferProgress>(100);
+
+    let app_clone = app_handle.clone();
+    let session_id_clone = session_id.clone();
+    let task_id_clone = task_id.clone();
+    let remote_path_clone = remote_path.clone();
+    let progress_task = tokio::spawn(async move {
+        let mut last_emit_time = std::time::Instant::now();
+        let mut last_emit_bytes: u64 = 0;
+        while let Some(progress) = progress_rx.recv().await {
+            let now = std::time::Instant::now();
+            let elapsed = now.duration_since(last_emit_time);
+            if elapsed >= std::time::Duration::from_millis(200) {
+                let speed = if elapsed.as_secs_f64() > 0.0 {
+                    ((progress.bytes_transferred - last_emit_bytes) as f64
+                        / elapsed.as_secs_f64()) as u64
+                } else {
+                    0
+                };
+                let percentage = if progress.total_bytes > 0 {
+                    (progress.bytes_transferred * 100 / progress.total_bytes) as u32
+                } else {
+                    0
+                };
+                let event_name = format!("sftp:transfer:{}:{}", session_id_clone, task_id_clone);
+                let _ = app_clone.emit(
+                    &event_name,
+                    serde_json::json!({
+                        "taskId": task_id_clone,
+                        "sessionId": session_id_clone,
+                        "type": "download",
+                        "path": remote_path_clone,
+                        "bytesTransferred": progress.bytes_transferred,
+                        "totalBytes": progress.total_bytes,
+                        "percentage": percentage,
+                        "speed": speed,
+                    }),
+                );
+                last_emit_time = now;
+                last_emit_bytes = progress.bytes_transferred;
+            }
+        }
+    });
+
+    let result = sftp_client::download_file_streaming(
+        &sftp,
+        &remote_path,
+        &local_path,
+        Some(progress_tx),
+        Some(cancel_token),
+        None,
+    )
+    .await;
+
+    drop(sftp);
+
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(1), progress_task).await;
+
+    {
+        let mut cancels = state.transfer_cancels.write().await;
+        cancels.remove(&task_id);
+    }
+
+    result.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn sftp_cancel_transfer(
+    state: State<'_, TerminalState>,
+    task_id: String,
+) -> Result<(), String> {
+    let cancels = state.transfer_cancels.read().await;
+    if let Some(token) = cancels.get(&task_id) {
+        token.cancel();
+        Ok(())
+    } else {
+        Err(format!("Transfer task not found: {}", task_id))
+    }
 }
 
 fn connections_path() -> Result<PathBuf, String> {
@@ -1284,7 +1570,15 @@ pub async fn local_home_dir() -> Result<String, String> {
         .ok_or_else(|| "Cannot determine home directory".to_string())
 }
 
+#[tauri::command]
+pub async fn local_desktop_dir() -> Result<String, String> {
+    dirs::desktop_dir()
+        .map(|p| p.to_string_lossy().to_string())
+        .ok_or_else(|| "Cannot determine desktop directory".to_string())
+}
+
 #[derive(serde::Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct BatchSessionInfo {
     pub session_id: String,
     pub host: String,
@@ -1293,6 +1587,7 @@ pub struct BatchSessionInfo {
 }
 
 #[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct BatchUploadRequest {
     pub sessions: Vec<BatchSessionInfo>,
     pub files: Vec<String>,
@@ -1311,22 +1606,11 @@ pub async fn sftp_batch_upload(
     let retry_count: u32 = 2;
     let retry_delay_ms: u64 = 1000;
 
-    let mut sftp_clients: Vec<(BatchSessionInfo, Arc<SftpClient>)> = Vec::new();
+    let mut ssh_clients: Vec<(BatchSessionInfo, Arc<crate::terminal::ssh::client::SshClient>)> = Vec::new();
     for info in &request.sessions {
         let handle = state.manager.get_handle(&info.session_id).await;
         if let Some(SessionHandle::Ssh(ssh_client)) = handle {
-            match ssh_client.open_sftp().await {
-                Ok(sftp_session) => {
-                    let sftp_client = SftpClient::from_session(sftp_session);
-                    sftp_clients.push((info.clone(), Arc::new(sftp_client)));
-                }
-                Err(e) => {
-                    return Err(format!(
-                        "Failed to open SFTP for {}: {}",
-                        info.host, e
-                    ));
-                }
-            }
+            ssh_clients.push((info.clone(), ssh_client));
         } else {
             return Err(format!("SSH session not found for {}", info.host));
         }
@@ -1355,7 +1639,7 @@ pub async fn sftp_batch_upload(
     tokio::spawn(async move {
         let mut handles = Vec::new();
 
-        for (info, sftp_client) in sftp_clients {
+        for (info, ssh_client) in ssh_clients {
             if cancel_token.is_cancelled() {
                 break;
             }
@@ -1459,7 +1743,7 @@ pub async fn sftp_batch_upload(
                         Err(_) => break,
                     };
 
-                    let sftp_client_clone = sftp_client.clone();
+                    let ssh_client_clone = ssh_client.clone();
                     let app_handle_clone = app_handle.clone();
                     let batch_id_clone = batch_id.clone();
                     let session_id_clone = session_id.clone();
@@ -1507,7 +1791,7 @@ pub async fn sftp_batch_upload(
                                 tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
                             }
 
-                            match sftp_client_clone.create_sftp_channel().await {
+                            match ssh_client_clone.open_sftp().await {
                                 Ok(channel) => {
                                     let (progress_tx, progress_rx) =
                                         tokio::sync::mpsc::channel::<crate::terminal::sftp::batch::FileTransferProgress>(100);
@@ -1623,7 +1907,7 @@ pub async fn sftp_batch_upload(
                                     batch_id: batch_id_clone.clone(),
                                     session_id: session_id_clone.clone(),
                                     host: host_clone.clone(),
-                                    status: BatchTransferStatus::Transferring,
+                                    status: BatchTransferStatus::Completed,
                                     current_file: Some(filename_clone.clone()),
                                     files_completed: new_completed,
                                     files_total,
@@ -1886,7 +2170,15 @@ async fn download_dir_recursive(
     let entries = client.list_dir(remote_path).await?;
 
     for entry in &entries {
-        let local_entry_path = std::path::Path::new(local_path).join(&entry.name);
+        let sanitized_name = {
+            let invalid_chars = ['<', '>', ':', '"', '|', '?', '*'];
+            let result: String = entry.name.chars().map(|c| {
+                if invalid_chars.contains(&c) || (c as u32) <= 0x1F { '_' } else { c }
+            }).collect();
+            let trimmed = result.trim_end_matches(|c| c == ' ' || c == '.');
+            if trimmed.is_empty() { "_".to_string() } else { trimmed.to_string() }
+        };
+        let local_entry_path = std::path::Path::new(local_path).join(&sanitized_name);
         let local_entry_str = local_entry_path.to_string_lossy().to_string();
         let remote_entry_path = if remote_path.ends_with('/') {
             format!("{}{}", remote_path, entry.name)

@@ -4,12 +4,13 @@ import {
   Download,
   Plus,
   Search,
-  Server,
   X,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { saveMarkdownFile } from "@/lib/tauri";
+import { useLicense } from "@/hooks/useLicense";
 
 import { KnowledgeView } from "./KnowledgeView";
 import { NoteAgentPanel } from "./NoteAgentPanel";
@@ -41,9 +42,11 @@ const AGENT_PANEL_DEFAULT_WIDTH = 306;
 
 interface NotesViewProps {
   onSendToAgent?: (prompt: string) => void | Promise<void>;
+  createNoteTrigger?: number;
 }
 
-export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
+export function NotesView({ onSendToAgent: _onSendToAgent, createNoteTrigger }: NotesViewProps) {
+  const { licenseActive } = useLicense();
   const [notebooks, setNotebooks] = useState<Notebook[]>([]);
   const [activeNotebookId, setActiveNotebookId] = useState("");
   const [notes, setNotes] = useState<OperationNote[]>([]);
@@ -60,7 +63,7 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
   const [storageReady, setStorageReady] = useState(false);
   const [storageError, setStorageError] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
-  const [agentPanelCollapsed, setAgentPanelCollapsed] = useState(false);
+  const [agentPanelCollapsed, setAgentPanelCollapsed] = useState(true);
   const [agentPanelWidth, setAgentPanelWidth] = useState(AGENT_PANEL_DEFAULT_WIDTH);
   const dragRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const lastSavedSnapshotRef = useRef<string | null>(null);
@@ -259,6 +262,12 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
     [activeNotebook],
   );
 
+  useEffect(() => {
+    if (createNoteTrigger && createNoteTrigger > 0) {
+      createNote();
+    }
+  }, [createNoteTrigger, createNote]);
+
   const createNotebook = useCallback(() => {
     const name = window.prompt("笔记本名称", "新的笔记本")?.trim();
     if (!name) return;
@@ -343,20 +352,14 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
     setNotice("笔记本已删除");
   }, [activeNotebook, notebooks, notes]);
 
-  const exportActiveNote = useCallback(() => {
+  const exportActiveNote = useCallback(async () => {
     if (!activeNote) return;
-
-    const blob = new Blob([activeNote.contentMarkdown], {
-      type: "text/markdown;charset=utf-8",
-    });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `${safeFileName(activeNote.title)}.md`;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    URL.revokeObjectURL(url);
+    try {
+      const saved = await saveMarkdownFile(activeNote.title, activeNote.contentMarkdown);
+      if (saved) setNotice("已导出 Markdown");
+    } catch {
+      setNotice("导出失败");
+    }
   }, [activeNote]);
 
   const copyNoteMarkdown = useCallback(async (note: OperationNote) => {
@@ -391,18 +394,7 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
     setNotice("已复制一份笔记");
   }, []);
 
-  const editNoteTags = useCallback((note: OperationNote) => {
-    const raw = window.prompt("标签，用逗号或空格分隔", note.tags.join(", "));
-    if (raw === null) return;
-
-    const tags = Array.from(
-      new Set(
-        raw
-          .split(/[\s,，]+/)
-          .map((tag) => tag.trim())
-          .filter(Boolean),
-      ),
-    );
+  const editNoteTags = useCallback((note: OperationNote, tags: string[]) => {
     setNotes((current) =>
       current.map((n) =>
         n.id === note.id ? { ...n, tags, updatedAt: "刚刚" } : n,
@@ -829,19 +821,18 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
             >
               <Search className="h-3.5 w-3.5" />
             </IconButton>
-            <IconButton label="新建 SSH 记录" onClick={() => createNote("ssh")}>
-              <Server className="h-3.5 w-3.5" />
-            </IconButton>
             <IconButton label="导出 Markdown" disabled={!activeNote} onClick={exportActiveNote}>
               <Download className="h-3.5 w-3.5" />
             </IconButton>
-            <IconButton
-              label={agentPanelCollapsed ? "展开 Agent 联动" : "收起 Agent 联动"}
-              active={!agentPanelCollapsed}
-              onClick={() => setAgentPanelCollapsed((current) => !current)}
-            >
-              <Bot className="h-3.5 w-3.5" />
-            </IconButton>
+            {licenseActive && (
+              <IconButton
+                label={agentPanelCollapsed ? "展开 Agent 联动" : "收起 Agent 联动"}
+                active={!agentPanelCollapsed}
+                onClick={() => setAgentPanelCollapsed((current) => !current)}
+              >
+                <Bot className="h-3.5 w-3.5" />
+              </IconButton>
+            )}
           </div>
         </div>
 
@@ -933,6 +924,11 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
         onAgentChatIdChange={(agentChatId) => updateActiveNote({ agentChatId })}
         onApplyResult={applyAiResult}
         onSaveKnowledge={saveKnowledgeFromAgent}
+        onAutoTag={(tags) => {
+          if (!activeNote) return;
+          const merged = Array.from(new Set([...activeNote.tags, ...tags]));
+          updateActiveNote({ tags: merged });
+        }}
         onClearChat={() => updateActiveNote({ agentChatId: undefined })}
       />
     </div>
@@ -992,11 +988,6 @@ function IconButton({
       {children}
     </Button>
   );
-}
-
-function safeFileName(name: string): string {
-  const cleaned = name.trim().replace(/[\\/:*?"<>|]/g, "_").slice(0, 64);
-  return cleaned || "未命名笔记";
 }
 
 function ensureKnowledgeCategoryPath(

@@ -25,7 +25,8 @@
         "minWidth": 800,
         "minHeight": 600,
         "center": true,
-        "decorations": false
+        "decorations": false,
+        "dragDropEnabled": false
       }
     ]
   },
@@ -41,6 +42,14 @@
     ],
     "resources": [
       "resources/*"
+    ],
+    "fileAssociations": [
+      {
+        "ext": ["md", "markdown"],
+        "name": "Markdown Document",
+        "role": "Editor",
+        "mimeType": "text/markdown"
+      }
     ]
   }
 }

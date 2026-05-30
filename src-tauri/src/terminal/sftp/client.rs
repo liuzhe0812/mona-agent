@@ -13,6 +13,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::terminal::config::AuthConfig;
 use crate::terminal::error::TerminalError;
+use crate::terminal::ssh::client::SshClient;
 
 struct SftpClientHandler;
 
@@ -42,6 +43,7 @@ pub struct FileInfo {
 
 pub struct SftpClient {
     handle: Option<client::Handle<SftpClientHandler>>,
+    ssh_client: Option<Arc<SshClient>>,
     session: Arc<Mutex<Option<russh_sftp::client::SftpSession>>>,
 }
 
@@ -126,13 +128,18 @@ impl SftpClient {
 
         Ok(Self {
             handle: Some(handle),
+            ssh_client: None,
             session: Arc::new(Mutex::new(Some(sftp_session))),
         })
     }
 
-    pub fn from_session(sftp_session: russh_sftp::client::SftpSession) -> Self {
+    pub fn from_session(
+        sftp_session: russh_sftp::client::SftpSession,
+        ssh_client: Arc<SshClient>,
+    ) -> Self {
         Self {
             handle: None,
+            ssh_client: Some(ssh_client),
             session: Arc::new(Mutex::new(Some(sftp_session))),
         }
     }
@@ -269,8 +276,81 @@ impl SftpClient {
         let session = guard.as_ref().ok_or_else(|| {
             TerminalError::SftpOperation("SFTP session not connected".into())
         })?;
-        session.write(remote_path, &data).await.map_err(|e| {
-            TerminalError::SftpOperation(format!("upload failed: {}", e))
+        let mut file = session.create(remote_path).await.map_err(|e| {
+            TerminalError::SftpOperation(format!("create failed: {}", e))
+        })?;
+        file.write_all(&data).await.map_err(|e| {
+            TerminalError::SftpOperation(format!("write failed: {}", e))
+        })?;
+        file.shutdown().await.map_err(|e| {
+            TerminalError::SftpOperation(format!("close failed: {}", e))
+        })
+    }
+
+    pub async fn upload_with_progress(
+        &self,
+        app_handle: AppHandle,
+        session_id: String,
+        task_id: String,
+        remote_path: &str,
+        data: Vec<u8>,
+    ) -> Result<(), TerminalError> {
+        let guard = self.session.lock().await;
+        let sftp = guard.as_ref().ok_or_else(|| {
+            TerminalError::SftpOperation("SFTP session not connected".into())
+        })?;
+
+        let mut file = sftp.create(remote_path).await.map_err(|e| {
+            TerminalError::SftpOperation(format!("create failed: {}", e))
+        })?;
+
+        let total = data.len() as u64;
+        let chunk_size: usize = 32768;
+        let mut offset: usize = 0;
+        let mut last_emit_time = std::time::Instant::now();
+        let mut last_emit_bytes: u64 = 0;
+
+        while offset < data.len() {
+            let end = std::cmp::min(offset + chunk_size, data.len());
+            file.write_all(&data[offset..end]).await.map_err(|e| {
+                TerminalError::SftpOperation(format!("write failed: {}", e))
+            })?;
+            offset = end;
+
+            let now = std::time::Instant::now();
+            let elapsed = now.duration_since(last_emit_time);
+            if elapsed >= Duration::from_millis(200) || offset == data.len() {
+                let speed = if elapsed.as_secs_f64() > 0.0 {
+                    ((offset as u64 - last_emit_bytes) as f64 / elapsed.as_secs_f64()) as u64
+                } else {
+                    0
+                };
+                let percentage = if total > 0 {
+                    (offset as u64 * 100 / total) as u32
+                } else {
+                    100
+                };
+                let event_name = format!("sftp:transfer:{}:{}", session_id, task_id);
+                let _ = app_handle.emit(
+                    &event_name,
+                    serde_json::json!({
+                        "taskId": task_id,
+                        "sessionId": session_id,
+                        "type": "upload",
+                        "path": remote_path,
+                        "bytesTransferred": offset as u64,
+                        "totalBytes": total,
+                        "percentage": percentage,
+                        "speed": speed,
+                    }),
+                );
+                last_emit_time = now;
+                last_emit_bytes = offset as u64;
+            }
+        }
+
+        file.shutdown().await.map_err(|e| {
+            TerminalError::SftpOperation(format!("close failed: {}", e))
         })
     }
 
@@ -414,6 +494,9 @@ impl SftpClient {
     pub async fn create_sftp_channel(
         &self,
     ) -> Result<russh_sftp::client::SftpSession, TerminalError> {
+        if let Some(ssh) = &self.ssh_client {
+            return ssh.open_sftp().await;
+        }
         let handle = self.handle.as_ref().ok_or_else(|| {
             TerminalError::SftpOperation(
                 "No SSH handle available for channel creation".into(),
@@ -518,6 +601,26 @@ pub async fn upload_file_streaming(
     Ok(())
 }
 
+fn sanitize_filename(name: &str) -> String {
+    let invalid_chars = ['<', '>', ':', '"', '|', '?', '*'];
+    let result: String = name
+        .chars()
+        .map(|c| {
+            if invalid_chars.contains(&c) || (c as u32) <= 0x1F {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    let trimmed = result.trim_end_matches(|c| c == ' ' || c == '.');
+    if trimmed.is_empty() {
+        "_".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
 pub async fn download_file_streaming(
     sftp: &russh_sftp::client::SftpSession,
     remote_path: &str,
@@ -526,6 +629,27 @@ pub async fn download_file_streaming(
     cancel_token: Option<CancellationToken>,
     is_paused: Option<Arc<AtomicBool>>,
 ) -> Result<(), TerminalError> {
+    let local_path = std::path::Path::new(local_path).to_path_buf();
+    let local_path = if let Some(name) = local_path.file_name() {
+        let name_str = name.to_string_lossy();
+        let sanitized = sanitize_filename(&name_str);
+        if sanitized != name_str {
+            local_path.with_file_name(&sanitized)
+        } else {
+            local_path
+        }
+    } else {
+        local_path
+    };
+    if let Some(parent) = local_path.parent() {
+        tokio::fs::create_dir_all(parent).await.map_err(|e| {
+            TerminalError::SftpOperation(format!(
+                "Failed to create parent directory '{}': {}",
+                parent.display(),
+                e
+            ))
+        })?;
+    }
     let metadata = sftp.metadata(remote_path).await.map_err(|e| {
         TerminalError::SftpOperation(format!(
             "Failed to get remote file metadata: {}",
@@ -536,10 +660,11 @@ pub async fn download_file_streaming(
     let mut remote_file = sftp.open(remote_path).await.map_err(|e| {
         TerminalError::SftpOperation(format!("Failed to open remote file: {}", e))
     })?;
-    let mut local_file = tokio::fs::File::create(local_path).await.map_err(
+    let mut local_file = tokio::fs::File::create(&local_path).await.map_err(
         |e| {
             TerminalError::SftpOperation(format!(
-                "Failed to create local file: {}",
+                "Failed to create local file '{}': {}",
+                local_path.display(),
                 e
             ))
         },

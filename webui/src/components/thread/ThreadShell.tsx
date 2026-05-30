@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   FileText,
-  MessageSquarePlus,
+  Terminal,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -26,8 +26,8 @@ interface ThreadShellProps {
   title: string;
   onToggleSidebar: () => void;
   onGoHome?: () => void;
-  onNewChat?: () => void;
-  onOpenNote?: () => void;
+  onOpenSSH?: () => void;
+  onCreateNote?: () => void;
   onCreateChat?: () => Promise<string | null>;
   onTurnEnd?: () => void;
   queuedPrompt?: QueuedPrompt | null;
@@ -61,8 +61,9 @@ export function ThreadShell({
   session,
   title,
   onToggleSidebar,
-  onNewChat,
-  onOpenNote,
+  onGoHome,
+  onOpenSSH,
+  onCreateNote,
   onCreateChat,
   onTurnEnd,
   queuedPrompt,
@@ -272,16 +273,16 @@ export function ThreadShell({
     <div className="flex items-center justify-center gap-2 pb-3">
       <button
         type="button"
-        onClick={onNewChat}
+        onClick={onOpenSSH}
         disabled={booting || isStreaming}
         className="inline-flex h-9 items-center gap-2 rounded-full border border-border/70 bg-card px-3 text-[12.5px] font-medium text-foreground/82 shadow-[0_5px_14px_rgba(15,23,42,0.045)] transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-55"
       >
-        <MessageSquarePlus className="h-4 w-4 text-[#4f9de8]" />
-        新建会话
+        <Terminal className="h-4 w-4 text-[#4f9de8]" />
+        新建SSH会话
       </button>
       <button
         type="button"
-        onClick={onOpenNote}
+        onClick={onCreateNote}
         disabled={booting || isStreaming}
         className="inline-flex h-9 items-center gap-2 rounded-full border border-border/70 bg-card px-3 text-[12.5px] font-medium text-foreground/82 shadow-[0_5px_14px_rgba(15,23,42,0.045)] transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-55"
       >

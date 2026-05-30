@@ -91,6 +91,10 @@ export async function localHomeDir(): Promise<string> {
   return invoke<string>("local_home_dir");
 }
 
+export async function localDesktopDir(): Promise<string> {
+  return invoke<string>("local_desktop_dir");
+}
+
 export async function sshReconnect(
   sessionId: string,
   config: ConnectionConfig,
@@ -180,8 +184,9 @@ export async function sftpUpload(
   sessionId: string,
   remotePath: string,
   data: number[],
+  taskId?: string,
 ): Promise<void> {
-  return invoke("sftp_upload", { sessionId, remotePath, data });
+  return invoke("sftp_upload", { sessionId, remotePath, data, taskId: taskId ?? null });
 }
 
 export async function sftpTouch(sessionId: string, path: string): Promise<void> {
@@ -232,6 +237,53 @@ export async function sftpUploadDir(
   return invoke("sftp_upload_dir", { sessionId, localPath, remotePath });
 }
 
+export interface TransferProgressEvent {
+  taskId: string;
+  sessionId: string;
+  type: "upload" | "download";
+  path: string;
+  bytesTransferred: number;
+  totalBytes: number;
+  percentage: number;
+  speed: number;
+}
+
+export async function sftpUploadFile(
+  sessionId: string,
+  localPath: string,
+  remotePath: string,
+  taskId: string,
+): Promise<void> {
+  return invoke("sftp_upload_file", { sessionId, localPath, remotePath, taskId });
+}
+
+export async function sftpDownloadFile(
+  sessionId: string,
+  remotePath: string,
+  localPath: string,
+  taskId: string,
+): Promise<void> {
+  return invoke("sftp_download_file", { sessionId, remotePath, localPath, taskId });
+}
+
+export async function sftpCancelTransfer(taskId: string): Promise<void> {
+  return invoke("sftp_cancel_transfer", { taskId });
+}
+
+export function onTransferProgress(
+  sessionId: string,
+  taskId: string,
+  handler: (event: TransferProgressEvent) => void,
+): Promise<UnlistenFn> {
+  if (!isTauri()) {
+    return Promise.resolve(() => {});
+  }
+  return listen<TransferProgressEvent>(
+    `sftp:transfer:${sessionId}:${taskId}`,
+    (e) => handler(e.payload),
+  );
+}
+
 export async function terminalSaveConnections(
   connections: ConnectionConfig[],
 ): Promise<void> {
@@ -266,26 +318,7 @@ export async function sshPortForward(
   });
 }
 
-export interface SftpTransferProgressEvent {
-  sessionId: string;
-  path: string;
-  direction: "upload" | "download";
-  bytesTransferred: number;
-  totalBytes: number | null;
-}
-
 export type UnlistenFn = () => void;
-
-export function onSftpTransferProgress(
-  handler: (event: SftpTransferProgressEvent) => void,
-): Promise<UnlistenFn> {
-  if (!isTauri()) {
-    return Promise.resolve(() => {});
-  }
-  return listen<SftpTransferProgressEvent>("sftp-transfer-progress", (e) => {
-    handler(e.payload);
-  });
-}
 
 export interface TerminalOutputEvent {
   sessionId: string;

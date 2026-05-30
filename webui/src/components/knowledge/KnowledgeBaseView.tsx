@@ -10,11 +10,13 @@ import {
   ChevronDown,
   ChevronUp,
   FileText,
+  FileCode,
   AlertCircle,
   Plus,
   Trash2,
   FolderOpen,
   FolderSearch,
+  CheckCircle2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -29,7 +31,16 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { isTauri } from "@/lib/tauri";
-import { kbStatus, kbQuery, kbIngest, kbCompile, kbList, kbCreate, kbDelete } from "@/lib/api";
+import {
+  kbStatus,
+  kbQuery,
+  kbCompile,
+  kbList,
+  kbCreate,
+  kbDelete,
+  kbFiles,
+  kbIngestFiles,
+} from "@/lib/api";
 import { useClient } from "@/providers/ClientProvider";
 
 interface KbInstance {
@@ -46,6 +57,36 @@ interface KbResult {
   content: string;
 }
 
+interface KbFile {
+  name: string;
+  path: string;
+  size: number;
+  modified: string;
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatModifiedDate(iso: string): string {
+  try {
+    const d = new Date(iso);
+    return `${d.getMonth() + 1}/${d.getDate()}`;
+  } catch {
+    return "";
+  }
+}
+
+function getFileIcon(name: string) {
+  const ext = name.split(".").pop()?.toLowerCase() ?? "";
+  if (ext === "md") return <FileText className="h-4 w-4 shrink-0 text-blue-500" />;
+  if (["py", "js", "ts"].includes(ext))
+    return <FileCode className="h-4 w-4 shrink-0 text-green-500" />;
+  return <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />;
+}
+
 export function KnowledgeBaseView({ onBack }: { onBack?: () => void }) {
   const { token } = useClient();
   const [instances, setInstances] = useState<KbInstance[]>([]);
@@ -58,15 +99,19 @@ export function KnowledgeBaseView({ onBack }: { onBack?: () => void }) {
   const [loading, setLoading] = useState(false);
   const [ingesting, setIngesting] = useState(false);
   const [compiling, setCompiling] = useState(false);
+  const [compileSuccess, setCompileSuccess] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [createName, setCreateName] = useState("");
   const [createMode, setCreateMode] = useState("document");
   const [createPaths, setCreatePaths] = useState("");
   const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [files, setFiles] = useState<KbFile[]>([]);
+  const [loadingFiles, setLoadingFiles] = useState(false);
 
   const loadInstances = useCallback(async () => {
     try {
@@ -100,6 +145,22 @@ export function KnowledgeBaseView({ onBack }: { onBack?: () => void }) {
     }
   }, [token, selectedName]);
 
+  const loadFiles = useCallback(async () => {
+    if (!selectedName) {
+      setFiles([]);
+      return;
+    }
+    setLoadingFiles(true);
+    try {
+      const res = await kbFiles(token, selectedName);
+      setFiles(res.files);
+    } catch {
+      setFiles([]);
+    } finally {
+      setLoadingFiles(false);
+    }
+  }, [token, selectedName]);
+
   useEffect(() => {
     loadInstances();
   }, [loadInstances]);
@@ -107,6 +168,10 @@ export function KnowledgeBaseView({ onBack }: { onBack?: () => void }) {
   useEffect(() => {
     loadStatus();
   }, [loadStatus]);
+
+  useEffect(() => {
+    loadFiles();
+  }, [loadFiles]);
 
   const handleSearch = useCallback(async () => {
     const q = query.trim();
@@ -136,20 +201,24 @@ export function KnowledgeBaseView({ onBack }: { onBack?: () => void }) {
     [handleSearch],
   );
 
-  const handleIngest = useCallback(async () => {
-    if (!selectedName) return;
-    const inst = instances.find((i) => i.name === selectedName);
-    setIngesting(true);
-    setError(null);
+  const handleIngestFiles = useCallback(async () => {
+    if (!selectedName || !isTauri()) return;
     try {
-      await kbIngest(
-        token,
-        inst?.paths?.length ? inst.paths : ["."],
-        undefined,
-        selectedName,
-        true,
-        inst?.mode ?? "notebook",
-      );
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const selected = await open({
+        multiple: true,
+        directory: false,
+        title: "选择要入库的文件",
+      });
+      if (!selected) return;
+      const paths = Array.isArray(selected)
+        ? selected.map(String)
+        : [String(selected)];
+      if (paths.length === 0) return;
+      setIngesting(true);
+      setError(null);
+      await kbIngestFiles(token, selectedName, paths);
+      await loadFiles();
       await loadStatus();
       await loadInstances();
     } catch {
@@ -157,28 +226,41 @@ export function KnowledgeBaseView({ onBack }: { onBack?: () => void }) {
     } finally {
       setIngesting(false);
     }
-  }, [token, selectedName, instances, loadStatus, loadInstances]);
+  }, [token, selectedName, loadFiles, loadStatus, loadInstances]);
 
   const handleCompile = useCallback(async () => {
     if (!selectedName) return;
+    const inst = instances.find((i) => i.name === selectedName);
+    if (inst && inst.mode !== "document") {
+      setError("Notebook 模式不支持 Wiki 编译，仅支持 FTS5 搜索");
+      return;
+    }
     setCompiling(true);
     setError(null);
+    setCompileSuccess(null);
     try {
-      await kbCompile(token, undefined, selectedName);
+      const res = await kbCompile(token, undefined, selectedName);
       await loadStatus();
       await loadInstances();
-    } catch {
-      setError("编译失败");
+      if (res.compiled === 0) {
+        setCompileSuccess("没有待编译的文件");
+      } else {
+        setCompileSuccess(`编译完成，已处理 ${res.compiled} 个文件`);
+      }
+      setTimeout(() => setCompileSuccess(null), 3000);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "编译失败";
+      setError(msg);
     } finally {
       setCompiling(false);
     }
-  }, [token, selectedName, loadStatus, loadInstances]);
+  }, [token, selectedName, instances, loadStatus, loadInstances]);
 
   const handleCreate = useCallback(async () => {
     const name = createName.trim();
     if (!name) return;
     setCreating(true);
-    setError(null);
+    setCreateError(null);
     try {
       const paths = createPaths
         .split(",")
@@ -191,8 +273,9 @@ export function KnowledgeBaseView({ onBack }: { onBack?: () => void }) {
       setCreatePaths("");
       await loadInstances();
       setSelectedName(name);
-    } catch {
-      setError("创建失败");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "创建失败";
+      setCreateError(msg);
     } finally {
       setCreating(false);
     }
@@ -209,6 +292,7 @@ export function KnowledgeBaseView({ onBack }: { onBack?: () => void }) {
         setSelectedName(null);
         setStatus(null);
         setResults([]);
+        setFiles([]);
         setQuery("");
       }
       setDeleteTarget(null);
@@ -277,7 +361,7 @@ export function KnowledgeBaseView({ onBack }: { onBack?: () => void }) {
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => setCreateOpen(true)}
+              onClick={() => { setCreateOpen(true); setCreateError(null); }}
               className="h-7 gap-1 text-[12px]"
             >
               <Plus className="h-3.5 w-3.5" />
@@ -391,7 +475,7 @@ export function KnowledgeBaseView({ onBack }: { onBack?: () => void }) {
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={handleIngest}
+                    onClick={handleIngestFiles}
                     disabled={ingesting}
                     className="h-7 gap-1.5 text-[12px]"
                   >
@@ -402,22 +486,39 @@ export function KnowledgeBaseView({ onBack }: { onBack?: () => void }) {
                     )}
                     入库
                   </Button>
-                  {selectedInstance.mode === "document" && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={handleCompile}
-                      disabled={compiling}
-                      className="h-7 gap-1.5 text-[12px]"
-                    >
-                      {compiling ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      ) : (
-                        <RefreshCw className="h-3.5 w-3.5" />
-                      )}
-                      编译
-                    </Button>
-                  )}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleCompile}
+                    disabled={compiling || selectedInstance.mode !== "document"}
+                    className="h-7 gap-1.5 text-[12px]"
+                    title={
+                      selectedInstance.mode !== "document"
+                        ? "Notebook 模式不支持 Wiki 编译"
+                        : "编译知识库"
+                    }
+                  >
+                    {compiling ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <RefreshCw className="h-3.5 w-3.5" />
+                    )}
+                    编译
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={loadFiles}
+                    disabled={loadingFiles}
+                    className="h-7 gap-1.5 text-[12px]"
+                  >
+                    {loadingFiles ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <RefreshCw className="h-3.5 w-3.5" />
+                    )}
+                    刷新
+                  </Button>
                 </div>
               </div>
             </div>
@@ -457,70 +558,105 @@ export function KnowledgeBaseView({ onBack }: { onBack?: () => void }) {
                     {error}
                   </div>
                 )}
-
-                {results.length > 0 && (
-                  <div className="mb-2 text-[12px] text-muted-foreground">
-                    找到 {results.length} 条结果
-                    {totalTokens > 0 && ` · ${totalTokens} tokens`}
+                {compileSuccess && (
+                  <div className="mb-3 flex items-center gap-2 rounded-lg border border-green-500/50 bg-green-500/10 px-3 py-2 text-[13px] text-green-700 dark:text-green-400">
+                    <CheckCircle2 className="h-4 w-4 shrink-0" />
+                    {compileSuccess}
                   </div>
                 )}
 
+                {files.length > 0 && (
+                  <div className="mb-3">
+                    <div className="mb-2 text-[12px] font-medium text-muted-foreground">
+                      关联目录文件
+                    </div>
+                    <div className="flex flex-col gap-0.5">
+                      {files.map((file) => (
+                        <div
+                          key={file.path}
+                          className="flex items-center gap-2.5 rounded-md px-2 py-1.5 transition-colors hover:bg-muted/50"
+                        >
+                          {getFileIcon(file.name)}
+                          <span className="min-w-0 flex-1 truncate text-[13px]">
+                            {file.name}
+                          </span>
+                          <span className="shrink-0 text-[11px] text-muted-foreground">
+                            {formatFileSize(file.size)}
+                          </span>
+                          <span className="shrink-0 text-[11px] text-muted-foreground">
+                            {formatModifiedDate(file.modified)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {files.length === 0 && !loadingFiles && !error && (
+                  <div className="mb-3 flex flex-col items-center justify-center py-8 text-muted-foreground">
+                    <FolderOpen className="mb-2 h-8 w-8 opacity-40" />
+                    <p className="text-[13px]">关联目录为空，点击入库添加文件</p>
+                  </div>
+                )}
+
+                {results.length > 0 && (
+                  <>
+                    <Separator className="my-3" />
+                    <div className="mb-2 text-[12px] text-muted-foreground">
+                      搜索结果 · 找到 {results.length} 条
+                      {totalTokens > 0 && ` · ${totalTokens} tokens`}
+                    </div>
+                    <div className="flex flex-col gap-2">
+                      {results.map((result, index) => {
+                        const isExpanded = expandedIndex === index;
+                        return (
+                          <div
+                            key={`${result.path}-${index}`}
+                            className="rounded-lg border border-border/70 bg-card transition-colors hover:border-border"
+                          >
+                            <button
+                              type="button"
+                              onClick={() => setExpandedIndex(isExpanded ? null : index)}
+                              className="flex w-full items-start gap-3 px-3 py-2.5 text-left"
+                            >
+                              <FileText className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                              <div className="min-w-0 flex-1">
+                                <div className="text-[13px] font-medium leading-snug">
+                                  {result.title || result.path}
+                                </div>
+                                <div className="mt-0.5 truncate text-[11.5px] text-muted-foreground">
+                                  {result.path}
+                                </div>
+                              </div>
+                              {isExpanded ? (
+                                <ChevronUp className="h-4 w-4 shrink-0 text-muted-foreground" />
+                              ) : (
+                                <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+                              )}
+                            </button>
+                            {isExpanded && (
+                              <>
+                                <Separator />
+                                <div className="px-3 py-2.5">
+                                  <pre className="whitespace-pre-wrap break-words text-[12.5px] leading-relaxed text-foreground/80">
+                                    {result.content}
+                                  </pre>
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </>
+                )}
+
                 {results.length === 0 && !loading && !error && query.trim() && (
-                  <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
+                  <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
                     <FileText className="mb-2 h-8 w-8 opacity-40" />
                     <p className="text-[13px]">未找到相关内容</p>
                   </div>
                 )}
-
-                {!query.trim() && results.length === 0 && !error && (
-                  <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
-                    <Search className="mb-2 h-8 w-8 opacity-40" />
-                    <p className="text-[13px]">输入关键词搜索知识库</p>
-                  </div>
-                )}
-
-                <div className="flex flex-col gap-2">
-                  {results.map((result, index) => {
-                    const isExpanded = expandedIndex === index;
-                    return (
-                      <div
-                        key={`${result.path}-${index}`}
-                        className="rounded-lg border border-border/70 bg-card transition-colors hover:border-border"
-                      >
-                        <button
-                          type="button"
-                          onClick={() => setExpandedIndex(isExpanded ? null : index)}
-                          className="flex w-full items-start gap-3 px-3 py-2.5 text-left"
-                        >
-                          <FileText className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-                          <div className="min-w-0 flex-1">
-                            <div className="text-[13px] font-medium leading-snug">
-                              {result.title || result.path}
-                            </div>
-                            <div className="mt-0.5 truncate text-[11.5px] text-muted-foreground">
-                              {result.path}
-                            </div>
-                          </div>
-                          {isExpanded ? (
-                            <ChevronUp className="h-4 w-4 shrink-0 text-muted-foreground" />
-                          ) : (
-                            <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
-                          )}
-                        </button>
-                        {isExpanded && (
-                          <>
-                            <Separator />
-                            <div className="px-3 py-2.5">
-                              <pre className="whitespace-pre-wrap break-words text-[12.5px] leading-relaxed text-foreground/80">
-                                {result.content}
-                              </pre>
-                            </div>
-                          </>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
               </div>
             </ScrollArea>
           </>
@@ -589,6 +725,12 @@ export function KnowledgeBaseView({ onBack }: { onBack?: () => void }) {
               </div>
             </div>
           </div>
+          {createError && (
+            <div className="flex items-center gap-2 rounded-lg border border-destructive/50 bg-destructive/10 px-3 py-2 text-[13px] text-destructive">
+              <AlertCircle className="h-4 w-4 shrink-0" />
+              {createError}
+            </div>
+          )}
           <DialogFooter>
             <Button
               variant="outline"

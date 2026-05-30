@@ -1,4 +1,5 @@
-import { Bot, Copy, FilePlus2, FileText, FolderInput, Plus, Server, Tags, Trash2, Wrench } from "lucide-react";
+import { useState } from "react";
+import { Bot, Copy, FilePlus2, FileText, FolderInput, Plus, Server, Tags, Trash2, Wrench, X } from "lucide-react";
 
 import {
   ContextMenu,
@@ -10,6 +11,14 @@ import {
   ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 import type { Notebook, NoteSourceKind, OperationNote } from "./notes-data";
@@ -22,7 +31,7 @@ interface NoteListProps {
   onSelect: (id: string) => void;
   onCopyMarkdown?: (note: OperationNote) => void;
   onDuplicate?: (note: OperationNote) => void;
-  onEditTags?: (note: OperationNote) => void;
+  onEditTags?: (note: OperationNote, tags: string[]) => void;
   onMoveToNotebook?: (note: OperationNote, notebookId: string) => void;
   onDelete?: (note: OperationNote) => void;
   onCreateNote?: (sourceKind: NoteSourceKind) => void;
@@ -50,25 +59,41 @@ export function NoteList({
   onCreateNote,
   notebooks = [],
 }: NoteListProps) {
+  const [editingNote, setEditingNote] = useState<OperationNote | null>(null);
+
+  const handleSaveTags = (tags: string[]) => {
+    if (!editingNote || !onEditTags) return;
+    onEditTags(editingNote, tags);
+    setEditingNote(null);
+  };
+
   if (notes.length === 0) {
     return (
-      <ContextMenu>
-        <ContextMenuTrigger asChild>
-          <div className="flex h-full items-center justify-center px-6 text-center text-[12px] leading-5 text-muted-foreground">
-            {emptyLabel}
-          </div>
-        </ContextMenuTrigger>
-        <ContextMenuContent className="w-44">
-          <ContextMenuItem onSelect={() => onCreateNote?.("manual")}>
-            <Plus className="mr-2 h-3.5 w-3.5" />
-            新建笔记
-          </ContextMenuItem>
-          <ContextMenuItem onSelect={() => onCreateNote?.("ssh")}>
-            <Server className="mr-2 h-3.5 w-3.5" />
-            新建 SSH 记录
-          </ContextMenuItem>
-        </ContextMenuContent>
-      </ContextMenu>
+      <>
+        <ContextMenu>
+          <ContextMenuTrigger asChild>
+            <div className="flex h-full items-center justify-center px-6 text-center text-[12px] leading-5 text-muted-foreground">
+              {emptyLabel}
+            </div>
+          </ContextMenuTrigger>
+          <ContextMenuContent className="w-44">
+            <ContextMenuItem onSelect={() => onCreateNote?.("manual")}>
+              <Plus className="mr-2 h-3.5 w-3.5" />
+              新建笔记
+            </ContextMenuItem>
+            <ContextMenuItem onSelect={() => onCreateNote?.("ssh")}>
+              <Server className="mr-2 h-3.5 w-3.5" />
+              新建 SSH 记录
+            </ContextMenuItem>
+          </ContextMenuContent>
+        </ContextMenu>
+        <TagEditDialog
+          open={editingNote !== null}
+          tags={editingNote?.tags ?? []}
+          onSave={handleSaveTags}
+          onOpenChange={(open) => { if (!open) setEditingNote(null); }}
+        />
+      </>
     );
   }
 
@@ -86,7 +111,7 @@ export function NoteList({
                   onSelect={() => onSelect(note.id)}
                   onCopyMarkdown={onCopyMarkdown}
                   onDuplicate={onDuplicate}
-                  onEditTags={onEditTags}
+                  onEditTags={onEditTags ? () => setEditingNote(note) : undefined}
                   onMoveToNotebook={onMoveToNotebook}
                   onDelete={onDelete}
                   notebooks={notebooks}
@@ -109,6 +134,12 @@ export function NoteList({
       <div className="shrink-0 border-t border-border/65 px-3 py-2.5 text-[11px] text-muted-foreground">
         共 {totalCount} 条笔记
       </div>
+      <TagEditDialog
+        open={editingNote !== null}
+        tags={editingNote?.tags ?? []}
+        onSave={handleSaveTags}
+        onOpenChange={(open) => { if (!open) setEditingNote(null); }}
+      />
     </div>
   );
 }
@@ -129,7 +160,7 @@ function NoteRow({
   onSelect: () => void;
   onCopyMarkdown?: (note: OperationNote) => void;
   onDuplicate?: (note: OperationNote) => void;
-  onEditTags?: (note: OperationNote) => void;
+  onEditTags?: () => void;
   onMoveToNotebook?: (note: OperationNote, notebookId: string) => void;
   onDelete?: (note: OperationNote) => void;
   notebooks: Notebook[];
@@ -165,16 +196,6 @@ function NoteRow({
           <span className="mt-1 line-clamp-2 text-[11px] leading-4 text-muted-foreground">
             {note.preview}
           </span>
-          <span className="mt-2 flex min-w-0 items-center gap-1.5">
-            {note.tags.slice(0, 2).map((tag) => (
-              <span
-                key={tag}
-                className="rounded-full border border-border/65 bg-background/70 px-1.5 py-0.5 text-[10.5px] font-medium text-muted-foreground"
-              >
-                {tag}
-              </span>
-            ))}
-          </span>
         </button>
       </ContextMenuTrigger>
       <ContextMenuContent className="w-44">
@@ -186,7 +207,7 @@ function NoteRow({
           <FilePlus2 className="mr-2 h-3.5 w-3.5" />
           复制笔记
         </ContextMenuItem>
-        <ContextMenuItem onSelect={() => onEditTags?.(note)}>
+        <ContextMenuItem onSelect={() => onEditTags?.()}>
           <Tags className="mr-2 h-3.5 w-3.5" />
           编辑标签
         </ContextMenuItem>
@@ -222,5 +243,126 @@ function NoteRow({
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
+  );
+}
+
+function TagEditDialog({
+  open,
+  tags: initialTags,
+  onSave,
+  onOpenChange,
+}: {
+  open: boolean;
+  tags: string[];
+  onSave: (tags: string[]) => void;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const [tags, setTags] = useState<string[]>(initialTags);
+  const [input, setInput] = useState("");
+
+  const handleOpenChange = (nextOpen: boolean) => {
+    if (nextOpen) {
+      setTags(initialTags);
+      setInput("");
+    }
+    onOpenChange(nextOpen);
+  };
+
+  const addTag = () => {
+    const newTags = input
+      .split(/[\s,，、]+/)
+      .map((t) => t.trim())
+      .filter(Boolean);
+    if (newTags.length === 0) return;
+    setTags((prev) => {
+      const merged = Array.from(new Set([...prev, ...newTags]));
+      return merged;
+    });
+    setInput("");
+  };
+
+  const removeTag = (tag: string) => {
+    setTags((prev) => prev.filter((t) => t !== tag));
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      addTag();
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogContent className="max-w-[360px] gap-0 rounded-xl border-border/70 p-0">
+        <DialogHeader className="border-b border-border/65 px-4 py-3 text-left">
+          <DialogTitle className="text-[14px]">编辑标签</DialogTitle>
+        </DialogHeader>
+
+        <div className="px-4 py-3">
+          {tags.length > 0 ? (
+            <div className="flex flex-wrap gap-1.5">
+              {tags.map((tag) => (
+                <span
+                  key={tag}
+                  className="inline-flex items-center gap-1 rounded-full border border-border/65 bg-muted/25 px-2 py-0.5 text-[11.5px] text-muted-foreground"
+                >
+                  {tag}
+                  <button
+                    type="button"
+                    onClick={() => removeTag(tag)}
+                    className="grid h-3.5 w-3.5 place-items-center rounded-full text-muted-foreground hover:bg-accent hover:text-foreground"
+                  >
+                    <X className="h-2.5 w-2.5" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          ) : (
+            <p className="text-[12px] text-muted-foreground">暂无标签</p>
+          )}
+
+          <div className="mt-3 flex items-center gap-1.5">
+            <input
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="输入标签，回车添加"
+              className="h-8 flex-1 rounded-lg border border-border/70 bg-background px-2.5 text-[12px] outline-none placeholder:text-muted-foreground focus:border-border"
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-8 px-2.5 text-[12px]"
+              disabled={!input.trim()}
+              onClick={addTag}
+            >
+              添加
+            </Button>
+          </div>
+        </div>
+
+        <DialogFooter className="border-t border-border/65 px-4 py-2.5">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-7 px-2.5 text-[12px]"
+            onClick={() => onOpenChange(false)}
+          >
+            取消
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            className="h-7 px-2.5 text-[12px]"
+            onClick={() => onSave(tags)}
+          >
+            保存
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

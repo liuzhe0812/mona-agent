@@ -1,7 +1,7 @@
 import type { JSONContent } from "@tiptap/core";
 
 export type NoteSourceKind = "agent" | "manual" | "ssh" | "windows";
-export type NoteAiActionId = "summary" | "extractKnowledge" | "freeform";
+export type NoteAiActionId = "summary" | "extractKnowledge" | "freeform" | "polish" | "translate" | "continue" | "autoTag";
 
 export interface Notebook {
   id: string;

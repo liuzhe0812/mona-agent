@@ -2,6 +2,7 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Request
+from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -146,3 +147,58 @@ def list_devices(
 ):
     devices = db.query(Device).filter(Device.user_id == user.id).all()
     return DeviceListResponse(devices=devices)
+
+
+@router.post("/bind-and-download")
+def bind_and_download_license(
+    body: DeviceBindRequest,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    sub = _get_active_subscription(db, user.id)
+    if sub is None:
+        raise AuthError("no_subscription", "Active subscription required to bind a device", status_code=403)
+
+    existing_device = db.query(Device).filter(Device.device_fingerprint == body.device_fingerprint).first()
+    if existing_device:
+        if existing_device.user_id != user.id:
+            raise AuthError(
+                "device_bound_other", "This device is bound to another account", status_code=409
+            )
+        jti = uuid.uuid4().hex
+        existing_device.license_jti = jti
+        existing_device.device_name = body.device_name or existing_device.device_name
+        existing_device.last_verified = datetime.now(timezone.utc)
+        db.commit()
+        license_jwt, _ = issue_license(user.id, body.device_fingerprint, sub.current_period_end)
+        return PlainTextResponse(
+            content=license_jwt,
+            media_type="text/plain",
+            headers={"Content-Disposition": f'attachment; filename="mona-license.jwt"'},
+        )
+
+    user_device_count = db.query(Device).filter(Device.user_id == user.id).count()
+    if user_device_count >= settings.max_devices_per_user:
+        raise AuthError(
+            "device_limit",
+            f"Maximum {settings.max_devices_per_user} devices allowed",
+            status_code=403,
+        )
+
+    jti = uuid.uuid4().hex
+    device = Device(
+        user_id=user.id,
+        device_fingerprint=body.device_fingerprint,
+        device_name=body.device_name,
+        license_jti=jti,
+        last_verified=datetime.now(timezone.utc),
+    )
+    db.add(device)
+    db.commit()
+
+    license_jwt, _ = issue_license(user.id, body.device_fingerprint, sub.current_period_end)
+    return PlainTextResponse(
+        content=license_jwt,
+        media_type="text/plain",
+        headers={"Content-Disposition": f'attachment; filename="mona-license.jwt"'},
+    )

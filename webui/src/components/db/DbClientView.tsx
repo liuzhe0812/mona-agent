@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { useLicense } from "@/hooks/useLicense";
 import { ConnectionTree } from "./ConnectionTree";
 import { SqlEditor } from "./SqlEditor";
 import { ResultPanel } from "./ResultPanel";
@@ -28,6 +29,7 @@ const AGENT_PANEL_MAX = 480;
 const AGENT_PANEL_DEFAULT = 320;
 
 export function DbClientView() {
+  const { licenseActive } = useLicense();
   const loadSavedConnections = useDbStore((s) => s.loadSavedConnections);
   const queryTabs = useDbStore((s) => s.queryTabs);
   const activeTabId = useDbStore((s) => s.activeTabId);
@@ -257,20 +259,24 @@ export function DbClientView() {
                 <span className="text-[11px] text-muted-foreground">
                   {selectedTable?.name}
                 </span>
-                <Separator orientation="vertical" className="h-5" />
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className={cn("h-6 w-6 px-0", !agentPanelCollapsed && "bg-accent text-foreground")}
-                      onClick={() => setAgentPanelCollapsed((c) => !c)}
-                    >
-                      <Bot className="h-3.5 w-3.5" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>{agentPanelCollapsed ? "展开 AI 助手" : "收起 AI 助手"}</TooltipContent>
-                </Tooltip>
+                {licenseActive && (
+                  <>
+                    <Separator orientation="vertical" className="h-5" />
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className={cn("h-6 w-6 px-0", !agentPanelCollapsed && "bg-accent text-foreground")}
+                          onClick={() => setAgentPanelCollapsed((c) => !c)}
+                        >
+                          <Bot className="h-3.5 w-3.5" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>{agentPanelCollapsed ? "展开 AI 助手" : "收起 AI 助手"}</TooltipContent>
+                    </Tooltip>
+                  </>
+                )}
               </div>
             </TooltipProvider>
 
@@ -355,17 +361,19 @@ export function DbClientView() {
         </div>
       </div>
 
-      {!agentPanelCollapsed && (
+      {licenseActive && !agentPanelCollapsed && (
         <div
           className="w-[1px] shrink-0 cursor-col-resize bg-border"
           onMouseDown={onAgentDragStart}
         />
       )}
 
-      <DbAgentPanel
-        collapsed={agentPanelCollapsed}
-        width={agentPanelWidth}
-      />
+      {licenseActive && (
+        <DbAgentPanel
+          collapsed={agentPanelCollapsed}
+          width={agentPanelWidth}
+        />
+      )}
 
       <NewConnectionDialog />
     </div>

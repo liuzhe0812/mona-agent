@@ -31,6 +31,7 @@ import {
 import type { BatchTransferProgress } from "../types/terminal";
 import { useBatchStore } from "../store/batchStore";
 import type { BatchSession, TransferSessionNode } from "../store/batchStore";
+import { useTerminalStore } from "../store/terminalStore";
 import {
   Play,
   Square,
@@ -113,6 +114,31 @@ export function BatchModeView() {
   } = store;
 
   const [collapsedTransfer, setCollapsedTransfer] = useState<Set<string>>(new Set());
+
+  const terminalStoreActiveId = useTerminalStore((s) => s.activeSessionId);
+  const terminalStoreSessions = useTerminalStore((s) => s.sessions);
+  const isBatchVisible = terminalStoreSessions.find(
+    (s) => s.id === terminalStoreActiveId,
+  )?.type === "batch";
+  const prevVisibleRef = useRef(isBatchVisible);
+
+  useEffect(() => {
+    if (isBatchVisible && !prevVisibleRef.current) {
+      setTimeout(() => {
+        fitAddonsRef.current.forEach((fitAddon, id) => {
+          try {
+            fitAddon.fit();
+            const terminal = terminalsRef.current.get(id);
+            if (terminal && id === activeSessionId) {
+              terminal.scrollToBottom();
+              terminal.focus();
+            }
+          } catch {}
+        });
+      }, 100);
+    }
+    prevVisibleRef.current = isBatchVisible;
+  }, [isBatchVisible, activeSessionId]);
 
   const terminalRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const terminalsRef = useRef<Map<string, Terminal>>(new Map());
@@ -748,6 +774,26 @@ export function BatchModeView() {
                         activeSessionId === session.id ? "opacity-100 pointer-events-auto z-10" : "opacity-0 pointer-events-none z-0",
                       )}
                     >
+                      {session.status === "error" && (
+                        <div className="absolute inset-0 z-20 flex items-center justify-center bg-[#0d0d0d]/80">
+                          <div className="text-center max-w-sm">
+                            <XCircle className="h-10 w-10 text-red-500 mx-auto mb-3" />
+                            <p className="text-sm text-red-400 font-medium mb-1">连接失败</p>
+                            <p className="text-xs text-muted-foreground mb-3">{session.host}</p>
+                            <p className="text-xs text-red-400/80 bg-red-500/10 rounded px-3 py-2 font-mono break-all">
+                              {session.error || "未知错误"}
+                            </p>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="mt-3 h-7 text-xs"
+                              onClick={() => handleReconnectSession(session.id)}
+                            >
+                              <RefreshCw className="mr-1 h-3 w-3" /> 重新连接
+                            </Button>
+                          </div>
+                        </div>
+                      )}
                       <div
                         ref={(el) => {
                           if (el) {
@@ -808,8 +854,8 @@ export function BatchModeView() {
             )}
           >
             {connectedCount > 0 ? (
-              <div className="flex flex-1">
-                <div className="flex flex-col flex-1 min-w-0">
+              <div className="flex flex-1 min-h-0">
+                <div className="flex flex-col flex-1 min-w-0 min-h-0">
                   <div className="flex items-center gap-2 px-3 py-1.5 border-b">
                     <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => { const parent = remotePath.substring(0, remotePath.lastIndexOf("/")) || "/"; loadRemoteFiles(parent); }} disabled={remotePath === "/"}>
                       <ChevronLeft className="h-3 w-3" />
@@ -859,7 +905,7 @@ export function BatchModeView() {
 
                 <div className="w-px bg-border" />
 
-                <div className="flex flex-col w-72">
+                <div className="flex flex-col w-72 min-h-0">
                   <div className="flex items-center justify-between px-2 py-1.5 border-b">
                     <span className="text-xs font-medium">传输任务</span>
                     <div className="flex items-center gap-1">
@@ -868,7 +914,7 @@ export function BatchModeView() {
                     </div>
                   </div>
                   {transferSessions.length > 0 ? (
-                    <ScrollArea className="flex-1">
+                    <ScrollArea className="flex-1 min-h-0">
                       <div className="p-1 space-y-1">
                         {transferSessions.map((session) => (
                           <div key={session.id} className="rounded border bg-card">
@@ -883,14 +929,14 @@ export function BatchModeView() {
                             </button>
                             {!collapsedTransfer.has(session.id) && (
                               <div className="border-t px-2 py-1">
-                                <Progress value={session.progress} className="h-1 mb-1" />
+                                <Progress value={session.progress} className={cn("h-1 mb-1", session.status === "completed" ? "[&>div]:bg-emerald-500" : "[&>div]:bg-blue-500")} />
                                 <div className="space-y-0.5">
                                   {session.files.map((file) => (
-                                    <div key={file.id} className="flex items-center gap-2 text-xs text-muted-foreground">
-                                      {getStatusIcon(file.status)}
-                                      <span className="truncate flex-1">{file.filename}</span>
-                                      <span>{file.speed}</span>
-                                    </div>
+                                    <div key={file.id} className="flex items-center gap-2 text-xs text-muted-foreground min-w-0">
+                                    {getStatusIcon(file.status)}
+                                    <span className="truncate flex-1 min-w-0">{file.filename}</span>
+                                    <span className="shrink-0">{file.speed}</span>
+                                  </div>
                                   ))}
                                 </div>
                               </div>
@@ -914,7 +960,7 @@ export function BatchModeView() {
                         const totalProgress = totalBytes > 0 ? Math.round((transferredBytes / totalBytes) * 100) : 0;
                         return (
                           <>
-                            <Progress value={totalProgress} className="h-1.5 mb-1" />
+                            <Progress value={totalProgress} className={cn("h-1.5 mb-1", completedSessions === transferSessions.length && errorSessions === 0 ? "[&>div]:bg-emerald-500" : "[&>div]:bg-blue-500")} />
                             <div className="flex items-center justify-between text-xs text-muted-foreground">
                               <span>总进度 {totalProgress}%</span>
                               <span>{completedFiles}/{totalFiles} 文件</span>

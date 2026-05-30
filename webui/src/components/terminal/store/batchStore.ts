@@ -184,12 +184,12 @@ export const useBatchStore = create<BatchState>()(
         const { sessionId, status, currentFile, filesCompleted, filesTotal, bytesTransferred, bytesTotal, speed, etaSeconds, error } = progress;
 
         const statusMap: Record<string, TransferSessionNode["status"]> = {
-          Pending: "waiting",
-          Connecting: "waiting",
-          Transferring: "transferring",
-          Completed: "completed",
-          Error: "error",
-          Cancelled: "completed",
+          pending: "waiting",
+          connecting: "waiting",
+          transferring: "transferring",
+          completed: "completed",
+          error: "error",
+          cancelled: "completed",
         };
 
         let sessionProgress = 0;
@@ -198,6 +198,8 @@ export const useBatchStore = create<BatchState>()(
         } else if (filesTotal > 0) {
           sessionProgress = Math.round((filesCompleted / filesTotal) * 100);
         }
+
+        const fileStatus = status === "completed" ? "completed" : status === "error" ? "error" : "transferring";
 
         set((state) => ({
           transferSessions: state.transferSessions.map((s) =>
@@ -213,16 +215,13 @@ export const useBatchStore = create<BatchState>()(
                   speed: formatSpeed(speed),
                   eta: formatEta(etaSeconds),
                   error: error || undefined,
-                  files: s.files.map((f) =>
-                    f.filename === currentFile
-                      ? {
-                          ...f,
-                          status: status === "Completed" ? "completed" : status === "Error" ? "error" : "transferring",
-                          speed: formatSpeed(speed),
-                          eta: formatEta(etaSeconds),
-                        }
-                      : f,
-                  ),
+                  files: currentFile
+                    ? s.files.map((f) =>
+                        f.filename === currentFile
+                          ? { ...f, status: fileStatus, speed: formatSpeed(speed), eta: formatEta(etaSeconds) }
+                          : f,
+                      )
+                    : s.files.map((f) => ({ ...f, status: fileStatus })),
                 }
               : s,
           ),

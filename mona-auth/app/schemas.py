@@ -51,21 +51,39 @@ class LicenseRefreshRequest(BaseModel):
     device_fingerprint: str = Field(min_length=8, max_length=255)
 
 
-class CheckoutRequest(BaseModel):
-    success_url: str
-    cancel_url: str
+class CreatePaymentRequest(BaseModel):
+    duration_months: int = Field(default=1, ge=1, le=12)
+    payment_type: str = Field(default="alipay", pattern=r"^(alipay|wechat)$")
 
 
-class CheckoutResponse(BaseModel):
-    checkout_url: str
+class PaymentInfo(BaseModel):
+    id: int
+    trade_order_id: str
+    amount: float
+    duration_months: int
+    status: str
+    pay_url: str | None
+    paid_at: datetime | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
 
 
-class PortalRequest(BaseModel):
-    return_url: str
+class CreatePaymentResponse(BaseModel):
+    trade_order_id: str
+    pay_url: str
+    amount: float
 
 
-class PortalResponse(BaseModel):
-    portal_url: str
+class PaymentListResponse(BaseModel):
+    payments: list[PaymentInfo]
+
+
+class SubscriptionInfo(BaseModel):
+    status: str
+    current_period_end: datetime | None
+
+    model_config = {"from_attributes": True}
 
 
 class ErrorResponse(BaseModel):

@@ -1,4 +1,4 @@
-﻿import {
+import {
   useCallback,
   useEffect,
   useMemo,
@@ -22,6 +22,7 @@ import {
   EyeOff,
   Gem,
   Globe2,
+  Copy,
   Grid3X3,
   HardDrive,
   Hexagon,
@@ -30,7 +31,6 @@ import {
   KeyRound,
   Layers,
   Loader2,
-  LogOut,
   Monitor,
   Moon,
   Orbit,
@@ -51,6 +51,7 @@ import { useTranslation } from "react-i18next";
 
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { Button } from "@/components/ui/button";
+import { useLicense } from "@/hooks/useLicense";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -89,7 +90,8 @@ type SettingsSectionKey =
   | "web"
   | "runtime"
   | "desktop"
-  | "advanced";
+  | "advanced"
+  | "about";
 
 type LocalDensity = "comfortable" | "compact";
 type LocalActivityMode = "auto" | "expanded";
@@ -141,7 +143,6 @@ interface SettingsViewProps {
   onToggleTheme: () => void;
   onBackToChat: () => void;
   onModelNameChange: (modelName: string | null) => void;
-  onLogout?: () => void;
   onRestart?: () => void;
   isRestarting?: boolean;
 }
@@ -179,7 +180,6 @@ export function SettingsView({
   onToggleTheme,
   onBackToChat,
   onModelNameChange,
-  onLogout,
   onRestart,
   isRestarting = false,
 }: SettingsViewProps) {
@@ -704,6 +704,8 @@ export function SettingsView({
         return <DesktopSettings />;
       case "advanced":
         return <AdvancedSettings settings={settings} />;
+      case "about":
+        return <AboutSettings />;
       default:
         return null;
     }
@@ -715,7 +717,6 @@ export function SettingsView({
         activeSection={activeSection}
         onSelectSection={setActiveSection}
         onBackToChat={onBackToChat}
-        onLogout={onLogout}
       />
 
       <main className="min-w-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
@@ -764,8 +765,9 @@ const SETTINGS_NAV_ITEMS: Array<{ key: SettingsSectionKey; icon: LucideIcon; fal
   { key: "image", icon: ImageIcon, fallback: "Image" },
   { key: "web", icon: Globe2, fallback: "Web" },
   { key: "runtime", icon: Server, fallback: "Runtime" },
-  { key: "desktop", icon: Monitor, fallback: "Desktop", desktopOnly: true },
+  { key: "desktop", icon: Monitor, fallback: "桌面", desktopOnly: true },
   { key: "advanced", icon: ShieldCheck, fallback: "Advanced" },
+  { key: "about", icon: Info, fallback: "关于" },
 ];
 
 function titleForSection(section: SettingsSectionKey): string {
@@ -776,12 +778,10 @@ function SettingsSidebar({
   activeSection,
   onSelectSection,
   onBackToChat,
-  onLogout,
 }: {
   activeSection: SettingsSectionKey;
   onSelectSection: (section: SettingsSectionKey) => void;
   onBackToChat: () => void;
-  onLogout?: () => void;
 }) {
   const { t } = useTranslation();
   return (
@@ -825,20 +825,6 @@ function SettingsSidebar({
           );
         })}
       </nav>
-
-      <div className="hidden md:mt-auto md:block md:pt-4">
-        {onLogout ? (
-          <Button
-            type="button"
-            variant="ghost"
-            onClick={onLogout}
-            className="h-9 w-full justify-start gap-2 rounded-[10px] px-2.5 text-[13px] font-medium text-muted-foreground hover:bg-destructive/8 hover:text-destructive"
-          >
-            <LogOut className="h-4 w-4" aria-hidden />
-            {t("app.account.logout")}
-          </Button>
-        ) : null}
-      </div>
     </aside>
   );
 }
@@ -1948,6 +1934,214 @@ function RuntimeSettings({
   );
 }
 
+function AboutSettings() {
+  const { t } = useTranslation();
+  const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
+  const { refreshLicense } = useLicense();
+  const [licenseStatus, setLicenseStatus] = useState<"checking" | "active" | "expired" | "missing">("checking");
+  const [licenseExpiry, setLicenseExpiry] = useState<string | null>(null);
+  const [machineId, setMachineId] = useState<string>("");
+  const [copied, setCopied] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [importMessage, setImportMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+
+  useEffect(() => {
+    checkLicense();
+    loadMachineId();
+  }, []);
+
+  const loadMachineId = async () => {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const id = await invoke<string>("get_machine_id");
+      setMachineId(id);
+    } catch {
+      setMachineId("");
+    }
+  };
+
+  const copyMachineId = async () => {
+    if (!machineId) return;
+    try {
+      await navigator.clipboard.writeText(machineId);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        await invoke("plugin:clipboard-manager|write_text", { text: machineId });
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      } catch {}
+    }
+  };
+
+  const checkLicense = async () => {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const result = await invoke<{ status: string; expires_at: string | null }>("check_license");
+      if (result.status === "valid") {
+        setLicenseStatus("active");
+        setLicenseExpiry(result.expires_at);
+      } else if (result.status === "expired") {
+        setLicenseStatus("expired");
+        setLicenseExpiry(result.expires_at);
+      } else {
+        setLicenseStatus("missing");
+      }
+    } catch {
+      setLicenseStatus("missing");
+    }
+  };
+
+  const handleImportLicense = async () => {
+    setImporting(true);
+    setImportMessage(null);
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const selected = await open({
+        multiple: false,
+        filters: [{ name: "License", extensions: ["jwt", "lic", "txt"] }],
+      });
+      if (!selected) {
+        setImporting(false);
+        return;
+      }
+      const filePath = typeof selected === "string" ? selected : Array.isArray(selected) ? selected[0] : null;
+      if (!filePath) {
+        setImporting(false);
+        return;
+      }
+      const { invoke } = await import("@tauri-apps/api/core");
+      const result = await invoke<{ success: boolean; message: string }>("import_license", { path: filePath });
+      if (result.success) {
+        setImportMessage({ type: "success", text: result.message || tx("settings.about.licenseImported", "License imported successfully") });
+        await checkLicense();
+        await refreshLicense();
+      } else {
+        setImportMessage({ type: "error", text: result.message || tx("settings.about.licenseImportFailed", "Failed to import license") });
+      }
+    } catch (e) {
+      setImportMessage({ type: "error", text: String(e) });
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const statusTone = licenseStatus === "active" ? "success" as const : licenseStatus === "expired" ? "warning" as const : "neutral" as const;
+  const statusLabel =
+    licenseStatus === "checking"
+      ? tx("settings.about.checking", "检测中...")
+      : licenseStatus === "active"
+        ? tx("settings.about.activated", "已激活")
+        : licenseStatus === "expired"
+          ? tx("settings.about.expired", "已过期")
+          : tx("settings.about.notActivated", "未激活");
+
+  return (
+    <div className="space-y-7">
+      <section>
+        <SettingsSectionTitle>{tx("settings.about.product", "产品信息")}</SettingsSectionTitle>
+        <SettingsGroup>
+          <SettingsRow title={tx("settings.about.productName", "产品名称")}>
+            <span className="text-[13px] text-muted-foreground">Mona</span>
+          </SettingsRow>
+          <SettingsRow title={tx("settings.about.version", "版本号")}>
+            <span className="text-[13px] text-muted-foreground">0.1.0</span>
+          </SettingsRow>
+          <SettingsRow
+            title={tx("settings.about.machineId", "机器码")}
+            description={tx("settings.about.machineIdDesc", "复制此机器码，到授权页面换取 License 文件")}
+          >
+            <div className="flex items-center gap-2">
+              <code className="max-w-[200px] truncate rounded bg-muted px-2 py-0.5 text-[12px] font-mono text-muted-foreground">
+                {machineId || "..."}
+              </code>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={copyMachineId}
+                disabled={!machineId}
+                className="h-7 rounded-full px-2"
+              >
+                {copied ? (
+                  <Check className="h-3.5 w-3.5 text-emerald-600" />
+                ) : (
+                  <Copy className="h-3.5 w-3.5" />
+                )}
+              </Button>
+            </div>
+          </SettingsRow>
+        </SettingsGroup>
+      </section>
+
+      <section>
+        <SettingsSectionTitle>{tx("settings.about.license", "授权")}</SettingsSectionTitle>
+        <SettingsGroup>
+          <SettingsRow
+            title={tx("settings.about.activationStatus", "激活状态")}
+            description={
+              licenseStatus === "active"
+                ? tx("settings.about.activatedDesc", "Pro 功能（DB AI、笔记 AI、终端 AI、知识库 AI）已解锁")
+                : licenseStatus === "expired"
+                  ? tx("settings.about.expiredDesc", "授权已过期，Pro 功能已锁定")
+                  : tx("settings.about.notActivatedDesc", "激活后可使用 Pro 功能：DB AI、笔记 AI、终端 AI、知识库 AI")
+            }
+          >
+            <StatusPill tone={statusTone}>{statusLabel}</StatusPill>
+          </SettingsRow>
+          {licenseExpiry ? (
+            <ReadOnlyRow title={tx("settings.about.licenseExpiry", "授权到期时间")} value={new Date(licenseExpiry).toLocaleDateString()} />
+          ) : null}
+          <SettingsRow
+            title={tx("settings.about.importLicense", "导入授权文件")}
+            description={tx("settings.about.importLicenseDesc", "导入 .jwt 授权文件以激活 Pro 功能")}
+          >
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleImportLicense}
+              disabled={importing}
+              className="rounded-full"
+            >
+              {importing
+                ? tx("settings.about.importing", "导入中...")
+                : tx("settings.about.selectFile", "选择文件")}
+            </Button>
+          </SettingsRow>
+          {importMessage ? (
+            <div className={cn(
+              "px-4 py-2.5 text-[13px] sm:px-5",
+              importMessage.type === "success" && "text-emerald-700 dark:text-emerald-300",
+              importMessage.type === "error" && "text-destructive",
+            )}>
+              {importMessage.text}
+            </div>
+          ) : null}
+        </SettingsGroup>
+      </section>
+
+      <section>
+        <SettingsSectionTitle>{tx("settings.about.freeFeatures", "免费功能")}</SettingsSectionTitle>
+        <SettingsGroup>
+          <ReadOnlyRow title="Agent 对话" value={tx("settings.values.enabled", "已启用")} />
+          <ReadOnlyRow title={tx("settings.about.imageGeneration", "图片生成")} value={tx("settings.values.enabled", "已启用")} />
+        </SettingsGroup>
+      </section>
+
+      <section>
+        <SettingsSectionTitle>{tx("settings.about.proFeatures", "Pro 功能")}</SettingsSectionTitle>
+        <SettingsGroup>
+          <ReadOnlyRow title="DB AI" value={licenseStatus === "active" ? tx("settings.values.enabled", "已启用") : tx("settings.values.disabled", "未启用")} />
+          <ReadOnlyRow title="笔记 AI" value={licenseStatus === "active" ? tx("settings.values.enabled", "已启用") : tx("settings.values.disabled", "未启用")} />
+          <ReadOnlyRow title="终端 AI" value={licenseStatus === "active" ? tx("settings.values.enabled", "已启用") : tx("settings.values.disabled", "未启用")} />
+          <ReadOnlyRow title={tx("settings.about.knowledgeBaseAI", "知识库 AI")} value={licenseStatus === "active" ? tx("settings.values.enabled", "已启用") : tx("settings.values.disabled", "未启用")} />
+        </SettingsGroup>
+      </section>
+    </div>
+  );
+}
+
 function AdvancedSettings({ settings }: { settings: SettingsPayload }) {
   const { t } = useTranslation();
   const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
@@ -1968,20 +2162,6 @@ function AdvancedSettings({ settings }: { settings: SettingsPayload }) {
         <SettingsGroup>
           <ReadOnlyRow title={tx("settings.rows.mcpServers", "MCP servers")} value={String(settings.advanced.mcp_server_count)} />
           <ReadOnlyRow title={tx("settings.rows.pathAppend", "PATH append")} value={settings.advanced.exec_path_append_set ? tx("settings.values.configured", "Configured") : tx("settings.values.notConfigured", "Not configured")} />
-          <SettingsRow
-            title={tx("settings.rows.configurationDocs", "Configuration docs")}
-            description={tx("settings.help.advancedReadOnly", "Advanced safety controls are read-only in WebUI. Edit config.json intentionally when needed.")}
-          >
-            <a
-              className="inline-flex h-8 items-center rounded-full border border-input bg-background px-3 text-[13px] font-medium text-foreground shadow-sm transition-colors hover:bg-muted"
-              href="https://github.com/HKUDS/mona/blob/main/docs/configuration.md"
-              target="_blank"
-              rel="noreferrer"
-            >
-              <Info className="mr-1.5 h-3.5 w-3.5" aria-hidden />
-              {tx("settings.actions.openDocs", "Open docs")}
-            </a>
-          </SettingsRow>
         </SettingsGroup>
       </section>
     </div>
@@ -2576,43 +2756,43 @@ function DesktopSettings() {
   return (
     <div className="space-y-7">
       <section>
-        <SettingsSectionTitle>{tx("settings.desktop.behavior", "Window behavior")}</SettingsSectionTitle>
+        <SettingsSectionTitle>{tx("settings.desktop.behavior", "窗口行为")}</SettingsSectionTitle>
         <SettingsGroup>
           <SettingsRow
-            title={tx("settings.desktop.runInBackground", "Run in background")}
-            description={tx("settings.desktop.runInBackgroundHelp", "When enabled, closing the window hides Mona to the system tray instead of quitting. The gateway keeps running so you can still access it from a browser.")}
+            title={tx("settings.desktop.runInBackground", "后台运行")}
+            description={tx("settings.desktop.runInBackgroundHelp", "启用后，关闭窗口会将 Mona 隐藏到系统托盘而非退出。网关继续运行，仍可通过浏览器访问。")}
           >
             <ToggleButton
               checked={settings.run_in_background}
               onChange={(run_in_background) => updateSetting({ run_in_background })}
-              label={settings.run_in_background ? tx("settings.values.on", "On") : tx("settings.values.off", "Off")}
+              label={settings.run_in_background ? tx("settings.values.on", "开") : tx("settings.values.off", "关")}
             />
           </SettingsRow>
           <SettingsRow
-            title={tx("settings.desktop.autoStartGateway", "Auto-start gateway")}
-            description={tx("settings.desktop.autoStartGatewayHelp", "Automatically start the gateway when Mona launches.")}
+            title={tx("settings.desktop.autoStartGateway", "自动启动网关")}
+            description={tx("settings.desktop.autoStartGatewayHelp", "Mona 启动时自动启动网关。")}
           >
             <ToggleButton
               checked={settings.auto_start_gateway}
               onChange={(auto_start_gateway) => updateSetting({ auto_start_gateway })}
-              label={settings.auto_start_gateway ? tx("settings.values.on", "On") : tx("settings.values.off", "Off")}
+              label={settings.auto_start_gateway ? tx("settings.values.on", "开") : tx("settings.values.off", "关")}
             />
           </SettingsRow>
         </SettingsGroup>
       </section>
 
       <section>
-        <SettingsSectionTitle>{tx("settings.desktop.gateway", "Gateway")}</SettingsSectionTitle>
+        <SettingsSectionTitle>{tx("settings.desktop.gateway", "网关")}</SettingsSectionTitle>
         <SettingsGroup>
           <SettingsRow
-            title={tx("settings.desktop.gatewayStatus", "Gateway status")}
-            description={tx("settings.desktop.gatewayStatusHelp", "Current status of the mona gateway process.")}
+            title={tx("settings.desktop.gatewayStatus", "网关状态")}
+            description={tx("settings.desktop.gatewayStatusHelp", "Mona 网关进程的当前状态。")}
           >
             <div className="flex items-center gap-2">
               <StatusPill tone={gatewayStatus?.running ? "success" : "neutral"}>
                 {gatewayStatus?.running
-                  ? tx("settings.desktop.running", "Running")
-                  : tx("settings.desktop.stopped", "Stopped")}
+                  ? tx("settings.desktop.running", "运行中")
+                  : tx("settings.desktop.stopped", "已停止")}
               </StatusPill>
               {gatewayStatus?.port ? (
                 <span className="text-[12px] text-muted-foreground">
@@ -2622,8 +2802,8 @@ function DesktopSettings() {
             </div>
           </SettingsRow>
           <SettingsRow
-            title={tx("settings.desktop.openInBrowser", "Open in browser")}
-            description={tx("settings.desktop.openInBrowserHelp", "Open the WebUI in your default web browser.")}
+            title={tx("settings.desktop.openInBrowser", "在浏览器中打开")}
+            description={tx("settings.desktop.openInBrowserHelp", "在默认浏览器中打开 WebUI。")}
           >
             <Button
               size="sm"
@@ -2632,11 +2812,11 @@ function DesktopSettings() {
               disabled={!gatewayStatus?.running}
               className="rounded-full"
             >
-              {tx("settings.desktop.openBrowser", "Open browser")}
+              {tx("settings.desktop.openBrowser", "打开浏览器")}
             </Button>
           </SettingsRow>
           <ReadOnlyRow
-            title={tx("settings.desktop.gatewayPort", "Gateway port")}
+            title={tx("settings.desktop.gatewayPort", "网关端口")}
             value={String(settings.gateway_port)}
           />
         </SettingsGroup>

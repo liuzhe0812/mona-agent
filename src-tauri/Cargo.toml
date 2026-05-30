@@ -47,6 +47,7 @@ dashmap = "6"
 file_icon_provider = "1"
 png = "0.17"
 base64 = "0.22"
+jsonwebtoken = "9"
 windows = { version = "0.61", features = [
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",

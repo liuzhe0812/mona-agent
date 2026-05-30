@@ -13,6 +13,7 @@ import { FileManager } from "./FileManager/FileManager";
 import { BatchModeView } from "./BatchMode/BatchModeView";
 import { DesktopMode } from "./Desktop/DesktopMode";
 import { useTerminalStore } from "./store/terminalStore";
+import { useLicense } from "@/hooks/useLicense";
 import { shellSpawn } from "./ipc";
 
 const AI_PANEL_DEFAULT_WIDTH = 320;
@@ -20,6 +21,7 @@ const AI_PANEL_MIN_WIDTH = 240;
 const AI_PANEL_MAX_WIDTH = 600;
 
 export function TerminalView() {
+  const { licenseActive } = useLicense();
   const sessions = useTerminalStore((s) => s.sessions);
   const activeSessionId = useTerminalStore((s) => s.activeSessionId);
   const aiPanelVisible = useTerminalStore((s) => s.aiPanelVisible);
@@ -101,9 +103,13 @@ export function TerminalView() {
         <Toolbar />
         <SessionTabBar />
         <div className="min-h-0 flex-1">
-          {activeSession?.type === "batch" ? (
+          <div
+            className="h-full"
+            style={{ display: activeSession?.type === "batch" ? "block" : "none" }}
+          >
             <BatchModeView />
-          ) : (
+          </div>
+          {activeSession?.type !== "batch" && (
             sessions
               .filter((s) => s.type !== "batch")
               .map((session) => {
@@ -145,7 +151,7 @@ export function TerminalView() {
         </div>
         <StatusBar sessionId={activeSessionId} />
       </div>
-      {aiPanelVisible && activeSession?.type !== "batch" && (
+      {licenseActive && aiPanelVisible && activeSession?.type !== "batch" && (
         <>
           <div
             onMouseDown={handleDragStart}

@@ -315,7 +315,6 @@ export async function kbCompile(
   const effectiveBase = base ?? (await getApiBase());
   const query = new URLSearchParams();
   if (instance) query.set("instance", instance);
-  query.set("mode", "document");
   return request(
     `${effectiveBase}/api/kb/compile?${query}`,
     token,
@@ -362,6 +361,36 @@ export async function kbDelete(
   query.set("name", name);
   return request(
     `${effectiveBase}/api/kb/delete?${query}`,
+    token,
+  );
+}
+
+export async function kbFiles(
+  token: string,
+  instance: string,
+  base?: string,
+): Promise<{ files: Array<{ name: string; path: string; size: number; modified: string }> }> {
+  const effectiveBase = base ?? (await getApiBase());
+  const query = new URLSearchParams();
+  query.set("instance", instance);
+  return request(
+    `${effectiveBase}/api/kb/files?${query}`,
+    token,
+  );
+}
+
+export async function kbIngestFiles(
+  token: string,
+  instance: string,
+  sources: string[],
+  base?: string,
+): Promise<{ added: string[]; count: number }> {
+  const effectiveBase = base ?? (await getApiBase());
+  const query = new URLSearchParams();
+  query.set("instance", instance);
+  query.set("sources", sources.join(","));
+  return request(
+    `${effectiveBase}/api/kb/ingest-files?${query}`,
     token,
   );
 }

@@ -13,7 +13,10 @@ use approval::ApprovalState;
 use sftp::batch::BatchTransferManager;
 use session::SessionManager;
 use ssh::known_hosts::KnownHostsStore;
+use std::collections::HashMap;
 use std::sync::Arc;
+use tokio::sync::RwLock;
+use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]
 pub struct TerminalState {
@@ -21,6 +24,7 @@ pub struct TerminalState {
     pub known_hosts: Arc<KnownHostsStore>,
     pub approval: ApprovalState,
     pub batch_transfer: BatchTransferManager,
+    pub transfer_cancels: Arc<RwLock<HashMap<String, CancellationToken>>>,
 }
 
 impl TerminalState {
@@ -38,6 +42,7 @@ impl TerminalState {
             known_hosts,
             approval: ApprovalState::new(),
             batch_transfer: BatchTransferManager::new(),
+            transfer_cancels: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 

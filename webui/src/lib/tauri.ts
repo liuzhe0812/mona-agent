@@ -99,3 +99,30 @@ export async function saveDesktopNotesState(state: unknown): Promise<void> {
 export async function exportNoteTempFile(noteId: string, content: string): Promise<string> {
   return invoke<string>("notes_export_temp", { noteId, content });
 }
+
+export async function saveMarkdownFile(title: string, content: string): Promise<boolean> {
+  if (!isTauri()) {
+    const blob = new Blob([content], { type: "text/markdown;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    const safeName = title.trim().replace(/[\\/:*?"<>|]/g, "_").slice(0, 64) || "未命名笔记";
+    link.download = `${safeName}.md`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    return true;
+  }
+  const { save } = await import("@tauri-apps/plugin-dialog");
+  const { writeFile } = await import("@tauri-apps/plugin-fs");
+  const safeName = title.trim().replace(/[\\/:*?"<>|]/g, "_").slice(0, 64) || "未命名笔记";
+  const filePath = await save({
+    defaultPath: `${safeName}.md`,
+    filters: [{ name: "Markdown", extensions: ["md"] }],
+  });
+  if (!filePath) return false;
+  const encoder = new TextEncoder();
+  await writeFile(filePath, encoder.encode(content));
+  return true;
+}

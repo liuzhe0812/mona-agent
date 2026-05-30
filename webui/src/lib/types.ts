@@ -405,7 +405,7 @@ export interface WebuiThreadPersistedPayload {
 }
 
 export type Outbound =
-  | { type: "new_chat" }
+  | { type: "new_chat"; ephemeral?: boolean }
   | { type: "attach"; chat_id: string }
   | {
       type: "message";
@@ -419,4 +419,5 @@ export type Outbound =
       db_connection_id?: string;
       db_database?: string;
       db_table?: string;
-    };
+    }
+  | { type: "delete_chat"; chat_id: string };

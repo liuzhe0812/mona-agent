@@ -27,13 +27,6 @@ export interface HostKeyDialogState {
   saveSession: boolean;
 }
 
-export interface TransferProgress {
-  path: string;
-  direction: "upload" | "download";
-  bytesTransferred: number;
-  totalBytes: number | null;
-}
-
 export interface ExecApprovalState {
   open: boolean;
   requestId: string;
@@ -56,6 +49,7 @@ interface TerminalState {
   savedConnections: ConnectionConfig[];
   aiPanelVisible: boolean;
   newConnectionDialogOpen: boolean;
+  newConnectionDialogDefaultType: "ssh" | "sftp";
   settingsDialogOpen: boolean;
   settings: TerminalSettings;
   batchSelectedIds: Set<string>;
@@ -63,7 +57,6 @@ interface TerminalState {
   batchActiveTabId: string | null;
   hostKeyDialog: HostKeyDialogState;
   sshPasswordDialog: SshPasswordDialogState;
-  transferProgress: Record<string, TransferProgress>;
   execApproval: ExecApprovalState;
   terminalRegistry: TerminalRegistry;
   terminalExecMode: "auto" | "approval";
@@ -76,7 +69,7 @@ interface TerminalState {
   toggleAIPanel: () => void;
   addConnection: (config: ConnectionConfig) => void;
   removeConnection: (id: string) => void;
-  setNewConnectionDialogOpen: (open: boolean) => void;
+  setNewConnectionDialogOpen: (open: boolean, defaultType?: "ssh" | "sftp") => void;
   setSettingsDialogOpen: (open: boolean) => void;
   updateSettings: (settings: Partial<TerminalSettings>) => void;
   toggleBatchSelection: (id: string) => void;
@@ -92,8 +85,6 @@ interface TerminalState {
   closeHostKeyDialog: () => void;
   showSshPasswordDialog: (dialog: Omit<SshPasswordDialogState, "open">) => void;
   closeSshPasswordDialog: () => void;
-  updateTransferProgress: (key: string, progress: TransferProgress) => void;
-  clearTransferProgress: (key: string) => void;
   showExecApproval: (approval: Omit<ExecApprovalState, "open">) => void;
   closeExecApproval: () => void;
   setTerminalExecMode: (mode: "auto" | "approval") => void;
@@ -108,6 +99,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   savedConnections: [],
   aiPanelVisible: true,
   newConnectionDialogOpen: false,
+  newConnectionDialogDefaultType: "ssh" as const,
   settingsDialogOpen: false,
   settings: {
     fontSize: 14,
@@ -136,7 +128,6 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     onConfirm: () => {},
     onCancel: () => {},
   },
-  transferProgress: {},
   execApproval: {
     open: false,
     requestId: "",
@@ -203,8 +194,11 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     }));
   },
 
-  setNewConnectionDialogOpen: (open) => {
-    set({ newConnectionDialogOpen: open });
+  setNewConnectionDialogOpen: (open, defaultType) => {
+    set({
+      newConnectionDialogOpen: open,
+      ...(defaultType ? { newConnectionDialogDefaultType: defaultType } : {}),
+    });
   },
 
   setSettingsDialogOpen: (open) => {
@@ -332,19 +326,6 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
         onConfirm: () => {},
         onCancel: () => {},
       },
-    });
-  },
-
-  updateTransferProgress: (key, progress) => {
-    set((state) => ({
-      transferProgress: { ...state.transferProgress, [key]: progress },
-    }));
-  },
-
-  clearTransferProgress: (key) => {
-    set((state) => {
-      const { [key]: _, ...rest } = state.transferProgress;
-      return { transferProgress: rest };
     });
   },
 

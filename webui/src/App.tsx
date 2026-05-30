@@ -1,6 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { GripVertical } from "lucide-react";
 import { DeleteConfirm } from "@/components/DeleteConfirm";
 import { RenameChatDialog } from "@/components/RenameChatDialog";
 import { SetupWizard } from "@/components/SetupWizard";
@@ -9,17 +8,17 @@ import { SessionSearchDialog } from "@/components/SessionSearchDialog";
 import { SettingsView } from "@/components/settings/SettingsView";
 import { ThreadShell } from "@/components/thread/ThreadShell";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
-import { AgentWorkbench } from "@/components/workspace/AgentWorkbench";
 import { AppTitleBar } from "@/components/workspace/AppTitleBar";
 import { TerminalView } from "@/components/terminal/TerminalView";
+import { useTerminalStore } from "@/components/terminal/store/terminalStore";
 
 import { useSessions } from "@/hooks/useSessions";
 import { useDeferredTitleRefresh } from "@/hooks/useDeferredTitleRefresh";
 import { useSidebarState } from "@/hooks/useSidebarState";
 import { ThemeProvider, useTheme } from "@/hooks/useTheme";
+import { LicenseProvider } from "@/hooks/useLicense";
 import { cn } from "@/lib/utils";
 import {
-  clearSavedSecret,
   deriveWsUrl,
   fetchBootstrap,
   loadSavedSecret,
@@ -400,31 +399,23 @@ export default function App() {
     );
   };
 
-  const handleLogout = () => {
-    if (state.status === "ready") {
-      state.client.close();
-    }
-    clearSavedSecret();
-    setState({ status: "auth" });
-  };
-
   return (
     <ClientProvider
       client={state.client}
       token={state.token}
       modelName={state.modelName}
     >
-      <Shell onModelNameChange={handleModelNameChange} onLogout={handleLogout} />
+      <LicenseProvider>
+        <Shell onModelNameChange={handleModelNameChange} />
+      </LicenseProvider>
     </ClientProvider>
   );
 }
 
 function Shell({
   onModelNameChange,
-  onLogout,
 }: {
   onModelNameChange: (modelName: string | null) => void;
-  onLogout: () => void;
 }) {
   const { t, i18n } = useTranslation();
   const { client } = useClient();
@@ -434,6 +425,7 @@ function Shell({
     useSidebarState(sessions, !loading);
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [view, setView] = useState<ShellView>("chat");
+  const [createNoteTrigger, setCreateNoteTrigger] = useState(0);
   const [desktopSidebarOpen, setDesktopSidebarOpen] =
     useState<boolean>(readSidebarOpen);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
@@ -453,10 +445,16 @@ function Shell({
   const [completedChatIds, setCompletedChatIds] = useState<Set<string>>(readCompletedRunChatIds);
   const [queuedAgentPrompt, setQueuedAgentPrompt] = useState<QueuedAgentPrompt | null>(null);
   const runningChatIdsRef = useRef<Set<string>>(new Set());
-  const [workbenchWidth, setWorkbenchWidth] = useState(320);
-  const isDraggingWorkbenchRef = useRef(false);
-  const dragStartXRef = useRef(0);
-  const dragStartWidthRef = useRef(0);
+
+  useEffect(() => {
+    const mql = window.matchMedia("(min-width: 1024px)");
+    const handler = (e: MediaQueryListEvent) => {
+      if (!e.matches) setDesktopSidebarOpen(false);
+    };
+    mql.addEventListener("change", handler);
+    if (!mql.matches) setDesktopSidebarOpen(false);
+    return () => mql.removeEventListener("change", handler);
+  }, []);
 
   useEffect(() => {
     try {
@@ -530,35 +528,6 @@ function Shell({
     setDesktopSidebarOpen(true);
   }, []);
 
-  useEffect(() => {
-    const onMouseMove = (e: MouseEvent) => {
-      if (!isDraggingWorkbenchRef.current) return;
-      const delta = dragStartXRef.current - e.clientX;
-      const next = Math.max(240, Math.min(600, dragStartWidthRef.current + delta));
-      setWorkbenchWidth(next);
-    };
-    const onMouseUp = () => {
-      isDraggingWorkbenchRef.current = false;
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-    };
-    window.addEventListener("mousemove", onMouseMove);
-    window.addEventListener("mouseup", onMouseUp);
-    return () => {
-      window.removeEventListener("mousemove", onMouseMove);
-      window.removeEventListener("mouseup", onMouseUp);
-    };
-  }, []);
-
-  const onWorkbenchDragStart = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    isDraggingWorkbenchRef.current = true;
-    dragStartXRef.current = e.clientX;
-    dragStartWidthRef.current = workbenchWidth;
-    document.body.style.cursor = "col-resize";
-    document.body.style.userSelect = "none";
-  }, [workbenchWidth]);
-
   const closeMobileSidebar = useCallback(() => {
     setMobileSidebarOpen(false);
   }, []);
@@ -581,12 +550,21 @@ function Shell({
 
   const onOpenNote = useCallback(() => {
     setView("note");
+    setCreateNoteTrigger((n) => n + 1);
     setMobileSidebarOpen(false);
   }, []);
 
   const onOpenSSH = useCallback(() => {
     setView("ssh");
     setMobileSidebarOpen(false);
+  }, []);
+
+  const onOpenSSHAndNew = useCallback(() => {
+    setView("ssh");
+    setMobileSidebarOpen(false);
+    requestAnimationFrame(() => {
+      useTerminalStore.getState().setNewConnectionDialogOpen(true);
+    });
   }, []);
 
   const onOpenDb = useCallback(() => {
@@ -945,7 +923,7 @@ function Shell({
         {showMainSidebar ? (
           <aside
             className={cn(
-              "relative z-20 hidden shrink-0 overflow-hidden lg:block",
+              "relative z-20 shrink-0 overflow-hidden",
               "transition-[width] duration-300 ease-out",
             )}
             style={{
@@ -959,7 +937,16 @@ function Shell({
                 {...sidebarProps}
                 collapsed={!desktopSidebarOpen}
                 onCollapse={closeDesktopSidebar}
-                onExpand={openDesktopSidebar}
+                onExpand={() => {
+                  const isDesktop =
+                    typeof window !== "undefined" &&
+                    window.matchMedia("(min-width: 1024px)").matches;
+                  if (isDesktop) {
+                    openDesktopSidebar();
+                  } else {
+                    setMobileSidebarOpen(true);
+                  }
+                }}
               />
             </div>
           </aside>
@@ -1005,8 +992,8 @@ function Shell({
                   session={activeSession}
                   title={headerTitle}
                   onToggleSidebar={toggleSidebar}
-                  onNewChat={onNewChat}
-                  onOpenNote={onOpenNote}
+                  onOpenSSH={onOpenSSHAndNew}
+                  onCreateNote={onOpenNote}
                   onCreateChat={onCreateChat}
                   onTurnEnd={onTurnEnd}
                   queuedPrompt={queuedAgentPrompt}
@@ -1020,7 +1007,7 @@ function Shell({
               {view === "note" ? (
                 <div className="absolute inset-0 flex flex-col">
                   <Suspense fallback={<ModuleLoading title="正在打开笔记" />}>
-                    <NotesView onSendToAgent={onSendNoteToAgent} />
+                    <NotesView onSendToAgent={onSendNoteToAgent} createNoteTrigger={createNoteTrigger} />
                   </Suspense>
                 </div>
               ) : null}
@@ -1031,7 +1018,6 @@ function Shell({
                     onToggleTheme={toggle}
                     onBackToChat={onBackToChat}
                     onModelNameChange={onModelNameChange}
-                    onLogout={onLogout}
                     onRestart={onRestart}
                     isRestarting={isRestarting}
                   />
@@ -1052,25 +1038,12 @@ function Shell({
                   </Suspense>
                 </div>
               )}
-              {view === "kb" && (
-                <div className="absolute inset-0 flex flex-col">
-                  <Suspense fallback={<ModuleLoading title="正在打开知识库" />}>
-                    <KnowledgeBaseView onBack={onBackToChat} />
-                  </Suspense>
-                </div>
-              )}
+              <div className={`absolute inset-0 flex flex-col${view === "kb" ? "" : " hidden"}`}>
+                <Suspense fallback={<ModuleLoading title="正在打开知识库" />}>
+                  <KnowledgeBaseView onBack={onBackToChat} />
+                </Suspense>
+              </div>
             </main>
-            {view === "chat" ? (
-              <>
-                <div
-                  onMouseDown={onWorkbenchDragStart}
-                  className="flex h-full w-1 shrink-0 cursor-col-resize items-center justify-center border-l border-border/75 bg-transparent transition-colors duration-150 hover:bg-transparent active:bg-accent/20"
-                >
-                  <GripVertical className="h-3.5 w-3.5 text-muted-foreground/30" />
-                </div>
-                <AgentWorkbench width={workbenchWidth} />
-              </>
-            ) : null}
           </div>
         </div>
 

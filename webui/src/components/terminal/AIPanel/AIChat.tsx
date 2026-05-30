@@ -1,21 +1,52 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Send, Loader2, Shield, Square } from "lucide-react";
+import { Send, Loader2, Shield, Square, FileText } from "lucide-react";
 import { useClient } from "@/providers/ClientProvider";
 import { useTerminalStore } from "../store/terminalStore";
+import { isTauri } from "@/lib/tauri";
 import type { InboundEvent } from "@/lib/types";
+import type { ActionConfirmResult } from "./ActionConfig";
 
 interface Props {
   sessionId: string | null;
-  initialMessage?: string;
+  initialAction?: ActionConfirmResult;
   onInitialMessageSent?: () => void;
 }
 
 interface ChatMessage {
   role: "user" | "assistant";
   content: string;
+  label?: string;
+  generateReport?: boolean;
 }
 
-export function AIChat({ sessionId, initialMessage, onInitialMessageSent }: Props) {
+function extractHtmlCodeBlock(content: string): string | null {
+  const match = content.match(/```html\s*\n([\s\S]*?)```/);
+  return match ? match[1].trim() : null;
+}
+
+function openHtmlReport(html: string, label: string) {
+  const safeName = label.trim().replace(/[\\/:*?"<>|]/g, "_").slice(0, 64) || "report";
+  if (isTauri()) {
+    (async () => {
+      const { writeFile } = await import("@tauri-apps/plugin-fs");
+      const { BaseDirectory } = await import("@tauri-apps/plugin-fs");
+      const { open } = await import("@tauri-apps/plugin-shell");
+      const fileName = `${safeName}_${Date.now()}.html`;
+      const encoder = new TextEncoder();
+      await writeFile(fileName, encoder.encode(html), { baseDir: BaseDirectory.Temp });
+      const { tempDir } = await import("@tauri-apps/api/path");
+      const dir = await tempDir();
+      const filePath = dir + fileName;
+      await open(filePath);
+    })().catch(console.error);
+  } else {
+    const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    window.open(url, "_blank");
+  }
+}
+
+export function AIChat({ sessionId, initialAction, onInitialMessageSent }: Props) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -24,13 +55,13 @@ export function AIChat({ sessionId, initialMessage, onInitialMessageSent }: Prop
   const registry = useTerminalStore((s) => s.terminalRegistry);
   const execMode = useTerminalStore((s) => s.terminalExecMode);
   const setExecMode = useTerminalStore((s) => s.setTerminalExecMode);
-  const initialMessageRef = useRef(initialMessage);
+  const initialActionRef = useRef(initialAction);
   const onInitialMessageSentRef = useRef(onInitialMessageSent);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    initialMessageRef.current = initialMessage;
-  }, [initialMessage]);
+    initialActionRef.current = initialAction;
+  }, [initialAction]);
 
   useEffect(() => {
     onInitialMessageSentRef.current = onInitialMessageSent;
@@ -98,13 +129,21 @@ export function AIChat({ sessionId, initialMessage, onInitialMessageSent }: Prop
   }, [messages]);
 
   useEffect(() => {
-    const msg = initialMessageRef.current;
-    if (!msg || !chatId) return;
-    const enriched = enrichWithTerminalContext(msg, sessionId, registry);
-    setMessages((prev) => [...prev, { role: "user", content: msg }]);
+    const action = initialActionRef.current;
+    if (!action || !chatId) return;
+    const enriched = enrichWithTerminalContext(action.prompt, sessionId, registry);
+    setMessages((prev) => [
+      ...prev,
+      {
+        role: "user",
+        content: action.label,
+        label: action.label,
+        generateReport: action.generateReport,
+      },
+    ]);
     setIsLoading(true);
     client.sendMessage(chatId, enriched, undefined, { terminalSessionId: sessionId ?? undefined, terminalExecMode: execMode });
-    initialMessageRef.current = undefined;
+    initialActionRef.current = undefined;
     onInitialMessageSentRef.current?.();
   }, [chatId, sessionId, registry, client, execMode]);
 
@@ -127,6 +166,9 @@ export function AIChat({ sessionId, initialMessage, onInitialMessageSent }: Prop
     return () => {
       if (cid && isLoadingRef.current) {
         try { c.sendMessage(cid, "/stop"); } catch {}
+      }
+      if (cid && cid.startsWith("ephemeral:")) {
+        try { c.deleteChat(cid); } catch {}
       }
     };
   }, [chatId, client]);
@@ -152,18 +194,40 @@ export function AIChat({ sessionId, initialMessage, onInitialMessageSent }: Prop
             输入问题，AI 将基于终端上下文回答
           </p>
         )}
-        {messages.map((msg, i) => (
-          <div
-            key={i}
-            className={`text-xs leading-relaxed whitespace-pre-wrap break-words ${
-              msg.role === "user"
-                ? "bg-sidebar-accent rounded-lg px-3 py-2 text-foreground w-fit"
-                : "text-muted-foreground"
-            }`}
-          >
-            {msg.content}
-          </div>
-        ))}
+        {messages.map((msg, i) => {
+          const htmlContent = msg.role === "assistant" ? extractHtmlCodeBlock(msg.content) : null;
+          const displayContent = msg.role === "assistant" && htmlContent
+            ? msg.content.replace(/```html\s*\n[\s\S]*?```/, "").trim()
+            : msg.content;
+          return (
+            <div key={i}>
+              <div
+                className={`text-xs leading-relaxed whitespace-pre-wrap break-words ${
+                  msg.role === "user"
+                    ? "bg-sidebar-accent rounded-lg px-3 py-2 text-foreground w-fit"
+                    : "text-muted-foreground"
+                }`}
+              >
+                {msg.role === "user" && msg.label && (
+                  <span className="mr-1 inline-flex items-center gap-0.5 rounded bg-foreground/10 px-1.5 py-0.5 text-[10px] font-medium text-foreground/80">
+                    {msg.label}
+                  </span>
+                )}
+                {displayContent}
+              </div>
+              {htmlContent && (
+                <button
+                  type="button"
+                  onClick={() => openHtmlReport(htmlContent, msg.generateReport ? (messages[i - 1]?.label ?? "报告") : "报告")}
+                  className="mt-1.5 inline-flex items-center gap-1.5 rounded-md border border-border/70 bg-background px-2 py-1 text-[11px] text-foreground hover:bg-sidebar-accent/50 transition-colors"
+                >
+                  <FileText className="h-3 w-3" />
+                  查看 HTML 报告
+                </button>
+              )}
+            </div>
+          );
+        })}
         {isLoading && messages[messages.length - 1]?.role !== "assistant" && (
           <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
             <Loader2 className="h-3 w-3 animate-spin" />
