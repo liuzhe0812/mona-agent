@@ -7,6 +7,7 @@ import {
   FileText,
   ListFilter,
   Menu,
+  Presentation,
   Search,
   Settings,
   Terminal,
@@ -47,6 +48,7 @@ interface SidebarProps {
   onToggleArchive: (key: string) => void;
   onOpenSettings: () => void;
   onOpenNote?: () => void;
+  onOpenPpt?: () => void;
   onOpenSSH?: () => void;
   onOpenDb?: () => void;
   onOpenKb?: () => void;
@@ -123,7 +125,9 @@ export function Sidebar(props: SidebarProps) {
 
       <ToolboxNavigation
         collapsed={collapsed}
+        onNewChat={props.onNewChat}
         onOpenNote={props.onOpenNote ?? (() => {})}
+        onOpenPpt={props.onOpenPpt ?? (() => {})}
         onOpenSSH={props.onOpenSSH ?? (() => {})}
         onOpenDb={props.onOpenDb ?? (() => {})}
         onOpenKb={props.onOpenKb ?? (() => {})}
@@ -219,18 +223,23 @@ const TOOLBOX_ITEMS: Array<{
   { label: "终端", icon: <Terminal className="h-4 w-4" /> },
   { label: "数据库", icon: <Database className="h-4 w-4" /> },
   { label: "知识库", icon: <BookOpen className="h-4 w-4" /> },
+  { label: "PPT制作", icon: <Presentation className="h-4 w-4" /> },
 ];
 
 function ToolboxNavigation({
   collapsed,
+  onNewChat,
   onOpenNote,
+  onOpenPpt,
   onOpenSSH,
   onOpenDb,
   onOpenKb,
   onGoHome,
 }: {
   collapsed: boolean;
+  onNewChat: () => void;
   onOpenNote: () => void;
+  onOpenPpt: () => void;
   onOpenSSH: () => void;
   onOpenDb: () => void;
   onOpenKb: () => void;
@@ -250,8 +259,12 @@ function ToolboxNavigation({
       )}
     >
       {visibleItems.map((item) => {
-        const onClick = item.label === "笔记"
+        const onClick = item.label === "Mona"
+          ? onNewChat
+          : item.label === "笔记"
             ? onOpenNote
+          : item.label === "PPT制作"
+            ? onOpenPpt
           : item.label === "终端"
             ? onOpenSSH
           : item.label === "数据库"

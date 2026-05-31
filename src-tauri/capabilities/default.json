@@ -18,6 +18,8 @@
     "shell:allow-kill",
     "dialog:default",
     "opener:default",
+    "opener:allow-open-path",
+    "opener:allow-reveal-item-in-dir",
     "fs:default",
     "fs:allow-read-file",
     "fs:allow-write-file",

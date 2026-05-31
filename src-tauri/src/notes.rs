@@ -800,7 +800,7 @@ fn bool_to_i64(value: bool) -> i64 {
     }
 }
 
-fn read_workspace_path_from_config() -> PathBuf {
+pub fn read_workspace_path_from_config() -> PathBuf {
     let config_path = crate::settings::mona_config_path();
     if !config_path.exists() {
         return dirs::home_dir()

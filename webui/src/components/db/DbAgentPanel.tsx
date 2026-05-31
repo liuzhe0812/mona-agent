@@ -236,8 +236,8 @@ export function DbAgentPanel({
         </div>
       </div>
 
-      <div className="shrink-0 border-b border-border/65 px-2.5 py-2">
-        <div className="grid grid-cols-3 gap-1.5">
+      <div className="shrink-0 border-b border-border/65 px-1 py-0.5">
+        <div className="grid grid-cols-2 gap-1">
           <button
             type="button"
             disabled={!activeTab?.connectionId || creatingChat || isStreaming}
@@ -247,10 +247,10 @@ export function DbAgentPanel({
                 "执行计划",
               )
             }
-            className="flex h-7 items-center justify-center gap-1 rounded-lg border border-border/70 bg-background text-[10px] font-medium text-foreground/82 transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+            className="flex items-center gap-1.5 rounded px-2 py-1.5 text-[11px] text-muted-foreground transition-colors hover:bg-sidebar-accent/50 hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
           >
-            <Zap className="h-3 w-3 shrink-0 text-muted-foreground" />
-            <span className="min-w-0 truncate">执行计划</span>
+            <Zap className="h-3 w-3 shrink-0" />
+            <span>执行计划</span>
           </button>
           <button
             type="button"
@@ -261,10 +261,10 @@ export function DbAgentPanel({
                 "索引诊断",
               )
             }
-            className="flex h-7 items-center justify-center gap-1 rounded-lg border border-border/70 bg-background text-[10px] font-medium text-foreground/82 transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+            className="flex items-center gap-1.5 rounded px-2 py-1.5 text-[11px] text-muted-foreground transition-colors hover:bg-sidebar-accent/50 hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
           >
-            <ListTree className="h-3 w-3 shrink-0 text-muted-foreground" />
-            <span className="min-w-0 truncate">索引诊断</span>
+            <ListTree className="h-3 w-3 shrink-0" />
+            <span>索引诊断</span>
           </button>
           <button
             type="button"
@@ -275,10 +275,10 @@ export function DbAgentPanel({
                 "数据画像",
               )
             }
-            className="flex h-7 items-center justify-center gap-1 rounded-lg border border-border/70 bg-background text-[10px] font-medium text-foreground/82 transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+            className="flex items-center gap-1.5 rounded px-2 py-1.5 text-[11px] text-muted-foreground transition-colors hover:bg-sidebar-accent/50 hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
           >
-            <BarChart3 className="h-3 w-3 shrink-0 text-muted-foreground" />
-            <span className="min-w-0 truncate">数据画像</span>
+            <BarChart3 className="h-3 w-3 shrink-0" />
+            <span>数据画像</span>
           </button>
           <button
             type="button"
@@ -289,10 +289,10 @@ export function DbAgentPanel({
                 "诊断错误",
               )
             }
-            className="flex h-7 items-center justify-center gap-1 rounded-lg border border-border/70 bg-background text-[10px] font-medium text-foreground/82 transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+            className="flex items-center gap-1.5 rounded px-2 py-1.5 text-[11px] text-muted-foreground transition-colors hover:bg-sidebar-accent/50 hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
           >
-            <AlertTriangle className="h-3 w-3 shrink-0 text-muted-foreground" />
-            <span className="min-w-0 truncate">诊断错误</span>
+            <AlertTriangle className="h-3 w-3 shrink-0" />
+            <span>诊断错误</span>
           </button>
           <button
             type="button"
@@ -303,10 +303,10 @@ export function DbAgentPanel({
                 "一键巡检",
               )
             }
-            className="flex h-7 items-center justify-center gap-1 rounded-lg border border-border/70 bg-background text-[10px] font-medium text-foreground/82 transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+            className="flex items-center gap-1.5 rounded px-2 py-1.5 text-[11px] text-muted-foreground transition-colors hover:bg-sidebar-accent/50 hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
           >
-            <Shield className="h-3 w-3 shrink-0 text-muted-foreground" />
-            <span className="min-w-0 truncate">一键巡检</span>
+            <Shield className="h-3 w-3 shrink-0" />
+            <span>一键巡检</span>
           </button>
           <button
             type="button"
@@ -317,10 +317,10 @@ export function DbAgentPanel({
                 "优化建议",
               )
             }
-            className="flex h-7 items-center justify-center gap-1 rounded-lg border border-border/70 bg-background text-[10px] font-medium text-foreground/82 transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+            className="flex items-center gap-1.5 rounded px-2 py-1.5 text-[11px] text-muted-foreground transition-colors hover:bg-sidebar-accent/50 hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
           >
-            <Wrench className="h-3 w-3 shrink-0 text-muted-foreground" />
-            <span className="min-w-0 truncate">优化建议</span>
+            <Wrench className="h-3 w-3 shrink-0" />
+            <span>优化建议</span>
           </button>
         </div>
       </div>
@@ -417,14 +417,8 @@ function DbChat({
         </InlineNotice>
       ) : null}
 
-      {!hasMessages && !loading ? (
-        <AssistantHint
-          text={
-            hasActiveTab
-              ? "可以提问关于当前数据库的问题，或使用上方快捷功能。"
-              : "先连接数据库再开始对话。"
-          }
-        />
+      {!hasMessages && !loading && hasActiveTab ? (
+        <AssistantHint text="可以提问关于当前数据库的问题，或使用上方快捷功能。" />
       ) : null}
 
       {loading ? <AssistantHint text="正在读取会话历史..." loading /> : null}

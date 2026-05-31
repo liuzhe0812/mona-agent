@@ -1,6 +1,8 @@
 import type {
   ChatSummary,
   ImageGenerationSettingsUpdate,
+  PptProject,
+  PptTemplatesResponse,
   ProviderSettingsUpdate,
   SettingsPayload,
   SettingsUpdate,
@@ -257,7 +259,16 @@ export async function kbStatus(
   token: string,
   base?: string,
   instance?: string,
-): Promise<{ mode: string; docCount: number; pendingChanges: number; instance: string }> {
+): Promise<{
+  instance: string;
+  mode: string;
+  sources: number;
+  pages: number;
+  nodes: number;
+  edges: number;
+  pending: number;
+  indexed: number;
+}> {
   const effectiveBase = base ?? (await getApiBase());
   const query = new URLSearchParams();
   if (instance) query.set("instance", instance);
@@ -272,15 +283,11 @@ export async function kbIngest(
   paths: string[],
   base?: string,
   instance?: string,
-  recursive = false,
-  mode = "notebook",
-): Promise<{ ingested: string[]; count: number }> {
+): Promise<{ ingested: number }> {
   const effectiveBase = base ?? (await getApiBase());
   const query = new URLSearchParams();
   query.set("paths", paths.join(","));
   if (instance) query.set("instance", instance);
-  query.set("recursive", String(recursive));
-  query.set("mode", mode);
   return request(
     `${effectiveBase}/api/kb/ingest?${query}`,
     token,
@@ -292,15 +299,13 @@ export async function kbQuery(
   q: string,
   base?: string,
   instance?: string,
-  topK = 5,
-  maxTokens = 8000,
-): Promise<{ results: Array<{ path: string; title: string; content: string }>; totalTokens: number }> {
+  limit = 10,
+): Promise<{ results: Array<{ path: string; title: string; snippet: string; rank: number }>; query: string }> {
   const effectiveBase = base ?? (await getApiBase());
   const query = new URLSearchParams();
   query.set("q", q);
   if (instance) query.set("instance", instance);
-  query.set("topK", String(topK));
-  query.set("maxTokens", String(maxTokens));
+  query.set("limit", String(limit));
   return request(
     `${effectiveBase}/api/kb/query?${query}`,
     token,
@@ -321,10 +326,42 @@ export async function kbCompile(
   );
 }
 
+export async function kbGraph(
+  token: string,
+  base?: string,
+  instance?: string,
+): Promise<{
+  node_count: number;
+  edge_count: number;
+  kind_counts: Record<string, number>;
+  relation_counts: Record<string, number>;
+  nodes: Array<{ id: string; kind: string; title: string }>;
+  edges: Array<{ source: string; target: string; relation: string }>;
+}> {
+  const effectiveBase = base ?? (await getApiBase());
+  const query = new URLSearchParams();
+  if (instance) query.set("instance", instance);
+  return request(
+    `${effectiveBase}/api/kb/graph?${query}`,
+    token,
+  );
+}
+
 export async function kbList(
   token: string,
   base?: string,
-): Promise<{ instances: Array<{ name: string; mode: string; paths: string[]; docCount: number; pendingChanges: number }> }> {
+): Promise<{
+  instances: Array<{
+    name: string;
+    mode: string;
+    paths: string[];
+    sources: number;
+    pages: number;
+    nodes: number;
+    edges: number;
+    pending: number;
+  }>;
+}> {
   const effectiveBase = base ?? (await getApiBase());
   const query = new URLSearchParams();
   return request(
@@ -393,4 +430,34 @@ export async function kbIngestFiles(
     `${effectiveBase}/api/kb/ingest-files?${query}`,
     token,
   );
+}
+
+export async function fetchPptTemplates(
+  token: string,
+  base?: string,
+): Promise<PptTemplatesResponse> {
+  const effectiveBase = base ?? (await getApiBase());
+  return request<PptTemplatesResponse>(
+    `${effectiveBase}/api/ppt/templates`,
+    token,
+  );
+}
+
+export async function fetchPptProjects(
+  token: string,
+  base?: string,
+): Promise<{ projects: PptProject[] }> {
+  const effectiveBase = base ?? (await getApiBase());
+  return request(`${effectiveBase}/api/ppt/projects`, token);
+}
+
+export async function fetchPptPreviewPort(
+  token: string,
+  project: string,
+  base?: string,
+): Promise<{ port: number | null }> {
+  const effectiveBase = base ?? (await getApiBase());
+  const query = new URLSearchParams();
+  query.set("project", project);
+  return request(`${effectiveBase}/api/ppt/preview-port?${query}`, token);
 }

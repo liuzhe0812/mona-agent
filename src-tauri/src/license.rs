@@ -5,6 +5,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 
 const LICENSE_FILENAME: &str = "license.jwt";
+const TRIAL_DAYS: i64 = 31;
 
 fn license_dir() -> Result<PathBuf, String> {
     let base = dirs::data_local_dir()
@@ -15,6 +16,47 @@ fn license_dir() -> Result<PathBuf, String> {
 
 fn license_path() -> Result<PathBuf, String> {
     Ok(license_dir()?.join(LICENSE_FILENAME))
+}
+
+fn trial_marker_path() -> Result<PathBuf, String> {
+    Ok(license_dir()?.join("first_run"))
+}
+
+fn get_trial_status() -> (bool, String) {
+    let marker = match trial_marker_path() {
+        Ok(p) => p,
+        Err(_) => return (false, String::new()),
+    };
+
+    let first_run = if marker.exists() {
+        match std::fs::read_to_string(&marker) {
+            Ok(ts) => match ts.trim().parse::<i64>() {
+                Ok(v) => chrono::DateTime::from_timestamp(v, 0),
+                Err(_) => None,
+            },
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
+
+    let first_run = match first_run {
+        Some(dt) => dt,
+        None => {
+            let now = chrono::Utc::now();
+            if let Ok(dir) = license_dir() {
+                let _ = std::fs::create_dir_all(&dir);
+                let _ = std::fs::write(&marker, now.timestamp().to_string());
+            }
+            now
+        }
+    };
+
+    let trial_end = first_run + chrono::Duration::days(TRIAL_DAYS);
+    let now = chrono::Utc::now();
+    let active = now <= trial_end;
+    let expires_at = trial_end.format("%Y-%m-%d").to_string();
+    (active, expires_at)
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -40,6 +82,14 @@ pub async fn get_machine_id() -> Result<String, String> {
 pub async fn check_license() -> Result<serde_json::Value, String> {
     let path = license_path()?;
     if !path.exists() {
+        let (trial_active, expires_at) = get_trial_status();
+        if trial_active {
+            return Ok(serde_json::json!({
+                "status": "valid",
+                "expires_at": expires_at,
+                "trial": true
+            }));
+        }
         return Ok(serde_json::json!({
             "status": "missing",
             "expires_at": null

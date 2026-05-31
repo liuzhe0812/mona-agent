@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Send, Loader2, Shield, Square, FileText } from "lucide-react";
 import { useClient } from "@/providers/ClientProvider";
 import { useTerminalStore } from "../store/terminalStore";
-import { isTauri } from "@/lib/tauri";
+import { isTauri, openPathWithSystemApp } from "@/lib/tauri";
 import type { InboundEvent } from "@/lib/types";
 import type { ActionConfirmResult } from "./ActionConfig";
 
@@ -16,34 +16,12 @@ interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   label?: string;
-  generateReport?: boolean;
 }
 
-function extractHtmlCodeBlock(content: string): string | null {
-  const match = content.match(/```html\s*\n([\s\S]*?)```/);
-  return match ? match[1].trim() : null;
-}
-
-function openHtmlReport(html: string, label: string) {
-  const safeName = label.trim().replace(/[\\/:*?"<>|]/g, "_").slice(0, 64) || "report";
-  if (isTauri()) {
-    (async () => {
-      const { writeFile } = await import("@tauri-apps/plugin-fs");
-      const { BaseDirectory } = await import("@tauri-apps/plugin-fs");
-      const { open } = await import("@tauri-apps/plugin-shell");
-      const fileName = `${safeName}_${Date.now()}.html`;
-      const encoder = new TextEncoder();
-      await writeFile(fileName, encoder.encode(html), { baseDir: BaseDirectory.Temp });
-      const { tempDir } = await import("@tauri-apps/api/path");
-      const dir = await tempDir();
-      const filePath = dir + fileName;
-      await open(filePath);
-    })().catch(console.error);
-  } else {
-    const blob = new Blob([html], { type: "text/html;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    window.open(url, "_blank");
-  }
+interface ReportInfo {
+  title: string;
+  path: string;
+  fileName: string;
 }
 
 export function AIChat({ sessionId, initialAction, onInitialMessageSent }: Props) {
@@ -51,6 +29,7 @@ export function AIChat({ sessionId, initialAction, onInitialMessageSent }: Props
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [chatId, setChatId] = useState<string | null>(null);
+  const [reports, setReports] = useState<ReportInfo[]>([]);
   const { client } = useClient();
   const registry = useTerminalStore((s) => s.terminalRegistry);
   const execMode = useTerminalStore((s) => s.terminalExecMode);
@@ -77,6 +56,20 @@ export function AIChat({ sessionId, initialAction, onInitialMessageSent }: Props
       cancelled = true;
     };
   }, [client]);
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    let unlisten: (() => void) | null = null;
+    (async () => {
+      const { listen } = await import("@tauri-apps/api/event");
+      unlisten = await listen<ReportInfo>("terminal-report-ready", (event) => {
+        setReports((prev) => [...prev, event.payload]);
+      });
+    })();
+    return () => {
+      unlisten?.();
+    };
+  }, []);
 
   useEffect(() => {
     if (!chatId) return;
@@ -126,7 +119,7 @@ export function AIChat({ sessionId, initialAction, onInitialMessageSent }: Props
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages]);
+  }, [messages, reports]);
 
   useEffect(() => {
     const action = initialActionRef.current;
@@ -138,7 +131,6 @@ export function AIChat({ sessionId, initialAction, onInitialMessageSent }: Props
         role: "user",
         content: action.label,
         label: action.label,
-        generateReport: action.generateReport,
       },
     ]);
     setIsLoading(true);
@@ -189,45 +181,40 @@ export function AIChat({ sessionId, initialAction, onInitialMessageSent }: Props
   return (
     <div className="flex h-full flex-col">
       <div ref={scrollRef} className="flex-1 overflow-auto p-3 space-y-3">
-        {messages.length === 0 && (
+        {messages.length === 0 && reports.length === 0 && (
           <p className="text-center text-xs text-muted-foreground py-8">
             输入问题，AI 将基于终端上下文回答
           </p>
         )}
-        {messages.map((msg, i) => {
-          const htmlContent = msg.role === "assistant" ? extractHtmlCodeBlock(msg.content) : null;
-          const displayContent = msg.role === "assistant" && htmlContent
-            ? msg.content.replace(/```html\s*\n[\s\S]*?```/, "").trim()
-            : msg.content;
-          return (
-            <div key={i}>
-              <div
-                className={`text-xs leading-relaxed whitespace-pre-wrap break-words ${
-                  msg.role === "user"
-                    ? "bg-sidebar-accent rounded-lg px-3 py-2 text-foreground w-fit"
-                    : "text-muted-foreground"
-                }`}
-              >
-                {msg.role === "user" && msg.label && (
-                  <span className="mr-1 inline-flex items-center gap-0.5 rounded bg-foreground/10 px-1.5 py-0.5 text-[10px] font-medium text-foreground/80">
-                    {msg.label}
-                  </span>
-                )}
-                {displayContent}
-              </div>
-              {htmlContent && (
-                <button
-                  type="button"
-                  onClick={() => openHtmlReport(htmlContent, msg.generateReport ? (messages[i - 1]?.label ?? "报告") : "报告")}
-                  className="mt-1.5 inline-flex items-center gap-1.5 rounded-md border border-border/70 bg-background px-2 py-1 text-[11px] text-foreground hover:bg-sidebar-accent/50 transition-colors"
-                >
-                  <FileText className="h-3 w-3" />
-                  查看 HTML 报告
-                </button>
-              )}
-            </div>
-          );
-        })}
+        {messages.map((msg, i) => (
+          <div
+            key={i}
+            className={`text-xs leading-relaxed whitespace-pre-wrap break-words ${
+              msg.role === "user"
+                ? "bg-sidebar-accent rounded-lg px-3 py-2 text-foreground w-fit"
+                : "text-muted-foreground"
+            }`}
+          >
+            {msg.role === "user" && msg.label && (
+              <span className="mr-1 inline-flex items-center gap-0.5 rounded bg-foreground/10 px-1.5 py-0.5 text-[10px] font-medium text-foreground/80">
+                {msg.label}
+              </span>
+            )}
+            {msg.content}
+          </div>
+        ))}
+        {reports.map((report, i) => (
+          <button
+            key={`report-${i}`}
+            type="button"
+            onClick={() => openPathWithSystemApp(report.path)}
+            className="inline-flex items-center gap-1.5 rounded-md border border-border/70 bg-background px-2.5 py-1.5 text-[11px] text-foreground hover:bg-sidebar-accent/50 transition-colors"
+          >
+            <FileText className="h-3.5 w-3.5 text-[#1d6feb]" />
+            <span className="font-medium">{report.title}</span>
+            <span className="text-muted-foreground">— 点击查看报告</span>
+          </button>
+        ))}
         {isLoading && messages[messages.length - 1]?.role !== "assistant" && (
           <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
             <Loader2 className="h-3 w-3 animate-spin" />

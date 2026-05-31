@@ -306,6 +306,18 @@ class KnowledgeConfig(Base):
     default_mode: KnowledgeMode = KnowledgeMode.DOCUMENT
 
 
+class PPTMasterConfig(Base):
+    """PPT Master skill configuration."""
+
+    enabled: bool = False
+    projects_dir: str = "ppt-projects"
+    default_format: str = "ppt169"
+    use_mona_image_gen: bool = True
+    tts_enabled: bool = False
+    live_preview: bool = True
+    preview_port: int = 5050
+
+
 class TerminalToolConfig(Base):
     enable: bool = True
     exec_mode: TerminalExecMode = TerminalExecMode.AUTO
@@ -374,6 +386,7 @@ class ToolsConfig(Base):
     ssrf_whitelist: list[str] = Field(default_factory=list)  # CIDR ranges to exempt from SSRF blocking (e.g. ["100.64.0.0/10"] for Tailscale)
     knowledge: KnowledgeConfig = Field(default_factory=KnowledgeConfig)
     terminal: TerminalToolConfig = Field(default_factory=TerminalToolConfig)
+    ppt_master: PPTMasterConfig = Field(default_factory=PPTMasterConfig)
 
 
 class Config(BaseSettings):

@@ -55,7 +55,7 @@ const SIDEBAR_WIDTH = 220;
 const SIDEBAR_RAIL_WIDTH = 56;
 const TOKEN_REFRESH_MARGIN_MS = 30_000;
 const TOKEN_REFRESH_MIN_DELAY_MS = 5_000;
-type ShellView = "chat" | "settings" | "note" | "ssh" | "db" | "kb";
+type ShellView = "chat" | "settings" | "note" | "ssh" | "db" | "kb" | "ppt";
 
 interface QueuedAgentPrompt {
   id: string;
@@ -77,6 +77,12 @@ const DbClientView = lazy(() =>
 const KnowledgeBaseView = lazy(() =>
   import("@/components/knowledge/KnowledgeBaseView").then((module) => ({
     default: module.KnowledgeBaseView,
+  })),
+);
+
+const PptMakerView = lazy(() =>
+  import("@/components/ppt/PptMakerView").then((module) => ({
+    default: module.PptMakerView,
   })),
 );
 
@@ -577,6 +583,11 @@ function Shell({
     setMobileSidebarOpen(false);
   }, []);
 
+  const onOpenPpt = useCallback(() => {
+    setView("ppt");
+    setMobileSidebarOpen(false);
+  }, []);
+
   const onCreateChat = useCallback(async () => {
     try {
       const chatId = await createChat();
@@ -901,6 +912,7 @@ function Shell({
     onOpenSearch: onOpenSessionSearch,
     onGoHome,
     onOpenNote,
+    onOpenPpt,
     onOpenSSH,
     onOpenDb,
     onOpenKb,
@@ -984,7 +996,7 @@ function Shell({
               <div
                 className={cn(
                   "absolute inset-0 flex flex-col",
-                  (view === "settings" || view === "note" || view === "ssh" || view === "db" || view === "kb") &&
+                  (view === "settings" || view === "note" || view === "ssh" || view === "db" || view === "kb" || view === "ppt") &&
                     "invisible pointer-events-none",
                 )}
               >
@@ -1043,6 +1055,13 @@ function Shell({
                   <KnowledgeBaseView onBack={onBackToChat} />
                 </Suspense>
               </div>
+              {view === "ppt" && (
+                <div className="absolute inset-0 flex flex-col">
+                  <Suspense fallback={<ModuleLoading title="正在打开 PPT 制作" />}>
+                    <PptMakerView onBack={onBackToChat} />
+                  </Suspense>
+                </div>
+              )}
             </main>
           </div>
         </div>

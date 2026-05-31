@@ -421,3 +421,35 @@ export type Outbound =
       db_table?: string;
     }
   | { type: "delete_chat"; chat_id: string };
+
+export interface PptTemplate {
+  key: string;
+  kind: "layout" | "deck";
+  name: string;
+  summary: string;
+  coverSvgUrl: string;
+  primaryColor?: string;
+  pageCount?: number;
+  canvasFormat?: string;
+}
+
+export interface PptCanvasFormat {
+  key: string;
+  label: string;
+  viewBox: string;
+  desc: string;
+}
+
+export interface PptTemplatesResponse {
+  layouts: PptTemplate[];
+  decks: PptTemplate[];
+  canvasFormats: PptCanvasFormat[];
+}
+
+export interface PptProject {
+  name: string;
+  createdAt: number;
+  format: string;
+  slideCount: number;
+  hasExport: boolean;
+}

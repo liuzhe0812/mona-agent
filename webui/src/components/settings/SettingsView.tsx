@@ -1938,7 +1938,7 @@ function AboutSettings() {
   const { t } = useTranslation();
   const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
   const { refreshLicense } = useLicense();
-  const [licenseStatus, setLicenseStatus] = useState<"checking" | "active" | "expired" | "missing">("checking");
+  const [licenseStatus, setLicenseStatus] = useState<"checking" | "active" | "trial" | "expired" | "missing">("checking");
   const [licenseExpiry, setLicenseExpiry] = useState<string | null>(null);
   const [machineId, setMachineId] = useState<string>("");
   const [copied, setCopied] = useState(false);
@@ -1979,9 +1979,13 @@ function AboutSettings() {
   const checkLicense = async () => {
     try {
       const { invoke } = await import("@tauri-apps/api/core");
-      const result = await invoke<{ status: string; expires_at: string | null }>("check_license");
+      const result = await invoke<{ status: string; expires_at: string | null; trial?: boolean }>("check_license");
       if (result.status === "valid") {
-        setLicenseStatus("active");
+        if (result.trial) {
+          setLicenseStatus("trial");
+        } else {
+          setLicenseStatus("active");
+        }
         setLicenseExpiry(result.expires_at);
       } else if (result.status === "expired") {
         setLicenseStatus("expired");
@@ -2028,15 +2032,17 @@ function AboutSettings() {
     }
   };
 
-  const statusTone = licenseStatus === "active" ? "success" as const : licenseStatus === "expired" ? "warning" as const : "neutral" as const;
+  const statusTone = licenseStatus === "active" ? "success" as const : licenseStatus === "trial" ? "info" as const : licenseStatus === "expired" ? "warning" as const : "neutral" as const;
   const statusLabel =
     licenseStatus === "checking"
       ? tx("settings.about.checking", "检测中...")
       : licenseStatus === "active"
         ? tx("settings.about.activated", "已激活")
-        : licenseStatus === "expired"
-          ? tx("settings.about.expired", "已过期")
-          : tx("settings.about.notActivated", "未激活");
+        : licenseStatus === "trial"
+          ? tx("settings.about.trial", "试用中")
+          : licenseStatus === "expired"
+            ? tx("settings.about.expired", "已过期")
+            : tx("settings.about.notActivated", "未激活");
 
   return (
     <div className="space-y-7">
@@ -2604,7 +2610,7 @@ function StatusPill({
   tone = "neutral",
 }: {
   children: ReactNode;
-  tone?: "neutral" | "success" | "warning";
+  tone?: "neutral" | "success" | "warning" | "info";
 }) {
   return (
     <span
@@ -2612,6 +2618,7 @@ function StatusPill({
         "inline-flex max-w-[260px] items-center rounded-full px-2.5 py-1 text-[12px] font-medium",
         tone === "success" && "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
         tone === "warning" && "bg-amber-500/10 text-amber-700 dark:text-amber-300",
+        tone === "info" && "bg-blue-500/10 text-blue-700 dark:text-blue-300",
         tone === "neutral" && "bg-muted text-muted-foreground",
       )}
     >

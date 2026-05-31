@@ -353,3 +353,53 @@ class TerminalUploadTool(Tool):
             return f"File uploaded: {path} ({bytes_uploaded} bytes, {status})"
 
         return str(result)
+
+
+class GenerateReportTool(Tool):
+    _scopes = {"core", "subagent"}
+    config_key = "generate_report"
+
+    @property
+    def name(self) -> str:
+        return "generate_report"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Generate an HTML report and save it as a local file that the user can open in their browser. "
+            "Use this tool when the user requests an HTML report — do NOT output the HTML content in your chat response. "
+            "The report will be saved to a temporary directory and the user will see a button to open it. "
+            "Parameters: title (report title, used for filename), content (complete HTML string following the Mona report design spec)."
+        )
+
+    @property
+    def read_only(self) -> bool:
+        return False
+
+    async def execute(
+        self,
+        title: str,
+        content: str,
+        **kwargs: Any,
+    ) -> str:
+        result = _tauri_invoke(
+            "report_save_temp",
+            {"title": title, "content": content},
+        )
+
+        if isinstance(result, str) and result.startswith("Error:"):
+            return result
+
+        if isinstance(result, dict):
+            status = result.get("status", "unknown")
+            path = result.get("path", "")
+            file_name = result.get("fileName", "")
+            if status == "saved" and path:
+                return (
+                    f"Report saved successfully: {file_name}\n"
+                    f"Path: {path}\n"
+                    f"Tell the user the report has been generated and they can click the button to view it."
+                )
+            return f"Report save result: {result}"
+
+        return str(result)

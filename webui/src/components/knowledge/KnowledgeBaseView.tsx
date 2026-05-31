@@ -2,13 +2,10 @@ import { useState, useCallback, useEffect } from "react";
 import {
   ChevronLeft,
   BookOpen,
-  Search,
   Upload,
   RefreshCw,
   Database,
   Loader2,
-  ChevronDown,
-  ChevronUp,
   FileText,
   FileCode,
   AlertCircle,
@@ -17,11 +14,12 @@ import {
   FolderOpen,
   FolderSearch,
   CheckCircle2,
+  Network,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Dialog,
   DialogContent,
@@ -33,8 +31,8 @@ import {
 import { isTauri } from "@/lib/tauri";
 import {
   kbStatus,
-  kbQuery,
   kbCompile,
+  kbGraph,
   kbList,
   kbCreate,
   kbDelete,
@@ -47,14 +45,11 @@ interface KbInstance {
   name: string;
   mode: string;
   paths: string[];
-  docCount: number;
-  pendingChanges: number;
-}
-
-interface KbResult {
-  path: string;
-  title: string;
-  content: string;
+  sources: number;
+  pages: number;
+  nodes: number;
+  edges: number;
+  pending: number;
 }
 
 interface KbFile {
@@ -62,6 +57,18 @@ interface KbFile {
   path: string;
   size: number;
   modified: string;
+}
+
+interface GraphNode {
+  id: string;
+  kind: string;
+  title: string;
+}
+
+interface GraphEdge {
+  source: string;
+  target: string;
+  relation: string;
 }
 
 function formatFileSize(bytes: number): string {
@@ -92,11 +99,6 @@ export function KnowledgeBaseView({ onBack }: { onBack?: () => void }) {
   const [instances, setInstances] = useState<KbInstance[]>([]);
   const [selectedName, setSelectedName] = useState<string | null>(null);
   const [status, setStatus] = useState<KbInstance | null>(null);
-  const [query, setQuery] = useState("");
-  const [results, setResults] = useState<KbResult[]>([]);
-  const [totalTokens, setTotalTokens] = useState(0);
-  const [expandedIndex, setExpandedIndex] = useState<number | null>(null);
-  const [loading, setLoading] = useState(false);
   const [ingesting, setIngesting] = useState(false);
   const [compiling, setCompiling] = useState(false);
   const [compileSuccess, setCompileSuccess] = useState<string | null>(null);
@@ -112,6 +114,10 @@ export function KnowledgeBaseView({ onBack }: { onBack?: () => void }) {
   const [deleting, setDeleting] = useState(false);
   const [files, setFiles] = useState<KbFile[]>([]);
   const [loadingFiles, setLoadingFiles] = useState(false);
+  const [graphOpen, setGraphOpen] = useState(false);
+  const [graphNodes, setGraphNodes] = useState<GraphNode[]>([]);
+  const [graphEdges, setGraphEdges] = useState<GraphEdge[]>([]);
+  const [loadingGraph, setLoadingGraph] = useState(false);
 
   const loadInstances = useCallback(async () => {
     try {
@@ -135,8 +141,11 @@ export function KnowledgeBaseView({ onBack }: { onBack?: () => void }) {
         name: s.instance,
         mode: s.mode,
         paths: [],
-        docCount: s.docCount,
-        pendingChanges: s.pendingChanges,
+        sources: s.sources,
+        pages: s.pages,
+        nodes: s.nodes,
+        edges: s.edges,
+        pending: s.pending,
       });
       setError(null);
     } catch (e) {
@@ -161,6 +170,22 @@ export function KnowledgeBaseView({ onBack }: { onBack?: () => void }) {
     }
   }, [token, selectedName]);
 
+  const loadGraph = useCallback(async () => {
+    if (!selectedName) return;
+    setLoadingGraph(true);
+    try {
+      const res = await kbGraph(token, undefined, selectedName);
+      setGraphNodes(res.nodes);
+      setGraphEdges(res.edges);
+      setGraphOpen(true);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "无法获取图谱";
+      setError(msg);
+    } finally {
+      setLoadingGraph(false);
+    }
+  }, [token, selectedName]);
+
   useEffect(() => {
     loadInstances();
   }, [loadInstances]);
@@ -173,33 +198,7 @@ export function KnowledgeBaseView({ onBack }: { onBack?: () => void }) {
     loadFiles();
   }, [loadFiles]);
 
-  const handleSearch = useCallback(async () => {
-    const q = query.trim();
-    if (!q || !selectedName) return;
-    setLoading(true);
-    setError(null);
-    setExpandedIndex(null);
-    try {
-      const res = await kbQuery(token, q, undefined, selectedName);
-      setResults(res.results);
-      setTotalTokens(res.totalTokens);
-    } catch {
-      setError("查询失败");
-      setResults([]);
-    } finally {
-      setLoading(false);
-    }
-  }, [token, query, selectedName]);
 
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        handleSearch();
-      }
-    },
-    [handleSearch],
-  );
 
   const handleIngestFiles = useCallback(async () => {
     if (!selectedName || !isTauri()) return;
@@ -230,11 +229,6 @@ export function KnowledgeBaseView({ onBack }: { onBack?: () => void }) {
 
   const handleCompile = useCallback(async () => {
     if (!selectedName) return;
-    const inst = instances.find((i) => i.name === selectedName);
-    if (inst && inst.mode !== "document") {
-      setError("Notebook 模式不支持 Wiki 编译，仅支持 FTS5 搜索");
-      return;
-    }
     setCompiling(true);
     setError(null);
     setCompileSuccess(null);
@@ -254,7 +248,7 @@ export function KnowledgeBaseView({ onBack }: { onBack?: () => void }) {
     } finally {
       setCompiling(false);
     }
-  }, [token, selectedName, instances, loadStatus, loadInstances]);
+  }, [token, selectedName, loadStatus, loadInstances]);
 
   const handleCreate = useCallback(async () => {
     const name = createName.trim();
@@ -382,9 +376,6 @@ export function KnowledgeBaseView({ onBack }: { onBack?: () => void }) {
                   type="button"
                   onClick={() => {
                     setSelectedName(inst.name);
-                    setResults([]);
-                    setQuery("");
-                    setExpandedIndex(null);
                     setError(null);
                   }}
                   className={`group relative flex w-full items-start gap-2 rounded-md px-2.5 py-2 text-left transition-colors ${
@@ -406,7 +397,7 @@ export function KnowledgeBaseView({ onBack }: { onBack?: () => void }) {
                       >
                         {inst.mode === "document" ? "Document" : "Notebook"}
                       </span>
-                      <span>{inst.docCount} 文档</span>
+                      <span>{inst.sources} 源</span>
                     </div>
                   </div>
                   <span
@@ -464,10 +455,13 @@ export function KnowledgeBaseView({ onBack }: { onBack?: () => void }) {
             <div className="shrink-0 border-b border-border/70 px-4 py-2">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-4 text-[12px] text-muted-foreground">
-                  <span>文档 {selectedInstance.docCount}</span>
-                  {selectedInstance.pendingChanges > 0 && (
+                  <span>源 {selectedInstance.sources}</span>
+                  <span>页 {selectedInstance.pages}</span>
+                  <span>节点 {selectedInstance.nodes}</span>
+                  <span>边 {selectedInstance.edges}</span>
+                  {selectedInstance.pending > 0 && (
                     <span className="text-amber-600 dark:text-amber-400">
-                      待编译 {selectedInstance.pendingChanges}
+                      待编译 {selectedInstance.pending}
                     </span>
                   )}
                 </div>
@@ -490,13 +484,9 @@ export function KnowledgeBaseView({ onBack }: { onBack?: () => void }) {
                     variant="ghost"
                     size="sm"
                     onClick={handleCompile}
-                    disabled={compiling || selectedInstance.mode !== "document"}
+                    disabled={compiling}
                     className="h-7 gap-1.5 text-[12px]"
-                    title={
-                      selectedInstance.mode !== "document"
-                        ? "Notebook 模式不支持 Wiki 编译"
-                        : "编译知识库"
-                    }
+                    title="编译知识库（LLM Wiki）"
                   >
                     {compiling ? (
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -508,45 +498,19 @@ export function KnowledgeBaseView({ onBack }: { onBack?: () => void }) {
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={loadFiles}
-                    disabled={loadingFiles}
+                    onClick={loadGraph}
+                    disabled={loadingGraph}
                     className="h-7 gap-1.5 text-[12px]"
+                    title="查看知识图谱"
                   >
-                    {loadingFiles ? (
+                    {loadingGraph ? (
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
                     ) : (
-                      <RefreshCw className="h-3.5 w-3.5" />
+                      <Network className="h-3.5 w-3.5" />
                     )}
-                    刷新
+                    图谱
                   </Button>
                 </div>
-              </div>
-            </div>
-
-            <div className="shrink-0 border-b border-border/70 px-4 py-3">
-              <div className="flex items-center gap-2">
-                <div className="relative flex-1">
-                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                  <Input
-                    value={query}
-                    onChange={(e) => setQuery(e.target.value)}
-                    onKeyDown={handleKeyDown}
-                    placeholder="搜索知识库..."
-                    className="pl-9"
-                  />
-                </div>
-                <Button
-                  onClick={handleSearch}
-                  disabled={loading || !query.trim()}
-                  size="sm"
-                >
-                  {loading ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <Search className="h-4 w-4" />
-                  )}
-                  搜索
-                </Button>
               </div>
             </div>
 
@@ -599,64 +563,7 @@ export function KnowledgeBaseView({ onBack }: { onBack?: () => void }) {
                   </div>
                 )}
 
-                {results.length > 0 && (
-                  <>
-                    <Separator className="my-3" />
-                    <div className="mb-2 text-[12px] text-muted-foreground">
-                      搜索结果 · 找到 {results.length} 条
-                      {totalTokens > 0 && ` · ${totalTokens} tokens`}
-                    </div>
-                    <div className="flex flex-col gap-2">
-                      {results.map((result, index) => {
-                        const isExpanded = expandedIndex === index;
-                        return (
-                          <div
-                            key={`${result.path}-${index}`}
-                            className="rounded-lg border border-border/70 bg-card transition-colors hover:border-border"
-                          >
-                            <button
-                              type="button"
-                              onClick={() => setExpandedIndex(isExpanded ? null : index)}
-                              className="flex w-full items-start gap-3 px-3 py-2.5 text-left"
-                            >
-                              <FileText className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-                              <div className="min-w-0 flex-1">
-                                <div className="text-[13px] font-medium leading-snug">
-                                  {result.title || result.path}
-                                </div>
-                                <div className="mt-0.5 truncate text-[11.5px] text-muted-foreground">
-                                  {result.path}
-                                </div>
-                              </div>
-                              {isExpanded ? (
-                                <ChevronUp className="h-4 w-4 shrink-0 text-muted-foreground" />
-                              ) : (
-                                <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
-                              )}
-                            </button>
-                            {isExpanded && (
-                              <>
-                                <Separator />
-                                <div className="px-3 py-2.5">
-                                  <pre className="whitespace-pre-wrap break-words text-[12.5px] leading-relaxed text-foreground/80">
-                                    {result.content}
-                                  </pre>
-                                </div>
-                              </>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </>
-                )}
 
-                {results.length === 0 && !loading && !error && query.trim() && (
-                  <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
-                    <FileText className="mb-2 h-8 w-8 opacity-40" />
-                    <p className="text-[13px]">未找到相关内容</p>
-                  </div>
-                )}
               </div>
             </ScrollArea>
           </>
@@ -772,6 +679,57 @@ export function KnowledgeBaseView({ onBack }: { onBack?: () => void }) {
               删除
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={graphOpen} onOpenChange={setGraphOpen}>
+        <DialogContent className="sm:max-w-[600px]">
+          <DialogHeader>
+            <DialogTitle>知识图谱</DialogTitle>
+            <DialogDescription>
+              {graphNodes.length} 节点 · {graphEdges.length} 边
+            </DialogDescription>
+          </DialogHeader>
+          <ScrollArea className="max-h-[400px]">
+            <div className="flex flex-col gap-3 py-2">
+              <div>
+                <div className="mb-1 text-[12px] font-medium text-muted-foreground">节点</div>
+                <div className="flex flex-wrap gap-1">
+                  {graphNodes.map((n) => (
+                    <span
+                      key={n.id}
+                      className={`rounded px-2 py-0.5 text-[11px] ${
+                        n.kind === "source"
+                          ? "bg-blue-100 text-blue-700"
+                          : n.kind === "concept"
+                          ? "bg-purple-100 text-purple-700"
+                          : "bg-amber-100 text-amber-700"
+                      }`}
+                    >
+                      {n.title}
+                    </span>
+                  ))}
+                </div>
+              </div>
+              {graphEdges.length > 0 && (
+                <div>
+                  <div className="mb-1 text-[12px] font-medium text-muted-foreground">关系</div>
+                  <div className="flex flex-col gap-0.5">
+                    {graphEdges.slice(0, 50).map((e, i) => (
+                      <div key={i} className="text-[11px] text-muted-foreground">
+                        {e.source} → {e.relation} → {e.target}
+                      </div>
+                    ))}
+                    {graphEdges.length > 50 && (
+                      <div className="text-[11px] text-muted-foreground">
+                        ... 还有 {graphEdges.length - 50} 条边
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          </ScrollArea>
         </DialogContent>
       </Dialog>
     </div>

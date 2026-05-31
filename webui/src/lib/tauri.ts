@@ -100,6 +100,18 @@ export async function exportNoteTempFile(noteId: string, content: string): Promi
   return invoke<string>("notes_export_temp", { noteId, content });
 }
 
+export async function openPathWithSystemApp(path: string): Promise<void> {
+  if (!isTauri()) return;
+  const { openPath } = await import("@tauri-apps/plugin-opener");
+  await openPath(path);
+}
+
+export async function revealItemInDir(path: string): Promise<void> {
+  if (!isTauri()) return;
+  const { revealItemInDir } = await import("@tauri-apps/plugin-opener");
+  await revealItemInDir(path);
+}
+
 export async function saveMarkdownFile(title: string, content: string): Promise<boolean> {
   if (!isTauri()) {
     const blob = new Blob([content], { type: "text/markdown;charset=utf-8" });

@@ -1,9 +1,12 @@
+import { useCallback } from "react";
+
 import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { isTauri, openPathWithSystemApp, revealItemInDir } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 
 type FileReferenceKind =
@@ -20,6 +23,7 @@ type FileReferenceKind =
 interface FileReferenceChipProps {
   path: string;
   tooltipPath?: string;
+  absolutePath?: string;
   display?: "name" | "path";
   active?: boolean;
   className?: string;
@@ -30,6 +34,7 @@ interface FileReferenceChipProps {
 export function FileReferenceChip({
   path,
   tooltipPath,
+  absolutePath,
   display = "name",
   active = false,
   className,
@@ -40,6 +45,24 @@ export function FileReferenceChip({
   const kind = fileKindForPath(path);
   const displayText = display === "path" ? path.replace(/\\/g, "/") : name;
   const fullPath = tooltipPath || path;
+  const openTarget = absolutePath || fullPath;
+
+  const handleClick = useCallback(() => {
+    if (!isTauri()) return;
+    void openPathWithSystemApp(openTarget);
+  }, [openTarget]);
+
+  const handleContextMenu = useCallback(
+    (e: React.MouseEvent) => {
+      if (!isTauri()) return;
+      e.preventDefault();
+      void revealItemInDir(openTarget);
+    },
+    [openTarget],
+  );
+
+  const canOpen = isTauri();
+
   return (
     <TooltipProvider delayDuration={500} skipDelayDuration={100}>
       <Tooltip>
@@ -50,10 +73,25 @@ export function FileReferenceChip({
             <span
               data-testid={testId}
               aria-label={fullPath}
+              role={canOpen ? "button" : undefined}
+              tabIndex={canOpen ? 0 : undefined}
+              onClick={canOpen ? handleClick : undefined}
+              onContextMenu={canOpen ? handleContextMenu : undefined}
+              onKeyDown={
+                canOpen
+                  ? (e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        handleClick();
+                      }
+                    }
+                  : undefined
+              }
               className={cn(
                 "inline-flex max-w-full items-center gap-1 font-medium leading-[inherit]",
                 "text-sky-600 transition-colors hover:text-sky-700",
                 "dark:text-sky-300 dark:hover:text-sky-200",
+                canOpen && "cursor-pointer",
               )}
             >
               <FileReferenceIcon kind={kind} />
@@ -90,6 +128,11 @@ export function FileReferenceChip({
           )}
         >
           {fullPath}
+          {canOpen && (
+            <span className="ml-1.5 text-muted-foreground">
+              · 点击打开，右键在文件夹中显示
+            </span>
+          )}
         </TooltipContent>
       </Tooltip>
     </TooltipProvider>

@@ -37,7 +37,6 @@ from mona.channels.base import BaseChannel
 from mona.command.builtin import builtin_command_palette
 from mona.config.paths import get_media_dir
 from mona.config.schema import Base
-from mona.knowledge.models import ChangePriority, ChangeType, FileMeta, PendingChange
 from mona.session.goal_state import goal_state_ws_blob
 from mona.session.webui_turns import websocket_turn_wall_started_at
 from mona.utils.helpers import safe_filename
@@ -62,9 +61,6 @@ from mona.webui.thread_disk import delete_webui_thread
 from mona.webui.transcript import append_transcript_object, build_webui_thread_response
 
 if TYPE_CHECKING:
-    from mona.knowledge.indexer import Indexer
-    from mona.knowledge.models import KnowledgeMeta
-    from mona.knowledge.store import KnowledgeStore
     from mona.session.manager import SessionManager
 
 
@@ -414,76 +410,28 @@ def _b64url_decode(s: str) -> bytes:
     return base64.urlsafe_b64decode(s + pad)
 
 
-def _kb_ingest_file(
-    file_path: Path,
-    workspace: Path,
-    store: "KnowledgeStore",
-    indexer: "Indexer",
-    meta: "KnowledgeMeta",
-    ingested: list[str],
-) -> None:
+def _llm_generate_sync(prompt: str) -> str:
+    """Generate text using Mona's LLM provider (sync wrapper)."""
+    import asyncio
+
+    from mona.llm.provider import get_provider
+
+    async def _generate() -> str:
+        provider = get_provider()
+        response = await provider.generate(prompt)
+        return response.content
+
     try:
-        rel = file_path.relative_to(workspace).as_posix()
-    except ValueError:
-        return
-    if file_path.suffix not in (
-        ".md", ".txt", ".py", ".js", ".ts", ".json",
-        ".yaml", ".yml", ".toml", ".rst",
-    ):
-        return
-    content = file_path.read_text(encoding="utf-8", errors="replace")
-    h = hashlib.sha256(content.encode()).hexdigest()
-    existing = meta.files.get(rel)
-    if existing and existing.hash == h:
-        return
-    title = _kb_extract_title(file_path)
-    indexer.upsert(path=rel, title=title, content=content, hash=h)
-    if existing:
-        change = PendingChange(
-            path=rel,
-            type=ChangeType.MODIFIED,
-            priority=ChangePriority.MEDIUM,
-            old_hash=existing.hash,
-            new_hash=h,
-        )
-    else:
-        change = PendingChange(
-            path=rel,
-            type=ChangeType.ADDED,
-            priority=ChangePriority.HIGH,
-            new_hash=h,
-        )
-    meta.pending_changes.append(change)
-    meta.files[rel] = FileMeta(hash=h)
-    ingested.append(rel)
+        loop = asyncio.get_running_loop()
+        if loop.is_running():
+            import concurrent.futures
 
-
-def _kb_ingest_dir(
-    dir_path: Path,
-    workspace: Path,
-    store: "KnowledgeStore",
-    indexer: "Indexer",
-    meta: "KnowledgeMeta",
-    ingested: list[str],
-    recursive: bool,
-) -> None:
-    for fp in sorted(dir_path.iterdir()):
-        if fp.name.startswith("."):
-            continue
-        if fp.is_file():
-            _kb_ingest_file(fp, workspace, store, indexer, meta, ingested)
-        elif recursive and fp.is_dir():
-            _kb_ingest_dir(fp, workspace, store, indexer, meta, ingested, recursive)
-
-
-def _kb_extract_title(path: Path) -> str:
-    try:
-        first_line = path.read_text(encoding="utf-8").split("\n", 1)[0].strip()
-        if first_line.startswith("#"):
-            return first_line.lstrip("# ").strip()
-    except Exception:
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                future = pool.submit(asyncio.run, _generate())
+                return future.result(timeout=120)
+    except RuntimeError:
         pass
-    return path.stem
+    return asyncio.get_event_loop().run_until_complete(_generate())
 
 
 # Allowed MIME types we actually serve from the media endpoint. Anything
@@ -759,8 +707,29 @@ class WebSocketChannel(BaseChannel):
         if got == "/api/kb/files":
             return self._handle_kb_files(request)
 
+        if got == "/api/kb/graph":
+            return self._handle_kb_graph(request)
+
         if got == "/api/kb/ingest-files":
             return self._handle_kb_ingest_files(request)
+
+        if got == "/api/ppt/templates":
+            return self._handle_ppt_templates(request)
+
+        if got == "/api/ppt/template-svg":
+            return self._handle_ppt_template_svg(request)
+
+        if got == "/api/ppt/upload":
+            return self._handle_ppt_upload(request)
+
+        if got == "/api/ppt/projects":
+            return self._handle_ppt_projects(request)
+
+        if got == "/api/ppt/download":
+            return self._handle_ppt_download(request)
+
+        if got == "/api/ppt/preview-port":
+            return self._handle_ppt_preview_port(request)
 
         m = re.match(r"^/api/sessions/([^/]+)/messages$", got)
         if m:
@@ -991,34 +960,31 @@ class WebSocketChannel(BaseChannel):
         try:
             from mona.config.loader import load_config
             from mona.config.paths import get_workspace_path
-            from mona.knowledge.indexer import Indexer
-            from mona.knowledge.models import KnowledgeMode
-            from mona.knowledge.store import KnowledgeStore
+            from mona.knowledge.indexer import WikiIndexer
+            from mona.knowledge.store import VaultStore
 
             workspace = get_workspace_path()
             query = _parse_query(request.path)
             instance = _query_first(query, "instance") or "default"
             config = load_config()
             inst_cfg = config.tools.knowledge.instances.get(instance)
-            mode = (
-                KnowledgeMode(inst_cfg.mode.value)
-                if inst_cfg
-                else KnowledgeMode(config.tools.knowledge.default_mode.value)
-            )
+            mode = inst_cfg.mode.value if inst_cfg else config.tools.knowledge.default_mode.value
             root = workspace / ".knowledge" / instance
-            store = KnowledgeStore(root, mode)
+            store = VaultStore(root)
             store.ensure_dirs()
-            indexer = Indexer(store.db_path)
+            indexer = WikiIndexer(root / "state" / "search.db")
             indexer.initialize()
             meta = store.load_meta()
-            doc_count = indexer.get_doc_count()
-            pending_count = len(meta.pending_changes)
-            mode_label = "document" if meta.mode == KnowledgeMode.DOCUMENT else "notebook"
+            graph = store.load_graph()
             return _http_json_response({
-                "mode": mode_label,
-                "docCount": doc_count,
-                "pendingChanges": pending_count,
                 "instance": instance,
+                "mode": mode,
+                "sources": meta.source_count,
+                "pages": meta.page_count,
+                "nodes": len(graph.nodes),
+                "edges": len(graph.edges),
+                "pending": len(meta.pending_sources),
+                "indexed": indexer.get_doc_count(),
             })
         except Exception:
             logger.exception("kb_status failed")
@@ -1030,48 +996,35 @@ class WebSocketChannel(BaseChannel):
         try:
             from mona.config.loader import load_config
             from mona.config.paths import get_workspace_path
-            from mona.knowledge.indexer import Indexer
-            from mona.knowledge.models import KnowledgeMode
-            from mona.knowledge.store import KnowledgeStore
+            from mona.knowledge.store import VaultStore
 
             workspace = get_workspace_path()
             query = _parse_query(request.path)
             instance = _query_first(query, "instance") or "default"
             paths_str = _query_first(query, "paths") or ""
-            recursive = _query_first(query, "recursive") == "true"
             config = load_config()
             inst_cfg = config.tools.knowledge.instances.get(instance)
-            mode = (
-                KnowledgeMode(inst_cfg.mode.value)
-                if inst_cfg
-                else KnowledgeMode(config.tools.knowledge.default_mode.value)
-            )
             root = workspace / ".knowledge" / instance
-            store = KnowledgeStore(root, mode)
+            store = VaultStore(root)
             store.ensure_dirs()
-            indexer = Indexer(store.db_path)
-            indexer.initialize()
-            meta = store.load_meta()
             if paths_str:
                 paths = [p.strip() for p in paths_str.split(",") if p.strip()]
             elif inst_cfg and inst_cfg.paths:
-                paths = [inst_cfg.paths[0]]
+                paths = inst_cfg.paths
             else:
                 paths = ["."]
-            ingested = []
-            for rel_path in paths:
-                target = workspace / rel_path
-                if not target.exists():
-                    continue
-                if target.is_file():
-                    _kb_ingest_file(target, workspace, store, indexer, meta, ingested)
-                elif target.is_dir():
-                    _kb_ingest_dir(target, workspace, store, indexer, meta, ingested, recursive)
-            store.save_meta(meta)
-            return _http_json_response({
-                "ingested": ingested,
-                "count": len(ingested),
-            })
+            ingested = 0
+            for p in paths:
+                path = workspace / p
+                if path.is_file():
+                    if store.ingest_file(path):
+                        ingested += 1
+                elif path.is_dir():
+                    for fp in path.rglob("*"):
+                        if fp.is_file() and not fp.name.startswith("."):
+                            if store.ingest_file(fp):
+                                ingested += 1
+            return _http_json_response({"ingested": ingested})
         except Exception:
             logger.exception("kb_ingest failed")
             return _http_error(500, "kb_ingest error")
@@ -1080,52 +1033,25 @@ class WebSocketChannel(BaseChannel):
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         try:
-            from mona.config.loader import load_config
             from mona.config.paths import get_workspace_path
-            from mona.knowledge.indexer import Indexer
-            from mona.knowledge.models import KnowledgeMode
-            from mona.knowledge.store import KnowledgeStore
+            from mona.knowledge.indexer import WikiIndexer
+            from mona.knowledge.query import VaultQuery
+            from mona.knowledge.store import VaultStore
 
             workspace = get_workspace_path()
             query_params = _parse_query(request.path)
             q = _query_first(query_params, "q") or ""
             instance = _query_first(query_params, "instance") or "default"
-            top_k = int(_query_first(query_params, "topK") or "5")
-            max_tokens = int(_query_first(query_params, "maxTokens") or "8000")
-            config = load_config()
-            inst_cfg = config.tools.knowledge.instances.get(instance)
-            mode = (
-                KnowledgeMode(inst_cfg.mode.value)
-                if inst_cfg
-                else KnowledgeMode(config.tools.knowledge.default_mode.value)
-            )
+            limit = int(_query_first(query_params, "limit") or "10")
             root = workspace / ".knowledge" / instance
-            store = KnowledgeStore(root, mode)
+            store = VaultStore(root)
             store.ensure_dirs()
-            indexer = Indexer(store.db_path)
+            indexer = WikiIndexer(root / "state" / "search.db")
             indexer.initialize()
-            results = indexer.search(q, top_k=top_k)
-            output = []
-            total_tokens = 0
-            for result in results:
-                rel_path = result["path"]
-                file_path = workspace / rel_path
-                if not file_path.exists():
-                    continue
-                content = file_path.read_text(encoding="utf-8", errors="replace")
-                tokens = len(content) // 3
-                if total_tokens + tokens > max_tokens:
-                    remaining = max_tokens - total_tokens
-                    if remaining > 200:
-                        content = content[:remaining * 3] + "\n... (truncated)"
-                    else:
-                        break
-                output.append({"path": rel_path, "title": result["title"], "content": content})
-                total_tokens += tokens
-            return _http_json_response({
-                "results": output,
-                "totalTokens": total_tokens,
-            })
+            graph = store.load_graph()
+            vq = VaultQuery(store, indexer, graph)
+            results = vq.search(q, limit)
+            return _http_json_response({"results": results, "query": q})
         except Exception:
             logger.exception("kb_query failed")
             return _http_error(500, "kb_query error")
@@ -1134,39 +1060,46 @@ class WebSocketChannel(BaseChannel):
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         try:
-            from mona.config.loader import load_config
             from mona.config.paths import get_workspace_path
-            from mona.knowledge.models import KnowledgeMode
+            from mona.knowledge.compiler import SourceCompiler
+            from mona.knowledge.store import VaultStore
 
             workspace = get_workspace_path()
             query_params = _parse_query(request.path)
             instance = _query_first(query_params, "instance") or "default"
-            config = load_config()
-            inst_cfg = config.tools.knowledge.instances.get(instance)
-            mode = (
-                KnowledgeMode(inst_cfg.mode.value)
-                if inst_cfg
-                else KnowledgeMode(config.tools.knowledge.default_mode.value)
-            )
-            if mode != KnowledgeMode.DOCUMENT:
-                return _http_json_response(
-                    {"error": "Notebook mode does not support Wiki compilation"}, status=400
-                )
-            from mona.knowledge.compiler import IncrementalCompiler
-            from mona.knowledge.store import KnowledgeStore
-            from mona.knowledge.wiki import WikiCompiler
-
             root = workspace / ".knowledge" / instance
-            store = KnowledgeStore(root, mode)
+            store = VaultStore(root)
             store.ensure_dirs()
-            meta = store.load_meta()
-            wiki = WikiCompiler(store, workspace)
-            compiler = IncrementalCompiler(store, wiki, meta)
-            count = compiler.compile_pending()
+            compiler = SourceCompiler(store)
+            count = compiler.compile_pending(_llm_generate_sync)
             return _http_json_response({"compiled": count})
         except Exception:
             logger.exception("kb_compile failed")
             return _http_error(500, "kb_compile error")
+
+    def _handle_kb_graph(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        try:
+            from mona.config.paths import get_workspace_path
+            from mona.knowledge.indexer import WikiIndexer
+            from mona.knowledge.query import VaultQuery
+            from mona.knowledge.store import VaultStore
+
+            workspace = get_workspace_path()
+            query_params = _parse_query(request.path)
+            instance = _query_first(query_params, "instance") or "default"
+            root = workspace / ".knowledge" / instance
+            store = VaultStore(root)
+            store.ensure_dirs()
+            indexer = WikiIndexer(root / "state" / "search.db")
+            indexer.initialize()
+            graph = store.load_graph()
+            vq = VaultQuery(store, indexer, graph)
+            return _http_json_response(vq.get_graph_overview())
+        except Exception:
+            logger.exception("kb_graph failed")
+            return _http_error(500, "kb_graph error")
 
     def _handle_kb_list(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):
@@ -1174,33 +1107,25 @@ class WebSocketChannel(BaseChannel):
         try:
             from mona.config.loader import load_config
             from mona.config.paths import get_workspace_path
-            from mona.knowledge.indexer import Indexer
-            from mona.knowledge.models import KnowledgeMode
-            from mona.knowledge.store import KnowledgeStore
+            from mona.knowledge.store import VaultStore
 
             config = load_config()
             workspace = get_workspace_path()
             result = []
             for name, inst_cfg in config.tools.knowledge.instances.items():
                 root = workspace / ".knowledge" / name
-                doc_count = 0
-                pending_count = 0
-                meta_path = root / "meta.json"
-                if meta_path.exists():
-                    mode = KnowledgeMode(inst_cfg.mode.value)
-                    store = KnowledgeStore(root, mode)
-                    store.ensure_dirs()
-                    indexer = Indexer(store.db_path)
-                    indexer.initialize()
-                    meta = store.load_meta()
-                    doc_count = indexer.get_doc_count()
-                    pending_count = len(meta.pending_changes)
+                store = VaultStore(root)
+                meta = store.load_meta()
+                graph = store.load_graph()
                 result.append({
                     "name": name,
                     "mode": inst_cfg.mode.value,
                     "paths": inst_cfg.paths,
-                    "docCount": doc_count,
-                    "pendingChanges": pending_count,
+                    "sources": meta.source_count,
+                    "pages": meta.page_count,
+                    "nodes": len(graph.nodes),
+                    "edges": len(graph.edges),
+                    "pending": len(meta.pending_sources),
                 })
             return _http_json_response({"instances": result})
         except Exception:
@@ -1215,8 +1140,7 @@ class WebSocketChannel(BaseChannel):
             from mona.config.paths import get_workspace_path
             from mona.config.schema import KnowledgeInstanceConfig
             from mona.config.schema import KnowledgeMode as SchemaKnowledgeMode
-            from mona.knowledge.models import KnowledgeMode
-            from mona.knowledge.store import KnowledgeStore
+            from mona.knowledge.store import VaultStore
 
             query = _parse_query(request.path)
             name = (_query_first(query, "name") or "").strip()
@@ -1247,7 +1171,7 @@ class WebSocketChannel(BaseChannel):
                 json.dump(raw, f, indent=2, ensure_ascii=False)
             workspace = get_workspace_path()
             root = workspace / ".knowledge" / name
-            store = KnowledgeStore(root, KnowledgeMode(schema_mode.value))
+            store = VaultStore(root)
             store.ensure_dirs()
             return _http_json_response({"name": name, "mode": mode_str})
         except Exception:
@@ -1334,9 +1258,7 @@ class WebSocketChannel(BaseChannel):
         try:
             from mona.config.loader import load_config
             from mona.config.paths import get_workspace_path
-            from mona.knowledge.indexer import Indexer
-            from mona.knowledge.models import KnowledgeMode
-            from mona.knowledge.store import KnowledgeStore
+            from mona.knowledge.store import VaultStore
 
             workspace = get_workspace_path()
             query = _parse_query(request.path)
@@ -1372,24 +1294,289 @@ class WebSocketChannel(BaseChannel):
                         dest.parent.mkdir(parents=True, exist_ok=True)
                         shutil.copy2(fp, dest)
                         added.append(rel.as_posix())
-            mode = (
-                KnowledgeMode(inst_cfg.mode.value)
-                if inst_cfg
-                else KnowledgeMode(config.tools.knowledge.default_mode.value)
-            )
             root = workspace / ".knowledge" / instance
-            store = KnowledgeStore(root, mode)
+            store = VaultStore(root)
             store.ensure_dirs()
-            indexer = Indexer(store.db_path)
-            indexer.initialize()
-            meta = store.load_meta()
-            ingested: list[str] = []
-            _kb_ingest_dir(target_dir, workspace, store, indexer, meta, ingested, True)
-            store.save_meta(meta)
+            for fp in target_dir.rglob("*"):
+                if fp.is_file() and not fp.name.startswith("."):
+                    store.ingest_file(fp)
             return _http_json_response({"added": added, "count": len(added)})
         except Exception:
             logger.exception("kb_ingest_files failed")
             return _http_error(500, "kb_ingest_files error")
+
+    def _handle_ppt_templates(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        try:
+            from urllib.parse import quote
+
+            from mona.agent.skills import BUILTIN_SKILLS_DIR
+
+            skill_dir = BUILTIN_SKILLS_DIR / "ppt-master"
+            layouts_index = (
+                skill_dir / "scripts" / "templates_full" / "layouts" / "layouts_index.json"
+            )
+            decks_index = (
+                skill_dir / "scripts" / "templates_full" / "decks" / "decks_index.json"
+            )
+
+            layouts = []
+            if layouts_index.exists():
+                raw = json.loads(layouts_index.read_text(encoding="utf-8"))
+                for key, info in raw.items():
+                    layouts.append({
+                        "key": key,
+                        "kind": "layout",
+                        "name": key.replace("_", " ").title(),
+                        "summary": info.get("summary", ""),
+                        "pageCount": info.get("page_count", 0),
+                        "canvasFormat": info.get("canvas_format", "ppt169"),
+                        "coverSvgUrl": (
+                            f"/api/ppt/template-svg?kind=layout&key={quote(key, safe='')}&file=01_cover.svg"
+                        ),
+                    })
+
+            decks = []
+            if decks_index.exists():
+                raw = json.loads(decks_index.read_text(encoding="utf-8"))
+                for key, info in raw.items():
+                    decks.append({
+                        "key": key,
+                        "kind": "deck",
+                        "name": key,
+                        "summary": info.get("summary", ""),
+                        "pageCount": info.get("page_count", 0),
+                        "canvasFormat": info.get("canvas_format", "ppt169"),
+                        "primaryColor": info.get("primary_color", ""),
+                        "coverSvgUrl": (
+                            f"/api/ppt/template-svg?kind=deck&key={quote(key, safe='')}&file=01_cover.svg"
+                        ),
+                    })
+
+            canvas_formats = [
+                {
+                    "key": "ppt169",
+                    "label": "PPT 16:9",
+                    "viewBox": "1280x720",
+                    "desc": "商务演示",
+                },
+                {
+                    "key": "ppt43",
+                    "label": "PPT 4:3",
+                    "viewBox": "1024x768",
+                    "desc": "传统投影",
+                },
+                {"key": "xhs", "label": "小红书", "viewBox": "1242x1660", "desc": "图文分享"},
+                {
+                    "key": "square",
+                    "label": "方形海报",
+                    "viewBox": "1080x1080",
+                    "desc": "朋友圈",
+                },
+                {
+                    "key": "story",
+                    "label": "竖屏故事",
+                    "viewBox": "1080x1920",
+                    "desc": "抖音封面",
+                },
+            ]
+
+            return _http_json_response({
+                "layouts": layouts,
+                "decks": decks,
+                "canvasFormats": canvas_formats,
+            })
+        except Exception as e:
+            logger.exception("ppt templates error")
+            return _http_error(500, str(e))
+
+    def _handle_ppt_template_svg(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        try:
+            from mona.agent.skills import BUILTIN_SKILLS_DIR
+
+            query = _parse_query(request.path)
+            kind = _query_first(query, "kind") or ""
+            key = _query_first(query, "key") or ""
+            file = _query_first(query, "file") or "01_cover.svg"
+
+            if "/" in key or "\\" in key or ".." in key:
+                return _http_error(400, "invalid key")
+            if "/" in file or "\\" in file or ".." in file:
+                return _http_error(400, "invalid file")
+
+            skill_dir = BUILTIN_SKILLS_DIR / "ppt-master"
+            subdir = "layouts" if kind == "layout" else "decks"
+            svg_path = skill_dir / "scripts" / "templates_full" / subdir / key / file
+
+            if not svg_path.exists():
+                return _http_error(404, "svg not found")
+
+            content = svg_path.read_bytes()
+            return _http_response(
+                content,
+                content_type="image/svg+xml",
+                extra_headers=[("Cache-Control", "public, max-age=3600")],
+            )
+        except Exception as e:
+            logger.exception("ppt template svg error")
+            return _http_error(500, str(e))
+
+    def _handle_ppt_upload(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        try:
+            import base64
+
+            from mona.config.paths import get_workspace_path
+
+            body = json.loads(request.body) if request.body else {}
+            files = body.get("files", [])
+            if not files:
+                return _http_error(400, "no files provided")
+
+            workspace = get_workspace_path()
+            sources_dir = workspace / "ppt-projects" / "_sources"
+            sources_dir.mkdir(parents=True, exist_ok=True)
+
+            saved: list[dict[str, str]] = []
+            for entry in files:
+                name = entry.get("name", "")
+                content_b64 = entry.get("content", "")
+                if not name or not content_b64:
+                    continue
+                safe_name = Path(name).name
+                if "/" in safe_name or "\\" in safe_name or ".." in safe_name:
+                    continue
+                dest = sources_dir / safe_name
+                dest.write_bytes(base64.b64decode(content_b64))
+                rel = dest.relative_to(workspace)
+                saved.append({
+                    "name": safe_name,
+                    "path": str(rel).replace("\\", "/"),
+                })
+
+            return _http_json_response({"files": saved})
+        except Exception as e:
+            logger.exception("ppt upload error")
+            return _http_error(500, str(e))
+
+    def _handle_ppt_projects(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        try:
+            from mona.config.paths import get_workspace_path
+
+            workspace = get_workspace_path()
+            projects_dir = workspace / "ppt-projects"
+            if not projects_dir.exists():
+                return _http_json_response({"projects": []})
+
+            projects = []
+            for d in sorted(projects_dir.iterdir()):
+                if not d.is_dir():
+                    continue
+                svg_dir = d / "svg_output"
+                export_dir = d / "exports"
+                slide_count = (
+                    len(list(svg_dir.glob("*.svg"))) if svg_dir.exists() else 0
+                )
+                pptx_files = (
+                    sorted(
+                        export_dir.glob("*.pptx"),
+                        key=lambda p: p.stat().st_mtime,
+                        reverse=True,
+                    )
+                    if export_dir.exists()
+                    else []
+                )
+                stat = d.stat()
+                projects.append({
+                    "name": d.name,
+                    "createdAt": stat.st_ctime,
+                    "format": "ppt169",
+                    "slideCount": slide_count,
+                    "hasExport": len(pptx_files) > 0,
+                })
+
+            return _http_json_response({"projects": projects})
+        except Exception as e:
+            logger.exception("ppt projects error")
+            return _http_error(500, str(e))
+
+    def _handle_ppt_download(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        try:
+            from mona.config.paths import get_workspace_path
+
+            query = _parse_query(request.path)
+            project_name = _query_first(query, "project") or ""
+            if (
+                not project_name
+                or "/" in project_name
+                or "\\" in project_name
+                or ".." in project_name
+            ):
+                return _http_error(400, "invalid project name")
+
+            workspace = get_workspace_path()
+            export_dir = workspace / "ppt-projects" / project_name / "exports"
+            if not export_dir.exists():
+                return _http_error(404, "exports not found")
+
+            pptx_files = sorted(
+                export_dir.glob("*.pptx"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+            if not pptx_files:
+                return _http_error(404, "no pptx found")
+
+            content = pptx_files[0].read_bytes()
+            filename = pptx_files[0].name
+            return _http_response(
+                content,
+                content_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                extra_headers=[
+                    ("Content-Disposition", f'attachment; filename="{filename}"'),
+                    ("Cache-Control", "no-cache"),
+                ],
+            )
+        except Exception as e:
+            logger.exception("ppt download error")
+            return _http_error(500, str(e))
+
+    def _handle_ppt_preview_port(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        try:
+            from mona.config.paths import get_workspace_path
+
+            query = _parse_query(request.path)
+            project_name = _query_first(query, "project") or ""
+            if (
+                not project_name
+                or "/" in project_name
+                or "\\" in project_name
+                or ".." in project_name
+            ):
+                return _http_error(400, "invalid project name")
+
+            workspace = get_workspace_path()
+            lock_file = workspace / "ppt-projects" / project_name / ".live_preview.lock"
+
+            if not lock_file.exists():
+                return _http_json_response({"port": None})
+
+            data = json.loads(lock_file.read_text(encoding="utf-8"))
+            port = data.get("port")
+            return _http_json_response({"port": port})
+        except Exception:
+            logger.exception("ppt preview port error")
+            return _http_json_response({"port": None})
 
     @staticmethod
     def _is_websocket_channel_session_key(key: str) -> bool:

@@ -279,6 +279,7 @@ export function AgentActivityCluster({
               <FileReferenceChip
                 path={singleFilePath}
                 tooltipPath={singleFileTooltipPath}
+                absolutePath={singleFileTooltipPath}
                 active={hasLiveEditingFiles}
                 className="-my-0.5 min-w-0"
                 textClassName="text-xs"
@@ -549,6 +550,7 @@ function FileEditRow({ edit }: { edit: FileEditSummary }) {
           <FileReferenceChip
             path={edit.path}
             tooltipPath={edit.absolute_path}
+            absolutePath={edit.absolute_path}
             display="path"
             active={editing}
             className="min-w-0"

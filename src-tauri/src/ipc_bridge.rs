@@ -332,6 +332,54 @@ impl IpcBridge {
                     .map_err(|e| e.to_string())?;
                 serde_json::to_value(result).map_err(|e| e.to_string())
             }
+            "report_save_temp" => {
+                let title = args
+                    .get("title")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("report");
+                let content = args
+                    .get("content")
+                    .and_then(|v| v.as_str())
+                    .ok_or("Missing content")?;
+
+                let workspace = crate::notes::read_workspace_path_from_config();
+                let tmp_dir = workspace.join(".mona").join("tmp").join("reports");
+                std::fs::create_dir_all(&tmp_dir)
+                    .map_err(|e| format!("Failed to create reports dir: {}", e))?;
+
+                let safe_name = title
+                    .replace(|c: char| !c.is_alphanumeric() && c != '-' && c != '_', "_");
+                let file_name = format!(
+                    "{}_{}.html",
+                    safe_name,
+                    chrono::Local::now().format("%Y%m%d%H%M%S")
+                );
+                let file_path = tmp_dir.join(&file_name);
+                std::fs::write(&file_path, content)
+                    .map_err(|e| format!("Failed to write report: {}", e))?;
+
+                let abs_path = file_path
+                    .to_str()
+                    .ok_or("Invalid report path")?
+                    .to_string();
+
+                self.app_handle
+                    .emit(
+                        "terminal-report-ready",
+                        serde_json::json!({
+                            "title": title,
+                            "path": &abs_path,
+                            "fileName": file_name,
+                        }),
+                    )
+                    .map_err(|e| format!("Failed to emit report event: {}", e))?;
+
+                Ok(serde_json::json!({
+                    "status": "saved",
+                    "path": abs_path,
+                    "fileName": file_name,
+                }))
+            }
             _ => Err(format!("Unknown command: {}", cmd)),
         }
     }
