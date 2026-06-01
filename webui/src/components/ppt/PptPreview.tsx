@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
-import { Loader2 } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { ChevronLeft, ChevronRight, Loader2 } from "lucide-react";
 
-import { fetchPptPreviewPort } from "@/lib/api";
+import { fetchPptProjectSlides, getApiBase, type PptSlide } from "@/lib/api";
 import { useClient } from "@/providers/ClientProvider";
 
 interface PptPreviewProps {
@@ -10,59 +10,56 @@ interface PptPreviewProps {
 
 export function PptPreview({ projectName }: PptPreviewProps) {
   const { token } = useClient();
-  const [port, setPort] = useState<number | null>(null);
-  const [ready, setReady] = useState(false);
+  const [slides, setSlides] = useState<PptSlide[]>([]);
+  const [index, setIndex] = useState(0);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
+
+  const [apiBase, setApiBase] = useState<string>("");
+
+  useEffect(() => {
+    getApiBase().then(setApiBase);
+  }, []);
 
   useEffect(() => {
     if (!projectName) {
-      setPort(null);
-      setReady(false);
+      setSlides([]);
+      setIndex(0);
+      setLoading(false);
       setError(false);
       return;
     }
 
     let cancelled = false;
-    let timer: ReturnType<typeof setTimeout>;
-    const name = projectName;
+    setLoading(true);
+    setError(false);
+    setSlides([]);
+    setIndex(0);
 
-    async function poll() {
-      try {
-        const res = await fetchPptPreviewPort(token, name);
+    fetchPptProjectSlides(token, projectName)
+      .then((res) => {
         if (cancelled) return;
-
-        if (res.port == null) {
-          timer = setTimeout(poll, 3000);
-          return;
-        }
-
-        setPort(res.port);
-
-        try {
-          const resp = await fetch(`http://localhost:${res.port}/api/config`);
-          if (!resp.ok) throw new Error();
-          if (cancelled) return;
-          setReady(true);
-        } catch {
-          if (cancelled) return;
-          timer = setTimeout(poll, 3000);
-        }
-      } catch {
+        setSlides(res.slides);
+        setLoading(false);
+      })
+      .catch(() => {
         if (cancelled) return;
         setError(true);
-      }
-    }
-
-    setPort(null);
-    setReady(false);
-    setError(false);
-    poll();
+        setLoading(false);
+      });
 
     return () => {
       cancelled = true;
-      clearTimeout(timer);
     };
   }, [projectName, token]);
+
+  const goPrev = useCallback(() => {
+    setIndex((i) => Math.max(0, i - 1));
+  }, []);
+
+  const goNext = useCallback(() => {
+    setIndex((i) => Math.min(slides.length - 1, i + 1));
+  }, [slides.length]);
 
   if (!projectName) {
     return (
@@ -72,28 +69,63 @@ export function PptPreview({ projectName }: PptPreviewProps) {
     );
   }
 
-  if (error) {
-    return (
-      <div className="flex h-full items-center justify-center text-[13px] text-muted-foreground">
-        预览服务未就绪
-      </div>
-    );
-  }
-
-  if (!port || !ready) {
+  if (loading) {
     return (
       <div className="flex h-full items-center justify-center text-[13px] text-muted-foreground">
         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-        正在连接预览服务…
+        加载预览…
       </div>
     );
   }
 
+  if (error) {
+    return (
+      <div className="flex h-full items-center justify-center text-[13px] text-muted-foreground">
+        加载预览失败
+      </div>
+    );
+  }
+
+  if (slides.length === 0) {
+    return (
+      <div className="flex h-full items-center justify-center text-[13px] text-muted-foreground">
+        暂无幻灯片
+      </div>
+    );
+  }
+
+  const slide = slides[index];
+  const svgUrl = `${apiBase}${slide.url}&token=${encodeURIComponent(token)}`;
+
   return (
-    <iframe
-      src={`http://localhost:${port}`}
-      className="h-full w-full border-0"
-      sandbox="allow-scripts allow-same-origin"
-    />
+    <div className="flex h-full flex-col">
+      <div className="flex min-h-0 flex-1 items-center justify-center bg-muted/30 p-4">
+        <img
+          src={svgUrl}
+          alt={slide.name}
+          className="max-h-full max-w-full rounded shadow-md"
+          draggable={false}
+        />
+      </div>
+      <div className="flex shrink-0 items-center justify-center gap-3 border-t border-border/70 py-1.5 text-[12px] text-muted-foreground">
+        <button
+          onClick={goPrev}
+          disabled={index === 0}
+          className="rounded p-1 hover:bg-muted disabled:opacity-30"
+        >
+          <ChevronLeft className="h-4 w-4" />
+        </button>
+        <span>
+          {index + 1} / {slides.length}
+        </span>
+        <button
+          onClick={goNext}
+          disabled={index === slides.length - 1}
+          className="rounded p-1 hover:bg-muted disabled:opacity-30"
+        >
+          <ChevronRight className="h-4 w-4" />
+        </button>
+      </div>
+    </div>
   );
 }

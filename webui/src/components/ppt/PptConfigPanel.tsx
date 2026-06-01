@@ -1,21 +1,14 @@
-import { useEffect, useRef, useState } from "react";
-import { FileText, Loader2, Palette, Upload, X } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { FileText, FolderOpen, Loader2, Palette, Upload, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { fetchPptTemplates, getApiBase } from "@/lib/api";
+import { fetchPptTemplates, getApiBase, pptAddSources } from "@/lib/api";
+import { isTauri } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 import { useClient } from "@/providers/ClientProvider";
 import type { PptCanvasFormat, PptTemplate } from "@/lib/types";
-
-interface PptConfig {
-  templateKey: string | null;
-  templateKind: "layout" | "deck" | null;
-  canvasFormat: string;
-  stylePreference: string;
-  sourceFiles: string[];
-  topic: string;
-}
+import type { PptConfig } from "./PptMakerView";
 
 interface PptConfigPanelProps {
   config: PptConfig;
@@ -28,7 +21,7 @@ type TemplateTab = "layout" | "deck";
 type SourceTab = "topic" | "files";
 
 export function PptConfigPanel({ config, setConfig, phase, onStart }: PptConfigPanelProps) {
-  const { token } = useClient();
+  const { client, token } = useClient();
   const readOnly = phase !== "config";
 
   const [layouts, setLayouts] = useState<PptTemplate[]>([]);
@@ -37,8 +30,9 @@ export function PptConfigPanel({ config, setConfig, phase, onStart }: PptConfigP
   const [templatesLoading, setTemplatesLoading] = useState(true);
   const [templateTab, setTemplateTab] = useState<TemplateTab>("layout");
   const [sourceTab, setSourceTab] = useState<SourceTab>("topic");
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
   const [apiBase, setApiBase] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     getApiBase().then(setApiBase);
@@ -85,6 +79,142 @@ export function PptConfigPanel({ config, setConfig, phase, onStart }: PptConfigP
     if (readOnly) return;
     setConfig((prev) => ({ ...prev, canvasFormat: fmt.key }));
   }
+
+  const handlePickFiles = useCallback(async () => {
+    if (readOnly || uploading) return;
+
+    if (isTauri()) {
+      try {
+        const { open } = await import("@tauri-apps/plugin-dialog");
+        const selected = await open({
+          multiple: true,
+          directory: false,
+          title: "选择源文件",
+          filters: [
+            {
+              name: "文档",
+              extensions: ["pdf", "doc", "docx", "txt", "md", "pptx", "csv", "json"],
+            },
+          ],
+        });
+        if (!selected) return;
+        const paths = Array.isArray(selected)
+          ? selected.map(String)
+          : [String(selected)];
+        if (paths.length === 0) return;
+
+        setUploading(true);
+        const res = await pptAddSources(token, paths);
+        const newPaths = res.files.map((f) => f.path);
+        setConfig((prev) => ({
+          ...prev,
+          sourceFiles: [...prev.sourceFiles, ...newPaths.filter((p) => !prev.sourceFiles.includes(p))],
+        }));
+      } catch (e) {
+        console.error("Failed to pick files via Tauri dialog", e);
+      } finally {
+        setUploading(false);
+      }
+    } else {
+      fileInputRef.current?.click();
+    }
+  }, [readOnly, uploading, token, setConfig]);
+
+  const handleDropFiles = useCallback(
+    async (e: React.DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (readOnly || uploading) return;
+
+      const files = Array.from(e.dataTransfer.files);
+      if (files.length === 0) return;
+
+      if (isTauri()) {
+        const paths: string[] = [];
+        for (const file of files) {
+          if ("path" in file && typeof (file as File & { path?: string }).path === "string") {
+            paths.push((file as File & { path: string }).path);
+          }
+        }
+        if (paths.length === 0) return;
+        try {
+          setUploading(true);
+          const res = await pptAddSources(token, paths);
+          const newPaths = res.files.map((f) => f.path);
+          setConfig((prev) => ({
+            ...prev,
+            sourceFiles: [...prev.sourceFiles, ...newPaths.filter((p) => !prev.sourceFiles.includes(p))],
+          }));
+        } catch {
+        } finally {
+          setUploading(false);
+        }
+      } else {
+        setUploading(true);
+        const mimeMap: Record<string, string> = {
+          ".pdf": "application/pdf",
+          ".txt": "text/plain",
+          ".md": "text/markdown",
+          ".csv": "text/csv",
+          ".json": "application/json",
+          ".doc": "application/msword",
+          ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        };
+        const readPromises = files.map(
+          (file) =>
+            new Promise<{ name: string; data_url: string } | null>((resolve) => {
+              const ext = "." + file.name.split(".").pop()?.toLowerCase();
+              const mime = mimeMap[ext];
+              if (!mime) {
+                resolve(null);
+                return;
+              }
+              const reader = new FileReader();
+              reader.onload = () => {
+                const b64 = reader.result as string;
+                resolve({ name: file.name, data_url: b64 });
+              };
+              reader.onerror = () => resolve(null);
+              reader.readAsDataURL(file);
+            }),
+        );
+        const results = (await Promise.all(readPromises)).filter(
+          (r): r is { name: string; data_url: string } => r !== null,
+        );
+        if (results.length === 0) {
+          setUploading(false);
+          return;
+        }
+        let handled = false;
+        const timeout = setTimeout(() => {
+          if (handled) return;
+          handled = true;
+          unsub();
+          setUploading(false);
+          console.error("PPT upload timed out");
+        }, 30_000);
+        const unsub = client.onPptUploadResult((result) => {
+          if (handled) return;
+          handled = true;
+          clearTimeout(timeout);
+          unsub();
+          setUploading(false);
+          if (result.ok && result.files) {
+            const newPaths = result.files.map((f) => f.path);
+            setConfig((prev) => ({
+              ...prev,
+              sourceFiles: [...prev.sourceFiles, ...newPaths.filter((p) => !prev.sourceFiles.includes(p))],
+            }));
+          } else {
+            console.error("PPT upload failed", result.error);
+          }
+        });
+        client.sendPptUpload(results);
+      }
+    },
+    [readOnly, uploading, token, setConfig, client],
+  );
 
   return (
     <div className="flex h-full flex-col">
@@ -226,8 +356,8 @@ export function PptConfigPanel({ config, setConfig, phase, onStart }: PptConfigP
               onClick={() => setSourceTab("files")}
               disabled={readOnly}
             >
-              <Upload className="mr-1 inline h-3 w-3" />
-              上传文件
+              <FolderOpen className="mr-1 inline h-3 w-3" />
+              源文件
             </button>
           </div>
           {sourceTab === "topic" ? (
@@ -247,52 +377,142 @@ export function PptConfigPanel({ config, setConfig, phase, onStart }: PptConfigP
                 type="file"
                 className="hidden"
                 multiple
-                accept=".pdf,.doc,.docx,.txt,.md,.pptx"
-                onChange={(e) => {
+                accept=".pdf,.doc,.docx,.txt,.md,.pptx,.csv,.json"
+                onChange={async (e) => {
                   const files = Array.from(e.target.files ?? []);
-                  if (files.length > 0) {
-                    setConfig((prev) => ({
-                      ...prev,
-                      sourceFiles: [...prev.sourceFiles, ...files.map((f) => f.name)],
-                    }));
-                  }
                   e.target.value = "";
+                  if (files.length === 0) return;
+
+                  if (isTauri()) {
+                    const paths = files
+                      .map((f) => (f as File & { path?: string }).path)
+                      .filter((p): p is string => typeof p === "string");
+                    if (paths.length === 0) return;
+                    try {
+                      setUploading(true);
+                      const res = await pptAddSources(token, paths);
+                      const newPaths = res.files.map((f) => f.path);
+                      setConfig((prev) => ({
+                        ...prev,
+                        sourceFiles: [
+                          ...prev.sourceFiles,
+                          ...newPaths.filter((p) => !prev.sourceFiles.includes(p)),
+                        ],
+                      }));
+                    } catch (err) {
+                      console.error("Failed to add sources", err);
+                    } finally {
+                      setUploading(false);
+                    }
+                  } else {
+                    setUploading(true);
+                    const mimeMap: Record<string, string> = {
+                      ".pdf": "application/pdf",
+                      ".txt": "text/plain",
+                      ".md": "text/markdown",
+                      ".csv": "text/csv",
+                      ".json": "application/json",
+                      ".doc": "application/msword",
+                      ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                      ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                    };
+                    const readPromises = files.map(
+                      (file) =>
+                        new Promise<{ name: string; data_url: string } | null>((resolve) => {
+                          const ext = "." + file.name.split(".").pop()?.toLowerCase();
+                          const mime = mimeMap[ext];
+                          if (!mime) {
+                            resolve(null);
+                            return;
+                          }
+                          const reader = new FileReader();
+                          reader.onload = () => {
+                            const b64 = reader.result as string;
+                            resolve({ name: file.name, data_url: b64 });
+                          };
+                          reader.onerror = () => resolve(null);
+                          reader.readAsDataURL(file);
+                        }),
+                    );
+                    const results = (await Promise.all(readPromises)).filter(
+                      (r): r is { name: string; data_url: string } => r !== null,
+                    );
+                    if (results.length === 0) {
+                      setUploading(false);
+                      return;
+                    }
+                    let handled = false;
+                    const timeout = setTimeout(() => {
+                      if (handled) return;
+                      handled = true;
+                      unsub();
+                      setUploading(false);
+                      console.error("PPT upload timed out");
+                    }, 30_000);
+                    const unsub = client.onPptUploadResult((result) => {
+                      if (handled) return;
+                      handled = true;
+                      clearTimeout(timeout);
+                      unsub();
+                      setUploading(false);
+                      if (result.ok && result.files) {
+                        const newPaths = result.files.map((f) => f.path);
+                        setConfig((prev) => ({
+                          ...prev,
+                          sourceFiles: [
+                            ...prev.sourceFiles,
+                            ...newPaths.filter((p) => !prev.sourceFiles.includes(p)),
+                          ],
+                        }));
+                      } else {
+                        console.error("PPT upload failed", result.error);
+                      }
+                    });
+                    client.sendPptUpload(results);
+                  }
                 }}
               />
               <button
                 type="button"
-                className="flex min-h-[80px] w-full items-center justify-center rounded-lg border border-dashed border-border/70 text-[11px] text-muted-foreground transition-colors hover:border-border hover:bg-muted/30"
-                onClick={() => fileInputRef.current?.click()}
-                disabled={readOnly}
+                className={cn(
+                  "flex min-h-[80px] w-full items-center justify-center rounded-lg border border-dashed text-[11px] transition-colors",
+                  uploading
+                    ? "border-border/50 bg-muted/20 text-muted-foreground"
+                    : "border-border/70 text-muted-foreground hover:border-border hover:bg-muted/30",
+                  readOnly && "cursor-default",
+                )}
+                onClick={handlePickFiles}
+                disabled={readOnly || uploading}
                 onDragOver={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
                 }}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  if (readOnly) return;
-                  const files = Array.from(e.dataTransfer.files ?? []);
-                  if (files.length > 0) {
-                    setConfig((prev) => ({
-                      ...prev,
-                      sourceFiles: [...prev.sourceFiles, ...files.map((f) => f.name)],
-                    }));
-                  }
-                }}
+                onDrop={handleDropFiles}
               >
-                <Upload className="mr-1.5 h-3.5 w-3.5" />
-                点击或拖拽文件到此处上传
+                {uploading ? (
+                  <>
+                    <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                    正在添加文件...
+                  </>
+                ) : (
+                  <>
+                    <Upload className="mr-1.5 h-3.5 w-3.5" />
+                    点击选择文件或拖拽到此处
+                  </>
+                )}
               </button>
+              <p className="text-[10px] text-muted-foreground">
+                文件将复制到工作区，AI 将直接读取文件内容
+              </p>
               {config.sourceFiles.length > 0 && (
                 <div className="space-y-1">
-                  {config.sourceFiles.map((name, i) => (
+                  {config.sourceFiles.map((path, i) => (
                     <div
-                      key={`${name}-${i}`}
+                      key={`${path}-${i}`}
                       className="flex items-center gap-1.5 rounded-md bg-muted/50 px-2 py-1 text-[11px]"
                     >
                       <FileText className="h-3 w-3 shrink-0 text-muted-foreground" />
-                      <span className="min-w-0 flex-1 truncate">{name}</span>
+                      <span className="min-w-0 flex-1 truncate">{path}</span>
                       {!readOnly && (
                         <button
                           type="button"

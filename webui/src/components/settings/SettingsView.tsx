@@ -1158,7 +1158,7 @@ function ModelsSettings({
                   providers={providerOptions}
                   value={providerValue}
                   emptyLabel={t("settings.byok.noConfiguredProviders")}
-                  onChange={(provider) => setForm((prev) => ({ ...prev, provider }))}
+                  onChange={(p) => setForm((prev) => ({ ...prev, provider: p }))}
                 />
               </SettingsRow>
               <SettingsRow
@@ -1166,10 +1166,10 @@ function ModelsSettings({
                 description={t("settings.help.model")}
               >
                 <Input
-                  value={form.model}
-                  onChange={(event) => setForm((prev) => ({ ...prev, model: event.target.value }))}
-                  className="h-8 w-[min(280px,70vw)] rounded-full text-[13px]"
-                />
+                    value={form.model}
+                    onChange={(event) => setForm((prev) => ({ ...prev, model: event.target.value }))}
+                    className="h-8 w-[min(280px,70vw)] rounded-full text-[13px]"
+                  />
               </SettingsRow>
             </>
           ) : (
@@ -1188,13 +1188,6 @@ function ModelsSettings({
             saved={false}
             onSave={onSave}
           />
-          {configuredProviders.length === 0 ? (
-            <SettingsRow title={t("settings.byok.configureFirst")}>
-              <Button size="sm" variant="outline" onClick={onOpenProviders} className="rounded-full">
-                {t("settings.byok.openByok")}
-              </Button>
-            </SettingsRow>
-          ) : null}
         </SettingsGroup>
       </section>
     </div>
@@ -1259,7 +1252,8 @@ function ProvidersSettings({
     const apiKeyRequired = provider.api_key_required ?? true;
     const apiKey = form.apiKey.trim();
     const apiBase = form.apiBase.trim();
-    const missingRequiredApiKey = apiKeyRequired && !provider.configured && !apiKey;
+    const missingRequiredApiKey =
+      apiKeyRequired && !provider.configured && !apiKey;
     const missingOptionalCredential =
       !apiKeyRequired && !provider.configured && !apiKey && !apiBase;
     return (
@@ -1280,7 +1274,9 @@ function ProvidersSettings({
               </span>
             </span>
           </span>
-          <StatusPill tone={provider.configured ? "success" : "neutral"}>
+          <StatusPill
+            tone={provider.configured ? "success" : "neutral"}
+          >
             {provider.configured
               ? t("settings.byok.configured")
               : t("settings.byok.notConfigured")}

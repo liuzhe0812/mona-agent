@@ -1,4 +1,4 @@
-﻿"""
+"""
 Provider Registry — single source of truth for LLM provider metadata.
 
 Adding a new provider:

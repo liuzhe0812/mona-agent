@@ -407,7 +407,7 @@ function DbChat({
   const hasMessages = messages.length > 0;
 
   return (
-    <div className="space-y-2.5">
+    <div className="space-y-3">
       {historyError ? (
         <InlineNotice>会话历史加载失败：{historyError}</InlineNotice>
       ) : null}
@@ -441,10 +441,9 @@ function ChatBubble({ message }: { message: UIMessage }) {
         ? [message.content]
         : [];
     return (
-      <div className="rounded-lg border border-border/65 bg-muted/25 px-2.5 py-2 text-[11px] leading-5 text-muted-foreground">
-        <div className="font-medium text-foreground/70">AI 动作</div>
+      <div className="text-xs leading-relaxed text-muted-foreground">
         {traces.length > 0 ? (
-          <ul className="mt-1 space-y-0.5">
+          <ul className="space-y-0.5">
             {traces.slice(-4).map((trace, index) => (
               <li key={`${message.id}-${index}`} className="truncate">
                 {trace}
@@ -452,50 +451,47 @@ function ChatBubble({ message }: { message: UIMessage }) {
             ))}
           </ul>
         ) : (
-          <p className="mt-1">正在调用工具...</p>
+          <p>正在调用工具...</p>
         )}
       </div>
     );
   }
 
   const isUser = message.role === "user";
+  const displayText = message.displayContent || message.content || (message.isStreaming ? "生成中..." : "");
 
   return (
-    <div className={cn("flex", isUser ? "justify-end" : "justify-start")}>
-      <div
-        className={cn(
-          "max-w-[90%] whitespace-pre-wrap rounded-xl px-2.5 py-2 text-[11.5px] leading-5",
-          isUser
-            ? "bg-foreground text-background"
-            : "border border-border/70 bg-background text-foreground/86",
-        )}
-      >
-        {message.reasoning ? (
-          <div className="mb-2 rounded-lg border border-border/60 bg-muted/25 px-2 py-1.5 text-[11px] leading-4 text-muted-foreground">
-            <span className="font-medium text-foreground/70">思考</span>
-            <div className="mt-1 line-clamp-4">{message.reasoning}</div>
-          </div>
-        ) : null}
-        {message.displayContent || message.content || (message.isStreaming ? "生成中..." : "")}
-      </div>
+    <div
+      className={cn(
+        "whitespace-pre-wrap break-words text-xs leading-relaxed",
+        isUser
+          ? "bg-sidebar-accent rounded-lg px-3 py-2 text-foreground w-fit"
+          : "text-muted-foreground",
+      )}
+    >
+      {message.reasoning ? (
+        <div className="mb-2 rounded-lg border border-border/60 bg-muted/25 px-2 py-1.5 text-[11px] leading-4 text-muted-foreground">
+          <span className="font-medium text-foreground/70">思考</span>
+          <div className="mt-1 line-clamp-4">{message.reasoning}</div>
+        </div>
+      ) : null}
+      {displayText}
     </div>
   );
 }
 
 function AssistantHint({ text, loading = false }: { text: string; loading?: boolean }) {
   return (
-    <div className="flex justify-center">
-      <div className="rounded-xl border border-border/70 bg-background px-2.5 py-2 text-[11.5px] leading-5 text-muted-foreground">
-        <span className="inline-flex items-center gap-2">
-          {loading ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <Sparkles className="h-3.5 w-3.5" />
-          )}
-          {text}
-        </span>
-      </div>
-    </div>
+    <p className="text-center text-xs text-muted-foreground py-8">
+      <span className="inline-flex items-center gap-2">
+        {loading ? (
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        ) : (
+          <Sparkles className="h-3.5 w-3.5" />
+        )}
+        {text}
+      </span>
+    </p>
   );
 }
 
@@ -507,7 +503,7 @@ function InlineNotice({
   onClose?: () => void;
 }) {
   return (
-    <div className="flex items-start gap-2 rounded-lg border border-border/70 bg-background px-3 py-2 text-[11.5px] leading-5 text-muted-foreground">
+    <div className="flex items-start gap-2 rounded-lg border border-border/70 bg-background px-3 py-2 text-xs leading-relaxed text-muted-foreground">
       <span className="min-w-0 flex-1">{children}</span>
       {onClose ? (
         <button

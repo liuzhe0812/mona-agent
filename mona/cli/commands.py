@@ -1,4 +1,4 @@
-﻿"""CLI commands for mona."""
+"""CLI commands for mona."""
 
 import asyncio
 import os
@@ -1524,7 +1524,10 @@ def status():
                     console.print(f"{spec.label}: [dim]not set[/dim]")
             else:
                 has_key = bool(p.api_key)
-                console.print(f"{spec.label}: {'[green]✓[/green]' if has_key else '[dim]not set[/dim]'}")
+                if has_key:
+                    console.print(f"{spec.label}: [green]✓[/green]")
+                else:
+                    console.print(f"{spec.label}: [dim]not set[/dim]")
 
 
 # ============================================================================

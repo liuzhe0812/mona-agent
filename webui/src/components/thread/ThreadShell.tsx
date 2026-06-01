@@ -9,16 +9,45 @@ import { ThreadComposer } from "@/components/thread/ThreadComposer";
 import { ThreadHeader } from "@/components/thread/ThreadHeader";
 import { StreamErrorNotice } from "@/components/thread/StreamErrorNotice";
 import { ThreadViewport } from "@/components/thread/ThreadViewport";
+import { SplitPane } from "@/components/deliver/SplitPane";
+import { FilePreviewPanel } from "@/components/deliver/FilePreviewPanel";
+import { useFilePreviewStore } from "@/components/deliver/filePreviewStore";
 import { useMonaStream, type SendImage, type SendOptions } from "@/hooks/useMonaStream";
 import { useSessionHistory } from "@/hooks/useSessions";
-import { listSlashCommands } from "@/lib/api";
-import type { ChatSummary, SlashCommand, UIMessage } from "@/lib/types";
+import { fetchSettings, listSlashCommands, updateSettings } from "@/lib/api";
+import type { ChatSummary, DeliveredFile, SlashCommand, UIMessage } from "@/lib/types";
 import { normalizeLegacyLongTaskMessages } from "@/lib/thread-display-compat";
 import { scrubSubagentUiMessages } from "@/lib/subagent-channel-display";
 import { useClient } from "@/providers/ClientProvider";
 
 function projectWebuiThreadMessages(messages: UIMessage[]): UIMessage[] {
   return scrubSubagentUiMessages(normalizeLegacyLongTaskMessages(messages));
+}
+
+function preserveDeliveredFiles(oldMessages: UIMessage[], newMessages: UIMessage[]): UIMessage[] {
+  const deliveredByAssistantIdx = new Map<number, DeliveredFile[]>();
+  let assistantIdx = 0;
+  for (const m of oldMessages) {
+    if (m.role === "assistant" && m.kind !== "trace") {
+      if (m.deliveredFiles?.length) {
+        deliveredByAssistantIdx.set(assistantIdx, m.deliveredFiles);
+      }
+      assistantIdx++;
+    }
+  }
+  if (deliveredByAssistantIdx.size === 0) return newMessages;
+  const result = [...newMessages];
+  let newAssistantIdx = 0;
+  for (let i = 0; i < result.length; i++) {
+    if (result[i].role === "assistant" && result[i].kind !== "trace") {
+      const files = deliveredByAssistantIdx.get(newAssistantIdx);
+      if (files) {
+        result[i] = { ...result[i], deliveredFiles: files };
+      }
+      newAssistantIdx++;
+    }
+  }
+  return result;
 }
 
 interface ThreadShellProps {
@@ -36,6 +65,7 @@ interface ThreadShellProps {
   onToggleTheme?: () => void;
   hideSidebarToggleOnDesktop?: boolean;
   showHeader?: boolean;
+  onModelNameChange?: (modelName: string | null) => void;
 }
 
 function toModelBadgeLabel(modelName: string | null): string | null {
@@ -72,6 +102,7 @@ export function ThreadShell({
   onToggleTheme = () => {},
   hideSidebarToggleOnDesktop = false,
   showHeader = true,
+  onModelNameChange,
 }: ThreadShellProps) {
   const { t } = useTranslation();
   const chatId = session?.chatId ?? null;
@@ -87,6 +118,9 @@ export function ThreadShell({
   const [booting, setBooting] = useState(false);
   const [slashCommands, setSlashCommands] = useState<SlashCommand[]>([]);
   const [heroImageMode, setHeroImageMode] = useState(false);
+  const [providerOptions, setProviderOptions] = useState<
+    Array<{ name: string; label: string }>
+  >([]);
   const [scrollToBottomSignal, setScrollToBottomSignal] = useState(0);
   const pendingFirstRef = useRef<PendingFirstMessage | null>(null);
   const consumedQueuedPromptRef = useRef<string | null>(null);
@@ -142,15 +176,19 @@ export function ThreadShell({
         pendingCanonicalHydrateRef.current.delete(chatId);
         appliedHistoryVersionRef.current.set(chatId, historyVersion);
         const normalized = projectWebuiThreadMessages(historical);
-        messageCacheRef.current.set(chatId, normalized);
-        return normalized;
+        const preserved = preserveDeliveredFiles(prev, normalized);
+        messageCacheRef.current.set(chatId, preserved);
+        return preserved;
       }
-      if (cached && cached.length > 0) return projectWebuiThreadMessages(cached);
+      if (cached && cached.length > 0) {
+        return preserveDeliveredFiles(prev, projectWebuiThreadMessages(cached));
+      }
       if (historical.length === 0 && prev.length > 0) return projectWebuiThreadMessages(prev);
       appliedHistoryVersionRef.current.set(chatId, historyVersion);
       const next = projectWebuiThreadMessages(historical);
-      if (historical.length > 0) messageCacheRef.current.set(chatId, next);
-      return next;
+      const preserved = preserveDeliveredFiles(prev, next);
+      if (historical.length > 0) messageCacheRef.current.set(chatId, preserved);
+      return preserved;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loading, chatId, historical, historyVersion]);
@@ -237,6 +275,42 @@ export function ThreadShell({
     };
   }, [token]);
 
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const settings = await fetchSettings(token);
+        if (!cancelled) {
+          const options = settings.providers
+            .filter((p) => p.configured)
+            .map((p) => ({
+              name: p.name,
+              label: p.label,
+            }));
+          setProviderOptions(options);
+        }
+      } catch {
+        if (!cancelled) setProviderOptions([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
+
+  const handleModelSwitch = useCallback(
+    async (provider: string, model: string) => {
+      try {
+        const payload = await updateSettings(token, { provider, model: model || undefined });
+        const newModel = payload.agent.model || null;
+        onModelNameChange?.(newModel);
+      } catch {
+        // silently ignore switch errors
+      }
+    },
+    [token, onModelNameChange],
+  );
+
   const handleWelcomeSend = useCallback(
     async (content: string, images?: SendImage[], options?: SendOptions) => {
       if (booting) return;
@@ -316,6 +390,8 @@ export function ThreadShell({
           isStreaming={isStreaming}
           placeholder={composerPlaceholder}
           modelLabel={toModelBadgeLabel(modelName)}
+          modelOptions={providerOptions}
+          onModelSwitch={handleModelSwitch}
           variant={showHeroComposer ? "hero" : "thread"}
           slashCommands={slashCommands}
           imageMode={showHeroComposer ? heroImageMode : undefined}
@@ -331,6 +407,8 @@ export function ThreadShell({
           isStreaming={isStreaming}
           placeholder={openingPlaceholder}
           modelLabel={toModelBadgeLabel(modelName)}
+          modelOptions={providerOptions}
+          onModelSwitch={handleModelSwitch}
           variant="hero"
           slashCommands={slashCommands}
           imageMode={heroImageMode}
@@ -360,27 +438,39 @@ export function ThreadShell({
     </div>
   );
 
+  const previewFile = useFilePreviewStore((s) => s.file);
+  const splitRatio = useFilePreviewStore((s) => s.splitRatio);
+  const setSplitRatio = useFilePreviewStore((s) => s.setSplitRatio);
+
   return (
-    <section className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
-      {showHeader ? (
-        <ThreadHeader
-          title={title}
-          onToggleSidebar={onToggleSidebar}
-          theme={theme}
-          onToggleTheme={onToggleTheme}
-          hideSidebarToggleOnDesktop={hideSidebarToggleOnDesktop}
-          minimal={!session && !loading}
-        />
-      ) : null}
-      <ThreadViewport
-        messages={displayMessages}
-        isStreaming={isStreaming}
-        emptyState={emptyState}
-        composer={composer}
-        scrollToBottomSignal={scrollToBottomSignal}
-        conversationKey={historyKey}
-        showScrollToBottomButton={!!session}
-      />
-    </section>
+    <SplitPane
+      left={
+        <section className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+          {showHeader ? (
+            <ThreadHeader
+              title={title}
+              onToggleSidebar={onToggleSidebar}
+              theme={theme}
+              onToggleTheme={onToggleTheme}
+              hideSidebarToggleOnDesktop={hideSidebarToggleOnDesktop}
+              minimal={!session && !loading}
+            />
+          ) : null}
+          <ThreadViewport
+            messages={displayMessages}
+            isStreaming={isStreaming}
+            emptyState={emptyState}
+            composer={composer}
+            scrollToBottomSignal={scrollToBottomSignal}
+            conversationKey={historyKey}
+            showScrollToBottomButton={!!session}
+          />
+        </section>
+      }
+      right={<FilePreviewPanel />}
+      ratio={splitRatio}
+      onRatioChange={setSplitRatio}
+      rightVisible={!!previewFile}
+    />
   );
 }

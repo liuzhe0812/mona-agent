@@ -504,6 +504,7 @@ class Config(BaseSettings):
             p = getattr(self.providers, spec.name, None)
             if p and p.api_key:
                 return p, spec.name
+
         return None, None
 
     def get_provider(

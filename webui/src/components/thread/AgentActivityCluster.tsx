@@ -14,6 +14,7 @@ const ACTIVITY_SCROLL_NEAR_BOTTOM_PX = 24;
 export function isReasoningOnlyAssistant(m: UIMessage): boolean {
   if (m.role !== "assistant" || m.kind === "trace") return false;
   if (m.content.trim().length > 0) return false;
+  if (m.deliveredFiles?.length) return false;
   return !!(m.reasoning?.length || m.reasoningStreaming || m.isStreaming);
 }
 

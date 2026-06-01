@@ -12,8 +12,10 @@ interface PptHistoryProps {
 }
 
 function formatRelativeTime(epoch: number): string {
-  const diff = Date.now() - epoch;
+  const ms = epoch > 1e12 ? epoch : epoch * 1000;
+  const diff = Date.now() - ms;
   const seconds = Math.floor(diff / 1000);
+  if (seconds < 0) return "刚刚";
   if (seconds < 60) return `${seconds}秒前`;
   const minutes = Math.floor(seconds / 60);
   if (minutes < 60) return `${minutes}分钟前`;

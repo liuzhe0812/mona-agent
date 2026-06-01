@@ -790,6 +790,40 @@ export function useMonaStream(
         });
         return;
       }
+      if (ev.event === "deliver_files") {
+        const files = Array.isArray(ev.files) ? ev.files : [];
+        if (files.length === 0) return;
+        setMessages((prev) => {
+          let targetIdx = -1;
+          for (let i = prev.length - 1; i >= 0; i--) {
+            const m = prev[i];
+            if (m.role === "assistant" && m.kind !== "trace") {
+              targetIdx = i;
+              break;
+            }
+            if (m.role === "user") break;
+          }
+          if (targetIdx >= 0) {
+            const target = prev[targetIdx];
+            return [
+              ...prev.slice(0, targetIdx),
+              { ...target, deliveredFiles: [...(target.deliveredFiles ?? []), ...files] },
+              ...prev.slice(targetIdx + 1),
+            ];
+          }
+          return [
+            ...prev,
+            {
+              id: `deliver-${Date.now()}`,
+              role: "assistant" as const,
+              content: "",
+              deliveredFiles: files,
+              createdAt: Date.now(),
+            },
+          ];
+        });
+        return;
+      }
       // ``attached`` / ``error`` frames aren't actionable here; the client
       // shell handles them separately.
     };

@@ -105,6 +105,7 @@ export class MonaClient {
   private sessionUpdateHandlers = new Set<SessionUpdateHandler>();
   private runStatusHandlers = new Set<RunStatusHandler>();
   private errorHandlers = new Set<ErrorHandler>();
+  private pptUploadHandlers = new Set<(result: { ok: boolean; files?: { name: string; path: string }[]; error?: string }) => void>();
   // chat_id -> handlers listening on it
   private chatHandlers = new Map<string, Set<EventHandler>>();
   /** Inbound frames received while no subscriber is registered (e.g. user switched away). */
@@ -190,6 +191,19 @@ export class MonaClient {
     return () => {
       this.errorHandlers.delete(handler);
     };
+  }
+
+  onPptUploadResult(
+    handler: (result: { ok: boolean; files?: { name: string; path: string }[]; error?: string }) => void,
+  ): Unsubscribe {
+    this.pptUploadHandlers.add(handler);
+    return () => {
+      this.pptUploadHandlers.delete(handler);
+    };
+  }
+
+  sendPptUpload(files: { name: string; data_url: string }[]): void {
+    this.queueSend({ type: "ppt_upload", files });
   }
 
   /** Last ``goal_status`` ``started_at`` (unix sec) for *chatId*, if the turn is running. */
@@ -404,6 +418,17 @@ export class MonaClient {
 
     if (parsed.event === "session_updated") {
       this.emitSessionUpdate(parsed.chat_id, parsed.scope);
+      return;
+    }
+
+    if (parsed.event === "ppt_upload_result") {
+      for (const handler of this.pptUploadHandlers) {
+        handler({
+          ok: !!parsed.ok,
+          files: parsed.files,
+          error: parsed.error,
+        });
+      }
       return;
     }
 

@@ -1014,6 +1014,7 @@ function Shell({
                   onToggleTheme={toggle}
                   hideSidebarToggleOnDesktop
                   showHeader={false}
+                  onModelNameChange={onModelNameChange}
                 />
               </div>
               {view === "note" ? (

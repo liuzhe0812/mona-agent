@@ -1,4 +1,4 @@
-﻿"""Create LLM providers from config."""
+"""Create LLM providers from config."""
 
 from __future__ import annotations
 
@@ -91,8 +91,10 @@ def _make_provider_core(
     else:
         from mona.providers.openai_compat_provider import OpenAICompatProvider
 
+        api_key = (p.api_key if p else None) or None
+
         provider = OpenAICompatProvider(
-            api_key=p.api_key if p else None,
+            api_key=api_key,
             api_base=config.get_api_base(model, preset=resolved),
             default_model=model,
             extra_headers=p.extra_headers if p else None,

@@ -1,9 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Loader2, Send, Square } from "lucide-react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Layers, Loader2, Send, Square } from "lucide-react";
 
 import { useMonaStream } from "@/hooks/useMonaStream";
 import { useSessionHistory } from "@/hooks/useSessions";
-import type { UIMessage } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 interface PptChatPanelProps {
@@ -46,9 +45,10 @@ export function PptChatPanel({ chatId }: PptChatPanelProps) {
     });
   }, [chatId, historical, historyVersion, loading, setMessages]);
 
-  useEffect(() => {
+  const messagesLen = messages.length;
+  useLayoutEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [messagesLen]);
 
   const sendDraft = useCallback(() => {
     const trimmed = draft.trim();
@@ -57,14 +57,46 @@ export function PptChatPanel({ chatId }: PptChatPanelProps) {
     send(trimmed);
   }, [chatId, draft, isStreaming, send]);
 
+  const userMessages = useMemo(
+    () => messages.filter((m) => m.role === "user"),
+    [messages],
+  );
+
+  const stats = useMemo(() => {
+    let reasoningSteps = 0;
+    let toolCalls = 0;
+    let added = 0;
+    let deleted = 0;
+    for (const m of messages) {
+      if (m.role === "assistant" && m.kind !== "trace") {
+        if (m.reasoning || m.reasoningStreaming) {
+          reasoningSteps += 1;
+        }
+      }
+      if (m.kind === "trace") {
+        toolCalls += m.traces?.length ?? (m.content.trim() ? 1 : 0);
+      }
+      if (m.fileEdits) {
+        for (const fe of m.fileEdits) {
+          if (fe.status !== "error" && !fe.binary) {
+            added += fe.added;
+            deleted += fe.deleted;
+          }
+        }
+      }
+    }
+    return { reasoningSteps, toolCalls, added, deleted };
+  }, [messages]);
+
   if (!chatId) {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-2 text-muted-foreground">
-        <Loader2 className="h-5 w-5 animate-spin" />
-        <span className="text-[12px]">等待生成开始...</span>
+      <div className="flex h-full items-center justify-center text-[12px] text-muted-foreground">
+        选择历史项目或开始新生成
       </div>
     );
   }
+
+  const hasStats = stats.reasoningSteps > 0 || stats.toolCalls > 0 || stats.added > 0 || stats.deleted > 0;
 
   return (
     <div className="flex h-full flex-col">
@@ -93,16 +125,43 @@ export function PptChatPanel({ chatId }: PptChatPanelProps) {
             </div>
           ) : null}
 
-          {messages.map((message) => (
-            <ChatBubble key={message.id} message={message} />
+          {hasStats && (
+            <div className="flex items-center gap-2 rounded-md bg-muted/40 px-2.5 py-1.5 text-[11px] text-muted-foreground">
+              <Layers className="h-3.5 w-3.5 shrink-0" />
+              {isStreaming ? (
+                <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
+              ) : null}
+              <span className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+                {stats.reasoningSteps > 0 && (
+                  <span>{stats.reasoningSteps} 次思考</span>
+                )}
+                {stats.toolCalls > 0 && (
+                  <span>{stats.toolCalls} 次工具调用</span>
+                )}
+                {(stats.added > 0 || stats.deleted > 0) && (
+                  <span className="inline-flex items-center gap-1 tabular-nums">
+                    <span className="text-emerald-600/75 dark:text-emerald-300/75">+{stats.added}</span>
+                    <span className="text-rose-600/70 dark:text-rose-300/75">-{stats.deleted}</span>
+                  </span>
+                )}
+              </span>
+            </div>
+          )}
+
+          {userMessages.map((message) => (
+            <div key={message.id} className="flex justify-end">
+              <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-lg bg-sidebar-accent px-3 py-2 text-[12px] leading-relaxed text-foreground">
+                {(message.displayContent ?? message.content) || (message.isStreaming ? "生成中..." : "")}
+              </div>
+            </div>
           ))}
 
-          {isStreaming ? (
+          {isStreaming && !hasStats && (
             <div className="flex items-center gap-1.5 text-[12px] text-muted-foreground">
               <Loader2 className="h-3 w-3 animate-spin" />
               <span>Agent 正在处理...</span>
             </div>
-          ) : null}
+          )}
 
           <div ref={bottomRef} />
         </div>
@@ -143,53 +202,6 @@ export function PptChatPanel({ chatId }: PptChatPanelProps) {
             )}
           </button>
         </div>
-      </div>
-    </div>
-  );
-}
-
-function ChatBubble({ message }: { message: UIMessage }) {
-  if (message.kind === "trace") {
-    const traces = message.traces?.length ? message.traces : message.content ? [message.content] : [];
-    return (
-      <div className="rounded-lg border border-border/65 bg-muted/25 px-2.5 py-2 text-[11px] leading-5 text-muted-foreground">
-        <div className="font-medium text-foreground/70">Agent 动作</div>
-        {traces.length > 0 ? (
-          <ul className="mt-1 space-y-0.5">
-            {traces.slice(-4).map((trace, index) => (
-              <li key={`${message.id}-${index}`} className="truncate">
-                {trace}
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="mt-1">正在调用工具...</p>
-        )}
-      </div>
-    );
-  }
-
-  const isUser = message.role === "user";
-
-  return (
-    <div className={cn("flex", isUser ? "justify-end" : "justify-start")}>
-      <div
-        className={cn(
-          "max-w-[85%] whitespace-pre-wrap break-words text-[12px] leading-relaxed",
-          isUser
-            ? "bg-sidebar-accent rounded-lg px-3 py-2 text-foreground"
-            : "text-muted-foreground",
-        )}
-      >
-        {message.reasoning ? (
-          <div className="mb-2 rounded-lg border border-border/60 bg-muted/25 px-2 py-1.5 text-[11px] leading-4 text-muted-foreground">
-            <span className="font-medium text-foreground/70">思考</span>
-            <div className="mt-1 line-clamp-4">{message.reasoning}</div>
-          </div>
-        ) : null}
-        {isUser
-          ? (message.displayContent ?? message.content) || (message.isStreaming ? "生成中..." : "")
-          : message.content || (message.isStreaming ? "生成中..." : "")}
       </div>
     </div>
   );

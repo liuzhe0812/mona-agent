@@ -62,6 +62,7 @@ documents the general tool contract and non-obvious usage patterns.
 - Use `message` to send content or local media to the user/channel.
 - `read_file` only reads content for your analysis; it does not deliver a file to the user.
 - When sending an existing local file, attach it through the message/media mechanism instead of pasting file contents unless the user asked for text.
+- Use `deliver_file` after creating new files (reports, images, data exports, configuration files, etc.) that the user should be aware of. This makes the files appear as clickable cards in the conversation. Do NOT call `deliver_file` for temporary or intermediate files.
 
 ## Scheduling and Background Work
 

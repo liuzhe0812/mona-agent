@@ -1,4 +1,4 @@
-﻿"""Settings REST helpers for the WebUI HTTP surface.
+"""Settings REST helpers for the WebUI HTTP surface.
 
 The WebSocket channel owns transport/authentication. This module owns the
 settings payload shape and the allowlisted config mutations exposed to WebUI.

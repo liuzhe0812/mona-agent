@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { JSONContent } from "@tiptap/core";
 import Link from "@tiptap/extension-link";
 import Placeholder from "@tiptap/extension-placeholder";
@@ -12,6 +12,8 @@ import {
   Bold,
   CheckSquare,
   Code2,
+  ClipboardPaste,
+  Copy,
   FileCode2,
   Heading1,
   Heading2,
@@ -22,12 +24,21 @@ import {
   ListOrdered,
   Quote,
   Redo2,
+  Scissors,
+  Strikethrough,
   Table2,
   Type,
   Undo2,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { cn } from "@/lib/utils";
 
 export type EditorMode = "visual" | "markdown";
@@ -182,15 +193,17 @@ export function MarkdownEditor({
       </div>
 
       {mode === "visual" ? (
-        <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin">
-          <div className={cn("mx-auto w-full max-w-[700px] px-5 py-5", editorClassName)}>
-            {children}
-            <EditorContent
-              editor={editor}
-              className="mt-4 text-[13.5px] leading-6 text-foreground [&_.ProseMirror]:min-h-[380px] [&_.ProseMirror]:outline-none [&_.ProseMirror_blockquote]:border-l-2 [&_.ProseMirror_blockquote]:border-border [&_.ProseMirror_blockquote]:pl-3 [&_.ProseMirror_code]:rounded [&_.ProseMirror_code]:bg-muted [&_.ProseMirror_code]:px-1 [&_.ProseMirror_h1]:mb-2 [&_.ProseMirror_h1]:mt-5 [&_.ProseMirror_h1]:text-[22px] [&_.ProseMirror_h1]:font-bold [&_.ProseMirror_h2]:mb-2 [&_.ProseMirror_h2]:mt-5 [&_.ProseMirror_h2]:text-[18px] [&_.ProseMirror_h2]:font-semibold [&_.ProseMirror_h3]:mb-2 [&_.ProseMirror_h3]:mt-4 [&_.ProseMirror_h3]:text-[15px] [&_.ProseMirror_h3]:font-semibold [&_.ProseMirror_h4]:mb-1.5 [&_.ProseMirror_h4]:mt-3 [&_.ProseMirror_h4]:text-[14px] [&_.ProseMirror_h4]:font-semibold [&_.ProseMirror_li]:my-0.5 [&_.ProseMirror_ol]:ml-5 [&_.ProseMirror_p]:my-1.5 [&_.ProseMirror_pre]:my-2.5 [&_.ProseMirror_pre]:overflow-x-auto [&_.ProseMirror_pre]:rounded-lg [&_.ProseMirror_pre]:border [&_.ProseMirror_pre]:border-border/70 [&_.ProseMirror_pre]:bg-muted/45 [&_.ProseMirror_pre]:p-2.5 [&_.ProseMirror_table]:my-2.5 [&_.ProseMirror_table]:w-full [&_.ProseMirror_table]:border-collapse [&_.ProseMirror_td]:border [&_.ProseMirror_td]:border-border [&_.ProseMirror_td]:px-2 [&_.ProseMirror_td]:py-1.5 [&_.ProseMirror_th]:border [&_.ProseMirror_th]:border-border [&_.ProseMirror_th]:bg-muted/45 [&_.ProseMirror_th]:px-2 [&_.ProseMirror_th]:py-1.5 [&_.ProseMirror_ul]:ml-5"
-            />
+        <EditorContextMenu editor={editor}>
+          <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin">
+            <div className={cn("mx-auto w-full max-w-[700px] px-5 py-5", editorClassName)}>
+              {children}
+              <EditorContent
+                editor={editor}
+                className="mt-4 text-[13.5px] leading-6 text-foreground [&_.ProseMirror]:min-h-[380px] [&_.ProseMirror]:outline-none [&_.ProseMirror_blockquote]:border-l-2 [&_.ProseMirror_blockquote]:border-border [&_.ProseMirror_blockquote]:pl-3 [&_.ProseMirror_code]:rounded [&_.ProseMirror_code]:bg-muted [&_.ProseMirror_code]:px-1 [&_.ProseMirror_h1]:mb-2 [&_.ProseMirror_h1]:mt-5 [&_.ProseMirror_h1]:text-[22px] [&_.ProseMirror_h1]:font-bold [&_.ProseMirror_h2]:mb-2 [&_.ProseMirror_h2]:mt-5 [&_.ProseMirror_h2]:text-[18px] [&_.ProseMirror_h2]:font-semibold [&_.ProseMirror_h3]:mb-2 [&_.ProseMirror_h3]:mt-4 [&_.ProseMirror_h3]:text-[15px] [&_.ProseMirror_h3]:font-semibold [&_.ProseMirror_h4]:mb-1.5 [&_.ProseMirror_h4]:mt-3 [&_.ProseMirror_h4]:text-[14px] [&_.ProseMirror_h4]:font-semibold [&_.ProseMirror_li]:my-0.5 [&_.ProseMirror_ol]:ml-5 [&_.ProseMirror_p]:my-1.5 [&_.ProseMirror_pre]:my-2.5 [&_.ProseMirror_pre]:overflow-x-auto [&_.ProseMirror_pre]:rounded-lg [&_.ProseMirror_pre]:border [&_.ProseMirror_pre]:border-border/70 [&_.ProseMirror_pre]:bg-muted/45 [&_.ProseMirror_pre]:p-2.5 [&_.ProseMirror_s]:line-through [&_.ProseMirror_s]:text-muted-foreground [&_.ProseMirror_table]:my-2.5 [&_.ProseMirror_table]:w-full [&_.ProseMirror_table]:border-collapse [&_.ProseMirror_td]:border [&_.ProseMirror_td]:border-border [&_.ProseMirror_td]:px-2 [&_.ProseMirror_td]:py-1.5 [&_.ProseMirror_th]:border [&_.ProseMirror_th]:border-border [&_.ProseMirror_th]:bg-muted/45 [&_.ProseMirror_th]:px-2 [&_.ProseMirror_th]:py-1.5 [&_.ProseMirror_ul]:ml-5"
+              />
+            </div>
           </div>
-        </div>
+        </EditorContextMenu>
       ) : (
         <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin">
           <div className={cn("mx-auto flex h-full w-full max-w-[700px] flex-col px-5 py-5", editorClassName)}>
@@ -214,6 +227,185 @@ export function MarkdownEditor({
         </div>
       ) : null}
     </section>
+  );
+}
+
+function EditorContextMenu({ editor, children }: { editor: Editor | null; children: React.ReactNode }) {
+  const [hasSelection, setHasSelection] = useState(false);
+
+  const updateSelection = () => {
+    if (!editor) return;
+    const { from, to } = editor.state.selection;
+    setHasSelection(from !== to);
+  };
+
+  const handleCopy = async () => {
+    if (!editor) return;
+    const { from, to } = editor.state.selection;
+    if (from === to) return;
+    const text = editor.state.doc.textBetween(from, to, "\n");
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {}
+  };
+
+  const handleCut = async () => {
+    if (!editor) return;
+    const { from, to } = editor.state.selection;
+    if (from === to) return;
+    const text = editor.state.doc.textBetween(from, to, "\n");
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {}
+    editor.chain().focus().deleteSelection().run();
+  };
+
+  const handlePaste = async () => {
+    if (!editor) return;
+    try {
+      const text = await navigator.clipboard.readText();
+      editor.chain().focus().insertContent(text).run();
+    } catch {}
+  };
+
+  const handleAddLink = () => {
+    if (!editor) return;
+    const url = window.prompt("输入链接地址");
+    if (!url) return;
+    editor.chain().focus().extendMarkRange("link").setLink({ href: url }).run();
+  };
+
+  const handleRemoveLink = () => {
+    editor?.chain().focus().unsetLink().run();
+  };
+
+  return (
+    <ContextMenu onOpenChange={updateSelection}>
+      <ContextMenuTrigger asChild>
+        {children}
+      </ContextMenuTrigger>
+      <ContextMenuContent className="w-44">
+        {hasSelection ? (
+          <>
+            <ContextMenuItem onSelect={handleCopy}>
+              <Copy className="mr-2 h-3.5 w-3.5" />
+              复制
+            </ContextMenuItem>
+            <ContextMenuItem onSelect={handleCut}>
+              <Scissors className="mr-2 h-3.5 w-3.5" />
+              剪切
+            </ContextMenuItem>
+          </>
+        ) : null}
+        <ContextMenuItem onSelect={handlePaste}>
+          <ClipboardPaste className="mr-2 h-3.5 w-3.5" />
+          粘贴
+        </ContextMenuItem>
+
+        {hasSelection ? (
+          <>
+            <ContextMenuSeparator />
+            <ContextMenuItem
+              onSelect={() => editor?.chain().focus().toggleBold().run()}
+            >
+              <Bold className="mr-2 h-3.5 w-3.5" />
+              加粗
+            </ContextMenuItem>
+            <ContextMenuItem
+              onSelect={() => editor?.chain().focus().toggleItalic().run()}
+            >
+              <Italic className="mr-2 h-3.5 w-3.5" />
+              斜体
+            </ContextMenuItem>
+            <ContextMenuItem
+              onSelect={() => editor?.chain().focus().toggleStrike().run()}
+            >
+              <Strikethrough className="mr-2 h-3.5 w-3.5" />
+              删除线
+            </ContextMenuItem>
+
+            <ContextMenuSeparator />
+            <ContextMenuItem
+              onSelect={() => editor?.chain().focus().toggleHeading({ level: 1 }).run()}
+            >
+              <Heading1 className="mr-2 h-3.5 w-3.5" />
+              标题 1
+            </ContextMenuItem>
+            <ContextMenuItem
+              onSelect={() => editor?.chain().focus().toggleHeading({ level: 2 }).run()}
+            >
+              <Heading2 className="mr-2 h-3.5 w-3.5" />
+              标题 2
+            </ContextMenuItem>
+            <ContextMenuItem
+              onSelect={() => editor?.chain().focus().toggleHeading({ level: 3 }).run()}
+            >
+              <Heading3 className="mr-2 h-3.5 w-3.5" />
+              标题 3
+            </ContextMenuItem>
+            <ContextMenuItem
+              onSelect={() => editor?.chain().focus().setParagraph().run()}
+            >
+              <Type className="mr-2 h-3.5 w-3.5" />
+              正文
+            </ContextMenuItem>
+
+            <ContextMenuSeparator />
+            <ContextMenuItem
+              onSelect={() => editor?.chain().focus().toggleBlockquote().run()}
+            >
+              <Quote className="mr-2 h-3.5 w-3.5" />
+              引用
+            </ContextMenuItem>
+            <ContextMenuItem
+              onSelect={() => editor?.chain().focus().toggleCodeBlock().run()}
+            >
+              <Code2 className="mr-2 h-3.5 w-3.5" />
+              代码块
+            </ContextMenuItem>
+            {editor?.isActive("link") ? (
+              <ContextMenuItem onSelect={handleRemoveLink}>
+                <Link2 className="mr-2 h-3.5 w-3.5" />
+                移除链接
+              </ContextMenuItem>
+            ) : (
+              <ContextMenuItem onSelect={handleAddLink}>
+                <Link2 className="mr-2 h-3.5 w-3.5" />
+                添加链接
+              </ContextMenuItem>
+            )}
+          </>
+        ) : (
+          <>
+            <ContextMenuSeparator />
+            <ContextMenuItem
+              onSelect={() => editor?.chain().focus().toggleHeading({ level: 1 }).run()}
+            >
+              <Heading1 className="mr-2 h-3.5 w-3.5" />
+              标题 1
+            </ContextMenuItem>
+            <ContextMenuItem
+              onSelect={() => editor?.chain().focus().toggleHeading({ level: 2 }).run()}
+            >
+              <Heading2 className="mr-2 h-3.5 w-3.5" />
+              标题 2
+            </ContextMenuItem>
+            <ContextMenuItem
+              onSelect={() => editor?.chain().focus().toggleHeading({ level: 3 }).run()}
+            >
+              <Heading3 className="mr-2 h-3.5 w-3.5" />
+              标题 3
+            </ContextMenuItem>
+            <ContextMenuItem
+              onSelect={() => editor?.chain().focus().setParagraph().run()}
+            >
+              <Type className="mr-2 h-3.5 w-3.5" />
+              正文
+            </ContextMenuItem>
+          </>
+        )}
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
 

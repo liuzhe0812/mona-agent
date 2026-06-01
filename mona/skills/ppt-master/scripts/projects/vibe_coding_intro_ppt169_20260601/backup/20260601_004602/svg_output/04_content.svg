@@ -1,0 +1,225 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720">
+    <defs>
+        <linearGradient id="bgGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" style="stop-color:#0A1628" />
+            <stop offset="100%" style="stop-color:#0F2847" />
+        </linearGradient>
+        <linearGradient id="accentGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" style="stop-color:#00D4FF" />
+            <stop offset="100%" style="stop-color:#7B2FFF" />
+        </linearGradient>
+        <linearGradient id="cardGradient1" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" style="stop-color:#00D4FF;stop-opacity:0.12" />
+            <stop offset="100%" style="stop-color:#00D4FF;stop-opacity:0.04" />
+        </linearGradient>
+        <linearGradient id="cardGradient2" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" style="stop-color:#7B2FFF;stop-opacity:0.12" />
+            <stop offset="100%" style="stop-color:#7B2FFF;stop-opacity:0.04" />
+        </linearGradient>
+    </defs>
+
+    <!-- 背景 -->
+    <rect width="1280" height="720" fill="url(#bgGradient)" />
+
+    <!-- 科技网格 -->
+    <g stroke="#FFFFFF" stroke-width="0.5" stroke-opacity="0.02">
+        <line x1="0" y1="0" x2="0" y2="720"/><line x1="64" y1="0" x2="64" y2="720"/>
+        <line x1="128" y1="0" x2="128" y2="720"/><line x1="192" y1="0" x2="192" y2="720"/>
+        <line x1="256" y1="0" x2="256" y2="720"/><line x1="320" y1="0" x2="320" y2="720"/>
+        <line x1="384" y1="0" x2="384" y2="720"/><line x1="448" y1="0" x2="448" y2="720"/>
+        <line x1="512" y1="0" x2="512" y2="720"/><line x1="576" y1="0" x2="576" y2="720"/>
+        <line x1="640" y1="0" x2="640" y2="720"/><line x1="704" y1="0" x2="704" y2="720"/>
+        <line x1="768" y1="0" x2="768" y2="720"/><line x1="832" y1="0" x2="832" y2="720"/>
+        <line x1="896" y1="0" x2="896" y2="720"/><line x1="960" y1="0" x2="960" y2="720"/>
+        <line x1="1024" y1="0" x2="1024" y2="720"/><line x1="1088" y1="0" x2="1088" y2="720"/>
+        <line x1="1152" y1="0" x2="1152" y2="720"/><line x1="1216" y1="0" x2="1216" y2="720"/>
+        <line x1="0" y1="0" x2="1280" y2="0"/><line x1="0" y1="60" x2="1280" y2="60"/>
+        <line x1="0" y1="120" x2="1280" y2="120"/><line x1="0" y1="180" x2="1280" y2="180"/>
+        <line x1="0" y1="240" x2="1280" y2="240"/><line x1="0" y1="300" x2="1280" y2="300"/>
+        <line x1="0" y1="360" x2="1280" y2="360"/><line x1="0" y1="420" x2="1280" y2="420"/>
+        <line x1="0" y1="480" x2="1280" y2="480"/><line x1="0" y1="540" x2="1280" y2="540"/>
+        <line x1="0" y1="600" x2="1280" y2="600"/><line x1="0" y1="660" x2="1280" y2="660"/>
+    </g>
+
+    <!-- 左侧装饰条 -->
+    <rect x="0" y="0" width="8" height="720" fill="url(#accentGradient)" />
+
+    <!-- 标题区域 -->
+    <text x="60" y="70" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="28" font-weight="bold"
+        fill="#FFFFFF">
+        核心工具与平台
+    </text>
+    <text x="60" y="98" font-family="system-ui, sans-serif" font-size="15" fill="#64748B">
+        Key Tools &amp; Platforms
+    </text>
+
+    <!-- 分隔线 -->
+    <line x1="60" y1="115" x2="500" y2="115" stroke="#1E3A5F" stroke-width="2" />
+
+    <!-- ==================== 内容区域 - 三栏布局 ==================== -->
+
+    <!-- 左栏: 主流工具 -->
+    <g transform="translate(60, 135)">
+        <rect x="0" y="0" width="360" height="520" rx="12" fill="url(#cardGradient1)" />
+        <rect x="0" y="0" width="360" height="50" rx="12" fill="#00D4FF" fill-opacity="0.15" />
+        <text x="180" y="32" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="18" font-weight="bold" fill="#00D4FF" text-anchor="middle">主流工具</text>
+
+        <!-- Cursor -->
+        <g transform="translate(20, 65)">
+            <rect x="0" y="0" width="320" height="70" rx="8" fill="#FFFFFF" fill-opacity="0.04" />
+            <circle cx="30" cy="35" r="18" fill="#00D4FF" fill-opacity="0.2" />
+            <text x="30" y="41" font-family="system-ui, sans-serif" font-size="16" font-weight="bold" fill="#00D4FF" text-anchor="middle">C</text>
+            <text x="60" y="28" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="16" font-weight="bold" fill="#FFFFFF">Cursor</text>
+            <text x="60" y="48" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="12" fill="#94A3B8">AI 原生 IDE，支持 Agent 模式自动编辑多文件</text>
+        </g>
+
+        <!-- Replit -->
+        <g transform="translate(20, 150)">
+            <rect x="0" y="0" width="320" height="70" rx="8" fill="#FFFFFF" fill-opacity="0.04" />
+            <circle cx="30" cy="35" r="18" fill="#7B2FFF" fill-opacity="0.2" />
+            <text x="30" y="41" font-family="system-ui, sans-serif" font-size="16" font-weight="bold" fill="#B388FF" text-anchor="middle">R</text>
+            <text x="60" y="28" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="16" font-weight="bold" fill="#FFFFFF">Replit Agent</text>
+            <text x="60" y="48" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="12" fill="#94A3B8">自然语言描述需求，AI 自主规划并部署完整应用</text>
+        </g>
+
+        <!-- Bolt.new -->
+        <g transform="translate(20, 235)">
+            <rect x="0" y="0" width="320" height="70" rx="8" fill="#FFFFFF" fill-opacity="0.04" />
+            <circle cx="30" cy="35" r="18" fill="#00D4FF" fill-opacity="0.2" />
+            <text x="30" y="41" font-family="system-ui, sans-serif" font-size="16" font-weight="bold" fill="#00D4FF" text-anchor="middle">B</text>
+            <text x="60" y="28" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="16" font-weight="bold" fill="#FFFFFF">Bolt.new</text>
+            <text x="60" y="48" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="12" fill="#94A3B8">浏览器内全栈 AI 开发，即时预览与部署</text>
+        </g>
+
+        <!-- Lovable / v0 -->
+        <g transform="translate(20, 320)">
+            <rect x="0" y="0" width="320" height="70" rx="8" fill="#FFFFFF" fill-opacity="0.04" />
+            <circle cx="30" cy="35" r="18" fill="#7B2FFF" fill-opacity="0.2" />
+            <text x="30" y="41" font-family="system-ui, sans-serif" font-size="16" font-weight="bold" fill="#B388FF" text-anchor="middle">L</text>
+            <text x="60" y="28" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="16" font-weight="bold" fill="#FFFFFF">Lovable / v0</text>
+            <text x="60" y="48" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="12" fill="#94A3B8">从 UI 设计稿直接生成前端代码，所见即所得</text>
+        </g>
+
+        <!-- GitHub Copilot -->
+        <g transform="translate(20, 405)">
+            <rect x="0" y="0" width="320" height="70" rx="8" fill="#FFFFFF" fill-opacity="0.04" />
+            <circle cx="30" cy="35" r="18" fill="#00D4FF" fill-opacity="0.2" />
+            <text x="30" y="41" font-family="system-ui, sans-serif" font-size="16" font-weight="bold" fill="#00D4FF" text-anchor="middle">G</text>
+            <text x="60" y="28" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="16" font-weight="bold" fill="#FFFFFF">GitHub Copilot</text>
+            <text x="60" y="48" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="12" fill="#94A3B8">代码补全与对话，集成主流 IDE 生态</text>
+        </g>
+    </g>
+
+    <!-- 中栏: 工作流程 -->
+    <g transform="translate(450, 135)">
+        <rect x="0" y="0" width="360" height="520" rx="12" fill="url(#cardGradient2)" />
+        <rect x="0" y="0" width="360" height="50" rx="12" fill="#7B2FFF" fill-opacity="0.15" />
+        <text x="180" y="32" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="18" font-weight="bold" fill="#B388FF" text-anchor="middle">工作流程</text>
+
+        <!-- Step 1 -->
+        <g transform="translate(20, 65)">
+            <circle cx="25" cy="25" r="20" fill="#7B2FFF" fill-opacity="0.2" />
+            <text x="25" y="31" font-family="system-ui, sans-serif" font-size="16" font-weight="bold" fill="#B388FF" text-anchor="middle">1</text>
+            <text x="55" y="22" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="15" font-weight="bold" fill="#FFFFFF">描述需求</text>
+            <text x="55" y="42" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="12" fill="#94A3B8">用自然语言描述功能需求</text>
+        </g>
+
+        <!-- 连接线 -->
+        <line x1="25" y1="50" x2="25" y2="80" stroke="#7B2FFF" stroke-width="2" stroke-opacity="0.3" stroke-dasharray="4,3" />
+
+        <!-- Step 2 -->
+        <g transform="translate(20, 130)">
+            <circle cx="25" cy="25" r="20" fill="#7B2FFF" fill-opacity="0.2" />
+            <text x="25" y="31" font-family="system-ui, sans-serif" font-size="16" font-weight="bold" fill="#B388FF" text-anchor="middle">2</text>
+            <text x="55" y="22" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="15" font-weight="bold" fill="#FFFFFF">AI 生成代码</text>
+            <text x="55" y="42" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="12" fill="#94A3B8">LLM 理解意图并生成代码</text>
+        </g>
+
+        <line x1="25" y1="155" x2="25" y2="185" stroke="#7B2FFF" stroke-width="2" stroke-opacity="0.3" stroke-dasharray="4,3" />
+
+        <!-- Step 3 -->
+        <g transform="translate(20, 195)">
+            <circle cx="25" cy="25" r="20" fill="#7B2FFF" fill-opacity="0.2" />
+            <text x="25" y="31" font-family="system-ui, sans-serif" font-size="16" font-weight="bold" fill="#B388FF" text-anchor="middle">3</text>
+            <text x="55" y="22" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="15" font-weight="bold" fill="#FFFFFF">即时预览</text>
+            <text x="55" y="42" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="12" fill="#94A3B8">实时查看运行效果</text>
+        </g>
+
+        <line x1="25" y1="220" x2="25" y2="250" stroke="#7B2FFF" stroke-width="2" stroke-opacity="0.3" stroke-dasharray="4,3" />
+
+        <!-- Step 4 -->
+        <g transform="translate(20, 260)">
+            <circle cx="25" cy="25" r="20" fill="#7B2FFF" fill-opacity="0.2" />
+            <text x="25" y="31" font-family="system-ui, sans-serif" font-size="16" font-weight="bold" fill="#B388FF" text-anchor="middle">4</text>
+            <text x="55" y="22" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="15" font-weight="bold" fill="#FFFFFF">迭代优化</text>
+            <text x="55" y="42" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="12" fill="#94A3B8">对话式反馈，持续改进</text>
+        </g>
+
+        <line x1="25" y1="285" x2="25" y2="315" stroke="#7B2FFF" stroke-width="2" stroke-opacity="0.3" stroke-dasharray="4,3" />
+
+        <!-- Step 5 -->
+        <g transform="translate(20, 325)">
+            <circle cx="25" cy="25" r="20" fill="#7B2FFF" fill-opacity="0.2" />
+            <text x="25" y="31" font-family="system-ui, sans-serif" font-size="16" font-weight="bold" fill="#B388FF" text-anchor="middle">5</text>
+            <text x="55" y="22" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="15" font-weight="bold" fill="#FFFFFF">部署上线</text>
+            <text x="55" y="42" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="12" fill="#94A3B8">一键部署到生产环境</text>
+        </g>
+
+        <!-- 关键提示 -->
+        <g transform="translate(20, 410)">
+            <rect x="0" y="0" width="320" height="80" rx="8" fill="#FFFFFF" fill-opacity="0.06" />
+            <text x="160" y="25" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="14" font-weight="bold" fill="#00D4FF" text-anchor="middle">💡 核心理念</text>
+            <text x="160" y="48" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="12" fill="#CBD5E1" text-anchor="middle">开发者专注于"做什么"和"为什么"</text>
+            <text x="160" y="66" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="12" fill="#CBD5E1" text-anchor="middle">AI 负责解决"怎么做"的实现细节</text>
+        </g>
+    </g>
+
+    <!-- 右栏: 应用场景 -->
+    <g transform="translate(840, 135)">
+        <rect x="0" y="0" width="380" height="520" rx="12" fill="url(#cardGradient1)" />
+        <rect x="0" y="0" width="380" height="50" rx="12" fill="#00D4FF" fill-opacity="0.15" />
+        <text x="190" y="32" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="18" font-weight="bold" fill="#00D4FF" text-anchor="middle">应用场景</text>
+
+        <!-- 场景 1 -->
+        <g transform="translate(20, 65)">
+            <rect x="0" y="0" width="340" height="80" rx="8" fill="#FFFFFF" fill-opacity="0.04" />
+            <text x="20" y="28" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="15" font-weight="bold" fill="#FFFFFF">🚀 快速原型开发</text>
+            <text x="20" y="50" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="12" fill="#94A3B8">几分钟内从想法到可运行的 MVP</text>
+            <text x="20" y="68" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="12" fill="#94A3B8">大幅降低创业和验证想法的门槛</text>
+        </g>
+
+        <!-- 场景 2 -->
+        <g transform="translate(20, 160)">
+            <rect x="0" y="0" width="340" height="80" rx="8" fill="#FFFFFF" fill-opacity="0.04" />
+            <text x="20" y="28" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="15" font-weight="bold" fill="#FFFFFF">🎨 前端与 UI 构建</text>
+            <text x="20" y="50" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="12" fill="#94A3B8">描述界面布局，AI 生成 HTML/CSS/React</text>
+            <text x="20" y="68" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="12" fill="#94A3B8">设计师可直接将创意转化为代码</text>
+        </g>
+
+        <!-- 场景 3 -->
+        <g transform="translate(20, 255)">
+            <rect x="0" y="0" width="340" height="80" rx="8" fill="#FFFFFF" fill-opacity="0.04" />
+            <text x="20" y="28" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="15" font-weight="bold" fill="#FFFFFF">📊 数据分析脚本</text>
+            <text x="20" y="50" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="12" fill="#94A3B8">用自然语言描述分析需求</text>
+            <text x="20" y="68" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="12" fill="#94A3B8">AI 自动生成 Python/R 数据处理代码</text>
+        </g>
+
+        <!-- 场景 4 -->
+        <g transform="translate(20, 350)">
+            <rect x="0" y="0" width="340" height="80" rx="8" fill="#FFFFFF" fill-opacity="0.04" />
+            <text x="20" y="28" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="15" font-weight="bold" fill="#FFFFFF">🔧 自动化脚本</text>
+            <text x="20" y="50" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="12" fill="#94A3B8">描述任务流程，AI 编写自动化脚本</text>
+            <text x="20" y="68" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="12" fill="#94A3B8">文件处理、API 调用、定时任务等</text>
+        </g>
+
+        <!-- 场景 5 -->
+        <g transform="translate(20, 445)">
+            <rect x="0" y="0" width="340" height="55" rx="8" fill="#FFFFFF" fill-opacity="0.04" />
+            <text x="20" y="25" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="15" font-weight="bold" fill="#FFFFFF">📚 学习与教育</text>
+            <text x="20" y="45" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="12" fill="#94A3B8">编程初学者快速上手实践</text>
+        </g>
+    </g>
+
+    <!-- 页码 -->
+    <text x="1220" y="700" font-family="system-ui, sans-serif" font-size="14" fill="#64748B" text-anchor="end">04</text>
+</svg>

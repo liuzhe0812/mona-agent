@@ -451,6 +451,22 @@ export async function fetchPptProjects(
   return request(`${effectiveBase}/api/ppt/projects`, token);
 }
 
+export interface PptSlide {
+  name: string;
+  url: string;
+}
+
+export async function fetchPptProjectSlides(
+  token: string,
+  project: string,
+  base?: string,
+): Promise<{ slides: PptSlide[] }> {
+  const effectiveBase = base ?? (await getApiBase());
+  const query = new URLSearchParams();
+  query.set("project", project);
+  return request(`${effectiveBase}/api/ppt/project-slides?${query}`, token);
+}
+
 export async function fetchPptPreviewPort(
   token: string,
   project: string,
@@ -460,4 +476,20 @@ export async function fetchPptPreviewPort(
   const query = new URLSearchParams();
   query.set("project", project);
   return request(`${effectiveBase}/api/ppt/preview-port?${query}`, token);
+}
+
+export interface PptSourceFile {
+  name: string;
+  path: string;
+}
+
+export async function pptAddSources(
+  token: string,
+  sources: string[],
+  base?: string,
+): Promise<{ files: PptSourceFile[] }> {
+  const effectiveBase = base ?? (await getApiBase());
+  const query = new URLSearchParams();
+  query.set("sources", sources.join("|"));
+  return request(`${effectiveBase}/api/ppt/add-sources?${query}`, token);
 }

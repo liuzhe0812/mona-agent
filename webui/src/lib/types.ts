@@ -30,6 +30,16 @@ export interface UIMediaAttachment {
   name?: string;
 }
 
+export interface DeliveredFile {
+  path: string;
+  absolute_path: string;
+  name: string;
+  size: number;
+  size_human: string;
+  mime: string;
+  summary?: string;
+}
+
 export interface UIMessage {
   id: string;
   role: Role;
@@ -50,6 +60,8 @@ export interface UIMessage {
   images?: UIImage[];
   /** Signed or local UI-renderable media attachments. */
   media?: UIMediaAttachment[];
+  /** Files delivered via deliver_file tool, rendered as FileCards. */
+  deliveredFiles?: DeliveredFile[];
   /** Assistant turn: accumulated model reasoning / thinking text. Built up
    * incrementally from ``reasoning_delta`` frames; finalized when
    * ``reasoning_end`` arrives. */
@@ -329,6 +341,11 @@ export type InboundEvent =
       edits: UIFileEdit[];
     }
   | {
+      event: "deliver_files";
+      chat_id: string;
+      files: DeliveredFile[];
+    }
+  | {
       event: "delta";
       chat_id: string;
       text: string;
@@ -376,7 +393,13 @@ export type InboundEvent =
       goal_state: GoalStateWsPayload;
     }
   | { event: "session_updated"; chat_id: string; scope?: "metadata" | "thread" | string }
-  | { event: "error"; chat_id?: string; detail?: string };
+  | { event: "error"; chat_id?: string; detail?: string }
+  | {
+      event: "ppt_upload_result";
+      ok: boolean;
+      files?: { name: string; path: string }[];
+      error?: string;
+    };
 
 /** Base64-encoded image attached to an outbound ``message`` envelope.
  *
@@ -420,7 +443,11 @@ export type Outbound =
       db_database?: string;
       db_table?: string;
     }
-  | { type: "delete_chat"; chat_id: string };
+  | { type: "delete_chat"; chat_id: string }
+  | {
+      type: "ppt_upload";
+      files: { name: string; data_url: string }[];
+    };
 
 export interface PptTemplate {
   key: string;

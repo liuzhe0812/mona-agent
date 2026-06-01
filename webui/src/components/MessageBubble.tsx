@@ -10,6 +10,7 @@ import { useTranslation } from "react-i18next";
 
 import { ImageLightbox } from "@/components/ImageLightbox";
 import { MarkdownText, preloadMarkdownText } from "@/components/MarkdownText";
+import { DeliveredFileCardList } from "@/components/deliver/DeliveredFileCard";
 import { cn } from "@/lib/utils";
 import { formatTurnLatency } from "@/lib/format";
 import type { UIImage, UIMediaAttachment, UIMessage } from "@/lib/types";
@@ -96,6 +97,8 @@ export function MessageBubble({
   }
 
   const empty = message.content.trim().length === 0;
+  const hasDeliveredFiles = !!(message.deliveredFiles && message.deliveredFiles.length > 0);
+  const showDeliveredFiles = hasDeliveredFiles && !message.isStreaming;
   const media = message.media ?? [];
   const reasoning = message.role === "assistant" ? message.reasoning ?? "" : "";
   const reasoningStreaming = !!(message.role === "assistant" && message.reasoningStreaming);
@@ -120,6 +123,12 @@ export function MessageBubble({
       ) : empty && message.isStreaming ? null : (
         <>
           <MarkdownText streaming={!!message.isStreaming}>{message.content}</MarkdownText>
+          {showDeliveredFiles ? (
+            <DeliveredFileCardList
+              files={message.deliveredFiles!}
+              className="mt-2"
+            />
+          ) : null}
           {media.length > 0 ? <MessageMedia media={media} align="left" /> : null}
           {showAssistantFooterRow ? (
             <div className="mt-2 flex min-h-8 flex-wrap items-center gap-x-2 gap-y-1 text-muted-foreground">

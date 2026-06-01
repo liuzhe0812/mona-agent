@@ -1,0 +1,90 @@
+<h2>猫咪 Logo 形象：摩尔加纳风格</h2>
+<p class="subtitle">参考 Persona 5 摩尔加纳 — 蓝色眼罩黑猫</p>
+
+<div class="section">
+  <h3>形象核心要素</h3>
+  <div style="display:flex;flex-wrap:wrap;gap:8px;margin:12px 0">
+    <span style="background:#1a1a2e;color:#e0e0e0;padding:6px 14px;border-radius:20px;font-size:14px">🖤 全身黑色</span>
+    <span style="background:#1a3a5c;color:#7ec8e3;padding:6px 14px;border-radius:20px;font-size:14px">🔵 蓝色眼罩</span>
+    <span style="background:#f0f0f0;color:#333;padding:6px 14px;border-radius:20px;font-size:14px">⚪ 白色嘴部</span>
+    <span style="background:#2d1b4e;color:#c4a0ff;padding:6px 14px;border-radius:20px;font-size:14px">✨ P5 动漫画风</span>
+    <span style="background:#3a1a1a;color:#ff9999;padding:6px 14px;border-radius:20px;font-size:14px">🐱 大眼睛</span>
+  </div>
+</div>
+
+<div class="split">
+  <div class="mockup">
+    <div class="mockup-header">💤 睡觉状态</div>
+    <div class="mockup-body" style="display:flex;align-items:center;justify-content:center;min-height:220px;background:#0f0f1a;border-radius:8px">
+      <div style="text-align:center;color:#aaa">
+        <div style="position:relative;display:inline-block">
+          <div style="font-size:72px;line-height:1">🐱</div>
+          <div style="position:absolute;top:-8px;right:-12px;font-size:24px;animation:float 2s ease-in-out infinite">💤</div>
+        </div>
+        <div style="margin-top:12px;font-size:14px;color:#7ec8e3">蜷缩睡觉，眼罩盖住眼睛</div>
+        <div style="font-size:12px;color:#666;margin-top:4px">Zzz 气泡缓缓飘出</div>
+        <div style="font-size:12px;color:#555;margin-top:4px">尾巴偶尔轻摆</div>
+      </div>
+    </div>
+    <style>
+      @keyframes float {
+        0%, 100% { transform: translateY(0px); }
+        50% { transform: translateY(-8px); }
+      }
+    </style>
+  </div>
+  <div class="mockup">
+    <div class="mockup-header">⌨️ 工作状态</div>
+    <div class="mockup-body" style="display:flex;align-items:center;justify-content:center;min-height:220px;background:#0f0f1a;border-radius:8px">
+      <div style="text-align:center;color:#aaa">
+        <div style="position:relative;display:inline-block">
+          <div style="font-size:72px;line-height:1">🐱</div>
+          <div style="position:absolute;top:-10px;right:-8px;font-size:20px;animation:pulse 0.8s ease-in-out infinite">⌨️</div>
+        </div>
+        <div style="margin-top:12px;font-size:14px;color:#7ec8e3">坐姿敲键盘，眼罩推到额头</div>
+        <div style="font-size:12px;color:#666;margin-top:4px">爪子快速敲击动画</div>
+        <div style="font-size:12px;color:#555;margin-top:4px">屏幕微光反射在脸上</div>
+      </div>
+    </div>
+    <style>
+      @keyframes pulse {
+        0%, 100% { transform: scale(1); }
+        50% { transform: scale(1.15); }
+      }
+    </style>
+  </div>
+</div>
+
+<div class="section" style="margin-top:28px">
+  <h3>动画实现方式选择</h3>
+  <div class="options">
+    <div class="option" data-choice="lottie" onclick="toggleSelect(this)">
+      <div class="letter">A</div>
+      <div class="content">
+        <h3>Lottie 动画 (推荐)</h3>
+        <p>用 After Effects / Rive 制作动画，导出 JSON，前端用 lottie-web 播放。画质清晰、体积小、支持交互控制（暂停/播放/切换状态），最适合这种角色动画</p>
+      </div>
+    </div>
+    <div class="option" data-choice="sprite" onclick="toggleSelect(this)">
+      <div class="letter">B</div>
+      <div class="content">
+        <h3>CSS Sprite 帧动画</h3>
+        <p>逐帧绘制 PNG 序列，用 CSS steps() 动画播放。实现简单但体积较大，不够流畅，切换状态需要替换图片</p>
+      </div>
+    </div>
+    <div class="option" data-choice="svg-css" onclick="toggleSelect(this)">
+      <div class="letter">C</div>
+      <div class="content">
+        <h3>SVG + CSS 动画</h3>
+        <p>用 SVG 绘制猫咪，CSS 控制各部位动画。体积最小、最灵活，但复杂角色动画实现难度高，效果可能不够精致</p>
+      </div>
+    </div>
+    <div class="option" data-choice="rive" onclick="toggleSelect(this)">
+      <div class="letter">D</div>
+      <div class="content">
+        <h3>Rive 动画</h3>
+        <p>类似 Lottie 但更强大，支持状态机、交互控制、实时参数调整。最适合角色状态切换，但需要 Rive 编辑器制作</p>
+      </div>
+    </div>
+  </div>
+</div>

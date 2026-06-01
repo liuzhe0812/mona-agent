@@ -312,7 +312,20 @@ _VIDEO_MIME_ALLOWED: frozenset[str] = frozenset({
 
 _UPLOAD_MIME_ALLOWED: frozenset[str] = _IMAGE_MIME_ALLOWED | _VIDEO_MIME_ALLOWED
 
+_PPT_DOC_MIME_ALLOWED: frozenset[str] = frozenset({
+    "application/pdf",
+    "text/plain",
+    "text/markdown",
+    "text/csv",
+    "application/json",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+})
+_PPT_DOC_MAX_BYTES = 20 * 1024 * 1024
+
 _DATA_URL_MIME_RE = re.compile(r"^data:([^;]+);base64,", re.DOTALL)
+_DATA_URL_RE = re.compile(r"^data:([^;]+);base64,(.+)$", re.DOTALL)
 
 
 def _extract_data_url_mime(url: str) -> str | None:
@@ -323,6 +336,20 @@ def _extract_data_url_mime(url: str) -> str | None:
     if not m:
         return None
     return m.group(1).strip().lower() or None
+
+
+def _decode_data_url_payload(url: str, max_bytes: int = _PPT_DOC_MAX_BYTES) -> bytes | None:
+    m = _DATA_URL_RE.match(url)
+    if not m:
+        return None
+    b64 = m.group(2)
+    try:
+        raw = base64.b64decode(b64)
+    except Exception:
+        return None
+    if len(raw) > max_bytes:
+        raise FileSizeExceeded(f"File exceeds {max_bytes // (1024 * 1024)}MB limit")
+    return raw
 
 
 _LOCALHOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
@@ -719,8 +746,8 @@ class WebSocketChannel(BaseChannel):
         if got == "/api/ppt/template-svg":
             return self._handle_ppt_template_svg(request)
 
-        if got == "/api/ppt/upload":
-            return self._handle_ppt_upload(request)
+        if got == "/api/ppt/add-sources":
+            return self._handle_ppt_add_sources(request)
 
         if got == "/api/ppt/projects":
             return self._handle_ppt_projects(request)
@@ -730,6 +757,12 @@ class WebSocketChannel(BaseChannel):
 
         if got == "/api/ppt/preview-port":
             return self._handle_ppt_preview_port(request)
+
+        if got == "/api/ppt/project-slides":
+            return self._handle_ppt_project_slides(request)
+
+        if got.startswith("/api/ppt/project-svg"):
+            return self._handle_ppt_project_svg(request)
 
         m = re.match(r"^/api/sessions/([^/]+)/messages$", got)
         if m:
@@ -752,6 +785,10 @@ class WebSocketChannel(BaseChannel):
         m = re.match(r"^/api/media/([A-Za-z0-9_-]+)/([A-Za-z0-9_-]+)$", got)
         if m:
             return self._handle_media_fetch(m.group(1), m.group(2))
+
+        if got.startswith("/api/file-preview"):
+            query_string = _query_first(query, "path") or ""
+            return self._handle_file_preview(query_string)
 
         # 4. WebSocket upgrade (the channel's primary purpose). Only run the
         # handshake gate on requests that actually ask to upgrade; otherwise
@@ -1424,43 +1461,59 @@ class WebSocketChannel(BaseChannel):
             logger.exception("ppt template svg error")
             return _http_error(500, str(e))
 
-    def _handle_ppt_upload(self, request: WsRequest) -> Response:
+    _PPT_SOURCE_SUFFIXES = frozenset({
+        ".md", ".txt", ".pdf", ".doc", ".docx", ".pptx", ".csv", ".json",
+    })
+
+    def _handle_ppt_add_sources(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         try:
-            import base64
-
             from mona.config.paths import get_workspace_path
 
-            body = json.loads(request.body) if request.body else {}
-            files = body.get("files", [])
-            if not files:
-                return _http_error(400, "no files provided")
-
             workspace = get_workspace_path()
+            query = _parse_query(request.path)
+            sources_str = _query_first(query, "sources") or ""
+            if not sources_str:
+                return _http_error(400, "missing sources")
+
             sources_dir = workspace / "ppt-projects" / "_sources"
             sources_dir.mkdir(parents=True, exist_ok=True)
 
-            saved: list[dict[str, str]] = []
-            for entry in files:
-                name = entry.get("name", "")
-                content_b64 = entry.get("content", "")
-                if not name or not content_b64:
+            sources = [s.strip() for s in sources_str.split("|") if s.strip()]
+            added: list[dict[str, str]] = []
+            for src_str in sources:
+                src = Path(src_str)
+                if not src.exists():
                     continue
-                safe_name = Path(name).name
-                if "/" in safe_name or "\\" in safe_name or ".." in safe_name:
-                    continue
-                dest = sources_dir / safe_name
-                dest.write_bytes(base64.b64decode(content_b64))
-                rel = dest.relative_to(workspace)
-                saved.append({
-                    "name": safe_name,
-                    "path": str(rel).replace("\\", "/"),
-                })
+                if src.is_file():
+                    if src.suffix.lower() in self._PPT_SOURCE_SUFFIXES:
+                        dest = sources_dir / src.name
+                        shutil.copy2(src, dest)
+                        rel = dest.relative_to(workspace)
+                        added.append({
+                            "name": src.name,
+                            "path": str(rel).replace("\\", "/"),
+                        })
+                elif src.is_dir():
+                    for fp in sorted(src.rglob("*")):
+                        if not fp.is_file():
+                            continue
+                        if fp.suffix.lower() not in self._PPT_SOURCE_SUFFIXES:
+                            continue
+                        rel_src = fp.relative_to(src)
+                        dest = sources_dir / rel_src
+                        dest.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(fp, dest)
+                        rel = dest.relative_to(workspace)
+                        added.append({
+                            "name": rel_src.as_posix(),
+                            "path": str(rel).replace("\\", "/"),
+                        })
 
-            return _http_json_response({"files": saved})
+            return _http_json_response({"files": added})
         except Exception as e:
-            logger.exception("ppt upload error")
+            logger.exception("ppt add sources error")
             return _http_error(500, str(e))
 
     def _handle_ppt_projects(self, request: WsRequest) -> Response:
@@ -1478,10 +1531,12 @@ class WebSocketChannel(BaseChannel):
             for d in sorted(projects_dir.iterdir()):
                 if not d.is_dir():
                     continue
-                svg_dir = d / "svg_output"
+                svg_dir = d / "svg_final"
+                if not svg_dir.is_dir():
+                    svg_dir = d / "svg_output"
                 export_dir = d / "exports"
                 slide_count = (
-                    len(list(svg_dir.glob("*.svg"))) if svg_dir.exists() else 0
+                    len(list(svg_dir.glob("*.svg"))) if svg_dir.is_dir() else 0
                 )
                 pptx_files = (
                     sorted(
@@ -1577,6 +1632,82 @@ class WebSocketChannel(BaseChannel):
         except Exception:
             logger.exception("ppt preview port error")
             return _http_json_response({"port": None})
+
+    def _handle_ppt_project_slides(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        try:
+            from mona.config.paths import get_workspace_path
+
+            query = _parse_query(request.path)
+            project_name = _query_first(query, "project") or ""
+            if (
+                not project_name
+                or "/" in project_name
+                or "\\" in project_name
+                or ".." in project_name
+            ):
+                return _http_error(400, "invalid project name")
+
+            workspace = get_workspace_path()
+            project_dir = workspace / "ppt-projects" / project_name
+            if not project_dir.is_dir():
+                return _http_json_response({"slides": []})
+
+            svg_dir = project_dir / "svg_final"
+            if not svg_dir.is_dir():
+                svg_dir = project_dir / "svg_output"
+            if not svg_dir.is_dir():
+                return _http_json_response({"slides": []})
+
+            slides: list[dict[str, str]] = []
+            for f in sorted(svg_dir.glob("*.svg")):
+                slides.append({
+                    "name": f.name,
+                    "url": f"/api/ppt/project-svg?project={quote(project_name, safe='')}&file={quote(f.name, safe='')}",
+                })
+            return _http_json_response({"slides": slides})
+        except Exception:
+            logger.exception("ppt project slides error")
+            return _http_error(500, "internal error")
+
+    def _handle_ppt_project_svg(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        try:
+            from mona.config.paths import get_workspace_path
+
+            query = _parse_query(request.path)
+            project_name = _query_first(query, "project") or ""
+            file_name = _query_first(query, "file") or ""
+            if (
+                not project_name
+                or "/" in project_name
+                or "\\" in project_name
+                or ".." in project_name
+            ):
+                return _http_error(400, "invalid project name")
+            if not file_name or "/" in file_name or "\\" in file_name or ".." in file_name:
+                return _http_error(400, "invalid file name")
+
+            workspace = get_workspace_path()
+            project_dir = workspace / "ppt-projects" / project_name
+
+            svg_path = project_dir / "svg_final" / file_name
+            if not svg_path.exists():
+                svg_path = project_dir / "svg_output" / file_name
+            if not svg_path.exists():
+                return _http_error(404, "svg not found")
+
+            content = svg_path.read_bytes()
+            return _http_response(
+                content,
+                content_type="image/svg+xml",
+                extra_headers=[("Cache-Control", "public, max-age=3600")],
+            )
+        except Exception:
+            logger.exception("ppt project svg error")
+            return _http_error(500, "internal error")
 
     @staticmethod
     def _is_websocket_channel_session_key(key: str) -> bool:
@@ -1798,6 +1929,40 @@ class WebSocketChannel(BaseChannel):
                 ("Cache-Control", "private, max-age=31536000, immutable"),
                 # Paired with the MIME whitelist above: prevents browsers from
                 # MIME-sniffing an octet-stream fallback into executable HTML.
+                ("X-Content-Type-Options", "nosniff"),
+            ],
+        )
+
+    def _handle_file_preview(self, raw_path: str) -> Response:
+        if not raw_path:
+            return _http_error(400, "missing path")
+        try:
+            target = Path(raw_path).resolve()
+        except Exception:
+            return _http_error(400, "invalid path")
+        if not target.is_file():
+            return _http_error(404, "file not found")
+        try:
+            data = target.read_bytes()
+        except OSError:
+            return _http_error(500, "read error")
+        mime, _ = mimetypes.guess_type(str(target))
+        if not mime:
+            mime = "application/octet-stream"
+        safe_mimes = {
+            "text/plain", "text/html", "text/css", "text/javascript",
+            "application/json", "application/xml", "text/xml",
+            "text/markdown", "text/csv",
+            "image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml",
+        }
+        if mime not in safe_mimes:
+            mime = "text/plain"
+        content_type = f"{mime}; charset=utf-8" if mime.startswith("text/") else mime
+        return _http_response(
+            data,
+            content_type=content_type,
+            extra_headers=[
+                ("Cache-Control", "no-store"),
                 ("X-Content-Type-Options", "nosniff"),
             ],
         )
@@ -2063,6 +2228,55 @@ class WebSocketChannel(BaseChannel):
             paths.append(saved)
         return paths, None
 
+    async def _handle_ppt_upload_envelope(
+        self,
+        connection: Any,
+        envelope: dict[str, Any],
+    ) -> None:
+        files = envelope.get("files")
+        if not isinstance(files, list) or not files:
+            await self._send_event(connection, "ppt_upload_result", ok=False, error="no files")
+            return
+        try:
+            from mona.config.paths import get_workspace_path
+
+            workspace = get_workspace_path()
+            sources_dir = workspace / "ppt-projects" / "_sources"
+            sources_dir.mkdir(parents=True, exist_ok=True)
+
+            added: list[dict[str, str]] = []
+            for item in files:
+                if not isinstance(item, dict):
+                    continue
+                name = item.get("name")
+                data_url = item.get("data_url")
+                if not isinstance(name, str) or not isinstance(data_url, str):
+                    continue
+                mime = _extract_data_url_mime(data_url)
+                if mime is None or mime not in _PPT_DOC_MIME_ALLOWED:
+                    continue
+                try:
+                    raw = _decode_data_url_payload(data_url, _PPT_DOC_MAX_BYTES)
+                except FileSizeExceeded:
+                    continue
+                except Exception:
+                    continue
+                if raw is None:
+                    continue
+                safe_name = safe_filename(name)
+                dest = sources_dir / safe_name
+                dest.write_bytes(raw)
+                rel = dest.relative_to(workspace)
+                added.append({"name": safe_name, "path": str(rel).replace("\\", "/")})
+
+            await self._send_event(
+                connection, "ppt_upload_result", ok=len(added) > 0, files=added,
+                error=None if added else "no valid files",
+            )
+        except Exception as e:
+            logger.exception("ppt_upload error")
+            await self._send_event(connection, "ppt_upload_result", ok=False, error=str(e))
+
     async def _dispatch_envelope(
         self,
         connection: Any,
@@ -2088,6 +2302,9 @@ class WebSocketChannel(BaseChannel):
             self._attach(connection, cid)
             await self._send_event(connection, "attached", chat_id=cid)
             await self._hydrate_after_subscribe(cid)
+            return
+        if t == "ppt_upload":
+            await self._handle_ppt_upload_envelope(connection, envelope)
             return
         if t == "message":
             cid = envelope.get("chat_id")
@@ -2216,6 +2433,7 @@ class WebSocketChannel(BaseChannel):
                 or msg.metadata.get("_session_updated")
                 or msg.metadata.get("_goal_status")
                 or msg.metadata.get("_goal_state_sync")
+                or msg.metadata.get("_deliver_files")
             ):
                 self.logger.debug("no active subscribers for chat_id={}", msg.chat_id)
             else:
@@ -2258,6 +2476,22 @@ class WebSocketChannel(BaseChannel):
             }
             self._try_append_webui_transcript(msg.chat_id, payload)
             raw = json.dumps(payload, ensure_ascii=False)
+            for connection in conns:
+                await self._safe_send_to(connection, raw, label=" ")
+            return
+        if msg.metadata.get("_deliver_files"):
+            payload: dict[str, Any] = {
+                "event": "deliver_files",
+                "chat_id": msg.chat_id,
+                "files": msg.metadata["_deliver_files"],
+            }
+            self._try_append_webui_transcript(msg.chat_id, payload)
+            raw = json.dumps(payload, ensure_ascii=False)
+            self.logger.info(
+                "deliver_files: sending to {} subscribers for chat_id={}, files={}",
+                len(conns), msg.chat_id,
+                [f.get("name") for f in msg.metadata["_deliver_files"]],
+            )
             for connection in conns:
                 await self._safe_send_to(connection, raw, label=" ")
             return

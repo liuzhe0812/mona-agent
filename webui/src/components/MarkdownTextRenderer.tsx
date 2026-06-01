@@ -8,6 +8,7 @@ import remarkMath from "remark-math";
 
 import { CodeBlock } from "@/components/CodeBlock";
 import { FileReferenceChip, isLikelyFilePath } from "@/components/FileReferenceChip";
+import { isTauri, openPathWithSystemApp, revealItemInDir } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 
 import "katex/dist/katex.min.css";
@@ -97,6 +98,11 @@ export default function MarkdownTextRenderer({
         );
       },
       a({ href, children: markdownChildren, ...props }) {
+        if (href && isLikelyFilePath(href)) {
+          return (
+            <FileLink href={href}>{markdownChildren}</FileLink>
+          );
+        }
         return (
           <a
             href={href}
@@ -140,5 +146,30 @@ export default function MarkdownTextRenderer({
         {children}
       </ReactMarkdown>
     </div>
+  );
+}
+
+function FileLink({ href, children }: { href: string; children: React.ReactNode }) {
+  const handleClick = (e: React.MouseEvent) => {
+    if (!isTauri()) return;
+    e.preventDefault();
+    void openPathWithSystemApp(href);
+  };
+  const handleContextMenu = (e: React.MouseEvent) => {
+    if (!isTauri()) return;
+    e.preventDefault();
+    void revealItemInDir(href);
+  };
+  return (
+    <span
+      role="button"
+      tabIndex={0}
+      onClick={handleClick}
+      onContextMenu={handleContextMenu}
+      className="cursor-pointer text-primary underline underline-offset-2 hover:opacity-80"
+      title={isTauri() ? `${href} · 点击打开，右键在文件夹中显示` : href}
+    >
+      {children}
+    </span>
   );
 }
