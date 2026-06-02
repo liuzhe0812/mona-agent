@@ -1,4 +1,4 @@
-﻿{
+{
   "app": {
     "brand": "mona",
     "loading": {
@@ -472,6 +472,15 @@
         "decode_failed": "Couldn't decode this image",
         "too_large": "Image is too large — try a smaller one",
         "io": "Couldn't read this file"
+      },
+      "pendingQueue": {
+        "append": "Append",
+        "appendAria": "Append to current task",
+        "editAria": "Edit message",
+        "deleteAria": "Delete message",
+        "empty": "Staged messages will be sent when the agent finishes",
+        "full": "Queue full (max 3)",
+        "injectedBadge": "Sent as supplement"
       }
     },
     "scrollToBottom": "Scroll to bottom",
@@ -496,6 +505,8 @@
     "imageAttachment": "Image attachment",
     "copyReply": "Copy reply",
     "copiedReply": "Copied reply",
+    "saveAsNote": "Save as note",
+    "savedAsNote": "Saved as note",
     "turnLatencyTitle": "Response time (end-to-end)"
   },
   "lightbox": {

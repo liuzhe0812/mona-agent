@@ -484,7 +484,16 @@
         "too_large": "图片太大，请换一张小一点的",
         "io": "无法读取该文件"
       },
-      "goalStateCloseAria": "关闭目标"
+      "goalStateCloseAria": "关闭目标",
+      "pendingQueue": {
+        "append": "追加",
+        "appendAria": "追加到当前任务",
+        "editAria": "编辑消息",
+        "deleteAria": "删除消息",
+        "empty": "暂存消息将在 agent 完成后发送",
+        "full": "队列已满（最多 3 条）",
+        "injectedBadge": "已作为补充信息发送"
+      }
     },
     "scrollToBottom": "滚动到底部",
     "loadEarlier": "加载更早消息"
@@ -508,6 +517,8 @@
     "imageAttachment": "图片附件",
     "copyReply": "复制回复",
     "copiedReply": "已复制回复",
+    "saveAsNote": "保存为笔记",
+    "savedAsNote": "已保存为笔记",
     "turnLatencyTitle": "本轮耗时（端到端）"
   },
   "lightbox": {
