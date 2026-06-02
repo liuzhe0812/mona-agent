@@ -318,6 +318,7 @@ export function useMonaStream(
   /** Latest sustained goal for this ``chatId`` (``goal_state`` WS events). */
   goalState: GoalStateWsPayload | undefined;
   send: (content: string, images?: SendImage[], options?: SendOptions) => void;
+  inject: (content: string, images?: SendImage[]) => void;
   stop: () => void;
   setMessages: React.Dispatch<React.SetStateAction<UIMessage[]>>;
   /** Latest transport-level fault raised since the last ``dismissStreamError``.
@@ -900,6 +901,30 @@ export function useMonaStream(
     [chatId, clearActivitySegment, client, flushPendingStreamEvents],
   );
 
+  const inject = useCallback(
+    (content: string, images?: SendImage[]) => {
+      if (!chatId) return;
+      const hasImages = !!images && images.length > 0;
+      if (!hasImages && !content.trim()) return;
+
+      const previews = hasImages ? images!.map((i) => i.preview) : undefined;
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          role: "user" as const,
+          content,
+          createdAt: Date.now(),
+          isInjected: true,
+          ...(previews ? { images: previews } : {}),
+        },
+      ]);
+      const wireMedia = hasImages ? images!.map((i) => i.media) : undefined;
+      client.sendMessage(chatId, content, wireMedia);
+    },
+    [chatId, client],
+  );
+
   const stop = useCallback(() => {
     if (!chatId) return;
     flushPendingStreamEvents();
@@ -921,6 +946,7 @@ export function useMonaStream(
     runStartedAt,
     goalState,
     send,
+    inject,
     stop,
     setMessages,
     streamError,

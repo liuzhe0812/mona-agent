@@ -1,4 +1,4 @@
-﻿import { act, renderHook } from "@testing-library/react";
+import { act, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 
@@ -1345,6 +1345,75 @@ describe("useMonaStream", () => {
       });
     });
     expect(result.current.goalState).toEqual({ active: false });
+  });
+
+  it("inject() sends a message without resetting streaming state", async () => {
+    const fake = fakeClient();
+    const { result } = renderHook(
+      () => useMonaStream("chat-inject", EMPTY_MESSAGES),
+      { wrapper: wrap(fake.client) },
+    );
+
+    act(() => {
+      result.current.send("start");
+    });
+    expect(result.current.isStreaming).toBe(true);
+    expect(fake.client.sendMessage).toHaveBeenCalledWith("chat-inject", "start", undefined);
+
+    act(() => {
+      fake.emit("chat-inject", { event: "delta", text: "thinking" });
+    });
+    await flushStreamFrame();
+
+    act(() => {
+      result.current.inject("correction");
+    });
+
+    expect(fake.client.sendMessage).toHaveBeenCalledWith("chat-inject", "correction", undefined);
+    expect(result.current.isStreaming).toBe(true);
+
+    const injectedBubble = result.current.messages.find(
+      (m) => m.role === "user" && m.isInjected,
+    );
+    expect(injectedBubble).toBeDefined();
+    expect(injectedBubble!.content).toBe("correction");
+  });
+
+  it("inject() does not clear the active assistant stream buffer", async () => {
+    const fake = fakeClient();
+    const { result } = renderHook(
+      () => useMonaStream("chat-inject-buffer", EMPTY_MESSAGES),
+      { wrapper: wrap(fake.client) },
+    );
+
+    act(() => {
+      result.current.send("start");
+    });
+
+    act(() => {
+      fake.emit("chat-inject-buffer", { event: "delta", text: "part1" });
+    });
+    await flushStreamFrame();
+
+    const messagesBefore = result.current.messages.filter(
+      (m) => m.role === "assistant",
+    );
+    expect(messagesBefore).toHaveLength(1);
+
+    act(() => {
+      result.current.inject("followup");
+    });
+
+    act(() => {
+      fake.emit("chat-inject-buffer", { event: "delta", text: "part2" });
+    });
+    await flushStreamFrame();
+
+    const allAssistant = result.current.messages.filter(
+      (m) => m.role === "assistant",
+    );
+    const combined = allAssistant.map((m) => m.content).join("");
+    expect(combined).toContain("part1");
   });
 
 });
