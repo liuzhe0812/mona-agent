@@ -71,6 +71,10 @@ export interface UIMessage {
   reasoningStreaming?: boolean;
   /** End-to-end wall time for this assistant turn (persisted ``latency_ms`` / ``turn_end``). */
   latencyMs?: number;
+  /** User turn: true when this message was injected mid-turn (via the pending
+   *  queue "append" action) rather than sent as a new conversational turn.
+   *  Drives a subtle visual badge so the user knows it was a supplement. */
+  isInjected?: boolean;
 }
 
 /** Structured UI blob on ``progress`` WS frames; channels may add more ``kind`` values later. */
@@ -479,4 +483,8 @@ export interface PptProject {
   format: string;
   slideCount: number;
   hasExport: boolean;
+  hasSvgOutput: boolean;
+  hasSpecLock: boolean;
+  status: "init" | "planning" | "generating" | "done";
+  chatId: string | null;
 }
