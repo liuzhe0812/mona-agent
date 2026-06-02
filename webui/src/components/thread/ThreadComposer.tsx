@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
 } from "react";
 
 import { MarkdownText, preloadMarkdownText } from "@/components/MarkdownText";
@@ -47,8 +48,10 @@ import {
 } from "@/hooks/useAttachedImages";
 import { useClipboardAndDrop } from "@/hooks/useClipboardAndDrop";
 import type { SendImage, SendOptions } from "@/hooks/useMonaStream";
+import type { PendingMessage } from "@/hooks/usePendingQueue";
 import type { SlashCommand, GoalStateWsPayload } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { PendingQueueStrip } from "@/components/thread/PendingQueueStrip";
 
 /** ``<input accept>``: aligned with the server's MIME whitelist. SVG is
  * deliberately excluded to avoid an embedded-script XSS surface. */
@@ -77,6 +80,13 @@ interface ThreadComposerProps {
   runStartedAt?: number | null;
   /** Sustained objective for this chat (WebSocket ``goal_state``). */
   goalState?: GoalStateWsPayload;
+  leadingActions?: ReactNode;
+  /** Pending message queue for mid-turn staging. */
+  pendingMessages?: PendingMessage[];
+  onPendingAppend?: (id: string) => void;
+  onPendingRemove?: (id: string) => void;
+  onPendingEdit?: (id: string, content: string) => void;
+  isPendingFull?: boolean;
 }
 
 const COMMAND_ICONS: Record<string, LucideIcon> = {
@@ -386,6 +396,12 @@ export function ThreadComposer({
   onStop,
   runStartedAt = null,
   goalState,
+  leadingActions,
+  pendingMessages = [],
+  onPendingAppend,
+  onPendingRemove,
+  _onPendingEdit,
+  isPendingFull = false,
 }: ThreadComposerProps) {
   const { t } = useTranslation();
   const [value, setValue] = useState("");
@@ -797,6 +813,21 @@ export function ThreadComposer({
         {runStartedAt != null || goalState?.active ? (
           <RunElapsedStrip startedAt={runStartedAt} goalState={goalState} />
         ) : null}
+        <PendingQueueStrip
+          messages={pendingMessages}
+          onAppend={onPendingAppend ?? (() => {})}
+          onRemove={onPendingRemove ?? (() => {})}
+          onEdit={(id) => {
+            const msg = pendingMessages.find((m) => m.id === id);
+            if (msg) {
+              setValue(msg.content);
+              onPendingRemove?.(id);
+              resizeTextarea();
+              textareaRef.current?.focus();
+            }
+          }}
+          isFull={isPendingFull}
+        />
         <textarea
           ref={textareaRef}
           value={value}
@@ -863,6 +894,9 @@ export function ThreadComposer({
             >
               <Plus className={cn(isHero ? "h-5 w-5" : "h-4 w-4")} />
             </Button>
+            {leadingActions ? (
+              <div className="flex min-w-0 items-center gap-1">{leadingActions}</div>
+            ) : null}
             <div ref={aspectControlRef} className="relative flex items-center gap-1">
               <Button
                 type="button"
