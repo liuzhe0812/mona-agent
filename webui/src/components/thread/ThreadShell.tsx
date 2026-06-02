@@ -5,6 +5,7 @@ import {
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
+import { AgentLogo } from "@/components/AgentLogo";
 import { ThreadComposer } from "@/components/thread/ThreadComposer";
 import { ThreadHeader } from "@/components/thread/ThreadHeader";
 import { StreamErrorNotice } from "@/components/thread/StreamErrorNotice";
@@ -13,9 +14,11 @@ import { SplitPane } from "@/components/deliver/SplitPane";
 import { FilePreviewPanel } from "@/components/deliver/FilePreviewPanel";
 import { useFilePreviewStore } from "@/components/deliver/filePreviewStore";
 import { useMonaStream, type SendImage, type SendOptions } from "@/hooks/useMonaStream";
+import { usePendingQueue } from "@/hooks/usePendingQueue";
 import { useSessionHistory } from "@/hooks/useSessions";
 import { fetchSettings, listSlashCommands, updateSettings } from "@/lib/api";
 import type { ChatSummary, DeliveredFile, SlashCommand, UIMessage } from "@/lib/types";
+import { useWorkspaceStore } from "@/lib/workspace-store";
 import { normalizeLegacyLongTaskMessages } from "@/lib/thread-display-compat";
 import { scrubSubagentUiMessages } from "@/lib/subagent-channel-display";
 import { useClient } from "@/providers/ClientProvider";
@@ -91,7 +94,6 @@ export function ThreadShell({
   session,
   title,
   onToggleSidebar,
-  onGoHome,
   onOpenSSH,
   onCreateNote,
   onCreateChat,
@@ -146,11 +148,14 @@ export function ThreadShell({
     runStartedAt,
     goalState,
     send,
+    inject,
     stop,
     setMessages,
     streamError,
     dismissStreamError,
   } = useMonaStream(chatId, initial, hasPendingToolCalls, handleTurnEnd);
+
+  const pendingQueue = usePendingQueue();
 
   useEffect(() => {
     if (chatId && historyKey) sessionKeyByChatIdRef.current.set(chatId, historyKey);
@@ -275,6 +280,8 @@ export function ThreadShell({
     };
   }, [token]);
 
+  const setWorkspacePath = useWorkspaceStore((s) => s.setWorkspacePath);
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -288,6 +295,9 @@ export function ThreadShell({
               label: p.label,
             }));
           setProviderOptions(options);
+          if (settings.runtime?.workspace_path) {
+            setWorkspacePath(settings.runtime.workspace_path);
+          }
         }
       } catch {
         if (!cancelled) setProviderOptions([]);
@@ -296,7 +306,7 @@ export function ThreadShell({
     return () => {
       cancelled = true;
     };
-  }, [token]);
+  }, [token, setWorkspacePath]);
 
   const handleModelSwitch = useCallback(
     async (provider: string, model: string) => {
@@ -327,10 +337,25 @@ export function ThreadShell({
 
   const handleThreadSend = useCallback(
     (content: string, images?: SendImage[], options?: SendOptions) => {
+      if (isStreaming) {
+        setScrollToBottomSignal((value) => value + 1);
+        inject(content, images);
+        return;
+      }
       setScrollToBottomSignal((value) => value + 1);
       send(content, images, options);
     },
-    [send],
+    [inject, isStreaming, send],
+  );
+
+  const handlePendingAppend = useCallback(
+    (id: string) => {
+      const msg = pendingQueue.messages.find((m) => m.id === id);
+      if (!msg) return;
+      inject(msg.content);
+      pendingQueue.remove(id);
+    },
+    [inject, pendingQueue],
   );
 
   useEffect(() => {
@@ -399,6 +424,11 @@ export function ThreadShell({
           onStop={stop}
           runStartedAt={runStartedAt}
           goalState={goalState}
+          pendingMessages={pendingQueue.messages}
+          onPendingAppend={handlePendingAppend}
+          onPendingRemove={pendingQueue.remove}
+          onPendingEdit={pendingQueue.update}
+          isPendingFull={pendingQueue.messages.length >= 3}
         />
       ) : (
         <ThreadComposer
@@ -415,6 +445,11 @@ export function ThreadShell({
           onImageModeChange={setHeroImageMode}
           runStartedAt={runStartedAt}
           goalState={goalState}
+          pendingMessages={pendingQueue.messages}
+          onPendingAppend={handlePendingAppend}
+          onPendingRemove={pendingQueue.remove}
+          onPendingEdit={pendingQueue.update}
+          isPendingFull={pendingQueue.messages.length >= 3}
         />
       )}
     </>
@@ -426,12 +461,7 @@ export function ThreadShell({
     </div>
   ) : (
     <div className="flex w-full flex-col items-center text-center animate-in fade-in-0 slide-in-from-bottom-2 duration-500">
-      <img
-        src="/brand/mona_app_icon.png"
-        alt=""
-        className="mb-4 h-16 w-16 select-none object-contain opacity-80"
-        draggable={false}
-      />
+      <AgentLogo state="welcome" className="mb-4 h-16 w-16 opacity-90" />
       <h1 className="text-balance text-[40px] font-normal leading-tight tracking-[-0.045em] text-foreground sm:text-[48px]">
         {t("thread.empty.greeting")}
       </h1>
