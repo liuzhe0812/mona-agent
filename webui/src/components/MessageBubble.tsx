@@ -5,7 +5,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { Check, ChevronRight, Copy, FileIcon, ImageIcon, PlaySquare, Sparkles, Wrench } from "lucide-react";
+import { Check, ChevronRight, Copy, CornerDownLeft, FileIcon, ImageIcon, PlaySquare, Sparkles, Wrench, BookmarkCheck, Bookmark } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { ImageLightbox } from "@/components/ImageLightbox";
@@ -13,6 +13,7 @@ import { MarkdownText, preloadMarkdownText } from "@/components/MarkdownText";
 import { DeliveredFileCardList } from "@/components/deliver/DeliveredFileCard";
 import { cn } from "@/lib/utils";
 import { formatTurnLatency } from "@/lib/format";
+import { createNoteFromChat, isTauri } from "@/lib/tauri";
 import type { UIImage, UIMediaAttachment, UIMessage } from "@/lib/types";
 
 interface MessageBubbleProps {
@@ -36,13 +37,18 @@ export function MessageBubble({
 }: MessageBubbleProps) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
+  const [saved, setSaved] = useState(false);
   const copyResetRef = useRef<number | null>(null);
+  const saveResetRef = useRef<number | null>(null);
   const baseAnim = "animate-in fade-in-0 slide-in-from-bottom-1 duration-300";
 
   useEffect(() => {
     return () => {
       if (copyResetRef.current !== null) {
         window.clearTimeout(copyResetRef.current);
+      }
+      if (saveResetRef.current !== null) {
+        window.clearTimeout(saveResetRef.current);
       }
     };
   }, []);
@@ -61,6 +67,21 @@ export function MessageBubble({
     });
   }, [message.content]);
 
+  const onSaveAsNote = useCallback(() => {
+    if (!isTauri() || saved) return;
+    const title = message.content.split("\n").find((line) => line.trim().length > 0)?.slice(0, 60) ?? "未命名笔记";
+    void createNoteFromChat(title, message.content).then(() => {
+      setSaved(true);
+      if (saveResetRef.current !== null) {
+        window.clearTimeout(saveResetRef.current);
+      }
+      saveResetRef.current = window.setTimeout(() => {
+        setSaved(false);
+        saveResetRef.current = null;
+      }, 2_000);
+    });
+  }, [message.content, saved]);
+
   if (message.kind === "trace") {
     return <TraceGroup message={message} animClass={baseAnim} />;
   }
@@ -74,7 +95,7 @@ export function MessageBubble({
     return (
       <div
         className={cn(
-          "group ml-auto flex max-w-[min(85%,36rem)] flex-col items-end gap-1.5",
+          "group ml-auto flex max-w-[min(85%,36rem)] min-w-0 flex-col items-end gap-1.5",
           baseAnim,
         )}
       >
@@ -85,13 +106,19 @@ export function MessageBubble({
         {hasText ? (
           <p
             className={cn(
-              "ml-auto w-fit rounded-[18px] bg-secondary/70 px-4 py-2",
+              "ml-auto max-w-full rounded-[18px] bg-secondary/70 px-4 py-2",
               "text-left text-[16px]/[1.75] whitespace-pre-wrap break-words",
             )}
           >
             {message.content}
           </p>
         ) : null}
+        {message.isInjected && (
+          <span className="mt-1 inline-flex items-center gap-1 text-[10px] text-primary/60">
+            <CornerDownLeft className="h-3 w-3" aria-hidden />
+            {t("thread.composer.pendingQueue.injectedBadge")}
+          </span>
+        )}
       </div>
     );
   }
@@ -106,15 +133,16 @@ export function MessageBubble({
 
   const showAssistantActions = message.role === "assistant" && !message.isStreaming && !empty;
   const showCopyButton = showAssistantCopyAction && showAssistantActions;
+  const showSaveButton = showAssistantActions && isTauri();
   const latencyMs = message.latencyMs;
   const showLatencyFooter =
     message.role === "assistant"
     && latencyMs != null
     && !message.isStreaming
     && (!empty || hasReasoning || media.length > 0);
-  const showAssistantFooterRow = showCopyButton || showLatencyFooter;
+  const showAssistantFooterRow = showCopyButton || showSaveButton || showLatencyFooter;
   return (
-    <div className={cn("w-full text-[15px]", baseAnim)} style={{ lineHeight: "var(--cjk-line-height)" }}>
+    <div className={cn("w-full min-w-0 text-[15px]", baseAnim)} style={{ lineHeight: "var(--cjk-line-height)" }}>
       {hasReasoning ? (
         <ReasoningBubble text={reasoning} streaming={reasoningStreaming} hasBodyBelow={!empty} />
       ) : null}
@@ -148,6 +176,27 @@ export function MessageBubble({
                     <Check className="h-4 w-4" aria-hidden />
                   ) : (
                     <Copy className="h-4 w-4" aria-hidden />
+                  )}
+                </button>
+              ) : null}
+              {showSaveButton ? (
+                <button
+                  type="button"
+                  onClick={onSaveAsNote}
+                  disabled={saved}
+                  aria-label={saved ? t("message.savedAsNote") : t("message.saveAsNote")}
+                  title={saved ? t("message.savedAsNote") : t("message.saveAsNote")}
+                  className={cn(
+                    "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full",
+                    "transition-colors hover:bg-muted/55 hover:text-foreground",
+                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                    saved && "text-[#1f9d7a]",
+                  )}
+                >
+                  {saved ? (
+                    <BookmarkCheck className="h-4 w-4" aria-hidden />
+                  ) : (
+                    <Bookmark className="h-4 w-4" aria-hidden />
                   )}
                 </button>
               ) : null}
