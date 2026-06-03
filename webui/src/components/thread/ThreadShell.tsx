@@ -362,16 +362,15 @@ export function ThreadShell({
   );
 
   const handleThreadSend = useCallback(
-    (content: string, images?: SendImage[], options?: SendOptions) => {
+    (content: string, _images?: SendImage[], _options?: SendOptions) => {
       if (isStreaming) {
-        setScrollToBottomSignal((value) => value + 1);
-        inject(content, images);
+        pendingQueue.enqueue(content);
         return;
       }
       setScrollToBottomSignal((value) => value + 1);
-      send(content, images, options);
+      send(content, _images, _options);
     },
-    [inject, isStreaming, send],
+    [isStreaming, pendingQueue, send],
   );
 
   const handlePendingAppend = useCallback(
