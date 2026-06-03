@@ -746,7 +746,10 @@ export function ThreadComposer({
   );
 
   const attachButtonDisabled = disabled || full;
-  const showStopButton = isStreaming && !!onStop;
+  // Show stop button only when streaming AND there's nothing to send.
+  // When the user has typed content, the send button takes priority so they
+  // can inject a follow-up message mid-turn.
+  const showStopButton = isStreaming && !!onStop && !canSend;
 
   return (
     <form
@@ -1045,6 +1048,25 @@ export function ThreadComposer({
             ) : null}
           </div>
           <span className={cn(isHero ? "hidden" : "sm:hidden")} aria-hidden />
+          {/* Compact stop button: visible when streaming with content to send,
+              so the user can still abort without clearing the input first. */}
+          {isStreaming && onStop && canSend && (
+            <Button
+              type="button"
+              size="icon"
+              aria-label={t("thread.composer.stop")}
+              onClick={onStop}
+              className={cn(
+                "rounded-full border border-border/70 bg-card text-foreground/85",
+                "shadow-[0_3px_10px_rgba(15,23,42,0.08)]",
+                "hover:bg-muted/65 hover:text-foreground hover:scale-[1.03] active:scale-95",
+                "disabled:text-muted-foreground/50",
+                isHero ? "" : "h-7.5 w-7.5",
+              )}
+            >
+              <Square className={cn("fill-current stroke-current", isHero ? "h-3 w-3" : "h-2.5 w-2.5")} />
+            </Button>
+          )}
           <Button
             type={showStopButton ? "button" : "submit"}
             size="icon"
@@ -1064,7 +1086,7 @@ export function ThreadComposer({
           >
             {showStopButton ? (
               <Square className={cn("fill-current stroke-current", isHero ? "h-3 w-3" : "h-2.5 w-2.5")} />
-            ) : isStreaming ? (
+            ) : isStreaming && !canSend ? (
               <Loader2 className={cn(isHero ? "h-4.5 w-4.5" : "h-4 w-4", "animate-spin")} />
             ) : (
               <ArrowUp className={cn(isHero ? "h-4.5 w-4.5" : "h-4 w-4")} />
