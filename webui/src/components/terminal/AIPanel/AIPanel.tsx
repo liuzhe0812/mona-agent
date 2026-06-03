@@ -31,7 +31,7 @@ export function AIPanel({ sessionId }: Props) {
           <h2 className="truncate text-[12px] font-semibold text-foreground">AI 助手</h2>
         </div>
       </div>
-      <div className="border-b px-3 py-2">
+      <div className="border-b p-3">
         <QuickActions onAction={handleQuickAction} />
       </div>
       <div className="flex-1 overflow-auto">

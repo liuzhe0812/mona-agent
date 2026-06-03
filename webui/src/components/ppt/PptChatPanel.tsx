@@ -1,15 +1,17 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Layers, Loader2, Send, Square } from "lucide-react";
 
+import { MessageBubble } from "@/components/MessageBubble";
 import { useMonaStream } from "@/hooks/useMonaStream";
 import { useSessionHistory } from "@/hooks/useSessions";
 import { cn } from "@/lib/utils";
 
 interface PptChatPanelProps {
   chatId: string | null;
+  onStreamingChange?: (streaming: boolean) => void;
 }
 
-export function PptChatPanel({ chatId }: PptChatPanelProps) {
+export function PptChatPanel({ chatId, onStreamingChange }: PptChatPanelProps) {
   const [draft, setDraft] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -30,6 +32,14 @@ export function PptChatPanel({ chatId }: PptChatPanelProps) {
     streamError,
     dismissStreamError,
   } = useMonaStream(chatId, historical, hasPendingToolCalls);
+
+  const wasStreamingRef = useRef(false);
+  useEffect(() => {
+    if (wasStreamingRef.current !== isStreaming) {
+      onStreamingChange?.(isStreaming);
+    }
+    wasStreamingRef.current = isStreaming;
+  }, [isStreaming, onStreamingChange]);
 
   useEffect(() => {
     if (!chatId) {
@@ -56,11 +66,6 @@ export function PptChatPanel({ chatId }: PptChatPanelProps) {
     setDraft("");
     send(trimmed);
   }, [chatId, draft, isStreaming, send]);
-
-  const userMessages = useMemo(
-    () => messages.filter((m) => m.role === "user"),
-    [messages],
-  );
 
   const stats = useMemo(() => {
     let reasoningSteps = 0;
@@ -100,7 +105,7 @@ export function PptChatPanel({ chatId }: PptChatPanelProps) {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="min-h-0 flex-1 overflow-y-auto p-3 scrollbar-thin">
+      <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden p-3 scrollbar-thin">
         <div className="space-y-3">
           {historyError ? (
             <div className="text-[11px] text-destructive">会话历史加载失败：{historyError}</div>
@@ -148,18 +153,14 @@ export function PptChatPanel({ chatId }: PptChatPanelProps) {
             </div>
           )}
 
-          {userMessages.map((message) => (
-            <div key={message.id} className="flex justify-end">
-              <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-lg bg-sidebar-accent px-3 py-2 text-[12px] leading-relaxed text-foreground">
-                {(message.displayContent ?? message.content) || (message.isStreaming ? "生成中..." : "")}
-              </div>
-            </div>
+          {messages.map((message) => (
+            <MessageBubble key={message.id} message={message} />
           ))}
 
-          {isStreaming && !hasStats && (
+          {isStreaming && !hasStats && messages.length > 0 && messages[messages.length - 1].role !== "assistant" && (
             <div className="flex items-center gap-1.5 text-[12px] text-muted-foreground">
               <Loader2 className="h-3 w-3 animate-spin" />
-              <span>Agent 正在处理...</span>
+              <span>思考中...</span>
             </div>
           )}
 

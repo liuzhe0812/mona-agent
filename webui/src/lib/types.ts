@@ -197,6 +197,8 @@ export interface SettingsPayload {
     api_key_hint?: string | null;
     api_base?: string | null;
     default_api_base?: string | null;
+    free_default_model?: string | null;
+    model?: string | null;
   }>;
   web_search: {
     provider: string;
@@ -274,6 +276,7 @@ export interface SettingsUpdate {
   model?: string;
   provider?: string;
   modelPreset?: string | null;
+  providerModel?: string;
   timezone?: string;
   botName?: string;
   botIcon?: string;
@@ -456,6 +459,7 @@ export type Outbound =
 export interface PptTemplate {
   key: string;
   kind: "layout" | "deck";
+  group: string;
   name: string;
   summary: string;
   coverSvgUrl: string;
@@ -472,8 +476,7 @@ export interface PptCanvasFormat {
 }
 
 export interface PptTemplatesResponse {
-  layouts: PptTemplate[];
-  decks: PptTemplate[];
+  templates: PptTemplate[];
   canvasFormats: PptCanvasFormat[];
 }
 

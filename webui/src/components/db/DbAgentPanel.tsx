@@ -13,10 +13,10 @@ import {
   Wrench,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { MessageBubble } from "@/components/MessageBubble";
 import { useMonaStream, type SendOptions } from "@/hooks/useMonaStream";
 import { useSessionHistory } from "@/hooks/useSessions";
 import type { UIMessage } from "@/lib/types";
-import { cn } from "@/lib/utils";
 import { useClient } from "@/providers/ClientProvider";
 import { useDbStore } from "./store/dbStore";
 import type { QueryTab } from "./types";
@@ -325,7 +325,7 @@ export function DbAgentPanel({
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-2.5 py-2 scrollbar-thin">
+      <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-2.5 py-2 scrollbar-thin">
         <DbChat
           messages={messages}
           loading={loading}
@@ -424,58 +424,11 @@ function DbChat({
       {loading ? <AssistantHint text="正在读取会话历史..." loading /> : null}
 
       {messages.map((message) => (
-        <ChatBubble key={message.id} message={message} />
+        <MessageBubble key={message.id} message={message} />
       ))}
 
       {creatingChat ? <AssistantHint text="正在创建会话..." loading /> : null}
       {isStreaming ? <AssistantHint text="AI 正在处理..." loading /> : null}
-    </div>
-  );
-}
-
-function ChatBubble({ message }: { message: UIMessage }) {
-  if (message.kind === "trace") {
-    const traces = message.traces?.length
-      ? message.traces
-      : message.content
-        ? [message.content]
-        : [];
-    return (
-      <div className="text-xs leading-relaxed text-muted-foreground">
-        {traces.length > 0 ? (
-          <ul className="space-y-0.5">
-            {traces.slice(-4).map((trace, index) => (
-              <li key={`${message.id}-${index}`} className="truncate">
-                {trace}
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p>正在调用工具...</p>
-        )}
-      </div>
-    );
-  }
-
-  const isUser = message.role === "user";
-  const displayText = message.displayContent || message.content || (message.isStreaming ? "生成中..." : "");
-
-  return (
-    <div
-      className={cn(
-        "whitespace-pre-wrap break-words text-xs leading-relaxed",
-        isUser
-          ? "bg-sidebar-accent rounded-lg px-3 py-2 text-foreground w-fit"
-          : "text-muted-foreground",
-      )}
-    >
-      {message.reasoning ? (
-        <div className="mb-2 rounded-lg border border-border/60 bg-muted/25 px-2 py-1.5 text-[11px] leading-4 text-muted-foreground">
-          <span className="font-medium text-foreground/70">思考</span>
-          <div className="mt-1 line-clamp-4">{message.reasoning}</div>
-        </div>
-      ) : null}
-      {displayText}
     </div>
   );
 }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { FileText, FolderOpen, Loader2, Palette, Upload, X } from "lucide-react";
+import { FileText, FolderOpen, Loader2, Upload, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import { useClient } from "@/providers/ClientProvider";
 import type { PptCanvasFormat, PptTemplate } from "@/lib/types";
 import type { PptConfig } from "./PptMakerView";
+import { PptTemplateDialog } from "./PptTemplateDialog";
 
 interface PptConfigPanelProps {
   config: PptConfig;
@@ -17,21 +18,18 @@ interface PptConfigPanelProps {
   onStart: () => void;
 }
 
-type TemplateTab = "layout" | "deck";
 type SourceTab = "topic" | "files";
 
 export function PptConfigPanel({ config, setConfig, phase, onStart }: PptConfigPanelProps) {
   const { client, token } = useClient();
   const readOnly = phase !== "config";
 
-  const [layouts, setLayouts] = useState<PptTemplate[]>([]);
-  const [decks, setDecks] = useState<PptTemplate[]>([]);
+  const [templates, setTemplates] = useState<PptTemplate[]>([]);
   const [canvasFormats, setCanvasFormats] = useState<PptCanvasFormat[]>([]);
-  const [templatesLoading, setTemplatesLoading] = useState(true);
-  const [templateTab, setTemplateTab] = useState<TemplateTab>("layout");
   const [sourceTab, setSourceTab] = useState<SourceTab>("topic");
   const [uploading, setUploading] = useState(false);
   const [apiBase, setApiBase] = useState<string | null>(null);
+  const [templateDialogOpen, setTemplateDialogOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -40,25 +38,22 @@ export function PptConfigPanel({ config, setConfig, phase, onStart }: PptConfigP
 
   useEffect(() => {
     let cancelled = false;
-    setTemplatesLoading(true);
     fetchPptTemplates(token)
       .then((res) => {
         if (!cancelled) {
-          setLayouts(res.layouts);
-          setDecks(res.decks);
+          setTemplates(res.templates);
           setCanvasFormats(res.canvasFormats);
         }
       })
-      .catch(() => {})
-      .finally(() => {
-        if (!cancelled) setTemplatesLoading(false);
-      });
+      .catch(() => {});
     return () => {
       cancelled = true;
     };
   }, [token]);
 
-  const currentTemplates = templateTab === "layout" ? layouts : decks;
+  const selectedTemplate = templates.find(
+    (t) => t.key === config.templateKey && t.kind === config.templateKind,
+  );
 
   function templateImgUrl(url: string): string {
     const base = apiBase ?? "";
@@ -68,10 +63,10 @@ export function PptConfigPanel({ config, setConfig, phase, onStart }: PptConfigP
 
   function handleSelectTemplate(tpl: PptTemplate) {
     if (readOnly) return;
-    if (config.templateKey === tpl.key && config.templateKind === templateTab) {
+    if (config.templateKey === tpl.key && config.templateKind === tpl.kind) {
       setConfig((prev) => ({ ...prev, templateKey: null, templateKind: null }));
     } else {
-      setConfig((prev) => ({ ...prev, templateKey: tpl.key, templateKind: templateTab }));
+      setConfig((prev) => ({ ...prev, templateKey: tpl.key, templateKind: tpl.kind }));
     }
   }
 
@@ -217,104 +212,76 @@ export function PptConfigPanel({ config, setConfig, phase, onStart }: PptConfigP
   );
 
   return (
-    <div className="flex h-full flex-col">
-      <div className="min-h-0 flex-1 overflow-y-auto p-3 space-y-4">
+    <div>
+      <div className="p-3 space-y-4">
         <section>
           <h3 className="mb-2 text-[12px] font-medium text-foreground">模板</h3>
-          <div className="mb-2 flex gap-1 rounded-lg bg-muted p-1">
-            <button
-              className={cn(
-                "flex-1 rounded-md px-3 py-1 text-[11px] font-medium transition-all",
-                templateTab === "layout"
-                  ? "bg-background text-foreground shadow"
-                  : "text-muted-foreground hover:text-foreground",
+          {selectedTemplate ? (
+            <div className="flex items-center gap-2 rounded-lg border border-primary/50 bg-muted/30 p-2">
+              <div className="h-10 w-16 shrink-0 overflow-hidden rounded bg-muted">
+                <img
+                  src={templateImgUrl(selectedTemplate.coverSvgUrl)}
+                  alt={selectedTemplate.name}
+                  className="h-full w-full object-cover"
+                />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-1.5">
+                  <span className="truncate text-[11px] font-medium text-foreground">
+                    {selectedTemplate.name}
+                  </span>
+                  {selectedTemplate.kind === "deck" && selectedTemplate.primaryColor && (
+                    <span
+                      className="h-2 w-2 shrink-0 rounded-full"
+                      style={{ backgroundColor: selectedTemplate.primaryColor }}
+                    />
+                  )}
+                </div>
+                <span className="text-[10px] text-muted-foreground">
+                  {selectedTemplate.group}
+                </span>
+              </div>
+              {!readOnly && (
+                <button
+                  type="button"
+                  className="shrink-0 text-muted-foreground hover:text-foreground"
+                  onClick={() =>
+                    setConfig((prev) => ({ ...prev, templateKey: null, templateKind: null }))
+                  }
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
               )}
-              onClick={() => setTemplateTab("layout")}
-              disabled={readOnly}
+            </div>
+          ) : null}
+          {!readOnly && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="mt-1.5 w-full text-[11px]"
+              onClick={() => setTemplateDialogOpen(true)}
             >
-              布局模板
-            </button>
-            <button
-              className={cn(
-                "flex-1 rounded-md px-3 py-1 text-[11px] font-medium transition-all",
-                templateTab === "deck"
-                  ? "bg-background text-foreground shadow"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-              onClick={() => setTemplateTab("deck")}
-              disabled={readOnly}
-            >
-              品牌套件
-            </button>
-          </div>
-          {templatesLoading ? (
-            <div className="flex items-center justify-center py-8">
-              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-            </div>
-          ) : currentTemplates.length === 0 ? (
-            <div className="py-6 text-center text-[11px] text-muted-foreground">
-              暂无模板
-            </div>
-          ) : (
-            <div className="grid grid-cols-2 gap-2">
-              {currentTemplates.map((tpl) => {
-                const selected =
-                  config.templateKey === tpl.key && config.templateKind === templateTab;
-                return (
-                  <button
-                    key={tpl.key}
-                    className={cn(
-                      "flex flex-col overflow-hidden rounded-lg border text-left transition-colors",
-                      selected
-                        ? "border-primary ring-1 ring-primary"
-                        : "border-border/70 hover:border-border",
-                      readOnly && "cursor-default",
-                    )}
-                    onClick={() => handleSelectTemplate(tpl)}
-                    disabled={readOnly}
-                  >
-                    <div className="aspect-video w-full overflow-hidden bg-muted">
-                      <img
-                        src={templateImgUrl(tpl.coverSvgUrl)}
-                        alt={tpl.name}
-                        className="h-full w-full object-cover"
-                      />
-                    </div>
-                    <div className="p-2">
-                      <div className="flex items-center justify-between gap-1">
-                        <span className="truncate text-[11px] font-medium text-foreground">
-                          {tpl.name}
-                        </span>
-                        {templateTab === "deck" && tpl.primaryColor ? (
-                          <span
-                            className="h-2.5 w-2.5 shrink-0 rounded-full"
-                            style={{ backgroundColor: tpl.primaryColor }}
-                          />
-                        ) : templateTab === "layout" && tpl.pageCount != null ? (
-                          <span className="shrink-0 rounded bg-muted px-1 text-[10px] text-muted-foreground">
-                            {tpl.pageCount}页
-                          </span>
-                        ) : null}
-                      </div>
-                      <p className="mt-0.5 line-clamp-2 text-[10px] text-muted-foreground">
-                        {tpl.summary}
-                      </p>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
+              {selectedTemplate ? "更换模板" : "选择模板"}
+            </Button>
           )}
+          <PptTemplateDialog
+            open={templateDialogOpen}
+            onOpenChange={setTemplateDialogOpen}
+            selectedKey={config.templateKey}
+            selectedKind={config.templateKind}
+            token={token}
+            onSelect={handleSelectTemplate}
+          />
         </section>
 
         <section>
           <h3 className="mb-2 text-[12px] font-medium text-foreground">画布格式</h3>
-          <div className="flex gap-2 overflow-x-auto pb-1">
+          <div className="flex flex-wrap gap-2">
             {canvasFormats.map((fmt) => (
               <button
                 key={fmt.key}
                 className={cn(
-                  "shrink-0 rounded-lg border px-3 py-2 text-left transition-colors",
+                  "rounded-lg border px-3 py-2 text-left transition-colors",
                   config.canvasFormat === fmt.key
                     ? "border-primary ring-1 ring-primary"
                     : "border-border/70 hover:border-border",
@@ -535,21 +502,7 @@ export function PptConfigPanel({ config, setConfig, phase, onStart }: PptConfigP
           )}
         </section>
 
-        <section>
-          <h3 className="mb-2 text-[12px] font-medium text-foreground">
-            <Palette className="mr-1 inline h-3 w-3" />
-            风格偏好
-          </h3>
-          <Textarea
-            className="min-h-[48px] resize-none text-[12px]"
-            placeholder="例如：简约商务、科技感、中国风..."
-            value={config.stylePreference}
-            onChange={(e) =>
-              setConfig((prev) => ({ ...prev, stylePreference: e.target.value }))
-            }
-            disabled={readOnly}
-          />
-        </section>
+
       </div>
 
       {!readOnly && (

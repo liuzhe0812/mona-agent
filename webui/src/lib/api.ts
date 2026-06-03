@@ -132,6 +132,14 @@ export async function fetchSettings(
   return request<SettingsPayload>(`${effectiveBase}/api/settings`, token);
 }
 
+export async function fetchZenFreeModels(
+  token: string,
+  base?: string,
+): Promise<{ models: string[] }> {
+  const effectiveBase = base ?? (await getApiBase());
+  return request<{ models: string[] }>(`${effectiveBase}/api/zen/models`, token);
+}
+
 export async function listSlashCommands(
   token: string,
   base?: string,
@@ -190,6 +198,7 @@ export async function updateSettings(
   }
   if (update.model !== undefined) query.set("model", update.model);
   if (update.provider !== undefined) query.set("provider", update.provider);
+  if (update.providerModel !== undefined) query.set("provider_model", update.providerModel);
   if (update.timezone !== undefined) query.set("timezone", update.timezone);
   if (update.botName !== undefined) query.set("bot_name", update.botName);
   if (update.botIcon !== undefined) query.set("bot_icon", update.botIcon);
@@ -255,183 +264,6 @@ export async function updateImageGenerationSettings(
   );
 }
 
-export async function kbStatus(
-  token: string,
-  base?: string,
-  instance?: string,
-): Promise<{
-  instance: string;
-  mode: string;
-  sources: number;
-  pages: number;
-  nodes: number;
-  edges: number;
-  pending: number;
-  indexed: number;
-}> {
-  const effectiveBase = base ?? (await getApiBase());
-  const query = new URLSearchParams();
-  if (instance) query.set("instance", instance);
-  return request(
-    `${effectiveBase}/api/kb/status?${query}`,
-    token,
-  );
-}
-
-export async function kbIngest(
-  token: string,
-  paths: string[],
-  base?: string,
-  instance?: string,
-): Promise<{ ingested: number }> {
-  const effectiveBase = base ?? (await getApiBase());
-  const query = new URLSearchParams();
-  query.set("paths", paths.join(","));
-  if (instance) query.set("instance", instance);
-  return request(
-    `${effectiveBase}/api/kb/ingest?${query}`,
-    token,
-  );
-}
-
-export async function kbQuery(
-  token: string,
-  q: string,
-  base?: string,
-  instance?: string,
-  limit = 10,
-): Promise<{ results: Array<{ path: string; title: string; snippet: string; rank: number }>; query: string }> {
-  const effectiveBase = base ?? (await getApiBase());
-  const query = new URLSearchParams();
-  query.set("q", q);
-  if (instance) query.set("instance", instance);
-  query.set("limit", String(limit));
-  return request(
-    `${effectiveBase}/api/kb/query?${query}`,
-    token,
-  );
-}
-
-export async function kbCompile(
-  token: string,
-  base?: string,
-  instance?: string,
-): Promise<{ compiled: number }> {
-  const effectiveBase = base ?? (await getApiBase());
-  const query = new URLSearchParams();
-  if (instance) query.set("instance", instance);
-  return request(
-    `${effectiveBase}/api/kb/compile?${query}`,
-    token,
-  );
-}
-
-export async function kbGraph(
-  token: string,
-  base?: string,
-  instance?: string,
-): Promise<{
-  node_count: number;
-  edge_count: number;
-  kind_counts: Record<string, number>;
-  relation_counts: Record<string, number>;
-  nodes: Array<{ id: string; kind: string; title: string }>;
-  edges: Array<{ source: string; target: string; relation: string }>;
-}> {
-  const effectiveBase = base ?? (await getApiBase());
-  const query = new URLSearchParams();
-  if (instance) query.set("instance", instance);
-  return request(
-    `${effectiveBase}/api/kb/graph?${query}`,
-    token,
-  );
-}
-
-export async function kbList(
-  token: string,
-  base?: string,
-): Promise<{
-  instances: Array<{
-    name: string;
-    mode: string;
-    paths: string[];
-    sources: number;
-    pages: number;
-    nodes: number;
-    edges: number;
-    pending: number;
-  }>;
-}> {
-  const effectiveBase = base ?? (await getApiBase());
-  const query = new URLSearchParams();
-  return request(
-    `${effectiveBase}/api/kb/list?${query}`,
-    token,
-  );
-}
-
-export async function kbCreate(
-  token: string,
-  name: string,
-  mode: string,
-  paths: string[],
-  base?: string,
-): Promise<{ name: string; mode: string }> {
-  const effectiveBase = base ?? (await getApiBase());
-  const query = new URLSearchParams();
-  query.set("name", name);
-  query.set("mode", mode);
-  query.set("paths", paths.join(","));
-  return request(
-    `${effectiveBase}/api/kb/create?${query}`,
-    token,
-  );
-}
-
-export async function kbDelete(
-  token: string,
-  name: string,
-  base?: string,
-): Promise<{ deleted: string }> {
-  const effectiveBase = base ?? (await getApiBase());
-  const query = new URLSearchParams();
-  query.set("name", name);
-  return request(
-    `${effectiveBase}/api/kb/delete?${query}`,
-    token,
-  );
-}
-
-export async function kbFiles(
-  token: string,
-  instance: string,
-  base?: string,
-): Promise<{ files: Array<{ name: string; path: string; size: number; modified: string }> }> {
-  const effectiveBase = base ?? (await getApiBase());
-  const query = new URLSearchParams();
-  query.set("instance", instance);
-  return request(
-    `${effectiveBase}/api/kb/files?${query}`,
-    token,
-  );
-}
-
-export async function kbIngestFiles(
-  token: string,
-  instance: string,
-  sources: string[],
-  base?: string,
-): Promise<{ added: string[]; count: number }> {
-  const effectiveBase = base ?? (await getApiBase());
-  const query = new URLSearchParams();
-  query.set("instance", instance);
-  query.set("sources", sources.join(","));
-  return request(
-    `${effectiveBase}/api/kb/ingest-files?${query}`,
-    token,
-  );
-}
-
 export async function fetchPptTemplates(
   token: string,
   base?: string,
@@ -478,6 +310,45 @@ export async function fetchPptPreviewPort(
   return request(`${effectiveBase}/api/ppt/preview-port?${query}`, token);
 }
 
+export interface PptExportStatus {
+  status: "not_found" | "init" | "planning" | "generating" | "done";
+  slideCount: number;
+  hasExport: boolean;
+  hasSvgOutput: boolean;
+  hasSpecLock: boolean;
+  exportFile: string | null;
+}
+
+export async function fetchPptExportStatus(
+  token: string,
+  project: string,
+  base?: string,
+): Promise<PptExportStatus> {
+  const effectiveBase = base ?? (await getApiBase());
+  const query = new URLSearchParams();
+  query.set("project", project);
+  return request<PptExportStatus>(
+    `${effectiveBase}/api/ppt/export-status?${query}`,
+    token,
+  );
+}
+
+export async function markPptGenerating(
+  token: string,
+  project: string,
+  action: "start" | "finish",
+  base?: string,
+): Promise<{ ok: boolean }> {
+  const effectiveBase = base ?? (await getApiBase());
+  const query = new URLSearchParams();
+  query.set("project", project);
+  query.set("action", action);
+  return request<{ ok: boolean }>(
+    `${effectiveBase}/api/ppt/mark-generating?${query}`,
+    token,
+  );
+}
+
 export interface PptSourceFile {
   name: string;
   path: string;
@@ -492,4 +363,28 @@ export async function pptAddSources(
   const query = new URLSearchParams();
   query.set("sources", sources.join("|"));
   return request(`${effectiveBase}/api/ppt/add-sources?${query}`, token);
+}
+
+export async function savePptChatId(
+  token: string,
+  project: string,
+  chatId: string,
+  base?: string,
+): Promise<{ ok: boolean }> {
+  const effectiveBase = base ?? (await getApiBase());
+  const query = new URLSearchParams();
+  query.set("project", project);
+  query.set("chatId", chatId);
+  return request(`${effectiveBase}/api/ppt/save-chat-id?${query}`, token);
+}
+
+export async function deletePptProject(
+  token: string,
+  project: string,
+  base?: string,
+): Promise<{ ok: boolean }> {
+  const effectiveBase = base ?? (await getApiBase());
+  const query = new URLSearchParams();
+  query.set("project", project);
+  return request(`${effectiveBase}/api/ppt/delete-project?${query}`, token);
 }

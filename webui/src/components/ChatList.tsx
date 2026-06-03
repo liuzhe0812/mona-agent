@@ -21,6 +21,12 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { deriveTitle, relativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { ChatSummary, SidebarDensity, SidebarSortMode } from "@/lib/types";
@@ -176,15 +182,17 @@ export const ChatList = memo(function ChatList({
                     : null;
                 return (
                   <li key={s.key} className="min-w-0">
-                    <div
-                      className={cn(
-                        "group flex min-w-0 max-w-full items-center gap-2 rounded-xl px-2 text-[13px] transition-colors",
-                        compact ? "min-h-7" : "min-h-8",
-                        active
-                          ? "bg-sidebar-accent/70 text-sidebar-accent-foreground shadow-[inset_0_0_0_1px_hsl(var(--sidebar-border)/0.28)]"
-                          : "text-sidebar-foreground/82 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground",
-                      )}
-                    >
+                    <ContextMenu>
+                      <ContextMenuTrigger asChild>
+                        <div
+                          className={cn(
+                            "group flex min-w-0 max-w-full items-center gap-2 rounded-xl px-2 text-[13px] transition-colors",
+                            compact ? "min-h-7" : "min-h-8",
+                            active
+                              ? "bg-sidebar-accent/70 text-sidebar-accent-foreground shadow-[inset_0_0_0_1px_hsl(var(--sidebar-border)/0.28)]"
+                              : "text-sidebar-foreground/82 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground",
+                          )}
+                        >
                       <button
                         type="button"
                         onClick={() => onSelect(s.key)}
@@ -261,7 +269,48 @@ export const ChatList = memo(function ChatList({
                           </DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>
-                    </div>
+                        </div>
+                      </ContextMenuTrigger>
+                    <ContextMenuContent
+                      onCloseAutoFocus={(event) => event.preventDefault()}
+                    >
+                      <ContextMenuItem
+                        onSelect={() => onTogglePin(s.key)}
+                      >
+                        {isPinned ? (
+                          <PinOff className="mr-2 h-4 w-4" />
+                        ) : (
+                          <Pin className="mr-2 h-4 w-4" />
+                        )}
+                        {isPinned ? t("chat.unpin") : t("chat.pin")}
+                      </ContextMenuItem>
+                      <ContextMenuItem
+                        onSelect={() => onRequestRename(s.key, title)}
+                      >
+                        <Pencil className="mr-2 h-4 w-4" />
+                        {t("chat.rename")}
+                      </ContextMenuItem>
+                      <ContextMenuItem
+                        onSelect={() => onToggleArchive(s.key)}
+                      >
+                        {isArchived ? (
+                          <ArchiveRestore className="mr-2 h-4 w-4" />
+                        ) : (
+                          <Archive className="mr-2 h-4 w-4" />
+                        )}
+                        {isArchived ? t("chat.unarchive") : t("chat.archive")}
+                      </ContextMenuItem>
+                      <ContextMenuItem
+                        onSelect={() => {
+                          window.setTimeout(() => onRequestDelete(s.key, title), 0);
+                        }}
+                        className="text-destructive focus:text-destructive"
+                      >
+                        <Trash2 className="mr-2 h-4 w-4" />
+                        {t("chat.delete")}
+                      </ContextMenuItem>
+                    </ContextMenuContent>
+                  </ContextMenu>
                   </li>
                 );
               })}

@@ -69,7 +69,8 @@ interface ThreadComposerProps {
   placeholder?: string;
   isStreaming?: boolean;
   modelLabel?: string | null;
-  modelOptions?: Array<{ name: string; label: string }>;
+  modelOptions?: Array<{ name: string; label: string; free_default_model?: string | null; model?: string | null }>;
+  zenFreeModels?: string[];
   onModelSwitch?: (provider: string, model: string) => void;
   variant?: "thread" | "hero";
   slashCommands?: SlashCommand[];
@@ -388,6 +389,7 @@ export function ThreadComposer({
   isStreaming = false,
   modelLabel = null,
   modelOptions = [],
+  zenFreeModels = [],
   onModelSwitch,
   variant = "thread",
   slashCommands = [],
@@ -400,7 +402,7 @@ export function ThreadComposer({
   pendingMessages = [],
   onPendingAppend,
   onPendingRemove,
-  _onPendingEdit,
+  onPendingEdit,
   isPendingFull = false,
 }: ThreadComposerProps) {
   const { t } = useTranslation();
@@ -975,25 +977,46 @@ export function ThreadComposer({
                     </button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end" side="top" className="min-w-[180px]">
-                    {modelOptions.map((opt) => (
-                      <DropdownMenuItem
-                        key={opt.name}
-                        className="flex items-center gap-2 text-[13px]"
-                        onSelect={() => {
-                          const model = "";
-                          onModelSwitch(opt.name, model);
-                        }}
-                      >
-                        <span
-                          aria-hidden
-                          className={cn(
-                            "h-1.5 w-1.5 flex-none rounded-full",
-                            "bg-emerald-500/80",
-                          )}
-                        />
-                        <span className="truncate">{opt.label}</span>
-                      </DropdownMenuItem>
-                    ))}
+                    {modelOptions.map((opt) => {
+                      if (opt.free_default_model && zenFreeModels.length > 0) {
+                        return zenFreeModels.map((model) => (
+                          <DropdownMenuItem
+                            key={`${opt.name}/${model}`}
+                            className="flex items-center gap-2 text-[13px]"
+                            onSelect={() => onModelSwitch(opt.name, model)}
+                          >
+                            <span
+                              aria-hidden
+                              className="h-1.5 w-1.5 flex-none rounded-full bg-blue-500/80"
+                            />
+                            <span className="truncate">{model.replace(/-free$/, "")}</span>
+                            <span className="ml-auto text-[10px] text-muted-foreground">Free</span>
+                          </DropdownMenuItem>
+                        ));
+                      }
+                      return (
+                        <DropdownMenuItem
+                          key={opt.name}
+                          className="flex items-center gap-2 text-[13px]"
+                          onSelect={() => {
+                            const model = opt.free_default_model || opt.model || "";
+                            onModelSwitch(opt.name, model);
+                          }}
+                        >
+                          <span
+                            aria-hidden
+                            className={cn(
+                              "h-1.5 w-1.5 flex-none rounded-full",
+                              opt.free_default_model ? "bg-blue-500/80" : "bg-emerald-500/80",
+                            )}
+                          />
+                          <span className="truncate">{opt.label}</span>
+                          {opt.free_default_model ? (
+                            <span className="ml-auto text-[10px] text-muted-foreground">Free</span>
+                          ) : null}
+                        </DropdownMenuItem>
+                      );
+                    })}
                   </DropdownMenuContent>
                 </DropdownMenu>
               ) : (

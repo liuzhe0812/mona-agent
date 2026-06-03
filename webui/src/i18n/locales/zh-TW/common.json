@@ -1,4 +1,4 @@
-﻿{
+{
   "app": {
     "brand": "mona",
     "loading": {
@@ -439,6 +439,8 @@
     "agentActivityLiveSummary": "進行中… · {{reasoning}} 步 · {{tools}} 次工具呼叫",
     "agentActivityLiveToolsOnly": "進行中… · {{tools}} 次工具呼叫",
     "imageAttachment": "圖片附件",
+    "saveAsNote": "儲存為筆記",
+    "savedAsNote": "已儲存為筆記",
     "turnLatencyTitle": "本輪耗時（端到端）"
   },
   "lightbox": {

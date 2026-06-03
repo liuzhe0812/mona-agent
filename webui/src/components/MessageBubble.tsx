@@ -110,7 +110,7 @@ export function MessageBubble({
               "text-left text-[16px]/[1.75] whitespace-pre-wrap break-words",
             )}
           >
-            {message.content}
+            {message.displayContent ?? message.content}
           </p>
         ) : null}
         {message.isInjected && (

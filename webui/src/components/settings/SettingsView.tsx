@@ -4,6 +4,7 @@ import {
   useMemo,
   useState,
   type Dispatch,
+  type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
   type SetStateAction,
 } from "react";
@@ -36,6 +37,7 @@ import {
   Orbit,
   Palette,
   Pencil,
+  RefreshCw,
   RotateCcw,
   Search,
   Server,
@@ -61,6 +63,7 @@ import {
 import { Input } from "@/components/ui/input";
 import {
   fetchSettings,
+  fetchZenFreeModels,
   updateImageGenerationSettings,
   updateProviderSettings,
   updateSettings,
@@ -369,6 +372,7 @@ export function SettingsView({
         modelPreset: form.modelPreset,
         ...(form.modelPreset === "default" && form.model !== defaultModel ? { model: form.model } : {}),
         ...(form.modelPreset === "default" && form.provider !== defaultProvider ? { provider: form.provider } : {}),
+        ...(form.modelPreset === "default" && form.model ? { providerModel: form.model } : {}),
       });
       applyPayload(payload);
       onModelNameChange(payload.agent.model || null);
@@ -614,7 +618,6 @@ export function SettingsView({
             dirty={modelDirty}
             saving={saving}
             onSave={saveModelSettings}
-            onOpenProviders={() => setActiveSection("providers")}
           />
         );
       case "providers":
@@ -1088,7 +1091,6 @@ function ModelsSettings({
   dirty,
   saving,
   onSave,
-  onOpenProviders,
 }: {
   form: AgentSettingsDraft;
   setForm: Dispatch<SetStateAction<AgentSettingsDraft>>;
@@ -1096,10 +1098,12 @@ function ModelsSettings({
   dirty: boolean;
   saving: boolean;
   onSave: () => void;
-  onOpenProviders: () => void;
 }) {
   const { t } = useTranslation();
+  const { token } = useClient();
   const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
+  const [zenFreeModels, setZenFreeModels] = useState<string[]>([]);
+  const [zenModelsLoading, setZenModelsLoading] = useState(false);
   const configuredProviders = settings.providers.filter((provider) => provider.configured);
   const showAutoProvider = defaultPreset(settings)?.provider === "auto" || form.provider === "auto";
   const providerOptions = showAutoProvider
@@ -1109,6 +1113,37 @@ function ModelsSettings({
     ? form.provider
     : "";
   const selectedPreset = settings.model_presets.find((preset) => preset.name === form.modelPreset);
+  const handleProviderChange = (provider: string) => {
+    const providerData = settings.providers.find((p) => p.name === provider);
+    const freeModel = providerData?.free_default_model;
+    const storedModel = providerData?.model;
+    setForm((prev) => ({
+      ...prev,
+      provider,
+      model: freeModel || storedModel || "",
+    }));
+  };
+  const isFreeProvider = !!settings.providers.find((p) => p.name === form.provider)?.free_default_model;
+
+  const fetchZenModels = useCallback(async () => {
+    if (!token) return;
+    setZenModelsLoading(true);
+    try {
+      const result = await fetchZenFreeModels(token);
+      setZenFreeModels(result.models);
+    } catch (e) {
+      console.error("Failed to fetch Zen free models:", e);
+    } finally {
+      setZenModelsLoading(false);
+    }
+  }, [token]);
+
+  useEffect(() => {
+    if (isFreeProvider && zenFreeModels.length === 0 && token) {
+      fetchZenModels();
+    }
+  }, [isFreeProvider, token]); // eslint-disable-line react-hooks/exhaustive-deps
+
   return (
     <div className="space-y-7">
       <section>
@@ -1118,7 +1153,21 @@ function ModelsSettings({
             <button
               key={preset.name}
               type="button"
-              onClick={() => setForm((prev) => ({ ...prev, modelPreset: preset.name }))}
+              onClick={() => {
+                const providerData = settings.providers.find(
+                  (p) => p.name === preset.provider,
+                );
+                const storedModel = providerData?.model;
+                setForm((prev) => ({
+                  ...prev,
+                  modelPreset: preset.name,
+                  model:
+                    preset.name === "default" && storedModel
+                      ? storedModel
+                      : preset.model,
+                  provider: preset.provider,
+                }));
+              }}
               className={cn(
                 "rounded-[22px] border px-4 py-4 text-left transition-colors",
                 form.modelPreset === preset.name
@@ -1158,18 +1207,44 @@ function ModelsSettings({
                   providers={providerOptions}
                   value={providerValue}
                   emptyLabel={t("settings.byok.noConfiguredProviders")}
-                  onChange={(p) => setForm((prev) => ({ ...prev, provider: p }))}
+                  onChange={handleProviderChange}
                 />
               </SettingsRow>
               <SettingsRow
                 title={t("settings.rows.model")}
                 description={t("settings.help.model")}
               >
-                <Input
+                {isFreeProvider ? (
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={form.model}
+                      onChange={(e) => setForm((prev) => ({ ...prev, model: e.target.value }))}
+                      className="h-8 max-w-[220px] rounded-full border bg-background px-3 text-[13px]"
+                    >
+                      {zenFreeModels.map((m) => (
+                        <option key={m} value={m}>{m}</option>
+                      ))}
+                      {!zenFreeModels.includes(form.model) && (
+                        <option value={form.model}>{form.model}</option>
+                      )}
+                    </select>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 rounded-full"
+                      onClick={fetchZenModels}
+                      disabled={zenModelsLoading}
+                    >
+                      <RefreshCw className={cn("h-3.5 w-3.5", zenModelsLoading && "animate-spin")} />
+                    </Button>
+                  </div>
+                ) : (
+                  <Input
                     value={form.model}
                     onChange={(event) => setForm((prev) => ({ ...prev, model: event.target.value }))}
                     className="h-8 w-[min(280px,70vw)] rounded-full text-[13px]"
                   />
+                )}
               </SettingsRow>
             </>
           ) : (
@@ -1275,11 +1350,19 @@ function ProvidersSettings({
             </span>
           </span>
           <StatusPill
-            tone={provider.configured ? "success" : "neutral"}
+            tone={
+              provider.configured
+                ? "success"
+                : provider.free_default_model
+                  ? "info"
+                  : "neutral"
+            }
           >
             {provider.configured
               ? t("settings.byok.configured")
-              : t("settings.byok.notConfigured")}
+              : provider.free_default_model
+                ? t("settings.byok.freeTier", "Free")
+                : t("settings.byok.notConfigured")}
           </StatusPill>
         </button>
 
@@ -2707,16 +2790,50 @@ function NumberInput({
   );
 }
 
+function shortcutFromKeyboardEvent(event: KeyboardEvent): string | null {
+  if (["Control", "Shift", "Alt", "Meta"].includes(event.key)) return null;
+  const parts: string[] = [];
+  if (event.ctrlKey) parts.push("Ctrl");
+  if (event.altKey) parts.push("Alt");
+  if (event.shiftKey) parts.push("Shift");
+  if (event.metaKey) parts.push("Meta");
+
+  let key = event.key;
+  if (/^[a-z]$/i.test(key)) {
+    key = key.toUpperCase();
+  } else if (key === " ") {
+    key = "Space";
+  } else {
+    const aliases: Record<string, string> = {
+      Escape: "Esc",
+      ArrowUp: "Up",
+      ArrowDown: "Down",
+      ArrowLeft: "Left",
+      ArrowRight: "Right",
+    };
+    key = aliases[key] ?? key;
+  }
+
+  if (!key || key.length > 12) return null;
+  parts.push(key);
+  return parts.join("+");
+}
+
 function DesktopSettings() {
   const { t } = useTranslation();
   const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
   const [settings, setSettings] = useState<DesktopAppSettings | null>(null);
   const [gatewayStatus, setGatewayStatus] = useState<{ running: boolean; port: number | null } | null>(null);
+  const [shortcutDraft, setShortcutDraft] = useState("Ctrl+Alt+M");
+  const [shortcutSaving, setShortcutSaving] = useState(false);
+  const [shortcutSaved, setShortcutSaved] = useState(false);
+  const [shortcutError, setShortcutError] = useState<string | null>(null);
 
   const loadSettings = useCallback(async () => {
     try {
       const s = await getDesktopSettings();
       setSettings(s);
+      setShortcutDraft(s.quick_ask_shortcut || "Ctrl+Alt+M");
       const status = await getGatewayStatus();
       setGatewayStatus(status);
     } catch (e) {
@@ -2733,9 +2850,53 @@ function DesktopSettings() {
     try {
       const updated = await updateDesktopSettings({ ...settings, ...patch });
       setSettings(updated);
+      if (patch.quick_ask_shortcut !== undefined) {
+        setShortcutDraft(updated.quick_ask_shortcut);
+      }
     } catch (e) {
       console.error("Failed to update setting:", e);
     }
+  };
+
+  const shortcutDirty = settings
+    ? shortcutDraft.trim() !== settings.quick_ask_shortcut
+    : false;
+
+  const saveShortcut = async () => {
+    if (!settings || shortcutSaving || !shortcutDirty) return;
+    setShortcutSaving(true);
+    setShortcutError(null);
+    setShortcutSaved(false);
+    try {
+      const updated = await updateDesktopSettings({
+        ...settings,
+        quick_ask_shortcut: shortcutDraft.trim(),
+      });
+      setSettings(updated);
+      setShortcutDraft(updated.quick_ask_shortcut);
+      setShortcutSaved(true);
+      window.setTimeout(() => setShortcutSaved(false), 2400);
+    } catch (e) {
+      setShortcutError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setShortcutSaving(false);
+    }
+  };
+
+  const handleShortcutKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Backspace" || event.key === "Delete") {
+      event.preventDefault();
+      setShortcutDraft("");
+      setShortcutSaved(false);
+      setShortcutError(null);
+      return;
+    }
+    const shortcut = shortcutFromKeyboardEvent(event.nativeEvent);
+    if (!shortcut) return;
+    event.preventDefault();
+    setShortcutDraft(shortcut);
+    setShortcutSaved(false);
+    setShortcutError(null);
   };
 
   const handleOpenInBrowser = async () => {
@@ -2780,6 +2941,48 @@ function DesktopSettings() {
               onChange={(auto_start_gateway) => updateSetting({ auto_start_gateway })}
               label={settings.auto_start_gateway ? tx("settings.values.on", "开") : tx("settings.values.off", "关")}
             />
+          </SettingsRow>
+          <SettingsRow
+            title={tx("settings.desktop.quickAskShortcut", "快问快捷键")}
+            description={tx("settings.desktop.quickAskShortcutHelp", "按下这个快捷键会唤出置顶的 Mona 快问窗口。点输入框后直接按新快捷键即可录入。")}
+          >
+            <div className="flex flex-col items-end gap-1.5">
+              <div className="flex items-center gap-2">
+                <Input
+                  value={shortcutDraft}
+                  onChange={(event) => {
+                    setShortcutDraft(event.target.value);
+                    setShortcutSaved(false);
+                    setShortcutError(null);
+                  }}
+                  onKeyDown={handleShortcutKeyDown}
+                  placeholder="Ctrl+Alt+M"
+                  className="h-8 w-44 rounded-full text-right text-[13px]"
+                />
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={saveShortcut}
+                  disabled={!shortcutDirty || shortcutSaving}
+                  className="rounded-full"
+                >
+                  {shortcutSaving
+                    ? tx("settings.actions.saving", "保存中...")
+                    : tx("settings.actions.save", "保存")}
+                </Button>
+              </div>
+              <div className="max-w-[320px] text-right text-[12px] leading-5 text-muted-foreground">
+                {shortcutError ? (
+                  <span className="text-destructive">{shortcutError}</span>
+                ) : shortcutSaved ? (
+                  <span className="text-blue-600 dark:text-blue-300">
+                    {tx("settings.status.saved", "已保存")}
+                  </span>
+                ) : (
+                  tx("settings.desktop.quickAskShortcutFormat", "建议使用 Ctrl / Alt / Shift 加字母组合。")
+                )}
+              </div>
+            </div>
           </SettingsRow>
         </SettingsGroup>
       </section>

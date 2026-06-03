@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowLeft, Download, Settings } from "lucide-react";
+import { ArrowLeft, Download, Mic, Settings } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { useClient } from "@/providers/ClientProvider";
-import { fetchPptProjects, getApiBase } from "@/lib/api";
+import { fetchPptExportStatus, markPptGenerating, savePptChatId, getApiBase } from "@/lib/api";
+import type { PptProject } from "@/lib/types";
 import { PptConfigPanel } from "./PptConfigPanel";
 import { PptChatPanel } from "./PptChatPanel";
 import { PptPreview } from "./PptPreview";
@@ -15,7 +16,6 @@ export interface PptConfig {
   templateKey: string | null;
   templateKind: "layout" | "deck" | null;
   canvasFormat: string;
-  stylePreference: string;
   sourceFiles: string[];
   topic: string;
 }
@@ -24,7 +24,6 @@ export const DEFAULT_CONFIG: PptConfig = {
   templateKey: null,
   templateKind: null,
   canvasFormat: "ppt169",
-  stylePreference: "",
   sourceFiles: [],
   topic: "",
 };
@@ -41,7 +40,9 @@ export function PptMakerView({ onBack }: PptMakerViewProps) {
   const [projectName, setProjectName] = useState<string | null>(null);
   const [historyKey, setHistoryKey] = useState(0);
   const chatIdRef = useRef<string | null>(null);
-  const knownProjectsRef = useRef<Set<string>>(new Set());
+  const generationStartRef = useRef<number | null>(null);
+  const [timedOut, setTimedOut] = useState(false);
+  const [isStreaming, setIsStreaming] = useState(false);
 
   useEffect(() => {
     chatIdRef.current = chatId;
@@ -57,21 +58,31 @@ export function PptMakerView({ onBack }: PptMakerViewProps) {
   }, [client]);
 
   useEffect(() => {
-    if (phase !== "generating") return;
+    if (phase !== "generating" || !projectName) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout>;
+    setTimedOut(false);
 
     async function poll() {
+      if (cancelled) return;
+
+      if (generationStartRef.current) {
+        const elapsed = Date.now() - generationStartRef.current;
+        if (elapsed > 30 * 60 * 1000) {
+          setTimedOut(true);
+          return;
+        }
+      }
+
       try {
-        const res = await fetchPptProjects(token);
+        const res = await fetchPptExportStatus(token, projectName!);
         if (cancelled) return;
-        for (const p of res.projects) {
-          if (!knownProjectsRef.current.has(p.name)) {
-            knownProjectsRef.current.add(p.name);
-            setProjectName(p.name);
-            setPhase("done");
-            return;
-          }
+        if (res.status === "done" && res.hasExport) {
+          await markPptGenerating(token, projectName!, "finish").catch(() => {});
+          setPhase("done");
+          setHistoryKey((k) => k + 1);
+          generationStartRef.current = null;
+          return;
         }
       } catch {}
       if (!cancelled) {
@@ -79,32 +90,30 @@ export function PptMakerView({ onBack }: PptMakerViewProps) {
       }
     }
 
-    fetchPptProjects(token).then((res) => {
-      if (!cancelled) {
-        for (const p of res.projects) {
-          knownProjectsRef.current.add(p.name);
-        }
-        poll();
-      }
-    });
+    poll();
 
     return () => {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [phase, token]);
+  }, [phase, projectName, token]);
 
   const handleStartGeneration = useCallback(async () => {
     try {
+      const name = generateProjectName();
+      setProjectName(name);
+      const prompt = buildPptPrompt(config, name);
+      markPptGenerating(token, name, "start").catch(() => {});
       const newChatId = await client.newChat(5_000, true);
       setChatId(newChatId);
-      const prompt = buildPptPrompt(config);
+      savePptChatId(token, name, newChatId).catch(() => {});
       client.sendMessage(newChatId, prompt);
       setPhase("generating");
+      generationStartRef.current = Date.now();
     } catch (e) {
       console.error("Failed to start PPT generation", e);
     }
-  }, [client, config]);
+  }, [client, config, token]);
 
   const handleDownload = useCallback(async (name?: string) => {
     const project = name ?? projectName;
@@ -116,11 +125,62 @@ export function PptMakerView({ onBack }: PptMakerViewProps) {
     link.click();
   }, [projectName, token]);
 
-  const handleSelectProject = useCallback((name: string) => {
-    setProjectName(name);
-    setChatId(null);
-    setPhase("done");
+  const handleResume = useCallback(async (name: string, existingChatId?: string | null, hasSpecLock?: boolean) => {
+    try {
+      markPptGenerating(token, name, "start").catch(() => {});
+      setProjectName(name);
+
+      const useResumeExecute = hasSpecLock || !existingChatId;
+      let resumeChatId: string;
+      let prompt: string;
+
+      if (useResumeExecute) {
+        resumeChatId = await client.newChat(5_000, true);
+        setChatId(resumeChatId);
+        savePptChatId(token, name, resumeChatId).catch(() => {});
+        prompt = `继续生成 projects/${name}\n\n请先读取 skills/ppt-master/SKILL.md 了解 resume-execute 工作流，然后继续执行。`;
+      } else {
+        resumeChatId = existingChatId!;
+        setChatId(resumeChatId);
+        prompt = `继续生成 PPT 项目 projects/${name}。请检查当前项目状态，从上次中断的地方继续执行。不要重新开始已完成的步骤。`;
+      }
+
+      client.sendMessage(resumeChatId, prompt);
+      setPhase("generating");
+      generationStartRef.current = Date.now();
+    } catch (e) {
+      console.error("Failed to resume PPT generation", e);
+    }
+  }, [client, token]);
+
+  const handleGenerateAudio = useCallback(async () => {
+    if (!projectName || !chatId) return;
+    try {
+      markPptGenerating(token, projectName, "start").catch(() => {});
+      client.sendMessage(
+        chatId,
+        `请为当前 PPT 项目生成配音旁白。使用 Edge TTS 默认语音，生成后重新导出带配音的 PPTX。`,
+      );
+      setPhase("generating");
+      generationStartRef.current = Date.now();
+    } catch (e) {
+      console.error("Failed to start TTS generation", e);
+    }
+  }, [client, chatId, projectName, token]);
+
+  const handleSelectProject = useCallback((project: PptProject) => {
+    setProjectName(project.name);
+    setChatId(project.chatId);
+    setPhase(project.status === "done" || project.hasExport ? "done" : "generating");
   }, []);
+
+  const handleDeleteProject = useCallback((name: string) => {
+    if (name === projectName) {
+      setPhase("config");
+      setChatId(null);
+      setProjectName(null);
+    };
+  }, [projectName]);
 
   const handleNewProject = useCallback(() => {
     setPhase("config");
@@ -139,6 +199,11 @@ export function PptMakerView({ onBack }: PptMakerViewProps) {
           <h1 className="text-[14px] font-semibold">PPT 制作</h1>
         </div>
         <div className="flex items-center gap-1">
+          {timedOut && phase === "generating" && (
+            <span className="text-[11px] text-amber-600 dark:text-amber-400">
+              生成超时，请检查聊天面板
+            </span>
+          )}
           {phase === "done" && projectName && (
             <Button
               variant="ghost"
@@ -148,6 +213,17 @@ export function PptMakerView({ onBack }: PptMakerViewProps) {
             >
               <Download className="h-3.5 w-3.5" />
               下载 PPTX
+            </Button>
+          )}
+          {phase === "done" && projectName && chatId && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleGenerateAudio}
+              className="h-7 gap-1.5 rounded-lg text-[12px] text-muted-foreground"
+            >
+              <Mic className="h-3.5 w-3.5" />
+              生成配音
             </Button>
           )}
           {phase === "done" && (
@@ -168,19 +244,19 @@ export function PptMakerView({ onBack }: PptMakerViewProps) {
 
       <div className="flex min-h-0 flex-1">
         <aside className="flex w-[320px] shrink-0 flex-col border-r border-border/70">
-          <div className="min-h-0 flex-1 overflow-y-auto">
-            <PptConfigPanel
-              config={config}
-              setConfig={setConfig}
-              phase={phase}
-              onStart={handleStartGeneration}
-            />
-          </div>
-          <div className="shrink-0 border-t border-border/70">
+          <PptConfigPanel
+            config={config}
+            setConfig={setConfig}
+            phase={phase}
+            onStart={handleStartGeneration}
+          />
+          <div className="min-h-0 flex-1 overflow-y-auto border-t border-border/70">
             <PptHistory
               key={historyKey}
               onSelect={handleSelectProject}
               onDownload={handleDownload}
+              onResume={handleResume}
+              onDelete={handleDeleteProject}
             />
           </div>
         </aside>
@@ -193,10 +269,10 @@ export function PptMakerView({ onBack }: PptMakerViewProps) {
           ) : (
             <div className="flex min-h-0 flex-1 flex-col">
               <div className="min-h-0 flex-1">
-                <PptPreview projectName={projectName} />
+                <PptPreview projectName={projectName} isStreaming={isStreaming} />
               </div>
-              <div className="shrink-0 h-[240px] border-t border-border/70">
-                <PptChatPanel chatId={chatId} />
+              <div className="shrink-0 h-[320px] border-t border-border/70">
+                <PptChatPanel chatId={chatId} onStreamingChange={setIsStreaming} />
               </div>
             </div>
           )}
@@ -206,17 +282,34 @@ export function PptMakerView({ onBack }: PptMakerViewProps) {
   );
 }
 
-function buildPptPrompt(config: PptConfig): string {
+function generateProjectName(): string {
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const ts = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}`;
+  const rand = Math.random().toString(36).slice(2, 6);
+  return `ppt-${ts}-${rand}`;
+}
+
+function buildPptPrompt(config: PptConfig, projectName: string): string {
   const parts: string[] = [];
-  parts.push("请制作一份 PPT。");
+  const hasPptxSource = config.sourceFiles.some((f) =>
+    f.toLowerCase().endsWith(".pptx"),
+  );
+
+  if (hasPptxSource) {
+    parts.push("请将现有 PPT 转换为网页版 PPT，保留原有内容和设计意图。");
+  } else {
+    parts.push("请制作一份 PPT。");
+  }
+
+  parts.push(`项目名使用：${projectName}`);
   if (config.templateKey && config.templateKind) {
     const kindLabel = config.templateKind === "deck" ? "品牌套件" : "布局模板";
     const subdir = config.templateKind === "deck" ? "decks" : "layouts";
     parts.push(`使用模板：${kindLabel} ${config.templateKey}（路径：scripts/templates_full/${subdir}/${config.templateKey}）`);
   }
-  parts.push(`画布格式：${config.canvasFormat}`);
-  if (config.stylePreference) {
-    parts.push(`风格偏好：${config.stylePreference}`);
+  if (config.canvasFormat && config.canvasFormat !== "ppt169") {
+    parts.push(`画布格式偏好：${config.canvasFormat}（请在八项确认中优先采用此格式）`);
   }
   if (config.sourceFiles.length > 0) {
     const filePaths = config.sourceFiles.map((p) => `  - ${p}`).join("\n");

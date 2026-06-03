@@ -67,7 +67,7 @@ export function MarkdownText({
       fallback={
         <div
           className={cn(
-            "whitespace-pre-wrap break-words leading-relaxed text-foreground/92",
+            "min-w-0 whitespace-pre-wrap break-words leading-relaxed text-foreground/92",
             className,
           )}
         >

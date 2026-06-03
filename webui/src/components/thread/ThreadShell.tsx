@@ -16,7 +16,7 @@ import { useFilePreviewStore } from "@/components/deliver/filePreviewStore";
 import { useMonaStream, type SendImage, type SendOptions } from "@/hooks/useMonaStream";
 import { usePendingQueue } from "@/hooks/usePendingQueue";
 import { useSessionHistory } from "@/hooks/useSessions";
-import { fetchSettings, listSlashCommands, updateSettings } from "@/lib/api";
+import { fetchSettings, fetchZenFreeModels, listSlashCommands, updateSettings } from "@/lib/api";
 import type { ChatSummary, DeliveredFile, SlashCommand, UIMessage } from "@/lib/types";
 import { useWorkspaceStore } from "@/lib/workspace-store";
 import { normalizeLegacyLongTaskMessages } from "@/lib/thread-display-compat";
@@ -121,8 +121,9 @@ export function ThreadShell({
   const [slashCommands, setSlashCommands] = useState<SlashCommand[]>([]);
   const [heroImageMode, setHeroImageMode] = useState(false);
   const [providerOptions, setProviderOptions] = useState<
-    Array<{ name: string; label: string }>
+    Array<{ name: string; label: string; free_default_model?: string | null; model?: string | null }>
   >([]);
+  const [zenFreeModels, setZenFreeModels] = useState<string[]>([]);
   const [scrollToBottomSignal, setScrollToBottomSignal] = useState(0);
   const pendingFirstRef = useRef<PendingFirstMessage | null>(null);
   const consumedQueuedPromptRef = useRef<string | null>(null);
@@ -293,6 +294,8 @@ export function ThreadShell({
             .map((p) => ({
               name: p.name,
               label: p.label,
+              free_default_model: p.free_default_model,
+              model: p.model,
             }));
           setProviderOptions(options);
           if (settings.runtime?.workspace_path) {
@@ -308,10 +311,33 @@ export function ThreadShell({
     };
   }, [token, setWorkspacePath]);
 
+  useEffect(() => {
+    if (providerOptions.length === 0 || zenFreeModels.length > 0 || !token) return;
+    const hasZen = providerOptions.some((opt) => opt.free_default_model);
+    if (!hasZen) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const result = await fetchZenFreeModels(token);
+        if (!cancelled) setZenFreeModels(result.models);
+      } catch (e) {
+        console.error("Failed to fetch Zen free models:", e);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [providerOptions, token]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const handleModelSwitch = useCallback(
     async (provider: string, model: string) => {
       try {
-        const payload = await updateSettings(token, { provider, model: model || undefined });
+        const payload = await updateSettings(token, {
+          modelPreset: "default",
+          provider,
+          model: model || undefined,
+          providerModel: model || undefined,
+        });
         const newModel = payload.agent.model || null;
         onModelNameChange?.(newModel);
       } catch {
@@ -416,6 +442,7 @@ export function ThreadShell({
           placeholder={composerPlaceholder}
           modelLabel={toModelBadgeLabel(modelName)}
           modelOptions={providerOptions}
+          zenFreeModels={zenFreeModels}
           onModelSwitch={handleModelSwitch}
           variant={showHeroComposer ? "hero" : "thread"}
           slashCommands={slashCommands}
@@ -438,6 +465,7 @@ export function ThreadShell({
           placeholder={openingPlaceholder}
           modelLabel={toModelBadgeLabel(modelName)}
           modelOptions={providerOptions}
+          zenFreeModels={zenFreeModels}
           onModelSwitch={handleModelSwitch}
           variant="hero"
           slashCommands={slashCommands}

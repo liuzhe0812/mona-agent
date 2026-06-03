@@ -42,6 +42,7 @@ export interface DesktopAppSettings {
   run_in_background: boolean;
   auto_start_gateway: boolean;
   gateway_port: number;
+  quick_ask_shortcut: string;
   config_path: string | null;
 }
 
@@ -100,10 +101,48 @@ export async function exportNoteTempFile(noteId: string, content: string): Promi
   return invoke<string>("notes_export_temp", { noteId, content });
 }
 
+export async function createNoteFromChat(
+  title: string,
+  contentMarkdown: string,
+  notebookId?: string,
+): Promise<string> {
+  return invoke<string>("notes_create_from_chat", {
+    title,
+    contentMarkdown,
+    notebookId: notebookId ?? null,
+  });
+}
+
 export async function openPathWithSystemApp(path: string): Promise<void> {
   if (!isTauri()) return;
-  const { openPath } = await import("@tauri-apps/plugin-opener");
-  await openPath(path);
+  try {
+    const { openPath } = await import("@tauri-apps/plugin-opener");
+    await openPath(path);
+  } catch (err) {
+    console.warn("[tauri] opener.openPath failed, falling back to shell.open:", err);
+    try {
+      const { open } = await import("@tauri-apps/plugin-shell");
+      await open(path);
+    } catch (err2) {
+      console.error("[tauri] shell.open also failed:", err2);
+    }
+  }
+}
+
+export async function quickAskHide(): Promise<void> {
+  return invoke<void>("quick_ask_hide");
+}
+
+export async function quickAskFocusChat(chatId: string): Promise<void> {
+  return invoke<void>("quick_ask_focus_chat", { chatId });
+}
+
+export async function quickAskOpenNote(): Promise<void> {
+  return invoke<void>("quick_ask_open_note");
+}
+
+export async function quickAskOpenSsh(): Promise<void> {
+  return invoke<void>("quick_ask_open_ssh");
 }
 
 export async function revealItemInDir(path: string): Promise<void> {

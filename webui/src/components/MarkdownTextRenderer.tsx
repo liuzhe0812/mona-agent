@@ -9,6 +9,7 @@ import remarkMath from "remark-math";
 import { CodeBlock } from "@/components/CodeBlock";
 import { FileReferenceChip, isLikelyFilePath } from "@/components/FileReferenceChip";
 import { isTauri, openPathWithSystemApp, revealItemInDir } from "@/lib/tauri";
+import { useWorkspaceStore, resolveToAbsolutePath } from "@/lib/workspace-store";
 import { cn } from "@/lib/utils";
 
 import "katex/dist/katex.min.css";
@@ -122,7 +123,7 @@ export default function MarkdownTextRenderer({
   return (
     <div
       className={cn(
-        "markdown-content prose max-w-none dark:prose-invert",
+        "markdown-content prose min-w-0 max-w-none dark:prose-invert break-words",
         "prose-headings:mt-4 prose-headings:mb-2 prose-headings:font-semibold prose-headings:tracking-tight",
         "prose-h1:text-lg prose-h2:text-base prose-h3:text-sm prose-h4:text-[13px]",
         "prose-p:my-2",
@@ -150,15 +151,17 @@ export default function MarkdownTextRenderer({
 }
 
 function FileLink({ href, children }: { href: string; children: React.ReactNode }) {
+  const workspacePath = useWorkspaceStore((s) => s.workspacePath);
+  const absPath = resolveToAbsolutePath(href, workspacePath);
   const handleClick = (e: React.MouseEvent) => {
     if (!isTauri()) return;
     e.preventDefault();
-    void openPathWithSystemApp(href);
+    void openPathWithSystemApp(absPath);
   };
   const handleContextMenu = (e: React.MouseEvent) => {
     if (!isTauri()) return;
     e.preventDefault();
-    void revealItemInDir(href);
+    void revealItemInDir(absPath);
   };
   return (
     <span
@@ -167,7 +170,7 @@ function FileLink({ href, children }: { href: string; children: React.ReactNode 
       onClick={handleClick}
       onContextMenu={handleContextMenu}
       className="cursor-pointer text-primary underline underline-offset-2 hover:opacity-80"
-      title={isTauri() ? `${href} · 点击打开，右键在文件夹中显示` : href}
+      title={isTauri() ? `${absPath} · 点击打开，右键在文件夹中显示` : absPath}
     >
       {children}
     </span>

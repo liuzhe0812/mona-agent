@@ -7,6 +7,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { isTauri, openPathWithSystemApp, revealItemInDir } from "@/lib/tauri";
+import { useWorkspaceStore, resolveToAbsolutePath } from "@/lib/workspace-store";
 import { cn } from "@/lib/utils";
 
 type FileReferenceKind =
@@ -45,7 +46,8 @@ export function FileReferenceChip({
   const kind = fileKindForPath(path);
   const displayText = display === "path" ? path.replace(/\\/g, "/") : name;
   const fullPath = tooltipPath || path;
-  const openTarget = absolutePath || fullPath;
+  const workspacePath = useWorkspaceStore((s) => s.workspacePath);
+  const openTarget = absolutePath || resolveToAbsolutePath(fullPath, workspacePath);
 
   const handleClick = useCallback(() => {
     if (!isTauri()) return;

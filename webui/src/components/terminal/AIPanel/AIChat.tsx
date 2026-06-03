@@ -1,21 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Send, Loader2, Shield, Square, FileText } from "lucide-react";
+import { MessageBubble } from "@/components/MessageBubble";
+import { useMonaStream, type SendOptions } from "@/hooks/useMonaStream";
+import { useSessionHistory } from "@/hooks/useSessions";
 import { useClient } from "@/providers/ClientProvider";
 import { useTerminalStore } from "../store/terminalStore";
 import { isTauri, openPathWithSystemApp } from "@/lib/tauri";
-import type { InboundEvent } from "@/lib/types";
 import type { ActionConfirmResult } from "./ActionConfig";
 
 interface Props {
   sessionId: string | null;
   initialAction?: ActionConfirmResult;
   onInitialMessageSent?: () => void;
-}
-
-interface ChatMessage {
-  role: "user" | "assistant";
-  content: string;
-  label?: string;
 }
 
 interface ReportInfo {
@@ -25,22 +21,18 @@ interface ReportInfo {
 }
 
 export function AIChat({ sessionId, initialAction, onInitialMessageSent }: Props) {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [input, setInput] = useState("");
-  const [isLoading, setIsLoading] = useState(false);
+  const [draft, setDraft] = useState("");
   const [chatId, setChatId] = useState<string | null>(null);
+  const [creatingChat, setCreatingChat] = useState(false);
   const [reports, setReports] = useState<ReportInfo[]>([]);
   const { client } = useClient();
   const registry = useTerminalStore((s) => s.terminalRegistry);
   const execMode = useTerminalStore((s) => s.terminalExecMode);
   const setExecMode = useTerminalStore((s) => s.setTerminalExecMode);
-  const initialActionRef = useRef(initialAction);
+  const pendingPromptRef = useRef<string | null>(null);
+  const pendingSendOptsRef = useRef<SendOptions | null>(null);
   const onInitialMessageSentRef = useRef(onInitialMessageSent);
   const scrollRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    initialActionRef.current = initialAction;
-  }, [initialAction]);
 
   useEffect(() => {
     onInitialMessageSentRef.current = onInitialMessageSent;
@@ -52,9 +44,7 @@ export function AIChat({ sessionId, initialAction, onInitialMessageSent }: Props
     client.newChat(5_000, true).then((id) => {
       if (!cancelled) setChatId(id);
     }).catch(() => {});
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [client]);
 
   useEffect(() => {
@@ -66,54 +56,41 @@ export function AIChat({ sessionId, initialAction, onInitialMessageSent }: Props
         setReports((prev) => [...prev, event.payload]);
       });
     })();
-    return () => {
-      unlisten?.();
-    };
+    return () => { unlisten?.(); };
   }, []);
 
+  const historyKey = chatId ? `websocket:${chatId}` : null;
+  const {
+    messages: historical,
+    loading,
+    hasPendingToolCalls,
+    version: historyVersion,
+  } = useSessionHistory(historyKey);
+  const {
+    messages,
+    isStreaming,
+    send,
+    stop,
+    setMessages,
+  } = useMonaStream(chatId, historical, hasPendingToolCalls);
+
   useEffect(() => {
-    if (!chatId) return;
-    let buffer = "";
-    const handle = (ev: InboundEvent) => {
-      if (ev.event === "delta") {
-        const chunk = typeof ev.text === "string" ? ev.text : "";
-        if (!chunk) return;
-        buffer += chunk;
-        setMessages((prev) => {
-          const updated = [...prev];
-          const last = updated[updated.length - 1];
-          if (last && last.role === "assistant") {
-            updated[updated.length - 1] = { ...last, content: buffer };
-          } else {
-            updated.push({ role: "assistant", content: buffer });
-          }
-          return updated;
-        });
-        setIsLoading(true);
-        return;
-      }
-      if (ev.event === "stream_end") {
-        buffer = "";
-        return;
-      }
-      if (ev.event === "turn_end") {
-        buffer = "";
-        setIsLoading(false);
-        return;
-      }
-      if (ev.event === "message") {
-        if (ev.kind === "tool_hint" || ev.kind === "progress") return;
-        if (ev.kind === "reasoning") return;
-        const text = ev.text;
-        if (!text) return;
-        setMessages((prev) => [...prev, { role: "assistant", content: text }]);
-        setIsLoading(false);
-        return;
-      }
-    };
-    const unsub = client.onChat(chatId, handle);
-    return unsub;
-  }, [chatId, client]);
+    if (!chatId || loading) return;
+    setMessages((current) => {
+      if (historical.length === 0 && current.length > 0) return current;
+      return historical;
+    });
+  }, [chatId, historical, historyVersion, loading, setMessages]);
+
+  useEffect(() => {
+    if (!chatId || isStreaming || creatingChat) return;
+    const pendingPrompt = pendingPromptRef.current;
+    if (!pendingPrompt) return;
+    const opts = pendingSendOptsRef.current;
+    pendingPromptRef.current = null;
+    pendingSendOptsRef.current = null;
+    send(pendingPrompt, undefined, opts ?? undefined);
+  }, [chatId, creatingChat, isStreaming, send]);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -122,86 +99,70 @@ export function AIChat({ sessionId, initialAction, onInitialMessageSent }: Props
   }, [messages, reports]);
 
   useEffect(() => {
-    const action = initialActionRef.current;
-    if (!action || !chatId) return;
+    const action = initialAction;
+    if (!action || !chatId || isStreaming || creatingChat) return;
     const enriched = enrichWithTerminalContext(action.prompt, sessionId, registry);
-    setMessages((prev) => [
-      ...prev,
-      {
-        role: "user",
-        content: action.label,
-        label: action.label,
-      },
-    ]);
-    setIsLoading(true);
-    client.sendMessage(chatId, enriched, undefined, { terminalSessionId: sessionId ?? undefined, terminalExecMode: execMode });
-    initialActionRef.current = undefined;
+    const sendOpts: SendOptions = {
+      terminalSessionId: sessionId ?? undefined,
+      terminalExecMode: execMode,
+      displayContent: action.label,
+    };
+    if (chatId) {
+      send(enriched, undefined, sendOpts);
+    }
     onInitialMessageSentRef.current?.();
-  }, [chatId, sessionId, registry, client, execMode]);
+  }, [chatId, initialAction, sessionId, registry, execMode, isStreaming, creatingChat, send]);
 
   const handleSend = useCallback(() => {
-    if (!input.trim() || !chatId) return;
-    const text = input.trim();
-    setInput("");
+    if (!draft.trim()) return;
+    const text = draft.trim();
+    setDraft("");
     const enriched = enrichWithTerminalContext(text, sessionId, registry);
-    setMessages((prev) => [...prev, { role: "user", content: text }]);
-    setIsLoading(true);
-    client.sendMessage(chatId, enriched, undefined, { terminalSessionId: sessionId ?? undefined, terminalExecMode: execMode });
-  }, [input, chatId, sessionId, registry, client, execMode]);
-
-  const isLoadingRef = useRef(false);
-  useEffect(() => { isLoadingRef.current = isLoading; }, [isLoading]);
-
-  useEffect(() => {
-    const cid = chatId;
-    const c = client;
-    return () => {
-      if (cid && isLoadingRef.current) {
-        try { c.sendMessage(cid, "/stop"); } catch {}
-      }
-      if (cid && cid.startsWith("ephemeral:")) {
-        try { c.deleteChat(cid); } catch {}
-      }
+    const sendOpts: SendOptions = {
+      terminalSessionId: sessionId ?? undefined,
+      terminalExecMode: execMode,
+      displayContent: text,
     };
-  }, [chatId, client]);
+
+    if (chatId) {
+      send(enriched, undefined, sendOpts);
+      return;
+    }
+
+    setCreatingChat(true);
+    pendingPromptRef.current = enriched;
+    pendingSendOptsRef.current = sendOpts;
+    client.newChat(5_000, true).then((nextChatId) => {
+      setChatId(nextChatId);
+      setCreatingChat(false);
+    }).catch(() => {
+      pendingPromptRef.current = null;
+      pendingSendOptsRef.current = null;
+      setCreatingChat(false);
+    });
+  }, [draft, chatId, sessionId, registry, client, execMode, send]);
 
   const handleStop = useCallback(() => {
-    if (!chatId) return;
-    setIsLoading(false);
-    client.sendMessage(chatId, "/stop");
-  }, [chatId, client]);
+    stop();
+  }, [stop]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      if (!isLoading) handleSend();
+      if (!isStreaming) handleSend();
     }
   };
 
   return (
     <div className="flex h-full flex-col">
-      <div ref={scrollRef} className="flex-1 overflow-auto p-3 space-y-3">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto overflow-x-hidden p-3 space-y-3">
         {messages.length === 0 && reports.length === 0 && (
           <p className="text-center text-xs text-muted-foreground py-8">
             输入问题，AI 将基于终端上下文回答
           </p>
         )}
-        {messages.map((msg, i) => (
-          <div
-            key={i}
-            className={`text-xs leading-relaxed whitespace-pre-wrap break-words ${
-              msg.role === "user"
-                ? "bg-sidebar-accent rounded-lg px-3 py-2 text-foreground w-fit"
-                : "text-muted-foreground"
-            }`}
-          >
-            {msg.role === "user" && msg.label && (
-              <span className="mr-1 inline-flex items-center gap-0.5 rounded bg-foreground/10 px-1.5 py-0.5 text-[10px] font-medium text-foreground/80">
-                {msg.label}
-              </span>
-            )}
-            {msg.content}
-          </div>
+        {messages.map((msg) => (
+          <MessageBubble key={msg.id} message={msg} />
         ))}
         {reports.map((report, i) => (
           <button
@@ -215,7 +176,7 @@ export function AIChat({ sessionId, initialAction, onInitialMessageSent }: Props
             <span className="text-muted-foreground">— 点击查看报告</span>
           </button>
         ))}
-        {isLoading && messages[messages.length - 1]?.role !== "assistant" && (
+        {isStreaming && messages.length > 0 && messages[messages.length - 1].role !== "assistant" && (
           <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
             <Loader2 className="h-3 w-3 animate-spin" />
             <span>思考中...</span>
@@ -236,8 +197,8 @@ export function AIChat({ sessionId, initialAction, onInitialMessageSent }: Props
         </div>
         <div className="flex min-h-[52px] items-end gap-1.5 rounded-xl border border-border/75 bg-background px-2.5 py-1.5 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
           <textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="输入问题，AI 将基于终端上下文回答..."
             className="min-h-[36px] flex-1 resize-none bg-transparent text-[12px] leading-5 outline-none placeholder:text-muted-foreground"
@@ -245,15 +206,15 @@ export function AIChat({ sessionId, initialAction, onInitialMessageSent }: Props
           />
           <button
             type="button"
-            onClick={isLoading ? handleStop : handleSend}
-            disabled={!isLoading && (!input.trim() || !chatId)}
+            onClick={isStreaming ? handleStop : handleSend}
+            disabled={!isStreaming && (!draft.trim() || !chatId)}
             className={`grid h-6 w-6 shrink-0 place-items-center rounded-lg transition-colors ${
-              isLoading
+              isStreaming
                 ? "text-destructive hover:bg-destructive/10"
                 : "bg-foreground text-background hover:bg-foreground/90 disabled:bg-muted disabled:text-muted-foreground"
             }`}
           >
-            {isLoading ? (
+            {isStreaming ? (
               <Square className="h-3 w-3" />
             ) : (
               <Send className="h-3 w-3" />

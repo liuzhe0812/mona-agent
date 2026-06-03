@@ -27,6 +27,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { MessageBubble } from "@/components/MessageBubble";
 import { useMonaStream } from "@/hooks/useMonaStream";
 import { useSessionHistory } from "@/hooks/useSessions";
 import type { UIMessage } from "@/lib/types";
@@ -397,7 +398,7 @@ export function NoteAgentPanel({
         onAction={runAction}
       />
 
-      <div className="min-h-0 flex-1 overflow-y-auto p-3 scrollbar-thin">
+      <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden p-3 scrollbar-thin">
         <AgentChat
           messages={messages}
           loading={loading}
@@ -672,27 +673,37 @@ function AgentChat({
         <InlineNotice onClose={onDismissStreamError}>消息过大或连接异常，请缩短内容后重试。</InlineNotice>
       ) : null}
 
-
-
       {loading ? <AssistantHint text="正在读取这篇笔记的 Agent 会话..." loading /> : null}
 
-      {messages.map((message) => (
-        <ChatBubble
-          key={message.id}
-          message={message}
-          applied={appliedMessageIds.includes(message.id)}
-          autoApplied={autoAppliedMessageIds.has(message.id)}
-          pendingAction={pendingAction}
-          onAppend={onAppend}
-          onReplace={onReplace}
-          onAutoTag={onAutoTag}
-          onCopy={onCopy}
-        />
-      ))}
+      {messages.map((message) => {
+        const isKnowledgeResult =
+          message.role === "assistant" && !message.isStreaming && isKnowledgeJsonCandidate(message.content);
+
+        return (
+          <div key={message.id} className="min-w-0">
+            {isKnowledgeResult ? (
+              <div className="rounded-lg border border-border/65 bg-muted/25 px-2.5 py-2 text-[12px] leading-5 text-muted-foreground">
+                已生成候选知识点，请在弹窗中确认保存。
+              </div>
+            ) : (
+              <MessageBubble message={message} />
+            )}
+            <NoteMessageActions
+              message={message}
+              applied={appliedMessageIds.includes(message.id)}
+              autoApplied={autoAppliedMessageIds.has(message.id)}
+              pendingAction={pendingAction}
+              onAppend={onAppend}
+              onReplace={onReplace}
+              onAutoTag={onAutoTag}
+              onCopy={onCopy}
+            />
+          </div>
+        );
+      })}
 
       {creatingChat ? <AssistantHint text="正在创建笔记专属会话..." loading /> : null}
       {isStreaming ? <AssistantHint text="Agent 正在处理..." loading /> : null}
-
     </div>
   );
 }
@@ -768,7 +779,7 @@ function QuickActionSection({
   );
 }
 
-function ChatBubble({
+function NoteMessageActions({
   message,
   applied,
   autoApplied,
@@ -787,32 +798,13 @@ function ChatBubble({
   onAutoTag: (tags: string[]) => void;
   onCopy: (message: UIMessage) => void;
 }) {
-  if (message.kind === "trace") {
-    const traces = message.traces?.length ? message.traces : message.content ? [message.content] : [];
-    return (
-      <div className="rounded-lg border border-border/65 bg-muted/25 px-2.5 py-2 text-[11px] leading-5 text-muted-foreground">
-        <div className="font-medium text-foreground/70">Agent 动作</div>
-        {traces.length > 0 ? (
-          <ul className="mt-1 space-y-0.5">
-            {traces.slice(-4).map((trace, index) => (
-              <li key={`${message.id}-${index}`} className="truncate">
-                {trace}
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="mt-1">正在调用工具...</p>
-        )}
-      </div>
-    );
-  }
+  if (message.kind === "trace") return null;
+  if (message.role === "user") return null;
 
-  const isUser = message.role === "user";
-  const isKnowledgeResult = !isUser && isKnowledgeJsonCandidate(message.content);
-  const isAutoTagResult = !isUser && pendingAction === "autoTag";
-  const isAutoApplyResult = !isUser && autoApplied;
+  const isKnowledgeResult = !message.isStreaming && isKnowledgeJsonCandidate(message.content);
+  const isAutoTagResult = pendingAction === "autoTag";
+  const isAutoApplyResult = autoApplied;
   const canApply =
-    !isUser &&
     message.role === "assistant" &&
     !message.isStreaming &&
     message.content.trim().length > 0 &&
@@ -827,62 +819,42 @@ function ChatBubble({
       .filter(Boolean)
       .slice(0, 3);
 
+  if (!canApply && !isAutoApplyResult && !isAutoTagResult) return null;
+
   return (
-    <div>
-      <div
-        className={cn(
-          "whitespace-pre-wrap break-words text-xs leading-relaxed",
-          isUser
-            ? "bg-sidebar-accent rounded-lg px-3 py-2 text-foreground w-fit"
-            : "text-muted-foreground",
-        )}
-      >
-        {message.reasoning ? (
-          <div className="mb-2 rounded-lg border border-border/60 bg-muted/25 px-2 py-1.5 text-[11px] leading-4 text-muted-foreground">
-            <span className="font-medium text-foreground/70">思考</span>
-            <div className="mt-1 line-clamp-4">{message.reasoning}</div>
-          </div>
-        ) : null}
-        {isUser
-          ? (message.displayContent ?? message.content) || (message.isStreaming ? "生成中..." : "")
-          : isKnowledgeResult
-            ? "已生成候选知识点，请在弹窗中确认保存。"
-            : message.content || (message.isStreaming ? "生成中..." : "")}
-        {isAutoApplyResult && !message.isStreaming ? (
-          <div className="mt-2 flex flex-wrap gap-1.5 border-t border-border/40 pt-2">
-            <span className="inline-flex h-7 items-center gap-1 rounded-md border border-[#1f9d7a]/25 bg-[#1f9d7a]/8 px-2 text-[11px] text-[#11745a]">
-              <Check className="h-3.5 w-3.5" />
-              已应用
-            </span>
-            <MiniAction label="复制" onClick={() => onCopy(message)}>
-              <Copy className="h-3.5 w-3.5" />
-            </MiniAction>
-          </div>
-        ) : null}
-        {isAutoTagResult && !message.isStreaming ? (
-          <div className="mt-2 flex flex-wrap gap-1.5 border-t border-border/40 pt-2">
-            <MiniAction
-              label="添加标签"
-              onClick={() => onAutoTag(parseAutoTagContent(message.content))}
-            >
-              <Tags className="h-3.5 w-3.5" />
-            </MiniAction>
-          </div>
-        ) : null}
-        {canApply ? (
-          <div className="mt-2 flex flex-wrap gap-1.5 border-t border-border/40 pt-2">
-            <MiniAction label={applied ? "已追加" : "追加"} disabled={applied} onClick={() => onAppend(message)}>
-              <Clipboard className="h-3.5 w-3.5" />
-            </MiniAction>
-            <MiniAction label="替换" onClick={() => onReplace(message)}>
-              <Replace className="h-3.5 w-3.5" />
-            </MiniAction>
-            <MiniAction label="复制" onClick={() => onCopy(message)}>
-              <Copy className="h-3.5 w-3.5" />
-            </MiniAction>
-          </div>
-        ) : null}
-      </div>
+    <div className="mt-2 flex flex-wrap gap-1.5 border-t border-border/40 pt-2">
+      {isAutoApplyResult ? (
+        <>
+          <span className="inline-flex h-7 items-center gap-1 rounded-md border border-[#1f9d7a]/25 bg-[#1f9d7a]/8 px-2 text-[11px] text-[#11745a]">
+            <Check className="h-3.5 w-3.5" />
+            已应用
+          </span>
+          <MiniAction label="复制" onClick={() => onCopy(message)}>
+            <Copy className="h-3.5 w-3.5" />
+          </MiniAction>
+        </>
+      ) : null}
+      {isAutoTagResult ? (
+        <MiniAction
+          label="添加标签"
+          onClick={() => onAutoTag(parseAutoTagContent(message.content))}
+        >
+          <Tags className="h-3.5 w-3.5" />
+        </MiniAction>
+      ) : null}
+      {canApply ? (
+        <>
+          <MiniAction label={applied ? "已追加" : "追加"} disabled={applied} onClick={() => onAppend(message)}>
+            <Clipboard className="h-3.5 w-3.5" />
+          </MiniAction>
+          <MiniAction label="替换" onClick={() => onReplace(message)}>
+            <Replace className="h-3.5 w-3.5" />
+          </MiniAction>
+          <MiniAction label="复制" onClick={() => onCopy(message)}>
+            <Copy className="h-3.5 w-3.5" />
+          </MiniAction>
+        </>
+      ) : null}
     </div>
   );
 }

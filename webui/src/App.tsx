@@ -2,9 +2,9 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { useTranslation } from "react-i18next";
 import { DeleteConfirm } from "@/components/DeleteConfirm";
 import { RenameChatDialog } from "@/components/RenameChatDialog";
-import { SetupWizard } from "@/components/SetupWizard";
 import { Sidebar } from "@/components/Sidebar";
 import { SessionSearchDialog } from "@/components/SessionSearchDialog";
+import { QuickAskWindow } from "@/components/quick/QuickAskWindow";
 import { SettingsView } from "@/components/settings/SettingsView";
 import { ThreadShell } from "@/components/thread/ThreadShell";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
@@ -22,15 +22,13 @@ import {
   deriveWsUrl,
   fetchBootstrap,
   loadSavedSecret,
-  resetGatewayBaseUrl,
   saveSecret,
 } from "@/lib/bootstrap";
-import { resetApiBase } from "@/lib/api";
 import { deriveTitle } from "@/lib/format";
 import { MonaClient } from "@/lib/mona-client";
 import { ClientProvider, useClient } from "@/providers/ClientProvider";
 import type { ChatSummary } from "@/lib/types";
-import { isTauri, getMonaConfigStatus, getGatewayStatus, startGateway, type MonaConfigStatus } from "@/lib/tauri";
+import { isTauri, getGatewayStatus, startGateway } from "@/lib/tauri";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -38,8 +36,6 @@ type BootState =
   | { status: "loading" }
   | { status: "error"; message: string }
   | { status: "auth"; failed?: boolean }
-  | { status: "setup"; configStatus: MonaConfigStatus }
-  | { status: "no_provider" }
   | {
       status: "ready";
       client: MonaClient;
@@ -55,7 +51,7 @@ const SIDEBAR_WIDTH = 220;
 const SIDEBAR_RAIL_WIDTH = 56;
 const TOKEN_REFRESH_MARGIN_MS = 30_000;
 const TOKEN_REFRESH_MIN_DELAY_MS = 5_000;
-type ShellView = "chat" | "settings" | "note" | "ssh" | "db" | "kb" | "ppt";
+type ShellView = "chat" | "settings" | "note" | "ssh" | "db" | "ppt";
 
 interface QueuedAgentPrompt {
   id: string;
@@ -71,12 +67,6 @@ const NotesView = lazy(() =>
 const DbClientView = lazy(() =>
   import("@/components/db/DbClientView").then((module) => ({
     default: module.DbClientView,
-  })),
-);
-
-const KnowledgeBaseView = lazy(() =>
-  import("@/components/knowledge/KnowledgeBaseView").then((module) => ({
-    default: module.KnowledgeBaseView,
   })),
 );
 
@@ -97,6 +87,10 @@ function tokenRefreshDelayMs(expiresAt: number): number {
     Math.max(1_000, remaining / 2),
   );
   return Math.max(TOKEN_REFRESH_MIN_DELAY_MS, remaining - margin);
+}
+
+function isQuickAskRoute(): boolean {
+  return typeof window !== "undefined" && window.location.hash.startsWith("#/quick-ask");
 }
 
 function AuthForm({
@@ -291,14 +285,6 @@ export default function App() {
     (async () => {
       setState({ status: "loading" });
       try {
-        const configStatus = await getMonaConfigStatus();
-        if (cancelled) return;
-
-        if (!configStatus.has_provider) {
-          setState({ status: "setup", configStatus });
-          return;
-        }
-
         try {
           const gwStatus = await getGatewayStatus();
           if (!gwStatus.running) {
@@ -349,42 +335,6 @@ export default function App() {
       />
     );
   }
-  if (state.status === "setup") {
-    return (
-      <SetupWizard
-        configStatus={state.configStatus}
-        onComplete={() => {
-          resetGatewayBaseUrl();
-          resetApiBase();
-          const saved = loadSavedSecret();
-          bootstrapWithSecret(saved);
-        }}
-        onSkip={() => {
-          setState({ status: "no_provider" });
-        }}
-      />
-    );
-  }
-  if (state.status === "no_provider") {
-    return (
-      <div className="flex h-full w-full items-center justify-center px-4 text-center">
-        <div className="flex max-w-md flex-col items-center gap-4">
-          <div className="text-4xl">🐈</div>
-          <p className="text-lg font-semibold">{t("app.noProvider.title", "Mona is ready")}</p>
-          <p className="text-sm text-muted-foreground">
-            {t("app.noProvider.hint", "Configure an AI provider in Settings to start chatting.")}
-          </p>
-          <Button
-            onClick={() => {
-              setState({ status: "setup", configStatus: { config_exists: false, has_provider: false, provider_name: null } });
-            }}
-          >
-            {t("app.noProvider.setup", "Set up provider")}
-          </Button>
-        </div>
-      </div>
-    );
-  }
   if (state.status === "error") {
     return (
       <div className="flex h-full w-full items-center justify-center px-4 text-center">
@@ -405,15 +355,21 @@ export default function App() {
     );
   };
 
+  const quickAskRoute = isQuickAskRoute();
+
   return (
     <ClientProvider
       client={state.client}
       token={state.token}
       modelName={state.modelName}
     >
-      <LicenseProvider>
-        <Shell onModelNameChange={handleModelNameChange} />
-      </LicenseProvider>
+      {quickAskRoute ? (
+        <QuickAskWindow />
+      ) : (
+        <LicenseProvider>
+          <Shell onModelNameChange={handleModelNameChange} />
+        </LicenseProvider>
+      )}
     </ClientProvider>
   );
 }
@@ -479,7 +435,22 @@ function Shell({
 
   const activeSession = useMemo<ChatSummary | null>(() => {
     if (!activeKey) return null;
-    return sessions.find((s) => s.key === activeKey) ?? null;
+    const existing = sessions.find((s) => s.key === activeKey);
+    if (existing) return existing;
+    const quickChatId = activeKey.startsWith("websocket:")
+      ? activeKey.slice("websocket:".length)
+      : "";
+    if (!quickChatId) return null;
+    const now = new Date().toISOString();
+    return {
+      key: activeKey,
+      channel: "websocket",
+      chatId: quickChatId,
+      createdAt: now,
+      updatedAt: now,
+      title: "",
+      preview: "",
+    };
   }, [sessions, activeKey]);
   const runningChatIdList = useMemo(() => Array.from(runningChatIds), [runningChatIds]);
   const completedChatIdList = useMemo(() => Array.from(completedChatIds), [completedChatIds]);
@@ -575,11 +546,6 @@ function Shell({
 
   const onOpenDb = useCallback(() => {
     setView("db");
-    setMobileSidebarOpen(false);
-  }, []);
-
-  const onOpenKb = useCallback(() => {
-    setView("kb");
     setMobileSidebarOpen(false);
   }, []);
 
@@ -761,6 +727,41 @@ function Shell({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [onOpenSessionSearch]);
 
+  useEffect(() => {
+    if (!isTauri()) return;
+    let cancelled = false;
+    const unlisteners: (() => void)[] = [];
+    (async () => {
+      const { listen } = await import("@tauri-apps/api/event");
+      const un1 = await listen("tray-new-note", () => {
+        onOpenNote();
+      });
+      const un2 = await listen("tray-new-ssh", () => {
+        onOpenSSHAndNew();
+      });
+      const un3 = await listen("quick-open-chat", (event) => {
+        const payload = event.payload as { chatId?: string } | undefined;
+        const chatId = payload?.chatId;
+        if (!chatId) return;
+        setActiveKey(`websocket:${chatId}`);
+        setView("chat");
+        setMobileSidebarOpen(false);
+        void refresh();
+      });
+      if (cancelled) {
+        un1();
+        un2();
+        un3();
+        return;
+      }
+      unlisteners.push(un1, un2, un3);
+    })();
+    return () => {
+      cancelled = true;
+      unlisteners.forEach((fn) => fn());
+    };
+  }, [onOpenNote, onOpenSSHAndNew, refresh]);
+
   const onSelectSearchResult = useCallback(
     (key: string) => {
       setSessionSearchOpen(false);
@@ -915,7 +916,6 @@ function Shell({
     onOpenPpt,
     onOpenSSH,
     onOpenDb,
-    onOpenKb,
     onToggleArchived,
     onUpdateView: onUpdateSidebarView,
     pinnedKeys: sidebarState.pinned_keys,
@@ -996,7 +996,7 @@ function Shell({
               <div
                 className={cn(
                   "absolute inset-0 flex flex-col",
-                  (view === "settings" || view === "note" || view === "ssh" || view === "db" || view === "kb" || view === "ppt") &&
+                  (view === "settings" || view === "note" || view === "ssh" || view === "db" || view === "ppt") &&
                     "invisible pointer-events-none",
                 )}
               >
@@ -1051,18 +1051,11 @@ function Shell({
                   </Suspense>
                 </div>
               )}
-              <div className={`absolute inset-0 flex flex-col${view === "kb" ? "" : " hidden"}`}>
-                <Suspense fallback={<ModuleLoading title="正在打开知识库" />}>
-                  <KnowledgeBaseView onBack={onBackToChat} />
+              <div className={`absolute inset-0 flex flex-col${view === "ppt" ? "" : " hidden"}`}>
+                <Suspense fallback={<ModuleLoading title="正在打开 PPT 制作" />}>
+                  <PptMakerView onBack={onBackToChat} />
                 </Suspense>
               </div>
-              {view === "ppt" && (
-                <div className="absolute inset-0 flex flex-col">
-                  <Suspense fallback={<ModuleLoading title="正在打开 PPT 制作" />}>
-                    <PptMakerView onBack={onBackToChat} />
-                  </Suspense>
-                </div>
-              )}
             </main>
           </div>
         </div>

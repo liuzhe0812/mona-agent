@@ -20,7 +20,7 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { Copy, ClipboardPaste, Download } from "lucide-react";
+import { Copy, ClipboardPaste, Download, Notebook } from "lucide-react";
 
 interface Props {
   sessionId: string;
@@ -261,9 +261,9 @@ export function XtermTerminal({ sessionId }: Props) {
     } catch {}
   }, []);
 
-  const handleExportLog = useCallback(async () => {
+  const getTerminalContent = useCallback((): string => {
     const terminal = terminalRef.current;
-    if (!terminal) return;
+    if (!terminal) return "";
     const buffer = terminal.buffer.active;
     const lines: string[] = [];
     for (let i = 0; i < buffer.length; i++) {
@@ -272,7 +272,12 @@ export function XtermTerminal({ sessionId }: Props) {
         lines.push(line.translateToString(true));
       }
     }
-    const content = lines.join("\n");
+    return lines.join("\n");
+  }, []);
+
+  const handleExportLog = useCallback(async () => {
+    const content = getTerminalContent();
+    if (!content) return;
     try {
       const { save } = await import("@tauri-apps/plugin-dialog");
       const savePath = await save({
@@ -284,7 +289,29 @@ export function XtermTerminal({ sessionId }: Props) {
       const { writeTextFile } = await import("@tauri-apps/plugin-fs");
       await writeTextFile(savePath as `${string}/${string}`, content);
     } catch {}
-  }, []);
+  }, [getTerminalContent]);
+
+  const handleExportToNote = useCallback(async () => {
+    const content = getTerminalContent();
+    if (!content) return;
+    try {
+      const { loadNotesState, saveNotesState, createBlankNote } = await import(
+        "@/components/notes/notes-storage"
+      );
+      const state = await loadNotesState();
+      let notebookId = state.notebooks[0]?.id;
+      if (!notebookId) return;
+      const note = createBlankNote(notebookId, "ssh");
+      const preview = content.split("\n").filter((l) => l.trim()).slice(-1)[0]?.slice(0, 60) ?? "终端记录";
+      note.title = `终端记录 ${new Date().toLocaleString("zh-CN")}`;
+      note.preview = preview;
+      note.contentMarkdown = `## 终端记录\n\n\`\`\`bash\n${content}\n\`\`\`\n`;
+      state.notes.unshift(note);
+      state.activeNoteId = note.id;
+      state.activeNotebookId = notebookId;
+      await saveNotesState(state);
+    } catch {}
+  }, [getTerminalContent]);
 
   const handleReconnect = async () => {
     const session = sessions.find((s) => s.id === sessionId);
@@ -339,6 +366,9 @@ export function XtermTerminal({ sessionId }: Props) {
         <ContextMenuSeparator />
         <ContextMenuItem onClick={handleExportLog}>
           <Download className="mr-2 h-3.5 w-3.5" /> 导出记录
+        </ContextMenuItem>
+        <ContextMenuItem onClick={handleExportToNote}>
+          <Notebook className="mr-2 h-3.5 w-3.5" /> 导出到笔记
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
