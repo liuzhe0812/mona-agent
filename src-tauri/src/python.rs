@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use crate::settings::app_data_dir;
 
 const PYTHON_VERSION_MARKER: &str = ".mona-python-version";
-const PYTHON_VERSION: &str = "3.12";
+const PYTHON_VERSION: &str = "3.12.13";
 
 pub fn python_dir() -> PathBuf {
     app_data_dir().join("python")
@@ -46,7 +46,6 @@ pub fn initialize_python() -> Result<(), String> {
 
     let resource_tar = find_python_resource()?;
     extract_python(&resource_tar, &dir)?;
-    install_mona()?;
 
     fs::write(version_marker_path(), PYTHON_VERSION)
         .map_err(|e| format!("Failed to write version marker: {}", e))?;
@@ -82,29 +81,6 @@ fn extract_python(tar_path: &PathBuf, dest: &PathBuf) -> Result<(), String> {
     archive.unpack(dest).map_err(|e| format!("Failed to extract: {}", e))?;
 
     log::info!("Python extraction complete");
-    Ok(())
-}
-
-fn install_mona() -> Result<(), String> {
-    let python = python_executable();
-    if !python.exists() {
-        return Err(format!("Python executable not found at {:?}", python));
-    }
-
-    log::info!("Installing mona-ai...");
-
-    let status = std::process::Command::new(&python)
-        .args(["-m", "pip", "install", "mona-ai[api]", "--quiet"])
-        .env("PIP_NO_CACHE_DIR", "1")
-        .env("PIP_DISABLE_PIP_VERSION_CHECK", "1")
-        .status()
-        .map_err(|e| format!("Failed to run pip install: {}", e))?;
-
-    if !status.success() {
-        return Err("pip install mona-ai failed".to_string());
-    }
-
-    log::info!("mona-ai installed successfully");
     Ok(())
 }
 

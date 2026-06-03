@@ -12,6 +12,8 @@ pub struct AppSettings {
     pub auto_start_gateway: bool,
     #[serde(default = "default_gateway_port")]
     pub gateway_port: u16,
+    #[serde(default = "default_quick_ask_shortcut")]
+    pub quick_ask_shortcut: String,
     #[serde(default)]
     pub config_path: Option<String>,
 }
@@ -25,6 +27,9 @@ fn default_auto_start_gateway() -> bool {
 fn default_gateway_port() -> u16 {
     17173
 }
+fn default_quick_ask_shortcut() -> String {
+    crate::quick_ask::DEFAULT_QUICK_ASK_SHORTCUT.to_string()
+}
 
 impl Default for AppSettings {
     fn default() -> Self {
@@ -32,6 +37,7 @@ impl Default for AppSettings {
             run_in_background: default_run_in_background(),
             auto_start_gateway: default_auto_start_gateway(),
             gateway_port: default_gateway_port(),
+            quick_ask_shortcut: default_quick_ask_shortcut(),
             config_path: None,
         }
     }

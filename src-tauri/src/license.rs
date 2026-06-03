@@ -4,6 +4,9 @@ use std::path::PathBuf;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
 const LICENSE_FILENAME: &str = "license.jwt";
 const TRIAL_DAYS: i64 = 31;
 
@@ -274,6 +277,7 @@ fn get_cpu_info() -> String {
     {
         let output = std::process::Command::new("cmd")
             .args(["/c", "wmic cpu get ProcessorId"])
+            .creation_flags(0x08000000)
             .output();
         match output {
             Ok(out) => {
@@ -316,6 +320,7 @@ fn get_disk_serial() -> String {
     {
         let output = std::process::Command::new("cmd")
             .args(["/c", "wmic diskdrive get serialnumber"])
+            .creation_flags(0x08000000)
             .output();
         match output {
             Ok(out) => {

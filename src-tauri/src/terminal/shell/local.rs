@@ -65,8 +65,11 @@ fn detect_shell() -> (&'static str, bool) {
 
 fn which_exists(cmd: &str) -> bool {
     if cfg!(windows) {
+        #[cfg(windows)]
+        use std::os::windows::process::CommandExt;
         std::process::Command::new("where")
             .arg(cmd)
+            .creation_flags(0x08000000)
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false)

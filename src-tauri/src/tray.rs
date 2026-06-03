@@ -1,16 +1,20 @@
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    App, Manager,
+    App, Emitter, Manager,
 };
 
 pub fn setup_tray(app: &App) -> Result<(), Box<dyn std::error::Error>> {
+    let new_note_item = MenuItem::with_id(app, "new_note", "新建笔记", true, None::<&str>)?;
+    let new_ssh_item =
+        MenuItem::with_id(app, "new_ssh", "新建 SSH 会话", true, None::<&str>)?;
     let show_item = MenuItem::with_id(app, "show", "显示窗口", true, None::<&str>)?;
-    let open_browser_item =
-        MenuItem::with_id(app, "open_browser", "在浏览器中打开", true, None::<&str>)?;
     let quit_item = MenuItem::with_id(app, "quit", "退出 Mona", true, None::<&str>)?;
 
-    let menu = Menu::with_items(app, &[&show_item, &open_browser_item, &quit_item])?;
+    let menu = Menu::with_items(
+        app,
+        &[&new_note_item, &new_ssh_item, &show_item, &quit_item],
+    )?;
 
     TrayIconBuilder::new()
         .icon(app.default_window_icon().unwrap().clone())
@@ -18,18 +22,24 @@ pub fn setup_tray(app: &App) -> Result<(), Box<dyn std::error::Error>> {
         .show_menu_on_left_click(false)
         .tooltip("Mona")
         .on_menu_event(move |app, event| match event.id.as_ref() {
-            "show" => {
+            "new_note" => {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.show();
                     let _ = window.set_focus();
                 }
+                let _ = app.emit("tray-new-note", ());
             }
-            "open_browser" => {
-                if let Some(gateway) = app.try_state::<crate::GatewayState>() {
-                    if let Some(port) = gateway.port() {
-                        let url = format!("http://127.0.0.1:{}", port);
-                        let _ = open::that(&url);
-                    }
+            "new_ssh" => {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+                let _ = app.emit("tray-new-ssh", ());
+            }
+            "show" => {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
                 }
             }
             "quit" => {
@@ -57,24 +67,4 @@ pub fn setup_tray(app: &App) -> Result<(), Box<dyn std::error::Error>> {
         .build(app)?;
 
     Ok(())
-}
-
-mod open {
-    pub fn that(url: &str) -> std::io::Result<()> {
-        #[cfg(windows)]
-        {
-            std::process::Command::new("cmd")
-                .args(["/c", "start", url])
-                .spawn()?;
-        }
-        #[cfg(target_os = "macos")]
-        {
-            std::process::Command::new("open").arg(url).spawn()?;
-        }
-        #[cfg(target_os = "linux")]
-        {
-            std::process::Command::new("xdg-open").arg(url).spawn()?;
-        }
-        Ok(())
-    }
 }

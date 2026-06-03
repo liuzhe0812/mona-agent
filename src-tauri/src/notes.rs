@@ -855,6 +855,72 @@ impl PathExt for PathBuf {
 }
 
 #[tauri::command]
+pub async fn notes_create_from_chat(
+    title: String,
+    content_markdown: String,
+    notebook_id: Option<String>,
+) -> Result<String, String> {
+    let conn = open_notes_db()?;
+
+    let target_notebook_id = match notebook_id {
+        Some(id) => {
+            let exists: bool = conn
+                .query_row(
+                    "SELECT COUNT(*) > 0 FROM notebooks WHERE id = ?1",
+                    params![&id],
+                    |row| row.get(0),
+                )
+                .map_err(|e| format!("Failed to check notebook: {}", e))?;
+            if !exists {
+                return Err(format!("Notebook not found: {}", id));
+            }
+            id
+        }
+        None => conn
+            .query_row(
+                "SELECT id FROM notebooks ORDER BY created_at ASC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("Failed to find default notebook: {}", e))?,
+    };
+
+    let note_id = format!("note-{}", uuid::Uuid::new_v4());
+    let now = chrono::Utc::now().to_rfc3339();
+    let preview: String = content_markdown
+        .chars()
+        .take(120)
+        .collect::<String>()
+        .lines()
+        .next()
+        .unwrap_or("")
+        .to_string();
+
+    conn.execute(
+        "INSERT INTO notes (
+            id, notebook_id, title, preview, updated_at_label, source_kind, source_label,
+            tags_json, content_markdown, content_json, plain_text, agent_chat_id,
+            applied_agent_message_ids_json, created_at, modified_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, NULL, NULL, '[]', ?10, ?10)",
+        params![
+            &note_id,
+            &target_notebook_id,
+            &title,
+            &preview,
+            "刚刚",
+            "agent",
+            "聊天保存",
+            "[]",
+            &content_markdown,
+            &now,
+        ],
+    )
+    .map_err(|e| format!("Failed to create note from chat: {}", e))?;
+
+    Ok(note_id)
+}
+
+#[tauri::command]
 pub async fn notes_export_temp(note_id: String, content: String) -> Result<String, String> {
     let workspace = read_workspace_path_from_config();
     let tmp_dir = workspace.join(".mona").join("tmp").join("notes");

@@ -1,7 +1,7 @@
 {
   "identifier": "default",
   "description": "Capability for the main window",
-  "windows": ["main"],
+  "windows": ["main", "quick-ask", "md-reader-*"],
   "permissions": [
     "core:default",
     "core:window:default",
@@ -11,17 +11,40 @@
     "core:window:allow-start-dragging",
     "core:window:allow-show",
     "core:window:allow-hide",
-    "shell:allow-open",
+    {
+      "identifier": "shell:allow-open",
+      "allow": [
+        { "path": "$HOME/**" },
+        { "path": "$DESKTOP/**" },
+        { "path": "$DOCUMENT/**" },
+        { "path": "$DOWNLOAD/**" },
+        { "path": "$APPDATA/**" },
+        { "path": "$LOCALAPPDATA/**" },
+        { "path": "$TEMP/**" }
+      ]
+    },
     "shell:allow-execute",
     "shell:allow-spawn",
     "shell:allow-stdin-write",
     "shell:allow-kill",
     "dialog:default",
     "opener:default",
-    "opener:allow-open-path",
     "opener:allow-reveal-item-in-dir",
+    {
+      "identifier": "opener:allow-open-path",
+      "allow": [
+        { "path": "$HOME/**" },
+        { "path": "$DESKTOP/**" },
+        { "path": "$DOCUMENT/**" },
+        { "path": "$DOWNLOAD/**" },
+        { "path": "$APPDATA/**" },
+        { "path": "$LOCALAPPDATA/**" },
+        { "path": "$TEMP/**" }
+      ]
+    },
     "fs:default",
     "fs:allow-read-file",
+    "fs:allow-read-text-file",
     "fs:allow-write-file",
     "fs:allow-write-text-file",
     "fs:allow-mkdir",

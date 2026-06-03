@@ -73,6 +73,12 @@ impl GatewayManager {
             );
         }
 
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000);
+        }
+
         let child = cmd
             .spawn()
             .map_err(|e| format!("Failed to start gateway: {}", e))?;
@@ -95,9 +101,11 @@ impl GatewayManager {
                 #[cfg(windows)]
                 {
                     let pid = child.id();
-                    let _ = std::process::Command::new("taskkill")
-                        .args(["/PID", &pid.to_string(), "/T", "/F"])
-                        .status();
+                    let mut kill_cmd = std::process::Command::new("taskkill");
+                    kill_cmd.args(["/PID", &pid.to_string(), "/T", "/F"]);
+                    use std::os::windows::process::CommandExt;
+                    kill_cmd.creation_flags(0x08000000);
+                    let _ = kill_cmd.status();
                 }
                 #[cfg(not(windows))]
                 {

@@ -4,6 +4,7 @@ mod ipc_bridge;
 mod license;
 mod notes;
 mod python;
+mod quick_ask;
 mod settings;
 mod terminal;
 mod tray;
@@ -15,6 +16,7 @@ use tauri::Listener;
 use tauri::Manager;
 use tauri::WebviewUrl;
 use tauri::WebviewWindowBuilder;
+use tauri_plugin_global_shortcut::ShortcutState;
 
 #[derive(Clone)]
 pub struct GatewayState {
@@ -63,7 +65,16 @@ async fn get_settings() -> Result<AppSettings, String> {
 }
 
 #[tauri::command]
-async fn update_settings(new_settings: AppSettings) -> Result<AppSettings, String> {
+async fn update_settings(
+    app: tauri::AppHandle,
+    shortcut_state: tauri::State<'_, quick_ask::QuickAskShortcutState>,
+    new_settings: AppSettings,
+) -> Result<AppSettings, String> {
+    quick_ask::register_quick_ask_shortcut(
+        &app,
+        shortcut_state.inner(),
+        &new_settings.quick_ask_shortcut,
+    )?;
     settings::save_settings(&new_settings)?;
     Ok(settings::load_settings())
 }
@@ -115,8 +126,10 @@ mod open {
     pub fn that(url: &str) -> std::io::Result<()> {
         #[cfg(windows)]
         {
+            use std::os::windows::process::CommandExt;
             std::process::Command::new("cmd")
-                .args(["/c", "start", url])
+                .args(["/c", "start", "", url])
+                .creation_flags(0x08000000)
                 .spawn()?;
         }
         #[cfg(target_os = "macos")]
@@ -191,9 +204,19 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_http::init())
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, _shortcut, event| {
+                    if event.state() == ShortcutState::Pressed {
+                        quick_ask::toggle_quick_ask(app);
+                    }
+                })
+                .build(),
+        )
         .manage(gateway_state.clone())
         .manage(terminal_state)
         .manage(db_state)
+        .manage(quick_ask::QuickAskShortcutState::default())
         .invoke_handler(tauri::generate_handler![
             get_settings,
             update_settings,
@@ -206,9 +229,15 @@ pub fn run() {
             mona_config_status,
             write_mona_provider_config,
             write_mona_model_config,
+            quick_ask::quick_ask_hide,
+            quick_ask::quick_ask_show,
+            quick_ask::quick_ask_focus_chat,
+            quick_ask::quick_ask_open_note,
+            quick_ask::quick_ask_open_ssh,
             notes::notes_load_state,
             notes::notes_save_state,
             notes::notes_export_temp,
+            notes::notes_create_from_chat,
             terminal::commands::ssh_connect,
             terminal::commands::ssh_connect_with_id,
             terminal::commands::ssh_disconnect,
@@ -322,6 +351,14 @@ pub fn run() {
             }
 
             let settings = settings::load_settings();
+            let shortcut_state = app.state::<quick_ask::QuickAskShortcutState>();
+            if let Err(e) = quick_ask::register_quick_ask_shortcut(
+                app.handle(),
+                shortcut_state.inner(),
+                &settings.quick_ask_shortcut,
+            ) {
+                log::error!("Failed to register quick ask shortcut: {}", e);
+            }
 
             if settings.auto_start_gateway {
                 let config_status = settings::check_mona_config();
