@@ -47,6 +47,7 @@ from mona.utils.media_decode import (
 from mona.utils.subagent_channel_display import scrub_subagent_messages_for_channel
 from mona.webui.settings_api import (
     WebUISettingsError,
+    fetch_zen_free_models,
     settings_payload,
     update_agent_settings,
     update_image_generation_settings,
@@ -437,29 +438,6 @@ def _b64url_decode(s: str) -> bytes:
     return base64.urlsafe_b64decode(s + pad)
 
 
-def _llm_generate_sync(prompt: str) -> str:
-    """Generate text using Mona's LLM provider (sync wrapper)."""
-    import asyncio
-
-    from mona.llm.provider import get_provider
-
-    async def _generate() -> str:
-        provider = get_provider()
-        response = await provider.generate(prompt)
-        return response.content
-
-    try:
-        loop = asyncio.get_running_loop()
-        if loop.is_running():
-            import concurrent.futures
-
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                future = pool.submit(asyncio.run, _generate())
-                return future.result(timeout=120)
-    except RuntimeError:
-        pass
-    return asyncio.get_event_loop().run_until_complete(_generate())
-
 
 # Allowed MIME types we actually serve from the media endpoint. Anything
 # outside this set is degraded to ``application/octet-stream`` so an
@@ -488,6 +466,50 @@ def _issue_route_secret_matches(headers: Any, configured_secret: str) -> bool:
     if not header_token:
         return False
     return hmac.compare_digest(header_token.strip(), configured_secret)
+
+
+def _get_ppt_project_status(project_dir: Path) -> dict:
+    svg_output_dir = project_dir / "svg_output"
+    svg_final_dir = project_dir / "svg_final"
+    spec_lock = project_dir / "spec_lock.md"
+    generating_marker = project_dir / ".generating"
+    export_dir = project_dir / "exports"
+
+    svg_count = (
+        len(list(svg_output_dir.glob("*.svg"))) if svg_output_dir.is_dir() else 0
+    )
+    svg_final_count = (
+        len(list(svg_final_dir.glob("*.svg"))) if svg_final_dir.is_dir() else 0
+    )
+    pptx_files = (
+        sorted(
+            export_dir.glob("*.pptx"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        if export_dir.exists()
+        else []
+    )
+
+    if generating_marker.exists():
+        project_status = "generating"
+    elif pptx_files:
+        project_status = "done"
+    elif svg_count > 0 or svg_final_count > 0:
+        project_status = "generating"
+    elif spec_lock.exists():
+        project_status = "planning"
+    else:
+        project_status = "init"
+
+    return {
+        "status": project_status,
+        "slideCount": max(svg_count, svg_final_count),
+        "hasExport": len(pptx_files) > 0,
+        "hasSvgOutput": svg_count > 0 or svg_final_count > 0,
+        "hasSpecLock": spec_lock.exists(),
+        "exportFile": pptx_files[0].name if pptx_files else None,
+    }
 
 
 class WebSocketChannel(BaseChannel):
@@ -689,6 +711,9 @@ class WebSocketChannel(BaseChannel):
         if got == "/api/settings":
             return self._handle_settings(request)
 
+        if got == "/api/zen/models":
+            return await self._handle_zen_models(request)
+
         if got == "/api/commands":
             return self._handle_commands(request)
 
@@ -710,36 +735,6 @@ class WebSocketChannel(BaseChannel):
         if got == "/api/settings/image-generation/update":
             return self._handle_settings_image_generation_update(request)
 
-        if got == "/api/kb/status":
-            return self._handle_kb_status(request)
-
-        if got == "/api/kb/ingest":
-            return self._handle_kb_ingest(request)
-
-        if got == "/api/kb/query":
-            return self._handle_kb_query(request)
-
-        if got == "/api/kb/compile":
-            return self._handle_kb_compile(request)
-
-        if got == "/api/kb/list":
-            return self._handle_kb_list(request)
-
-        if got == "/api/kb/create":
-            return self._handle_kb_create(request)
-
-        if got == "/api/kb/delete":
-            return self._handle_kb_delete(request)
-
-        if got == "/api/kb/files":
-            return self._handle_kb_files(request)
-
-        if got == "/api/kb/graph":
-            return self._handle_kb_graph(request)
-
-        if got == "/api/kb/ingest-files":
-            return self._handle_kb_ingest_files(request)
-
         if got == "/api/ppt/templates":
             return self._handle_ppt_templates(request)
 
@@ -758,11 +753,25 @@ class WebSocketChannel(BaseChannel):
         if got == "/api/ppt/preview-port":
             return self._handle_ppt_preview_port(request)
 
+        if got == "/api/ppt/export-status":
+            return self._handle_ppt_export_status(request)
+        if got == "/api/ppt/mark-generating":
+            return self._handle_ppt_mark_generating(request)
+
+        if got == "/api/ppt/save-chat-id":
+            return self._handle_ppt_save_chat_id(request)
+
+        if got == "/api/ppt/delete-project":
+            return self._handle_ppt_delete_project(request)
+
         if got == "/api/ppt/project-slides":
             return self._handle_ppt_project_slides(request)
 
         if got.startswith("/api/ppt/project-svg"):
             return self._handle_ppt_project_svg(request)
+
+        if got == "/api/kb/llm-config":
+            return self._handle_kb_llm_config(request)
 
         m = re.match(r"^/api/sessions/([^/]+)/messages$", got)
         if m:
@@ -899,6 +908,12 @@ class WebSocketChannel(BaseChannel):
             return _http_error(401, "Unauthorized")
         return _http_json_response(self._with_settings_restart_state(settings_payload()))
 
+    async def _handle_zen_models(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        models = await fetch_zen_free_models()
+        return _http_json_response({"models": models})
+
     def _with_settings_restart_state(
         self,
         payload: dict[str, Any],
@@ -991,357 +1006,6 @@ class WebSocketChannel(BaseChannel):
             return _http_error(e.status, e.message)
         return _http_json_response(self._with_settings_restart_state(payload, section="image"))
 
-    def _handle_kb_status(self, request: WsRequest) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        try:
-            from mona.config.loader import load_config
-            from mona.config.paths import get_workspace_path
-            from mona.knowledge.indexer import WikiIndexer
-            from mona.knowledge.store import VaultStore
-
-            workspace = get_workspace_path()
-            query = _parse_query(request.path)
-            instance = _query_first(query, "instance") or "default"
-            config = load_config()
-            inst_cfg = config.tools.knowledge.instances.get(instance)
-            mode = inst_cfg.mode.value if inst_cfg else config.tools.knowledge.default_mode.value
-            root = workspace / ".knowledge" / instance
-            store = VaultStore(root)
-            store.ensure_dirs()
-            indexer = WikiIndexer(root / "state" / "search.db")
-            indexer.initialize()
-            meta = store.load_meta()
-            graph = store.load_graph()
-            return _http_json_response({
-                "instance": instance,
-                "mode": mode,
-                "sources": meta.source_count,
-                "pages": meta.page_count,
-                "nodes": len(graph.nodes),
-                "edges": len(graph.edges),
-                "pending": len(meta.pending_sources),
-                "indexed": indexer.get_doc_count(),
-            })
-        except Exception:
-            logger.exception("kb_status failed")
-            return _http_error(500, "kb_status error")
-
-    def _handle_kb_ingest(self, request: WsRequest) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        try:
-            from mona.config.loader import load_config
-            from mona.config.paths import get_workspace_path
-            from mona.knowledge.store import VaultStore
-
-            workspace = get_workspace_path()
-            query = _parse_query(request.path)
-            instance = _query_first(query, "instance") or "default"
-            paths_str = _query_first(query, "paths") or ""
-            config = load_config()
-            inst_cfg = config.tools.knowledge.instances.get(instance)
-            root = workspace / ".knowledge" / instance
-            store = VaultStore(root)
-            store.ensure_dirs()
-            if paths_str:
-                paths = [p.strip() for p in paths_str.split(",") if p.strip()]
-            elif inst_cfg and inst_cfg.paths:
-                paths = inst_cfg.paths
-            else:
-                paths = ["."]
-            ingested = 0
-            for p in paths:
-                path = workspace / p
-                if path.is_file():
-                    if store.ingest_file(path):
-                        ingested += 1
-                elif path.is_dir():
-                    for fp in path.rglob("*"):
-                        if fp.is_file() and not fp.name.startswith("."):
-                            if store.ingest_file(fp):
-                                ingested += 1
-            return _http_json_response({"ingested": ingested})
-        except Exception:
-            logger.exception("kb_ingest failed")
-            return _http_error(500, "kb_ingest error")
-
-    def _handle_kb_query(self, request: WsRequest) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        try:
-            from mona.config.paths import get_workspace_path
-            from mona.knowledge.indexer import WikiIndexer
-            from mona.knowledge.query import VaultQuery
-            from mona.knowledge.store import VaultStore
-
-            workspace = get_workspace_path()
-            query_params = _parse_query(request.path)
-            q = _query_first(query_params, "q") or ""
-            instance = _query_first(query_params, "instance") or "default"
-            limit = int(_query_first(query_params, "limit") or "10")
-            root = workspace / ".knowledge" / instance
-            store = VaultStore(root)
-            store.ensure_dirs()
-            indexer = WikiIndexer(root / "state" / "search.db")
-            indexer.initialize()
-            graph = store.load_graph()
-            vq = VaultQuery(store, indexer, graph)
-            results = vq.search(q, limit)
-            return _http_json_response({"results": results, "query": q})
-        except Exception:
-            logger.exception("kb_query failed")
-            return _http_error(500, "kb_query error")
-
-    def _handle_kb_compile(self, request: WsRequest) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        try:
-            from mona.config.paths import get_workspace_path
-            from mona.knowledge.compiler import SourceCompiler
-            from mona.knowledge.store import VaultStore
-
-            workspace = get_workspace_path()
-            query_params = _parse_query(request.path)
-            instance = _query_first(query_params, "instance") or "default"
-            root = workspace / ".knowledge" / instance
-            store = VaultStore(root)
-            store.ensure_dirs()
-            compiler = SourceCompiler(store)
-            count = compiler.compile_pending(_llm_generate_sync)
-            return _http_json_response({"compiled": count})
-        except Exception:
-            logger.exception("kb_compile failed")
-            return _http_error(500, "kb_compile error")
-
-    def _handle_kb_graph(self, request: WsRequest) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        try:
-            from mona.config.paths import get_workspace_path
-            from mona.knowledge.indexer import WikiIndexer
-            from mona.knowledge.query import VaultQuery
-            from mona.knowledge.store import VaultStore
-
-            workspace = get_workspace_path()
-            query_params = _parse_query(request.path)
-            instance = _query_first(query_params, "instance") or "default"
-            root = workspace / ".knowledge" / instance
-            store = VaultStore(root)
-            store.ensure_dirs()
-            indexer = WikiIndexer(root / "state" / "search.db")
-            indexer.initialize()
-            graph = store.load_graph()
-            vq = VaultQuery(store, indexer, graph)
-            return _http_json_response(vq.get_graph_overview())
-        except Exception:
-            logger.exception("kb_graph failed")
-            return _http_error(500, "kb_graph error")
-
-    def _handle_kb_list(self, request: WsRequest) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        try:
-            from mona.config.loader import load_config
-            from mona.config.paths import get_workspace_path
-            from mona.knowledge.store import VaultStore
-
-            config = load_config()
-            workspace = get_workspace_path()
-            result = []
-            for name, inst_cfg in config.tools.knowledge.instances.items():
-                root = workspace / ".knowledge" / name
-                store = VaultStore(root)
-                meta = store.load_meta()
-                graph = store.load_graph()
-                result.append({
-                    "name": name,
-                    "mode": inst_cfg.mode.value,
-                    "paths": inst_cfg.paths,
-                    "sources": meta.source_count,
-                    "pages": meta.page_count,
-                    "nodes": len(graph.nodes),
-                    "edges": len(graph.edges),
-                    "pending": len(meta.pending_sources),
-                })
-            return _http_json_response({"instances": result})
-        except Exception:
-            logger.exception("kb_list failed")
-            return _http_error(500, "kb_list error")
-
-    def _handle_kb_create(self, request: WsRequest) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        try:
-            from mona.config.loader import get_config_path, load_config
-            from mona.config.paths import get_workspace_path
-            from mona.config.schema import KnowledgeInstanceConfig
-            from mona.config.schema import KnowledgeMode as SchemaKnowledgeMode
-            from mona.knowledge.store import VaultStore
-
-            query = _parse_query(request.path)
-            name = (_query_first(query, "name") or "").strip()
-            mode_str = _query_first(query, "mode") or "document"
-            paths_str = _query_first(query, "paths") or ""
-            if not name:
-                return _http_error(400, "missing name")
-            config = load_config()
-            if name in config.tools.knowledge.instances:
-                return _http_error(409, "instance already exists")
-            try:
-                schema_mode = SchemaKnowledgeMode(mode_str)
-            except ValueError:
-                return _http_error(400, "invalid mode")
-            paths = [p.strip() for p in paths_str.split(",") if p.strip()]
-            inst_cfg = KnowledgeInstanceConfig(mode=schema_mode, paths=paths)
-            config_path = get_config_path()
-            raw: dict[str, Any] = {}
-            if config_path.exists():
-                with open(config_path, encoding="utf-8") as f:
-                    raw = json.load(f)
-            tools = raw.setdefault("tools", {})
-            knowledge = tools.setdefault("knowledge", {})
-            instances = knowledge.setdefault("instances", {})
-            instances[name] = inst_cfg.model_dump(by_alias=True)
-            config_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(config_path, "w", encoding="utf-8") as f:
-                json.dump(raw, f, indent=2, ensure_ascii=False)
-            workspace = get_workspace_path()
-            root = workspace / ".knowledge" / name
-            store = VaultStore(root)
-            store.ensure_dirs()
-            return _http_json_response({"name": name, "mode": mode_str})
-        except Exception:
-            logger.exception("kb_create failed")
-            return _http_error(500, "kb_create error")
-
-    def _handle_kb_delete(self, request: WsRequest) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        try:
-            from mona.config.loader import get_config_path, load_config
-            from mona.config.paths import get_workspace_path
-
-            query = _parse_query(request.path)
-            name = (_query_first(query, "name") or "").strip()
-            if not name:
-                return _http_error(400, "missing name")
-            config = load_config()
-            if name not in config.tools.knowledge.instances:
-                return _http_error(404, "instance not found")
-            config_path = get_config_path()
-            raw: dict[str, Any] = {}
-            if config_path.exists():
-                with open(config_path, encoding="utf-8") as f:
-                    raw = json.load(f)
-            instances = raw.get("tools", {}).get("knowledge", {}).get("instances", {})
-            instances.pop(name, None)
-            config_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(config_path, "w", encoding="utf-8") as f:
-                json.dump(raw, f, indent=2, ensure_ascii=False)
-            workspace = get_workspace_path()
-            kb_dir = workspace / ".knowledge" / name
-            if kb_dir.exists():
-                shutil.rmtree(kb_dir)
-            return _http_json_response({"deleted": name})
-        except Exception:
-            logger.exception("kb_delete failed")
-            return _http_error(500, "kb_delete error")
-
-    _KB_SUPPORTED_SUFFIXES = frozenset({
-        ".md", ".txt", ".py", ".js", ".ts", ".json",
-        ".yaml", ".yml", ".toml", ".rst", ".pdf", ".docx", ".pptx",
-    })
-
-    def _handle_kb_files(self, request: WsRequest) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        try:
-            from mona.config.loader import load_config
-            from mona.config.paths import get_workspace_path
-
-            workspace = get_workspace_path()
-            query = _parse_query(request.path)
-            instance = _query_first(query, "instance") or "default"
-            config = load_config()
-            inst_cfg = config.tools.knowledge.instances.get(instance)
-            if not inst_cfg or not inst_cfg.paths:
-                return _http_json_response({"files": []})
-            assoc_dir = workspace / inst_cfg.paths[0]
-            if not assoc_dir.is_dir():
-                return _http_json_response({"files": []})
-            files: list[dict[str, Any]] = []
-            for fp in sorted(assoc_dir.rglob("*")):
-                if not fp.is_file():
-                    continue
-                if fp.suffix.lower() not in self._KB_SUPPORTED_SUFFIXES:
-                    continue
-                rel = fp.relative_to(assoc_dir).as_posix()
-                stat = fp.stat()
-                files.append({
-                    "name": fp.name,
-                    "path": rel,
-                    "size": stat.st_size,
-                    "modified": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
-                })
-            return _http_json_response({"files": files})
-        except Exception:
-            logger.exception("kb_files failed")
-            return _http_error(500, "kb_files error")
-
-    def _handle_kb_ingest_files(self, request: WsRequest) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        try:
-            from mona.config.loader import load_config
-            from mona.config.paths import get_workspace_path
-            from mona.knowledge.store import VaultStore
-
-            workspace = get_workspace_path()
-            query = _parse_query(request.path)
-            instance = _query_first(query, "instance") or "default"
-            sources_str = _query_first(query, "sources") or ""
-            if not sources_str:
-                return _http_error(400, "missing sources")
-            config = load_config()
-            inst_cfg = config.tools.knowledge.instances.get(instance)
-            if not inst_cfg or not inst_cfg.paths:
-                return _http_error(400, "instance has no associated paths")
-            target_dir = workspace / inst_cfg.paths[0]
-            target_dir.mkdir(parents=True, exist_ok=True)
-            sources = [s.strip() for s in sources_str.split(",") if s.strip()]
-            added: list[str] = []
-            for src_str in sources:
-                src = Path(src_str)
-                if not src.exists():
-                    continue
-                if src.is_file():
-                    if src.suffix.lower() in self._KB_SUPPORTED_SUFFIXES:
-                        dest = target_dir / src.name
-                        shutil.copy2(src, dest)
-                        added.append(src.name)
-                elif src.is_dir():
-                    for fp in sorted(src.rglob("*")):
-                        if not fp.is_file():
-                            continue
-                        if fp.suffix.lower() not in self._KB_SUPPORTED_SUFFIXES:
-                            continue
-                        rel = fp.relative_to(src)
-                        dest = target_dir / rel
-                        dest.parent.mkdir(parents=True, exist_ok=True)
-                        shutil.copy2(fp, dest)
-                        added.append(rel.as_posix())
-            root = workspace / ".knowledge" / instance
-            store = VaultStore(root)
-            store.ensure_dirs()
-            for fp in target_dir.rglob("*"):
-                if fp.is_file() and not fp.name.startswith("."):
-                    store.ingest_file(fp)
-            return _http_json_response({"added": added, "count": len(added)})
-        except Exception:
-            logger.exception("kb_ingest_files failed")
-            return _http_error(500, "kb_ingest_files error")
-
     def _handle_ppt_templates(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
@@ -1358,14 +1022,15 @@ class WebSocketChannel(BaseChannel):
                 skill_dir / "scripts" / "templates_full" / "decks" / "decks_index.json"
             )
 
-            layouts = []
+            templates = []
             if layouts_index.exists():
                 raw = json.loads(layouts_index.read_text(encoding="utf-8"))
                 for key, info in raw.items():
-                    layouts.append({
+                    templates.append({
                         "key": key,
                         "kind": "layout",
-                        "name": key.replace("_", " ").title(),
+                        "group": "通用",
+                        "name": info.get("name", key),
                         "summary": info.get("summary", ""),
                         "pageCount": info.get("page_count", 0),
                         "canvasFormat": info.get("canvas_format", "ppt169"),
@@ -1374,14 +1039,14 @@ class WebSocketChannel(BaseChannel):
                         ),
                     })
 
-            decks = []
             if decks_index.exists():
                 raw = json.loads(decks_index.read_text(encoding="utf-8"))
                 for key, info in raw.items():
-                    decks.append({
+                    templates.append({
                         "key": key,
                         "kind": "deck",
-                        "name": key,
+                        "group": "品牌",
+                        "name": info.get("name", key),
                         "summary": info.get("summary", ""),
                         "pageCount": info.get("page_count", 0),
                         "canvasFormat": info.get("canvas_format", "ppt169"),
@@ -1420,8 +1085,7 @@ class WebSocketChannel(BaseChannel):
             ]
 
             return _http_json_response({
-                "layouts": layouts,
-                "decks": decks,
+                "templates": templates,
                 "canvasFormats": canvas_formats,
             })
         except Exception as e:
@@ -1531,29 +1195,24 @@ class WebSocketChannel(BaseChannel):
             for d in sorted(projects_dir.iterdir()):
                 if not d.is_dir():
                     continue
-                svg_dir = d / "svg_final"
-                if not svg_dir.is_dir():
-                    svg_dir = d / "svg_output"
-                export_dir = d / "exports"
-                slide_count = (
-                    len(list(svg_dir.glob("*.svg"))) if svg_dir.is_dir() else 0
-                )
-                pptx_files = (
-                    sorted(
-                        export_dir.glob("*.pptx"),
-                        key=lambda p: p.stat().st_mtime,
-                        reverse=True,
-                    )
-                    if export_dir.exists()
-                    else []
-                )
+                status_info = _get_ppt_project_status(d)
                 stat = d.stat()
+                chat_id_file = d / ".chat_id"
+                chat_id = (
+                    chat_id_file.read_text(encoding="utf-8").strip()
+                    if chat_id_file.exists()
+                    else None
+                )
                 projects.append({
                     "name": d.name,
                     "createdAt": stat.st_ctime,
                     "format": "ppt169",
-                    "slideCount": slide_count,
-                    "hasExport": len(pptx_files) > 0,
+                    "slideCount": status_info["slideCount"],
+                    "hasExport": status_info["hasExport"],
+                    "hasSvgOutput": status_info["hasSvgOutput"],
+                    "hasSpecLock": status_info["hasSpecLock"],
+                    "status": status_info["status"],
+                    "chatId": chat_id,
                 })
 
             return _http_json_response({"projects": projects})
@@ -1633,10 +1292,141 @@ class WebSocketChannel(BaseChannel):
             logger.exception("ppt preview port error")
             return _http_json_response({"port": None})
 
+    def _handle_ppt_export_status(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        try:
+            from mona.config.paths import get_workspace_path
+
+            query = _parse_query(request.path)
+            project_name = _query_first(query, "project") or ""
+            if (
+                not project_name
+                or "/" in project_name
+                or "\\" in project_name
+                or ".." in project_name
+            ):
+                return _http_error(400, "invalid project name")
+
+            workspace = get_workspace_path()
+            project_dir = workspace / "ppt-projects" / project_name
+            if not project_dir.is_dir():
+                return _http_json_response({"status": "not_found"})
+
+            status_info = _get_ppt_project_status(project_dir)
+            return _http_json_response({
+                "status": status_info["status"],
+                "slideCount": status_info["slideCount"],
+                "hasExport": status_info["hasExport"],
+                "hasSvgOutput": status_info["hasSvgOutput"],
+                "hasSpecLock": status_info["hasSpecLock"],
+                "exportFile": status_info["exportFile"],
+            })
+        except Exception as e:
+            logger.exception("ppt export status error")
+            return _http_error(500, str(e))
+
+    def _handle_ppt_mark_generating(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        try:
+            from mona.config.paths import get_workspace_path
+
+            query = _parse_query(request.path)
+            project_name = _query_first(query, "project") or ""
+            action = _query_first(query, "action") or "start"
+
+            if (
+                not project_name
+                or "/" in project_name
+                or "\\" in project_name
+                or ".." in project_name
+            ):
+                return _http_error(400, "invalid project name")
+
+            workspace = get_workspace_path()
+            project_dir = workspace / "ppt-projects" / project_name
+            marker = project_dir / ".generating"
+
+            if action == "start":
+                project_dir.mkdir(parents=True, exist_ok=True)
+                marker.write_text("1", encoding="utf-8")
+            elif action == "finish":
+                marker.unlink(missing_ok=True)
+
+            return _http_json_response({"ok": True})
+        except Exception as e:
+            logger.exception("ppt mark generating error")
+            return _http_error(500, str(e))
+
+    def _handle_ppt_save_chat_id(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        try:
+            from mona.config.paths import get_workspace_path
+
+            query = _parse_query(request.path)
+            project_name = _query_first(query, "project") or ""
+            chat_id = _query_first(query, "chatId") or ""
+
+            if (
+                not project_name
+                or "/" in project_name
+                or "\\" in project_name
+                or ".." in project_name
+            ):
+                return _http_error(400, "invalid project name")
+
+            workspace = get_workspace_path()
+            project_dir = workspace / "ppt-projects" / project_name
+            if not project_dir.is_dir():
+                return _http_error(404, "project not found")
+
+            chat_id_file = project_dir / ".chat_id"
+            chat_id_file.write_text(chat_id, encoding="utf-8")
+
+            return _http_json_response({"ok": True})
+        except Exception as e:
+            logger.exception("ppt save chat id error")
+            return _http_error(500, str(e))
+
+    def _handle_ppt_delete_project(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        try:
+            import shutil
+
+            from mona.config.paths import get_workspace_path
+
+            query = _parse_query(request.path)
+            project_name = _query_first(query, "project") or ""
+
+            if (
+                not project_name
+                or "/" in project_name
+                or "\\" in project_name
+                or ".." in project_name
+            ):
+                return _http_error(400, "invalid project name")
+
+            workspace = get_workspace_path()
+            project_dir = workspace / "ppt-projects" / project_name
+            if not project_dir.is_dir():
+                return _http_error(404, "project not found")
+
+            shutil.rmtree(project_dir)
+
+            return _http_json_response({"ok": True})
+        except Exception as e:
+            logger.exception("ppt delete project error")
+            return _http_error(500, str(e))
+
     def _handle_ppt_project_slides(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         try:
+            from urllib.parse import quote
+
             from mona.config.paths import get_workspace_path
 
             query = _parse_query(request.path)
@@ -1982,6 +1772,62 @@ class WebSocketChannel(BaseChannel):
         deleted = self._session_manager.delete_session(decoded_key)
         delete_webui_thread(decoded_key)
         return _http_json_response({"deleted": bool(deleted)})
+
+    def _handle_kb_llm_config(self, request: WsRequest) -> Response:
+        """Return the current LLM provider config for the knowledge base frontend."""
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        try:
+            from mona.config.loader import load_config
+            config = load_config()
+            preset = config.resolve_preset()
+            provider_name = (
+                config.get_provider_name(preset.model, preset=preset)
+                or preset.provider
+            )
+            provider = config.get_provider(preset.model, preset=preset)
+
+            # Map Mona provider names to llm_wiki provider names
+            provider_map = {
+                "openai": "openai",
+                "anthropic": "anthropic",
+                "google": "google",
+                "azure_openai": "azure",
+                "azure": "azure",
+                "ollama": "ollama",
+                "openrouter": "custom",
+                "deepseek": "custom",
+                "groq": "custom",
+                "zhipu": "custom",
+                "huggingface": "custom",
+                "skywork": "custom",
+                "custom": "custom",
+                "bedrock": "custom",
+            }
+            mapped_provider = provider_map.get(provider_name, "custom")
+
+            api_key = provider.api_key if provider and provider.api_key else ""
+            api_base = provider.api_base if provider and provider.api_base else ""
+
+            # For Ollama, use the api_base as ollamaUrl
+            ollama_url = api_base if mapped_provider == "ollama" else "http://localhost:11434"
+            # For custom providers, use api_base as customEndpoint
+            custom_endpoint = api_base if mapped_provider == "custom" else ""
+
+            # Estimate max context size in characters (tokens * ~4 chars/token)
+            max_context_chars = (preset.context_window_tokens or 65536) * 4
+
+            return _http_json_response({
+                "provider": mapped_provider,
+                "apiKey": api_key,
+                "model": preset.model,
+                "ollamaUrl": ollama_url,
+                "customEndpoint": custom_endpoint,
+                "maxContextSize": max_context_chars,
+                "reasoning": {"mode": "auto"},
+            })
+        except Exception as e:
+            return _http_error(500, f"Failed to get LLM config: {e}")
 
     def _serve_static(self, request_path: str) -> Response | None:
         """Resolve *request_path* against the built SPA directory; SPA fallback to index.html."""

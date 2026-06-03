@@ -49,7 +49,7 @@ def _make_provider_core(
     elif backend == "openai_compat" and not model.startswith("bedrock/"):
         needs_key = not (p and p.api_key)
         exempt = spec and (spec.is_oauth or spec.is_local or spec.is_direct)
-        if needs_key and not exempt:
+        if needs_key and not exempt and (spec and spec.api_key_required):
             raise ValueError(f"No API key configured for provider '{provider_name}'.")
 
     if backend == "openai_codex":
@@ -100,6 +100,7 @@ def _make_provider_core(
             extra_headers=p.extra_headers if p else None,
             spec=spec,
             extra_body=p.extra_body if p else None,
+            no_auth=not spec.api_key_required if spec else False,
         )
 
     provider.generation = resolved.to_generation_settings()

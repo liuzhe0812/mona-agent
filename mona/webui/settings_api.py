@@ -9,6 +9,9 @@ from __future__ import annotations
 from typing import Any
 from zoneinfo import ZoneInfo
 
+import httpx
+from loguru import logger
+
 from mona.config.loader import get_config_path, load_config, save_config
 from mona.providers.image_generation import (
     get_image_gen_provider,
@@ -71,6 +74,8 @@ def _mask_secret_hint(secret: str | None) -> str | None:
 
 
 def _provider_requires_api_key(spec: Any) -> bool:
+    if not spec.api_key_required:
+        return False
     if spec.backend == "azure_openai":
         return True
     if spec.is_oauth:
@@ -152,15 +157,24 @@ def settings_payload(*, requires_restart: bool = False) -> dict[str, Any]:
         provider_config = getattr(config.providers, spec.name, None)
         if provider_config is None or spec.is_oauth:
             continue
+        configured = _provider_configured_for_settings(
+            spec, provider_config
+        ) or not spec.api_key_required
         providers.append(
             {
                 "name": spec.name,
                 "label": spec.label,
-                "configured": _provider_configured_for_settings(spec, provider_config),
+                "configured": configured,
                 "api_key_required": _provider_requires_api_key(spec),
                 "api_key_hint": _mask_secret_hint(provider_config.api_key),
-                "api_base": provider_config.api_base,
+                "api_base": provider_config.api_base or spec.default_api_base or None,
                 "default_api_base": spec.default_api_base or None,
+                "model": provider_config.model or (
+                    defaults.model if spec.name == defaults.provider else None
+                ),
+                "free_default_model": (
+                    spec.free_default_model if spec.free_default_model else None
+                ),
             }
         )
 
@@ -327,11 +341,24 @@ def update_agent_settings(query: QueryParams) -> dict[str, Any]:
         provider_config = getattr(config.providers, provider, None)
         if (
             provider_config is None
-            or not _provider_configured_for_settings(spec, provider_config)
+            or (
+                spec.api_key_required
+                and not _provider_configured_for_settings(spec, provider_config)
+            )
         ):
             raise WebUISettingsError("provider is not configured")
         if defaults.provider != provider:
             defaults.provider = provider
+            changed = True
+
+    # Save the model to the provider's config so it can be recalled when switching providers
+    provider_model = _query_first_alias(query, "provider_model", "providerModel")
+    if provider_model is not None:
+        provider_model = provider_model.strip()
+        active_provider = provider or defaults.provider
+        provider_config = getattr(config.providers, active_provider, None)
+        if provider_config is not None and provider_config.model != provider_model:
+            provider_config.model = provider_model
             changed = True
 
     timezone = _query_first(query, "timezone")
@@ -611,3 +638,25 @@ def update_image_generation_settings(query: QueryParams) -> dict[str, Any]:
     if changed:
         save_config(config)
     return settings_payload(requires_restart=changed)
+
+
+_ZEN_MODELS_URL = "https://opencode.ai/zen/v1/models"
+
+
+async def fetch_zen_free_models() -> list[str]:
+    """Fetch free model IDs from OpenCode Zen API.
+
+    Free models have a ``-free`` suffix in their ``id`` field.
+    Returns a sorted list of model ID strings; on any error returns an empty list.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(_ZEN_MODELS_URL)
+        resp.raise_for_status()
+        data = resp.json()
+        models = data.get("data", [])
+        free_ids = sorted(m["id"] for m in models if m.get("id", "").endswith("-free"))
+        return free_ids
+    except Exception:
+        logger.exception("Failed to fetch Zen free models")
+        return []

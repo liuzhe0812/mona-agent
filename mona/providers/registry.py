@@ -31,6 +31,9 @@ class ProviderSpec:
     name: str  # config field name, e.g. "dashscope"
     keywords: tuple[str, ...]  # model-name keywords for matching (lowercase)
     env_key: str  # env var for API key, e.g. "DASHSCOPE_API_KEY"
+    # Default model for providers that need no API key
+    free_default_model: str = ""
+    api_key_required: bool = True  # False for free providers (e.g. Zen)
     display_name: str = ""  # shown in `mona status`
 
     # which provider implementation to use
@@ -515,6 +518,16 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         display_name="Qianfan",
         backend="openai_compat",
         default_api_base="https://qianfan.baidubce.com/v2"
+    ),
+    # OpenCode Zen: free provider, no API key required
+    ProviderSpec(
+        name="zen",
+        keywords=("zen",),
+        env_key="",
+        display_name="OpenCode Zen",
+        api_key_required=False,
+        default_api_base="https://opencode.ai/zen/v1",
+        free_default_model="deepseek-v4-flash-free",
     ),
 )
 

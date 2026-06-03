@@ -170,6 +170,7 @@ class ProviderConfig(Base):
 
     api_key: str | None = None
     api_base: str | None = None
+    model: str | None = None  # Last-used model for this provider
     extra_headers: dict[str, str] | None = None  # Custom headers (e.g. APP-Code for AiHubMix)
     extra_body: dict[str, Any] | None = None  # Extra fields merged into every request body
 
@@ -221,6 +222,7 @@ class ProvidersConfig(Base):
     github_copilot: ProviderConfig = Field(default_factory=ProviderConfig, exclude=True)  # Github Copilot (OAuth)
     qianfan: ProviderConfig = Field(default_factory=ProviderConfig)  # Qianfan (百度千帆)
     nvidia: ProviderConfig = Field(default_factory=ProviderConfig)  # NVIDIA NIM (nvapi- keys)
+    zen: ProviderConfig = Field(default_factory=ProviderConfig)  # OpenCode Zen (free, no API key)
 
 
 class HeartbeatConfig(Base):
@@ -267,43 +269,9 @@ def _lazy_default(module_path: str, class_name: str) -> Any:
     return getattr(module, class_name)()
 
 
-class KnowledgeMode(str, Enum):
-    DOCUMENT = "document"
-    NOTEBOOK = "notebook"
-
-
 class TerminalExecMode(str, Enum):
     AUTO = "auto"
     APPROVAL = "approval"
-
-
-class KnowledgeInstanceConfig(Base):
-    """单个知识库实例配置."""
-
-    mode: KnowledgeMode = KnowledgeMode.DOCUMENT
-    paths: list[str] = Field(default_factory=list)
-
-    fts5_enabled: bool = True
-    fts5_tokenizer: Literal["simple", "porter", "unicode61"] = "unicode61"
-
-    wiki_enabled: bool = True
-    wiki_model_preset: str | None = None
-    auto_compile_on_ingest: bool = True
-    batch_compile_threshold: int = Field(default=10, ge=1)
-    lazy_compile_enabled: bool = True
-    diff_ratio_minor: float = Field(default=0.1, ge=0.0, le=1.0)
-    diff_ratio_moderate: float = Field(default=0.5, ge=0.0, le=1.0)
-
-    query_max_tokens: int = Field(default=8000, ge=1000)
-    query_top_k: int = Field(default=5, ge=1, le=20)
-
-
-class KnowledgeConfig(Base):
-    """本地 AI 知识库配置."""
-
-    knowledge_dir: str = ".knowledge"
-    instances: dict[str, KnowledgeInstanceConfig] = Field(default_factory=dict)
-    default_mode: KnowledgeMode = KnowledgeMode.DOCUMENT
 
 
 class PPTMasterConfig(Base):
@@ -384,7 +352,6 @@ class ToolsConfig(Base):
     restrict_to_workspace: bool = False  # restrict all tool access to workspace directory
     mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
     ssrf_whitelist: list[str] = Field(default_factory=list)  # CIDR ranges to exempt from SSRF blocking (e.g. ["100.64.0.0/10"] for Tailscale)
-    knowledge: KnowledgeConfig = Field(default_factory=KnowledgeConfig)
     terminal: TerminalToolConfig = Field(default_factory=TerminalToolConfig)
     ppt_master: PPTMasterConfig = Field(default_factory=PPTMasterConfig)
 
@@ -468,14 +435,14 @@ class Config(BaseSettings):
         for spec in PROVIDERS:
             p = getattr(self.providers, spec.name, None)
             if p and model_prefix and normalized_prefix == spec.name:
-                if spec.is_oauth or spec.is_local or spec.is_direct or p.api_key:
+                if spec.is_oauth or spec.is_local or spec.is_direct or p.api_key or not spec.api_key_required:
                     return p, spec.name
 
         # Match by keyword (order follows PROVIDERS registry)
         for spec in PROVIDERS:
             p = getattr(self.providers, spec.name, None)
             if p and any(_kw_matches(kw) for kw in spec.keywords):
-                if spec.is_oauth or spec.is_local or spec.is_direct or p.api_key:
+                if spec.is_oauth or spec.is_local or spec.is_direct or p.api_key or not spec.api_key_required:
                     return p, spec.name
 
         # Fallback: configured local providers can route models without
@@ -502,7 +469,7 @@ class Config(BaseSettings):
             if spec.is_oauth:
                 continue
             p = getattr(self.providers, spec.name, None)
-            if p and p.api_key:
+            if p and (p.api_key or not spec.api_key_required):
                 return p, spec.name
 
         return None, None

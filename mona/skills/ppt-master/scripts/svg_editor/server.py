@@ -213,6 +213,13 @@ def create_app(
     def _update_activity():
         app.config['LAST_REQUEST_TIME'] = time.time()
 
+    @app.after_request
+    def _add_cors_headers(response):
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, DELETE, OPTIONS'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
+        return response
+
     def _exit_with_lock_release(code: int = 0) -> None:
         lf = app.config.get('LOCK_FILE')
         if lf is not None:

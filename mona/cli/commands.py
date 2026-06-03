@@ -1516,6 +1516,8 @@ def status():
                 continue
             if spec.is_oauth:
                 console.print(f"{spec.label}: [green]✓ (OAuth)[/green]")
+            elif not spec.api_key_required:
+                console.print(f"{spec.label}: [dim]free[/dim]")
             elif spec.is_local:
                 # Local deployments show api_base instead of api_key
                 if p.api_base:

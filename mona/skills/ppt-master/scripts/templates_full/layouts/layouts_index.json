@@ -1,6 +1,7 @@
 {
   "academic_defense": {
-    "summary": "Thesis defense, academic presentations, research progress reports, grant applications.",
+    "name": "学术答辩",
+    "summary": "论文答辩、学术报告、研究进展汇报、基金申请",
     "canvas_format": "ppt169",
     "page_count": 5,
     "page_types": [
@@ -12,7 +13,8 @@
     ]
   },
   "ai_ops": {
-    "summary": "Telecom AI operations architecture, IT system overviews, digital transformation proposals, smart infrastructure reports.",
+    "name": "AI 运维",
+    "summary": "电信 AI 运维架构、IT 系统概览、数字化转型方案、智慧基础设施报告",
     "canvas_format": "ppt169",
     "page_count": 6,
     "page_types": [
@@ -25,7 +27,8 @@
     ]
   },
   "government_blue": {
-    "summary": "Key project briefings, Five-Year Plan presentations, work summaries, investment promotion, policy interpretation.",
+    "name": "政务蓝",
+    "summary": "重点项目汇报、五年规划展示、工作总结、招商引资、政策解读",
     "canvas_format": "ppt169",
     "page_count": 5,
     "page_types": [
@@ -37,7 +40,8 @@
     ]
   },
   "government_red": {
-    "summary": "Government briefings, policy interpretation, work summaries, project introductions, investment promotion.",
+    "name": "政务红",
+    "summary": "政务汇报、政策解读、工作总结、项目介绍、招商引资",
     "canvas_format": "ppt169",
     "page_count": 5,
     "page_types": [
@@ -49,7 +53,8 @@
     ]
   },
   "medical_university": {
-    "summary": "Medical academic reports, case discussions, research presentations, hospital work reports, medical education and training.",
+    "name": "医学院校",
+    "summary": "医学学术报告、病例讨论、研究汇报、医院工作报告、医学教育培训",
     "canvas_format": "ppt169",
     "page_count": 5,
     "page_types": [
@@ -61,7 +66,8 @@
     ]
   },
   "pixel_retro": {
-    "summary": "Tech talks, programming tutorials, game introductions, geek-style showcases.",
+    "name": "像素复古",
+    "summary": "技术分享、编程教程、游戏介绍、极客风格展示",
     "canvas_format": "ppt169",
     "page_count": 5,
     "page_types": [
@@ -73,7 +79,8 @@
     ]
   },
   "psychology_attachment": {
-    "summary": "Psychotherapy training, academic lectures, counseling case analysis, professional sharing.",
+    "name": "心理依恋",
+    "summary": "心理治疗培训、学术讲座、咨询案例分析、专业分享",
     "canvas_format": "ppt169",
     "page_count": 5,
     "page_types": [

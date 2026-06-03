@@ -1,4 +1,4 @@
-﻿"""OpenAI-compatible provider for all non-Anthropic LLM APIs."""
+"""OpenAI-compatible provider for all non-Anthropic LLM APIs."""
 
 from __future__ import annotations
 
@@ -289,12 +289,14 @@ class OpenAICompatProvider(LLMProvider):
         extra_headers: dict[str, str] | None = None,
         spec: ProviderSpec | None = None,
         extra_body: dict[str, Any] | None = None,
+        no_auth: bool = False,
     ):
         super().__init__(api_key, api_base)
         self.default_model = default_model
         self.extra_headers = extra_headers or {}
         self._spec = spec
         self._extra_body = extra_body or {}
+        self._no_auth = no_auth
 
         if api_key and spec and spec.env_key:
             self._setup_env(api_key, api_base)
@@ -338,6 +340,17 @@ class OpenAICompatProvider(LLMProvider):
             http_client = httpx.AsyncClient(
                 limits=httpx.Limits(keepalive_expiry=0),
                 timeout=timeout_s,
+            )
+        elif self._no_auth:
+            # Zen-style providers reject Authorization headers; strip them.
+            async def _strip_auth(request: httpx.Request) -> None:
+                request.headers.pop("authorization", None)
+
+            http_client = httpx.AsyncClient(
+                timeout=timeout_s,
+                event_hooks={
+                    "request": [_strip_auth],
+                },
             )
         self._client = AsyncOpenAI(
             api_key=self._api_key_for_client,
