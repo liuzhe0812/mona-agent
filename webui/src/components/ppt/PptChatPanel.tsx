@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Layers, Loader2, Send, Square } from "lucide-react";
+import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from "react";
+import { Loader2, Send, Square } from "lucide-react";
 
-import { MessageBubble } from "@/components/MessageBubble";
+import { ThreadMessages } from "@/components/thread/ThreadMessages";
 import { useMonaStream } from "@/hooks/useMonaStream";
 import { useSessionHistory } from "@/hooks/useSessions";
 import { cn } from "@/lib/utils";
@@ -9,9 +9,16 @@ import { cn } from "@/lib/utils";
 interface PptChatPanelProps {
   chatId: string | null;
   onStreamingChange?: (streaming: boolean) => void;
+  /** Map of chatId → displayContent for the first user message in that chat. */
+  displayContentMap?: Record<string, string>;
+  ref?: React.Ref<PptChatPanelHandle>;
 }
 
-export function PptChatPanel({ chatId, onStreamingChange }: PptChatPanelProps) {
+export interface PptChatPanelHandle {
+  send: (content: string, displayContent?: string) => void;
+}
+
+export function PptChatPanel({ chatId, onStreamingChange, displayContentMap, ref }: PptChatPanelProps) {
   const [draft, setDraft] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -51,9 +58,18 @@ export function PptChatPanel({ chatId, onStreamingChange }: PptChatPanelProps) {
     if (!chatId || loading) return;
     setMessages((current) => {
       if (historical.length === 0 && current.length > 0) return current;
-      return historical;
+      // Apply displayContent to the first user message if provided
+      const dc = displayContentMap?.[chatId];
+      return historical.map((m, i) => {
+        if (m.role === "user" && !m.displayContent && dc) {
+          // Only apply to the first user message
+          const isFirstUser = !historical.slice(0, i).some((h) => h.role === "user");
+          if (isFirstUser) return { ...m, displayContent: dc };
+        }
+        return m;
+      });
     });
-  }, [chatId, historical, historyVersion, loading, setMessages]);
+  }, [chatId, historical, historyVersion, loading, setMessages, displayContentMap]);
 
   const messagesLen = messages.length;
   useLayoutEffect(() => {
@@ -67,31 +83,12 @@ export function PptChatPanel({ chatId, onStreamingChange }: PptChatPanelProps) {
     send(trimmed);
   }, [chatId, draft, isStreaming, send]);
 
-  const stats = useMemo(() => {
-    let reasoningSteps = 0;
-    let toolCalls = 0;
-    let added = 0;
-    let deleted = 0;
-    for (const m of messages) {
-      if (m.role === "assistant" && m.kind !== "trace") {
-        if (m.reasoning || m.reasoningStreaming) {
-          reasoningSteps += 1;
-        }
-      }
-      if (m.kind === "trace") {
-        toolCalls += m.traces?.length ?? (m.content.trim() ? 1 : 0);
-      }
-      if (m.fileEdits) {
-        for (const fe of m.fileEdits) {
-          if (fe.status !== "error" && !fe.binary) {
-            added += fe.added;
-            deleted += fe.deleted;
-          }
-        }
-      }
-    }
-    return { reasoningSteps, toolCalls, added, deleted };
-  }, [messages]);
+  useImperativeHandle(ref, () => ({
+    send: (content: string, displayContent?: string) => {
+      if (!chatId) return;
+      send(content, undefined, displayContent ? { displayContent } : undefined);
+    },
+  }), [chatId, send]);
 
   if (!chatId) {
     return (
@@ -100,8 +97,6 @@ export function PptChatPanel({ chatId, onStreamingChange }: PptChatPanelProps) {
       </div>
     );
   }
-
-  const hasStats = stats.reasoningSteps > 0 || stats.toolCalls > 0 || stats.added > 0 || stats.deleted > 0;
 
   return (
     <div className="flex h-full flex-col">
@@ -130,39 +125,7 @@ export function PptChatPanel({ chatId, onStreamingChange }: PptChatPanelProps) {
             </div>
           ) : null}
 
-          {hasStats && (
-            <div className="flex items-center gap-2 rounded-md bg-muted/40 px-2.5 py-1.5 text-[11px] text-muted-foreground">
-              <Layers className="h-3.5 w-3.5 shrink-0" />
-              {isStreaming ? (
-                <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
-              ) : null}
-              <span className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
-                {stats.reasoningSteps > 0 && (
-                  <span>{stats.reasoningSteps} 次思考</span>
-                )}
-                {stats.toolCalls > 0 && (
-                  <span>{stats.toolCalls} 次工具调用</span>
-                )}
-                {(stats.added > 0 || stats.deleted > 0) && (
-                  <span className="inline-flex items-center gap-1 tabular-nums">
-                    <span className="text-emerald-600/75 dark:text-emerald-300/75">+{stats.added}</span>
-                    <span className="text-rose-600/70 dark:text-rose-300/75">-{stats.deleted}</span>
-                  </span>
-                )}
-              </span>
-            </div>
-          )}
-
-          {messages.map((message) => (
-            <MessageBubble key={message.id} message={message} />
-          ))}
-
-          {isStreaming && !hasStats && messages.length > 0 && messages[messages.length - 1].role !== "assistant" && (
-            <div className="flex items-center gap-1.5 text-[12px] text-muted-foreground">
-              <Loader2 className="h-3 w-3 animate-spin" />
-              <span>思考中...</span>
-            </div>
-          )}
+          <ThreadMessages messages={messages} isStreaming={isStreaming} />
 
           <div ref={bottomRef} />
         </div>

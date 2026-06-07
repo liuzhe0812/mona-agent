@@ -1,38 +1,92 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowLeft, Download, Mic, Settings } from "lucide-react";
+import { History, SlidersHorizontal } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { useClient } from "@/providers/ClientProvider";
 import { fetchPptExportStatus, markPptGenerating, savePptChatId, getApiBase } from "@/lib/api";
+import { isTauri, httpFetch } from "@/lib/tauri";
+import { cn } from "@/lib/utils";
 import type { PptProject } from "@/lib/types";
 import { PptConfigPanel } from "./PptConfigPanel";
 import { PptChatPanel } from "./PptChatPanel";
+import type { PptChatPanelHandle } from "./PptChatPanel";
 import { PptPreview } from "./PptPreview";
 import { PptHistory } from "./PptHistory";
 
 type PptPhase = "config" | "generating" | "done";
+export type PptImageMode = "none" | "key-pages" | "rich";
+export type PptVisualMode = "auto" | "data" | "process";
+export type PptStyleMode = "general" | "consulting" | "top-consulting";
+export type PptIconApproach = "emoji" | "ai" | "builtin" | "custom";
+export type PptIconLibrary = "chunk-filled" | "tabler-filled" | "tabler-outline" | "phosphor-duotone";
+export type PptFormulaPolicy = "mixed" | "render-all" | "text-only";
+export type PptImageApproach = "none" | "user" | "ai" | "web" | "placeholder";
+export type PptPageTransition = "fade" | "push" | "wipe" | "split" | "strips" | "cover" | "random" | "none";
+export type PptEntranceAnimation = "auto" | "none" | "fade" | "fly" | "zoom" | "wipe" | "mixed";
+export type PptAnimationTrigger = "after-previous" | "with-previous" | "on-click";
 
 export interface PptConfig {
+  // --- Basic ---
   templateKey: string | null;
-  templateKind: "layout" | "deck" | null;
+  templateKind: "layout" | "brand" | "deck" | null;
   canvasFormat: string;
+  imageMode: PptImageMode;
+  visualMode: PptVisualMode;
   sourceFiles: string[];
   topic: string;
+
+  // --- Design Preferences ---
+  styleMode: PptStyleMode | null;
+  styleDescriptor: string;
+  pageCount: number | null;
+  audience: string;
+  primaryColor: string;
+  iconApproach: PptIconApproach | null;
+  iconLibrary: PptIconLibrary | null;
+  formulaPolicy: PptFormulaPolicy | null;
+  imageApproach: PptImageApproach | null;
+
+  // --- Animation & Export ---
+  pageTransition: PptPageTransition;
+  entranceAnimation: PptEntranceAnimation;
+  animationTrigger: PptAnimationTrigger;
+  autoAdvance: number | null;
+  enableNarration: boolean;
+  mergeParagraphs: boolean;
 }
 
 export const DEFAULT_CONFIG: PptConfig = {
   templateKey: null,
   templateKind: null,
   canvasFormat: "ppt169",
+  imageMode: "key-pages",
+  visualMode: "auto",
   sourceFiles: [],
   topic: "",
+
+  styleMode: null,
+  styleDescriptor: "",
+  pageCount: null,
+  audience: "",
+  primaryColor: "",
+  iconApproach: null,
+  iconLibrary: null,
+  formulaPolicy: null,
+  imageApproach: null,
+
+  pageTransition: "fade",
+  entranceAnimation: "auto",
+  animationTrigger: "after-previous",
+  autoAdvance: null,
+  enableNarration: false,
+  mergeParagraphs: false,
 };
 
 interface PptMakerViewProps {
   onBack: () => void;
 }
 
-export function PptMakerView({ onBack }: PptMakerViewProps) {
+export function PptMakerView({ onBack: _onBack }: PptMakerViewProps) {
   const { client, token } = useClient();
   const [phase, setPhase] = useState<PptPhase>("config");
   const [config, setConfig] = useState<PptConfig>(DEFAULT_CONFIG);
@@ -41,27 +95,31 @@ export function PptMakerView({ onBack }: PptMakerViewProps) {
   const [historyKey, setHistoryKey] = useState(0);
   const chatIdRef = useRef<string | null>(null);
   const generationStartRef = useRef<number | null>(null);
-  const [timedOut, setTimedOut] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
+  const [hasPptxOutput, setHasPptxOutput] = useState(false);
+  const [pipelineStage, setPipelineStage] = useState<string>("init");
+  const [sidebarTab, setSidebarTab] = useState<"config" | "history">("config");
+  const chatPanelRef = useRef<PptChatPanelHandle>(null);
+  const [displayContentMap, setDisplayContentMap] = useState<Record<string, string>>({});
+
+  // Auto-switch to history tab when generation starts or completes
+  useEffect(() => {
+    if (phase === "generating" || phase === "done") {
+      setSidebarTab("history");
+    }
+  }, [phase]);
 
   useEffect(() => {
     chatIdRef.current = chatId;
   }, [chatId]);
 
-  useEffect(() => {
-    return () => {
-      const id = chatIdRef.current;
-      if (id) {
-        client.deleteChat(id);
-      }
-    };
-  }, [client]);
+  // NOTE: Do NOT delete the chat on unmount. PPT chats are persistent
+  // and should remain accessible from the history panel.
 
   useEffect(() => {
     if (phase !== "generating" || !projectName) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout>;
-    setTimedOut(false);
 
     async function poll() {
       if (cancelled) return;
@@ -69,7 +127,6 @@ export function PptMakerView({ onBack }: PptMakerViewProps) {
       if (generationStartRef.current) {
         const elapsed = Date.now() - generationStartRef.current;
         if (elapsed > 30 * 60 * 1000) {
-          setTimedOut(true);
           return;
         }
       }
@@ -77,6 +134,8 @@ export function PptMakerView({ onBack }: PptMakerViewProps) {
       try {
         const res = await fetchPptExportStatus(token, projectName!);
         if (cancelled) return;
+        setHasPptxOutput(res.hasPptxOutput);
+        setPipelineStage(res.pipelineStage ?? "init");
         if (res.status === "done" && res.hasExport) {
           await markPptGenerating(token, projectName!, "finish").catch(() => {});
           setPhase("done");
@@ -103,10 +162,12 @@ export function PptMakerView({ onBack }: PptMakerViewProps) {
       const name = generateProjectName();
       setProjectName(name);
       const prompt = buildPptPrompt(config, name);
-      markPptGenerating(token, name, "start").catch(() => {});
-      const newChatId = await client.newChat(5_000, true);
+      const displayText = `请制作一份 PPT。\n项目名：${name}`;
+      await markPptGenerating(token, name, "start");
+      const newChatId = await client.newChat(5_000);
       setChatId(newChatId);
-      savePptChatId(token, name, newChatId).catch(() => {});
+      setDisplayContentMap((prev) => ({ ...prev, [newChatId]: displayText }));
+      await savePptChatId(token, name, newChatId);
       client.sendMessage(newChatId, prompt);
       setPhase("generating");
       generationStartRef.current = Date.now();
@@ -119,60 +180,47 @@ export function PptMakerView({ onBack }: PptMakerViewProps) {
     const project = name ?? projectName;
     if (!project) return;
     const base = await getApiBase();
+    const url = `${base}/api/ppt/download?project=${encodeURIComponent(project)}&token=${encodeURIComponent(token)}`;
+
+    if (isTauri()) {
+      try {
+        const { save } = await import("@tauri-apps/plugin-dialog");
+        const { writeFile } = await import("@tauri-apps/plugin-fs");
+        const filePath = await save({
+          defaultPath: `${project}.pptx`,
+          filters: [{ name: "PowerPoint", extensions: ["pptx"] }],
+        });
+        if (!filePath) return;
+        const res = await httpFetch(url);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const blob = await res.arrayBuffer();
+        await writeFile(filePath, new Uint8Array(blob));
+      } catch (e) {
+        console.error("PPT download failed", e);
+      }
+      return;
+    }
+
     const link = document.createElement("a");
-    link.href = `${base}/api/ppt/download?project=${encodeURIComponent(project)}&token=${encodeURIComponent(token)}`;
+    link.href = url;
     link.download = `${project}.pptx`;
     link.click();
   }, [projectName, token]);
 
-  const handleResume = useCallback(async (name: string, existingChatId?: string | null, hasSpecLock?: boolean) => {
-    try {
-      markPptGenerating(token, name, "start").catch(() => {});
-      setProjectName(name);
-
-      const useResumeExecute = hasSpecLock || !existingChatId;
-      let resumeChatId: string;
-      let prompt: string;
-
-      if (useResumeExecute) {
-        resumeChatId = await client.newChat(5_000, true);
-        setChatId(resumeChatId);
-        savePptChatId(token, name, resumeChatId).catch(() => {});
-        prompt = `继续生成 projects/${name}\n\n请先读取 skills/ppt-master/SKILL.md 了解 resume-execute 工作流，然后继续执行。`;
-      } else {
-        resumeChatId = existingChatId!;
-        setChatId(resumeChatId);
-        prompt = `继续生成 PPT 项目 projects/${name}。请检查当前项目状态，从上次中断的地方继续执行。不要重新开始已完成的步骤。`;
-      }
-
-      client.sendMessage(resumeChatId, prompt);
-      setPhase("generating");
-      generationStartRef.current = Date.now();
-    } catch (e) {
-      console.error("Failed to resume PPT generation", e);
-    }
-  }, [client, token]);
-
-  const handleGenerateAudio = useCallback(async () => {
-    if (!projectName || !chatId) return;
-    try {
-      markPptGenerating(token, projectName, "start").catch(() => {});
-      client.sendMessage(
-        chatId,
-        `请为当前 PPT 项目生成配音旁白。使用 Edge TTS 默认语音，生成后重新导出带配音的 PPTX。`,
-      );
-      setPhase("generating");
-      generationStartRef.current = Date.now();
-    } catch (e) {
-      console.error("Failed to start TTS generation", e);
-    }
-  }, [client, chatId, projectName, token]);
-
   const handleSelectProject = useCallback((project: PptProject) => {
     setProjectName(project.name);
     setChatId(project.chatId);
-    setPhase(project.status === "done" || project.hasExport ? "done" : "generating");
-  }, []);
+    setHasPptxOutput(project.hasPptxOutput);
+    const isDone = project.status === "done" || project.hasExport;
+    setPhase(isDone ? "done" : "generating");
+    // Set displayContent for historical project's chat
+    if (project.chatId && !displayContentMap[project.chatId]) {
+      setDisplayContentMap((prev) => ({
+        ...prev,
+        [project.chatId!]: `请制作一份 PPT。\n项目名：${project.name}`,
+      }));
+    }
+  }, [displayContentMap]);
 
   const handleDeleteProject = useCallback((name: string) => {
     if (name === projectName) {
@@ -182,82 +230,52 @@ export function PptMakerView({ onBack }: PptMakerViewProps) {
     };
   }, [projectName]);
 
-  const handleNewProject = useCallback(() => {
-    setPhase("config");
-    setChatId(null);
-    setProjectName(null);
-    setHistoryKey((k) => k + 1);
-  }, []);
-
   return (
     <div className="flex h-full flex-col bg-background">
-      <div className="flex h-12 shrink-0 items-center justify-between border-b border-border/70 px-3">
-        <div className="flex items-center gap-2">
-          <Button variant="ghost" size="icon" onClick={onBack} className="h-8 w-8 rounded-lg">
-            <ArrowLeft className="h-4 w-4" />
-          </Button>
-          <h1 className="text-[14px] font-semibold">PPT 制作</h1>
-        </div>
-        <div className="flex items-center gap-1">
-          {timedOut && phase === "generating" && (
-            <span className="text-[11px] text-amber-600 dark:text-amber-400">
-              生成超时，请检查聊天面板
-            </span>
-          )}
-          {phase === "done" && projectName && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => handleDownload()}
-              className="h-7 gap-1.5 rounded-lg text-[12px] text-muted-foreground"
-            >
-              <Download className="h-3.5 w-3.5" />
-              下载 PPTX
-            </Button>
-          )}
-          {phase === "done" && projectName && chatId && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleGenerateAudio}
-              className="h-7 gap-1.5 rounded-lg text-[12px] text-muted-foreground"
-            >
-              <Mic className="h-3.5 w-3.5" />
-              生成配音
-            </Button>
-          )}
-          {phase === "done" && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleNewProject}
-              className="h-7 rounded-lg text-[12px] text-muted-foreground"
-            >
-              新建
-            </Button>
-          )}
-          <Button variant="ghost" size="icon" className="h-8 w-8 rounded-lg text-muted-foreground">
-            <Settings className="h-4 w-4" />
-          </Button>
-        </div>
-      </div>
-
       <div className="flex min-h-0 flex-1">
-        <aside className="flex w-[320px] shrink-0 flex-col border-r border-border/70">
-          <PptConfigPanel
-            config={config}
-            setConfig={setConfig}
-            phase={phase}
-            onStart={handleStartGeneration}
-          />
-          <div className="min-h-0 flex-1 overflow-y-auto border-t border-border/70">
-            <PptHistory
-              key={historyKey}
-              onSelect={handleSelectProject}
-              onDownload={handleDownload}
-              onResume={handleResume}
-              onDelete={handleDeleteProject}
-            />
+        <aside className="flex w-[260px] shrink-0 flex-col border-r border-border/70">
+          <div className="flex shrink-0 border-b border-border/70">
+            <button
+              className={cn(
+                "flex flex-1 items-center justify-center gap-1.5 py-2 text-[11px] font-medium transition-colors",
+                sidebarTab === "config"
+                  ? "text-foreground border-b-2 border-primary"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+              onClick={() => setSidebarTab("config")}
+            >
+              <SlidersHorizontal className="h-3 w-3" />
+              配置
+            </button>
+            <button
+              className={cn(
+                "flex flex-1 items-center justify-center gap-1.5 py-2 text-[11px] font-medium transition-colors",
+                sidebarTab === "history"
+                  ? "text-foreground border-b-2 border-primary"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+              onClick={() => setSidebarTab("history")}
+            >
+              <History className="h-3 w-3" />
+              历史
+            </button>
+          </div>
+          <div className="min-h-0 flex-1">
+            {sidebarTab === "config" ? (
+              <PptConfigPanel
+                config={config}
+                setConfig={setConfig}
+                phase={phase}
+                onStart={handleStartGeneration}
+              />
+            ) : (
+              <PptHistory
+                key={historyKey}
+                onSelect={handleSelectProject}
+                onDownload={handleDownload}
+                onDelete={handleDeleteProject}
+              />
+            )}
           </div>
         </aside>
 
@@ -267,14 +285,15 @@ export function PptMakerView({ onBack }: PptMakerViewProps) {
               选择模板和输入主题后开始生成
             </div>
           ) : (
-            <div className="flex min-h-0 flex-1 flex-col">
-              <div className="min-h-0 flex-1">
-                <PptPreview projectName={projectName} isStreaming={isStreaming} />
-              </div>
-              <div className="shrink-0 h-[320px] border-t border-border/70">
-                <PptChatPanel chatId={chatId} onStreamingChange={setIsStreaming} />
-              </div>
-            </div>
+            <ResizablePanelGroup direction="vertical" className="min-h-0 flex-1">
+              <ResizablePanel defaultSize={55} minSize={20}>
+                <PptPreview projectName={projectName} isStreaming={isStreaming} hasPptxOutput={hasPptxOutput} pipelineStage={pipelineStage} />
+              </ResizablePanel>
+              <ResizableHandle withHandle />
+              <ResizablePanel defaultSize={45} minSize={15}>
+                <PptChatPanel key={chatId ?? "empty"} chatId={chatId} onStreamingChange={setIsStreaming} displayContentMap={displayContentMap} ref={chatPanelRef} />
+              </ResizablePanel>
+            </ResizablePanelGroup>
           )}
         </div>
       </div>
@@ -292,6 +311,7 @@ function generateProjectName(): string {
 
 function buildPptPrompt(config: PptConfig, projectName: string): string {
   const parts: string[] = [];
+
   const hasPptxSource = config.sourceFiles.some((f) =>
     f.toLowerCase().endsWith(".pptx"),
   );
@@ -302,20 +322,181 @@ function buildPptPrompt(config: PptConfig, projectName: string): string {
     parts.push("请制作一份 PPT。");
   }
 
-  parts.push(`项目名使用：${projectName}`);
+  // Project identity
+  parts.push(`项目名：${projectName}`);
+  parts.push(`项目目录：ppt_projects/（init 时加 --dir ppt_projects）`);
+
+  // --- Mandatory reference reads ---
+  // The SKILL.md is already injected as an always-skill. These reminders
+  // reinforce the most frequently violated rules — keep them short.
+  parts.push("");
+  parts.push("⚠️ 关键规则提醒（详见 mona-ppt SKILL.md）：");
+  parts.push("- Step 5：当 design_spec 有 Acquire Via: ai 行时，必须执行，用 generate_image 工具生图，禁止跳过");
+  parts.push("- Step 7：导出只能用 svg_to_pptx.py，禁止自创脚本（convert.js / pptxgenjs 等）");
+  parts.push("- SVG 颜色用 #RRGGBB 格式，不要用 rgba()，渐变透明度用 stop-opacity 属性");
+
+  // --- Eight Confirmations pre-fill ---
+  // User has already configured preferences in the UI. Present these as
+  // the confirmed Eight Confirmations — the AI should output the full
+  // confirmation block and auto-proceed (user already confirmed via UI).
+
+  const confirmations: string[] = [];
+
+  // a. Canvas format
+  confirmations.push(`画布格式：${config.canvasFormat}`);
+
+  // b. Page count
+  if (config.pageCount != null) {
+    confirmations.push(`页数：${config.pageCount} 页`);
+  } else {
+    confirmations.push("页数：AI 推荐");
+  }
+
+  // c. Audience
+  if (config.audience.trim()) {
+    confirmations.push(`目标受众：${config.audience.trim()}`);
+  } else {
+    confirmations.push("目标受众：AI 推荐");
+  }
+
+  // d. Style mode + descriptor
+  if (config.styleMode) {
+    const modeLabel: Record<PptStyleMode, string> = {
+      general: "General Versatile（视觉冲击优先）",
+      consulting: "General Consulting（数据清晰优先）",
+      "top-consulting": "Top Consulting（逻辑说服优先）",
+    };
+    confirmations.push(`风格模式：${modeLabel[config.styleMode]}`);
+  } else {
+    confirmations.push("风格模式：AI 推荐");
+  }
+  if (config.styleDescriptor.trim()) {
+    confirmations.push(`视觉风格描述：${config.styleDescriptor.trim()}`);
+  }
+
+  // e. Color scheme
+  if (config.primaryColor.trim()) {
+    confirmations.push(`主色调：${config.primaryColor.trim()}`);
+  } else {
+    confirmations.push("主色调：AI 推荐");
+  }
+
+  // f. Icon approach + library
+  if (config.iconApproach) {
+    const iconLabel: Record<PptIconApproach, string> = {
+      emoji: "Emoji",
+      ai: "AI 生成图标",
+      builtin: "内置图标库",
+      custom: "自定义图标",
+    };
+    confirmations.push(`图标方案：${iconLabel[config.iconApproach]}`);
+    if (config.iconApproach === "builtin" && config.iconLibrary) {
+      confirmations.push(`图标库：${config.iconLibrary}`);
+    }
+  } else {
+    confirmations.push("图标方案：AI 推荐");
+  }
+
+  // g. Formula policy
+  if (config.formulaPolicy) {
+    const formulaLabel: Record<PptFormulaPolicy, string> = {
+      mixed: "混合（复杂公式渲染为图片，简单公式保留文本）",
+      "render-all": "全部渲染为图片",
+      "text-only": "全部保留为可编辑文本",
+    };
+    confirmations.push(`公式渲染策略：${formulaLabel[config.formulaPolicy]}`);
+  } else {
+    confirmations.push("公式渲染策略：AI 推荐（默认 mixed）");
+  }
+
+  // h. Image approach
+  const effectiveImageApproach = config.imageApproach ?? (
+    config.imageMode === "none" ? "none"
+    : config.imageMode === "rich" ? "ai"
+    : null
+  );
+  if (effectiveImageApproach) {
+    const imgLabel: Record<PptImageApproach, string> = {
+      none: "不使用图片",
+      user: "仅使用用户提供的图片",
+      ai: "AI 生成图片",
+      web: "网络搜索图片",
+      placeholder: "使用占位图",
+    };
+    confirmations.push(`图片方案：${imgLabel[effectiveImageApproach]}`);
+  } else if (config.imageMode === "key-pages") {
+    confirmations.push("图片方案：仅在关键页使用 AI 图片（必须执行 Step 5 Image Acquisition Phase，为封面页和关键内容页生成 AI 图片）");
+  } else {
+    confirmations.push("图片方案：AI 推荐");
+  }
+
+  // Visual mode
+  if (config.visualMode !== "auto") {
+    const visualModeText: Record<Exclude<PptVisualMode, "auto">, string> = {
+      data: "数据图表优先",
+      process: "流程图/架构图优先",
+    };
+    confirmations.push(`表达策略：${visualModeText[config.visualMode]}`);
+  }
+
+  parts.push("");
+  parts.push("以下为用户在 UI 中已确认的八项确认内容，请在 Step 4 展示完整确认结果后自动推进（用户已确认，无需再询问）：");
+  parts.push(confirmations.map((c) => `- ${c}`).join("\n"));
+
+  // --- Template selection ---
+  // Important: no template selected means no template instructions at all.
+  // This preserves the existing PPT generation path.
   if (config.templateKey && config.templateKind) {
-    const kindLabel = config.templateKind === "deck" ? "品牌套件" : "布局模板";
-    const subdir = config.templateKind === "deck" ? "decks" : "layouts";
-    parts.push(`使用模板：${kindLabel} ${config.templateKey}（路径：scripts/templates_full/${subdir}/${config.templateKey}）`);
+    if (config.templateKind === "deck") {
+      const subdir = "decks";
+      parts.push(`使用完整模板：${config.templateKey}（路径：mona/skills/mona-ppt/templates/${subdir}/${config.templateKey}）`);
+      parts.push("⚠️ 完整模板硬约束（必须遵守）：");
+      parts.push("- 读取 design_spec.md 的 Page Roster，为每页选择模板页");
+      parts.push("- spec_lock.md 的 page_layouts 不得为空，必须记录每页对应的模板 SVG");
+      parts.push("- Executor 每页生成前必须读取对应模板 SVG，在此基础上替换内容，不要自由重画");
+      parts.push("- 如果某页没有合适模板，必须在 spec_lock.md 写明原因");
+      parts.push("- 如果完整模板目录存在 template.pptx，导出时 Step 7 加 --template 参数：python mona/skills/mona-ppt/scripts/svg_to_pptx.py <project_path> --template <deck_dir>/template.pptx");
+    } else if (config.templateKind === "brand") {
+      parts.push(`使用品牌：${config.templateKey}（路径：mona/skills/mona-ppt/templates/brands/${config.templateKey}）`);
+      parts.push("⚠️ 品牌模板只控制视觉风格（颜色、字体、Logo），不固定页面版式");
+      parts.push("⚠️ 品牌模板导出时 Step 7.3 必须加 --template 参数：python mona/skills/mona-ppt/scripts/svg_to_pptx.py <project_path> --template <brand_dir>/template.pptx");
+    } else {
+      const kindLabel = "布局模板";
+      parts.push(`使用模板：${kindLabel} ${config.templateKey}（路径：mona/skills/mona-ppt/templates/layouts/${config.templateKey}）`);
+    }
   }
-  if (config.canvasFormat && config.canvasFormat !== "ppt169") {
-    parts.push(`画布格式偏好：${config.canvasFormat}（请在八项确认中优先采用此格式）`);
-  }
+
+  // --- Source material ---
   if (config.sourceFiles.length > 0) {
     const filePaths = config.sourceFiles.map((p) => `  - ${p}`).join("\n");
-    parts.push(`源文件（请先读取以下文件内容再制作）：\n${filePaths}`);
+    parts.push(`源文件：\n${filePaths}`);
   } else if (config.topic) {
-    parts.push(`主题：${config.topic}（请先进行主题研究）`);
+    parts.push(`主题：${config.topic}`);
   }
+
+  // --- Export options ---
+  const exportOpts: string[] = [];
+  if (config.pageTransition !== "fade") {
+    exportOpts.push(`页面过渡：${config.pageTransition}`);
+  }
+  if (config.entranceAnimation !== "auto") {
+    exportOpts.push(`入场动画：${config.entranceAnimation}`);
+  }
+  if (config.animationTrigger !== "after-previous") {
+    exportOpts.push(`动画触发：${config.animationTrigger}`);
+  }
+  if (config.autoAdvance != null) {
+    exportOpts.push(`自动翻页：${config.autoAdvance} 秒`);
+  }
+  if (config.enableNarration) {
+    exportOpts.push("启用朗读：是（导出时运行 generate-audio 工作流）");
+  }
+  if (config.mergeParagraphs) {
+    exportOpts.push("合并段落：是（--merge-paragraphs）");
+  }
+  if (exportOpts.length > 0) {
+    parts.push(`导出选项：${exportOpts.join("；")}`);
+  }
+
   return parts.join("\n");
 }

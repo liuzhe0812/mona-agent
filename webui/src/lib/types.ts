@@ -281,12 +281,14 @@ export interface SettingsUpdate {
   botName?: string;
   botIcon?: string;
   toolHintMaxLength?: number;
+  workspace?: string;
 }
 
 export interface ProviderSettingsUpdate {
   provider: string;
   apiKey?: string;
   apiBase?: string;
+  model?: string;
 }
 
 export interface WebSearchSettingsUpdate {
@@ -406,6 +408,46 @@ export type InboundEvent =
       ok: boolean;
       files?: { name: string; path: string }[];
       error?: string;
+    }
+  | {
+      event: "ppt_import_brand_result";
+      ok: boolean;
+      brandId?: string;
+      name?: string;
+      primaryColor?: string;
+      secondaryColor?: string;
+      accentColor?: string;
+      titleFont?: string;
+      bodyFont?: string;
+      canvasFormat?: string;
+      slideCount?: number;
+      layoutCount?: number;
+      masterCount?: number;
+      hasCoverSvg?: boolean;
+      assets?: string[];
+      error?: string;
+    }
+  | {
+      event: "ppt_import_deck_result";
+      ok: boolean;
+      deckId?: string;
+      name?: string;
+      pageCount?: number;
+      coverSvgUrl?: string;
+      primaryColor?: string;
+      error?: string;
+    }
+  | {
+      event: "ppt_save_brand_result";
+      ok: boolean;
+      brandId?: string;
+      error?: string;
+    }
+  | {
+      event: "ppt_delete_brand_result";
+      ok: boolean;
+      brandId?: string;
+      error?: string;
     };
 
 /** Base64-encoded image attached to an outbound ``message`` envelope.
@@ -454,11 +496,27 @@ export type Outbound =
   | {
       type: "ppt_upload";
       files: { name: string; data_url: string }[];
+    }
+  | {
+      type: "ppt_import_brand";
+      file: { name: string; data_url: string };
+    }
+  | {
+      type: "ppt_import_deck";
+      file: { name: string; data_url: string };
+    }
+  | {
+      type: "ppt_save_brand";
+      data: PptBrandSaveRequest;
+    }
+  | {
+      type: "ppt_delete_brand";
+      data: { brandId: string };
     };
 
 export interface PptTemplate {
   key: string;
-  kind: "layout" | "deck";
+  kind: "layout" | "brand" | "deck";
   group: string;
   name: string;
   summary: string;
@@ -466,6 +524,7 @@ export interface PptTemplate {
   primaryColor?: string;
   pageCount?: number;
   canvasFormat?: string;
+  userCreated?: boolean;
 }
 
 export interface PptCanvasFormat {
@@ -487,7 +546,37 @@ export interface PptProject {
   slideCount: number;
   hasExport: boolean;
   hasSvgOutput: boolean;
+  hasPptxOutput: boolean;
   hasSpecLock: boolean;
   status: "init" | "planning" | "generating" | "done";
   chatId: string | null;
+}
+
+export interface PptBrandImportResult {
+  brandId: string;
+  name: string;
+  primaryColor: string;
+  secondaryColor?: string;
+  accentColor?: string;
+  titleFont?: string;
+  bodyFont?: string;
+  canvasFormat: string;
+  slideCount: number;
+  layoutCount: number;
+  masterCount: number;
+  coverSvgUrl: string;
+  assets: string[];
+}
+
+export interface PptBrandSaveRequest {
+  brandId: string;
+  name: string;
+  summary: string;
+  primaryColor: string;
+  secondaryColor?: string;
+  accentColor?: string;
+  titleFont?: string;
+  bodyFont?: string;
+  logoIncluded: boolean;
+  keywords: string[];
 }
