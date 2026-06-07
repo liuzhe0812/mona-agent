@@ -98,15 +98,15 @@ export function QuickActions({ onAction }: Props) {
   }
 
   return (
-    <div className="grid grid-cols-2 gap-1">
+    <div className="grid grid-cols-2 gap-1.5">
       {ACTIONS.map((action) => (
         <button
           key={action.id}
           onClick={() => setActiveId(action.id)}
-          className="flex items-center gap-1.5 rounded px-2 py-1.5 text-[11px] text-muted-foreground hover:bg-sidebar-accent/50 hover:text-foreground transition-colors"
+          className="flex h-9 items-center gap-2 rounded-lg border border-border/70 bg-background px-2.5 text-left text-[11.5px] font-medium text-foreground/82 transition-colors hover:bg-accent hover:text-foreground"
         >
-          <action.icon className="h-3 w-3 shrink-0" />
-          <span>{action.label}</span>
+          <action.icon className="h-4 w-4 shrink-0 text-muted-foreground" />
+          <span className="min-w-0 truncate">{action.label}</span>
         </button>
       ))}
     </div>

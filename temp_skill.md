@@ -1,10 +1,10 @@
 ---
-name: ppt-master
+name: mona-ppt
 description: >
   AI-driven multi-format SVG content generation system. Converts source documents
   (PDF/DOCX/URL/Markdown) into high-quality SVG pages and exports to PPTX through
   multi-role collaboration. Use when user asks to "create PPT", "make presentation",
-  "生成PPT", "做PPT", "制作演示文稿", or mentions "ppt-master".
+  "生成PPT", "做PPT", "制作演示文稿", or mentions "mona-ppt".
 ---
 
 # PPT Master Skill
@@ -37,7 +37,7 @@ description: >
 > [!IMPORTANT]
 > ## 🔌 Compatibility With Generic Coding Skills
 >
-> - `ppt-master` is a repository-specific workflow, not a general application scaffold
+> - `mona-ppt` is a repository-specific workflow, not a general application scaffold
 > - Do NOT create `.worktrees/`, `tests/`, branch workflows, or generic engineering structure by default
 > - On conflict with a generic coding skill, follow this skill unless the user explicitly says otherwise
 

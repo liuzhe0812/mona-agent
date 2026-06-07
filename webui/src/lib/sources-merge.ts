@@ -1,3 +1,8 @@
+/**
+ * Frontmatter array-field merging during ingest.
+ * Ported from llm_wiki src/lib/sources-merge.ts
+ */
+
 export function parseFrontmatterArray(content: string, fieldName: string): string[] {
   const fmMatch = content.match(/^---\n([\s\S]*?)\n---/)
   if (!fmMatch) return []
@@ -38,13 +43,11 @@ export function writeFrontmatterArray(
   const escapedName = fieldName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
   const serialized = values.map((s) => `"${s}"`).join(", ")
   const newLine = `${fieldName}: [${serialized}]`
-
   const inlineRe = new RegExp(`^${escapedName}:\\s*\\[[^\\]]*\\]`, "m")
   if (inlineRe.test(fmBody)) {
     const rewritten = fmBody.replace(inlineRe, newLine)
     return `${openDelim}${rewritten}${closeDelim}${content.slice(fmMatch[0].length)}`
   }
-
   const blockRe = new RegExp(
     `^${escapedName}:\\s*\\n((?:[ \\t]+-\\s+.+\\n?)+)`,
     "m",
@@ -53,7 +56,6 @@ export function writeFrontmatterArray(
     const rewritten = fmBody.replace(blockRe, newLine)
     return `${openDelim}${rewritten}${closeDelim}${content.slice(fmMatch[0].length)}`
   }
-
   const rewritten = `${fmBody}\n${newLine}`
   return `${openDelim}${rewritten}${closeDelim}${content.slice(fmMatch[0].length)}`
 }

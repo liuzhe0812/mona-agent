@@ -1,0 +1,10 @@
+{
+  "展会PPT模版": {
+    "name": "展会PPT模版",
+    "summary": "从用户上传 PPTX 导入的自定义模板，共 1 页",
+    "canvas_format": "ppt169",
+    "page_count": 1,
+    "primary_color": "#1A1A1A",
+    "userCreated": true
+  }
+}

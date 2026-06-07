@@ -26,6 +26,10 @@ import {
   sftpBatchCancel,
   sftpBatchPause,
   sftpBatchResume,
+  sftpRemove,
+  sftpRename,
+  sftpMkdir,
+  sftpDownload,
   onBatchTransferProgress,
 } from "../ipc";
 import type { BatchTransferProgress } from "../types/terminal";
@@ -56,6 +60,13 @@ import {
   ChevronLeft,
   ArrowUp,
   Home,
+  Download,
+  Pencil,
+  FolderPlus,
+  Copy,
+  Scissors,
+  ClipboardPaste,
+  Info,
 } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 
@@ -111,9 +122,19 @@ export function BatchModeView() {
     activeBatchId, setActiveBatchId,
     maxConcurrent, setMaxConcurrent,
     handleBatchProgress,
+    selectedFilePaths,
+    selectFile,
+    clearFileSelection,
+    clipboard,
+    setClipboard,
+    clearClipboard,
   } = store;
 
   const [collapsedTransfer, setCollapsedTransfer] = useState<Set<string>>(new Set());
+  const [renameTarget, setRenameTarget] = useState<{ filePath: string; fileName: string } | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [mkdirEditing, setMkdirEditing] = useState(false);
+  const [mkdirValue, setMkdirValue] = useState("");
 
   const terminalStoreActiveId = useTerminalStore((s) => s.activeSessionId);
   const terminalStoreSessions = useTerminalStore((s) => s.sessions);
@@ -494,6 +515,7 @@ export function BatchModeView() {
     const connectedSession = sessions.find((s) => s.status === "connected");
     if (!connectedSession) return;
     setLoadingFiles(true);
+    clearFileSelection();
     try {
       const files = await sftpList(connectedSession.id, path);
       setRemoteFiles(files);
@@ -503,6 +525,104 @@ export function BatchModeView() {
     } finally {
       setLoadingFiles(false);
     }
+  };
+
+  const handleFileClick = (file: FileInfo, index: number, e: React.MouseEvent) => {
+    if (e.ctrlKey || e.metaKey) {
+      e.preventDefault();
+      selectFile(file.path, true);
+    } else if (e.shiftKey) {
+      e.preventDefault();
+      selectFile(file.path, false, true, remoteFiles);
+    } else {
+      if (file.isDir) {
+        loadRemoteFiles(file.path);
+      } else {
+        selectFile(file.path);
+      }
+    }
+  };
+
+  const handleDeleteFile = async (file: FileInfo) => {
+    if (!activeSession) return;
+    try {
+      await sftpRemove(activeSession.id, file.path, file.isDir);
+      await loadRemoteFiles(remotePath);
+    } catch (err) {
+      console.error("删除失败:", err);
+    }
+  };
+
+  const handleRenameFile = async () => {
+    if (!activeSession || !renameTarget || !renameValue.trim()) {
+      setRenameTarget(null);
+      return;
+    }
+    const parent = renameTarget.filePath.substring(0, renameTarget.filePath.lastIndexOf("/")) || "/";
+    const newPath = parent + "/" + renameValue.trim();
+    try {
+      await sftpRename(activeSession.id, renameTarget.filePath, newPath);
+      await loadRemoteFiles(remotePath);
+    } catch (err) {
+      console.error("重命名失败:", err);
+    } finally {
+      setRenameTarget(null);
+      setRenameValue("");
+    }
+  };
+
+  const startRename = (filePath: string, fileName: string) => {
+    setRenameTarget({ filePath, fileName });
+    setRenameValue(fileName);
+  };
+
+  const handleDownloadFile = async (file: FileInfo) => {
+    if (!activeSession || file.isDir) return;
+    try {
+      const data = await sftpDownload(activeSession.id, file.path);
+      const blob = new Blob([new Uint8Array(data)]);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = file.name;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("下载失败:", err);
+    }
+  };
+
+  const handleMkdir = async () => {
+    if (!activeSession || !mkdirValue.trim()) {
+      setMkdirEditing(false);
+      setMkdirValue("");
+      return;
+    }
+    const path = remotePath.endsWith("/") ? remotePath + mkdirValue.trim() : remotePath + "/" + mkdirValue.trim();
+    try {
+      await sftpMkdir(activeSession.id, path);
+      await loadRemoteFiles(remotePath);
+    } catch (err) {
+      console.error("创建文件夹失败:", err);
+    } finally {
+      setMkdirEditing(false);
+      setMkdirValue("");
+    }
+  };
+
+  const handleCopyFiles = (files: FileInfo[]) => {
+    setClipboard(files.map((f) => ({ path: f.path, isDir: f.isDir, action: "copy" as const })));
+  };
+
+  const handleCutFiles = (files: FileInfo[]) => {
+    setClipboard(files.map((f) => ({ path: f.path, isDir: f.isDir, action: "cut" as const })));
+  };
+
+  const getSelectedFiles = (clickedFile: FileInfo): FileInfo[] => {
+    if (selectedFilePaths.has(clickedFile.path)) {
+      return remoteFiles.filter((f) => selectedFilePaths.has(f.path));
+    }
+    return [clickedFile];
   };
 
   const handleUpload = async () => {
@@ -877,26 +997,142 @@ export function BatchModeView() {
                     </div>
                   </div>
                   <ScrollArea className="flex-1">
-                    <div className="min-w-[400px]">
-                      <div className="flex text-xs font-medium text-muted-foreground bg-secondary border-b sticky top-0">
-                        <div className="px-2 py-1 w-[200px] shrink-0">名称</div>
-                        <div className="px-2 py-1 w-20 shrink-0 text-right">大小</div>
-                        <div className="px-2 py-1 w-16 shrink-0 text-right">类型</div>
-                      </div>
-                      {remoteFiles.map((file) => (
-                        <div key={file.path} className="flex items-center text-xs cursor-pointer hover:bg-accent/20" style={{ height: 26 }} onClick={() => { if (file.isDir) loadRemoteFiles(file.path); }}>
-                          <div className="px-2 w-[200px] shrink-0 flex items-center gap-1.5">
-                            {file.isDir ? <Folder className="h-3.5 w-3.5 text-yellow-500 shrink-0" /> : <File className="h-3.5 w-3.5 text-gray-400 shrink-0" />}
-                            <span className="truncate">{file.name}</span>
+                    <ContextMenu>
+                      <ContextMenuTrigger asChild>
+                        <div className="min-w-[400px]" onClick={() => clearFileSelection()}>
+                          <div className="flex text-xs font-medium text-muted-foreground bg-secondary border-b sticky top-0">
+                            <div className="px-2 py-1 w-[200px] shrink-0">名称</div>
+                            <div className="px-2 py-1 w-20 shrink-0 text-right">大小</div>
+                            <div className="px-2 py-1 w-16 shrink-0 text-right">类型</div>
                           </div>
-                          <div className="px-2 w-20 shrink-0 text-right text-muted-foreground">{file.isDir ? "-" : formatSize(file.size)}</div>
-                          <div className="px-2 w-16 shrink-0 text-right text-muted-foreground">{file.isDir ? "文件夹" : "文件"}</div>
+                          {mkdirEditing && (
+                            <div className="flex items-center text-xs" style={{ height: 26 }}>
+                              <div className="px-2 w-[200px] shrink-0 flex items-center gap-1.5">
+                                <Folder className="h-3.5 w-3.5 text-yellow-500 shrink-0" />
+                                <input
+                                  autoFocus
+                                  value={mkdirValue}
+                                  onChange={(e) => setMkdirValue(e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter") {
+                                      e.stopPropagation();
+                                      handleMkdir();
+                                    } else if (e.key === "Escape") {
+                                      e.stopPropagation();
+                                      setMkdirEditing(false);
+                                      setMkdirValue("");
+                                    }
+                                  }}
+                                  onBlur={() => {
+                                    handleMkdir();
+                                  }}
+                                  onClick={(e) => e.stopPropagation()}
+                                  placeholder="新文件夹"
+                                  className="h-5 px-1 text-xs bg-background border border-input rounded flex-1 min-w-0 outline-none focus:ring-1 focus:ring-ring"
+                                />
+                              </div>
+                              <div className="px-2 w-20 shrink-0 text-right text-muted-foreground">-</div>
+                              <div className="px-2 w-16 shrink-0 text-right text-muted-foreground">文件夹</div>
+                            </div>
+                          )}
+                          {remoteFiles.map((file, index) => (
+                            <ContextMenu key={file.path}>
+                              <ContextMenuTrigger asChild>
+                                <div
+                                  className={cn(
+                                    "flex items-center text-xs cursor-pointer hover:bg-accent/20",
+                                    selectedFilePaths.has(file.path) && "bg-accent/60",
+                                  )}
+                                  style={{ height: 26 }}
+                                  onClick={(e) => handleFileClick(file, index, e)}
+                                >
+                                  <div className="px-2 w-[200px] shrink-0 flex items-center gap-1.5">
+                                    {file.isDir ? <Folder className="h-3.5 w-3.5 text-yellow-500 shrink-0" /> : <File className="h-3.5 w-3.5 text-gray-400 shrink-0" />}
+                                    {renameTarget?.filePath === file.path ? (
+                                      <input
+                                        autoFocus
+                                        value={renameValue}
+                                        onChange={(e) => setRenameValue(e.target.value)}
+                                        onKeyDown={(e) => {
+                                          if (e.key === "Enter") {
+                                            e.stopPropagation();
+                                            handleRenameFile();
+                                          } else if (e.key === "Escape") {
+                                            e.stopPropagation();
+                                            setRenameTarget(null);
+                                            setRenameValue("");
+                                          }
+                                        }}
+                                        onBlur={() => {
+                                          handleRenameFile();
+                                        }}
+                                        onClick={(e) => e.stopPropagation()}
+                                        className="h-5 px-1 text-xs bg-background border border-input rounded flex-1 min-w-0 outline-none focus:ring-1 focus:ring-ring"
+                                      />
+                                    ) : (
+                                      <span className="truncate">{file.name}</span>
+                                    )}
+                                  </div>
+                                  <div className="px-2 w-20 shrink-0 text-right text-muted-foreground">{file.isDir ? "-" : formatSize(file.size)}</div>
+                                  <div className="px-2 w-16 shrink-0 text-right text-muted-foreground">{file.isDir ? "文件夹" : "文件"}</div>
+                                </div>
+                              </ContextMenuTrigger>
+                              <ContextMenuContent className="w-48">
+                                {file.isDir && (
+                                  <ContextMenuItem onClick={() => loadRemoteFiles(file.path)}>
+                                    <FolderOpen className="mr-2 h-3.5 w-3.5" /> 打开
+                                  </ContextMenuItem>
+                                )}
+                                {!file.isDir && (
+                                  <ContextMenuItem onClick={() => handleDownloadFile(file)}>
+                                    <Download className="mr-2 h-3.5 w-3.5" /> 下载
+                                  </ContextMenuItem>
+                                )}
+                                <ContextMenuSeparator />
+                                <ContextMenuItem onClick={() => handleCopyFiles(getSelectedFiles(file))}>
+                                  <Copy className="mr-2 h-3.5 w-3.5" /> 复制
+                                </ContextMenuItem>
+                                <ContextMenuItem onClick={() => handleCutFiles(getSelectedFiles(file))}>
+                                  <Scissors className="mr-2 h-3.5 w-3.5" /> 剪切
+                                </ContextMenuItem>
+                                {clipboard.length > 0 && (
+                                  <ContextMenuItem onClick={() => { /* TODO: paste */ }}>
+                                    <ClipboardPaste className="mr-2 h-3.5 w-3.5" /> 粘贴
+                                  </ContextMenuItem>
+                                )}
+                                <ContextMenuSeparator />
+                                <ContextMenuItem onClick={() => startRename(file.path, file.name)}>
+                                  <Pencil className="mr-2 h-3.5 w-3.5" /> 重命名
+                                </ContextMenuItem>
+                                <ContextMenuItem onClick={() => handleDeleteFile(file)} className="text-red-600">
+                                  <Trash2 className="mr-2 h-3.5 w-3.5" /> 删除
+                                </ContextMenuItem>
+                              </ContextMenuContent>
+                            </ContextMenu>
+                          ))}
+                          {remoteFiles.length === 0 && !loadingFiles && (
+                            <div className="py-8 text-center text-xs text-muted-foreground">空文件夹</div>
+                          )}
                         </div>
-                      ))}
-                      {remoteFiles.length === 0 && !loadingFiles && (
-                        <div className="py-8 text-center text-xs text-muted-foreground">空文件夹</div>
-                      )}
-                    </div>
+                      </ContextMenuTrigger>
+                      <ContextMenuContent className="w-48">
+                        <ContextMenuItem onClick={() => { setMkdirEditing(true); setMkdirValue(""); }}>
+                          <FolderPlus className="mr-2 h-3.5 w-3.5" /> 新建文件夹
+                        </ContextMenuItem>
+                        <ContextMenuItem onClick={() => handleUpload()}>
+                          <Upload className="mr-2 h-3.5 w-3.5" /> 上传文件
+                        </ContextMenuItem>
+                        {clipboard.length > 0 && (
+                          <ContextMenuItem onClick={() => { /* TODO: paste */ }}>
+                            <ClipboardPaste className="mr-2 h-3.5 w-3.5" /> 粘贴
+                          </ContextMenuItem>
+                        )}
+                        <ContextMenuSeparator />
+                        <ContextMenuItem onClick={() => loadRemoteFiles(remotePath)}>
+                          <RefreshCw className="mr-2 h-3.5 w-3.5" /> 刷新
+                        </ContextMenuItem>
+                      </ContextMenuContent>
+                    </ContextMenu>
                   </ScrollArea>
                   <div className="flex items-center justify-between px-3 py-1 border-t text-xs text-muted-foreground">
                     <span>{remoteFiles.filter((f) => f.isDir).length} 个文件夹, {remoteFiles.filter((f) => !f.isDir).length} 个文件</span>
@@ -914,29 +1150,29 @@ export function BatchModeView() {
                     </div>
                   </div>
                   {transferSessions.length > 0 ? (
-                    <ScrollArea className="flex-1 min-h-0">
-                      <div className="p-1 space-y-1">
+                    <ScrollArea className="flex-1 min-h-0 w-full">
+                      <div className="p-1 space-y-1 w-full min-w-0">
                         {transferSessions.map((session) => (
-                          <div key={session.id} className="rounded border bg-card">
+                          <div key={session.id} className="rounded border bg-card w-full min-w-0">
                             <button
                               onClick={() => setCollapsedTransfer((prev) => { const next = new Set(prev); next.has(session.id) ? next.delete(session.id) : next.add(session.id); return next; })}
-                              className="flex w-full items-center gap-2 px-2 py-1 text-xs hover:bg-accent/20"
+                              className="flex w-full items-center gap-2 px-2 py-1 text-xs hover:bg-accent/20 min-w-0"
                             >
-                              {collapsedTransfer.has(session.id) ? <ChevronRight className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                              {collapsedTransfer.has(session.id) ? <ChevronRight className="h-3 w-3 shrink-0" /> : <ChevronDown className="h-3 w-3 shrink-0" />}
                               {getStatusIcon(session.status)}
-                              <span className="truncate flex-1 text-left">{session.host}</span>
-                              <span className="text-muted-foreground">{session.completedCount}/{session.totalCount}</span>
+                              <span className="truncate flex-1 text-left min-w-0">{session.host}</span>
+                              <span className="text-muted-foreground shrink-0">{session.completedCount}/{session.totalCount}</span>
                             </button>
                             {!collapsedTransfer.has(session.id) && (
-                              <div className="border-t px-2 py-1">
-                                <Progress value={session.progress} className={cn("h-1 mb-1", session.status === "completed" ? "[&>div]:bg-emerald-500" : "[&>div]:bg-blue-500")} />
-                                <div className="space-y-0.5">
+                              <div className="border-t px-2 py-1 w-full min-w-0">
+                                <Progress value={session.progress} className={cn("h-1 mb-1 max-w-full", session.status === "completed" ? "[&>div]:bg-emerald-500" : "[&>div]:bg-blue-500")} />
+                                <div className="space-y-0.5 w-full min-w-0">
                                   {session.files.map((file) => (
-                                    <div key={file.id} className="flex items-center gap-2 text-xs text-muted-foreground min-w-0">
-                                    {getStatusIcon(file.status)}
-                                    <span className="truncate flex-1 min-w-0">{file.filename}</span>
-                                    <span className="shrink-0">{file.speed}</span>
-                                  </div>
+                                    <div key={file.id} className="flex items-center gap-2 text-xs text-muted-foreground w-full min-w-0">
+                                      {getStatusIcon(file.status)}
+                                      <span className="truncate flex-1 min-w-0">{file.filename}</span>
+                                      <span className="shrink-0">{file.speed}</span>
+                                    </div>
                                   ))}
                                 </div>
                               </div>
@@ -995,6 +1231,7 @@ export function BatchModeView() {
           </div>
         </div>
       </div>
+
     </div>
   );
 }

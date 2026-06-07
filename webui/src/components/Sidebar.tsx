@@ -52,6 +52,7 @@ interface SidebarProps {
   onOpenPpt?: () => void;
   onOpenSSH?: () => void;
   onOpenDb?: () => void;
+  onOpenKb?: () => void;
   onOpenSearch: () => void;
   onToggleArchived: () => void;
   onUpdateView: (view: Partial<SidebarViewState>) => void;
@@ -126,6 +127,7 @@ export function Sidebar(props: SidebarProps) {
         onOpenPpt={props.onOpenPpt ?? (() => {})}
         onOpenSSH={props.onOpenSSH ?? (() => {})}
         onOpenDb={props.onOpenDb ?? (() => {})}
+        onOpenKb={props.onOpenKb ?? (() => {})}
         onGoHome={props.onGoHome ?? (() => {})}
       />
       <Separator className="mx-2 mb-2 bg-sidebar-border/50" />
@@ -228,6 +230,7 @@ function ToolboxNavigation({
   onOpenPpt,
   onOpenSSH,
   onOpenDb,
+  onOpenKb,
   onGoHome,
 }: {
   collapsed: boolean;
@@ -236,6 +239,7 @@ function ToolboxNavigation({
   onOpenPpt: () => void;
   onOpenSSH: () => void;
   onOpenDb: () => void;
+  onOpenKb: () => void;
   onGoHome: () => void;
 }) {
   const { licenseActive } = useLicense();
@@ -262,6 +266,8 @@ function ToolboxNavigation({
             ? onOpenSSH
           : item.label === "数据库"
             ? onOpenDb
+          : item.label === "知识库"
+            ? onOpenKb
           : onGoHome;
         return (
           <SidebarActionButton

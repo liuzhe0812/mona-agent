@@ -22,6 +22,8 @@ import { useWorkspaceStore } from "@/lib/workspace-store";
 import { normalizeLegacyLongTaskMessages } from "@/lib/thread-display-compat";
 import { scrubSubagentUiMessages } from "@/lib/subagent-channel-display";
 import { useClient } from "@/providers/ClientProvider";
+import { useKbStore } from "@/stores/kb-store";
+import { retrieveKbContext, buildKbSystemPrompt } from "@/lib/kb-rag";
 
 function projectWebuiThreadMessages(messages: UIMessage[]): UIMessage[] {
   return scrubSubagentUiMessages(normalizeLegacyLongTaskMessages(messages));
@@ -117,12 +119,28 @@ export function ThreadShell({
     version: historyVersion,
   } = useSessionHistory(historyKey);
   const { client, modelName, token } = useClient();
+  const kbProjectsRaw = useKbStore((s) => s.projects);
+  const kbProjects = useMemo(
+    () => kbProjectsRaw.map((p) => ({ id: p.id, name: p.name })),
+    [kbProjectsRaw],
+  );
+  const selectedKbForChat = useKbStore((s) => s.selectedKbForChat);
+  const setSelectedKbForChat = useKbStore((s) => s.setSelectedKbForChat);
+  const selectedKbProjectName = useKbStore(
+    (s) => {
+      const p = s.projects.find((p) => p.id === s.selectedKbForChat);
+      return p?.name ?? null;
+    },
+  );
   const [booting, setBooting] = useState(false);
   const [slashCommands, setSlashCommands] = useState<SlashCommand[]>([]);
-  const [heroImageMode, setHeroImageMode] = useState(false);
+  const [imageMode, setImageMode] = useState(false);
   const [providerOptions, setProviderOptions] = useState<
     Array<{ name: string; label: string; free_default_model?: string | null; model?: string | null }>
   >([]);
+  const [imageGenConfig, setImageGenConfig] = useState<{ provider: string; model: string } | null>(null);
+  const preImageModeRef = useRef<{ provider: string; model: string } | null>(null);
+  const activeModelRef = useRef<{ provider: string; model: string } | null>(null);
   const [zenFreeModels, setZenFreeModels] = useState<string[]>([]);
   const [scrollToBottomSignal, setScrollToBottomSignal] = useState(0);
   const pendingFirstRef = useRef<PendingFirstMessage | null>(null);
@@ -298,6 +316,18 @@ export function ThreadShell({
               model: p.model,
             }));
           setProviderOptions(options);
+          if (settings.image_generation?.provider && settings.image_generation?.model) {
+            setImageGenConfig({
+              provider: settings.image_generation.provider,
+              model: settings.image_generation.model,
+            });
+          }
+          if (settings.agent?.provider && settings.agent?.model) {
+            activeModelRef.current = {
+              provider: settings.agent.provider,
+              model: settings.agent.model,
+            };
+          }
           if (settings.runtime?.workspace_path) {
             setWorkspacePath(settings.runtime.workspace_path);
           }
@@ -333,19 +363,57 @@ export function ThreadShell({
     async (provider: string, model: string) => {
       try {
         const payload = await updateSettings(token, {
-          modelPreset: "default",
           provider,
           model: model || undefined,
-          providerModel: model || undefined,
         });
         const newModel = payload.agent.model || null;
         onModelNameChange?.(newModel);
+        // Track the active provider+model for image mode auto-switch
+        if (payload.agent?.provider && payload.agent?.model) {
+          activeModelRef.current = {
+            provider: payload.agent.provider,
+            model: payload.agent.model,
+          };
+        }
+        // Refresh provider options from the updated settings so the dropdown
+        // stays in sync (e.g. the previously-active provider now shows its
+        // stored model instead of the old active-model fallback).
+        if (payload.providers) {
+          const options = payload.providers
+            .filter((p: { configured: boolean }) => p.configured)
+            .map((p: { name: string; label: string; free_default_model?: string | null; model?: string | null }) => ({
+              name: p.name,
+              label: p.label,
+              free_default_model: p.free_default_model,
+              model: p.model,
+            }));
+          setProviderOptions(options);
+        }
       } catch {
         // silently ignore switch errors
       }
     },
     [token, onModelNameChange],
   );
+
+  // Auto-switch model when image mode toggles
+  useEffect(() => {
+    if (!imageGenConfig) return;
+    if (imageMode) {
+      // Save current active provider+model before switching to image model
+      if (activeModelRef.current && !preImageModeRef.current) {
+        preImageModeRef.current = { ...activeModelRef.current };
+      }
+      handleModelSwitch(imageGenConfig.provider, imageGenConfig.model);
+    } else {
+      // Switch back to the previous default model
+      const prev = preImageModeRef.current;
+      if (prev) {
+        handleModelSwitch(prev.provider, prev.model);
+        preImageModeRef.current = null;
+      }
+    }
+  }, [imageMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleWelcomeSend = useCallback(
     async (content: string, images?: SendImage[], options?: SendOptions) => {
@@ -362,15 +430,30 @@ export function ThreadShell({
   );
 
   const handleThreadSend = useCallback(
-    (content: string, _images?: SendImage[], _options?: SendOptions) => {
+    async (content: string, _images?: SendImage[], _options?: SendOptions) => {
       if (isStreaming) {
         pendingQueue.enqueue(content);
         return;
       }
       setScrollToBottomSignal((value) => value + 1);
-      send(content, _images, _options);
+
+      // Inject KB RAG context if a knowledge base is selected
+      let finalContent = content;
+      if (selectedKbForChat) {
+        try {
+          const ragContext = await retrieveKbContext(selectedKbForChat, content);
+          if (ragContext) {
+            const systemPrompt = buildKbSystemPrompt(ragContext);
+            finalContent = `${systemPrompt}\n\n---\n\n${content}`;
+          }
+        } catch (err) {
+          console.warn("[ThreadShell] KB RAG retrieval failed:", err);
+        }
+      }
+
+      send(finalContent, _images, _options);
     },
-    [isStreaming, pendingQueue, send],
+    [isStreaming, pendingQueue, send, selectedKbForChat],
   );
 
   const handlePendingAppend = useCallback(
@@ -445,8 +528,8 @@ export function ThreadShell({
           onModelSwitch={handleModelSwitch}
           variant={showHeroComposer ? "hero" : "thread"}
           slashCommands={slashCommands}
-          imageMode={showHeroComposer ? heroImageMode : undefined}
-          onImageModeChange={showHeroComposer ? setHeroImageMode : undefined}
+          imageMode={imageMode}
+          onImageModeChange={setImageMode}
           onStop={stop}
           runStartedAt={runStartedAt}
           goalState={goalState}
@@ -455,6 +538,10 @@ export function ThreadShell({
           onPendingRemove={pendingQueue.remove}
           onPendingEdit={pendingQueue.update}
           isPendingFull={pendingQueue.messages.length >= 3}
+          kbProjectId={selectedKbForChat}
+          kbProjectName={selectedKbProjectName}
+          kbProjects={kbProjects.length > 0 ? kbProjects : undefined}
+          onKbSelect={setSelectedKbForChat}
         />
       ) : (
         <ThreadComposer
@@ -468,8 +555,8 @@ export function ThreadShell({
           onModelSwitch={handleModelSwitch}
           variant="hero"
           slashCommands={slashCommands}
-          imageMode={heroImageMode}
-          onImageModeChange={setHeroImageMode}
+          imageMode={imageMode}
+          onImageModeChange={setImageMode}
           runStartedAt={runStartedAt}
           goalState={goalState}
           pendingMessages={pendingQueue.messages}
@@ -477,6 +564,10 @@ export function ThreadShell({
           onPendingRemove={pendingQueue.remove}
           onPendingEdit={pendingQueue.update}
           isPendingFull={pendingQueue.messages.length >= 3}
+          kbProjectId={selectedKbForChat}
+          kbProjectName={selectedKbProjectName}
+          kbProjects={kbProjects.length > 0 ? kbProjects : undefined}
+          onKbSelect={setSelectedKbForChat}
         />
       )}
     </>

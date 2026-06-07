@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Download, FolderOpen, Play, Trash2 } from "lucide-react";
+import { Download, FolderOpen, Trash2 } from "lucide-react";
 
 import { deletePptProject, fetchPptProjects } from "@/lib/api";
 import { isTauri, openPathWithSystemApp } from "@/lib/tauri";
@@ -18,7 +18,6 @@ import type { PptProject } from "@/lib/types";
 interface PptHistoryProps {
   onSelect: (project: PptProject) => void;
   onDownload: (name: string) => void;
-  onResume: (name: string, chatId?: string | null, hasSpecLock?: boolean) => void;
   onDelete?: (name: string) => void;
 }
 
@@ -43,7 +42,7 @@ const STATUS_LABELS: Record<string, string> = {
   done: "已完成",
 };
 
-export function PptHistory({ onSelect, onDownload, onResume, onDelete }: PptHistoryProps) {
+export function PptHistory({ onSelect, onDownload, onDelete }: PptHistoryProps) {
   const { token } = useClient();
   const workspacePath = useWorkspaceStore((s) => s.workspacePath);
   const [projects, setProjects] = useState<PptProject[]>([]);
@@ -75,7 +74,7 @@ export function PptHistory({ onSelect, onDownload, onResume, onDelete }: PptHist
 
   const handleOpenDir = async (name: string) => {
     if (!isTauri() || !workspacePath) return;
-    const dirPath = `${workspacePath}/ppt-projects/${name}`;
+    const dirPath = `${workspacePath}/ppt_projects/${name}`;
     try {
       await openPathWithSystemApp(dirPath);
     } catch (e) {
@@ -92,113 +91,81 @@ export function PptHistory({ onSelect, onDownload, onResume, onDelete }: PptHist
   }
 
   return (
-    <div className="flex flex-col">
+    <div className="flex h-full flex-col overflow-y-auto">
       <div className="px-2 py-1 text-[11px] font-medium text-muted-foreground">
         历史项目
       </div>
-      {projects.map((p) => {
-        const canResume = p.status === "generating" || p.status === "planning";
-        return (
-          <ContextMenu key={p.name}>
-            <ContextMenuTrigger asChild>
-              <button
-                className={cn(
-                  "flex w-full items-center gap-2 px-2 py-1.5 text-left",
-                  "hover:bg-accent",
-                )}
-                onClick={() => onSelect(p)}
-              >
-                <FolderOpen className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-[12px]">{p.name}</div>
-                  <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
-                    <span>{STATUS_LABELS[p.status] || p.status}</span>
-                    <span>·</span>
-                    <span>{p.slideCount}页</span>
-                    <span>·</span>
-                    <span>{formatRelativeTime(p.createdAt)}</span>
-                  </div>
+      {projects.map((p) => (
+        <ContextMenu key={p.name}>
+          <ContextMenuTrigger asChild>
+            <button
+              className={cn(
+                "flex w-full items-center gap-2 px-2 py-1.5 text-left",
+                "hover:bg-accent",
+              )}
+              onClick={() => onSelect(p)}
+            >
+              <FolderOpen className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-[12px]">{p.name}</div>
+                <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+                  <span>{STATUS_LABELS[p.status] || p.status}</span>
+                  <span>·</span>
+                  <span>{p.slideCount}页</span>
+                  <span>·</span>
+                  <span>{formatRelativeTime(p.createdAt)}</span>
                 </div>
-                {canResume && (
-                  <span
-                    role="button"
-                    tabIndex={0}
-                    className="shrink-0 rounded p-0.5 hover:bg-accent text-emerald-600 dark:text-emerald-400"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onResume(p.name, p.chatId, p.hasSpecLock);
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.stopPropagation();
-                        onResume(p.name, p.chatId, p.hasSpecLock);
-                      }
-                    }}
-                    title="继续生成"
-                  >
-                    <Play className="h-3 w-3" />
-                  </span>
-                )}
-                {p.hasExport && (
-                  <span
-                    role="button"
-                    tabIndex={0}
-                    className="shrink-0 rounded p-0.5 hover:bg-accent"
-                    onClick={(e) => {
+              </div>
+              {p.hasExport && (
+                <span
+                  role="button"
+                  tabIndex={0}
+                  className="shrink-0 rounded p-0.5 hover:bg-accent"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDownload(p.name);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
                       e.stopPropagation();
                       onDownload(p.name);
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.stopPropagation();
-                        onDownload(p.name);
-                      }
-                    }}
-                  >
-                    <Download className="h-3 w-3 text-muted-foreground" />
-                  </span>
-                )}
-              </button>
-            </ContextMenuTrigger>
-            <ContextMenuContent className="w-40">
-              {canResume && (
-                <ContextMenuItem
-                  onClick={() => onResume(p.name, p.chatId, p.hasSpecLock)}
-                  className="text-[12px]"
+                    }
+                  }}
                 >
-                  <Play className="mr-2 h-3.5 w-3.5" />
-                  继续生成
-                </ContextMenuItem>
+                  <Download className="h-3 w-3 text-muted-foreground" />
+                </span>
               )}
-              {p.hasExport && (
-                <ContextMenuItem
-                  onClick={() => onDownload(p.name)}
-                  className="text-[12px]"
-                >
-                  <Download className="mr-2 h-3.5 w-3.5" />
-                  下载 PPTX
-                </ContextMenuItem>
-              )}
+            </button>
+          </ContextMenuTrigger>
+          <ContextMenuContent className="w-40">
+            {p.hasExport && (
               <ContextMenuItem
-                onClick={() => handleOpenDir(p.name)}
+                onClick={() => onDownload(p.name)}
                 className="text-[12px]"
               >
-                <FolderOpen className="mr-2 h-3.5 w-3.5" />
-                打开任务目录
+                <Download className="mr-2 h-3.5 w-3.5" />
+                下载 PPTX
               </ContextMenuItem>
-              <ContextMenuSeparator />
-              <ContextMenuItem
-                onClick={() => handleDelete(p.name)}
-                disabled={deleting === p.name}
-                className="text-[12px] text-destructive focus:text-destructive"
-              >
-                <Trash2 className="mr-2 h-3.5 w-3.5" />
-                {deleting === p.name ? "删除中..." : "删除项目"}
-              </ContextMenuItem>
-            </ContextMenuContent>
-          </ContextMenu>
-        );
-      })}
+            )}
+            <ContextMenuItem
+              onClick={() => handleOpenDir(p.name)}
+              className="text-[12px]"
+            >
+              <FolderOpen className="mr-2 h-3.5 w-3.5" />
+              打开任务目录
+            </ContextMenuItem>
+            <ContextMenuSeparator />
+            <ContextMenuItem
+              onClick={() => handleDelete(p.name)}
+              disabled={deleting === p.name}
+              className="text-[12px] text-destructive focus:text-destructive"
+            >
+              <Trash2 className="mr-2 h-3.5 w-3.5" />
+              {deleting === p.name ? "删除中..." : "删除项目"}
+            </ContextMenuItem>
+          </ContextMenuContent>
+        </ContextMenu>
+      ))}
     </div>
   );
 }

@@ -82,8 +82,7 @@ export function CodeBlock({
   return (
     <div
       className={cn(
-        "overflow-hidden rounded-lg border",
-        isDark ? "border-white/10" : "border-black/10",
+        "overflow-hidden rounded-lg",
         className,
       )}
     >

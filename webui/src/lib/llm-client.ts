@@ -1,199 +1,242 @@
-import type { LlmConfig } from "@/stores/wiki-store"
-import { isAzureOpenAiEndpoint } from "@/lib/azure-openai"
-import { getProviderConfig, type RequestOverrides } from "./llm-providers"
-import { getHttpFetch, isFetchNetworkError } from "./tauri-fetch"
-import { countReasoningCharsInLine, extractReasoningTextFromLine } from "./reasoning-detector"
+/** Streaming LLM client for the frontend. */
 
-export type { ChatMessage, RequestOverrides } from "./llm-providers"
-export { isFetchNetworkError } from "./tauri-fetch"
+import { httpFetch } from "@/lib/tauri"
+
+export interface LlmConfig {
+  model: string
+  apiKey: string | null
+  apiBase: string
+  providerName: string | null
+}
+
+export interface ChatMessage {
+  role: "system" | "user" | "assistant"
+  content: string
+}
 
 export interface StreamCallbacks {
   onToken: (token: string) => void
-  onReasoningToken?: (token: string) => void
   onDone: () => void
-  onError: (error: Error) => void
+  onError: (err: Error) => void
 }
 
-const DECODER = new TextDecoder()
+export interface StreamOptions {
+  temperature?: number
+  max_tokens?: number
+  signal?: AbortSignal
+}
 
-function parseLines(chunk: Uint8Array, buffer: string): [string[], string] {
-  const text = buffer + DECODER.decode(chunk, { stream: true })
-  const lines = text.split("\n")
-  const remaining = lines.pop() ?? ""
-  return [lines, remaining]
+const DEFAULT_TEMPERATURE = 0.1
+const DEFAULT_MAX_TOKENS = 8192
+
+function isAnthropic(providerName: string | null): boolean {
+  return providerName === "anthropic"
+}
+
+function buildAnthropicHeaders(apiKey: string | null): Record<string, string> {
+  return {
+    "Content-Type": "application/json",
+    "x-api-key": apiKey ?? "",
+    "anthropic-version": "2023-06-01",
+  }
+}
+
+function buildOpenAIHeaders(apiKey: string | null): Record<string, string> {
+  return {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${apiKey ?? ""}`,
+  }
+}
+
+function buildAnthropicBody(
+  model: string,
+  messages: ChatMessage[],
+  options?: StreamOptions,
+): string {
+  // Anthropic Messages API: system is a top-level field, not in messages
+  const system = messages.find((m) => m.role === "system")?.content
+  const nonSystem = messages.filter((m) => m.role !== "system")
+
+  return JSON.stringify({
+    model,
+    messages: nonSystem,
+    ...(system ? { system } : {}),
+    stream: true,
+    temperature: options?.temperature ?? DEFAULT_TEMPERATURE,
+    max_tokens: options?.max_tokens ?? DEFAULT_MAX_TOKENS,
+  })
+}
+
+function buildOpenAIBody(
+  model: string,
+  messages: ChatMessage[],
+  options?: StreamOptions,
+): string {
+  return JSON.stringify({
+    model,
+    messages,
+    stream: true,
+    temperature: options?.temperature ?? DEFAULT_TEMPERATURE,
+    max_tokens: options?.max_tokens ?? DEFAULT_MAX_TOKENS,
+  })
+}
+
+async function parseAnthropicSSE(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  callbacks: StreamCallbacks,
+): Promise<void> {
+  const decoder = new TextDecoder()
+  let buffer = ""
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split("\n")
+    buffer = lines.pop() ?? ""
+
+    for (const line of lines) {
+      const trimmed = line.trim()
+      if (!trimmed || trimmed.startsWith("event:")) continue
+      if (!trimmed.startsWith("data:")) continue
+
+      const data = trimmed.slice(5).trim()
+      if (data === "[DONE]") {
+        callbacks.onDone()
+        return
+      }
+
+      try {
+        const chunk = JSON.parse(data)
+        if (chunk.type === "message_stop") {
+          callbacks.onDone()
+          return
+        }
+        if (chunk.type === "content_block_delta" && chunk.delta?.text) {
+          callbacks.onToken(chunk.delta.text)
+        }
+        if (chunk.type === "error") {
+          callbacks.onError(new Error(chunk.error?.message ?? "Anthropic API error"))
+          return
+        }
+      } catch {
+        // Skip malformed JSON lines
+      }
+    }
+  }
+
+  callbacks.onDone()
+}
+
+async function parseOpenAISSE(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  callbacks: StreamCallbacks,
+): Promise<void> {
+  const decoder = new TextDecoder()
+  let buffer = ""
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split("\n")
+    buffer = lines.pop() ?? ""
+
+    for (const line of lines) {
+      const trimmed = line.trim()
+      if (!trimmed || !trimmed.startsWith("data:")) continue
+
+      const data = trimmed.slice(5).trim()
+      if (data === "[DONE]") {
+        callbacks.onDone()
+        return
+      }
+
+      try {
+        const chunk = JSON.parse(data)
+        const content = chunk.choices?.[0]?.delta?.content
+        if (content) {
+          callbacks.onToken(content)
+        }
+        if (chunk.choices?.[0]?.finish_reason === "stop") {
+          callbacks.onDone()
+          return
+        }
+      } catch {
+        // Skip malformed JSON lines
+      }
+    }
+  }
+
+  callbacks.onDone()
 }
 
 export async function streamChat(
   config: LlmConfig,
-  messages: import("./llm-providers").ChatMessage[],
+  messages: ChatMessage[],
   callbacks: StreamCallbacks,
-  signal?: AbortSignal,
-  requestOverrides?: RequestOverrides,
+  options?: StreamOptions,
 ): Promise<void> {
-  const { onToken, onDone, onError } = callbacks
+  const anthropic = isAnthropic(config.providerName)
 
-  const providerConfig = getProviderConfig(config)
-
-  const timeoutMs = 30 * 60 * 1000
-  let combinedSignal = signal
-  let timeoutController: AbortController | undefined
-  let timeoutFired = false
-
-  if (typeof AbortSignal.timeout === "function") {
-    timeoutController = new AbortController()
-    const timeoutId = setTimeout(() => {
-      timeoutFired = true
-      timeoutController?.abort()
-    }, timeoutMs)
-
-    if (signal) {
-      signal.addEventListener("abort", () => {
-        clearTimeout(timeoutId)
-        timeoutController?.abort()
-      })
-    }
-    combinedSignal = timeoutController.signal
+  if (!config.apiBase) {
+    callbacks.onError(new Error("LLM apiBase is empty — check your provider configuration"))
+    return
   }
+
+  const url = anthropic
+    ? `${config.apiBase}/messages`
+    : `${config.apiBase}/chat/completions`
+
+  console.log(`[llm-client] streamChat: model=${config.model}, provider=${config.providerName}, url=${url}`)
+
+  const headers = anthropic
+    ? buildAnthropicHeaders(config.apiKey)
+    : buildOpenAIHeaders(config.apiKey)
+
+  const body = anthropic
+    ? buildAnthropicBody(config.model, messages, options)
+    : buildOpenAIBody(config.model, messages, options)
 
   let response: Response
   try {
-    const body = providerConfig.buildBody(messages, requestOverrides)
-    const httpFetch = await getHttpFetch()
-    response = await httpFetch(providerConfig.url, {
+    response = await httpFetch(url, {
       method: "POST",
-      headers: providerConfig.headers,
-      body: JSON.stringify(body),
-      signal: combinedSignal,
+      headers,
+      body,
+      signal: options?.signal,
     })
   } catch (err) {
-    if (signal?.aborted) {
-      onDone()
-      return
-    }
-    if (err instanceof Error && err.name === "AbortError") {
-      if (timeoutFired) {
-        onError(new Error(`Request timed out after ${Math.round(timeoutMs / 60000)} min. Try a faster model or a smaller context.`))
-        return
-      }
-      onDone()
-      return
-    }
-    if (isFetchNetworkError(err)) {
-      if (timeoutFired) {
-        onError(new Error(`Request timed out after ${Math.round(timeoutMs / 60000)} min. Try a faster model or a smaller context.`))
-        return
-      }
-      onError(new Error(`Network error reaching ${providerConfig.url}. Check endpoint URL, API key, and connectivity.`))
-      return
-    }
-    onError(err instanceof Error ? err : new Error(String(err)))
+    const msg = err instanceof Error ? err.message : String(err)
+    console.error(`[llm-client] fetch failed: ${msg}`)
+    callbacks.onError(err instanceof Error ? err : new Error(msg))
     return
   }
 
   if (!response.ok) {
-    let errorDetail = `HTTP ${response.status}: ${response.statusText}`
+    let detail = `HTTP ${response.status}`
     try {
-      const body = await response.text()
-      if (body) errorDetail += ` — ${body}`
+      const text = await response.text()
+      if (text) detail += `: ${text}`
     } catch {
-      // ignore body read failure
+      // Ignore read errors on error responses
     }
-    if (
-      response.status === 404 &&
-      (config.provider === "azure" ||
-        (config.provider === "custom" && isAzureOpenAiEndpoint(config.customEndpoint)))
-    ) {
-      onError(
-        new Error(
-          `${errorDetail} — Azure 404 usually means the deployment name is wrong. ` +
-            `Set Model to your Azure deployment name (not the model SKU), ` +
-            `and Endpoint to https://<resource>.openai.azure.com ` +
-            `or .../openai/deployments/<deployment-name>.`,
-        ),
-      )
-      return
-    }
-    onError(new Error(errorDetail))
+    console.error(`[llm-client] streamChat error: ${detail}`)
+    callbacks.onError(new Error(detail))
     return
   }
 
-  if (!response.body) {
-    onError(new Error("Response body is null"))
+  const reader = response.body?.getReader()
+  if (!reader) {
+    callbacks.onError(new Error("Response body is not readable"))
     return
   }
 
-  const reader = response.body.getReader()
-  let lineBuffer = ""
-
-  let contentCharsEmitted = 0
-  let reasoningCharsObserved = 0
-  const recordToken = (text: string) => {
-    contentCharsEmitted += text.length
-    onToken(text)
-  }
-  const recordReasoning = (line: string) => {
-    const reasoningParts = extractReasoningTextFromLine(line)
-    for (const part of reasoningParts) {
-      callbacks.onReasoningToken?.(part)
-    }
-  }
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read()
-
-      if (done) {
-        if (lineBuffer.trim()) {
-          const trimmed = lineBuffer.trim()
-          reasoningCharsObserved += countReasoningCharsInLine(trimmed)
-          recordReasoning(trimmed)
-          const token = providerConfig.parseStream(trimmed)
-          if (token !== null) recordToken(token)
-        }
-        break
-      }
-
-      const [lines, remaining] = parseLines(value, lineBuffer)
-      lineBuffer = remaining
-
-      for (const line of lines) {
-        const trimmed = line.trim()
-        if (!trimmed) continue
-        reasoningCharsObserved += countReasoningCharsInLine(trimmed)
-        recordReasoning(trimmed)
-        const token = providerConfig.parseStream(trimmed)
-        if (token !== null) recordToken(token)
-      }
-    }
-
-    const REASONING_DIAGNOSTIC_THRESHOLD = 200
-    if (
-      contentCharsEmitted === 0 &&
-      reasoningCharsObserved >= REASONING_DIAGNOSTIC_THRESHOLD
-    ) {
-      onError(
-        new Error(
-          `Model produced ${reasoningCharsObserved.toLocaleString()} characters of reasoning / chain-of-thought, but no actual response content. ` +
-          `This usually means the endpoint hit a thinking-token limit, the model didn't transition from thinking to answering, ` +
-          `or the endpoint is misbehaving (the official Anthropic / OpenAI APIs don't have this issue). ` +
-          `Try a shorter input, increase max_tokens, or switch to a different model in Settings.`,
-        ),
-      )
-      return
-    }
-
-    onDone()
-  } catch (err) {
-    if (err instanceof Error && (err.name === "AbortError" || (signal?.aborted))) {
-      onDone()
-      return
-    }
-    if (isFetchNetworkError(err)) {
-      onError(new Error("Connection lost during streaming. Try again."))
-      return
-    }
-    onError(err instanceof Error ? err : new Error(String(err)))
-  } finally {
-    reader.releaseLock()
+  if (anthropic) {
+    await parseAnthropicSSE(reader, callbacks)
+  } else {
+    await parseOpenAISSE(reader, callbacks)
   }
 }

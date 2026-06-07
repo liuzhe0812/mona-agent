@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type Dispatch,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -21,6 +22,7 @@ import {
   Database,
   Eye,
   EyeOff,
+  FolderOpen,
   Gem,
   Globe2,
   Copy,
@@ -30,6 +32,7 @@ import {
   ImageIcon,
   Info,
   KeyRound,
+  Keyboard,
   Layers,
   Loader2,
   Monitor,
@@ -37,14 +40,15 @@ import {
   Orbit,
   Palette,
   Pencil,
-  RefreshCw,
   RotateCcw,
   Search,
   Server,
   ShieldCheck,
   SlidersHorizontal,
   Sparkles,
+  Star,
   Triangle,
+  Trash2,
   Waves,
   Zap,
   type LucideIcon,
@@ -62,8 +66,13 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
   fetchSettings,
-  fetchZenFreeModels,
   updateImageGenerationSettings,
   updateProviderSettings,
   updateSettings,
@@ -76,6 +85,7 @@ import {
   updateDesktopSettings,
   getGatewayStatus,
   type DesktopAppSettings,
+  type SidebarShortcuts,
 } from "@/lib/tauri";
 import { useClient } from "@/providers/ClientProvider";
 import type {
@@ -87,12 +97,12 @@ import type {
 type SettingsSectionKey =
   | "overview"
   | "appearance"
-  | "models"
-  | "providers"
+  | "models_providers"
   | "image"
   | "web"
   | "runtime"
   | "desktop"
+  | "shortcuts"
   | "advanced"
   | "about";
 
@@ -113,6 +123,7 @@ interface AgentSettingsDraft {
   botName: string;
   botIcon: string;
   toolHintMaxLength: number;
+  workspace: string;
 }
 
 type PendingRestartSection = "runtime" | "web" | "image";
@@ -198,9 +209,10 @@ export function SettingsView({
   const [activeSection, setActiveSection] = useState<SettingsSectionKey>("overview");
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
   const [providerQuery, setProviderQuery] = useState("");
-  const [providerForms, setProviderForms] = useState<Record<string, { apiKey: string; apiBase: string }>>({});
+  const [providerForms, setProviderForms] = useState<Record<string, { apiKey: string; apiBase: string; model: string }>>({});
   const [visibleProviderKeys, setVisibleProviderKeys] = useState<Record<string, boolean>>({});
   const [editingProviderKeys, setEditingProviderKeys] = useState<Record<string, boolean>>({});
+  const [highlightProvider, setHighlightProvider] = useState<string | null>(null);
   const [pendingRestartSections, setPendingRestartSections] = useState<PendingRestartSections>(
     EMPTY_PENDING_RESTART_SECTIONS,
   );
@@ -231,6 +243,7 @@ export function SettingsView({
     botName: "mona",
     botIcon: "",
     toolHintMaxLength: 40,
+    workspace: "",
   });
 
   const text = useCallback(
@@ -250,6 +263,7 @@ export function SettingsView({
       botName: payload.agent.bot_name,
       botIcon: payload.agent.bot_icon,
       toolHintMaxLength: payload.agent.tool_hint_max_length,
+      workspace: payload.runtime.workspace_path,
     });
     setWebSearchForm((prev) => ({
       provider: payload.web_search.provider,
@@ -313,23 +327,12 @@ export function SettingsView({
         next[provider.name] = {
           apiKey: next[provider.name]?.apiKey ?? "",
           apiBase: next[provider.name]?.apiBase ?? provider.api_base ?? provider.default_api_base ?? "",
+          model: next[provider.name]?.model ?? provider.model ?? "",
         };
       }
       return next;
     });
   }, [settings]);
-
-  const modelDirty = useMemo(() => {
-    if (!settings) return false;
-    const preset = modelPresetValue(settings);
-    const base = defaultPreset(settings);
-    return (
-      form.modelPreset !== preset ||
-      (form.modelPreset === "default" &&
-        (form.model !== (base?.model ?? settings.agent.model) ||
-          form.provider !== editableDefaultProvider(settings)))
-    );
-  }, [form, settings]);
 
   const runtimeDirty = useMemo(() => {
     if (!settings) return false;
@@ -337,7 +340,8 @@ export function SettingsView({
       form.timezone !== settings.agent.timezone ||
       form.botName !== settings.agent.bot_name ||
       form.botIcon !== settings.agent.bot_icon ||
-      form.toolHintMaxLength !== settings.agent.tool_hint_max_length
+      form.toolHintMaxLength !== settings.agent.tool_hint_max_length ||
+      form.workspace !== settings.runtime.workspace_path
     );
   }, [form, settings]);
 
@@ -362,28 +366,6 @@ export function SettingsView({
     [pendingRestartSections, settings?.requires_restart],
   );
 
-  const saveModelSettings = async () => {
-    if (!settings || !modelDirty || saving) return;
-    setSaving(true);
-    try {
-      const defaultModel = defaultPreset(settings)?.model ?? settings.agent.model;
-      const defaultProvider = editableDefaultProvider(settings);
-      const payload = await updateSettings(token, {
-        modelPreset: form.modelPreset,
-        ...(form.modelPreset === "default" && form.model !== defaultModel ? { model: form.model } : {}),
-        ...(form.modelPreset === "default" && form.provider !== defaultProvider ? { provider: form.provider } : {}),
-        ...(form.modelPreset === "default" && form.model ? { providerModel: form.model } : {}),
-      });
-      applyPayload(payload);
-      onModelNameChange(payload.agent.model || null);
-      setError(null);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setSaving(false);
-    }
-  };
-
   const saveRuntimeSettings = async () => {
     if (!settings || !runtimeDirty || saving) return;
     setSaving(true);
@@ -393,6 +375,7 @@ export function SettingsView({
         botName: form.botName,
         botIcon: form.botIcon,
         toolHintMaxLength: form.toolHintMaxLength,
+        workspace: form.workspace,
       });
       applyPayload(payload);
       if (payload.requires_restart) {
@@ -427,8 +410,10 @@ export function SettingsView({
     if (providerSaving) return;
     const provider = settings?.providers.find((item) => item.name === providerName);
     if (!provider) return;
-    const providerForm = providerForms[providerName] ?? { apiKey: "", apiBase: "" };
+    const providerForm = providerForms[providerName] ?? { apiKey: "", apiBase: "", model: "" };
     const apiKey = providerForm.apiKey.trim();
+    const apiBase = providerForm.apiBase.trim();
+    const model = providerForm.model.trim();
     const apiKeyRequired = provider.api_key_required ?? true;
     if (!provider.configured && apiKeyRequired && !apiKey) {
       setError(t("settings.byok.apiKeyRequired"));
@@ -438,8 +423,9 @@ export function SettingsView({
     try {
       const payload = await updateProviderSettings(token, {
         provider: providerName,
-        apiKey: apiKey || undefined,
-        apiBase: providerForm.apiBase.trim(),
+        apiKey,
+        apiBase,
+        model: model || undefined,
       });
       applyPayload(payload);
       if (payload.requires_restart) {
@@ -449,7 +435,8 @@ export function SettingsView({
         ...prev,
         [providerName]: {
           apiKey: "",
-          apiBase: providerForm.apiBase.trim(),
+          apiBase,
+          model,
         },
       }));
       setVisibleProviderKeys((prev) => ({ ...prev, [providerName]: false }));
@@ -459,6 +446,53 @@ export function SettingsView({
       setError((err as Error).message);
     } finally {
       setProviderSaving(null);
+    }
+  };
+
+  const deleteProvider = async (providerName: string) => {
+    if (providerSaving) return;
+    setProviderSaving(providerName);
+    try {
+      const payload = await updateProviderSettings(token, {
+        provider: providerName,
+        apiKey: "",
+        apiBase: "",
+      });
+      applyPayload(payload);
+      if (payload.requires_restart) {
+        setPendingRestartSections((prev) => ({ ...prev, image: true }));
+      }
+      setProviderForms((prev) => ({
+        ...prev,
+        [providerName]: { apiKey: "", apiBase: "", model: "" },
+      }));
+      setVisibleProviderKeys((prev) => ({ ...prev, [providerName]: false }));
+      setEditingProviderKeys((prev) => ({ ...prev, [providerName]: false }));
+      setExpandedProvider(null);
+      setError(null);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setProviderSaving(null);
+    }
+  };
+
+  const setDefaultProvider = async (providerName: string) => {
+    if (providerSaving) return;
+    const provider = settings?.providers.find((p) => p.name === providerName);
+    const model = provider?.model ?? "";
+    if (!model) return;
+    try {
+      const payload = await updateSettings(token, {
+        provider: providerName,
+        model,
+        providerModel: model,
+      });
+      applyPayload(payload);
+      onModelNameChange?.(payload.agent.model || null);
+      setError(null);
+    } catch (err) {
+      setError((err as Error).message);
     }
   };
 
@@ -526,6 +560,7 @@ export function SettingsView({
       [providerName]: {
         apiKey: "",
         apiBase: provider.api_base ?? provider.default_api_base ?? "",
+        model: provider.model ?? "",
       },
     }));
     setVisibleProviderKeys((prev) => ({ ...prev, [providerName]: false }));
@@ -579,6 +614,7 @@ export function SettingsView({
           [providerName]: {
             apiKey: "",
             apiBase: forms[providerName]?.apiBase ?? "",
+            model: forms[providerName]?.model ?? "",
           },
         }));
         setVisibleProviderKeys((visible) => ({ ...visible, [providerName]: false }));
@@ -609,20 +645,9 @@ export function SettingsView({
             onChangeLocalPrefs={setLocalPrefs}
           />
         );
-      case "models":
+      case "models_providers":
         return (
-          <ModelsSettings
-            form={form}
-            setForm={setForm}
-            settings={settings}
-            dirty={modelDirty}
-            saving={saving}
-            onSave={saveModelSettings}
-          />
-        );
-      case "providers":
-        return (
-          <ProvidersSettings
+          <ModelsProvidersSettings
             settings={settings}
             expandedProvider={expandedProvider}
             providerForms={providerForms}
@@ -640,15 +665,20 @@ export function SettingsView({
                 [provider]: {
                   apiKey: prev[provider]?.apiKey ?? "",
                   apiBase: prev[provider]?.apiBase ?? "",
+                  model: prev[provider]?.model ?? "",
                   ...value,
                 },
               }))
             }
             onSaveProvider={saveProvider}
+            onDeleteProvider={deleteProvider}
             onResetProviderDraft={resetProviderDraft}
+            onSetDefaultProvider={setDefaultProvider}
             imageProviderRestartPending={pendingRestartSections.image}
             onRestart={onRestart}
             isRestarting={isRestarting}
+            highlightProvider={highlightProvider}
+            onHighlightConsumed={() => setHighlightProvider(null)}
           />
         );
       case "image":
@@ -660,7 +690,10 @@ export function SettingsView({
             saving={imageGenerationSaving}
             onChangeForm={setImageGenerationForm}
             onSave={saveImageGenerationSettings}
-            onOpenProviders={() => setActiveSection("providers")}
+            onOpenProviders={(provider) => {
+              setHighlightProvider(provider ?? null);
+              setActiveSection("models_providers");
+            }}
             onRestart={onRestart}
             isRestarting={isRestarting}
             requiresRestartPending={pendingRestartSections.image}
@@ -705,6 +738,8 @@ export function SettingsView({
         );
       case "desktop":
         return <DesktopSettings />;
+      case "shortcuts":
+        return <ShortcutsSettings />;
       case "advanced":
         return <AdvancedSettings settings={settings} />;
       case "about":
@@ -763,12 +798,12 @@ export function SettingsView({
 const SETTINGS_NAV_ITEMS: Array<{ key: SettingsSectionKey; icon: LucideIcon; fallback: string; desktopOnly?: boolean }> = [
   { key: "overview", icon: Activity, fallback: "Overview" },
   { key: "appearance", icon: Palette, fallback: "Appearance" },
-  { key: "models", icon: SlidersHorizontal, fallback: "Models" },
-  { key: "providers", icon: KeyRound, fallback: "Providers" },
+  { key: "models_providers", icon: SlidersHorizontal, fallback: "模型供应商" },
   { key: "image", icon: ImageIcon, fallback: "Image" },
   { key: "web", icon: Globe2, fallback: "Web" },
   { key: "runtime", icon: Server, fallback: "Runtime" },
   { key: "desktop", icon: Monitor, fallback: "桌面", desktopOnly: true },
+  { key: "shortcuts", icon: Keyboard, fallback: "快捷键", desktopOnly: true },
   { key: "advanced", icon: ShieldCheck, fallback: "Advanced" },
   { key: "about", icon: Info, fallback: "关于" },
 ];
@@ -915,7 +950,7 @@ function OverviewSettings({
             title={tx("settings.overview.model", "Current model")}
             value={settings.agent.model}
             caption={`${activeProvider} · ${activePreset}`}
-            onClick={() => onSelectSection("models")}
+            onClick={() => onSelectSection("models_providers")}
           />
           <OverviewListRow
             icon={KeyRound}
@@ -928,7 +963,7 @@ function OverviewSettings({
               "{{count}}",
               String(settings.providers.length),
             )}
-            onClick={() => onSelectSection("providers")}
+            onClick={() => onSelectSection("models_providers")}
           />
         </SettingsGroup>
       </section>
@@ -1084,192 +1119,7 @@ function AppearanceSettings({
   );
 }
 
-function ModelsSettings({
-  form,
-  setForm,
-  settings,
-  dirty,
-  saving,
-  onSave,
-}: {
-  form: AgentSettingsDraft;
-  setForm: Dispatch<SetStateAction<AgentSettingsDraft>>;
-  settings: SettingsPayload;
-  dirty: boolean;
-  saving: boolean;
-  onSave: () => void;
-}) {
-  const { t } = useTranslation();
-  const { token } = useClient();
-  const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
-  const [zenFreeModels, setZenFreeModels] = useState<string[]>([]);
-  const [zenModelsLoading, setZenModelsLoading] = useState(false);
-  const configuredProviders = settings.providers.filter((provider) => provider.configured);
-  const showAutoProvider = defaultPreset(settings)?.provider === "auto" || form.provider === "auto";
-  const providerOptions = showAutoProvider
-    ? [{ name: "auto", label: tx("settings.values.auto", "Auto") }, ...configuredProviders]
-    : configuredProviders;
-  const providerValue = providerOptions.some((provider) => provider.name === form.provider)
-    ? form.provider
-    : "";
-  const selectedPreset = settings.model_presets.find((preset) => preset.name === form.modelPreset);
-  const handleProviderChange = (provider: string) => {
-    const providerData = settings.providers.find((p) => p.name === provider);
-    const freeModel = providerData?.free_default_model;
-    const storedModel = providerData?.model;
-    setForm((prev) => ({
-      ...prev,
-      provider,
-      model: freeModel || storedModel || "",
-    }));
-  };
-  const isFreeProvider = !!settings.providers.find((p) => p.name === form.provider)?.free_default_model;
-
-  const fetchZenModels = useCallback(async () => {
-    if (!token) return;
-    setZenModelsLoading(true);
-    try {
-      const result = await fetchZenFreeModels(token);
-      setZenFreeModels(result.models);
-    } catch (e) {
-      console.error("Failed to fetch Zen free models:", e);
-    } finally {
-      setZenModelsLoading(false);
-    }
-  }, [token]);
-
-  useEffect(() => {
-    if (isFreeProvider && zenFreeModels.length === 0 && token) {
-      fetchZenModels();
-    }
-  }, [isFreeProvider, token]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  return (
-    <div className="space-y-7">
-      <section>
-        <SettingsSectionTitle>{tx("settings.sections.presets", "Presets")}</SettingsSectionTitle>
-        <div className="grid gap-3 sm:grid-cols-2">
-          {settings.model_presets.map((preset) => (
-            <button
-              key={preset.name}
-              type="button"
-              onClick={() => {
-                const providerData = settings.providers.find(
-                  (p) => p.name === preset.provider,
-                );
-                const storedModel = providerData?.model;
-                setForm((prev) => ({
-                  ...prev,
-                  modelPreset: preset.name,
-                  model:
-                    preset.name === "default" && storedModel
-                      ? storedModel
-                      : preset.model,
-                  provider: preset.provider,
-                }));
-              }}
-              className={cn(
-                "rounded-[22px] border px-4 py-4 text-left transition-colors",
-                form.modelPreset === preset.name
-                  ? "border-primary/35 bg-primary/5 text-foreground"
-                  : "border-border/45 bg-card/82 hover:bg-muted/30",
-              )}
-            >
-              <span className="flex items-center justify-between gap-2">
-                <span className="truncate text-[15px] font-semibold">{preset.label}</span>
-                {form.modelPreset === preset.name ? <Check className="h-4 w-4" aria-hidden /> : null}
-              </span>
-              <span className="mt-2 block truncate text-[12px] text-muted-foreground">{preset.model}</span>
-              <span className="mt-1 block text-[12px] text-muted-foreground">
-                {preset.provider} · {preset.max_tokens} tokens
-              </span>
-            </button>
-          ))}
-        </div>
-      </section>
-
-      <section>
-        <SettingsSectionTitle>{t("settings.sections.ai")}</SettingsSectionTitle>
-        <SettingsGroup>
-          <SettingsRow
-            title={tx("settings.rows.selectedPreset", "Selected preset")}
-            description={tx("settings.help.selectedPreset", "Named presets are read-only here; edit them in config.json.")}
-          >
-            <StatusPill>{selectedPreset?.label ?? form.modelPreset}</StatusPill>
-          </SettingsRow>
-          {form.modelPreset === "default" ? (
-            <>
-              <SettingsRow
-                title={t("settings.rows.provider")}
-                description={t("settings.help.provider")}
-              >
-                <ProviderPicker
-                  providers={providerOptions}
-                  value={providerValue}
-                  emptyLabel={t("settings.byok.noConfiguredProviders")}
-                  onChange={handleProviderChange}
-                />
-              </SettingsRow>
-              <SettingsRow
-                title={t("settings.rows.model")}
-                description={t("settings.help.model")}
-              >
-                {isFreeProvider ? (
-                  <div className="flex items-center gap-2">
-                    <select
-                      value={form.model}
-                      onChange={(e) => setForm((prev) => ({ ...prev, model: e.target.value }))}
-                      className="h-8 max-w-[220px] rounded-full border bg-background px-3 text-[13px]"
-                    >
-                      {zenFreeModels.map((m) => (
-                        <option key={m} value={m}>{m}</option>
-                      ))}
-                      {!zenFreeModels.includes(form.model) && (
-                        <option value={form.model}>{form.model}</option>
-                      )}
-                    </select>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-7 w-7 rounded-full"
-                      onClick={fetchZenModels}
-                      disabled={zenModelsLoading}
-                    >
-                      <RefreshCw className={cn("h-3.5 w-3.5", zenModelsLoading && "animate-spin")} />
-                    </Button>
-                  </div>
-                ) : (
-                  <Input
-                    value={form.model}
-                    onChange={(event) => setForm((prev) => ({ ...prev, model: event.target.value }))}
-                    className="h-8 w-[min(280px,70vw)] rounded-full text-[13px]"
-                  />
-                )}
-              </SettingsRow>
-            </>
-          ) : (
-            <SettingsRow
-              title={tx("settings.rows.presetModel", "Preset model")}
-              description={tx("settings.help.presetModel", "Switch to Default to edit model and provider from the WebUI.")}
-            >
-              <span className="max-w-[280px] truncate text-right text-[13px] text-muted-foreground">
-                {selectedPreset?.model ?? settings.agent.model}
-              </span>
-            </SettingsRow>
-          )}
-          <SettingsFooter
-            dirty={dirty}
-            saving={saving}
-            saved={false}
-            onSave={onSave}
-          />
-        </SettingsGroup>
-      </section>
-    </div>
-  );
-}
-
-function ProvidersSettings({
+function ModelsProvidersSettings({
   settings,
   expandedProvider,
   providerForms,
@@ -1283,14 +1133,18 @@ function ProvidersSettings({
   onToggleProviderKeyEditing,
   onChangeProviderForm,
   onSaveProvider,
+  onDeleteProvider,
   onResetProviderDraft,
+  onSetDefaultProvider,
   imageProviderRestartPending,
   onRestart,
   isRestarting,
+  highlightProvider,
+  onHighlightConsumed,
 }: {
   settings: SettingsPayload;
   expandedProvider: string | null;
-  providerForms: Record<string, { apiKey: string; apiBase: string }>;
+  providerForms: Record<string, { apiKey: string; apiBase: string; model: string }>;
   visibleProviderKeys: Record<string, boolean>;
   editingProviderKeys: Record<string, boolean>;
   providerSaving: string | null;
@@ -1299,27 +1153,52 @@ function ProvidersSettings({
   onToggleProvider: (provider: string) => void;
   onToggleProviderKey: (provider: string) => void;
   onToggleProviderKeyEditing: (provider: string) => void;
-  onChangeProviderForm: (provider: string, value: Partial<{ apiKey: string; apiBase: string }>) => void;
+  onChangeProviderForm: (provider: string, value: Partial<{ apiKey: string; apiBase: string; model: string }>) => void;
   onSaveProvider: (provider: string) => void;
+  onDeleteProvider: (provider: string) => void;
   onResetProviderDraft: (provider: string) => void;
+  onSetDefaultProvider: (provider: string) => void;
   imageProviderRestartPending: boolean;
   onRestart?: () => void;
   isRestarting?: boolean;
+  highlightProvider?: string | null;
+  onHighlightConsumed?: () => void;
 }) {
   const { t } = useTranslation();
   const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
+  const highlightRef = useRef<HTMLDivElement>(null);
+
+  // --- Provider list logic ---
   const configuredProviders = settings.providers.filter((provider) => provider.configured);
+  const sortedConfiguredProviders = useMemo(() => {
+    const free = configuredProviders.filter((p) => p.free_default_model);
+    const rest = configuredProviders.filter((p) => !p.free_default_model);
+    return [...free, ...rest];
+  }, [configuredProviders]);
   const unconfiguredProviders = useMemo(
     () => orderUnconfiguredProviders(settings.providers.filter((provider) => !provider.configured)),
     [settings.providers],
   );
-  const filteredConfigured = filterProviders(configuredProviders, query);
+  const filteredConfigured = filterProviders(sortedConfiguredProviders, query);
   const filteredUnconfigured = filterProviders(unconfiguredProviders, query);
+
+  useEffect(() => {
+    if (!highlightProvider) return;
+    onToggleProvider(highlightProvider);
+    onHighlightConsumed?.();
+    requestAnimationFrame(() => {
+      highlightRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [highlightProvider]);
+
   const renderProviderRow = (provider: SettingsPayload["providers"][number]) => {
-    const expanded = expandedProvider === provider.name;
+    const expanded = expandedProvider === provider.name && !provider.free_default_model;
+    const highlighted = highlightProvider === provider.name;
     const form = providerForms[provider.name] ?? {
       apiKey: "",
       apiBase: provider.api_base ?? provider.default_api_base ?? "",
+      model: provider.model ?? "",
     };
     const saving = providerSaving === provider.name;
     const keyVisible = !!visibleProviderKeys[provider.name];
@@ -1332,36 +1211,62 @@ function ProvidersSettings({
     const missingOptionalCredential =
       !apiKeyRequired && !provider.configured && !apiKey && !apiBase;
     return (
-      <div key={provider.name} className="divide-y divide-border/45">
+      <div
+        key={provider.name}
+        ref={highlighted ? highlightRef : undefined}
+        className={cn(
+          "divide-y divide-border/45",
+          highlighted && "ring-2 ring-inset ring-primary/40 rounded-[18px]",
+        )}
+      >
         <button
           type="button"
-          onClick={() => onToggleProvider(provider.name)}
-          className="flex min-h-[70px] w-full items-center justify-between gap-4 px-4 py-3 text-left transition-colors hover:bg-muted/35 sm:px-5"
+          onClick={() => !provider.free_default_model && onToggleProvider(provider.name)}
+          className={cn(
+            "flex min-h-[70px] w-full items-center justify-between gap-4 px-4 py-3 text-left transition-colors sm:px-5",
+            provider.free_default_model ? "cursor-default" : "hover:bg-muted/35",
+          )}
         >
           <span className="flex min-w-0 items-center gap-3">
             <ProviderIcon provider={provider.name} />
             <span className="min-w-0">
-              <span className="block truncate text-[15px] font-semibold leading-5 text-foreground">
-                {provider.label}
+              <span className="flex items-center gap-1.5">
+                <span className="truncate text-[15px] font-semibold leading-5 text-foreground">
+                  {provider.label}
+                </span>
+                {settings.agent.provider === provider.name ? (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
+                    <Star className="h-2.5 w-2.5" aria-hidden />
+                    默认
+                  </span>
+                ) : null}
+                {settings.image_generation.provider === provider.name ? (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+                    <ImageIcon className="h-2.5 w-2.5" aria-hidden />
+                    {tx("settings.image.badge", "Image")}
+                  </span>
+                ) : null}
               </span>
-              <span className="block truncate text-[12px] text-muted-foreground">
-                {provider.api_base || provider.default_api_base || provider.name}
-              </span>
+              {!provider.free_default_model && (
+                <span className="block truncate text-[12px] text-muted-foreground">
+                  {provider.api_base || provider.default_api_base || provider.name}
+                </span>
+              )}
             </span>
           </span>
           <StatusPill
             tone={
-              provider.configured
-                ? "success"
-                : provider.free_default_model
-                  ? "info"
+              provider.free_default_model
+                ? "info"
+                : provider.configured
+                  ? "success"
                   : "neutral"
             }
           >
-            {provider.configured
-              ? t("settings.byok.configured")
-              : provider.free_default_model
-                ? t("settings.byok.freeTier", "Free")
+            {provider.free_default_model
+              ? tx("settings.byok.builtin", "内置")
+              : provider.configured
+                ? t("settings.byok.configured")
                 : t("settings.byok.notConfigured")}
           </StatusPill>
         </button>
@@ -1439,81 +1344,126 @@ function ProvidersSettings({
                 className="h-9 rounded-full text-[13px]"
               />
             </label>
-            <div className="flex items-center justify-end gap-2">
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => onResetProviderDraft(provider.name)}
-                className="rounded-full"
-              >
-                {t("settings.actions.cancel")}
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => onSaveProvider(provider.name)}
-                disabled={saving || missingRequiredApiKey || missingOptionalCredential}
-                className="rounded-full"
-              >
-                {saving ? t("settings.actions.saving") : t("settings.actions.save")}
-              </Button>
+            <label className="block space-y-1.5">
+              <span className="text-[12px] font-medium text-muted-foreground">
+                模型 ID
+              </span>
+              <Input
+                value={form.model}
+                onChange={(event) =>
+                  onChangeProviderForm(provider.name, { model: event.target.value })
+                }
+                placeholder="例如 qwen3-plus, deepseek-chat"
+                className="h-9 rounded-full text-[13px]"
+              />
+            </label>
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                {provider.configured && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => onDeleteProvider(provider.name)}
+                    disabled={saving}
+                    className="rounded-full text-destructive hover:text-destructive"
+                  >
+                    <Trash2 className="mr-1 h-3.5 w-3.5" aria-hidden />
+                    删除
+                  </Button>
+                )}
+                {provider.configured && provider.model && settings.agent.provider !== provider.name && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => onSetDefaultProvider(provider.name)}
+                    disabled={saving}
+                    className="rounded-full text-emerald-600 hover:text-emerald-700 dark:text-emerald-400 dark:hover:text-emerald-300"
+                  >
+                    <Star className="mr-1 h-3.5 w-3.5" aria-hidden />
+                    设为默认
+                  </Button>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => onResetProviderDraft(provider.name)}
+                  className="rounded-full"
+                >
+                  {t("settings.actions.cancel")}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => onSaveProvider(provider.name)}
+                  disabled={saving || missingRequiredApiKey || missingOptionalCredential}
+                  className="rounded-full"
+                >
+                  {saving ? t("settings.actions.saving") : t("settings.actions.save")}
+                </Button>
+              </div>
             </div>
           </div>
         ) : null}
       </div>
     );
   };
+
   return (
-    <div className="space-y-6">
-      <p className="max-w-[42rem] text-[13px] leading-6 text-muted-foreground">
-        {t("settings.byok.description")}
-      </p>
-      {imageProviderRestartPending && onRestart ? (
-        <div className="flex min-h-[48px] items-center justify-between gap-3 border-y border-border/55 py-3">
-          <p className="text-[13px] leading-5 text-muted-foreground">
-            {tx("settings.status.imageProviderRestart", "Image provider changes saved. Restart when ready.")}
-          </p>
-          <div className="shrink-0">
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={onRestart}
-              disabled={isRestarting}
-              className="rounded-full"
-            >
-              {isRestarting ? (
-                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden />
-              ) : (
-                <RotateCcw className="mr-1.5 h-3.5 w-3.5" aria-hidden />
-              )}
-              {isRestarting ? t("app.system.restarting") : t("app.system.restart")}
-            </Button>
+    <div className="space-y-7">
+      {/* 供应商配置区 */}
+      <section>
+        <SettingsSectionTitle>供应商</SettingsSectionTitle>
+        {imageProviderRestartPending && onRestart ? (
+          <div className="flex min-h-[48px] items-center justify-between gap-3 border-y border-border/55 py-3 mb-4">
+            <p className="text-[13px] leading-5 text-muted-foreground">
+              {tx("settings.status.imageProviderRestart", "Image provider changes saved. Restart when ready.")}
+            </p>
+            <div className="shrink-0">
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={onRestart}
+                disabled={isRestarting}
+                className="rounded-full"
+              >
+                {isRestarting ? (
+                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden />
+                ) : (
+                  <RotateCcw className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+                )}
+                {isRestarting ? t("app.system.restarting") : t("app.system.restart")}
+              </Button>
+            </div>
           </div>
+        ) : null}
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden />
+          <Input
+            value={query}
+            onChange={(event) => onQueryChange(event.target.value)}
+            placeholder={tx("settings.providers.searchPlaceholder", "搜索供应商")}
+            className="h-10 rounded-full pl-9 text-[13px]"
+          />
         </div>
-      ) : null}
-      <div className="relative">
-        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden />
-        <Input
-          value={query}
-          onChange={(event) => onQueryChange(event.target.value)}
-          placeholder={tx("settings.providers.searchPlaceholder", "Search providers")}
-          className="h-10 rounded-full pl-9 text-[13px]"
-        />
-      </div>
-      <ProviderSection
-        title={t("settings.byok.configuredSection")}
-        count={filteredConfigured.length}
-        empty={t("settings.byok.noConfiguredProviders")}
-      >
-        {filteredConfigured.map(renderProviderRow)}
-      </ProviderSection>
-      <ProviderSection
-        title={t("settings.byok.notConfiguredSection")}
-        count={filteredUnconfigured.length}
-        empty={tx("settings.providers.noMatches", "No providers match this search.")}
-      >
-        {filteredUnconfigured.map(renderProviderRow)}
-      </ProviderSection>
+        <div className="mt-4">
+          <ProviderSection
+            title={t("settings.byok.configuredSection")}
+            count={filteredConfigured.length}
+            empty={t("settings.byok.noConfiguredProviders")}
+          >
+            {filteredConfigured.map(renderProviderRow)}
+          </ProviderSection>
+          <ProviderSection
+            title={t("settings.byok.notConfiguredSection")}
+            count={filteredUnconfigured.length}
+            empty={tx("settings.providers.noMatches", "No providers match this search.")}
+          >
+            {filteredUnconfigured.map(renderProviderRow)}
+          </ProviderSection>
+        </div>
+      </section>
     </div>
   );
 }
@@ -1536,7 +1486,7 @@ function ImageGenerationSettings({
   saving: boolean;
   onChangeForm: Dispatch<SetStateAction<ImageGenerationSettingsUpdate>>;
   onSave: () => void;
-  onOpenProviders: () => void;
+  onOpenProviders: (provider?: string) => void;
   onRestart?: () => void;
   isRestarting?: boolean;
   requiresRestartPending: boolean;
@@ -1594,7 +1544,7 @@ function ImageGenerationSettings({
                   : tx("settings.values.notConfigured", "Not configured")}
               </StatusPill>
               {!providerConfigured ? (
-                <Button size="sm" variant="outline" onClick={onOpenProviders} className="rounded-full">
+                <Button size="sm" variant="outline" onClick={() => onOpenProviders(form.provider)} className="rounded-full">
                   {tx("settings.image.configureProvider", "Configure provider")}
                 </Button>
               ) : null}
@@ -1612,12 +1562,13 @@ function ImageGenerationSettings({
         <SettingsSectionTitle>{tx("settings.sections.imageDefaults", "Defaults")}</SettingsSectionTitle>
         <SettingsGroup>
           <SettingsRow
-            title={tx("settings.rows.imageModel", "Image model")}
-            description={tx("settings.help.imageModel", "Model name sent to the selected image provider.")}
+            title="图片模型"
+            description="图片生成使用的模型 ID，与聊天模型不同"
           >
             <Input
               value={form.model}
               onChange={(event) => onChangeForm((prev) => ({ ...prev, model: event.target.value }))}
+              placeholder="例如 agnes-image-21-flash, gpt-image-1"
               className="h-8 w-[min(300px,70vw)] rounded-full text-[13px]"
             />
           </SettingsRow>
@@ -2003,7 +1954,52 @@ function RuntimeSettings({
             </SettingsRow>
           ) : null}
           <ReadOnlyRow title={t("settings.rows.configPath")} value={settings.runtime.config_path} />
-          <ReadOnlyRow title={tx("settings.rows.workspacePath", "Workspace path")} value={settings.runtime.workspace_path} />
+          <SettingsRow
+            title={
+              <span className="inline-flex items-center gap-1.5">
+                {tx("settings.rows.workspacePath", "Workspace path")}
+                <TooltipProvider delayDuration={200}>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Info className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
+                    </TooltipTrigger>
+                    <TooltipContent side="top" className="max-w-72 whitespace-normal leading-relaxed">
+                      {tx("settings.help.workspacePath", "修改工作区路径后需要重启才能生效。会话记录将自动迁移到新目录。")}
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              </span>
+            }
+          >
+            <div className="flex items-center gap-2">
+              <Input
+                value={form.workspace}
+                onChange={(event) => setForm((prev) => ({ ...prev, workspace: event.target.value }))}
+                className="h-8 w-[min(280px,60vw)] rounded-full text-[13px]"
+              />
+              {isTauri() ? (
+                <Button
+                  variant="outline"
+                  size="icon"
+                  type="button"
+                  className="h-8 w-8 shrink-0 rounded-full"
+                  onClick={async () => {
+                    try {
+                      const { open } = await import("@tauri-apps/plugin-dialog");
+                      const selected = await open({ directory: true, multiple: false });
+                      if (selected) {
+                        setForm((prev) => ({ ...prev, workspace: selected }));
+                      }
+                    } catch (e) {
+                      console.error("Failed to open directory picker:", e);
+                    }
+                  }}
+                >
+                  <FolderOpen className="h-4 w-4" />
+                </Button>
+              ) : null}
+            </div>
+          </SettingsRow>
           <ReadOnlyRow title={tx("settings.rows.heartbeat", "Heartbeat")} value={settings.runtime.heartbeat.enabled ? `${settings.runtime.heartbeat.interval_s}s` : tx("settings.values.disabled", "Disabled")} />
           <ReadOnlyRow title={tx("settings.rows.dream", "Dream")} value={settings.runtime.dream.schedule} />
           <ReadOnlyRow title={tx("settings.rows.unifiedSession", "Unified session")} value={settings.runtime.unified_session ? tx("settings.values.enabled", "Enabled") : tx("settings.values.disabled", "Disabled")} />
@@ -2413,6 +2409,7 @@ const PROVIDER_ICONS: Record<string, LucideIcon> = {
   deepseek: Waves,
   zhipu: Grid3X3,
   dashscope: Cloud,
+  dashscope_coding_plan: Cloud,
   moonshot: Moon,
   minimax: Zap,
   minimax_anthropic: Brain,
@@ -2421,6 +2418,7 @@ const PROVIDER_ICONS: Record<string, LucideIcon> = {
   gemini: Gem,
   mistral: Orbit,
   siliconflow: Layers,
+  agnes: Sparkles,
   volcengine: Cloud,
   volcengine_coding_plan: Cloud,
   byteplus: Cloud,
@@ -2506,7 +2504,7 @@ function SettingsRow({
   description,
   children,
 }: {
-  title: string;
+  title: ReactNode;
   description?: string;
   children?: ReactNode;
 }) {
@@ -2611,40 +2609,6 @@ function RestartSettingsFooter({
           disabled={!dirty || disabled || saving}
           className="rounded-full"
         >
-          {saving ? t("settings.actions.saving") : t("settings.actions.save")}
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-function SettingsFooter({
-  dirty,
-  saving,
-  saved,
-  onSave,
-}: {
-  dirty: boolean;
-  saving: boolean;
-  saved: boolean;
-  onSave: () => void;
-}) {
-  const { t } = useTranslation();
-  const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
-  const statusMessage = dirty
-    ? t("settings.status.unsaved")
-    : saved
-      ? t("settings.status.savedRestart")
-      : tx("settings.status.upToDate", "Up to date.");
-  return (
-    <div className="flex min-h-[58px] flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5">
-      <div className="text-[13px] text-muted-foreground">
-        <SettingsStatusMessage tone={dirty || saved ? "accent" : undefined}>
-          {statusMessage}
-        </SettingsStatusMessage>
-      </div>
-      <div className="flex justify-end">
-        <Button size="sm" variant="outline" onClick={onSave} disabled={!dirty || saving} className="rounded-full">
           {saving ? t("settings.actions.saving") : t("settings.actions.save")}
         </Button>
       </div>
@@ -2824,16 +2788,11 @@ function DesktopSettings() {
   const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
   const [settings, setSettings] = useState<DesktopAppSettings | null>(null);
   const [gatewayStatus, setGatewayStatus] = useState<{ running: boolean; port: number | null } | null>(null);
-  const [shortcutDraft, setShortcutDraft] = useState("Ctrl+Alt+M");
-  const [shortcutSaving, setShortcutSaving] = useState(false);
-  const [shortcutSaved, setShortcutSaved] = useState(false);
-  const [shortcutError, setShortcutError] = useState<string | null>(null);
 
   const loadSettings = useCallback(async () => {
     try {
       const s = await getDesktopSettings();
       setSettings(s);
-      setShortcutDraft(s.quick_ask_shortcut || "Ctrl+Alt+M");
       const status = await getGatewayStatus();
       setGatewayStatus(status);
     } catch (e) {
@@ -2850,53 +2809,9 @@ function DesktopSettings() {
     try {
       const updated = await updateDesktopSettings({ ...settings, ...patch });
       setSettings(updated);
-      if (patch.quick_ask_shortcut !== undefined) {
-        setShortcutDraft(updated.quick_ask_shortcut);
-      }
     } catch (e) {
       console.error("Failed to update setting:", e);
     }
-  };
-
-  const shortcutDirty = settings
-    ? shortcutDraft.trim() !== settings.quick_ask_shortcut
-    : false;
-
-  const saveShortcut = async () => {
-    if (!settings || shortcutSaving || !shortcutDirty) return;
-    setShortcutSaving(true);
-    setShortcutError(null);
-    setShortcutSaved(false);
-    try {
-      const updated = await updateDesktopSettings({
-        ...settings,
-        quick_ask_shortcut: shortcutDraft.trim(),
-      });
-      setSettings(updated);
-      setShortcutDraft(updated.quick_ask_shortcut);
-      setShortcutSaved(true);
-      window.setTimeout(() => setShortcutSaved(false), 2400);
-    } catch (e) {
-      setShortcutError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setShortcutSaving(false);
-    }
-  };
-
-  const handleShortcutKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
-    if (event.key === "Backspace" || event.key === "Delete") {
-      event.preventDefault();
-      setShortcutDraft("");
-      setShortcutSaved(false);
-      setShortcutError(null);
-      return;
-    }
-    const shortcut = shortcutFromKeyboardEvent(event.nativeEvent);
-    if (!shortcut) return;
-    event.preventDefault();
-    setShortcutDraft(shortcut);
-    setShortcutSaved(false);
-    setShortcutError(null);
   };
 
   const handleOpenInBrowser = async () => {
@@ -2942,48 +2857,6 @@ function DesktopSettings() {
               label={settings.auto_start_gateway ? tx("settings.values.on", "开") : tx("settings.values.off", "关")}
             />
           </SettingsRow>
-          <SettingsRow
-            title={tx("settings.desktop.quickAskShortcut", "快问快捷键")}
-            description={tx("settings.desktop.quickAskShortcutHelp", "按下这个快捷键会唤出置顶的 Mona 快问窗口。点输入框后直接按新快捷键即可录入。")}
-          >
-            <div className="flex flex-col items-end gap-1.5">
-              <div className="flex items-center gap-2">
-                <Input
-                  value={shortcutDraft}
-                  onChange={(event) => {
-                    setShortcutDraft(event.target.value);
-                    setShortcutSaved(false);
-                    setShortcutError(null);
-                  }}
-                  onKeyDown={handleShortcutKeyDown}
-                  placeholder="Ctrl+Alt+M"
-                  className="h-8 w-44 rounded-full text-right text-[13px]"
-                />
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={saveShortcut}
-                  disabled={!shortcutDirty || shortcutSaving}
-                  className="rounded-full"
-                >
-                  {shortcutSaving
-                    ? tx("settings.actions.saving", "保存中...")
-                    : tx("settings.actions.save", "保存")}
-                </Button>
-              </div>
-              <div className="max-w-[320px] text-right text-[12px] leading-5 text-muted-foreground">
-                {shortcutError ? (
-                  <span className="text-destructive">{shortcutError}</span>
-                ) : shortcutSaved ? (
-                  <span className="text-blue-600 dark:text-blue-300">
-                    {tx("settings.status.saved", "已保存")}
-                  </span>
-                ) : (
-                  tx("settings.desktop.quickAskShortcutFormat", "建议使用 Ctrl / Alt / Shift 加字母组合。")
-                )}
-              </div>
-            </div>
-          </SettingsRow>
         </SettingsGroup>
       </section>
 
@@ -3025,6 +2898,249 @@ function DesktopSettings() {
             title={tx("settings.desktop.gatewayPort", "网关端口")}
             value={String(settings.gateway_port)}
           />
+        </SettingsGroup>
+      </section>
+    </div>
+  );
+}
+
+const SIDEBAR_SHORTCUT_ITEMS: Array<{ key: keyof SidebarShortcuts; label: string }> = [
+  { key: "mona", label: "Mona" },
+  { key: "note", label: "笔记" },
+  { key: "ssh", label: "终端" },
+  { key: "db", label: "数据库" },
+  { key: "kb", label: "知识库" },
+  { key: "ppt", label: "PPT制作" },
+];
+
+const DEFAULT_SIDEBAR_SHORTCUTS: SidebarShortcuts = {
+  mona: "Alt+1",
+  note: "Alt+2",
+  ssh: "Alt+3",
+  db: "Alt+4",
+  kb: "Alt+5",
+  ppt: "Alt+6",
+};
+
+function ShortcutsSettings() {
+  const { t } = useTranslation();
+  const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
+  const [settings, setSettings] = useState<DesktopAppSettings | null>(null);
+  const [quickAskDraft, setQuickAskDraft] = useState("Ctrl+Alt+M");
+  const [quickAskSaving, setQuickAskSaving] = useState(false);
+  const [quickAskSaved, setQuickAskSaved] = useState(false);
+  const [quickAskError, setQuickAskError] = useState<string | null>(null);
+  const [sidebarDrafts, setSidebarDrafts] = useState<SidebarShortcuts>(DEFAULT_SIDEBAR_SHORTCUTS);
+  const [sidebarSaving, setSidebarSaving] = useState(false);
+  const [sidebarSaved, setSidebarSaved] = useState(false);
+  const [sidebarError, setSidebarError] = useState<string | null>(null);
+
+  const loadSettings = useCallback(async () => {
+    try {
+      const s = await getDesktopSettings();
+      setSettings(s);
+      setQuickAskDraft(s.quick_ask_shortcut || "Ctrl+Alt+M");
+      setSidebarDrafts(s.sidebar_shortcuts || DEFAULT_SIDEBAR_SHORTCUTS);
+    } catch (e) {
+      console.error("Failed to load desktop settings:", e);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadSettings();
+  }, [loadSettings]);
+
+  const quickAskDirty = settings
+    ? quickAskDraft.trim() !== settings.quick_ask_shortcut
+    : false;
+
+  const sidebarDirty = settings
+    ? Object.keys(DEFAULT_SIDEBAR_SHORTCUTS).some(
+        (key) => sidebarDrafts[key as keyof SidebarShortcuts] !== settings!.sidebar_shortcuts[key as keyof SidebarShortcuts],
+      )
+    : false;
+
+  const saveQuickAsk = async () => {
+    if (!settings || quickAskSaving || !quickAskDirty) return;
+    setQuickAskSaving(true);
+    setQuickAskError(null);
+    setQuickAskSaved(false);
+    try {
+      const updated = await updateDesktopSettings({
+        ...settings,
+        quick_ask_shortcut: quickAskDraft.trim(),
+      });
+      setSettings(updated);
+      setQuickAskDraft(updated.quick_ask_shortcut);
+      setQuickAskSaved(true);
+      window.setTimeout(() => setQuickAskSaved(false), 2400);
+    } catch (e) {
+      setQuickAskError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setQuickAskSaving(false);
+    }
+  };
+
+  const saveSidebarShortcuts = async () => {
+    if (!settings || sidebarSaving || !sidebarDirty) return;
+    setSidebarSaving(true);
+    setSidebarError(null);
+    setSidebarSaved(false);
+    try {
+      const updated = await updateDesktopSettings({
+        ...settings,
+        sidebar_shortcuts: sidebarDrafts,
+      });
+      setSettings(updated);
+      setSidebarDrafts(updated.sidebar_shortcuts);
+      setSidebarSaved(true);
+      window.setTimeout(() => setSidebarSaved(false), 2400);
+    } catch (e) {
+      setSidebarError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSidebarSaving(false);
+    }
+  };
+
+  const handleQuickAskKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Backspace" || event.key === "Delete") {
+      event.preventDefault();
+      setQuickAskDraft("");
+      setQuickAskSaved(false);
+      setQuickAskError(null);
+      return;
+    }
+    const shortcut = shortcutFromKeyboardEvent(event.nativeEvent);
+    if (!shortcut) return;
+    event.preventDefault();
+    setQuickAskDraft(shortcut);
+    setQuickAskSaved(false);
+    setQuickAskError(null);
+  };
+
+  const handleSidebarShortcutKeyDown = (
+    event: ReactKeyboardEvent<HTMLInputElement>,
+    key: keyof SidebarShortcuts,
+  ) => {
+    if (event.key === "Backspace" || event.key === "Delete") {
+      event.preventDefault();
+      setSidebarDrafts((prev) => ({ ...prev, [key]: "" }));
+      setSidebarSaved(false);
+      setSidebarError(null);
+      return;
+    }
+    const shortcut = shortcutFromKeyboardEvent(event.nativeEvent);
+    if (!shortcut) return;
+    event.preventDefault();
+    setSidebarDrafts((prev) => ({ ...prev, [key]: shortcut }));
+    setSidebarSaved(false);
+    setSidebarError(null);
+  };
+
+  if (!settings) {
+    return (
+      <div className="flex h-48 items-center justify-center text-sm text-muted-foreground">
+        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+        {tx("settings.status.loading", "Loading...")}
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-7">
+      <section>
+        <SettingsSectionTitle>{tx("settings.shortcuts.quickAsk", "快问快捷键")}</SettingsSectionTitle>
+        <SettingsGroup>
+          <SettingsRow
+            title={tx("settings.desktop.quickAskShortcut", "快问快捷键")}
+            description={tx("settings.desktop.quickAskShortcutHelp", "按下此快捷键会唤出置顶的 Mona 快问窗口。")}
+          >
+            <div className="flex flex-col items-end gap-1.5">
+              <div className="flex items-center gap-2">
+                <Input
+                  value={quickAskDraft}
+                  onChange={(event) => {
+                    setQuickAskDraft(event.target.value);
+                    setQuickAskSaved(false);
+                    setQuickAskError(null);
+                  }}
+                  onKeyDown={handleQuickAskKeyDown}
+                  placeholder="Ctrl+Alt+M"
+                  className="h-8 w-44 rounded-full text-right text-[13px]"
+                />
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={saveQuickAsk}
+                  disabled={!quickAskDirty || quickAskSaving}
+                  className="rounded-full"
+                >
+                  {quickAskSaving
+                    ? tx("settings.actions.saving", "保存中...")
+                    : tx("settings.actions.save", "保存")}
+                </Button>
+              </div>
+              <div className="max-w-[320px] text-right text-[12px] leading-5 text-muted-foreground">
+                {quickAskError ? (
+                  <span className="text-destructive">{quickAskError}</span>
+                ) : quickAskSaved ? (
+                  <span className="text-blue-600 dark:text-blue-300">
+                    {tx("settings.status.saved", "已保存")}
+                  </span>
+                ) : (
+                  tx("settings.desktop.quickAskShortcutFormat", "建议使用 Ctrl / Alt / Shift 加字母组合。")
+                )}
+              </div>
+            </div>
+          </SettingsRow>
+        </SettingsGroup>
+      </section>
+
+      <section>
+        <SettingsSectionTitle>{tx("settings.shortcuts.sidebarNav", "侧边栏导航快捷键")}</SettingsSectionTitle>
+        <SettingsGroup>
+          {SIDEBAR_SHORTCUT_ITEMS.map(({ key, label }) => (
+            <SettingsRow
+              key={key}
+              title={`切换至${label}`}
+            >
+              <Input
+                value={sidebarDrafts[key]}
+                onChange={(event) => {
+                  setSidebarDrafts((prev) => ({ ...prev, [key]: event.target.value }));
+                  setSidebarSaved(false);
+                  setSidebarError(null);
+                }}
+                onKeyDown={(event) => handleSidebarShortcutKeyDown(event, key)}
+                placeholder={DEFAULT_SIDEBAR_SHORTCUTS[key]}
+                className="h-8 w-44 rounded-full text-right text-[13px]"
+              />
+            </SettingsRow>
+          ))}
+          <div className="flex min-h-[58px] flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+            <div className="min-w-0 text-[13px] leading-5 text-muted-foreground">
+              {sidebarError ? (
+                <span className="text-destructive">{sidebarError}</span>
+              ) : sidebarSaved ? (
+                <span className="text-blue-600 dark:text-blue-300">
+                  {tx("settings.status.saved", "已保存")}
+                </span>
+              ) : null}
+            </div>
+            <div className="flex shrink-0 justify-end">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={saveSidebarShortcuts}
+                disabled={!sidebarDirty || sidebarSaving}
+                className="rounded-full"
+              >
+                {sidebarSaving
+                  ? tx("settings.actions.saving", "保存中...")
+                  : tx("settings.actions.save", "保存")}
+              </Button>
+            </div>
+          </div>
         </SettingsGroup>
       </section>
     </div>

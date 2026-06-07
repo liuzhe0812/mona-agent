@@ -82,6 +82,11 @@ interface ThreadComposerProps {
   /** Sustained objective for this chat (WebSocket ``goal_state``). */
   goalState?: GoalStateWsPayload;
   leadingActions?: ReactNode;
+  /** KB RAG: selected knowledge base project for chat context */
+  kbProjectId?: string | null;
+  kbProjectName?: string | null;
+  kbProjects?: Array<{ id: string; name: string }>;
+  onKbSelect?: (id: string | null) => void;
   /** Pending message queue for mid-turn staging. */
   pendingMessages?: PendingMessage[];
   onPendingAppend?: (id: string) => void;
@@ -402,8 +407,11 @@ export function ThreadComposer({
   pendingMessages = [],
   onPendingAppend,
   onPendingRemove,
-  onPendingEdit,
   isPendingFull = false,
+  kbProjectId,
+  kbProjectName,
+  kbProjects,
+  onKbSelect,
 }: ThreadComposerProps) {
   const { t } = useTranslation();
   const [value, setValue] = useState("");
@@ -952,6 +960,65 @@ export function ThreadComposer({
                 />
               ) : null}
             </div>
+            {kbProjects && kbProjects.length > 0 ? (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    title={kbProjectName ?? "选择知识库"}
+                    className={cn(
+                      "inline-flex min-w-0 items-center gap-1.5 rounded-full border px-2.5 py-1",
+                      "border-foreground/10 bg-foreground/[0.035] font-medium text-foreground/80",
+                      "hover:bg-foreground/[0.07] transition-colors cursor-pointer",
+                      isHero
+                        ? "max-w-[13rem] text-[12px] shadow-[0_2px_8px_rgba(15,23,42,0.04)]"
+                        : "max-w-[10rem] text-[10.5px] shadow-[0_2px_8px_rgba(15,23,42,0.035)]",
+                    )}
+                  >
+                    <span
+                      aria-hidden
+                      className={cn(
+                        "h-1.5 w-1.5 flex-none rounded-full",
+                        kbProjectId ? "bg-purple-500/80" : "bg-foreground/20",
+                      )}
+                    />
+                    <BookOpen className={cn("flex-none", isHero ? "h-3 w-3" : "h-2.5 w-2.5")} />
+                    <span className="truncate">{kbProjectName ?? "知识库"}</span>
+                    <ChevronDown className={cn("flex-none opacity-50", isHero ? "h-3 w-3" : "h-2.5 w-2.5")} />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" side="top" className="min-w-[180px]">
+                  {kbProjectId && (
+                    <DropdownMenuItem
+                      className="flex items-center gap-2 text-[13px]"
+                      onSelect={() => onKbSelect?.(null)}
+                    >
+                      <span aria-hidden className="h-1.5 w-1.5 flex-none rounded-full bg-foreground/20" />
+                      <span>清除知识库</span>
+                    </DropdownMenuItem>
+                  )}
+                  {kbProjects.map((p) => (
+                    <DropdownMenuItem
+                      key={p.id}
+                      className="flex items-center gap-2 text-[13px]"
+                      onSelect={() => onKbSelect?.(p.id)}
+                    >
+                      <span
+                        aria-hidden
+                        className={cn(
+                          "h-1.5 w-1.5 flex-none rounded-full",
+                          p.id === kbProjectId ? "bg-purple-500/80" : "bg-foreground/20",
+                        )}
+                      />
+                      <span className="truncate">{p.name}</span>
+                      {p.id === kbProjectId && (
+                        <Check className="ml-auto h-3 w-3 text-muted-foreground" />
+                      )}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            ) : null}
             {modelLabel ? (
               modelOptions.length > 0 && onModelSwitch ? (
                 <DropdownMenu>
@@ -994,12 +1061,15 @@ export function ThreadComposer({
                           </DropdownMenuItem>
                         ));
                       }
+                      const modelLeaf = opt.model
+                        ? (opt.model.split("/").pop() ?? opt.model)
+                        : null;
                       return (
                         <DropdownMenuItem
                           key={opt.name}
                           className="flex items-center gap-2 text-[13px]"
                           onSelect={() => {
-                            const model = opt.free_default_model || opt.model || "";
+                            const model = opt.model || "";
                             onModelSwitch(opt.name, model);
                           }}
                         >
@@ -1007,13 +1077,12 @@ export function ThreadComposer({
                             aria-hidden
                             className={cn(
                               "h-1.5 w-1.5 flex-none rounded-full",
-                              opt.free_default_model ? "bg-blue-500/80" : "bg-emerald-500/80",
+                              modelLeaf ? "bg-emerald-500/80" : "bg-muted-foreground/40",
                             )}
                           />
-                          <span className="truncate">{opt.label}</span>
-                          {opt.free_default_model ? (
-                            <span className="ml-auto text-[10px] text-muted-foreground">Free</span>
-                          ) : null}
+                          <span className={cn("truncate", !modelLeaf && "text-muted-foreground")}>
+                            {modelLeaf ?? `${opt.label}（未设置）`}
+                          </span>
                         </DropdownMenuItem>
                       );
                     })}

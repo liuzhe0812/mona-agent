@@ -13,6 +13,7 @@ import { saveMarkdownFile } from "@/lib/tauri";
 import { useLicense } from "@/hooks/useLicense";
 
 import { KnowledgeView } from "./KnowledgeView";
+import { ConfirmDialog, PromptDialog } from "./NotesDialogs";
 import { NoteAgentPanel } from "./NoteAgentPanel";
 import { NoteEditor } from "./NoteEditor";
 import { NoteList } from "./NoteList";
@@ -42,10 +43,9 @@ const AGENT_PANEL_DEFAULT_WIDTH = 306;
 
 interface NotesViewProps {
   onSendToAgent?: (prompt: string) => void | Promise<void>;
-  createNoteTrigger?: number;
 }
 
-export function NotesView({ onSendToAgent: _onSendToAgent, createNoteTrigger }: NotesViewProps) {
+export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
   const { licenseActive } = useLicense();
   const [notebooks, setNotebooks] = useState<Notebook[]>([]);
   const [activeNotebookId, setActiveNotebookId] = useState("");
@@ -68,6 +68,20 @@ export function NotesView({ onSendToAgent: _onSendToAgent, createNoteTrigger }: 
   const dragRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const lastSavedSnapshotRef = useRef<string | null>(null);
   const latestSnapshotRef = useRef<string | null>(null);
+
+  // Dialog state for replacing browser native prompt/confirm
+  type PromptState =
+    | { kind: "createNotebook" }
+    | { kind: "renameNotebook" }
+    | { kind: "createKnowledgeCategory"; parentId: string | null }
+    | { kind: "renameKnowledgeCategory"; categoryId: string };
+  type ConfirmState =
+    | { kind: "deleteNotebook" }
+    | { kind: "deleteNote"; noteId: string }
+    | { kind: "deleteKnowledgeCategory"; categoryId: string }
+    | { kind: "deleteKnowledgeItem"; itemId: string };
+  const [promptState, setPromptState] = useState<PromptState | null>(null);
+  const [confirmState, setConfirmState] = useState<ConfirmState | null>(null);
 
   const activeNotebook = useMemo(
     () => notebooks.find((notebook) => notebook.id === activeNotebookId) ?? notebooks[0] ?? null,
@@ -262,16 +276,11 @@ export function NotesView({ onSendToAgent: _onSendToAgent, createNoteTrigger }: 
     [activeNotebook],
   );
 
-  useEffect(() => {
-    if (createNoteTrigger && createNoteTrigger > 0) {
-      createNote();
-    }
-  }, [createNoteTrigger, createNote]);
-
   const createNotebook = useCallback(() => {
-    const name = window.prompt("笔记本名称", "新的笔记本")?.trim();
-    if (!name) return;
+    setPromptState({ kind: "createNotebook" });
+  }, []);
 
+  const handleCreateNotebook = useCallback((name: string) => {
     let nextNotebook: Notebook;
     try {
       nextNotebook = createCustomNotebook(name);
@@ -288,28 +297,17 @@ export function NotesView({ onSendToAgent: _onSendToAgent, createNoteTrigger }: 
 
   const renameActiveNotebook = useCallback(() => {
     if (!activeNotebook) return;
-    const name = window.prompt("笔记本名称", activeNotebook.name)?.trim();
-    if (!name || name === activeNotebook.name) return;
+    setPromptState({ kind: "renameNotebook" });
+  }, [activeNotebook]);
 
+  const handleRenameNotebook = useCallback((name: string) => {
+    if (!activeNotebook || name === activeNotebook.name) return;
     setNotebooks((current) =>
       current.map((notebook) =>
         notebook.id === activeNotebook.id ? { ...notebook, name } : notebook,
       ),
     );
     setNotice("笔记本已重命名");
-  }, [activeNotebook]);
-
-  const editActiveNotebookDescription = useCallback(() => {
-    if (!activeNotebook) return;
-    const description = window.prompt("笔记本描述", activeNotebook.description)?.trim();
-    if (description === undefined || description === activeNotebook.description) return;
-
-    setNotebooks((current) =>
-      current.map((notebook) =>
-        notebook.id === activeNotebook.id ? { ...notebook, description } : notebook,
-      ),
-    );
-    setNotice("笔记本描述已更新");
   }, [activeNotebook]);
 
   const toggleActiveNotebookKnowledgeBase = useCallback(
@@ -329,17 +327,19 @@ export function NotesView({ onSendToAgent: _onSendToAgent, createNoteTrigger }: 
 
   const deleteActiveNotebook = useCallback(() => {
     if (!activeNotebook) return;
+    if (activeNotebook.id === "default") {
+      setNotice("默认分类不允许删除");
+      return;
+    }
     if (notebooks.length <= 1) {
       setNotice("至少保留一个笔记本");
       return;
     }
+    setConfirmState({ kind: "deleteNotebook" });
+  }, [activeNotebook, notebooks.length]);
 
-    const noteCount = notes.filter((note) => note.notebookId === activeNotebook.id).length;
-    const confirmed = window.confirm(
-      `删除「${activeNotebook.name}」？这会同时删除里面的 ${noteCount} 条笔记。`,
-    );
-    if (!confirmed) return;
-
+  const handleDeleteNotebook = useCallback(() => {
+    if (!activeNotebook) return;
     const nextNotebooks = notebooks.filter((notebook) => notebook.id !== activeNotebook.id);
     const nextNotebook = nextNotebooks[0];
     const nextActiveNote = notes.find((note) => note.notebookId === nextNotebook.id) ?? null;
@@ -426,15 +426,21 @@ export function NotesView({ onSendToAgent: _onSendToAgent, createNoteTrigger }: 
 
   const deleteNote = useCallback(
     (note: OperationNote) => {
-      const confirmed = window.confirm(`删除「${note.title || "未命名笔记"}」？`);
-      if (!confirmed) return;
+      setConfirmState({ kind: "deleteNote", noteId: note.id });
+    },
+    [],
+  );
 
+  const handleDeleteNote = useCallback(
+    (noteId: string) => {
+      const note = notes.find((n) => n.id === noteId);
+      if (!note) return;
       const noteNotebookId = note.notebookId;
       const remainingNotes = notes.filter(
-        (n) => n.notebookId === noteNotebookId && n.id !== note.id,
+        (n) => n.notebookId === noteNotebookId && n.id !== noteId,
       );
-      setNotes((current) => current.filter((n) => n.id !== note.id));
-      if (activeNoteId === note.id) {
+      setNotes((current) => current.filter((n) => n.id !== noteId));
+      if (activeNoteId === noteId) {
         setActiveNoteId(remainingNotes[0]?.id ?? null);
       }
       setNotice("笔记已删除");
@@ -525,14 +531,15 @@ export function NotesView({ onSendToAgent: _onSendToAgent, createNoteTrigger }: 
   );
 
   const createKnowledgeCategoryManually = useCallback((parentId: string | null = null) => {
+    setPromptState({ kind: "createKnowledgeCategory", parentId });
+  }, []);
+
+  const handleCreateKnowledgeCategory = useCallback((name: string) => {
+    if (!promptState || promptState.kind !== "createKnowledgeCategory") return;
+    const parentId = promptState.parentId;
     const parentCategory = parentId
       ? knowledgeCategories.find((category) => category.id === parentId)
       : null;
-    const name = window.prompt(
-      parentCategory ? `在「${parentCategory.name}」下新建分类` : "知识分类名称",
-      "新的分类",
-    )?.trim();
-    if (!name) return;
     if (
       hasSiblingCategoryName(knowledgeCategories, name, parentCategory?.id ?? null)
     ) {
@@ -552,36 +559,41 @@ export function NotesView({ onSendToAgent: _onSendToAgent, createNoteTrigger }: 
     setActiveKnowledgeCategoryId(nextCategory.id);
     setViewMode("knowledge");
     setNotice("知识分类已创建");
-  }, [knowledgeCategories]);
+  }, [knowledgeCategories, promptState]);
 
   const renameKnowledgeCategory = useCallback(
     (categoryId: string) => {
       const category = knowledgeCategories.find((item) => item.id === categoryId);
       if (!category) return;
-
-      const name = window.prompt("知识分类名称", category.name)?.trim();
-      if (!name || name === category.name) return;
-      if (
-        hasSiblingCategoryName(
-          knowledgeCategories,
-          name,
-          category.parentId ?? null,
-          categoryId,
-        )
-      ) {
-        setNotice("知识分类已存在");
-        return;
-      }
-
-      setKnowledgeCategories((current) =>
-        current.map((item) =>
-          item.id === categoryId ? { ...item, name } : item,
-        ),
-      );
-      setNotice("知识分类已重命名");
+      setPromptState({ kind: "renameKnowledgeCategory", categoryId });
     },
     [knowledgeCategories],
   );
+
+  const handleRenameKnowledgeCategory = useCallback((name: string) => {
+    if (!promptState || promptState.kind !== "renameKnowledgeCategory") return;
+    const categoryId = promptState.categoryId;
+    const category = knowledgeCategories.find((item) => item.id === categoryId);
+    if (!category || name === category.name) return;
+    if (
+      hasSiblingCategoryName(
+        knowledgeCategories,
+        name,
+        category.parentId ?? null,
+        categoryId,
+      )
+    ) {
+      setNotice("知识分类已存在");
+      return;
+    }
+
+    setKnowledgeCategories((current) =>
+      current.map((item) =>
+        item.id === categoryId ? { ...item, name } : item,
+      ),
+    );
+    setNotice("知识分类已重命名");
+  }, [knowledgeCategories, promptState]);
 
   const deleteKnowledgeCategory = useCallback(
     (categoryId: string) => {
@@ -591,44 +603,40 @@ export function NotesView({ onSendToAgent: _onSendToAgent, createNoteTrigger }: 
         setNotice("至少保留一个知识分类");
         return;
       }
-
-      const remainingCategories = knowledgeCategories
-        .filter((item) => item.id !== categoryId)
-        .map((item) =>
-          item.parentId === categoryId ? { ...item, parentId: category.parentId ?? null } : item,
-        );
-      const targetCategory =
-        (category.parentId
-          ? remainingCategories.find((item) => item.id === category.parentId)
-          : null) ?? remainingCategories[0];
-      const itemCount = knowledgeItems.filter((item) => item.categoryId === categoryId).length;
-      const childCount = knowledgeCategories.filter((item) => item.parentId === categoryId).length;
-      const details = [
-        itemCount > 0 ? `${itemCount} 条知识点会移动到「${targetCategory.name}」` : "",
-        childCount > 0 ? `${childCount} 个子分类会向上移动` : "",
-      ].filter(Boolean);
-      const confirmed = window.confirm(
-        details.length > 0
-          ? `删除「${category.name}」？${details.join("，")}。`
-          : `删除「${category.name}」？`,
-      );
-      if (!confirmed) return;
-
-      setKnowledgeCategories(remainingCategories);
-      setKnowledgeItems((current) =>
-        current.map((item) =>
-          item.categoryId === categoryId
-            ? { ...item, categoryId: targetCategory.id, updatedAt: "刚刚" }
-            : item,
-        ),
-      );
-      if (activeKnowledgeCategoryId === categoryId) {
-        setActiveKnowledgeCategoryId(targetCategory.id);
-      }
-      setNotice("知识分类已删除");
+      setConfirmState({ kind: "deleteKnowledgeCategory", categoryId });
     },
-    [activeKnowledgeCategoryId, knowledgeCategories, knowledgeItems],
+    [knowledgeCategories],
   );
+
+  const handleDeleteKnowledgeCategory = useCallback(() => {
+    if (!confirmState || confirmState.kind !== "deleteKnowledgeCategory") return;
+    const categoryId = confirmState.categoryId;
+    const category = knowledgeCategories.find((item) => item.id === categoryId);
+    if (!category) return;
+
+    const remainingCategories = knowledgeCategories
+      .filter((item) => item.id !== categoryId)
+      .map((item) =>
+        item.parentId === categoryId ? { ...item, parentId: category.parentId ?? null } : item,
+      );
+    const targetCategory =
+      (category.parentId
+        ? remainingCategories.find((item) => item.id === category.parentId)
+        : null) ?? remainingCategories[0];
+
+    setKnowledgeCategories(remainingCategories);
+    setKnowledgeItems((current) =>
+      current.map((item) =>
+        item.categoryId === categoryId
+          ? { ...item, categoryId: targetCategory.id, updatedAt: "刚刚" }
+          : item,
+      ),
+    );
+    if (activeKnowledgeCategoryId === categoryId) {
+      setActiveKnowledgeCategoryId(targetCategory.id);
+    }
+    setNotice("知识分类已删除");
+  }, [activeKnowledgeCategoryId, confirmState, knowledgeCategories]);
 
   const moveKnowledgeItem = useCallback(
     (itemId: string, categoryId: string) => {
@@ -672,20 +680,24 @@ export function NotesView({ onSendToAgent: _onSendToAgent, createNoteTrigger }: 
     (itemId: string) => {
       const item = knowledgeItems.find((entry) => entry.id === itemId);
       if (!item) return;
-      const confirmed = window.confirm(`删除知识点「${item.title}」？`);
-      if (!confirmed) return;
-
-      setKnowledgeItems((current) => current.filter((entry) => entry.id !== itemId));
-      if (activeKnowledgeItemId === itemId) {
-        setActiveKnowledgeItemId(null);
-      }
-      if (knowledgeReturnItemId === itemId) {
-        setKnowledgeReturnItemId(null);
-      }
-      setNotice("知识点已删除");
+      setConfirmState({ kind: "deleteKnowledgeItem", itemId });
     },
-    [activeKnowledgeItemId, knowledgeItems, knowledgeReturnItemId],
+    [knowledgeItems],
   );
+
+  const handleDeleteKnowledgeItem = useCallback(() => {
+    if (!confirmState || confirmState.kind !== "deleteKnowledgeItem") return;
+    const itemId = confirmState.itemId;
+
+    setKnowledgeItems((current) => current.filter((entry) => entry.id !== itemId));
+    if (activeKnowledgeItemId === itemId) {
+      setActiveKnowledgeItemId(null);
+    }
+    if (knowledgeReturnItemId === itemId) {
+      setKnowledgeReturnItemId(null);
+    }
+    setNotice("知识点已删除");
+  }, [activeKnowledgeItemId, confirmState, knowledgeReturnItemId]);
 
   const openSourceNote = useCallback(
     (noteId: string, knowledgeItemId?: string) => {
@@ -756,6 +768,115 @@ export function NotesView({ onSendToAgent: _onSendToAgent, createNoteTrigger }: 
     [agentPanelWidth],
   );
 
+  // Prompt dialog computed values
+  const promptTitle = useMemo(() => {
+    if (!promptState) return "";
+    switch (promptState.kind) {
+      case "createNotebook": return "笔记本名称";
+      case "renameNotebook": return "笔记本名称";
+      case "createKnowledgeCategory": {
+        const parentCategory = promptState.parentId
+          ? knowledgeCategories.find((c) => c.id === promptState.parentId)
+          : null;
+        return parentCategory ? `在「${parentCategory.name}」下新建分类` : "知识分类名称";
+      }
+      case "renameKnowledgeCategory": return "知识分类名称";
+    }
+  }, [promptState, knowledgeCategories]);
+
+  const promptDefaultValue = useMemo(() => {
+    if (!promptState) return "";
+    switch (promptState.kind) {
+      case "createNotebook": return "新的笔记本";
+      case "renameNotebook": return activeNotebook?.name ?? "";
+      case "createKnowledgeCategory": return "新的分类";
+      case "renameKnowledgeCategory": {
+        const category = knowledgeCategories.find((c) => c.id === promptState.categoryId);
+        return category?.name ?? "";
+      }
+    }
+  }, [promptState, activeNotebook, knowledgeCategories]);
+
+  const promptPlaceholder = useMemo(() => {
+    if (!promptState) return "";
+    switch (promptState.kind) {
+      case "createNotebook": return "输入笔记本名称";
+      case "renameNotebook": return "输入新名称";
+      case "createKnowledgeCategory": return "输入分类名称";
+      case "renameKnowledgeCategory": return "输入新名称";
+    }
+  }, [promptState]);
+
+  const handlePromptConfirm = useCallback((value: string) => {
+    if (!promptState) return;
+    switch (promptState.kind) {
+      case "createNotebook": handleCreateNotebook(value); break;
+      case "renameNotebook": handleRenameNotebook(value); break;
+      case "createKnowledgeCategory": handleCreateKnowledgeCategory(value); break;
+      case "renameKnowledgeCategory": handleRenameKnowledgeCategory(value); break;
+    }
+    setPromptState(null);
+  }, [promptState, handleCreateNotebook, handleRenameNotebook, handleCreateKnowledgeCategory, handleRenameKnowledgeCategory]);
+
+  // Confirm dialog computed values
+  const confirmTitle = useMemo(() => {
+    if (!confirmState) return "";
+    switch (confirmState.kind) {
+      case "deleteNotebook": return `删除「${activeNotebook?.name ?? ""}」？`;
+      case "deleteNote": {
+        const note = notes.find((n) => n.id === confirmState.noteId);
+        return `删除「${note?.title || "未命名笔记"}」？`;
+      }
+      case "deleteKnowledgeCategory": {
+        const category = knowledgeCategories.find((c) => c.id === confirmState.categoryId);
+        return `删除「${category?.name ?? ""}」？`;
+      }
+      case "deleteKnowledgeItem": {
+        const item = knowledgeItems.find((i) => i.id === confirmState.itemId);
+        return `删除知识点「${item?.title ?? ""}」？`;
+      }
+    }
+  }, [confirmState, activeNotebook, notes, knowledgeCategories, knowledgeItems]);
+
+  const confirmMessage = useMemo(() => {
+    if (!confirmState) return "";
+    switch (confirmState.kind) {
+      case "deleteNotebook": {
+        const noteCount = notes.filter((n) => n.notebookId === activeNotebook?.id).length;
+        return `这会同时删除里面的 ${noteCount} 条笔记。`;
+      }
+      case "deleteNote": return "删除后无法恢复。";
+      case "deleteKnowledgeCategory": {
+        const category = knowledgeCategories.find((c) => c.id === confirmState.categoryId);
+        if (!category) return "";
+        const remainingCategories = knowledgeCategories.filter((i) => i.id !== category.id);
+        const targetCategory =
+          (category.parentId
+            ? remainingCategories.find((i) => i.id === category.parentId)
+            : null) ?? remainingCategories[0];
+        const itemCount = knowledgeItems.filter((i) => i.categoryId === category.id).length;
+        const childCount = knowledgeCategories.filter((i) => i.parentId === category.id).length;
+        const details = [
+          itemCount > 0 ? `${itemCount} 条知识点会移动到「${targetCategory?.name ?? ""}」` : "",
+          childCount > 0 ? `${childCount} 个子分类会向上移动` : "",
+        ].filter(Boolean);
+        return details.length > 0 ? details.join("，") + "。" : "删除后无法恢复。";
+      }
+      case "deleteKnowledgeItem": return "删除后无法恢复。";
+    }
+  }, [confirmState, activeNotebook, notes, knowledgeCategories, knowledgeItems]);
+
+  const handleConfirmAction = useCallback(() => {
+    if (!confirmState) return;
+    switch (confirmState.kind) {
+      case "deleteNotebook": handleDeleteNotebook(); break;
+      case "deleteNote": handleDeleteNote(confirmState.noteId); break;
+      case "deleteKnowledgeCategory": handleDeleteKnowledgeCategory(); break;
+      case "deleteKnowledgeItem": handleDeleteKnowledgeItem(); break;
+    }
+    setConfirmState(null);
+  }, [confirmState, handleDeleteNotebook, handleDeleteNote, handleDeleteKnowledgeCategory, handleDeleteKnowledgeItem]);
+
   return (
     <div className="flex h-full min-h-0 bg-background">
       <section className="flex min-w-0 flex-1 flex-col">
@@ -768,7 +889,6 @@ export function NotesView({ onSendToAgent: _onSendToAgent, createNoteTrigger }: 
                 onSelect={selectNotebook}
                 onCreateNotebook={createNotebook}
                 onRenameNotebook={renameActiveNotebook}
-                onEditNotebookDescription={editActiveNotebookDescription}
                 onToggleKnowledgeBase={toggleActiveNotebookKnowledgeBase}
                 onDeleteNotebook={deleteActiveNotebook}
               />
@@ -924,12 +1044,24 @@ export function NotesView({ onSendToAgent: _onSendToAgent, createNoteTrigger }: 
         onAgentChatIdChange={(agentChatId) => updateActiveNote({ agentChatId })}
         onApplyResult={applyAiResult}
         onSaveKnowledge={saveKnowledgeFromAgent}
-        onAutoTag={(tags) => {
-          if (!activeNote) return;
-          const merged = Array.from(new Set([...activeNote.tags, ...tags]));
-          updateActiveNote({ tags: merged });
-        }}
         onClearChat={() => updateActiveNote({ agentChatId: undefined })}
+      />
+
+      <PromptDialog
+        open={promptState !== null}
+        title={promptTitle}
+        defaultValue={promptDefaultValue}
+        placeholder={promptPlaceholder}
+        onConfirm={handlePromptConfirm}
+        onOpenChange={(open) => { if (!open) setPromptState(null); }}
+      />
+      <ConfirmDialog
+        open={confirmState !== null}
+        title={confirmTitle}
+        message={confirmMessage}
+        destructive
+        onConfirm={handleConfirmAction}
+        onOpenChange={(open) => { if (!open) setConfirmState(null); }}
       />
     </div>
   );

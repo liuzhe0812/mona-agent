@@ -31,6 +31,8 @@ interface DbState {
   newConnectionDialogOpen: boolean;
   isLoadingTree: boolean;
   isLoadingTable: boolean;
+  connectingId: string | null;
+  connectError: string | null;
 
   loadSavedConnections: () => Promise<void>;
   saveConnection: (config: DbConnectionConfig) => Promise<void>;
@@ -49,6 +51,7 @@ interface DbState {
   setSelectedConnectionId: (id: string | null) => void;
   setSelectedDatabase: (db: string | null) => void;
   setNewConnectionDialogOpen: (open: boolean) => void;
+  setConnectError: (error: string | null) => void;
   refreshServerStats: (connectionId: string) => Promise<void>;
   refreshProcesses: (connectionId: string) => Promise<void>;
   refreshUsers: (connectionId: string) => Promise<void>;
@@ -75,6 +78,8 @@ export const useDbStore = create<DbState>((set, get) => ({
   newConnectionDialogOpen: false,
   isLoadingTree: false,
   isLoadingTable: false,
+  connectingId: null,
+  connectError: null,
 
   loadSavedConnections: async () => {
     try {
@@ -112,14 +117,17 @@ export const useDbStore = create<DbState>((set, get) => ({
   },
 
   connect: async (config) => {
+    set({ connectingId: config.id, connectError: null });
     try {
       const info = await ipc.dbConnect(config);
       set((state) => ({
         activeConnections: [...state.activeConnections, info],
         selectedConnectionId: info.id,
+        connectingId: null,
       }));
       await get().refreshTree(info.id);
     } catch (e) {
+      set({ connectingId: null, connectError: String(e) });
       throw e;
     }
   },
@@ -387,6 +395,10 @@ export const useDbStore = create<DbState>((set, get) => ({
 
   setNewConnectionDialogOpen: (open) => {
     set({ newConnectionDialogOpen: open });
+  },
+
+  setConnectError: (error) => {
+    set({ connectError: error });
   },
 
   refreshServerStats: async (connectionId) => {

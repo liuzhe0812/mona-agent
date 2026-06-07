@@ -41,6 +41,14 @@ impl ConnectionManager {
         }
     }
 
+    pub fn connections(&self) -> &HashMap<String, ManagedConnection> {
+        &self.connections
+    }
+
+    pub fn contains_connection(&self, id: &str) -> bool {
+        self.connections.contains_key(id)
+    }
+
     pub fn get_handle(&self, connection_id: &str) -> Option<(DbHandle, DbConnectionConfig)> {
         self.connections.get(connection_id)
             .map(|conn| (conn.handle.clone(), conn.config.clone()))

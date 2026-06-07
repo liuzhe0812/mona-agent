@@ -19,7 +19,7 @@ impl GatewayManager {
         }
     }
 
-    pub fn start(&self, settings: &AppSettings) -> Result<u16, String> {
+    pub fn start(&self, settings: &AppSettings, app_handle: &tauri::AppHandle) -> Result<u16, String> {
         let mut guard = self.process.lock().map_err(|e| format!("Lock error: {}", e))?;
 
         if let Some(ref mut proc) = *guard {
@@ -38,7 +38,7 @@ impl GatewayManager {
             log::info!("Using system Python: {:?}", sys_python);
             sys_python
         } else {
-            python::initialize_python()?;
+            python::initialize_python(app_handle)?;
             python::python_executable()
         };
 
@@ -53,24 +53,27 @@ impl GatewayManager {
 
         cmd.env("PYTHONUNBUFFERED", "1");
 
-        let project_root =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap_or_else(|| {
-                std::path::Path::new(".")
-            });
-        let mona_pkg_dir = project_root.join("mona");
-        if mona_pkg_dir.is_dir() {
-            let sep = if cfg!(windows) { ";" } else { ":" };
-            let existing = std::env::var("PYTHONPATH").unwrap_or_default();
-            let new_path = if existing.is_empty() {
-                project_root.display().to_string()
-            } else {
-                format!("{}{}{}", project_root.display(), sep, existing)
-            };
-            cmd.env("PYTHONPATH", &new_path);
-            log::info!(
-                "Dev mode detected: PYTHONPATH set to {:?}",
-                project_root
-            );
+        // Only set PYTHONPATH in dev mode (when source tree exists next to exe)
+        // In packaged builds, mona-ai is installed in site-packages
+        if let Ok(exe_path) = std::env::current_exe() {
+            if let Some(exe_dir) = exe_path.parent() {
+                let project_root = exe_dir.parent().unwrap_or(exe_dir);
+                let mona_pkg_dir = project_root.join("mona");
+                if mona_pkg_dir.is_dir() {
+                    let sep = if cfg!(windows) { ";" } else { ":" };
+                    let existing = std::env::var("PYTHONPATH").unwrap_or_default();
+                    let new_path = if existing.is_empty() {
+                        project_root.display().to_string()
+                    } else {
+                        format!("{}{}{}", project_root.display(), sep, existing)
+                    };
+                    cmd.env("PYTHONPATH", &new_path);
+                    log::info!(
+                        "Dev mode detected: PYTHONPATH set to {:?}",
+                        project_root
+                    );
+                }
+            }
         }
 
         #[cfg(windows)]

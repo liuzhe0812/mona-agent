@@ -9,6 +9,7 @@ import type {
   OutboundImageGeneration,
   OutboundMedia,
   GoalStateWsPayload,
+  DeliveredFile,
   UIImage,
   UIFileEdit,
   UIMessage,
@@ -78,22 +79,24 @@ function attachReasoningChunk(
       || hasAnswer
       || candidate.isStreaming
     ) {
-      const merged: UIMessage = {
+      const next = prev.slice();
+      next[i] = {
         ...candidate,
         reasoning: (candidate.reasoning ?? "") + chunk,
         reasoningStreaming: true,
         ...(activitySegmentId ? { activitySegmentId } : {}),
       };
-      return [...prev.slice(0, i), merged, ...prev.slice(i + 1)];
+      return next;
     }
     if (!hasAnswer && candidate.isStreaming) {
-      const merged: UIMessage = {
+      const next = prev.slice();
+      next[i] = {
         ...candidate,
         reasoning: chunk,
         reasoningStreaming: true,
         ...(activitySegmentId ? { activitySegmentId } : {}),
       };
-      return [...prev.slice(0, i), merged, ...prev.slice(i + 1)];
+      return next;
     }
     break;
   }
@@ -136,6 +139,48 @@ function replaceMessageAt(prev: UIMessage[], index: number, message: UIMessage):
   return next;
 }
 
+function mergeDeliveredFiles(
+  existing: DeliveredFile[] | undefined,
+  incoming: DeliveredFile[],
+): DeliveredFile[] {
+  const next = [...(existing ?? [])];
+  const seen = new Set(next.map((file) => file.absolute_path || file.path || file.name));
+  for (const file of incoming) {
+    const key = file.absolute_path || file.path || file.name;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    next.push(file);
+  }
+  return next;
+}
+
+function appendDeliveredFilesToLastAssistant(
+  prev: UIMessage[],
+  files: DeliveredFile[],
+): UIMessage[] {
+  if (files.length === 0) return prev;
+  for (let i = prev.length - 1; i >= 0; i -= 1) {
+    const message = prev[i];
+    if (message.role === "user") break;
+    if (message.role === "assistant" && message.kind !== "trace") {
+      return replaceMessageAt(prev, i, {
+        ...message,
+        deliveredFiles: mergeDeliveredFiles(message.deliveredFiles, files),
+      });
+    }
+  }
+  return [
+    ...prev,
+    {
+      id: `deliver-${Date.now()}`,
+      role: "assistant",
+      content: "",
+      deliveredFiles: files,
+      createdAt: Date.now(),
+    },
+  ];
+}
+
 /**
  * Close the active reasoning stream segment, if any. Idempotent: a
  * ``reasoning_end`` with no preceding deltas is a harmless no-op.
@@ -144,8 +189,9 @@ function closeReasoningStream(prev: UIMessage[]): UIMessage[] {
   for (let i = prev.length - 1; i >= 0; i -= 1) {
     const candidate = prev[i];
     if (!candidate.reasoningStreaming) continue;
-    const merged: UIMessage = { ...candidate, reasoningStreaming: false };
-    return [...prev.slice(0, i), merged, ...prev.slice(i + 1)];
+    const next = prev.slice();
+    next[i] = { ...candidate, reasoningStreaming: false };
+    return next;
   }
   return prev;
 }
@@ -348,6 +394,7 @@ export function useMonaStream(
   const fileEditSegmentRef = useRef<string | null>(null);
   const activitySegmentCounterRef = useRef(0);
   const pendingStreamEventsRef = useRef<PendingStreamEvent[]>([]);
+  const pendingDeliveredFilesRef = useRef<DeliveredFile[]>([]);
   const streamFrameRef = useRef<number | null>(null);
   const suppressStreamUntilTurnEndRef = useRef(false);
   /** Timer that defers ``isStreaming = false`` after ``stream_end``.
@@ -428,49 +475,12 @@ export function useMonaStream(
     return idx;
   }, []);
 
-  const appendAnswerChunk = useCallback(
-    (prev: UIMessage[], chunk: string): UIMessage[] => {
-      let next = prev;
-      let targetIndex = resolveActiveAssistantIndex(next);
-
-      if (targetIndex === null) {
-        targetIndex = findActiveAssistantPlaceholderIndex(next);
-      }
-      if (targetIndex === null) {
-        targetIndex = findStreamingAssistantIndex(next, closedAssistantStreamIdsRef.current);
-      }
-      if (targetIndex === null) {
-        const id = crypto.randomUUID();
-        next = [
-          ...next,
-          {
-            id,
-            role: "assistant",
-            content: "",
-            isStreaming: true,
-            createdAt: Date.now(),
-          },
-        ];
-        targetIndex = next.length - 1;
-      }
-
-      const target = next[targetIndex];
-      const merged: UIMessage = {
-        ...target,
-        content: target.content + chunk,
-        isStreaming: true,
-      };
-      closedAssistantStreamIdsRef.current.delete(merged.id);
-      activeAssistantRef.current = { id: merged.id, index: targetIndex };
-      buffer.current = { messageId: merged.id };
-      return replaceMessageAt(next, targetIndex, merged);
-    },
-    [resolveActiveAssistantIndex],
-  );
-
   const applyPendingStreamEvents = useCallback(
     (prev: UIMessage[], events: PendingStreamEvent[]): UIMessage[] => {
-      let next = prev;
+      if (events.length === 0) return prev;
+      // Single array copy — all mutations happen on this draft,
+      // eliminating the O(events × messages) cascade of intermediate arrays.
+      const draft = prev.slice();
       for (let i = 0; i < events.length;) {
         const kind = events[i].kind;
         let text = "";
@@ -478,15 +488,91 @@ export function useMonaStream(
           text += events[i].text;
           i += 1;
         }
-        next = kind === "delta"
-          ? appendAnswerChunk(next, text)
-          : attachReasoningChunk(next, text, {
-              ensure: ensureActivitySegmentId,
+        if (kind === "delta") {
+          // Inline appendAnswerChunk: find target, mutate draft in-place
+          let targetIndex = resolveActiveAssistantIndex(draft);
+          if (targetIndex === null) {
+            targetIndex = findActiveAssistantPlaceholderIndex(draft);
+          }
+          if (targetIndex === null) {
+            targetIndex = findStreamingAssistantIndex(draft, closedAssistantStreamIdsRef.current);
+          }
+          if (targetIndex === null) {
+            const id = crypto.randomUUID();
+            draft.push({
+              id,
+              role: "assistant",
+              content: "",
+              isStreaming: true,
+              createdAt: Date.now(),
             });
+            targetIndex = draft.length - 1;
+          }
+          const target = draft[targetIndex];
+          const merged: UIMessage = {
+            ...target,
+            content: target.content + text,
+            isStreaming: true,
+          };
+          closedAssistantStreamIdsRef.current.delete(merged.id);
+          activeAssistantRef.current = { id: merged.id, index: targetIndex };
+          buffer.current = { messageId: merged.id };
+          draft[targetIndex] = merged;
+        } else {
+          // Inline attachReasoningChunk: find target, mutate draft in-place
+          let found = false;
+          for (let j = draft.length - 1; j >= 0; j -= 1) {
+            const candidate = draft[j];
+            if (candidate.role === "user") break;
+            if (candidate.kind === "trace") break;
+            if (candidate.role !== "assistant") continue;
+            const activitySegmentId = candidate.activitySegmentId ?? ensureActivitySegmentId();
+            const hasAnswer = candidate.content.length > 0;
+            if (
+              candidate.reasoningStreaming
+              || candidate.reasoning !== undefined
+              || hasAnswer
+              || candidate.isStreaming
+            ) {
+              draft[j] = {
+                ...candidate,
+                reasoning: (candidate.reasoning ?? "") + text,
+                reasoningStreaming: true,
+                ...(activitySegmentId ? { activitySegmentId } : {}),
+              };
+              found = true;
+              break;
+            }
+            if (!hasAnswer && candidate.isStreaming) {
+              draft[j] = {
+                ...candidate,
+                reasoning: text,
+                reasoningStreaming: true,
+                ...(activitySegmentId ? { activitySegmentId } : {}),
+              };
+              found = true;
+              break;
+            }
+            break;
+          }
+          if (!found) {
+            const activitySegmentId = ensureActivitySegmentId();
+            draft.push({
+              id: crypto.randomUUID(),
+              role: "assistant",
+              content: "",
+              isStreaming: true,
+              reasoning: text,
+              reasoningStreaming: true,
+              ...(activitySegmentId ? { activitySegmentId } : {}),
+              createdAt: Date.now(),
+            });
+          }
+        }
       }
-      return next;
+      return draft;
     },
-    [appendAnswerChunk, ensureActivitySegmentId],
+    [resolveActiveAssistantIndex, ensureActivitySegmentId],
   );
 
   const flushPendingStreamEvents = useCallback((options?: { closeAnswerSegment?: boolean }) => {
@@ -534,6 +620,7 @@ export function useMonaStream(
     buffer.current = null;
     activeAssistantRef.current = null;
     closedAssistantStreamIdsRef.current.clear();
+    pendingDeliveredFilesRef.current = [];
     clearActivitySegment();
     clearPendingStreamWork();
     suppressStreamUntilTurnEndRef.current = false;
@@ -627,6 +714,13 @@ export function useMonaStream(
         setMessages((prev) => {
           let finalized = prev.map((m) => (m.isStreaming ? { ...m, isStreaming: false } : m));
           finalized = pruneReasoningOnlyPlaceholders(finalized);
+          if (pendingDeliveredFilesRef.current.length > 0) {
+            finalized = appendDeliveredFilesToLastAssistant(
+              finalized,
+              pendingDeliveredFilesRef.current,
+            );
+            pendingDeliveredFilesRef.current = [];
+          }
           if (typeof ev.latency_ms === "number" && ev.latency_ms >= 0) {
             finalized = stampLastAssistantLatency(finalized, Math.round(ev.latency_ms));
           }
@@ -697,7 +791,9 @@ export function useMonaStream(
                   : lines[lines.length - 1],
                 activitySegmentId: last.activitySegmentId ?? segmentId,
               };
-              return [...prev.slice(0, -1), merged];
+              const next = prev.slice();
+              next[next.length - 1] = merged;
+              return next;
             }
             return [
               ...prev,
@@ -735,11 +831,16 @@ export function useMonaStream(
             typeof ev.latency_ms === "number" && ev.latency_ms >= 0
               ? Math.round(ev.latency_ms)
               : undefined;
-          return absorbCompleteAssistantMessage(filtered, {
+          let next = absorbCompleteAssistantMessage(filtered, {
             content,
             ...(hasMedia ? { media } : {}),
             ...(lat !== undefined ? { latencyMs: lat } : {}),
           });
+          if (pendingDeliveredFilesRef.current.length > 0) {
+            next = appendDeliveredFilesToLastAssistant(next, pendingDeliveredFilesRef.current);
+            pendingDeliveredFilesRef.current = [];
+          }
+          return next;
         });
         if (hasMedia) {
           suppressStreamUntilTurnEndRef.current = true;
@@ -795,7 +896,7 @@ export function useMonaStream(
         const files = Array.isArray(ev.files) ? ev.files : [];
         if (files.length === 0) return;
         setMessages((prev) => {
-          let targetIdx = -1;
+          let targetIdx: number | null = null;
           for (let i = prev.length - 1; i >= 0; i--) {
             const m = prev[i];
             if (m.role === "assistant" && m.kind !== "trace") {
@@ -804,24 +905,19 @@ export function useMonaStream(
             }
             if (m.role === "user") break;
           }
-          if (targetIdx >= 0) {
+          if (targetIdx !== null && !prev[targetIdx].isStreaming) {
             const target = prev[targetIdx];
             return [
               ...prev.slice(0, targetIdx),
-              { ...target, deliveredFiles: [...(target.deliveredFiles ?? []), ...files] },
+              { ...target, deliveredFiles: mergeDeliveredFiles(target.deliveredFiles, files) },
               ...prev.slice(targetIdx + 1),
             ];
           }
-          return [
-            ...prev,
-            {
-              id: `deliver-${Date.now()}`,
-              role: "assistant" as const,
-              content: "",
-              deliveredFiles: files,
-              createdAt: Date.now(),
-            },
-          ];
+          pendingDeliveredFilesRef.current = mergeDeliveredFiles(
+            pendingDeliveredFilesRef.current,
+            files,
+          );
+          return prev;
         });
         return;
       }
@@ -835,6 +931,7 @@ export function useMonaStream(
       buffer.current = null;
       activeAssistantRef.current = null;
       closedAssistantStreamIdsRef.current.clear();
+      pendingDeliveredFilesRef.current = [];
       clearActivitySegment();
       clearPendingStreamWork();
       if (streamEndTimerRef.current !== null) {
@@ -868,6 +965,7 @@ export function useMonaStream(
         buffer.current = null;
         activeAssistantRef.current = null;
         closedAssistantStreamIdsRef.current.clear();
+        pendingDeliveredFilesRef.current = [];
         clearActivitySegment();
         return [
           ...pruneReasoningOnlyPlaceholders(prev),
@@ -888,6 +986,9 @@ export function useMonaStream(
       if (options) {
         client.sendMessage(chatId, content, wireMedia, {
           imageGeneration: options.imageGeneration,
+          // IMPORTANT: displayContent is persisted to the server so that
+          // history replay also shows the short label. DO NOT remove.
+          displayContent: options.displayContent,
           terminalSessionId: options.terminalSessionId,
           terminalExecMode: options.terminalExecMode,
           dbConnectionId: options.dbConnectionId,
@@ -933,6 +1034,7 @@ export function useMonaStream(
       buffer.current = null;
       activeAssistantRef.current = null;
       closedAssistantStreamIdsRef.current.clear();
+      pendingDeliveredFilesRef.current = [];
       clearActivitySegment();
       return prev.map((m) => (m.isStreaming ? { ...m, isStreaming: false } : m));
     });

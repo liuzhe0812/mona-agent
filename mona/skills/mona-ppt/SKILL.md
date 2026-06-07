@@ -17,20 +17,20 @@ metadata:
 
 Pipeline dispatcher for Mona PPT. This file owns execution discipline, step gates, and reference routing. Detailed instructions live in references and are loaded only when the step needs them.
 
-Pipeline: source -> project -> optional template -> Strategist -> optional image acquisition -> Executor SVG -> quality gate -> export.
+Pipeline: source -> project -> optional template -> Strategist -> optional image acquisition -> Executor SVG -> quality gate -> `svg_to_pptx.py` export.
 
 ## Core Contract
 
 1. Run the pipeline strictly in order. Check each step gate before entry.
 2. Step 4 Eight Confirmations are blocking: wait for explicit user confirmation before writing `design_spec.md` / `spec_lock.md`.
-3. No cross-phase bundling: no SVG during Strategist, no export before SVG quality passes.
-4. Every project SVG page is hand-written by the current main agent, one page at a time. No sub-agents, page batches, loops, templating scripts, or SVG generator scripts.
-5. Before every SVG page, read `<project_path>/spec_lock.md`; use only locked colors, fonts, icons, images, `page_rhythm`, `page_layouts`, and `page_charts`.
+3. Normal SVG path: no cross-phase bundling; no SVG during Strategist, no export before SVG quality passes.
+4. Normal SVG path: every project SVG page is hand-written by the current main agent, one page at a time. No sub-agents, page batches, loops, templating scripts, or SVG generator scripts.
+5. Normal SVG path: before every SVG page, read `<project_path>/spec_lock.md`; use only locked colors, fonts, icons, images, `page_rhythm`, `page_layouts`, and `page_charts`.
 6. Do not directly inspect image files. Use `analyze_images.py` output and the design spec image list.
-7. SVG image hrefs must use `../images/<filename>` for project images. Bare filenames like `cover_bg.png` are invalid unless the file is actually in `svg_output/`.
-8. Run `svg_quality_checker.py <project_path>` on `svg_output/`; all errors must be fixed before export.
-9. Speaker notes must be real Markdown under `notes/`; SVG `<metadata>` does not count.
-10. PPTX export must use `${SKILL_DIR}/scripts/svg_to_pptx.py` only. Never create custom export scripts, never use Node/pptxgenjs, never install PPTX-generation npm packages.
+7. Normal SVG path: SVG image hrefs must use `../images/<filename>` for project images. Bare filenames like `cover_bg.png` are invalid unless the file is actually in `svg_output/`.
+8. Normal SVG path: run `svg_quality_checker.py <project_path>` on `svg_output/`; all errors must be fixed before export.
+9. Normal SVG path: speaker notes must be real Markdown under `notes/`; SVG `<metadata>` does not count.
+10. Export discipline: PPTX export must use `${SKILL_DIR}/scripts/svg_to_pptx.py`. For custom PPTX templates, add `--template-underlay <native_template_dir>/template.pptx`. Never create custom export scripts, never use Node/pptxgenjs, never install PPTX-generation npm packages.
 
 ## Mona Defaults
 
@@ -47,6 +47,7 @@ Pipeline: source -> project -> optional template -> Strategist -> optional image
 |---|---|
 | Step 1-2 source conversion / project setup | `references/source-project.md` |
 | Step 3 explicit template directory path(s) only | `references/template-selection.md` |
+| Custom PPTX template selected | `references/native-pptx-template-mode.md` |
 | Step 4 Strategist | `references/strategist.md`, `templates/design_spec_reference.md`; `references/canvas-formats.md` only for special canvas choices |
 | Step 5 image rows exist | `references/image-base.md`; plus `references/image-generator.md` only for `Acquire Via: ai`, `references/image-searcher.md` only for `Acquire Via: web` |
 | Step 6 Executor | `references/executor-run.md`, `references/executor-base.md`, `references/shared-standards.md`, and exactly one style file: `executor-general.md` / `executor-consultant.md` / `executor-consultant-top.md` |
@@ -97,9 +98,21 @@ Gate: Step 2 complete.
 - Style words and brand mentions without a path flow into Step 4 as user preferences.
 
 - When no template is selected, keep the normal free-design flow: do not require `page_layouts`, do not copy template files, and do not add template export flags.
-- When a `deck` template is selected, `spec_lock.md` MUST include non-empty `page_layouts`. Empty or missing `page_layouts` in a deck project is a hard error.
 
 Checkpoint: free design is selected, or template files are copied/fused into `<project_path>/templates/`.
+
+- When a `native` template is selected, keep the normal SVG pipeline and use the template PPTX first slide as a repeated underlay at export.
+- Do not output `native_content_plan.json`; do not use `native_pptx_builder.py`.
+
+### Custom PPTX Template Underlay Mode
+
+Gate: Step 3 selected a directory under `mona/skills/mona-ppt/templates/native/<template_id>` containing `template.pptx`, `template_roles.json`, and `template_manifest.json`.
+
+- Read `references/native-pptx-template-mode.md`.
+- Treat `template.pptx` slide 1 as a repeated visual underlay for every final slide.
+- Do not infer cover/toc/content/thanks roles from the template.
+- Complete Step 4, Step 5, Step 6, SVG quality checks, notes, and chart verification normally.
+- Export with `python ${SKILL_DIR}/scripts/svg_to_pptx.py <project_path> --template-underlay <native_template_dir>/template.pptx`.
 
 ### Step 4: Strategist Phase
 

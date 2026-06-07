@@ -192,19 +192,11 @@ pub async fn import_license(path: String) -> Result<serde_json::Value, String> {
     }))
 }
 
+const LICENSE_PUBKEY: &str = include_str!("license_pubkey.pem");
+
 fn load_public_key() -> Result<jsonwebtoken::DecodingKey, String> {
-    let key_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("src")
-        .join("license_pubkey.pem");
-
-    if key_path.exists() {
-        let pem = std::fs::read_to_string(&key_path)
-            .map_err(|e| format!("读取公钥失败: {}", e))?;
-        return jsonwebtoken::DecodingKey::from_rsa_pem(pem.as_bytes())
-            .map_err(|e| format!("公钥格式错误: {}", e));
-    }
-
-    Err("公钥文件不存在，请联系开发者获取".to_string())
+    jsonwebtoken::DecodingKey::from_rsa_pem(LICENSE_PUBKEY.as_bytes())
+        .map_err(|e| format!("公钥格式错误: {}", e))
 }
 
 fn extract_exp_fallback(token: &str) -> Option<String> {

@@ -7,8 +7,9 @@ import { FileManagerApp } from "./apps/FileManagerApp";
 import { TerminalApp } from "./apps/TerminalApp";
 import { TaskManagerApp } from "./apps/TaskManagerApp";
 import { TextEditorApp } from "./apps/TextEditorApp";
+import { RecycleBinApp } from "./apps/RecycleBinApp";
 import { useWindowManager } from "./useWindowManager";
-import { desktopDisconnect, desktopConnect } from "../ipc";
+import { desktopDisconnect, desktopConnect, desktopExec } from "../ipc";
 import { useTerminalStore } from "../store/terminalStore";
 import type { ConnectionConfig } from "../types/terminal";
 import type { AppType, WindowState } from "./types";
@@ -190,6 +191,8 @@ export function DesktopMode({ sessionId }: DesktopModeProps) {
             filePath={window.data?.filePath as string}
           />
         );
+      case "recycleBin":
+        return <RecycleBinApp sessionId={effectiveSessionId} />;
       default:
         return null;
     }
@@ -201,6 +204,32 @@ export function DesktopMode({ sessionId }: DesktopModeProps) {
     } catch {}
     setDisconnected(true);
     removeSession(sessionId);
+  };
+
+  const handleDesktopContextMenu = async (
+    action: string,
+    data?: Record<string, unknown>,
+  ) => {
+    try {
+      switch (action) {
+        case "newFile": {
+          const name = (data?.name as string) || "新建文件.txt";
+          await desktopExec(effectiveSessionId, `touch ~/Desktop/'${name}'`);
+          break;
+        }
+        case "newFolder": {
+          const name = (data?.name as string) || "新建文件夹";
+          await desktopExec(effectiveSessionId, `mkdir -p ~/Desktop/'${name}'`);
+          break;
+        }
+        case "refresh":
+          break;
+        case "paste":
+          break;
+      }
+    } catch (err) {
+      console.error("Desktop context menu action failed:", String(err));
+    }
   };
 
   if (disconnected) {
@@ -228,7 +257,7 @@ export function DesktopMode({ sessionId }: DesktopModeProps) {
     <div className="desktop-mode-container" ref={containerRef}>
       <style>{desktopStyles}</style>
 
-      <DesktopSurface onOpenApp={handleOpenApp} />
+      <DesktopSurface onOpenApp={handleOpenApp} onDesktopContextMenu={handleDesktopContextMenu} />
 
       {windows.map((window) => (
         <Window

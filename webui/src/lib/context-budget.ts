@@ -1,3 +1,8 @@
+/**
+ * Pure budget allocator for chat context assembly.
+ * Ported from llm_wiki src/lib/context-budget.ts
+ */
+
 export interface ContextBudget {
   maxCtx: number
   responseReserve: number
@@ -27,11 +32,5 @@ export function computeContextBudget(
     pageBudget,
     Math.max(PER_PAGE_FLOOR, Math.floor(pageBudget * PER_PAGE_FRAC)),
   )
-  return {
-    maxCtx,
-    responseReserve,
-    indexBudget,
-    pageBudget,
-    maxPageSize,
-  }
+  return { maxCtx, responseReserve, indexBudget, pageBudget, maxPageSize }
 }

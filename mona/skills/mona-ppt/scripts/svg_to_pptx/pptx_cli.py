@@ -232,6 +232,10 @@ Recorded narration:
         '--template', type=str, default=None,
         help='Path to template PPTX file (inherits masters and layouts)',
     )
+    parser.add_argument(
+        '--template-underlay', type=str, default=None,
+        help='Path to a one-slide PPTX template used as a repeated slide underlay',
+    )
     parser.add_argument('--no-cache', action='store_true',
                         help='Disable the SVG→PNG cache for this run (still parallel).')
     parser.add_argument('--keep-cache', action='store_true',
@@ -247,70 +251,6 @@ Recorded narration:
     if not project_path.exists():
         print(f"Error: Path does not exist: {project_path}")
         sys.exit(1)
-
-    # --- Deck project page_layouts validation ---
-    def _project_declares_deck_template(path: Path) -> bool:
-        design_spec_path = path / "templates" / "design_spec.md"
-        if not design_spec_path.exists():
-            return False
-        spec_text = design_spec_path.read_text(encoding="utf-8")
-        if not spec_text.startswith("---\n"):
-            return False
-        end = spec_text.find("\n---\n", 4)
-        if end == -1:
-            return False
-        frontmatter = spec_text[4:end]
-        import re
-        return re.search(r"(?m)^\s*kind\s*:\s*deck\s*$", frontmatter) is not None
-
-    def _read_page_layouts(path: Path) -> list[tuple[str, str]]:
-        import re
-        lock_text = path.read_text(encoding="utf-8")
-        section = re.search(
-            r"(?ms)^##\s+page_layouts\s*$([\s\S]*?)(?=^##\s+|\Z)",
-            lock_text,
-        )
-        if section is None:
-            return []
-        rows: list[tuple[str, str]] = []
-        for raw_line in section.group(1).splitlines():
-            line = raw_line.strip()
-            match = re.match(r"^-?\s*(P\d{2})\s*:\s*([A-Za-z0-9_.-]+)\s*$", line)
-            if match:
-                rows.append((match.group(1), match.group(2)))
-        return rows
-
-    if _project_declares_deck_template(project_path):
-        spec_lock_path = project_path / "spec_lock.md"
-        if not spec_lock_path.exists():
-            print(
-                "Error: Deck project requires spec_lock.md with page_layouts. "
-                "Please regenerate the project.",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        page_layouts = _read_page_layouts(spec_lock_path)
-        if not page_layouts:
-            print(
-                "Error: Deck project spec_lock.md is missing non-empty page_layouts. "
-                "The AI must select template pages from the Page Roster. "
-                "Please regenerate the project.",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        missing = [
-            f"{page}: {basename}"
-            for page, basename in page_layouts
-            if not (project_path / "templates" / f"{basename}.svg").exists()
-        ]
-        if missing:
-            print(
-                "Error: Deck project page_layouts references missing template SVG files.",
-                file=sys.stderr,
-            )
-            for item in missing[:20]:
-                print(f"  {item}", file=sys.stderr)
-            sys.exit(1)
 
     try:
         project_info = get_project_info(str(project_path))
@@ -574,6 +514,7 @@ Recorded narration:
         workers=args.workers,
         merge_paragraphs=args.merge_paragraphs,
         template_pptx=Path(args.template) if args.template else None,
+        template_underlay_pptx=Path(args.template_underlay) if args.template_underlay else None,
     )
 
     success = True

@@ -110,6 +110,10 @@ export function MessageBubble({
               "text-left text-[16px]/[1.75] whitespace-pre-wrap break-words",
             )}
           >
+            {/* IMPORTANT: Use displayContent (short label) when available, fallback to content.
+                DO NOT change to just message.content — displayContent ensures user messages
+                show the original input, not the enriched prompt with terminal/DB context.
+                This is persisted to the server for history replay. */}
             {message.displayContent ?? message.content}
           </p>
         ) : null}

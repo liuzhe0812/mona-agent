@@ -89,7 +89,7 @@ export default function MarkdownTextRenderer({
         return (
           <pre
             className={cn(
-              "my-3 overflow-x-auto rounded-lg border border-border/60 bg-muted/35",
+              "my-3 overflow-x-auto rounded-lg bg-muted/35",
               "p-3 font-mono text-[0.8125rem] leading-snug text-foreground/90",
               "whitespace-pre [overflow-wrap:normal]",
             )}

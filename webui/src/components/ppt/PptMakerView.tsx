@@ -28,7 +28,7 @@ export type PptAnimationTrigger = "after-previous" | "with-previous" | "on-click
 export interface PptConfig {
   // --- Basic ---
   templateKey: string | null;
-  templateKind: "layout" | "brand" | "deck" | null;
+  templateKind: "layout" | "brand" | "native" | null;
   canvasFormat: string;
   imageMode: PptImageMode;
   visualMode: PptVisualMode;
@@ -311,6 +311,9 @@ function generateProjectName(): string {
 
 function buildPptPrompt(config: PptConfig, projectName: string): string {
   const parts: string[] = [];
+  const usesNativeTemplate = Boolean(
+    config.templateKey && config.templateKind === "native",
+  );
 
   const hasPptxSource = config.sourceFiles.some((f) =>
     f.toLowerCase().endsWith(".pptx"),
@@ -332,8 +335,12 @@ function buildPptPrompt(config: PptConfig, projectName: string): string {
   parts.push("");
   parts.push("⚠️ 关键规则提醒（详见 mona-ppt SKILL.md）：");
   parts.push("- Step 5：当 design_spec 有 Acquire Via: ai 行时，必须执行，用 generate_image 工具生图，禁止跳过");
-  parts.push("- Step 7：导出只能用 svg_to_pptx.py，禁止自创脚本（convert.js / pptxgenjs 等）");
-  parts.push("- SVG 颜色用 #RRGGBB 格式，不要用 rgba()，渐变透明度用 stop-opacity 属性");
+  if (usesNativeTemplate) {
+    parts.push("- 自定义模板模式：仍按正常 SVG 高质量管线生成和质检，导出时用 svg_to_pptx.py 加 --template-underlay");
+  } else {
+    parts.push("- Step 7：导出只能用 svg_to_pptx.py，禁止自创脚本（convert.js / pptxgenjs 等）");
+    parts.push("- SVG 颜色用 #RRGGBB 格式，不要用 rgba()，渐变透明度用 stop-opacity 属性");
+  }
 
   // --- Eight Confirmations pre-fill ---
   // User has already configured preferences in the UI. Present these as
@@ -447,15 +454,14 @@ function buildPptPrompt(config: PptConfig, projectName: string): string {
   // Important: no template selected means no template instructions at all.
   // This preserves the existing PPT generation path.
   if (config.templateKey && config.templateKind) {
-    if (config.templateKind === "deck") {
-      const subdir = "decks";
-      parts.push(`使用完整模板：${config.templateKey}（路径：mona/skills/mona-ppt/templates/${subdir}/${config.templateKey}）`);
-      parts.push("⚠️ 完整模板硬约束（必须遵守）：");
-      parts.push("- 读取 design_spec.md 的 Page Roster，为每页选择模板页");
-      parts.push("- spec_lock.md 的 page_layouts 不得为空，必须记录每页对应的模板 SVG");
-      parts.push("- Executor 每页生成前必须读取对应模板 SVG，在此基础上替换内容，不要自由重画");
-      parts.push("- 如果某页没有合适模板，必须在 spec_lock.md 写明原因");
-      parts.push("- 如果完整模板目录存在 template.pptx，导出时 Step 7 加 --template 参数：python mona/skills/mona-ppt/scripts/svg_to_pptx.py <project_path> --template <deck_dir>/template.pptx");
+    if (usesNativeTemplate) {
+      parts.push(`使用自定义模板：${config.templateKey}（路径：mona/skills/mona-ppt/templates/native/${config.templateKey}）`);
+      parts.push("⚠️ 自定义模板硬约束（必须遵守）：");
+      parts.push("- 读取 references/native-pptx-template-mode.md");
+      parts.push("- 把该 PPTX 的第一页当作每页通用底板，不要判断封面/目录/致谢等角色");
+      parts.push("- Step 4/5/6 仍按正常 SVG 管线执行：design_spec、spec_lock、AI 图片、图表、流程图、SVG 质量检查都不能跳过");
+      parts.push("- 不要输出 native_content_plan.json，不要使用 native_pptx_builder.py");
+      parts.push("- Step 7 导出命令必须加底板参数：python mona/skills/mona-ppt/scripts/svg_to_pptx.py <project_path> --template-underlay mona/skills/mona-ppt/templates/native/<template_id>/template.pptx");
     } else if (config.templateKind === "brand") {
       parts.push(`使用品牌：${config.templateKey}（路径：mona/skills/mona-ppt/templates/brands/${config.templateKey}）`);
       parts.push("⚠️ 品牌模板只控制视觉风格（颜色、字体、Logo），不固定页面版式");

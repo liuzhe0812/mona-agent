@@ -1,4 +1,4 @@
-﻿"""Image generation tool."""
+"""Image generation tool."""
 
 from __future__ import annotations
 
@@ -122,9 +122,18 @@ class ImageGenerationTool(Tool):
         cls = get_image_gen_provider(self.config.provider)
         if cls is None:
             return None
+        # Resolve api_base: prefer the provider's explicit api_base, then
+        # fall back to the ProviderSpec's default_api_base so gateways like
+        # Agnes AI work even when the user didn't manually fill api_base.
+        api_base = provider.api_base if provider else None
+        if not api_base:
+            from mona.providers.registry import find_by_name as _find_spec
+            spec = _find_spec(self.config.provider)
+            if spec and spec.default_api_base:
+                api_base = spec.default_api_base
         kwargs = {
             "api_key": provider.api_key if provider else None,
-            "api_base": provider.api_base if provider else None,
+            "api_base": api_base,
             "extra_headers": provider.extra_headers if provider else None,
             "extra_body": provider.extra_body if provider else None,
         }
@@ -177,11 +186,17 @@ class ImageGenerationTool(Tool):
 
         try:
             refs = self._resolve_reference_images(reference_images)
+            # Use the image-specific model from image_generation config.
+            # Fall back to the provider's stored model if image model is not set.
+            provider_cfg = self._provider_config()
+            model = self.config.model or (provider_cfg.model if provider_cfg and provider_cfg.model else None)
+            if not model:
+                return "Error: no image model configured. Set the image model in Image settings."
             artifacts: list[dict[str, Any]] = []
             while len(artifacts) < requested:
                 response = await client.generate(
                     prompt=prompt,
-                    model=self.config.model,
+                    model=model,
                     reference_images=refs,
                     aspect_ratio=aspect_ratio or self.config.default_aspect_ratio,
                     image_size=image_size or self.config.default_image_size,
@@ -190,7 +205,7 @@ class ImageGenerationTool(Tool):
                     artifact = store_generated_image_artifact(
                         image_data_url,
                         prompt=prompt,
-                        model=self.config.model,
+                        model=model,
                         source_images=refs,
                         save_dir=self.config.save_dir,
                         provider=self.config.provider,

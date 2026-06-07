@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Send, Loader2, Shield, Square, FileText } from "lucide-react";
-import { MessageBubble } from "@/components/MessageBubble";
+import { Send, Shield, Square, FileText } from "lucide-react";
+import { ThreadMessages } from "@/components/thread/ThreadMessages";
 import { useMonaStream, type SendOptions } from "@/hooks/useMonaStream";
 import { useSessionHistory } from "@/hooks/useSessions";
 import { useClient } from "@/providers/ClientProvider";
@@ -105,6 +105,9 @@ export function AIChat({ sessionId, initialAction, onInitialMessageSent }: Props
     const sendOpts: SendOptions = {
       terminalSessionId: sessionId ?? undefined,
       terminalExecMode: execMode,
+      // IMPORTANT: displayContent shows the action label (e.g. "健康巡检") in the
+      // message bubble instead of the full enriched prompt. Persisted to server for
+      // history replay. DO NOT remove this field.
       displayContent: action.label,
     };
     if (chatId) {
@@ -121,6 +124,9 @@ export function AIChat({ sessionId, initialAction, onInitialMessageSent }: Props
     const sendOpts: SendOptions = {
       terminalSessionId: sessionId ?? undefined,
       terminalExecMode: execMode,
+      // IMPORTANT: displayContent shows the user's original input in the message
+      // bubble, not the enriched prompt with terminal context. Persisted to server
+      // for history replay. DO NOT remove this field.
       displayContent: text,
     };
 
@@ -161,9 +167,7 @@ export function AIChat({ sessionId, initialAction, onInitialMessageSent }: Props
             输入问题，AI 将基于终端上下文回答
           </p>
         )}
-        {messages.map((msg) => (
-          <MessageBubble key={msg.id} message={msg} />
-        ))}
+        <ThreadMessages messages={messages} isStreaming={isStreaming} />
         {reports.map((report, i) => (
           <button
             key={`report-${i}`}
@@ -176,12 +180,6 @@ export function AIChat({ sessionId, initialAction, onInitialMessageSent }: Props
             <span className="text-muted-foreground">— 点击查看报告</span>
           </button>
         ))}
-        {isStreaming && messages.length > 0 && messages[messages.length - 1].role !== "assistant" && (
-          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <Loader2 className="h-3 w-3 animate-spin" />
-            <span>思考中...</span>
-          </div>
-        )}
       </div>
       <div className="shrink-0 p-2">
         <div className="flex items-center gap-1.5 px-2.5 pb-1.5">

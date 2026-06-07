@@ -17,6 +17,26 @@ from aiohttp import web
 from loguru import logger
 
 from mona.config.paths import get_media_dir
+from mona.kb.api import (
+    handle_kb_create_project,
+    handle_kb_delete_file,
+    handle_kb_embed,
+    handle_kb_embed_status,
+    handle_kb_get_reviews,
+    handle_kb_get_wiki_page,
+    handle_kb_graph,
+    handle_kb_import_files,
+    handle_kb_ingest,
+    handle_kb_ingest_status,
+    handle_kb_lint,
+    handle_kb_list_files,
+    handle_kb_list_projects,
+    handle_kb_list_wiki,
+    handle_kb_rename_project,
+    handle_kb_save_reviews,
+    handle_kb_search,
+    handle_kb_update_wiki_page,
+)
 from mona.utils.helpers import safe_filename
 from mona.utils.media_decode import (
     MAX_FILE_SIZE,
@@ -463,4 +483,25 @@ def create_app(
     app.router.add_get("/v1/models", handle_models)
     app.router.add_get("/health", handle_health)
     app.router.add_post("/api/tauri/invoke", handle_tauri_invoke)
+
+    # KB routes
+    app.router.add_get("/api/kb/projects", handle_kb_list_projects)
+    app.router.add_post("/api/kb/projects", handle_kb_create_project)
+    app.router.add_post("/api/kb/{id}/rename", handle_kb_rename_project)
+    app.router.add_get("/api/kb/{id}/files", handle_kb_list_files)
+    app.router.add_post("/api/kb/{id}/import", handle_kb_import_files)
+    app.router.add_delete("/api/kb/{id}/files/{path:.*}", handle_kb_delete_file)
+    app.router.add_post("/api/kb/{id}/ingest", handle_kb_ingest)
+    app.router.add_get("/api/kb/{id}/ingest/status", handle_kb_ingest_status)
+    app.router.add_get("/api/kb/{id}/wiki", handle_kb_list_wiki)
+    app.router.add_get("/api/kb/{id}/wiki/{path:.*}", handle_kb_get_wiki_page)
+    app.router.add_post("/api/kb/{id}/wiki/update/{path:.*}", handle_kb_update_wiki_page)
+    app.router.add_get("/api/kb/{id}/graph", handle_kb_graph)
+    app.router.add_get("/api/kb/{id}/search", handle_kb_search)
+    app.router.add_post("/api/kb/{id}/embed", handle_kb_embed)
+    app.router.add_get("/api/kb/{id}/embed/status", handle_kb_embed_status)
+    app.router.add_get("/api/kb/{id}/reviews", handle_kb_get_reviews)
+    app.router.add_post("/api/kb/{id}/reviews", handle_kb_save_reviews)
+    app.router.add_get("/api/kb/{id}/lint", handle_kb_lint)
+
     return app

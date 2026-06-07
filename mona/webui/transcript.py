@@ -1,4 +1,4 @@
-﻿"""Append-only WebUI display transcript (JSONL), separate from agent session."""
+"""Append-only WebUI display transcript (JSONL), separate from agent session."""
 
 from __future__ import annotations
 
@@ -150,6 +150,7 @@ def replay_transcript_to_ui_messages(
     active_activity_segment_id: str | None = None
     active_file_edit_segment_id: str | None = None
     activity_segment_counter = 0
+    pending_delivered_files: list[dict[str, Any]] = []
     _ts_base = int(time.time() * 1000)
 
     def _new_id(prefix: str, idx: int) -> str:
@@ -275,6 +276,85 @@ def replay_transcript_to_ui_messages(
                 }
                 return
 
+    def _delivered_file_key(file: dict[str, Any]) -> str:
+        return str(file.get("absolute_path") or file.get("path") or file.get("name") or "")
+
+    def merge_delivered_files(
+        existing: list[dict[str, Any]] | None,
+        incoming: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        out = list(existing or [])
+        seen = {_delivered_file_key(file) for file in out if isinstance(file, dict)}
+        for file in incoming:
+            if not isinstance(file, dict):
+                continue
+            key = _delivered_file_key(file)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(dict(file))
+        return out
+
+    def append_delivered_files_to_last_assistant(files: list[dict[str, Any]], idx: int) -> None:
+        if not files:
+            return
+        for i in range(len(messages) - 1, -1, -1):
+            message = messages[i]
+            if message.get("role") == "user":
+                break
+            if message.get("role") == "assistant" and message.get("kind") != "trace":
+                messages[i] = {
+                    **message,
+                    "deliveredFiles": merge_delivered_files(
+                        message.get("deliveredFiles")
+                        if isinstance(message.get("deliveredFiles"), list)
+                        else None,
+                        files,
+                    ),
+                }
+                return
+        messages.append(
+            {
+                "id": _new_id("as-deliver", idx),
+                "role": "assistant",
+                "content": "",
+                "deliveredFiles": merge_delivered_files(None, files),
+                "createdAt": _ts_base + idx,
+            },
+        )
+
+    def queue_delivered_files(files: list[dict[str, Any]]) -> None:
+        nonlocal pending_delivered_files
+        pending_delivered_files = merge_delivered_files(pending_delivered_files, files)
+
+    def flush_pending_delivered_files(idx: int) -> None:
+        nonlocal pending_delivered_files
+        if not pending_delivered_files:
+            return
+        append_delivered_files_to_last_assistant(pending_delivered_files, idx)
+        pending_delivered_files = []
+
+    def attach_or_queue_delivered_files(files: list[dict[str, Any]]) -> None:
+        for i in range(len(messages) - 1, -1, -1):
+            message = messages[i]
+            if message.get("role") == "user":
+                break
+            if message.get("role") == "assistant" and message.get("kind") != "trace":
+                if message.get("isStreaming"):
+                    queue_delivered_files(files)
+                else:
+                    messages[i] = {
+                        **message,
+                        "deliveredFiles": merge_delivered_files(
+                            message.get("deliveredFiles")
+                            if isinstance(message.get("deliveredFiles"), list)
+                            else None,
+                            files,
+                        ),
+                    }
+                return
+        queue_delivered_files(files)
+
     def absorb_complete(extra: dict[str, Any], idx: int) -> None:
         nonlocal active_activity_segment_id, active_file_edit_segment_id
         last = messages[-1] if messages else None
@@ -294,6 +374,7 @@ def replay_transcript_to_ui_messages(
                     **extra,
                 },
             )
+        flush_pending_delivered_files(idx)
         active_activity_segment_id = None
         active_file_edit_segment_id = None
 
@@ -401,6 +482,12 @@ def replay_transcript_to_ui_messages(
                 "content": text_s,
                 "createdAt": _ts_base + idx,
             }
+            # IMPORTANT: restore displayContent from transcript so history
+            # replay shows the short label (e.g. "健康巡检") instead of the
+            # full enriched prompt. DO NOT remove.
+            dc = rec.get("display_content")
+            if isinstance(dc, str) and dc:
+                row["displayContent"] = dc
             if media_att:
                 row["media"] = media_att
                 if all(m.get("kind") == "image" for m in media_att):
@@ -412,6 +499,12 @@ def replay_transcript_to_ui_messages(
             raw_edits = rec.get("edits")
             if isinstance(raw_edits, list):
                 upsert_file_edits([e for e in raw_edits if isinstance(e, dict)], idx)
+            continue
+
+        if ev == "deliver_files":
+            raw_files = rec.get("files")
+            if isinstance(raw_files, list):
+                attach_or_queue_delivered_files([f for f in raw_files if isinstance(f, dict)])
             continue
 
         if ev == "delta":
@@ -562,6 +655,7 @@ def replay_transcript_to_ui_messages(
                 if m.get("isStreaming"):
                     messages[i] = {**m, "isStreaming": False}
             prune_reasoning_only()
+            flush_pending_delivered_files(idx)
             lat = rec.get("latency_ms")
             if isinstance(lat, (int, float)) and lat >= 0:
                 stamp_latency(int(lat))

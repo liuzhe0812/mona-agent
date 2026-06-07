@@ -5,6 +5,42 @@ use std::path::PathBuf;
 const SETTINGS_FILE: &str = "settings.json";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SidebarShortcuts {
+    #[serde(default = "default_shortcut_mona")]
+    pub mona: String,
+    #[serde(default = "default_shortcut_note")]
+    pub note: String,
+    #[serde(default = "default_shortcut_ssh")]
+    pub ssh: String,
+    #[serde(default = "default_shortcut_db")]
+    pub db: String,
+    #[serde(default = "default_shortcut_kb")]
+    pub kb: String,
+    #[serde(default = "default_shortcut_ppt")]
+    pub ppt: String,
+}
+
+fn default_shortcut_mona() -> String { "Alt+1".to_string() }
+fn default_shortcut_note() -> String { "Alt+2".to_string() }
+fn default_shortcut_ssh() -> String { "Alt+3".to_string() }
+fn default_shortcut_db() -> String { "Alt+4".to_string() }
+fn default_shortcut_kb() -> String { "Alt+5".to_string() }
+fn default_shortcut_ppt() -> String { "Alt+6".to_string() }
+
+impl Default for SidebarShortcuts {
+    fn default() -> Self {
+        Self {
+            mona: default_shortcut_mona(),
+            note: default_shortcut_note(),
+            ssh: default_shortcut_ssh(),
+            db: default_shortcut_db(),
+            kb: default_shortcut_kb(),
+            ppt: default_shortcut_ppt(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     #[serde(default = "default_run_in_background")]
     pub run_in_background: bool,
@@ -14,6 +50,8 @@ pub struct AppSettings {
     pub gateway_port: u16,
     #[serde(default = "default_quick_ask_shortcut")]
     pub quick_ask_shortcut: String,
+    #[serde(default)]
+    pub sidebar_shortcuts: SidebarShortcuts,
     #[serde(default)]
     pub config_path: Option<String>,
 }
@@ -38,6 +76,7 @@ impl Default for AppSettings {
             auto_start_gateway: default_auto_start_gateway(),
             gateway_port: default_gateway_port(),
             quick_ask_shortcut: default_quick_ask_shortcut(),
+            sidebar_shortcuts: SidebarShortcuts::default(),
             config_path: None,
         }
     }

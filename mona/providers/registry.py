@@ -201,6 +201,18 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         detect_by_base_keyword="siliconflow",
         default_api_base="https://api.siliconflow.cn/v1",
     ),
+    # Agnes AI: OpenAI-compatible gateway
+    ProviderSpec(
+        name="agnes",
+        keywords=("agnes",),
+        env_key="AGNES_API_KEY",
+        display_name="Agnes AI",
+        backend="openai_compat",
+        is_gateway=True,
+        detect_by_base_keyword="agnes-ai",
+        default_api_base="https://apihub.agnes-ai.com/v1",
+        strip_model_prefix=True,
+    ),
 
     # Novita AI: OpenAI-compatible gateway for hosted model APIs.
     ProviderSpec(
@@ -349,6 +361,18 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         display_name="DashScope",
         backend="openai_compat",
         default_api_base="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        thinking_style="enable_thinking",
+    ),
+    # DashScope Coding Plan (百炼 Coding Plan): same key as dashscope
+    ProviderSpec(
+        name="dashscope_coding_plan",
+        keywords=("dashscope-plan",),
+        env_key="DASHSCOPE_API_KEY",
+        display_name="百炼 Coding Plan",
+        backend="openai_compat",
+        is_gateway=True,
+        default_api_base="https://coding.dashscope.aliyuncs.com/v1",
+        strip_model_prefix=True,
         thinking_style="enable_thinking",
     ),
     # Moonshot (月之暗面): Kimi K2.5 / K2.6 enforce temperature >= 1.0.
@@ -524,7 +548,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         name="zen",
         keywords=("zen",),
         env_key="",
-        display_name="OpenCode Zen",
+        display_name="内置供应商",
         api_key_required=False,
         default_api_base="https://opencode.ai/zen/v1",
         free_default_model="deepseek-v4-flash-free",

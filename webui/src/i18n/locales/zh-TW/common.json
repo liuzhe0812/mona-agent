@@ -1,6 +1,8 @@
 {
   "app": {
     "brand": "mona",
+    "title": "知識庫",
+    "subtitle": "將文件編譯為可搜尋、可瀏覽的 Wiki 知識圖譜",
     "loading": {
       "connecting": "正在連線到 mona…",
       "boot": "正在載入 mona…"
@@ -26,6 +28,16 @@
       "description": "mona Web UI —— 與你的 mona 工作區對話。"
     }
   },
+  "nav": {
+    "wiki": "Wiki",
+    "sources": "來源",
+    "search": "搜尋",
+    "graph": "圖譜",
+    "lint": "檢查",
+    "review": "審閱",
+    "settings": "設定",
+    "switchProject": "切換專案"
+  },
   "sidebar": {
     "collapse": "收合側邊欄",
     "toggleTheme": "切換主題",
@@ -41,6 +53,8 @@
     "recent": "最近對話",
     "refreshSessions": "重新整理會話",
     "settings": "設定",
+    "knowledge": "知識",
+    "files": "檔案",
     "language": {
       "label": "語言",
       "ariaLabel": "切換語言"
@@ -464,5 +478,137 @@
       "title": "訊息過大",
       "body": "伺服器因超過大小限制拒收了上一則訊息。可移除部分圖片或改用較小的圖片後再試。"
     }
+  },
+  "fileTree": {
+    "openProjectFolder": "開啟專案資料夾",
+    "openProjectFolderFailed": "無法開啟專案資料夾。",
+    "noProject": "未開啟專案"
+  },
+  "welcome": {
+    "newProject": "新建專案",
+    "openProject": "開啟專案",
+    "recentProjects": "最近專案"
+  },
+  "project": {
+    "createTitle": "建立新專案",
+    "name": "專案名稱",
+    "namePlaceholder": "我的知識庫",
+    "template": "專案範本",
+    "aiOutputLanguage": "AI 輸出語言",
+    "aiOutputLanguageRequired": "*",
+    "aiOutputLanguageHint": "AI 編譯 Wiki 內容時使用的語言。",
+    "pickLanguage": "選擇語言",
+    "parentDir": "父目錄",
+    "parentDirPlaceholder": "選擇儲存位置...",
+    "browse": "選擇資料夾",
+    "cancel": "取消",
+    "create": "建立",
+    "creating": "建立中...",
+    "errorNameRequired": "請輸入專案名稱。",
+    "errorLanguageRequired": "請選擇 AI 輸出語言。"
+  },
+  "templates": {
+    "general": {
+      "name": "通用",
+      "description": "通用知識庫"
+    },
+    "research": {
+      "name": "研究",
+      "description": "用於研究專案和論文"
+    },
+    "technical": {
+      "name": "技術",
+      "description": "用於技術文件"
+    }
+  },
+  "graph": {
+    "nodeTypeLabels": {
+      "entity": "實體",
+      "concept": "概念",
+      "source": "來源",
+      "query": "查詢",
+      "synthesis": "綜合",
+      "overview": "概覽",
+      "comparison": "對比",
+      "finding": "發現",
+      "thesis": "論點",
+      "methodology": "方法論",
+      "other": "其他"
+    },
+    "openProject": "請先開啟專案",
+    "buildingGraph": "正在建構知識圖譜...",
+    "retry": "重試",
+    "noPages": "暫無 Wiki 頁面",
+    "importSourcesHint": "匯入來源檔案以開始建構知識圖譜",
+    "knowledgeGraph": "知識圖譜",
+    "pages": "頁面",
+    "links": "連結",
+    "hidden": "已隱藏",
+    "searchPlaceholder": "搜尋頁面...",
+    "searchLabel": "搜尋圖譜",
+    "clearSearch": "清除搜尋",
+    "closeSearch": "關閉搜尋",
+    "filter": "篩選",
+    "reset": "重設",
+    "type": "類型",
+    "community": "社群",
+    "insights": "洞察",
+    "resizing": "調整大小中",
+    "noSearchResults": "無搜尋結果",
+    "noVisibleNodes": "無可見節點",
+    "graphFilters": "圖譜篩選",
+    "quickFilters": "快速篩選",
+    "hideIndexOverview": "隱藏索引概覽",
+    "hideIsolated": "隱藏孤立節點",
+    "maxLinks": "最大連結數",
+    "maxLinksHint": "僅顯示連結數 ≤ 此值的節點",
+    "displayTuning": "顯示調整",
+    "nodeSize": "節點大小",
+    "spacing": "間距",
+    "displayTuningHint": "調整圖譜的視覺參數",
+    "nodeTypes": "節點類型",
+    "hiddenNodes": "已隱藏的節點",
+    "show": "顯示",
+    "showingStats": "顯示 {{pages}}/{{total}} 頁面，{{links}}/{{totalLinks}} 連結",
+    "hideThisNode": "隱藏此節點",
+    "nodeTypesLabel": "節點類型",
+    "communitiesLabel": "社群",
+    "showAll": "顯示全部",
+    "cluster": "群集 {{id}}",
+    "surprisingConnections": "驚人連結",
+    "knowledgeGaps": "知識缺口",
+    "deepResearch": "深度研究",
+    "generatingTopic": "正在產生研究主題...",
+    "researchTopic": "研究主題",
+    "searchQueries": "搜尋查詢",
+    "cancel": "取消",
+    "startResearch": "開始研究"
+  },
+  "sources": {
+    "importSourceFiles": "匯入來源檔案",
+    "importSourceFolder": "匯入來源資料夾",
+    "title": "來源",
+    "refreshFolder": "重新整理資料夾",
+    "refreshFolderTooltip": "掃描來源資料夾的變更",
+    "importing": "匯入中...",
+    "import": "匯入",
+    "importFolder": "匯入資料夾",
+    "refreshFailed": "重新整理來源失敗：{{error}}",
+    "noSources": "暫無來源檔案",
+    "importHint": "匯入文件以開始編譯知識庫",
+    "importFiles": "匯入檔案",
+    "sourceCount": "{{count}} 個來源檔案",
+    "refreshingFolder": "重新整理中...",
+    "deleteFolderConfirm": "確定刪除資料夾「{{name}}」？",
+    "deleteFolder": "刪除資料夾「{{name}}」",
+    "ingest": "編譯",
+    "deleteFileConfirm": "確定刪除檔案「{{name}}」？",
+    "deleteFile": "刪除檔案「{{name}}」",
+    "loadingMore": "載入更多...",
+    "confirm": "確認"
+  },
+  "search": {
+    "placeholder": "搜尋 Wiki 頁面",
+    "noResults": "未找到結果："
   }
 }

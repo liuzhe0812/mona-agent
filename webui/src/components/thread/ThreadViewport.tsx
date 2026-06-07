@@ -189,7 +189,7 @@ export function ThreadViewport({
 
   useLayoutEffect(() => {
     measureComposerDock();
-  }, [composer, hasMessages, measureComposerDock]);
+  }, [hasMessages, measureComposerDock]);
 
   useEffect(() => cancelScheduledBottomScroll, [cancelScheduledBottomScroll]);
 

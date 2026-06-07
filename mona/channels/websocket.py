@@ -1189,27 +1189,26 @@ class WebSocketChannel(BaseChannel):
                         "userCreated": info.get("userCreated", False),
                     })
 
-            # --- Deck templates ---
-            decks_index = (
-                skill_dir / "scripts" / "templates_full" / "decks" / "decks_index.json"
+            # --- Native templates ---
+            native_index = (
+                skill_dir / "scripts" / "templates_full" / "native" / "native_index.json"
             )
-            if decks_index.exists():
-                raw = json.loads(decks_index.read_text(encoding="utf-8"))
+            if native_index.exists():
+                raw = json.loads(native_index.read_text(encoding="utf-8"))
                 for key, info in raw.items():
-                    deck_dir = decks_index.parent / key
+                    native_dir = native_index.parent / key
                     cover_url = ""
-                    if deck_dir.is_dir():
-                        for ext in (".svg", ".png", ".jpg", ".jpeg"):
-                            if (deck_dir / f"01{ext}").exists():
-                                cover_url = (
-                                    f"/api/ppt/template-svg?kind=deck"
-                                    f"&key={quote(key, safe='')}&file=01{ext}"
-                                )
-                                break
+                    if native_dir.is_dir():
+                        cover_file = native_dir / "01_cover.png"
+                        if cover_file.exists():
+                            cover_url = (
+                                f"/api/ppt/template-svg?kind=native"
+                                f"&key={quote(key, safe='')}&file=01_cover.png"
+                            )
                     templates.append({
                         "key": key,
-                        "kind": "deck",
-                        "group": "完整模板",
+                        "kind": "native",
+                        "group": "自定义模板",
                         "name": info.get("name", key),
                         "summary": info.get("summary", ""),
                         "pageCount": info.get("page_count", 0),
@@ -1297,7 +1296,7 @@ class WebSocketChannel(BaseChannel):
                 return _http_error(400, "invalid file")
 
             skill_dir = BUILTIN_SKILLS_DIR / "mona-ppt"
-            subdir = {"layout": "layouts", "brand": "brands", "deck": "decks"}.get(kind)
+            subdir = {"layout": "layouts", "brand": "brands", "native": "native"}.get(kind)
             if not subdir:
                 return _http_error(400, "invalid template kind")
             base_dir = skill_dir / "scripts" / "templates_full" / subdir / key
@@ -2132,6 +2131,12 @@ class WebSocketChannel(BaseChannel):
                 "chat_id": chat_id,
                 "text": content,
             }
+            # IMPORTANT: persist display_content so history replay shows the
+            # short label (e.g. "健康巡检") instead of the full enriched prompt.
+            # DO NOT remove — multiple modules (terminal, db, notes) depend on this.
+            display_content = meta.get("display_content")
+            if isinstance(display_content, str) and display_content:
+                user_obj["display_content"] = display_content
             if media:
                 user_obj["media_paths"] = list(media)
             self._try_append_webui_transcript(chat_id, user_obj)
@@ -3161,6 +3166,234 @@ class WebSocketChannel(BaseChannel):
             paths.append(saved)
         return paths, None
 
+    async def _handle_ppt_import_native_envelope(
+        self,
+        connection: Any,
+        envelope: dict[str, Any],
+    ) -> None:
+        """Handle ppt_import_native envelope: import PPTX as a native template."""
+        file_info = envelope.get("file")
+        if not isinstance(file_info, dict):
+            await self._send_event(
+                connection, "ppt_import_native_result", ok=False, error="no file",
+            )
+            return
+
+        name = file_info.get("name", "")
+        data_url = file_info.get("data_url", "")
+        mime = _extract_data_url_mime(data_url)
+        if mime != "application/vnd.openxmlformats-officedocument.presentationml.presentation":
+            await self._send_event(
+                connection, "ppt_import_native_result", ok=False, error="not a pptx file",
+            )
+            return
+
+        try:
+            raw = _decode_data_url_payload(data_url, _PPT_DOC_MAX_BYTES)
+        except FileSizeExceeded:
+            await self._send_event(
+                connection, "ppt_import_native_result", ok=False, error="file too large",
+            )
+            return
+        except Exception:
+            await self._send_event(
+                connection, "ppt_import_native_result", ok=False, error="decode failed",
+            )
+            return
+        if raw is None:
+            await self._send_event(
+                connection, "ppt_import_native_result", ok=False, error="decode failed",
+            )
+            return
+
+        try:
+            import tempfile
+            from urllib.parse import quote
+
+            from mona.agent.skills import BUILTIN_SKILLS_DIR
+
+            with tempfile.TemporaryDirectory(prefix="ppt_native_") as tmp_dir:
+                tmp_path = Path(tmp_dir) / safe_filename(name or "upload.pptx")
+                tmp_path.write_bytes(raw)
+
+                skill_dir = BUILTIN_SKILLS_DIR / "mona-ppt"
+
+                # Run native_template_inspect.py
+                inspect_script = skill_dir / "scripts" / "native_template_inspect.py"
+                output_dir = Path(tmp_dir) / "native_output"
+                result = subprocess.run(
+                    [
+                        "python", str(inspect_script), str(tmp_path),
+                        "-o", str(output_dir),
+                        "--name", Path(name).stem if name else "template",
+                    ],
+                    capture_output=True, text=True, timeout=120,
+                )
+                if result.returncode != 0:
+                    await self._send_event(
+                        connection,
+                        "ppt_import_native_result",
+                        ok=False,
+                        error=f"inspect failed: {result.stderr[:300]}",
+                    )
+                    return
+
+                # Read manifest for metadata
+                manifest_path = output_dir / "template_manifest.json"
+                manifest = {}
+                if manifest_path.exists():
+                    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+                page_count = manifest.get("slide_count", 0)
+                canvas_format = manifest.get("canvas_format", "ppt169")
+
+                # Extract primary color from roles
+                primary_color = "#1A1A1A"
+
+                # Generate template_id
+                template_id = safe_filename(Path(name).stem if name else "template")
+                if not template_id or template_id == ".":
+                    template_id = f"native_{int(time.time())}"
+
+                display_name = Path(name).stem if name else template_id
+
+                # Copy to templates_full/native/<template_id>
+                target_dir = skill_dir / "scripts" / "templates_full" / "native" / template_id
+                if target_dir.exists():
+                    shutil.rmtree(target_dir)
+                shutil.copytree(output_dir, target_dir)
+
+                # Sync to templates/native/<template_id>
+                skill_target = skill_dir / "templates" / "native" / template_id
+                if skill_target.exists():
+                    shutil.rmtree(skill_target)
+                shutil.copytree(output_dir, skill_target)
+
+                # Update native_index.json (both copies)
+                for index_path in [
+                    skill_dir / "scripts" / "templates_full" / "native" / "native_index.json",
+                    skill_dir / "templates" / "native" / "native_index.json",
+                ]:
+                    index_data: dict[str, Any] = {}
+                    if index_path.exists():
+                        index_data = json.loads(index_path.read_text(encoding="utf-8"))
+                    index_data[template_id] = {
+                        "name": display_name,
+                        "summary": f"从用户上传 PPTX 导入的自定义模板，共 {page_count} 页",
+                        "canvas_format": canvas_format,
+                        "page_count": page_count,
+                        "primary_color": primary_color,
+                        "userCreated": True,
+                    }
+                    index_path.parent.mkdir(parents=True, exist_ok=True)
+                    index_path.write_text(
+                        json.dumps(index_data, ensure_ascii=False, indent=2) + "\n",
+                        encoding="utf-8",
+                    )
+
+                # Generate cover URL
+                cover_url = ""
+                cover_file = target_dir / "01_cover.png"
+                if cover_file.exists():
+                    cover_url = (
+                        f"/api/ppt/template-svg?kind=native"
+                        f"&key={quote(template_id, safe='')}&file=01_cover.png"
+                    )
+
+                # Send result
+                await self._send_event(
+                    connection,
+                    "ppt_import_native_result",
+                    ok=True,
+                    templateId=template_id,
+                    name=display_name,
+                    pageCount=page_count,
+                    coverUrl=cover_url,
+                    primaryColor=primary_color,
+                )
+
+        except Exception as exc:
+            logger.exception("ppt_import_native error")
+            await self._send_event(
+                connection,
+                "ppt_import_native_result",
+                ok=False,
+                error=str(exc)[:200],
+            )
+
+    async def _handle_ppt_delete_native(
+        self,
+        connection: Any,
+        envelope: dict[str, Any],
+    ) -> None:
+        """Handle ppt_delete_native envelope."""
+        data = envelope.get("data", {})
+        if not isinstance(data, dict):
+            data = {}
+        template_id = data.get("templateId") or envelope.get("templateId", "")
+        if (
+            not isinstance(template_id, str)
+            or not template_id
+            or "/" in template_id
+            or "\\" in template_id
+            or ".." in template_id
+        ):
+            await self._send_event(
+                connection, "ppt_delete_native_result", ok=False, error="invalid templateId",
+            )
+            return
+
+        from mona.agent.skills import BUILTIN_SKILLS_DIR
+
+        skill_dir = BUILTIN_SKILLS_DIR / "mona-ppt"
+        primary_index = (
+            skill_dir / "scripts" / "templates_full" / "native" / "native_index.json"
+        )
+        fallback_index = skill_dir / "templates" / "native" / "native_index.json"
+
+        index_data: dict[str, Any] = {}
+        for index_path in (primary_index, fallback_index):
+            if index_path.exists():
+                index_data = json.loads(index_path.read_text(encoding="utf-8"))
+                if template_id in index_data:
+                    break
+
+        info = index_data.get(template_id)
+        if not isinstance(info, dict):
+            await self._send_event(
+                connection, "ppt_delete_native_result", ok=False, error="template not found",
+            )
+            return
+        if info.get("userCreated") is not True:
+            await self._send_event(
+                connection,
+                "ppt_delete_native_result",
+                ok=False,
+                error="cannot delete built-in template",
+            )
+            return
+
+        for native_base in [
+            skill_dir / "scripts" / "templates_full" / "native",
+            skill_dir / "templates" / "native",
+        ]:
+            native_dir = native_base / template_id
+            if native_dir.exists():
+                shutil.rmtree(native_dir)
+
+            index_path = native_base / "native_index.json"
+            if index_path.exists():
+                index_data = json.loads(index_path.read_text(encoding="utf-8"))
+                index_data.pop(template_id, None)
+                index_path.write_text(
+                    json.dumps(index_data, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+
+        await self._send_event(
+            connection, "ppt_delete_native_result", ok=True, templateId=template_id,
+        )
+
     async def _handle_ppt_upload_envelope(
         self,
         connection: Any,
@@ -3210,767 +3443,6 @@ class WebSocketChannel(BaseChannel):
             logger.exception("ppt_upload error")
             await self._send_event(connection, "ppt_upload_result", ok=False, error=str(e))
 
-    async def _handle_ppt_import_brand_envelope(
-        self,
-        connection: Any,
-        envelope: dict[str, Any],
-    ) -> None:
-        """Handle ppt_import_brand envelope: extract brand info from uploaded PPTX."""
-        file_info = envelope.get("file")
-        if not isinstance(file_info, dict):
-            await self._send_event(
-                connection, "ppt_import_brand_result", ok=False, error="no file",
-            )
-            return
-
-        name = file_info.get("name", "")
-        data_url = file_info.get("data_url", "")
-        mime = _extract_data_url_mime(data_url)
-        if mime != "application/vnd.openxmlformats-officedocument.presentationml.presentation":
-            await self._send_event(
-                connection, "ppt_import_brand_result", ok=False, error="not a pptx file",
-            )
-            return
-
-        try:
-            raw = _decode_data_url_payload(data_url, _PPT_DOC_MAX_BYTES)
-        except FileSizeExceeded:
-            await self._send_event(
-                connection, "ppt_import_brand_result", ok=False, error="file too large",
-            )
-            return
-        except Exception:
-            await self._send_event(
-                connection, "ppt_import_brand_result", ok=False, error="decode failed",
-            )
-            return
-        if raw is None:
-            await self._send_event(
-                connection, "ppt_import_brand_result", ok=False, error="decode failed",
-            )
-            return
-
-        try:
-            import tempfile
-
-            from mona.agent.skills import BUILTIN_SKILLS_DIR
-
-            # Save PPTX to temp dir
-            with tempfile.TemporaryDirectory(prefix="ppt_brand_") as tmp_dir:
-                tmp_path = Path(tmp_dir) / safe_filename(name or "upload.pptx")
-                tmp_path.write_bytes(raw)
-
-                # Run pptx_template_import.py with --manifest-only first
-                skill_dir = BUILTIN_SKILLS_DIR / "mona-ppt"
-                script = skill_dir / "scripts" / "pptx_template_import.py"
-                output_dir = Path(tmp_dir) / "import_output"
-                result = subprocess.run(
-                    [
-                        "python", str(script), str(tmp_path),
-                        "-o", str(output_dir), "--manifest-only",
-                    ],
-                    capture_output=True, text=True, timeout=60,
-                )
-                if result.returncode != 0:
-                    await self._send_event(
-                        connection,
-                        "ppt_import_brand_result",
-                        ok=False,
-                        error=f"import failed: {result.stderr[:200]}",
-                    )
-                    return
-
-                # Read manifest
-                manifest_path = output_dir / "manifest.json"
-                if not manifest_path.exists():
-                    await self._send_event(
-                        connection,
-                        "ppt_import_brand_result",
-                        ok=False,
-                        error="manifest not found",
-                    )
-                    return
-                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-
-                # Extract brand info from manifest
-                theme_colors = manifest.get("theme", {}).get("colors", {})
-                primary_color = theme_colors.get("primary", "")
-                secondary_color = theme_colors.get("secondary", "")
-                accent_color = theme_colors.get("accent", "")
-                if not primary_color:
-                    primary_color = theme_colors.get("dk1", "#1A1A1A")
-                if not secondary_color:
-                    secondary_color = theme_colors.get("lt1", "#FFFFFF")
-
-                fonts = manifest.get("theme", {}).get("fonts", {})
-                title_font = fonts.get("major", "")
-                body_font = fonts.get("minor", "")
-
-                slide_size = manifest.get("slideSize", {})
-                canvas_format = "ppt169"
-                if slide_size:
-                    w = slide_size.get("width", 0)
-                    h = slide_size.get("height", 0)
-                    if w and h:
-                        ratio = w / h
-                        if abs(ratio - 4 / 3) < 0.1:
-                            canvas_format = "ppt43"
-
-                slides = manifest.get("slides", [])
-                layouts = manifest.get("layouts", [])
-                masters = manifest.get("masters", [])
-
-                # Generate brand ID from filename
-                brand_id = safe_filename(Path(name).stem if name else "brand")
-                if not brand_id or brand_id == ".":
-                    brand_id = f"brand_{int(time.time())}"
-
-                # Store full import output for later save-brand
-                brand_temp_dir = (
-                    Path(tempfile.gettempdir()) / "mona_brand_imports" / brand_id
-                )
-                if brand_temp_dir.exists():
-                    shutil.rmtree(brand_temp_dir)
-                brand_temp_dir.mkdir(parents=True, exist_ok=True)
-
-                # Copy extracted assets (background images, logos, etc.) to brand temp dir
-                import_assets_dir = output_dir / "assets"
-                if import_assets_dir.is_dir():
-                    brand_assets_dir = brand_temp_dir / "assets"
-                    shutil.copytree(import_assets_dir, brand_assets_dir)
-
-                # Save manifest.json for later use (background asset detection, etc.)
-                import_manifest = output_dir / "manifest.json"
-                if import_manifest.exists():
-                    shutil.copy2(import_manifest, brand_temp_dir / "manifest.json")
-
-                # Save original PPTX for template-based generation
-                shutil.copy2(tmp_path, brand_temp_dir / "template.pptx")
-
-                # Extract cover thumbnail from PPTX (docProps/thumbnail.*)
-                import zipfile
-                has_cover = False
-                try:
-                    with zipfile.ZipFile(tmp_path, "r") as zf:
-                        for zname in zf.namelist():
-                            if zname.startswith("docProps/thumbnail"):
-                                data = zf.read(zname)
-                                ext = Path(zname).suffix  # .jpeg, .png, etc.
-                                (brand_temp_dir / f"01_cover{ext}").write_bytes(data)
-                                has_cover = True
-                                break
-                except (zipfile.BadZipFile, Exception):
-                    pass
-
-                # Fallback: generate cover image from first slide via python-pptx + Pillow
-                if not has_cover:
-                    try:
-                        from PIL import Image, ImageDraw, ImageFont
-                        from pptx import Presentation
-
-                        prs = Presentation(str(tmp_path))
-                        if prs.slides:
-                            w, h = 1280, 720
-                            img = Image.new("RGB", (w, h), "white")
-                            draw = ImageDraw.Draw(img)
-                            draw.rectangle(
-                                [(2, 2), (w - 3, h - 3)], outline="#CCCCCC", width=2,
-                            )
-                            label = Path(name).stem if name else "Brand"
-                            try:
-                                font = ImageFont.load_default(size=36)
-                            except Exception:
-                                font = ImageFont.load_default()
-                            bbox = draw.textbbox((0, 0), label, font=font)
-                            text_w = bbox[2] - bbox[0]
-                            text_h = bbox[3] - bbox[1]
-                            draw.text(
-                                ((w - text_w) // 2, (h - text_h) // 2),
-                                label,
-                                fill="#666666",
-                                font=font,
-                            )
-                            img.save(str(brand_temp_dir / "01_cover.png"))
-                            has_cover = True
-                    except ImportError:
-                        pass
-                    except Exception:
-                        pass
-
-                await self._send_event(
-                    connection,
-                    "ppt_import_brand_result",
-                    ok=True,
-                    brandId=brand_id,
-                    name=Path(name).stem if name else "Brand",
-                    primaryColor=primary_color,
-                    secondaryColor=secondary_color,
-                    accentColor=accent_color,
-                    titleFont=title_font,
-                    bodyFont=body_font,
-                    canvasFormat=canvas_format,
-                    slideCount=len(slides),
-                    layoutCount=len(layouts),
-                    masterCount=len(masters),
-                    hasCoverSvg=has_cover,
-                    assets=[
-                        a.get("name", "")
-                        for a in manifest.get("assets", {}).get("allAssets", [])
-                        if isinstance(a, dict)
-                    ],
-                )
-        except subprocess.TimeoutExpired:
-            await self._send_event(
-                connection, "ppt_import_brand_result", ok=False, error="import timed out",
-            )
-        except Exception as e:
-            logger.exception("ppt import brand error")
-            await self._send_event(
-                connection, "ppt_import_brand_result", ok=False, error=str(e),
-            )
-
-    async def _handle_ppt_import_deck_envelope(
-        self,
-        connection: Any,
-        envelope: dict[str, Any],
-    ) -> None:
-        """Handle ppt_import_deck envelope: import PPTX as a full deck template."""
-        file_info = envelope.get("file")
-        if not isinstance(file_info, dict):
-            await self._send_event(
-                connection, "ppt_import_deck_result", ok=False, error="no file",
-            )
-            return
-
-        name = file_info.get("name", "")
-        data_url = file_info.get("data_url", "")
-        mime = _extract_data_url_mime(data_url)
-        if mime != "application/vnd.openxmlformats-officedocument.presentationml.presentation":
-            await self._send_event(
-                connection, "ppt_import_deck_result", ok=False, error="not a pptx file",
-            )
-            return
-
-        try:
-            raw = _decode_data_url_payload(data_url, _PPT_DOC_MAX_BYTES)
-        except FileSizeExceeded:
-            await self._send_event(
-                connection, "ppt_import_deck_result", ok=False, error="file too large",
-            )
-            return
-        except Exception:
-            await self._send_event(
-                connection, "ppt_import_deck_result", ok=False, error="decode failed",
-            )
-            return
-        if raw is None:
-            await self._send_event(
-                connection, "ppt_import_deck_result", ok=False, error="decode failed",
-            )
-            return
-
-        try:
-            import tempfile
-
-            from mona.agent.skills import BUILTIN_SKILLS_DIR
-
-            with tempfile.TemporaryDirectory(prefix="ppt_deck_") as tmp_dir:
-                tmp_path = Path(tmp_dir) / safe_filename(name or "upload.pptx")
-                tmp_path.write_bytes(raw)
-
-                skill_dir = BUILTIN_SKILLS_DIR / "mona-ppt"
-
-                # Step 1: Run pptx_template_import.py (full import, NOT --manifest-only)
-                import_script = skill_dir / "scripts" / "pptx_template_import.py"
-                output_dir = Path(tmp_dir) / "import_output"
-                result = subprocess.run(
-                    [
-                        "python", str(import_script), str(tmp_path),
-                        "-o", str(output_dir),
-                    ],
-                    capture_output=True, text=True, timeout=120,
-                )
-                if result.returncode != 0:
-                    await self._send_event(
-                        connection,
-                        "ppt_import_deck_result",
-                        ok=False,
-                        error=f"import failed: {result.stderr[:300]}",
-                    )
-                    return
-
-                # Step 2: Run pptx_to_svg.py
-                svg_script = skill_dir / "scripts" / "pptx_to_svg.py"
-                result = subprocess.run(
-                    [
-                        "python", str(svg_script), str(tmp_path),
-                        "-o", str(output_dir), "--inheritance-mode", "both",
-                    ],
-                    capture_output=True, text=True, timeout=120,
-                )
-                if result.returncode != 0:
-                    await self._send_event(
-                        connection,
-                        "ppt_import_deck_result",
-                        ok=False,
-                        error=f"svg render failed: {result.stderr[:300]}",
-                    )
-                    return
-
-                # Step 3: Copy original PPTX to workspace for --template export
-                shutil.copy2(tmp_path, output_dir / "template.pptx")
-
-                # Step 4: Read manifest for metadata
-                manifest_path = output_dir / "manifest.json"
-                if not manifest_path.exists():
-                    await self._send_event(
-                        connection,
-                        "ppt_import_deck_result",
-                        ok=False,
-                        error="manifest not found after import",
-                    )
-                    return
-                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-
-                theme_colors = manifest.get("theme", {}).get("colors", {})
-                primary_color = theme_colors.get("primary", "")
-                if not primary_color:
-                    primary_color = theme_colors.get("dk1", "#1A1A1A")
-
-                slide_size = manifest.get("slideSize", {})
-                canvas_format = "ppt169"
-                if slide_size:
-                    w = slide_size.get("width", 0)
-                    h = slide_size.get("height", 0)
-                    if w and h and abs(w / h - 4 / 3) < 0.1:
-                        canvas_format = "ppt43"
-
-                svg_flat_dir = output_dir / "svg-flat"
-                page_count = 0
-                if svg_flat_dir.is_dir():
-                    page_count = len(list(svg_flat_dir.glob("slide_*.svg")))
-
-                # Step 5: Generate deck_id
-                deck_id = safe_filename(Path(name).stem if name else "deck")
-                if not deck_id or deck_id == ".":
-                    deck_id = f"deck_{int(time.time())}"
-
-                display_name = Path(name).stem if name else deck_id
-
-                # Step 6: Run materialize_deck_template.py
-                materialize_script = skill_dir / "scripts" / "materialize_deck_template.py"
-                deck_output = Path(tmp_dir) / "deck_output"
-                result = subprocess.run(
-                    [
-                        "python", str(materialize_script), str(output_dir),
-                        "-o", str(deck_output),
-                        "--name", display_name,
-                        "--canvas", canvas_format,
-                    ],
-                    capture_output=True, text=True, timeout=60,
-                )
-                if result.returncode != 0:
-                    await self._send_event(
-                        connection,
-                        "ppt_import_deck_result",
-                        ok=False,
-                        error=f"materialize failed: {result.stderr[:300]}",
-                    )
-                    return
-
-                # Step 7: Copy to templates_full/decks/<deck_id>
-                target_dir = skill_dir / "scripts" / "templates_full" / "decks" / deck_id
-                if target_dir.exists():
-                    shutil.rmtree(target_dir)
-                shutil.copytree(deck_output, target_dir)
-
-                # Step 8: Sync to templates/decks/<deck_id>
-                skill_target = skill_dir / "templates" / "decks" / deck_id
-                if skill_target.exists():
-                    shutil.rmtree(skill_target)
-                shutil.copytree(deck_output, skill_target)
-
-                # Step 9: Update decks_index.json (both copies)
-                for index_path in [
-                    skill_dir / "scripts" / "templates_full" / "decks" / "decks_index.json",
-                    skill_dir / "templates" / "decks" / "decks_index.json",
-                ]:
-                    index_data: dict[str, Any] = {}
-                    if index_path.exists():
-                        index_data = json.loads(index_path.read_text(encoding="utf-8"))
-                    index_data[deck_id] = {
-                        "name": display_name,
-                        "summary": f"从用户上传 PPTX 导入的完整模板，共 {page_count} 页",
-                        "canvas_format": canvas_format,
-                        "page_count": page_count,
-                        "primary_color": primary_color,
-                        "userCreated": True,
-                    }
-                    index_path.parent.mkdir(parents=True, exist_ok=True)
-                    index_path.write_text(
-                        json.dumps(index_data, ensure_ascii=False, indent=2) + "\n",
-                        encoding="utf-8",
-                    )
-
-                # Step 10: Generate cover preview URL
-                from urllib.parse import quote
-
-                cover_svg = target_dir / "01.svg"
-                cover_url = ""
-                if cover_svg.exists():
-                    cover_url = (
-                        f"/api/ppt/template-svg?kind=deck"
-                        f"&key={quote(deck_id, safe='')}&file=01.svg"
-                    )
-
-                # Step 11: Send result
-                await self._send_event(
-                    connection,
-                    "ppt_import_deck_result",
-                    ok=True,
-                    deckId=deck_id,
-                    name=display_name,
-                    pageCount=page_count,
-                    coverSvgUrl=cover_url,
-                    primaryColor=primary_color,
-                )
-
-        except Exception as exc:
-            logger.exception("ppt_import_deck error")
-            await self._send_event(
-                connection,
-                "ppt_import_deck_result",
-                ok=False,
-                error=str(exc)[:200],
-            )
-
-    async def _handle_ppt_save_brand_envelope(
-        self,
-        connection: Any,
-        envelope: dict[str, Any],
-    ) -> None:
-        """Handle ppt_save_brand envelope: persist brand template to disk."""
-        data = envelope.get("data", {})
-        brand_id = data.get("brandId", "")
-        if not brand_id or "/" in brand_id or "\\" in brand_id or ".." in brand_id:
-            await self._send_event(
-                connection, "ppt_save_brand_result", ok=False, error="invalid brandId",
-            )
-            return
-
-        try:
-            import tempfile
-
-            from mona.agent.skills import BUILTIN_SKILLS_DIR
-
-            skill_dir = BUILTIN_SKILLS_DIR / "mona-ppt"
-            brands_dir = skill_dir / "scripts" / "templates_full" / "brands"
-            brand_dir = brands_dir / brand_id
-            index_path = brands_dir / "brands_index.json"
-
-            # Check for conflict with built-in brand
-            if brand_dir.exists() and index_path.exists():
-                index_data = json.loads(index_path.read_text(encoding="utf-8"))
-                existing = index_data.get(brand_id, {})
-                if not existing.get("userCreated", False):
-                    await self._send_event(
-                        connection,
-                        "ppt_save_brand_result",
-                        ok=False,
-                        error="brand already exists (built-in)",
-                    )
-                    return
-
-            # Create brand dir and copy only template.pptx from temp import
-            temp_import_dir = (
-                Path(tempfile.gettempdir()) / "mona_brand_imports" / brand_id
-            )
-            if brand_dir.exists():
-                shutil.rmtree(brand_dir)
-            brand_dir.mkdir(parents=True, exist_ok=True)
-            if temp_import_dir.exists():
-                import_template_pptx = temp_import_dir / "template.pptx"
-                if import_template_pptx.exists():
-                    shutil.copy2(import_template_pptx, brand_dir / "template.pptx")
-                shutil.rmtree(temp_import_dir, ignore_errors=True)
-
-            # Write design_spec.md
-            name = data.get("name", brand_id)
-            summary = data.get("summary", "")
-            primary_color = data.get("primaryColor", "#1A1A1A")
-            secondary_color = data.get("secondaryColor", "")
-            accent_color = data.get("accentColor", "")
-            title_font = data.get("titleFont", "")
-            body_font = data.get("bodyFont", "")
-            keywords = data.get("keywords", [])
-
-            # Generate background/images section for design_spec
-            template_pptx_path = brand_dir / "template.pptx"
-            if template_pptx_path.exists():
-                bg_images_section = (
-                    "\n## VII. Template PPTX\n\n"
-                    "This brand has an original template PPTX file (`template.pptx`). "
-                    "The template's masters and layouts will be inherited automatically during export. "
-                    "Do NOT draw background images in SVG — the template background will be preserved.\n"
-                )
-            else:
-                bg_images_section = ""
-
-            design_spec = (
-                f"---\n"
-                f"brand_id: {brand_id}\n"
-                f"kind: brand\n"
-                f"summary: {summary}\n"
-                f"keywords: {json.dumps(keywords, ensure_ascii=False)}\n"
-                f'primary_color: "{primary_color}"\n'
-                f"---\n\n"
-                f"# {name} Brand Specification\n\n"
-                f"> Brand preset with extracted assets. "
-                f"Pages are composed freely under these constraints, "
-                f"using the provided background and decoration assets.\n\n"
-                f"## I. Brand Overview\n\n"
-                f"| Property | Value |\n"
-                f"|---|---|\n"
-                f"| Brand Name | {name} |\n"
-                f"| Use Cases | {summary} |\n"
-                f"| Tone | Professional |\n\n"
-                f"## II. Color Scheme\n\n"
-                f"| Role | HEX | Provenance |\n"
-                f"|---|---|---|\n"
-                f"| primary | {primary_color} | fact |\n"
-                f"| secondary | {secondary_color or '#FFFFFF'} | fact |\n"
-                f"| accent | {accent_color or primary_color} | fact |\n"
-                f"| text | #1A1A1A | default |\n"
-                f"| bg | #FFFFFF | default |\n\n"
-                f"## III. Typography\n\n"
-                f"| Role | Family | Weight |\n"
-                f"|---|---|---|\n"
-                f"| title | {title_font or 'system-ui'} | 600 |\n"
-                f"| body | {body_font or 'system-ui'} | 400 |\n\n"
-                f"## IV. Logo\n\n"
-            )
-            design_spec += "- File: inherited from template PPTX\n- Usage: cover and section pages\n\n"
-            design_spec += (
-                f"## V. Voice & Tone\n\n"
-                f"- Formality: formal\n"
-                f"- Person: we\n"
-                f"- Emoji: forbidden\n"
-                f"- Abbreviations: spell-out-first\n\n"
-                f"## VI. Icon Style\n\n"
-                f"- Preference: linear\n"
-                f"{bg_images_section}"
-            )
-            (brand_dir / "design_spec.md").write_text(design_spec, encoding="utf-8")
-
-            # Generate cover preview from original PPTX
-            # Remove any stale cover files first
-            for _old_ext in (".svg", ".png", ".jpg", ".jpeg"):
-                _old_file = brand_dir / f"01_cover{_old_ext}"
-                if _old_file.exists():
-                    _old_file.unlink()
-            template_pptx_path = brand_dir / "template.pptx"
-            if template_pptx_path.exists():
-                import sys
-                scripts_dir = BUILTIN_SKILLS_DIR / "mona-ppt" / "scripts"
-                if str(scripts_dir) not in sys.path:
-                    sys.path.insert(0, str(scripts_dir))
-                from pptx_render_slide import render_first_slide
-                render_first_slide(template_pptx_path, brand_dir / "01_cover")
-            else:
-                # Fallback: simple SVG with brand name
-                _label = (name or brand_id).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-                _bg = primary_color or "#1A1A1A"
-                svg_content = (
-                    f'<?xml version="1.0" encoding="UTF-8"?>\n'
-                    f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720">\n'
-                    f'  <rect width="1280" height="720" fill="#FFFFFF"/>\n'
-                    f'  <rect x="0" y="0" width="1280" height="120" fill="{_bg}"/>\n'
-                    f'  <text x="640" y="78" text-anchor="middle" fill="#FFFFFF" '
-                    f'font-family="system-ui, sans-serif" font-size="44" font-weight="bold">'
-                    f'{_label}</text>\n'
-                    f'</svg>'
-                )
-                (brand_dir / "01_cover.svg").write_text(svg_content, encoding="utf-8")
-
-            # Update brands_index.json
-            if index_path.exists():
-                index_data = json.loads(index_path.read_text(encoding="utf-8"))
-            else:
-                index_data = {}
-
-            index_data[brand_id] = {
-                "name": name,
-                "summary": summary,
-                "canvas_format": data.get("canvasFormat", "ppt169"),
-                "page_count": data.get("slideCount", 0),
-                "primary_color": primary_color,
-                "userCreated": True,
-                "keywords": keywords,
-            }
-            index_path.write_text(
-                json.dumps(index_data, ensure_ascii=False, indent=2) + "\n",
-                encoding="utf-8",
-            )
-
-            # Also sync to ${SKILL_DIR}/templates/brands/ so the AI (which
-            # reads SKILL.md references like ${SKILL_DIR}/templates/brands/)
-            # can find user-imported brand templates.
-            skill_brands_dir = skill_dir / "templates" / "brands"
-            skill_brand_dir = skill_brands_dir / brand_id
-            skill_index_path = skill_brands_dir / "brands_index.json"
-
-            # Copy brand files (design_spec.md + cover image + any assets)
-            if skill_brand_dir != brand_dir:
-                if skill_brand_dir.exists():
-                    shutil.rmtree(skill_brand_dir)
-                shutil.copytree(brand_dir, skill_brand_dir)
-
-            # Merge into templates/brands/brands_index.json
-            if skill_index_path.exists():
-                skill_index_data = json.loads(
-                    skill_index_path.read_text(encoding="utf-8")
-                )
-            else:
-                skill_index_data = {}
-            skill_index_data[brand_id] = {
-                "name": name,
-                "summary": summary,
-                "primary_color": primary_color,
-                "userCreated": True,
-                "keywords": keywords,
-            }
-            skill_index_path.write_text(
-                json.dumps(skill_index_data, ensure_ascii=False, indent=2) + "\n",
-                encoding="utf-8",
-            )
-
-            await self._send_event(
-                connection, "ppt_save_brand_result", ok=True, brandId=brand_id,
-            )
-        except Exception as e:
-            logger.exception("ppt save brand error")
-            await self._send_event(
-                connection, "ppt_save_brand_result", ok=False, error=str(e),
-            )
-
-    async def _handle_ppt_delete_brand_envelope(
-        self,
-        connection: Any,
-        envelope: dict[str, Any],
-    ) -> None:
-        """Handle ppt_delete_brand envelope: remove a user-created brand template."""
-        data = envelope.get("data", {})
-        brand_id = data.get("brandId", "")
-        if not brand_id or "/" in brand_id or "\\" in brand_id or ".." in brand_id:
-            await self._send_event(
-                connection, "ppt_delete_brand_result", ok=False, error="invalid brandId",
-            )
-            return
-
-        try:
-            from mona.agent.skills import BUILTIN_SKILLS_DIR
-
-            skill_dir = BUILTIN_SKILLS_DIR / "mona-ppt"
-            brands_dir = skill_dir / "scripts" / "templates_full" / "brands"
-            brand_dir = brands_dir / brand_id
-            index_path = brands_dir / "brands_index.json"
-
-            if not index_path.exists():
-                await self._send_event(
-                    connection,
-                    "ppt_delete_brand_result",
-                    ok=False,
-                    error="brand not found",
-                )
-                return
-
-            index_data = json.loads(index_path.read_text(encoding="utf-8"))
-            entry = index_data.get(brand_id, {})
-            if not entry.get("userCreated", False):
-                await self._send_event(
-                    connection,
-                    "ppt_delete_brand_result",
-                    ok=False,
-                    error="cannot delete built-in brand",
-                )
-                return
-
-            # Delete brand directory
-            if brand_dir.exists():
-                shutil.rmtree(brand_dir)
-
-            # Update index
-            index_data.pop(brand_id, None)
-            index_path.write_text(
-                json.dumps(index_data, ensure_ascii=False, indent=2) + "\n",
-                encoding="utf-8",
-            )
-
-            # Also remove from templates/brands/ (synced copy for AI)
-            skill_brands_dir = skill_dir / "templates" / "brands"
-            skill_brand_dir = skill_brands_dir / brand_id
-            skill_index_path = skill_brands_dir / "brands_index.json"
-            if skill_brand_dir.exists():
-                shutil.rmtree(skill_brand_dir)
-            if skill_index_path.exists():
-                skill_index_data = json.loads(
-                    skill_index_path.read_text(encoding="utf-8")
-                )
-                skill_index_data.pop(brand_id, None)
-                skill_index_path.write_text(
-                    json.dumps(skill_index_data, ensure_ascii=False, indent=2) + "\n",
-                    encoding="utf-8",
-                )
-
-            await self._send_event(
-                connection, "ppt_delete_brand_result", ok=True, brandId=brand_id,
-            )
-        except Exception as e:
-            logger.exception("ppt delete brand error")
-            await self._send_event(
-                connection, "ppt_delete_brand_result", ok=False, error=str(e),
-            )
-
-    async def _handle_ppt_delete_deck(
-        self,
-        connection: Any,
-        envelope: dict[str, Any],
-    ) -> None:
-        """Handle ppt_delete_deck envelope."""
-        deck_id = envelope.get("deckId", "")
-        if not deck_id:
-            await self._send_event(
-                connection, "ppt_delete_deck_result", ok=False, error="no deckId",
-            )
-            return
-
-        from mona.agent.skills import BUILTIN_SKILLS_DIR
-
-        skill_dir = BUILTIN_SKILLS_DIR / "mona-ppt"
-
-        # Remove deck directories
-        for deck_base in [
-            skill_dir / "scripts" / "templates_full" / "decks",
-            skill_dir / "templates" / "decks",
-        ]:
-            deck_dir = deck_base / deck_id
-            if deck_dir.exists():
-                shutil.rmtree(deck_dir)
-
-            # Update index
-            index_path = deck_base / "decks_index.json"
-            if index_path.exists():
-                index_data = json.loads(index_path.read_text(encoding="utf-8"))
-                index_data.pop(deck_id, None)
-                index_path.write_text(
-                    json.dumps(index_data, ensure_ascii=False, indent=2) + "\n",
-                    encoding="utf-8",
-                )
-
-        await self._send_event(
-            connection, "ppt_delete_deck_result", ok=True, deckId=deck_id,
-        )
-
     async def _dispatch_envelope(
         self,
         connection: Any,
@@ -4000,20 +3472,11 @@ class WebSocketChannel(BaseChannel):
         if t == "ppt_upload":
             await self._handle_ppt_upload_envelope(connection, envelope)
             return
-        if t == "ppt_import_brand":
-            await self._handle_ppt_import_brand_envelope(connection, envelope)
+        if t == "ppt_import_native":
+            await self._handle_ppt_import_native_envelope(connection, envelope)
             return
-        if t == "ppt_save_brand":
-            await self._handle_ppt_save_brand_envelope(connection, envelope)
-            return
-        if t == "ppt_delete_brand":
-            await self._handle_ppt_delete_brand_envelope(connection, envelope)
-            return
-        if t == "ppt_import_deck":
-            await self._handle_ppt_import_deck_envelope(connection, envelope)
-            return
-        if t == "ppt_delete_deck":
-            await self._handle_ppt_delete_deck(connection, envelope)
+        if t == "ppt_delete_native":
+            await self._handle_ppt_delete_native(connection, envelope)
             return
         if t == "message":
             cid = envelope.get("chat_id")
@@ -4068,6 +3531,11 @@ class WebSocketChannel(BaseChannel):
             db_table = envelope.get("db_table")
             if isinstance(db_table, str) and db_table:
                 metadata["table"] = db_table
+            # IMPORTANT: persist display_content for history replay.
+            # DO NOT remove — keeps user messages showing original input, not enriched prompts.
+            display_content = envelope.get("display_content")
+            if isinstance(display_content, str) and display_content:
+                metadata["display_content"] = display_content
             image_generation = envelope.get("image_generation")
             if isinstance(image_generation, dict) and image_generation.get("enabled") is True:
                 aspect_ratio = image_generation.get("aspect_ratio")

@@ -228,20 +228,8 @@ fn seed_default_notebooks(conn: &Connection) -> Result<(), String> {
     let defaults = [
         (
             "default",
-            "默认笔记本",
-            "记录资料、想法、处理过程和 Agent 输出",
-            true,
-        ),
-        (
-            "work",
-            "工作笔记",
-            "记录项目、会议、任务和日常工作内容",
-            false,
-        ),
-        (
-            "personal",
-            "个人笔记",
-            "保存阅读摘录、灵感和临时记录",
+            "默认分类",
+            "",
             false,
         ),
     ];
@@ -876,13 +864,7 @@ pub async fn notes_create_from_chat(
             }
             id
         }
-        None => conn
-            .query_row(
-                "SELECT id FROM notebooks ORDER BY created_at ASC LIMIT 1",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(|e| format!("Failed to find default notebook: {}", e))?,
+        None => "default".to_string(),
     };
 
     let note_id = format!("note-{}", uuid::Uuid::new_v4());

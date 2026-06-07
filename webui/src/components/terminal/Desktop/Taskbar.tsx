@@ -26,7 +26,7 @@ const DOCK_APPS: {
   { type: "fileManager", name: "文件管理器", icon: Folder },
   { type: "terminal", name: "终端", icon: Terminal },
   { type: "taskManager", name: "任务管理器", icon: Activity },
-  { type: null, name: "回收站", icon: Trash2 },
+  { type: "recycleBin", name: "回收站", icon: Trash2 },
 ];
 
 function DockIcon({

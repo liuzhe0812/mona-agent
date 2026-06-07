@@ -1,6 +1,8 @@
 {
   "app": {
     "brand": "mona",
+    "title": "Knowledge Base",
+    "subtitle": "Compile documents into a searchable, browsable Wiki knowledge graph",
     "loading": {
       "connecting": "Connecting to mona…",
       "boot": "Loading mona…"
@@ -38,6 +40,16 @@
       "description": "mona web UI — chat with your mona workspace."
     }
   },
+  "nav": {
+    "wiki": "Wiki",
+    "sources": "Sources",
+    "search": "Search",
+    "graph": "Graph",
+    "lint": "Lint",
+    "review": "Review",
+    "settings": "Settings",
+    "switchProject": "Switch project"
+  },
   "sidebar": {
     "navigation": "Sidebar navigation",
     "globalActions": "Global actions",
@@ -60,6 +72,8 @@
     "recent": "Recent",
     "refreshSessions": "Refresh sessions",
     "settings": "Settings",
+    "knowledge": "Knowledge",
+    "files": "Files",
     "language": {
       "label": "Language",
       "ariaLabel": "Change language"
@@ -530,5 +544,137 @@
       "title": "Message too large",
       "body": "The server rejected your last message because it exceeded the size limit. Remove some images or try smaller files, then send again."
     }
+  },
+  "fileTree": {
+    "openProjectFolder": "Open project folder",
+    "openProjectFolderFailed": "Failed to open the project folder.",
+    "noProject": "No project open"
+  },
+  "welcome": {
+    "newProject": "New Project",
+    "openProject": "Open Project",
+    "recentProjects": "Recent Projects"
+  },
+  "project": {
+    "createTitle": "Create New Project",
+    "name": "Project Name",
+    "namePlaceholder": "My Knowledge Base",
+    "template": "Project Template",
+    "aiOutputLanguage": "AI Output Language",
+    "aiOutputLanguageRequired": "*",
+    "aiOutputLanguageHint": "Language used by AI when compiling Wiki content.",
+    "pickLanguage": "Select language",
+    "parentDir": "Parent Directory",
+    "parentDirPlaceholder": "Choose a location...",
+    "browse": "Choose folder",
+    "cancel": "Cancel",
+    "create": "Create",
+    "creating": "Creating...",
+    "errorNameRequired": "Please enter a project name.",
+    "errorLanguageRequired": "Please select an AI output language."
+  },
+  "templates": {
+    "general": {
+      "name": "General",
+      "description": "A general-purpose knowledge base"
+    },
+    "research": {
+      "name": "Research",
+      "description": "For research projects and papers"
+    },
+    "technical": {
+      "name": "Technical",
+      "description": "For technical documentation"
+    }
+  },
+  "graph": {
+    "nodeTypeLabels": {
+      "entity": "Entity",
+      "concept": "Concept",
+      "source": "Source",
+      "query": "Query",
+      "synthesis": "Synthesis",
+      "overview": "Overview",
+      "comparison": "Comparison",
+      "finding": "Finding",
+      "thesis": "Thesis",
+      "methodology": "Methodology",
+      "other": "Other"
+    },
+    "openProject": "Please open a project first",
+    "buildingGraph": "Building knowledge graph...",
+    "retry": "Retry",
+    "noPages": "No Wiki pages yet",
+    "importSourcesHint": "Import source files to start building the knowledge graph",
+    "knowledgeGraph": "Knowledge Graph",
+    "pages": "Pages",
+    "links": "Links",
+    "hidden": "Hidden",
+    "searchPlaceholder": "Search pages...",
+    "searchLabel": "Search graph",
+    "clearSearch": "Clear search",
+    "closeSearch": "Close search",
+    "filter": "Filter",
+    "reset": "Reset",
+    "type": "Type",
+    "community": "Community",
+    "insights": "Insights",
+    "resizing": "Resizing",
+    "noSearchResults": "No search results",
+    "noVisibleNodes": "No visible nodes",
+    "graphFilters": "Graph filters",
+    "quickFilters": "Quick filters",
+    "hideIndexOverview": "Hide index overview",
+    "hideIsolated": "Hide isolated nodes",
+    "maxLinks": "Max links",
+    "maxLinksHint": "Only show nodes with links ≤ this value",
+    "displayTuning": "Display tuning",
+    "nodeSize": "Node size",
+    "spacing": "Spacing",
+    "displayTuningHint": "Adjust visual parameters of the graph",
+    "nodeTypes": "Node types",
+    "hiddenNodes": "Hidden nodes",
+    "show": "Show",
+    "showingStats": "Showing {{pages}}/{{total}} pages, {{links}}/{{totalLinks}} links",
+    "hideThisNode": "Hide this node",
+    "nodeTypesLabel": "Node types",
+    "communitiesLabel": "Communities",
+    "showAll": "Show all",
+    "cluster": "Cluster {{id}}",
+    "surprisingConnections": "Surprising connections",
+    "knowledgeGaps": "Knowledge gaps",
+    "deepResearch": "Deep research",
+    "generatingTopic": "Generating research topic...",
+    "researchTopic": "Research topic",
+    "searchQueries": "Search queries",
+    "cancel": "Cancel",
+    "startResearch": "Start research"
+  },
+  "sources": {
+    "importSourceFiles": "Import source files",
+    "importSourceFolder": "Import source folder",
+    "title": "Sources",
+    "refreshFolder": "Refresh folder",
+    "refreshFolderTooltip": "Scan source folder for changes",
+    "importing": "Importing...",
+    "import": "Import",
+    "importFolder": "Import folder",
+    "refreshFailed": "Failed to refresh sources: {{error}}",
+    "noSources": "No source files yet",
+    "importHint": "Import documents to start building the knowledge base",
+    "importFiles": "Import files",
+    "sourceCount": "{{count}} source files",
+    "refreshingFolder": "Refreshing...",
+    "deleteFolderConfirm": "Delete folder \"{{name}}\"?",
+    "deleteFolder": "Delete folder \"{{name}}\"",
+    "ingest": "Ingest",
+    "deleteFileConfirm": "Delete file \"{{name}}\"?",
+    "deleteFile": "Delete file \"{{name}}\"",
+    "loadingMore": "Loading more...",
+    "confirm": "Confirm"
+  },
+  "search": {
+    "placeholder": "Search Wiki pages",
+    "noResults": "No results found:"
   }
 }

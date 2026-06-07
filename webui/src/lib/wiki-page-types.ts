@@ -1,3 +1,8 @@
+/**
+ * Wiki page type definitions.
+ * Ported from llm_wiki src/lib/wiki-page-types.ts
+ */
+
 export const GENERATION_WIKI_TYPES = [
   "source",
   "entity",
@@ -25,7 +30,11 @@ const WIKI_TYPE_DIRS: Array<{ dir: string; type: string }> = [
 export function inferWikiTypeFromPath(path: string, fileName?: string): string | null {
   const normalized = path.replace(/\\/g, "/").toLowerCase()
   for (const { dir, type } of WIKI_TYPE_DIRS) {
-    if (normalized.includes(`/wiki/${dir}/`) || normalized.includes(`/${dir}/`) || normalized.startsWith(`wiki/${dir}/`)) {
+    if (
+      normalized.includes(`/wiki/${dir}/`) ||
+      normalized.includes(`/${dir}/`) ||
+      normalized.startsWith(`wiki/${dir}/`)
+    ) {
       return type
     }
   }

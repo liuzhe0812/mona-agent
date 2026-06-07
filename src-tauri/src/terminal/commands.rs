@@ -2246,7 +2246,7 @@ pub async fn sftp_upload_dir(
         .ok_or_else(|| TerminalError::SessionNotFound(session_id.clone()).to_string())?;
     let client = get_sftp_client(&handle)?;
 
-    client.mkdir(&remote_path).await.map_err(|e| e.to_string())?;
+    client.mkdir_if_not_exists(&remote_path).await.map_err(|e| e.to_string())?;
 
     upload_dir_recursive(&client, &app, &session_id, &local_path, &remote_path)
         .await
@@ -2282,7 +2282,7 @@ async fn upload_dir_recursive(
         })?;
 
         if metadata.is_dir() {
-            client.mkdir(&remote_entry_path).await?;
+            client.mkdir_if_not_exists(&remote_entry_path).await?;
             Box::pin(upload_dir_recursive(
                 client,
                 app,

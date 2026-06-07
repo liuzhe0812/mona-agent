@@ -5,7 +5,6 @@ import type {
   OutboundImageGeneration,
   OutboundMedia,
   GoalStateWsPayload,
-  PptBrandSaveRequest,
 } from "./types";
 
 /** WebSocket readyState constants, referenced by value to stay portable
@@ -107,10 +106,18 @@ export class MonaClient {
   private runStatusHandlers = new Set<RunStatusHandler>();
   private errorHandlers = new Set<ErrorHandler>();
   private pptUploadHandlers = new Set<(result: { ok: boolean; files?: { name: string; path: string }[]; error?: string }) => void>();
-  private pptImportBrandHandlers = new Set<(result: { ok: boolean; brandId?: string; name?: string; primaryColor?: string; secondaryColor?: string; accentColor?: string; titleFont?: string; bodyFont?: string; canvasFormat?: string; slideCount?: number; layoutCount?: number; masterCount?: number; hasCoverSvg?: boolean; assets?: string[]; error?: string }) => void>();
-  private pptImportDeckHandlers = new Set<(result: { ok: boolean; deckId?: string; name?: string; pageCount?: number; coverSvgUrl?: string; primaryColor?: string; error?: string }) => void>();
   private pptSaveBrandHandlers = new Set<(result: { ok: boolean; brandId?: string; error?: string }) => void>();
   private pptDeleteBrandHandlers = new Set<(result: { ok: boolean; brandId?: string; error?: string }) => void>();
+  private pptImportNativeHandlers = new Set<(result: {
+    ok: boolean;
+    templateId?: string;
+    name?: string;
+    pageCount?: number;
+    coverUrl?: string;
+    primaryColor?: string;
+    error?: string;
+  }) => void>();
+  private pptDeleteNativeHandlers = new Set<(result: { ok: boolean; templateId?: string; error?: string }) => void>();
   // chat_id -> handlers listening on it
   private chatHandlers = new Map<string, Set<EventHandler>>();
   /** Inbound frames received while no subscriber is registered (e.g. user switched away). */
@@ -207,24 +214,6 @@ export class MonaClient {
     };
   }
 
-  onPptImportBrandResult(
-    handler: (result: { ok: boolean; brandId?: string; name?: string; primaryColor?: string; secondaryColor?: string; accentColor?: string; titleFont?: string; bodyFont?: string; canvasFormat?: string; slideCount?: number; layoutCount?: number; masterCount?: number; hasCoverSvg?: boolean; assets?: string[]; error?: string }) => void,
-  ): Unsubscribe {
-    this.pptImportBrandHandlers.add(handler);
-    return () => {
-      this.pptImportBrandHandlers.delete(handler);
-    };
-  }
-
-  onPptImportDeckResult(
-    handler: (result: { ok: boolean; deckId?: string; name?: string; pageCount?: number; coverSvgUrl?: string; primaryColor?: string; error?: string }) => void,
-  ): Unsubscribe {
-    this.pptImportDeckHandlers.add(handler);
-    return () => {
-      this.pptImportDeckHandlers.delete(handler);
-    };
-  }
-
   onPptSaveBrandResult(
     handler: (result: { ok: boolean; brandId?: string; error?: string }) => void,
   ): Unsubscribe {
@@ -243,24 +232,46 @@ export class MonaClient {
     };
   }
 
+  onPptImportNativeResult(
+    handler: (result: {
+      ok: boolean;
+      templateId?: string;
+      name?: string;
+      pageCount?: number;
+      coverUrl?: string;
+      primaryColor?: string;
+      error?: string;
+    }) => void,
+  ): Unsubscribe {
+    this.pptImportNativeHandlers.add(handler);
+    return () => {
+      this.pptImportNativeHandlers.delete(handler);
+    };
+  }
+
+  onPptDeleteNativeResult(
+    handler: (result: { ok: boolean; templateId?: string; error?: string }) => void,
+  ): Unsubscribe {
+    this.pptDeleteNativeHandlers.add(handler);
+    return () => {
+      this.pptDeleteNativeHandlers.delete(handler);
+    };
+  }
+
   sendPptUpload(files: { name: string; data_url: string }[]): void {
     this.queueSend({ type: "ppt_upload", files });
   }
 
-  sendPptImportBrand(file: { name: string; data_url: string }): void {
-    this.queueSend({ type: "ppt_import_brand", file });
-  }
-
-  sendPptImportDeck(file: { name: string; data_url: string }): void {
-    this.queueSend({ type: "ppt_import_deck", file });
-  }
-
-  sendPptSaveBrand(data: PptBrandSaveRequest): void {
-    this.queueSend({ type: "ppt_save_brand", data });
-  }
-
   sendPptDeleteBrand(data: { brandId: string }): void {
     this.queueSend({ type: "ppt_delete_brand", data });
+  }
+
+  sendPptImportNative(file: { name: string; data_url: string }): void {
+    this.queueSend({ type: "ppt_import_native", file });
+  }
+
+  sendPptDeleteNative(data: { templateId: string }): void {
+    this.queueSend({ type: "ppt_delete_native", data });
   }
 
   /** Last ``goal_status`` ``started_at`` (unix sec) for *chatId*, if the turn is running. */
@@ -388,6 +399,9 @@ export class MonaClient {
     media?: OutboundMedia[],
     options?: {
       imageGeneration?: OutboundImageGeneration;
+      /** IMPORTANT: Short display text persisted to server for history replay.
+       *  DO NOT remove — keeps user messages showing original input, not enriched prompts. */
+      displayContent?: string;
       terminalSessionId?: string;
       terminalExecMode?: string;
       dbConnectionId?: string;
@@ -402,6 +416,7 @@ export class MonaClient {
       content,
       ...(media && media.length > 0 ? { media } : {}),
       ...(options?.imageGeneration ? { image_generation: options.imageGeneration } : {}),
+      ...(options?.displayContent ? { display_content: options.displayContent } : {}),
       ...(options?.terminalSessionId ? { terminal_session_id: options.terminalSessionId } : {}),
       ...(options?.terminalExecMode ? { terminal_exec_mode: options.terminalExecMode } : {}),
       ...(options?.dbConnectionId ? { db_connection_id: options.dbConnectionId } : {}),
@@ -489,44 +504,6 @@ export class MonaClient {
       return;
     }
 
-    if (parsed.event === "ppt_import_brand_result") {
-      for (const handler of this.pptImportBrandHandlers) {
-        handler({
-          ok: !!parsed.ok,
-          brandId: parsed.brandId,
-          name: parsed.name,
-          primaryColor: parsed.primaryColor,
-          secondaryColor: parsed.secondaryColor,
-          accentColor: parsed.accentColor,
-          titleFont: parsed.titleFont,
-          bodyFont: parsed.bodyFont,
-          canvasFormat: parsed.canvasFormat,
-          slideCount: parsed.slideCount,
-          layoutCount: parsed.layoutCount,
-          masterCount: parsed.masterCount,
-          hasCoverSvg: parsed.hasCoverSvg,
-          assets: parsed.assets,
-          error: parsed.error,
-        });
-      }
-      return;
-    }
-
-    if (parsed.event === "ppt_import_deck_result") {
-      for (const handler of this.pptImportDeckHandlers) {
-        handler({
-          ok: !!parsed.ok,
-          deckId: parsed.deckId,
-          name: parsed.name,
-          pageCount: parsed.pageCount,
-          coverSvgUrl: parsed.coverSvgUrl,
-          primaryColor: parsed.primaryColor,
-          error: parsed.error,
-        });
-      }
-      return;
-    }
-
     if (parsed.event === "ppt_save_brand_result") {
       for (const handler of this.pptSaveBrandHandlers) {
         handler({
@@ -543,6 +520,32 @@ export class MonaClient {
         handler({
           ok: !!parsed.ok,
           brandId: parsed.brandId,
+          error: parsed.error,
+        });
+      }
+      return;
+    }
+
+    if (parsed.event === "ppt_import_native_result") {
+      for (const handler of this.pptImportNativeHandlers) {
+        handler({
+          ok: !!parsed.ok,
+          templateId: parsed.templateId,
+          name: parsed.name,
+          pageCount: parsed.pageCount,
+          coverUrl: parsed.coverUrl,
+          primaryColor: parsed.primaryColor,
+          error: parsed.error,
+        });
+      }
+      return;
+    }
+
+    if (parsed.event === "ppt_delete_native_result") {
+      for (const handler of this.pptDeleteNativeHandlers) {
+        handler({
+          ok: !!parsed.ok,
+          templateId: parsed.templateId,
           error: parsed.error,
         });
       }

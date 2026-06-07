@@ -205,6 +205,7 @@ export async function updateSettings(
   if (update.toolHintMaxLength !== undefined) {
     query.set("tool_hint_max_length", String(update.toolHintMaxLength));
   }
+  if (update.workspace !== undefined) query.set("workspace", update.workspace);
   return request<SettingsPayload>(`${effectiveBase}/api/settings/update?${query}`, token);
 }
 
@@ -218,6 +219,7 @@ export async function updateProviderSettings(
   query.set("provider", update.provider);
   if (update.apiKey !== undefined) query.set("api_key", update.apiKey);
   if (update.apiBase !== undefined) query.set("api_base", update.apiBase);
+  if (update.model !== undefined) query.set("model", update.model);
   return request<SettingsPayload>(
     `${effectiveBase}/api/settings/provider/update?${query}`,
     token,
@@ -286,6 +288,7 @@ export async function fetchPptProjects(
 export interface PptSlide {
   name: string;
   url: string;
+  type?: "svg" | "image";
 }
 
 export async function fetchPptProjectSlides(
@@ -315,8 +318,12 @@ export interface PptExportStatus {
   slideCount: number;
   hasExport: boolean;
   hasSvgOutput: boolean;
+  hasPptxOutput: boolean;
   hasSpecLock: boolean;
   exportFile: string | null;
+  pipelineStage: string;
+  svgOutputCount: number;
+  svgFinalCount: number;
 }
 
 export async function fetchPptExportStatus(
@@ -331,6 +338,28 @@ export async function fetchPptExportStatus(
     `${effectiveBase}/api/ppt/export-status?${query}`,
     token,
   );
+}
+
+export interface PptVisualPlanPage {
+  page: string;
+  file: string;
+  title: string;
+  visual_type: string;
+  chart_template: string | null;
+  layout_template: string | null;
+  has_ai_image: boolean;
+  notes: string;
+}
+
+export async function fetchPptVisualPlan(
+  token: string,
+  project: string,
+  base?: string,
+): Promise<{ pages: PptVisualPlanPage[] }> {
+  const effectiveBase = base ?? (await getApiBase());
+  const query = new URLSearchParams();
+  query.set("project", project);
+  return request(`${effectiveBase}/api/ppt/visual-plan?${query}`, token);
 }
 
 export async function markPptGenerating(
@@ -387,4 +416,28 @@ export async function deletePptProject(
   const query = new URLSearchParams();
   query.set("project", project);
   return request(`${effectiveBase}/api/ppt/delete-project?${query}`, token);
+}
+
+export async function fetchPptUrl(
+  token: string,
+  url: string,
+  project?: string,
+  base?: string,
+): Promise<{ ok: boolean; file?: string; output?: string; error?: string }> {
+  const effectiveBase = base ?? (await getApiBase());
+  const query = new URLSearchParams();
+  query.set("url", url);
+  if (project) query.set("project", project);
+  return request(`${effectiveBase}/api/ppt/fetch-url?${query}`, token);
+}
+
+export async function generatePptPreview(
+  token: string,
+  project: string,
+  base?: string,
+): Promise<{ ok: boolean; slideCount?: number; error?: string }> {
+  const effectiveBase = base ?? (await getApiBase());
+  const query = new URLSearchParams();
+  query.set("project", project);
+  return request(`${effectiveBase}/api/ppt/generate-preview?${query}`, token);
 }

@@ -13,6 +13,8 @@ from mona.agent.tools.schema import ArraySchema, StringSchema, tool_parameters_s
 from mona.bus.events import OutboundMessage
 from mona.config.paths import get_workspace_path
 
+DELIVER_FILES_PENDING_META = "_pending_deliver_files"
+
 
 def _human_size(size_bytes: int) -> str:
     if size_bytes < 1024:
@@ -63,6 +65,9 @@ class DeliverFileTool(Tool, ContextAware):
         self._default_chat_id: ContextVar[str] = ContextVar(
             "deliver_file_default_chat_id", default=""
         )
+        self._pending_files: ContextVar[list[dict[str, Any]] | None] = ContextVar(
+            "deliver_file_pending_files", default=None
+        )
 
     @classmethod
     def create(cls, ctx: Any) -> Tool:
@@ -76,6 +81,8 @@ class DeliverFileTool(Tool, ContextAware):
     def set_context(self, ctx: RequestContext) -> None:
         self._default_channel.set(ctx.channel)
         self._default_chat_id.set(ctx.chat_id)
+        pending_files = ctx.metadata.get(DELIVER_FILES_PENDING_META)
+        self._pending_files.set(pending_files if isinstance(pending_files, list) else None)
 
     @property
     def name(self) -> str:
@@ -142,6 +149,23 @@ class DeliverFileTool(Tool, ContextAware):
 
         if not files:
             return "Error: no valid files to deliver"
+
+        pending_files = self._pending_files.get()
+        if pending_files is not None:
+            existing_paths = {
+                str(item.get("absolute_path"))
+                for item in pending_files
+                if isinstance(item, dict) and item.get("absolute_path")
+            }
+            added = 0
+            for item in files:
+                absolute_path = str(item.get("absolute_path") or "")
+                if absolute_path in existing_paths:
+                    continue
+                pending_files.append(item)
+                existing_paths.add(absolute_path)
+                added += 1
+            return f"Prepared {added} file(s) for final delivery"
 
         msg = OutboundMessage(
             channel=default_channel,

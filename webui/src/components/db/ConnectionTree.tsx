@@ -25,6 +25,9 @@ import {
   Terminal,
   FileCode,
   Eraser,
+  Loader2,
+  AlertCircle,
+  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -72,6 +75,9 @@ export function ConnectionTree() {
   const refreshServerStats = useDbStore((s) => s.refreshServerStats);
   const refreshProcesses = useDbStore((s) => s.refreshProcesses);
   const refreshUsers = useDbStore((s) => s.refreshUsers);
+  const connectingId = useDbStore((s) => s.connectingId);
+  const connectError = useDbStore((s) => s.connectError);
+  const setConnectError = useDbStore((s) => s.setConnectError);
 
   const isConnected = (id: string) => activeConnections.some((c) => c.id === id);
 
@@ -92,10 +98,24 @@ export function ConnectionTree() {
           </Button>
         </div>
       </div>
+      {connectError && (
+        <div className="mx-2 mt-1 flex items-start gap-1.5 rounded-md border border-destructive/30 bg-destructive/5 px-2 py-1.5 text-[11px] text-destructive">
+          <AlertCircle className="mt-0.5 h-3 w-3 shrink-0" />
+          <span className="flex-1 break-all">{connectError}</span>
+          <button
+            type="button"
+            onClick={() => setConnectError(null)}
+            className="shrink-0 text-destructive/60 hover:text-destructive"
+          >
+            <X className="h-3 w-3" />
+          </button>
+        </div>
+      )}
       <ScrollArea className="flex-1">
         <div className="py-1">
           {savedConnections.map((config) => {
             const connected = isConnected(config.id);
+            const connecting = connectingId === config.id;
             const tree = connectionTree[config.id];
 
             return (
@@ -104,12 +124,19 @@ export function ConnectionTree() {
                   <ContextMenuTrigger asChild>
                     <div>
                       <TreeItem
-                        icon={<Database className="h-3.5 w-3.5" />}
+                        icon={
+                          connecting ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+                          ) : (
+                            <Database className="h-3.5 w-3.5" />
+                          )
+                        }
                         label={config.name}
-                        badge={connected ? "已连接" : "离线"}
-                        badgeVariant={connected ? "success" : "muted"}
+                        badge={connecting ? "连接中" : connected ? "已连接" : "离线"}
+                        badgeVariant={connecting ? "warning" : connected ? "success" : "muted"}
                         defaultOpen={connected}
                         onClick={() => {
+                          if (connecting) return;
                           if (!connected) {
                             connect(config);
                           } else {
@@ -752,7 +779,7 @@ function TreeItem({
   icon: React.ReactNode;
   label: string;
   badge?: string;
-  badgeVariant?: "success" | "muted";
+  badgeVariant?: "success" | "warning" | "muted";
   defaultOpen?: boolean;
   onClick?: () => void;
   actions?: { icon: React.ReactNode; onClick: () => void }[];
@@ -807,7 +834,9 @@ function TreeItem({
               "shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium",
               badgeVariant === "success"
                 ? "bg-green-500/15 text-green-500"
-                : "bg-muted text-muted-foreground",
+                : badgeVariant === "warning"
+                  ? "bg-amber-500/15 text-amber-500"
+                  : "bg-muted text-muted-foreground",
             )}
           >
             {badge}

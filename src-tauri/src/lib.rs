@@ -38,8 +38,8 @@ impl GatewayState {
         }
     }
 
-    pub fn start(&self, settings: &AppSettings) -> Result<u16, String> {
-        let port = self.inner.manager.start(settings)?;
+    pub fn start(&self, settings: &AppSettings, app_handle: &tauri::AppHandle) -> Result<u16, String> {
+        let port = self.inner.manager.start(settings, app_handle)?;
         *self.inner.port.lock().map_err(|e| e.to_string())? = Some(port);
         Ok(port)
     }
@@ -80,10 +80,13 @@ async fn update_settings(
 }
 
 #[tauri::command]
-async fn start_gateway(state: tauri::State<'_, GatewayState>) -> Result<u16, String> {
+async fn start_gateway(
+    state: tauri::State<'_, GatewayState>,
+    app_handle: tauri::AppHandle,
+) -> Result<u16, String> {
     let settings = settings::load_settings();
     settings::ensure_desktop_config(settings.gateway_port)?;
-    let port = state.start(&settings)?;
+    let port = state.start(&settings, &app_handle)?;
     gateway::wait_for_gateway(port, 30).await?;
     Ok(port)
 }
@@ -106,8 +109,8 @@ async fn gateway_status(state: tauri::State<'_, GatewayState>) -> Result<serde_j
 }
 
 #[tauri::command]
-async fn initialize_python_env() -> Result<(), String> {
-    python::initialize_python()
+async fn initialize_python_env(app_handle: tauri::AppHandle) -> Result<(), String> {
+    python::initialize_python(&app_handle)
 }
 
 #[tauri::command]
@@ -204,15 +207,13 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_http::init())
-        .plugin(
-            tauri_plugin_global_shortcut::Builder::new()
+        .plugin(tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, _shortcut, event| {
                     if event.state() == ShortcutState::Pressed {
                         quick_ask::toggle_quick_ask(app);
                     }
                 })
-                .build(),
-        )
+                .build())
         .manage(gateway_state.clone())
         .manage(terminal_state)
         .manage(db_state)
@@ -368,8 +369,9 @@ pub fn run() {
                     }
                     let state = gateway_state.clone();
                     let settings_clone = settings.clone();
+                    let app_handle_clone = app.handle().clone();
                     tauri::async_runtime::spawn(async move {
-                        match state.start(&settings_clone) {
+                        match state.start(&settings_clone, &app_handle_clone) {
                             Ok(actual_port) => {
                                 match gateway::wait_for_gateway(actual_port, 30).await {
                                     Ok(()) => {

@@ -1,4 +1,4 @@
-export type AppType = "fileManager" | "taskManager" | "terminal" | "textEditor" | null;
+export type AppType = "fileManager" | "taskManager" | "terminal" | "textEditor" | "recycleBin" | null;
 
 export interface WindowState {
   id: string;

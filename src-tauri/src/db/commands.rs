@@ -12,6 +12,10 @@ pub async fn db_connect(
         .map_err(|e| e.to_string())?;
 
     let mut manager = state.manager.lock().await;
+    // If a connection with the same id already exists, disconnect it first
+    if manager.contains_connection(&config.id) {
+        let _ = manager.disconnect(&config.id);
+    }
     manager.insert_connection(config, handle, server_version)
         .map_err(|e| e.to_string())
 }

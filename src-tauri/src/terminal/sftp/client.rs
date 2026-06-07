@@ -189,6 +189,27 @@ impl SftpClient {
         })
     }
 
+    pub async fn mkdir_if_not_exists(&self, path: &str) -> Result<(), TerminalError> {
+        let guard = self.session.lock().await;
+        let session = guard.as_ref().ok_or_else(|| {
+            TerminalError::SftpOperation("SFTP session not connected".into())
+        })?;
+        match session.create_dir(path).await {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                let err_str = format!("{}", e).to_lowercase();
+                if err_str.contains("exist") || err_str.contains("failure") {
+                    Ok(())
+                } else {
+                    Err(TerminalError::SftpOperation(format!(
+                        "mkdir failed: {}",
+                        e
+                    )))
+                }
+            }
+        }
+    }
+
     pub async fn rmdir(&self, path: &str) -> Result<(), TerminalError> {
         let guard = self.session.lock().await;
         let session = guard.as_ref().ok_or_else(|| {

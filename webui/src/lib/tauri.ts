@@ -38,11 +38,21 @@ export interface MonaConfigStatus {
   provider_name: string | null;
 }
 
+export interface SidebarShortcuts {
+  mona: string;
+  note: string;
+  ssh: string;
+  db: string;
+  kb: string;
+  ppt: string;
+}
+
 export interface DesktopAppSettings {
   run_in_background: boolean;
   auto_start_gateway: boolean;
   gateway_port: number;
   quick_ask_shortcut: string;
+  sidebar_shortcuts: SidebarShortcuts;
   config_path: string | null;
 }
 

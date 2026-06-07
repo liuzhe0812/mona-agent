@@ -59,6 +59,12 @@ const formatEta = (seconds: number | null): string => {
   return `${h}小时${m}分钟`;
 };
 
+export interface ClipboardItem {
+  path: string;
+  isDir: boolean;
+  action: "copy" | "cut";
+}
+
 interface BatchState {
   startIp: string;
   count: number;
@@ -77,6 +83,8 @@ interface BatchState {
   transferSessions: TransferSessionNode[];
   activeBatchId: string | null;
   maxConcurrent: number;
+  selectedFilePaths: Set<string>;
+  clipboard: ClipboardItem[];
 
   setStartIp: (v: string) => void;
   setCount: (v: number) => void;
@@ -101,6 +109,10 @@ interface BatchState {
   setActiveBatchId: (id: string | null) => void;
   setMaxConcurrent: (n: number) => void;
   handleBatchProgress: (progress: BatchTransferProgress) => void;
+  selectFile: (path: string, multi?: boolean, range?: boolean, allFiles?: FileInfo[]) => void;
+  clearFileSelection: () => void;
+  setClipboard: (items: ClipboardItem[]) => void;
+  clearClipboard: () => void;
 }
 
 export const useBatchStore = create<BatchState>()(
@@ -123,6 +135,8 @@ export const useBatchStore = create<BatchState>()(
       transferSessions: [],
       activeBatchId: null,
       maxConcurrent: 3,
+      selectedFilePaths: new Set(),
+      clipboard: [],
 
       setStartIp: (v) => set({ startIp: v }),
       setCount: (v) => set({ count: v }),
@@ -180,6 +194,33 @@ export const useBatchStore = create<BatchState>()(
       setActiveBatchId: (id) => set({ activeBatchId: id }),
       setMaxConcurrent: (n) => set({ maxConcurrent: n }),
 
+      selectFile: (path, multi, range, allFiles) =>
+        set((state) => {
+          const next = new Set(state.selectedFilePaths);
+          if (multi) {
+            if (next.has(path)) next.delete(path);
+            else next.add(path);
+          } else if (range && allFiles) {
+            const paths = allFiles.map((f) => f.path);
+            const lastIdx = paths.findIndex((p) => next.has(p));
+            const curIdx = paths.indexOf(path);
+            if (lastIdx >= 0 && curIdx >= 0) {
+              const start = Math.min(lastIdx, curIdx);
+              const end = Math.max(lastIdx, curIdx);
+              for (let i = start; i <= end; i++) next.add(paths[i]);
+            } else {
+              next.add(path);
+            }
+          } else {
+            next.clear();
+            next.add(path);
+          }
+          return { selectedFilePaths: next };
+        }),
+      clearFileSelection: () => set({ selectedFilePaths: new Set() }),
+      setClipboard: (items) => set({ clipboard: items }),
+      clearClipboard: () => set({ clipboard: [] }),
+
       handleBatchProgress: (progress) => {
         const { sessionId, status, currentFile, filesCompleted, filesTotal, bytesTransferred, bytesTotal, speed, etaSeconds, error } = progress;
 
@@ -199,7 +240,7 @@ export const useBatchStore = create<BatchState>()(
           sessionProgress = Math.round((filesCompleted / filesTotal) * 100);
         }
 
-        const fileStatus = status === "Completed" ? "completed" : status === "Error" ? "error" : "transferring";
+        const fileStatus = status === "completed" ? "completed" : status === "error" ? "error" : "transferring";
 
         set((state) => ({
           transferSessions: state.transferSessions.map((s) =>

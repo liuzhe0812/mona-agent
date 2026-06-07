@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   BookOpen,
   Check,
+  ChevronRight,
   Database,
   FileText,
   Pencil,
@@ -61,8 +62,13 @@ export function KnowledgeView({
   const [scope, setScope] = useState<KnowledgeScope>("category");
   const [tagFilter, setTagFilter] = useState("");
   const [sortMode, setSortMode] = useState<KnowledgeSort>("recent");
+  const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
 
   const flattenedCategories = useMemo(() => flattenCategories(categories), [categories]);
+  const childIdSet = useMemo(
+    () => new Set(categories.filter((c) => c.parentId).map((c) => c.parentId!)),
+    [categories],
+  );
   const activeCategory =
     categories.find((category) => category.id === activeCategoryId) ?? categories[0] ?? null;
   const activeCategoryIds = useMemo(
@@ -119,6 +125,15 @@ export function KnowledgeView({
 
         <div className="min-h-0 flex-1 overflow-y-auto p-2 scrollbar-thin">
           {flattenedCategories.map(({ category, depth }) => {
+            const hasChildren = childIdSet.has(category.id);
+            const isCollapsed = collapsedIds.has(category.id);
+
+            // Skip children of collapsed ancestors
+            if (depth > 0) {
+              const ancestors = getAncestorIds(category.id, categories);
+              if (ancestors.some((id) => collapsedIds.has(id))) return null;
+            }
+
             const count = countCategoryItems(category.id, categories, items);
             return (
               <div
@@ -130,13 +145,33 @@ export function KnowledgeView({
                     : "border-transparent hover:border-border/70 hover:bg-background",
                 )}
               >
+                {hasChildren ? (
+                  <button
+                    type="button"
+                    aria-label={isCollapsed ? "展开" : "折叠"}
+                    title={isCollapsed ? "展开" : "折叠"}
+                    onClick={() =>
+                      setCollapsedIds((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(category.id)) next.delete(category.id);
+                        else next.add(category.id);
+                        return next;
+                      })
+                    }
+                    style={{ marginLeft: `${6 + depth * 14}px` }}
+                    className="grid h-5 w-5 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+                  >
+                    <ChevronRight className={cn("h-3 w-3 transition-transform", !isCollapsed && "rotate-90")} />
+                  </button>
+                ) : (
+                  <span style={{ marginLeft: `${6 + depth * 14}px`, width: "20px" }} className="shrink-0" />
+                )}
                 <button
                   type="button"
                   onClick={() => {
                     onSelectCategory(category.id);
                     setScope("category");
                   }}
-                  style={{ paddingLeft: `${10 + depth * 14}px` }}
                   className="flex min-w-0 flex-1 items-center gap-2 py-2 pr-1 text-left"
                 >
                   <BookOpen className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
@@ -193,7 +228,7 @@ function KnowledgeDirectory({
   title,
   items,
   totalCount,
-  categories,
+  categories: _categories,
   notes,
   query,
   scope,
@@ -310,7 +345,6 @@ function KnowledgeDirectory({
             <KnowledgeCard
               key={item.id}
               item={item}
-              categoryPath={getCategoryPath(item.categoryId, categories)}
               notes={notes}
               onOpenSourceNote={onOpenSourceNote}
               onUpdateItem={onUpdateItem}
@@ -325,14 +359,12 @@ function KnowledgeDirectory({
 
 function KnowledgeCard({
   item,
-  categoryPath,
   notes,
   onOpenSourceNote,
   onUpdateItem,
   onDeleteItem,
 }: {
   item: KnowledgeItem;
-  categoryPath: string;
   notes: OperationNote[];
   onOpenSourceNote: (noteId: string, knowledgeItemId: string) => void;
   onUpdateItem: (itemId: string, patch: KnowledgeItemUpdate) => void;
@@ -403,9 +435,20 @@ function KnowledgeCard({
                 <h3 className="min-w-0 break-words text-[15px] font-semibold leading-6 text-foreground">
                   {item.title}
                 </h3>
-                <span className="rounded-full border border-border/65 bg-muted/25 px-1.5 py-0.5 text-[10.5px] text-muted-foreground">
-                  {categoryPath}
-                </span>
+                {item.tags.slice(0, 4).map((tag) => (
+                  <span
+                    key={tag}
+                    className="inline-flex max-w-full items-center gap-1 rounded-full border border-border/65 bg-background px-2 py-0.5 text-[11px] text-muted-foreground"
+                  >
+                    <Tag className="h-3 w-3 shrink-0" />
+                    <span className="truncate">{tag}</span>
+                  </span>
+                ))}
+                {item.tags.length > 4 ? (
+                  <span className="rounded-full border border-border/65 bg-muted/25 px-2 py-0.5 text-[11px] text-muted-foreground">
+                    +{item.tags.length - 4}
+                  </span>
+                ) : null}
               </div>
               <p className="mt-1.5 break-words text-[12.5px] leading-5 text-muted-foreground">
                 {item.summary}
@@ -478,47 +521,30 @@ function KnowledgeCard({
         </>
       ) : (
         <>
-          <div className="mt-3 flex min-w-0 flex-wrap items-center gap-1.5">
-            {item.tags.slice(0, 4).map((tag) => (
-              <span
-                key={tag}
-                className="inline-flex max-w-full items-center gap-1 rounded-full border border-border/65 bg-background px-2 py-0.5 text-[11px] text-muted-foreground"
-              >
-                <Tag className="h-3 w-3 shrink-0" />
-                <span className="truncate">{tag}</span>
-              </span>
-            ))}
-            {item.tags.length > 4 ? (
-              <span className="rounded-full border border-border/65 bg-muted/25 px-2 py-0.5 text-[11px] text-muted-foreground">
-                +{item.tags.length - 4}
-              </span>
-            ) : null}
+          <div className="mt-3 flex min-w-0 flex-wrap items-center gap-1.5 border-t border-border/60 pt-3">
+            <span className="text-[11px] text-muted-foreground">
+              关联 {linkedNotes.length} 篇笔记：
+            </span>
+            {linkedNotes.map((linkedNote) => {
+              const sourceNote = noteById.get(linkedNote.noteId) ?? null;
+              const noteTitle = sourceNote?.title ?? linkedNote.noteTitle;
+              return (
+                <button
+                  key={linkedNote.noteId}
+                  type="button"
+                  disabled={!sourceNote}
+                  onClick={() => onOpenSourceNote(linkedNote.noteId, item.id)}
+                  title={linkedNote.description || "关联笔记"}
+                  className="inline-flex h-7 max-w-[220px] items-center gap-1.5 rounded-md border border-border/70 bg-background px-2 text-[11px] font-medium text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+                >
+                  <FileText className="h-3 w-3 shrink-0" />
+                  <span className="truncate">{noteTitle}</span>
+                </button>
+              );
+            })}
           </div>
         </>
       )}
-
-      <div className="mt-3 flex min-w-0 flex-wrap items-center gap-1.5 border-t border-border/60 pt-3">
-        <span className="text-[11px] text-muted-foreground">
-          关联 {linkedNotes.length} 篇笔记：
-        </span>
-        {linkedNotes.map((linkedNote) => {
-          const sourceNote = noteById.get(linkedNote.noteId) ?? null;
-          const noteTitle = sourceNote?.title ?? linkedNote.noteTitle;
-          return (
-            <button
-              key={linkedNote.noteId}
-              type="button"
-              disabled={!sourceNote}
-              onClick={() => onOpenSourceNote(linkedNote.noteId, item.id)}
-              title={linkedNote.description || "关联笔记"}
-              className="inline-flex h-7 max-w-[220px] items-center gap-1.5 rounded-md border border-border/70 bg-background px-2 text-[11px] font-medium text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
-            >
-              <FileText className="h-3 w-3 shrink-0" />
-              <span className="truncate">{noteTitle}</span>
-            </button>
-          );
-        })}
-      </div>
     </article>
   );
 }
@@ -649,6 +675,17 @@ function countCategoryItems(
 ): number {
   const ids = collectCategoryIds(categoryId, categories);
   return items.filter((item) => ids.has(item.categoryId)).length;
+}
+
+function getAncestorIds(categoryId: string, categories: KnowledgeCategory[]): string[] {
+  const byId = new Map(categories.map((c) => [c.id, c]));
+  const result: string[] = [];
+  let current = byId.get(categoryId);
+  while (current?.parentId) {
+    result.push(current.parentId);
+    current = byId.get(current.parentId);
+  }
+  return result;
 }
 
 function collectTags(items: KnowledgeItem[]): string[] {

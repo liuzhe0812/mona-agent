@@ -50,7 +50,7 @@ export function createBlankNote(
     tags: isSsh ? ["SSH", "草稿"] : ["草稿"],
     contentMarkdown: isSsh
       ? "## SSH 会话记录\n\n```bash\n# 在这里粘贴命令和输出\n```\n\n## 判断\n\n"
-      : "## 新笔记\n\n在这里记录想法、资料、处理过程或 Agent 输出。\n",
+      : "",
     appliedAgentMessageIds: [],
   };
 }
@@ -75,7 +75,6 @@ export function createCustomNotebook(name: string): Notebook {
   return {
     id: createId("notebook"),
     name,
-    description: "自定义笔记本",
     knowledgeBaseEnabled: false,
   };
 }

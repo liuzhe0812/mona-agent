@@ -1,12 +1,11 @@
 import type { JSONContent } from "@tiptap/core";
 
 export type NoteSourceKind = "agent" | "manual" | "ssh" | "windows";
-export type NoteAiActionId = "summary" | "extractKnowledge" | "freeform" | "polish" | "translate" | "continue" | "autoTag";
+export type NoteAiActionId = "summary" | "extractKnowledge" | "freeform" | "polish" | "translate" | "continue" | "generateHtml";
 
 export interface Notebook {
   id: string;
   name: string;
-  description: string;
   knowledgeBaseEnabled: boolean;
 }
 

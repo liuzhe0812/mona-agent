@@ -184,17 +184,25 @@ export function FileManagerApp({
     });
   };
 
+  const trashRoot = `${getUserHome()}/.local/share/Trash`;
+  const trashFilesPath = `${trashRoot}/files`;
+  const trashInfoPath = `${trashRoot}/info`;
+
   const handleDelete = async (ids: string[]) => {
     if (!ids.length) return;
-    if (!confirm(`确定要删除 ${ids.length} 个项目吗？`)) return;
+    if (!confirm(`确定要将 ${ids.length} 个项目移到回收站吗？`)) return;
     try {
+      await desktopExec(sessionId, `mkdir -p '${trashFilesPath}' '${trashInfoPath}'`);
       for (const id of ids) {
         const file = files.find((f) => f.path === id);
         if (!file) continue;
-        const cmd = file.type === "folder"
-          ? `rm -rf '${file.path}'`
-          : `rm -f '${file.path}'`;
-        await desktopExec(sessionId, cmd);
+        const uniqueSuffix = Math.floor(Math.random() * 1000000);
+        const trashName = `${file.name}_${uniqueSuffix}`;
+        const date = new Date().toISOString();
+        await desktopExec(
+          sessionId,
+          `echo "[Trash Info]" > '${trashInfoPath}/${trashName}.trashinfo' && echo "Path=${file.path}" >> '${trashInfoPath}/${trashName}.trashinfo' && echo "DeletionDate=${date}" >> '${trashInfoPath}/${trashName}.trashinfo' && mv '${file.path}' '${trashFilesPath}/${trashName}'`,
+        );
       }
       loadDirectory(currentPath);
     } catch (err) {

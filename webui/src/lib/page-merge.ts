@@ -1,5 +1,14 @@
-import { parseFrontmatter } from "./frontmatter"
-import { mergeArrayFieldsIntoContent } from "./sources-merge"
+/**
+ * Merge a wiki page that the LLM just generated with whatever's already on disk.
+ * Ported from llm_wiki src/lib/page-merge.ts
+ *
+ * Three layers of protection:
+ *   1. Frontmatter array fields (sources / tags / related) — always union-merged
+ *   2. Body — if old and new bodies differ, ask the LLM to produce a coherent merge
+ *   3. Locked frontmatter fields (type / title / created) — existing values forced back
+ */
+
+import { mergeArrayFieldsIntoContent } from "@/lib/sources-merge"
 
 const UNION_FIELDS = ["sources", "tags", "related"] as const
 const LOCKED_FIELDS = ["type", "title", "created"] as const
@@ -20,6 +29,25 @@ export interface MergePageOptions {
   signal?: AbortSignal
   backup?: (existingContent: string) => Promise<void>
   today?: () => string
+}
+
+function parseFrontmatter(content: string): { frontmatter: Record<string, string | null> | null; body: string } {
+  if (!content.startsWith("---")) return { frontmatter: null, body: content }
+  const end = content.indexOf("---", 3)
+  if (end === -1) return { frontmatter: null, body: content }
+  const yamlText = content.slice(3, end).trim()
+  const body = content.slice(end + 3).trim()
+  const frontmatter: Record<string, string> = {}
+  for (const line of yamlText.split("\n")) {
+    const stripped = line.trim()
+    if (!stripped || stripped.startsWith("-")) continue
+    if (stripped.includes(":")) {
+      const [key, ...rest] = stripped.split(":")
+      const value = rest.join(":").trim()
+      if (value) frontmatter[key.trim()] = value
+    }
+  }
+  return { frontmatter, body }
 }
 
 export async function mergePageContent(
@@ -53,7 +81,7 @@ export async function mergePageContent(
     )
   } catch (err) {
     console.warn(
-      `[page-merge] LLM merge failed for ${opts.pagePath}, falling back to incoming + array-field union: ${err instanceof Error ? err.message : err}`,
+      `[page-merge] LLM merge failed for ${opts.pagePath}, falling back: ${err instanceof Error ? err.message : err}`,
     )
     await tryBackup(opts, existingContent)
     return arrayMerged
@@ -61,9 +89,7 @@ export async function mergePageContent(
 
   const llmParsed = parseFrontmatter(llmOutput)
   if (llmParsed.frontmatter === null) {
-    console.warn(
-      `[page-merge] LLM output for ${opts.pagePath} has no frontmatter — rejecting, falling back`,
-    )
+    console.warn(`[page-merge] LLM output for ${opts.pagePath} has no frontmatter — rejecting`)
     await tryBackup(opts, existingContent)
     return arrayMerged
   }
@@ -74,7 +100,7 @@ export async function mergePageContent(
   const minThreshold = Math.max(oldBodyLen, newBodyLen) * BODY_SHRINK_THRESHOLD
   if (llmBodyLen < minThreshold) {
     console.warn(
-      `[page-merge] LLM merge for ${opts.pagePath} produced body ${llmBodyLen} chars, below threshold ${minThreshold.toFixed(0)} (max input was ${Math.max(oldBodyLen, newBodyLen)}) — rejecting, falling back`,
+      `[page-merge] LLM merge for ${opts.pagePath} produced body ${llmBodyLen} chars, below threshold ${minThreshold.toFixed(0)} — rejecting`,
     )
     await tryBackup(opts, existingContent)
     return arrayMerged
@@ -87,6 +113,7 @@ export async function mergePageContent(
       final = setFrontmatterScalar(final, field, existingValue)
     }
   }
+
   final = mergeArrayFieldsIntoContent(final, arrayMerged, [...UNION_FIELDS])
 
   const todayFn = opts.today ?? defaultToday
@@ -94,17 +121,12 @@ export async function mergePageContent(
   return final
 }
 
-async function tryBackup(
-  opts: MergePageOptions,
-  existingContent: string,
-): Promise<void> {
+async function tryBackup(opts: MergePageOptions, existingContent: string): Promise<void> {
   if (!opts.backup) return
   try {
     await opts.backup(existingContent)
   } catch (err) {
-    console.warn(
-      `[page-merge] backup failed for ${opts.pagePath}: ${err instanceof Error ? err.message : err}`,
-    )
+    console.warn(`[page-merge] backup failed for ${opts.pagePath}: ${err instanceof Error ? err.message : err}`)
   }
 }
 

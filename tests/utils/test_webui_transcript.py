@@ -42,6 +42,29 @@ def test_replay_delta_and_turn_end(tmp_path, monkeypatch) -> None:
     assert msgs[1]["latencyMs"] == 42
 
 
+def test_replay_deliver_files_attaches_to_final_assistant() -> None:
+    delivered = {
+        "path": "report.md",
+        "absolute_path": "C:/work/report.md",
+        "name": "report.md",
+        "size": 12,
+        "size_human": "12 B",
+        "mime": "text/markdown",
+    }
+
+    msgs = replay_transcript_to_ui_messages([
+        {"event": "user", "chat_id": "t-deliver", "text": "make report"},
+        {"event": "deliver_files", "chat_id": "t-deliver", "files": [delivered]},
+        {"event": "message", "chat_id": "t-deliver", "text": "报告已经生成。"},
+        {"event": "turn_end", "chat_id": "t-deliver"},
+    ])
+
+    assert len(msgs) == 2
+    assert msgs[1]["role"] == "assistant"
+    assert msgs[1]["content"] == "报告已经生成。"
+    assert msgs[1]["deliveredFiles"] == [delivered]
+
+
 def test_replay_file_edit_event_creates_file_activity(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("mona.config.paths.get_data_dir", lambda: tmp_path)
     key = "websocket:t-file"

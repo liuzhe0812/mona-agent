@@ -6,6 +6,8 @@ settings payload shape and the allowlisted config mutations exposed to WebUI.
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -105,9 +107,76 @@ def _parse_bool(value: str, field: str) -> bool:
     return normalized in {"1", "true", "yes"}
 
 
+def _validate_workspace_path(path: Path) -> None:
+    """Reject unsafe workspace paths."""
+    resolved = path.resolve()
+    if resolved == resolved.parent:
+        raise WebUISettingsError("workspace cannot be the filesystem root")
+    home = Path.home().resolve()
+    if resolved == home:
+        raise WebUISettingsError("workspace cannot be the user home directory")
+    if ".." in Path(str(path)).parts:
+        raise WebUISettingsError("workspace path must not contain '..'")
+    if os.name == "nt":
+        system_dirs: list[Path] = []
+        for env_key in ("SystemRoot", "ProgramFiles", "ProgramFiles(x86)"):
+            val = os.environ.get(env_key)
+            if val:
+                system_dirs.append(Path(val).resolve())
+        for sd in system_dirs:
+            if resolved == sd or _is_under(resolved, sd):
+                raise WebUISettingsError(
+                    "workspace cannot be inside a system directory"
+                )
+
+
+def _is_under(path: Path, directory: Path) -> bool:
+    try:
+        path.relative_to(directory.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def _migrate_workspace_data(old_ws: Path, new_ws: Path) -> None:
+    """Move sessions and other runtime data from old workspace to new one."""
+    import shutil
+
+    if not old_ws.exists():
+        return
+    new_ws.mkdir(parents=True, exist_ok=True)
+
+    # Migrate sessions directory
+    old_sessions = old_ws / "sessions"
+    new_sessions = new_ws / "sessions"
+    if old_sessions.exists() and old_sessions.is_dir():
+        new_sessions.mkdir(parents=True, exist_ok=True)
+        for item in old_sessions.iterdir():
+            if item.is_file() and item.suffix == ".jsonl":
+                dest = new_sessions / item.name
+                if not dest.exists():
+                    shutil.copy2(str(item), str(dest))
+
+    # Migrate memory directory
+    old_memory = old_ws / "memory"
+    new_memory = new_ws / "memory"
+    if old_memory.exists() and old_memory.is_dir():
+        new_memory.mkdir(parents=True, exist_ok=True)
+        for item in old_memory.iterdir():
+            if item.is_file():
+                dest = new_memory / item.name
+                if not dest.exists():
+                    shutil.copy2(str(item), str(dest))
+
+
 def _image_generation_provider_rows(config: Any) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    # First, add providers with dedicated image generation implementations.
     for name in image_gen_provider_names():
+        if name == "openai_compat":
+            continue  # internal fallback, not shown as a standalone option
+        seen.add(name)
         spec = find_by_name(name)
         provider_config = getattr(config.providers, name, None)
         configured = (
@@ -127,6 +196,28 @@ def _image_generation_provider_rows(config: Any) -> list[dict[str, Any]]:
                 "default_api_base": (
                     spec.default_api_base if spec and spec.default_api_base else None
                 ),
+            }
+        )
+    # Then, add any other configured provider that has credentials.
+    # These will use the OpenAI-compatible image generation fallback.
+    for spec in PROVIDERS:
+        if spec.name in seen or spec.is_oauth:
+            continue
+        provider_config = getattr(config.providers, spec.name, None)
+        if provider_config is None:
+            continue
+        configured = _provider_configured_for_settings(spec, provider_config)
+        if not configured and not provider_config.api_key and not provider_config.api_base:
+            continue
+        seen.add(spec.name)
+        rows.append(
+            {
+                "name": spec.name,
+                "label": spec.label,
+                "configured": configured,
+                "api_key_hint": _mask_secret_hint(provider_config.api_key),
+                "api_base": provider_config.api_base or spec.default_api_base or None,
+                "default_api_base": spec.default_api_base or None,
             }
         )
     return rows
@@ -350,6 +441,13 @@ def update_agent_settings(query: QueryParams) -> dict[str, Any]:
         if defaults.provider != provider:
             defaults.provider = provider
             changed = True
+        # When switching providers without explicitly setting a model,
+        # auto-apply the target provider's stored model so the active model
+        # stays consistent with the new provider.
+        if model is None and provider_config and provider_config.model:
+            if defaults.model != provider_config.model:
+                defaults.model = provider_config.model
+                changed = True
 
     # Save the model to the provider's config so it can be recalled when switching providers
     provider_model = _query_first_alias(query, "provider_model", "providerModel")
@@ -410,8 +508,27 @@ def update_agent_settings(query: QueryParams) -> dict[str, Any]:
             changed = True
             restart_required = True
 
+    workspace = _query_first(query, "workspace")
+    if workspace is not None:
+        workspace = workspace.strip()
+        if not workspace:
+            raise WebUISettingsError("workspace is required")
+        _validate_workspace_path(Path(workspace).expanduser())
+        if defaults.workspace != workspace:
+            _migrate_workspace_data(Path(defaults.workspace).expanduser(), Path(workspace).expanduser())
+            defaults.workspace = workspace
+            changed = True
+            restart_required = True
+
     if changed:
         save_config(config)
+        # Ensure the new workspace directory exists and has templates.
+        if workspace is not None and defaults.workspace == workspace:
+            from mona.utils.helpers import sync_workspace_templates
+
+            ws = Path(workspace).expanduser()
+            ws.mkdir(parents=True, exist_ok=True)
+            sync_workspace_templates(ws)
     return settings_payload(requires_restart=restart_required)
 
 
@@ -441,6 +558,13 @@ def update_provider_settings(query: QueryParams) -> dict[str, Any]:
         api_base = (api_base or "").strip() or None
         if provider_config.api_base != api_base:
             provider_config.api_base = api_base
+            changed = True
+
+    model = _query_first_alias(query, "model", "model")
+    if model is not None:
+        model = model.strip() or None
+        if provider_config.model != model:
+            provider_config.model = model
             changed = True
 
     if changed:
@@ -554,6 +678,9 @@ def update_image_generation_settings(query: QueryParams) -> dict[str, Any]:
             raise WebUISettingsError("image generation provider is required")
         if get_image_gen_provider(provider_name) is None:
             raise WebUISettingsError("unknown image generation provider")
+        # Verify the provider has a config entry.
+        if getattr(config.providers, provider_name, None) is None:
+            raise WebUISettingsError("provider is not available in configuration")
         if image_config.provider != provider_name:
             image_config.provider = provider_name
             changed = True

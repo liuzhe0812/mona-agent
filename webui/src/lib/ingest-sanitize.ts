@@ -1,3 +1,8 @@
+/**
+ * Clean up an LLM-generated wiki page body before it hits disk.
+ * Ported from llm_wiki src/lib/ingest-sanitize.ts
+ */
+
 export function sanitizeIngestedFileContent(content: string): string {
   let cleaned = content
   cleaned = stripOuterCodeFence(cleaned)

@@ -410,34 +410,6 @@ export type InboundEvent =
       error?: string;
     }
   | {
-      event: "ppt_import_brand_result";
-      ok: boolean;
-      brandId?: string;
-      name?: string;
-      primaryColor?: string;
-      secondaryColor?: string;
-      accentColor?: string;
-      titleFont?: string;
-      bodyFont?: string;
-      canvasFormat?: string;
-      slideCount?: number;
-      layoutCount?: number;
-      masterCount?: number;
-      hasCoverSvg?: boolean;
-      assets?: string[];
-      error?: string;
-    }
-  | {
-      event: "ppt_import_deck_result";
-      ok: boolean;
-      deckId?: string;
-      name?: string;
-      pageCount?: number;
-      coverSvgUrl?: string;
-      primaryColor?: string;
-      error?: string;
-    }
-  | {
       event: "ppt_save_brand_result";
       ok: boolean;
       brandId?: string;
@@ -447,6 +419,22 @@ export type InboundEvent =
       event: "ppt_delete_brand_result";
       ok: boolean;
       brandId?: string;
+      error?: string;
+    }
+  | {
+      event: "ppt_import_native_result";
+      ok: boolean;
+      templateId?: string;
+      name?: string;
+      pageCount?: number;
+      coverUrl?: string;
+      primaryColor?: string;
+      error?: string;
+    }
+  | {
+      event: "ppt_delete_native_result";
+      ok: boolean;
+      templateId?: string;
       error?: string;
     };
 
@@ -486,6 +474,11 @@ export type Outbound =
       media?: OutboundMedia[];
       image_generation?: OutboundImageGeneration;
       webui?: true;
+      /** IMPORTANT: Short display text for the user message bubble (e.g. action label).
+       *  When set, the frontend renders this instead of the full `content`.
+       *  This field is persisted to the server so history replay also shows the short version.
+       *  DO NOT remove — multiple modules (terminal, db, notes) depend on this. */
+      display_content?: string;
       terminal_session_id?: string;
       terminal_exec_mode?: string;
       db_connection_id?: string;
@@ -498,25 +491,21 @@ export type Outbound =
       files: { name: string; data_url: string }[];
     }
   | {
-      type: "ppt_import_brand";
-      file: { name: string; data_url: string };
-    }
-  | {
-      type: "ppt_import_deck";
-      file: { name: string; data_url: string };
-    }
-  | {
-      type: "ppt_save_brand";
-      data: PptBrandSaveRequest;
-    }
-  | {
       type: "ppt_delete_brand";
       data: { brandId: string };
+    }
+  | {
+      type: "ppt_import_native";
+      file: { name: string; data_url: string };
+    }
+  | {
+      type: "ppt_delete_native";
+      data: { templateId: string };
     };
 
 export interface PptTemplate {
   key: string;
-  kind: "layout" | "brand" | "deck";
+  kind: "layout" | "brand" | "native";
   group: string;
   name: string;
   summary: string;
@@ -552,31 +541,3 @@ export interface PptProject {
   chatId: string | null;
 }
 
-export interface PptBrandImportResult {
-  brandId: string;
-  name: string;
-  primaryColor: string;
-  secondaryColor?: string;
-  accentColor?: string;
-  titleFont?: string;
-  bodyFont?: string;
-  canvasFormat: string;
-  slideCount: number;
-  layoutCount: number;
-  masterCount: number;
-  coverSvgUrl: string;
-  assets: string[];
-}
-
-export interface PptBrandSaveRequest {
-  brandId: string;
-  name: string;
-  summary: string;
-  primaryColor: string;
-  secondaryColor?: string;
-  accentColor?: string;
-  titleFont?: string;
-  bodyFont?: string;
-  logoIncluded: boolean;
-  keywords: string[];
-}

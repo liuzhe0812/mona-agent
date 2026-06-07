@@ -20,7 +20,6 @@ interface NotebookSelectProps {
   onSelect: (id: string) => void;
   onCreateNotebook?: () => void;
   onRenameNotebook?: () => void;
-  onEditNotebookDescription?: () => void;
   onToggleKnowledgeBase?: (enabled: boolean) => void;
   onDeleteNotebook?: () => void;
 }
@@ -31,7 +30,6 @@ export function NotebookSelect({
   onSelect,
   onCreateNotebook,
   onRenameNotebook,
-  onEditNotebookDescription,
   onToggleKnowledgeBase,
   onDeleteNotebook,
 }: NotebookSelectProps) {
@@ -86,12 +84,6 @@ export function NotebookSelect({
                 <span className="text-[12.5px] font-medium text-foreground/88">重命名当前笔记本</span>
               </DropdownMenuItem>
             ) : null}
-            {onEditNotebookDescription ? (
-              <DropdownMenuItem onSelect={onEditNotebookDescription} className="gap-2 px-2 py-2">
-                <BookOpen className="h-3.5 w-3.5 text-muted-foreground" />
-                <span className="text-[12.5px] font-medium text-foreground/88">编辑描述</span>
-              </DropdownMenuItem>
-            ) : null}
             {onToggleKnowledgeBase ? (
               <DropdownMenuCheckboxItem
                 checked={activeNotebook.knowledgeBaseEnabled}
@@ -104,7 +96,8 @@ export function NotebookSelect({
             {onDeleteNotebook ? (
               <DropdownMenuItem
                 onSelect={onDeleteNotebook}
-                className="gap-2 px-2 py-2 text-destructive focus:text-destructive"
+                disabled={activeNotebook.id === "default"}
+                className="gap-2 px-2 py-2 text-destructive focus:text-destructive data-[disabled]:opacity-50 data-[disabled]:text-muted-foreground"
               >
                 <Trash2 className="h-3.5 w-3.5" />
                 <span className="text-[12.5px] font-medium">删除当前笔记本</span>

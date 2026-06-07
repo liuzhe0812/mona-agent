@@ -92,6 +92,47 @@ async function flushStreamFrame() {
 }
 
 describe("useMonaStream", () => {
+  it("attaches early delivered files to the final assistant message", () => {
+    const fake = fakeClient();
+    const { result } = renderHook(() => useMonaStream("chat-deliver", EMPTY_MESSAGES), {
+      wrapper: wrap(fake.client),
+    });
+
+    const file = {
+      path: "report.md",
+      absolute_path: "C:/work/report.md",
+      name: "report.md",
+      size: 12,
+      size_human: "12 B",
+      mime: "text/markdown",
+    };
+
+    act(() => {
+      fake.emit("chat-deliver", {
+        event: "deliver_files",
+        chat_id: "chat-deliver",
+        files: [file],
+      });
+    });
+
+    expect(result.current.messages).toHaveLength(0);
+
+    act(() => {
+      fake.emit("chat-deliver", {
+        event: "message",
+        chat_id: "chat-deliver",
+        text: "done",
+      });
+    });
+
+    expect(result.current.messages).toHaveLength(1);
+    expect(result.current.messages[0]).toMatchObject({
+      role: "assistant",
+      content: "done",
+      deliveredFiles: [file],
+    });
+  });
+
   it("batches answer deltas into one animation-frame update", async () => {
     const fake = fakeClient();
     const requestFrame = vi.spyOn(window, "requestAnimationFrame");

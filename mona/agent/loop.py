@@ -22,6 +22,7 @@ from mona.agent.memory import Consolidator, Dream
 from mona.agent.progress_hook import AgentProgressHook
 from mona.agent.runner import _MAX_INJECTIONS_PER_TURN, AgentRunner, AgentRunSpec
 from mona.agent.subagent import SubagentManager
+from mona.agent.tools.deliver_file import DELIVER_FILES_PENDING_META
 from mona.agent.tools.file_state import FileStateStore, bind_file_states, reset_file_states
 from mona.agent.tools.message import MessageTool
 from mona.agent.tools.registry import ToolRegistry
@@ -113,6 +114,7 @@ class TurnContext:
     turn_wall_started_at: float = field(default_factory=time.time)
     turn_latency_ms: int | None = None
 
+    delivered_files: list[dict[str, Any]] = field(default_factory=list)
     trace: list[StateTraceEntry] = field(default_factory=list)
 
 
@@ -1197,6 +1199,7 @@ class AgentLoop:
         on_stream: Callable[[str], Awaitable[None]] | None,
         *,
         turn_latency_ms: int | None = None,
+        delivered_files: list[dict[str, Any]] | None = None,
     ) -> OutboundMessage | None:
         """Assemble the final outbound message from turn results."""
         # MessageTool suppression
@@ -1208,10 +1211,13 @@ class AgentLoop:
         logger.info("Response to {}:{}: {}", msg.channel, msg.sender_id, preview)
 
         meta = dict(msg.metadata or {})
+        meta.pop(DELIVER_FILES_PENDING_META, None)
         if on_stream is not None and stop_reason not in {"error", "tool_error"}:
             meta["_streamed"] = True
         if turn_latency_ms is not None:
             meta["latency_ms"] = int(turn_latency_ms)
+        if delivered_files:
+            meta["_deliver_files"] = list(delivered_files)
 
         return OutboundMessage(
             channel=msg.channel,
@@ -1280,6 +1286,7 @@ class AgentLoop:
             ctx.session,
             replay_max_messages=self._max_messages,
         )
+        ctx.msg.metadata[DELIVER_FILES_PENDING_META] = ctx.delivered_files
         self._set_tool_context(
             ctx.msg.channel,
             ctx.msg.chat_id,
@@ -1375,6 +1382,7 @@ class AgentLoop:
             ctx.had_injections,
             ctx.on_stream,
             turn_latency_ms=ctx.turn_latency_ms,
+            delivered_files=ctx.delivered_files,
         )
         return "ok"
 

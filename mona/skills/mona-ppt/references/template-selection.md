@@ -10,10 +10,20 @@ Default is free design. Do not query any `*_index.json`, do not ask the user, an
 
 ## Trigger Rule
 
-Step 3 triggers only when the initial user request contains one or more explicit directory paths, and each path resolves to a directory containing `design_spec.md` with frontmatter:
+Step 3 triggers only when the initial user request contains one or more explicit directory paths.
+
+For `brand` and `layout`, each path must resolve to a directory containing `design_spec.md` with frontmatter:
 
 ```yaml
-kind: brand | layout | deck
+kind: brand | layout
+```
+
+For `native`, the path must resolve to a directory containing:
+
+```text
+template.pptx
+template_roles.json
+template_manifest.json
 ```
 
 Anything else skips Step 3.
@@ -24,7 +34,7 @@ Anything else skips Step 3.
 |---|---|---|
 | `brand` | Identity only: colors, typography, logo, voice, icon style | Identity locked; structure stays free |
 | `layout` | Structure only: canvas, page structure, page types, SVG roster | Structure locked; identity decided in Eight Confirmations |
-| `deck` | Full replica: identity + structure + middle/template overview | All template segments locked; confirmations narrow deck-content fields |
+| `native` | Original PPTX template; slide 1 is the repeated visual underlay | Normal SVG pipeline; export adds `--template-underlay` |
 
 Segment ownership for fusion:
 
@@ -32,7 +42,6 @@ Segment ownership for fusion:
 |---|---|
 | Identity | `brand` |
 | Structure | `layout` |
-| Middle/template overview | `deck` |
 
 ## Single-Path Dispatch
 
@@ -45,6 +54,8 @@ cp -r ${TEMPLATE_DIR}/* <project_path>/templates/
 
 The copied `design_spec.md` frontmatter tells Strategist how to read it.
 
+For a `native` template, do not copy or fuse `design_spec.md`. Keep the selected directory as the source of truth, then switch to `references/native-pptx-template-mode.md`.
+
 ## Multi-Path Fusion
 
 When the user gives two or more paths of different kinds, fuse them into a single `<project_path>/templates/design_spec.md` at segment level. Do not do implicit field-level mixing.
@@ -53,7 +64,6 @@ Priority:
 
 - brand owns Identity
 - layout owns Structure
-- deck owns Middle/template overview
 
 Field-level user edits, such as "use this brand but change primary to #FF0000", flow into Strategist's Eight Confirmations as normal user requirements.
 
@@ -65,7 +75,7 @@ Full architecture details live in `docs/zh/templates-architecture.md`.
 
 ## Creating New Templates
 
-- New layout/deck template: read `workflows/create-template.md`.
+- New layout template: read `workflows/create-template.md`.
 - New brand-only preset: read `workflows/create-brand.md`.
 
 ## Checkpoint
@@ -75,16 +85,19 @@ Before Step 4:
 - free-design path is selected, or
 - template files are copied/fused into `<project_path>/templates/`
 
-## Deck Hard Constraints
-
-When `kind: deck` is selected:
-- Strategist MUST read the Page Roster from `design_spec.md`.
-- `spec_lock.md.page_layouts` MUST be populated with template page selections.
-- Executor MUST read the corresponding template SVG before generating each page.
-- If no suitable template page exists for a given slide, the Executor MAY design freely but MUST note the reason in `spec_lock.md`.
-- Export will FAIL if `page_layouts` is missing in a deck project.
-
 When no template is selected:
 - Do not run template-selection behavior.
 - Do not create `<project_path>/templates/` just for this feature.
 - `spec_lock.md.page_layouts` stays optional as before.
+
+When `kind: native` is selected:
+- Treat `template.pptx` slide 1 as the repeated visual underlay.
+- Do not infer template roles such as cover, toc, content, or thanks.
+- Do not output `native_content_plan.json`.
+- Use the normal SVG pipeline and quality gate.
+- Step 7 uses `svg_to_pptx.py --template-underlay <native_template_dir>/template.pptx`.
+
+When no template is selected:
+- Do not run template-selection behavior.
+- Do not create `<project_path>/templates/` just for this feature.
+- Use the normal SVG pipeline as before.

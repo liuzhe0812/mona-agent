@@ -48,9 +48,9 @@ export const NOTE_AI_ACTIONS: Array<{
     description: "延续末尾内容和风格继续写",
   },
   {
-    id: "autoTag",
-    label: "自动标签",
-    description: "分析全文生成1-3个核心标签",
+    id: "generateHtml",
+    label: "生成HTML文档",
+    description: "生成精美排版的HTML文档",
   },
 ];
 
@@ -91,7 +91,7 @@ export function buildAgentActionPrompt(
       "    {",
       '      "categoryName": "知识分类路径。必须按内容所属领域分类，使用 / 表示多级分类，例如 技术/人工智能/模型量化；只有和已有分类语义高度匹配时才复用已有分类",',
       '      "title": "知识点标题",',
-      '      "summary": "精简内容总结，2-5 句话，只保留笔记里最值得沉淀的内容，不按固定格式拆分",',
+      '      "summary": "100字以内的总结性描述，让读者快速了解这个知识点在讲什么，不要涉及具体内容细节",',
       '      "sourceDescription": "来源链接或来源说明；没有链接时写来自当前笔记",',
       '      "tags": ["标签1"]',
       "    }",
@@ -102,7 +102,7 @@ export function buildAgentActionPrompt(
       "- 只提取能脱离原文复用的知识点；临时想法、待确认内容、流水账不要保存。",
       "- 不要整篇复制原文，不要大段搬运笔记，只输出压缩后的知识点。",
       "- 不要编造笔记里没有的信息。",
-      "- 每个 summary 只写精简内容总结，不要输出“为什么值得保存/关键概念/适用场景/注意事项”等固定分区。",
+      "- 每个 summary 只写总结性描述，100字以内，让读者知道这个知识点在讲什么即可，不要涉及具体内容细节，不要输出“为什么值得保存/关键概念/适用场景/注意事项”等固定分区。",
       "- 如果笔记只有一个稳定知识点，就只返回 1 个 item；不要为了凑数拆分。",
       "",
       "标签要求：",
@@ -216,35 +216,115 @@ export function buildAgentActionPrompt(
     ].join("\n");
   }
 
-  if (actionId === "autoTag") {
-    const existingTagsLine = note.tags.length > 0 ? `已有标签：${note.tags.join("、")}` : "已有标签：无";
+  if (actionId === "generateHtml") {
     if (filePath) {
       return [
-        "请为这篇笔记生成1-3个最核心的标签。",
+        `请基于当前笔记内容，生成一份精美的HTML文档。使用 read_file 工具读取文件 ${filePath}，阅读后生成HTML文档。要求输出一个完整的、自包含的HTML文件（所有CSS写在<style>标签内），不要输出Markdown代码块包裹，不要解释。`,
         "",
-        existingTagsLine,
+        "文档风格规范（必须严格遵循）：",
+        "【配色方案】",
+        "- 主色：#1a3a5c（深蓝），辅助色：#2c5f8a（中蓝）",
+        "- 强调色：#c9a84c（金色），浅强调色：#e8d59a",
+        "- 背景：#ffffff，柔背景：#f8f7f4，区域背景：#faf9f6",
+        "- 文字：#2c2c2c，次要文字：#5a5a5a，弱化文字：#8a8a8a",
+        "- 边框：#e0ddd5，浅边框：#eeece6",
         "",
-        `使用 read_file 工具读取文件 ${filePath}，阅读后输出标签。`,
-        "要求：",
-        "- 分析全文核心主题，输出1-3个领域级或主题级标签",
-        "- 如果已有标签能准确概括核心主题，优先复用",
-        "- 标签用逗号分隔，只输出标签本身，不要输出编号、解释或其他内容",
-        "- 不要追问",
+        "【封面页】",
+        "- 全屏高度，深蓝渐变背景：linear-gradient(160deg, #0d1b2a 0%, #1b2d45 40%, #1a3a5c 70%, #2c5f8a 100%)",
+        "- 居中白色文字，标题用笔记标题",
+        "- 标题上方有金色边框徽章（letter-spacing: 4px）",
+        "- 标题下方有副标题行和80px宽金色分割线",
+        "- 底部有元信息行",
+        "",
+        "【左侧导航栏】",
+        "- 240px宽，sticky定位，柔背景色，紧贴左侧无间距",
+        '- 标题"目录"，各节链接',
+        "- 链接无左边距和左边框，文字紧贴左侧，active状态用背景色和加粗区分",
+        "",
+        "【正文排版】",
+        '- 节编号：金色，如"01"、"02"，letter-spacing: 3px',
+        "- h2：Noto Serif SC，32px，深蓝色，letter-spacing: 2px",
+        "- h3：Noto Serif SC，20px，深蓝色，左侧3px金色竖线",
+        "- 段落：15px，行高1.8，次要文字色",
+        "- 节之间用1px分割线隔开，间距80px",
+        "",
+        "【特色组件】",
+        "- 高亮框：柔背景+浅边框+圆角8px",
+        "- 特性卡片：2列网格，hover时金色边框+阴影",
+        "- 流程步骤：横向排列，圆形编号，箭头连接",
+        "- 对比行：左红右绿双栏对比",
+        "- 表格：深蓝表头白字，偶数行柔背景",
+        "",
+        "【页脚】",
+        "- 与封面同色深蓝渐变背景",
+        "- 居中文字，内容为：Made by Mona",
+        "",
+        "【响应式】",
+        "- 768px以下：封面标题缩小，单列布局，侧边栏隐藏",
+        "",
+        "【字体】",
+        "- 引入 Google Fonts：Noto Serif SC 和 Noto Sans SC",
+        "- 标题用 Noto Serif SC，正文用 Noto Sans SC",
+        "",
+        "根据笔记内容自动划分章节、生成目录、设计封面。",
+        "生成完成后，使用 write_file 工具将 HTML 内容保存到 .mona/output/ 目录，文件名使用笔记标题（去除特殊字符）加 .html 后缀。",
+        "不要在回复中输出 HTML 代码，只通过 write_file 工具保存文件即可。",
       ].join("\n");
     }
     const context = formatNoteContext(note);
     return [
-      "请为这篇笔记生成1-3个最核心的标签。",
+      "请基于当前笔记内容，生成一份精美的HTML文档。要求输出一个完整的、自包含的HTML文件（所有CSS写在<style>标签内）。",
       "",
-      existingTagsLine,
+      "文档风格规范（必须严格遵循）：",
+      "【配色方案】",
+      "- 主色：#1a3a5c（深蓝），辅助色：#2c5f8a（中蓝）",
+      "- 强调色：#c9a84c（金色），浅强调色：#e8d59a",
+      "- 背景：#ffffff，柔背景：#f8f7f4，区域背景：#faf9f6",
+      "- 文字：#2c2c2c，次要文字：#5a5a5a，弱化文字：#8a8a8a",
+      "- 边框：#e0ddd5，浅边框：#eeece6",
+      "",
+      "【封面页】",
+      "- 全屏高度，深蓝渐变背景：linear-gradient(160deg, #0d1b2a 0%, #1b2d45 40%, #1a3a5c 70%, #2c5f8a 100%)",
+      "- 居中白色文字，标题用笔记标题",
+      "- 标题上方有金色边框徽章（letter-spacing: 4px）",
+      "- 标题下方有副标题行和80px宽金色分割线",
+      "- 底部有元信息行",
+      "",
+      "【左侧导航栏】",
+      "- 240px宽，sticky定位，柔背景色，紧贴左侧无间距",
+      '- 标题"目录"，各节链接',
+      "- 链接无左边距和左边框，文字紧贴左侧，active状态用背景色和加粗区分",
+      "",
+      "【正文排版】",
+      '- 节编号：金色，如"01"、"02"，letter-spacing: 3px',
+      "- h2：Noto Serif SC，32px，深蓝色，letter-spacing: 2px",
+      "- h3：Noto Serif SC，20px，深蓝色，左侧3px金色竖线",
+      "- 段落：15px，行高1.8，次要文字色",
+      "- 节之间用1px分割线隔开，间距80px",
+      "",
+      "【特色组件】",
+      "- 高亮框：柔背景+浅边框+圆角8px",
+      "- 特性卡片：2列网格，hover时金色边框+阴影",
+      "- 流程步骤：横向排列，圆形编号，箭头连接",
+      "- 对比行：左红右绿双栏对比",
+      "- 表格：深蓝表头白字，偶数行柔背景",
+      "",
+      "【页脚】",
+      "- 与封面同色深蓝渐变背景",
+      "- 居中文字，内容为：Made by Mona",
+      "",
+      "【响应式】",
+      "- 768px以下：封面标题缩小，单列布局，侧边栏隐藏",
+      "",
+      "【字体】",
+      "- 引入 Google Fonts：Noto Serif SC 和 Noto Sans SC",
+      "- 标题用 Noto Serif SC，正文用 Noto Sans SC",
       "",
       context,
       "",
-      "要求：",
-      "- 分析全文核心主题，输出1-3个领域级或主题级标签",
-      "- 如果已有标签能准确概括核心主题，优先复用",
-      "- 标签用逗号分隔，只输出标签本身，不要输出编号、解释或其他内容",
-      "- 不要追问",
+      "根据笔记内容自动划分章节、生成目录、设计封面。",
+      "生成完成后，使用 write_file 工具将 HTML 内容保存到 .mona/output/ 目录，文件名使用笔记标题（去除特殊字符）加 .html 后缀。",
+      "不要在回复中输出 HTML 代码，只通过 write_file 工具保存文件即可。",
     ].join("\n");
   }
 
@@ -258,6 +338,39 @@ export function buildFreeformAgentPrompt(note: OperationNote, question: string):
 ${question}
 
 ${formatNoteContext(note)}`;
+}
+
+/** Pattern-to-label pairs for inferring displayContent from persisted user messages. */
+const ACTION_PROMPT_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
+  { pattern: /^请总结这篇笔记的内容/, label: "总结当前笔记" },
+  { pattern: /^请从这篇笔记中提取/, label: "提取知识点" },
+  { pattern: /^请对这篇笔记进行润色优化/, label: "润色优化" },
+  { pattern: /^请翻译这篇笔记/, label: "翻译" },
+  { pattern: /^请续写这篇笔记/, label: "续写扩展" },
+  { pattern: /^请基于当前笔记内容，生成一份精美的HTML文档/, label: "生成HTML文档" },
+];
+
+/**
+ * Infer a short display label from a persisted user message that was sent by a
+ * note AI quick-action.  Returns `undefined` when the content doesn't match any
+ * known action pattern (i.e. a freeform question).
+ */
+export function inferNoteActionDisplayLabel(content: string): string | undefined {
+  if (!content) return undefined;
+
+  // Check quick-action patterns first
+  for (const { pattern, label } of ACTION_PROMPT_PATTERNS) {
+    if (pattern.test(content)) return label;
+  }
+
+  // Extract user question from freeform prompt
+  const freeformMatch = content.match(/^用户正在笔记页面里处理当前笔记[\s\S]*?用户问题：\n(.+?)(?:\n\n当前笔记：|$)/);
+  if (freeformMatch) {
+    const question = freeformMatch[1].trim();
+    if (question) return question;
+  }
+
+  return undefined;
 }
 
 export function buildAgentResultMarkdown(content: string): string {

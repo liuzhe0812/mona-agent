@@ -1,6 +1,8 @@
 use std::fs;
 use std::path::PathBuf;
 
+use tauri::Manager;
+
 use crate::settings::app_data_dir;
 
 const PYTHON_VERSION_MARKER: &str = ".mona-python-version";
@@ -35,17 +37,21 @@ pub fn is_python_initialized() -> bool {
     }
 }
 
-pub fn initialize_python() -> Result<(), String> {
-    let dir = python_dir();
+pub fn initialize_python(app_handle: &tauri::AppHandle) -> Result<(), String> {
     if is_python_initialized() {
-        log::info!("Python already initialized at {:?}", dir);
+        log::info!("Python already initialized at {:?}", python_dir());
         return Ok(());
     }
 
-    fs::create_dir_all(&dir).map_err(|e| format!("Failed to create python dir: {}", e))?;
+    // Extract to app_data_dir, NOT python_dir.
+    // The tar contains a top-level "python/" directory, so extracting to
+    // app_data_dir produces: app_data_dir/python/python.exe
+    // If we extracted to python_dir, we'd get: python_dir/python/python.exe (wrong!)
+    let base_dir = app_data_dir();
+    fs::create_dir_all(&base_dir).map_err(|e| format!("Failed to create app data dir: {}", e))?;
 
-    let resource_tar = find_python_resource()?;
-    extract_python(&resource_tar, &dir)?;
+    let resource_tar = find_python_resource(app_handle)?;
+    extract_python(&resource_tar, &base_dir)?;
 
     fs::write(version_marker_path(), PYTHON_VERSION)
         .map_err(|e| format!("Failed to write version marker: {}", e))?;
@@ -54,21 +60,42 @@ pub fn initialize_python() -> Result<(), String> {
     Ok(())
 }
 
-fn find_python_resource() -> Result<PathBuf, String> {
-    let candidates = [
-        PathBuf::from("resources").join("python.tar.gz"),
-        PathBuf::from("resources").join("python-install.tar.gz"),
-    ];
+fn find_python_resource(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
+    // 1. Use Tauri's resource_dir() API — the correct way to find bundled resources
+    if let Ok(resource_dir) = app_handle.path().resource_dir() {
+        for name in &["python.tar.gz", "python-install.tar.gz"] {
+            let candidate = resource_dir.join(name);
+            if candidate.exists() {
+                log::info!("Found Python resource via resource_dir: {:?}", candidate);
+                return Ok(candidate);
+            }
+        }
+        log::info!("resource_dir is {:?}, but no python tar found there", resource_dir);
+    }
 
-    for candidate in &candidates {
-        if candidate.exists() {
-            return Ok(candidate.clone());
+    // 2. Fallback: next to the executable (some installers place resources here)
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            for name in &["python.tar.gz", "python-install.tar.gz"] {
+                let candidate = exe_dir.join(name);
+                if candidate.exists() {
+                    log::info!("Found Python resource next to exe: {:?}", candidate);
+                    return Ok(candidate);
+                }
+            }
         }
     }
 
-    Err(
-        "Python runtime not found in resources. Please run the download script first.".to_string(),
-    )
+    // 3. Fallback: relative path (works in dev mode from src-tauri/)
+    for name in &["python.tar.gz", "python-install.tar.gz"] {
+        let candidate = PathBuf::from("resources").join(name);
+        if candidate.exists() {
+            log::info!("Found Python resource via relative path: {:?}", candidate);
+            return Ok(candidate);
+        }
+    }
+
+    Err("Python runtime not found. Searched resource_dir, exe dir, and working directory.".into())
 }
 
 fn extract_python(tar_path: &PathBuf, dest: &PathBuf) -> Result<(), String> {

@@ -67,6 +67,10 @@
     @apply border-border;
   }
 
+  *:focus {
+    outline: none;
+  }
+
   html,
   body,
   #root {

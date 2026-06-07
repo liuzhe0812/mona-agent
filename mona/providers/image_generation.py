@@ -1,4 +1,4 @@
-﻿"""Image generation provider helpers."""
+"""Image generation provider helpers."""
 
 from __future__ import annotations
 
@@ -137,7 +137,14 @@ def register_image_gen_provider(cls: type[ImageGenerationProvider]) -> None:
 
 
 def get_image_gen_provider(name: str) -> type[ImageGenerationProvider] | None:
-    return _IMAGE_GEN_PROVIDERS.get(name)
+    cls = _IMAGE_GEN_PROVIDERS.get(name)
+    if cls is not None:
+        return cls
+    # Fallback: any provider not in the registry uses the OpenAI-compatible
+    # Images API client.  This allows providers like siliconflow, volcengine,
+    # dashscope, custom, etc. to work for image generation without a dedicated
+    # implementation.
+    return _IMAGE_GEN_PROVIDERS.get("openai_compat")
 
 
 def image_gen_provider_names() -> tuple[str, ...]:
@@ -147,11 +154,21 @@ def image_gen_provider_names() -> tuple[str, ...]:
 
 def image_gen_provider_configs(config: Any) -> dict[str, Any]:
     providers_cfg = config.providers
-    return {
+    # Start with registered image-gen providers.
+    result: dict[str, Any] = {
         name: pc
         for name in _IMAGE_GEN_PROVIDERS
         if (pc := getattr(providers_cfg, name, None)) is not None
     }
+    # Also include any other provider that has credentials configured — they
+    # will fall back to the OpenAI-compatible image generation client.
+    for field_name in providers_cfg.model_fields_set:
+        if field_name in result:
+            continue
+        pc = getattr(providers_cfg, field_name, None)
+        if pc is not None and (pc.api_key or pc.api_base):
+            result[field_name] = pc
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -893,6 +910,111 @@ class OpenAIImageGenerationClient(ImageGenerationProvider):
 # ---------------------------------------------------------------------------
 
 
+class OpenAICompatImageGenerationClient(ImageGenerationProvider):
+    """Generic OpenAI-compatible Images API client.
+
+    Used as the fallback for any provider that doesn't have a dedicated
+    ``ImageGenerationProvider`` implementation.  Calls the standard
+    ``/images/generations`` endpoint using the provider's configured
+    ``api_key`` and ``api_base``.
+    """
+
+    provider_name = "openai_compat"
+    missing_key_message = (
+        "API key is not configured for this provider. "
+        "Set the provider's apiKey in the Providers settings."
+    )
+
+    async def generate(
+        self,
+        *,
+        prompt: str,
+        model: str,
+        reference_images: list[str] | None = None,
+        aspect_ratio: str | None = None,
+        image_size: str | None = None,
+    ) -> GeneratedImageResponse:
+        if not self.api_key:
+            raise ImageGenerationError(self.missing_key_message)
+
+        if reference_images:
+            logger.warning(
+                "OpenAI-compatible image generation does not support reference images; "
+                "ignoring {} reference image(s) for {}",
+                len(reference_images),
+                model,
+            )
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            **self.extra_headers,
+        }
+
+        body: dict[str, Any] = {
+            "model": model,
+            "prompt": prompt,
+            "n": 1,
+        }
+
+        # Only request b64_json for models known to support it (OpenAI native
+        # models).  Third-party gateways like Agnes AI reject this parameter.
+        if _model_supports_b64_response(model):
+            body["response_format"] = "b64_json"
+
+        size = _openai_size(model, aspect_ratio, image_size)
+        if size:
+            body["size"] = size
+
+        body.update(self.extra_body)
+
+        logger.info(
+            "OpenAI-compat Images API request: POST {}/images/generations body={}",
+            self.api_base,
+            body,
+        )
+
+        response = await self._http_post(
+            f"{self.api_base}/images/generations",
+            headers=headers,
+            body=body,
+        )
+
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            detail = response.text[:1000]
+            logger.error(
+                "OpenAI-compat Images API error ({}): {}",
+                response.status_code,
+                detail,
+            )
+            raise ImageGenerationError(
+                f"Image generation failed (HTTP {response.status_code}): {detail}"
+            ) from exc
+
+        payload = response.json()
+
+        client = self._client
+        owns_client = client is None
+        if owns_client:
+            client = httpx.AsyncClient(timeout=self.timeout)
+        try:
+            images = await _openai_images_from_payload(client, payload)
+        finally:
+            if owns_client:
+                await client.aclose()
+
+        self._require_images(images, payload)
+
+        return GeneratedImageResponse(images=images, content="", raw=payload)
+
+
+# ---------------------------------------------------------------------------
+# OpenAI Codex image generation (original)
+# ---------------------------------------------------------------------------
+
+
 class CodexImageGenerationClient(ImageGenerationProvider):
     """OpenAI image generation via Codex subscription OAuth.
 
@@ -994,6 +1116,12 @@ class CodexImageGenerationClient(ImageGenerationProvider):
         self._require_images(images, raw)
 
         return GeneratedImageResponse(images=images, content=content_text, raw=raw)
+
+
+def _model_supports_b64_response(model: str) -> bool:
+    """Return True if the model is known to support ``response_format=b64_json``."""
+    m = model.lower()
+    return any(m.startswith(p) for p in ("dall-e-", "gpt-image-", "o3-", "o4-"))
 
 
 def _openai_size(
@@ -1308,6 +1436,7 @@ register_image_gen_provider(AIHubMixImageGenerationClient)
 register_image_gen_provider(CodexImageGenerationClient)
 register_image_gen_provider(GeminiImageGenerationClient)
 register_image_gen_provider(MiniMaxImageGenerationClient)
+register_image_gen_provider(OpenAICompatImageGenerationClient)
 register_image_gen_provider(OpenAIImageGenerationClient)
 register_image_gen_provider(OpenRouterImageGenerationClient)
 register_image_gen_provider(StepFunImageGenerationClient)

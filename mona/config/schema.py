@@ -197,6 +197,7 @@ class ProvidersConfig(Base):
     groq: ProviderConfig = Field(default_factory=ProviderConfig)
     zhipu: ProviderConfig = Field(default_factory=ProviderConfig)
     dashscope: ProviderConfig = Field(default_factory=ProviderConfig)
+    dashscope_coding_plan: ProviderConfig = Field(default_factory=ProviderConfig)  # DashScope Coding Plan (百炼 Coding Plan)
     vllm: ProviderConfig = Field(default_factory=ProviderConfig)
     ollama: ProviderConfig = Field(default_factory=ProviderConfig)  # Ollama local models
     lm_studio: ProviderConfig = Field(default_factory=ProviderConfig)  # LM Studio local models
@@ -213,6 +214,7 @@ class ProvidersConfig(Base):
     ant_ling: ProviderConfig = Field(default_factory=ProviderConfig)  # Ant Ling
     aihubmix: ProviderConfig = Field(default_factory=ProviderConfig)  # AiHubMix API gateway
     siliconflow: ProviderConfig = Field(default_factory=ProviderConfig)  # SiliconFlow (硅基流动)
+    agnes: ProviderConfig = Field(default_factory=ProviderConfig)  # Agnes AI
     novita: ProviderConfig = Field(default_factory=ProviderConfig)  # Novita AI
     volcengine: ProviderConfig = Field(default_factory=ProviderConfig)  # VolcEngine (火山引擎)
     volcengine_coding_plan: ProviderConfig = Field(default_factory=ProviderConfig)  # VolcEngine Coding Plan
@@ -278,7 +280,7 @@ class PPTMasterConfig(Base):
     """PPT Master skill configuration."""
 
     enabled: bool = False
-    projects_dir: str = "ppt-projects"
+    projects_dir: str = "ppt_projects"
     default_format: str = "ppt169"
     use_mona_image_gen: bool = True
     tts_enabled: bool = False

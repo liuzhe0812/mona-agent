@@ -12,26 +12,26 @@ import { fetchPptTemplates, getApiBase } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useClient } from "@/providers/ClientProvider";
 import type { PptTemplate } from "@/lib/types";
-import { PptBrandImportView } from "./PptBrandImportView";
+import { PptPptxTemplateImportView } from "./PptPptxTemplateImportView";
+
+type TemplateKindFilter = "all" | "general" | "native";
+
+const TEMPLATE_FILTERS: Array<{ value: TemplateKindFilter; label: string }> = [
+  { value: "all", label: "全部" },
+  { value: "general", label: "通用" },
+  { value: "native", label: "自定义" },
+];
+
+type DialogView = "select" | "import";
 
 interface PptTemplateDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   selectedKey: string | null;
-  selectedKind: "layout" | "brand" | "deck" | null;
+  selectedKind: "layout" | "brand" | "native" | null;
   token: string;
   onSelect: (tpl: PptTemplate) => void;
 }
-
-type DialogView = "select" | "import" | "import-deck";
-type TemplateKindFilter = "all" | "layout" | "brand" | "deck";
-
-const TEMPLATE_FILTERS: Array<{ value: TemplateKindFilter; label: string }> = [
-  { value: "all", label: "全部" },
-  { value: "deck", label: "完整模板" },
-  { value: "layout", label: "布局" },
-  { value: "brand", label: "品牌" },
-];
 
 export function PptTemplateDialog({
   open,
@@ -45,9 +45,9 @@ export function PptTemplateDialog({
   const [templates, setTemplates] = useState<PptTemplate[]>([]);
   const [loading, setLoading] = useState(true);
   const [apiBase, setApiBase] = useState<string | null>(null);
-  const [dialogView, setDialogView] = useState<DialogView>("select");
-  const [kindFilter, setKindFilter] = useState<TemplateKindFilter>("all");
   const [deletingBrand, setDeletingBrand] = useState<string | null>(null);
+  const [kindFilter, setKindFilter] = useState<TemplateKindFilter>("all");
+  const [dialogView, setDialogView] = useState<DialogView>("select");
 
   useEffect(() => {
     getApiBase().then(setApiBase);
@@ -76,10 +76,13 @@ export function PptTemplateDialog({
     return `${base}${url}${sep}token=${encodeURIComponent(token)}`;
   }
 
-  const filteredTemplates =
-    kindFilter === "all" ? templates : templates.filter((tpl) => tpl.kind === kindFilter);
+  const filtered = kindFilter === "all"
+    ? templates
+    : templates.filter((t) =>
+      kindFilter === "native" ? t.kind === "native" : t.kind !== "native",
+    );
 
-  const groups = filteredTemplates.reduce<Record<string, PptTemplate[]>>((acc, tpl) => {
+  const groups = filtered.reduce<Record<string, PptTemplate[]>>((acc, tpl) => {
     const g = tpl.group || "其他";
     if (!acc[g]) acc[g] = [];
     acc[g].push(tpl);
@@ -89,13 +92,6 @@ export function PptTemplateDialog({
   function handleSelect(tpl: PptTemplate) {
     onSelect(tpl);
     onOpenChange(false);
-  }
-
-  function handleImportSaved() {
-    setDialogView("select");
-    fetchPptTemplates(token)
-      .then((res) => setTemplates(res.templates))
-      .catch(() => {});
   }
 
   function handleDeleteBrand(brandId: string, e: React.MouseEvent) {
@@ -125,37 +121,53 @@ export function PptTemplateDialog({
     client.sendPptDeleteBrand({ brandId });
   }
 
-  // Reset view when dialog opens
-  useEffect(() => {
-    if (open) {
-      setDialogView("select");
-      setKindFilter("all");
-    }
-  }, [open]);
+  function handleDeleteNative(templateId: string, e: React.MouseEvent) {
+    e.stopPropagation();
+    if (deletingBrand) return;
+    setDeletingBrand(templateId);
+    let handled = false;
+    const timeout = setTimeout(() => {
+      if (handled) return;
+      handled = true;
+      setDeletingBrand(null);
+    }, 15_000);
+
+    const unsub = client.onPptDeleteNativeResult((result) => {
+      if (handled) return;
+      handled = true;
+      clearTimeout(timeout);
+      unsub();
+      setDeletingBrand(null);
+      if (result.ok) {
+        setTemplates((prev) =>
+          prev.filter((t) => !(t.kind === "native" && t.key === templateId)),
+        );
+      }
+    });
+
+    client.sendPptDeleteNative({ templateId });
+  }
+
+  function handleImportSaved() {
+    setDialogView("select");
+    fetchPptTemplates(token)
+      .then((res) => setTemplates(res.templates))
+      .catch(() => {});
+  }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl max-h-[80vh] flex flex-col p-0">
         <DialogHeader className="shrink-0 px-6 pt-6 pb-2">
           <DialogTitle>
-            {dialogView === "import-deck"
-              ? "导入完整模板"
-              : dialogView === "import"
-                ? "导入品牌模板"
-                : "选择模板"}
+            {dialogView === "import" ? "自定义模板" : "选择模板"}
           </DialogTitle>
         </DialogHeader>
         <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-6">
           {dialogView === "import" ? (
-            <PptBrandImportView
+            <PptPptxTemplateImportView
               onBack={() => setDialogView("select")}
               onSaved={handleImportSaved}
-            />
-          ) : dialogView === "import-deck" ? (
-            <PptBrandImportView
-              onBack={() => setDialogView("select")}
-              onSaved={handleImportSaved}
-              mode="deck"
             />
           ) : loading ? (
             <div className="flex items-center justify-center py-12">
@@ -163,45 +175,34 @@ export function PptTemplateDialog({
             </div>
           ) : (
             <div className="space-y-5">
-              <div className="flex items-center justify-between gap-2">
-                <div className="grid grid-cols-5 gap-1 rounded-lg bg-muted p-1">
-                  {TEMPLATE_FILTERS.map((item) => (
+              <div className="flex items-center justify-between gap-3">
+                <div className="grid grid-cols-3 gap-1.5">
+                  {TEMPLATE_FILTERS.map((f) => (
                     <button
-                      key={item.value}
-                      type="button"
+                      key={f.value}
                       className={cn(
-                        "rounded-md px-2 py-1 text-[11px] font-medium transition-all",
-                        kindFilter === item.value
-                          ? "bg-background text-foreground shadow"
-                          : "text-muted-foreground hover:text-foreground",
+                        "rounded-full px-3 py-1 text-[11px] font-medium transition-colors",
+                        kindFilter === f.value
+                          ? "bg-primary text-primary-foreground"
+                          : "bg-muted text-muted-foreground hover:bg-muted/80",
                       )}
-                      onClick={() => setKindFilter(item.value)}
+                      onClick={() => setKindFilter(f.value)}
                     >
-                      {item.label}
+                      {f.label}
                     </button>
                   ))}
                 </div>
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="text-[11px]"
-                    onClick={() => setDialogView("import")}
-                  >
-                    <Plus className="mr-1 h-3 w-3" />
-                    导入品牌
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="text-[11px]"
-                    onClick={() => setDialogView("import-deck")}
-                  >
-                    <Plus className="mr-1 h-3 w-3" />
-                    导入完整模板
-                  </Button>
-                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="text-[11px]"
+                  onClick={() => setDialogView("import")}
+                >
+                  <Plus className="mr-1 h-3 w-3" />
+                  自定义模板
+                </Button>
               </div>
+
               {Object.entries(groups).length === 0 ? (
                 <div className="flex items-center justify-center rounded-lg border border-dashed border-border/70 py-10 text-[12px] text-muted-foreground">
                   暂无模板
@@ -255,7 +256,7 @@ export function PptTemplateDialog({
                                       className="h-2.5 w-2.5 shrink-0 rounded-full"
                                       style={{ backgroundColor: tpl.primaryColor }}
                                     />
-                                  ) : (tpl.kind === "layout" || tpl.kind === "deck") &&
+                                  ) : (tpl.kind === "layout" || tpl.kind === "native") &&
                                     tpl.pageCount != null ? (
                                     <span className="shrink-0 rounded bg-muted px-1 text-[10px] text-muted-foreground">
                                       {tpl.pageCount}页
@@ -267,11 +268,15 @@ export function PptTemplateDialog({
                                 </p>
                               </div>
                             </button>
-                            {tpl.kind === "brand" && tpl.userCreated && (
+                            {(tpl.kind === "brand" || tpl.kind === "native") && tpl.userCreated && (
                               <button
                                 type="button"
                                 className="absolute right-1 top-1 rounded-full bg-background/80 p-1 text-muted-foreground hover:text-destructive"
-                                onClick={(e) => handleDeleteBrand(tpl.key, e)}
+                                onClick={(e) =>
+                                  tpl.kind === "native"
+                                    ? handleDeleteNative(tpl.key, e)
+                                    : handleDeleteBrand(tpl.key, e)
+                                }
                                 disabled={deletingBrand === tpl.key}
                               >
                                 {deletingBrand === tpl.key ? (

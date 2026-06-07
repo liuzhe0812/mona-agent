@@ -27,8 +27,9 @@ import {
 import { deriveTitle } from "@/lib/format";
 import { MonaClient } from "@/lib/mona-client";
 import { ClientProvider, useClient } from "@/providers/ClientProvider";
+import { KnowledgeDialogProvider } from "@/providers/KnowledgeDialogProvider";
 import type { ChatSummary } from "@/lib/types";
-import { isTauri, getGatewayStatus, startGateway } from "@/lib/tauri";
+import { isTauri, getGatewayStatus, startGateway, getDesktopSettings, type SidebarShortcuts } from "@/lib/tauri";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -51,7 +52,7 @@ const SIDEBAR_WIDTH = 220;
 const SIDEBAR_RAIL_WIDTH = 56;
 const TOKEN_REFRESH_MARGIN_MS = 30_000;
 const TOKEN_REFRESH_MIN_DELAY_MS = 5_000;
-type ShellView = "chat" | "settings" | "note" | "ssh" | "db" | "ppt";
+type ShellView = "chat" | "settings" | "note" | "ssh" | "db" | "kb" | "ppt";
 
 interface QueuedAgentPrompt {
   id: string;
@@ -76,6 +77,12 @@ const PptMakerView = lazy(() =>
   })),
 );
 
+const KnowledgeBaseView = lazy(() =>
+  import("@/components/knowledge/KnowledgeBaseView").then((module) => ({
+    default: module.KnowledgeBaseView,
+  })),
+);
+
 function bootstrapTokenExpiresAt(expiresInSeconds: number): number {
   return Date.now() + Math.max(0, expiresInSeconds) * 1000;
 }
@@ -91,6 +98,35 @@ function tokenRefreshDelayMs(expiresAt: number): number {
 
 function isQuickAskRoute(): boolean {
   return typeof window !== "undefined" && window.location.hash.startsWith("#/quick-ask");
+}
+
+function shortcutFromKeyboardEvent(event: KeyboardEvent): string | null {
+  if (["Control", "Shift", "Alt", "Meta"].includes(event.key)) return null;
+  const parts: string[] = [];
+  if (event.ctrlKey) parts.push("Ctrl");
+  if (event.altKey) parts.push("Alt");
+  if (event.shiftKey) parts.push("Shift");
+  if (event.metaKey) parts.push("Meta");
+
+  let key = event.key;
+  if (/^[a-z]$/i.test(key)) {
+    key = key.toUpperCase();
+  } else if (key === " ") {
+    key = "Space";
+  } else {
+    const aliases: Record<string, string> = {
+      Escape: "Esc",
+      ArrowUp: "Up",
+      ArrowDown: "Down",
+      ArrowLeft: "Left",
+      ArrowRight: "Right",
+    };
+    key = aliases[key] ?? key;
+  }
+
+  if (!key || key.length > 12) return null;
+  parts.push(key);
+  return parts.join("+");
 }
 
 function AuthForm({
@@ -363,6 +399,7 @@ export default function App() {
       token={state.token}
       modelName={state.modelName}
     >
+      <KnowledgeDialogProvider>
       {quickAskRoute ? (
         <QuickAskWindow />
       ) : (
@@ -370,6 +407,7 @@ export default function App() {
           <Shell onModelNameChange={handleModelNameChange} />
         </LicenseProvider>
       )}
+    </KnowledgeDialogProvider>
     </ClientProvider>
   );
 }
@@ -387,7 +425,6 @@ function Shell({
     useSidebarState(sessions, !loading);
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [view, setView] = useState<ShellView>("chat");
-  const [createNoteTrigger, setCreateNoteTrigger] = useState(0);
   const [desktopSidebarOpen, setDesktopSidebarOpen] =
     useState<boolean>(readSidebarOpen);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
@@ -407,6 +444,14 @@ function Shell({
   const [completedChatIds, setCompletedChatIds] = useState<Set<string>>(readCompletedRunChatIds);
   const [queuedAgentPrompt, setQueuedAgentPrompt] = useState<QueuedAgentPrompt | null>(null);
   const runningChatIdsRef = useRef<Set<string>>(new Set());
+  const sidebarShortcutsRef = useRef<SidebarShortcuts>({
+    mona: "Alt+1",
+    note: "Alt+2",
+    ssh: "Alt+3",
+    db: "Alt+4",
+    kb: "Alt+5",
+    ppt: "Alt+6",
+  });
 
   useEffect(() => {
     const mql = window.matchMedia("(min-width: 1024px)");
@@ -527,7 +572,6 @@ function Shell({
 
   const onOpenNote = useCallback(() => {
     setView("note");
-    setCreateNoteTrigger((n) => n + 1);
     setMobileSidebarOpen(false);
   }, []);
 
@@ -551,6 +595,11 @@ function Shell({
 
   const onOpenPpt = useCallback(() => {
     setView("ppt");
+    setMobileSidebarOpen(false);
+  }, []);
+
+  const onOpenKb = useCallback(() => {
+    setView("kb");
     setMobileSidebarOpen(false);
   }, []);
 
@@ -726,6 +775,38 @@ function Shell({
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [onOpenSessionSearch]);
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    getDesktopSettings().then((s) => {
+      if (s.sidebar_shortcuts) {
+        sidebarShortcutsRef.current = s.sidebar_shortcuts;
+      }
+    }).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    const shortcutToView: Record<string, () => void> = {
+      [sidebarShortcutsRef.current.mona]: onNewChat,
+      [sidebarShortcutsRef.current.note]: onOpenNote,
+      [sidebarShortcutsRef.current.ssh]: onOpenSSH,
+      [sidebarShortcutsRef.current.db]: onOpenDb,
+      [sidebarShortcutsRef.current.kb]: onOpenKb,
+      [sidebarShortcutsRef.current.ppt]: onOpenPpt,
+    };
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      const shortcut = shortcutFromKeyboardEvent(event);
+      if (!shortcut) return;
+      const handler = shortcutToView[shortcut];
+      if (!handler) return;
+      event.preventDefault();
+      handler();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onNewChat, onOpenNote, onOpenSSH, onOpenDb, onOpenKb, onOpenPpt]);
 
   useEffect(() => {
     if (!isTauri()) return;
@@ -916,6 +997,7 @@ function Shell({
     onOpenPpt,
     onOpenSSH,
     onOpenDb,
+    onOpenKb,
     onToggleArchived,
     onUpdateView: onUpdateSidebarView,
     pinnedKeys: sidebarState.pinned_keys,
@@ -996,7 +1078,7 @@ function Shell({
               <div
                 className={cn(
                   "absolute inset-0 flex flex-col",
-                  (view === "settings" || view === "note" || view === "ssh" || view === "db" || view === "ppt") &&
+                  (view === "settings" || view === "note" || view === "ssh" || view === "db" || view === "kb" || view === "ppt") &&
                     "invisible pointer-events-none",
                 )}
               >
@@ -1020,7 +1102,7 @@ function Shell({
               {view === "note" ? (
                 <div className="absolute inset-0 flex flex-col">
                   <Suspense fallback={<ModuleLoading title="正在打开笔记" />}>
-                    <NotesView onSendToAgent={onSendNoteToAgent} createNoteTrigger={createNoteTrigger} />
+                    <NotesView onSendToAgent={onSendNoteToAgent} />
                   </Suspense>
                 </div>
               ) : null}
@@ -1048,6 +1130,13 @@ function Shell({
                 <div className="absolute inset-0 flex flex-col">
                   <Suspense fallback={<ModuleLoading title="正在打开数据库客户端" />}>
                     <DbClientView />
+                  </Suspense>
+                </div>
+              )}
+              {view === "kb" && (
+                <div className="absolute inset-0 flex flex-col">
+                  <Suspense fallback={<ModuleLoading title="正在打开知识库" />}>
+                    <KnowledgeBaseView />
                   </Suspense>
                 </div>
               )}

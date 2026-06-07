@@ -432,7 +432,7 @@ export function FileManager({ sessionId }: Props) {
         const cleanup = { fn: null as (() => void) | null };
         const progressPromise = onTransferProgress(sessionId, fileTaskId, (event) => {
           setTransferTask((prev) => {
-            if (!prev || prev.id !== taskId) return prev;
+            if (!prev || prev.id !== taskId || prev.status === "cancelled") return prev;
             return {
               ...prev,
               progress: event.percentage,
@@ -573,7 +573,7 @@ export function FileManager({ sessionId }: Props) {
         const cleanup = { fn: null as (() => void) | null };
         const progressPromise = onTransferProgress(sessionId, fileTaskId, (event) => {
           setTransferTask((prev) => {
-            if (!prev || prev.id !== taskId) return prev;
+            if (!prev || prev.id !== taskId || prev.status === "cancelled") return prev;
             return {
               ...prev,
               progress: event.percentage,
