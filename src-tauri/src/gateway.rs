@@ -44,6 +44,13 @@ impl GatewayManager {
 
         let port = find_available_port(settings.gateway_port)?;
 
+        if !python_exe.exists() {
+            return Err(format!(
+                "Python executable not found at {:?}. Please restart the app to re-initialize.",
+                python_exe
+            ));
+        }
+
         let mut cmd = std::process::Command::new(&python_exe);
         cmd.args(["-m", "mona", "gateway", "--port", &port.to_string()]);
 

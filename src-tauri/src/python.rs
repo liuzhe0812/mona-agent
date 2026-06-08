@@ -6,7 +6,7 @@ use tauri::Manager;
 use crate::settings::app_data_dir;
 
 const PYTHON_VERSION_MARKER: &str = ".mona-python-version";
-const PYTHON_VERSION: &str = "3.12.13";
+pub const PYTHON_VERSION: &str = "3.12.13";
 
 pub fn python_dir() -> PathBuf {
     app_data_dir().join("python")
@@ -61,6 +61,16 @@ pub fn initialize_python(app_handle: &tauri::AppHandle) -> Result<(), String> {
 }
 
 fn find_python_resource(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let searched = |locations: &[String]| {
+        if locations.is_empty() {
+            " (none searched)".to_string()
+        } else {
+            locations.join(", ")
+        }
+    };
+
+    let mut tried: Vec<String> = Vec::new();
+
     // 1. Use Tauri's resource_dir() API — the correct way to find bundled resources
     if let Ok(resource_dir) = app_handle.path().resource_dir() {
         for name in &["python.tar.gz", "python-install.tar.gz"] {
@@ -69,18 +79,29 @@ fn find_python_resource(app_handle: &tauri::AppHandle) -> Result<PathBuf, String
                 log::info!("Found Python resource via resource_dir: {:?}", candidate);
                 return Ok(candidate);
             }
+            tried.push(format!("resource_dir/{}", name));
         }
         log::info!("resource_dir is {:?}, but no python tar found there", resource_dir);
+    } else {
+        tried.push("resource_dir (unavailable)".into());
     }
 
-    // 2. Fallback: next to the executable (some installers place resources here)
+    // 2. Fallback: exe_dir/resources/ (NSIS installs resources here)
+    //    and exe_dir/ (some installers place resources next to exe)
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(exe_dir) = exe_path.parent() {
-            for name in &["python.tar.gz", "python-install.tar.gz"] {
-                let candidate = exe_dir.join(name);
-                if candidate.exists() {
-                    log::info!("Found Python resource next to exe: {:?}", candidate);
-                    return Ok(candidate);
+            for sub in &["resources", ""] {
+                for name in &["python.tar.gz", "python-install.tar.gz"] {
+                    let candidate = if sub.is_empty() {
+                        exe_dir.join(name)
+                    } else {
+                        exe_dir.join(sub).join(name)
+                    };
+                    if candidate.exists() {
+                        log::info!("Found Python resource near exe: {:?}", candidate);
+                        return Ok(candidate);
+                    }
+                    tried.push(format!("exe_dir/{}/{}", sub, name));
                 }
             }
         }
@@ -93,9 +114,13 @@ fn find_python_resource(app_handle: &tauri::AppHandle) -> Result<PathBuf, String
             log::info!("Found Python resource via relative path: {:?}", candidate);
             return Ok(candidate);
         }
+        tried.push(format!("resources/{}", name));
     }
 
-    Err("Python runtime not found. Searched resource_dir, exe dir, and working directory.".into())
+    Err(format!(
+        "Python runtime not found. Searched: {}",
+        searched(&tried)
+    ))
 }
 
 fn extract_python(tar_path: &PathBuf, dest: &PathBuf) -> Result<(), String> {

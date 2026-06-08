@@ -16,10 +16,10 @@ export async function retrieveKbContext(
   maxPages: number = 5,
 ): Promise<KBRagContext | null> {
   const results = await searchKb(projectId, query, maxPages)
-  if (results.length === 0) return null
+  if (results.results.length === 0) return null
 
   const pages = await Promise.all(
-    results.map(async (r) => {
+    results.results.map(async (r) => {
       let content = ""
       try {
         const page = await getWikiPage(projectId, r.path)

@@ -12,6 +12,7 @@ mod tray;
 use gateway::GatewayManager;
 use settings::AppSettings;
 use std::sync::Arc;
+use tauri::Emitter;
 use tauri::Listener;
 use tauri::Manager;
 use tauri::WebviewUrl;
@@ -119,6 +120,59 @@ async fn is_python_ready() -> Result<bool, String> {
 }
 
 #[tauri::command]
+async fn diagnose_python(app_handle: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    let exe = python::python_executable();
+    let marker = python::version_marker_path();
+    let resource_dir = app_handle.path().resource_dir().map(|p| p.display().to_string()).unwrap_or_else(|e| format!("ERROR: {}", e));
+    let exe_path = std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_else(|e| format!("ERROR: {}", e));
+    let data_dir = crate::settings::app_data_dir().display().to_string();
+
+    let mut resource_candidates = Vec::new();
+    // Check resource_dir
+    if let Ok(rd) = app_handle.path().resource_dir() {
+        for name in &["python.tar.gz", "python-install.tar.gz"] {
+            let c = rd.join(name);
+            resource_candidates.push(serde_json::json!({
+                "path": c.display().to_string(),
+                "exists": c.exists()
+            }));
+        }
+    }
+    // Check exe_dir/resources/
+    if let Ok(ep) = std::env::current_exe() {
+        if let Some(ed) = ep.parent() {
+            for sub in &["resources", ""] {
+                for name in &["python.tar.gz", "python-install.tar.gz"] {
+                    let c = if sub.is_empty() { ed.join(name) } else { ed.join(sub).join(name) };
+                    resource_candidates.push(serde_json::json!({
+                        "path": c.display().to_string(),
+                        "exists": c.exists()
+                    }));
+                }
+            }
+        }
+    }
+
+    Ok(serde_json::json!({
+        "python_exe": {
+            "path": exe.display().to_string(),
+            "exists": exe.exists()
+        },
+        "version_marker": {
+            "path": marker.display().to_string(),
+            "exists": marker.exists(),
+            "content": std::fs::read_to_string(&marker).unwrap_or_default()
+        },
+        "expected_version": python::PYTHON_VERSION,
+        "data_dir": data_dir,
+        "resource_dir": resource_dir,
+        "current_exe": exe_path,
+        "resource_candidates": resource_candidates,
+        "system_python": python::find_system_python().map(|p| p.display().to_string()),
+    }))
+}
+
+#[tauri::command]
 async fn open_in_browser(state: tauri::State<'_, GatewayState>) -> Result<(), String> {
     let port = state.port().ok_or("Gateway not running")?;
     let url = format!("http://127.0.0.1:{}", port);
@@ -170,6 +224,17 @@ async fn write_mona_model_config(
 }
 
 fn open_md_reader_window(app_handle: &tauri::AppHandle, file_path: &str) {
+    // 查找已有的 MD 阅读器窗口，有则发送事件让它开新 tab
+    for window in app_handle.webview_windows().values() {
+        let label = window.label();
+        if label.starts_with("md-reader-") {
+            let _ = app_handle.emit_to(label, "md-file-open", file_path);
+            let _ = window.set_focus();
+            return;
+        }
+    }
+
+    // 没有已有窗口，创建新窗口
     let encoded = urlencoding::encode(file_path);
     let url = format!("#/md-reader?file={}", encoded);
     let label = format!("md-reader-{}", file_path.replace(|c: char| !c.is_alphanumeric(), "-"));
@@ -178,11 +243,6 @@ fn open_md_reader_window(app_handle: &tauri::AppHandle, file_path: &str) {
     } else {
         &label
     };
-
-    if let Some(existing) = app_handle.get_webview_window(label_truncated) {
-        let _ = existing.set_focus();
-        return;
-    }
 
     let _ = WebviewWindowBuilder::new(app_handle, label_truncated, WebviewUrl::App(url.into()))
         .title("Mona - Markdown 阅读器")
@@ -226,6 +286,7 @@ pub fn run() {
             gateway_status,
             initialize_python_env,
             is_python_ready,
+            diagnose_python,
             open_in_browser,
             mona_config_status,
             write_mona_provider_config,

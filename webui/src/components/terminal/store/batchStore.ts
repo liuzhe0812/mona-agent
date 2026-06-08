@@ -225,12 +225,12 @@ export const useBatchStore = create<BatchState>()(
         const { sessionId, status, currentFile, filesCompleted, filesTotal, bytesTransferred, bytesTotal, speed, etaSeconds, error } = progress;
 
         const statusMap: Record<string, TransferSessionNode["status"]> = {
-          pending: "waiting",
-          connecting: "waiting",
-          transferring: "transferring",
-          completed: "completed",
-          error: "error",
-          cancelled: "completed",
+          Pending: "waiting",
+          Connecting: "waiting",
+          Transferring: "transferring",
+          Completed: "completed",
+          Error: "error",
+          Cancelled: "completed",
         };
 
         let sessionProgress = 0;
@@ -240,7 +240,7 @@ export const useBatchStore = create<BatchState>()(
           sessionProgress = Math.round((filesCompleted / filesTotal) * 100);
         }
 
-        const fileStatus = status === "completed" ? "completed" : status === "error" ? "error" : "transferring";
+        const fileStatus = status === "Completed" ? "completed" : status === "Error" ? "error" : "transferring";
 
         set((state) => ({
           transferSessions: state.transferSessions.map((s) =>

@@ -32,7 +32,7 @@ import {
   sftpDownload,
   onBatchTransferProgress,
 } from "../ipc";
-import type { BatchTransferProgress } from "../types/terminal";
+import type { BatchTransferProgress, FileInfo } from "../types/terminal";
 import { useBatchStore } from "../store/batchStore";
 import type { BatchSession, TransferSessionNode } from "../store/batchStore";
 import { useTerminalStore } from "../store/terminalStore";
@@ -66,7 +66,6 @@ import {
   Copy,
   Scissors,
   ClipboardPaste,
-  Info,
 } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 
@@ -127,7 +126,6 @@ export function BatchModeView() {
     clearFileSelection,
     clipboard,
     setClipboard,
-    clearClipboard,
   } = store;
 
   const [collapsedTransfer, setCollapsedTransfer] = useState<Set<string>>(new Set());
@@ -527,7 +525,7 @@ export function BatchModeView() {
     }
   };
 
-  const handleFileClick = (file: FileInfo, index: number, e: React.MouseEvent) => {
+  const handleFileClick = (file: FileInfo, _index: number, e: React.MouseEvent) => {
     if (e.ctrlKey || e.metaKey) {
       e.preventDefault();
       selectFile(file.path, true);
