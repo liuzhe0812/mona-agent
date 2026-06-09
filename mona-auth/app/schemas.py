@@ -86,6 +86,15 @@ class SubscriptionInfo(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class TrialActivateRequest(BaseModel):
+    machine_fingerprint: str = Field(min_length=8, max_length=64)
+
+
+class TrialActivateResponse(BaseModel):
+    active: bool
+    expires_at: datetime | None = None
+
+
 class ErrorResponse(BaseModel):
     error: str
     detail: str | None = None

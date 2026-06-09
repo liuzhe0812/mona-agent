@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     license_private_key_path: str = "keys/private.pem"
     license_public_key_path: str = "keys/public.pem"
     license_expire_days: int = 7
+    trial_days: int = 31
     max_devices_per_user: int = 3
 
     xhp_app_id: str = ""

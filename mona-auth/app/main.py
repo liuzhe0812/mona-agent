@@ -7,6 +7,7 @@ from app.middleware import setup_rate_limit
 from app.routers.auth_router import router as auth_router
 from app.routers.device_router import router as device_router
 from app.routers.payment_router import router as payment_router
+from app.routers.trial_router import router as trial_router
 
 app = FastAPI(title="Mona Auth Service", version="0.1.0")
 
@@ -26,6 +27,7 @@ setup_rate_limit(app)
 app.include_router(auth_router)
 app.include_router(device_router)
 app.include_router(payment_router)
+app.include_router(trial_router)
 
 
 @app.get("/health")

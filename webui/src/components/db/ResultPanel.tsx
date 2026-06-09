@@ -80,43 +80,30 @@ export function ResultPanel() {
             </Button>
           </div>
         )}
-        {result && (
+        {result && result.columns.length > 0 && (
           <span className="px-3.5 py-1.5 text-[11px] text-muted-foreground">
-            {result.rows.length} 行 · {result.execution_time_ms}ms ·{" "}
-            {result.columns.length} 列
+            {result.rows.length} 行 · {result.execution_time_ms}ms · {result.columns.length} 列
           </span>
         )}
       </div>
-      <div className="flex-1 overflow-auto">
-        {isExecuting ? (
-          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-            <div className="flex items-center gap-2">
-              <span className="relative flex h-2 w-2">
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-foreground/40" />
-                <span className="relative inline-flex h-2 w-2 rounded-full bg-foreground/60" />
-              </span>
-              执行中...
-            </div>
+      <div className="flex-1 overflow-auto relative">
+        {isExecuting && (
+          <div className="absolute inset-x-0 top-0 z-20 flex items-center justify-center bg-background/60 py-1">
+            <span className="relative flex h-2 w-2">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-foreground/40" />
+              <span className="relative inline-flex h-2 w-2 rounded-full bg-foreground/60" />
+            </span>
           </div>
-        ) : activeResultTab === "result" && result ? (
-          result.rows.length > 0 ? (
-            <ResultTable result={result} tabId={activeTabId!} edits={edits} />
-          ) : (
-            <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-              {result.message ?? "无结果"}
-            </div>
-          )
+        )}
+        {activeResultTab === "result" && result && result.columns.length > 0 ? (
+          <ResultTable result={result} tabId={activeTabId!} edits={edits} />
         ) : activeResultTab === "message" && result ? (
           <div className="p-3.5 text-[13px] text-foreground">
             {result.message ?? "无消息"}
           </div>
         ) : activeResultTab === "properties" ? (
           <PropertiesContent />
-        ) : (
-          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-            执行查询以查看结果
-          </div>
-        )}
+        ) : null}
       </div>
     </div>
   );

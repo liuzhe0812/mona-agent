@@ -17,6 +17,24 @@ from mona.session.manager import SessionManager
 WEBUI_TRANSCRIPT_SCHEMA_VERSION = 3
 _MAX_TRANSCRIPT_FILE_BYTES = 8 * 1024 * 1024
 
+_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico", ".tif", ".tiff"}
+_VIDEO_EXTS = {".mp4", ".webm", ".mov", ".m4v", ".avi", ".mkv", ".3gp"}
+
+
+def _infer_media_kind(name: str, url: str) -> str:
+    """Infer media kind from file name / URL extension."""
+    ext = Path(name).suffix.lower() if name else ""
+    if not ext:
+        clean = url.split("?", 1)[0].split("#", 1)[0].lower()
+        dot = clean.rfind(".")
+        if dot >= 0:
+            ext = clean[dot:]
+    if ext in _IMAGE_EXTS:
+        return "image"
+    if ext in _VIDEO_EXTS:
+        return "video"
+    return "file"
+
 
 def webui_transcript_path(session_key: str) -> Path:
     stem = SessionManager.safe_key(session_key)
@@ -631,7 +649,7 @@ def replay_transcript_to_ui_messages(
                     if isinstance(m, dict) and m.get("url"):
                         media.append(
                             {
-                                "kind": "image",
+                                "kind": _infer_media_kind(str(m.get("name") or ""), str(m["url"])),
                                 "url": str(m["url"]),
                                 "name": str(m.get("name") or ""),
                             },

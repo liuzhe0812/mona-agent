@@ -84,58 +84,64 @@ function useFileIcons(files: UnifiedFileItem[]) {
 
   useEffect(() => {
     let cancelled = false;
+
     const toLoad: UnifiedFileItem[] = [];
+    const cachedEntries: Record<string, string> = {};
 
     for (const f of files) {
       const ext = extractExtension(f.name);
       const cached = getCachedIcon(ext, f.isDir);
       if (cached) {
-        if (!resolved[f.path] || resolved[f.path] !== cached) {
-          setResolved((prev) => ({ ...prev, [f.path]: cached }));
-        }
+        cachedEntries[f.path] = cached;
       } else {
         toLoad.push(f);
       }
     }
 
-    if (toLoad.length === 0) return;
+    // Reset resolved to only contain cached icons for current files.
+    // This avoids accumulating stale entries from previous directories
+    // and prevents O(N²) spread operations from repeated setResolved calls.
+    setResolved(cachedEntries);
 
-    let idx = 0;
-    const batchSize = 6;
+    if (toLoad.length > 0) {
+      let idx = 0;
+      const batchSize = 6;
 
-    async function loadBatch() {
-      if (cancelled) return;
-      const batch = toLoad.slice(idx, idx + batchSize);
-      idx += batchSize;
-      if (batch.length === 0) return;
+      async function loadBatch() {
+        if (cancelled) return;
+        const batch = toLoad.slice(idx, idx + batchSize);
+        idx += batchSize;
+        if (batch.length === 0) return;
 
-      const entries: Record<string, string> = {};
-      const results = await Promise.allSettled(
-        batch.map(async (f) => {
-          const ext = extractExtension(f.name);
-          const dataUrl = await getIcon(ext, f.isDir);
-          return { path: f.path, dataUrl };
-        }),
-      );
+        const entries: Record<string, string> = {};
+        const results = await Promise.allSettled(
+          batch.map(async (f) => {
+            const ext = extractExtension(f.name);
+            const dataUrl = await getIcon(ext, f.isDir);
+            return { path: f.path, dataUrl };
+          }),
+        );
 
-      if (cancelled) return;
+        if (cancelled) return;
 
-      for (const r of results) {
-        if (r.status === "fulfilled" && r.value.dataUrl) {
-          entries[r.value.path] = r.value.dataUrl;
+        for (const r of results) {
+          if (r.status === "fulfilled" && r.value.dataUrl) {
+            entries[r.value.path] = r.value.dataUrl;
+          }
+        }
+
+        if (Object.keys(entries).length > 0) {
+          setResolved((prev) => ({ ...prev, ...entries }));
+        }
+
+        if (idx < toLoad.length) {
+          requestAnimationFrame(loadBatch);
         }
       }
 
-      if (Object.keys(entries).length > 0) {
-        setResolved((prev) => ({ ...prev, ...entries }));
-      }
-
-      if (idx < toLoad.length) {
-        requestAnimationFrame(loadBatch);
-      }
+      loadBatch();
     }
 
-    loadBatch();
     return () => {
       cancelled = true;
     };
@@ -527,12 +533,58 @@ export function FilePane({
             加载中…
           </div>
         ) : displayFiles.length === 0 ? (
-          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-            空目录
-          </div>
+          <ContextMenu>
+            <ContextMenuTrigger asChild>
+              <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                空目录
+              </div>
+            </ContextMenuTrigger>
+            <ContextMenuContent className="w-48">
+              {onCreateFolder && (
+                <ContextMenuItem onClick={onCreateFolder}>
+                  <FolderPlus className="mr-2 h-3.5 w-3.5" /> 新建文件夹
+                </ContextMenuItem>
+              )}
+              {onCreateFile && (
+                <ContextMenuItem onClick={onCreateFile}>
+                  <FilePlus className="mr-2 h-3.5 w-3.5" /> 新建文件
+                </ContextMenuItem>
+              )}
+              {clipboardHasItems && onPaste && (
+                <ContextMenuItem onClick={onPaste}>
+                  <ClipboardPaste className="mr-2 h-3.5 w-3.5" /> 粘贴
+                </ContextMenuItem>
+              )}
+              <ContextMenuSeparator />
+              <ContextMenuItem onClick={onToggleHiddenFiles}>
+                {showHiddenFiles ? (
+                  <Eye className="mr-2 h-3.5 w-3.5" />
+                ) : (
+                  <EyeOff className="mr-2 h-3.5 w-3.5" />
+                )}
+                {showHiddenFiles ? "隐藏隐藏文件" : "显示隐藏文件"}
+              </ContextMenuItem>
+              <ContextMenuItem onClick={onRefresh}>
+                <RefreshCw className="mr-2 h-3.5 w-3.5" /> 刷新
+              </ContextMenuItem>
+            </ContextMenuContent>
+          </ContextMenu>
         ) : (
           <ContextMenu>
             <ContextMenuTrigger asChild>
+              <div
+                className="h-full"
+                onClick={(e) => {
+                  if (e.target === e.currentTarget) {
+                    setSelectedPaths(new Set());
+                    lastSelectedIndexRef.current = -1;
+                  }
+                }}
+                onContextMenu={() => {
+                  setSelectedPaths(new Set());
+                  lastSelectedIndexRef.current = -1;
+                }}
+              >
               <table
                 className="w-full text-xs"
                 style={{ tableLayout: "fixed", minWidth: side === "remote" ? 544 : 448 }}
@@ -670,6 +722,7 @@ export function FilePane({
                   ))}
                 </tbody>
               </table>
+              </div>
             </ContextMenuTrigger>
             <ContextMenuContent className="w-48">
               {onCreateFolder && (

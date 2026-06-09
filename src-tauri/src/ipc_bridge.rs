@@ -78,18 +78,65 @@ impl IpcBridge {
     ) -> Result<(), String> {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-        let mut buf = vec![0u8; 65536];
+        let mut buf = vec![0u8; 131072];
         let (mut reader, mut writer) = stream.into_split();
-        let n = reader
-            .read(&mut buf)
-            .await
-            .map_err(|e| format!("Read failed: {}", e))?;
 
-        if n == 0 {
+        // Read the full HTTP request. TCP is a stream protocol, so a single
+        // read may not return the complete payload. Loop until we have at
+        // least the headers AND the full body (per Content-Length).
+        let mut total = 0;
+        let mut content_length: Option<usize> = None;
+        loop {
+            let n = reader
+                .read(&mut buf[total..])
+                .await
+                .map_err(|e| format!("Read failed: {}", e))?;
+            if n == 0 {
+                break;
+            }
+            total += n;
+
+            // Try to parse headers once we have enough data.
+            if content_length.is_none() {
+                let s = String::from_utf8_lossy(&buf[..total]);
+                if let Some(header_end) = s.find("\r\n\r\n") {
+                    let headers = &s[..header_end];
+                    for line in headers.lines() {
+                        if let Some(val) = line.strip_prefix("Content-Length:") {
+                            content_length = Some(val.trim().parse::<usize>().unwrap_or(0));
+                            break;
+                        }
+                    }
+                    if let Some(cl) = content_length {
+                        let header_len = header_end + 4; // +4 for \r\n\r\n
+                        if total >= header_len + cl {
+                            break; // We have the full request
+                        }
+                    } else {
+                        // No Content-Length header — assume body is everything after headers
+                        break;
+                    }
+                }
+            } else if let Some(cl) = content_length {
+                let s = String::from_utf8_lossy(&buf[..total]);
+                if let Some(header_end) = s.find("\r\n\r\n") {
+                    let header_len = header_end + 4;
+                    if total >= header_len + cl {
+                        break;
+                    }
+                }
+            }
+
+            if total >= buf.len() {
+                buf.resize(buf.len() * 2, 0);
+            }
+        }
+
+        if total == 0 {
             return Ok(());
         }
 
-        let request_str = String::from_utf8_lossy(&buf[..n]);
+        let request_str = String::from_utf8_lossy(&buf[..total]);
         let body = extract_body(&request_str);
 
         let response_body = match body {
@@ -101,6 +148,8 @@ impl IpcBridge {
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
                 let args = invoke_req.get("args").cloned().unwrap_or_default();
+
+                log::debug!("IPC bridge received cmd={:?}, args keys={:?}", cmd, args.as_object().map(|o| o.keys().collect::<Vec<_>>()));
 
                 let result = self
                     .dispatch_command(cmd, args, &terminal_state)

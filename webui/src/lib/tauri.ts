@@ -123,6 +123,21 @@ export async function createNoteFromChat(
   });
 }
 
+export interface NoteSearchResult {
+  noteId: string;
+  title: string;
+  snippet: string;
+  rank: number;
+}
+
+export async function searchNotebookNotes(
+  notebookId: string,
+  query: string,
+  limit?: number,
+): Promise<NoteSearchResult[]> {
+  return invoke<NoteSearchResult[]>("notes_search", { notebookId, query, limit });
+}
+
 export async function openPathWithSystemApp(path: string): Promise<void> {
   if (!isTauri()) return;
   try {

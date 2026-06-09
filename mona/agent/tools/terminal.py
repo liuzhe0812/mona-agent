@@ -51,9 +51,11 @@ def _tauri_invoke(cmd: str, args: dict[str, Any] | None = None) -> Any:
         with urllib.request.urlopen(req, timeout=30) as resp:
             result = json.loads(resp.read().decode())
             if isinstance(result, dict) and "error" in result:
+                logger.warning("IPC bridge error for cmd={!r}: {}", cmd, result["error"])
                 return f"Error: {result['error']}"
             return result.get("result", result)
     except Exception as e:
+        logger.warning("IPC bridge invoke failed for cmd={!r}: {}", cmd, e)
         return f"Error: Tauri invoke failed: {e}"
 
 

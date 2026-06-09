@@ -17,6 +17,7 @@ import { SlowQueryView } from "./SlowQueryView";
 import { ReplicationView } from "./ReplicationView";
 import { BackupView } from "./BackupView";
 import { NewConnectionDialog } from "./NewConnectionDialog";
+import { EditConnectionDialog } from "./EditConnectionDialog";
 import { useDbStore } from "./store/dbStore";
 
 const LEFT_PANEL_MIN = 180;
@@ -376,6 +377,7 @@ export function DbClientView() {
       )}
 
       <NewConnectionDialog />
+      <EditConnectionDialog />
     </div>
   );
 }

@@ -29,6 +29,7 @@ pub struct NotesState {
 pub struct Notebook {
     pub id: String,
     pub name: String,
+    #[serde(default)]
     pub description: String,
     pub knowledge_base_enabled: bool,
 }
@@ -175,6 +176,32 @@ fn initialize_schema(conn: &Connection) -> Result<(), String> {
             modified_at TEXT NOT NULL,
             FOREIGN KEY (category_id) REFERENCES knowledge_categories(id) ON DELETE CASCADE
         );
+
+        CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
+            note_id,
+            notebook_id,
+            title,
+            content,
+            tags,
+            content='notes',
+            content_rowid='rowid'
+        );
+
+        CREATE TRIGGER IF NOT EXISTS notes_fts_insert AFTER INSERT ON notes BEGIN
+            INSERT INTO notes_fts(rowid, note_id, notebook_id, title, content, tags)
+            VALUES (new.rowid, new.id, new.notebook_id, new.title, new.content_markdown, new.tags_json);
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS notes_fts_update AFTER UPDATE ON notes BEGIN
+            DELETE FROM notes_fts WHERE rowid = old.rowid;
+            INSERT INTO notes_fts(rowid, note_id, notebook_id, title, content, tags)
+            VALUES (new.rowid, new.id, new.notebook_id, new.title, new.content_markdown, new.tags_json);
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS notes_fts_delete AFTER DELETE ON notes BEGIN
+            INSERT INTO notes_fts(notes_fts, rowid, note_id, notebook_id, title, content, tags)
+            VALUES ('delete', old.rowid, old.id, old.notebook_id, old.title, old.content_markdown, old.tags_json);
+        END;
         "#,
     )
     .map_err(|e| format!("Failed to initialize notes schema: {}", e))?;
@@ -185,7 +212,21 @@ fn initialize_schema(conn: &Connection) -> Result<(), String> {
         "knowledge_items",
         "linked_notes_json",
         "TEXT NOT NULL DEFAULT '[]'",
-    )
+    )?;
+    ensure_column(
+        conn,
+        "notebooks",
+        "knowledge_base_enabled",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
+    ensure_column(conn, "notes", "agent_chat_id", "TEXT")?;
+    ensure_column(
+        conn,
+        "notes",
+        "applied_agent_message_ids_json",
+        "TEXT NOT NULL DEFAULT '[]'",
+    )?;
+    ensure_column(conn, "notes", "plain_text", "TEXT")
 }
 
 fn ensure_column(
@@ -444,6 +485,9 @@ pub async fn notes_save_state(state: NotesState) -> Result<(), String> {
         params![&state.active_knowledge_category_id],
     )
     .map_err(|e| format!("Failed to save active knowledge category: {}", e))?;
+
+    tx.execute("INSERT INTO notes_fts(notes_fts) VALUES('rebuild')", [])
+        .map_err(|e| format!("Failed to rebuild FTS index: {}", e))?;
 
     tx.commit()
         .map_err(|e| format!("Failed to commit notes transaction: {}", e))
@@ -900,6 +944,115 @@ pub async fn notes_create_from_chat(
     .map_err(|e| format!("Failed to create note from chat: {}", e))?;
 
     Ok(note_id)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteSearchResult {
+    pub note_id: String,
+    pub title: String,
+    pub snippet: String,
+    pub rank: f64,
+}
+
+#[tauri::command]
+pub async fn notes_search(
+    notebook_id: String,
+    query: String,
+    limit: Option<usize>,
+) -> Result<Vec<NoteSearchResult>, String> {
+    let conn = open_notes_db()?;
+    let limit = limit.unwrap_or(5);
+
+    // Try FTS5 search first
+    let fts_results = search_fts(&conn, &notebook_id, &query, limit)?;
+
+    if !fts_results.is_empty() {
+        return Ok(fts_results);
+    }
+
+    // Fallback to LIKE search for better Chinese support
+    search_like(&conn, &notebook_id, &query, limit)
+}
+
+fn search_fts(
+    conn: &Connection,
+    notebook_id: &str,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<NoteSearchResult>, String> {
+    // Build FTS query: split into words, filter short ones, join with OR
+    let fts_query = query
+        .split_whitespace()
+        .filter(|w| w.len() >= 2)
+        .map(|w| format!("\"{}\"", w))
+        .collect::<Vec<_>>()
+        .join(" OR ");
+
+    if fts_query.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let sql = format!(
+        "SELECT note_id, title, snippet(notes_fts, 3, '⟨', '⟩', '...', 64) as snippet, rank \
+         FROM notes_fts \
+         WHERE notes_fts MATCH ?1 AND notebook_id = ?2 \
+         ORDER BY rank \
+         LIMIT {}",
+        limit
+    );
+
+    let mut stmt = conn.prepare(&sql).map_err(|e| format!("Search prepare failed: {}", e))?;
+    let results = stmt
+        .query_map(params![&fts_query, &notebook_id], |row| {
+            Ok(NoteSearchResult {
+                note_id: row.get(0)?,
+                title: row.get(1)?,
+                snippet: row.get(2)?,
+                rank: row.get(3)?,
+            })
+        })
+        .map_err(|e| format!("Search query failed: {}", e))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    Ok(results)
+}
+
+fn search_like(
+    conn: &Connection,
+    notebook_id: &str,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<NoteSearchResult>, String> {
+    let pattern = format!("%{}%", query.replace('%', "\\%").replace('_', "\\_"));
+    let sql = format!(
+        "SELECT id, title, \
+         substr(content_markdown, 1, 200) as snippet \
+         FROM notes \
+         WHERE notebook_id = ?1 AND (title LIKE ?2 ESCAPE '\\' OR content_markdown LIKE ?2 ESCAPE '\\') \
+         ORDER BY modified_at DESC \
+         LIMIT {}",
+        limit
+    );
+
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(|e| format!("LIKE search prepare failed: {}", e))?;
+    let results = stmt
+        .query_map(params![&notebook_id, &pattern], |row| {
+            Ok(NoteSearchResult {
+                note_id: row.get(0)?,
+                title: row.get(1)?,
+                snippet: row.get(2)?,
+                rank: 0.0,
+            })
+        })
+        .map_err(|e| format!("LIKE search query failed: {}", e))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    Ok(results)
 }
 
 #[tauri::command]

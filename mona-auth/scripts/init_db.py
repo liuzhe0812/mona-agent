@@ -1,5 +1,5 @@
 from app.database import Base, engine
-from app.models import Device, Subscription, User  # noqa: F401
+from app.models import Device, Subscription, TrialActivation, User  # noqa: F401
 
 
 def init_db():

@@ -55,9 +55,6 @@ $TauriConf = Get-Content "src-tauri\tauri.conf.json" -Raw | ConvertFrom-Json
 $CurrentVersion = $TauriConf.version
 
 # Determine new version
-# - If user specified a version: use it directly
-# - If user specified a rule (major/minor/patch): apply it
-# - If nothing specified: default to patch bump
 $Parts = $CurrentVersion -split '\.'
 $Major = [int]$Parts[0]
 $Minor = [int]$Parts[1]
@@ -71,9 +68,10 @@ $NewPatch = $Patch + 1
 $NewVersion = "$NewMajor.$NewMinor.$NewPatch"
 
 # Update both files
-# 1. tauri.conf.json
-$TauriConf.version = $NewVersion
-$TauriConf | ConvertTo-Json -Depth 10 | Set-Content "src-tauri\tauri.conf.json"
+# 1. tauri.conf.json — must preserve JSON formatting, use raw replacement
+$confContent = Get-Content "src-tauri\tauri.conf.json" -Raw
+$confContent = $confContent -replace "(?<=`"version`":\s*`")[^`"]+(?=`")", $NewVersion
+Set-Content "src-tauri\tauri.conf.json" $confContent
 
 # 2. Cargo.toml — replace the version line
 $CargoToml = Get-Content "src-tauri\Cargo.toml" -Raw
@@ -89,6 +87,8 @@ Write-Output "Version bumped: $CurrentVersion -> $NewVersion"
 
 The Python runtime must include the interpreter AND all mona-ai dependencies pre-installed so users never need pip or network access.
 
+**If `python.tar.gz` already exists and no Python dependencies changed, skip this step.**
+
 ```powershell
 $PythonVersion = "3.12.13"
 $ReleaseTag = "20260510"
@@ -96,11 +96,10 @@ $Platform = "x86_64-pc-windows-msvc"
 $BaseUrl = "https://github.com/astral-sh/python-build-standalone/releases/download/$ReleaseTag"
 $FileName = "cpython-$PythonVersion+$ReleaseTag-$Platform-install_only.tar.gz"
 
-# 1. Download python-build-standalone
+# 1. Download python-build-standalone (skip if already downloaded)
 $ResourcesDir = "src-tauri\resources"
 New-Item -ItemType Directory -Path $ResourcesDir -Force | Out-Null
 $PythonArchive = "$ResourcesDir\python.tar.gz"
-Invoke-WebRequest -Uri "$BaseUrl/$FileName" -OutFile $PythonArchive -UseBasicParsing
 
 # 2. Extract to temp dir
 $TempDir = "$env:TEMP\mona-python-build"
@@ -150,20 +149,9 @@ Remove-Item -Recurse -Force $TempDir
 - The version marker file (`.mona-python-version`) is written at runtime, not in the archive
 - The `PYTHON_VERSION` constant in `src-tauri/src/python.rs` must match the downloaded Python version
 
-### Step 2: Build WebUI
+### Step 2: Build Tauri Installer
 
-```powershell
-cd webui
-npm install
-npm run build:tauri
-cd ..
-```
-
-This produces `src-tauri/dist/` which Tauri embeds as the frontend.
-
-If the WebUI is already built and no frontend changes were made, this step can be skipped — `cargo tauri build` runs `beforeBuildCommand` automatically.
-
-### Step 3: Build Tauri Installer
+WebUI build is handled automatically by `cargo tauri build` via `beforeBuildCommand` in `tauri.conf.json`.
 
 ```powershell
 cd src-tauri
@@ -172,60 +160,92 @@ cargo tauri build
 cd ..
 ```
 
-**Note:** Set `$env:CI = ""` to avoid the `--ci` flag error that occurs when the `CI` environment variable is set to `"1"` (common in some terminal environments).
+**Note:** Set `$env:CI = ""` to avoid the `--ci` flag error that occurs when the `CI` environment variable is set to `"1"`.
 
 Output locations (version comes from Step 0):
 - MSI installer: `src-tauri/target/release/bundle/msi/Mona_{version}_x64_en-US.msi`
 - NSIS installer: `src-tauri/target/release/bundle/nsis/Mona_{version}_x64-setup.exe`
 
-### Step 4: Verify the Build
+### Step 3: Verify the Build
 
 After building, verify the installer works:
 
 1. Install Mona on a clean Windows machine (or VM)
 2. Launch the app — it should:
-   - Extract Python runtime from `resources/python.tar.gz` to `%AppData%/mona/python/`
+   - Find `python.tar.gz` via Tauri's `resource_dir()` API
+   - Extract Python runtime to `%AppData%/mona/python/`
    - Auto-start the gateway on the configured port
    - Show the WebUI in the Tauri window
 3. **No CMD windows should appear** — all `Command::new()` calls use `CREATE_NO_WINDOW` on Windows
 4. Close the window — app should minimize to system tray (default `run_in_background: true`)
 5. Right-click tray icon → "退出 Mona" — should stop gateway and exit
 
-## Tauri Bundle Configuration
+## Resource Path Resolution (Critical)
 
-The `src-tauri/tauri.conf.json` controls the installer format:
+This is the #1 cause of "works in dev, fails after install" bugs.
 
-```json
-{
-  "bundle": {
-    "active": true,
-    "targets": "all",
-    "icon": [
-      "icons/32x32.png",
-      "icons/128x128.png",
-      "icons/128x128@2x.png",
-      "icons/icon.icns",
-      "icons/icon.ico"
-    ],
-    "resources": [
-      "resources/*"
-    ]
-  }
-}
+### How Tauri bundles resources
+
+When `tauri.conf.json` has `"resources": ["resources/*"]`, Tauri embeds `python.tar.gz` into the installer. After installation, the file is placed in a platform-specific directory:
+
+| Installer | Resource location |
+|-----------|-------------------|
+| NSIS (per-user) | `C:\Users\{user}\AppData\Local\com.mona.desktop\resources\` |
+| MSI (per-machine) | `C:\Program Files\Mona\resources\` |
+| Dev mode | `src-tauri/resources/` (relative to CWD) |
+
+### How `python.rs` finds resources
+
+The `find_python_resource()` function uses a 3-level fallback:
+
+1. **Tauri `resource_dir()` API** (primary) — `app_handle.path().resource_dir()` returns the correct path regardless of install method. This is the only reliable way in packaged builds.
+2. **Next to executable** (fallback) — checks `exe_dir/python.tar.gz`
+3. **Relative path** (dev mode) — checks `resources/python.tar.gz` from CWD
+
+**Important:** `initialize_python()` requires an `AppHandle` parameter because of this. The call chain is:
+
+```
+Frontend command / setup callback
+  → GatewayState::start(settings, app_handle)
+    → GatewayManager::start(settings, app_handle)
+      → python::initialize_python(app_handle)
+        → find_python_resource(app_handle)
+          → app_handle.path().resource_dir()
 ```
 
-**`resources/*`** is critical — this embeds `python.tar.gz` into the installer.
+### What NOT to do
+
+- **Never use `env!("CARGO_MANIFEST_DIR")`** — this is a compile-time constant pointing to the build machine's source directory. It does NOT exist on client machines.
+- **Never use relative paths only** — the working directory at runtime is not `src-tauri/`.
+- **Never assume resources are next to the exe** — NSIS puts them in a subdirectory.
 
 ## Python Runtime Lifecycle (Runtime Code)
 
 The Rust code in `src-tauri/src/python.rs` handles Python initialization at app startup:
 
 1. Check `%AppData%/mona/python/.mona-python-version` — if version matches, skip extraction
-2. If not initialized, extract `resources/python.tar.gz` to `%AppData%/mona/python/`
+2. If not initialized, find `python.tar.gz` via `resource_dir()` and extract to `%AppData%/mona/python/`
 3. Write version marker file
 4. The `gateway.rs` then uses this Python to run `python -m mona gateway`
 
-**No runtime `pip install`** — all dependencies are pre-installed in the archive. The `install_mona()` function has been removed from `python.rs`.
+**No runtime `pip install`** — all dependencies are pre-installed in the archive.
+
+## Gateway PYTHONPATH Detection
+
+`gateway.rs` sets `PYTHONPATH` only in dev mode. It detects dev mode by checking if a `mona/` package directory exists relative to the exe's parent. In packaged builds, `mona-ai` is installed in `site-packages`, so `PYTHONPATH` is not set.
+
+```rust
+// Only set PYTHONPATH in dev mode (when source tree exists next to exe)
+if let Ok(exe_path) = std::env::current_exe() {
+    if let Some(exe_dir) = exe_path.parent() {
+        let project_root = exe_dir.parent().unwrap_or(exe_dir);
+        let mona_pkg_dir = project_root.join("mona");
+        if mona_pkg_dir.is_dir() {
+            // Dev mode: set PYTHONPATH to project root
+        }
+    }
+}
+```
 
 ## Windows CMD Window Suppression
 
@@ -248,14 +268,34 @@ Files that require this flag:
 
 ## Updating Icons
 
-When the logo changes, regenerate all icon formats:
+When the logo changes:
 
-```powershell
-cd src-tauri
-cargo tauri icon ..\logo.png
-```
+1. **Ensure `logo.png` has transparent background** (RGBA mode, not RGB with white bg). If the logo has a white background, strip it first:
+   ```python
+   from PIL import Image
+   img = Image.open("logo.png").convert("RGBA")
+   # Remove white background
+   r, g, b, a = img.split()
+   diff = ImageChops.difference(Image.merge("RGB", (r, g, b)), Image.new("RGB", img.size, (255, 255, 255)))
+   alpha = diff.convert("L").point(lambda x: 255 if x > 10 else 0)
+   img.putalpha(alpha)
+   img.save("logo.png")
+   ```
 
-Also update WebUI brand images in `webui/public/brand/` if needed.
+2. **Regenerate Tauri icons:**
+   ```powershell
+   cd src-tauri
+   cargo tauri icon ..\logo.png
+   ```
+
+3. **Update WebUI brand images** in `webui/public/brand/` if needed.
+
+4. **Clear Windows icon cache** after installing:
+   ```powershell
+   Remove-Item "$env:LOCALAPPDATA\IconCache.db" -Force -ErrorAction SilentlyContinue
+   Remove-Item "$env:LOCALAPPDATA\Microsoft\Windows\Explorer\iconcache*" -Force -ErrorAction SilentlyContinue
+   Stop-Process -Name explorer -Force; Start-Sleep 2; Start-Process explorer
+   ```
 
 ## Size Optimization
 
@@ -269,50 +309,14 @@ Also update WebUI brand images in `webui/public/brand/` if needed.
 
 Typical installer size: ~170MB (Python runtime ~80MB + deps ~80MB + Tauri ~10MB)
 
-## CI/CD Integration (GitHub Actions)
-
-```yaml
-name: Build Windows Installer
-on:
-  push:
-    tags: ["v*"]
-jobs:
-  build:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-pc-windows-msvc
-      - name: Setup bun
-        run: npm install -g bun
-      - name: Build Python runtime
-        run: powershell -File scripts/build-python-runtime.ps1
-      - name: Build WebUI
-        run: cd webui && bun install && bun run build:tauri
-      - name: Build Tauri
-        run: cd src-tauri && cargo tauri build
-        env:
-          CI: ""
-      - uses: actions/upload-artifact@v4
-        with:
-          name: Mona-installer
-          path: |
-            src-tauri/target/release/bundle/msi/*.msi
-            src-tauri/target/release/bundle/nsis/*.exe
-```
-
 ## Troubleshooting
 
 | Problem | Fix |
 |---------|-----|
+| Python runtime not found after install | `find_python_resource()` uses `resource_dir()` API — ensure `AppHandle` is passed correctly through the call chain |
 | `ImportError: cannot import name 'BaseTool'` | mona-ai was installed in editable mode (`.pth` points to source dir). Rebuild python.tar.gz with `pip install ".[extras]"` (no `-e`) |
 | `mona.__file__` points to source directory | Same as above — editable install. Verify from `C:\` not the project root |
 | CMD windows flash on launch | Add `creation_flags(0x08000000)` to all `Command::new()` calls on Windows |
-| `python.tar.gz` not found in resources | Run the Python runtime build script first |
 | Gateway fails to start | Check `%AppData%/mona/python/python.exe` exists; check logs in `%AppData%/mona/` |
 | First launch is slow | Expected — Python extraction takes 10-30s; subsequent launches are instant |
 | MSI install fails | Ensure no previous version running; try `msiexec /i Mona.msi /log install.log` |
@@ -321,9 +325,10 @@ jobs:
 | `taskkill` fails to stop gateway | Gateway process may have child processes; `taskkill /T /F` handles this |
 | Port conflict | Gateway auto-searches ports `gateway_port` to `gateway_port + 5` |
 | `error: invalid value '1' for '--ci'` | Set `$env:CI = ""` before running `cargo tauri build` |
-| `npm error Missing script: "build:web"` | Ensure `tauri.conf.json` uses `"npm run build:tauri"` not `"npm run build:web && npm run build"` |
-| Taskbar shows old icon | Windows icon cache may be stale; run `cargo tauri icon ..\logo.png` and rebuild |
+| Taskbar shows old icon | Windows icon cache; regenerate icons with `cargo tauri icon ..\logo.png` and clear cache |
 | Version mismatch between MSI and Cargo.toml | Both `tauri.conf.json` and `Cargo.toml` must have the same `version` — see Step 0 |
+| Icon has white background on taskbar | `logo.png` must be RGBA with transparent background, not RGB with white pixels |
+| `CARGO_MANIFEST_DIR` path not found | Never use `env!("CARGO_MANIFEST_DIR")` — it's a compile-time constant pointing to build machine source dir. Use runtime detection instead. |
 
 ## File Structure Reference
 
@@ -332,14 +337,13 @@ src-tauri/
 ├── Cargo.toml              # Rust dependencies + desktop app version
 ├── tauri.conf.json         # Tauri bundle config (version, targets, icons, resources)
 ├── build.rs                # Tauri build script
-├── download-python.ps1     # Download python-build-standalone (raw, no deps)
 ├── resources/
 │   ├── README              # Notes about Python runtime
 │   └── python.tar.gz       # Pre-built Python + mona-ai (generated by build script)
 ├── src/
 │   ├── lib.rs              # App setup, gateway auto-start, open::that with CREATE_NO_WINDOW
-│   ├── gateway.rs          # Gateway process management (start/stop/health check, CREATE_NO_WINDOW)
-│   ├── python.rs           # Python runtime initialization (extract + version check, NO pip install)
+│   ├── gateway.rs          # Gateway process management (start/stop/health, needs AppHandle, CREATE_NO_WINDOW)
+│   ├── python.rs           # Python runtime init (uses resource_dir() via AppHandle, NO pip install)
 │   ├── settings.rs         # App settings (run_in_background, auto_start_gateway, port)
 │   ├── tray.rs             # System tray (show window, open browser, quit, CREATE_NO_WINDOW)
 │   ├── license.rs          # License validation (wmic with CREATE_NO_WINDOW)

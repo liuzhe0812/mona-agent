@@ -334,7 +334,7 @@ function buildPptPrompt(config: PptConfig, projectName: string): string {
   // reinforce the most frequently violated rules — keep them short.
   parts.push("");
   parts.push("⚠️ 关键规则提醒（详见 mona-ppt SKILL.md）：");
-  parts.push("- Step 5：当 design_spec 有 Acquire Via: ai 行时，必须执行，用 generate_image 工具生图，禁止跳过");
+  parts.push("- Step 5：当 design_spec 有需要图片的行时，用 web_search 搜图，用 web_fetch 下载一张到 <project_path>/images/，然后审查图片质量和内容相关性；如果不符合要求，继续下载其他搜索结果；如果 web_search 不可用，再用 generate_image 工具生图");
   if (usesNativeTemplate) {
     parts.push("- 自定义模板模式：仍按正常 SVG 高质量管线生成和质检，导出时用 svg_to_pptx.py 加 --template-underlay");
   } else {

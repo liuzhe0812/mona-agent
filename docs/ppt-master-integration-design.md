@@ -1,6 +1,6 @@
-# PPT Master 集成到 Mona 的设计方案（完整 Fork 版）
+﻿# PPT Master 集成到 Mona 的设计方案（完整 Fork 版）
 
-> **目标：** 完整 Fork `hugohe3/ppt-master` 到 Mona 的 Skill 系统，保持所有原始文件、结构和内容不变，仅做运行环境的最小必要适配。
+> **目标：** 完整 Fork `hugohe3/mona-ppt` 到 Mona 的 Skill 系统，保持所有原始文件、结构和内容不变，仅做运行环境的最小必要适配。
 
 ---
 
@@ -8,7 +8,7 @@
 
 ### 1.1 集成方式
 
-采用 **完整 Fork 方案**：将 PPT Master 的 `skills/ppt-master/` 目录**原封不动**复制到 `mona/skills/ppt-master/`，保持：
+采用 **完整 Fork 方案**：将 PPT Master 的 `skills/mona-ppt/` 目录**原封不动**复制到 `mona/skills/mona-ppt/`，保持：
 
 - 完整的 SKILL.md（564 行，不做任何删减）
 - 完整的 references/ 目录结构
@@ -40,7 +40,7 @@ PPT Master 是一个**严格串行、上下文依赖极强**的流水线系统�
 ### 2.1 Skill 目录布局（完整 Fork）
 
 ```
-mona/skills/ppt-master/
+mona/skills/mona-ppt/
 ├── SKILL.md                          # 完整原始 SKILL.md（564 行，不做删减）
 ├── requirements.txt                  # PPT Master 依赖清单（完整）
 ├── references/
@@ -103,11 +103,11 @@ mona/skills/ppt-master/
 
 | 原仓库路径 | Mona Skill 路径 | 处理方式 |
 |-----------|----------------|---------|
-| `skills/ppt-master/SKILL.md` | `mona/skills/ppt-master/SKILL.md` | **完整复制，仅适配 `${SKILL_DIR}` 和 `python3`** |
-| `skills/ppt-master/references/` | `mona/skills/ppt-master/references/` | **完整复制，不做任何修改** |
-| `skills/ppt-master/scripts/` | `mona/skills/ppt-master/scripts/` | **完整复制，仅适配路径变量** |
-| `skills/ppt-master/templates/` | `mona/skills/ppt-master/templates/` | **完整复制** |
-| `skills/ppt-master/workflows/` | `mona/skills/ppt-master/references/workflows/` | **完整复制，保持原结构** |
+| `skills/mona-ppt/SKILL.md` | `mona/skills/mona-ppt/SKILL.md` | **完整复制，仅适配 `${SKILL_DIR}` 和 `python3`** |
+| `skills/mona-ppt/references/` | `mona/skills/mona-ppt/references/` | **完整复制，不做任何修改** |
+| `skills/mona-ppt/scripts/` | `mona/skills/mona-ppt/scripts/` | **完整复制，仅适配路径变量** |
+| `skills/mona-ppt/templates/` | `mona/skills/mona-ppt/templates/` | **完整复制** |
+| `skills/mona-ppt/workflows/` | `mona/skills/mona-ppt/references/workflows/` | **完整复制，保持原结构** |
 
 ---
 
@@ -138,8 +138,8 @@ PPT Master 使用 `${SKILL_DIR}` 指向 skill 安装目录。Mona 没有此变�
 ## Mona Environment Setup
 
 When running in Mona, the skill directory is resolved as follows:
-- Builtin skill: `<mona-install-dir>/mona/skills/ppt-master/`
-- Workspace skill: `<workspace>/skills/ppt-master/`
+- Builtin skill: `<mona-install-dir>/mona/skills/mona-ppt/`
+- Workspace skill: `<workspace>/skills/mona-ppt/`
 
 All `${SKILL_DIR}` references in this document should be resolved to the actual skill directory path.
 ```
@@ -167,12 +167,12 @@ use `python` instead. The agent will automatically detect the correct command.
 
 ```yaml
 ---
-name: ppt-master
+name: mona-ppt
 description: >
   AI-driven multi-format SVG content generation system. Converts source documents
   (PDF/DOCX/URL/Markdown) into high-quality SVG pages and exports to PPTX through
   multi-role collaboration. Use when user asks to "create PPT", "make presentation",
-  "生成PPT", "做PPT", "制作演示文稿", or mentions "ppt-master".
+  "生成PPT", "做PPT", "制作演示文稿", or mentions "mona-ppt".
 metadata:
   mona:
     emoji: "📊"
@@ -248,7 +248,7 @@ flask>=3.0.0
 
 ```toml
 [project.optional-dependencies]
-ppt-master = [
+mona-ppt = [
     "python-pptx>=0.6.21",
     "svglib>=1.5.0",
     "reportlab>=4.0.0",
@@ -271,7 +271,7 @@ ppt-master = [
 
 安装命令：
 ```bash
-pip install mona[ppt-master]
+pip install mona[mona-ppt]
 ```
 
 ### 4.3 运行时依赖检查
@@ -284,7 +284,7 @@ Python 包依赖在 SKILL.md 中保留原始的前置检查说明：
 
 Install dependencies:
 ```bash
-pip install -r skills/ppt-master/requirements.txt
+pip install -r skills/mona-ppt/requirements.txt
 ```
 ```
 
@@ -360,7 +360,7 @@ ELEVENLABS_API_KEY="..."
 1. 当前工作目录
 2. Skill 目录
 3. 仓库根目录
-4. `~/.ppt-master/`
+4. `~/.mona-ppt/`
 
 ---
 
@@ -398,7 +398,7 @@ Save the returned artifact path to the project's `images/` directory and update 
 当 Mona 的 `generate_image` 未启用时，回退到 PPT Master 原生的 `image_gen.py`：
 
 ```bash
-python skills/ppt-master/scripts/image_gen.py "prompt" --backend openai
+python skills/mona-ppt/scripts/image_gen.py "prompt" --backend openai
 ```
 
 **配置控制**：`use_mona_image_gen: true`（默认）使用 Mona `generate_image`；`false` 使用 PPT Master `image_gen.py`。
@@ -424,9 +424,9 @@ PPT Master 的 `${SKILL_DIR}` 在 Mona 中通过以下方式解析：
 # 在 agent 执行时，通过工具上下文获取 skill 路径
 from mona.agent.skills import BUILTIN_SKILLS_DIR
 
-skill_dir = BUILTIN_SKILLS_DIR / "ppt-master"
+skill_dir = BUILTIN_SKILLS_DIR / "mona-ppt"
 # 或 workspace skill
-skill_dir = Path(workspace) / "skills" / "ppt-master"
+skill_dir = Path(workspace) / "skills" / "mona-ppt"
 ```
 
 ---
@@ -457,7 +457,7 @@ skill_dir = Path(workspace) / "skills" / "ppt-master"
 
 | 检查项 | 验证方式 |
 |--------|----------|
-| Skill 结构合法 | 运行 `quick_validate.py mona/skills/ppt-master/` |
+| Skill 结构合法 | 运行 `quick_validate.py mona/skills/mona-ppt/` |
 | 文件完整性 | 对比原仓库文件列表，确认无遗漏 |
 | 依赖安装完整 | `pip install -r requirements.txt` 成功 |
 | 脚本可执行 | 每个脚本 `--help` 正常输出 |
@@ -468,8 +468,8 @@ skill_dir = Path(workspace) / "skills" / "ppt-master"
 
 ```bash
 # 对比原仓库和 Fork 的文件列表
-diff <(cd ppt-master/skills/ppt-master && find . -type f | sort) \
-     <(cd mona/skills/ppt-master && find . -type f | sort)
+diff <(cd mona-ppt/skills/mona-ppt && find . -type f | sort) \
+     <(cd mona/skills/mona-ppt && find . -type f | sort)
 ```
 
 ---
@@ -481,7 +481,7 @@ diff <(cd ppt-master/skills/ppt-master && find . -type f | sort) \
 1. **复制文件**
    ```bash
    # 从 PPT Master 仓库复制
-   cp -r ppt-master/skills/ppt-master/* mona/skills/ppt-master/
+   cp -r mona-ppt/skills/mona-ppt/* mona/skills/mona-ppt/
    ```
 
 2. **适配 Frontmatter**
@@ -498,7 +498,7 @@ diff <(cd ppt-master/skills/ppt-master && find . -type f | sort) \
    - 在 `ToolsConfig` 中注册
 
 5. **依赖配置**
-   - 在 `pyproject.toml` 添加 `[ppt-master]` 可选依赖组
+   - 在 `pyproject.toml` 添加 `[mona-ppt]` 可选依赖组
 
 ### Phase 3：测试验证（0.5 天）
 
@@ -547,7 +547,7 @@ diff <(cd ppt-master/skills/ppt-master && find . -type f | sort) \
 | `SKILL.md` | 添加 `${SKILL_DIR}` 路径说明段落 | Mona 无变量替换机制 |
 | `SKILL.md` | 添加 `python3` / `python` 兼容说明 | Windows 兼容 |
 | `config/schema.py` | 添加 `PPTMasterConfig` | Mona 配置系统 |
-| `pyproject.toml` | 添加 `[ppt-master]` 可选依赖 | Mona 依赖管理 |
+| `pyproject.toml` | 添加 `[mona-ppt]` 可选依赖 | Mona 依赖管理 |
 
 **总计：5 处修改，均为必要适配，不涉及任何业务逻辑变更。**
 

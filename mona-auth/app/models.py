@@ -74,6 +74,16 @@ class Device(Base):
     user: Mapped["User"] = relationship(back_populates="devices")
 
 
+class TrialActivation(Base):
+    __tablename__ = "trial_activations"
+    __table_args__ = (UniqueConstraint("machine_fingerprint"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    machine_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    activated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+
 class Payment(Base):
     __tablename__ = "payments"
 

@@ -29,6 +29,7 @@ interface DbState {
   processes: ProcessInfo[];
   users: UserInfo[];
   newConnectionDialogOpen: boolean;
+  editConnectionConfig: DbConnectionConfig | null;
   isLoadingTree: boolean;
   isLoadingTable: boolean;
   connectingId: string | null;
@@ -51,6 +52,7 @@ interface DbState {
   setSelectedConnectionId: (id: string | null) => void;
   setSelectedDatabase: (db: string | null) => void;
   setNewConnectionDialogOpen: (open: boolean) => void;
+  setEditConnectionConfig: (config: DbConnectionConfig | null) => void;
   setConnectError: (error: string | null) => void;
   refreshServerStats: (connectionId: string) => Promise<void>;
   refreshProcesses: (connectionId: string) => Promise<void>;
@@ -76,6 +78,7 @@ export const useDbStore = create<DbState>((set, get) => ({
   processes: [],
   users: [],
   newConnectionDialogOpen: false,
+  editConnectionConfig: null,
   isLoadingTree: false,
   isLoadingTable: false,
   connectingId: null,
@@ -334,7 +337,7 @@ export const useDbStore = create<DbState>((set, get) => ({
 
     set((state) => ({
       queryTabs: state.queryTabs.map((t) =>
-        t.id === tabId ? { ...t, isExecuting: true, result: null } : t,
+        t.id === tabId ? { ...t, isExecuting: true } : t,
       ),
     }));
 
@@ -355,25 +358,73 @@ export const useDbStore = create<DbState>((set, get) => ({
           data_type: colTypes.get(col.name) ?? col.data_type,
         }));
       }
-      set((state) => ({
-        queryTabs: state.queryTabs.map((t) =>
-          t.id === tabId ? { ...t, result, isExecuting: false } : t,
-        ),
-      }));
+
+      // For non-SELECT statements on a table-bound tab, auto-refresh table data
+      const isTableTab = tab.title !== "新查询" && tab.database;
+      if (result.columns.length === 0 && isTableTab) {
+        const conn = get().activeConnections.find((c) => c.id === tab.connectionId);
+        const isSqlite = conn?.config.db_type === "sqlite";
+        const refreshSql = isSqlite
+          ? `SELECT * FROM "${tab.title}" LIMIT 100`
+          : `SELECT * FROM \`${tab.database}\`.\`${tab.title}\` LIMIT 100`;
+        try {
+          const refreshResult = await ipc.dbExecuteQuery(tab.connectionId, refreshSql, undefined, tab.database ?? undefined);
+          if (tab.tableInfo) {
+            const pkNames = new Set(
+              tab.tableInfo.columns
+                .filter((c) => c.is_primary_key)
+                .map((c) => c.name),
+            );
+            const colTypes = new Map(
+              tab.tableInfo.columns.map((c) => [c.name, c.data_type.toUpperCase()]),
+            );
+            refreshResult.columns = refreshResult.columns.map((col) => ({
+              ...col,
+              is_primary_key: pkNames.has(col.name),
+              data_type: colTypes.get(col.name) ?? col.data_type,
+            }));
+          }
+          // Carry over the original DDL/DML execution result
+          refreshResult.message = result.message;
+          refreshResult.affected_rows = result.affected_rows;
+          set((state) => ({
+            queryTabs: state.queryTabs.map((t) =>
+              t.id === tabId ? { ...t, result: refreshResult, isExecuting: false } : t,
+            ),
+          }));
+        } catch {
+          // Refresh failed — keep showing previous table data if any
+          set((state) => ({
+            queryTabs: state.queryTabs.map((t) =>
+              t.id === tabId ? { ...t, isExecuting: false } : t,
+            ),
+          }));
+        }
+      } else {
+        set((state) => ({
+          queryTabs: state.queryTabs.map((t) =>
+            t.id === tabId ? { ...t, result, isExecuting: false } : t,
+          ),
+        }));
+      }
     } catch (e) {
+      // Don't overwrite table data with error result — keep previous table visible
+      // Error info is available in the message tab
       set((state) => ({
         queryTabs: state.queryTabs.map((t) =>
           t.id === tabId
             ? {
                 ...t,
                 isExecuting: false,
-                result: {
-                  columns: [],
-                  rows: [],
-                  affected_rows: 0,
-                  execution_time_ms: 0,
-                  message: String(e),
-                },
+                result: t.result
+                  ? { ...t.result, message: String(e) }
+                  : {
+                      columns: [],
+                      rows: [],
+                      affected_rows: 0,
+                      execution_time_ms: 0,
+                      message: String(e),
+                    },
               }
             : t,
         ),
@@ -395,6 +446,10 @@ export const useDbStore = create<DbState>((set, get) => ({
 
   setNewConnectionDialogOpen: (open) => {
     set({ newConnectionDialogOpen: open });
+  },
+
+  setEditConnectionConfig: (config) => {
+    set({ editConnectionConfig: config });
   },
 
   setConnectError: (error) => {

@@ -573,3 +573,26 @@ function formatKnowledgeCategoryPaths(categories: KnowledgeCategory[]): string[]
     .map((category) => getPath(category))
     .filter(Boolean);
 }
+
+export interface NoteSearchResult {
+  noteId: string;
+  title: string;
+  snippet: string;
+  rank: number;
+}
+
+export function formatKnowledgeBaseContext(results: NoteSearchResult[]): string {
+  if (results.length === 0) return "";
+
+  const sections = results
+    .map((r, i) => `### ${i + 1}. ${r.title}\n${r.snippet.replace(/⟨/g, "**").replace(/⟩/g, "**")}`)
+    .join("\n\n");
+
+  return [
+    "当前笔记本已设为知识库，以下是从笔记本中检索到的相关笔记片段，请结合这些内容回答：",
+    "",
+    sections,
+    "",
+    "如果检索内容不足以回答，请如实说明。",
+  ].join("\n");
+}

@@ -111,59 +111,47 @@ async fn gateway_status(state: tauri::State<'_, GatewayState>) -> Result<serde_j
 
 #[tauri::command]
 async fn initialize_python_env(app_handle: tauri::AppHandle) -> Result<(), String> {
-    python::initialize_python(&app_handle)
+    python::deploy_gateway(&app_handle)?;
+    Ok(())
 }
 
 #[tauri::command]
 async fn is_python_ready() -> Result<bool, String> {
-    Ok(python::is_python_initialized())
+    Ok(python::is_gateway_deployed())
 }
 
 #[tauri::command]
 async fn diagnose_python(app_handle: tauri::AppHandle) -> Result<serde_json::Value, String> {
-    let exe = python::python_executable();
-    let marker = python::version_marker_path();
+    let gateway = python::gateway_exe_path();
     let resource_dir = app_handle.path().resource_dir().map(|p| p.display().to_string()).unwrap_or_else(|e| format!("ERROR: {}", e));
     let exe_path = std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_else(|e| format!("ERROR: {}", e));
     let data_dir = crate::settings::app_data_dir().display().to_string();
 
     let mut resource_candidates = Vec::new();
-    // Check resource_dir
     if let Ok(rd) = app_handle.path().resource_dir() {
-        for name in &["python.tar.gz", "python-install.tar.gz"] {
-            let c = rd.join(name);
-            resource_candidates.push(serde_json::json!({
-                "path": c.display().to_string(),
-                "exists": c.exists()
-            }));
-        }
+        let c = rd.join("mona-gateway.exe");
+        resource_candidates.push(serde_json::json!({
+            "path": c.display().to_string(),
+            "exists": c.exists()
+        }));
     }
-    // Check exe_dir/resources/
     if let Ok(ep) = std::env::current_exe() {
         if let Some(ed) = ep.parent() {
             for sub in &["resources", ""] {
-                for name in &["python.tar.gz", "python-install.tar.gz"] {
-                    let c = if sub.is_empty() { ed.join(name) } else { ed.join(sub).join(name) };
-                    resource_candidates.push(serde_json::json!({
-                        "path": c.display().to_string(),
-                        "exists": c.exists()
-                    }));
-                }
+                let c = if sub.is_empty() { ed.join("mona-gateway.exe") } else { ed.join(sub).join("mona-gateway.exe") };
+                resource_candidates.push(serde_json::json!({
+                    "path": c.display().to_string(),
+                    "exists": c.exists()
+                }));
             }
         }
     }
 
     Ok(serde_json::json!({
-        "python_exe": {
-            "path": exe.display().to_string(),
-            "exists": exe.exists()
+        "gateway_exe": {
+            "path": gateway.display().to_string(),
+            "exists": gateway.exists()
         },
-        "version_marker": {
-            "path": marker.display().to_string(),
-            "exists": marker.exists(),
-            "content": std::fs::read_to_string(&marker).unwrap_or_default()
-        },
-        "expected_version": python::PYTHON_VERSION,
         "data_dir": data_dir,
         "resource_dir": resource_dir,
         "current_exe": exe_path,
@@ -300,6 +288,7 @@ pub fn run() {
             notes::notes_save_state,
             notes::notes_export_temp,
             notes::notes_create_from_chat,
+            notes::notes_search,
             terminal::commands::ssh_connect,
             terminal::commands::ssh_connect_with_id,
             terminal::commands::ssh_disconnect,
@@ -382,6 +371,11 @@ pub fn run() {
             license::import_license,
         ])
         .setup(move |app| {
+            // 设置高分辨率窗口图标，确保任务栏在高 DPI 下清晰
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.set_icon(tray::load_icon());
+            }
+
             tray::setup_tray(app)?;
 
             let app_handle_for_file = app.handle().clone();

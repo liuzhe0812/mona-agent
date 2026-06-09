@@ -42,3 +42,19 @@
 - Agent 系统提示词和场景指令位于 `mona/templates/`，使用 Jinja2 markdown 格式
 - 修改模板文件等同于修改运行时代码，需保持变更范围最小
 - 不要教模型重复内部标记、本地路径或 tool-call 文本
+
+## UI 规范
+
+### 红线：禁止使用浏览器原生控件样式
+
+- **禁止直接使用浏览器原生表单控件**（`<input>`、`<textarea>`、`<select>`、`<button>` 等），必须使用项目 UI 组件库封装的对应组件，确保视觉风格统一
+- 输入框：使用 `Input`（`@/components/ui/input`）或 `Textarea`（`@/components/ui/textarea`）
+- 下拉选择：使用 `Select` / `Combobox` 等组件库封装
+- 按钮：使用 `Button`（`@/components/ui/button`）
+- 全局已通过 `globals.css` 移除浏览器默认 focus outline（`*:focus { outline: none; }`），聚焦样式由组件库内部 `focus-visible:ring` 控制
+
+### 输入框细节
+
+- 圆角统一使用 `rounded-full`（单行输入）或 `rounded-lg`（多行文本域）
+- 高度统一 `h-8`，字号 `text-[13px]`
+- 禁止在输入框上添加额外的 `border`、`outline`、`ring` 样式，除非有明确的交互需求（如错误状态 `ring-destructive`）

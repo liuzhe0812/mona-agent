@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <defs>
+    <radialGradient id="eye" cx="50%" cy="42%" r="68%">
+      <stop offset="0%" stop-color="#7fc8ff" />
+      <stop offset="45%" stop-color="#3c83da" />
+      <stop offset="100%" stop-color="#1151b7" />
+    </radialGradient>
+  </defs>
+  <!-- 白色圆角背景 -->
+  <rect x="0" y="0" width="128" height="128" rx="28" fill="#ffffff" />
+  <!-- 猫头居中：所有 y 坐标 +16 -->
+  <g>
+    <!-- 左耳 -->
+    <path d="M17 68C18 52 23 33 29 20c13 5 25 17 36 35L42 75C34 71 26 69 17 68z" fill="#18192b" stroke="#0b0d17" stroke-width="2.1" stroke-linejoin="round" />
+    <!-- 右耳 -->
+    <path d="M111 68c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#18192b" stroke="#0b0d17" stroke-width="2.1" stroke-linejoin="round" />
+    <!-- 左耳内 -->
+    <path d="M31 30c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f8f6ee" stroke="#0b0d17" stroke-width="1.1" stroke-linejoin="round" />
+    <!-- 右耳内 -->
+    <path d="M97 30c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f8f6ee" stroke="#0b0d17" stroke-width="1.1" stroke-linejoin="round" />
+    <!-- 耳纹 -->
+    <path d="M34 37c2.5 4.5 4 8.5 4 13M45 47c-3 3-4 6.5-3 10M94 37c-2.5 4.5-4 8.5-4 13M83 47c3 3 4 6.5 3 10" fill="none" stroke="#d6d2c7" stroke-width="1.15" stroke-linecap="round" />
+    <!-- 头部轮廓 -->
+    <path d="M17 65c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 92 17 65z" fill="#18192b" stroke="#0b0d17" stroke-width="1.4" />
+    <!-- 面部白色 -->
+    <path d="M18 74c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 94 18 74z" fill="#f1eee2" />
+    <!-- 额头 -->
+    <path d="M50 33c9-3 20-3 30 0 0 5-7 8-16 8s-14-3-14-8z" fill="#363a55" opacity="0.55" />
+    <!-- 左眼 -->
+    <g>
+      <ellipse cx="42" cy="59" rx="13.2" ry="24" fill="#f8fafc" stroke="#0b0d17" stroke-width="1.2" />
+      <ellipse cx="42" cy="59" rx="8.9" ry="17.2" fill="url(#eye)" stroke="#0b0d17" stroke-width="1.1" />
+      <ellipse cx="43.6" cy="59" rx="2" ry="9.3" fill="#061225" />
+      <path d="M50 66c2.1 0 3.1-1.1 3.1-2.4" fill="none" stroke="#f2fdff" stroke-width="2" stroke-linecap="round" />
+    </g>
+    <!-- 右眼 -->
+    <g>
+      <ellipse cx="86" cy="59" rx="13.2" ry="24" fill="#f8fafc" stroke="#0b0d17" stroke-width="1.2" />
+      <ellipse cx="86" cy="59" rx="8.9" ry="17.2" fill="url(#eye)" stroke="#0b0d17" stroke-width="1.1" />
+      <ellipse cx="87.6" cy="59" rx="2" ry="9.3" fill="#061225" />
+      <path d="M94 66c2.1 0 3.1-1.1 3.1-2.4" fill="none" stroke="#f2fdff" stroke-width="2" stroke-linecap="round" />
+    </g>
+    <!-- 嘴巴 -->
+    <path d="M53 91c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#111827" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" />
+  </g>
+</svg>

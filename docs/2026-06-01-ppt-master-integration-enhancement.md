@@ -1,4 +1,4 @@
-# PPT Master 集成增强实施计划（修订版）
+﻿# PPT Master 集成增强实施计划（修订版）
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -34,7 +34,7 @@
 | `webui/src/components/ppt/PptMakerView.tsx` | 预生成项目名；修复状态检测；增加 Split Mode / TTS / 超时 |
 | `webui/src/components/ppt/PptConfigPanel.tsx` | 移除风格偏好（保留画布格式作为预填建议） |
 | `webui/src/components/ppt/PptChatPanel.tsx` | 增大面板高度 |
-| `mona/skills/ppt-master/scripts/svg_editor/server.py` | 添加 CORS 头，允许 iframe 嵌入 |
+| `mona/skills/mona-ppt/scripts/svg_editor/server.py` | 添加 CORS 头，允许 iframe 嵌入 |
 | `webui/src/components/ppt/PptPreview.tsx` | 重写为 iframe 嵌入 live-preview + 静态回退 |
 | `webui/src/components/ppt/PptHistory.tsx` | 增加 Split Mode 恢复入口 + 状态标签 |
 
@@ -42,7 +42,7 @@
 
 | 文件 | 原因 |
 |------|------|
-| `mona/skills/ppt-master/SKILL.md` | 完整 Fork 原则，不做删减 |
+| `mona/skills/mona-ppt/SKILL.md` | 完整 Fork 原则，不做删减 |
 | `mona/agent/skills.py` | SkillsLoader 机制无需改动 |
 | `mona/config/schema.py` | 现有 PPTMasterConfig 已够用 |
 
@@ -584,7 +584,7 @@ git commit -m "feat(ppt): enlarge chat panel height for better eight-confirmatio
 ## Task 6: Live Preview 服务端 CORS 适配
 
 **Files:**
-- Modify: `mona/skills/ppt-master/scripts/svg_editor/server.py`
+- Modify: `mona/skills/mona-ppt/scripts/svg_editor/server.py`
 
 Flask live-preview 服务需要允许 iframe 嵌入。注意：
 - 不设置 `X-Frame-Options`（Flask 默认不设置，浏览器默认允许同源 iframe；`ALLOWALL` 是非标准值，某些浏览器会当作 `DENY` 处理）
@@ -608,14 +608,14 @@ Flask live-preview 服务需要允许 iframe 嵌入。注意：
 
 - [ ] **Step 2: 验证修改**
 
-Run: `python -c "import ast; ast.parse(open('mona/skills/ppt-master/scripts/svg_editor/server.py', encoding='utf-8').read()); print('syntax OK')"`
+Run: `python -c "import ast; ast.parse(open('mona/skills/mona-ppt/scripts/svg_editor/server.py', encoding='utf-8').read()); print('syntax OK')"`
 
 Expected: syntax OK
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add mona/skills/ppt-master/scripts/svg_editor/server.py
+git add mona/skills/mona-ppt/scripts/svg_editor/server.py
 git commit -m "feat(ppt): add CORS headers to live-preview Flask server for iframe embedding"
 ```
 
@@ -1008,7 +1008,7 @@ export function PptHistory({ onSelect, onDownload, onResume }: PptHistoryProps) 
       setProjectName(name);
       client.sendMessage(
         newChatId,
-        `继续生成 projects/${name}\n\n请先读取 skills/ppt-master/SKILL.md 了解 resume-execute 工作流，然后继续执行。`,
+        `继续生成 projects/${name}\n\n请先读取 skills/mona-ppt/SKILL.md 了解 resume-execute 工作流，然后继续执行。`,
       );
       setPhase("generating");
       generationStartRef.current = Date.now();

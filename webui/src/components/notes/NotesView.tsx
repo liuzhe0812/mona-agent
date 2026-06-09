@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { saveMarkdownFile } from "@/lib/tauri";
 import { useLicense } from "@/hooks/useLicense";
+import { useKbStore } from "@/stores/kb-store";
 
 import { KnowledgeView } from "./KnowledgeView";
 import { ConfirmDialog, PromptDialog } from "./NotesDialogs";
@@ -192,9 +193,10 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
           lastSavedSnapshotRef.current = snapshot;
           if (latestSnapshotRef.current === snapshot) setSaveStatus("saved");
         })
-        .catch(() => {
+        .catch((error) => {
           if (latestSnapshotRef.current === snapshot) setSaveStatus("error");
-          setNotice("笔记保存失败");
+          const msg = error instanceof Error ? error.message : String(error);
+          setNotice(`笔记保存失败：${msg}`);
         });
     }, 450);
 
@@ -216,6 +218,15 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
     const timer = window.setTimeout(() => setNotice(null), 1800);
     return () => window.clearTimeout(timer);
   }, [notice]);
+
+  // Sync notebook knowledge bases to kb-store for chat selector
+  const setNotebookKbList = useKbStore((s) => s.setNotebookKbList);
+  useEffect(() => {
+    const kbNotebooks = notebooks
+      .filter((n) => n.knowledgeBaseEnabled)
+      .map((n) => ({ id: n.id, name: n.name }));
+    setNotebookKbList(kbNotebooks);
+  }, [notebooks, setNotebookKbList]);
 
   useEffect(() => {
     if (!activeNote && notebookNotes[0]) {
@@ -1037,6 +1048,7 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
 
       <NoteAgentPanel
         note={activeNote}
+        notebook={activeNotebook}
         knowledgeCategories={knowledgeCategories}
         knowledgeTags={knowledgeTags}
         collapsed={agentPanelCollapsed}

@@ -32,27 +32,28 @@ impl GatewayManager {
             }
         }
 
-        let python_exe = if python::is_python_initialized() {
-            python::python_executable()
-        } else if let Some(sys_python) = python::find_system_python() {
-            log::info!("Using system Python: {:?}", sys_python);
-            sys_python
-        } else {
-            python::initialize_python(app_handle)?;
-            python::python_executable()
-        };
-
         let port = find_available_port(settings.gateway_port)?;
 
-        if !python_exe.exists() {
+        // Try system Python first (for dev mode), then fall back to packaged gateway
+        let (exe_path, args) = if let Some(sys_python) = python::find_system_python() {
+            log::info!("Using system Python: {:?}", sys_python);
+            (sys_python, vec!["-m".to_string(), "mona".to_string(), "gateway".to_string(), "--port".to_string(), port.to_string()])
+        } else if let Ok(gateway) = python::deploy_gateway(app_handle) {
+            log::info!("Using packaged gateway: {:?}", gateway);
+            (gateway, vec!["gateway".to_string(), "--port".to_string(), port.to_string()])
+        } else {
+            return Err("No gateway available. Neither system Python nor packaged gateway found.".into());
+        };
+
+        if !exe_path.exists() {
             return Err(format!(
-                "Python executable not found at {:?}. Please restart the app to re-initialize.",
-                python_exe
+                "Gateway executable not found at {:?}",
+                exe_path
             ));
         }
 
-        let mut cmd = std::process::Command::new(&python_exe);
-        cmd.args(["-m", "mona", "gateway", "--port", &port.to_string()]);
+        let mut cmd = std::process::Command::new(&exe_path);
+        cmd.args(&args);
 
         if let Some(ref config_path) = settings.config_path {
             cmd.args(["--config", config_path]);
@@ -60,25 +61,23 @@ impl GatewayManager {
 
         cmd.env("PYTHONUNBUFFERED", "1");
 
-        // Only set PYTHONPATH in dev mode (when source tree exists next to exe)
-        // In packaged builds, mona-ai is installed in site-packages
-        if let Ok(exe_path) = std::env::current_exe() {
-            if let Some(exe_dir) = exe_path.parent() {
-                let project_root = exe_dir.parent().unwrap_or(exe_dir);
-                let mona_pkg_dir = project_root.join("mona");
-                if mona_pkg_dir.is_dir() {
-                    let sep = if cfg!(windows) { ";" } else { ":" };
-                    let existing = std::env::var("PYTHONPATH").unwrap_or_default();
-                    let new_path = if existing.is_empty() {
-                        project_root.display().to_string()
-                    } else {
-                        format!("{}{}{}", project_root.display(), sep, existing)
-                    };
-                    cmd.env("PYTHONPATH", &new_path);
-                    log::info!(
-                        "Dev mode detected: PYTHONPATH set to {:?}",
-                        project_root
-                    );
+        // In dev mode (system Python), set PYTHONPATH if source tree exists
+        if args.first().map(|s| s.as_str()) == Some("-m") {
+            if let Ok(exe_path) = std::env::current_exe() {
+                if let Some(exe_dir) = exe_path.parent() {
+                    let project_root = exe_dir.parent().unwrap_or(exe_dir);
+                    let mona_pkg_dir = project_root.join("mona");
+                    if mona_pkg_dir.is_dir() {
+                        let sep = if cfg!(windows) { ";" } else { ":" };
+                        let existing = std::env::var("PYTHONPATH").unwrap_or_default();
+                        let new_path = if existing.is_empty() {
+                            project_root.display().to_string()
+                        } else {
+                            format!("{}{}{}", project_root.display(), sep, existing)
+                        };
+                        cmd.env("PYTHONPATH", &new_path);
+                        log::info!("Dev mode: PYTHONPATH set to {:?}", project_root);
+                    }
                 }
             }
         }

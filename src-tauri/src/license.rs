@@ -8,6 +8,8 @@ use base64::Engine;
 use std::os::windows::process::CommandExt;
 
 const LICENSE_FILENAME: &str = "license.jwt";
+const TRIAL_CACHE_FILENAME: &str = "trial_cache.json";
+const AUTH_SERVER_URL: &str = "http://47.117.69.105:8000";
 const TRIAL_DAYS: i64 = 31;
 
 fn license_dir() -> Result<PathBuf, String> {
@@ -21,45 +23,93 @@ fn license_path() -> Result<PathBuf, String> {
     Ok(license_dir()?.join(LICENSE_FILENAME))
 }
 
-fn trial_marker_path() -> Result<PathBuf, String> {
-    Ok(license_dir()?.join("first_run"))
+fn trial_cache_path() -> Result<PathBuf, String> {
+    Ok(license_dir()?.join(TRIAL_CACHE_FILENAME))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct TrialCache {
+    active: bool,
+    expires_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct TrialActivateResponse {
+    active: bool,
+    expires_at: Option<String>,
+}
+
+fn get_machine_fingerprint() -> String {
+    let fingerprint = collect_fingerprint();
+    let mut hasher = Sha256::new();
+    hasher.update(fingerprint.as_bytes());
+    hex::encode(hasher.finalize())
+}
+
+async fn activate_trial_server() -> Result<TrialActivateResponse, String> {
+    let machine_fp = get_machine_fingerprint();
+    let url = format!("{}/trial/activate", AUTH_SERVER_URL);
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("HTTP client error: {}", e))?;
+
+    let resp = client
+        .post(&url)
+        .json(&serde_json::json!({ "machine_fingerprint": machine_fp }))
+        .send()
+        .await
+        .map_err(|e| format!("Trial activation request failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("Trial activation server error: {}", resp.status()));
+    }
+
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Trial activation parse error: {}", e))?;
+
+    let active = body.get("active").and_then(|v| v.as_bool()).unwrap_or(false);
+    let expires_at = body
+        .get("expires_at")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    Ok(TrialActivateResponse { active, expires_at })
+}
+
+fn save_trial_cache(active: bool, expires_at: &str) {
+    if let Ok(path) = trial_cache_path() {
+        if let Ok(dir) = license_dir() {
+            let _ = std::fs::create_dir_all(&dir);
+        }
+        let cache = TrialCache {
+            active,
+            expires_at: expires_at.to_string(),
+        };
+        if let Ok(json) = serde_json::to_string(&cache) {
+            let _ = std::fs::write(&path, json);
+        }
+    }
+}
+
+fn load_trial_cache() -> Option<TrialCache> {
+    let path = trial_cache_path().ok()?;
+    if !path.exists() {
+        return None;
+    }
+    let content = std::fs::read_to_string(&path).ok()?;
+    serde_json::from_str(&content).ok()
 }
 
 fn get_trial_status() -> (bool, String) {
-    let marker = match trial_marker_path() {
-        Ok(p) => p,
-        Err(_) => return (false, String::new()),
-    };
-
-    let first_run = if marker.exists() {
-        match std::fs::read_to_string(&marker) {
-            Ok(ts) => match ts.trim().parse::<i64>() {
-                Ok(v) => chrono::DateTime::from_timestamp(v, 0),
-                Err(_) => None,
-            },
-            Err(_) => None,
-        }
-    } else {
-        None
-    };
-
-    let first_run = match first_run {
-        Some(dt) => dt,
-        None => {
-            let now = chrono::Utc::now();
-            if let Ok(dir) = license_dir() {
-                let _ = std::fs::create_dir_all(&dir);
-                let _ = std::fs::write(&marker, now.timestamp().to_string());
-            }
-            now
-        }
-    };
-
-    let trial_end = first_run + chrono::Duration::days(TRIAL_DAYS);
-    let now = chrono::Utc::now();
-    let active = now <= trial_end;
-    let expires_at = trial_end.format("%Y-%m-%d").to_string();
-    (active, expires_at)
+    // Try to load from local cache first (used as fallback)
+    if let Some(cache) = load_trial_cache() {
+        return (cache.active, cache.expires_at);
+    }
+    (false, String::new())
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -74,29 +124,61 @@ struct LicenseClaims {
 
 #[tauri::command]
 pub async fn get_machine_id() -> Result<String, String> {
-    let fingerprint = collect_fingerprint();
-    let mut hasher = Sha256::new();
-    hasher.update(fingerprint.as_bytes());
-    let hash = hasher.finalize();
-    Ok(hex::encode(hash))
+    Ok(get_machine_fingerprint())
 }
 
 #[tauri::command]
 pub async fn check_license() -> Result<serde_json::Value, String> {
     let path = license_path()?;
     if !path.exists() {
-        let (trial_active, expires_at) = get_trial_status();
-        if trial_active {
-            return Ok(serde_json::json!({
-                "status": "valid",
-                "expires_at": expires_at,
-                "trial": true
-            }));
+        // No license file — check trial via server
+        match activate_trial_server().await {
+            Ok(resp) => {
+                let expires_at = resp.expires_at.clone().unwrap_or_default();
+                save_trial_cache(resp.active, &expires_at);
+                if resp.active {
+                    return Ok(serde_json::json!({
+                        "status": "valid",
+                        "expires_at": expires_at,
+                        "trial": true
+                    }));
+                }
+                return Ok(serde_json::json!({
+                    "status": "expired",
+                    "expires_at": expires_at,
+                    "trial": true
+                }));
+            }
+            Err(_) => {
+                // Network error — fall back to local cache
+                let (active, expires_at) = get_trial_status();
+                if active {
+                    return Ok(serde_json::json!({
+                        "status": "valid",
+                        "expires_at": expires_at,
+                        "trial": true
+                    }));
+                }
+                if !expires_at.is_empty() {
+                    return Ok(serde_json::json!({
+                        "status": "expired",
+                        "expires_at": expires_at,
+                        "trial": true
+                    }));
+                }
+                // No cache at all — grant local temporary trial,
+                // will be synced with server on next successful connection
+                let now = chrono::Utc::now();
+                let trial_end = now + chrono::Duration::days(TRIAL_DAYS);
+                let expires_at_str = trial_end.format("%Y-%m-%d").to_string();
+                save_trial_cache(true, &expires_at_str);
+                return Ok(serde_json::json!({
+                    "status": "valid",
+                    "expires_at": expires_at_str,
+                    "trial": true
+                }));
+            }
         }
-        return Ok(serde_json::json!({
-            "status": "missing",
-            "expires_at": null
-        }));
     }
 
     let token = std::fs::read_to_string(&path)
@@ -124,12 +206,7 @@ pub async fn check_license() -> Result<serde_json::Value, String> {
     };
 
     let current_fp = {
-        let machine_id = {
-            let fingerprint = collect_fingerprint();
-            let mut hasher = Sha256::new();
-            hasher.update(fingerprint.as_bytes());
-            hex::encode(hasher.finalize())
-        };
+        let machine_id = get_machine_fingerprint();
         let mut hasher = Sha256::new();
         hasher.update(machine_id.as_bytes());
         hex::encode(hasher.finalize())

@@ -120,16 +120,27 @@ export function ThreadShell({
   } = useSessionHistory(historyKey);
   const { client, modelName, token } = useClient();
   const kbProjectsRaw = useKbStore((s) => s.projects);
+  const notebookKbList = useKbStore((s) => s.notebookKbList);
   const kbProjects = useMemo(
-    () => kbProjectsRaw.map((p) => ({ id: p.id, name: p.name })),
-    [kbProjectsRaw],
+    () => [
+      ...kbProjectsRaw.map((p) => ({ id: p.id, name: p.name, isNotebook: false })),
+      ...notebookKbList.map((n) => ({ id: `notebook:${n.id}`, name: n.name, isNotebook: true })),
+    ],
+    [kbProjectsRaw, notebookKbList],
   );
   const selectedKbForChat = useKbStore((s) => s.selectedKbForChat);
   const setSelectedKbForChat = useKbStore((s) => s.setSelectedKbForChat);
   const selectedKbProjectName = useKbStore(
     (s) => {
       const p = s.projects.find((p) => p.id === s.selectedKbForChat);
-      return p?.name ?? null;
+      if (p) return p.name;
+      // Check notebook knowledge bases
+      if (s.selectedKbForChat?.startsWith("notebook:")) {
+        const nbId = s.selectedKbForChat.slice("notebook:".length);
+        const nb = s.notebookKbList.find((n) => n.id === nbId);
+        if (nb) return nb.name;
+      }
+      return null;
     },
   );
   const [booting, setBooting] = useState(false);
@@ -415,18 +426,45 @@ export function ThreadShell({
     }
   }, [imageMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const injectKbContext = useCallback(
+    async (content: string): Promise<string> => {
+      if (!selectedKbForChat) return content;
+      try {
+        if (selectedKbForChat.startsWith("notebook:")) {
+          const notebookId = selectedKbForChat.slice("notebook:".length);
+          const { searchNotebookNotes } = await import("@/lib/tauri");
+          const { formatKnowledgeBaseContext } = await import("@/components/notes/notes-ai");
+          const results = await searchNotebookNotes(notebookId, content);
+          const kbContext = formatKnowledgeBaseContext(results);
+          if (kbContext) return `${kbContext}\n\n---\n\n${content}`;
+        } else {
+          const ragContext = await retrieveKbContext(selectedKbForChat, content);
+          if (ragContext) {
+            const systemPrompt = buildKbSystemPrompt(ragContext);
+            return `${systemPrompt}\n\n---\n\n${content}`;
+          }
+        }
+      } catch (err) {
+        console.warn("[ThreadShell] KB RAG retrieval failed:", err);
+      }
+      return content;
+    },
+    [selectedKbForChat],
+  );
+
   const handleWelcomeSend = useCallback(
     async (content: string, images?: SendImage[], options?: SendOptions) => {
       if (booting) return;
       setBooting(true);
-      pendingFirstRef.current = { content, images, options };
+      const finalContent = await injectKbContext(content);
+      pendingFirstRef.current = { content: finalContent, images, options };
       const newId = await onCreateChat?.();
       if (!newId) {
         pendingFirstRef.current = null;
         setBooting(false);
       }
     },
-    [booting, onCreateChat],
+    [booting, onCreateChat, injectKbContext],
   );
 
   const handleThreadSend = useCallback(
@@ -436,24 +474,10 @@ export function ThreadShell({
         return;
       }
       setScrollToBottomSignal((value) => value + 1);
-
-      // Inject KB RAG context if a knowledge base is selected
-      let finalContent = content;
-      if (selectedKbForChat) {
-        try {
-          const ragContext = await retrieveKbContext(selectedKbForChat, content);
-          if (ragContext) {
-            const systemPrompt = buildKbSystemPrompt(ragContext);
-            finalContent = `${systemPrompt}\n\n---\n\n${content}`;
-          }
-        } catch (err) {
-          console.warn("[ThreadShell] KB RAG retrieval failed:", err);
-        }
-      }
-
+      const finalContent = await injectKbContext(content);
       send(finalContent, _images, _options);
     },
-    [isStreaming, pendingQueue, send, selectedKbForChat],
+    [isStreaming, pendingQueue, send, injectKbContext],
   );
 
   const handlePendingAppend = useCallback(

@@ -9,6 +9,7 @@ import {
   listSessions,
 } from "@/lib/api";
 import { deriveTitle } from "@/lib/format";
+import { resolveUIImageUrls, resolveMediaAttachmentUrls } from "@/lib/media";
 import type { ChatSummary, UIMessage } from "@/lib/types";
 
 const EMPTY_MESSAGES: UIMessage[] = [];
@@ -174,6 +175,8 @@ export function useSessionHistory(key: string | null): {
           ...m,
           id: m.id ?? `hist-${idx}`,
           createdAt: typeof m.createdAt === "number" ? m.createdAt : Date.now(),
+          images: resolveUIImageUrls(m.images),
+          media: resolveMediaAttachmentUrls(m.media),
         }));
         const last = ui[ui.length - 1];
         const hasPending = last?.kind === "trace";

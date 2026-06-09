@@ -70,16 +70,20 @@ export function MessageBubble({
   const onSaveAsNote = useCallback(() => {
     if (!isTauri() || saved) return;
     const title = message.content.split("\n").find((line) => line.trim().length > 0)?.slice(0, 60) ?? "未命名笔记";
-    void createNoteFromChat(title, message.content).then(() => {
-      setSaved(true);
-      if (saveResetRef.current !== null) {
-        window.clearTimeout(saveResetRef.current);
-      }
-      saveResetRef.current = window.setTimeout(() => {
-        setSaved(false);
-        saveResetRef.current = null;
-      }, 2_000);
-    });
+    createNoteFromChat(title, message.content)
+      .then(() => {
+        setSaved(true);
+        if (saveResetRef.current !== null) {
+          window.clearTimeout(saveResetRef.current);
+        }
+        saveResetRef.current = window.setTimeout(() => {
+          setSaved(false);
+          saveResetRef.current = null;
+        }, 2_000);
+      })
+      .catch((err) => {
+        console.error("[MessageBubble] save as note failed:", err);
+      });
   }, [message.content, saved]);
 
   if (message.kind === "trace") {

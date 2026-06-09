@@ -1,4 +1,4 @@
-# PPT 制作功能实施计划
+﻿# PPT 制作功能实施计划
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -6,7 +6,7 @@
 
 **Architecture:** 前端新增 PptMakerView 独立页面（ShellView="ppt"），内含配置面板、iframe 预览、内嵌聊天面板（复用 useMonaStream + ephemeral 会话）。后端在 websocket.py 中新增 6 个 REST API 提供模板列表、SVG 缩略图、项目列表、下载、上传、预览端口查询。
 
-**Tech Stack:** React + TypeScript（前端），Python + aiohttp（后端 REST），Flask（ppt-master live-preview），WebSocket（ephemeral 会话）
+**Tech Stack:** React + TypeScript（前端），Python + aiohttp（后端 REST），Flask（mona-ppt live-preview），WebSocket（ephemeral 会话）
 
 ---
 
@@ -341,7 +341,7 @@ Expected: 编译成功，可以在浏览器中看到侧边栏新增的"PPT制作
             from mona.config.paths import get_workspace_path
             from mona.agent.skills import BUILTIN_SKILLS_DIR
 
-            skill_dir = BUILTIN_SKILLS_DIR / "ppt-master"
+            skill_dir = BUILTIN_SKILLS_DIR / "mona-ppt"
             layouts_index = skill_dir / "scripts" / "templates_full" / "layouts" / "layouts_index.json"
             decks_index = skill_dir / "scripts" / "templates_full" / "decks" / "decks_index.json"
 
@@ -411,7 +411,7 @@ Expected: 编译成功，可以在浏览器中看到侧边栏新增的"PPT制作
             if "/" in file or "\\" in file or ".." in file:
                 return _http_error(400, "invalid file")
 
-            skill_dir = BUILTIN_SKILLS_DIR / "ppt-master"
+            skill_dir = BUILTIN_SKILLS_DIR / "mona-ppt"
             subdir = "layouts" if kind == "layout" else "decks"
             svg_path = skill_dir / "scripts" / "templates_full" / subdir / key / file
 

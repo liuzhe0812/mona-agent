@@ -220,6 +220,37 @@ impl SftpClient {
         })
     }
 
+    pub async fn remove_dir_recursive(
+        &self,
+        sftp: &russh_sftp::client::SftpSession,
+        path: &str,
+    ) -> Result<(), TerminalError> {
+        let entries = sftp.read_dir(path).await.map_err(|e| {
+            TerminalError::SftpOperation(format!("read_dir failed: {}", e))
+        })?;
+        for entry in entries {
+            let name = entry.file_name();
+            if name == "." || name == ".." {
+                continue;
+            }
+            let entry_path = if path.ends_with('/') {
+                format!("{}{}", path, name)
+            } else {
+                format!("{}/{}", path, name)
+            };
+            if entry.file_type().is_dir() {
+                Box::pin(self.remove_dir_recursive(sftp, &entry_path)).await?;
+            } else {
+                sftp.remove_file(&entry_path).await.map_err(|e| {
+                    TerminalError::SftpOperation(format!("remove failed: {}", e))
+                })?;
+            }
+        }
+        sftp.remove_dir(path).await.map_err(|e| {
+            TerminalError::SftpOperation(format!("rmdir failed: {}", e))
+        })
+    }
+
     pub async fn remove(&self, path: &str) -> Result<(), TerminalError> {
         let guard = self.session.lock().await;
         let session = guard.as_ref().ok_or_else(|| {
@@ -510,6 +541,10 @@ impl SftpClient {
         })?;
 
         Ok(())
+    }
+
+    pub fn ssh_client(&self) -> Option<&Arc<SshClient>> {
+        self.ssh_client.as_ref()
     }
 
     pub async fn create_sftp_channel(

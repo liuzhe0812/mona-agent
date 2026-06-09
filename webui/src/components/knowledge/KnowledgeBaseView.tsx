@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react"
-import { FolderPlus, FileText, Network, Database, Search, Play, Loader2, Upload, ArrowLeft, X, ClipboardCheck, ShieldCheck, Pencil, Check, Settings } from "lucide-react"
+import { FolderPlus, FileText, Network, Database, Search, Play, Loader2, Upload, ArrowLeft, X, ClipboardCheck, ShieldCheck, Pencil, Check } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { useKbStore } from "@/stores/kb-store"
@@ -10,11 +10,11 @@ import { WikiViewer } from "./wiki-viewer"
 import { GraphView } from "./graph-view"
 import { ReviewView } from "./review-view"
 import { LintView } from "./lint-view"
-import { SettingsView } from "./settings/settings-view"
+import { EmbedSettingsCard } from "./settings/settings-view"
 import { searchKb, setKbToken, type SearchResult } from "@/lib/kb-api"
 import { useClient } from "@/providers/ClientProvider"
 
-type Tab = "files" | "wiki" | "graph" | "review" | "lint" | "settings"
+type Tab = "files" | "wiki" | "graph" | "review" | "lint"
 
 export function KnowledgeBaseView() {
   const { token } = useClient()
@@ -111,6 +111,11 @@ export function KnowledgeBaseView() {
             </div>
           </div>
         )}
+
+        {/* Embedding settings (global, shared by all projects) */}
+        <div className="w-full max-w-md">
+          <EmbedSettingsCard />
+        </div>
 
         {showNewProject ? (
           <div className="flex items-center gap-2">
@@ -321,7 +326,6 @@ export function KnowledgeBaseView() {
           ["graph", "知识图谱", Network],
           ["review", "审查", ClipboardCheck],
           ["lint", "检查", ShieldCheck],
-          ["settings", "设置", Settings],
         ] as const).map(([id, label, Icon]) => (
           <button
             key={id}
@@ -381,8 +385,6 @@ export function KnowledgeBaseView() {
           <ReviewView />
         ) : tab === "lint" ? (
           <LintView />
-        ) : tab === "settings" ? (
-          <SettingsView />
         ) : (
           <GraphView onNavigateToWiki={(path) => { setTab("wiki"); useKbStore.getState().loadWikiPage(path) }} />
         )}

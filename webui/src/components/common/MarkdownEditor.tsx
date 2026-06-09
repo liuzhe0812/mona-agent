@@ -157,7 +157,7 @@ export function MarkdownEditor({
   const lineCount = content.split(/\r?\n/).length;
 
   return (
-    <section className={cn("flex min-w-0 flex-1 flex-col bg-background", className)}>
+    <section className={cn("flex min-h-0 min-w-0 flex-1 flex-col bg-background", className)}>
       <div className="flex h-10 shrink-0 items-center justify-between border-b border-border/65 px-3">
         {showToolbar ? <EditorToolbar editor={editor} /> : <div />}
         <div className="flex items-center gap-0.5 rounded-lg border border-border/70 bg-muted/30 p-0.5">

@@ -225,16 +225,18 @@ export async function sftpDownloadDir(
   sessionId: string,
   remotePath: string,
   localPath: string,
+  taskId?: string,
 ): Promise<void> {
-  return invoke("sftp_download_dir", { sessionId, remotePath, localPath });
+  return invoke("sftp_download_dir", { sessionId, remotePath, localPath, taskId });
 }
 
 export async function sftpUploadDir(
   sessionId: string,
   localPath: string,
   remotePath: string,
+  taskId?: string,
 ): Promise<void> {
-  return invoke("sftp_upload_dir", { sessionId, localPath, remotePath });
+  return invoke("sftp_upload_dir", { sessionId, localPath, remotePath, taskId });
 }
 
 export interface TransferProgressEvent {

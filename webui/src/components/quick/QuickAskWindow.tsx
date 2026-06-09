@@ -89,9 +89,9 @@ export function QuickAskWindow() {
   return (
     <div
       data-tauri-drag-region
-      className="flex h-full w-full items-center justify-center bg-transparent px-5 py-4"
+      className="flex h-full w-full items-end justify-center bg-transparent pb-6"
     >
-      <div className="w-full max-w-[900px]">
+      <div className="w-full max-w-[58rem]">
         <ThreadComposer
           onSend={handleSend}
           disabled={submitting}

@@ -12,7 +12,8 @@ from typing import Any
 
 # Force UTF-8 encoding for Windows console
 if sys.platform == "win32":
-    if sys.stdout.encoding != "utf-8":
+    _stdout_ok = sys.stdout is not None and hasattr(sys.stdout, "encoding")
+    if _stdout_ok and sys.stdout.encoding != "utf-8":
         os.environ["PYTHONIOENCODING"] = "utf-8"
         # Re-open stdout/stderr with UTF-8 encoding
         with suppress(Exception):

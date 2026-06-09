@@ -106,8 +106,8 @@ fn show_quick_ask(app: &AppHandle) -> Result<(), String> {
         WebviewUrl::App("#/quick-ask".into()),
     )
     .title("Mona Quick Ask")
-    .inner_size(900.0, 190.0)
-    .min_inner_size(560.0, 160.0)
+    .inner_size(900.0, 140.0)
+    .min_inner_size(560.0, 120.0)
     .resizable(false)
     .decorations(false)
     .transparent(true)
@@ -146,8 +146,11 @@ fn place_quick_ask_window(window: &WebviewWindow) {
         let logical_window_width = outer_size
             .map(|size| size.width as f64 / scale)
             .unwrap_or(900.0);
+        let logical_window_height = outer_size
+            .map(|size| size.height as f64 / scale)
+            .unwrap_or(140.0);
         let x = logical_monitor_pos.0 + (logical_monitor_size.0 - logical_window_width) / 2.0;
-        let y = logical_monitor_pos.1 + 82.0;
+        let y = logical_monitor_pos.1 + logical_monitor_size.1 - logical_window_height - 48.0;
         let _ = window.set_position(Position::Logical(LogicalPosition::new(
             x.max(logical_monitor_pos.0),
             y,

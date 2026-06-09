@@ -40,6 +40,15 @@ export function resetApiBase(): void {
   _apiBase = null;
 }
 
+/** Return the cached API base synchronously (empty string if not yet resolved).
+ *
+ * Useful for resolving relative media URLs (e.g. ``/api/media/…``) in
+ * components where an async call is impractical. By the time media URLs
+ * are rendered the bootstrap has completed, so the cache is populated. */
+export function getCachedApiBase(): string {
+  return _apiBase ?? "";
+}
+
 async function request<T>(
   url: string,
   token: string,

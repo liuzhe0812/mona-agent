@@ -452,7 +452,7 @@ export function FileManager({ sessionId }: Props) {
           } else if (fromSide === "system" && file.path && (file.path.includes(":") || file.path.startsWith("/"))) {
             await sftpUploadFile(sessionId, file.path, remoteFilePath, fileTaskId);
           } else if (file.isDir) {
-            await sftpUploadDir(sessionId, file.path, remoteFilePath);
+            await sftpUploadDir(sessionId, file.path, remoteFilePath, fileTaskId);
           } else {
             await sftpUploadFile(sessionId, file.path, remoteFilePath, fileTaskId);
           }
@@ -588,7 +588,7 @@ export function FileManager({ sessionId }: Props) {
 
         try {
           if (file.isDir) {
-            await sftpDownloadDir(sessionId, file.path, localFilePath);
+            await sftpDownloadDir(sessionId, file.path, localFilePath, fileTaskId);
           } else {
             await sftpDownloadFile(sessionId, file.path, localFilePath, fileTaskId);
           }

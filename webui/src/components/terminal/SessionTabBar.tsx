@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useRef, useState } from "react";
 import {
   Pencil,
   Copy,
@@ -17,6 +17,15 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 
 export function SessionTabBar() {
   const sessions = useTerminalStore((s) => s.sessions);
@@ -27,6 +36,11 @@ export function SessionTabBar() {
   const updateSessionTitle = useTerminalStore((s) => s.updateSessionTitle);
   const addSession = useTerminalStore((s) => s.addSession);
   const connections = useTerminalStore((s) => s.connections);
+
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [renameTarget, setRenameTarget] = useState<{ id: string; title: string } | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const renameInputRef = useRef<HTMLInputElement>(null);
 
   const handleClose = useCallback(
     async (sessionId: string, sessionType: string) => {
@@ -64,13 +78,21 @@ export function SessionTabBar() {
 
   const handleRename = useCallback(
     (session: { id: string; title: string }) => {
-      const newTitle = window.prompt("重命名标签页", session.title)?.trim();
-      if (newTitle) {
-        updateSessionTitle(session.id, newTitle);
-      }
+      setRenameTarget(session);
+      setRenameValue(session.title);
+      setRenameOpen(true);
     },
-    [updateSessionTitle],
+    [],
   );
+
+  const handleRenameConfirm = useCallback(() => {
+    const trimmed = renameValue.trim();
+    if (trimmed && renameTarget) {
+      updateSessionTitle(renameTarget.id, trimmed);
+    }
+    setRenameOpen(false);
+    setRenameTarget(null);
+  }, [renameValue, renameTarget, updateSessionTitle]);
 
   const handleDuplicate = useCallback(
     async (session: { id: string; type: string; configId: string }) => {
@@ -143,89 +165,115 @@ export function SessionTabBar() {
   );
 
   return (
-    <div className="flex h-8 shrink-0 items-end border-b border-border bg-sidebar/50 px-1">
-      {sessions.map((session, index) => {
-        const isActive = session.id === activeSessionId;
-        const isSsh = session.type === "ssh";
-        const canDuplicate = session.type === "ssh" || session.type === "sftp" || session.type === "local";
+    <>
+      <div className="flex h-8 shrink-0 items-end border-b border-border bg-sidebar/50 px-1">
+        {sessions.map((session, index) => {
+          const isActive = session.id === activeSessionId;
+          const isSsh = session.type === "ssh";
+          const canDuplicate = session.type === "ssh" || session.type === "sftp" || session.type === "local";
 
-        return (
-          <ContextMenu key={session.id}>
-            <ContextMenuTrigger asChild>
-              <div
-                className={`flex items-center gap-1.5 px-2.5 py-1 text-xs transition-colors cursor-pointer select-none relative ${
-                  index > 0 ? "border-l border-border" : ""
-                } ${
-                  isActive
-                    ? "bg-background text-foreground"
-                    : "text-muted-foreground hover:bg-sidebar-accent/50"
-                }`}
-                onClick={() => setActiveSession(session.id)}
-              >
-                {isActive && (
-                  <span
-                    className="absolute bottom-0 left-0 right-0 h-0.5"
-                    style={{ backgroundColor: "hsl(var(--theme))" }}
-                  />
-                )}
-                <span
-                  className={`h-1.5 w-1.5 rounded-full shrink-0 ${
-                    session.type === "local"
-                      ? "bg-amber-500"
-                      : session.status === "connected"
-                        ? "bg-emerald-500"
-                        : session.status === "connecting"
-                          ? "bg-amber-500"
-                          : session.status === "error"
-                            ? "bg-red-500"
-                            : "bg-muted-foreground/40"
+          return (
+            <ContextMenu key={session.id}>
+              <ContextMenuTrigger asChild>
+                <div
+                  className={`flex items-center gap-1.5 px-2.5 py-1 text-xs transition-colors cursor-pointer select-none relative ${
+                    index > 0 ? "border-l border-border" : ""
+                  } ${
+                    isActive
+                      ? "bg-background text-foreground"
+                      : "text-muted-foreground hover:bg-sidebar-accent/50"
                   }`}
-                />
-                <span className="max-w-[120px] truncate">{session.title}</span>
-                <X
-                  className="h-3 w-3 shrink-0 opacity-0 hover:opacity-100"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleClose(session.id, session.type);
-                  }}
-                />
-              </div>
-            </ContextMenuTrigger>
-            <ContextMenuContent className="w-48">
-              <ContextMenuItem onClick={() => handleRename(session)}>
-                <Pencil className="mr-2 h-3.5 w-3.5" /> 重命名
-              </ContextMenuItem>
-              {canDuplicate && (
-                <ContextMenuItem onClick={() => handleDuplicate(session)}>
-                  <Copy className="mr-2 h-3.5 w-3.5" /> 复制会话
+                  onClick={() => setActiveSession(session.id)}
+                >
+                  {isActive && (
+                    <span
+                      className="absolute bottom-0 left-0 right-0 h-0.5"
+                      style={{ backgroundColor: "hsl(var(--theme))" }}
+                    />
+                  )}
+                  <span
+                    className={`h-1.5 w-1.5 rounded-full shrink-0 ${
+                      session.type === "local"
+                        ? "bg-amber-500"
+                        : session.status === "connected"
+                          ? "bg-emerald-500"
+                          : session.status === "connecting"
+                            ? "bg-amber-500"
+                            : session.status === "error"
+                              ? "bg-red-500"
+                              : "bg-muted-foreground/40"
+                    }`}
+                  />
+                  <span className="max-w-[120px] truncate">{session.title}</span>
+                  <X
+                    className="h-3 w-3 shrink-0 opacity-0 hover:opacity-100"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleClose(session.id, session.type);
+                    }}
+                  />
+                </div>
+              </ContextMenuTrigger>
+              <ContextMenuContent className="w-48">
+                <ContextMenuItem onClick={() => handleRename(session)}>
+                  <Pencil className="mr-2 h-3.5 w-3.5" /> 重命名
                 </ContextMenuItem>
-              )}
-              {isSsh && (
-                <ContextMenuItem onClick={() => handleOpenSftp(session)}>
-                  <FolderOpen className="mr-2 h-3.5 w-3.5" /> 打开 SFTP
+                {canDuplicate && (
+                  <ContextMenuItem onClick={() => handleDuplicate(session)}>
+                    <Copy className="mr-2 h-3.5 w-3.5" /> 复制会话
+                  </ContextMenuItem>
+                )}
+                {isSsh && (
+                  <ContextMenuItem onClick={() => handleOpenSftp(session)}>
+                    <FolderOpen className="mr-2 h-3.5 w-3.5" /> 打开 SFTP
+                  </ContextMenuItem>
+                )}
+                <ContextMenuSeparator />
+                <ContextMenuItem onClick={() => handleClose(session.id, session.type)}>
+                  <X className="mr-2 h-3.5 w-3.5" /> 关闭
                 </ContextMenuItem>
-              )}
-              <ContextMenuSeparator />
-              <ContextMenuItem onClick={() => handleClose(session.id, session.type)}>
-                <X className="mr-2 h-3.5 w-3.5" /> 关闭
-              </ContextMenuItem>
-              <ContextMenuItem onClick={() => handleCloseOthers(session.id)}>
-                <XCircle className="mr-2 h-3.5 w-3.5" /> 关闭其他
-              </ContextMenuItem>
-              <ContextMenuItem onClick={() => handleCloseToRight(session.id)}>
-                <ArrowRightFromLine className="mr-2 h-3.5 w-3.5" /> 关闭右侧
-              </ContextMenuItem>
-            </ContextMenuContent>
-          </ContextMenu>
-        );
-      })}
-      <button
-        onClick={handleNewShell}
-        className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-sidebar-accent/50"
-        title="新建 Shell"
-      >
-        <span className="text-sm leading-none">+</span>
-      </button>
-    </div>
+                <ContextMenuItem onClick={() => handleCloseOthers(session.id)}>
+                  <XCircle className="mr-2 h-3.5 w-3.5" /> 关闭其他
+                </ContextMenuItem>
+                <ContextMenuItem onClick={() => handleCloseToRight(session.id)}>
+                  <ArrowRightFromLine className="mr-2 h-3.5 w-3.5" /> 关闭右侧
+                </ContextMenuItem>
+              </ContextMenuContent>
+            </ContextMenu>
+          );
+        })}
+        <button
+          onClick={handleNewShell}
+          className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-sidebar-accent/50"
+          title="新建 Shell"
+        >
+          <span className="text-sm leading-none">+</span>
+        </button>
+      </div>
+
+      <Dialog open={renameOpen} onOpenChange={(open) => { if (!open) { setRenameOpen(false); setRenameTarget(null); } }}>
+        <DialogContent className="sm:max-w-sm" showCloseButton={false}>
+          <DialogHeader>
+            <DialogTitle>重命名标签页</DialogTitle>
+          </DialogHeader>
+          <Input
+            ref={renameInputRef}
+            value={renameValue}
+            onChange={(e) => setRenameValue(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") handleRenameConfirm(); }}
+            className="rounded-full h-8 text-[13px]"
+            autoFocus
+          />
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => { setRenameOpen(false); setRenameTarget(null); }}>
+              取消
+            </Button>
+            <Button size="sm" onClick={handleRenameConfirm}>
+              确定
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }

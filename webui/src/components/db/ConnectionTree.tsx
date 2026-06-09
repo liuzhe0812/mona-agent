@@ -70,6 +70,7 @@ export function ConnectionTree() {
   const selectTable = useDbStore((s) => s.selectTable);
   const setCurrentView = useDbStore((s) => s.setCurrentView);
   const setNewConnectionDialogOpen = useDbStore((s) => s.setNewConnectionDialogOpen);
+  const setEditConnectionConfig = useDbStore((s) => s.setEditConnectionConfig);
   const setSelectedConnectionId = useDbStore((s) => s.setSelectedConnectionId);
   const setSelectedDatabase = useDbStore((s) => s.setSelectedDatabase);
   const refreshServerStats = useDbStore((s) => s.refreshServerStats);
@@ -203,6 +204,11 @@ export function ConnectionTree() {
                           断开连接
                         </ContextMenuItem>
                         <ContextMenuSeparator />
+                        <ContextMenuItem onClick={() => setEditConnectionConfig(config)}>
+                          <Pencil className="mr-2 h-3.5 w-3.5" />
+                          编辑
+                        </ContextMenuItem>
+                        <ContextMenuSeparator />
                         <ContextMenuItem
                           className="text-destructive focus:text-destructive"
                           onClick={() => {
@@ -219,6 +225,10 @@ export function ConnectionTree() {
                         <ContextMenuItem onClick={() => connect(config)}>
                           <Database className="mr-2 h-3.5 w-3.5" />
                           连接
+                        </ContextMenuItem>
+                        <ContextMenuItem onClick={() => setEditConnectionConfig(config)}>
+                          <Pencil className="mr-2 h-3.5 w-3.5" />
+                          编辑
                         </ContextMenuItem>
                         <ContextMenuSeparator />
                         <ContextMenuItem

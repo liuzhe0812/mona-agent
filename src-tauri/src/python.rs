@@ -1,141 +1,123 @@
-use std::fs;
 use std::path::PathBuf;
 
 use tauri::Manager;
 
 use crate::settings::app_data_dir;
 
-const PYTHON_VERSION_MARKER: &str = ".mona-python-version";
-pub const PYTHON_VERSION: &str = "3.12.13";
+const GATEWAY_EXE_NAME: &str = "mona-gateway.exe";
 
-pub fn python_dir() -> PathBuf {
-    app_data_dir().join("python")
+/// Directory where mona-gateway.exe is extracted to (or found)
+pub fn gateway_exe_dir() -> PathBuf {
+    app_data_dir().join("gateway")
 }
 
-pub fn python_executable() -> PathBuf {
-    let dir = python_dir();
-    if cfg!(windows) {
-        dir.join("python.exe")
+/// Path to the mona-gateway executable
+pub fn gateway_exe_path() -> PathBuf {
+    gateway_exe_dir().join(GATEWAY_EXE_NAME)
+}
+
+/// Check if mona-gateway.exe has been deployed (extracted from bundle)
+pub fn is_gateway_deployed() -> bool {
+    gateway_exe_path().exists()
+}
+
+/// Deploy mona-gateway.exe from bundled resources to app data dir.
+/// This copies the exe from the Tauri resource directory to a stable location.
+/// Re-deploys if the bundled exe differs from the deployed one (different size).
+pub fn deploy_gateway(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let source = find_gateway_resource(app_handle)?;
+    let dest_dir = gateway_exe_dir();
+    std::fs::create_dir_all(&dest_dir)
+        .map_err(|e| format!("Failed to create gateway dir: {}", e))?;
+
+    let dest = gateway_exe_path();
+
+    // Check if we need to (re-)deploy: missing or different size
+    let need_deploy = if !dest.exists() {
+        true
     } else {
-        dir.join("bin").join("python3")
-    }
-}
-
-pub fn version_marker_path() -> PathBuf {
-    python_dir().join(PYTHON_VERSION_MARKER)
-}
-
-pub fn is_python_initialized() -> bool {
-    let exe = python_executable();
-    let marker = version_marker_path();
-    if !exe.exists() || !marker.exists() {
-        return false;
-    }
-    match fs::read_to_string(&marker) {
-        Ok(v) => v.trim() == PYTHON_VERSION,
-        Err(_) => false,
-    }
-}
-
-pub fn initialize_python(app_handle: &tauri::AppHandle) -> Result<(), String> {
-    if is_python_initialized() {
-        log::info!("Python already initialized at {:?}", python_dir());
-        return Ok(());
-    }
-
-    // Extract to app_data_dir, NOT python_dir.
-    // The tar contains a top-level "python/" directory, so extracting to
-    // app_data_dir produces: app_data_dir/python/python.exe
-    // If we extracted to python_dir, we'd get: python_dir/python/python.exe (wrong!)
-    let base_dir = app_data_dir();
-    fs::create_dir_all(&base_dir).map_err(|e| format!("Failed to create app data dir: {}", e))?;
-
-    let resource_tar = find_python_resource(app_handle)?;
-    extract_python(&resource_tar, &base_dir)?;
-
-    fs::write(version_marker_path(), PYTHON_VERSION)
-        .map_err(|e| format!("Failed to write version marker: {}", e))?;
-
-    log::info!("Python initialization complete");
-    Ok(())
-}
-
-fn find_python_resource(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
-    let searched = |locations: &[String]| {
-        if locations.is_empty() {
-            " (none searched)".to_string()
+        let src_meta = std::fs::metadata(&source)
+            .map_err(|e| format!("Failed to read source metadata: {}", e))?;
+        let dst_meta = std::fs::metadata(&dest)
+            .map_err(|e| format!("Failed to read dest metadata: {}", e))?;
+        let src_size = src_meta.len();
+        let dst_size = dst_meta.len();
+        if src_size != dst_size {
+            log::info!(
+                "Gateway exe size changed (source: {}, deployed: {}), re-deploying",
+                src_size, dst_size
+            );
+            true
         } else {
-            locations.join(", ")
+            log::info!("Gateway already deployed at {:?}", dest);
+            false
         }
     };
 
+    if !need_deploy {
+        return Ok(dest);
+    }
+
+    log::info!("Deploying gateway from {:?} to {:?}", source, dest);
+
+    let copied = std::fs::copy(&source, &dest)
+        .map_err(|e| format!("Failed to copy gateway exe: {}", e))?;
+
+    log::info!("Gateway deployed: {} bytes copied", copied);
+
+    Ok(dest)
+}
+
+/// Find the mona-gateway.exe in bundled resources
+fn find_gateway_resource(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
     let mut tried: Vec<String> = Vec::new();
 
-    // 1. Use Tauri's resource_dir() API — the correct way to find bundled resources
+    // 1. Use Tauri's resource_dir() API
     if let Ok(resource_dir) = app_handle.path().resource_dir() {
-        for name in &["python.tar.gz", "python-install.tar.gz"] {
-            let candidate = resource_dir.join(name);
-            if candidate.exists() {
-                log::info!("Found Python resource via resource_dir: {:?}", candidate);
-                return Ok(candidate);
-            }
-            tried.push(format!("resource_dir/{}", name));
+        let candidate = resource_dir.join(GATEWAY_EXE_NAME);
+        if candidate.exists() {
+            log::info!("Found gateway via resource_dir: {:?}", candidate);
+            return Ok(candidate);
         }
-        log::info!("resource_dir is {:?}, but no python tar found there", resource_dir);
+        tried.push(format!("resource_dir/{}", GATEWAY_EXE_NAME));
+        log::info!("resource_dir is {:?}, but {} not found there", resource_dir, GATEWAY_EXE_NAME);
     } else {
         tried.push("resource_dir (unavailable)".into());
     }
 
-    // 2. Fallback: exe_dir/resources/ (NSIS installs resources here)
-    //    and exe_dir/ (some installers place resources next to exe)
+    // 2. Fallback: exe_dir/resources/ and exe_dir/ (NSIS installs resources here)
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(exe_dir) = exe_path.parent() {
             for sub in &["resources", ""] {
-                for name in &["python.tar.gz", "python-install.tar.gz"] {
-                    let candidate = if sub.is_empty() {
-                        exe_dir.join(name)
-                    } else {
-                        exe_dir.join(sub).join(name)
-                    };
-                    if candidate.exists() {
-                        log::info!("Found Python resource near exe: {:?}", candidate);
-                        return Ok(candidate);
-                    }
-                    tried.push(format!("exe_dir/{}/{}", sub, name));
+                let candidate = if sub.is_empty() {
+                    exe_dir.join(GATEWAY_EXE_NAME)
+                } else {
+                    exe_dir.join(sub).join(GATEWAY_EXE_NAME)
+                };
+                if candidate.exists() {
+                    log::info!("Found gateway near exe: {:?}", candidate);
+                    return Ok(candidate);
                 }
+                tried.push(format!("exe_dir/{}/{}", sub, GATEWAY_EXE_NAME));
             }
         }
     }
 
-    // 3. Fallback: relative path (works in dev mode from src-tauri/)
-    for name in &["python.tar.gz", "python-install.tar.gz"] {
-        let candidate = PathBuf::from("resources").join(name);
-        if candidate.exists() {
-            log::info!("Found Python resource via relative path: {:?}", candidate);
-            return Ok(candidate);
-        }
-        tried.push(format!("resources/{}", name));
+    // 3. Fallback: relative path (dev mode)
+    let candidate = PathBuf::from("resources").join(GATEWAY_EXE_NAME);
+    if candidate.exists() {
+        log::info!("Found gateway via relative path: {:?}", candidate);
+        return Ok(candidate);
     }
+    tried.push(format!("resources/{}", GATEWAY_EXE_NAME));
 
     Err(format!(
-        "Python runtime not found. Searched: {}",
-        searched(&tried)
+        "Gateway executable not found. Searched: {}",
+        tried.join(", ")
     ))
 }
 
-fn extract_python(tar_path: &PathBuf, dest: &PathBuf) -> Result<(), String> {
-    log::info!("Extracting Python from {:?} to {:?}", tar_path, dest);
-
-    let file = fs::File::open(tar_path).map_err(|e| format!("Failed to open tar: {}", e))?;
-    let gz = flate2::read::GzDecoder::new(file);
-    let mut archive = tar::Archive::new(gz);
-
-    archive.unpack(dest).map_err(|e| format!("Failed to extract: {}", e))?;
-
-    log::info!("Python extraction complete");
-    Ok(())
-}
-
+/// Find system Python (for dev mode fallback)
 pub fn find_system_python() -> Option<PathBuf> {
     let python_name = if cfg!(windows) {
         "python.exe"

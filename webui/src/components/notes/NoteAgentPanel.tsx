@@ -42,6 +42,7 @@ import type { KnowledgeCategory, NoteAiActionId, OperationNote } from "./notes-d
 
 interface NoteAgentPanelProps {
   note: OperationNote | null;
+  notebook: import("./notes-data").Notebook | null;
   knowledgeCategories: KnowledgeCategory[];
   knowledgeTags: string[];
   collapsed?: boolean;
@@ -54,6 +55,7 @@ interface NoteAgentPanelProps {
 
 export function NoteAgentPanel({
   note,
+  notebook,
   knowledgeCategories,
   knowledgeTags,
   collapsed: collapsedProp,
@@ -251,14 +253,30 @@ export function NoteAgentPanel({
         return false;
       }
 
+      // Inject knowledge base context if enabled
+      let finalPrompt = trimmed;
+      if (notebook?.knowledgeBaseEnabled && isTauri()) {
+        try {
+          const { searchNotebookNotes } = await import("@/lib/tauri");
+          const { formatKnowledgeBaseContext } = await import("./notes-ai");
+          const results = await searchNotebookNotes(notebook.id, trimmed);
+          const kbContext = formatKnowledgeBaseContext(results);
+          if (kbContext) {
+            finalPrompt = `${kbContext}\n\n---\n\n${trimmed}`;
+          }
+        } catch {
+          // Search failed, proceed without context
+        }
+      }
+
       if (chatId) {
-        send(trimmed, undefined, displayContent ? { displayContent } : undefined);
+        send(finalPrompt, undefined, displayContent ? { displayContent } : undefined);
         return true;
       }
 
       setCreatingChat(true);
       setNotice("正在创建笔记专属会话");
-      pendingPromptRef.current = trimmed;
+      pendingPromptRef.current = finalPrompt;
       pendingDisplayContentRef.current = displayContent ?? null;
       try {
         const nextChatId = await client.newChat(5_000, true);
@@ -274,7 +292,7 @@ export function NoteAgentPanel({
         setCreatingChat(false);
       }
     },
-    [chatId, client, creatingChat, isStreaming, note, onAgentChatIdChange, send],
+    [chatId, client, creatingChat, isStreaming, note, notebook, onAgentChatIdChange, send],
   );
 
   const runAction = useCallback(

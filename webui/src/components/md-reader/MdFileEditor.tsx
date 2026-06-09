@@ -41,6 +41,7 @@ export function MdFileEditor({ tab, onContentChange, onModeChange }: MdFileEdito
           <span>已保存</span>
         )
       }
+      className="min-h-0 flex-1"
     />
   );
 }
