@@ -113,7 +113,7 @@ class AgentDefaults(Base):
 
     workspace: str = "~/.mona/workspace"
     model_preset: str | None = None  # Active preset name — takes precedence over fields below
-    model: str = "deepseek-v4-flash-free"
+    model: str = ""  # Empty → resolved at runtime from provider's free_default_model
     provider: str = (
         "zen"  # Provider name (e.g. "anthropic", "openrouter") or "auto" for auto-detection
     )
@@ -387,8 +387,15 @@ class Config(BaseSettings):
     def resolve_default_preset(self) -> ModelPresetConfig:
         """Return the implicit `default` preset from agents.defaults fields."""
         d = self.agents.defaults
+        model = d.model
+        if not model:
+            # Empty model → fall back to the provider's free_default_model
+            from mona.providers.registry import find_by_name
+            spec = find_by_name(d.provider)
+            if spec and spec.free_default_model:
+                model = spec.free_default_model
         return ModelPresetConfig(
-            model=d.model, provider=d.provider, max_tokens=d.max_tokens,
+            model=model, provider=d.provider, max_tokens=d.max_tokens,
             context_window_tokens=d.context_window_tokens,
             temperature=d.temperature, reasoning_effort=d.reasoning_effort,
         )
