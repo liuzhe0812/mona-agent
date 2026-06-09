@@ -113,9 +113,9 @@ class AgentDefaults(Base):
 
     workspace: str = "~/.mona/workspace"
     model_preset: str | None = None  # Active preset name — takes precedence over fields below
-    model: str = "anthropic/claude-opus-4-5"
+    model: str = "deepseek-v4-flash-free"
     provider: str = (
-        "auto"  # Provider name (e.g. "anthropic", "openrouter") or "auto" for auto-detection
+        "zen"  # Provider name (e.g. "anthropic", "openrouter") or "auto" for auto-detection
     )
     max_tokens: int = 8192
     context_window_tokens: int = 65_536

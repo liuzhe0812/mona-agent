@@ -16,9 +16,16 @@ interface ProviderOption {
   description: string;
   defaultApiBase?: string;
   needsApiBase?: boolean;
+  noApiKey?: boolean;
 }
 
 const PROVIDERS: ProviderOption[] = [
+  {
+    name: "zen",
+    label: "内置供应商",
+    description: "免费，无需 API Key，开箱即用",
+    noApiKey: true,
+  },
   {
     name: "openrouter",
     label: "OpenRouter",
@@ -62,6 +69,7 @@ const PROVIDERS: ProviderOption[] = [
 ];
 
 const DEFAULT_MODELS: Record<string, string> = {
+  zen: "deepseek-v4-flash-free",
   openrouter: "anthropic/claude-sonnet-4",
   openai: "gpt-4o",
   anthropic: "claude-sonnet-4-20250514",
@@ -99,7 +107,12 @@ export function SetupWizard({ configStatus, onComplete, onSkip }: SetupWizardPro
       setApiBase("");
     }
     setModel(DEFAULT_MODELS[provider.name] || "");
-    setStep("apikey");
+    if (provider.noApiKey) {
+      // Skip API key step for free providers
+      setStep("model");
+    } else {
+      setStep("apikey");
+    }
   }, []);
 
   const handleApiKeySubmit = useCallback(async () => {
@@ -226,7 +239,7 @@ export function SetupWizard({ configStatus, onComplete, onSkip }: SetupWizardPro
         {step === "model" && (
           <div className="flex flex-col gap-4">
             <div className="flex items-center gap-2">
-              <Button variant="ghost" size="sm" onClick={() => setStep("apikey")}>
+              <Button variant="ghost" size="sm" onClick={() => setStep(selectedProviderInfo?.noApiKey ? "provider" : "apikey")}>
                 ← {t("setup.back", "Back")}
               </Button>
             </div>
