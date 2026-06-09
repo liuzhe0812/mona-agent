@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { JSONContent } from "@tiptap/core";
+import TiptapImage from "@tiptap/extension-image";
 import Link from "@tiptap/extension-link";
 import Placeholder from "@tiptap/extension-placeholder";
 import { Table, TableCell, TableHeader, TableRow } from "@tiptap/extension-table";
@@ -18,6 +19,7 @@ import {
   Heading1,
   Heading2,
   Heading3,
+  Image as ImageIcon,
   Italic,
   Link2,
   ListChecks,
@@ -61,6 +63,30 @@ export interface MarkdownEditorProps {
   children?: React.ReactNode;
 }
 
+// Custom Image extension that serializes `assets/xxx.png` from title/alt instead of data URL
+const NoteImage = TiptapImage.extend({
+  addStorage() {
+    return {
+      markdown: {
+        serialize: {
+          image(state: any, node: any) {
+            // Use title (stores assets/xxx.png) as the Markdown src
+            const src = node.attrs.title || node.attrs.alt || node.attrs.src;
+            const alt = node.attrs.alt || "";
+            state.write(`![${alt}](${src})`);
+          },
+        },
+      },
+    };
+  },
+}).configure({
+  inline: false,
+  allowBase64: false,
+  HTMLAttributes: {
+    class: "max-w-full h-auto rounded-lg my-2",
+  },
+});
+
 export function MarkdownEditor({
   content,
   mode = "visual",
@@ -79,11 +105,124 @@ export function MarkdownEditor({
   const onContentChangeRef = useRef(onContentChange);
   onContentChangeRef.current = onContentChange;
 
+  // Cache for data URLs: assets/xxx.png -> data:image/png;base64,...
+  const dataUrlCacheRef = useRef<Map<string, string>>(new Map());
+
+  // Convert assets/ relative paths to data URLs for rendering
+  const convertAssetsPaths = useCallback(async (editor: Editor) => {
+    const { readNoteImage } = await import("@/lib/tauri");
+    const tr = editor.state.tr;
+    let modified = false;
+    const tasks: Promise<void>[] = [];
+
+    editor.state.doc.descendants((node, pos) => {
+      if (node.type.name === "image" && node.attrs.src) {
+        const src = node.attrs.src as string;
+        if (
+          src.startsWith("assets/") ||
+          (!src.startsWith("http") && !src.startsWith("data:") && !src.includes(":"))
+        ) {
+          const fileName = src.startsWith("assets/") ? src.slice("assets/".length) : src;
+
+          // Use cached data URL if available
+          const cached = dataUrlCacheRef.current.get(fileName);
+          if (cached) {
+            tr.setNodeMarkup(pos, undefined, {
+              ...node.attrs,
+              src: cached,
+              alt: node.attrs.alt || src,
+              title: src,
+            });
+            modified = true;
+            return;
+          }
+
+          // Load data URL asynchronously
+          tasks.push(
+            readNoteImage(fileName).then((dataUrl) => {
+              dataUrlCacheRef.current.set(fileName, dataUrl);
+            }).catch((err) => {
+              console.warn("[MarkdownEditor] Failed to load image:", fileName, err);
+            }),
+          );
+        }
+      }
+    });
+
+    // Apply cached results first
+    if (modified) {
+      settingContentRef.current = true;
+      editor.view.dispatch(tr);
+      settingContentRef.current = false;
+    }
+
+    // Load uncached images and apply in a second pass
+    if (tasks.length > 0) {
+      await Promise.all(tasks);
+      const tr2 = editor.state.tr;
+      let modified2 = false;
+      editor.state.doc.descendants((node, pos) => {
+        if (node.type.name === "image" && node.attrs.src) {
+          const src = node.attrs.src as string;
+          if (
+            src.startsWith("assets/") ||
+            (!src.startsWith("http") && !src.startsWith("data:") && !src.includes(":"))
+          ) {
+            const fileName = src.startsWith("assets/") ? src.slice("assets/".length) : src;
+            const dataUrl = dataUrlCacheRef.current.get(fileName);
+            if (dataUrl) {
+              tr2.setNodeMarkup(pos, undefined, {
+                ...node.attrs,
+                src: dataUrl,
+                alt: node.attrs.alt || src,
+                title: src,
+              });
+              modified2 = true;
+            }
+          }
+        }
+      });
+      if (modified2) {
+        settingContentRef.current = true;
+        editor.view.dispatch(tr2);
+        settingContentRef.current = false;
+      }
+    }
+  }, []);
+
+  const insertImageFile = useCallback(async (file: File, view: any) => {
+    const ext = file.name.split(".").pop() || "png";
+    const id = crypto.randomUUID().replace(/-/g, "").slice(0, 16);
+    const fileName = `${id}.${ext}`;
+    const arrayBuffer = await file.arrayBuffer();
+    const imageData = Array.from(new Uint8Array(arrayBuffer));
+
+    try {
+      const { saveNoteImage, readNoteImage } = await import("@/lib/tauri");
+      await saveNoteImage(fileName, imageData);
+      const dataUrl = await readNoteImage(fileName);
+      dataUrlCacheRef.current.set(fileName, dataUrl);
+      const markdownSrc = `assets/${fileName}`;
+      view.dispatch(
+        view.state.tr.replaceSelectionWith(
+          view.state.schema.nodes.image.create({
+            src: dataUrl,
+            alt: markdownSrc,
+            title: markdownSrc,
+          }),
+        ),
+      );
+    } catch (err) {
+      console.warn("[MarkdownEditor] Failed to save image:", err);
+    }
+  }, []);
+
   const extensions = useMemo(
     () => [
       StarterKit.configure({
         heading: { levels: [1, 2, 3, 4] },
       }),
+      NoteImage,
       TaskList,
       TaskItem.configure({ nested: true }),
       Link.configure({
@@ -113,6 +252,35 @@ export function MarkdownEditor({
       attributes: {
         class: "notes-prosemirror",
       },
+      handlePaste: (view, event) => {
+        const items = event.clipboardData?.items;
+        if (!items) return false;
+        for (const item of items) {
+          if (item.type.startsWith("image/")) {
+            event.preventDefault();
+            const file = item.getAsFile();
+            if (file) insertImageFile(file, view);
+            return true;
+          }
+        }
+        return false;
+      },
+      handleDrop: (view, event, _slice, moved) => {
+        if (moved) return false;
+        const files = event.dataTransfer?.files;
+        if (!files || files.length === 0) return false;
+        for (const file of files) {
+          if (file.type.startsWith("image/")) {
+            event.preventDefault();
+            insertImageFile(file, view);
+            return true;
+          }
+        }
+        return false;
+      },
+    },
+    onCreate: async ({ editor }) => {
+      await convertAssetsPaths(editor);
     },
     onUpdate: ({ editor }) => {
       if (settingContentRef.current) return;
@@ -138,7 +306,10 @@ export function MarkdownEditor({
     editor.commands.setContent(content, { contentType: "markdown" });
     settingContentRef.current = false;
     lastMarkdownRef.current = content;
-  }, [editor, content]);
+
+    // Convert assets/ paths to data URLs after setting content
+    convertAssetsPaths(editor);
+  }, [editor, content, convertAssetsPaths]);
 
   const handleMarkdownChange = (value: string) => {
     if (!editor) return;
@@ -199,7 +370,7 @@ export function MarkdownEditor({
               {children}
               <EditorContent
                 editor={editor}
-                className="mt-4 text-[13.5px] leading-6 text-foreground [&_.ProseMirror]:min-h-[380px] [&_.ProseMirror]:outline-none [&_.ProseMirror_blockquote]:border-l-2 [&_.ProseMirror_blockquote]:border-border [&_.ProseMirror_blockquote]:pl-3 [&_.ProseMirror_code]:rounded [&_.ProseMirror_code]:bg-muted [&_.ProseMirror_code]:px-1 [&_.ProseMirror_h1]:mb-2 [&_.ProseMirror_h1]:mt-5 [&_.ProseMirror_h1]:text-[22px] [&_.ProseMirror_h1]:font-bold [&_.ProseMirror_h2]:mb-2 [&_.ProseMirror_h2]:mt-5 [&_.ProseMirror_h2]:text-[18px] [&_.ProseMirror_h2]:font-semibold [&_.ProseMirror_h3]:mb-2 [&_.ProseMirror_h3]:mt-4 [&_.ProseMirror_h3]:text-[15px] [&_.ProseMirror_h3]:font-semibold [&_.ProseMirror_h4]:mb-1.5 [&_.ProseMirror_h4]:mt-3 [&_.ProseMirror_h4]:text-[14px] [&_.ProseMirror_h4]:font-semibold [&_.ProseMirror_li]:my-0.5 [&_.ProseMirror_ol]:ml-5 [&_.ProseMirror_p]:my-1.5 [&_.ProseMirror_pre]:my-2.5 [&_.ProseMirror_pre]:overflow-x-auto [&_.ProseMirror_pre]:rounded-lg [&_.ProseMirror_pre]:border [&_.ProseMirror_pre]:border-border/70 [&_.ProseMirror_pre]:bg-muted/45 [&_.ProseMirror_pre]:p-2.5 [&_.ProseMirror_s]:line-through [&_.ProseMirror_s]:text-muted-foreground [&_.ProseMirror_table]:my-2.5 [&_.ProseMirror_table]:w-full [&_.ProseMirror_table]:border-collapse [&_.ProseMirror_td]:border [&_.ProseMirror_td]:border-border [&_.ProseMirror_td]:px-2 [&_.ProseMirror_td]:py-1.5 [&_.ProseMirror_th]:border [&_.ProseMirror_th]:border-border [&_.ProseMirror_th]:bg-muted/45 [&_.ProseMirror_th]:px-2 [&_.ProseMirror_th]:py-1.5 [&_.ProseMirror_ul]:ml-5"
+                className="mt-4 text-[13.5px] leading-6 text-foreground [&_.ProseMirror]:min-h-[380px] [&_.ProseMirror]:outline-none [&_.ProseMirror_blockquote]:border-l-2 [&_.ProseMirror_blockquote]:border-border [&_.ProseMirror_blockquote]:pl-3 [&_.ProseMirror_code]:rounded [&_.ProseMirror_code]:bg-muted [&_.ProseMirror_code]:px-1 [&_.ProseMirror_h1]:mb-2 [&_.ProseMirror_h1]:mt-5 [&_.ProseMirror_h1]:text-[22px] [&_.ProseMirror_h1]:font-bold [&_.ProseMirror_h2]:mb-2 [&_.ProseMirror_h2]:mt-5 [&_.ProseMirror_h2]:text-[18px] [&_.ProseMirror_h2]:font-semibold [&_.ProseMirror_h3]:mb-2 [&_.ProseMirror_h3]:mt-4 [&_.ProseMirror_h3]:text-[15px] [&_.ProseMirror_h3]:font-semibold [&_.ProseMirror_h4]:mb-1.5 [&_.ProseMirror_h4]:mt-3 [&_.ProseMirror_h4]:text-[14px] [&_.ProseMirror_h4]:font-semibold [&_.ProseMirror_img]:max-w-full [&_.ProseMirror_img]:h-auto [&_.ProseMirror_img]:rounded-lg [&_.ProseMirror_img]:my-2 [&_.ProseMirror_li]:my-0.5 [&_.ProseMirror_ol]:ml-5 [&_.ProseMirror_p]:my-1.5 [&_.ProseMirror_pre]:my-2.5 [&_.ProseMirror_pre]:overflow-x-auto [&_.ProseMirror_pre]:rounded-lg [&_.ProseMirror_pre]:border [&_.ProseMirror_pre]:border-border/70 [&_.ProseMirror_pre]:bg-muted/45 [&_.ProseMirror_pre]:p-2.5 [&_.ProseMirror_s]:line-through [&_.ProseMirror_s]:text-muted-foreground [&_.ProseMirror_table]:my-2.5 [&_.ProseMirror_table]:w-full [&_.ProseMirror_table]:border-collapse [&_.ProseMirror_td]:border [&_.ProseMirror_td]:border-border [&_.ProseMirror_td]:px-2 [&_.ProseMirror_td]:py-1.5 [&_.ProseMirror_th]:border [&_.ProseMirror_th]:border-border [&_.ProseMirror_th]:bg-muted/45 [&_.ProseMirror_th]:px-2 [&_.ProseMirror_th]:py-1.5 [&_.ProseMirror_ul]:ml-5"
               />
             </div>
           </div>
@@ -518,6 +689,37 @@ function EditorToolbar({ editor }: { editor: Editor | null }) {
         }}
       >
         <Link2 className="h-3.5 w-3.5" />
+      </ToolbarButton>
+      <ToolbarButton
+        label="图片"
+        disabled={!editor}
+        onClick={async () => {
+          try {
+            const { open } = await import("@tauri-apps/plugin-dialog");
+            const selected = await open({
+              multiple: false,
+              filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp"] }],
+            });
+            if (!selected) return;
+            const filePath = typeof selected === "string" ? selected : selected.path;
+            if (!filePath) return;
+            const { readFile } = await import("@tauri-apps/plugin-fs");
+            const data = await readFile(filePath);
+            const ext = filePath.split(".").pop() || "png";
+            const id = crypto.randomUUID().replace(/-/g, "").slice(0, 16);
+            const fileName = `${id}.${ext}`;
+            const imageData = Array.from(data);
+            const { saveNoteImage, readNoteImage } = await import("@/lib/tauri");
+            await saveNoteImage(fileName, imageData);
+            const dataUrl = await readNoteImage(fileName);
+            const markdownSrc = `assets/${fileName}`;
+            editor?.chain().focus().setImage({ src: dataUrl, alt: markdownSrc, title: markdownSrc }).run();
+          } catch (err) {
+            console.warn("[MarkdownEditor] Failed to insert image:", err);
+          }
+        }}
+      >
+        <ImageIcon className="h-3.5 w-3.5" />
       </ToolbarButton>
       <span className="mx-1 h-4 w-px bg-border/70" />
       <ToolbarButton

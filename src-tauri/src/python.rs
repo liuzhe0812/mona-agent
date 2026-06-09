@@ -117,7 +117,7 @@ fn find_gateway_resource(app_handle: &tauri::AppHandle) -> Result<PathBuf, Strin
     ))
 }
 
-/// Find system Python (for dev mode fallback)
+/// Find system Python (dev mode only — release builds never call this).
 pub fn find_system_python() -> Option<PathBuf> {
     let python_name = if cfg!(windows) {
         "python.exe"

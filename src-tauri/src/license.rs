@@ -8,8 +8,7 @@ use base64::Engine;
 use std::os::windows::process::CommandExt;
 
 const LICENSE_FILENAME: &str = "license.jwt";
-const TRIAL_CACHE_FILENAME: &str = "trial_cache.json";
-const AUTH_SERVER_URL: &str = "http://47.117.69.105:8000";
+const AUTH_SERVER_URL: &str = "https://mona.lzfun.vip";
 const TRIAL_DAYS: i64 = 31;
 
 fn license_dir() -> Result<PathBuf, String> {
@@ -23,21 +22,131 @@ fn license_path() -> Result<PathBuf, String> {
     Ok(license_dir()?.join(LICENSE_FILENAME))
 }
 
-fn trial_cache_path() -> Result<PathBuf, String> {
-    Ok(license_dir()?.join(TRIAL_CACHE_FILENAME))
+fn auth_token_path() -> Result<PathBuf, String> {
+    Ok(license_dir()?.join("auth_token"))
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct TrialCache {
-    active: bool,
-    expires_at: String,
+fn license_cache_path() -> Result<PathBuf, String> {
+    Ok(license_dir()?.join("license_cache.json"))
 }
 
+fn local_trial_path() -> Result<PathBuf, String> {
+    Ok(license_dir()?.join("local_trial_start"))
+}
+
+// ── Local trial (no login required) ──
+
+fn get_or_create_local_trial_start() -> String {
+    let path = match local_trial_path() {
+        Ok(p) => p,
+        Err(_) => return chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+    };
+
+    if path.exists() {
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            let trimmed = content.trim().to_string();
+            if !trimmed.is_empty() {
+                return trimmed;
+            }
+        }
+    }
+
+    // First launch — record trial start time
+    let now_str = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    if let Ok(dir) = license_dir() {
+        let _ = std::fs::create_dir_all(&dir);
+    }
+    let _ = std::fs::write(&path, &now_str);
+    now_str
+}
+
+fn check_local_trial() -> Result<serde_json::Value, String> {
+    let start_str = get_or_create_local_trial_start();
+    let start = chrono::DateTime::parse_from_rfc3339(&start_str)
+        .map(|dt| dt.with_timezone(&chrono::Utc))
+        .unwrap_or_else(|_| chrono::Utc::now());
+
+    let now = chrono::Utc::now();
+    let trial_end = start + chrono::Duration::days(TRIAL_DAYS);
+    let remaining = (trial_end - now).num_days();
+
+    if now < trial_end {
+        Ok(serde_json::json!({
+            "status": "valid",
+            "expires_at": trial_end.format("%Y-%m-%d").to_string(),
+            "trial": true,
+            "local_trial": true,
+            "remaining_days": remaining.max(0),
+            "email": null
+        }))
+    } else {
+        Ok(serde_json::json!({
+            "status": "expired",
+            "expires_at": trial_end.format("%Y-%m-%d").to_string(),
+            "trial": true,
+            "local_trial": true,
+            "remaining_days": 0,
+            "email": null
+        }))
+    }
+}
+
+// ── Auth token storage ──
+
+fn save_auth_token(token: &str) -> Result<(), String> {
+    let dir = license_dir()?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = auth_token_path()?;
+    std::fs::write(&path, token).map_err(|e| e.to_string())
+}
+
+fn load_auth_token() -> Option<String> {
+    let path = auth_token_path().ok()?;
+    if !path.exists() {
+        return None;
+    }
+    std::fs::read_to_string(&path).ok().map(|s| s.trim().to_string())
+}
+
+pub fn remove_auth_token() -> Result<(), String> {
+    let path = auth_token_path()?;
+    if path.exists() {
+        std::fs::remove_file(&path).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+// ── License cache (offline fallback) ──
+
 #[derive(Debug, Serialize, Deserialize)]
-struct TrialActivateResponse {
-    active: bool,
+struct LicenseCache {
+    status: String,
     expires_at: Option<String>,
+    trial: bool,
+    email: Option<String>,
 }
+
+fn save_license_cache(cache: &LicenseCache) {
+    if let Ok(path) = license_cache_path() {
+        if let Ok(dir) = license_dir() {
+            let _ = std::fs::create_dir_all(&dir);
+        }
+        if let Ok(json) = serde_json::to_string(cache) {
+            let _ = std::fs::write(&path, json);
+        }
+    }
+}
+
+fn load_license_cache() -> Option<LicenseCache> {
+    let path = license_cache_path().ok()?;
+    if !path.exists() {
+        return None;
+    }
+    let content = std::fs::read_to_string(&path).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
+// ── Machine fingerprint ──
 
 fn get_machine_fingerprint() -> String {
     let fingerprint = collect_fingerprint();
@@ -46,71 +155,173 @@ fn get_machine_fingerprint() -> String {
     hex::encode(hasher.finalize())
 }
 
-async fn activate_trial_server() -> Result<TrialActivateResponse, String> {
-    let machine_fp = get_machine_fingerprint();
-    let url = format!("{}/trial/activate", AUTH_SERVER_URL);
+// ── Server API calls ──
 
-    let client = reqwest::Client::builder()
+fn build_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
-        .map_err(|e| format!("HTTP client error: {}", e))?;
+        .map_err(|e| format!("HTTP client error: {}", e))
+}
 
+#[derive(Debug, Serialize, Deserialize)]
+struct TokenResponse {
+    access_token: String,
+    expires_in: i64,
+}
+
+#[tauri::command]
+pub async fn send_register_code(email: String) -> Result<serde_json::Value, String> {
+    let client = build_client()?;
     let resp = client
-        .post(&url)
-        .json(&serde_json::json!({ "machine_fingerprint": machine_fp }))
+        .post(format!("{}/auth/send-register-code", AUTH_SERVER_URL))
+        .json(&serde_json::json!({ "email": email }))
         .send()
         .await
-        .map_err(|e| format!("Trial activation request failed: {}", e))?;
+        .map_err(|e| format!("Request failed: {}", e))?;
 
-    if !resp.status().is_success() {
-        return Err(format!("Trial activation server error: {}", resp.status()));
+    let body: serde_json::Value = resp.json().await.map_err(|e| format!("Parse error: {}", e))?;
+
+    if body.get("message").is_some() {
+        return Ok(serde_json::json!({ "success": true, "message": body["message"] }));
     }
 
-    let body: serde_json::Value = resp
-        .json()
+    let error = body.get("error").and_then(|v| v.as_str()).unwrap_or("Unknown error");
+    Err(error.to_string())
+}
+
+#[tauri::command]
+pub async fn auth_register(email: String, password: String, code: String) -> Result<serde_json::Value, String> {
+    let machine_fp = get_machine_fingerprint();
+    let client = build_client()?;
+    let resp = client
+        .post(format!("{}/auth/register?device_fingerprint={}", AUTH_SERVER_URL, machine_fp))
+        .json(&serde_json::json!({ "email": email, "password": password, "code": code }))
+        .send()
         .await
-        .map_err(|e| format!("Trial activation parse error: {}", e))?;
+        .map_err(|e| format!("Request failed: {}", e))?;
 
-    let active = body.get("active").and_then(|v| v.as_bool()).unwrap_or(false);
-    let expires_at = body
-        .get("expires_at")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
+    let body: serde_json::Value = resp.json().await.map_err(|e| format!("Parse error: {}", e))?;
 
-    Ok(TrialActivateResponse { active, expires_at })
+    if let Some(token) = body.get("access_token").and_then(|v| v.as_str()) {
+        save_auth_token(token)?;
+        return Ok(serde_json::json!({ "success": true }));
+    }
+
+    let error = body.get("error").and_then(|v| v.as_str()).unwrap_or("Unknown error");
+    Err(error.to_string())
 }
 
-fn save_trial_cache(active: bool, expires_at: &str) {
-    if let Ok(path) = trial_cache_path() {
-        if let Ok(dir) = license_dir() {
-            let _ = std::fs::create_dir_all(&dir);
+#[tauri::command]
+pub async fn auth_login(email: String, password: String) -> Result<serde_json::Value, String> {
+    let client = build_client()?;
+    let resp = client
+        .post(format!("{}/auth/login", AUTH_SERVER_URL))
+        .json(&serde_json::json!({ "email": email, "password": password }))
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    let body: serde_json::Value = resp.json().await.map_err(|e| format!("Parse error: {}", e))?;
+
+    if let Some(token) = body.get("access_token").and_then(|v| v.as_str()) {
+        save_auth_token(token)?;
+        return Ok(serde_json::json!({ "success": true }));
+    }
+
+    let error = body.get("error").and_then(|v| v.as_str()).unwrap_or("Unknown error");
+    Err(error.to_string())
+}
+
+#[tauri::command]
+pub async fn auth_logout() -> Result<serde_json::Value, String> {
+    remove_auth_token()?;
+    // Also remove license cache
+    if let Ok(path) = license_cache_path() {
+        if path.exists() {
+            let _ = std::fs::remove_file(&path);
         }
-        let cache = TrialCache {
-            active,
-            expires_at: expires_at.to_string(),
-        };
-        if let Ok(json) = serde_json::to_string(&cache) {
-            let _ = std::fs::write(&path, json);
-        }
     }
+    Ok(serde_json::json!({ "success": true }))
 }
 
-fn load_trial_cache() -> Option<TrialCache> {
-    let path = trial_cache_path().ok()?;
-    if !path.exists() {
-        return None;
+#[tauri::command]
+pub async fn auth_forgot_password(email: String) -> Result<serde_json::Value, String> {
+    let client = build_client()?;
+    let resp = client
+        .post(format!("{}/auth/forgot-password", AUTH_SERVER_URL))
+        .json(&serde_json::json!({ "email": email }))
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    let body: serde_json::Value = resp.json().await.map_err(|e| format!("Parse error: {}", e))?;
+
+    if body.get("message").is_some() {
+        return Ok(serde_json::json!({ "success": true, "message": body["message"] }));
     }
-    let content = std::fs::read_to_string(&path).ok()?;
-    serde_json::from_str(&content).ok()
+
+    let error = body.get("error").and_then(|v| v.as_str()).unwrap_or("Unknown error");
+    Err(error.to_string())
 }
 
-fn get_trial_status() -> (bool, String) {
-    // Try to load from local cache first (used as fallback)
-    if let Some(cache) = load_trial_cache() {
-        return (cache.active, cache.expires_at);
+#[tauri::command]
+pub async fn auth_reset_password(
+    email: String,
+    code: String,
+    new_password: String,
+) -> Result<serde_json::Value, String> {
+    let client = build_client()?;
+    let resp = client
+        .post(format!("{}/auth/reset-password", AUTH_SERVER_URL))
+        .json(&serde_json::json!({ "email": email, "code": code, "new_password": new_password }))
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    let body: serde_json::Value = resp.json().await.map_err(|e| format!("Parse error: {}", e))?;
+
+    if body.get("message").is_some() {
+        return Ok(serde_json::json!({ "success": true, "message": body["message"] }));
     }
-    (false, String::new())
+
+    let error = body.get("error").and_then(|v| v.as_str()).unwrap_or("Unknown error");
+    Err(error.to_string())
 }
+
+#[tauri::command]
+pub async fn get_auth_status() -> Result<serde_json::Value, String> {
+    let token = load_auth_token();
+    Ok(serde_json::json!({ "logged_in": token.is_some() }))
+}
+
+#[tauri::command]
+pub async fn bind_device() -> Result<serde_json::Value, String> {
+    let token = match load_auth_token() {
+        Some(t) => t,
+        None => return Err("Not logged in".to_string()),
+    };
+    let machine_fp = get_machine_fingerprint();
+    let client = build_client()?;
+    let resp = client
+        .post(format!("{}/license/bind-device", AUTH_SERVER_URL))
+        .header("Authorization", format!("Bearer {}", token))
+        .json(&serde_json::json!({ "device_fingerprint": machine_fp }))
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    let body: serde_json::Value = resp.json().await.map_err(|e| format!("Parse error: {}", e))?;
+
+    if body.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
+        return Ok(body);
+    }
+
+    let error = body.get("error").and_then(|v| v.as_str()).unwrap_or("Bind failed");
+    Err(error.to_string())
+}
+
+// ── License check ──
 
 #[derive(Debug, Serialize, Deserialize)]
 struct LicenseClaims {
@@ -129,59 +340,66 @@ pub async fn get_machine_id() -> Result<String, String> {
 
 #[tauri::command]
 pub async fn check_license() -> Result<serde_json::Value, String> {
+    // 1. If there's a license.jwt file, verify locally (paid license)
     let path = license_path()?;
-    if !path.exists() {
-        // No license file — check trial via server
-        match activate_trial_server().await {
-            Ok(resp) => {
-                let expires_at = resp.expires_at.clone().unwrap_or_default();
-                save_trial_cache(resp.active, &expires_at);
-                if resp.active {
-                    return Ok(serde_json::json!({
-                        "status": "valid",
-                        "expires_at": expires_at,
-                        "trial": true
-                    }));
-                }
-                return Ok(serde_json::json!({
-                    "status": "expired",
-                    "expires_at": expires_at,
-                    "trial": true
-                }));
+    if path.exists() {
+        return check_paid_license(&path);
+    }
+
+    // 2. If logged in, check via server
+    if let Some(token) = load_auth_token() {
+        match check_license_server(&token).await {
+            Ok(result) => {
+                save_license_cache(&result);
+                return Ok(serde_json::to_value(&result).unwrap_or_default());
             }
             Err(_) => {
                 // Network error — fall back to local cache
-                let (active, expires_at) = get_trial_status();
-                if active {
-                    return Ok(serde_json::json!({
-                        "status": "valid",
-                        "expires_at": expires_at,
-                        "trial": true
-                    }));
+                if let Some(cache) = load_license_cache() {
+                    return Ok(serde_json::to_value(&cache).unwrap_or_default());
                 }
-                if !expires_at.is_empty() {
-                    return Ok(serde_json::json!({
-                        "status": "expired",
-                        "expires_at": expires_at,
-                        "trial": true
-                    }));
-                }
-                // No cache at all — grant local temporary trial,
-                // will be synced with server on next successful connection
-                let now = chrono::Utc::now();
-                let trial_end = now + chrono::Duration::days(TRIAL_DAYS);
-                let expires_at_str = trial_end.format("%Y-%m-%d").to_string();
-                save_trial_cache(true, &expires_at_str);
-                return Ok(serde_json::json!({
-                    "status": "valid",
-                    "expires_at": expires_at_str,
-                    "trial": true
-                }));
+                // No cache but logged in — still grant local trial as fallback
+                return check_local_trial();
             }
         }
     }
 
-    let token = std::fs::read_to_string(&path)
+    // 3. Not logged in — check local trial
+    check_local_trial()
+}
+
+async fn check_license_server(token: &str) -> Result<LicenseCache, String> {
+    let machine_fp = get_machine_fingerprint();
+    let client = build_client()?;
+    let resp = client
+        .get(format!("{}/license/check?device_fingerprint={}", AUTH_SERVER_URL, machine_fp))
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
+        // Token expired or invalid
+        let _ = remove_auth_token();
+        return Err("Token expired".to_string());
+    }
+
+    if !resp.status().is_success() {
+        return Err(format!("Server error: {}", resp.status()));
+    }
+
+    let body: serde_json::Value = resp.json().await.map_err(|e| format!("Parse error: {}", e))?;
+
+    Ok(LicenseCache {
+        status: body.get("status").and_then(|v| v.as_str()).unwrap_or("missing").to_string(),
+        expires_at: body.get("expires_at").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        trial: body.get("trial").and_then(|v| v.as_bool()).unwrap_or(false),
+        email: body.get("email").and_then(|v| v.as_str()).map(|s| s.to_string()),
+    })
+}
+
+fn check_paid_license(path: &PathBuf) -> Result<serde_json::Value, String> {
+    let token = std::fs::read_to_string(path)
         .map_err(|e| format!("Failed to read license file: {}", e))?;
 
     let public_key = load_public_key()?;

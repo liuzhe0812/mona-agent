@@ -6,6 +6,11 @@ from pydantic import BaseModel, EmailStr, Field
 class RegisterRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8, max_length=128)
+    code: str = Field(min_length=6, max_length=6)
+
+
+class SendRegisterCodeRequest(BaseModel):
+    email: EmailStr
 
 
 class LoginRequest(BaseModel):
@@ -17,6 +22,16 @@ class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     expires_in: int
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    email: EmailStr
+    code: str = Field(min_length=6, max_length=6)
+    new_password: str = Field(min_length=8, max_length=128)
 
 
 class DeviceBindRequest(BaseModel):
@@ -49,6 +64,13 @@ class LicenseResponse(BaseModel):
 
 class LicenseRefreshRequest(BaseModel):
     device_fingerprint: str = Field(min_length=8, max_length=255)
+
+
+class LicenseCheckResponse(BaseModel):
+    status: str
+    expires_at: str | None = None
+    trial: bool = False
+    email: str | None = None
 
 
 class CreatePaymentRequest(BaseModel):
@@ -86,13 +108,26 @@ class SubscriptionInfo(BaseModel):
     model_config = {"from_attributes": True}
 
 
-class TrialActivateRequest(BaseModel):
-    machine_fingerprint: str = Field(min_length=8, max_length=64)
+class AdminUserInfo(BaseModel):
+    id: int
+    email: str
+    is_admin: bool
+    trial_started_at: datetime | None
+    trial_expires_at: datetime | None
+    created_at: datetime
+    subscription_status: str | None = None
+    subscription_end: datetime | None = None
+
+    model_config = {"from_attributes": True}
 
 
-class TrialActivateResponse(BaseModel):
-    active: bool
-    expires_at: datetime | None = None
+class AdminUserListResponse(BaseModel):
+    users: list[AdminUserInfo]
+    total: int
+
+
+class AdminTrialUpdateRequest(BaseModel):
+    trial_expires_at: datetime
 
 
 class ErrorResponse(BaseModel):

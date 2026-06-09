@@ -25,6 +25,10 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     is_admin: Mapped[bool] = mapped_column(default=False)
+    trial_started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    trial_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    bound_device_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    trial_device_changes: Mapped[int] = mapped_column(default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     subscriptions: Mapped[list["Subscription"]] = relationship(
@@ -74,14 +78,27 @@ class Device(Base):
     user: Mapped["User"] = relationship(back_populates="devices")
 
 
-class TrialActivation(Base):
-    __tablename__ = "trial_activations"
-    __table_args__ = (UniqueConstraint("machine_fingerprint"),)
+class PasswordResetCode(Base):
+    __tablename__ = "password_reset_codes"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    machine_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
-    activated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    email: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    code: Mapped[str] = mapped_column(String(6), nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    used: Mapped[bool] = mapped_column(default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class UsedDeviceTrial(Base):
+    __tablename__ = "used_device_trials"
+    __table_args__ = (UniqueConstraint("device_fingerprint"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    device_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
 class Payment(Base):

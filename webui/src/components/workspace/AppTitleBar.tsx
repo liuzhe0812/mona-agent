@@ -1,13 +1,13 @@
 import type { ReactNode } from "react";
-import { Maximize2, Minus, Moon, Sun, X } from "lucide-react";
+import { Maximize2, Minus, Settings, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { ConnectionBadge } from "@/components/ConnectionBadge";
 import { isTauri } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 
 interface AppTitleBarProps {
-  theme: "light" | "dark";
-  onToggleTheme: () => void;
+  onOpenSettings?: () => void;
 }
 
 async function withCurrentWindow(
@@ -24,7 +24,7 @@ async function withCurrentWindow(
   }
 }
 
-export function AppTitleBar({ theme, onToggleTheme }: AppTitleBarProps) {
+export function AppTitleBar({ onOpenSettings }: AppTitleBarProps) {
   return (
     <header
       data-tauri-drag-region
@@ -32,16 +32,15 @@ export function AppTitleBar({ theme, onToggleTheme }: AppTitleBarProps) {
     >
       <div data-tauri-drag-region className="min-w-0 flex-1" />
       <div className="flex h-full items-center">
-        <TitleBarButton
-          label={theme === "dark" ? "切换到浅色" : "切换到深色"}
-          onClick={onToggleTheme}
-        >
-          {theme === "dark" ? (
-            <Sun className="h-3.5 w-3.5" />
-          ) : (
-            <Moon className="h-3.5 w-3.5" />
-          )}
-        </TitleBarButton>
+        <ConnectionBadge />
+        {onOpenSettings && (
+          <TitleBarButton
+            label="设置"
+            onClick={onOpenSettings}
+          >
+            <Settings className="h-3.5 w-3.5" />
+          </TitleBarButton>
+        )}
         <TitleBarButton
           label="最小化"
           onClick={() => {

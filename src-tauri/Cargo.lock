@@ -3222,7 +3222,7 @@ dependencies = [
 
 [[package]]
 name = "mona-desktop"
-version = "0.1.5"
+version = "0.9.1"
 dependencies = [
  "base64 0.22.1",
  "chrono",

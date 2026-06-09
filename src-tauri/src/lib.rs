@@ -110,18 +110,7 @@ async fn gateway_status(state: tauri::State<'_, GatewayState>) -> Result<serde_j
 }
 
 #[tauri::command]
-async fn initialize_python_env(app_handle: tauri::AppHandle) -> Result<(), String> {
-    python::deploy_gateway(&app_handle)?;
-    Ok(())
-}
-
-#[tauri::command]
-async fn is_python_ready() -> Result<bool, String> {
-    Ok(python::is_gateway_deployed())
-}
-
-#[tauri::command]
-async fn diagnose_python(app_handle: tauri::AppHandle) -> Result<serde_json::Value, String> {
+async fn diagnose_gateway(app_handle: tauri::AppHandle) -> Result<serde_json::Value, String> {
     let gateway = python::gateway_exe_path();
     let resource_dir = app_handle.path().resource_dir().map(|p| p.display().to_string()).unwrap_or_else(|e| format!("ERROR: {}", e));
     let exe_path = std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_else(|e| format!("ERROR: {}", e));
@@ -156,7 +145,6 @@ async fn diagnose_python(app_handle: tauri::AppHandle) -> Result<serde_json::Val
         "resource_dir": resource_dir,
         "current_exe": exe_path,
         "resource_candidates": resource_candidates,
-        "system_python": python::find_system_python().map(|p| p.display().to_string()),
     }))
 }
 
@@ -272,9 +260,7 @@ pub fn run() {
             start_gateway,
             stop_gateway,
             gateway_status,
-            initialize_python_env,
-            is_python_ready,
-            diagnose_python,
+            diagnose_gateway,
             open_in_browser,
             mona_config_status,
             write_mona_provider_config,
@@ -289,6 +275,9 @@ pub fn run() {
             notes::notes_export_temp,
             notes::notes_create_from_chat,
             notes::notes_search,
+            notes::notes_save_image,
+            notes::notes_get_assets_dir,
+            notes::notes_read_image,
             terminal::commands::ssh_connect,
             terminal::commands::ssh_connect_with_id,
             terminal::commands::ssh_disconnect,
@@ -369,6 +358,14 @@ pub fn run() {
             license::get_machine_id,
             license::check_license,
             license::import_license,
+            license::auth_register,
+            license::send_register_code,
+            license::auth_login,
+            license::auth_logout,
+            license::auth_forgot_password,
+            license::auth_reset_password,
+            license::get_auth_status,
+            license::bind_device,
         ])
         .setup(move |app| {
             // 设置高分辨率窗口图标，确保任务栏在高 DPI 下清晰

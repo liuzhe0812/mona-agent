@@ -6,17 +6,18 @@ import {
   Database,
   FileText,
   ListFilter,
+  LogIn,
   Menu,
   Presentation,
   Search,
-  Settings,
   Terminal,
+  User,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { AgentLogo } from "@/components/AgentLogo";
 import { ChatList } from "@/components/ChatList";
-import { ConnectionBadge } from "@/components/ConnectionBadge";
+
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -48,6 +49,7 @@ interface SidebarProps {
   onRequestRename: (key: string, label: string) => void;
   onToggleArchive: (key: string) => void;
   onOpenSettings: () => void;
+  onOpenLogin?: () => void;
   onOpenNote?: () => void;
   onOpenPpt?: () => void;
   onOpenSSH?: () => void;
@@ -73,6 +75,7 @@ interface SidebarProps {
 
 export function Sidebar(props: SidebarProps) {
   const { t } = useTranslation();
+  const { loggedIn, licenseInfo, localTrial, localTrialExpired, remainingDays } = useLicense();
   const [menuPortalContainer, setMenuPortalContainer] =
     useState<HTMLElement | null>(null);
   const collapsed = Boolean(props.collapsed);
@@ -198,14 +201,31 @@ export function Sidebar(props: SidebarProps) {
           collapsed && "w-14 flex-col px-0",
         )}
       >
-        <SidebarActionButton
-          collapsed={collapsed}
-          label={t("sidebar.settings")}
-          onClick={props.onOpenSettings}
-          className={collapsed ? undefined : "flex-1"}
-          icon={<Settings className="h-4 w-4" />}
-        />
-        <ConnectionBadge />
+        {localTrial && !localTrialExpired ? (
+          <SidebarActionButton
+            collapsed={collapsed}
+            label={`试用剩余 ${remainingDays} 天`}
+            onClick={props.onOpenLogin}
+            className={collapsed ? undefined : "flex-1"}
+            icon={<User className="h-4 w-4" />}
+          />
+        ) : loggedIn ? (
+          <SidebarActionButton
+            collapsed={collapsed}
+            label={licenseInfo?.email ?? t("sidebar.settings")}
+            onClick={props.onOpenLogin}
+            className={collapsed ? undefined : "flex-1"}
+            icon={<User className="h-4 w-4" />}
+          />
+        ) : (
+          <SidebarActionButton
+            collapsed={collapsed}
+            label={t("sidebar.login", "登录")}
+            onClick={props.onOpenLogin}
+            className={collapsed ? undefined : "flex-1"}
+            icon={<LogIn className="h-4 w-4" />}
+          />
+        )}
       </div>
     </nav>
   );
@@ -243,7 +263,7 @@ function ToolboxNavigation({
   onGoHome: () => void;
 }) {
   const { licenseActive } = useLicense();
-  const LICENSE_REQUIRED = new Set(["知识库"]);
+  const LICENSE_REQUIRED = new Set(["知识库", "PPT制作"]);
   const visibleItems = licenseActive
     ? TOOLBOX_ITEMS
     : TOOLBOX_ITEMS.filter((item) => !LICENSE_REQUIRED.has(item.label));

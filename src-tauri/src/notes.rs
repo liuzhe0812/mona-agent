@@ -1,4 +1,5 @@
 use crate::settings::app_data_dir;
+use base64::Engine;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -178,28 +179,25 @@ fn initialize_schema(conn: &Connection) -> Result<(), String> {
         );
 
         CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
-            note_id,
+            id,
             notebook_id,
             title,
-            content,
-            tags,
+            content_markdown,
+            tags_json,
             content='notes',
             content_rowid='rowid'
         );
-
         CREATE TRIGGER IF NOT EXISTS notes_fts_insert AFTER INSERT ON notes BEGIN
-            INSERT INTO notes_fts(rowid, note_id, notebook_id, title, content, tags)
+            INSERT INTO notes_fts(rowid, id, notebook_id, title, content_markdown, tags_json)
             VALUES (new.rowid, new.id, new.notebook_id, new.title, new.content_markdown, new.tags_json);
         END;
-
         CREATE TRIGGER IF NOT EXISTS notes_fts_update AFTER UPDATE ON notes BEGIN
             DELETE FROM notes_fts WHERE rowid = old.rowid;
-            INSERT INTO notes_fts(rowid, note_id, notebook_id, title, content, tags)
+            INSERT INTO notes_fts(rowid, id, notebook_id, title, content_markdown, tags_json)
             VALUES (new.rowid, new.id, new.notebook_id, new.title, new.content_markdown, new.tags_json);
         END;
-
         CREATE TRIGGER IF NOT EXISTS notes_fts_delete AFTER DELETE ON notes BEGIN
-            INSERT INTO notes_fts(notes_fts, rowid, note_id, notebook_id, title, content, tags)
+            INSERT INTO notes_fts(notes_fts, rowid, id, notebook_id, title, content_markdown, tags_json)
             VALUES ('delete', old.rowid, old.id, old.notebook_id, old.title, old.content_markdown, old.tags_json);
         END;
         "#,
@@ -226,7 +224,67 @@ fn initialize_schema(conn: &Connection) -> Result<(), String> {
         "applied_agent_message_ids_json",
         "TEXT NOT NULL DEFAULT '[]'",
     )?;
-    ensure_column(conn, "notes", "plain_text", "TEXT")
+    ensure_column(conn, "notes", "plain_text", "TEXT")?;
+
+    // Migrate FTS5 table: if old notes_fts has column "note_id", rebuild it
+    migrate_fts_if_needed(conn)
+}
+
+fn migrate_fts_if_needed(conn: &Connection) -> Result<(), String> {
+    // Check if notes_fts has the old "note_id" column (should be "id" now)
+    let has_old_schema: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('notes_fts') WHERE name = 'note_id'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+        > 0;
+
+    if !has_old_schema {
+        return Ok(());
+    }
+
+    // Drop old FTS table and triggers, they will be recreated by initialize_schema
+    // on next app launch. But since CREATE VIRTUAL TABLE IF NOT EXISTS won't recreate,
+    // we need to drop them now.
+    conn.execute_batch(
+        "DROP TRIGGER IF EXISTS notes_fts_insert;
+         DROP TRIGGER IF EXISTS notes_fts_update;
+         DROP TRIGGER IF EXISTS notes_fts_delete;
+         DROP TABLE IF EXISTS notes_fts;",
+    )
+    .map_err(|e| format!("Failed to drop old FTS table: {}", e))?;
+
+    // Recreate with correct column names
+    conn.execute_batch(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
+            id,
+            notebook_id,
+            title,
+            content_markdown,
+            tags_json,
+            content='notes',
+            content_rowid='rowid'
+        );
+        CREATE TRIGGER IF NOT EXISTS notes_fts_insert AFTER INSERT ON notes BEGIN
+            INSERT INTO notes_fts(rowid, id, notebook_id, title, content_markdown, tags_json)
+            VALUES (new.rowid, new.id, new.notebook_id, new.title, new.content_markdown, new.tags_json);
+        END;
+        CREATE TRIGGER IF NOT EXISTS notes_fts_update AFTER UPDATE ON notes BEGIN
+            DELETE FROM notes_fts WHERE rowid = old.rowid;
+            INSERT INTO notes_fts(rowid, id, notebook_id, title, content_markdown, tags_json)
+            VALUES (new.rowid, new.id, new.notebook_id, new.title, new.content_markdown, new.tags_json);
+        END;
+        CREATE TRIGGER IF NOT EXISTS notes_fts_delete AFTER DELETE ON notes BEGIN
+            INSERT INTO notes_fts(notes_fts, rowid, id, notebook_id, title, content_markdown, tags_json)
+            VALUES ('delete', old.rowid, old.id, old.notebook_id, old.title, old.content_markdown, old.tags_json);
+        END;
+        INSERT INTO notes_fts(notes_fts) VALUES('rebuild');",
+    )
+    .map_err(|e| format!("Failed to recreate FTS table: {}", e))?;
+
+    Ok(())
 }
 
 fn ensure_column(
@@ -490,7 +548,12 @@ pub async fn notes_save_state(state: NotesState) -> Result<(), String> {
         .map_err(|e| format!("Failed to rebuild FTS index: {}", e))?;
 
     tx.commit()
-        .map_err(|e| format!("Failed to commit notes transaction: {}", e))
+        .map_err(|e| format!("Failed to commit notes transaction: {}", e))?;
+
+    // Clean up orphaned image files no longer referenced by any note
+    cleanup_orphaned_assets(&state.notes)?;
+
+    Ok(())
 }
 
 fn load_notebooks(conn: &Connection) -> Result<Vec<Notebook>, String> {
@@ -994,7 +1057,7 @@ fn search_fts(
     }
 
     let sql = format!(
-        "SELECT note_id, title, snippet(notes_fts, 3, '⟨', '⟩', '...', 64) as snippet, rank \
+        "SELECT id, title, snippet(notes_fts, 3, '⟨', '⟩', '...', 64) as snippet, rank \
          FROM notes_fts \
          WHERE notes_fts MATCH ?1 AND notebook_id = ?2 \
          ORDER BY rank \
@@ -1065,4 +1128,111 @@ pub async fn notes_export_temp(note_id: String, content: String) -> Result<Strin
     fs::write(&file_path, &content).map_err(|e| format!("Failed to write temp file: {}", e))?;
 
     Ok(format!(".mona/tmp/notes/{}.md", note_id))
+}
+
+/// Scan all notes' Markdown for `assets/xxx.png` references and delete
+/// files in the assets directory that are no longer referenced by any note.
+fn cleanup_orphaned_assets(notes: &[OperationNote]) -> Result<(), String> {
+    let assets_dir = app_data_dir().join("notes").join("assets");
+    if !assets_dir.exists() {
+        return Ok(());
+    }
+
+    // Collect all referenced file names from note Markdown
+    let mut referenced = std::collections::HashSet::new();
+    for note in notes {
+        let md = &note.content_markdown;
+        let mut start = 0;
+        while let Some(pos) = md[start..].find("assets/") {
+            let abs_pos = start + pos;
+            let rest = &md[abs_pos + "assets/".len()..];
+            // Extract file name: alphanumeric + dots + extension
+            let end = rest
+                .char_indices()
+                .take_while(|(i, c)| {
+                    *i == 0 && c.is_alphanumeric()
+                        || *i > 0 && (c.is_alphanumeric() || *c == '.' || *c == '-' || *c == '_')
+                })
+                .last()
+                .map(|(i, c)| i + c.len_utf8())
+                .unwrap_or(0);
+            let name = &rest[..end];
+            if !name.is_empty() && name.contains('.') {
+                referenced.insert(name.to_string());
+            }
+            start = abs_pos + "assets/".len();
+        }
+    }
+
+    // Delete files not in the referenced set
+    let entries = fs::read_dir(&assets_dir)
+        .map_err(|e| format!("Failed to read assets dir: {}", e))?;
+    for entry in entries.flatten() {
+        if let Some(name) = entry.file_name().to_str() {
+            if !referenced.contains(name) {
+                let _ = fs::remove_file(entry.path());
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn notes_save_image(
+    file_name: String,
+    image_data: Vec<u8>,
+) -> Result<String, String> {
+    let assets_dir = app_data_dir().join("notes").join("assets");
+    fs::create_dir_all(&assets_dir)
+        .map_err(|e| format!("Failed to create notes assets dir: {}", e))?;
+
+    let file_path = assets_dir.join(&file_name);
+    fs::write(&file_path, &image_data)
+        .map_err(|e| format!("Failed to save note image: {}", e))?;
+
+    Ok(file_path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub async fn notes_get_assets_dir() -> Result<String, String> {
+    let assets_dir = app_data_dir().join("notes").join("assets");
+    fs::create_dir_all(&assets_dir)
+        .map_err(|e| format!("Failed to ensure notes assets dir: {}", e))?;
+    Ok(assets_dir.to_string_lossy().to_string())
+}
+
+/// Read a note image file and return it as a data URL for rendering.
+/// Only used for in-browser display; the database still stores relative paths like `assets/xxx.png`.
+#[tauri::command]
+pub async fn notes_read_image(file_name: String) -> Result<String, String> {
+    let assets_dir = app_data_dir().join("notes").join("assets");
+    let file_path = assets_dir.join(&file_name);
+
+    if !file_path.exists() {
+        return Err(format!("Image file not found: {}", file_name));
+    }
+
+    let data = fs::read(&file_path)
+        .map_err(|e| format!("Failed to read image: {}", e))?;
+
+    let ext = file_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("png")
+        .to_lowercase();
+
+    let mime = match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "bmp" => "image/bmp",
+        "ico" => "image/x-icon",
+        _ => "image/png",
+    };
+
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
+    Ok(format!("data:{};base64,{}", mime, b64))
 }

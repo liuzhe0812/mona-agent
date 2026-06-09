@@ -34,35 +34,26 @@ impl GatewayManager {
 
         let port = find_available_port(settings.gateway_port)?;
 
-        // Try system Python first (for dev mode), then fall back to packaged gateway
-        let (exe_path, args) = if let Some(sys_python) = python::find_system_python() {
-            log::info!("Using system Python: {:?}", sys_python);
-            (sys_python, vec!["-m".to_string(), "mona".to_string(), "gateway".to_string(), "--port".to_string(), port.to_string()])
-        } else if let Ok(gateway) = python::deploy_gateway(app_handle) {
-            log::info!("Using packaged gateway: {:?}", gateway);
-            (gateway, vec!["gateway".to_string(), "--port".to_string(), port.to_string()])
-        } else {
-            return Err("No gateway available. Neither system Python nor packaged gateway found.".into());
-        };
+        let mut cmd;
 
-        if !exe_path.exists() {
-            return Err(format!(
-                "Gateway executable not found at {:?}",
-                exe_path
-            ));
-        }
+        if cfg!(debug_assertions) {
+            // Dev mode: system Python only
+            let sys_python = python::find_system_python()
+                .ok_or_else(|| "System Python not found. Install Python for dev mode.".to_string())?;
+            log::info!("Dev mode: using system Python: {:?}", sys_python);
+            if !sys_python.exists() {
+                return Err(format!("System Python not found at {:?}", sys_python));
+            }
+            cmd = std::process::Command::new(&sys_python);
+            cmd.args(["-m", "mona", "gateway", "--port", &port.to_string()]);
 
-        let mut cmd = std::process::Command::new(&exe_path);
-        cmd.args(&args);
+            if let Some(ref config_path) = settings.config_path {
+                cmd.args(["--config", config_path]);
+            }
 
-        if let Some(ref config_path) = settings.config_path {
-            cmd.args(["--config", config_path]);
-        }
+            cmd.env("PYTHONUNBUFFERED", "1");
 
-        cmd.env("PYTHONUNBUFFERED", "1");
-
-        // In dev mode (system Python), set PYTHONPATH if source tree exists
-        if args.first().map(|s| s.as_str()) == Some("-m") {
+            // Set PYTHONPATH if source tree exists
             if let Ok(exe_path) = std::env::current_exe() {
                 if let Some(exe_dir) = exe_path.parent() {
                     let project_root = exe_dir.parent().unwrap_or(exe_dir);
@@ -80,6 +71,21 @@ impl GatewayManager {
                     }
                 }
             }
+        } else {
+            // Release mode: packaged gateway exe only
+            let exe_path = python::deploy_gateway(app_handle)?;
+            log::info!("Using packaged gateway: {:?}", exe_path);
+            if !exe_path.exists() {
+                return Err(format!("Gateway executable not found at {:?}", exe_path));
+            }
+            cmd = std::process::Command::new(&exe_path);
+            cmd.args(["gateway", "--port", &port.to_string()]);
+
+            if let Some(ref config_path) = settings.config_path {
+                cmd.args(["--config", config_path]);
+            }
+
+            cmd.env("PYTHONUNBUFFERED", "1");
         }
 
         #[cfg(windows)]

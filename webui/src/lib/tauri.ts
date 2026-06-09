@@ -138,6 +138,21 @@ export async function searchNotebookNotes(
   return invoke<NoteSearchResult[]>("notes_search", { notebookId, query, limit });
 }
 
+export async function saveNoteImage(
+  fileName: string,
+  imageData: number[],
+): Promise<string> {
+  return invoke<string>("notes_save_image", { fileName, imageData });
+}
+
+export async function getNotesAssetsDir(): Promise<string> {
+  return invoke<string>("notes_get_assets_dir");
+}
+
+export async function readNoteImage(fileName: string): Promise<string> {
+  return invoke<string>("notes_read_image", { fileName });
+}
+
 export async function openPathWithSystemApp(path: string): Promise<void> {
   if (!isTauri()) return;
   try {

@@ -8,13 +8,21 @@ class Settings(BaseSettings):
     database_pool_size: int = 5
 
     jwt_access_secret: str = "change-me"
-    jwt_access_expire_minutes: int = 60
+    jwt_access_expire_minutes: int = 60 * 24 * 7  # 7 days
 
     license_private_key_path: str = "keys/private.pem"
     license_public_key_path: str = "keys/public.pem"
     license_expire_days: int = 7
     trial_days: int = 31
     max_devices_per_user: int = 3
+
+    smtp_host: str = ""
+    smtp_port: int = 465
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""
+
+    password_reset_code_expire_minutes: int = 10
 
     xhp_app_id: str = ""
     xhp_app_secret: str = ""

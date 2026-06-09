@@ -16,7 +16,8 @@ import { useSessions } from "@/hooks/useSessions";
 import { useDeferredTitleRefresh } from "@/hooks/useDeferredTitleRefresh";
 import { useSidebarState } from "@/hooks/useSidebarState";
 import { ThemeProvider, useTheme } from "@/hooks/useTheme";
-import { LicenseProvider } from "@/hooks/useLicense";
+import { LicenseProvider, useLicense } from "@/hooks/useLicense";
+import { LoginDialog } from "@/components/LoginDialog";
 import { cn } from "@/lib/utils";
 import {
   deriveWsUrl,
@@ -420,6 +421,7 @@ function Shell({
   const { t, i18n } = useTranslation();
   const { client } = useClient();
   const { theme, toggle } = useTheme();
+  const { licenseActive, checking, loggedIn } = useLicense();
   const { sessions, loading, refresh, createChat, deleteChat } = useSessions();
   const { state: sidebarState, update: updateSidebarState } =
     useSidebarState(sessions, !loading);
@@ -443,6 +445,7 @@ function Shell({
   const [runningChatIds, setRunningChatIds] = useState<Set<string>>(() => new Set());
   const [completedChatIds, setCompletedChatIds] = useState<Set<string>>(readCompletedRunChatIds);
   const [queuedAgentPrompt, setQueuedAgentPrompt] = useState<QueuedAgentPrompt | null>(null);
+  const [loginDialogOpen, setLoginDialogOpen] = useState(false);
   const runningChatIdsRef = useRef<Set<string>>(new Set());
   const sidebarShortcutsRef = useRef<SidebarShortcuts>({
     mona: "Alt+1",
@@ -857,6 +860,11 @@ function Shell({
     setMobileSidebarOpen(false);
   }, []);
 
+  const onOpenLogin = useCallback(() => {
+    setLoginDialogOpen(true);
+    setMobileSidebarOpen(false);
+  }, []);
+
   const onBackToChat = useCallback(() => {
     setView("chat");
     setMobileSidebarOpen(false);
@@ -991,6 +999,7 @@ function Shell({
     onRequestRename,
     onToggleArchive,
     onOpenSettings,
+    onOpenLogin,
     onOpenSearch: onOpenSessionSearch,
     onGoHome,
     onOpenNote,
@@ -1070,8 +1079,7 @@ function Shell({
 
         <div className="flex min-w-0 flex-1 flex-col">
           <AppTitleBar
-            theme={theme}
-            onToggleTheme={toggle}
+            onOpenSettings={onOpenSettings}
           />
           <div className="flex min-h-0 flex-1 overflow-hidden">
             <main className="relative flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-background">
@@ -1157,6 +1165,11 @@ function Shell({
           loading={loading}
           titleOverrides={sidebarState.title_overrides}
           onSelect={onSelectSearchResult}
+        />
+
+        <LoginDialog
+          open={loginDialogOpen}
+          onOpenChange={setLoginDialogOpen}
         />
 
         <DeleteConfirm

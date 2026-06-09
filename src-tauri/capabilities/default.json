@@ -62,6 +62,7 @@
     "fs:allow-document-write-recursive",
     "fs:allow-download-read-recursive",
     "fs:allow-download-write-recursive",
+    "fs:allow-appdata-read-recursive",
     "clipboard-manager:allow-read-text",
     "clipboard-manager:allow-write-text",
     {
