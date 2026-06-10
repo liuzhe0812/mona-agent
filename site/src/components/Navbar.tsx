@@ -41,7 +41,7 @@ export default function Navbar() {
           ))}
         </div>
         <a
-          href="/download"
+          href="https://mona.lzfun.vip/releases/Mona-latest.exe"
           className="inline-flex items-center gap-2 rounded-md border border-black bg-[#101010] px-3.5 py-2 text-sm font-semibold text-white transition hover:bg-white hover:text-black"
         >
           <Download className="h-4 w-4" />

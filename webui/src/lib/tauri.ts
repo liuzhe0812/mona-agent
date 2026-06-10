@@ -217,3 +217,33 @@ export async function saveMarkdownFile(title: string, content: string): Promise<
   await writeFile(filePath, encoder.encode(content));
   return true;
 }
+
+// ---------------------------------------------------------------------------
+// Updater
+// ---------------------------------------------------------------------------
+
+export interface UpdateCheckResult {
+  has_update: boolean;
+  current_version: string;
+  latest_version: string;
+  notes: string | null;
+  size: number | null;
+}
+
+export interface UpdateProgress {
+  stage: string;
+  percent: number;
+  message: string;
+}
+
+export async function checkForUpdates(): Promise<UpdateCheckResult> {
+  return invoke<UpdateCheckResult>("check_for_updates");
+}
+
+export async function performUpdate(): Promise<void> {
+  return invoke<void>("perform_update");
+}
+
+export async function getCurrentVersion(): Promise<string> {
+  return invoke<string>("get_current_version");
+}

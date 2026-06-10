@@ -161,9 +161,16 @@ impl LocalShell {
                 pixel_width: 0,
                 pixel_height: 0,
             })
-            .map_err(|e| TerminalError::ShellSpawn(e.to_string()))?;
+            .map_err(|e| {
+                log::error!("Failed to open PTY: {}", e);
+                TerminalError::ShellSpawn(format!("openpty failed: {}", e))
+            })?;
 
         let (shell, utf8_mode) = detect_shell();
+        log::info!(
+            "Spawning local shell: {} (utf8={}), session={}",
+            shell, utf8_mode, session_id
+        );
 
         let mut cmd = CommandBuilder::new(shell);
         cmd.env("TERM", "xterm-256color");
@@ -176,7 +183,10 @@ impl LocalShell {
         let child = pair
             .slave
             .spawn_command(cmd)
-            .map_err(|e| TerminalError::ShellSpawn(e.to_string()))?;
+            .map_err(|e| {
+                log::error!("Failed to spawn shell command: {}", e);
+                TerminalError::ShellSpawn(format!("spawn_command failed: {}", e))
+            })?;
 
         let child = Arc::new(StdMutex::new(child));
 
@@ -200,9 +210,11 @@ impl LocalShell {
         std::thread::spawn(move || {
             let mut reader = reader;
             let mut buf = [0u8; 4096];
+            log::info!("PTY reader thread started for session {}", sid);
             loop {
                 match reader.read(&mut buf) {
                     Ok(0) => {
+                        log::info!("PTY reader: shell exited for session {}", sid);
                         let msg = "\r\n[Shell exited]\r\n".to_string();
                         sb.push(msg.clone());
                         let payload = serde_json::json!({
@@ -222,7 +234,10 @@ impl LocalShell {
                         });
                         let _ = handle.emit("terminal-output", payload);
                     }
-                    Err(_) => break,
+                    Err(e) => {
+                        log::error!("PTY reader error for session {}: {}", sid, e);
+                        break;
+                    }
                 }
             }
         });

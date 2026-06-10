@@ -75,7 +75,7 @@ export default function HeroSection() {
             transition={{ duration: 0.6, delay: 0.3, ease: "easeOut" }}
           >
             <MagneticButton
-              href="/download"
+              href="https://mona.lzfun.vip/releases/Mona-latest.exe"
               className="inline-flex items-center justify-center gap-2 rounded-md border border-black bg-[#101010] px-5 py-3 text-sm font-semibold text-white transition hover:bg-white hover:text-black"
             >
               <Download className="h-4 w-4" />

@@ -205,7 +205,7 @@ export function Sidebar(props: SidebarProps) {
           <SidebarActionButton
             collapsed={collapsed}
             label={`试用剩余 ${remainingDays} 天`}
-            onClick={props.onOpenLogin}
+            onClick={props.onOpenLogin ?? (() => {})}
             className={collapsed ? undefined : "flex-1"}
             icon={<User className="h-4 w-4" />}
           />
@@ -213,7 +213,7 @@ export function Sidebar(props: SidebarProps) {
           <SidebarActionButton
             collapsed={collapsed}
             label={licenseInfo?.email ?? t("sidebar.settings")}
-            onClick={props.onOpenLogin}
+            onClick={props.onOpenLogin ?? (() => {})}
             className={collapsed ? undefined : "flex-1"}
             icon={<User className="h-4 w-4" />}
           />
@@ -221,7 +221,7 @@ export function Sidebar(props: SidebarProps) {
           <SidebarActionButton
             collapsed={collapsed}
             label={t("sidebar.login", "登录")}
-            onClick={props.onOpenLogin}
+            onClick={props.onOpenLogin ?? (() => {})}
             className={collapsed ? undefined : "flex-1"}
             icon={<LogIn className="h-4 w-4" />}
           />

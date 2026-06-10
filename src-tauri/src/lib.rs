@@ -8,6 +8,7 @@ mod quick_ask;
 mod settings;
 mod terminal;
 mod tray;
+mod updater;
 
 use gateway::GatewayManager;
 use settings::AppSettings;
@@ -237,6 +238,7 @@ pub fn run() {
     let terminal_state_for_bridge = terminal_state.clone();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_log::Builder::new().build())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
@@ -366,6 +368,9 @@ pub fn run() {
             license::auth_reset_password,
             license::get_auth_status,
             license::bind_device,
+            updater::check_for_updates,
+            updater::perform_update,
+            updater::get_current_version,
         ])
         .setup(move |app| {
             // 设置高分辨率窗口图标，确保任务栏在高 DPI 下清晰
@@ -443,6 +448,39 @@ pub fn run() {
                     log::info!("No provider configured, skipping gateway auto-start");
                 }
             }
+
+            // Cleanup after update (remove backups, markers)
+            if let Err(e) = updater::cleanup_after_update() {
+                log::warn!("Update cleanup failed: {}", e);
+            }
+
+            // Auto-check for updates 5 seconds after launch
+            let app_handle_for_update = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                match updater::fetch_manifest("https://mona.lzfun.vip/updates/update.json").await {
+                    Ok(manifest) => {
+                        let current = updater::get_app_version();
+                        let latest = manifest.version.clone();
+                        if updater::check_update_available(&current, &manifest.version) {
+                            let _ = app_handle_for_update.emit(
+                                "update-available",
+                                updater::UpdateCheckResult {
+                                    has_update: true,
+                                    current_version: current,
+                                    latest_version: manifest.version,
+                                    notes: manifest.notes,
+                                    size: Some(manifest.size),
+                                },
+                            );
+                            log::info!("Update available: {}", latest);
+                        }
+                    }
+                    Err(e) => {
+                        log::info!("Update check failed: {}", e);
+                    }
+                }
+            });
 
             let window = app.get_webview_window("main").unwrap();
             let gateway_state_for_close = gateway_state.clone();

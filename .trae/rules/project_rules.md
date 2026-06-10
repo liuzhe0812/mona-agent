@@ -31,6 +31,13 @@
 - 新增沙箱后端需实现 `_wrap_<name>(command, workspace, cwd) -> str` 并注册到 `_BACKENDS`
 - 不要在代码中暴露 API 密钥、token 或敏感信息
 
+### 红线：禁止依赖用户侧 Python 环境
+
+- **Mona Desktop 必须完全自包含**，所有 Python 依赖必须在构建时打包进 `python.tar.gz`，不得要求用户机器上预装 Python 或任何 pip 包
+- 禁止运行时调用 `pip install`：用户机器上可能没有 pip、没有网络、没有 Python
+- 新增 Python 依赖时必须评估对安装包体积的影响，优先选择轻量替代方案
+- 所有功能必须开箱即用，零额外配置
+
 ## 配置规范
 
 - 配置模型必须继承 `mona.config.schema.Base`（配置了 `alias_generator=to_camel` 和 `populate_by_name=True`）

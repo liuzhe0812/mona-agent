@@ -65,6 +65,12 @@ export interface MarkdownEditorProps {
 
 // Custom Image extension that serializes `assets/xxx.png` from title/alt instead of data URL
 const NoteImage = TiptapImage.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      width: { default: null, parseHTML: (el: HTMLElement) => el.getAttribute("width") },
+    };
+  },
   addStorage() {
     return {
       markdown: {
@@ -111,9 +117,10 @@ export function MarkdownEditor({
   // Convert assets/ relative paths to data URLs for rendering
   const convertAssetsPaths = useCallback(async (editor: Editor) => {
     const { readNoteImage } = await import("@/lib/tauri");
+    const dpr = window.devicePixelRatio || 1;
     const tr = editor.state.tr;
     let modified = false;
-    const tasks: Promise<void>[] = [];
+    const tasks: Promise<{ fileName: string; dataUrl: string; displayWidth: number | null }>[] = [];
 
     editor.state.doc.descendants((node, pos) => {
       if (node.type.name === "image" && node.attrs.src) {
@@ -137,12 +144,23 @@ export function MarkdownEditor({
             return;
           }
 
-          // Load data URL asynchronously
+          // Load data URL asynchronously with DPI detection
           tasks.push(
-            readNoteImage(fileName).then((dataUrl) => {
+            readNoteImage(fileName).then(async (dataUrl) => {
               dataUrlCacheRef.current.set(fileName, dataUrl);
+              const displayWidth = await new Promise<number | null>((resolve) => {
+                if (dpr <= 1) { resolve(null); return; }
+                const img = new Image();
+                img.onload = () => {
+                  resolve(img.naturalWidth > 0 ? Math.round(img.naturalWidth / dpr) : null);
+                };
+                img.onerror = () => resolve(null);
+                img.src = dataUrl;
+              });
+              return { fileName, dataUrl, displayWidth };
             }).catch((err) => {
               console.warn("[MarkdownEditor] Failed to load image:", fileName, err);
+              return { fileName, dataUrl: "", displayWidth: null };
             }),
           );
         }
@@ -158,7 +176,7 @@ export function MarkdownEditor({
 
     // Load uncached images and apply in a second pass
     if (tasks.length > 0) {
-      await Promise.all(tasks);
+      const results = await Promise.all(tasks);
       const tr2 = editor.state.tr;
       let modified2 = false;
       editor.state.doc.descendants((node, pos) => {
@@ -169,13 +187,14 @@ export function MarkdownEditor({
             (!src.startsWith("http") && !src.startsWith("data:") && !src.includes(":"))
           ) {
             const fileName = src.startsWith("assets/") ? src.slice("assets/".length) : src;
-            const dataUrl = dataUrlCacheRef.current.get(fileName);
-            if (dataUrl) {
+            const result = results.find((r) => r.fileName === fileName);
+            if (result?.dataUrl) {
               tr2.setNodeMarkup(pos, undefined, {
                 ...node.attrs,
-                src: dataUrl,
+                src: result.dataUrl,
                 alt: node.attrs.alt || src,
                 title: src,
+                ...(result.displayWidth != null ? { width: result.displayWidth } : {}),
               });
               modified2 = true;
             }
@@ -203,12 +222,29 @@ export function MarkdownEditor({
       const dataUrl = await readNoteImage(fileName);
       dataUrlCacheRef.current.set(fileName, dataUrl);
       const markdownSrc = `assets/${fileName}`;
+
+      // Detect natural dimensions and apply DPI scaling
+      const displayWidth = await new Promise<number | null>((resolve) => {
+        const img = new Image();
+        img.onload = () => {
+          const dpr = window.devicePixelRatio || 1;
+          if (dpr > 1 && img.naturalWidth > 0) {
+            resolve(Math.round(img.naturalWidth / dpr));
+          } else {
+            resolve(null);
+          }
+        };
+        img.onerror = () => resolve(null);
+        img.src = dataUrl;
+      });
+
       view.dispatch(
         view.state.tr.replaceSelectionWith(
           view.state.schema.nodes.image.create({
             src: dataUrl,
             alt: markdownSrc,
             title: markdownSrc,
+            ...(displayWidth != null ? { width: displayWidth } : {}),
           }),
         ),
       );
@@ -701,7 +737,7 @@ function EditorToolbar({ editor }: { editor: Editor | null }) {
               filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp"] }],
             });
             if (!selected) return;
-            const filePath = typeof selected === "string" ? selected : selected.path;
+            const filePath = selected;
             if (!filePath) return;
             const { readFile } = await import("@tauri-apps/plugin-fs");
             const data = await readFile(filePath);
@@ -713,7 +749,23 @@ function EditorToolbar({ editor }: { editor: Editor | null }) {
             await saveNoteImage(fileName, imageData);
             const dataUrl = await readNoteImage(fileName);
             const markdownSrc = `assets/${fileName}`;
-            editor?.chain().focus().setImage({ src: dataUrl, alt: markdownSrc, title: markdownSrc }).run();
+            // DPI scaling for HiDPI screenshots
+            const dpr = window.devicePixelRatio || 1;
+            const displayWidth = await new Promise<number | null>((resolve) => {
+              if (dpr <= 1) { resolve(null); return; }
+              const img = new Image();
+              img.onload = () => {
+                resolve(img.naturalWidth > 0 ? Math.round(img.naturalWidth / dpr) : null);
+              };
+              img.onerror = () => resolve(null);
+              img.src = dataUrl;
+            });
+            editor?.chain().focus().setImage({
+              src: dataUrl,
+              alt: markdownSrc,
+              title: markdownSrc,
+              ...(displayWidth != null ? { width: displayWidth } : {}),
+            }).run();
           } catch (err) {
             console.warn("[MarkdownEditor] Failed to insert image:", err);
           }

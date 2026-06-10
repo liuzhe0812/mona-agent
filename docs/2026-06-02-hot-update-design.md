@@ -2,11 +2,11 @@
 
 ## Overview
 
-Mona Desktop is a Tauri v2 application distributed as a Windows NSIS installer. It embeds a Python runtime with `mona-ai` pre-installed, running the gateway as a subprocess. This document describes the hot-update mechanism for both the Tauri client and the Python backend.
+Mona Desktop is a Tauri v2 application distributed as a Windows NSIS installer. It embeds a Python runtime with `mona-ai` pre-installed, running the gateway as a subprocess. This document describes the hot-update mechanism for the application.
+
+**Core principle**: One version, one package, one update flow. The entire app (Tauri client + Python runtime + mona-ai) is updated as a single unit — there is no separate "client update" or "backend update".
 
 ## Runtime Layout (User's Machine)
-
-Understanding the actual file layout is critical for the update design:
 
 ```
 C:\Program Files\Mona\                    ← NSIS install directory
@@ -33,7 +33,7 @@ C:\Program Files\Mona\                    ← NSIS install directory
 
 ### Key Constraints
 
-1. **No runtime pip**: The Python runtime has mona-ai and all dependencies pre-installed in `python.tar.gz` during build. `pip` itself may be stripped from the runtime to save space (~5MB). The `install_mona()` function was intentionally removed from `python.rs`.
+1. **No runtime pip**: The Python runtime has mona-ai and all dependencies pre-installed in `python.tar.gz` during build. `pip` itself may be stripped from the runtime to save space (~5MB).
 
 2. **Python + mona-ai are one unit**: The `python.tar.gz` is built by: downloading python-build-standalone → `pip install ".[api,wecom,weixin,pdf]"` → strip caches → re-pack. This means mona-ai and its entire dependency tree are bundled together.
 
@@ -41,227 +41,72 @@ C:\Program Files\Mona\                    ← NSIS install directory
 
 4. **First-launch extraction**: `python.rs` checks `.mona-python-version` marker; if missing or version mismatch, it extracts `python.tar.gz` to `%AppData%/mona/python/`.
 
+5. **Windows exe lock**: The running `Mona.exe` cannot be overwritten. Exe replacement requires a restart with a helper script.
+
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────┐
-│                 VPS (Nginx)                      │
-│                                                  │
-│  /updates/stable.json    ← Tauri client manifest │
-│  /updates/backend.json   ← Python backend manifest│
-│  /releases/*.exe         ← Client installers     │
-│  /releases/backend-*.tar.gz ← Python+mona-ai pkg │
-└──────────────────┬──────────────────────────────┘
+┌──────────────────────────────────────────┐
+│              VPS (Nginx)                 │
+│                                          │
+│  /updates/update.json  ← Update manifest │
+│  /releases/mona-*.tar.gz ← Update pkg   │
+└──────────────────┬───────────────────────┘
                    │ HTTPS
                    ▼
-┌─────────────────────────────────────────────────┐
-│           Mona Desktop (Tauri v2)                │
-│                                                  │
-│  ┌──────────────┐    ┌─────────────────────┐    │
-│  │ tauri-plugin │    │  updater.rs (custom)  │    │
-│  │   -updater   │    │  Backend update mod   │    │
-│  └──────┬───────┘    └──────────┬──────────┘    │
-│         │                       │                │
-│         ▼                       ▼                │
-│   Client exe replace    Replace python dir       │
-│   (apply on restart)    + restart gateway proc   │
-└─────────────────────────────────────────────────┘
+┌──────────────────────────────────────────┐
+│        Mona Desktop (Tauri v2)           │
+│                                          │
+│  ┌────────────────────────────────────┐  │
+│  │       updater.rs (custom)          │  │
+│  │                                    │  │
+│  │  1. Check manifest                │  │
+│  │  2. Download update package       │  │
+│  │  3. Verify SHA256                 │  │
+│  │  4. Stop gateway                  │  │
+│  │  5. Replace python.tar.gz         │  │
+│  │  6. Delete python/ (force re-ext) │  │
+│  │  7. Stage new exe                 │  │
+│  │  8. Restart via helper script     │  │
+│  └────────────────────────────────────┘  │
+└──────────────────────────────────────────┘
 ```
 
-## Component 1: Tauri Client Update (tauri-plugin-updater)
+## Update Package
 
-### Server-side
+A single `mona-<version>.tar.gz` containing the entire application:
 
-Nginx serves a static JSON manifest at `/updates/stable.json`:
+```
+mona-0.2.0.tar.gz
+├── Mona.exe                  ← New Tauri client binary
+└── python.tar.gz             ← New Python runtime + mona-ai
+```
+
+Size estimate: ~90MB (10MB exe + 80MB Python runtime). Since updates are holistic, this is expected.
+
+## VPS Update Server
+
+### Directory Structure
+
+```
+/var/www/mona-updates/
+├── updates/
+│   └── update.json           ← Single manifest
+└── releases/
+    └── mona-0.2.0.tar.gz     ← Update package
+```
+
+### Manifest: `update.json`
 
 ```json
 {
   "version": "0.2.0",
   "notes": "Bug fixes and improvements",
   "pub_date": "2026-06-02T12:00:00Z",
-  "platforms": {
-    "windows-x86_64": {
-      "url": "https://<VPS_HOST>/releases/mona-0.2.0-x64-setup.exe",
-      "signature": "<ed25519_signature>"
-    }
-  }
+  "url": "https://mona.lzfun.vip/releases/mona-0.2.0.tar.gz",
+  "sha256": "abc123...",
+  "size": 94371840
 }
-```
-
-### Client-side
-
-1. Add `tauri-plugin-updater = "2"` to `src-tauri/Cargo.toml`
-2. Configure in `tauri.conf.json`:
-   ```json
-   {
-     "plugins": {
-       "updater": {
-         "endpoints": ["https://<VPS_HOST>/updates/stable.json"],
-         "pubkey": "<PUBLIC_KEY>"
-       }
-     }
-   }
-   ```
-3. Register plugin in `lib.rs`: `.plugin(tauri_plugin_updater::Builder::new().build())`
-4. Frontend checks on startup, downloads in background, applies on next restart
-
-### Security
-
-- ed25519 signature verification built into `tauri-plugin-updater`
-- Private key used only during CI/CD signing; public key embedded in app
-
-## Component 2: Python Backend Update (Custom Rust Module)
-
-### Why NOT pip install at runtime
-
-The original design proposed `pip install <wheel>` at runtime. This is **not viable** because:
-
-1. **pip may not exist** in the embedded Python runtime (stripped to save ~5MB)
-2. **Dependency resolution** is unreliable without a working pip + network access
-3. **mona-ai and Python are one unit** — the entire `python.tar.gz` is built on the CI machine with all deps pre-resolved
-4. **File locks on Windows** — gateway process holds .pyd/.dll files open, pip install can't overwrite them
-
-### Strategy: Backend Package (site-packages overlay)
-
-Instead of pip install, we ship a **backend package** — a tar.gz containing only the site-packages content that changed. This is much smaller than the full Python runtime (~10-20MB vs ~80MB).
-
-**Build-time**: On the CI machine, after building the full `python.tar.gz`, diff the new site-packages against the previous release's site-packages and produce `backend-<version>.tar.gz` containing only changed/added files.
-
-**Runtime**: The updater downloads `backend-<version>.tar.gz`, stops the gateway, extracts it over `%AppData%/mona/python/Lib/site-packages/`, and restarts the gateway.
-
-For the rare case where Python runtime itself needs updating, we ship the full `python.tar.gz`.
-
-### Server-side
-
-Nginx serves `/updates/backend.json`:
-
-```json
-{
-  "version": "0.2.0",
-  "backend_package": {
-    "version": "0.2.0",
-    "url": "https://<VPS_HOST>/releases/backend-0.2.0.tar.gz",
-    "sha256": "abc123...",
-    "size": 15728640
-  },
-  "full_runtime": {
-    "python_version": "3.12.13",
-    "mona_version": "0.2.0",
-    "url": "https://<VPS_HOST>/releases/python-0.2.0.tar.gz",
-    "sha256": "def456...",
-    "size": 83886080
-  }
-}
-```
-
-- `backend_package`: Incremental site-packages overlay (~10-20MB). Used for most updates.
-- `full_runtime`: Complete Python+mona-ai archive (~80MB). Used only when Python runtime itself changes, or as a fallback.
-
-### Version Tracking
-
-| Component | Method | Location |
-|-----------|--------|----------|
-| Python runtime | `.mona-python-version` marker file | `app_data_dir()/python/` (existing) |
-| mona-ai package | Read from `mona_ai-*.dist-info/METADATA` | `app_data_dir()/python/Lib/site-packages/` |
-
-No additional marker file needed. The mona-ai version is read directly from the installed dist-info:
-
-```rust
-fn get_installed_mona_version() -> Option<String> {
-    let site_packages = python_dir().join("Lib").join("site-packages");
-    // Scan for mona_ai-*.dist-info/PKG-INFO or METADATA
-    for entry in fs::read_dir(&site_packages).ok()? {
-        let name = entry.ok()?.file_name();
-        let name_str = name.to_str()?;
-        if name_str.starts_with("mona_ai-") && name_str.ends_with(".dist-info") {
-            // Parse version from "mona_ai-0.2.0.dist-info"
-            let version = name_str
-                .strip_prefix("mona_ai-")?
-                .strip_suffix(".dist-info")?;
-            return Some(version.to_string());
-        }
-    }
-    None
-}
-```
-
-### Update Flow
-
-```
-App startup
-  │
-  ├─ Fetch backend.json from VPS
-  │
-  ├─ Compare backend_package.version vs installed mona-ai version
-  │   ├─ Same → skip
-  │   └─ Different →
-  │       ├─ Is Python runtime version also changed?
-  │       │   ├─ Yes → download full_runtime tar.gz (full replacement)
-  │       │   └─ No  → download backend_package tar.gz (site-packages overlay)
-  │       ├─ Stop gateway
-  │       ├─ Verify SHA256
-  │       ├─ Extract archive
-  │       │   ├─ Full runtime: delete old python dir → extract new one → write .mona-python-version
-  │       │   └─ Backend package: extract over site-packages (overwrite existing)
-  │       ├─ Start gateway
-  │       └─ Verify gateway health check
-  │
-  └─ Done
-```
-
-### New File: `src-tauri/src/updater.rs`
-
-Core functions:
-
-- `check_backend_update()` — Fetch `backend.json`, compare versions, return update availability
-- `perform_backend_update()` — Download backend package, verify SHA256, stop gateway, extract, start gateway
-- `perform_full_runtime_update()` — Download full runtime, verify SHA256, stop gateway, replace python dir, start gateway
-- `get_installed_mona_version()` — Read version from dist-info directory
-- `verify_gateway_health()` — Wait for gateway `/health` endpoint after restart
-
-### Tauri Commands
-
-| Command | Description |
-|---------|-------------|
-| `check_for_updates` | Returns `{ client: {has_update, version}, backend: {has_update, version} }` |
-| `update_backend` | Executes Python backend update (auto-selects backend_package or full_runtime) |
-| `get_current_versions` | Returns current client and backend versions |
-
-### Rollback Strategy
-
-Before applying a backend update, the updater creates a snapshot of the current site-packages state:
-
-1. Rename `%AppData%/mona/python/Lib/site-packages` to `site-packages.bak`
-2. Extract new files into a fresh `site-packages` directory
-3. If gateway health check fails after restart, delete new `site-packages` and rename `site-packages.bak` back
-4. If health check passes, delete `site-packages.bak`
-
-For full runtime updates, the same strategy applies at the `python/` directory level.
-
-### Windows File Lock Handling
-
-The gateway process must be fully stopped before any file replacement. The current `gateway.rs` uses `taskkill /PID <pid> /T /F` to kill the process tree, then calls `child.wait()` to ensure the process has exited. The updater must:
-
-1. Call `GatewayState::stop()` and wait for it to complete
-2. Add a 500ms grace period for Windows to release file locks
-3. Only then proceed with file extraction
-
-## Component 3: VPS Update Server
-
-### Setup
-
-Nginx static file server with HTTPS (Let's Encrypt cert).
-
-Directory structure:
-```
-/var/www/mona-updates/
-├── updates/
-│   ├── stable.json
-│   └── backend.json
-└── releases/
-    ├── mona-0.2.0-x64-setup.exe
-    ├── backend-0.2.0.tar.gz          ← site-packages overlay (~10-20MB)
-    └── python-0.2.0.tar.gz           ← full runtime (~80MB, rare)
 ```
 
 ### Nginx Config
@@ -286,11 +131,167 @@ server {
 }
 ```
 
-## Component 4: Frontend UI
+## Version Tracking
+
+The app has a single version number. It is stored in two places:
+
+| Location | Purpose |
+|----------|---------|
+| `Mona.exe` (compiled-in) | Tauri client version from `tauri.conf.json` |
+| `mona_ai-*.dist-info/METADATA` | mona-ai package version in site-packages |
+
+The updater reads the current version from the dist-info directory (same logic as the existing `get_installed_mona_version()` pattern). The manifest version is compared against this.
+
+```rust
+fn get_installed_version() -> Option<String> {
+    let site_packages = python_dir().join("Lib").join("site-packages");
+    for entry in fs::read_dir(&site_packages).ok()? {
+        let name = entry.ok()?.file_name();
+        let name_str = name.to_str()?;
+        if name_str.starts_with("mona_ai-") && name_str.ends_with(".dist-info") {
+            let version = name_str
+                .strip_prefix("mona_ai-")?
+                .strip_suffix(".dist-info")?;
+            return Some(version.to_string());
+        }
+    }
+    None
+}
+```
+
+## Update Flow
+
+```
+App startup (5s delay)
+  │
+  ├─ Fetch update.json from VPS
+  │
+  ├─ Compare manifest.version vs installed version
+  │   ├─ Same → skip, mark "up to date"
+  │   └─ Different → notify user
+  │
+  ├─ User clicks "Update"
+  │   │
+  │   ├─ Download mona-<version>.tar.gz to staging dir
+  │   │   (%LOCALAPPDATA%/mona/update/)
+  │   │
+  │   ├─ Verify SHA256 against manifest
+  │   │
+  │   ├─ Extract to staging dir
+  │   │   ├── Mona.exe
+  │   │   └── python.tar.gz
+  │   │
+  │   ├─ Stop gateway process (GatewayState::stop())
+  │   │
+  │   ├─ Replace Python runtime:
+  │   │   ├── Copy python.tar.gz → <install_dir>/resources/python.tar.gz
+  │   │   └── Delete %AppData%/mona/python/ (force re-extraction on next launch)
+  │   │
+  │   ├─ Stage exe for replacement:
+  │   │   ├── Copy Mona.exe → <install_dir>/Mona.exe.new
+  │   │   └── Write .update-pending marker in %AppData%/mona/
+  │   │
+  │   └─ Launch helper script & exit current process
+  │
+  └─ Helper script (update.bat):
+      ├── Wait for current Mona.exe process to exit
+      ├── Rename Mona.exe → Mona.exe.old
+      ├── Rename Mona.exe.new → Mona.exe
+      ├── Start Mona.exe
+      ├── Delete Mona.exe.old
+      └── Delete self
+```
+
+### On Next Launch (after update)
+
+1. `python.rs` detects missing `python/` directory (or version mismatch)
+2. Re-extracts `python.tar.gz` → `%AppData%/mona/python/`
+3. Gateway starts normally
+4. App reports current version matches manifest — "up to date"
+
+## Exe Replacement Strategy
+
+On Windows, the running `Mona.exe` cannot be overwritten or renamed. The solution is a helper batch script that runs after the current process exits:
+
+```bat
+@echo off
+:: Wait for the current process to exit
+:wait
+tasklist /FI "PID eq %1" 2>nul | find "%1" >nul
+if %ERRORLEVEL%==0 (
+    timeout /t 1 /nobreak >nul
+    goto wait
+)
+
+:: Swap the exe
+cd /d "%~dp0"
+move /y "Mona.exe.new" "Mona.exe" >nul 2>&1
+
+:: Start the new version
+start "" "Mona.exe"
+
+:: Cleanup
+del "Mona.exe.old" >nul 2>&1
+del "%~f0" >nul 2>&1
+```
+
+The updater:
+1. Writes this script to a temp file
+2. Launches it with the current process PID as argument
+3. Exits the current process
+
+This is a well-established pattern used by many Windows desktop applications.
+
+## Rollback Strategy
+
+Before applying the update, the updater preserves the previous state:
+
+1. **Python runtime**: Rename `%AppData%/mona/python/` to `python.bak/` before deletion
+2. **Python archive**: Rename `resources/python.tar.gz` to `python.tar.gz.bak` before replacement
+3. **Exe**: The old exe is preserved as `Mona.exe.old` by the helper script
+
+If the updated app fails to start or the gateway health check fails:
+
+1. The helper script (or a recovery mode on next launch) detects the failure
+2. Restores `python.bak/` → `python/`
+3. Restores `python.tar.gz.bak` → `python.tar.gz`
+4. Restores `Mona.exe.old` → `Mona.exe`
+
+If the health check passes, cleanup deletes all `.bak` and `.old` files.
+
+## Windows File Lock Handling
+
+The gateway process must be fully stopped before any file replacement:
+
+1. Call `GatewayState::stop()` and wait for it to complete
+2. Add a 500ms grace period for Windows to release file locks on `.pyd`/`.dll` files
+3. Only then proceed with file operations
+
+## New File: `src-tauri/src/updater.rs`
+
+Core functions:
+
+| Function | Description |
+|----------|-------------|
+| `check_for_update()` | Fetch `update.json`, compare versions, return update availability |
+| `perform_update()` | Download package, verify SHA256, stop gateway, replace files, stage exe, restart |
+| `get_installed_version()` | Read version from `mona_ai-*.dist-info` directory |
+| `verify_gateway_health()` | Wait for gateway `/health` endpoint after restart |
+| `create_update_script()` | Generate the helper batch script for exe swap |
+
+## Tauri Commands
+
+| Command | Description |
+|---------|-------------|
+| `check_for_updates` | Returns `{ has_update: bool, current_version: str, latest_version: str, notes: str }` |
+| `perform_update` | Executes the full update flow |
+| `get_current_version` | Returns current installed version |
+
+## Frontend UI
 
 ### Settings Page — Update Section
 
-- Display current versions (client + backend)
+- Display current version
 - "Check for Updates" button
 - Update status indicator (checking / update available / up to date / updating)
 - Download progress bar (with size estimate)
@@ -299,73 +300,63 @@ server {
 ### Startup Behavior
 
 - Silent check 5 seconds after launch
-- Show badge/notification in tray menu if update available
+- Show badge/notification if update available
 - User clicks to enter update flow
 
-## Component 5: CI/CD Release Pipeline
+## CI/CD Release Pipeline
 
-### Building the backend package
-
-The CI pipeline produces both the full `python.tar.gz` (for the NSIS installer) and the incremental `backend-<version>.tar.gz` (for hot-update):
+The CI pipeline produces the update package alongside the NSIS installer:
 
 ```powershell
-# 1. Build full python.tar.gz (same as current build process)
-# ... download python-build-standalone, pip install mona-ai, re-pack ...
-
-# 2. Build backend package (site-packages overlay)
-# Compare new site-packages against previous release
-$OldSitePackages = "previous-release/python/Lib/site-packages"
-$NewSitePackages = "build-output/python/Lib/site-packages"
-
-# Create tar.gz of the entire new site-packages
-tar -czf "backend-$Version.tar.gz" -C $NewSitePackages .
-
-# 3. Compute SHA256
-$Hash = (Get-FileHash "backend-$Version.tar.gz" -Algorithm SHA256).Hash
-```
-
-### Full release pipeline
-
-```bash
 # 1. Build Tauri client
 cd src-tauri && cargo tauri build
+# Produces: Mona.exe (in target/release/)
 
-# 2. Build Python runtime + backend package
-# (see above)
+# 2. Build Python runtime (same as current build process)
+# ... download python-build-standalone, pip install mona-ai, re-pack ...
+# Produces: python.tar.gz
 
-# 3. Sign client binary
-cargo tauri signer sign <exe>
+# 3. Build update package
+mkdir update-staging
+copy target\release\Mona.exe update-staging\
+copy python.tar.gz update-staging\
+tar -czf "mona-$Version.tar.gz" -C update-staging Mona.exe python.tar.gz
 
-# 4. Upload artifacts to VPS
-scp releases/* vps:/var/www/mona-updates/releases/
+# 4. Compute SHA256
+$Hash = (Get-FileHash "mona-$Version.tar.gz" -Algorithm SHA256).Hash
 
-# 5. Update manifests
-# Edit stable.json and backend.json with new version, URL, signature, SHA256
+# 5. Build NSIS installer (for first-time installs)
+# ... standard tauri build process ...
+
+# 6. Upload to VPS
+scp "mona-$Version.tar.gz" vps:/var/www/mona-updates/releases/
+
+# 7. Update manifest
+# Edit update.json with new version, URL, SHA256, size
 ```
 
 ## Security
 
-1. **Client updates**: ed25519 signature verification (tauri-plugin-updater built-in)
-2. **Backend updates**: SHA256 hash verification against manifest
-3. **Transport**: HTTPS required on VPS
-4. **No credential exposure**: VPS URLs are public; update artifacts are signed/hashed
-5. **Rollback**: Automatic rollback on gateway health check failure
+1. **SHA256 verification**: Update package hash verified against manifest before application
+2. **Transport**: HTTPS required on VPS
+3. **No credential exposure**: VPS URLs are public; update artifacts are hash-verified
+4. **Rollback**: Automatic rollback on gateway health check failure
+5. **No code execution from untrusted sources**: The helper script is generated locally, not downloaded
 
 ## File Change List
 
 | File | Change |
 |------|--------|
-| `src-tauri/Cargo.toml` | Add `tauri-plugin-updater` dependency |
-| `src-tauri/tauri.conf.json` | Add updater config + pubkey |
-| `src-tauri/src/updater.rs` | **New** — Backend update module |
-| `src-tauri/src/lib.rs` | Register updater plugin + commands |
-| `src-tauri/src/python.rs` | Add `get_installed_mona_version()` function |
+| `src-tauri/Cargo.toml` | Add dependencies (reqwest, sha2, etc.) |
+| `src-tauri/src/updater.rs` | **New** — Update module |
+| `src-tauri/src/lib.rs` | Register updater commands |
+| `src-tauri/src/python.rs` | Add `get_installed_version()` function |
 | `webui/src/` | Update settings page with update UI |
 
 ## Out of Scope
 
-- Incremental/delta updates for the client binary (full replacement only)
+- Incremental/delta updates (full package replacement only)
 - Auto-update without user confirmation (user must approve)
 - macOS/Linux support (Windows-only for now)
 - Update scheduling (check on startup only)
-- Differential binary patching for backend package
+- Differential binary patching

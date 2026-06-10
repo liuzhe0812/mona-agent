@@ -421,7 +421,7 @@ function Shell({
   const { t, i18n } = useTranslation();
   const { client } = useClient();
   const { theme, toggle } = useTheme();
-  const { licenseActive, checking, loggedIn } = useLicense();
+  useLicense();
   const { sessions, loading, refresh, createChat, deleteChat } = useSessions();
   const { state: sidebarState, update: updateSidebarState } =
     useSidebarState(sessions, !loading);

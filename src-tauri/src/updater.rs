@@ -1,0 +1,415 @@
+use std::fs;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use tauri::Emitter;
+
+use crate::settings::app_data_dir;
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateManifest {
+    pub version: String,
+    pub notes: Option<String>,
+    pub pub_date: Option<String>,
+    pub url: String,
+    pub sha256: String,
+    pub size: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateCheckResult {
+    pub has_update: bool,
+    pub current_version: String,
+    pub latest_version: String,
+    pub notes: Option<String>,
+    pub size: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateProgress {
+    pub stage: String,
+    pub percent: u8,
+    pub message: String,
+}
+
+// ---------------------------------------------------------------------------
+// Version detection
+// ---------------------------------------------------------------------------
+
+/// Get the app version from the compile-time Cargo.toml version.
+pub fn get_app_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
+// ---------------------------------------------------------------------------
+// Manifest fetching
+// ---------------------------------------------------------------------------
+
+/// Fetch the update manifest from the VPS.
+pub async fn fetch_manifest(manifest_url: &str) -> Result<UpdateManifest, String> {
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(manifest_url)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(|e| format!("Failed to fetch manifest: {}", e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("Manifest request failed: HTTP {}", resp.status()));
+    }
+
+    resp.json::<UpdateManifest>()
+        .await
+        .map_err(|e| format!("Failed to parse manifest: {}", e))
+}
+
+/// Check if an update is available by comparing versions.
+pub fn check_update_available(current: &str, latest: &str) -> bool {
+    current != latest
+}
+
+// ---------------------------------------------------------------------------
+// Download + verify
+// ---------------------------------------------------------------------------
+
+/// Download the update package to a staging directory and verify its SHA256.
+/// Returns the path to the downloaded file.
+pub async fn download_and_verify(
+    url: &str,
+    expected_sha256: &str,
+    expected_size: u64,
+    staging_dir: &Path,
+    app_handle: &tauri::AppHandle,
+) -> Result<PathBuf, String> {
+    fs::create_dir_all(staging_dir)
+        .map_err(|e| format!("Failed to create staging dir: {}", e))?;
+
+    let file_name = url.rsplit('/').next().unwrap_or("update.tar.gz");
+    let dest_path = staging_dir.join(file_name);
+    let mut dest_file = fs::File::create(&dest_path)
+        .map_err(|e| format!("Failed to create temp file: {}", e))?;
+
+    let client = reqwest::Client::new();
+    let mut resp = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| format!("Download failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("Download failed: HTTP {}", resp.status()));
+    }
+
+    let mut hasher = Sha256::new();
+    let mut downloaded: u64 = 0;
+
+    while let Some(chunk) = resp.chunk().await.map_err(|e| format!("Download error: {}", e))? {
+        dest_file
+            .write_all(&chunk)
+            .map_err(|e| format!("Write error: {}", e))?;
+        hasher.update(&chunk);
+        downloaded += chunk.len() as u64;
+
+        // Emit progress
+        let percent = if expected_size > 0 {
+            ((downloaded as f64 / expected_size as f64) * 100.0).min(100.0) as u8
+        } else {
+            0
+        };
+        let _ = app_handle.emit(
+            "update-progress",
+            UpdateProgress {
+                stage: "downloading".to_string(),
+                percent,
+                message: format!(
+                    "下载中... {}/{} MB",
+                    downloaded / 1_048_576,
+                    expected_size / 1_048_576
+                ),
+            },
+        );
+    }
+
+    dest_file
+        .flush()
+        .map_err(|e| format!("Flush error: {}", e))?;
+
+    // Verify SHA256
+    let hash_result = hex::encode(hasher.finalize());
+    if hash_result.to_lowercase() != expected_sha256.to_lowercase() {
+        let _ = fs::remove_file(&dest_path);
+        return Err(format!(
+            "SHA256 verification failed\nExpected: {}\nGot: {}",
+            expected_sha256, hash_result
+        ));
+    }
+
+    log::info!(
+        "Update package verified: {} ({} bytes)",
+        file_name,
+        downloaded
+    );
+    Ok(dest_path)
+}
+
+// ---------------------------------------------------------------------------
+// Extract + install
+// ---------------------------------------------------------------------------
+
+/// Extract the update package and install files.
+///
+/// Steps:
+/// 1. Extract mona-<version>.tar.gz → staging/Mona.exe + staging/mona-gateway.exe
+/// 2. Stop gateway
+/// 3. Backup resources/mona-gateway.exe → mona-gateway.exe.bak
+/// 4. Copy new mona-gateway.exe → resources/mona-gateway.exe
+/// 5. Copy Mona.exe → Mona.exe.new (staged for swap)
+/// 6. Write .update-pending marker
+pub fn install_update(
+    package_path: &Path,
+    gateway_state: &crate::GatewayState,
+    app_handle: &tauri::AppHandle,
+) -> Result<(), String> {
+    let staging_dir = package_path
+        .parent()
+        .ok_or("Cannot determine staging directory")?;
+
+    // 1. Extract the outer tar.gz
+    let _ = app_handle.emit(
+        "update-progress",
+        UpdateProgress {
+            stage: "extracting".to_string(),
+            percent: 30,
+            message: "解压更新包...".to_string(),
+        },
+    );
+
+    extract_tar_gz(package_path, staging_dir)?;
+
+    let new_exe = staging_dir.join("Mona.exe");
+    let new_gateway = staging_dir.join("mona-gateway.exe");
+
+    if !new_exe.exists() {
+        return Err("Update package missing Mona.exe".to_string());
+    }
+    if !new_gateway.exists() {
+        return Err("Update package missing mona-gateway.exe".to_string());
+    }
+
+    // 2. Stop gateway
+    let _ = app_handle.emit(
+        "update-progress",
+        UpdateProgress {
+            stage: "stopping".to_string(),
+            percent: 50,
+            message: "停止网关...".to_string(),
+        },
+    );
+
+    gateway_state.stop()?;
+    // Grace period for Windows file locks
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
+    // 3. Backup existing mona-gateway.exe in resources
+    let install_dir = get_install_dir()?;
+    let resource_gateway = install_dir.join("resources").join("mona-gateway.exe");
+    if resource_gateway.exists() {
+        let bak_path = resource_gateway.with_extension("exe.bak");
+        let _ = fs::remove_file(&bak_path);
+        fs::rename(&resource_gateway, &bak_path)
+            .map_err(|e| format!("Failed to backup mona-gateway.exe: {}", e))?;
+    }
+
+    // 4. Copy new mona-gateway.exe to resources
+    let _ = app_handle.emit(
+        "update-progress",
+        UpdateProgress {
+            stage: "installing".to_string(),
+            percent: 70,
+            message: "安装网关...".to_string(),
+        },
+    );
+
+    fs::create_dir_all(install_dir.join("resources"))
+        .map_err(|e| format!("Failed to create resources dir: {}", e))?;
+    fs::copy(&new_gateway, &resource_gateway)
+        .map_err(|e| format!("Failed to copy mona-gateway.exe: {}", e))?;
+
+    // 5. Stage new exe
+    let _ = app_handle.emit(
+        "update-progress",
+        UpdateProgress {
+            stage: "installing".to_string(),
+            percent: 85,
+            message: "准备更新客户端...".to_string(),
+        },
+    );
+
+    let exe_new = install_dir.join("Mona.exe.new");
+    fs::copy(&new_exe, &exe_new)
+        .map_err(|e| format!("Failed to stage new exe: {}", e))?;
+
+    // 6. Write .update-pending marker
+    let marker = app_data_dir().join(".update-pending");
+    fs::write(&marker, "pending")
+        .map_err(|e| format!("Failed to write update marker: {}", e))?;
+
+    // 7. Cleanup staging
+    let _ = fs::remove_dir_all(staging_dir);
+
+    log::info!("Update installed, pending restart to apply");
+    Ok(())
+}
+
+/// Launch the helper batch script to swap the exe and restart.
+pub fn launch_update_restart() -> Result<(), String> {
+    let install_dir = get_install_dir()?;
+    let current_pid = std::process::id();
+
+    let script_content = format!(
+        r#"@echo off
+:wait
+tasklist /FI "PID eq {pid}" 2>nul | find "{pid}" >nul
+if %ERRORLEVEL%==0 (
+    timeout /t 1 /nobreak >nul
+    goto wait
+)
+cd /d "{install_dir}"
+move /y "Mona.exe.new" "Mona.exe" >nul 2>&1
+start "" "Mona.exe"
+del "Mona.exe.old" >nul 2>&1
+del "%~f0" >nul 2>&1
+"#,
+        pid = current_pid,
+        install_dir = install_dir.display()
+    );
+
+    let script_path = install_dir.join("_update_restart.bat");
+    fs::write(&script_path, &script_content)
+        .map_err(|e| format!("Failed to write update script: {}", e))?;
+
+    let mut cmd = std::process::Command::new("cmd");
+    cmd.args(["/c", &script_path.display().to_string()]);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    cmd.spawn()
+        .map_err(|e| format!("Failed to launch update script: {}", e))?;
+
+    Ok(())
+}
+
+/// Cleanup after a successful update (called on next launch).
+pub fn cleanup_after_update() -> Result<(), String> {
+    let marker = app_data_dir().join(".update-pending");
+    if !marker.exists() {
+        return Ok(());
+    }
+
+    log::info!("Cleaning up after update...");
+
+    // Remove marker
+    let _ = fs::remove_file(&marker);
+
+    let install_dir = get_install_dir()?;
+
+    // Remove old gateway backup
+    let gateway_bak = install_dir.join("resources").join("mona-gateway.exe.bak");
+    if gateway_bak.exists() {
+        let _ = fs::remove_file(&gateway_bak);
+    }
+
+    let exe_old = install_dir.join("Mona.exe.old");
+    if exe_old.exists() {
+        let _ = fs::remove_file(&exe_old);
+    }
+
+    log::info!("Update cleanup complete");
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+fn extract_tar_gz(archive_path: &Path, dest_dir: &Path) -> Result<(), String> {
+    let file = fs::File::open(archive_path)
+        .map_err(|e| format!("Failed to open archive: {}", e))?;
+    let gz = flate2::read::GzDecoder::new(file);
+    let mut archive = tar::Archive::new(gz);
+    archive
+        .unpack(dest_dir)
+        .map_err(|e| format!("Failed to extract archive: {}", e))?;
+    Ok(())
+}
+
+fn get_install_dir() -> Result<PathBuf, String> {
+    let exe_path = std::env::current_exe().map_err(|e| format!("Cannot get exe path: {}", e))?;
+    exe_path
+        .parent()
+        .map(|p| p.to_path_buf())
+        .ok_or_else(|| "Cannot determine install directory".to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Tauri commands
+// ---------------------------------------------------------------------------
+
+const MANIFEST_URL: &str = "https://mona.lzfun.vip/updates/update.json";
+
+#[tauri::command]
+pub async fn check_for_updates() -> Result<UpdateCheckResult, String> {
+    let manifest = fetch_manifest(MANIFEST_URL).await?;
+    let current = get_app_version();
+    let has_update = check_update_available(&current, &manifest.version);
+    Ok(UpdateCheckResult {
+        has_update,
+        current_version: current,
+        latest_version: manifest.version,
+        notes: manifest.notes,
+        size: Some(manifest.size),
+    })
+}
+
+#[tauri::command]
+pub async fn perform_update(
+    state: tauri::State<'_, crate::GatewayState>,
+    app_handle: tauri::AppHandle,
+) -> Result<(), String> {
+    let manifest = fetch_manifest(MANIFEST_URL).await?;
+
+    let staging_dir = dirs::cache_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("mona")
+        .join("update");
+
+    let package_path = download_and_verify(
+        &manifest.url,
+        &manifest.sha256,
+        manifest.size,
+        &staging_dir,
+        &app_handle,
+    )
+    .await?;
+
+    install_update(&package_path, &state, &app_handle)?;
+
+    launch_update_restart()?;
+
+    // Exit the current process so the helper script can swap the exe
+    std::process::exit(0);
+}
+
+#[tauri::command]
+pub async fn get_current_version() -> Result<String, String> {
+    Ok(get_app_version())
+}

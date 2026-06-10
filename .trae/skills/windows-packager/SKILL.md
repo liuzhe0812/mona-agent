@@ -29,56 +29,27 @@ Mona Installer
 
 ### Step 0: Version Management
 
-Version numbers must be kept in sync across two files (the Tauri desktop version):
+The version is managed by the `release` skill. If you are running a standalone package build (not a release), the version should already be set correctly in both files:
 
 | File | Field | Example |
 |------|-------|---------|
 | `src-tauri/Cargo.toml` | `version` | `version = "0.1.0"` |
 | `src-tauri/tauri.conf.json` | `version` | `"version": "0.1.0"` |
 
-The Python package version in `pyproject.toml` is independent and does NOT need to match.
-
-**Version bump rules:**
-
-- If the user specifies a version (e.g. "打包 0.2.0"), use that exact version
-- If the user specifies a bump rule:
-  - `patch` — increment last segment: `0.1.0` → `0.1.1`
-  - `minor` — increment middle segment, reset last: `0.1.0` → `0.2.0`
-  - `major` — increment first segment, reset others: `0.1.0` → `1.0.0`
-- **If no version is specified, default to `patch` bump** — increment the last segment by 1
-
-**Implementation:**
+**If the user asks to bump version during packaging**, update both files:
 
 ```powershell
-# Read current version from tauri.conf.json
-$TauriConf = Get-Content "src-tauri\tauri.conf.json" -Raw | ConvertFrom-Json
-$CurrentVersion = $TauriConf.version
+$NewVersion = "<determined_version>"
 
-# Determine new version
-$Parts = $CurrentVersion -split '\.'
-$Major = [int]$Parts[0]
-$Minor = [int]$Parts[1]
-$Patch = [int]$Parts[2]
-
-# Default: patch bump
-$NewMajor = $Major
-$NewMinor = $Minor
-$NewPatch = $Patch + 1
-
-$NewVersion = "$NewMajor.$NewMinor.$NewPatch"
-
-# Update both files
-# 1. tauri.conf.json — must preserve JSON formatting, use raw replacement
+# 1. tauri.conf.json
 $confContent = Get-Content "src-tauri\tauri.conf.json" -Raw
 $confContent = $confContent -replace "(?<=`"version`":\s*`")[^`"]+(?=`")", $NewVersion
 Set-Content "src-tauri\tauri.conf.json" $confContent
 
-# 2. Cargo.toml — replace the version line
+# 2. Cargo.toml
 $CargoToml = Get-Content "src-tauri\Cargo.toml" -Raw
 $CargoToml = $CargoToml -replace '(?m)^(version\s*=\s*)"[^"]*"', "`$1`"$NewVersion`""
 Set-Content "src-tauri\Cargo.toml" $CargoToml
-
-Write-Output "Version bumped: $CurrentVersion -> $NewVersion"
 ```
 
 **After updating, confirm both files have the same version before proceeding.**

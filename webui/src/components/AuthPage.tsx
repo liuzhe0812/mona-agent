@@ -45,7 +45,7 @@ export function AuthPage() {
     }
     setLoading(true);
     try {
-      await register(email, password);
+      await register(email, password, code);
     } catch (err) {
       setError(String(err).replace(/^Error:\s*/, ""));
     } finally {

@@ -1,27 +1,31 @@
-"""LanceDB v2 chunk-level vector store for knowledge base embeddings.
+"""sqlite-vec chunk-level vector store for knowledge base embeddings.
 
-Ported from llm_wiki_tmp/src-tauri/src/commands/vectorstore.rs.
+Replaces LanceDB with sqlite-vec for a much smaller footprint (~0.3MB vs ~241MB).
 
 Each row is one CHUNK of a wiki page. Multiple rows per page.
 Schema: chunk_id, page_id, chunk_index, chunk_text, heading_path, vector.
 
 Upsert semantics: DELETE all rows for page_id, then ADD new chunks.
+
+Data is stored as a single SQLite database file at
+  <project_path>/.llm-wiki/vectorstore.db
 """
 
 from __future__ import annotations
 
+import sqlite3
+import struct
 from pathlib import Path
 from typing import Any
 
-import lancedb
-import pyarrow as pa
+import sqlite_vec
 from loguru import logger
 
 TABLE_V2 = "wiki_chunks_v2"
 
 
-def _db_path(project_path: Path) -> str:
-    return str(project_path / ".llm-wiki" / "lancedb").replace("\\", "/")
+def _db_path(project_path: Path) -> Path:
+    return project_path / ".llm-wiki" / "vectorstore.db"
 
 
 def _validate_page_id(page_id: str) -> None:
@@ -31,47 +35,25 @@ def _validate_page_id(page_id: str) -> None:
         raise ValueError(f"Invalid page_id: {page_id!r}")
 
 
-def _make_schema(dim: int) -> pa.Schema:
-    return pa.schema([
-        pa.field("chunk_id", pa.utf8(), nullable=False),
-        pa.field("page_id", pa.utf8(), nullable=False),
-        pa.field("chunk_index", pa.uint32(), nullable=False),
-        pa.field("chunk_text", pa.utf8(), nullable=False),
-        pa.field("heading_path", pa.utf8(), nullable=False),
-        pa.field("vector", pa.list_(pa.float32(), dim), nullable=False),
-    ])
+def _connect(db_path: Path) -> sqlite3.Connection:
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(db_path))
+    conn.enable_load_extension(True)
+    sqlite_vec.load(conn)
+    return conn
 
 
-def _make_batch(
-    page_id: str,
-    chunks: list[dict[str, Any]],
-    dim: int,
-) -> pa.RecordBatch:
-    chunk_ids = [f"{page_id}#{c['chunk_index']}" for c in chunks]
-    page_ids = [page_id] * len(chunks)
-    indexes = [c["chunk_index"] for c in chunks]
-    texts = [c["chunk_text"] for c in chunks]
-    heading_paths = [c["heading_path"] for c in chunks]
-    flat_vectors: list[float] = []
-    for c in chunks:
-        emb = c["embedding"]
-        if len(emb) != dim:
-            raise ValueError(f"Chunk #{c['chunk_index']} has dim {len(emb)}, expected {dim}")
-        flat_vectors.extend(emb)
-
-    vector_array = pa.FixedSizeListArray.from_arrays(
-        pa.array(flat_vectors, type=pa.float32()),
-        dim,
+def _ensure_table(conn: sqlite3.Connection, dim: int) -> None:
+    conn.execute(
+        f"CREATE VIRTUAL TABLE IF NOT EXISTS {TABLE_V2} "
+        f"USING vec0(chunk_id text PRIMARY KEY, page_id text, chunk_index integer, "
+        f"chunk_text text, heading_path text, vector float[{dim}])"
     )
+    conn.commit()
 
-    return pa.RecordBatch.from_pydict({
-        "chunk_id": chunk_ids,
-        "page_id": page_ids,
-        "chunk_index": indexes,
-        "chunk_text": texts,
-        "heading_path": heading_paths,
-        "vector": vector_array,
-    }, schema=_make_schema(dim))
+
+def _floats_to_bytes(vectors: list[float]) -> bytes:
+    return struct.pack(f"{len(vectors)}f", *vectors)
 
 
 async def upsert_chunks(project_path: Path, page_id: str, chunks: list[dict[str, Any]]) -> None:
@@ -84,20 +66,29 @@ async def upsert_chunks(project_path: Path, page_id: str, chunks: list[dict[str,
     if dim == 0:
         raise ValueError("Chunk #0 has empty embedding")
 
-    db = lancedb.connect(_db_path(project_path))
-    batch = _make_batch(page_id, chunks, dim)
-    data = [batch]
+    conn = _connect(_db_path(project_path))
+    try:
+        _ensure_table(conn, dim)
 
-    table_names = db.table_names()
-    if TABLE_V2 in table_names:
-        table = db.open_table(TABLE_V2)
+        # Delete existing chunks for this page
         try:
-            table.delete(f"page_id = '{page_id}'")
+            conn.execute(f"DELETE FROM {TABLE_V2} WHERE page_id = ?", (page_id,))
         except Exception as e:
             logger.warning(f"[vectorstore] delete before upsert failed for {page_id}: {e}")
-        table.add(data)
-    else:
-        db.create_table(TABLE_V2, data)
+
+        # Insert new chunks
+        for c in chunks:
+            chunk_id = f"{page_id}#{c['chunk_index']}"
+            vector_bytes = _floats_to_bytes(c["embedding"])
+            conn.execute(
+                f"INSERT INTO {TABLE_V2}(chunk_id, page_id, chunk_index, chunk_text, heading_path, vector) "
+                f"VALUES (?, ?, ?, ?, ?, ?)",
+                (chunk_id, page_id, c["chunk_index"], c["chunk_text"], c["heading_path"], vector_bytes),
+            )
+
+        conn.commit()
+    finally:
+        conn.close()
 
 
 async def search_chunks(
@@ -106,46 +97,78 @@ async def search_chunks(
     top_k: int = 30,
 ) -> list[dict[str, Any]]:
     """Search for similar chunks by embedding vector."""
-    db = lancedb.connect(_db_path(project_path))
-
-    if TABLE_V2 not in db.table_names():
+    db_path = _db_path(project_path)
+    if not db_path.exists():
         return []
 
-    table = db.open_table(TABLE_V2)
-    results = table.search(query_embedding).limit(top_k).to_list()
+    conn = _connect(db_path)
+    try:
+        # Check table exists
+        tables = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (TABLE_V2,)
+        ).fetchall()
+        if not tables:
+            return []
 
-    out: list[dict[str, Any]] = []
-    for row in results:
-        distance = row.get("_distance", 1.0)
-        out.append({
-            "chunk_id": row.get("chunk_id", ""),
-            "page_id": row.get("page_id", ""),
-            "chunk_index": row.get("chunk_index", 0),
-            "chunk_text": row.get("chunk_text", ""),
-            "heading_path": row.get("heading_path", ""),
-            "score": 1.0 / (1.0 + distance),
-        })
-    return out
+        query_bytes = _floats_to_bytes(query_embedding)
+        rows = conn.execute(
+            f"SELECT chunk_id, page_id, chunk_index, chunk_text, heading_path, distance "
+            f"FROM {TABLE_V2} WHERE vector MATCH ? ORDER BY distance LIMIT ?",
+            (query_bytes, top_k),
+        ).fetchall()
+
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            distance = row[5] if row[5] is not None else 1.0
+            out.append({
+                "chunk_id": row[0] or "",
+                "page_id": row[1] or "",
+                "chunk_index": row[2] or 0,
+                "chunk_text": row[3] or "",
+                "heading_path": row[4] or "",
+                "score": 1.0 / (1.0 + distance),
+            })
+        return out
+    finally:
+        conn.close()
 
 
 async def delete_page(project_path: Path, page_id: str) -> None:
     """Delete all chunks for a page."""
     _validate_page_id(page_id)
-    db = lancedb.connect(_db_path(project_path))
-
-    if TABLE_V2 not in db.table_names():
+    db_path = _db_path(project_path)
+    if not db_path.exists():
         return
 
-    table = db.open_table(TABLE_V2)
-    table.delete(f"page_id = '{page_id}'")
+    conn = _connect(db_path)
+    try:
+        tables = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (TABLE_V2,)
+        ).fetchall()
+        if not tables:
+            return
+
+        conn.execute(f"DELETE FROM {TABLE_V2} WHERE page_id = ?", (page_id,))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 async def count_chunks(project_path: Path) -> int:
     """Count total chunks in the v2 index."""
-    db = lancedb.connect(_db_path(project_path))
-
-    if TABLE_V2 not in db.table_names():
+    db_path = _db_path(project_path)
+    if not db_path.exists():
         return 0
 
-    table = db.open_table(TABLE_V2)
-    return table.count_rows()
+    conn = _connect(db_path)
+    try:
+        tables = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (TABLE_V2,)
+        ).fetchall()
+        if not tables:
+            return 0
+
+        row = conn.execute(f"SELECT count(*) FROM {TABLE_V2}").fetchone()
+        return row[0] if row else 0
+    finally:
+        conn.close()

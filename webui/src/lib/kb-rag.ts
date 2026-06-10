@@ -40,7 +40,7 @@ export function buildKbSystemPrompt(context: KBRagContext): string {
     .join("\n\n---\n\n")
 
   return [
-    "以下是从用户知识库中检索到的相关内容，请基于这些内容回答用户的问题。",
+    "以下是从用户知识库中检索到的相关内容。遇到问题时，请优先从知识库中查找答案，而非依赖自身知识。",
     "如果知识库内容不足以回答，请如实说明。",
     "引用知识库内容时，请标注来源页面。",
     "",

@@ -20,6 +20,7 @@ import {
   Cloud,
   Cpu,
   Database,
+  Download,
   Eye,
   EyeOff,
   FolderOpen,
@@ -40,6 +41,7 @@ import {
   Orbit,
   Palette,
   Pencil,
+  RefreshCw,
   RotateCcw,
   Search,
   Server,
@@ -84,6 +86,10 @@ import {
   getDesktopSettings,
   updateDesktopSettings,
   getGatewayStatus,
+  checkForUpdates,
+  performUpdate,
+  type UpdateCheckResult,
+  type UpdateProgress,
   type DesktopAppSettings,
   type SidebarShortcuts,
 } from "@/lib/tauri";
@@ -2020,10 +2026,83 @@ function AboutSettings() {
   const [importing, setImporting] = useState(false);
   const [importMessage, setImportMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
+  const [updateCheck, setUpdateCheck] = useState<UpdateCheckResult | null>(null);
+  const [updateChecking, setUpdateChecking] = useState(false);
+  const [updateDownloading, setUpdateDownloading] = useState(false);
+  const [updateProgress, setUpdateProgress] = useState<UpdateProgress | null>(null);
+
+  const [appVersion, setAppVersion] = useState<string>("");
+
   useEffect(() => {
     checkLicense();
     loadMachineId();
+    loadAppVersion();
   }, []);
+
+  // Listen for update progress and auto-check events
+  useEffect(() => {
+    if (!isTauri()) return;
+
+    let unlistenProgress: (() => void) | null = null;
+    let unlistenAvailable: (() => void) | null = null;
+
+    (async () => {
+      try {
+        const { listen } = await import("@tauri-apps/api/event");
+        unlistenProgress = await listen<UpdateProgress>("update-progress", (event) => {
+          setUpdateProgress(event.payload);
+        });
+        unlistenAvailable = await listen<UpdateCheckResult>("update-available", (event) => {
+          setUpdateCheck(event.payload);
+        });
+      } catch {}
+    })();
+
+    return () => {
+      unlistenProgress?.();
+      unlistenAvailable?.();
+    };
+  }, []);
+
+  const handleCheckUpdate = async () => {
+    if (updateChecking) return;
+    setUpdateChecking(true);
+    setUpdateCheck(null);
+    try {
+      const result = await checkForUpdates();
+      setUpdateCheck(result);
+    } catch {
+      setUpdateCheck({
+        has_update: false,
+        current_version: appVersion,
+        latest_version: "",
+        notes: null,
+        size: null,
+      });
+    } finally {
+      setUpdateChecking(false);
+    }
+  };
+
+  const handlePerformUpdate = async () => {
+    if (updateDownloading) return;
+    setUpdateDownloading(true);
+    try {
+      await performUpdate();
+      // performUpdate calls process::exit(0), so this line may not be reached
+    } catch {
+      setUpdateDownloading(false);
+    }
+  };
+
+  const loadAppVersion = async () => {
+    try {
+      const { getVersion } = await import("@tauri-apps/api/app");
+      setAppVersion(await getVersion());
+    } catch {
+      setAppVersion("unknown");
+    }
+  };
 
   const loadMachineId = async () => {
     try {
@@ -2128,7 +2207,7 @@ function AboutSettings() {
             <span className="text-[13px] text-muted-foreground">Mona</span>
           </SettingsRow>
           <SettingsRow title={tx("settings.about.version", "版本号")}>
-            <span className="text-[13px] text-muted-foreground">0.1.0</span>
+            <span className="text-[13px] text-muted-foreground">{appVersion || "..."}</span>
           </SettingsRow>
           <SettingsRow
             title={tx("settings.about.machineId", "机器码")}
@@ -2155,6 +2234,79 @@ function AboutSettings() {
           </SettingsRow>
         </SettingsGroup>
       </section>
+
+      {isTauri() ? (
+        <section>
+          <SettingsSectionTitle>{tx("settings.about.update", "软件更新")}</SettingsSectionTitle>
+          <SettingsGroup>
+            <SettingsRow title={tx("settings.about.currentVersion", "当前版本")}>
+              <span className="text-[13px] text-muted-foreground">{appVersion || "..."}</span>
+            </SettingsRow>
+            <SettingsRow
+              title={tx("settings.about.checkUpdate", "检查更新")}
+              description={
+                updateCheck?.has_update
+                  ? tx("settings.about.newVersionAvailable", "发现新版本 {{version}}").replace(
+                      "{{version}}",
+                      updateCheck.latest_version,
+                    )
+                  : updateCheck && !updateCheck.has_update
+                    ? tx("settings.about.alreadyUpToDate", "已是最新版本")
+                    : undefined
+              }
+            >
+              <div className="flex items-center gap-2">
+                {updateCheck?.has_update && !updateDownloading ? (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={handlePerformUpdate}
+                    className="rounded-full"
+                  >
+                    <Download className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+                    {tx("settings.about.downloadAndInstall", "下载并安装")}
+                  </Button>
+                ) : null}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={handleCheckUpdate}
+                  disabled={updateChecking || updateDownloading}
+                  className="rounded-full"
+                >
+                  {updateChecking ? (
+                    <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden />
+                  ) : (
+                    <RefreshCw className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+                  )}
+                  {updateChecking
+                    ? tx("settings.about.checking", "检查中...")
+                    : tx("settings.about.checkNow", "立即检查")}
+                </Button>
+              </div>
+            </SettingsRow>
+            {updateDownloading && updateProgress ? (
+              <div className="px-4 py-3 sm:px-5">
+                <div className="mb-1.5 flex items-center justify-between text-[12px]">
+                  <span className="text-muted-foreground">{updateProgress.message}</span>
+                  <span className="font-medium text-foreground">{updateProgress.percent}%</span>
+                </div>
+                <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+                  <div
+                    className="h-full rounded-full bg-primary transition-all duration-300"
+                    style={{ width: `${updateProgress.percent}%` }}
+                  />
+                </div>
+              </div>
+            ) : null}
+            {updateCheck?.notes ? (
+              <div className="px-4 py-3 text-[13px] text-muted-foreground sm:px-5">
+                {updateCheck.notes}
+              </div>
+            ) : null}
+          </SettingsGroup>
+        </section>
+      ) : null}
 
       <section>
         <SettingsSectionTitle>{tx("settings.about.license", "授权")}</SettingsSectionTitle>
@@ -2199,14 +2351,6 @@ function AboutSettings() {
               {importMessage.text}
             </div>
           ) : null}
-        </SettingsGroup>
-      </section>
-
-      <section>
-        <SettingsSectionTitle>{tx("settings.about.freeFeatures", "免费功能")}</SettingsSectionTitle>
-        <SettingsGroup>
-          <ReadOnlyRow title="Agent 对话" value={tx("settings.values.enabled", "已启用")} />
-          <ReadOnlyRow title={tx("settings.about.imageGeneration", "图片生成")} value={tx("settings.values.enabled", "已启用")} />
         </SettingsGroup>
       </section>
 
