@@ -1,7 +1,8 @@
+use std::io::Write;
 use std::sync::Mutex;
 
 use crate::python;
-use crate::settings::AppSettings;
+use crate::settings::{self, AppSettings};
 
 pub struct GatewayProcess {
     child: Option<std::process::Child>,
@@ -94,6 +95,19 @@ impl GatewayManager {
             cmd.creation_flags(0x08000000);
         }
 
+        if let Some(log_file) = open_gateway_log(port) {
+            match log_file.try_clone() {
+                Ok(stderr_file) => {
+                    cmd.stdout(std::process::Stdio::from(log_file));
+                    cmd.stderr(std::process::Stdio::from(stderr_file));
+                }
+                Err(e) => {
+                    log::warn!("Failed to clone gateway log file: {}", e);
+                    cmd.stdout(std::process::Stdio::from(log_file));
+                }
+            }
+        }
+
         let child = cmd
             .spawn()
             .map_err(|e| format!("Failed to start gateway: {}", e))?;
@@ -156,11 +170,75 @@ impl GatewayManager {
         }
     }
 
+    pub fn exit_message(&self) -> Option<String> {
+        let mut guard = self.process.lock().ok()?;
+        let proc = guard.as_mut()?;
+        let child = proc.child.as_mut()?;
+        match child.try_wait() {
+            Ok(Some(status)) => Some(format!(
+                "Gateway process exited before becoming ready ({status}). See log: {}",
+                gateway_log_path().display()
+            )),
+            Ok(None) => None,
+            Err(e) => Some(format!(
+                "Failed to inspect gateway process: {e}. See log: {}",
+                gateway_log_path().display()
+            )),
+        }
+    }
+
     #[allow(dead_code)]
     pub fn port(&self) -> Option<u16> {
         let guard = self.process.lock().ok()?;
         guard.as_ref().map(|p| p.port)
     }
+}
+
+fn gateway_log_path() -> std::path::PathBuf {
+    settings::app_data_dir().join("logs").join("gateway.log")
+}
+
+fn open_gateway_log(port: u16) -> Option<std::fs::File> {
+    const MAX_GATEWAY_LOG_BYTES: u64 = 5 * 1024 * 1024;
+
+    let path = gateway_log_path();
+    if let Some(parent) = path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            log::warn!("Failed to create gateway log dir {:?}: {}", parent, e);
+            return None;
+        }
+    }
+
+    if std::fs::metadata(&path)
+        .map(|meta| meta.len() > MAX_GATEWAY_LOG_BYTES)
+        .unwrap_or(false)
+    {
+        let old_path = path.with_extension("log.old");
+        let _ = std::fs::remove_file(&old_path);
+        if let Err(e) = std::fs::rename(&path, &old_path) {
+            log::warn!("Failed to rotate gateway log {:?}: {}", path, e);
+        }
+    }
+
+    let mut file = match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        Ok(file) => file,
+        Err(e) => {
+            log::warn!("Failed to open gateway log {:?}: {}", path, e);
+            return None;
+        }
+    };
+
+    let _ = writeln!(
+        file,
+        "\n=== gateway start {:?} port {} ===",
+        std::time::SystemTime::now(),
+        port
+    );
+    Some(file)
 }
 
 fn find_available_port(start_port: u16) -> Result<u16, String> {
@@ -182,17 +260,33 @@ fn is_port_available(port: u16) -> bool {
     TcpListener::bind(("127.0.0.1", port)).is_ok()
 }
 
-pub async fn wait_for_gateway(port: u16, timeout_secs: u64) -> Result<(), String> {
-    let client = reqwest::Client::new();
+pub async fn wait_for_gateway<F>(
+    port: u16,
+    timeout_secs: u64,
+    mut gateway_exit_message: F,
+) -> Result<(), String>
+where
+    F: FnMut() -> Option<String>,
+{
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .map_err(|e| format!("Failed to create gateway health client: {}", e))?;
     let url = format!("http://127.0.0.1:{}/health", port);
     let start = std::time::Instant::now();
     let timeout = std::time::Duration::from_secs(timeout_secs);
 
     loop {
+        if let Some(message) = gateway_exit_message() {
+            return Err(message);
+        }
+
         if start.elapsed() > timeout {
             return Err(format!(
-                "Gateway did not start within {}s on port {}",
-                timeout_secs, port
+                "Gateway did not start within {}s on port {}. See log: {}",
+                timeout_secs,
+                port,
+                gateway_log_path().display()
             ));
         }
 

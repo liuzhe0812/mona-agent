@@ -21,6 +21,8 @@ use tauri::WebviewUrl;
 use tauri::WebviewWindowBuilder;
 use tauri_plugin_global_shortcut::ShortcutState;
 
+const GATEWAY_START_TIMEOUT_SECS: u64 = 90;
+
 #[derive(Clone)]
 pub struct GatewayState {
     inner: Arc<GatewayStateInner>,
@@ -57,9 +59,22 @@ impl GatewayState {
         self.inner.manager.is_running()
     }
 
+    pub fn exit_message(&self) -> Option<String> {
+        self.inner.manager.exit_message()
+    }
+
     pub fn port(&self) -> Option<u16> {
         self.inner.port.lock().ok()?.as_ref().copied()
     }
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalHttpResponse {
+    status: u16,
+    status_text: String,
+    headers: Vec<(String, String)>,
+    body: Vec<u8>,
 }
 
 #[tauri::command]
@@ -90,7 +105,11 @@ async fn start_gateway(
     let settings = settings::load_settings();
     settings::ensure_desktop_config(settings.gateway_port)?;
     let port = state.start(&settings, &app_handle)?;
-    gateway::wait_for_gateway(port, 30).await?;
+    let wait_state = state.inner().clone();
+    gateway::wait_for_gateway(port, GATEWAY_START_TIMEOUT_SECS, move || {
+        wait_state.exit_message()
+    })
+    .await?;
     Ok(port)
 }
 
@@ -148,6 +167,84 @@ async fn diagnose_gateway(app_handle: tauri::AppHandle) -> Result<serde_json::Va
         "current_exe": exe_path,
         "resource_candidates": resource_candidates,
     }))
+}
+
+fn is_loopback_http_url(url: &reqwest::Url) -> bool {
+    if !matches!(url.scheme(), "http" | "https") {
+        return false;
+    }
+
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    host.parse::<std::net::IpAddr>()
+        .map(|ip| ip.is_loopback())
+        .unwrap_or(false)
+}
+
+#[tauri::command]
+async fn local_http_request(
+    method: String,
+    url: String,
+    headers: Vec<(String, String)>,
+    body: Option<Vec<u8>>,
+) -> Result<LocalHttpResponse, String> {
+    let parsed = reqwest::Url::parse(&url).map_err(|e| format!("Invalid URL: {}", e))?;
+    if !is_loopback_http_url(&parsed) {
+        return Err("local_http_request only allows localhost or loopback URLs".to_string());
+    }
+
+    let method = reqwest::Method::from_bytes(method.as_bytes())
+        .map_err(|e| format!("Invalid HTTP method: {}", e))?;
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .map_err(|e| format!("Failed to create local HTTP client: {}", e))?;
+
+    let mut request = client.request(method, parsed);
+    for (name, value) in headers {
+        let name = reqwest::header::HeaderName::from_bytes(name.as_bytes())
+            .map_err(|e| format!("Invalid header name: {}", e))?;
+        let value = reqwest::header::HeaderValue::from_str(&value)
+            .map_err(|e| format!("Invalid header value: {}", e))?;
+        request = request.header(name, value);
+    }
+
+    if let Some(body) = body {
+        request = request.body(body);
+    }
+
+    let response = request
+        .send()
+        .await
+        .map_err(|e| format!("Local HTTP request failed: {}", e))?;
+    let status = response.status();
+    let status_text = status.canonical_reason().unwrap_or("").to_string();
+    let headers = response
+        .headers()
+        .iter()
+        .filter_map(|(name, value)| {
+            value
+                .to_str()
+                .ok()
+                .map(|value| (name.as_str().to_string(), value.to_string()))
+        })
+        .collect();
+    let body = response
+        .bytes()
+        .await
+        .map_err(|e| format!("Failed to read local HTTP response: {}", e))?
+        .to_vec();
+
+    Ok(LocalHttpResponse {
+        status: status.as_u16(),
+        status_text,
+        headers,
+        body,
+    })
 }
 
 #[tauri::command]
@@ -274,6 +371,7 @@ pub fn run() {
             stop_gateway,
             gateway_status,
             diagnose_gateway,
+            local_http_request,
             open_in_browser,
             mona_config_status,
             write_mona_provider_config,
@@ -453,7 +551,14 @@ pub fn run() {
                     tauri::async_runtime::spawn(async move {
                         match state.start(&settings_clone, &app_handle_clone) {
                             Ok(actual_port) => {
-                                match gateway::wait_for_gateway(actual_port, 30).await {
+                                let wait_state = state.clone();
+                                match gateway::wait_for_gateway(
+                                    actual_port,
+                                    GATEWAY_START_TIMEOUT_SECS,
+                                    move || wait_state.exit_message(),
+                                )
+                                .await
+                                {
                                     Ok(()) => {
                                         log::info!("Gateway ready on port {}", actual_port);
                                     }

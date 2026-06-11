@@ -11,8 +11,85 @@ export function isTauri(): boolean {
   return !!window.__TAURI_INTERNALS__ || !!window.__TAURI__;
 }
 
-export function httpFetch(url: string, init?: RequestInit): Promise<Response> {
+interface LocalHttpBridgeResponse {
+  status: number;
+  statusText: string;
+  headers: Array<[string, string]>;
+  body: number[];
+}
+
+function isLoopbackHttpUrl(rawUrl: string): boolean {
+  try {
+    const parsed = new URL(rawUrl);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+    const host = parsed.hostname.toLowerCase();
+    return (
+      host === "localhost" ||
+      host.startsWith("127.") ||
+      host === "::1" ||
+      host === "[::1]"
+    );
+  } catch {
+    return false;
+  }
+}
+
+type SerializedBody =
+  | { supported: true; body: number[] | null }
+  | { supported: false };
+
+async function serializeRequestBody(body: BodyInit | null | undefined): Promise<SerializedBody> {
+  if (body == null) return { supported: true, body: null };
+  if (typeof body === "string") {
+    return { supported: true, body: Array.from(new TextEncoder().encode(body)) };
+  }
+  if (body instanceof URLSearchParams) {
+    return { supported: true, body: Array.from(new TextEncoder().encode(body.toString())) };
+  }
+  if (body instanceof Blob) {
+    return { supported: true, body: Array.from(new Uint8Array(await body.arrayBuffer())) };
+  }
+  if (body instanceof ArrayBuffer) {
+    return { supported: true, body: Array.from(new Uint8Array(body)) };
+  }
+  if (ArrayBuffer.isView(body)) {
+    return {
+      supported: true,
+      body: Array.from(
+        new Uint8Array(body.buffer, body.byteOffset, body.byteLength),
+      ),
+    };
+  }
+  return { supported: false };
+}
+
+export async function httpFetch(url: string, init?: RequestInit): Promise<Response> {
   if (isTauri()) {
+    if (isLoopbackHttpUrl(url)) {
+      if (init?.signal?.aborted) {
+        throw new DOMException("The operation was aborted.", "AbortError");
+      }
+
+      const serializedBody = await serializeRequestBody(init?.body);
+      if (serializedBody.supported) {
+        const headers = Array.from(new Headers(init?.headers).entries());
+        const result = await invoke<LocalHttpBridgeResponse>("local_http_request", {
+          method: init?.method ?? "GET",
+          url,
+          headers,
+          body: serializedBody.body,
+        });
+        const responseBody =
+          result.status === 204 || result.status === 304
+            ? null
+            : new Uint8Array(result.body);
+        return new Response(responseBody, {
+          status: result.status,
+          statusText: result.statusText,
+          headers: new Headers(result.headers),
+        });
+      }
+    }
     return tauriFetch(url, init);
   }
   return window.fetch(url, init);
