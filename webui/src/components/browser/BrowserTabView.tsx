@@ -1,12 +1,14 @@
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useCallback, useState } from "react";
 import { BrowserToolbar } from "./BrowserToolbar";
 import { AiAssistantPanel } from "./AiAssistantPanel";
 import type { Tab } from "@/hooks/useBrowserTabs";
+import type { ChatSummary } from "@/lib/types";
 import { isTauri } from "@/lib/tauri";
 
 interface BrowserTabViewProps {
   tab: Tab;
   isVisible: boolean;
+  session: ChatSummary | null;
   onNavigate: (url: string) => void;
   onGoBack: () => void;
   onGoForward: () => void;
@@ -17,6 +19,7 @@ interface BrowserTabViewProps {
 export function BrowserTabView({
   tab,
   isVisible,
+  session,
   onNavigate,
   onGoBack,
   onGoForward,
@@ -26,6 +29,7 @@ export function BrowserTabView({
   const webviewContainerRef = useRef<HTMLDivElement>(null);
   const resizeObserverRef = useRef<ResizeObserver | null>(null);
   const lastBoundsRef = useRef<{ left: number; top: number; width: number; height: number } | null>(null);
+  const [isAiPanelOpen, setIsAiPanelOpen] = useState(false);
 
   // 更新子 WebView 位置和大小
   const updateWebviewBounds = useCallback(async () => {
@@ -73,7 +77,16 @@ export function BrowserTabView({
     }, isVisible ? 100 : 0);
 
     return () => clearTimeout(timer);
-  }, [tab.webviewCreated, isVisible, updateWebviewBounds]);
+  }, [tab.webviewCreated, isVisible, isAiPanelOpen, updateWebviewBounds]);
+
+  // AI Panel 开关时，延迟再次更新 WebView 位置（确保 DOM 已完成布局）
+  useEffect(() => {
+    if (!tab.webviewCreated || !isVisible) return;
+    const timer = setTimeout(() => {
+      updateWebviewBounds();
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [isAiPanelOpen, tab.webviewCreated, isVisible, updateWebviewBounds]);
 
   // 监听容器大小变化
   useEffect(() => {
@@ -128,25 +141,32 @@ export function BrowserTabView({
       <BrowserToolbar
         url={tab.url ?? ""}
         isAiControlled={tab.isAiControlled}
+        isAiPanelOpen={isAiPanelOpen}
         onNavigate={onNavigate}
         onGoBack={onGoBack}
         onGoForward={onGoForward}
         onReload={onReload}
+        onToggleAiPanel={() => setIsAiPanelOpen((prev) => !prev)}
       />
-      <div ref={webviewContainerRef} className="flex-1 min-h-0 bg-white relative">
-        {!tab.webviewCreated && (
-          <div className="flex h-full items-center justify-center text-muted-foreground text-[13px]">
-            在地址栏输入网址开始浏览
-          </div>
+      <div className="flex flex-1 min-h-0">
+        <div ref={webviewContainerRef} className="flex-1 min-w-0 bg-white relative">
+          {!tab.webviewCreated && (
+            <div className="flex h-full items-center justify-center text-muted-foreground text-[13px]">
+              在地址栏输入网址开始浏览
+            </div>
+          )}
+        </div>
+        {isAiPanelOpen && (
+          <AiAssistantPanel
+            session={session}
+            isAiActive={isAiActive}
+            onClose={() => setIsAiPanelOpen(false)}
+            onToggle={() => {
+              setTimeout(() => requestAnimationFrame(() => updateWebviewBounds()), 50);
+            }}
+          />
         )}
       </div>
-      <AiAssistantPanel
-        isAiActive={isAiActive}
-        onToggle={() => {
-          // 面板展开/收起后，延迟一帧让布局生效再更新 WebView 大小
-          setTimeout(() => requestAnimationFrame(() => updateWebviewBounds()), 50);
-        }}
-      />
     </div>
   );
 }

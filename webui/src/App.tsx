@@ -1205,6 +1205,7 @@ function Shell({
                     <BrowserTabView
                       tab={tab}
                       isVisible={tab.id === activeBrowserTabId}
+                      session={activeSession}
                       onNavigate={(url) => navigateToUrl(tab.id, url)}
                       onGoBack={() => goBack(tab.id)}
                       onGoForward={() => goForward(tab.id)}

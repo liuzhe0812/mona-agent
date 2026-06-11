@@ -3379,6 +3379,7 @@ dependencies = [
  "flate2",
  "hex",
  "jsonwebtoken",
+ "libc",
  "log",
  "png 0.17.16",
  "portable-pty",

@@ -12,6 +12,7 @@ interface Props {
   sessionId: string | null;
   initialAction?: ActionConfirmResult;
   onInitialMessageSent?: () => void;
+  onStreamingChange?: (streaming: boolean) => void;
 }
 
 interface ReportInfo {
@@ -20,7 +21,7 @@ interface ReportInfo {
   fileName: string;
 }
 
-export function AIChat({ sessionId, initialAction, onInitialMessageSent }: Props) {
+export function AIChat({ sessionId, initialAction, onInitialMessageSent, onStreamingChange }: Props) {
   const [draft, setDraft] = useState("");
   const [chatId, setChatId] = useState<string | null>(null);
   const [creatingChat, setCreatingChat] = useState(false);
@@ -73,6 +74,10 @@ export function AIChat({ sessionId, initialAction, onInitialMessageSent }: Props
     stop,
     setMessages,
   } = useMonaStream(chatId, historical, hasPendingToolCalls);
+
+  useEffect(() => {
+    onStreamingChange?.(isStreaming);
+  }, [isStreaming, onStreamingChange]);
 
   useEffect(() => {
     if (!chatId || loading) return;

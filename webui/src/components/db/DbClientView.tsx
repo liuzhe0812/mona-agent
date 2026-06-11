@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Play, Square, Plus, FolderOpen, Save, Download, Upload, Trash2, PlusCircle, Bot, ChevronLeft, ChevronRight } from "lucide-react";
+import { Play, Square, Plus, FolderOpen, Save, Download, Upload, Trash2, PlusCircle, ChevronLeft, ChevronRight } from "lucide-react";
+import { AgentLogo } from "@/components/AgentLogo";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -44,6 +45,7 @@ export function DbClientView() {
   const activeConnections = useDbStore((s) => s.activeConnections);
   const selectedTable = useDbStore((s) => s.selectedTable);
   const serverStats = useDbStore((s) => s.serverStats);
+  const agentStreaming = useDbStore((s) => s.agentStreaming);
   const initializedRef = useRef(false);
 
   const [leftWidth, setLeftWidth] = useState(LEFT_PANEL_DEFAULT);
@@ -265,16 +267,15 @@ export function DbClientView() {
                     <Separator orientation="vertical" className="h-5" />
                     <Tooltip>
                       <TooltipTrigger asChild>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className={cn("h-6 w-6 px-0", !agentPanelCollapsed && "bg-accent text-foreground")}
+                        <button
+                          type="button"
+                          className="flex items-center justify-center"
                           onClick={() => setAgentPanelCollapsed((c) => !c)}
                         >
-                          <Bot className="h-3.5 w-3.5" />
-                        </Button>
+                          <AgentLogo state={agentStreaming ? "working" : "idle"} className="h-5 w-5" />
+                        </button>
                       </TooltipTrigger>
-                      <TooltipContent>{agentPanelCollapsed ? "展开 AI 助手" : "收起 AI 助手"}</TooltipContent>
+                      <TooltipContent>{agentPanelCollapsed ? "展开 Mona" : "收起 Mona"}</TooltipContent>
                     </Tooltip>
                   </>
                 )}

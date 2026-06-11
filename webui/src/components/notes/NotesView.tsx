@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
-  Bot,
   Download,
   Plus,
   Search,
   X,
 } from "lucide-react";
 
+import { AgentLogo } from "@/components/AgentLogo";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { saveMarkdownFile } from "@/lib/tauri";
@@ -66,6 +66,7 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [agentPanelCollapsed, setAgentPanelCollapsed] = useState(true);
   const [agentPanelWidth, setAgentPanelWidth] = useState(AGENT_PANEL_DEFAULT_WIDTH);
+  const [agentStreaming, setAgentStreaming] = useState(false);
   const dragRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const lastSavedSnapshotRef = useRef<string | null>(null);
   const latestSnapshotRef = useRef<string | null>(null);
@@ -961,7 +962,7 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
                 active={!agentPanelCollapsed}
                 onClick={() => setAgentPanelCollapsed((current) => !current)}
               >
-                <Bot className="h-3.5 w-3.5" />
+                <AgentLogo state={agentStreaming ? "working" : "idle"} className="h-5 w-5" />
               </IconButton>
             )}
           </div>
@@ -1057,6 +1058,7 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
         onApplyResult={applyAiResult}
         onSaveKnowledge={saveKnowledgeFromAgent}
         onClearChat={() => updateActiveNote({ agentChatId: undefined })}
+        onStreamingChange={setAgentStreaming}
       />
 
       <PromptDialog
@@ -1125,7 +1127,7 @@ function IconButton({
       disabled={disabled}
       onClick={onClick}
       className={cn(
-        "h-8 w-8 rounded-lg border border-border/70 bg-background text-muted-foreground shadow-none hover:bg-accent hover:text-foreground",
+        "h-7 w-7 rounded-md text-muted-foreground hover:bg-accent hover:text-foreground",
         active && "bg-accent text-foreground",
       )}
     >

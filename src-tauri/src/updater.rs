@@ -166,11 +166,11 @@ pub async fn download_and_verify(
 /// Extract the update package and install files.
 ///
 /// Steps:
-/// 1. Extract mona-<version>.tar.gz → staging/Mona.exe + staging/mona-gateway.exe
+/// 1. Extract mona-<version>.tar.gz → staging/Mona(.exe) + staging/mona-gateway(.exe)
 /// 2. Stop gateway
-/// 3. Backup resources/mona-gateway.exe → mona-gateway.exe.bak
-/// 4. Copy new mona-gateway.exe → resources/mona-gateway.exe
-/// 5. Copy Mona.exe → Mona.exe.new (staged for swap)
+/// 3. Backup resources/mona-gateway → mona-gateway.bak
+/// 4. Copy new mona-gateway → resources/mona-gateway
+/// 5. Copy Mona(.exe) → Mona(.exe).new (staged for swap)
 /// 6. Write .update-pending marker
 pub fn install_update(
     package_path: &Path,
@@ -193,14 +193,18 @@ pub fn install_update(
 
     extract_tar_gz(package_path, staging_dir)?;
 
+    #[cfg(windows)]
     let new_exe = staging_dir.join("Mona.exe");
-    let new_gateway = staging_dir.join("mona-gateway.exe");
+    #[cfg(not(windows))]
+    let new_exe = staging_dir.join("Mona");
+
+    let new_gateway = staging_dir.join(crate::python::GATEWAY_EXE_NAME);
 
     if !new_exe.exists() {
-        return Err("Update package missing Mona.exe".to_string());
+        return Err(format!("Update package missing main executable"));
     }
     if !new_gateway.exists() {
-        return Err("Update package missing mona-gateway.exe".to_string());
+        return Err(format!("Update package missing gateway executable"));
     }
 
     // 2. Stop gateway
@@ -214,20 +218,20 @@ pub fn install_update(
     );
 
     gateway_state.stop()?;
-    // Grace period for Windows file locks
+    // Grace period for file locks
     std::thread::sleep(std::time::Duration::from_millis(500));
 
-    // 3. Backup existing mona-gateway.exe in resources
+    // 3. Backup existing gateway in resources
     let install_dir = get_install_dir()?;
-    let resource_gateway = install_dir.join("resources").join("mona-gateway.exe");
+    let resource_gateway = install_dir.join("resources").join(crate::python::GATEWAY_EXE_NAME);
     if resource_gateway.exists() {
-        let bak_path = resource_gateway.with_extension("exe.bak");
+        let bak_path = resource_gateway.with_extension("bak");
         let _ = fs::remove_file(&bak_path);
         fs::rename(&resource_gateway, &bak_path)
-            .map_err(|e| format!("Failed to backup mona-gateway.exe: {}", e))?;
+            .map_err(|e| format!("Failed to backup gateway: {}", e))?;
     }
 
-    // 4. Copy new mona-gateway.exe to resources
+    // 4. Copy new gateway to resources
     let _ = app_handle.emit(
         "update-progress",
         UpdateProgress {
@@ -240,7 +244,7 @@ pub fn install_update(
     fs::create_dir_all(install_dir.join("resources"))
         .map_err(|e| format!("Failed to create resources dir: {}", e))?;
     fs::copy(&new_gateway, &resource_gateway)
-        .map_err(|e| format!("Failed to copy mona-gateway.exe: {}", e))?;
+        .map_err(|e| format!("Failed to copy gateway: {}", e))?;
 
     // 5. Stage new exe
     let _ = app_handle.emit(
@@ -252,7 +256,11 @@ pub fn install_update(
         },
     );
 
+    #[cfg(windows)]
     let exe_new = install_dir.join("Mona.exe.new");
+    #[cfg(not(windows))]
+    let exe_new = install_dir.join("Mona.new");
+
     fs::copy(&new_exe, &exe_new)
         .map_err(|e| format!("Failed to stage new exe: {}", e))?;
 
@@ -268,7 +276,8 @@ pub fn install_update(
     Ok(())
 }
 
-/// Launch the helper batch script to swap the exe and restart.
+/// Launch the helper script to swap the exe and restart.
+#[cfg(windows)]
 pub fn launch_update_restart() -> Result<(), String> {
     let install_dir = get_install_dir()?;
     let current_pid = std::process::id();
@@ -308,6 +317,43 @@ del "%~f0" >nul 2>&1
     Ok(())
 }
 
+#[cfg(not(windows))]
+pub fn launch_update_restart() -> Result<(), String> {
+    let install_dir = get_install_dir()?;
+    let current_pid = std::process::id();
+
+    let script_content = format!(
+        r#"#!/bin/bash
+while kill -0 {pid} 2>/dev/null; do
+    sleep 1
+done
+cd "{install_dir}"
+mv -f "Mona.new" "Mona" 2>/dev/null
+chmod +x "Mona"
+open "Mona"
+rm -f "Mona.old" "$0"
+"#,
+        pid = current_pid,
+        install_dir = install_dir.display()
+    );
+
+    let script_path = install_dir.join("_update_restart.sh");
+    fs::write(&script_path, &script_content)
+        .map_err(|e| format!("Failed to write update script: {}", e))?;
+
+    std::process::Command::new("chmod")
+        .args(["+x", &script_path.display().to_string()])
+        .status()
+        .map_err(|e| format!("Failed to chmod script: {}", e))?;
+
+    std::process::Command::new("bash")
+        .arg(&script_path.display().to_string())
+        .spawn()
+        .map_err(|e| format!("Failed to launch update script: {}", e))?;
+
+    Ok(())
+}
+
 /// Cleanup after a successful update (called on next launch).
 pub fn cleanup_after_update() -> Result<(), String> {
     let marker = app_data_dir().join(".update-pending");
@@ -323,12 +369,18 @@ pub fn cleanup_after_update() -> Result<(), String> {
     let install_dir = get_install_dir()?;
 
     // Remove old gateway backup
-    let gateway_bak = install_dir.join("resources").join("mona-gateway.exe.bak");
+    let gateway_bak = install_dir
+        .join("resources")
+        .join(format!("{}.bak", crate::python::GATEWAY_EXE_NAME));
     if gateway_bak.exists() {
         let _ = fs::remove_file(&gateway_bak);
     }
 
+    #[cfg(windows)]
     let exe_old = install_dir.join("Mona.exe.old");
+    #[cfg(not(windows))]
+    let exe_old = install_dir.join("Mona.old");
+
     if exe_old.exists() {
         let _ = fs::remove_file(&exe_old);
     }

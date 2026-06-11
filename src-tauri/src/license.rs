@@ -586,7 +586,20 @@ fn get_cpu_info() -> String {
             Err(_) => "cpu:unknown".into(),
         }
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        let output = std::process::Command::new("sh")
+            .args(["-c", "sysctl -n machdep.cpu.brand_string"])
+            .output();
+        match output {
+            Ok(out) => {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                format!("cpu:{}", stdout.trim())
+            }
+            Err(_) => "cpu:unknown".into(),
+        }
+    }
+    #[cfg(target_os = "linux")]
     {
         let output = std::process::Command::new("sh")
             .args(["-c", "cat /proc/cpuinfo | grep 'model name' | head -1"])
@@ -629,7 +642,23 @@ fn get_disk_serial() -> String {
             Err(_) => "disk:unknown".into(),
         }
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        let output = std::process::Command::new("sh")
+            .args([
+                "-c",
+                "ioreg -rd1 -c IOPlatformExpertDevice | awk '/IOPlatformUUID/ { gsub(/\"/,\"\"); print $NF }'",
+            ])
+            .output();
+        match output {
+            Ok(out) => {
+                let uuid = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                format!("disk:{}", uuid)
+            }
+            Err(_) => "disk:unknown".into(),
+        }
+    }
+    #[cfg(target_os = "linux")]
     {
         let output = std::process::Command::new("sh")
             .args([

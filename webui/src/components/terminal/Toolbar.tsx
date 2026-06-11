@@ -1,6 +1,7 @@
 import { useState } from "react";
-import { Plus, FolderOpen, Server, Settings, Bot, ArrowLeftRight, HardDrive, Monitor } from "lucide-react";
+import { Plus, FolderOpen, Server, Settings, ArrowLeftRight, HardDrive, Monitor } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { AgentLogo } from "@/components/AgentLogo";
 import { useTerminalStore } from "./store/terminalStore";
 import { useLicense } from "@/hooks/useLicense";
 import { sshOpenSftp, desktopConnect } from "./ipc";
@@ -11,6 +12,7 @@ export function Toolbar() {
   const { licenseActive } = useLicense();
   const toggleAIPanel = useTerminalStore((s) => s.toggleAIPanel);
   const aiPanelVisible = useTerminalStore((s) => s.aiPanelVisible);
+  const aiStreaming = useTerminalStore((s) => s.aiStreaming);
   const setNewConnectionDialogOpen = useTerminalStore(
     (s) => s.setNewConnectionDialogOpen,
   );
@@ -155,8 +157,9 @@ export function Toolbar() {
           onClick={toggleAIPanel}
           title={aiPanelVisible ? "隐藏 AI 面板" : "显示 AI 面板"}
         >
-          <Bot
-            className={`h-3.5 w-3.5 ${aiPanelVisible ? "text-foreground" : "text-muted-foreground"}`}
+          <AgentLogo
+            state={aiStreaming ? "working" : "idle"}
+            className={`h-5 w-5 ${aiPanelVisible ? "" : "opacity-60"}`}
           />
         </Button>
       )}

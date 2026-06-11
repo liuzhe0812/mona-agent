@@ -1,18 +1,21 @@
 import { ArrowLeft, ArrowRight, RotateCw, Star, Lock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { AgentLogo } from "@/components/AgentLogo";
 import { useEffect, useState } from "react";
 
 interface BrowserToolbarProps {
   url: string;
   isAiControlled: boolean;
+  isAiPanelOpen: boolean;
   onNavigate: (url: string) => void;
   onGoBack: () => void;
   onGoForward: () => void;
   onReload: () => void;
+  onToggleAiPanel: () => void;
 }
 
-export function BrowserToolbar({ url, isAiControlled, onNavigate, onGoBack, onGoForward, onReload }: BrowserToolbarProps) {
+export function BrowserToolbar({ url, isAiControlled, isAiPanelOpen, onNavigate, onGoBack, onGoForward, onReload, onToggleAiPanel }: BrowserToolbarProps) {
   const [inputUrl, setInputUrl] = useState(url);
   const [isFocused, setIsFocused] = useState(false);
 
@@ -58,15 +61,17 @@ export function BrowserToolbar({ url, isAiControlled, onNavigate, onGoBack, onGo
       <Button variant="ghost" size="icon" className="h-6 w-6" title="收藏">
         <Star className="h-3 w-3" />
       </Button>
-      {isAiControlled && (
-        <div className="flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-600">
-          <span className="relative flex h-1.5 w-1.5">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-500 opacity-75" />
-            <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-amber-500" />
-          </span>
-          AI 操作中
-        </div>
-      )}
+      <button
+        type="button"
+        onClick={onToggleAiPanel}
+        title="Mona"
+        className={`flex h-6 w-6 items-center justify-center rounded-md transition-colors ${isAiPanelOpen ? "bg-primary/15" : "hover:bg-muted/60"}`}
+      >
+        <AgentLogo
+          state={isAiControlled ? "working" : "idle"}
+          className="h-5 w-5"
+        />
+      </button>
     </div>
   );
 }

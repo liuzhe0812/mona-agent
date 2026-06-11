@@ -313,7 +313,7 @@ function SidebarActionButton({
 }: {
   collapsed: boolean;
   label: string;
-  icon: ReactNode;
+  icon?: ReactNode;
   onClick: () => void;
   className?: string;
   active?: boolean;
@@ -336,15 +336,17 @@ function SidebarActionButton({
         className,
       )}
     >
-      <span
-        className={cn(
-          "flex shrink-0 items-center justify-center transition-transform duration-300 ease-out",
-          collapsed ? "translate-x-0" : "translate-x-0",
-        )}
-        aria-hidden
-      >
-        {icon}
-      </span>
+      {icon && (
+        <span
+          className={cn(
+            "flex shrink-0 items-center justify-center transition-transform duration-300 ease-out",
+            collapsed ? "translate-x-0" : "translate-x-0",
+          )}
+          aria-hidden
+        >
+          {icon}
+        </span>
+      )}
       <span
         className={cn(
           "min-w-0 overflow-hidden truncate whitespace-nowrap transition-[max-width,opacity,transform] duration-200 ease-out",

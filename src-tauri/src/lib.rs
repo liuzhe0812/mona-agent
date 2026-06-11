@@ -120,7 +120,7 @@ async fn diagnose_gateway(app_handle: tauri::AppHandle) -> Result<serde_json::Va
 
     let mut resource_candidates = Vec::new();
     if let Ok(rd) = app_handle.path().resource_dir() {
-        let c = rd.join("mona-gateway.exe");
+        let c = rd.join(python::GATEWAY_EXE_NAME);
         resource_candidates.push(serde_json::json!({
             "path": c.display().to_string(),
             "exists": c.exists()
@@ -129,7 +129,7 @@ async fn diagnose_gateway(app_handle: tauri::AppHandle) -> Result<serde_json::Va
     if let Ok(ep) = std::env::current_exe() {
         if let Some(ed) = ep.parent() {
             for sub in &["resources", ""] {
-                let c = if sub.is_empty() { ed.join("mona-gateway.exe") } else { ed.join(sub).join("mona-gateway.exe") };
+                let c = if sub.is_empty() { ed.join(python::GATEWAY_EXE_NAME) } else { ed.join(sub).join(python::GATEWAY_EXE_NAME) };
                 resource_candidates.push(serde_json::json!({
                     "path": c.display().to_string(),
                     "exists": c.exists()

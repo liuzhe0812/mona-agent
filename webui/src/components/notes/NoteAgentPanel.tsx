@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
-  Bot,
   Check,
   Clipboard,
   Copy,
@@ -18,6 +17,7 @@ import {
 } from "lucide-react";
 
 import { MessageBubble } from "@/components/MessageBubble";
+import { AgentLogo } from "@/components/AgentLogo";
 import { AgentActivityCluster } from "@/components/thread/AgentActivityCluster";
 import { buildDisplayUnits, type DisplayUnit } from "@/components/thread/ThreadMessages";
 import { useMonaStream } from "@/hooks/useMonaStream";
@@ -51,6 +51,7 @@ interface NoteAgentPanelProps {
   onApplyResult: (mode: "append" | "replace", markdown: string, messageId: string) => void;
   onSaveKnowledge: (draft: ExtractedKnowledgeDraft) => boolean;
   onClearChat?: () => void;
+  onStreamingChange?: (streaming: boolean) => void;
 }
 
 export function NoteAgentPanel({
@@ -64,6 +65,7 @@ export function NoteAgentPanel({
   onApplyResult,
   onSaveKnowledge,
   onClearChat,
+  onStreamingChange,
 }: NoteAgentPanelProps) {
   const [draft, setDraft] = useState("");
   const collapsed = collapsedProp ?? false;
@@ -109,6 +111,11 @@ export function NoteAgentPanel({
     streamError,
     dismissStreamError,
   } = useMonaStream(chatId, historical, hasPendingToolCalls);
+
+  // Notify parent when streaming state changes
+  useEffect(() => {
+    onStreamingChange?.(isStreaming);
+  }, [isStreaming, onStreamingChange]);
 
   // Register save handler for the global knowledge dialog
   useEffect(() => {
@@ -377,10 +384,7 @@ export function NoteAgentPanel({
     <aside className="flex h-full shrink-0 flex-col border-l border-border/70 bg-background" style={{ width }}>
       <div className="flex h-12 shrink-0 items-center justify-between border-b border-border/65 px-3">
         <div className="flex min-w-0 items-center gap-2">
-          <span className="grid h-6 w-6 place-items-center rounded-lg border border-border/70 bg-background">
-            <Bot className="h-3.5 w-3.5 text-muted-foreground" />
-          </span>
-          <h2 className="truncate text-[13px] font-semibold text-foreground">AI 助手</h2>
+          <h2 className="truncate text-[13px] font-semibold text-foreground">Mona</h2>
         </div>
         <div className="flex items-center gap-1">
           {notice ? <span className="max-w-28 truncate text-[11px] text-muted-foreground">{notice}</span> : null}
@@ -788,7 +792,7 @@ function NoteMessageActions({
 function AssistantHint({ text, loading = false }: { text: string; loading?: boolean }) {
   return (
     <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-      {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Bot className="h-3 w-3" />}
+      {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <AgentLogo state="idle" className="h-3 w-3" />}
       <span>{text}</span>
     </div>
   );

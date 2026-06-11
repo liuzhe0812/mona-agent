@@ -4,7 +4,10 @@ use tauri::Manager;
 
 use crate::settings::app_data_dir;
 
-const GATEWAY_EXE_NAME: &str = "mona-gateway.exe";
+#[cfg(windows)]
+pub const GATEWAY_EXE_NAME: &str = "mona-gateway.exe";
+#[cfg(not(windows))]
+pub const GATEWAY_EXE_NAME: &str = "mona-gateway";
 
 /// Directory where mona-gateway.exe is extracted to (or found)
 pub fn gateway_exe_dir() -> PathBuf {

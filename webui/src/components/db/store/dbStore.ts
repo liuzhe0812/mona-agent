@@ -34,6 +34,9 @@ interface DbState {
   isLoadingTable: boolean;
   connectingId: string | null;
   connectError: string | null;
+  agentStreaming: boolean;
+
+  setAgentStreaming: (streaming: boolean) => void;
 
   loadSavedConnections: () => Promise<void>;
   saveConnection: (config: DbConnectionConfig) => Promise<void>;
@@ -83,6 +86,7 @@ export const useDbStore = create<DbState>((set, get) => ({
   isLoadingTable: false,
   connectingId: null,
   connectError: null,
+  agentStreaming: false,
 
   loadSavedConnections: async () => {
     try {
@@ -454,6 +458,10 @@ export const useDbStore = create<DbState>((set, get) => ({
 
   setConnectError: (error) => {
     set({ connectError: error });
+  },
+
+  setAgentStreaming: (streaming) => {
+    set({ agentStreaming: streaming });
   },
 
   refreshServerStats: async (connectionId) => {

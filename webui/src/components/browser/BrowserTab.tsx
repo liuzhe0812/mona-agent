@@ -35,9 +35,9 @@ export function BrowserTabItem({ tab, active, onClick, onClose }: BrowserTabProp
     >
       {faviconUrl ? (
         <img src={faviconUrl} alt="" className="shrink-0 h-4 w-4 rounded-sm" onError={(e) => { e.currentTarget.style.display = "none"; }} />
-      ) : (
-        <span className="shrink-0 text-[11px]">{tab.type === "mona" ? "M" : tab.isAiControlled ? "🤖" : "🌐"}</span>
-      )}
+      ) : tab.type !== "mona" ? (
+        <span className="shrink-0 text-[11px]">{tab.isAiControlled ? "🤖" : "🌐"}</span>
+      ) : null}
       <span className="truncate">{tab.title}</span>
       {tab.type !== "mona" && onClose && (
         <span

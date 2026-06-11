@@ -60,6 +60,7 @@ interface TerminalState {
   execApproval: ExecApprovalState;
   terminalRegistry: TerminalRegistry;
   terminalExecMode: "auto" | "approval";
+  aiStreaming: boolean;
 
   addSession: (session: Session) => void;
   removeSession: (sessionId: string) => void;
@@ -88,6 +89,7 @@ interface TerminalState {
   showExecApproval: (approval: Omit<ExecApprovalState, "open">) => void;
   closeExecApproval: () => void;
   setTerminalExecMode: (mode: "auto" | "approval") => void;
+  setAiStreaming: (streaming: boolean) => void;
 }
 
 const registry = new TerminalRegistry();
@@ -137,6 +139,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   },
   terminalRegistry: registry,
   terminalExecMode: "auto" as const,
+  aiStreaming: false,
 
   addSession: (session) => {
     set((state) => ({
@@ -347,6 +350,10 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
 
   setTerminalExecMode: (mode) => {
     set({ terminalExecMode: mode });
+  },
+
+  setAiStreaming: (streaming) => {
+    set({ aiStreaming: streaming });
   },
 }));
 

@@ -1,10 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  Bot,
   Loader2,
   RotateCcw,
   Send,
-  Sparkles,
   Square,
   Zap,
   ListTree,
@@ -13,6 +11,7 @@ import {
   Shield,
   Wrench,
 } from "lucide-react";
+import { AgentLogo } from "@/components/AgentLogo";
 import { Button } from "@/components/ui/button";
 import { ThreadMessages } from "@/components/thread/ThreadMessages";
 import { useMonaStream, type SendOptions } from "@/hooks/useMonaStream";
@@ -80,6 +79,7 @@ export function DbAgentPanel({
   const activeTabId = useDbStore((s) => s.activeTabId);
   const queryTabs = useDbStore((s) => s.queryTabs);
   const updateTabSql = useDbStore((s) => s.updateTabSql);
+  const setAgentStreaming = useDbStore((s) => s.setAgentStreaming);
   const activeTab = queryTabs.find((t) => t.id === activeTabId);
 
   const chatId = activeTab?.agentChatId ?? null;
@@ -100,6 +100,10 @@ export function DbAgentPanel({
     streamError,
     dismissStreamError,
   } = useMonaStream(chatId, historical, hasPendingToolCalls);
+
+  useEffect(() => {
+    setAgentStreaming(isStreaming);
+  }, [isStreaming, setAgentStreaming]);
 
   useEffect(() => {
     setDraft("");
@@ -242,10 +246,7 @@ export function DbAgentPanel({
     >
       <div className="flex h-10 shrink-0 items-center justify-between border-b border-border/65 px-3">
         <div className="flex min-w-0 items-center gap-2">
-          <span className="grid h-5 w-5 place-items-center rounded-md border border-border/70 bg-background">
-            <Bot className="h-3 w-3 text-muted-foreground" />
-          </span>
-          <h2 className="truncate text-[12px] font-semibold text-foreground">AI 助手</h2>
+          <h2 className="truncate text-[12px] font-semibold text-foreground">Mona</h2>
         </div>
         <div className="flex items-center gap-1">
           {notice ? (
@@ -514,7 +515,7 @@ function AssistantHint({ text, loading = false }: { text: string; loading?: bool
         {loading ? (
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
         ) : (
-          <Sparkles className="h-3.5 w-3.5" />
+          <AgentLogo state="idle" className="h-4 w-4" />
         )}
         {text}
       </span>
