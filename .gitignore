@@ -23,6 +23,7 @@ src-tauri/target/
 src-tauri/dist/
 src-tauri/resources/python.tar.gz
 src-tauri/resources/python-install.tar.gz
+src-tauri/resources/mona-gateway*
 
 # Python bytecode & caches
 *.pyc
