@@ -9,6 +9,8 @@ import { SettingsView } from "@/components/settings/SettingsView";
 import { ThreadShell } from "@/components/thread/ThreadShell";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { AppTitleBar } from "@/components/workspace/AppTitleBar";
+import { BrowserTabView } from "@/components/browser/BrowserTabView";
+import { useBrowserTabs } from "@/hooks/useBrowserTabs";
 import { TerminalView } from "@/components/terminal/TerminalView";
 import { useTerminalStore } from "@/components/terminal/store/terminalStore";
 
@@ -427,6 +429,19 @@ function Shell({
     useSidebarState(sessions, !loading);
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [view, setView] = useState<ShellView>("chat");
+  const {
+    tabs: browserTabs,
+    activeTabId: activeBrowserTabId,
+    activeTab: activeBrowserTab,
+    addEmptyTab,
+    navigateToUrl,
+    closeTab: closeBrowserTab,
+    switchTab: switchBrowserTab,
+    goBack,
+    goForward,
+    reload,
+    updateTabUrl,
+  } = useBrowserTabs();
   const [desktopSidebarOpen, setDesktopSidebarOpen] =
     useState<boolean>(readSidebarOpen);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
@@ -568,49 +583,61 @@ function Shell({
     }
   }, []);
 
+  const switchToMonaTab = useCallback(() => {
+    switchBrowserTab("mona");
+  }, [switchBrowserTab]);
+
   const onGoHome = useCallback(() => {
     setView("chat");
+    switchToMonaTab();
     setMobileSidebarOpen(false);
-  }, []);
+  }, [switchToMonaTab]);
 
   const onOpenNote = useCallback(() => {
     setView("note");
+    switchToMonaTab();
     setMobileSidebarOpen(false);
-  }, []);
+  }, [switchToMonaTab]);
 
   const onOpenSSH = useCallback(() => {
     setView("ssh");
+    switchToMonaTab();
     setMobileSidebarOpen(false);
-  }, []);
+  }, [switchToMonaTab]);
 
   const onOpenSSHAndNew = useCallback(() => {
     setView("ssh");
+    switchToMonaTab();
     setMobileSidebarOpen(false);
     requestAnimationFrame(() => {
       useTerminalStore.getState().setNewConnectionDialogOpen(true);
     });
-  }, []);
+  }, [switchToMonaTab]);
 
   const onOpenDb = useCallback(() => {
     setView("db");
+    switchToMonaTab();
     setMobileSidebarOpen(false);
-  }, []);
+  }, [switchToMonaTab]);
 
   const onOpenPpt = useCallback(() => {
     setView("ppt");
+    switchToMonaTab();
     setMobileSidebarOpen(false);
-  }, []);
+  }, [switchToMonaTab]);
 
   const onOpenKb = useCallback(() => {
     setView("kb");
+    switchToMonaTab();
     setMobileSidebarOpen(false);
-  }, []);
+  }, [switchToMonaTab]);
 
   const onCreateChat = useCallback(async () => {
     try {
       const chatId = await createChat();
       setActiveKey(`websocket:${chatId}`);
       setView("chat");
+      switchToMonaTab();
       setMobileSidebarOpen(false);
       return chatId;
     } catch (e) {
@@ -635,17 +662,19 @@ function Shell({
           content: prompt,
         });
         setView("chat");
+        switchToMonaTab();
         setMobileSidebarOpen(false);
       } catch (e) {
         console.error("Failed to send note prompt to agent", e);
       }
     },
-    [activeSession?.chatId, createChat],
+    [activeSession?.chatId, createChat, switchToMonaTab],
   );
 
   const onNewChat = useCallback(() => {
     setActiveKey(null);
     setView("chat");
+    switchToMonaTab();
     setMobileSidebarOpen(false);
   }, []);
 
@@ -662,9 +691,10 @@ function Shell({
       }
       setActiveKey(key);
       setView("chat");
+      switchToMonaTab();
       setMobileSidebarOpen(false);
     },
-    [sessions],
+    [sessions, switchToMonaTab],
   );
 
   const onTogglePin = useCallback(
@@ -829,6 +859,7 @@ function Shell({
         if (!chatId) return;
         setActiveKey(`websocket:${chatId}`);
         setView("chat");
+        switchToMonaTab();
         setMobileSidebarOpen(false);
         void refresh();
       });
@@ -867,6 +898,7 @@ function Shell({
 
   const onBackToChat = useCallback(() => {
     setView("chat");
+    switchToMonaTab();
     setMobileSidebarOpen(false);
     setActiveKey((current) => {
       if (!current) return null;
@@ -1022,71 +1054,80 @@ function Shell({
 
   return (
     <ThemeProvider theme={theme}>
-      <div className="relative flex h-full w-full overflow-hidden bg-background">
-        {showMainSidebar ? (
-          <aside
-            className={cn(
-              "relative z-20 shrink-0 overflow-hidden",
-              "transition-[width] duration-300 ease-out",
-            )}
-            style={{
-              width: desktopSidebarOpen ? SIDEBAR_WIDTH : SIDEBAR_RAIL_WIDTH,
-            }}
-          >
-            <div
-              className="absolute inset-y-0 left-0 h-full w-full overflow-hidden bg-sidebar shadow-inner-right"
-            >
-              <Sidebar
-                {...sidebarProps}
-                collapsed={!desktopSidebarOpen}
-                onCollapse={closeDesktopSidebar}
-                onExpand={() => {
-                  const isDesktop =
-                    typeof window !== "undefined" &&
-                    window.matchMedia("(min-width: 1024px)").matches;
-                  if (isDesktop) {
-                    openDesktopSidebar();
-                  } else {
-                    setMobileSidebarOpen(true);
-                  }
-                }}
-              />
-            </div>
-          </aside>
-        ) : null}
+      <div className="relative flex h-full w-full flex-col overflow-hidden bg-background">
+        {/* 标题栏在最顶部，全宽 */}
+        <AppTitleBar
+          tabs={browserTabs}
+          activeTabId={activeBrowserTabId}
+          onTabClick={switchBrowserTab}
+          onTabClose={closeBrowserTab}
+          onNewTab={addEmptyTab}
+          onOpenSettings={onOpenSettings}
+        />
 
-        {showMainSidebar ? (
-          <Sheet
-            open={mobileSidebarOpen}
-            onOpenChange={(open) => setMobileSidebarOpen(open)}
-          >
-            <SheetContent
-              side="left"
-              showCloseButton={false}
-              aria-describedby={undefined}
-              className="p-0 lg:hidden"
-              style={{ width: SIDEBAR_WIDTH, maxWidth: SIDEBAR_WIDTH }}
+        {/* 标题栏下方：Sidebar + 主内容区 */}
+        <div className="flex min-h-0 flex-1 overflow-hidden">
+          {showMainSidebar ? (
+            <aside
+              className={cn(
+                "relative z-20 shrink-0 overflow-hidden",
+                "transition-[width] duration-300 ease-out",
+              )}
+              style={{
+                width: desktopSidebarOpen ? SIDEBAR_WIDTH : SIDEBAR_RAIL_WIDTH,
+              }}
             >
-              <SheetTitle className="sr-only">{t("sidebar.navigation")}</SheetTitle>
-              <Sidebar
-                {...sidebarProps}
-                onCollapse={closeMobileSidebar}
-                containActionMenus
-              />
-            </SheetContent>
-          </Sheet>
-        ) : null}
+              <div
+                className="absolute inset-y-0 left-0 h-full w-full overflow-hidden bg-sidebar shadow-inner-right"
+              >
+                <Sidebar
+                  {...sidebarProps}
+                  collapsed={!desktopSidebarOpen}
+                  onCollapse={closeDesktopSidebar}
+                  onExpand={() => {
+                    const isDesktop =
+                      typeof window !== "undefined" &&
+                      window.matchMedia("(min-width: 1024px)").matches;
+                    if (isDesktop) {
+                      openDesktopSidebar();
+                    } else {
+                      setMobileSidebarOpen(true);
+                    }
+                  }}
+                />
+              </div>
+            </aside>
+          ) : null}
 
-        <div className="flex min-w-0 flex-1 flex-col">
-          <AppTitleBar
-            onOpenSettings={onOpenSettings}
-          />
-          <div className="flex min-h-0 flex-1 overflow-hidden">
-            <main className="relative flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-background">
+          {showMainSidebar ? (
+            <Sheet
+              open={mobileSidebarOpen}
+              onOpenChange={(open) => setMobileSidebarOpen(open)}
+            >
+              <SheetContent
+                side="left"
+                showCloseButton={false}
+                aria-describedby={undefined}
+                className="p-0 lg:hidden"
+                style={{ width: SIDEBAR_WIDTH, maxWidth: SIDEBAR_WIDTH }}
+              >
+                <SheetTitle className="sr-only">{t("sidebar.navigation")}</SheetTitle>
+                <Sidebar
+                  {...sidebarProps}
+                  onCollapse={closeMobileSidebar}
+                  containActionMenus
+                />
+              </SheetContent>
+            </Sheet>
+          ) : null}
+
+          <div className="flex min-w-0 flex-1 flex-col">
+            <div className="flex min-h-0 flex-1 overflow-hidden">
+              <main className="relative flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-background">
               <div
                 className={cn(
                   "absolute inset-0 flex flex-col",
-                  (view === "settings" || view === "note" || view === "ssh" || view === "db" || view === "kb" || view === "ppt") &&
+                  (view === "settings" || view === "note" || view === "ssh" || view === "db" || view === "kb" || view === "ppt" || activeBrowserTab.type !== "mona") &&
                     "invisible pointer-events-none",
                 )}
               >
@@ -1153,8 +1194,28 @@ function Shell({
                   <PptMakerView onBack={onBackToChat} />
                 </Suspense>
               </div>
+              {browserTabs
+                .filter((t) => t.type === "browser")
+                .map((tab) => (
+                  <div
+                    key={tab.id}
+                    className="absolute inset-0 flex flex-col"
+                    style={{ display: tab.id === activeBrowserTabId ? "flex" : "none" }}
+                  >
+                    <BrowserTabView
+                      tab={tab}
+                      isVisible={tab.id === activeBrowserTabId}
+                      onNavigate={(url) => navigateToUrl(tab.id, url)}
+                      onGoBack={() => goBack(tab.id)}
+                      onGoForward={() => goForward(tab.id)}
+                      onReload={() => reload(tab.id)}
+                      onUrlChange={(url) => updateTabUrl(tab.id, url)}
+                    />
+                  </div>
+                ))}
             </main>
           </div>
+        </div>
         </div>
 
         <SessionSearchDialog

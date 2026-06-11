@@ -429,6 +429,55 @@ impl IpcBridge {
                     "fileName": file_name,
                 }))
             }
+            "browser_create_tab" => {
+                let browser_state = self.app_handle.state::<crate::browser::BrowserState>();
+                let id = args.get("id").and_then(|v| v.as_str()).ok_or("Missing id")?;
+                let url = args.get("url").and_then(|v| v.as_str()).ok_or("Missing url")?;
+                let result = browser_state.create_tab(&self.app_handle, id, url)?;
+                serde_json::to_value(result).map_err(|e| e.to_string())
+            }
+            "browser_close_tab" => {
+                let browser_state = self.app_handle.state::<crate::browser::BrowserState>();
+                let id = args.get("id").and_then(|v| v.as_str()).ok_or("Missing id")?;
+                browser_state.close_tab(&self.app_handle, id)?;
+                Ok(Value::Null)
+            }
+            "browser_navigate_tab" => {
+                let browser_state = self.app_handle.state::<crate::browser::BrowserState>();
+                let id = args.get("id").and_then(|v| v.as_str()).ok_or("Missing id")?;
+                let url = args.get("url").and_then(|v| v.as_str()).ok_or("Missing url")?;
+                browser_state.navigate_tab(&self.app_handle, id, url)?;
+                Ok(Value::Null)
+            }
+            "browser_go_back" => {
+                let browser_state = self.app_handle.state::<crate::browser::BrowserState>();
+                let id = args.get("id").and_then(|v| v.as_str()).ok_or("Missing id")?;
+                browser_state.go_back(&self.app_handle, id)?;
+                Ok(Value::Null)
+            }
+            "browser_go_forward" => {
+                let browser_state = self.app_handle.state::<crate::browser::BrowserState>();
+                let id = args.get("id").and_then(|v| v.as_str()).ok_or("Missing id")?;
+                browser_state.go_forward(&self.app_handle, id)?;
+                Ok(Value::Null)
+            }
+            "browser_reload" => {
+                let browser_state = self.app_handle.state::<crate::browser::BrowserState>();
+                let id = args.get("id").and_then(|v| v.as_str()).ok_or("Missing id")?;
+                browser_state.reload(&self.app_handle, id)?;
+                Ok(Value::Null)
+            }
+            "browser_list_tabs" => {
+                let browser_state = self.app_handle.state::<crate::browser::BrowserState>();
+                let tabs = browser_state.list_tabs();
+                serde_json::to_value(tabs).map_err(|e| e.to_string())
+            }
+            "browser_get_cdp_port" => {
+                let browser_state = self.app_handle.state::<crate::browser::BrowserState>();
+                let id = args.get("id").and_then(|v| v.as_str()).ok_or("Missing id")?;
+                let port = browser_state.get_cdp_port(id)?;
+                Ok(Value::Number(port.into()))
+            }
             _ => Err(format!("Unknown command: {}", cmd)),
         }
     }

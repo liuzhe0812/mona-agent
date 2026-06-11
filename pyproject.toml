@@ -77,6 +77,9 @@ langsmith = [
 pdf = [
     "pymupdf>=1.25.0",
 ]
+browser = [
+    "playwright>=1.40.0,<2.0.0",
+]
 olostep = [
     "olostep>=0.1.0",
 ]

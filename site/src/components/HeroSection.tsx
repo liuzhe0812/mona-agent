@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { Download, ShieldCheck, Sparkles } from "lucide-react";
+import { BookOpen, Download, ShieldCheck } from "lucide-react";
 import AgentLogo from "@/components/AgentLogo";
 import MagneticButton from "@/components/MagneticButton";
 import OpsConsole from "@/components/OpsConsole";
@@ -82,11 +82,11 @@ export default function HeroSection() {
               下载 Mona
             </MagneticButton>
             <MagneticButton
-              href="#modules"
+              href="/manual.html"
               className="inline-flex items-center justify-center gap-2 rounded-md border border-black/12 bg-white/[0.55] px-5 py-3 text-sm font-semibold text-black transition hover:border-black/28 hover:bg-white"
             >
-              <Sparkles className="h-4 w-4" />
-              看产品模块
+              <BookOpen className="h-4 w-4" />
+              快速入门
             </MagneticButton>
           </motion.div>
 

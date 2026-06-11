@@ -1,12 +1,19 @@
 import type { ReactNode } from "react";
-import { Maximize2, Minus, Settings, X } from "lucide-react";
+import { Maximize2, Minus, Plus, Settings, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { ConnectionBadge } from "@/components/ConnectionBadge";
+import { BrowserTabItem } from "@/components/browser/BrowserTab";
 import { isTauri } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
+import type { Tab } from "@/hooks/useBrowserTabs";
 
 interface AppTitleBarProps {
+  tabs: Tab[];
+  activeTabId: string;
+  onTabClick: (id: string) => void;
+  onTabClose: (id: string) => void;
+  onNewTab: () => void;
   onOpenSettings?: () => void;
 }
 
@@ -24,20 +31,46 @@ async function withCurrentWindow(
   }
 }
 
-export function AppTitleBar({ onOpenSettings }: AppTitleBarProps) {
+export function AppTitleBar({
+  tabs,
+  activeTabId,
+  onTabClick,
+  onTabClose,
+  onNewTab,
+  onOpenSettings,
+}: AppTitleBarProps) {
   return (
     <header
       data-tauri-drag-region
       className="flex h-9 shrink-0 items-center border-b border-border/70 bg-sidebar/95 text-sidebar-foreground"
     >
-      <div data-tauri-drag-region className="min-w-0 flex-1" />
-      <div className="flex h-full items-center">
+      {/* 标签栏 */}
+      <div className="flex items-center gap-0.5 overflow-x-auto px-2 scrollbar-none">
+        {tabs.map((tab) => (
+          <BrowserTabItem
+            key={tab.id}
+            tab={tab}
+            active={tab.id === activeTabId}
+            onClick={() => onTabClick(tab.id)}
+            onClose={tab.type !== "mona" ? () => onTabClose(tab.id) : undefined}
+          />
+        ))}
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          onClick={onNewTab}
+          className="h-6 w-6 rounded-md text-muted-foreground hover:bg-sidebar-accent/50 hover:text-foreground"
+        >
+          <Plus className="h-3 w-3" />
+        </Button>
+      </div>
+
+      {/* 右侧控制按钮 */}
+      <div className="ml-auto flex h-full items-center">
         <ConnectionBadge />
         {onOpenSettings && (
-          <TitleBarButton
-            label="设置"
-            onClick={onOpenSettings}
-          >
+          <TitleBarButton label="设置" onClick={onOpenSettings}>
             <Settings className="h-3.5 w-3.5" />
           </TitleBarButton>
         )}

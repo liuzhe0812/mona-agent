@@ -20,7 +20,7 @@ document.addEventListener("contextmenu", (e) => e.preventDefault());
 document.addEventListener("keydown", (e) => {
   const ctrl = e.ctrlKey || e.metaKey;
   if (e.key === "F5") e.preventDefault();
-  if (e.key === "a" && ctrl) e.preventDefault();
+  if (e.key === "a" && ctrl && !["INPUT", "TEXTAREA"].includes((e.target as HTMLElement)?.tagName)) e.preventDefault();
   if (e.key === "p" && ctrl) e.preventDefault();
   if (e.key === "s" && ctrl) e.preventDefault();
   if (e.key === "f" && ctrl) e.preventDefault();

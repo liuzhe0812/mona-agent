@@ -7,96 +7,97 @@
     <style>
         :root {
             --sidebar-w: 272px;
-            --primary: #6C5CE7;
-            --primary-light: #A29BFE;
-            --bg: #FAFBFC;
-            --sidebar-bg: #1E1E2E;
-            --sidebar-text: #CDD6F4;
-            --sidebar-hover: #313244;
-            --sidebar-active: #45475A;
-            --text: #2D3748;
-            --text-light: #718096;
-            --border: #E2E8F0;
-            --card-bg: #FFF;
-            --code-bg: #F7F8FA;
-            --green: #00B894;
-            --orange: #FDCB6E;
-            --red: #E17055;
-            --blue: #74B9FF;
+            --primary: #101010;
+            --primary-light: #333;
+            --bg: #f7f7f5;
+            --sidebar-bg: #fff;
+            --sidebar-text: #101010;
+            --sidebar-hover: #f7f7f5;
+            --sidebar-active: #f7f7f5;
+            --text: #101010;
+            --text-light: rgba(16,16,16,0.58);
+            --border: rgba(16,16,16,0.10);
+            --card-bg: #fff;
+            --code-bg: #f7f7f5;
+            --green: #16a34a;
+            --orange: #d97706;
+            --red: #dc2626;
         }
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
         * { margin:0; padding:0; box-sizing:border-box; }
-        body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans SC",sans-serif; color:var(--text); background:var(--bg); line-height:1.75; display:flex; min-height:100vh; }
+        body { font-family:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans SC",sans-serif; color:var(--text); background:var(--bg); line-height:1.75; display:flex; min-height:100vh; }
 
-        .sidebar { width:var(--sidebar-w); background:var(--sidebar-bg); color:var(--sidebar-text); position:fixed; top:0; left:0; bottom:0; overflow-y:auto; z-index:100; }
+        .sidebar { width:var(--sidebar-w); background:var(--sidebar-bg); color:var(--sidebar-text); position:fixed; top:0; left:0; bottom:0; overflow-y:auto; z-index:100; border-right:1px solid var(--border); }
         .sidebar::-webkit-scrollbar { width:4px; }
-        .sidebar::-webkit-scrollbar-thumb { background:rgba(255,255,255,.1); border-radius:2px; }
-        .sidebar-hd { padding:24px 20px 16px; border-bottom:1px solid rgba(255,255,255,.06); }
-        .sidebar-hd .logo { font-size:20px; font-weight:700; color:#FFF; display:flex; align-items:center; gap:8px; }
+        .sidebar::-webkit-scrollbar-thumb { background:rgba(16,16,16,0.12); border-radius:2px; }
+        .sidebar-hd { padding:24px 20px 16px; border-bottom:1px solid var(--border); }
+        .sidebar-hd .logo { font-size:20px; font-weight:700; color:var(--text); display:flex; align-items:center; gap:8px; }
         .sidebar-hd .logo span { font-size:24px; }
-        .sidebar-hd .sub { font-size:11px; color:var(--primary-light); margin-top:3px; letter-spacing:1.2px; }
-        .nav-sec { padding:6px 20px 2px; font-size:10.5px; font-weight:600; text-transform:uppercase; letter-spacing:1.5px; color:rgba(205,214,244,.35); margin-top:12px; }
-        .nav-item { display:block; padding:6px 20px; font-size:13px; color:var(--sidebar-text); text-decoration:none; border-left:3px solid transparent; cursor:pointer; transition:all .12s; }
-        .nav-item:hover { background:var(--sidebar-hover); color:#FFF; }
-        .nav-item.active { background:var(--sidebar-active); color:var(--primary-light); border-left-color:var(--primary-light); }
-        .nav-item.sub { padding-left:36px; font-size:12.5px; color:rgba(205,214,244,.65); }
+        .sidebar-hd .sub { font-size:11px; color:var(--text-light); margin-top:3px; letter-spacing:1.2px; font-family:"JetBrains Mono",monospace; }
+        .nav-sec { padding:6px 20px 2px; font-size:10.5px; font-weight:600; text-transform:uppercase; letter-spacing:1.5px; color:var(--text-light); margin-top:12px; }
+        .nav-item { display:block; padding:6px 20px; font-size:13px; color:var(--text-light); text-decoration:none; border-left:2px solid transparent; border-radius:0; cursor:pointer; transition:all .12s; }
+        .nav-item:hover { background:var(--sidebar-hover); color:var(--text); }
+        .nav-item.active { background:var(--sidebar-active); color:var(--primary); border-left-color:var(--primary); font-weight:500; }
+        .nav-item.sub { padding-left:36px; font-size:12.5px; color:rgba(16,16,16,0.45); }
 
         .main { margin-left:var(--sidebar-w); flex:1; min-width:0; }
         .content { max-width:860px; margin:0 auto; padding:40px 36px 80px; }
 
         .hero { text-align:center; padding:48px 0 40px; border-bottom:1px solid var(--border); margin-bottom:40px; }
         .hero-icon { font-size:56px; margin-bottom:12px; }
-        .hero h1 { font-size:36px; font-weight:800; background:linear-gradient(135deg,var(--primary),var(--primary-light)); -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text; margin-bottom:10px; }
+        .hero h1 { font-size:36px; font-weight:800; color:var(--primary); margin-bottom:10px; }
         .hero p { font-size:17px; color:var(--text-light); max-width:560px; margin:0 auto; }
 
         .sec { margin-bottom:48px; scroll-margin-top:20px; }
         .sec h2 { font-size:24px; font-weight:700; margin-bottom:6px; display:flex; align-items:center; gap:8px; }
-        .sec h2 .ic { font-size:26px; }
-        .sec h3 { font-size:18px; font-weight:600; margin:24px 0 8px; padding-left:12px; border-left:3px solid var(--primary-light); }
+        .sec h2 .ic { font-size:26px; display:inline-flex; align-items:center; justify-content:center; width:32px; height:32px; }
+        .mona-icon { width:28px; height:28px; vertical-align:middle; }
+        .sec h3 { font-size:18px; font-weight:600; margin:24px 0 8px; padding-left:12px; border-left:3px solid var(--primary); }
         .sec h4 { font-size:15px; font-weight:600; margin:16px 0 6px; }
         .sec p { margin-bottom:10px; }
         .sec ul,.sec ol { margin:6px 0 14px 22px; }
         .sec li { margin-bottom:4px; }
 
-        .step { background:var(--card-bg); border:1px solid var(--border); border-radius:10px; padding:16px 20px; margin:10px 0; display:flex; gap:14px; align-items:flex-start; }
-        .step-num { flex-shrink:0; width:28px; height:28px; border-radius:50%; background:var(--primary); color:#FFF; font-size:13px; font-weight:700; display:flex; align-items:center; justify-content:center; }
+        .step { background:var(--card-bg); border:1px solid var(--border); border-radius:8px; padding:16px 20px; margin:10px 0; display:flex; gap:14px; align-items:flex-start; }
+        .step-num { flex-shrink:0; width:28px; height:28px; border-radius:6px; background:var(--primary); color:#f7f7f5; font-size:13px; font-weight:700; display:flex; align-items:center; justify-content:center; font-family:"JetBrains Mono",monospace; }
         .step-body { flex:1; min-width:0; }
         .step-body .step-title { font-weight:600; font-size:14px; margin-bottom:2px; }
         .step-body .step-desc { font-size:13px; color:var(--text-light); }
 
-        .tip { background:#F0EDFF; border-left:3px solid var(--primary); border-radius:0 8px 8px 0; padding:12px 16px; margin:12px 0; font-size:13.5px; }
-        .tip.warn { background:#FFF8E1; border-left-color:var(--orange); }
-        .tip.danger { background:#FFF0ED; border-left-color:var(--red); }
+        .tip { background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:12px 16px; margin:12px 0; font-size:13.5px; }
+        .tip.warn { background:#fffbeb; border-color:rgba(217,119,6,0.2); }
+        .tip.danger { background:#fef2f2; border-color:rgba(220,38,38,0.2); }
         .tip strong { display:block; margin-bottom:2px; }
 
         .card-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(240px,1fr)); gap:14px; margin:12px 0; }
-        .card { background:var(--card-bg); border:1px solid var(--border); border-radius:10px; padding:18px; transition:box-shadow .2s; }
-        .card:hover { box-shadow:0 3px 16px rgba(108,92,231,.08); }
+        .card { background:var(--card-bg); border:1px solid var(--border); border-radius:8px; padding:18px; transition:all .2s; }
+        .card:hover { border-color:rgba(16,16,16,0.24); box-shadow:0 2px 8px rgba(16,16,16,0.06); transform:translateY(-1px); }
         .card .card-ic { font-size:24px; margin-bottom:6px; }
         .card .card-t { font-size:14px; font-weight:600; margin-bottom:4px; }
         .card .card-d { font-size:12.5px; color:var(--text-light); line-height:1.6; }
 
-        .tag { display:inline-block; padding:2px 9px; border-radius:10px; font-size:11.5px; font-weight:500; margin-right:3px; }
-        .tag-p { background:#F0EDFF; color:#6C5CE7; }
-        .tag-g { background:#E6FFF5; color:#00B894; }
-        .tag-o { background:#FFF8E1; color:#E17055; }
-        .tag-b { background:#EBF5FF; color:#0984E3; }
+        .tag { display:inline-block; padding:2px 9px; border-radius:6px; font-size:11.5px; font-weight:500; margin-right:3px; border:1px solid; }
+        .tag-p { background:rgba(16,16,16,0.04); color:var(--primary); border-color:rgba(16,16,16,0.10); }
+        .tag-g { background:rgba(22,163,74,0.06); color:var(--green); border-color:rgba(22,163,74,0.15); }
+        .tag-o { background:rgba(217,119,6,0.06); color:var(--orange); border-color:rgba(217,119,6,0.15); }
+        .tag-b { background:rgba(16,16,16,0.04); color:var(--primary-light); border-color:rgba(16,16,16,0.10); }
 
-        code { background:var(--code-bg); padding:2px 5px; border-radius:4px; font-size:12.5px; font-family:"SF Mono","Fira Code","Consolas",monospace; color:var(--primary); }
-        pre { background:var(--code-bg); border:1px solid var(--border); border-radius:8px; padding:14px 18px; overflow-x:auto; margin:10px 0; font-size:12.5px; line-height:1.6; }
-        pre code { background:none; padding:0; color:var(--text); }
+        code { background:var(--code-bg); padding:2px 5px; border-radius:4px; font-size:12.5px; font-family:"JetBrains Mono","SF Mono","Consolas",monospace; color:var(--primary); border:1px solid var(--border); }
+        pre { background:var(--primary); border:1px solid rgba(16,16,16,0.2); border-radius:8px; padding:14px 18px; overflow-x:auto; margin:10px 0; font-size:12.5px; line-height:1.6; color:#f7f7f5; }
+        pre code { background:none; padding:0; color:#f7f7f5; border:none; }
 
         table { width:100%; border-collapse:collapse; margin:12px 0; font-size:13.5px; }
-        th { background:var(--code-bg); text-align:left; padding:9px 12px; font-weight:600; border-bottom:2px solid var(--border); }
+        th { background:var(--bg); text-align:left; padding:9px 12px; font-weight:600; border-bottom:2px solid var(--border); }
         td { padding:9px 12px; border-bottom:1px solid var(--border); }
-        tr:hover td { background:rgba(108,92,231,.02); }
+        tr:hover td { background:rgba(16,16,16,0.02); }
 
-        .kbd { display:inline-block; padding:1px 7px; border:1px solid var(--border); border-radius:4px; font-size:11.5px; font-family:"SF Mono","Consolas",monospace; background:var(--code-bg); color:var(--text); box-shadow:0 1px 0 var(--border); }
+        .kbd { display:inline-block; padding:1px 7px; border:1px solid var(--border); border-radius:4px; font-size:11.5px; font-family:"JetBrains Mono","Consolas",monospace; background:var(--card-bg); color:var(--text); box-shadow:0 1px 0 var(--border); }
 
         .divider { height:1px; background:var(--border); margin:36px 0; }
 
-        .screenshot { background:var(--code-bg); border:1px solid var(--border); border-radius:8px; padding:20px; margin:12px 0; text-align:center; color:var(--text-light); font-size:13px; }
-        .screenshot .mock { display:inline-flex; flex-direction:column; border:1px solid var(--border); border-radius:8px; overflow:hidden; background:#FFF; box-shadow:0 2px 12px rgba(0,0,0,.06); }
-        .screenshot .mock-bar { background:var(--sidebar-bg); color:#FFF; padding:6px 12px; font-size:11px; display:flex; align-items:center; gap:6px; }
+        .screenshot { background:var(--card-bg); border:1px solid var(--border); border-radius:8px; padding:20px; margin:12px 0; text-align:center; color:var(--text-light); font-size:13px; }
+        .screenshot .mock { display:inline-flex; flex-direction:column; border:1px solid var(--border); border-radius:8px; overflow:hidden; background:#FFF; box-shadow:0 2px 12px rgba(16,16,16,0.06); }
+        .screenshot .mock-bar { background:var(--bg); color:var(--sidebar-text); padding:6px 12px; font-size:11px; display:flex; align-items:center; gap:6px; border-bottom:1px solid var(--border); }
         .screenshot .mock-body { padding:16px; font-size:12px; text-align:left; min-width:280px; }
 
         @media(max-width:768px) {
@@ -108,7 +109,7 @@
             .card-grid { grid-template-columns:1fr; }
             .mob-toggle { display:flex!important; }
         }
-        .mob-toggle { display:none; position:fixed; top:10px; left:10px; z-index:200; width:36px; height:36px; border-radius:8px; background:var(--sidebar-bg); color:#FFF; border:none; font-size:18px; align-items:center; justify-content:center; cursor:pointer; }
+        .mob-toggle { display:none; position:fixed; top:10px; left:10px; z-index:200; width:36px; height:36px; border-radius:8px; background:var(--text); color:#FFF; border:none; font-size:18px; align-items:center; justify-content:center; cursor:pointer; }
     </style>
 </head>
 <body>
@@ -117,13 +118,12 @@
 
 <aside class="sidebar">
     <div class="sidebar-hd">
-        <div class="logo"><span>🐈</span> Mona</div>
+        <div class="logo"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg> Mona</div>
         <div class="sub">USER MANUAL</div>
     </div>
     <div class="nav-sec">快速开始</div>
-    <a class="nav-item" href="#install">安装与启动</a>
-    <a class="nav-item" href="#setup-wizard">首次配置向导</a>
-    <a class="nav-item" href="#auth">登录认证</a>
+    <a class="nav-item" href="#install">下载与安装</a>
+    <a class="nav-item" href="#auth">授权与账号</a>
     <div class="nav-sec">界面总览</div>
     <a class="nav-item" href="#layout">界面布局</a>
     <a class="nav-item" href="#sidebar-guide">侧边栏</a>
@@ -169,89 +169,103 @@
 <div class="content">
 
 <div class="hero">
-    <div class="hero-icon">🐈</div>
+    <div class="hero-icon"><svg class="mona-icon" style="width:56px;height:56px" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
     <h1>Mona 用户手册</h1>
     <p>从安装到精通 —— 手把手教你使用 Mona 桌面客户端的所有功能</p>
 </div>
 
-<!-- 安装与启动 -->
+<!-- 下载与安装 -->
 <div class="sec" id="install">
-    <h2><span class="ic">🚀</span> 安装与启动</h2>
-    <h3>Tauri 桌面客户端（推荐）</h3>
+    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 下载与安装</h2>
+
+    <h3>下载</h3>
+    <p>访问 Mona 官网 <code>mona.lzfun.vip</code> 下载最新版安装包，目前支持 Windows 系统。</p>
+
+    <h3>安装步骤</h3>
     <div class="step">
         <div class="step-num">1</div>
         <div class="step-body">
             <div class="step-title">下载安装包</div>
-            <div class="step-desc">从项目发布页下载对应操作系统的安装包（Windows .msi / .exe）</div>
+            <div class="step-desc">从官网下载 Windows 安装包（.msi 或 .exe）</div>
         </div>
     </div>
     <div class="step">
         <div class="step-num">2</div>
         <div class="step-body">
-            <div class="step-title">安装并启动</div>
-            <div class="step-desc">运行安装程序，完成后启动 Mona。应用会自动启动 Gateway 后端服务。</div>
+            <div class="step-title">运行安装程序</div>
+            <div class="step-desc">双击安装包，按提示完成安装</div>
         </div>
     </div>
     <div class="step">
         <div class="step-num">3</div>
         <div class="step-body">
-            <div class="step-title">完成首次配置</div>
-            <div class="step-desc">首次启动会进入配置向导，选择 AI 供应商并输入 API 密钥。</div>
+            <div class="step-title">启动并配置</div>
+            <div class="step-desc">启动 Mona，首次使用会进入配置向导，选择 AI 供应商并输入 API 密钥</div>
         </div>
     </div>
 
-    <h3>Web 浏览器访问</h3>
-    <ol>
-        <li>在终端运行 <code>mona gateway</code> 启动网关服务</li>
-        <li>浏览器打开 <code>http://127.0.0.1:18790</code></li>
-        <li>如果设置了认证密钥，输入密钥后登录</li>
-    </ol>
     <div class="tip">
         <strong>提示</strong>
-        Web 模式需要手动启动 Gateway。桌面客户端会自动管理 Gateway 生命周期。
+        安装后即可免费试用 31 天，无需注册账号。试用期内所有功能均可使用。
     </div>
 </div>
 
-<!-- 首次配置向导 -->
-<div class="sec" id="setup-wizard">
-    <h2><span class="ic">🧙</span> 首次配置向导</h2>
-    <p>首次启动 Tauri 桌面客户端时，会自动进入配置向导，分三步完成初始设置：</p>
-
-    <h3>第一步：选择 AI 供应商</h3>
-    <p>从以下供应商中选择一个：</p>
-    <table>
-        <thead><tr><th>供应商</th><th>说明</th></tr></thead>
-        <tbody>
-            <tr><td>OpenRouter</td><td>一个 API 密钥访问 200+ 模型</td></tr>
-            <tr><td>OpenAI</td><td>GPT-4o、GPT-4 等</td></tr>
-            <tr><td>Anthropic</td><td>Claude Opus、Sonnet、Haiku</td></tr>
-            <tr><td>DeepSeek</td><td>DeepSeek V3 / R1</td></tr>
-            <tr><td>DashScope (通义千问)</td><td>Qwen 系列模型</td></tr>
-            <tr><td>Google Gemini</td><td>Gemini Pro、Flash 等</td></tr>
-            <tr><td>Custom</td><td>任何 OpenAI 兼容接口</td></tr>
-        </tbody>
-    </table>
-    <p>也可以点击「跳过 — 稍后在设置中配置」跳过此步骤。</p>
-
-    <h3>第二步：输入 API 密钥</h3>
-    <p>输入所选供应商的 API 密钥。密钥仅存储在本地，不会上传。选择 Custom 供应商时还需要输入 API 地址。</p>
-
-    <h3>第三步：选择模型</h3>
-    <p>输入要使用的模型名称（如 <code>gpt-4o</code>、<code>claude-sonnet-4</code>），点击「启动 Mona」完成配置。之后可在设置中修改。</p>
-</div>
-
-<!-- 登录认证 -->
+<!-- 授权与账号 -->
 <div class="sec" id="auth">
-    <h2><span class="ic">🔐</span> 登录认证</h2>
-    <p>如果 Gateway 配置了认证密钥，Web 访问时会显示登录界面：</p>
-    <ol>
-        <li>在密码框中输入认证密钥</li>
-        <li>点击「提交」按钮</li>
-        <li>认证成功后自动进入主界面</li>
-    </ol>
+    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 授权与账号</h2>
+
+    <h3>免费试用</h3>
+    <p>安装 Mona 后自动获得 <strong>31 天免费试用</strong>，无需注册账号即可使用全部功能，包括 AI 对话、笔记、终端、数据库、知识库和 PPT 制作。</p>
+    <p>侧边栏底部会显示试用剩余天数，例如「试用剩余 28 天」。</p>
+
+    <h3>注册账号</h3>
+    <p>试用期结束后，需要注册账号并登录才能继续使用。注册步骤：</p>
+    <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+            <div class="step-title">点击登录按钮</div>
+            <div class="step-desc">点击侧边栏底部的「登录」按钮，打开登录对话框</div>
+        </div>
+    </div>
+    <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+            <div class="step-title">切换到注册</div>
+            <div class="step-desc">点击「注册新账号」</div>
+        </div>
+    </div>
+    <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+            <div class="step-title">输入邮箱并获取验证码</div>
+            <div class="step-desc">输入邮箱地址，点击「获取验证码」，验证码将发送到你的邮箱</div>
+        </div>
+    </div>
+    <div class="step">
+        <div class="step-num">4</div>
+        <div class="step-body">
+            <div class="step-title">完成注册</div>
+            <div class="step-desc">输入收到的 6 位验证码、设置密码，点击「注册」</div>
+        </div>
+    </div>
+
+    <h3>登录</h3>
+    <p>注册后使用邮箱和密码登录。登录成功后，侧边栏底部显示你的邮箱地址，点击可查看账号信息和授权状态。</p>
+
+    <h3>找回密码</h3>
+    <p>忘记密码时，在登录对话框点击「忘记密码？」，输入注册邮箱获取验证码，然后设置新密码。</p>
+
+    <h3>设备绑定</h3>
+    <ul>
+        <li>每个账号同时只能在一台设备上使用</li>
+        <li>试用用户可更换 1 次设备</li>
+        <li>正式授权用户可无限制更换设备</li>
+        <li>使用过的设备即使换新邮箱也无法再次获得试用</li>
+    </ul>
+
     <div class="tip warn">
         <strong>注意</strong>
-        如果输入错误密钥，会提示认证失败。密钥保存在浏览器本地，后续访问无需重复输入。
+        试用期结束后未登录，AI 对话功能将不可用。请及时注册账号以继续使用。
     </div>
 </div>
 
@@ -259,22 +273,22 @@
 
 <!-- 界面布局 -->
 <div class="sec" id="layout">
-    <h2><span class="ic">🖥️</span> 界面布局</h2>
+    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 界面布局</h2>
     <p>Mona 界面由三个主要区域组成：</p>
 
     <div class="screenshot">
         <div class="mock">
-            <div class="mock-bar">🐈 Mona</div>
+            <div class="mock-bar"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg> Mona</div>
             <div class="mock-body" style="display:flex; gap:8px;">
-                <div style="width:80px; background:var(--sidebar-bg); color:#FFF; border-radius:4px; padding:8px; font-size:10px;">
+                <div style="width:80px; background:hsl(0 0% 98.5%); border:1px solid hsl(0 0% 89.8%); border-radius:4px; padding:8px; font-size:10px; color:hsl(240 3% 12%);">
                     <div>🤖 Mona</div>
                     <div>📝 笔记</div>
                     <div>💻 终端</div>
                     <div>🗄️ 数据库</div>
                     <div>📚 知识库</div>
                     <div>📊 PPT</div>
-                    <div style="margin-top:8px; border-top:1px solid rgba(255,255,255,.2); padding-top:6px;">会话列表...</div>
-                    <div style="margin-top:auto;">⚙️ 设置</div>
+                    <div style="margin-top:8px; border-top:1px solid hsl(0 0% 89.8%); padding-top:6px; color:hsl(0 0% 45%);">会话列表...</div>
+                    <div style="margin-top:auto; color:hsl(0 0% 45%);">👤 登录</div>
                 </div>
                 <div style="flex:1; border:1px solid var(--border); border-radius:4px; padding:8px; font-size:10px;">
                     <div style="text-align:center; color:var(--text-light);">对话 / 功能模块区域</div>
@@ -286,8 +300,8 @@
     <table>
         <thead><tr><th>区域</th><th>说明</th></tr></thead>
         <tbody>
-            <tr><td>侧边栏（左）</td><td>工具箱导航 + 会话列表 + 设置入口</td></tr>
-            <tr><td>标题栏（上）</td><td>应用标题 + 主题切换</td></tr>
+            <tr><td>侧边栏（左）</td><td>工具箱导航 + 会话列表 + 登录/账号入口</td></tr>
+            <tr><td>标题栏（上）</td><td>应用标题 + 设置按钮 + 主题切换</td></tr>
             <tr><td>主内容区（中）</td><td>根据当前视图显示对话/笔记/终端/数据库/知识库/PPT</td></tr>
         </tbody>
     </table>
@@ -295,7 +309,7 @@
 
 <!-- 侧边栏 -->
 <div class="sec" id="sidebar-guide">
-    <h2><span class="ic">📋</span> 侧边栏</h2>
+    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 侧边栏</h2>
     <p>侧边栏分为上下两部分：上方是工具箱导航和操作按钮，下方是会话列表。</p>
 
     <h3>折叠与展开</h3>
@@ -304,6 +318,17 @@
         <li>点击折叠状态下的 <strong>Mona 图标</strong> 展开侧边栏</li>
         <li>折叠状态下，各功能仅显示图标，鼠标悬停可查看名称</li>
     </ul>
+
+    <h3>底部按钮</h3>
+    <p>侧边栏底部根据登录状态显示不同内容：</p>
+    <table>
+        <thead><tr><th>状态</th><th>显示</th></tr></thead>
+        <tbody>
+            <tr><td>试用中</td><td>「试用剩余 X 天」按钮，点击可打开登录对话框</td></tr>
+            <tr><td>已登录</td><td>邮箱地址按钮，点击可查看账号信息和授权状态</td></tr>
+            <tr><td>试用到期 / 未登录</td><td>「登录」按钮，点击打开登录对话框</td></tr>
+        </tbody>
+    </table>
 
     <h3>会话列表</h3>
     <p>侧边栏下方显示所有对话会话。每个会话显示标题和预览文本。</p>
@@ -328,7 +353,7 @@
 
 <!-- 工具箱导航 -->
 <div class="sec" id="toolbox">
-    <h2><span class="ic">🧰</span> 工具箱导航</h2>
+    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 工具箱导航</h2>
     <p>侧边栏顶部提供六个功能模块的快速入口：</p>
 
     <div class="card-grid">
@@ -374,7 +399,7 @@
 
 <!-- 对话界面 -->
 <div class="sec" id="chat">
-    <h2><span class="ic">💬</span> AI 对话</h2>
+    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> AI 对话</h2>
     <p>对话界面是 Mona 的核心功能，由消息展示区和输入框组成。</p>
 
     <h3>空状态</h3>
@@ -383,7 +408,7 @@
 
 <!-- 发送消息 -->
 <div class="sec" id="send-msg">
-    <h2><span class="ic">✉️</span> 发送消息</h2>
+    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 发送消息</h2>
     <p>底部输入框是消息编辑器，支持以下操作：</p>
 
     <h3>基本发送</h3>
@@ -403,7 +428,7 @@
 
 <!-- 附加图片 -->
 <div class="sec" id="attach-img">
-    <h2><span class="ic">🖼️</span> 附加图片</h2>
+    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 附加图片</h2>
     <p>支持在消息中附加图片，让 AI 看图分析或编辑。</p>
 
     <h3>添加图片的方式</h3>
@@ -423,7 +448,7 @@
 
 <!-- 斜杠命令 -->
 <div class="sec" id="slash-cmd">
-    <h2><span class="ic">⚡</span> 斜杠命令</h2>
+    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 斜杠命令</h2>
     <p>在输入框中输入 <code>/</code> 会弹出命令面板，显示可用的斜杠命令列表。</p>
 
     <h3>使用方法</h3>
@@ -463,7 +488,7 @@
 
 <!-- 切换模型 -->
 <div class="sec" id="model-switch">
-    <h2><span class="ic">🔄</span> 切换模型</h2>
+    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 切换模型</h2>
     <p>输入框左下角显示当前模型名称，点击可切换模型。</p>
 
     <h3>切换方式</h3>
@@ -479,7 +504,7 @@
 
 <!-- 消息展示 -->
 <div class="sec" id="msg-display">
-    <h2><span class="ic">💬</span> 消息展示</h2>
+    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 消息展示</h2>
     <p>对话区域展示用户消息和 AI 回复，支持丰富的内容渲染。</p>
 
     <h3>用户消息</h3>
@@ -505,7 +530,7 @@
 
 <!-- 代理活动追踪 -->
 <div class="sec" id="agent-activity">
-    <h2><span class="ic">🔍</span> 代理活动追踪</h2>
+    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 代理活动追踪</h2>
     <p>AI 处理任务时，消息区上方会显示实时的代理活动面板，追踪 AI 的工具调用和推理过程。</p>
 
     <h3>活动类型</h3>
@@ -530,7 +555,7 @@
 
 <!-- 目标追踪 -->
 <div class="sec" id="goal-track">
-    <h2><span class="ic">🎯</span> 目标追踪</h2>
+    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 目标追踪</h2>
     <p>当 AI 执行长期任务时，输入框上方会显示目标追踪条。</p>
 
     <h3>目标信息</h3>
@@ -549,7 +574,7 @@
 
 <!-- 图像生成 -->
 <div class="sec" id="image-gen">
-    <h2><span class="ic">🎨</span> 图像生成</h2>
+    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 图像生成</h2>
     <p>启用图像生成功能后，可以在对话中让 AI 生成图片。</p>
 
     <h3>使用方法</h3>
@@ -586,7 +611,7 @@
 
 <!-- 交付文件 -->
 <div class="sec" id="delivered-files">
-    <h2><span class="ic">📎</span> 交付文件</h2>
+    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 交付文件</h2>
     <p>当 AI 生成文件（如代码、文档、PPT 等）时，会以交付文件卡片的形式展示在对话中。</p>
     <ul>
         <li>卡片显示文件名、大小和类型图标</li>
@@ -599,7 +624,7 @@
 
 <!-- 会话管理 -->
 <div class="sec" id="session-mgmt">
-    <h2><span class="ic">📁</span> 会话管理</h2>
+    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 会话管理</h2>
 
     <h3>新建对话</h3>
     <ul>
@@ -625,7 +650,7 @@
 
 <!-- 搜索会话 -->
 <div class="sec" id="session-search">
-    <h2><span class="ic">🔎</span> 搜索会话</h2>
+    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 搜索会话</h2>
     <p>使用搜索功能快速定位历史对话。</p>
 
     <h3>打开搜索</h3>
@@ -644,7 +669,7 @@
 
 <!-- 视图选项 -->
 <div class="sec" id="session-view">
-    <h2><span class="ic">⚙️</span> 视图选项</h2>
+    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 视图选项</h2>
     <p>点击侧边栏的「视图」按钮，可自定义会话列表的显示方式：</p>
 
     <table>
@@ -664,7 +689,7 @@
 
 <!-- 笔记 -->
 <div class="sec" id="notes">
-    <h2><span class="ic">📝</span> 笔记</h2>
+    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 笔记</h2>
     <p>笔记模块提供结构化的笔记管理功能，支持 AI 辅助写作。</p>
 
     <h3>创建笔记</h3>
@@ -686,7 +711,7 @@
 
 <!-- 终端 -->
 <div class="sec" id="terminal">
-    <h2><span class="ic">💻</span> 终端</h2>
+    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 终端</h2>
     <p>终端模块提供 SSH 远程连接和本地命令执行功能。</p>
 
     <h3>新建连接</h3>
@@ -744,7 +769,7 @@
 
 <!-- 数据库 -->
 <div class="sec" id="database">
-    <h2><span class="ic">🗄️</span> 数据库</h2>
+    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 数据库</h2>
     <p>数据库模块提供可视化的数据库管理和查询功能。</p>
 
     <h3>新建连接</h3>
@@ -788,7 +813,7 @@
 
 <!-- 知识库 -->
 <div class="sec" id="knowledge">
-    <h2><span class="ic">📚</span> 知识库</h2>
+    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 知识库</h2>
     <p>知识库模块将文档编译为可搜索、可浏览的 Wiki 知识图谱。</p>
 
     <h3>创建知识库项目</h3>
@@ -839,8 +864,13 @@
 
 <!-- PPT 制作 -->
 <div class="sec" id="ppt">
-    <h2><span class="ic">📊</span> PPT 制作</h2>
-    <p>PPT 制作模块是 AI 驱动的演示文稿创建工具。</p>
+    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> PPT 制作</h2>
+    <p>PPT 制作模块是 AI 驱动的演示文稿创建工具。<span class="tag tag-p">需授权</span></p>
+
+    <div class="tip warn">
+        <strong>授权要求</strong>
+        PPT 制作功能需要有效授权（试用期内或已登录账号）。未授权时侧边栏不显示 PPT 入口。
+    </div>
 
     <h3>创建 PPT</h3>
     <div class="step">
@@ -888,8 +918,8 @@
 
 <!-- 设置总览 -->
 <div class="sec" id="settings-overview">
-    <h2><span class="ic">⚙️</span> 设置</h2>
-    <p>点击侧边栏底部的「设置」按钮进入设置页面。设置页面左侧为分区导航，右侧为配置内容。</p>
+    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 设置</h2>
+    <p>点击标题栏右侧的「设置」按钮（齿轮图标）进入设置页面。设置页面左侧为分区导航，右侧为配置内容。</p>
 
     <h3>设置分区</h3>
     <table>
@@ -915,7 +945,7 @@
 
 <!-- 模型与供应商 -->
 <div class="sec" id="settings-model">
-    <h2><span class="ic">🤖</span> 模型与供应商设置</h2>
+    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 模型与供应商设置</h2>
 
     <h3>模型设置</h3>
     <ul>
@@ -942,7 +972,7 @@
 
 <!-- 图片生成设置 -->
 <div class="sec" id="settings-image">
-    <h2><span class="ic">🎨</span> 图片生成设置</h2>
+    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 图片生成设置</h2>
     <p>在「图片」分区中配置图像生成功能：</p>
 
     <table>
@@ -960,7 +990,7 @@
 
 <!-- 网页搜索设置 -->
 <div class="sec" id="settings-web">
-    <h2><span class="ic">🌐</span> 网页搜索设置</h2>
+    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 网页搜索设置</h2>
     <p>在「网页」分区中配置 Web 搜索功能：</p>
 
     <table>
@@ -978,7 +1008,7 @@
 
 <!-- 运行时设置 -->
 <div class="sec" id="settings-runtime">
-    <h2><span class="ic">🏃</span> 运行时设置</h2>
+    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 运行时设置</h2>
     <p>在「运行时」分区中配置代理运行时参数：</p>
 
     <table>
@@ -995,7 +1025,7 @@
 
 <!-- 高级设置 -->
 <div class="sec" id="settings-advanced">
-    <h2><span class="ic">🔧</span> 高级设置</h2>
+    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 高级设置</h2>
     <p>高级设置提供更深层的配置选项：</p>
     <ul>
         <li><strong>配置路径</strong>：显示 config.json 的文件路径</li>
@@ -1010,7 +1040,7 @@
 
 <!-- 快捷提问 -->
 <div class="sec" id="quick-ask">
-    <h2><span class="ic">⚡</span> 快捷提问</h2>
+    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 快捷提问</h2>
     <p>桌面客户端提供快捷提问窗口，无需打开主窗口即可快速向 AI 提问。</p>
 
     <h3>使用方法</h3>
@@ -1027,7 +1057,7 @@
 
 <!-- 键盘快捷键 -->
 <div class="sec" id="shortcuts">
-    <h2><span class="ic">⌨️</span> 键盘快捷键</h2>
+    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 键盘快捷键</h2>
 
     <table>
         <thead><tr><th>快捷键</th><th>功能</th><th>适用</th></tr></thead>
@@ -1048,7 +1078,7 @@
 
 <!-- 主题与外观 -->
 <div class="sec" id="theme">
-    <h2><span class="ic">🎨</span> 主题与外观</h2>
+    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 主题与外观</h2>
 
     <h3>切换主题</h3>
     <ul>
@@ -1075,7 +1105,7 @@
 
 <!-- 多语言 -->
 <div class="sec" id="i18n">
-    <h2><span class="ic">🌍</span> 多语言</h2>
+    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 多语言</h2>
     <p>Mona 支持多语言界面，目前包含：</p>
     <ul>
         <li>简体中文（zh-CN）</li>
@@ -1087,7 +1117,7 @@
 
 <!-- 重启服务 -->
 <div class="sec" id="restart">
-    <h2><span class="ic">🔄</span> 重启服务</h2>
+    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 重启服务</h2>
     <p>某些配置更改（如模型、供应商、图像生成设置）需要重启才能生效。</p>
 
     <h3>重启方式</h3>
@@ -1106,21 +1136,35 @@
 
 <!-- 常见问题 -->
 <div class="sec" id="faq">
-    <h2><span class="ic">❓</span> 常见问题</h2>
+    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 常见问题</h2>
 
     <h3>无法连接到 Mona</h3>
     <p>页面显示「无法连接到 mona」：</p>
     <ul>
-        <li>确认 Gateway 已启动（<code>mona gateway</code>）</li>
-        <li>确认页面与 Gateway 在同一台机器上</li>
-        <li>桌面客户端会自动启动 Gateway，如失败请检查日志</li>
+        <li>确认 Mona 应用已启动</li>
+        <li>桌面客户端会自动启动 Gateway 服务，如失败请检查日志</li>
+        <li>尝试重启 Mona</li>
     </ul>
 
-    <h3>认证失败</h3>
-    <p>输入密钥后提示认证失败：</p>
+    <h3>授权过期怎么办</h3>
     <ul>
-        <li>检查密钥是否与 config.json 中配置的一致</li>
-        <li>注意密钥区分大小写</li>
+        <li>试用期结束后，点击侧边栏底部的「登录」按钮</li>
+        <li>注册账号并登录即可获取服务端授权</li>
+        <li>如需正式授权，请联系管理员</li>
+    </ul>
+
+    <h3>注册收不到验证码</h3>
+    <ul>
+        <li>检查邮箱的垃圾邮件/广告邮件文件夹</li>
+        <li>确认输入的邮箱地址正确</li>
+        <li>验证码 10 分钟内有效，60 秒内不可重复发送</li>
+    </ul>
+
+    <h3>设备不匹配</h3>
+    <ul>
+        <li>表示当前设备与账号绑定的设备不一致</li>
+        <li>点击登录对话框中的「绑定设备」按钮更换设备</li>
+        <li>试用用户仅可更换 1 次设备，正式授权无限制</li>
     </ul>
 
     <h3>AI 不回复</h3>
@@ -1138,10 +1182,10 @@
         <li>输入框中的 ✨ 图像模式开关需要打开</li>
     </ul>
 
-    <h3>知识库功能不可见</h3>
+    <h3>PPT 制作功能不可见</h3>
     <ul>
-        <li>知识库模块需要有效的许可证</li>
-        <li>未激活许可证时，侧边栏不显示知识库入口</li>
+        <li>PPT 制作需要有效授权（试用期内或已登录账号）</li>
+        <li>未授权时侧边栏不显示 PPT 入口</li>
     </ul>
 
     <h3>修改配置后未生效</h3>
@@ -1154,8 +1198,8 @@
 <div class="divider"></div>
 
 <div style="text-align:center; color:var(--text-light); padding:16px 0;">
-    <p>Mona 用户手册 &mdash; 版本 1.0</p>
-    <p style="font-size:12px; margin-top:6px;">🐈 Mona &mdash; Your Personal AI Agent</p>
+    <p>Mona 用户手册 &mdash; 版本 1.1</p>
+    <p style="font-size:12px; margin-top:6px;"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg> Mona &mdash; Your Personal AI Agent</p>
 </div>
 
 </div>

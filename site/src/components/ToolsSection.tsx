@@ -5,6 +5,7 @@ import {
   Bot,
   Database,
   FileStack,
+  Library,
   Presentation,
   Server,
   Sparkles,
@@ -55,6 +56,14 @@ const modules: ModuleItem[] = [
     accent: "#101010",
   },
   {
+    icon: Library,
+    name: "Knowledge",
+    title: "AI 驱动知识库",
+    desc: "笔记和会话自动沉淀为可检索知识，遇到同类问题直接复用历史经验。",
+    lines: ["语义检索", "关联问答", "知识图谱"],
+    accent: "#101010",
+  },
+  {
     icon: Presentation,
     name: "PPT",
     title: "AI PPT 制作",
@@ -78,7 +87,7 @@ export default function ToolsSection() {
                 Product Map
               </p>
               <h2 className="max-w-3xl text-4xl font-semibold leading-tight md:text-5xl">
-                一个 Agent，接住五类高频工作。
+                一个 Agent，接住六类高频工作。
               </h2>
             </div>
             <p className="max-w-xl text-base leading-7 text-black/[0.62] md:text-lg">
@@ -89,7 +98,7 @@ export default function ToolsSection() {
 
         <div className="grid gap-4 lg:grid-cols-[0.9fr_1.1fr] lg:items-stretch">
           <ScrollReveal>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-5 lg:grid-cols-1">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-6 lg:grid-cols-1">
               {modules.map((item, index) => (
                 <button
                   key={item.name}

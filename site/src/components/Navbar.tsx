@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Download } from "lucide-react";
 
 const links = [
+  { label: "快速入门", href: "/manual.html" },
   { label: "Agent", href: "#agent" },
   { label: "模块", href: "#modules" },
   { label: "白盒运维", href: "#whitebox" },

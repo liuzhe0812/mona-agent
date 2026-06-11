@@ -1,3 +1,4 @@
+mod browser;
 mod db;
 mod gateway;
 mod ipc_bridge;
@@ -231,6 +232,15 @@ fn open_md_reader_window(app_handle: &tauri::AppHandle, file_path: &str) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // 在 WebView2 启动前设置 CDP 调试端口（全局，所有 WebView 共享）
+    #[cfg(windows)]
+    {
+        std::env::set_var(
+            "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+            "--remote-debugging-port=9300",
+        );
+    }
+
     let gateway_state = GatewayState::new();
     let terminal_state = terminal::TerminalState::new();
     let db_state = db::DbState::new();
@@ -256,6 +266,7 @@ pub fn run() {
         .manage(terminal_state)
         .manage(db_state)
         .manage(quick_ask::QuickAskShortcutState::default())
+        .manage(browser::BrowserState::new())
         .invoke_handler(tauri::generate_handler![
             get_settings,
             update_settings,
@@ -371,6 +382,18 @@ pub fn run() {
             updater::check_for_updates,
             updater::perform_update,
             updater::get_current_version,
+            browser::commands::browser_create_tab,
+            browser::commands::browser_close_tab,
+            browser::commands::browser_update_tab_url,
+            browser::commands::browser_update_tab_title,
+            browser::commands::browser_list_tabs,
+            browser::commands::browser_get_cdp_port,
+            browser::commands::browser_set_ai_status,
+            browser::commands::browser_navigate_tab,
+            browser::commands::browser_go_back,
+            browser::commands::browser_go_forward,
+            browser::commands::browser_reload,
+            browser::commands::browser_on_url_changed,
         ])
         .setup(move |app| {
             // 设置高分辨率窗口图标，确保任务栏在高 DPI 下清晰

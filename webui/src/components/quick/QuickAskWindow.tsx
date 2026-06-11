@@ -89,14 +89,14 @@ export function QuickAskWindow() {
   return (
     <div
       data-tauri-drag-region
-      className="flex h-full w-full items-end justify-center bg-transparent pb-6"
+      className="flex h-full w-full items-center justify-center bg-transparent"
     >
       <div className="w-full max-w-[58rem]">
         <ThreadComposer
           onSend={handleSend}
           disabled={submitting}
           isStreaming={submitting}
-          placeholder="在 Mona 本地随时向 Codex 提问"
+          placeholder="向Mona提问"
           modelLabel={toModelBadgeLabel(modelName)}
           variant="hero"
           slashCommands={slashCommands}

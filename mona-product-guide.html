@@ -7,23 +7,24 @@
     <style>
         :root {
             --sidebar-width: 280px;
-            --primary: #6C5CE7;
-            --primary-light: #A29BFE;
-            --primary-dark: #5A4BD1;
-            --bg: #FAFBFC;
-            --sidebar-bg: #1E1E2E;
-            --sidebar-text: #CDD6F4;
-            --sidebar-hover: #313244;
-            --sidebar-active: #45475A;
-            --text: #2D3748;
-            --text-light: #718096;
-            --border: #E2E8F0;
-            --card-bg: #FFFFFF;
-            --accent-green: #00B894;
-            --accent-orange: #FDCB6E;
-            --accent-red: #E17055;
-            --accent-blue: #74B9FF;
-            --code-bg: #F7F8FA;
+            /* Mona app theme — shadcn/ui neutral palette + --theme blue */
+            --primary: hsl(217 91% 60%);
+            --primary-light: hsl(213 94% 68%);
+            --primary-dark: hsl(217 91% 50%);
+            --bg: hsl(0 0% 100%);
+            --sidebar-bg: hsl(0 0% 98.5%);
+            --sidebar-text: hsl(0 0% 3.9%);
+            --sidebar-hover: hsl(0 0% 95.8%);
+            --sidebar-active: hsl(0 0% 92%);
+            --text: hsl(240 3% 12%);
+            --text-light: hsl(0 0% 45.1%);
+            --border: hsl(0 0% 89.8%);
+            --card-bg: hsl(0 0% 100%);
+            --accent-green: hsl(142 71% 45%);
+            --accent-orange: hsl(35 92% 60%);
+            --accent-red: hsl(0 84% 60%);
+            --accent-blue: hsl(217 91% 60%);
+            --code-bg: hsl(0 0% 96.1%);
         }
 
         * {
@@ -57,13 +58,13 @@
 
         .sidebar-header {
             padding: 28px 24px 20px;
-            border-bottom: 1px solid rgba(255,255,255,0.06);
+            border-bottom: 1px solid var(--border);
         }
 
         .sidebar-header .logo {
             font-size: 22px;
             font-weight: 700;
-            color: #FFF;
+            color: var(--text);
             display: flex;
             align-items: center;
             gap: 10px;
@@ -75,7 +76,7 @@
 
         .sidebar-header .subtitle {
             font-size: 12px;
-            color: var(--primary-light);
+            color: var(--primary);
             margin-top: 4px;
             letter-spacing: 1px;
         }
@@ -90,39 +91,41 @@
             font-weight: 600;
             text-transform: uppercase;
             letter-spacing: 1.5px;
-            color: rgba(205, 214, 244, 0.4);
+            color: hsl(0 0% 60%);
         }
 
         .nav-item {
             display: block;
             padding: 7px 24px;
             font-size: 13.5px;
-            color: var(--sidebar-text);
+            color: var(--text-light);
             text-decoration: none;
             transition: all 0.15s ease;
             border-left: 3px solid transparent;
+            border-radius: 4px;
             cursor: pointer;
         }
 
         .nav-item:hover {
             background: var(--sidebar-hover);
-            color: #FFF;
+            color: var(--text);
         }
 
         .nav-item.active {
             background: var(--sidebar-active);
-            color: var(--primary-light);
-            border-left-color: var(--primary-light);
+            color: var(--primary);
+            border-left-color: var(--primary);
+            font-weight: 500;
         }
 
         .nav-item.sub {
             padding-left: 40px;
             font-size: 13px;
-            color: rgba(205, 214, 244, 0.7);
+            color: hsl(0 0% 55%);
         }
 
         .nav-item.sub:hover {
-            color: #FFF;
+            color: var(--text);
         }
 
         /* Main Content */
@@ -227,7 +230,7 @@
         }
 
         .card:hover {
-            box-shadow: 0 4px 20px rgba(108, 92, 231, 0.1);
+            box-shadow: 0 4px 20px hsl(217 91% 60% / .1);
             transform: translateY(-1px);
         }
 
@@ -259,10 +262,10 @@
             margin-bottom: 4px;
         }
 
-        .tag-purple { background: #F0EDFF; color: #6C5CE7; }
-        .tag-green { background: #E6FFF5; color: #00B894; }
-        .tag-orange { background: #FFF8E1; color: #E17055; }
-        .tag-blue { background: #EBF5FF; color: #0984E3; }
+        .tag-purple { background: hsl(217 91% 95%); color: hsl(217 91% 50%); }
+        .tag-green { background: hsl(142 71% 95%); color: hsl(142 71% 38%); }
+        .tag-orange { background: hsl(35 92% 95%); color: hsl(25 84% 50%); }
+        .tag-blue { background: hsl(213 94% 95%); color: hsl(213 94% 50%); }
 
         /* Code */
         code {
@@ -313,7 +316,7 @@
         }
 
         .feature-table tr:hover td {
-            background: rgba(108, 92, 231, 0.03);
+            background: hsl(217 91% 60% / .03);
         }
 
         /* Divider */
@@ -352,11 +355,11 @@
             gap: 8px;
         }
 
-        .arch-layer.l1 { background: #F0EDFF; color: #6C5CE7; }
-        .arch-layer.l2 { background: #E6FFF5; color: #00B894; }
-        .arch-layer.l3 { background: #EBF5FF; color: #0984E3; }
-        .arch-layer.l4 { background: #FFF8E1; color: #E17055; }
-        .arch-layer.l5 { background: #F7F8FA; color: #718096; }
+        .arch-layer.l1 { background: hsl(217 91% 95%); color: hsl(217 91% 45%); }
+        .arch-layer.l2 { background: hsl(142 71% 95%); color: hsl(142 71% 35%); }
+        .arch-layer.l3 { background: hsl(213 94% 95%); color: hsl(213 94% 45%); }
+        .arch-layer.l4 { background: hsl(35 92% 95%); color: hsl(25 84% 45%); }
+        .arch-layer.l5 { background: hsl(0 0% 96%); color: hsl(0 0% 45%); }
 
         .arch-arrow {
             font-size: 18px;
@@ -397,7 +400,7 @@
             width: 40px;
             height: 40px;
             border-radius: 8px;
-            background: var(--sidebar-bg);
+            background: var(--text);
             color: #FFF;
             border: none;
             font-size: 20px;
@@ -411,7 +414,7 @@
             width: 4px;
         }
         .sidebar::-webkit-scrollbar-thumb {
-            background: rgba(255,255,255,0.1);
+            background: hsl(0 0% 80%);
             border-radius: 2px;
         }
     </style>

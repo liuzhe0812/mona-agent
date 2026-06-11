@@ -6,11 +6,12 @@ import {
   Bot,
   CheckCircle2,
   Database,
+  Library,
   Presentation,
   Server,
 } from "lucide-react";
 
-type ScenarioKey = "ssh" | "database" | "notes" | "ppt";
+type ScenarioKey = "ssh" | "database" | "notes" | "knowledge" | "ppt";
 
 interface Scenario {
   key: ScenarioKey;
@@ -64,6 +65,19 @@ const scenarios: Scenario[] = [
     steps: ["抽取事实", "整理 Markdown", "提炼知识点", "写入知识库"],
     telemetry: ["note saved: prod-api-nginx-spike.md", "knowledge points extracted: 8", "linked sessions: ssh + db"],
     quickActions: ["生成笔记", "提取知识点", "关联会话"],
+    accent: "#101010",
+  },
+  {
+    key: "knowledge",
+    icon: Library,
+    label: "知识库",
+    title: "把经验变成可检索的知识",
+    prompt: "搜索过去所有关于 Nginx 502 的排障记录和解决方案。",
+    command: 'mona knowledge search "nginx 502 排障"',
+    summary: "已从 12 篇笔记和 6 次会话中检索到相关知识点，支持追问和关联。",
+    steps: ["解析查询意图", "检索知识索引", "关联历史会话", "汇总答案"],
+    telemetry: ["matched notes: 12", "linked sessions: 6", "relevance score: 0.94"],
+    quickActions: ["知识搜索", "关联问答", "知识图谱"],
     accent: "#101010",
   },
   {
@@ -174,7 +188,7 @@ export default function OpsConsole({ compact = false }: OpsConsoleProps) {
         </div>
       </div>
       <div className="relative p-4">
-        <div className="mb-4 grid grid-cols-4 gap-2">
+        <div className="mb-4 grid grid-cols-5 gap-2">
           {scenarios.map((item) => (
             <button
               key={item.key}

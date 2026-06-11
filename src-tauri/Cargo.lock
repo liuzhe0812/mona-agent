@@ -3405,6 +3405,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",
+ "url",
  "urlencoding",
  "uuid",
  "windows 0.61.3",
