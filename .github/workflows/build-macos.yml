@@ -1,6 +1,9 @@
 name: Build macOS
 
 on:
+  push:
+    paths:
+      - '.github/workflows/build-macos.yml'
   workflow_dispatch:
     inputs:
       version:
