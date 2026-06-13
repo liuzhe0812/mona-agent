@@ -57,6 +57,10 @@
         .pagination button:disabled { opacity: .5; cursor: default; }
         .confirm-text { font-size: 14px; line-height: 1.6; margin-bottom: 16px; }
         .confirm-text strong { color: #dc2626; }
+        .tab-btn { padding: 6px 14px; border: 1px solid #ddd; border-radius: 6px; background: #fff; cursor: pointer; font-size: 13px; }
+        .tab-btn.active { background: #4f46e5; color: #fff; border-color: #4f46e5; }
+        .tab-section { display: none; }
+        .tab-section.active { display: block; }
     </style>
 </head>
 <body>
@@ -73,24 +77,52 @@
     <div id="app" class="app">
         <div class="header">
             <h1>Mona 管理后台</h1>
-            <button onclick="doLogout()">退出</button>
+            <div style="display:flex;gap:8px;align-items:center">
+                <button onclick="switchTab('users')" id="tab-users" class="tab-btn active">用户</button>
+                <button onclick="switchTab('pricing')" id="tab-pricing" class="tab-btn">价格配置</button>
+                <button onclick="switchTab('notifications')" id="tab-notifications" class="tab-btn">通知管理</button>
+                <button onclick="doLogout()">退出</button>
+            </div>
         </div>
-        <div class="stats" id="stats"></div>
-        <div class="users">
-            <div class="users-header">
-                <h2>用户列表</h2>
-                <div class="search-box">
-                    <input type="text" id="searchInput" placeholder="搜索邮箱..." onkeydown="if(event.key==='Enter')doSearch()">
-                    <button onclick="doSearch()">搜索</button>
+        <div id="section-users" class="tab-section active">
+            <div class="stats" id="stats"></div>
+            <div class="users">
+                <div class="users-header">
+                    <h2>用户列表</h2>
+                    <div class="search-box">
+                        <input type="text" id="searchInput" placeholder="搜索邮箱..." onkeydown="if(event.key==='Enter')doSearch()">
+                        <button onclick="doSearch()">搜索</button>
+                    </div>
+                </div>
+                <table>
+                    <thead>
+                        <tr><th>ID</th><th>邮箱</th><th>角色</th><th>试用</th><th>订阅</th><th>注册时间</th><th>操作</th></tr>
+                    </thead>
+                    <tbody id="userTable"></tbody>
+                </table>
+                <div class="pagination" id="pagination"></div>
+            </div>
+        </div>
+
+        <div id="section-pricing" class="tab-section">
+            <div class="users">
+                <div class="users-header"><h2>价格配置</h2><button onclick="savePricing()" class="primary">保存</button></div>
+                <table id="pricingTable"><thead><tr><th>ID</th><th>名称</th><th>价格</th><th>原价</th><th>时长(月)</th><th>角标</th><th>排序</th><th>启用</th><th>操作</th></tr></thead><tbody></tbody></table>
+                <div style="margin-top:16px"><button onclick="addPlanRow()">+ 新增方案</button></div>
+                <div class="users-header" style="margin-top:24px"><h2>全局配置</h2></div>
+                <div style="background:#fff;padding:16px;border-radius:10px;box-shadow:0 1px 3px rgba(0,0,0,.06)">
+                    <label>联系邮箱</label><input type="email" id="cfgEmail" style="width:300px">
+                    <label>微信号</label><input type="text" id="cfgWechat" style="width:300px">
+                    <label>促销横幅（留空不显示）</label><input type="text" id="cfgBanner" style="width:500px">
                 </div>
             </div>
-            <table>
-                <thead>
-                    <tr><th>ID</th><th>邮箱</th><th>角色</th><th>试用</th><th>订阅</th><th>注册时间</th><th>操作</th></tr>
-                </thead>
-                <tbody id="userTable"></tbody>
-            </table>
-            <div class="pagination" id="pagination"></div>
+        </div>
+
+        <div id="section-notifications" class="tab-section">
+            <div class="users">
+                <div class="users-header"><h2>通知管理</h2><button onclick="openNotifModal()">+ 新建通知</button></div>
+                <table id="notifTable"><thead><tr><th>ID</th><th>标题</th><th>类型</th><th>状态</th><th>过期时间</th><th>已读</th><th>操作</th></tr></thead><tbody></tbody></table>
+            </div>
         </div>
     </div>
 
@@ -127,6 +159,22 @@
             <div class="modal-btns">
                 <button onclick="closeDeleteModal()">取消</button>
                 <button class="danger" onclick="confirmDelete()">删除</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="notifModal" class="modal-overlay">
+        <div class="modal" style="width:500px">
+            <h3>新建通知</h3>
+            <label>标题</label><input type="text" id="notifTitle">
+            <label>正文</label><textarea id="notifBody" rows="3"></textarea>
+            <label>类型</label>
+            <select id="notifType"><option value="promotion">促销</option><option value="system">系统</option><option value="subscription">订阅</option></select>
+            <label>跳转地址（subscribe 或其他 URL）</label><input type="text" id="notifAction">
+            <label>过期时间</label><input type="datetime-local" id="notifExpires">
+            <div class="modal-btns">
+                <button onclick="closeNotifModal()">取消</button>
+                <button class="primary" onclick="saveNotif()">保存并发布</button>
             </div>
         </div>
     </div>
@@ -315,6 +363,128 @@
             closeDeleteModal();
             loadUsers(currentPage);
             loadStats();
+        }
+
+        let currentTab = 'users';
+
+        function switchTab(tab) {
+            currentTab = tab;
+            document.querySelectorAll('.tab-section').forEach(el => el.classList.remove('active'));
+            document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+            document.getElementById('section-' + tab).classList.add('active');
+            document.getElementById('tab-' + tab).classList.add('active');
+            if (tab === 'pricing') loadPricing();
+            if (tab === 'notifications') loadNotifications();
+        }
+
+        async function loadPricing() {
+            const res = await fetch(`${API}/config/pricing`);
+            const data = await res.json();
+            document.getElementById('cfgEmail').value = data.contact.email;
+            document.getElementById('cfgWechat').value = data.contact.wechat;
+            document.getElementById('cfgBanner').value = data.promotional_banner || '';
+            const tbody = document.querySelector('#pricingTable tbody');
+            tbody.innerHTML = data.plans.map(p => `<tr data-id="${p.id}">
+                <td>${p.id}</td>
+                <td><input value="${p.name}"></td>
+                <td><input type="number" value="${p.price}"></td>
+                <td><input type="number" value="${p.original_price || ''}"></td>
+                <td><input type="number" value="${p.duration_months}"></td>
+                <td><input value="${p.badge || ''}"></td>
+                <td><input type="number" value="${p.sort_order}"></td>
+                <td><input type="checkbox" ${p.enabled ? 'checked' : ''}></td>
+                <td><button onclick="deletePlan('${p.id}')">删除</button></td>
+            </tr>`).join('');
+        }
+
+        function addPlanRow() {
+            const tbody = document.querySelector('#pricingTable tbody');
+            const id = 'plan_' + Date.now();
+            const tr = document.createElement('tr');
+            tr.dataset.id = id;
+            tr.dataset.new = 'true';
+            tr.innerHTML = `<td><input value="${id}"></td><td><input></td><td><input type="number"></td><td><input type="number"></td><td><input type="number"></td><td><input></td><td><input type="number" value="0"></td><td><input type="checkbox" checked></td><td><button onclick="this.closest('tr').remove()">删除</button></td>`;
+            tbody.appendChild(tr);
+        }
+
+        async function savePricing() {
+            const rows = document.querySelectorAll('#pricingTable tbody tr');
+            const plans = [];
+            rows.forEach(row => {
+                const inputs = row.querySelectorAll('input');
+                plans.push({
+                    id: inputs[0].value,
+                    name: inputs[1].value,
+                    price: parseFloat(inputs[2].value),
+                    original_price: inputs[3].value ? parseFloat(inputs[3].value) : null,
+                    duration_months: parseInt(inputs[4].value),
+                    badge: inputs[5].value || null,
+                    sort_order: parseInt(inputs[6].value) || 0,
+                    enabled: inputs[7].checked,
+                });
+            });
+            await fetch(`${API}/admin/pricing`, {
+                method: 'PUT',
+                headers: headers(),
+                body: JSON.stringify({
+                    plans,
+                    contact: {
+                        email: document.getElementById('cfgEmail').value,
+                        wechat: document.getElementById('cfgWechat').value,
+                    },
+                    promotional_banner: document.getElementById('cfgBanner').value || null,
+                }),
+            });
+            alert('保存成功');
+        }
+
+        async function deletePlan(id) {
+            if (!confirm('确定删除？')) return;
+            await fetch(`${API}/admin/pricing/${id}`, { method: 'DELETE', headers: headers() });
+            loadPricing();
+        }
+
+        async function loadNotifications() {
+            const res = await fetch(`${API}/admin/notifications`, { headers: headers() });
+            const data = await res.json();
+            const tbody = document.querySelector('#notifTable tbody');
+            tbody.innerHTML = data.notifications.map(n => `<tr>
+                <td>${n.id}</td><td>${n.title}</td><td>${n.type}</td>
+                <td>${n.published ? '已发布' : '未发布'}</td>
+                <td>${n.expires_at ? n.expires_at.slice(0,16) : '-'}</td>
+                <td>${n.read_count}</td>
+                <td class="actions">
+                    <button onclick="toggleNotif(${n.id}, ${!n.published})">${n.published ? '取消发布' : '发布'}</button>
+                    <button class="btn-danger" onclick="deleteNotif(${n.id})">删除</button>
+                </td>
+            </tr>`).join('');
+        }
+
+        function openNotifModal() { document.getElementById('notifModal').style.display = 'flex'; }
+        function closeNotifModal() { document.getElementById('notifModal').style.display = 'none'; }
+
+        async function saveNotif() {
+            const body = {
+                title: document.getElementById('notifTitle').value,
+                body: document.getElementById('notifBody').value,
+                type: document.getElementById('notifType').value,
+                action_url: document.getElementById('notifAction').value || null,
+                expires_at: document.getElementById('notifExpires').value ? new Date(document.getElementById('notifExpires').value).toISOString() : null,
+            };
+            await fetch(`${API}/admin/notifications`, { method: 'POST', headers: headers(), body: JSON.stringify(body) });
+            closeNotifModal();
+            loadNotifications();
+        }
+
+        async function toggleNotif(id, publish) {
+            await fetch(`${API}/admin/notifications/${id}/${publish ? 'publish' : 'unpublish'}`, { method: 'POST', headers: headers() });
+            loadNotifications();
+        }
+
+        async function deleteNotif(id) {
+            if (!confirm('确定删除？')) return;
+            await fetch(`${API}/admin/notifications/${id}`, { method: 'DELETE', headers: headers() });
+            loadNotifications();
         }
 
         // Auto-login if token exists
