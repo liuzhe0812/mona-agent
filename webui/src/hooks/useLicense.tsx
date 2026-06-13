@@ -10,6 +10,21 @@ interface LicenseInfo {
   email: string | null;
 }
 
+interface PricingPlan {
+  id: string;
+  name: string;
+  price: number;
+  durationMonths: number;
+  originalPrice?: number;
+  badge?: string;
+}
+
+interface PricingConfig {
+  plans: PricingPlan[];
+  contact: { email: string; wechat: string };
+  promotionalBanner: string | null;
+}
+
 interface LicenseContextValue {
   licenseActive: boolean;
   checking: boolean;
@@ -19,6 +34,8 @@ interface LicenseContextValue {
   localTrialExpired: boolean;
   remainingDays: number;
   deviceMismatch: boolean;
+  pricingConfig: PricingConfig | null;
+  fetchPricing: () => Promise<void>;
   login: (email: string, password: string) => Promise<void>;
   register: (email: string, password: string, code: string) => Promise<void>;
   sendRegisterCode: (email: string) => Promise<string>;
@@ -38,6 +55,8 @@ const LicenseContext = createContext<LicenseContextValue>({
   localTrialExpired: false,
   remainingDays: 0,
   deviceMismatch: false,
+  pricingConfig: null,
+  fetchPricing: async () => {},
   login: async () => {},
   register: async () => {},
   sendRegisterCode: async () => "",
@@ -57,6 +76,7 @@ export function LicenseProvider({ children }: { children: React.ReactNode }) {
   const [localTrialExpired, setLocalTrialExpired] = useState(false);
   const [remainingDays, setRemainingDays] = useState(0);
   const [deviceMismatch, setDeviceMismatch] = useState(false);
+  const [pricingConfig, setPricingConfig] = useState<PricingConfig | null>(null);
 
   const invokeTauri = useCallback(async <T,>(cmd: string, args?: Record<string, unknown>): Promise<T> => {
     const { invoke } = await import("@tauri-apps/api/core");
@@ -82,6 +102,16 @@ export function LicenseProvider({ children }: { children: React.ReactNode }) {
       setLicenseActive(false);
     } finally {
       setChecking(false);
+    }
+  }, [invokeTauri]);
+
+  const fetchPricing = useCallback(async () => {
+    if (!isTauri()) return;
+    try {
+      const result = await invokeTauri<PricingConfig>("get_pricing");
+      setPricingConfig(result);
+    } catch {
+      setPricingConfig(null);
     }
   }, [invokeTauri]);
 
@@ -141,7 +171,8 @@ export function LicenseProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     checkLicense();
-  }, [checkLicense]);
+    fetchPricing();
+  }, [checkLicense, fetchPricing]);
 
   return (
     <LicenseContext.Provider value={{
@@ -153,6 +184,8 @@ export function LicenseProvider({ children }: { children: React.ReactNode }) {
       localTrialExpired,
       remainingDays,
       deviceMismatch,
+      pricingConfig,
+      fetchPricing,
       login,
       register,
       sendRegisterCode,
