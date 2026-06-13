@@ -6,7 +6,15 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.deps import get_current_user
 from app.errors import AuthError
-from app.models import AppConfig, Notification, NotificationRead, PricingPlan, Subscription, SubscriptionStatus, User
+from app.models import (
+    AppConfig,
+    Notification,
+    NotificationRead,
+    PricingPlan,
+    Subscription,
+    SubscriptionStatus,
+    User,
+)
 from app.schemas import AdminTrialUpdateRequest, AdminUserInfo, AdminUserListResponse
 
 router = APIRouter(prefix="/admin", tags=["admin"])
