@@ -133,3 +133,43 @@ class AdminTrialUpdateRequest(BaseModel):
 class ErrorResponse(BaseModel):
     error: str
     detail: str | None = None
+
+
+class PricingPlanInfo(BaseModel):
+    id: str
+    name: str
+    price: float
+    duration_months: int
+    original_price: float | None = None
+    badge: str | None = None
+
+
+class ContactConfig(BaseModel):
+    email: str
+    wechat: str
+
+
+class PricingConfigResponse(BaseModel):
+    plans: list[PricingPlanInfo]
+    contact: ContactConfig
+    promotional_banner: str | None = None
+
+
+class NotificationInfo(BaseModel):
+    id: int
+    title: str
+    body: str
+    type: str
+    action_url: str | None = None
+    image_url: str | None = None
+    read: bool = False
+    published_at: datetime | None = None
+    expires_at: datetime | None = None
+
+
+class NotificationListResponse(BaseModel):
+    notifications: list[NotificationInfo]
+
+
+class UnreadCountResponse(BaseModel):
+    unread_count: int
