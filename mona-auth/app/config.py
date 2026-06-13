@@ -29,9 +29,6 @@ class Settings(BaseSettings):
     xhp_notify_url: str = ""
     xhp_base_url: str = "https://api.xunhupay.com/payment/do.html"
 
-    price_monthly: float = 29.0
-    price_yearly: float = 288.0
-
     cors_origins: list[str] = []
 
     @property

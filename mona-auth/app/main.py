@@ -10,7 +10,9 @@ from app.errors import AuthError, auth_error_handler
 from app.middleware import setup_rate_limit
 from app.routers.admin_router import router as admin_router
 from app.routers.auth_router import router as auth_router
+from app.routers.config_router import router as config_router
 from app.routers.device_router import router as device_router
+from app.routers.notification_router import router as notification_router
 from app.routers.payment_router import router as payment_router
 from app.routers.trial_router import router as license_router
 
