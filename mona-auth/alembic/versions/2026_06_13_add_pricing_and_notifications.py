@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "2026_06_13_add_pricing_and_notifications"
+revision: str = "pricing_notif"
 down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -42,7 +42,7 @@ def upgrade() -> None:
 
     op.create_table(
         "notifications",
-        sa.Column("id", sa.Integer, primary_key=True, autoincrement=True),
+        sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=True),
         sa.Column("title", sa.String(128), nullable=False),
         sa.Column("body", sa.String(512), nullable=False),
         sa.Column("type", sa.String(32), nullable=False),
@@ -56,15 +56,25 @@ def upgrade() -> None:
 
     op.create_table(
         "notification_reads",
-        sa.Column("id", sa.Integer, primary_key=True, autoincrement=True),
-        sa.Column("user_id", sa.Integer, sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True),
-        sa.Column("notification_id", sa.Integer, sa.ForeignKey("notifications.id", ondelete="CASCADE"), nullable=False, index=True),
+        sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=True),
+        sa.Column("user_id", sa.BigInteger, sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True),
+        sa.Column("notification_id", sa.BigInteger, sa.ForeignKey("notifications.id", ondelete="CASCADE"), nullable=False, index=True),
         sa.Column("read_at", sa.DateTime, server_default=sa.func.now()),
         sa.UniqueConstraint("user_id", "notification_id"),
     )
 
     op.bulk_insert(
-        "pricing_plans",
+        sa.table(
+            "pricing_plans",
+            sa.column("id", sa.String),
+            sa.column("name", sa.String),
+            sa.column("price", sa.Numeric),
+            sa.column("original_price", sa.Numeric),
+            sa.column("duration_months", sa.Integer),
+            sa.column("badge", sa.String),
+            sa.column("sort_order", sa.Integer),
+            sa.column("enabled", sa.Boolean),
+        ),
         [
             {
                 "id": "monthly",
@@ -88,7 +98,11 @@ def upgrade() -> None:
     )
 
     op.bulk_insert(
-        "app_config",
+        sa.table(
+            "app_config",
+            sa.column("key", sa.String),
+            sa.column("value", sa.String),
+        ),
         [
             {"key": "contact_email", "value": "support@example.com"},
             {"key": "contact_wechat", "value": "mona_support"},
