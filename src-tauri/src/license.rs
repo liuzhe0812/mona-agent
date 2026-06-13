@@ -164,6 +164,23 @@ fn build_client() -> Result<reqwest::Client, String> {
         .map_err(|e| format!("HTTP client error: {}", e))
 }
 
+#[tauri::command]
+pub async fn get_pricing() -> Result<serde_json::Value, String> {
+    let client = build_client()?;
+    let resp = client
+        .get(format!("{}/config/pricing", AUTH_SERVER_URL))
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("Server error: {}", resp.status()));
+    }
+
+    let body: serde_json::Value = resp.json().await.map_err(|e| format!("Parse error: {}", e))?;
+    Ok(body)
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct TokenResponse {
     access_token: String,

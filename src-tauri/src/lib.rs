@@ -355,7 +355,12 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, _shortcut, event| {
                     if event.state() == ShortcutState::Pressed {
-                        quick_ask::toggle_quick_ask(app);
+                        let mode = settings::load_settings().quick_ask_mode;
+                        if mode == "full" {
+                            quick_ask::toggle_main_window(app);
+                        } else {
+                            quick_ask::toggle_quick_ask(app);
+                        }
                     }
                 })
                 .build())
@@ -437,6 +442,11 @@ pub fn run() {
             terminal::commands::sftp_upload_file,
             terminal::commands::sftp_download_file,
             terminal::commands::sftp_cancel_transfer,
+            terminal::ide::commands::ide_open_project,
+            terminal::ide::commands::ide_check_file,
+            terminal::ide::commands::ide_read_file,
+            terminal::ide::commands::ide_write_file,
+            terminal::ide::commands::ide_exec_command,
             terminal::desktop::commands::desktop_connect,
             terminal::desktop::commands::desktop_disconnect,
             terminal::desktop::commands::desktop_exec,
@@ -469,6 +479,7 @@ pub fn run() {
             license::get_machine_id,
             license::check_license,
             license::import_license,
+            license::get_pricing,
             license::auth_register,
             license::send_register_code,
             license::auth_login,
@@ -492,6 +503,16 @@ pub fn run() {
             browser::commands::browser_go_forward,
             browser::commands::browser_reload,
             browser::commands::browser_on_url_changed,
+            browser::storage::browser_add_bookmark,
+            browser::storage::browser_remove_bookmark,
+            browser::storage::browser_update_bookmark,
+            browser::storage::browser_is_bookmarked,
+            browser::storage::browser_list_bookmarks,
+            browser::storage::browser_import_bookmarks,
+            browser::storage::browser_record_visit,
+            browser::storage::browser_clear_history,
+            browser::storage::browser_clear_cache,
+            browser::storage::browser_search_suggestions,
         ])
         .setup(move |app| {
             // 设置高分辨率窗口图标，确保任务栏在高 DPI 下清晰
