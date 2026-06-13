@@ -32,10 +32,12 @@ if settings.cors_origins:
 setup_rate_limit(app)
 
 app.include_router(auth_router)
+app.include_router(config_router)
 app.include_router(device_router)
 app.include_router(payment_router)
 app.include_router(license_router)
 app.include_router(admin_router)
+app.include_router(notification_router)
 
 # Admin SPA - serve static files
 _admin_dir = Path(__file__).parent / "admin"

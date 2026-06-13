@@ -1,7 +1,7 @@
 import enum
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Enum, ForeignKey, String, UniqueConstraint, func
+from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -21,7 +21,7 @@ class PaymentStatus(str, enum.Enum):
 class User(Base):
     __tablename__ = "users"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     is_admin: Mapped[bool] = mapped_column(default=False)
@@ -45,9 +45,9 @@ class User(Base):
 class Subscription(Base):
     __tablename__ = "subscriptions"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
     status: Mapped[SubscriptionStatus] = mapped_column(
         Enum(SubscriptionStatus), nullable=False, default=SubscriptionStatus.EXPIRED
@@ -65,9 +65,9 @@ class Device(Base):
     __tablename__ = "devices"
     __table_args__ = (UniqueConstraint("device_fingerprint"),)
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
     device_fingerprint: Mapped[str] = mapped_column(String(255), nullable=False)
     device_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -81,7 +81,7 @@ class Device(Base):
 class PasswordResetCode(Base):
     __tablename__ = "password_reset_codes"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     email: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     code: Mapped[str] = mapped_column(String(6), nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
@@ -93,10 +93,10 @@ class UsedDeviceTrial(Base):
     __tablename__ = "used_device_trials"
     __table_args__ = (UniqueConstraint("device_fingerprint"),)
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     device_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
     user_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
@@ -104,9 +104,9 @@ class UsedDeviceTrial(Base):
 class Payment(Base):
     __tablename__ = "payments"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
     trade_order_id: Mapped[str] = mapped_column(String(128), unique=True, nullable=False, index=True)
     xhp_order_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
@@ -152,7 +152,7 @@ class AppConfig(Base):
 class Notification(Base):
     __tablename__ = "notifications"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     title: Mapped[str] = mapped_column(String(128), nullable=False)
     body: Mapped[str] = mapped_column(String(512), nullable=False)
     type: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -168,11 +168,11 @@ class NotificationRead(Base):
     __tablename__ = "notification_reads"
     __table_args__ = (UniqueConstraint("user_id", "notification_id"),)
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
     notification_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("notifications.id", ondelete="CASCADE"), nullable=False, index=True
+        Integer, ForeignKey("notifications.id", ondelete="CASCADE"), nullable=False, index=True
     )
     read_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

@@ -7,8 +7,9 @@ Create Date: 2026-06-13 10:00:00.000000
 """
 from typing import Sequence, Union
 
-from alembic import op
 import sqlalchemy as sa
+
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "2026_06_13_add_pricing_and_notifications"
@@ -41,7 +42,7 @@ def upgrade() -> None:
 
     op.create_table(
         "notifications",
-        sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=True),
+        sa.Column("id", sa.Integer, primary_key=True, autoincrement=True),
         sa.Column("title", sa.String(128), nullable=False),
         sa.Column("body", sa.String(512), nullable=False),
         sa.Column("type", sa.String(32), nullable=False),
@@ -55,9 +56,9 @@ def upgrade() -> None:
 
     op.create_table(
         "notification_reads",
-        sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=True),
-        sa.Column("user_id", sa.BigInteger, sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True),
-        sa.Column("notification_id", sa.BigInteger, sa.ForeignKey("notifications.id", ondelete="CASCADE"), nullable=False, index=True),
+        sa.Column("id", sa.Integer, primary_key=True, autoincrement=True),
+        sa.Column("user_id", sa.Integer, sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True),
+        sa.Column("notification_id", sa.Integer, sa.ForeignKey("notifications.id", ondelete="CASCADE"), nullable=False, index=True),
         sa.Column("read_at", sa.DateTime, server_default=sa.func.now()),
         sa.UniqueConstraint("user_id", "notification_id"),
     )
