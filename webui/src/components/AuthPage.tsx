@@ -2,11 +2,12 @@ import { useState } from "react";
 import { useLicense } from "@/hooks/useLicense";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { SubscribeView } from "./SubscribeView";
 
-type AuthView = "login" | "register" | "forgot" | "reset";
+type AuthView = "login" | "register" | "forgot" | "reset" | "subscribe";
 
 export function AuthPage() {
-  const { login, register, forgotPassword, resetPassword, licenseInfo, deviceMismatch, bindDevice, logout } = useLicense();
+  const { login, register, forgotPassword, resetPassword, licenseInfo, loggedIn, deviceMismatch, bindDevice, logout } = useLicense();
   const [view, setView] = useState<AuthView>("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -139,9 +140,16 @@ export function AuthPage() {
         {error && <p className="text-center text-sm text-destructive">{error}</p>}
         {success && <p className="text-center text-sm text-green-600">{success}</p>}
 
-        {licenseInfo?.status === "expired" && (
+        {licenseInfo?.status === "expired" && loggedIn && (
           <div className="rounded-lg border border-border bg-muted/50 p-3 text-center text-sm text-muted-foreground">
-            Trial expired on {licenseInfo.expires_at}. Please subscribe to continue.
+            订阅已过期。
+            <button
+              type="button"
+              className="ml-1 text-primary hover:underline"
+              onClick={() => setView("subscribe")}
+            >
+              立即续费
+            </button>
           </div>
         )}
 
@@ -160,6 +168,13 @@ export function AuthPage() {
                 Create account
               </button>
             </div>
+            <button
+              type="button"
+              className="text-center text-xs text-muted-foreground hover:underline"
+              onClick={() => { setView("subscribe"); setError(""); setSuccess(""); }}
+            >
+              购买订阅
+            </button>
           </form>
         )}
 
@@ -185,6 +200,13 @@ export function AuthPage() {
             </Button>
             <button type="button" className="text-center text-xs text-muted-foreground hover:underline" onClick={() => { setView("login"); setError(""); setSuccess(""); }}>
               Already have an account? Sign in
+            </button>
+            <button
+              type="button"
+              className="text-center text-xs text-muted-foreground hover:underline"
+              onClick={() => { setView("subscribe"); setError(""); setSuccess(""); }}
+            >
+              购买订阅
             </button>
           </form>
         )}
@@ -213,6 +235,13 @@ export function AuthPage() {
               Back to sign in
             </button>
           </form>
+        )}
+
+        {view === "subscribe" && (
+          <SubscribeView
+            userEmail={licenseInfo?.email || email}
+            onBackToLogin={() => setView("login")}
+          />
         )}
       </div>
     </div>
