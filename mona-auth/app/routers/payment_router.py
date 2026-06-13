@@ -11,7 +11,7 @@ from app.config import settings
 from app.database import get_db
 from app.deps import get_current_user
 from app.errors import AuthError
-from app.models import Payment, PaymentStatus, Subscription, SubscriptionStatus, User
+from app.models import Payment, PaymentStatus, PricingPlan, Subscription, SubscriptionStatus, User
 from app.schemas import (
     CreatePaymentRequest,
     CreatePaymentResponse,
@@ -29,10 +29,14 @@ def _xhp_sign(params: dict[str, str]) -> str:
     return hashlib.md5(sign_str.encode()).hexdigest()
 
 
-def _get_price(duration_months: int) -> float:
-    if duration_months >= 12:
-        years = duration_months // 12
-        return settings.price_yearly * years
+def _get_price(db: Session, duration_months: int) -> float:
+    plan = db.query(PricingPlan).filter(PricingPlan.duration_months == duration_months).first()
+    if plan:
+        return float(plan.price)
+    # fallback: find monthly price
+    monthly = db.query(PricingPlan).filter(PricingPlan.duration_months == 1).first()
+    if monthly:
+        return float(monthly.price) * duration_months
     return settings.price_monthly * duration_months
 
 
@@ -76,7 +80,7 @@ async def create_payment(
             raise AuthError("already_subscribed", "You already have an active subscription", status_code=409)
 
     trade_order_id = f"mona_{user.id}_{uuid.uuid4().hex[:12]}"
-    amount = _get_price(body.duration_months)
+    amount = _get_price(db, body.duration_months)
 
     payment = Payment(
         user_id=user.id,
