@@ -181,6 +181,60 @@ pub async fn get_pricing() -> Result<serde_json::Value, String> {
     Ok(body)
 }
 
+#[tauri::command]
+pub async fn list_notifications() -> Result<serde_json::Value, String> {
+    let token = load_auth_token().ok_or_else(|| "Not logged in".to_string())?;
+    let client = build_client()?;
+    let resp = client
+        .get(format!("{}/notifications", AUTH_SERVER_URL))
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("Server error: {}", resp.status()));
+    }
+
+    resp.json::<serde_json::Value>().await.map_err(|e| format!("Parse error: {}", e))
+}
+
+#[tauri::command]
+pub async fn get_unread_notification_count() -> Result<serde_json::Value, String> {
+    let token = load_auth_token().ok_or_else(|| "Not logged in".to_string())?;
+    let client = build_client()?;
+    let resp = client
+        .get(format!("{}/notifications/unread-count", AUTH_SERVER_URL))
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("Server error: {}", resp.status()));
+    }
+
+    resp.json::<serde_json::Value>().await.map_err(|e| format!("Parse error: {}", e))
+}
+
+#[tauri::command]
+pub async fn mark_notification_read(notification_id: i64) -> Result<serde_json::Value, String> {
+    let token = load_auth_token().ok_or_else(|| "Not logged in".to_string())?;
+    let client = build_client()?;
+    let resp = client
+        .post(format!("{}/notifications/{}/read", AUTH_SERVER_URL, notification_id))
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("Server error: {}", resp.status()));
+    }
+
+    Ok(serde_json::json!({ "success": true }))
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct TokenResponse {
     access_token: String,
