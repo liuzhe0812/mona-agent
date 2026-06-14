@@ -429,7 +429,7 @@ function Shell({
   const { t, i18n } = useTranslation();
   const { client } = useClient();
   const { theme, toggle } = useTheme();
-  useLicense();
+  const { licenseActive } = useLicense();
   const { sessions, loading, refresh, createChat, deleteChat } = useSessions();
   const { state: sidebarState, update: updateSidebarState } =
     useSidebarState(sessions, !loading);
@@ -1077,7 +1077,8 @@ function Shell({
             onTabClose={closeBrowserTab}
             onNewTab={addEmptyTab}
             onOpenSettings={onOpenSettings}
-            onOpenLogin={onOpenLogin}
+            onOpenSubscribe={onOpenLogin}
+            showUpgrade={!licenseActive}
           />
         )}
 
