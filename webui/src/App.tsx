@@ -55,7 +55,7 @@ const SIDEBAR_WIDTH = 220;
 const SIDEBAR_RAIL_WIDTH = 56;
 const TOKEN_REFRESH_MARGIN_MS = 30_000;
 const TOKEN_REFRESH_MIN_DELAY_MS = 5_000;
-type ShellView = "chat" | "settings" | "note" | "ssh" | "db" | "kb" | "ppt";
+type ShellView = "chat" | "settings" | "note" | "ssh" | "db" | "kb" | "ppt" | "md-reader";
 
 interface QueuedAgentPrompt {
   id: string;
@@ -77,6 +77,12 @@ const DbClientView = lazy(() =>
 const PptMakerView = lazy(() =>
   import("@/components/ppt/PptMakerView").then((module) => ({
     default: module.PptMakerView,
+  })),
+);
+
+const MdReaderView = lazy(() =>
+  import("@/components/md-reader/MdReaderView").then((module) => ({
+    default: module.MdReaderView,
   })),
 );
 
@@ -441,6 +447,9 @@ function Shell({
     goForward,
     reload,
     updateTabUrl,
+    browserFullscreen,
+    toggleFullscreen,
+    exitFullscreen,
   } = useBrowserTabs();
   const [desktopSidebarOpen, setDesktopSidebarOpen] =
     useState<boolean>(readSidebarOpen);
@@ -863,13 +872,17 @@ function Shell({
         setMobileSidebarOpen(false);
         void refresh();
       });
+      const un4 = await listen<string>("md-file-open", () => {
+        setView("md-reader");
+      });
       if (cancelled) {
         un1();
         un2();
         un3();
+        un4();
         return;
       }
-      unlisteners.push(un1, un2, un3);
+      unlisteners.push(un1, un2, un3, un4);
     })();
     return () => {
       cancelled = true;
@@ -1055,19 +1068,23 @@ function Shell({
   return (
     <ThemeProvider theme={theme}>
       <div className="relative flex h-full w-full flex-col overflow-hidden bg-background">
-        {/* 标题栏在最顶部，全宽 */}
-        <AppTitleBar
-          tabs={browserTabs}
-          activeTabId={activeBrowserTabId}
-          onTabClick={switchBrowserTab}
-          onTabClose={closeBrowserTab}
-          onNewTab={addEmptyTab}
-          onOpenSettings={onOpenSettings}
-        />
+        {/* 标题栏在最顶部，全宽（浏览器全屏时隐藏） */}
+        {!browserFullscreen && (
+          <AppTitleBar
+            tabs={browserTabs}
+            activeTabId={activeBrowserTabId}
+            onTabClick={switchBrowserTab}
+            onTabClose={closeBrowserTab}
+            onNewTab={addEmptyTab}
+            onOpenSettings={onOpenSettings}
+            onOpenLogin={onOpenLogin}
+          />
+        )}
 
         {/* 标题栏下方：Sidebar + 主内容区 */}
         <div className="flex min-h-0 flex-1 overflow-hidden">
-          {showMainSidebar ? (
+          {/* 侧边栏（浏览器全屏时隐藏） */}
+          {!browserFullscreen && showMainSidebar ? (
             <aside
               className={cn(
                 "relative z-20 shrink-0 overflow-hidden",
@@ -1099,7 +1116,7 @@ function Shell({
             </aside>
           ) : null}
 
-          {showMainSidebar ? (
+          {!browserFullscreen && showMainSidebar ? (
             <Sheet
               open={mobileSidebarOpen}
               onOpenChange={(open) => setMobileSidebarOpen(open)}
@@ -1127,7 +1144,7 @@ function Shell({
               <div
                 className={cn(
                   "absolute inset-0 flex flex-col",
-                  (view === "settings" || view === "note" || view === "ssh" || view === "db" || view === "kb" || view === "ppt" || activeBrowserTab.type !== "mona") &&
+                  (view === "settings" || view === "note" || view === "ssh" || view === "db" || view === "kb" || view === "ppt" || view === "md-reader" || activeBrowserTab.type !== "mona") &&
                     "invisible pointer-events-none",
                 )}
               >
@@ -1194,6 +1211,13 @@ function Shell({
                   <PptMakerView onBack={onBackToChat} />
                 </Suspense>
               </div>
+              {view === "md-reader" && (
+                <div className="absolute inset-0 flex flex-col">
+                  <Suspense fallback={<ModuleLoading title="正在打开 Markdown 阅读器" />}>
+                    <MdReaderView onBack={onBackToChat} />
+                  </Suspense>
+                </div>
+              )}
               {browserTabs
                 .filter((t) => t.type === "browser")
                 .map((tab) => (
@@ -1204,7 +1228,10 @@ function Shell({
                   >
                     <BrowserTabView
                       tab={tab}
-                      isVisible={tab.id === activeBrowserTabId}
+                      isVisible={tab.id === activeBrowserTabId && !loginDialogOpen}
+                      isFullscreen={browserFullscreen}
+                      onToggleFullscreen={toggleFullscreen}
+                      onExitFullscreen={exitFullscreen}
                       session={activeSession}
                       onNavigate={(url) => navigateToUrl(tab.id, url)}
                       onGoBack={() => goBack(tab.id)}

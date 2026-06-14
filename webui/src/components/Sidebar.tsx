@@ -17,7 +17,6 @@ import { useTranslation } from "react-i18next";
 
 import { AgentLogo } from "@/components/AgentLogo";
 import { ChatList } from "@/components/ChatList";
-import { NotificationCenter } from "@/components/NotificationCenter";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -112,18 +111,15 @@ export function Sidebar(props: SidebarProps) {
           <AgentLogo state={agentLogoState} className="h-8 w-8" />
         </button>
         {!collapsed && (
-          <div className="flex items-center gap-0.5">
-            <NotificationCenter onOpenSubscribe={props.onOpenLogin} />
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label={t("sidebar.collapse")}
-              onClick={props.onCollapse}
-              className="h-7 w-7 rounded-lg text-muted-foreground/85 hover:bg-sidebar-accent/75 hover:text-sidebar-foreground"
-            >
-              <Menu className="h-3.5 w-3.5" />
-            </Button>
-          </div>
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label={t("sidebar.collapse")}
+            onClick={props.onCollapse}
+            className="h-7 w-7 rounded-lg text-muted-foreground/85 hover:bg-sidebar-accent/75 hover:text-sidebar-foreground"
+          >
+            <Menu className="h-3.5 w-3.5" />
+          </Button>
         )}
       </div>
 

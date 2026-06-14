@@ -4,6 +4,7 @@ import { Maximize2, Minus, Plus, Settings, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ConnectionBadge } from "@/components/ConnectionBadge";
 import { BrowserTabItem } from "@/components/browser/BrowserTab";
+import { NotificationCenter } from "@/components/NotificationCenter";
 import { isTauri } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 import type { Tab } from "@/hooks/useBrowserTabs";
@@ -15,6 +16,7 @@ interface AppTitleBarProps {
   onTabClose: (id: string) => void;
   onNewTab: () => void;
   onOpenSettings?: () => void;
+  onOpenLogin?: () => void;
 }
 
 async function withCurrentWindow(
@@ -38,6 +40,7 @@ export function AppTitleBar({
   onTabClose,
   onNewTab,
   onOpenSettings,
+  onOpenLogin,
 }: AppTitleBarProps) {
   return (
     <header
@@ -74,6 +77,7 @@ export function AppTitleBar({
             <Settings className="h-3.5 w-3.5" />
           </TitleBarButton>
         )}
+        <NotificationCenter onOpenSubscribe={onOpenLogin} />
         <TitleBarButton
           label="最小化"
           onClick={() => {
