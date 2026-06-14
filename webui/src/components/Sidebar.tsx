@@ -75,7 +75,8 @@ interface SidebarProps {
 
 export function Sidebar(props: SidebarProps) {
   const { t } = useTranslation();
-  const { loggedIn, licenseInfo, localTrial, localTrialExpired, remainingDays } = useLicense();
+  const { loggedIn, licenseInfo, licenseActive, localTrial, localTrialExpired, remainingDays } =
+    useLicense();
   const [menuPortalContainer, setMenuPortalContainer] =
     useState<HTMLElement | null>(null);
   const collapsed = Boolean(props.collapsed);
@@ -210,13 +211,25 @@ export function Sidebar(props: SidebarProps) {
             icon={<User className="h-4 w-4" />}
           />
         ) : loggedIn ? (
-          <SidebarActionButton
-            collapsed={collapsed}
-            label={licenseInfo?.email ?? t("sidebar.settings")}
-            onClick={props.onOpenLogin ?? (() => {})}
-            className={collapsed ? undefined : "flex-1"}
-            icon={<User className="h-4 w-4" />}
-          />
+          <div className={cn("flex items-center gap-1", collapsed ? "w-14 flex-col px-0" : "w-full")}>
+            <SidebarActionButton
+              collapsed={collapsed}
+              label={licenseInfo?.email ?? t("sidebar.settings")}
+              onClick={props.onOpenLogin ?? (() => {})}
+              className={collapsed ? undefined : "flex-1"}
+              icon={<User className="h-4 w-4" />}
+            />
+            {!collapsed && !licenseActive && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={props.onOpenLogin}
+                className="h-8 shrink-0 rounded-full px-2.5 text-[12px] font-medium text-primary hover:bg-sidebar-accent/75 hover:text-primary"
+              >
+                升级 Pro
+              </Button>
+            )}
+          </div>
         ) : (
           <SidebarActionButton
             collapsed={collapsed}

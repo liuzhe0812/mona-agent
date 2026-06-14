@@ -37,16 +37,20 @@ export function NotificationCenter({ onOpenSubscribe }: NotificationCenterProps)
   return (
     <Sheet open={open} onOpenChange={setOpen}>
       <SheetTrigger asChild>
-        <div className="relative inline-flex">
-          <Button variant="ghost" size="icon" aria-label="消息中心">
-            <Bell className="h-5 w-5" />
-          </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          aria-label="消息中心"
+          title="消息中心"
+          className="relative h-9 w-11 rounded-none text-muted-foreground hover:bg-sidebar-accent/80 hover:text-foreground"
+        >
+          <Bell className="h-3.5 w-3.5" />
           {unreadCount > 0 && (
-            <span className="absolute -top-0.5 -right-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[10px] font-medium text-destructive-foreground">
+            <span className="absolute right-2 top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[10px] font-medium text-destructive-foreground">
               {badgeText}
             </span>
           )}
-        </div>
+        </Button>
       </SheetTrigger>
       <SheetContent side="right" className="flex w-full max-w-sm flex-col p-0">
         <SheetHeader className="flex-row items-center justify-between space-y-0 border-b p-4">

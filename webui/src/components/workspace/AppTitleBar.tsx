@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Crown, Maximize2, Minus, Plus, Settings, X } from "lucide-react";
+import { Maximize2, Minus, Plus, Settings, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { ConnectionBadge } from "@/components/ConnectionBadge";
@@ -17,7 +17,6 @@ interface AppTitleBarProps {
   onNewTab: () => void;
   onOpenSettings?: () => void;
   onOpenSubscribe?: () => void;
-  showUpgrade?: boolean;
 }
 
 async function withCurrentWindow(
@@ -42,7 +41,6 @@ export function AppTitleBar({
   onNewTab,
   onOpenSettings,
   onOpenSubscribe,
-  showUpgrade,
 }: AppTitleBarProps) {
   return (
     <header
@@ -77,11 +75,6 @@ export function AppTitleBar({
         {onOpenSettings && (
           <TitleBarButton label="设置" onClick={onOpenSettings}>
             <Settings className="h-3.5 w-3.5" />
-          </TitleBarButton>
-        )}
-        {showUpgrade && onOpenSubscribe && (
-          <TitleBarButton label="升级 Pro" onClick={onOpenSubscribe}>
-            <Crown className="h-3.5 w-3.5" />
           </TitleBarButton>
         )}
         <NotificationCenter onOpenSubscribe={onOpenSubscribe} />
