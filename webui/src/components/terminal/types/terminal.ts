@@ -75,10 +75,118 @@ export interface BatchUploadRequest {
   maxConcurrent?: number;
 }
 
+export interface ProjectInfo {
+  rootPath: string;
+  name: string;
+}
+
+export type FileCheckResult =
+  | { type: "editable"; size: number; mtime: number }
+  | { type: "too_large"; size: number; limit: number }
+  | { type: "binary" }
+  | { type: "not_editable"; reason: string };
+
+export interface FileContentResult {
+  content: string;
+  mtime: number;
+  size: number;
+}
+
+export interface WriteResult {
+  mtime: number;
+  size: number;
+}
+
+export interface IdeExecResult {
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
+}
+
 export interface BatchConnectConfig {
   startIp: string;
   count: number;
   username: string;
   password: string;
   port: number;
+}
+
+export interface RemoteCpuInfo {
+  load: number;
+  load1: number;
+  load5: number;
+  load15: number;
+  speed: number;
+  cores: number;
+  brand: string;
+  loadUser: number;
+  loadSystem: number;
+}
+
+export interface RemoteMemoryInfo {
+  used: number;
+  total: number;
+  usedPercent: number;
+  free: number;
+  buffcache: number;
+}
+
+export interface RemoteDiskInfo {
+  fs: string;
+  used: number;
+  size: number;
+  usePercent: number;
+  busyPercent: number;
+  rIoSec: number;
+  wIoSec: number;
+  diskType: string;
+}
+
+export interface RemoteNetworkInfo {
+  iface: string;
+  rxSec: number;
+  txSec: number;
+}
+
+export interface RemoteProcessInfo {
+  pid: number;
+  name: string;
+  user: string;
+  cpuPercent: number;
+  memPercent: number;
+  memRss: number;
+  state: string;
+}
+
+export interface RemoteProcessList {
+  processes: RemoteProcessInfo[];
+  timestamp: number;
+}
+
+export interface RemoteProcessCount {
+  all: number;
+  running: number;
+}
+
+export interface RemoteSystemInfo {
+  cpu: RemoteCpuInfo;
+  memory: RemoteMemoryInfo;
+  disk: RemoteDiskInfo[];
+  network: RemoteNetworkInfo[];
+  processes: RemoteProcessCount;
+}
+
+export interface RemotePortInfo {
+  protocol: string;
+  localAddr: string;
+  localPort: number;
+  state: string;
+  pid: number | null;
+  processName: string | null;
+  processUser: string | null;
+}
+
+export interface RemotePortsData {
+  ports: RemotePortInfo[];
+  timestamp: number;
 }

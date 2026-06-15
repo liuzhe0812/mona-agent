@@ -32,9 +32,11 @@ interface LicenseContextValue {
   loggedIn: boolean;
   localTrial: boolean;
   localTrialExpired: boolean;
+  serverTrial: boolean;
   remainingDays: number;
   deviceMismatch: boolean;
   pricingConfig: PricingConfig | null;
+  pricingError: string | null;
   fetchPricing: () => Promise<void>;
   login: (email: string, password: string) => Promise<void>;
   register: (email: string, password: string, code: string) => Promise<void>;
@@ -53,9 +55,11 @@ const LicenseContext = createContext<LicenseContextValue>({
   loggedIn: false,
   localTrial: false,
   localTrialExpired: false,
+  serverTrial: false,
   remainingDays: 0,
   deviceMismatch: false,
   pricingConfig: null,
+  pricingError: null,
   fetchPricing: async () => {},
   login: async () => {},
   register: async () => {},
@@ -74,9 +78,11 @@ export function LicenseProvider({ children }: { children: React.ReactNode }) {
   const [loggedIn, setLoggedIn] = useState(false);
   const [localTrial, setLocalTrial] = useState(false);
   const [localTrialExpired, setLocalTrialExpired] = useState(false);
+  const [serverTrial, setServerTrial] = useState(false);
   const [remainingDays, setRemainingDays] = useState(0);
   const [deviceMismatch, setDeviceMismatch] = useState(false);
   const [pricingConfig, setPricingConfig] = useState<PricingConfig | null>(null);
+  const [pricingError, setPricingError] = useState<string | null>(null);
 
   const invokeTauri = useCallback(async <T,>(cmd: string, args?: Record<string, unknown>): Promise<T> => {
     const { invoke } = await import("@tauri-apps/api/core");
@@ -93,9 +99,10 @@ export function LicenseProvider({ children }: { children: React.ReactNode }) {
       const result = await invokeTauri<LicenseInfo>("check_license");
       setLicenseInfo(result);
       setLicenseActive(result.status === "valid");
-      setLoggedIn(result.status !== "not_logged_in" && !result.local_trial);
+      setLoggedIn(result.status !== "not_logged_in");
       setLocalTrial(!!result.local_trial && result.status === "valid");
       setLocalTrialExpired(!!result.local_trial && result.status === "expired");
+      setServerTrial(!!result.trial && result.status === "valid" && !result.local_trial);
       setRemainingDays(result.remaining_days ?? 0);
       setDeviceMismatch(result.status === "device_mismatch");
     } catch {
@@ -106,12 +113,38 @@ export function LicenseProvider({ children }: { children: React.ReactNode }) {
   }, [invokeTauri]);
 
   const fetchPricing = useCallback(async () => {
-    if (!isTauri()) return;
+    setPricingError(null);
     try {
-      const result = await invokeTauri<PricingConfig>("get_pricing");
-      setPricingConfig(result);
-    } catch {
+      let raw: unknown;
+      if (isTauri()) {
+        raw = await invokeTauri<Record<string, unknown>>("get_pricing");
+      } else {
+        const resp = await fetch("https://mona.lzfun.vip/config/pricing");
+        if (!resp.ok) throw new Error(`fetch pricing failed: ${resp.status}`);
+        raw = await resp.json();
+      }
+      const data = raw as Record<string, unknown>;
+      const plans = (data.plans as Record<string, unknown>[] | undefined) ?? [];
+      setPricingConfig({
+        plans: plans.map((p) => ({
+          id: String(p.id ?? ""),
+          name: String(p.name ?? ""),
+          price: Number(p.price ?? 0),
+          durationMonths: Number(p.duration_months ?? p.durationMonths ?? 1),
+          originalPrice: p.original_price != null ? Number(p.original_price) : undefined,
+          badge: p.badge ? String(p.badge) : undefined,
+        })),
+        contact: {
+          email: String((data.contact as Record<string, unknown> | undefined)?.email ?? ""),
+          wechat: String((data.contact as Record<string, unknown> | undefined)?.wechat ?? ""),
+        },
+        promotionalBanner:
+          data.promotional_banner != null ? String(data.promotional_banner) : null,
+      });
+    } catch (err) {
       setPricingConfig(null);
+      setPricingError(String(err));
+      console.error("fetchPricing failed:", err);
     }
   }, [invokeTauri]);
 
@@ -141,6 +174,9 @@ export function LicenseProvider({ children }: { children: React.ReactNode }) {
     setLoggedIn(false);
     setLicenseActive(false);
     setLicenseInfo(null);
+    setLocalTrial(false);
+    setLocalTrialExpired(false);
+    setServerTrial(false);
     setDeviceMismatch(false);
   }, [invokeTauri]);
 
@@ -182,9 +218,11 @@ export function LicenseProvider({ children }: { children: React.ReactNode }) {
       loggedIn,
       localTrial,
       localTrialExpired,
+      serverTrial,
       remainingDays,
       deviceMismatch,
       pricingConfig,
+      pricingError,
       fetchPricing,
       login,
       register,

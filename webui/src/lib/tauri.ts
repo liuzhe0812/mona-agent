@@ -129,6 +129,7 @@ export interface DesktopAppSettings {
   auto_start_gateway: boolean;
   gateway_port: number;
   quick_ask_shortcut: string;
+  quick_ask_mode: string;
   sidebar_shortcuts: SidebarShortcuts;
   config_path: string | null;
 }

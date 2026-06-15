@@ -20,6 +20,12 @@ pub fn toggle_quick_ask(app: &AppHandle) {
     }
 }
 
+pub fn toggle_main_window(app: &AppHandle) {
+    if let Err(e) = toggle_main_window_inner(app) {
+        log::error!("Failed to toggle main window: {}", e);
+    }
+}
+
 pub fn register_quick_ask_shortcut(
     app: &AppHandle,
     state: &QuickAskShortcutState,
@@ -130,6 +136,18 @@ fn show_main_window(app: &AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("main") {
         window.show().map_err(|e| e.to_string())?;
         window.set_focus().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+fn toggle_main_window_inner(app: &AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("main") {
+        if window.is_visible().unwrap_or(false) && window.is_focused().unwrap_or(false) {
+            window.hide().map_err(|e| e.to_string())?;
+        } else {
+            window.show().map_err(|e| e.to_string())?;
+            window.set_focus().map_err(|e| e.to_string())?;
+        }
     }
     Ok(())
 }

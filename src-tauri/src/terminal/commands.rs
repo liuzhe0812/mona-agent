@@ -18,7 +18,6 @@ use crate::terminal::sftp::batch::{
 use crate::terminal::sftp::client::{FileInfo, SftpClient};
 use crate::terminal::sftp::client as sftp_client;
 use crate::terminal::ssh::client::SshClient;
-use crate::terminal::ssh::forward::{ForwardType, PortForward};
 use crate::terminal::TerminalState;
 use tauri::{AppHandle, Emitter, State};
 use tokio::sync::{Semaphore, Notify};
@@ -1098,44 +1097,6 @@ pub async fn terminal_load_connections() -> Result<Vec<ConnectionConfig>, String
     let connections: Vec<ConnectionConfig> = serde_json::from_str(&data)
         .map_err(|e| TerminalError::ConfigLoad(e.to_string()).to_string())?;
     Ok(connections)
-}
-
-#[tauri::command]
-pub async fn ssh_port_forward(
-    state: State<'_, TerminalState>,
-    session_id: String,
-    forward_type: String,
-    local_port: u16,
-    remote_host: String,
-    remote_port: u16,
-) -> Result<u16, String> {
-    let handle = state
-        .manager
-        .get_handle(&session_id)
-        .await
-        .ok_or_else(|| TerminalError::SessionNotFound(session_id.clone()).to_string())?;
-
-    let ssh_client = match handle {
-        SessionHandle::Ssh(client) => client,
-        _ => return Err("Not an SSH session".into()),
-    };
-
-    let ft = match forward_type.as_str() {
-        "local" => ForwardType::Local {
-            local_port,
-            remote_host,
-            remote_port,
-        },
-        "remote" => ForwardType::Remote {
-            remote_port,
-            local_host: "127.0.0.1".into(),
-            local_port,
-        },
-        _ => return Err("Invalid forward type, use 'local' or 'remote'".into()),
-    };
-
-    let pf = PortForward::new_from_arc(ssh_client.handle.clone(), ft);
-    pf.start_local().await.map_err(|e| e.to_string())
 }
 
 #[derive(serde::Serialize, Clone)]

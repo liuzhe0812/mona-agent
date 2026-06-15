@@ -1,4 +1,5 @@
 pub mod commands;
+pub mod storage;
 pub mod tab;
 
 use dashmap::DashMap;
@@ -10,28 +11,17 @@ use url::Url;
 
 const CDP_PORT_START: u16 = 9300;
 
-/// 拦截新窗口请求的初始化脚本
-/// 1. 拦截所有带 target="_blank" 的链接点击，改为同窗口导航
-/// 2. 拦截 window.open() 调用，改为同窗口导航
-/// 注意：子 WebView 中 __TAURI_INTERNALS__ 不可用，URL 变化通过 on_navigation 回调通知
-const BLANK_LINK_INTERCEPTOR: &str = r#"
+/// 注入 tab ID 标记的初始化脚本
+/// target="_blank" 链接和 window.open 由 WebView2 的 NewWindowRequested 事件处理
+const TAB_ID_INJECTOR: &str = r#"
 (function() {
-  // 拦截 target="_blank" 链接点击
-  window.addEventListener('click', function(e) {
-    var link = e.target.closest('a[target="_blank"]');
-    if (link && link.href) {
-      e.preventDefault();
-      e.stopPropagation();
-      window.location.href = link.href;
-    }
+  if (window.__mona_fullscreen_keys_injected) return;
+  window.__mona_fullscreen_keys_injected = true;
+  document.addEventListener('keydown', function(e) {
+    if (e.key !== 'Escape' && e.key !== 'F11') return;
+    if (!window.__TAURI__ || !window.__TAURI__.event) return;
+    window.__TAURI__.event.emit('browser-fullscreen-key', { key: e.key });
   }, true);
-  // 拦截 window.open() 调用，改为同窗口导航
-  window.open = function(url) {
-    if (url) {
-      window.location.href = url;
-    }
-    return null;
-  };
 })();
 "#;
 
@@ -70,21 +60,13 @@ impl BrowserState {
         // 为 on_navigation 闭包克隆所需变量
         let tabs = self.tabs.clone();
         let app_handle = app.clone();
+        let app_handle2 = app.clone();
         let tab_id = id.to_string();
-
-        // 创建子 WebView，配置 on_navigation：
-        // 1. 允许所有 https/http 导航
-        // 2. 通知前端 URL 变化（子 WebView 中 __TAURI_INTERNALS__ 不可用，必须在此回调中处理）
-        //
-        // 注意：不设置 data_directory，因为 WebView2 不同 data_directory 会启动独立的浏览器进程，
-        // 导致子 WebView 不共享主窗口的 CDP 端口（--remote-debugging-port=9300），
-        // Playwright 无法通过 CDP 连接到子 WebView。
-        // 所有 WebView 共享同一用户数据目录（EBWebView），cookies/localStorage 自然持久化。
 
         // 注入 tab ID 标记，供 Playwright CDP 通过 evaluate 识别对应 Page
         let init_script = format!(
             "{}\nwindow.__mona_tab_id = '{}';",
-            BLANK_LINK_INTERCEPTOR, id
+            TAB_ID_INJECTOR, id
         );
 
         let webview_builder = WebviewBuilder::new(&webview_label, WebviewUrl::External(parsed_url))
@@ -105,13 +87,64 @@ impl BrowserState {
 
         // 初始位置放在屏幕外，避免 WebView 覆盖工具栏
         // updateWebviewBounds 会在前端将其移到正确位置
-        window
+        let child_webview = window
             .add_child(
                 webview_builder,
                 tauri::LogicalPosition::new(-9999, -9999),
                 tauri::LogicalSize::new(1, 1),
             )
             .map_err(|e| format!("Failed to create webview: {}", e))?;
+
+        // 注册 WebView2 NewWindowRequested 事件处理器
+        // 当用户点击 target="_blank" 链接时，WebView2 触发此事件
+        // 我们拦截它，通知前端创建新标签页，而不是让系统浏览器打开
+        let emit_handle = app_handle2.clone();
+        child_webview.with_webview(move |wv| {
+            #[cfg(target_os = "windows")]
+            {
+                use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2NewWindowRequestedEventArgs;
+                use webview2_com::NewWindowRequestedEventHandler;
+                use windows_strings::PWSTR;
+
+                let controller = wv.controller();
+                let core_webview = unsafe { controller.CoreWebView2().unwrap() };
+
+                let emit = emit_handle.clone();
+                let handler = NewWindowRequestedEventHandler::create(Box::new(
+                    move |_sender: Option<webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2>,
+                          args: Option<ICoreWebView2NewWindowRequestedEventArgs>| {
+                        if let Some(args) = args {
+                            // 获取请求的 URI
+                            let mut raw_uri = PWSTR::null();
+                            let uri = unsafe {
+                                match args.Uri(&mut raw_uri) {
+                                    Ok(()) => {
+                                        let s = raw_uri.to_string().unwrap_or_default();
+                                        windows::Win32::System::Com::CoTaskMemFree(Some(raw_uri.as_ptr() as *const _));
+                                        s
+                                    }
+                                    Err(_) => String::new(),
+                                }
+                            };
+                            if !uri.is_empty() {
+                                let _ = emit.emit(
+                                    "browser-open-new-tab",
+                                    serde_json::json!({ "url": uri }),
+                                );
+                            }
+                            // 阻止系统浏览器打开
+                            unsafe { let _ = args.SetHandled(true); }
+                        }
+                        Ok(())
+                    },
+                ));
+
+                let mut token: i64 = 0;
+                unsafe {
+                    let _ = core_webview.add_NewWindowRequested(&handler, &mut token);
+                }
+            }
+        }).map_err(|e| format!("Failed to register NewWindowRequested handler: {}", e))?;
 
         let tab = BrowserTab {
             id: id.to_string(),

@@ -3531,6 +3531,12 @@ class WebSocketChannel(BaseChannel):
             db_table = envelope.get("db_table")
             if isinstance(db_table, str) and db_table:
                 metadata["table"] = db_table
+            browser_page_url = envelope.get("browser_page_url")
+            if isinstance(browser_page_url, str) and browser_page_url:
+                metadata["browser_page_url"] = browser_page_url
+            browser_page_title = envelope.get("browser_page_title")
+            if isinstance(browser_page_title, str) and browser_page_title:
+                metadata["browser_page_title"] = browser_page_title
             # IMPORTANT: persist display_content for history replay.
             # DO NOT remove — keeps user messages showing original input, not enriched prompts.
             display_content = envelope.get("display_content")

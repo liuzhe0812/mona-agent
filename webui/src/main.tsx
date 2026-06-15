@@ -36,25 +36,4 @@ document.addEventListener("keydown", (e) => {
 const root = document.getElementById("root");
 if (!root) throw new Error("root element missing");
 
-function isMdReaderRoute(): boolean {
-  const hash = window.location.hash;
-  return hash.startsWith("#/md-reader");
-}
-
-function getMdReaderFilePath(): string | null {
-  const hash = window.location.hash;
-  const match = hash.match(/[?&]file=([^&]+)/);
-  if (match) {
-    return decodeURIComponent(match[1]);
-  }
-  return null;
-}
-
-if (isMdReaderRoute()) {
-  import("./components/md-reader/MdReaderApp").then(({ MdReaderApp }) => {
-    const filePath = getMdReaderFilePath();
-    ReactDOM.createRoot(root!).render(<MdReaderApp initialFilePath={filePath} />);
-  });
-} else {
-  ReactDOM.createRoot(root).render(<App />);
-}
+ReactDOM.createRoot(root).render(<App />);

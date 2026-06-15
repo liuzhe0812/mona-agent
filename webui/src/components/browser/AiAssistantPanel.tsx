@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Loader2, RotateCcw, Send, Sparkles, Square, X } from "lucide-react";
-import { AgentLogo } from "@/components/AgentLogo";
 import { Input } from "@/components/ui/input";
 import { ThreadMessages } from "@/components/thread/ThreadMessages";
 import { useMonaStream, type SendOptions } from "@/hooks/useMonaStream";
@@ -19,6 +18,10 @@ interface AiAssistantPanelProps {
   session: ChatSummary | null;
   /** Whether AI is currently operating the browser */
   isAiActive: boolean;
+  /** Current browser page URL */
+  pageUrl?: string;
+  /** Current browser page title */
+  pageTitle?: string;
   /** Callback when panel layout changes (to notify parent to resize WebView) */
   onToggle?: (expanded: boolean) => void;
   /** Callback when panel is closed */
@@ -28,6 +31,8 @@ interface AiAssistantPanelProps {
 export function AiAssistantPanel({
   session,
   isAiActive,
+  pageUrl,
+  pageTitle,
   onToggle,
   onClose,
 }: AiAssistantPanelProps) {
@@ -90,6 +95,11 @@ export function AiAssistantPanel({
     send(pendingPrompt, undefined, opts ?? undefined);
   }, [chatId, creatingChat, isStreaming, send]);
 
+  const browserSendOpts = useMemo<SendOptions>(() => ({
+    browserPageUrl: pageUrl || undefined,
+    browserPageTitle: pageTitle || undefined,
+  }), [pageUrl, pageTitle]);
+
   const sendDraft = useCallback(() => {
     const text = draft.trim();
     if (!text || creatingChat) return;
@@ -101,7 +111,7 @@ export function AiAssistantPanel({
     setDraft("");
 
     if (chatId) {
-      send(text);
+      send(text, undefined, browserSendOpts);
       return;
     }
 
@@ -109,9 +119,10 @@ export function AiAssistantPanel({
     setCreatingChat(true);
     setNotice("正在创建会话");
     pendingPromptRef.current = text;
+    pendingSendOptsRef.current = browserSendOpts;
     (async () => {
       try {
-        const nextChatId = await client.newChat(5_000, true);
+        await client.newChat(5_000, true);
         // The session will be picked up by useSessions automatically
         // For now we just set the pending prompt
         pendingPromptRef.current = text;
@@ -122,7 +133,7 @@ export function AiAssistantPanel({
         setCreatingChat(false);
       }
     })();
-  }, [draft, chatId, client, creatingChat, isStreaming, send]);
+  }, [draft, chatId, client, creatingChat, isStreaming, send, browserSendOpts]);
 
   const handleResetChat = useCallback(() => {
     setMessages([]);

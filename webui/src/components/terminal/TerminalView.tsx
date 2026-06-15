@@ -12,6 +12,7 @@ import { ExecApprovalDialog } from "./Dialogs/ExecApprovalDialog";
 import { FileManager } from "./FileManager/FileManager";
 import { BatchModeView } from "./BatchMode/BatchModeView";
 import { DesktopMode } from "./Desktop/DesktopMode";
+import { IdeLayout } from "../ide/IdeLayout";
 import { useTerminalStore } from "./store/terminalStore";
 import { useLicense } from "@/hooks/useLicense";
 import { shellSpawn } from "./ipc";
@@ -133,6 +134,17 @@ export function TerminalView() {
                       style={{ display: isActive ? "block" : "none" }}
                     >
                       <DesktopMode sessionId={session.id} />
+                    </div>
+                  );
+                }
+                if (session.type === "ssh") {
+                  return (
+                    <div
+                      key={session.id}
+                      className="h-full"
+                      style={{ display: isActive ? "block" : "none" }}
+                    >
+                      <IdeLayout sessionId={session.id} />
                     </div>
                   );
                 }

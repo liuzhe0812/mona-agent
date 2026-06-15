@@ -1,6 +1,6 @@
 [project]
 name = "mona-ai"
-version = "1.0.3"
+version = "1.0.5"
 description = "A lightweight personal AI assistant framework"
 readme = { file = "LICENSE", content-type = "text/plain" }
 requires-python = ">=3.11"
@@ -182,3 +182,4 @@ exclude_lines = [
     "if __name__ == .__main__.:",
     "if TYPE_CHECKING:",
 ]
+

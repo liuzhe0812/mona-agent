@@ -599,6 +599,7 @@ class AgentLoop:
             sender_id=msg.sender_id,
             session_summary=pending_summary,
             session_metadata=session.metadata,
+            message_metadata=msg.metadata,
         )
 
     async def _dispatch_command_inline(
@@ -1064,6 +1065,7 @@ class AgentLoop:
             sender_id=msg.sender_id,
             session_summary=pending,
             session_metadata=session.metadata,
+            message_metadata=msg.metadata,
         )
         t_wall = time.time()
         final_content, _, all_msgs, stop_reason, _ = await self._run_agent_loop(

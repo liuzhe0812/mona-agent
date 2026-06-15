@@ -53,6 +53,7 @@ impl GatewayManager {
             }
 
             cmd.env("PYTHONUNBUFFERED", "1");
+            cmd.env("PYTHONUTF8", "1");
 
             // Set PYTHONPATH if source tree exists
             if let Ok(exe_path) = std::env::current_exe() {
@@ -86,7 +87,14 @@ impl GatewayManager {
                 cmd.args(["--config", config_path]);
             }
 
+            // Environment isolation for release mode: strip harmful Python env vars
+            // that may leak from Conda/Anaconda/user site-packages and cause import conflicts.
+            strip_harmful_python_env(&mut cmd);
             cmd.env("PYTHONUNBUFFERED", "1");
+            cmd.env("PYTHONUTF8", "1");
+            cmd.env("PYTHONIOENCODING", "utf-8");
+            cmd.env("PYTHONNOUSERSITE", "1");
+            cmd.env("NO_COLOR", "1");
         }
 
         #[cfg(windows)]
@@ -175,10 +183,17 @@ impl GatewayManager {
         let proc = guard.as_mut()?;
         let child = proc.child.as_mut()?;
         match child.try_wait() {
-            Ok(Some(status)) => Some(format!(
-                "Gateway process exited before becoming ready ({status}). See log: {}",
-                gateway_log_path().display()
-            )),
+            Ok(Some(status)) => {
+                let log_tail = read_log_tail(20);
+                let mut msg = format!(
+                    "Gateway process exited before becoming ready ({status}). See log: {}",
+                    gateway_log_path().display()
+                );
+                if !log_tail.is_empty() {
+                    msg.push_str(&format!("\n\nRecent log:\n{}", log_tail));
+                }
+                Some(msg)
+            }
             Ok(None) => None,
             Err(e) => Some(format!(
                 "Failed to inspect gateway process: {e}. See log: {}",
@@ -248,8 +263,29 @@ fn find_available_port(start_port: u16) -> Result<u16, String> {
         }
         log::info!("Port {} is in use, trying next", port);
     }
+
+    // All ports in range are occupied — wait briefly for the start port to free up
+    log::info!(
+        "All ports {}-{} in use, waiting up to 10s for port {} to become available",
+        start_port,
+        start_port + 5,
+        start_port
+    );
+    let wait_start = std::time::Instant::now();
+    let wait_deadline = std::time::Duration::from_secs(10);
+    loop {
+        if is_port_available(start_port) {
+            log::info!("Port {} became available after waiting", start_port);
+            return Ok(start_port);
+        }
+        if wait_start.elapsed() > wait_deadline {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+
     Err(format!(
-        "No available port in range {}-{}",
+        "No available port in range {}-{}. Another program may be using these ports.",
         start_port,
         start_port + 5
     ))
@@ -258,6 +294,46 @@ fn find_available_port(start_port: u16) -> Result<u16, String> {
 fn is_port_available(port: u16) -> bool {
     use std::net::TcpListener;
     TcpListener::bind(("127.0.0.1", port)).is_ok()
+}
+
+/// Strip environment variables that can interfere with the packaged gateway.
+/// Conda/Anaconda/user site-packages may inject conflicting packages
+/// (e.g. a different pydantic version) that crash the gateway at import time.
+fn strip_harmful_python_env(cmd: &mut std::process::Command) {
+    for var in [
+        "PYTHONPATH",
+        "PYTHONHOME",
+        "PYTHONSTARTUP",
+        "VIRTUAL_ENV",
+        "CONDA_PREFIX",
+        "CONDA_DEFAULT_ENV",
+        "CONDA_SHLVL",
+        "CONDA_PYTHON_EXE",
+        "CONDA_PROMPT_MODIFIER",
+        "PIP_TARGET",
+        "PIP_PREFIX",
+        "PIP_USER",
+        "PIP_REQUIRE_VIRTUALENV",
+    ] {
+        cmd.env_remove(var);
+    }
+}
+
+/// Read the last N lines of the gateway log file for error diagnostics.
+fn read_log_tail(max_lines: usize) -> String {
+    let path = gateway_log_path();
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(_) => return String::new(),
+    };
+    let lines: Vec<&str> = content.lines().rev().take(max_lines).collect();
+    let mut result = lines.into_iter().rev().collect::<Vec<&str>>().join("\n");
+    // Truncate to avoid excessively long error messages
+    const MAX_TAIL_BYTES: usize = 4096;
+    if result.len() > MAX_TAIL_BYTES {
+        result = result[result.len() - MAX_TAIL_BYTES..].to_string();
+    }
+    result
 }
 
 pub async fn wait_for_gateway<F>(
@@ -282,12 +358,17 @@ where
         }
 
         if start.elapsed() > timeout {
-            return Err(format!(
+            let log_tail = read_log_tail(20);
+            let mut msg = format!(
                 "Gateway did not start within {}s on port {}. See log: {}",
                 timeout_secs,
                 port,
                 gateway_log_path().display()
-            ));
+            );
+            if !log_tail.is_empty() {
+                msg.push_str(&format!("\n\nRecent log:\n{}", log_tail));
+            }
+            return Err(msg);
         }
 
         match client.get(&url).timeout(std::time::Duration::from_secs(2)).send().await {

@@ -484,6 +484,8 @@ export type Outbound =
       db_connection_id?: string;
       db_database?: string;
       db_table?: string;
+      browser_page_url?: string;
+      browser_page_title?: string;
     }
   | { type: "delete_chat"; chat_id: string }
   | {

@@ -9,6 +9,7 @@ import {
   browserGoBack as goBackIpc,
   browserGoForward as goForwardIpc,
   browserReload as reloadIpc,
+  browserRecordVisit,
 } from "@/lib/browser-ipc";
 import { isTauri } from "@/lib/tauri";
 
@@ -40,6 +41,107 @@ let _tabCounter = 0;
 export function useBrowserTabs() {
   const [tabs, setTabs] = useState<Tab[]>([MONA_TAB]);
   const [activeTabId, setActiveTabId] = useState<string>("mona");
+  const [browserFullscreen, setBrowserFullscreen] = useState(false);
+
+  // 全屏切换
+  const toggleFullscreen = useCallback(async () => {
+    if (!isTauri()) return;
+    try {
+      const { getCurrentWindow } = await import("@tauri-apps/api/window");
+      const win = getCurrentWindow();
+      const isFull = await win.isFullscreen();
+      await win.setFullscreen(!isFull);
+      setBrowserFullscreen(!isFull);
+    } catch (e) {
+      console.error("[useBrowserTabs] toggle fullscreen failed:", e);
+    }
+  }, []);
+
+  const exitFullscreen = useCallback(async () => {
+    if (!isTauri()) return;
+    try {
+      const { getCurrentWindow } = await import("@tauri-apps/api/window");
+      const win = getCurrentWindow();
+      await win.setFullscreen(false);
+      setBrowserFullscreen(false);
+    } catch (e) {
+      console.error("[useBrowserTabs] exit fullscreen failed:", e);
+    }
+  }, []);
+
+  // F11 切换全屏，Escape 退出全屏
+  useEffect(() => {
+    if (!isTauri()) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "F11") {
+        e.preventDefault();
+        void toggleFullscreen();
+      } else if (e.key === "Escape" && browserFullscreen) {
+        e.preventDefault();
+        void exitFullscreen();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [toggleFullscreen, exitFullscreen, browserFullscreen]);
+
+  // 全屏时 WebView 会捕获键盘事件，监听 WebView 内部透传出来的 ESC/F11
+  useEffect(() => {
+    if (!isTauri()) return;
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+
+    (async () => {
+      const { listen } = await import("@tauri-apps/api/event");
+      unlisten = await listen<{ key: string }>("browser-fullscreen-key", (event) => {
+        if (cancelled) return;
+        if (event.payload.key === "F11") {
+          void toggleFullscreen();
+        } else if (event.payload.key === "Escape" && browserFullscreen) {
+          void exitFullscreen();
+        }
+      });
+    })();
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [toggleFullscreen, exitFullscreen, browserFullscreen]);
+
+  // 监听 Tauri 窗口 resize 事件来检测全屏状态变化
+  // 视频全屏按钮通过 wry runtime 的 ContainsFullScreenElementChanged 直接设置窗口全屏
+  // 前端需要通过窗口事件来同步全屏状态
+  useEffect(() => {
+    if (!isTauri()) return;
+    let mounted = true;
+    let unlisten: (() => void) | undefined;
+
+    (async () => {
+      try {
+        const { getCurrentWindow } = await import("@tauri-apps/api/window");
+        const win = getCurrentWindow();
+        unlisten = await win.onResized(async () => {
+          if (!mounted) return;
+          try {
+            const isFull = await win.isFullscreen();
+            if (mounted) {
+              setBrowserFullscreen((prev) => (prev !== isFull ? isFull : prev));
+            }
+          } catch {
+            // ignore
+          }
+        });
+      } catch {
+        // ignore - Tauri API not available
+      }
+    })();
+
+    return () => {
+      mounted = false;
+      unlisten?.();
+    };
+  }, []);
 
   useEffect(() => {
     if (!isTauri()) return;
@@ -63,6 +165,7 @@ export function useBrowserTabs() {
     let unlistenCreated: (() => void) | undefined;
     let unlistenClosed: (() => void) | undefined;
     let unlistenUrlChanged: (() => void) | undefined;
+    let unlistenOpenNewTab: (() => void) | undefined;
 
     (async () => {
       const { listen } = await import("@tauri-apps/api/event");
@@ -100,6 +203,40 @@ export function useBrowserTabs() {
           setTabs((prev) =>
             prev.map((t) => (t.id === id ? { ...t, url } : t))
           );
+          // 记录访问历史
+          if (url && (url.startsWith("http://") || url.startsWith("https://"))) {
+            browserRecordVisit(url, "").catch(() => {});
+          }
+        }
+      );
+
+      // 监听 target="_blank" / window.open 的新标签请求
+      unlistenOpenNewTab = await listen<{ url: string }>(
+        "browser-open-new-tab",
+        (event) => {
+          const { url } = event.payload;
+          _tabCounter++;
+          const id = `tab-${_tabCounter}`;
+          const newTab: Tab = {
+            id,
+            type: "browser",
+            title: url,
+            url,
+            isAiControlled: false,
+            webviewCreated: false,
+          };
+          setTabs((prev) => [...prev, newTab]);
+          setActiveTabId(id);
+          // 创建 WebView
+          browserCreateTab(id, url).then(() => {
+            setTabs((prev) =>
+              prev.map((t) =>
+                t.id === id ? { ...t, webviewCreated: true } : t
+              )
+            );
+          }).catch((e) => {
+            console.error("[useBrowserTabs] create tab for new-tab request failed:", e);
+          });
         }
       );
     })();
@@ -109,6 +246,7 @@ export function useBrowserTabs() {
       unlistenCreated?.();
       unlistenClosed?.();
       unlistenUrlChanged?.();
+      unlistenOpenNewTab?.();
     };
   }, []);
 
@@ -271,5 +409,8 @@ export function useBrowserTabs() {
     goBack,
     goForward,
     reload,
+    browserFullscreen,
+    toggleFullscreen,
+    exitFullscreen,
   };
 }

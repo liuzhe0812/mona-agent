@@ -1,4 +1,11 @@
-import { Wifi, WifiOff, Loader2, AlertTriangle, Monitor, Server } from "lucide-react";
+import {
+  Wifi,
+  WifiOff,
+  Loader2,
+  AlertTriangle,
+  Monitor,
+  Server,
+} from "lucide-react";
 import { useTerminalStore } from "./store/terminalStore";
 
 interface Props {

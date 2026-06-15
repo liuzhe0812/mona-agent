@@ -1,12 +1,22 @@
 import { useState } from "react";
-import { Plus, FolderOpen, Server, Settings, ArrowLeftRight, HardDrive, Monitor } from "lucide-react";
+import {
+  Plus,
+  FolderOpen,
+  Server,
+  Settings,
+  HardDrive,
+  Monitor,
+  FolderTree,
+  Activity,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AgentLogo } from "@/components/AgentLogo";
 import { useTerminalStore } from "./store/terminalStore";
+import { useIdeStore } from "../ide/useIdeStore";
 import { useLicense } from "@/hooks/useLicense";
 import { sshOpenSftp, desktopConnect } from "./ipc";
-import { PortForwardDialog } from "./Dialogs/PortForwardDialog";
 import { SessionManagerDialog } from "./Dialogs/SessionManagerDialog";
+import { cn } from "@/lib/utils";
 
 export function Toolbar() {
   const { licenseActive } = useLicense();
@@ -21,8 +31,12 @@ export function Toolbar() {
   const sessions = useTerminalStore((s) => s.sessions);
   const addSession = useTerminalStore((s) => s.addSession);
   const connections = useTerminalStore((s) => s.connections);
-  const [portForwardOpen, setPortForwardOpen] = useState(false);
   const [sessionManagerOpen, setSessionManagerOpen] = useState(false);
+
+  const fileTreeVisible = useIdeStore((s) => s.leftFileTreeVisible);
+  const systemMonitorVisible = useIdeStore((s) => s.leftSystemMonitorVisible);
+  const toggleFileTree = useIdeStore((s) => s.toggleLeftFileTree);
+  const toggleSystemMonitor = useIdeStore((s) => s.toggleLeftSystemMonitor);
 
   const activeSession = sessions.find((s) => s.id === activeSessionId);
 
@@ -134,21 +148,44 @@ export function Toolbar() {
         <Monitor className="h-3.5 w-3.5" />
         桌面
       </Button>
-      <Button variant="ghost" size="sm" className="h-7 gap-1.5 text-xs" onClick={() => setSettingsDialogOpen(true)}>
-        <Settings className="h-3.5 w-3.5" />
-        设置
-      </Button>
       <Button
         variant="ghost"
         size="sm"
         className="h-7 gap-1.5 text-xs"
-        onClick={() => setPortForwardOpen(true)}
-        disabled={!activeSession || activeSession.type !== "ssh"}
+        onClick={() => setSettingsDialogOpen(true)}
       >
-        <ArrowLeftRight className="h-3.5 w-3.5" />
-        转发
+        <Settings className="h-3.5 w-3.5" />
+        设置
       </Button>
       <div className="flex-1" />
+      {activeSession?.type === "ssh" && (
+        <>
+          <Button
+            variant="ghost"
+            size="sm"
+            className={cn(
+              "h-7 w-7 p-0",
+              fileTreeVisible && "bg-accent text-accent-foreground",
+            )}
+            onClick={toggleFileTree}
+            title={fileTreeVisible ? "隐藏文件树" : "显示文件树"}
+          >
+            <FolderTree className="h-4 w-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className={cn(
+              "h-7 w-7 p-0",
+              systemMonitorVisible && "bg-accent text-accent-foreground",
+            )}
+            onClick={toggleSystemMonitor}
+            title={systemMonitorVisible ? "隐藏系统监控" : "显示系统监控"}
+          >
+            <Activity className="h-4 w-4" />
+          </Button>
+        </>
+      )}
       {licenseActive && (
         <Button
           variant="ghost"
@@ -162,13 +199,6 @@ export function Toolbar() {
             className={`h-5 w-5 ${aiPanelVisible ? "" : "opacity-60"}`}
           />
         </Button>
-      )}
-      {activeSessionId && (
-        <PortForwardDialog
-          open={portForwardOpen}
-          onOpenChange={setPortForwardOpen}
-          sessionId={activeSessionId}
-        />
       )}
       <SessionManagerDialog
         open={sessionManagerOpen}

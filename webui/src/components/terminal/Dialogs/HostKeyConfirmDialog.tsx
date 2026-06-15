@@ -8,14 +8,14 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { sshTrustHostKey, sshConnect } from "../ipc";
+import { sshTrustHostKey, sshConnectWithId } from "../ipc";
 import { useTerminalStore } from "../store/terminalStore";
 import type { ConnectionConfig } from "../types/terminal";
 
 export function HostKeyConfirmDialog() {
   const dialog = useTerminalStore((s) => s.hostKeyDialog);
   const closeHostKeyDialog = useTerminalStore((s) => s.closeHostKeyDialog);
-  const addSession = useTerminalStore((s) => s.addSession);
+  const updateSessionStatus = useTerminalStore((s) => s.updateSessionStatus);
   const addConnection = useTerminalStore((s) => s.addConnection);
   const saveConnection = useTerminalStore((s) => s.saveConnection);
   const showSshPasswordDialog = useTerminalStore((s) => s.showSshPasswordDialog);
@@ -28,6 +28,7 @@ export function HostKeyConfirmDialog() {
 
   const handleTrust = async () => {
     const config = dialog.pendingConfig;
+    const sessionId = dialog.pendingSessionId;
     if (!config) return;
 
     setTrusting(true);
@@ -35,16 +36,10 @@ export function HostKeyConfirmDialog() {
     try {
       await sshTrustHostKey(dialog.host, dialog.port);
 
-      const tryConnect = async (connConfig: ConnectionConfig) => {
+      const doConnect = async (connConfig: ConnectionConfig, sid: string) => {
         addConnection(connConfig);
-        const sessionId = await sshConnect(connConfig);
-        addSession({
-          id: sessionId,
-          configId: connConfig.id,
-          type: connConfig.protocol === "sftp" ? "sftp" : "ssh",
-          status: "connected",
-          title: connConfig.host,
-        });
+        await sshConnectWithId(sid, connConfig);
+        updateSessionStatus(sid, "connected");
         if (dialog.saveSession) {
           await saveConnection(connConfig);
         }
@@ -52,7 +47,17 @@ export function HostKeyConfirmDialog() {
       };
 
       try {
-        await tryConnect(config);
+        if (sessionId) {
+          await doConnect(config, sessionId);
+        } else {
+          // Fallback: no pre-existing session, should not normally happen
+          addConnection(config);
+          await sshConnectWithId(crypto.randomUUID(), config);
+          if (dialog.saveSession) {
+            await saveConnection(config);
+          }
+          closeHostKeyDialog();
+        }
       } catch (err) {
         const errMsg = String(err);
         const keyringMatch = errMsg.match(/keyring/i);
@@ -69,15 +74,29 @@ export function HostKeyConfirmDialog() {
                 ...config,
                 auth: { type: "password", password },
               };
-              await tryConnect(newConfig);
+              if (sessionId) {
+                await sshConnectWithId(sessionId, newConfig);
+                updateSessionStatus(sessionId, "connected");
+              }
+              await saveConnection(newConfig);
             },
-            onCancel: () => {},
+            onCancel: () => {
+              if (sessionId) {
+                updateSessionStatus(sessionId, "error");
+              }
+            },
           });
           return;
+        }
+        if (sessionId) {
+          updateSessionStatus(sessionId, "error");
         }
         setError(errMsg.replace(/^Error:\s*/i, ""));
       }
     } catch (err) {
+      if (sessionId) {
+        updateSessionStatus(sessionId, "error");
+      }
       setError(String(err).replace(/^Error:\s*/i, ""));
     } finally {
       setTrusting(false);

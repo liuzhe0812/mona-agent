@@ -50,6 +50,7 @@ interface SidebarProps {
   onToggleArchive: (key: string) => void;
   onOpenSettings: () => void;
   onOpenLogin?: () => void;
+  onOpenSubscribe?: () => void;
   onOpenNote?: () => void;
   onOpenPpt?: () => void;
   onOpenSSH?: () => void;
@@ -75,7 +76,7 @@ interface SidebarProps {
 
 export function Sidebar(props: SidebarProps) {
   const { t } = useTranslation();
-  const { loggedIn, licenseInfo, licenseActive, localTrial, localTrialExpired, remainingDays } =
+  const { loggedIn, licenseInfo, licenseActive, localTrial, localTrialExpired, serverTrial, remainingDays } =
     useLicense();
   const [menuPortalContainer, setMenuPortalContainer] =
     useState<HTMLElement | null>(null);
@@ -202,15 +203,7 @@ export function Sidebar(props: SidebarProps) {
           collapsed && "w-14 flex-col px-0",
         )}
       >
-        {localTrial && !localTrialExpired ? (
-          <SidebarActionButton
-            collapsed={collapsed}
-            label={`试用剩余 ${remainingDays} 天`}
-            onClick={props.onOpenLogin ?? (() => {})}
-            className={collapsed ? undefined : "flex-1"}
-            icon={<User className="h-4 w-4" />}
-          />
-        ) : loggedIn ? (
+        {loggedIn ? (
           <div className={cn("flex items-center gap-1", collapsed ? "w-14 flex-col px-0" : "w-full")}>
             <SidebarActionButton
               collapsed={collapsed}
@@ -219,25 +212,54 @@ export function Sidebar(props: SidebarProps) {
               className={collapsed ? undefined : "flex-1"}
               icon={<User className="h-4 w-4" />}
             />
-            {!collapsed && !licenseActive && (
+            {!collapsed && (!licenseActive || serverTrial || localTrial) && (
               <Button
-                variant="ghost"
                 size="sm"
-                onClick={props.onOpenLogin}
-                className="h-8 shrink-0 rounded-full px-2.5 text-[12px] font-medium text-primary hover:bg-sidebar-accent/75 hover:text-primary"
+                onClick={props.onOpenSubscribe ?? props.onOpenLogin}
+                className="h-5 shrink-0 rounded-full bg-blue-500/15 px-1.5 text-[10px] font-medium text-blue-600 hover:bg-blue-500/25 dark:text-blue-400"
+              >
+                升级 Pro
+              </Button>
+            )}
+          </div>
+        ) : localTrial && !localTrialExpired ? (
+          <div className={cn("flex items-center gap-1", collapsed ? "w-14 flex-col px-0" : "w-full")}>
+            <SidebarActionButton
+              collapsed={collapsed}
+              label={`试用剩余 ${remainingDays} 天`}
+              onClick={props.onOpenLogin ?? (() => {})}
+              className={collapsed ? undefined : "flex-1"}
+              icon={<User className="h-4 w-4" />}
+            />
+            {!collapsed && (
+              <Button
+                size="sm"
+                onClick={props.onOpenSubscribe ?? props.onOpenLogin}
+                className="h-5 shrink-0 rounded-full bg-blue-500/15 px-1.5 text-[10px] font-medium text-blue-600 hover:bg-blue-500/25 dark:text-blue-400"
               >
                 升级 Pro
               </Button>
             )}
           </div>
         ) : (
-          <SidebarActionButton
-            collapsed={collapsed}
-            label={t("sidebar.login", "登录")}
-            onClick={props.onOpenLogin ?? (() => {})}
-            className={collapsed ? undefined : "flex-1"}
-            icon={<LogIn className="h-4 w-4" />}
-          />
+          <div className={cn("flex items-center gap-1", collapsed ? "w-14 flex-col px-0" : "w-full")}>
+            <SidebarActionButton
+              collapsed={collapsed}
+              label={t("sidebar.login", "登录")}
+              onClick={props.onOpenLogin ?? (() => {})}
+              className={collapsed ? undefined : "flex-1"}
+              icon={<LogIn className="h-4 w-4" />}
+            />
+            {!collapsed && (
+              <Button
+                size="sm"
+                onClick={props.onOpenSubscribe ?? props.onOpenLogin}
+                className="h-5 shrink-0 rounded-full bg-blue-500/15 px-1.5 text-[10px] font-medium text-blue-600 hover:bg-blue-500/25 dark:text-blue-400"
+              >
+                购买订阅
+              </Button>
+            )}
+          </div>
         )}
       </div>
     </nav>

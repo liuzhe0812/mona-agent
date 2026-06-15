@@ -1,6 +1,20 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { ConnectionConfig, AuthConfig, FileInfo, BatchUploadRequest, BatchTransferProgress } from "./types/terminal";
+import type {
+  ConnectionConfig,
+  AuthConfig,
+  FileInfo,
+  BatchUploadRequest,
+  BatchTransferProgress,
+  ProjectInfo,
+  FileCheckResult,
+  FileContentResult,
+  WriteResult,
+  IdeExecResult,
+  RemoteSystemInfo,
+  RemoteProcessList,
+  RemotePortsData,
+} from "./types/terminal";
 
 function isTauri(): boolean {
   return !!(window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
@@ -140,6 +154,76 @@ export async function shellGetBuffer(sessionId: string): Promise<string> {
 
 export async function sftpList(sessionId: string, path: string): Promise<FileInfo[]> {
   return invoke<FileInfo[]>("sftp_list", { sessionId, path });
+}
+
+export async function ideOpenProject(
+  sessionId: string,
+  path: string,
+): Promise<ProjectInfo> {
+  return invoke("ide_open_project", { sessionId, path });
+}
+
+export async function ideCheckFile(
+  sessionId: string,
+  path: string,
+): Promise<FileCheckResult> {
+  return invoke("ide_check_file", { sessionId, path });
+}
+
+export async function ideReadFile(
+  sessionId: string,
+  path: string,
+): Promise<FileContentResult> {
+  return invoke("ide_read_file", { sessionId, path });
+}
+
+export async function ideWriteFile(
+  sessionId: string,
+  path: string,
+  content: string,
+  expectMtime: number,
+  expectSize: number,
+): Promise<WriteResult> {
+  return invoke("ide_write_file", {
+    sessionId,
+    path,
+    content,
+    expectMtime,
+    expectSize,
+  });
+}
+
+export async function ideExecCommand(
+  sessionId: string,
+  command: string,
+  cwd?: string,
+): Promise<IdeExecResult> {
+  return invoke("ide_exec_command", { sessionId, command, cwd });
+}
+
+export async function ideRemoteGetSystemInfo(
+  sessionId: string,
+): Promise<RemoteSystemInfo> {
+  return invoke<RemoteSystemInfo>("ide_remote_get_system_info", { sessionId });
+}
+
+export async function ideRemoteGetProcesses(
+  sessionId: string,
+): Promise<RemoteProcessList> {
+  return invoke<RemoteProcessList>("ide_remote_get_processes", { sessionId });
+}
+
+export async function ideRemoteGetPorts(
+  sessionId: string,
+): Promise<RemotePortsData> {
+  return invoke<RemotePortsData>("ide_remote_get_ports", { sessionId });
+}
+
+export async function ideRemoteKillProcess(
+  sessionId: string,
+  pid: number,
+): Promise<void> {
+  return invoke("ide_remote_kill_process", { sessionId, pid });
 }
 
 export async function sftpMkdir(sessionId: string, path: string): Promise<void> {
@@ -302,22 +386,6 @@ export async function sshTrustHostKey(host: string, port: number): Promise<void>
 
 export async function sshRemoveHostKey(host: string, port: number): Promise<void> {
   return invoke("ssh_remove_host_key", { host, port });
-}
-
-export async function sshPortForward(
-  sessionId: string,
-  forwardType: string,
-  localPort: number,
-  remoteHost: string,
-  remotePort: number,
-): Promise<number> {
-  return invoke<number>("ssh_port_forward", {
-    sessionId,
-    forwardType,
-    localPort,
-    remoteHost,
-    remotePort,
-  });
 }
 
 export type UnlistenFn = () => void;

@@ -407,6 +407,8 @@ export class MonaClient {
       dbConnectionId?: string;
       dbDatabase?: string;
       dbTable?: string;
+      browserPageUrl?: string;
+      browserPageTitle?: string;
     },
   ): void {
     this.knownChats.add(chatId);
@@ -422,6 +424,8 @@ export class MonaClient {
       ...(options?.dbConnectionId ? { db_connection_id: options.dbConnectionId } : {}),
       ...(options?.dbDatabase ? { db_database: options.dbDatabase } : {}),
       ...(options?.dbTable ? { db_table: options.dbTable } : {}),
+      ...(options?.browserPageUrl ? { browser_page_url: options.browserPageUrl } : {}),
+      ...(options?.browserPageTitle ? { browser_page_title: options.browserPageTitle } : {}),
       webui: true,
     };
     this.queueSend(frame);

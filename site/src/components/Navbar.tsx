@@ -3,10 +3,11 @@ import { Download } from "lucide-react";
 
 const links = [
   { label: "快速入门", href: "/manual.html" },
-  { label: "Agent", href: "#agent" },
-  { label: "模块", href: "#modules" },
-  { label: "白盒运维", href: "#whitebox" },
-  { label: "桌面端", href: "#desktop" },
+  { label: "Agent", href: "/#agent" },
+  { label: "模块", href: "/#modules" },
+  { label: "白盒运维", href: "/#whitebox" },
+  { label: "桌面端", href: "/#desktop" },
+  { label: "更新日志", href: "/changelog" },
 ];
 
 export default function Navbar() {
@@ -27,7 +28,7 @@ export default function Navbar() {
       }`}
     >
       <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
-        <a href="#" className="font-mono text-lg font-semibold tracking-normal text-[#101010]">
+        <a href="/" className="font-mono text-lg font-semibold tracking-normal text-[#101010]">
           Mona
         </a>
         <div className="hidden items-center gap-7 md:flex">

@@ -4,6 +4,7 @@ pub mod config;
 pub mod credential_store;
 pub mod desktop;
 pub mod error;
+pub mod ide;
 pub mod session;
 pub mod shell;
 pub mod ssh;

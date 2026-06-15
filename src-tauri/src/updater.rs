@@ -166,10 +166,10 @@ pub async fn download_and_verify(
 /// Extract the update package and install files.
 ///
 /// Steps:
-/// 1. Extract mona-<version>.tar.gz → staging/Mona(.exe) + staging/mona-gateway(.exe)
+/// 1. Extract mona-<version>.tar.gz → staging/Mona(.exe) + staging/mona-gateway/
 /// 2. Stop gateway
-/// 3. Backup resources/mona-gateway → mona-gateway.bak
-/// 4. Copy new mona-gateway → resources/mona-gateway
+/// 3. Backup resources/mona-gateway/ → mona-gateway.bak/
+/// 4. Copy new mona-gateway/ → resources/mona-gateway/
 /// 5. Copy Mona(.exe) → Mona(.exe).new (staged for swap)
 /// 6. Write .update-pending marker
 pub fn install_update(
@@ -198,13 +198,13 @@ pub fn install_update(
     #[cfg(not(windows))]
     let new_exe = staging_dir.join("Mona");
 
-    let new_gateway = staging_dir.join(crate::python::GATEWAY_EXE_NAME);
+    let new_gateway_dir = staging_dir.join("mona-gateway");
 
     if !new_exe.exists() {
-        return Err(format!("Update package missing main executable"));
+        return Err("Update package missing main executable".to_string());
     }
-    if !new_gateway.exists() {
-        return Err(format!("Update package missing gateway executable"));
+    if !new_gateway_dir.is_dir() {
+        return Err("Update package missing gateway directory".to_string());
     }
 
     // 2. Stop gateway
@@ -221,17 +221,17 @@ pub fn install_update(
     // Grace period for file locks
     std::thread::sleep(std::time::Duration::from_millis(500));
 
-    // 3. Backup existing gateway in resources
+    // 3. Backup existing gateway directory in resources
     let install_dir = get_install_dir()?;
-    let resource_gateway = install_dir.join("resources").join(crate::python::GATEWAY_EXE_NAME);
-    if resource_gateway.exists() {
-        let bak_path = resource_gateway.with_extension("bak");
-        let _ = fs::remove_file(&bak_path);
-        fs::rename(&resource_gateway, &bak_path)
-            .map_err(|e| format!("Failed to backup gateway: {}", e))?;
+    let resource_gateway_dir = install_dir.join("resources").join("mona-gateway");
+    if resource_gateway_dir.exists() {
+        let bak_path = install_dir.join("resources").join("mona-gateway.bak");
+        let _ = fs::remove_dir_all(&bak_path);
+        fs::rename(&resource_gateway_dir, &bak_path)
+            .map_err(|e| format!("Failed to backup gateway dir: {}", e))?;
     }
 
-    // 4. Copy new gateway to resources
+    // 4. Copy new gateway directory to resources
     let _ = app_handle.emit(
         "update-progress",
         UpdateProgress {
@@ -243,8 +243,7 @@ pub fn install_update(
 
     fs::create_dir_all(install_dir.join("resources"))
         .map_err(|e| format!("Failed to create resources dir: {}", e))?;
-    fs::copy(&new_gateway, &resource_gateway)
-        .map_err(|e| format!("Failed to copy gateway: {}", e))?;
+    copy_dir_recursive(&new_gateway_dir, &resource_gateway_dir)?;
 
     // 5. Stage new exe
     let _ = app_handle.emit(
@@ -368,12 +367,10 @@ pub fn cleanup_after_update() -> Result<(), String> {
 
     let install_dir = get_install_dir()?;
 
-    // Remove old gateway backup
-    let gateway_bak = install_dir
-        .join("resources")
-        .join(format!("{}.bak", crate::python::GATEWAY_EXE_NAME));
+    // Remove old gateway backup directory
+    let gateway_bak = install_dir.join("resources").join("mona-gateway.bak");
     if gateway_bak.exists() {
-        let _ = fs::remove_file(&gateway_bak);
+        let _ = fs::remove_dir_all(&gateway_bak);
     }
 
     #[cfg(windows)]
@@ -410,6 +407,29 @@ fn get_install_dir() -> Result<PathBuf, String> {
         .parent()
         .map(|p| p.to_path_buf())
         .ok_or_else(|| "Cannot determine install directory".to_string())
+}
+
+/// Recursively copy a directory tree.
+fn copy_dir_recursive(source: &Path, dest: &Path) -> Result<(), String> {
+    fs::create_dir_all(dest)
+        .map_err(|e| format!("Failed to create dir {:?}: {}", dest, e))?;
+
+    for entry in fs::read_dir(source)
+        .map_err(|e| format!("Failed to read dir {:?}: {}", source, e))?
+    {
+        let entry = entry.map_err(|e| format!("Failed to read dir entry: {}", e))?;
+        let src_path = entry.path();
+        let dest_path = dest.join(entry.file_name());
+
+        if src_path.is_dir() {
+            copy_dir_recursive(&src_path, &dest_path)?;
+        } else {
+            fs::copy(&src_path, &dest_path)
+                .map_err(|e| format!("Failed to copy {:?} to {:?}: {}", src_path, dest_path, e))?;
+        }
+    }
+
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

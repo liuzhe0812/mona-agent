@@ -349,6 +349,8 @@ export interface SendOptions {
   dbConnectionId?: string;
   dbDatabase?: string;
   dbTable?: string;
+  browserPageUrl?: string;
+  browserPageTitle?: string;
 }
 
 export function useMonaStream(
@@ -994,6 +996,8 @@ export function useMonaStream(
           dbConnectionId: options.dbConnectionId,
           dbDatabase: options.dbDatabase,
           dbTable: options.dbTable,
+          browserPageUrl: options.browserPageUrl,
+          browserPageTitle: options.browserPageTitle,
         });
       } else {
         client.sendMessage(chatId, content, wireMedia);

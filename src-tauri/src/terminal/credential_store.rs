@@ -160,6 +160,10 @@ fn save_vault(vault: &Vault) -> Result<(), String> {
 pub fn store_credential(auth: &AuthConfig, host: &str, port: u16, username: &str) -> AuthConfig {
     match auth {
         AuthConfig::Password { password } => {
+            if password == ENCRYPTED_MARKER || password == LEGACY_KEYRING_MARKER {
+                // Already a stored-credential marker; don't re-encrypt it.
+                return auth.clone();
+            }
             if !password.is_empty() {
                 let key = vault_key(host, port, username, "password");
                 match encrypt(password) {
@@ -186,6 +190,9 @@ pub fn store_credential(auth: &AuthConfig, host: &str, port: u16, username: &str
             passphrase,
         } => {
             if let Some(pp) = passphrase {
+                if pp == ENCRYPTED_MARKER || pp == LEGACY_KEYRING_MARKER {
+                    return auth.clone();
+                }
                 if !pp.is_empty() {
                     let key = vault_key(host, port, username, "passphrase");
                     match encrypt(pp) {

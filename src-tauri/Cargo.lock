@@ -3367,7 +3367,7 @@ dependencies = [
 
 [[package]]
 name = "mona-desktop"
-version = "1.0.3"
+version = "1.0.5"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -3409,7 +3409,9 @@ dependencies = [
  "url",
  "urlencoding",
  "uuid",
+ "webview2-com",
  "windows 0.61.3",
+ "windows-strings 0.4.2",
 ]
 
 [[package]]

@@ -1,4 +1,4 @@
-﻿"""Context builder for assembling agent prompts."""
+"""Context builder for assembling agent prompts."""
 
 import base64
 import mimetypes
@@ -98,6 +98,8 @@ class ContextBuilder:
         timezone: str | None = None,
         sender_id: str | None = None,
         supplemental_lines: Sequence[str] | None = None,
+        browser_page_url: str | None = None,
+        browser_page_title: str | None = None,
     ) -> str:
         """Build untrusted runtime metadata block appended after user content."""
         lines = [f"Current Time: {current_time_str(timezone)}"]
@@ -105,6 +107,13 @@ class ContextBuilder:
             lines += [f"Channel: {channel}", f"Chat ID: {chat_id}"]
         if sender_id:
             lines += [f"Sender ID: {sender_id}"]
+        if browser_page_url or browser_page_title:
+            page_info = "Browser Page:"
+            if browser_page_title:
+                page_info += f" {browser_page_title}"
+            if browser_page_url:
+                page_info += f" ({browser_page_url})"
+            lines.append(page_info)
         if supplemental_lines:
             lines.extend(supplemental_lines)
         return ContextBuilder._RUNTIME_CONTEXT_TAG + "\n" + "\n".join(lines) + "\n" + ContextBuilder._RUNTIME_CONTEXT_END
@@ -156,15 +165,23 @@ class ContextBuilder:
         sender_id: str | None = None,
         session_summary: str | None = None,
         session_metadata: Mapping[str, Any] | None = None,
+        message_metadata: Mapping[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         """Build the complete message list for an LLM call."""
         extra = goal_state_runtime_lines(session_metadata)
+        browser_page_url = None
+        browser_page_title = None
+        if message_metadata:
+            browser_page_url = message_metadata.get("browser_page_url")
+            browser_page_title = message_metadata.get("browser_page_title")
         runtime_ctx = self._build_runtime_context(
             channel,
             chat_id,
             self.timezone,
             sender_id=sender_id,
             supplemental_lines=extra or None,
+            browser_page_url=browser_page_url,
+            browser_page_title=browser_page_title,
         )
         user_content = self._build_user_content(current_message, media)
 

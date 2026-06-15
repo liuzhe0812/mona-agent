@@ -76,3 +76,77 @@ export async function browserGoForward(id: string): Promise<void> {
 export async function browserReload(id: string): Promise<void> {
   return invoke<void>("browser_reload", { id });
 }
+
+// ── Browser Storage (Bookmarks & History) ──
+
+export interface Bookmark {
+  id: number;
+  url: string;
+  title: string;
+  folder: string;
+  createdAt: string;
+}
+
+export interface ImportBookmarkItem {
+  url: string;
+  title: string;
+  folder: string;
+}
+
+export interface AddressBarSuggestion {
+  url: string;
+  title: string;
+  isBookmark: boolean;
+  visitCount: number;
+  lastVisitedAt: string;
+}
+
+/** 添加收藏 */
+export async function browserAddBookmark(url: string, title: string, folder?: string): Promise<Bookmark> {
+  return invoke<Bookmark>("browser_add_bookmark", { url, title, folder: folder || null });
+}
+
+/** 移除收藏 */
+export async function browserRemoveBookmark(url: string): Promise<void> {
+  return invoke<void>("browser_remove_bookmark", { url });
+}
+
+/** 更新收藏（标题或文件夹） */
+export async function browserUpdateBookmark(url: string, title?: string, folder?: string): Promise<void> {
+  return invoke<void>("browser_update_bookmark", { url, title: title ?? null, folder: folder ?? null });
+}
+
+/** 检查是否已收藏 */
+export async function browserIsBookmarked(url: string): Promise<boolean> {
+  return invoke<boolean>("browser_is_bookmarked", { url });
+}
+
+/** 列出所有收藏 */
+export async function browserListBookmarks(): Promise<Bookmark[]> {
+  return invoke<Bookmark[]>("browser_list_bookmarks");
+}
+
+/** 批量导入收藏（如从 Chrome 导出的 Bookmarks JSON） */
+export async function browserImportBookmarks(items: ImportBookmarkItem[]): Promise<number> {
+  return invoke<number>("browser_import_bookmarks", { items });
+}
+
+/** 记录访问历史 */
+export async function browserRecordVisit(url: string, title: string): Promise<void> {
+  return invoke<void>("browser_record_visit", { url, title });
+}
+
+/** 清空历史记录 */
+export async function browserClearHistory(): Promise<void> {
+  return invoke<void>("browser_clear_history");
+}
+
+/** 清理浏览器缓存 */
+export async function browserClearCache(): Promise<void> {
+  return invoke<void>("browser_clear_cache");
+}
+
+/** 搜索地址栏建议（收藏+历史） */
+export async function browserSearchSuggestions(query: string, limit?: number): Promise<AddressBarSuggestion[]> {
+  return invoke<AddressBarSuggestion[]>("browser_search_suggestions", { query, limit });
+}

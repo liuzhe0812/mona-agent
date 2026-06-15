@@ -58,9 +58,43 @@
         .confirm-text { font-size: 14px; line-height: 1.6; margin-bottom: 16px; }
         .confirm-text strong { color: #dc2626; }
         .tab-btn { padding: 6px 14px; border: 1px solid #ddd; border-radius: 6px; background: #fff; cursor: pointer; font-size: 13px; }
-        .tab-btn.active { background: #4f46e5; color: #fff; border-color: #4f46e5; }
+        .tab-btn.active { background: #3b82f6; color: #fff; border-color: #3b82f6; }
         .tab-section { display: none; }
         .tab-section.active { display: block; }
+        .card { background: #fff; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,.06); border: 1px solid #f0f0f0; overflow: hidden; }
+        .card-header { padding: 16px 20px; border-bottom: 1px solid #f0f0f0; display: flex; justify-content: space-between; align-items: center; }
+        .card-header h3 { font-size: 15px; font-weight: 600; color: #111827; }
+        .card-body { padding: 20px; }
+        .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 8px 16px; border-radius: 8px; font-size: 13px; font-weight: 500; cursor: pointer; border: 1px solid transparent; transition: all .15s; }
+        .btn-primary { background: #3b82f6; color: #fff; }
+        .btn-primary:hover { background: #2563eb; }
+        .btn-outline { background: #fff; border-color: #e5e7eb; color: #374151; }
+        .btn-outline:hover { background: #f9fafb; }
+        .btn-danger { color: #dc2626; border-color: #fca5a5; background: #fff; }
+        .btn-danger:hover { background: #fef2f2; }
+        .btn-sm { padding: 5px 10px; font-size: 12px; }
+        .form-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; }
+        .form-field { display: flex; flex-direction: column; gap: 6px; }
+        .form-field label { font-size: 12px; font-weight: 500; color: #374151; }
+        .form-field input, .form-field select { padding: 8px 10px; border: 1px solid #e5e7eb; border-radius: 8px; font-size: 13px; background: #fff; color: #111827; outline: none; }
+        .form-field input:focus, .form-field select:focus { border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,.12); }
+        .form-field input::placeholder { color: #9ca3af; }
+        .pricing-table { width: 100%; border-collapse: collapse; }
+        .pricing-table th { text-align: left; padding: 12px 16px; font-size: 12px; font-weight: 600; color: #6b7280; background: #f9fafb; border-bottom: 1px solid #f0f0f0; white-space: nowrap; }
+        .pricing-table td { padding: 12px 16px; border-bottom: 1px solid #f3f4f6; font-size: 13px; vertical-align: middle; }
+        .pricing-table tr:last-child td { border-bottom: none; }
+        .pricing-table input, .pricing-table select { width: 100%; padding: 6px 8px; border: 1px solid #e5e7eb; border-radius: 6px; font-size: 13px; outline: none; background: #fff; }
+        .pricing-table input:focus, .pricing-table select:focus { border-color: #3b82f6; box-shadow: 0 0 0 2px rgba(59,130,246,.12); }
+        .pricing-table input[type="checkbox"] { width: auto; accent-color: #3b82f6; }
+        .pricing-table .col-id { width: 120px; }
+        .pricing-table .col-number { width: 90px; }
+        .pricing-table .col-badge { width: 100px; }
+        .pricing-table .col-enabled { width: 60px; text-align: center; }
+        .pricing-table .col-action { width: 70px; }
+        .empty-tip { text-align: center; padding: 40px; color: #9ca3af; font-size: 13px; }
+        .toast { position: fixed; top: 20px; right: 20px; padding: 12px 18px; background: #111827; color: #fff; border-radius: 8px; font-size: 13px; box-shadow: 0 10px 25px rgba(0,0,0,.15); opacity: 0; transform: translateY(-10px); transition: all .2s; pointer-events: none; z-index: 100; }
+        .toast.show { opacity: 1; transform: translateY(0); }
+        .toast.error { background: #dc2626; }
     </style>
 </head>
 <body>
@@ -106,14 +140,51 @@
 
         <div id="section-pricing" class="tab-section">
             <div class="users">
-                <div class="users-header"><h2>价格配置</h2><button onclick="savePricing()" class="primary">保存</button></div>
-                <table id="pricingTable"><thead><tr><th>ID</th><th>名称</th><th>价格</th><th>原价</th><th>时长(月)</th><th>角标</th><th>排序</th><th>启用</th><th>操作</th></tr></thead><tbody></tbody></table>
-                <div style="margin-top:16px"><button onclick="addPlanRow()">+ 新增方案</button></div>
-                <div class="users-header" style="margin-top:24px"><h2>全局配置</h2></div>
-                <div style="background:#fff;padding:16px;border-radius:10px;box-shadow:0 1px 3px rgba(0,0,0,.06)">
-                    <label>联系邮箱</label><input type="email" id="cfgEmail" style="width:300px">
-                    <label>微信号</label><input type="text" id="cfgWechat" style="width:300px">
-                    <label>促销横幅（留空不显示）</label><input type="text" id="cfgBanner" style="width:500px">
+                <div class="card">
+                    <div class="card-header">
+                        <h3>订阅方案</h3>
+                        <button class="btn btn-outline btn-sm" onclick="addPlanRow()">+ 新增方案</button>
+                    </div>
+                    <div class="card-body" style="padding:0">
+                        <table class="pricing-table" id="pricingTable">
+                            <thead><tr>
+                                <th class="col-id">ID</th>
+                                <th>名称</th>
+                                <th class="col-number">价格</th>
+                                <th class="col-number">原价</th>
+                                <th class="col-number">时长(月)</th>
+                                <th class="col-badge">角标</th>
+                                <th class="col-number">排序</th>
+                                <th class="col-enabled">启用</th>
+                                <th class="col-action">操作</th>
+                            </tr></thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="card" style="margin-top:20px">
+                    <div class="card-header"><h3>全局配置</h3></div>
+                    <div class="card-body">
+                        <div class="form-grid">
+                            <div class="form-field">
+                                <label>联系邮箱</label>
+                                <input type="email" id="cfgEmail" placeholder="support@example.com">
+                            </div>
+                            <div class="form-field">
+                                <label>微信号</label>
+                                <input type="text" id="cfgWechat" placeholder="mona_support">
+                            </div>
+                            <div class="form-field" style="grid-column:1/-1">
+                                <label>促销横幅（留空不显示）</label>
+                                <input type="text" id="cfgBanner" placeholder="限时优惠：年度订阅立减 60 元">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div style="margin-top:20px;display:flex;justify-content:flex-end">
+                    <button class="btn btn-primary" onclick="savePricing()">保存配置</button>
                 </div>
             </div>
         </div>
@@ -178,6 +249,8 @@
             </div>
         </div>
     </div>
+
+    <div id="toast" class="toast"></div>
 
     <script>
         const API = '';
@@ -377,71 +450,118 @@
             if (tab === 'notifications') loadNotifications();
         }
 
+        function showToast(msg, error = false) {
+            const el = document.getElementById('toast');
+            el.textContent = msg;
+            el.className = 'toast' + (error ? ' error' : '');
+            el.classList.add('show');
+            setTimeout(() => el.classList.remove('show'), 2500);
+        }
+
         async function loadPricing() {
-            const res = await fetch(`${API}/config/pricing`);
-            const data = await res.json();
-            document.getElementById('cfgEmail').value = data.contact.email;
-            document.getElementById('cfgWechat').value = data.contact.wechat;
-            document.getElementById('cfgBanner').value = data.promotional_banner || '';
-            const tbody = document.querySelector('#pricingTable tbody');
-            tbody.innerHTML = data.plans.map(p => `<tr data-id="${p.id}">
-                <td>${p.id}</td>
-                <td><input value="${p.name}"></td>
-                <td><input type="number" value="${p.price}"></td>
-                <td><input type="number" value="${p.original_price || ''}"></td>
-                <td><input type="number" value="${p.duration_months}"></td>
-                <td><input value="${p.badge || ''}"></td>
-                <td><input type="number" value="${p.sort_order}"></td>
-                <td><input type="checkbox" ${p.enabled ? 'checked' : ''}></td>
-                <td><button onclick="deletePlan('${p.id}')">删除</button></td>
-            </tr>`).join('');
+            try {
+                const res = await fetch(`${API}/admin/pricing`, { headers: headers() });
+                if (!res.ok) throw new Error('加载失败');
+                const data = await res.json();
+                document.getElementById('cfgEmail').value = data.contact.email || '';
+                document.getElementById('cfgWechat').value = data.contact.wechat || '';
+                document.getElementById('cfgBanner').value = data.promotional_banner || '';
+                const tbody = document.querySelector('#pricingTable tbody');
+                if (!data.plans || data.plans.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="9" class="empty-tip">暂无方案，点击右上角新增</td></tr>';
+                    return;
+                }
+                tbody.innerHTML = data.plans.map(p => `<tr data-id="${p.id}">
+                    <td><input value="${p.id}" placeholder="monthly"></td>
+                    <td><input value="${p.name || ''}" placeholder="月度订阅"></td>
+                    <td><input type="number" step="0.01" value="${p.price ?? ''}" placeholder="29"></td>
+                    <td><input type="number" step="0.01" value="${p.original_price ?? ''}" placeholder="39"></td>
+                    <td><input type="number" value="${p.duration_months ?? ''}" placeholder="1"></td>
+                    <td><input value="${p.badge || ''}" placeholder="推荐"></td>
+                    <td><input type="number" value="${p.sort_order ?? 0}"></td>
+                    <td style="text-align:center"><input type="checkbox" ${p.enabled ? 'checked' : ''}></td>
+                    <td><button class="btn btn-danger btn-sm" onclick="deletePlan('${p.id}')">删除</button></td>
+                </tr>`).join('');
+            } catch (e) {
+                showToast('价格配置加载失败', true);
+            }
         }
 
         function addPlanRow() {
             const tbody = document.querySelector('#pricingTable tbody');
+            const emptyTip = tbody.querySelector('.empty-tip');
+            if (emptyTip) emptyTip.closest('tr').remove();
             const id = 'plan_' + Date.now();
             const tr = document.createElement('tr');
             tr.dataset.id = id;
             tr.dataset.new = 'true';
-            tr.innerHTML = `<td><input value="${id}"></td><td><input></td><td><input type="number"></td><td><input type="number"></td><td><input type="number"></td><td><input></td><td><input type="number" value="0"></td><td><input type="checkbox" checked></td><td><button onclick="this.closest('tr').remove()">删除</button></td>`;
+            tr.innerHTML = `<td><input value="${id}" placeholder="plan_id"></td>
+                <td><input placeholder="方案名称"></td>
+                <td><input type="number" step="0.01" placeholder="29"></td>
+                <td><input type="number" step="0.01" placeholder="39"></td>
+                <td><input type="number" placeholder="1"></td>
+                <td><input placeholder="推荐"></td>
+                <td><input type="number" value="0"></td>
+                <td style="text-align:center"><input type="checkbox" checked></td>
+                <td><button class="btn btn-danger btn-sm" onclick="this.closest('tr').remove()">删除</button></td>`;
             tbody.appendChild(tr);
         }
 
         async function savePricing() {
             const rows = document.querySelectorAll('#pricingTable tbody tr');
             const plans = [];
-            rows.forEach(row => {
+            for (const row of rows) {
                 const inputs = row.querySelectorAll('input');
+                const id = inputs[0].value.trim();
+                const name = inputs[1].value.trim();
+                const price = parseFloat(inputs[2].value);
+                const duration = parseInt(inputs[4].value);
+                if (!id || !name || Number.isNaN(price) || Number.isNaN(duration)) {
+                    showToast('请填写完整的方案信息（ID、名称、价格、时长）', true);
+                    return;
+                }
                 plans.push({
-                    id: inputs[0].value,
-                    name: inputs[1].value,
-                    price: parseFloat(inputs[2].value),
+                    id,
+                    name,
+                    price,
                     original_price: inputs[3].value ? parseFloat(inputs[3].value) : null,
-                    duration_months: parseInt(inputs[4].value),
-                    badge: inputs[5].value || null,
+                    duration_months: duration,
+                    badge: inputs[5].value.trim() || null,
                     sort_order: parseInt(inputs[6].value) || 0,
                     enabled: inputs[7].checked,
                 });
-            });
-            await fetch(`${API}/admin/pricing`, {
-                method: 'PUT',
-                headers: headers(),
-                body: JSON.stringify({
-                    plans,
-                    contact: {
-                        email: document.getElementById('cfgEmail').value,
-                        wechat: document.getElementById('cfgWechat').value,
-                    },
-                    promotional_banner: document.getElementById('cfgBanner').value || null,
-                }),
-            });
-            alert('保存成功');
+            }
+            try {
+                const res = await fetch(`${API}/admin/pricing`, {
+                    method: 'PUT',
+                    headers: headers(),
+                    body: JSON.stringify({
+                        plans,
+                        contact: {
+                            email: document.getElementById('cfgEmail').value.trim(),
+                            wechat: document.getElementById('cfgWechat').value.trim(),
+                        },
+                        promotional_banner: document.getElementById('cfgBanner').value.trim() || null,
+                    }),
+                });
+                if (!res.ok) throw new Error('保存失败');
+                showToast('保存成功');
+                loadPricing();
+            } catch (e) {
+                showToast('保存失败', true);
+            }
         }
 
         async function deletePlan(id) {
-            if (!confirm('确定删除？')) return;
-            await fetch(`${API}/admin/pricing/${id}`, { method: 'DELETE', headers: headers() });
-            loadPricing();
+            if (!confirm('确定删除该方案？')) return;
+            try {
+                const res = await fetch(`${API}/admin/pricing/${id}`, { method: 'DELETE', headers: headers() });
+                if (!res.ok) throw new Error('删除失败');
+                showToast('已删除');
+                loadPricing();
+            } catch (e) {
+                showToast('删除失败', true);
+            }
         }
 
         async function loadNotifications() {

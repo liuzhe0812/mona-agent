@@ -572,10 +572,41 @@ class BrowserClickTool(Tool):
     async def execute(self, tabId: str, target: str, **kwargs: Any) -> str:
         mgr = await _get_connection_manager()
         try:
+            # Record tabs before click to detect new tabs opened by target="_blank"
+            tabs_before = set()
+            try:
+                tabs_before = {t["id"] for t in _tauri_invoke("browser_list_tabs") or []}
+            except Exception:
+                pass
+
             page = await mgr.get_page(tabId)
             locator = _resolve_locator(page, target)
             await locator.click(timeout=10000, force=True)
-            return f"Clicked: {target}"
+
+            # Wait briefly for new tab to appear
+            import asyncio
+            await asyncio.sleep(0.5)
+
+            # Check if new tabs were opened
+            new_tabs_info = ""
+            try:
+                tabs_after = _tauri_invoke("browser_list_tabs") or []
+                new_tabs = [t for t in tabs_after if t["id"] not in tabs_before]
+                if new_tabs:
+                    new_tabs_info = (
+                        "\n\n⚠️ New tab(s) opened by this click:\n"
+                        + "\n".join(
+                            f"  - tabId: {t['id']}, url: {t.get('url', '')}, "
+                            f"title: {t.get('title', '')}"
+                            for t in new_tabs
+                        )
+                        + "\nUse browser_list_tabs to see all tabs, and use the new tabId "
+                        "for subsequent operations on the new page."
+                    )
+            except Exception:
+                pass
+
+            return f"Clicked: {target}{new_tabs_info}"
         except Exception as e:
             return f"Error clicking '{target}': {e}"
 
@@ -880,3 +911,48 @@ class BrowserGoForwardTool(Tool):
             return "Navigated forward"
         except Exception as e:
             return f"Error going forward: {e}"
+
+
+@tool_parameters(
+    tool_parameters_schema()
+)
+class BrowserListTabsTool(Tool):
+    """List all open browser tabs."""
+
+    _scopes = {"core", "subagent"}
+
+    name = "browser_list_tabs"
+    description = (
+        "List all open browser tabs with their IDs, URLs, and titles. "
+        "Use this to discover new tabs that may have been opened by clicking links, "
+        "or to find the correct tabId for subsequent operations."
+    )
+    config_key = "browser"
+
+    @classmethod
+    def config_cls(cls):
+        return BrowserToolsConfig
+
+    @classmethod
+    def enabled(cls, ctx: Any) -> bool:
+        return _playwright_available()
+
+    @property
+    def read_only(self) -> bool:
+        return True
+
+    async def execute(self, **kwargs: Any) -> str:
+        try:
+            tabs = _tauri_invoke("browser_list_tabs") or []
+            if not tabs:
+                return "No browser tabs open."
+            lines = ["Open browser tabs:"]
+            for t in tabs:
+                lines.append(
+                    f"  - tabId: {t['id']}, url: {t.get('url', '')}, "
+                    f"title: {t.get('title', '')}, "
+                    f"aiControlled: {t.get('is_ai_controlled', False)}"
+                )
+            return "\n".join(lines)
+        except Exception as e:
+            return f"Error listing tabs: {e}"

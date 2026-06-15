@@ -3074,6 +3074,7 @@ function ShortcutsSettings() {
   const [quickAskSaving, setQuickAskSaving] = useState(false);
   const [quickAskSaved, setQuickAskSaved] = useState(false);
   const [quickAskError, setQuickAskError] = useState<string | null>(null);
+  const [quickAskMode, setQuickAskMode] = useState("compact");
   const [sidebarDrafts, setSidebarDrafts] = useState<SidebarShortcuts>(DEFAULT_SIDEBAR_SHORTCUTS);
   const [sidebarSaving, setSidebarSaving] = useState(false);
   const [sidebarSaved, setSidebarSaved] = useState(false);
@@ -3084,6 +3085,7 @@ function ShortcutsSettings() {
       const s = await getDesktopSettings();
       setSettings(s);
       setQuickAskDraft(s.quick_ask_shortcut || "Ctrl+Alt+M");
+      setQuickAskMode(s.quick_ask_mode || "compact");
       setSidebarDrafts(s.sidebar_shortcuts || DEFAULT_SIDEBAR_SHORTCUTS);
     } catch (e) {
       console.error("Failed to load desktop settings:", e);
@@ -3098,6 +3100,10 @@ function ShortcutsSettings() {
     ? quickAskDraft.trim() !== settings.quick_ask_shortcut
     : false;
 
+  const quickAskModeDirty = settings
+    ? quickAskMode !== settings.quick_ask_mode
+    : false;
+
   const sidebarDirty = settings
     ? Object.keys(DEFAULT_SIDEBAR_SHORTCUTS).some(
         (key) => sidebarDrafts[key as keyof SidebarShortcuts] !== settings!.sidebar_shortcuts[key as keyof SidebarShortcuts],
@@ -3105,7 +3111,7 @@ function ShortcutsSettings() {
     : false;
 
   const saveQuickAsk = async () => {
-    if (!settings || quickAskSaving || !quickAskDirty) return;
+    if (!settings || quickAskSaving || (!quickAskDirty && !quickAskModeDirty)) return;
     setQuickAskSaving(true);
     setQuickAskError(null);
     setQuickAskSaved(false);
@@ -3113,9 +3119,11 @@ function ShortcutsSettings() {
       const updated = await updateDesktopSettings({
         ...settings,
         quick_ask_shortcut: quickAskDraft.trim(),
+        quick_ask_mode: quickAskMode,
       });
       setSettings(updated);
       setQuickAskDraft(updated.quick_ask_shortcut);
+      setQuickAskMode(updated.quick_ask_mode);
       setQuickAskSaved(true);
       window.setTimeout(() => setQuickAskSaved(false), 2400);
     } catch (e) {
@@ -3216,7 +3224,7 @@ function ShortcutsSettings() {
                   size="sm"
                   variant="outline"
                   onClick={saveQuickAsk}
-                  disabled={!quickAskDirty || quickAskSaving}
+                  disabled={(!quickAskDirty && !quickAskModeDirty) || quickAskSaving}
                   className="rounded-full"
                 >
                   {quickAskSaving
@@ -3235,6 +3243,35 @@ function ShortcutsSettings() {
                   tx("settings.desktop.quickAskShortcutFormat", "建议使用 Ctrl / Alt / Shift 加字母组合。")
                 )}
               </div>
+            </div>
+          </SettingsRow>
+          <SettingsRow
+            title={tx("settings.desktop.quickAskMode", "打开方式")}
+            description={tx("settings.desktop.quickAskModeHelp", "选择按下快捷键后的打开方式。")}
+          >
+            <div className="flex items-center gap-1 rounded-full border border-border p-0.5">
+              <button
+                type="button"
+                onClick={() => { setQuickAskMode("compact"); setQuickAskSaved(false); }}
+                className={`rounded-full px-3 py-1 text-[13px] transition-colors ${
+                  quickAskMode === "compact"
+                    ? "bg-foreground text-background"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {tx("settings.desktop.quickAskModeCompact", "简洁模式")}
+              </button>
+              <button
+                type="button"
+                onClick={() => { setQuickAskMode("full"); setQuickAskSaved(false); }}
+                className={`rounded-full px-3 py-1 text-[13px] transition-colors ${
+                  quickAskMode === "full"
+                    ? "bg-foreground text-background"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {tx("settings.desktop.quickAskModeFull", "完整模式")}
+              </button>
             </div>
           </SettingsRow>
         </SettingsGroup>

@@ -24,6 +24,7 @@ export interface HostKeyDialogState {
   fingerprint: string;
   expectedFingerprint: string;
   pendingConfig: ConnectionConfig | null;
+  pendingSessionId: string | null;
   saveSession: boolean;
 }
 
@@ -99,7 +100,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   activeSessionId: null,
   connections: [],
   savedConnections: [],
-  aiPanelVisible: true,
+  aiPanelVisible: false,
   newConnectionDialogOpen: false,
   newConnectionDialogDefaultType: "ssh" as const,
   settingsDialogOpen: false,
@@ -120,6 +121,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     fingerprint: "",
     expectedFingerprint: "",
     pendingConfig: null,
+    pendingSessionId: null,
     saveSession: false,
   },
   sshPasswordDialog: {
@@ -310,6 +312,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
         fingerprint: "",
         expectedFingerprint: "",
         pendingConfig: null,
+        pendingSessionId: null,
         saveSession: false,
       },
     });

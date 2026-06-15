@@ -50,6 +50,8 @@ pub struct AppSettings {
     pub gateway_port: u16,
     #[serde(default = "default_quick_ask_shortcut")]
     pub quick_ask_shortcut: String,
+    #[serde(default = "default_quick_ask_mode")]
+    pub quick_ask_mode: String,
     #[serde(default)]
     pub sidebar_shortcuts: SidebarShortcuts,
     #[serde(default)]
@@ -68,6 +70,9 @@ fn default_gateway_port() -> u16 {
 fn default_quick_ask_shortcut() -> String {
     crate::quick_ask::DEFAULT_QUICK_ASK_SHORTCUT.to_string()
 }
+fn default_quick_ask_mode() -> String {
+    "compact".to_string()
+}
 
 impl Default for AppSettings {
     fn default() -> Self {
@@ -76,6 +81,7 @@ impl Default for AppSettings {
             auto_start_gateway: default_auto_start_gateway(),
             gateway_port: default_gateway_port(),
             quick_ask_shortcut: default_quick_ask_shortcut(),
+            quick_ask_mode: default_quick_ask_mode(),
             sidebar_shortcuts: SidebarShortcuts::default(),
             config_path: None,
         }

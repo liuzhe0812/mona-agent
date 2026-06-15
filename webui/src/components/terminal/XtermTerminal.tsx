@@ -20,7 +20,7 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { Copy, ClipboardPaste, Download, Notebook } from "lucide-react";
+import { Copy, ClipboardPaste, Download, Notebook, Loader2 } from "lucide-react";
 
 interface Props {
   sessionId: string;
@@ -56,14 +56,17 @@ export function XtermTerminal({ sessionId }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
+  const lastSizeRef = useRef<{ cols: number; rows: number } | null>(null);
   const settings = useTerminalStore((s) => s.settings);
-  const activeSessionId = useTerminalStore((s) => s.activeSessionId);
   const [disconnected, setDisconnected] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
   const sessions = useTerminalStore((s) => s.sessions);
   const connections = useTerminalStore((s) => s.connections);
   const updateSessionStatus = useTerminalStore((s) => s.updateSessionStatus);
   const registry = useTerminalStore((s) => s.terminalRegistry);
+  const sessionStatus = useTerminalStore(
+    (s) => s.sessions.find((sess) => sess.id === sessionId)?.status,
+  );
 
   const updateSessionTitle = useTerminalStore((s) => s.updateSessionTitle);
 
@@ -91,11 +94,29 @@ export function XtermTerminal({ sessionId }: Props) {
     terminal.loadAddon(fitAddon);
     terminal.loadAddon(webLinksAddon);
     terminal.open(containerRef.current);
-    terminal.focus();
+
+    const fitAndResize = (force = false) => {
+      if (!fitAddonRef.current || !terminalRef.current) return;
+      // Don't resize backend during connecting state
+      const currentStatus = useTerminalStore
+        .getState()
+        .sessions.find((s) => s.id === sessionId)?.status;
+      if (currentStatus === "connecting") return;
+      fitAddonRef.current.fit();
+      const { cols, rows } = terminalRef.current;
+      if (
+        force ||
+        lastSizeRef.current === null ||
+        lastSizeRef.current.cols !== cols ||
+        lastSizeRef.current.rows !== rows
+      ) {
+        lastSizeRef.current = { cols, rows };
+        resizeFn(sessionId, cols, rows).catch(() => {});
+      }
+    };
 
     requestAnimationFrame(() => {
-      fitAddon.fit();
-      resizeFn(sessionId, terminal.cols, terminal.rows).catch(() => {});
+      fitAndResize(true);
     });
 
     let inputBuffer = "";
@@ -188,45 +209,51 @@ export function XtermTerminal({ sessionId }: Props) {
     terminalRef.current = terminal;
     fitAddonRef.current = fitAddon;
 
-    const handleResize = () => {
-      fitAddon.fit();
-      resizeFn(sessionId, terminal.cols, terminal.rows).catch(() => {});
-    };
-    window.addEventListener("resize", handleResize);
-
+    let resizeTimeout: ReturnType<typeof setTimeout> | null = null;
     const resizeObserver = new ResizeObserver(() => {
-      fitAddon.fit();
-      resizeFn(sessionId, terminal.cols, terminal.rows).catch(() => {});
+      if (resizeTimeout) clearTimeout(resizeTimeout);
+      resizeTimeout = setTimeout(() => {
+        fitAndResize();
+      }, 250);
     });
     resizeObserver.observe(containerRef.current);
 
     return () => {
+      if (resizeTimeout) clearTimeout(resizeTimeout);
       resizeObserver.disconnect();
-      window.removeEventListener("resize", handleResize);
       dataDisposable.dispose();
       titleDisposable.dispose();
       registry.unregister(sessionId);
       terminal.dispose();
       terminalRef.current = null;
       fitAddonRef.current = null;
+      lastSizeRef.current = null;
     };
   }, [sessionId, registry]);
 
+  // When session becomes connected, trigger initial fit + resize
   useEffect(() => {
+    if (sessionStatus !== "connected") return;
     const terminal = terminalRef.current;
     const fitAddon = fitAddonRef.current;
     if (!terminal || !fitAddon) return;
-    if (activeSessionId === sessionId) {
-      requestAnimationFrame(() => {
-        fitAddon.fit();
+    requestAnimationFrame(() => {
+      fitAddon.fit();
+      const { cols, rows } = terminal;
+      if (
+        lastSizeRef.current === null ||
+        lastSizeRef.current.cols !== cols ||
+        lastSizeRef.current.rows !== rows
+      ) {
+        lastSizeRef.current = { cols, rows };
         const sessions = useTerminalStore.getState().sessions;
         const session = sessions.find((s) => s.id === sessionId);
         const resizeFn = session?.type === "ssh" ? sshResize : shellResize;
-        resizeFn(sessionId, terminal.cols, terminal.rows).catch(() => {});
-        terminal.focus();
-      });
-    }
-  }, [activeSessionId, sessionId]);
+        resizeFn(sessionId, cols, rows).catch(() => {});
+      }
+      terminal.focus();
+    });
+  }, [sessionStatus, sessionId]);
 
   useEffect(() => {
     const terminal = terminalRef.current;
@@ -334,7 +361,19 @@ export function XtermTerminal({ sessionId }: Props) {
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
-        <div className="relative h-full w-full bg-[#1a1a1a]">
+        <div className="relative h-full w-full overflow-hidden bg-[#1a1a1a]">
+          {sessionStatus === "connecting" ? (
+            <div className="absolute inset-0 flex items-center justify-center bg-[#1a1a1a]">
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                <span className="text-sm">连接中…</span>
+              </div>
+            </div>
+          ) : sessionStatus === "error" ? (
+            <div className="absolute inset-0 flex items-center justify-center bg-[#1a1a1a]">
+              <span className="text-sm text-red-500">连接失败</span>
+            </div>
+          ) : null}
           <div
             ref={containerRef}
             className="h-full w-full"

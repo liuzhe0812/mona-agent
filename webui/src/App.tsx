@@ -470,6 +470,7 @@ function Shell({
   const [completedChatIds, setCompletedChatIds] = useState<Set<string>>(readCompletedRunChatIds);
   const [queuedAgentPrompt, setQueuedAgentPrompt] = useState<QueuedAgentPrompt | null>(null);
   const [loginDialogOpen, setLoginDialogOpen] = useState(false);
+  const [loginDialogInitialView, setLoginDialogInitialView] = useState<"login" | "subscribe">("login");
   const runningChatIdsRef = useRef<Set<string>>(new Set());
   const sidebarShortcutsRef = useRef<SidebarShortcuts>({
     mona: "Alt+1",
@@ -905,6 +906,13 @@ function Shell({
   }, []);
 
   const onOpenLogin = useCallback(() => {
+    setLoginDialogInitialView("login");
+    setLoginDialogOpen(true);
+    setMobileSidebarOpen(false);
+  }, []);
+
+  const onOpenSubscribe = useCallback(() => {
+    setLoginDialogInitialView("subscribe");
     setLoginDialogOpen(true);
     setMobileSidebarOpen(false);
   }, []);
@@ -1020,6 +1028,8 @@ function Shell({
       deriveTitle(activeSession.preview, t("chat.newChat"))
     : t("app.brand");
 
+  const isBrowserTabActive = activeBrowserTab.type !== "mona";
+
   useEffect(() => {
     if (view === "settings") {
       document.title = t("app.documentTitle.chat", {
@@ -1045,6 +1055,7 @@ function Shell({
     onToggleArchive,
     onOpenSettings,
     onOpenLogin,
+    onOpenSubscribe,
     onOpenSearch: onOpenSessionSearch,
     onGoHome,
     onOpenNote,
@@ -1077,7 +1088,7 @@ function Shell({
             onTabClose={closeBrowserTab}
             onNewTab={addEmptyTab}
             onOpenSettings={onOpenSettings}
-            onOpenSubscribe={onOpenLogin}
+            onOpenSubscribe={onOpenSubscribe}
           />
         )}
 
@@ -1166,14 +1177,14 @@ function Shell({
                 />
               </div>
               {view === "note" ? (
-                <div className="absolute inset-0 flex flex-col">
+                <div className={cn("absolute inset-0 flex flex-col", isBrowserTabActive && "hidden")}>
                   <Suspense fallback={<ModuleLoading title="正在打开笔记" />}>
                     <NotesView onSendToAgent={onSendNoteToAgent} />
                   </Suspense>
                 </div>
               ) : null}
               {view === "settings" && (
-                <div className="absolute inset-0 flex flex-col">
+                <div className={cn("absolute inset-0 flex flex-col", isBrowserTabActive && "hidden")}>
                   <SettingsView
                     theme={theme}
                     onToggleTheme={toggle}
@@ -1187,32 +1198,32 @@ function Shell({
               <div
                 className={cn(
                   "absolute inset-0 flex flex-col",
-                  view !== "ssh" && "invisible pointer-events-none",
+                  (view !== "ssh" || isBrowserTabActive) && "invisible pointer-events-none",
                 )}
               >
                 <TerminalView />
               </div>
               {view === "db" && (
-                <div className="absolute inset-0 flex flex-col">
+                <div className={cn("absolute inset-0 flex flex-col", isBrowserTabActive && "hidden")}>
                   <Suspense fallback={<ModuleLoading title="正在打开数据库客户端" />}>
                     <DbClientView />
                   </Suspense>
                 </div>
               )}
               {view === "kb" && (
-                <div className="absolute inset-0 flex flex-col">
+                <div className={cn("absolute inset-0 flex flex-col", isBrowserTabActive && "hidden")}>
                   <Suspense fallback={<ModuleLoading title="正在打开知识库" />}>
                     <KnowledgeBaseView />
                   </Suspense>
                 </div>
               )}
-              <div className={`absolute inset-0 flex flex-col${view === "ppt" ? "" : " hidden"}`}>
+              <div className={cn("absolute inset-0 flex flex-col", (view !== "ppt" || isBrowserTabActive) && "hidden")}>
                 <Suspense fallback={<ModuleLoading title="正在打开 PPT 制作" />}>
                   <PptMakerView onBack={onBackToChat} />
                 </Suspense>
               </div>
               {view === "md-reader" && (
-                <div className="absolute inset-0 flex flex-col">
+                <div className={cn("absolute inset-0 flex flex-col", isBrowserTabActive && "hidden")}>
                   <Suspense fallback={<ModuleLoading title="正在打开 Markdown 阅读器" />}>
                     <MdReaderView onBack={onBackToChat} />
                   </Suspense>
@@ -1223,7 +1234,7 @@ function Shell({
                 .map((tab) => (
                   <div
                     key={tab.id}
-                    className="absolute inset-0 flex flex-col"
+                    className="absolute inset-0 flex flex-col bg-background"
                     style={{ display: tab.id === activeBrowserTabId ? "flex" : "none" }}
                   >
                     <BrowserTabView
@@ -1259,6 +1270,7 @@ function Shell({
         <LoginDialog
           open={loginDialogOpen}
           onOpenChange={setLoginDialogOpen}
+          initialView={loginDialogInitialView}
         />
 
         <DeleteConfirm

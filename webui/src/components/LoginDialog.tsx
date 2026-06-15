@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useLicense } from "@/hooks/useLicense";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { SubscribeView } from "./SubscribeView";
 import {
   Dialog,
   DialogContent,
@@ -9,17 +10,19 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
-type LoginView = "login" | "register" | "forgot" | "reset";
+type LoginView = "login" | "register" | "forgot" | "reset" | "subscribe";
 
 export function LoginDialog({
   open,
   onOpenChange,
+  initialView = "login",
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  initialView?: LoginView;
 }) {
-  const { login, register, sendRegisterCode, forgotPassword, resetPassword, loggedIn, logout, licenseInfo, localTrial, localTrialExpired, remainingDays } = useLicense();
-  const [view, setView] = useState<LoginView>("login");
+  const { login, register, sendRegisterCode, forgotPassword, resetPassword, loggedIn, logout, licenseInfo, localTrial, localTrialExpired, remainingDays, pricingConfig, fetchPricing } = useLicense();
+  const [view, setView] = useState<LoginView>(initialView);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -31,6 +34,30 @@ export function LoginDialog({
   const [success, setSuccess] = useState("");
   const [codeSent, setCodeSent] = useState(false);
   const [codeCooldown, setCodeCooldown] = useState(0);
+  const [subscribeLoading, setSubscribeLoading] = useState(false);
+
+  useEffect(() => {
+    if (open) {
+      setView(initialView);
+      setSubscribeLoading(initialView === "subscribe" && !pricingConfig);
+    }
+  }, [open, initialView, pricingConfig]);
+
+  useEffect(() => {
+    if (open && view === "subscribe") {
+      fetchPricing();
+    }
+  }, [open, view, fetchPricing]);
+
+  useEffect(() => {
+    if (!open || view !== "subscribe") return;
+    if (pricingConfig) {
+      const timer = window.setTimeout(() => setSubscribeLoading(false), 150);
+      return () => window.clearTimeout(timer);
+    }
+    const fallbackTimer = window.setTimeout(() => setSubscribeLoading(false), 1500);
+    return () => window.clearTimeout(fallbackTimer);
+  }, [open, view, pricingConfig]);
 
   const handleClose = (v: boolean) => {
     if (!v) {
@@ -43,50 +70,6 @@ export function LoginDialog({
     }
     onOpenChange(v);
   };
-
-  // If logged in, show account info
-  if (loggedIn) {
-    return (
-      <Dialog open={open} onOpenChange={handleClose}>
-        <DialogContent className="sm:max-w-sm">
-          <DialogHeader>
-            <DialogTitle>账号信息</DialogTitle>
-          </DialogHeader>
-          <div className="flex flex-col gap-3 text-sm">
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">邮箱</span>
-              <span>{licenseInfo?.email}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">授权状态</span>
-              <span>{licenseInfo?.status === "valid" ? "有效" : licenseInfo?.status === "expired" ? "已过期" : licenseInfo?.status === "device_mismatch" ? "设备不匹配" : "无"}</span>
-            </div>
-            {licenseInfo?.expires_at && (
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">到期时间</span>
-                <span>{licenseInfo.expires_at}</span>
-              </div>
-            )}
-            {licenseInfo?.trial && (
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">类型</span>
-                <span>试用</span>
-              </div>
-            )}
-            <Button
-              variant="outline"
-              onClick={async () => {
-                await logout();
-                setView("login");
-              }}
-            >
-              退出登录
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
-    );
-  }
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -191,90 +174,161 @@ export function LoginDialog({
     }
   };
 
+  const isSubscribeView = view === "subscribe";
+  const showAccountInfo = loggedIn && view === "login";
+
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="sm:max-w-sm">
+      <DialogContent className={isSubscribeView ? "sm:max-w-lg" : "sm:max-w-sm"}>
         <DialogHeader>
           <DialogTitle>
-            {view === "login" && "登录"}
-            {view === "register" && "注册"}
-            {view === "forgot" && "找回密码"}
-            {view === "reset" && "重置密码"}
+            {isSubscribeView
+              ? "购买订阅"
+              : showAccountInfo
+                ? "账号信息"
+                : view === "login"
+                  ? "登录"
+                  : view === "register"
+                    ? "注册"
+                    : view === "forgot"
+                      ? "找回密码"
+                      : "重置密码"}
           </DialogTitle>
         </DialogHeader>
 
-        {error && <p className="text-sm text-destructive">{error}</p>}
-        {success && <p className="text-sm text-green-600">{success}</p>}
-
-        {localTrialExpired && view === "login" && (
-          <p className="text-sm text-muted-foreground">试用期已结束，请登录账号以继续使用全部功能</p>
+        {isSubscribeView && (
+          <SubscribeView
+            userEmail={licenseInfo?.email || email}
+            onBackToLogin={() => setView(loggedIn ? "login" : "login")}
+            embed
+            loading={subscribeLoading}
+          />
         )}
-        {localTrial && !localTrialExpired && view === "login" && (
-          <p className="text-sm text-muted-foreground">试用剩余 {remainingDays} 天，登录后可获取正式授权</p>
-        )}
 
-        {view === "login" && (
-          <form onSubmit={handleLogin} className="flex flex-col gap-3">
-            <Input type="email" placeholder="邮箱" value={email} onChange={(e) => setEmail(e.target.value)} disabled={loading} autoFocus />
-            <Input type="password" placeholder="密码" value={password} onChange={(e) => setPassword(e.target.value)} disabled={loading} />
-            <Button type="submit" disabled={!email || !password || loading}>
-              {loading ? "登录中..." : "登录"}
-            </Button>
-            <div className="flex justify-between text-xs text-muted-foreground">
-              <button type="button" className="hover:underline" onClick={() => { setView("forgot"); setError(""); setSuccess(""); }}>
-                忘记密码？
-              </button>
-              <button type="button" className="hover:underline" onClick={() => { setView("register"); setError(""); setSuccess(""); setCodeSent(false); }}>
-                注册新账号
-              </button>
+        {showAccountInfo && (
+          <div className="flex flex-col gap-3 text-sm">
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">邮箱</span>
+              <span>{licenseInfo?.email}</span>
             </div>
-          </form>
-        )}
-
-        {view === "register" && (
-          <form onSubmit={handleRegister} className="flex flex-col gap-3">
-            <Input type="email" placeholder="邮箱" value={email} onChange={(e) => setEmail(e.target.value)} disabled={loading} autoFocus />
-            <div className="flex gap-2">
-              <Input type="text" placeholder="6 位验证码" value={registerCode} onChange={(e) => setRegisterCode(e.target.value)} disabled={loading} maxLength={6} className="flex-1" />
-              <Button type="button" variant="outline" onClick={handleSendCode} disabled={!email || codeCooldown > 0 || loading} className="shrink-0 whitespace-nowrap">
-                {codeCooldown > 0 ? `${codeCooldown}s` : codeSent ? "重新发送" : "获取验证码"}
-              </Button>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">授权状态</span>
+              <span>{licenseInfo?.status === "valid" ? "有效" : licenseInfo?.status === "expired" ? "已过期" : licenseInfo?.status === "device_mismatch" ? "设备不匹配" : "无"}</span>
             </div>
-            <Input type="password" placeholder="密码（至少 8 位）" value={password} onChange={(e) => setPassword(e.target.value)} disabled={loading} />
-            <Input type="password" placeholder="确认密码" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} disabled={loading} className={passwordMismatch ? "ring-1 ring-destructive" : ""} />
-            <Button type="submit" disabled={!email || !registerCode || !password || !confirmPassword || passwordMismatch || loading}>
-              {loading ? "注册中..." : "注册"}
+            {licenseInfo?.expires_at && (
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">到期时间</span>
+                <span>{licenseInfo.expires_at}</span>
+              </div>
+            )}
+            {licenseInfo?.trial && (
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">类型</span>
+                <span>试用</span>
+              </div>
+            )}
+            <Button
+              variant="outline"
+              onClick={async () => {
+                await logout();
+                setView("login");
+              }}
+            >
+              退出登录
             </Button>
-            <button type="button" className="text-center text-xs text-muted-foreground hover:underline" onClick={() => { setView("login"); setError(""); setSuccess(""); }}>
-              已有账号？登录
-            </button>
-          </form>
+          </div>
         )}
 
-        {view === "forgot" && (
-          <form onSubmit={handleForgot} className="flex flex-col gap-3">
-            <Input type="email" placeholder="邮箱" value={email} onChange={(e) => setEmail(e.target.value)} disabled={loading} autoFocus />
-            <Button type="submit" disabled={!email || loading}>
-              {loading ? "发送中..." : "发送验证码"}
-            </Button>
-            <button type="button" className="text-center text-xs text-muted-foreground hover:underline" onClick={() => { setView("login"); setError(""); setSuccess(""); }}>
-              返回登录
-            </button>
-          </form>
-        )}
+        {!isSubscribeView && !showAccountInfo && (
+          <>
+            {error && <p className="text-sm text-destructive">{error}</p>}
+            {success && <p className="text-sm text-green-600">{success}</p>}
 
-        {view === "reset" && (
-          <form onSubmit={handleReset} className="flex flex-col gap-3">
-            <Input type="email" placeholder="邮箱" value={email} onChange={(e) => setEmail(e.target.value)} disabled={loading} />
-            <Input type="text" placeholder="6 位验证码" value={resetCode} onChange={(e) => setResetCode(e.target.value)} disabled={loading} maxLength={6} />
-            <Input type="password" placeholder="新密码（至少 8 位）" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} disabled={loading} />
-            <Button type="submit" disabled={!email || !resetCode || !newPassword || loading}>
-              {loading ? "重置中..." : "重置密码"}
-            </Button>
-            <button type="button" className="text-center text-xs text-muted-foreground hover:underline" onClick={() => { setView("login"); setError(""); setSuccess(""); }}>
-              返回登录
-            </button>
-          </form>
+            {localTrialExpired && view === "login" && (
+              <p className="text-sm text-muted-foreground">试用期已结束，请登录账号以继续使用全部功能</p>
+            )}
+            {localTrial && !localTrialExpired && view === "login" && (
+              <p className="text-sm text-muted-foreground">试用剩余 {remainingDays} 天，登录后可获取正式授权</p>
+            )}
+
+            {view === "login" && (
+              <form onSubmit={handleLogin} className="flex flex-col gap-3">
+                <Input type="email" placeholder="邮箱" value={email} onChange={(e) => setEmail(e.target.value)} disabled={loading} autoFocus />
+                <Input type="password" placeholder="密码" value={password} onChange={(e) => setPassword(e.target.value)} disabled={loading} />
+                <Button type="submit" disabled={!email || !password || loading}>
+                  {loading ? "登录中..." : "登录"}
+                </Button>
+                <div className="flex justify-between text-xs text-muted-foreground">
+                  <button type="button" className="hover:underline" onClick={() => { setView("forgot"); setError(""); setSuccess(""); }}>
+                    忘记密码？
+                  </button>
+                  <button type="button" className="hover:underline" onClick={() => { setView("register"); setError(""); setSuccess(""); setCodeSent(false); }}>
+                    注册新账号
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  className="text-center text-xs text-primary hover:underline"
+                  onClick={() => { setView("subscribe"); setError(""); setSuccess(""); }}
+                >
+                  购买订阅
+                </button>
+              </form>
+            )}
+
+            {view === "register" && (
+              <form onSubmit={handleRegister} className="flex flex-col gap-3">
+                <Input type="email" placeholder="邮箱" value={email} onChange={(e) => setEmail(e.target.value)} disabled={loading} autoFocus />
+                <div className="flex gap-2">
+                  <Input type="text" placeholder="6 位验证码" value={registerCode} onChange={(e) => setRegisterCode(e.target.value)} disabled={loading} maxLength={6} className="flex-1" />
+                  <Button type="button" variant="outline" onClick={handleSendCode} disabled={!email || codeCooldown > 0 || loading} className="shrink-0 whitespace-nowrap">
+                    {codeCooldown > 0 ? `${codeCooldown}s` : codeSent ? "重新发送" : "获取验证码"}
+                  </Button>
+                </div>
+                <Input type="password" placeholder="密码（至少 8 位）" value={password} onChange={(e) => setPassword(e.target.value)} disabled={loading} />
+                <Input type="password" placeholder="确认密码" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} disabled={loading} className={passwordMismatch ? "ring-1 ring-destructive" : ""} />
+                <Button type="submit" disabled={!email || !registerCode || !password || !confirmPassword || passwordMismatch || loading}>
+                  {loading ? "注册中..." : "注册"}
+                </Button>
+                <button type="button" className="text-center text-xs text-muted-foreground hover:underline" onClick={() => { setView("login"); setError(""); setSuccess(""); }}>
+                  已有账号？登录
+                </button>
+                <button
+                  type="button"
+                  className="text-center text-xs text-primary hover:underline"
+                  onClick={() => { setView("subscribe"); setError(""); setSuccess(""); }}
+                >
+                  购买订阅
+                </button>
+              </form>
+            )}
+
+            {view === "forgot" && (
+              <form onSubmit={handleForgot} className="flex flex-col gap-3">
+                <Input type="email" placeholder="邮箱" value={email} onChange={(e) => setEmail(e.target.value)} disabled={loading} autoFocus />
+                <Button type="submit" disabled={!email || loading}>
+                  {loading ? "发送中..." : "发送验证码"}
+                </Button>
+                <button type="button" className="text-center text-xs text-muted-foreground hover:underline" onClick={() => { setView("login"); setError(""); setSuccess(""); }}>
+                  返回登录
+                </button>
+              </form>
+            )}
+
+            {view === "reset" && (
+              <form onSubmit={handleReset} className="flex flex-col gap-3">
+                <Input type="email" placeholder="邮箱" value={email} onChange={(e) => setEmail(e.target.value)} disabled={loading} />
+                <Input type="text" placeholder="6 位验证码" value={resetCode} onChange={(e) => setResetCode(e.target.value)} disabled={loading} maxLength={6} />
+                <Input type="password" placeholder="新密码（至少 8 位）" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} disabled={loading} />
+                <Button type="submit" disabled={!email || !resetCode || !newPassword || loading}>
+                  {loading ? "重置中..." : "重置密码"}
+                </Button>
+                <button type="button" className="text-center text-xs text-muted-foreground hover:underline" onClick={() => { setView("login"); setError(""); setSuccess(""); }}>
+                  返回登录
+                </button>
+              </form>
+            )}
+          </>
         )}
       </DialogContent>
     </Dialog>

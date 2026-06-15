@@ -9,7 +9,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { sshConnect } from "../ipc";
+import { sshConnectWithId } from "../ipc";
 import { useTerminalStore } from "../store/terminalStore";
 import type { AuthConfig, ConnectionConfig } from "../types/terminal";
 import type { HostKeyDialogState } from "../store/terminalStore";
@@ -46,13 +46,12 @@ export function NewConnectionDialog() {
   const defaultType = useTerminalStore((s) => s.newConnectionDialogDefaultType);
   const addSession = useTerminalStore((s) => s.addSession);
   const addConnection = useTerminalStore((s) => s.addConnection);
+  const updateSessionStatus = useTerminalStore((s) => s.updateSessionStatus);
   const showHostKeyDialog = useTerminalStore((s) => s.showHostKeyDialog);
   const saveConnection = useTerminalStore((s) => s.saveConnection);
 
   const [connectionType, setConnectionType] = useState<ConnectionType>(defaultType);
   const [sshForm, setSshForm] = useState<SshFormState>(defaultSshForm);
-  const [connecting, setConnecting] = useState(false);
-  const [errorMsg, setErrorMsg] = useState("");
 
   useEffect(() => {
     if (open) {
@@ -62,88 +61,90 @@ export function NewConnectionDialog() {
 
   const resetAndClose = () => {
     setSshForm(defaultSshForm);
-    setConnecting(false);
-    setErrorMsg("");
     setOpen(false);
   };
 
-  const handleConnect = async () => {
-    setConnecting(true);
-    setErrorMsg("");
-
+  const handleConnect = () => {
     let config: ConnectionConfig | null = null;
 
-    try {
-      const configId = crypto.randomUUID();
-      const auth = buildAuth(sshForm);
-      const protocol = connectionType === "sftp" ? "sftp" : "ssh";
-      const displayName =
-        sshForm.sessionName.trim() ||
-        `${sshForm.username}@${sshForm.host}`;
-      config = {
-        id: configId,
-        name: displayName,
-        protocol,
-        host: sshForm.host,
-        port: sshForm.port,
-        username: sshForm.username,
-        auth,
-      };
-      addConnection(config);
+    const configId = crypto.randomUUID();
+    const auth = buildAuth(sshForm);
+    const protocol = connectionType === "sftp" ? "sftp" : "ssh";
+    const displayName =
+      sshForm.sessionName.trim() ||
+      `${sshForm.username}@${sshForm.host}`;
+    config = {
+      id: configId,
+      name: displayName,
+      protocol,
+      host: sshForm.host,
+      port: sshForm.port,
+      username: sshForm.username,
+      auth,
+    };
 
-      const sessionId = await sshConnect(config);
-      addSession({
-        id: sessionId,
-        configId,
-        type: protocol,
-        status: "connected",
-        title: sshForm.host,
+    const sessionId = crypto.randomUUID();
+    addConnection(config);
+    addSession({
+      id: sessionId,
+      configId,
+      type: protocol,
+      status: "connecting",
+      title: sshForm.host,
+    });
+    resetAndClose();
+
+    const doConnect = async (connConfig: ConnectionConfig, sid: string) => {
+      await sshConnectWithId(sid, connConfig);
+      updateSessionStatus(sid, "connected");
+    };
+
+    doConnect(config, sessionId)
+      .then(async () => {
+        if (sshForm.saveSession) {
+          await saveConnection(config!);
+        }
+      })
+      .catch((err) => {
+        const errMsg = String(err);
+        const unknownMatch = errMsg.match(/Host key unknown:\s*(SHA256:\S+)/);
+        const changedMatch = errMsg.match(
+          /Host key changed: expected\s*(SHA256:\S+),\s*got\s*(SHA256:\S+)/,
+        );
+
+        if (unknownMatch && config) {
+          const dialogData: Omit<HostKeyDialogState, "open"> = {
+            host: sshForm.host,
+            port: sshForm.port,
+            type: "unknown",
+            fingerprint: unknownMatch[1],
+            expectedFingerprint: "",
+            pendingConfig: config,
+            pendingSessionId: sessionId,
+            saveSession: sshForm.saveSession,
+          };
+          showHostKeyDialog(dialogData);
+          return;
+        }
+
+        if (changedMatch && config) {
+          const dialogData: Omit<HostKeyDialogState, "open"> = {
+            host: sshForm.host,
+            port: sshForm.port,
+            type: "changed",
+            fingerprint: changedMatch[2],
+            expectedFingerprint: changedMatch[1],
+            pendingConfig: config,
+            pendingSessionId: sessionId,
+            saveSession: sshForm.saveSession,
+          };
+          showHostKeyDialog(dialogData);
+          return;
+        }
+
+        updateSessionStatus(sessionId, "error");
+        console.error("Failed to connect:", errMsg);
       });
-
-      if (sshForm.saveSession) {
-        await saveConnection(config);
-      }
-      resetAndClose();
-    } catch (err) {
-      const errMsg = String(err);
-      const unknownMatch = errMsg.match(/Host key unknown:\s*(SHA256:\S+)/);
-      const changedMatch = errMsg.match(
-        /Host key changed: expected\s*(SHA256:\S+),\s*got\s*(SHA256:\S+)/,
-      );
-
-      if (unknownMatch && config) {
-        const dialogData: Omit<HostKeyDialogState, "open"> = {
-          host: sshForm.host,
-          port: sshForm.port,
-          type: "unknown",
-          fingerprint: unknownMatch[1],
-          expectedFingerprint: "",
-          pendingConfig: config,
-          saveSession: sshForm.saveSession,
-        };
-        showHostKeyDialog(dialogData);
-        resetAndClose();
-        return;
-      }
-
-      if (changedMatch && config) {
-        const dialogData: Omit<HostKeyDialogState, "open"> = {
-          host: sshForm.host,
-          port: sshForm.port,
-          type: "changed",
-          fingerprint: changedMatch[2],
-          expectedFingerprint: changedMatch[1],
-          pendingConfig: config,
-          saveSession: sshForm.saveSession,
-        };
-        showHostKeyDialog(dialogData);
-        resetAndClose();
-        return;
-      }
-
-      setErrorMsg(errMsg.replace(/^Error:\s*/i, ""));
-      setConnecting(false);
-    }
   };
 
   const canConnect = sshForm.host.trim() !== "" && sshForm.username.trim() !== "";
@@ -273,18 +274,12 @@ export function NewConnectionDialog() {
               </div>
         </div>
 
-        {errorMsg && (
-          <div className="rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">
-            {errorMsg}
-          </div>
-        )}
-
         <DialogFooter>
           <Button variant="outline" onClick={resetAndClose}>
             取消
           </Button>
-          <Button onClick={handleConnect} disabled={!canConnect || connecting}>
-            {connecting ? "连接中…" : "连接"}
+          <Button onClick={handleConnect} disabled={!canConnect}>
+            连接
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -5,7 +5,7 @@ description: "Build and publish Mona releases to VPS for hot-update and website 
 
 # Mona Release Pipeline
 
-Version sync → Package build (via `windows-packager` skill) → Create update package → Upload to VPS → Update manifest → Deploy website.
+Version sync → Package build (via `windows-packager` skill) → Create update package → Generate changelog → Upload to VPS → Update manifest → Deploy website.
 
 ## Prerequisites
 
@@ -58,17 +58,17 @@ Set-Content "pyproject.toml" $Pyproject
 
 Execute the `windows-packager` skill's build pipeline (Step 1 + Step 2):
 
-1. **Build Python Runtime** — `windows-packager` Step 1: download python-build-standalone, `pip install ".[api,wecom,weixin,pdf]"`, strip caches, re-pack `python.tar.gz`
+1. **Build mona-gateway** — `windows-packager` Step 1: `pip install ".[api,wecom,weixin,pdf]"`, `pyinstaller src-tauri\mona-gateway.spec`, copy `dist/mona-gateway/` to `src-tauri/resources/mona-gateway/`
 2. **Build Tauri Client** — `windows-packager` Step 2: `cargo tauri build`, produces NSIS installer + `Mona.exe`
 
 Output artifacts:
-- `src-tauri/resources/python.tar.gz`
+- `src-tauri/resources/mona-gateway/` (PyInstaller COLLECT directory)
 - `src-tauri/target/release/Mona.exe`
 - `src-tauri/target/release/bundle/nsis/Mona_{version}_x64-setup.exe`
 
 ## Step 3: Create Update Package
 
-The update package is a single `mona-<version>.tar.gz` containing `Mona.exe` and `python.tar.gz`.
+The update package is a single `mona-<version>.tar.gz` containing `Mona.exe` and the `mona-gateway/` directory.
 
 ```powershell
 $Version = "<determined_version>"
@@ -77,11 +77,11 @@ if (Test-Path $StagingDir) { Remove-Item -Recurse -Force $StagingDir }
 New-Item -ItemType Directory -Path $StagingDir -Force | Out-Null
 
 Copy-Item "src-tauri\target\release\Mona.exe" "$StagingDir\Mona.exe"
-Copy-Item "src-tauri\resources\python.tar.gz" "$StagingDir\python.tar.gz"
+Copy-Item -Recurse "src-tauri\resources\mona-gateway" "$StagingDir\mona-gateway"
 
 $UpdatePackage = "dist\mona-$Version.tar.gz"
 New-Item -ItemType Directory -Path "dist" -Force | Out-Null
-tar -czf $UpdatePackage -C $StagingDir Mona.exe python.tar.gz
+tar -czf $UpdatePackage -C $StagingDir Mona.exe mona-gateway
 
 # Compute SHA256
 $Hash = (Get-FileHash $UpdatePackage -Algorithm SHA256).Hash.ToLower()
@@ -92,7 +92,62 @@ Write-Output "SHA256: $Hash"
 Write-Output "Size: $Size bytes"
 ```
 
-## Step 4: Upload to VPS
+## Step 4: Generate Changelog
+
+The release process must record the current git hash and produce human-readable release notes from the commits since the previous release.
+
+### 4.1 Collect git history
+
+Use the helper script to get the current hash, previous release hash, and the commits in between:
+
+```powershell
+python scripts/update_changelog.py collect
+```
+
+Output example:
+
+```json
+{
+  "currentGitHash": "abc123...",
+  "previousGitHash": "def456...",
+  "commitCount": 12,
+  "commits": [
+    {"hash": "abc123...", "subject": "feat: add SSH IDE mode", "body": ""},
+    {"hash": "...", "subject": "fix: resolve update download race", "body": ""}
+  ]
+}
+```
+
+If `previousGitHash` is empty (first release), skip commit analysis and write a manual summary.
+
+### 4.2 Summarize with AI
+
+Feed the collected commits to the current LLM session with a prompt like:
+
+> You are summarizing a Mona release for end users. Below are the commits between version X and the previous release. Convert them into a concise Chinese changelog: one short `summary` sentence and 3-8 bullet `items` in plain language. Ignore internal refactors, test-only changes, and dependency bumps unless user-visible. Output only JSON in this shape:
+> ```json
+> {"summary": "...", "items": ["...", "..."]}
+> ```
+>
+> Commits:
+> - ...
+
+### 4.3 Write changelog data
+
+Use the helper script to prepend the new release entry:
+
+```powershell
+python scripts/update_changelog.py write `
+  --version $Version `
+  --summary "修复了更新下载竞态，新增 SSH IDE 模式。" `
+  --items "新增 SSH IDE 模式，支持多文件编辑" `
+  --items "修复自动更新下载时偶发的文件占用问题" `
+  --items "优化 Agent 执行结果展示"
+```
+
+This updates `site/public/changelog.json`, which the website changelog page reads at runtime.
+
+## Step 5: Upload to VPS
 
 Use Python paramiko (Windows lacks native sshpass):
 
@@ -120,9 +175,9 @@ sftp.close()
 ssh.close()
 ```
 
-## Step 5: Update Manifest
+## Step 6: Update Manifest
 
-Update `/var/www/mona/updates/update.json` on VPS:
+Update `/var/www/mona/updates/update.json` on VPS. Include the current `git_hash` so future releases can diff against it.
 
 ```python
 import paramiko, json
@@ -140,6 +195,7 @@ manifest = {
     "url": f"https://mona.lzfun.vip/releases/mona-{version}.tar.gz",
     "sha256": sha256_hash,
     "size": file_size,
+    "git_hash": current_git_hash,
 }
 
 with sftp.open("/var/www/mona/updates/update.json", "w") as f:
@@ -149,9 +205,9 @@ sftp.close()
 ssh.close()
 ```
 
-## Step 6: Deploy Website (if site changed)
+## Step 7: Deploy Website
 
-If the website source in `site/` has changed:
+The website source in `site/` includes a changelog page that reads `site/public/changelog.json`. Build and deploy it:
 
 ```powershell
 cd site
@@ -160,11 +216,37 @@ npm run build
 
 Then upload `site/dist/` to VPS `/var/www/mona/dist/` via paramiko.
 
-## Step 7: Verify
+```python
+import paramiko, os
 
-1. `curl https://mona.lzfun.vip/updates/update.json` — manifest accessible
+ssh = paramiko.SSHClient()
+ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+ssh.connect("47.117.69.105", username="root", password="Alt34484!@#", timeout=10)
+sftp = ssh.open_sftp()
+
+local_dist = "site/dist"
+remote_dist = "/var/www/mona/dist"
+
+for root, dirs, files in os.walk(local_dist):
+    rel = os.path.relpath(root, local_dist).replace("\\", "/")
+    remote_root = f"{remote_dist}/{rel}" if rel != "." else remote_dist
+    ssh.exec_command(f"mkdir -p {remote_root}")
+    for f in files:
+        local_path = os.path.join(root, f).replace("\\", "/")
+        remote_path = f"{remote_root}/{f}"
+        sftp.put(local_path, remote_path)
+
+sftp.close()
+ssh.close()
+```
+
+## Step 8: Verify
+
+1. `curl https://mona.lzfun.vip/updates/update.json` — manifest accessible and contains `git_hash`
 2. `curl -I https://mona.lzfun.vip/releases/mona-<ver>.tar.gz` — update package downloadable
 3. `curl -I https://mona.lzfun.vip/releases/Mona-latest.exe` — NSIS download works
+4. `curl https://mona.lzfun.vip/changelog.json` — changelog data is up to date
+5. Open `https://mona.lzfun.vip/changelog` in a browser — UI matches the rest of the site
 
 ## Cleanup
 
@@ -177,8 +259,8 @@ Remove-Item -Recurse -Force "$env:TEMP\mona-update-staging" -ErrorAction Silentl
 
 | User says | Action |
 |-----------|--------|
-| "发布新版本" / "release" | Ask for version, then execute full pipeline (Steps 1-7) |
-| "只部署官网" / "deploy site" | Build site + upload to VPS only (Step 6) |
+| "发布新版本" / "release" | Ask for version, then execute full pipeline (Steps 1-8) |
+| "只部署官网" / "deploy site" | Build site + upload to VPS only (Step 7) |
 
 ## Troubleshooting
 
@@ -189,5 +271,8 @@ Remove-Item -Recurse -Force "$env:TEMP\mona-update-staging" -ErrorAction Silentl
 | Nginx 403 | Check permissions: `chmod -R 755 /var/www/mona/` |
 | Nginx 404 | Check file paths match manifest URLs exactly |
 | `cargo tauri build` fails with `--ci` error | Set `$env:CI = ""` before building |
-| Update package too large | Strip `__pycache__`, `.pyc`, `.pyo` from Python runtime |
+| Update package too large | Strip `__pycache__`, `.pyc`, `.pyo` from Python runtime; exclude unused packages in spec |
 | Hot-update SHA256 mismatch | Re-compute hash after upload, ensure binary mode transfer |
+| PyInstaller missing import | Add to `hidden_imports` list in `src-tauri/mona-gateway.spec` |
+| Changelog page shows old data | Confirm `site/public/changelog.json` was updated and redeployed |
+| `previousGitHash` is empty | The existing `changelog.json` entry has no `gitHash`; for first release use manual summary |

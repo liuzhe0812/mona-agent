@@ -16,7 +16,7 @@ import {
   Search,
 } from "lucide-react";
 import { useTerminalStore } from "../store/terminalStore";
-import { sshConnect } from "../ipc";
+import { sshConnectWithId } from "../ipc";
 import type { ConnectionConfig, AuthConfig } from "../types/terminal";
 import type { HostKeyDialogState } from "../store/terminalStore";
 
@@ -118,6 +118,7 @@ export function SessionManagerDialog({
   const deleteConnection = useTerminalStore((s) => s.deleteConnection);
   const addSession = useTerminalStore((s) => s.addSession);
   const addConnection = useTerminalStore((s) => s.addConnection);
+  const updateSessionStatus = useTerminalStore((s) => s.updateSessionStatus);
   const showHostKeyDialog = useTerminalStore((s) => s.showHostKeyDialog);
   const showSshPasswordDialog = useTerminalStore((s) => s.showSshPasswordDialog);
 
@@ -140,7 +141,6 @@ export function SessionManagerDialog({
     passphrase: "",
   });
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
-  const [connectingId, setConnectingId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
 
   const startEdit = (config: ConnectionConfig, mode: EditMode) => {
@@ -201,25 +201,26 @@ export function SessionManagerDialog({
     setDeleteConfirmId(null);
   };
 
-  const handleConnect = async (config: ConnectionConfig) => {
-    setConnectingId(config.id);
+  const handleConnect = (config: ConnectionConfig) => {
+    const sessionId = crypto.randomUUID();
+    const sessionType = config.protocol === "sftp" ? "sftp" : "ssh";
 
-    const tryConnect = async (connConfig: ConnectionConfig) => {
-      addConnection(connConfig);
-      const sessionId = await sshConnect(connConfig);
-      addSession({
-        id: sessionId,
-        configId: connConfig.id,
-        type: connConfig.protocol === "sftp" ? "sftp" : "ssh",
-        status: "connected",
-        title: connConfig.host,
-      });
+    addConnection(config);
+    addSession({
+      id: sessionId,
+      configId: config.id,
+      type: sessionType,
+      status: "connecting",
+      title: config.host,
+    });
+    onOpenChange(false);
+
+    const doConnect = async (connConfig: ConnectionConfig, sid: string) => {
+      await sshConnectWithId(sid, connConfig);
+      updateSessionStatus(sid, "connected");
     };
 
-    try {
-      await tryConnect(config);
-      onOpenChange(false);
-    } catch (err) {
+    doConnect(config, sessionId).catch((err) => {
       const errMsg = String(err);
       const unknownMatch = errMsg.match(/Host key unknown:\s*(SHA256:\S+)/);
       const changedMatch = errMsg.match(
@@ -237,10 +238,10 @@ export function SessionManagerDialog({
           fingerprint: unknownMatch[1],
           expectedFingerprint: "",
           pendingConfig: config,
+          pendingSessionId: sessionId,
           saveSession: true,
         };
         showHostKeyDialog(dialogData);
-        onOpenChange(false);
         return;
       }
 
@@ -252,10 +253,10 @@ export function SessionManagerDialog({
           fingerprint: changedMatch[2],
           expectedFingerprint: changedMatch[1],
           pendingConfig: config,
+          pendingSessionId: sessionId,
           saveSession: true,
         };
         showHostKeyDialog(dialogData);
-        onOpenChange(false);
         return;
       }
 
@@ -269,18 +270,19 @@ export function SessionManagerDialog({
               ...config,
               auth: { type: "password", password },
             };
-            await tryConnect(newConfig);
+            await doConnect(newConfig, sessionId);
             await saveConnection(newConfig);
           },
-          onCancel: () => {},
+          onCancel: () => {
+            updateSessionStatus(sessionId, "error");
+          },
         });
         return;
       }
 
+      updateSessionStatus(sessionId, "error");
       console.error("Failed to open saved connection:", errMsg);
-    } finally {
-      setConnectingId(null);
-    }
+    });
   };
 
   const filteredConnections = searchQuery.trim()
@@ -328,7 +330,7 @@ export function SessionManagerDialog({
                     key={conn.id}
                     className="group flex items-center gap-1 rounded-md border px-2 py-1.5 hover:bg-accent/50 transition-colors cursor-pointer"
                     onClick={() => {
-                      if (connectingId !== conn.id && !deleteConfirmId) {
+                      if (!deleteConfirmId) {
                         handleConnect(conn);
                       }
                     }}

@@ -1,30 +1,154 @@
-import { ArrowLeft, ArrowRight, RotateCw, Star, Lock } from "lucide-react";
+import { ArrowLeft, ArrowRight, RotateCw, Star, Lock, Globe, Search, Maximize, Minimize, Settings2, Trash2, HardDrive, BookmarkPlus, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { AgentLogo } from "@/components/AgentLogo";
-import { useEffect, useState } from "react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuCheckboxItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  browserIsBookmarked,
+  browserAddBookmark,
+  browserRemoveBookmark,
+  browserSearchSuggestions,
+  browserClearHistory,
+  browserClearCache,
+  browserImportBookmarks,
+  type AddressBarSuggestion,
+  type ImportBookmarkItem,
+} from "@/lib/browser-ipc";
+
+interface ChromeBookmarkNode {
+  type?: string;
+  name?: string;
+  url?: string;
+  children?: ChromeBookmarkNode[];
+}
+
+interface ChromeBookmarksJson {
+  roots?: Record<string, ChromeBookmarkNode | undefined>;
+}
 
 interface BrowserToolbarProps {
   url: string;
+  title: string;
   isAiControlled: boolean;
   isAiPanelOpen: boolean;
+  isFullscreen?: boolean;
+  bookmarkBarVisible: boolean;
   onNavigate: (url: string) => void;
   onGoBack: () => void;
   onGoForward: () => void;
   onReload: () => void;
   onToggleAiPanel: () => void;
+  onToggleBookmarkBar: () => void;
+  onToggleFullscreen?: () => void;
+  onExitFullscreen?: () => void;
+  onDropdownOpenChange?: (open: boolean) => void;
 }
 
-export function BrowserToolbar({ url, isAiControlled, isAiPanelOpen, onNavigate, onGoBack, onGoForward, onReload, onToggleAiPanel }: BrowserToolbarProps) {
+export function BrowserToolbar({
+  url,
+  title,
+  isAiControlled,
+  isAiPanelOpen,
+  isFullscreen = false,
+  bookmarkBarVisible,
+  onNavigate,
+  onGoBack,
+  onGoForward,
+  onReload,
+  onToggleAiPanel,
+  onToggleBookmarkBar,
+  onToggleFullscreen,
+  onExitFullscreen,
+  onDropdownOpenChange,
+}: BrowserToolbarProps) {
   const [inputUrl, setInputUrl] = useState(url);
   const [isFocused, setIsFocused] = useState(false);
+  const [isBookmarked, setIsBookmarked] = useState(false);
+  const [suggestions, setSuggestions] = useState<AddressBarSuggestion[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [selectedIdx, setSelectedIdx] = useState(-1);
+  const suggestionsRef = useRef<HTMLDivElement>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout>>();
 
-  // 当外部 url 变化时同步到输入框（仅未聚焦时）
+  // 同步外部 url 到输入框（仅未聚焦时）
   useEffect(() => {
     if (!isFocused) {
       setInputUrl(url);
     }
   }, [url, isFocused]);
+
+  // 检查收藏状态
+  useEffect(() => {
+    if (url && url.startsWith("http")) {
+      browserIsBookmarked(url).then(setIsBookmarked).catch(() => setIsBookmarked(false));
+    } else {
+      setIsBookmarked(false);
+    }
+  }, [url]);
+
+  // 点击外部关闭下拉
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (suggestionsRef.current && !suggestionsRef.current.contains(e.target as Node)) {
+        setShowSuggestions(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  // Notify parent when dropdown opens/closes (to hide native WebView)
+  useEffect(() => {
+    onDropdownOpenChange?.(showSuggestions);
+  }, [showSuggestions, onDropdownOpenChange]);
+
+  // 搜索建议（防抖）
+  const fetchSuggestions = useCallback((query: string) => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    if (!query.trim()) {
+      setSuggestions([]);
+      setShowSuggestions(false);
+      return;
+    }
+    debounceRef.current = setTimeout(async () => {
+      try {
+        const results = await browserSearchSuggestions(query, 8);
+        setSuggestions(results);
+        setShowSuggestions(results.length > 0);
+        setSelectedIdx(-1);
+      } catch {
+        setSuggestions([]);
+        setShowSuggestions(false);
+      }
+    }, 150);
+  }, []);
+
+  const handleFocus = () => {
+    setIsFocused(true);
+    if (inputUrl.trim()) {
+      fetchSuggestions(inputUrl);
+    }
+  };
+
+  const handleBlur = () => {
+    setTimeout(() => {
+      setIsFocused(false);
+      setShowSuggestions(false);
+    }, 200);
+  };
+
+  const handleInputChange = (value: string) => {
+    setInputUrl(value);
+    fetchSuggestions(value);
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -32,6 +156,120 @@ export function BrowserToolbar({ url, isAiControlled, isAiPanelOpen, onNavigate,
     if (!trimmed) return;
     const finalUrl = trimmed.includes("://") ? trimmed : `https://${trimmed}`;
     onNavigate(finalUrl);
+    setShowSuggestions(false);
+  };
+
+  const handleSelectSuggestion = (suggestion: AddressBarSuggestion) => {
+    setInputUrl(suggestion.url);
+    onNavigate(suggestion.url);
+    setShowSuggestions(false);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (!showSuggestions || suggestions.length === 0) return;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setSelectedIdx((prev) => (prev < suggestions.length - 1 ? prev + 1 : prev));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setSelectedIdx((prev) => (prev > 0 ? prev - 1 : -1));
+    } else if (e.key === "Enter" && selectedIdx >= 0) {
+      e.preventDefault();
+      handleSelectSuggestion(suggestions[selectedIdx]);
+    } else if (e.key === "Escape") {
+      setShowSuggestions(false);
+    }
+  };
+
+  const toggleBookmark = async () => {
+    try {
+      if (isBookmarked) {
+        await browserRemoveBookmark(url);
+        setIsBookmarked(false);
+      } else {
+        await browserAddBookmark(url, title || url);
+        setIsBookmarked(true);
+      }
+      window.dispatchEvent(new Event("bookmark-changed"));
+    } catch (e) {
+      console.error("[BrowserToolbar] toggle bookmark failed:", e);
+    }
+  };
+
+  const handleClearHistory = async () => {
+    try {
+      await browserClearHistory();
+    } catch (e) {
+      console.error("[BrowserToolbar] clear history failed:", e);
+    }
+  };
+
+  const handleClearCache = async () => {
+    try {
+      await browserClearCache();
+    } catch (e) {
+      console.error("[BrowserToolbar] clear cache failed:", e);
+    }
+  };
+
+  const collectChromeBookmarks = useCallback((
+    node: ChromeBookmarkNode,
+    folderPath: string,
+    out: ImportBookmarkItem[],
+  ) => {
+    if (node.type === "url" && node.url) {
+      out.push({
+        url: node.url,
+        title: node.name || node.url,
+        folder: folderPath,
+      });
+    } else if (node.type === "folder" && node.children) {
+      const nextPath = folderPath ? `${folderPath}/${node.name || "未命名文件夹"}` : (node.name || "");
+      for (const child of node.children) {
+        collectChromeBookmarks(child, nextPath, out);
+      }
+    }
+  }, []);
+
+  const handleImportChromeBookmarks = async () => {
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const selected = await open({
+        multiple: false,
+        directory: false,
+        filters: [
+          { name: "Chrome 书签", extensions: ["json"] },
+          { name: "所有文件", extensions: ["*"] },
+        ],
+      });
+      if (!selected || Array.isArray(selected)) return;
+
+      const { readTextFile } = await import("@tauri-apps/plugin-fs");
+      const content = await readTextFile(selected);
+      const data: ChromeBookmarksJson = JSON.parse(content);
+
+      const items: ImportBookmarkItem[] = [];
+      if (data.roots) {
+        for (const root of Object.values(data.roots)) {
+          if (root) collectChromeBookmarks(root, "", items);
+        }
+      }
+
+      if (items.length === 0) {
+        // eslint-disable-next-line no-alert
+        alert("未找到可导入的书签，请确认选择的是 Chrome 的 Bookmarks 文件。");
+        return;
+      }
+
+      const imported = await browserImportBookmarks(items);
+      window.dispatchEvent(new Event("bookmark-changed"));
+      // eslint-disable-next-line no-alert
+      alert(`成功导入 ${imported} 条书签。`);
+    } catch (e) {
+      console.error("[BrowserToolbar] import Chrome bookmarks failed:", e);
+      // eslint-disable-next-line no-alert
+      alert(`导入失败：${e instanceof Error ? e.message : String(e)}`);
+    }
   };
 
   return (
@@ -45,32 +283,127 @@ export function BrowserToolbar({ url, isAiControlled, isAiPanelOpen, onNavigate,
       <Button variant="ghost" size="icon" className="h-6 w-6" title="刷新" onClick={onReload}>
         <RotateCw className="h-3 w-3" />
       </Button>
-      <form onSubmit={handleSubmit} className="flex-1">
+
+      <form onSubmit={handleSubmit} className="flex-1 relative">
         <div className="flex items-center gap-1.5">
-          <Lock className="h-3 w-3 shrink-0 text-muted-foreground" />
+          {url.startsWith("https://") ? (
+            <Lock className="h-3 w-3 shrink-0 text-muted-foreground" />
+          ) : (
+            <Globe className="h-3 w-3 shrink-0 text-muted-foreground" />
+          )}
           <Input
             value={inputUrl}
-            onChange={(e) => setInputUrl(e.target.value)}
-            onFocus={() => setIsFocused(true)}
-            onBlur={() => setIsFocused(false)}
+            onChange={(e) => handleInputChange(e.target.value)}
+            onFocus={handleFocus}
+            onBlur={handleBlur}
+            onKeyDown={handleKeyDown}
             className="h-6 rounded-full border-0 bg-muted/50 text-[12px] px-2"
-            placeholder="输入网址..."
+            placeholder="输入网址或搜索..."
           />
         </div>
+
+        {/* 地址栏下拉建议 */}
+        {showSuggestions && suggestions.length > 0 && (
+          <div
+            ref={suggestionsRef}
+            className="absolute left-0 right-0 top-full z-50 mt-1 overflow-hidden rounded-lg border border-border bg-popover shadow-md"
+          >
+            {suggestions.map((s, i) => (
+              <button
+                key={s.url}
+                type="button"
+                className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] hover:bg-accent transition-colors ${
+                  i === selectedIdx ? "bg-accent" : ""
+                }`}
+                onMouseDown={() => handleSelectSuggestion(s)}
+                onMouseEnter={() => setSelectedIdx(i)}
+              >
+                {s.isBookmark ? (
+                  <Star className="h-3 w-3 shrink-0 fill-yellow-500 text-yellow-500" />
+                ) : (
+                  <Search className="h-3 w-3 shrink-0 text-muted-foreground" />
+                )}
+                <div className="flex-1 min-w-0">
+                  <div className="truncate font-medium">{s.title || s.url}</div>
+                  <div className="truncate text-muted-foreground">{s.url}</div>
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
       </form>
-      <Button variant="ghost" size="icon" className="h-6 w-6" title="收藏">
-        <Star className="h-3 w-3" />
+
+      <Button
+        variant="ghost"
+        size="icon"
+        className="h-6 w-6"
+        title={isBookmarked ? "取消收藏" : "收藏"}
+        onClick={toggleBookmark}
+      >
+        <Star
+          className={`h-3 w-3 ${isBookmarked ? "fill-yellow-500 text-yellow-500" : ""}`}
+        />
       </Button>
+
+      {/* 全屏按钮 - AI 按钮左边 */}
+      {onToggleFullscreen && (
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-6 w-6"
+          title={isFullscreen ? "退出全屏 (F11)" : "全屏 (F11)"}
+          onClick={isFullscreen ? onExitFullscreen : onToggleFullscreen}
+        >
+          {isFullscreen ? (
+            <Minimize className="h-3 w-3" />
+          ) : (
+            <Maximize className="h-3 w-3" />
+          )}
+        </Button>
+      )}
+
+      {/* 选项按钮 - 下拉菜单 */}
+      <DropdownMenu onOpenChange={(open) => onDropdownOpenChange?.(open)}>
+        <DropdownMenuTrigger asChild>
+          <Button variant="ghost" size="icon" className="h-6 w-6" title="选项">
+            <Settings2 className="h-3 w-3" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" side="top" className="w-48">
+          <DropdownMenuCheckboxItem
+            checked={bookmarkBarVisible}
+            onCheckedChange={() => onToggleBookmarkBar()}
+          >
+            <BookmarkPlus className="mr-2 h-3.5 w-3.5" />
+            书签栏
+          </DropdownMenuCheckboxItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onClick={handleClearHistory}>
+            <Trash2 className="mr-2 h-3.5 w-3.5" />
+            清理历史记录
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={handleClearCache}>
+            <HardDrive className="mr-2 h-3.5 w-3.5" />
+            清理缓存
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onClick={handleImportChromeBookmarks}>
+            <Upload className="mr-2 h-3.5 w-3.5" />
+            导入 Chrome 书签
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+
+      {/* AI 按钮 */}
       <button
         type="button"
         onClick={onToggleAiPanel}
         title="Mona"
-        className={`flex h-6 w-6 items-center justify-center rounded-md transition-colors ${isAiPanelOpen ? "bg-primary/15" : "hover:bg-muted/60"}`}
+        className={`flex h-6 w-6 items-center justify-center rounded-md transition-colors ${
+          isAiPanelOpen ? "bg-primary/15" : "hover:bg-muted/60"
+        }`}
       >
-        <AgentLogo
-          state={isAiControlled ? "working" : "idle"}
-          className="h-5 w-5"
-        />
+        <AgentLogo state={isAiControlled ? "working" : "idle"} className="h-5 w-5" />
       </button>
     </div>
   );
