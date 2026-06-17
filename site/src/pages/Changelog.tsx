@@ -111,9 +111,11 @@ export default function Changelog() {
                 )}
               </div>
 
-              <p className="mb-5 text-base leading-7 text-black/[0.74]">
-                {release.summary}
-              </p>
+              {release.summary && (
+                <p className="mb-5 text-base leading-7 text-black/[0.74]">
+                  {release.summary}
+                </p>
+              )}
 
               <ul className="space-y-2.5">
                 {release.items.map((item, i) => (

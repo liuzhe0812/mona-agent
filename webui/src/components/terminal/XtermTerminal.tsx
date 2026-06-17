@@ -13,14 +13,7 @@ import {
 } from "./ipc";
 import { useTerminalStore } from "./store/terminalStore";
 import type { ConnectionConfig } from "./types/terminal";
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuSeparator,
-  ContextMenuTrigger,
-} from "@/components/ui/context-menu";
-import { Copy, ClipboardPaste, Download, Notebook, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 
 interface Props {
   sessionId: string;
@@ -204,6 +197,8 @@ export function XtermTerminal({ sessionId }: Props) {
       }
     });
 
+    // 选中即复制（已移除，改为右键复制）
+
     registry.register(sessionId, terminal);
 
     terminalRef.current = terminal;
@@ -264,81 +259,32 @@ export function XtermTerminal({ sessionId }: Props) {
     terminal.options.cursorStyle = settings.cursorStyle;
   }, [settings]);
 
-  const handleCopy = useCallback(async () => {
-    const terminal = terminalRef.current;
-    if (!terminal) return;
-    const selection = terminal.getSelection();
-    if (selection) {
-      try {
-        const { invoke } = await import("@tauri-apps/api/core");
-        await invoke("plugin:clipboard-manager|write_text", { text: selection });
-      } catch {}
-    }
-  }, []);
-
-  const handlePaste = useCallback(async () => {
-    const terminal = terminalRef.current;
-    if (!terminal) return;
-    try {
-      const { invoke } = await import("@tauri-apps/api/core");
-      const text = await invoke<string>("plugin:clipboard-manager|read_text");
-      if (text) {
-        terminal.paste(text);
+  const handleContextMenu = useCallback(
+    async (e: React.MouseEvent) => {
+      e.preventDefault();
+      const terminal = terminalRef.current;
+      if (!terminal) return;
+      const selection = terminal.getSelection();
+      if (selection) {
+        // 有选中：复制并清除选中
+        try {
+          const { invoke } = await import("@tauri-apps/api/core");
+          await invoke("plugin:clipboard-manager|write_text", { text: selection });
+        } catch {}
+        terminal.clearSelection();
+      } else {
+        // 无选中：粘贴
+        try {
+          const { invoke } = await import("@tauri-apps/api/core");
+          const text = await invoke<string>("plugin:clipboard-manager|read_text");
+          if (text) {
+            terminal.paste(text);
+          }
+        } catch {}
       }
-    } catch {}
-  }, []);
-
-  const getTerminalContent = useCallback((): string => {
-    const terminal = terminalRef.current;
-    if (!terminal) return "";
-    const buffer = terminal.buffer.active;
-    const lines: string[] = [];
-    for (let i = 0; i < buffer.length; i++) {
-      const line = buffer.getLine(i);
-      if (line) {
-        lines.push(line.translateToString(true));
-      }
-    }
-    return lines.join("\n");
-  }, []);
-
-  const handleExportLog = useCallback(async () => {
-    const content = getTerminalContent();
-    if (!content) return;
-    try {
-      const { save } = await import("@tauri-apps/plugin-dialog");
-      const savePath = await save({
-        defaultPath: "terminal-log.txt",
-        title: "导出终端记录",
-        filters: [{ name: "文本文件", extensions: ["txt", "log"] }],
-      });
-      if (!savePath) return;
-      const { writeTextFile } = await import("@tauri-apps/plugin-fs");
-      await writeTextFile(savePath as `${string}/${string}`, content);
-    } catch {}
-  }, [getTerminalContent]);
-
-  const handleExportToNote = useCallback(async () => {
-    const content = getTerminalContent();
-    if (!content) return;
-    try {
-      const { loadNotesState, saveNotesState, createBlankNote } = await import(
-        "@/components/notes/notes-storage"
-      );
-      const state = await loadNotesState();
-      let notebookId = state.notebooks[0]?.id;
-      if (!notebookId) return;
-      const note = createBlankNote(notebookId, "ssh");
-      const preview = content.split("\n").filter((l) => l.trim()).slice(-1)[0]?.slice(0, 60) ?? "终端记录";
-      note.title = `终端记录 ${new Date().toLocaleString("zh-CN")}`;
-      note.preview = preview;
-      note.contentMarkdown = `## 终端记录\n\n\`\`\`bash\n${content}\n\`\`\`\n`;
-      state.notes.unshift(note);
-      state.activeNoteId = note.id;
-      state.activeNotebookId = notebookId;
-      await saveNotesState(state);
-    } catch {}
-  }, [getTerminalContent]);
+    },
+    [],
+  );
 
   const handleReconnect = async () => {
     const session = sessions.find((s) => s.id === sessionId);
@@ -359,58 +305,42 @@ export function XtermTerminal({ sessionId }: Props) {
   };
 
   return (
-    <ContextMenu>
-      <ContextMenuTrigger asChild>
-        <div className="relative h-full w-full overflow-hidden bg-[#1a1a1a]">
-          {sessionStatus === "connecting" ? (
-            <div className="absolute inset-0 flex items-center justify-center bg-[#1a1a1a]">
-              <div className="flex items-center gap-2 text-muted-foreground">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                <span className="text-sm">连接中…</span>
-              </div>
-            </div>
-          ) : sessionStatus === "error" ? (
-            <div className="absolute inset-0 flex items-center justify-center bg-[#1a1a1a]">
-              <span className="text-sm text-red-500">连接失败</span>
-            </div>
-          ) : null}
-          <div
-            ref={containerRef}
-            className="h-full w-full"
-            style={{ padding: "4px 0 0 4px" }}
-          />
-          {disconnected && (
-            <div className="absolute inset-x-0 top-0 flex items-center justify-center bg-background/80 py-2">
-              <span className="mr-3 text-sm text-muted-foreground">
-                连接已断开
-              </span>
-              <button
-                onClick={handleReconnect}
-                disabled={reconnecting}
-                className="rounded-md bg-primary px-3 py-1 text-sm text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-              >
-                {reconnecting ? "重连中…" : "重新连接"}
-              </button>
-            </div>
-          )}
+    <div
+      className="relative h-full w-full overflow-hidden bg-[#1a1a1a]"
+      onContextMenu={handleContextMenu}
+    >
+      {sessionStatus === "connecting" ? (
+        <div className="absolute inset-0 flex items-center justify-center bg-[#1a1a1a]">
+          <div className="flex items-center gap-2 text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            <span className="text-sm">连接中…</span>
+          </div>
         </div>
-      </ContextMenuTrigger>
-      <ContextMenuContent className="w-48">
-        <ContextMenuItem onClick={handleCopy}>
-          <Copy className="mr-2 h-3.5 w-3.5" /> 复制
-        </ContextMenuItem>
-        <ContextMenuItem onClick={handlePaste}>
-          <ClipboardPaste className="mr-2 h-3.5 w-3.5" /> 粘贴
-        </ContextMenuItem>
-        <ContextMenuSeparator />
-        <ContextMenuItem onClick={handleExportLog}>
-          <Download className="mr-2 h-3.5 w-3.5" /> 导出记录
-        </ContextMenuItem>
-        <ContextMenuItem onClick={handleExportToNote}>
-          <Notebook className="mr-2 h-3.5 w-3.5" /> 导出到笔记
-        </ContextMenuItem>
-      </ContextMenuContent>
-    </ContextMenu>
+      ) : sessionStatus === "error" ? (
+        <div className="absolute inset-0 flex items-center justify-center bg-[#1a1a1a]">
+          <span className="text-sm text-red-500">连接失败</span>
+        </div>
+      ) : null}
+      <div
+        ref={containerRef}
+        className="h-full w-full"
+        style={{ padding: "4px 0 0 4px" }}
+      />
+      {disconnected && (
+        <div className="absolute inset-x-0 top-0 flex items-center justify-center bg-background/80 py-2">
+          <span className="mr-3 text-sm text-muted-foreground">
+            连接已断开
+          </span>
+          <button
+            onClick={handleReconnect}
+            disabled={reconnecting}
+            className="rounded-md bg-primary px-3 py-1 text-sm text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+          >
+            {reconnecting ? "重连中…" : "重新连接"}
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 

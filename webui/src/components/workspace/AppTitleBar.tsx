@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { ConnectionBadge } from "@/components/ConnectionBadge";
 import { BrowserTabItem } from "@/components/browser/BrowserTab";
 import { NotificationCenter } from "@/components/NotificationCenter";
+import { useLicense } from "@/hooks/useLicense";
 import { isTauri } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 import type { Tab } from "@/hooks/useBrowserTabs";
@@ -17,6 +18,8 @@ interface AppTitleBarProps {
   onNewTab: () => void;
   onOpenSettings?: () => void;
   onOpenSubscribe?: () => void;
+  /** When true, renders a pulsing badge on the settings button (e.g. update available). */
+  settingsBadge?: boolean;
 }
 
 async function withCurrentWindow(
@@ -41,7 +44,11 @@ export function AppTitleBar({
   onNewTab,
   onOpenSettings,
   onOpenSubscribe,
+  settingsBadge,
 }: AppTitleBarProps) {
+  const { licenseActive, checking } = useLicense();
+  const showUpgradePro = !checking && !licenseActive && Boolean(onOpenSubscribe);
+
   return (
     <header
       data-tauri-drag-region
@@ -72,8 +79,18 @@ export function AppTitleBar({
       {/* 右侧控制按钮 */}
       <div className="ml-auto flex h-full items-center">
         <ConnectionBadge />
+        {showUpgradePro && (
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={onOpenSubscribe}
+            className="h-9 rounded-none px-3 text-[11px] font-medium text-blue-600 hover:bg-blue-500/10 dark:text-blue-400"
+          >
+            升级 Pro
+          </Button>
+        )}
         {onOpenSettings && (
-          <TitleBarButton label="设置" onClick={onOpenSettings}>
+          <TitleBarButton label="设置" onClick={onOpenSettings} badge={settingsBadge}>
             <Settings className="h-3.5 w-3.5" />
           </TitleBarButton>
         )}
@@ -112,11 +129,13 @@ function TitleBarButton({
   label,
   children,
   danger = false,
+  badge = false,
   onClick,
 }: {
   label: string;
   children: ReactNode;
   danger?: boolean;
+  badge?: boolean;
   onClick: () => void;
 }) {
   return (
@@ -127,11 +146,17 @@ function TitleBarButton({
       title={label}
       onClick={onClick}
       className={cn(
-        "h-9 w-11 rounded-none text-muted-foreground hover:bg-sidebar-accent/80 hover:text-foreground",
+        "relative h-9 w-11 rounded-none text-muted-foreground hover:bg-sidebar-accent/80 hover:text-foreground",
         danger && "hover:bg-red-500 hover:text-white",
       )}
     >
       {children}
+      {badge ? (
+        <span className="absolute right-2.5 top-2 flex h-1.5 w-1.5">
+          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-blue-500/70" />
+          <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-blue-500" />
+        </span>
+      ) : null}
     </Button>
   );
 }

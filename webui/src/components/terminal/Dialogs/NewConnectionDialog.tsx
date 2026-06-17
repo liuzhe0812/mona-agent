@@ -9,12 +9,12 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { sshConnectWithId } from "../ipc";
+import { sshConnectWithId, vncConnect } from "../ipc";
 import { useTerminalStore } from "../store/terminalStore";
 import type { AuthConfig, ConnectionConfig } from "../types/terminal";
 import type { HostKeyDialogState } from "../store/terminalStore";
 
-type ConnectionType = "ssh" | "sftp";
+type ConnectionType = "ssh" | "sftp" | "vnc";
 
 interface SshFormState {
   host: string;
@@ -40,6 +40,22 @@ const defaultSshForm: SshFormState = {
   sessionName: "",
 };
 
+interface VncFormState {
+  host: string;
+  port: number;
+  password: string;
+  saveSession: boolean;
+  sessionName: string;
+}
+
+const defaultVncForm: VncFormState = {
+  host: "",
+  port: 5900,
+  password: "",
+  saveSession: true,
+  sessionName: "",
+};
+
 export function NewConnectionDialog() {
   const open = useTerminalStore((s) => s.newConnectionDialogOpen);
   const setOpen = useTerminalStore((s) => s.setNewConnectionDialogOpen);
@@ -52,6 +68,7 @@ export function NewConnectionDialog() {
 
   const [connectionType, setConnectionType] = useState<ConnectionType>(defaultType);
   const [sshForm, setSshForm] = useState<SshFormState>(defaultSshForm);
+  const [vncForm, setVncForm] = useState<VncFormState>(defaultVncForm);
 
   useEffect(() => {
     if (open) {
@@ -61,10 +78,50 @@ export function NewConnectionDialog() {
 
   const resetAndClose = () => {
     setSshForm(defaultSshForm);
+    setVncForm(defaultVncForm);
     setOpen(false);
   };
 
+  const handleVncConnect = () => {
+    const sessionId = crypto.randomUUID();
+    const displayName =
+      vncForm.sessionName.trim() || `VNC ${vncForm.host}:${vncForm.port}`;
+
+    addSession({
+      id: sessionId,
+      configId: "",
+      type: "vnc",
+      status: "connecting",
+      title: displayName,
+      vncPassword: vncForm.password || undefined,
+    });
+    resetAndClose();
+
+    vncConnect({
+      host: vncForm.host,
+      port: vncForm.port,
+      password: vncForm.password || undefined,
+      name: displayName,
+    })
+      .then((info) => {
+        useTerminalStore.getState().updateSession(sessionId, {
+          status: "connected",
+          vncWsUrl: info.wsUrl,
+          vncWsToken: info.wsToken,
+        });
+      })
+      .catch((err) => {
+        updateSessionStatus(sessionId, "error");
+        console.error("VNC connect failed:", err);
+      });
+  };
+
   const handleConnect = () => {
+    if (connectionType === "vnc") {
+      handleVncConnect();
+      return;
+    }
+
     let config: ConnectionConfig | null = null;
 
     const configId = crypto.randomUUID();
@@ -147,7 +204,10 @@ export function NewConnectionDialog() {
       });
   };
 
-  const canConnect = sshForm.host.trim() !== "" && sshForm.username.trim() !== "";
+  const canConnect =
+    connectionType === "vnc"
+      ? vncForm.host.trim() !== ""
+      : sshForm.host.trim() !== "" && sshForm.username.trim() !== "";
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -169,9 +229,74 @@ export function NewConnectionDialog() {
               onClick={() => setConnectionType("sftp")}
               label="SFTP"
             />
+            <ConnectionTypeButton
+              active={connectionType === "vnc"}
+              onClick={() => setConnectionType("vnc")}
+              label="VNC"
+            />
           </div>
 
-          <div className="space-y-3">
+          {connectionType === "vnc" ? (
+            <div className="space-y-3">
+              <div className="grid grid-cols-[1fr_80px] gap-2">
+                <Input
+                  placeholder="VNC 主机地址"
+                  value={vncForm.host}
+                  onChange={(e) =>
+                    setVncForm((f) => ({ ...f, host: e.target.value }))
+                  }
+                />
+                <Input
+                  type="number"
+                  placeholder="端口"
+                  value={vncForm.port}
+                  onChange={(e) =>
+                    setVncForm((f) => ({
+                      ...f,
+                      port: parseInt(e.target.value, 10) || 5900,
+                    }))
+                  }
+                />
+              </div>
+              <Input
+                type="password"
+                placeholder="VNC 密码（可选）"
+                value={vncForm.password}
+                onChange={(e) =>
+                  setVncForm((f) => ({ ...f, password: e.target.value }))
+                }
+              />
+              <div className="space-y-2 rounded-md border p-3">
+                <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={vncForm.saveSession}
+                    onChange={(e) =>
+                      setVncForm((f) => ({
+                        ...f,
+                        saveSession: e.target.checked,
+                      }))
+                    }
+                    className="h-4 w-4 rounded border-input accent-primary"
+                  />
+                  <span>保存会话</span>
+                </label>
+                {vncForm.saveSession && (
+                  <Input
+                    placeholder={`会话名称（默认：VNC ${vncForm.host || "主机"}）`}
+                    value={vncForm.sessionName}
+                    onChange={(e) =>
+                      setVncForm((f) => ({
+                        ...f,
+                        sessionName: e.target.value,
+                      }))
+                    }
+                  />
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-3">
               <div className="grid grid-cols-[1fr_80px] gap-2">
                 <Input
                   placeholder="主机地址"
@@ -271,7 +396,8 @@ export function NewConnectionDialog() {
                   />
                 )}
               </div>
-              </div>
+            </div>
+          )}
         </div>
 
         <DialogFooter>

@@ -28,6 +28,7 @@ import type {
   NoteSourceKind,
   OperationNote,
 } from "./notes-data";
+import { nowTimestamp } from "./notes-data";
 import {
   createBlankNote,
   createCustomNotebook,
@@ -258,7 +259,7 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
             ? {
                 ...note,
                 ...patch,
-                updatedAt: "刚刚",
+                updatedAt: nowTimestamp(),
               }
             : note,
         ),
@@ -396,7 +397,7 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
       ...note,
       id: nextNoteId,
       title: `${note.title || "未命名笔记"} 副本`,
-      updatedAt: "刚刚",
+      updatedAt: nowTimestamp(),
       agentChatId: undefined,
       appliedAgentMessageIds: [],
     };
@@ -498,7 +499,7 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
                   ...item,
                   tags: mergeTags(item.tags, tags),
                   linkedNotes: mergeKnowledgeLinkedNotes(item, linkedNote),
-                  updatedAt: "刚刚",
+                  updatedAt: nowTimestamp(),
                 }
               : item,
           ),
@@ -527,7 +528,7 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
         sourceNoteId: activeNote.id,
         sourceNoteTitle: activeNote.title || "未命名笔记",
         sourceDescription: draft.sourceDescription,
-        updatedAt: "刚刚",
+        updatedAt: nowTimestamp(),
         tags,
         linkedNotes: [linkedNote],
       };
@@ -1204,7 +1205,7 @@ function createKnowledgeLinkedNote(
     noteId: note.id,
     noteTitle: note.title || "未命名笔记",
     description: description.trim() || "来自当前笔记",
-    linkedAt: "刚刚",
+    linkedAt: nowTimestamp(),
   };
 }
 

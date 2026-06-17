@@ -11,6 +11,7 @@ import type {
   NoteSourceKind,
   OperationNote,
 } from "./notes-data";
+import { nowTimestamp } from "./notes-data";
 
 export interface NotesStorageState {
   notebooks: Notebook[];
@@ -43,7 +44,7 @@ export function createBlankNote(
     notebookId,
     title: isSsh ? "SSH 会话记录" : "未命名笔记",
     preview: isSsh ? "记录 SSH 命令、输出和处理思路。" : "新的笔记。",
-    updatedAt: "刚刚",
+    updatedAt: nowTimestamp(),
     source: isSsh
       ? { kind: "ssh", label: "SSH 记录" }
       : { kind: "manual", label: "手动记录" },

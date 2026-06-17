@@ -1,4 +1,4 @@
-export type Protocol = "ssh" | "sftp" | "ftp" | "local";
+export type Protocol = "ssh" | "sftp" | "ftp" | "local" | "vnc";
 
 export type AuthConfig =
   | { type: "password"; password: string }
@@ -17,7 +17,7 @@ export interface ConnectionConfig {
 
 export type SessionStatus = "disconnected" | "connecting" | "connected" | "error";
 
-export type SessionType = "local" | "ssh" | "sftp" | "ftp" | "batch" | "desktop";
+export type SessionType = "local" | "ssh" | "sftp" | "ftp" | "batch" | "desktop" | "vnc";
 
 export interface Session {
   id: string;
@@ -25,6 +25,12 @@ export interface Session {
   type: SessionType;
   status: SessionStatus;
   title: string;
+  /** VNC: WebSocket URL for noVNC to connect to */
+  vncWsUrl?: string;
+  /** VNC: one-time token for WS authentication */
+  vncWsToken?: string;
+  /** VNC: password for VNC server authentication */
+  vncPassword?: string;
 }
 
 export interface FileInfo {

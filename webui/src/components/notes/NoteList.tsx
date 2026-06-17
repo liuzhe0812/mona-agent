@@ -22,6 +22,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 import type { Notebook, NoteSourceKind, OperationNote } from "./notes-data";
+import { formatRelativeTime } from "./notes-data";
 
 interface NoteListProps {
   notes: OperationNote[];
@@ -191,7 +192,7 @@ function NoteRow({
             <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium text-foreground/90">
               {note.title}
             </span>
-            <span className="shrink-0 text-[11px] text-muted-foreground">{note.updatedAt}</span>
+            <span className="shrink-0 text-[11px] text-muted-foreground">{formatRelativeTime(note.updatedAt)}</span>
           </span>
           <span className="mt-1 line-clamp-2 text-[11px] leading-4 text-muted-foreground">
             {note.preview}

@@ -68,6 +68,7 @@ interface TerminalState {
   setActiveSession: (sessionId: string) => void;
   updateSessionStatus: (sessionId: string, status: SessionStatus) => void;
   updateSessionTitle: (sessionId: string, title: string) => void;
+  updateSession: (sessionId: string, updates: Partial<Session>) => void;
   toggleAIPanel: () => void;
   addConnection: (config: ConnectionConfig) => void;
   removeConnection: (id: string) => void;
@@ -179,6 +180,14 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     set((state) => ({
       sessions: state.sessions.map((s) =>
         s.id === sessionId ? { ...s, title } : s,
+      ),
+    }));
+  },
+
+  updateSession: (sessionId, updates) => {
+    set((state) => ({
+      sessions: state.sessions.map((s) =>
+        s.id === sessionId ? { ...s, ...updates } : s,
       ),
     }));
   },

@@ -15,9 +15,10 @@ export default defineConfig(({ mode }) => {
       },
     },
     optimizeDeps: {
-      exclude: ["@radix-ui/react-dialog"],
+      exclude: ["@radix-ui/react-dialog", "@novnc/novnc"],
     },
     build: {
+      target: "esnext",
       outDir: isTauriBuild
         ? path.resolve(__dirname, "../src-tauri/dist")
         : path.resolve(__dirname, "../mona/web/dist"),

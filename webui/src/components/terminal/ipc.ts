@@ -659,3 +659,36 @@ export function onTerminalExecRequest(
     handler(e.payload),
   );
 }
+
+// ─── VNC ────────────────────────────────────────────────────────────
+
+export interface VncConnectConfig {
+  host: string;
+  port: number;
+  password?: string;
+  name?: string;
+}
+
+export interface VncSessionInfo {
+  id: string;
+  wsUrl: string;
+  wsToken: string;
+  host: string;
+  port: number;
+}
+
+export async function vncConnect(config: VncConnectConfig): Promise<VncSessionInfo> {
+  return invoke<VncSessionInfo>("vnc_connect", { config });
+}
+
+export async function vncDisconnect(sessionId: string): Promise<void> {
+  return invoke("vnc_disconnect", { sessionId });
+}
+
+export async function vncReconnect(sessionId: string): Promise<VncSessionInfo> {
+  return invoke<VncSessionInfo>("vnc_reconnect", { sessionId });
+}
+
+export async function vncListSessions(): Promise<VncSessionInfo[]> {
+  return invoke<VncSessionInfo[]>("vnc_list_sessions");
+}

@@ -13,15 +13,17 @@ mod updater;
 
 use gateway::GatewayManager;
 use settings::AppSettings;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tauri::Emitter;
 use tauri::Listener;
 use tauri::Manager;
-use tauri::WebviewUrl;
-use tauri::WebviewWindowBuilder;
 use tauri_plugin_global_shortcut::ShortcutState;
 
 const GATEWAY_START_TIMEOUT_SECS: u64 = 90;
+
+/// 存储首次启动时待打开的 md 文件路径（前端就绪后拉取）
+#[derive(Default)]
+struct PendingMdFiles(Mutex<Vec<String>>);
 
 #[derive(Clone)]
 pub struct GatewayState {
@@ -298,33 +300,28 @@ async fn write_mona_model_config(
     settings::write_mona_model_config(&model, &provider)
 }
 
-fn open_md_reader_window(app_handle: &tauri::AppHandle, file_path: &str) {
-    // 查找已有的 MD 阅读器窗口，有则发送事件让它开新 tab
-    for window in app_handle.webview_windows().values() {
-        let label = window.label();
-        if label.starts_with("md-reader-") {
-            let _ = app_handle.emit_to(label, "md-file-open", file_path);
-            let _ = window.set_focus();
-            return;
+fn emit_md_file_open(app_handle: &tauri::AppHandle, file_path: &str) {
+    // 存入 pending 列表，供前端首次加载时拉取
+    if let Some(pending) = app_handle.try_state::<PendingMdFiles>() {
+        if let Ok(mut files) = pending.0.lock() {
+            files.push(file_path.to_string());
         }
     }
+    // 同时 emit，供已就绪的前端监听器接收
+    let _ = app_handle.emit_to("main", "md-file-open", file_path);
+    if let Some(main_window) = app_handle.get_webview_window("main") {
+        let _ = main_window.show();
+        let _ = main_window.set_focus();
+    }
+}
 
-    // 没有已有窗口，创建新窗口
-    let encoded = urlencoding::encode(file_path);
-    let url = format!("#/md-reader?file={}", encoded);
-    let label = format!("md-reader-{}", file_path.replace(|c: char| !c.is_alphanumeric(), "-"));
-    let label_truncated = if label.len() > 64 {
-        &label[..64]
-    } else {
-        &label
-    };
-
-    let _ = WebviewWindowBuilder::new(app_handle, label_truncated, WebviewUrl::App(url.into()))
-        .title("Mona - Markdown 阅读器")
-        .inner_size(1000.0, 700.0)
-        .min_inner_size(600.0, 400.0)
-        .center()
-        .build();
+/// 前端启动时调用，拉取并清空 pending 的 md 文件路径
+#[tauri::command]
+fn get_pending_md_files(state: tauri::State<PendingMdFiles>) -> Vec<String> {
+    let mut files = state.0.lock().unwrap();
+    let result = files.clone();
+    files.clear();
+    result
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -352,6 +349,22 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_http::init())
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            // 二次启动时，检查命令行参数中是否有 md 文件
+            for arg in args.iter().skip(1) {
+                let lower = arg.to_lowercase();
+                if lower.ends_with(".md") || lower.ends_with(".markdown") {
+                    let _ = app.emit_to("main", "md-file-open", arg.as_str());
+                }
+            }
+            // 激活主窗口
+            if let Some(main_window) = app.get_webview_window("main") {
+                let _ = main_window.show();
+                let _ = main_window.set_focus();
+                let _ = main_window.unminimize();
+            }
+        })
+        )
         .plugin(tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, _shortcut, event| {
                     if event.state() == ShortcutState::Pressed {
@@ -369,6 +382,7 @@ pub fn run() {
         .manage(db_state)
         .manage(quick_ask::QuickAskShortcutState::default())
         .manage(browser::BrowserState::new())
+        .manage(PendingMdFiles::default())
         .invoke_handler(tauri::generate_handler![
             get_settings,
             update_settings,
@@ -381,6 +395,7 @@ pub fn run() {
             mona_config_status,
             write_mona_provider_config,
             write_mona_model_config,
+            get_pending_md_files,
             quick_ask::quick_ask_hide,
             quick_ask::quick_ask_show,
             quick_ask::quick_ask_focus_chat,
@@ -462,6 +477,10 @@ pub fn run() {
             terminal::desktop::commands::desktop_start_terminal,
             terminal::desktop::commands::desktop_send_terminal_input,
             terminal::desktop::commands::desktop_resize_terminal,
+            terminal::vnc::commands::vnc_connect,
+            terminal::vnc::commands::vnc_disconnect,
+            terminal::vnc::commands::vnc_reconnect,
+            terminal::vnc::commands::vnc_list_sessions,
             db::commands::db_connect,
             db::commands::db_disconnect,
             db::commands::db_test_connection,
@@ -534,25 +553,19 @@ pub fn run() {
                     if let Some(paths) = payload.get("paths").and_then(|p| p.as_array()) {
                         for path in paths {
                             if let Some(path_str) = path.as_str() {
-                                open_md_reader_window(&app_handle_for_file, path_str);
+                                emit_md_file_open(&app_handle_for_file, path_str);
                             }
                         }
                     }
                 }
             });
 
-            let mut has_md_file = false;
+            let mut _has_md_file = false;
             for arg in std::env::args().skip(1) {
                 let lower = arg.to_lowercase();
                 if lower.ends_with(".md") || lower.ends_with(".markdown") {
-                    open_md_reader_window(app.handle(), &arg);
-                    has_md_file = true;
-                }
-            }
-
-            if has_md_file {
-                if let Some(main_window) = app.get_webview_window("main") {
-                    let _ = main_window.close();
+                    emit_md_file_open(app.handle(), &arg);
+                    _has_md_file = true;
                 }
             }
 

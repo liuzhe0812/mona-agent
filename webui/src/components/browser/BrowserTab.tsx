@@ -1,4 +1,4 @@
-import { X } from "lucide-react";
+import { FileText, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Tab } from "@/hooks/useBrowserTabs";
 
@@ -35,6 +35,8 @@ export function BrowserTabItem({ tab, active, onClick, onClose }: BrowserTabProp
     >
       {faviconUrl ? (
         <img src={faviconUrl} alt="" className="shrink-0 h-4 w-4 rounded-sm" onError={(e) => { e.currentTarget.style.display = "none"; }} />
+      ) : tab.type === "md-reader" ? (
+        <FileText className="shrink-0 h-3.5 w-3.5 text-[#eba45d]" />
       ) : tab.type !== "mona" ? (
         <span className="shrink-0 text-[11px]">{tab.isAiControlled ? "🤖" : "🌐"}</span>
       ) : null}

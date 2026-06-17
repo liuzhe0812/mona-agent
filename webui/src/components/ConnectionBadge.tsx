@@ -31,6 +31,9 @@ export function ConnectionBadge() {
 
   useEffect(() => client.onStatus(setStatus), [client]);
 
+  // 仅在断开/异常状态下显示，已连接 (open) 或未启动 (idle) 时隐藏
+  if (status === "open" || status === "idle") return null;
+
   const meta = COPY[status];
   const pulsing =
     status === "connecting" ||

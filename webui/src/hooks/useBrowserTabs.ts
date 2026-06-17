@@ -15,12 +15,13 @@ import { isTauri } from "@/lib/tauri";
 
 export interface Tab {
   id: string;
-  type: "mona" | "browser";
+  type: "mona" | "browser" | "md-reader";
   title: string;
   url?: string;
   favicon?: string;
   isAiControlled: boolean;
   webviewCreated: boolean; // WebView 是否已在 Rust 侧创建
+  mdFilePath?: string; // md-reader 类型标签的文件路径
   aiStatus?: {
     description: string;
     steps?: string[];
@@ -310,16 +311,26 @@ export function useBrowserTabs() {
 
   // 关闭标签
   const closeTab = useCallback(async (id: string) => {
-    if (!isTauri() || id === "mona") return;
+    if (id === "mona") return;
 
     const tab = tabs.find((t) => t.id === id);
     if (!tab) return;
 
-    if (tab.webviewCreated) {
+    if (isTauri() && tab.webviewCreated) {
       try {
         await closeTabIpc(id);
       } catch (e) {
         console.error("Failed to close browser tab:", e);
+      }
+    }
+
+    // 关闭 md-reader 标签时，清理 store 中的文件数据
+    if (tab.type === "md-reader") {
+      const { useMdReaderStore } = await import("@/components/md-reader/mdReaderStore");
+      const store = useMdReaderStore.getState();
+      const mdTab = store.tabs.find((t) => t.filePath === tab.mdFilePath);
+      if (mdTab) {
+        store.closeTab(mdTab.id);
       }
     }
 
@@ -393,6 +404,29 @@ export function useBrowserTabs() {
     }
   }, []);
 
+  // 创建 md-reader 标签
+  const addMdReaderTab = useCallback((filePath: string) => {
+    const fileName = filePath.replace(/\\/g, "/").split("/").pop() || "untitled.md";
+    // 检查是否已有该文件的标签
+    const existing = tabs.find((t) => t.type === "md-reader" && t.mdFilePath === filePath);
+    if (existing) {
+      setActiveTabId(existing.id);
+      return;
+    }
+    _tabCounter++;
+    const id = `md-${_tabCounter}`;
+    const newTab: Tab = {
+      id,
+      type: "md-reader",
+      title: fileName,
+      mdFilePath: filePath,
+      isAiControlled: false,
+      webviewCreated: false,
+    };
+    setTabs((prev) => [...prev, newTab]);
+    setActiveTabId(id);
+  }, [tabs]);
+
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? MONA_TAB;
 
   return {
@@ -400,6 +434,7 @@ export function useBrowserTabs() {
     activeTabId,
     activeTab,
     addEmptyTab,
+    addMdReaderTab,
     navigateToUrl,
     closeTab,
     switchTab,

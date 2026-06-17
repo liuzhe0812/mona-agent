@@ -50,7 +50,7 @@ async fn get_sftp_client(
                 ssh_client.clone(),
             )))
         }
-        SessionHandle::Local(_) => Err("Local sessions do not support remote file editing".to_string()),
+        SessionHandle::Local(_) | SessionHandle::Vnc => Err("This session type does not support remote file editing".to_string()),
     }
 }
 

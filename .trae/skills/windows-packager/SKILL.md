@@ -13,10 +13,10 @@ Build a self-contained Windows installer for Mona (Tauri + Python + WebUI) that 
 Mona Installer
 ├── Tauri (Rust)          → Desktop shell (tray, window, gateway management)
 ├── WebUI (React + Vite)  → Frontend bundled into Tauri
-└── Python Runtime        → Embedded python-build-standalone + pre-installed mona-ai
+└── Python Gateway        → PyInstaller COLLECT (mona-gateway/ directory with exe + _internal/)
 ```
 
-**Client machines do NOT need Python installed.** The full Python 3.12 runtime + all dependencies are embedded in the installer.
+**Client machines do NOT need Python installed.** The full Python 3.12 runtime + all dependencies are embedded in the PyInstaller-built `mona-gateway/` directory.
 
 ## Prerequisites
 
@@ -24,6 +24,7 @@ Mona Installer
 - Rust toolchain: `rustup target add x86_64-pc-windows-msvc`
 - Node.js >= 18 + bun (or npm)
 - Visual Studio Build Tools (C++ workload)
+- Python 3.12+ with `pip install pyinstaller`
 
 ## Build Pipeline
 
@@ -54,71 +55,50 @@ Set-Content "src-tauri\Cargo.toml" $CargoToml
 
 **After updating, confirm both files have the same version before proceeding.**
 
-### Step 1: Prepare Python Runtime
+### Step 1: Build mona-gateway with PyInstaller (COLLECT / onedir mode)
 
-The Python runtime must include the interpreter AND all mona-ai dependencies pre-installed so users never need pip or network access.
+The gateway is built as a **directory** (not a single exe) using PyInstaller's COLLECT mode. This avoids the slow onefile extraction at runtime and eliminates gateway startup failures caused by antivirus scanning.
 
-**If `python.tar.gz` already exists and no Python dependencies changed, skip this step.**
+**If `src-tauri/resources/mona-gateway/` already exists and no Python dependencies changed, skip this step.**
 
 ```powershell
-$PythonVersion = "3.12.13"
-$ReleaseTag = "20260510"
-$Platform = "x86_64-pc-windows-msvc"
-$BaseUrl = "https://github.com/astral-sh/python-build-standalone/releases/download/$ReleaseTag"
-$FileName = "cpython-$PythonVersion+$ReleaseTag-$Platform-install_only.tar.gz"
+# 1. Ensure mona-ai is installed (NON-EDITABLE mode)
+pip install ".[api,wecom,weixin,pdf]"
 
-# 1. Download python-build-standalone (skip if already downloaded)
-$ResourcesDir = "src-tauri\resources"
-New-Item -ItemType Directory -Path $ResourcesDir -Force | Out-Null
-$PythonArchive = "$ResourcesDir\python.tar.gz"
-
-# 2. Extract to temp dir
-$TempDir = "$env:TEMP\mona-python-build"
-if (Test-Path $TempDir) { Remove-Item -Recurse -Force $TempDir }
-New-Item -ItemType Directory -Path $TempDir -Force | Out-Null
-tar -xzf $PythonArchive -C $TempDir
-
-# 3. Find the python directory (python-build-standalone extracts to python/)
-$PythonDir = Get-ChildItem -Path $TempDir -Directory -Recurse -Filter "python" |
-    Where-Object { Test-Path (Join-Path $_.FullName "python.exe") } |
-    Select-Object -First 1
-
-# 4. Install mona-ai with ALL optional dependencies (NON-EDITABLE mode)
-$PythonExe = Join-Path $PythonDir.FullName "python.exe"
-$ErrorActionPreference = "Continue"
-& $PythonExe -m pip install ".[api,wecom,weixin,pdf]" --no-warn-script-location 2>&1 | Out-Null
-
-# 5. Verify installation (must point to site-packages, NOT source directory)
+# 2. Verify installation points to site-packages (NOT source directory)
 Push-Location "C:\"
-$monaFile = & $PythonExe -c "import mona; print(mona.__file__)" 2>&1
+$monaFile = python -c "import mona; print(mona.__file__)" 2>&1
 Pop-Location
 if ($monaFile -notmatch "site-packages") {
     throw "mona-ai installed in editable mode! mona.__file__=$monaFile"
 }
 
-# 6. Clean up caches to reduce size
-Get-ChildItem $PythonDir.FullName -Recurse -Directory -Filter "__pycache__" |
-    Remove-Item -Recurse -Force
-Get-ChildItem $PythonDir.FullName -Recurse -File -Filter "*.pyc" |
-    Remove-Item -Force
-Get-ChildItem $PythonDir.FullName -Recurse -File -Filter "*.pyo" |
-    Remove-Item -Force
+# 3. Build with PyInstaller using the spec file
+pyinstaller src-tauri\mona-gateway.spec
 
-# 7. Re-pack into python.tar.gz
-tar -czf $PythonArchive -C $PythonDir.Parent.FullName (Split-Path $PythonDir.FullName -Leaf)
+# 4. The output is at dist/mona-gateway/ — copy to resources
+#    (Remove old single-file gateway if it exists)
+if (Test-Path "src-tauri\resources\mona-gateway.exe") {
+    Remove-Item "src-tauri\resources\mona-gateway.exe" -Force
+}
+if (Test-Path "src-tauri\resources\mona-gateway") {
+    Remove-Item "src-tauri\resources\mona-gateway" -Recurse -Force
+}
+Copy-Item -Recurse "dist\mona-gateway" "src-tauri\resources\mona-gateway"
 
-# 8. Cleanup
-Remove-Item -Recurse -Force $TempDir
+# 5. Verify
+$gatewayExe = "src-tauri\resources\mona-gateway\mona-gateway.exe"
+if (-not (Test-Path $gatewayExe)) {
+    throw "Gateway exe not found at $gatewayExe"
+}
+Write-Output "Gateway built successfully: $gatewayExe"
 ```
 
 **Critical rules:**
-- **NEVER use `pip install -e .`** — editable mode creates `.pth` files pointing to the build machine's source directory, which won't exist on client machines. Always use `pip install ".[extras]"` without `-e`.
-- **Verify from a non-source directory** — Python resolves imports from CWD first. Run `import mona; print(mona.__file__)` from `C:\` to confirm it points to `site-packages/mona/__init__.py`, not the source tree.
-- Always install `mona-ai[api]` at minimum — the gateway requires `aiohttp`
-- Install all optional deps you want to ship (`wecom`, `weixin`, `pdf`, etc.)
-- Strip `__pycache__`, `.pyc`, `.pyo` to reduce archive size
-- The version marker file (`.mona-python-version`) is written at runtime, not in the archive
-- The `PYTHON_VERSION` constant in `src-tauri/src/python.rs` must match the downloaded Python version
+- **NEVER use `pip install -e .`** — editable mode creates `.pth` files pointing to the build machine's source directory, which won't exist on client machines
+- **Always use the spec file** (`src-tauri/mona-gateway.spec`) — it contains all hidden imports and data file configurations
+- **The output is a directory**, not a single file: `dist/mona-gateway/mona-gateway.exe` + `dist/mona-gateway/_internal/`
+- **Verify from a non-source directory** — run `import mona; print(mona.__file__)` from `C:\` to confirm it points to `site-packages/mona/__init__.py`
 
 ### Step 2: Build Tauri Installer
 
@@ -143,8 +123,8 @@ After building, verify the installer works:
 
 1. Install Mona on a clean Windows machine (or VM)
 2. Launch the app — it should:
-   - Find `python.tar.gz` via Tauri's `resource_dir()` API
-   - Extract Python runtime to `%AppData%/mona/python/`
+   - Find `mona-gateway/` directory via Tauri's `resource_dir()` API
+   - Deploy gateway directory to `%AppData%/mona/gateway/mona-gateway/`
    - Auto-start the gateway on the configured port
    - Show the WebUI in the Tauri window
 3. **No CMD windows should appear** — all `Command::new()` calls use `CREATE_NO_WINDOW` on Windows
@@ -157,30 +137,30 @@ This is the #1 cause of "works in dev, fails after install" bugs.
 
 ### How Tauri bundles resources
 
-When `tauri.conf.json` has `"resources": ["resources/*"]`, Tauri embeds `python.tar.gz` into the installer. After installation, the file is placed in a platform-specific directory:
+When `tauri.conf.json` has `"resources": ["resources/mona-gateway/"]`, Tauri embeds the entire `mona-gateway/` directory into the installer. After installation, the directory is placed at:
 
 | Installer | Resource location |
 |-----------|-------------------|
-| NSIS (per-user) | `C:\Users\{user}\AppData\Local\com.mona.desktop\resources\` |
-| MSI (per-machine) | `C:\Program Files\Mona\resources\` |
-| Dev mode | `src-tauri/resources/` (relative to CWD) |
+| NSIS (per-user) | `C:\Users\{user}\AppData\Local\com.mona.desktop\resources\mona-gateway\` |
+| MSI (per-machine) | `C:\Program Files\Mona\resources\mona-gateway\` |
+| Dev mode | `src-tauri/resources/mona-gateway/` (relative to CWD) |
 
 ### How `python.rs` finds resources
 
-The `find_python_resource()` function uses a 3-level fallback:
+The `find_gateway_resource_dir()` function uses a 3-level fallback:
 
 1. **Tauri `resource_dir()` API** (primary) — `app_handle.path().resource_dir()` returns the correct path regardless of install method. This is the only reliable way in packaged builds.
-2. **Next to executable** (fallback) — checks `exe_dir/python.tar.gz`
-3. **Relative path** (dev mode) — checks `resources/python.tar.gz` from CWD
+2. **Next to executable** (fallback) — checks `exe_dir/resources/mona-gateway/` and `exe_dir/mona-gateway/`
+3. **Relative path** (dev mode) — checks `resources/mona-gateway/` from CWD
 
-**Important:** `initialize_python()` requires an `AppHandle` parameter because of this. The call chain is:
+**Important:** `deploy_gateway()` requires an `AppHandle` parameter because of this. The call chain is:
 
 ```
 Frontend command / setup callback
   → GatewayState::start(settings, app_handle)
     → GatewayManager::start(settings, app_handle)
-      → python::initialize_python(app_handle)
-        → find_python_resource(app_handle)
+      → python::deploy_gateway(app_handle)
+        → find_gateway_resource_dir(app_handle)
           → app_handle.path().resource_dir()
 ```
 
@@ -190,33 +170,25 @@ Frontend command / setup callback
 - **Never use relative paths only** — the working directory at runtime is not `src-tauri/`.
 - **Never assume resources are next to the exe** — NSIS puts them in a subdirectory.
 
-## Python Runtime Lifecycle (Runtime Code)
+## Gateway Deployment Lifecycle (Runtime Code)
 
-The Rust code in `src-tauri/src/python.rs` handles Python initialization at app startup:
+The Rust code in `src-tauri/src/python.rs` handles gateway deployment at app startup:
 
-1. Check `%AppData%/mona/python/.mona-python-version` — if version matches, skip extraction
-2. If not initialized, find `python.tar.gz` via `resource_dir()` and extract to `%AppData%/mona/python/`
-3. Write version marker file
-4. The `gateway.rs` then uses this Python to run `python -m mona gateway`
+1. Find `mona-gateway/` directory in bundled resources via `resource_dir()`
+2. Compare exe file size with deployed version at `%AppData%/mona/gateway/mona-gateway/mona-gateway.exe`
+3. If different or missing, copy entire directory tree to `%AppData%/mona/gateway/mona-gateway/`
+4. The `gateway.rs` then runs the deployed exe with environment isolation
 
-**No runtime `pip install`** — all dependencies are pre-installed in the archive.
+**No runtime `pip install`** — all dependencies are pre-bundled by PyInstaller.
 
-## Gateway PYTHONPATH Detection
+## Gateway Environment Isolation
 
-`gateway.rs` sets `PYTHONPATH` only in dev mode. It detects dev mode by checking if a `mona/` package directory exists relative to the exe's parent. In packaged builds, `mona-ai` is installed in `site-packages`, so `PYTHONPATH` is not set.
+`gateway.rs` applies strict environment isolation when launching the gateway in release mode:
 
-```rust
-// Only set PYTHONPATH in dev mode (when source tree exists next to exe)
-if let Ok(exe_path) = std::env::current_exe() {
-    if let Some(exe_dir) = exe_path.parent() {
-        let project_root = exe_dir.parent().unwrap_or(exe_dir);
-        let mona_pkg_dir = project_root.join("mona");
-        if mona_pkg_dir.is_dir() {
-            // Dev mode: set PYTHONPATH to project root
-        }
-    }
-}
-```
+- **Strips harmful variables:** `PYTHONPATH`, `PYTHONHOME`, `PYTHONSTARTUP`, `VIRTUAL_ENV`, `CONDA_PREFIX`, `CONDA_DEFAULT_ENV`, `CONDA_SHLVL`, `CONDA_PYTHON_EXE`, `CONDA_PROMPT_MODIFIER`, `PIP_TARGET`, `PIP_PREFIX`, `PIP_USER`, `PIP_REQUIRE_VIRTUALENV`
+- **Sets safety variables:** `PYTHONUNBUFFERED=1`, `PYTHONUTF8=1`, `PYTHONIOENCODING=utf-8`, `PYTHONNOUSERSITE=1`, `NO_COLOR=1`
+
+This prevents Conda/Anaconda/user site-packages from interfering with the packaged gateway.
 
 ## Windows CMD Window Suppression
 
@@ -274,32 +246,29 @@ When the logo changes:
 |-----------|-------------------|
 | Strip `__pycache__` and `.pyc` | ~30% of Python deps |
 | Strip `test/` and `.dist-info/` | ~10% |
-| Use `--no-compile` in pip | Avoids `.pyc` generation |
-| Remove `pip`, `setuptools` from runtime | ~5MB |
 | UPX compress the Tauri exe | ~30% of Rust binary |
+| Exclude unused packages in spec | Varies (torch, matplotlib, etc.) |
 
-Typical installer size: ~170MB (Python runtime ~80MB + deps ~80MB + Tauri ~10MB)
+Typical installer size: ~170MB (PyInstaller gateway ~80MB + Tauri ~10MB + WebUI ~5MB)
 
 ## Troubleshooting
 
 | Problem | Fix |
 |---------|-----|
-| Python runtime not found after install | `find_python_resource()` uses `resource_dir()` API — ensure `AppHandle` is passed correctly through the call chain |
-| `ImportError: cannot import name 'BaseTool'` | mona-ai was installed in editable mode (`.pth` points to source dir). Rebuild python.tar.gz with `pip install ".[extras]"` (no `-e`) |
+| Gateway not found after install | `find_gateway_resource_dir()` uses `resource_dir()` — ensure `AppHandle` is passed correctly through the call chain |
+| `ImportError: cannot import name 'BaseTool'` | mona-ai was installed in editable mode. Rebuild with `pip install ".[extras]"` (no `-e`) |
 | `mona.__file__` points to source directory | Same as above — editable install. Verify from `C:\` not the project root |
 | CMD windows flash on launch | Add `creation_flags(0x08000000)` to all `Command::new()` calls on Windows |
-| Gateway fails to start | Check `%AppData%/mona/python/python.exe` exists; check logs in `%AppData%/mona/` |
-| First launch is slow | Expected — Python extraction takes 10-30s; subsequent launches are instant |
-| MSI install fails | Ensure no previous version running; try `msiexec /i Mona.msi /log install.log` |
-| NSIS exe blocked by SmartScreen | Sign the installer with a code signing certificate |
-| Python deps missing at runtime | Ensure `pip install` in build script includes all `[api]`, `[wecom]`, etc. extras |
-| `taskkill` fails to stop gateway | Gateway process may have child processes; `taskkill /T /F` handles this |
-| Port conflict | Gateway auto-searches ports `gateway_port` to `gateway_port + 5` |
+| Gateway fails to start within 90s | Check `%AppData%/mona/gateway/mona-gateway/mona-gateway.exe` exists; check logs in `%AppData%/mona/` |
+| Gateway crashes on machines with Conda | Environment isolation strips `CONDA_PREFIX`, `PYTHONPATH`, etc. — ensure `strip_harmful_python_env()` is called |
+| Port conflict | Gateway auto-searches ports `gateway_port` to `gateway_port + 5`, waits 10s for port to free |
 | `error: invalid value '1' for '--ci'` | Set `$env:CI = ""` before running `cargo tauri build` |
 | Taskbar shows old icon | Windows icon cache; regenerate icons with `cargo tauri icon ..\logo.png` and clear cache |
 | Version mismatch between MSI and Cargo.toml | Both `tauri.conf.json` and `Cargo.toml` must have the same `version` — see Step 0 |
 | Icon has white background on taskbar | `logo.png` must be RGBA with transparent background, not RGB with white pixels |
 | `CARGO_MANIFEST_DIR` path not found | Never use `env!("CARGO_MANIFEST_DIR")` — it's a compile-time constant pointing to build machine source dir. Use runtime detection instead. |
+| PyInstaller missing import | Add to `hidden_imports` list in `src-tauri/mona-gateway.spec` |
+| `resource path doesn't exist` build error | Ensure `src-tauri/resources/mona-gateway/` directory exists (with at least `.gitkeep`) before `cargo tauri build` |
 
 ## File Structure Reference
 
@@ -308,14 +277,18 @@ src-tauri/
 ├── Cargo.toml              # Rust dependencies + desktop app version
 ├── tauri.conf.json         # Tauri bundle config (version, targets, icons, resources)
 ├── build.rs                # Tauri build script
+├── mona-gateway.spec       # PyInstaller spec (COLLECT mode, hidden imports, data files)
 ├── resources/
-│   ├── README              # Notes about Python runtime
-│   └── python.tar.gz       # Pre-built Python + mona-ai (generated by build script)
+│   ├── README              # Notes about gateway build
+│   └── mona-gateway/       # PyInstaller COLLECT output (built by Step 1)
+│       ├── mona-gateway.exe
+│       └── _internal/      # Python runtime + dependencies
 ├── src/
 │   ├── lib.rs              # App setup, gateway auto-start, open::that with CREATE_NO_WINDOW
-│   ├── gateway.rs          # Gateway process management (start/stop/health, needs AppHandle, CREATE_NO_WINDOW)
-│   ├── python.rs           # Python runtime init (uses resource_dir() via AppHandle, NO pip install)
+│   ├── gateway.rs          # Gateway process management (start/stop/health, env isolation, needs AppHandle)
+│   ├── python.rs           # Gateway deployment (directory copy, resource_dir via AppHandle, NO pip install)
 │   ├── settings.rs         # App settings (run_in_background, auto_start_gateway, port)
+│   ├── updater.rs          # Auto-update (directory-based gateway backup/replace)
 │   ├── tray.rs             # System tray (show window, open browser, quit, CREATE_NO_WINDOW)
 │   ├── license.rs          # License validation (wmic with CREATE_NO_WINDOW)
 │   ├── terminal/shell/local.rs  # Shell utils (where with CREATE_NO_WINDOW)

@@ -21,6 +21,7 @@ import type {
   KnowledgeLinkedNote,
   OperationNote,
 } from "./notes-data";
+import { formatRelativeTime } from "./notes-data";
 
 type KnowledgeScope = "category" | "all";
 type KnowledgeSort = "recent" | "title";
@@ -458,7 +459,7 @@ function KnowledgeCard({
         </div>
 
         <div className="flex shrink-0 items-center gap-1">
-          <span className="hidden text-[11px] text-muted-foreground sm:inline">{item.updatedAt}</span>
+          <span className="hidden text-[11px] text-muted-foreground sm:inline">{formatRelativeTime(item.updatedAt)}</span>
           {editing ? (
             <>
               <IconActionButton label="保存修改" onClick={saveEdit}>

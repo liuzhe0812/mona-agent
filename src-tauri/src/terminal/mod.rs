@@ -7,8 +7,9 @@ pub mod error;
 pub mod ide;
 pub mod session;
 pub mod shell;
-pub mod ssh;
 pub mod sftp;
+pub mod ssh;
+pub mod vnc;
 
 use approval::ApprovalState;
 use sftp::batch::BatchTransferManager;

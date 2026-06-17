@@ -313,7 +313,7 @@ pub async fn ssh_disconnect(
         SessionHandle::Desktop(client) => {
             client.disconnect().await.map_err(|e| e.to_string())?;
         }
-        _ => {}
+        SessionHandle::Local(_) | SessionHandle::Vnc => {}
     }
 
     state
@@ -1123,6 +1123,7 @@ pub async fn terminal_list_sessions(
                 SessionType::Local => "local".to_string(),
                 SessionType::Sftp => "sftp".to_string(),
                 SessionType::Desktop => "desktop".to_string(),
+                SessionType::Vnc => "vnc".to_string(),
             },
             status: match s.status {
                 SessionStatus::Disconnected => "disconnected".to_string(),
@@ -1152,6 +1153,7 @@ pub async fn terminal_get_output(
         SessionHandle::Local(shell) => Ok(shell.get_buffer()),
         SessionHandle::Sftp(_) => Err("SFTP session has no terminal output".into()),
         SessionHandle::Desktop(_) => Err("Desktop session has no terminal output".into()),
+        SessionHandle::Vnc => Err("VNC session has no terminal output".into()),
     }
 }
 
@@ -1196,6 +1198,7 @@ pub async fn terminal_exec_command(
         SessionHandle::Local(shell) => shell.write(data.as_bytes()).map_err(|e| e.to_string()),
         SessionHandle::Sftp(_) => Err("Cannot execute command in SFTP session".into()),
         SessionHandle::Desktop(_) => Err("Cannot write to desktop session".into()),
+        SessionHandle::Vnc => Err("Cannot write to VNC session".into()),
     }
 }
 
@@ -1276,6 +1279,9 @@ pub async fn terminal_respond_exec(
             }
             SessionHandle::Desktop(_) => {
                 return Err("Cannot write to desktop session".into());
+            }
+            SessionHandle::Vnc => {
+                return Err("Cannot write to VNC session".into());
             }
         }
     }

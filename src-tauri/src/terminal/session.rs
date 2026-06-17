@@ -17,6 +17,7 @@ pub enum SessionType {
     Local,
     Sftp,
     Desktop,
+    Vnc,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -60,6 +61,7 @@ pub enum SessionHandle {
     Local(Arc<LocalShell>),
     Sftp(Arc<SftpClient>),
     Desktop(Arc<SshClient>),
+    Vnc,
 }
 
 impl SessionHandle {
@@ -69,6 +71,7 @@ impl SessionHandle {
             SessionHandle::Local(shell) => SessionHandle::Local(Arc::clone(shell)),
             SessionHandle::Sftp(client) => SessionHandle::Sftp(Arc::clone(client)),
             SessionHandle::Desktop(client) => SessionHandle::Desktop(Arc::clone(client)),
+            SessionHandle::Vnc => SessionHandle::Vnc,
         }
     }
 }

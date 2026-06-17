@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Toolbar } from "./Toolbar";
 import { SessionTabBar } from "./SessionTabBar";
 import { XtermTerminal } from "./XtermTerminal";
+import { VncViewer } from "./VncViewer";
 import { StatusBar } from "./StatusBar";
 import { AIPanel } from "./AIPanel/AIPanel";
 import { NewConnectionDialog } from "./Dialogs/NewConnectionDialog";
@@ -15,7 +16,7 @@ import { DesktopMode } from "./Desktop/DesktopMode";
 import { IdeLayout } from "../ide/IdeLayout";
 import { useTerminalStore } from "./store/terminalStore";
 import { useLicense } from "@/hooks/useLicense";
-import { shellSpawn } from "./ipc";
+import { shellSpawn, vncReconnect } from "./ipc";
 
 const AI_PANEL_DEFAULT_WIDTH = 320;
 const AI_PANEL_MIN_WIDTH = 240;
@@ -145,6 +146,31 @@ export function TerminalView() {
                       style={{ display: isActive ? "block" : "none" }}
                     >
                       <IdeLayout sessionId={session.id} />
+                    </div>
+                  );
+                }
+                if (session.type === "vnc") {
+                  return (
+                    <div
+                      key={session.id}
+                      className="h-full"
+                      style={{ display: isActive ? "block" : "none" }}
+                    >
+                      <VncViewer
+                        wsUrl={session.vncWsUrl ?? ""}
+                        wsToken={session.vncWsToken ?? ""}
+                        password={session.vncPassword}
+                        onDisconnect={() => {
+                          vncReconnect(session.id).then((info) => {
+                            useTerminalStore.getState().updateSession(session.id, {
+                              vncWsUrl: info.wsUrl,
+                              vncWsToken: info.wsToken,
+                            });
+                          }).catch(() => {
+                            useTerminalStore.getState().updateSessionStatus(session.id, "error");
+                          });
+                        }}
+                      />
                     </div>
                   );
                 }

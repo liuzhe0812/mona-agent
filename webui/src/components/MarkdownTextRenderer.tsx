@@ -2,6 +2,8 @@ import { Children, isValidElement, useMemo } from "react";
 import type { Components } from "react-markdown";
 import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
+import rehypeRaw from "rehype-raw";
+import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -21,7 +23,28 @@ interface MarkdownTextRendererProps {
 }
 
 const remarkPlugins = [remarkBreaks, remarkGfm, remarkMath];
-const rehypePlugins = [rehypeKatex];
+
+/**
+ * Allow a small set of safe HTML tags that LLMs commonly emit inside tables
+ * (e.g. `<br>` for intra-cell line breaks).  Everything else is stripped.
+ */
+const sanitizeSchema = {
+  ...defaultSchema,
+  tagNames: [...(defaultSchema.tagNames ?? []), "br", "sub", "sup", "mark", "abbr"],
+  attributes: {
+    ...defaultSchema.attributes,
+    abbr: [...(defaultSchema.attributes?.abbr ?? []), "title"],
+    mark: [],
+    sub: [],
+    sup: [],
+  },
+} as typeof defaultSchema;
+
+const rehypePlugins: import("unified").PluggableList = [
+  rehypeRaw,
+  [rehypeSanitize, sanitizeSchema],
+  rehypeKatex,
+];
 
 /**
  * Heavy markdown stack (GFM, math, KaTeX, syntax highlighting) kept in a

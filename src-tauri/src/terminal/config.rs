@@ -7,6 +7,7 @@ pub enum Protocol {
     Sftp,
     Ftp,
     Local,
+    Vnc,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

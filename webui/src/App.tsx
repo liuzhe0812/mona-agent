@@ -20,6 +20,7 @@ import { useSidebarState } from "@/hooks/useSidebarState";
 import { ThemeProvider, useTheme } from "@/hooks/useTheme";
 import { LicenseProvider, useLicense } from "@/hooks/useLicense";
 import { LoginDialog } from "@/components/LoginDialog";
+import { UpdateNotification } from "@/components/UpdateNotification";
 import { cn } from "@/lib/utils";
 import {
   deriveWsUrl,
@@ -32,7 +33,7 @@ import { MonaClient } from "@/lib/mona-client";
 import { ClientProvider, useClient } from "@/providers/ClientProvider";
 import { KnowledgeDialogProvider } from "@/providers/KnowledgeDialogProvider";
 import type { ChatSummary } from "@/lib/types";
-import { isTauri, getGatewayStatus, startGateway, getDesktopSettings, type SidebarShortcuts } from "@/lib/tauri";
+import { isTauri, getGatewayStatus, startGateway, getDesktopSettings, type SidebarShortcuts, type UpdateCheckResult } from "@/lib/tauri";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -55,7 +56,7 @@ const SIDEBAR_WIDTH = 220;
 const SIDEBAR_RAIL_WIDTH = 56;
 const TOKEN_REFRESH_MARGIN_MS = 30_000;
 const TOKEN_REFRESH_MIN_DELAY_MS = 5_000;
-type ShellView = "chat" | "settings" | "note" | "ssh" | "db" | "kb" | "ppt" | "md-reader";
+type ShellView = "chat" | "settings" | "note" | "ssh" | "db" | "kb" | "ppt";
 
 interface QueuedAgentPrompt {
   id: string;
@@ -80,9 +81,9 @@ const PptMakerView = lazy(() =>
   })),
 );
 
-const MdReaderView = lazy(() =>
-  import("@/components/md-reader/MdReaderView").then((module) => ({
-    default: module.MdReaderView,
+const MdFileView = lazy(() =>
+  import("@/components/md-reader/MdFileView").then((module) => ({
+    default: module.MdFileView,
   })),
 );
 
@@ -440,6 +441,7 @@ function Shell({
     activeTabId: activeBrowserTabId,
     activeTab: activeBrowserTab,
     addEmptyTab,
+    addMdReaderTab,
     navigateToUrl,
     closeTab: closeBrowserTab,
     switchTab: switchBrowserTab,
@@ -471,6 +473,8 @@ function Shell({
   const [queuedAgentPrompt, setQueuedAgentPrompt] = useState<QueuedAgentPrompt | null>(null);
   const [loginDialogOpen, setLoginDialogOpen] = useState(false);
   const [loginDialogInitialView, setLoginDialogInitialView] = useState<"login" | "subscribe">("login");
+  const [updateAvailable, setUpdateAvailable] = useState<UpdateCheckResult | null>(null);
+  const [updateDialogSignal, setUpdateDialogSignal] = useState(0);
   const runningChatIdsRef = useRef<Set<string>>(new Set());
   const sidebarShortcutsRef = useRef<SidebarShortcuts>({
     mona: "Alt+1",
@@ -873,8 +877,11 @@ function Shell({
         setMobileSidebarOpen(false);
         void refresh();
       });
-      const un4 = await listen<string>("md-file-open", () => {
-        setView("md-reader");
+      const un4 = await listen<string>("md-file-open", (event) => {
+        const filePath = event.payload;
+        if (filePath) {
+          addMdReaderTab(filePath);
+        }
       });
       if (cancelled) {
         un1();
@@ -889,7 +896,26 @@ function Shell({
       cancelled = true;
       unlisteners.forEach((fn) => fn());
     };
-  }, [onOpenNote, onOpenSSHAndNew, refresh]);
+  }, [onOpenNote, onOpenSSHAndNew, refresh, addMdReaderTab]);
+
+  // 启动时拉取 pending 的 md 文件（首次启动场景）
+  useEffect(() => {
+    if (!isTauri()) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        const files = await invoke<string[]>("get_pending_md_files");
+        if (cancelled || !files || files.length === 0) return;
+        files.forEach((f) => addMdReaderTab(f));
+      } catch (err) {
+        console.error("Failed to get pending md files:", err);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [addMdReaderTab]);
 
   const onSelectSearchResult = useCallback(
     (key: string) => {
@@ -903,6 +929,10 @@ function Shell({
     setSessionSearchOpen(false);
     setView("settings");
     setMobileSidebarOpen(false);
+  }, []);
+
+  const onOpenUpdateDialog = useCallback(() => {
+    setUpdateDialogSignal((n) => n + 1);
   }, []);
 
   const onOpenLogin = useCallback(() => {
@@ -1087,8 +1117,9 @@ function Shell({
             onTabClick={switchBrowserTab}
             onTabClose={closeBrowserTab}
             onNewTab={addEmptyTab}
-            onOpenSettings={onOpenSettings}
+            onOpenSettings={updateAvailable ? onOpenUpdateDialog : onOpenSettings}
             onOpenSubscribe={onOpenSubscribe}
+            settingsBadge={!!updateAvailable}
           />
         )}
 
@@ -1155,7 +1186,7 @@ function Shell({
               <div
                 className={cn(
                   "absolute inset-0 flex flex-col",
-                  (view === "settings" || view === "note" || view === "ssh" || view === "db" || view === "kb" || view === "ppt" || view === "md-reader" || activeBrowserTab.type !== "mona") &&
+                  (view === "settings" || view === "note" || view === "ssh" || view === "db" || view === "kb" || view === "ppt" || activeBrowserTab.type !== "mona") &&
                     "invisible pointer-events-none",
                 )}
               >
@@ -1222,13 +1253,19 @@ function Shell({
                   <PptMakerView onBack={onBackToChat} />
                 </Suspense>
               </div>
-              {view === "md-reader" && (
-                <div className={cn("absolute inset-0 flex flex-col", isBrowserTabActive && "hidden")}>
-                  <Suspense fallback={<ModuleLoading title="正在打开 Markdown 阅读器" />}>
-                    <MdReaderView onBack={onBackToChat} />
-                  </Suspense>
-                </div>
-              )}
+              {browserTabs
+                .filter((t) => t.type === "md-reader")
+                .map((tab) => (
+                  <div
+                    key={tab.id}
+                    className="absolute inset-0 flex flex-col"
+                    style={{ display: tab.id === activeBrowserTabId ? "flex" : "none" }}
+                  >
+                    <Suspense fallback={<ModuleLoading title="正在打开 Markdown 阅读器" />}>
+                      <MdFileView filePath={tab.mdFilePath!} />
+                    </Suspense>
+                  </div>
+                ))}
               {browserTabs
                 .filter((t) => t.type === "browser")
                 .map((tab) => (
@@ -1271,6 +1308,11 @@ function Shell({
           open={loginDialogOpen}
           onOpenChange={setLoginDialogOpen}
           initialView={loginDialogInitialView}
+        />
+
+        <UpdateNotification
+          onUpdateAvailable={setUpdateAvailable}
+          openSignal={updateDialogSignal}
         />
 
         <DeleteConfirm

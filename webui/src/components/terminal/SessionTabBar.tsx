@@ -6,9 +6,11 @@ import {
   X,
   XCircle,
   ArrowRightFromLine,
+  Download,
+  Notebook,
 } from "lucide-react";
 import { useTerminalStore } from "./store/terminalStore";
-import { sshConnect, sshDisconnect, shellKill, shellSpawn, sshOpenSftp } from "./ipc";
+import { sshConnect, sshDisconnect, shellKill, shellSpawn, sshOpenSftp, vncDisconnect } from "./ipc";
 import { isTauri } from "@/lib/tauri";
 import {
   ContextMenu,
@@ -53,6 +55,8 @@ export function SessionTabBar() {
           await sshDisconnect(sessionId);
         } else if (sessionType === "local") {
           await shellKill(sessionId);
+        } else if (sessionType === "vnc") {
+          await vncDisconnect(sessionId);
         }
       } catch {
         updateSessionStatus(sessionId, "disconnected");
@@ -164,6 +168,64 @@ export function SessionTabBar() {
     [sessions, handleClose],
   );
 
+  const getTerminalContent = useCallback((sessionId: string): string => {
+    const terminal = useTerminalStore.getState().terminalRegistry.get(sessionId);
+    if (!terminal) return "";
+    const buffer = terminal.buffer.active;
+    const lines: string[] = [];
+    for (let i = 0; i < buffer.length; i++) {
+      const line = buffer.getLine(i);
+      if (line) {
+        lines.push(line.translateToString(true));
+      }
+    }
+    return lines.join("\n");
+  }, []);
+
+  const handleExportLog = useCallback(
+    async (sessionId: string) => {
+      const content = getTerminalContent(sessionId);
+      if (!content) return;
+      try {
+        const { save } = await import("@tauri-apps/plugin-dialog");
+        const savePath = await save({
+          defaultPath: "terminal-log.txt",
+          title: "导出终端记录",
+          filters: [{ name: "文本文件", extensions: ["txt", "log"] }],
+        });
+        if (!savePath) return;
+        const { writeTextFile } = await import("@tauri-apps/plugin-fs");
+        await writeTextFile(savePath as `${string}/${string}`, content);
+      } catch {}
+    },
+    [getTerminalContent],
+  );
+
+  const handleExportToNote = useCallback(
+    async (sessionId: string) => {
+      const content = getTerminalContent(sessionId);
+      if (!content) return;
+      try {
+        const { loadNotesState, saveNotesState, createBlankNote } = await import(
+          "@/components/notes/notes-storage"
+        );
+        const state = await loadNotesState();
+        const notebookId = state.notebooks[0]?.id;
+        if (!notebookId) return;
+        const note = createBlankNote(notebookId, "ssh");
+        const preview = content.split("\n").filter((l) => l.trim()).slice(-1)[0]?.slice(0, 60) ?? "终端记录";
+        note.title = `终端记录 ${new Date().toLocaleString("zh-CN")}`;
+        note.preview = preview;
+        note.contentMarkdown = `## 终端记录\n\n\`\`\`bash\n${content}\n\`\`\`\n`;
+        state.notes.unshift(note);
+        state.activeNoteId = note.id;
+        state.activeNotebookId = notebookId;
+        await saveNotesState(state);
+      } catch {}
+    },
+    [getTerminalContent],
+  );
+
   return (
     <>
       <div className="flex h-8 shrink-0 items-end border-b border-border bg-sidebar/50 px-1">
@@ -171,6 +233,7 @@ export function SessionTabBar() {
           const isActive = session.id === activeSessionId;
           const isSsh = session.type === "ssh";
           const canDuplicate = session.type === "ssh" || session.type === "sftp" || session.type === "local";
+          const canExport = session.type === "ssh" || session.type === "local";
 
           return (
             <ContextMenu key={session.id}>
@@ -227,6 +290,17 @@ export function SessionTabBar() {
                   <ContextMenuItem onClick={() => handleOpenSftp(session)}>
                     <FolderOpen className="mr-2 h-3.5 w-3.5" /> 打开 SFTP
                   </ContextMenuItem>
+                )}
+                {canExport && (
+                  <>
+                    <ContextMenuSeparator />
+                    <ContextMenuItem onClick={() => handleExportLog(session.id)}>
+                      <Download className="mr-2 h-3.5 w-3.5" /> 导出记录
+                    </ContextMenuItem>
+                    <ContextMenuItem onClick={() => handleExportToNote(session.id)}>
+                      <Notebook className="mr-2 h-3.5 w-3.5" /> 导出到笔记
+                    </ContextMenuItem>
+                  </>
                 )}
                 <ContextMenuSeparator />
                 <ContextMenuItem onClick={() => handleClose(session.id, session.type)}>
