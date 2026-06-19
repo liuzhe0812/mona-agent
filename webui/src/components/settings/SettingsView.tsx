@@ -36,11 +36,14 @@ import {
   Keyboard,
   Layers,
   Loader2,
+  Mail,
   Monitor,
   Moon,
   Orbit,
   Palette,
   Pencil,
+  QrCode,
+  Radio,
   RefreshCw,
   RotateCcw,
   Search,
@@ -58,7 +61,15 @@ import {
 import { useTranslation } from "react-i18next";
 
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
+import { EmailAccountsSettings } from "@/components/settings/EmailAccountsSettings";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { useLicense } from "@/hooks/useLicense";
 import {
   DropdownMenu,
@@ -67,6 +78,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Tooltip,
   TooltipContent,
@@ -74,7 +86,12 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import {
+  cancelWeixinLogin,
   fetchSettings,
+  getWeixinLoginStatus,
+  logoutWeixin,
+  startWeixinLogin,
+  updateChannelSettings,
   updateImageGenerationSettings,
   updateProviderSettings,
   updateSettings,
@@ -93,11 +110,12 @@ import {
   type DesktopAppSettings,
   type SidebarShortcuts,
 } from "@/lib/tauri";
-import { useClient } from "@/providers/ClientProvider";
+import { useClientOptional } from "@/providers/ClientProvider";
 import type {
   ImageGenerationSettingsUpdate,
   SettingsPayload,
   WebSearchSettingsUpdate,
+  WeixinLoginStatus,
 } from "@/lib/types";
 
 type SettingsSectionKey =
@@ -106,7 +124,9 @@ type SettingsSectionKey =
   | "models_providers"
   | "image"
   | "web"
+  | "channels"
   | "runtime"
+  | "email"
   | "desktop"
   | "shortcuts"
   | "advanced"
@@ -132,7 +152,7 @@ interface AgentSettingsDraft {
   workspace: string;
 }
 
-type PendingRestartSection = "runtime" | "web" | "image";
+type PendingRestartSection = "runtime" | "web" | "image" | "channels";
 type PendingRestartSections = Record<PendingRestartSection, boolean>;
 
 const LOCAL_PREFS_STORAGE_KEY = "mona-webui.settings-preferences";
@@ -156,6 +176,7 @@ const EMPTY_PENDING_RESTART_SECTIONS: PendingRestartSections = {
   runtime: false,
   web: false,
   image: false,
+  channels: false,
 };
 
 interface SettingsViewProps {
@@ -204,7 +225,7 @@ export function SettingsView({
   isRestarting = false,
 }: SettingsViewProps) {
   const { t } = useTranslation();
-  const { token } = useClient();
+  const { token } = useClientOptional();
   const [settings, setSettings] = useState<SettingsPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -292,6 +313,7 @@ export function SettingsView({
         runtime: payload.restart_required_sections.includes("runtime"),
         web: payload.restart_required_sections.includes("web"),
         image: payload.restart_required_sections.includes("image"),
+        channels: payload.restart_required_sections.includes("channels"),
       });
     }
   }, []);
@@ -368,7 +390,8 @@ export function SettingsView({
       !!settings?.requires_restart ||
       pendingRestartSections.runtime ||
       pendingRestartSections.web ||
-      pendingRestartSections.image,
+      pendingRestartSections.image ||
+      pendingRestartSections.channels,
     [pendingRestartSections, settings?.requires_restart],
   );
 
@@ -728,6 +751,22 @@ export function SettingsView({
             requiresRestartPending={pendingRestartSections.web}
           />
         );
+      case "channels":
+        return (
+          <ChannelsSettings
+            settings={settings}
+            token={token}
+            onSettingsChanged={(payload) => {
+              applyPayload(payload);
+              if (payload.requires_restart) {
+                setPendingRestartSections((prev) => ({ ...prev, channels: true }));
+              }
+            }}
+            onRestart={onRestart}
+            isRestarting={isRestarting}
+            requiresRestartPending={pendingRestartSections.channels}
+          />
+        );
       case "runtime":
         return (
           <RuntimeSettings
@@ -742,6 +781,8 @@ export function SettingsView({
             requiresRestartPending={pendingRestartSections.runtime}
           />
         );
+      case "email":
+        return <EmailAccountsSettings />;
       case "desktop":
         return <DesktopSettings />;
       case "shortcuts":
@@ -807,7 +848,9 @@ const SETTINGS_NAV_ITEMS: Array<{ key: SettingsSectionKey; icon: LucideIcon; fal
   { key: "models_providers", icon: SlidersHorizontal, fallback: "模型供应商" },
   { key: "image", icon: ImageIcon, fallback: "Image" },
   { key: "web", icon: Globe2, fallback: "Web" },
+  { key: "channels", icon: Radio, fallback: "频道" },
   { key: "runtime", icon: Server, fallback: "Runtime" },
+  { key: "email", icon: Mail, fallback: "邮箱", desktopOnly: true },
   { key: "desktop", icon: Monitor, fallback: "桌面", desktopOnly: true },
   { key: "shortcuts", icon: Keyboard, fallback: "快捷键", desktopOnly: true },
   { key: "advanced", icon: ShieldCheck, fallback: "Advanced" },
@@ -1862,6 +1905,452 @@ function WebSettings({
         </SettingsGroup>
       </section>
     </div>
+  );
+}
+
+function ChannelsSettings({
+  settings,
+  token,
+  onSettingsChanged,
+  onRestart,
+  isRestarting,
+  requiresRestartPending,
+}: {
+  settings: SettingsPayload;
+  token: string;
+  onSettingsChanged: (payload: SettingsPayload) => void;
+  onRestart?: () => void;
+  isRestarting?: boolean;
+  requiresRestartPending: boolean;
+}) {
+  const { t } = useTranslation();
+  const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
+  const channels = settings.channels?.available ?? [];
+  const weixin = channels.find((c) => c.name === "weixin");
+
+  const [toggling, setToggling] = useState(false);
+  const [loginOpen, setLoginOpen] = useState(false);
+  const [loginStatus, setLoginStatus] = useState<WeixinLoginStatus | null>(null);
+  const [loginBusy, setLoginBusy] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [allowFromInput, setAllowFromInput] = useState("");
+  const [allowAll, setAllowAll] = useState(false);
+  const [allowFromSaving, setAllowFromSaving] = useState(false);
+  const [allowFromError, setAllowFromError] = useState<string | null>(null);
+  const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    const list = weixin?.allow_from ?? [];
+    const all = list.includes("*");
+    setAllowAll(all);
+    setAllowFromInput(all ? "" : list.join("\n"));
+    setAllowFromError(null);
+  }, [weixin?.allow_from]);
+
+  const stopPolling = useCallback(() => {
+    if (pollRef.current) {
+      clearTimeout(pollRef.current);
+      pollRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    return () => stopPolling();
+  }, [stopPolling]);
+
+  const pollStatus = useCallback(async () => {
+    if (!token) return;
+    try {
+      const status = await getWeixinLoginStatus(token);
+      setLoginStatus(status);
+      if (status.state === "confirmed" || status.state === "failed" || status.state === "expired" || status.state === "cancelled") {
+        stopPolling();
+        if (status.state === "confirmed") {
+          // Refresh settings so logged_in reflects the new state.
+          try {
+            const fresh = await fetchSettings(token);
+            onSettingsChanged(fresh);
+          } catch {
+            // best-effort
+          }
+          setLoginOpen(false);
+        }
+        return;
+      }
+      pollRef.current = setTimeout(pollStatus, 1500);
+    } catch {
+      pollRef.current = setTimeout(pollStatus, 2000);
+    }
+  }, [token, onSettingsChanged, stopPolling]);
+
+  const handleStartLogin = useCallback(async () => {
+    if (!token) return;
+    setLoginBusy(true);
+    setError(null);
+    try {
+      const status = await startWeixinLogin(token);
+      setLoginStatus(status);
+      setLoginOpen(true);
+      pollRef.current = setTimeout(pollStatus, 1500);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoginBusy(false);
+    }
+  }, [token, pollStatus]);
+
+  const handleCloseLogin = useCallback(async () => {
+    stopPolling();
+    setLoginOpen(false);
+    if (loginStatus && (loginStatus.state === "awaiting_scan" || loginStatus.state === "fetching_qr")) {
+      try {
+        await cancelWeixinLogin(token);
+      } catch {
+        // ignore
+      }
+    }
+    setLoginStatus(null);
+  }, [token, loginStatus, stopPolling]);
+
+  const handleLogout = useCallback(async () => {
+    if (!token) return;
+    setLoggingOut(true);
+    setError(null);
+    try {
+      await logoutWeixin(token);
+      const fresh = await fetchSettings(token);
+      onSettingsChanged(fresh);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoggingOut(false);
+    }
+  }, [token, onSettingsChanged]);
+
+  const handleToggle = useCallback(async (enabled: boolean) => {
+    if (!token || !weixin) return;
+    setToggling(true);
+    setError(null);
+    try {
+      const payload = await updateChannelSettings(token, "weixin", enabled);
+      onSettingsChanged(payload);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setToggling(false);
+    }
+  }, [token, weixin, onSettingsChanged]);
+
+  const handleSaveAllowFrom = useCallback(async () => {
+    if (!token || !weixin) return;
+    setAllowFromSaving(true);
+    setAllowFromError(null);
+    try {
+      const list = allowAll
+        ? ["*"]
+        : allowFromInput
+            .split(/[\n,]+/)
+            .map((s) => s.trim())
+            .filter(Boolean);
+      const payload = await updateChannelSettings(token, "weixin", weixin.enabled, list);
+      onSettingsChanged(payload);
+    } catch (e) {
+      setAllowFromError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setAllowFromSaving(false);
+    }
+  }, [token, weixin, allowAll, allowFromInput, onSettingsChanged]);
+
+  const loginStateLabel = (() => {
+    if (!loginStatus) return "";
+    switch (loginStatus.state) {
+      case "fetching_qr":
+        return tx("settings.channels.weixin.login.fetchingQr", "正在获取二维码…");
+      case "awaiting_scan":
+        return tx("settings.channels.weixin.login.awaitingScan", "请使用微信扫码");
+      case "confirmed":
+        return tx("settings.channels.weixin.login.confirmed", "登录成功");
+      case "expired":
+        return tx("settings.channels.weixin.login.expired", "二维码已过期");
+      case "failed":
+        return tx("settings.channels.weixin.login.failed", "登录失败");
+      case "cancelled":
+        return tx("settings.channels.weixin.login.cancelled", "已取消");
+      default:
+        return "";
+    }
+  })();
+
+  return (
+    <div className="space-y-7">
+      <section>
+        <SettingsSectionTitle>{tx("settings.sections.channels", "频道接入")}</SettingsSectionTitle>
+        <SettingsGroup>
+          {weixin ? (
+            <>
+              <SettingsRow
+                title={weixin.display_name}
+                description={tx(
+                  "settings.channels.weixin.description",
+                  "启用后可通过微信与 Mona 对话。需扫码登录微信账号。",
+                )}
+              >
+                <div className="flex items-center gap-2">
+                  {weixin.enabled ? (
+                    weixin.logged_in ? (
+                      <StatusPill tone="success">
+                        {tx("settings.channels.weixin.status.loggedIn", "已登录")}
+                      </StatusPill>
+                    ) : (
+                      <StatusPill tone="warning">
+                        {tx("settings.channels.weixin.status.notLoggedIn", "未登录")}
+                      </StatusPill>
+                    )
+                  ) : (
+                    <StatusPill tone="neutral">
+                      {tx("settings.channels.weixin.status.disabled", "已禁用")}
+                    </StatusPill>
+                  )}
+                  <ToggleSwitch
+                    checked={weixin.enabled}
+                    disabled={toggling}
+                    onChange={handleToggle}
+                    aria-label={tx("settings.channels.weixin.toggle", "启用微信")}
+                  />
+                </div>
+              </SettingsRow>
+
+              {weixin.enabled ? (
+                <SettingsRow
+                  title={tx("settings.channels.weixin.account", "微信账号")}
+                  description={tx(
+                    "settings.channels.weixin.accountHelp",
+                    "扫码登录微信账号以接收和回复消息。",
+                  )}
+                >
+                  <div className="flex items-center gap-2">
+                    {weixin.logged_in ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={handleLogout}
+                        disabled={loggingOut}
+                        className="rounded-full"
+                      >
+                        {loggingOut ? (
+                          <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden />
+                        ) : null}
+                        {tx("settings.channels.weixin.logout", "退出登录")}
+                      </Button>
+                    ) : (
+                      <Button
+                        size="sm"
+                        onClick={handleStartLogin}
+                        disabled={loginBusy}
+                        className="rounded-full"
+                      >
+                        {loginBusy ? (
+                          <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden />
+                        ) : (
+                          <QrCode className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+                        )}
+                        {tx("settings.channels.weixin.scanLogin", "扫码登录")}
+                      </Button>
+                    )}
+                  </div>
+                </SettingsRow>
+              ) : null}
+
+              {weixin.enabled ? (
+                <SettingsRow
+                  title={tx("settings.channels.weixin.allowFrom", "允许的用户")}
+                  description={tx(
+                    "settings.channels.weixin.allowFromHelp",
+                    "设置可给 Mona 发消息的微信用户 ID。开启“允许所有人”则接收任意用户消息。",
+                  )}
+                >
+                  <div className="flex w-full min-w-[200px] flex-col items-stretch gap-3 sm:w-[260px]">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[13px] text-muted-foreground">
+                        {tx("settings.channels.weixin.allowAll", "允许所有人")}
+                      </span>
+                      <ToggleSwitch
+                        checked={allowAll}
+                        disabled={allowFromSaving}
+                        onChange={(checked) => {
+                          setAllowAll(checked);
+                          if (checked) setAllowFromInput("");
+                        }}
+                        aria-label={tx("settings.channels.weixin.allowAll", "允许所有人")}
+                      />
+                    </div>
+                    {!allowAll ? (
+                      <Textarea
+                        value={allowFromInput}
+                        onChange={(e) => setAllowFromInput(e.target.value)}
+                        placeholder={tx(
+                          "settings.channels.weixin.allowFromPlaceholder",
+                          "每行一个微信用户 ID，或用逗号分隔",
+                        )}
+                        className="min-h-[80px] resize-none rounded-lg text-[13px]"
+                        disabled={allowFromSaving}
+                      />
+                    ) : null}
+                    <div className="flex items-center justify-end gap-2">
+                      {allowFromError ? (
+                        <span className="text-[12px] text-destructive">{allowFromError}</span>
+                      ) : null}
+                      <Button
+                        size="sm"
+                        onClick={handleSaveAllowFrom}
+                        disabled={allowFromSaving}
+                        className="rounded-full"
+                      >
+                        {allowFromSaving ? (
+                          <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden />
+                        ) : null}
+                        {tx("settings.channels.weixin.saveAllowFrom", "保存")}
+                      </Button>
+                    </div>
+                  </div>
+                </SettingsRow>
+              ) : null}
+            </>
+          ) : (
+            <SettingsRow
+              title={tx("settings.channels.empty", "暂无可配置的频道")}
+              description={tx(
+                "settings.channels.emptyHelp",
+                "频道插件未安装或未注册。",
+              )}
+            >
+              <StatusPill tone="neutral">{tx("settings.channels.none", "无")}</StatusPill>
+            </SettingsRow>
+          )}
+        </SettingsGroup>
+
+        {error ? (
+          <div className="mt-3 px-1 text-[12px] text-destructive">{error}</div>
+        ) : null}
+
+        {requiresRestartPending ? (
+          <div className="mt-4 flex items-center justify-end gap-2">
+            <span className="text-[12px] text-muted-foreground">
+              {tx("settings.status.savedRestartApply", "已保存，重启后生效")}
+            </span>
+            {onRestart ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={onRestart}
+                disabled={isRestarting}
+                className="rounded-full"
+              >
+                {isRestarting ? (
+                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden />
+                ) : (
+                  <RotateCcw className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+                )}
+                {isRestarting
+                  ? t("app.system.restarting")
+                  : t("app.system.restart")}
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
+      </section>
+
+      <Dialog open={loginOpen} onOpenChange={(open) => { if (!open) handleCloseLogin(); }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>
+              {tx("settings.channels.weixin.login.title", "微信扫码登录")}
+            </DialogTitle>
+            <DialogDescription>
+              {tx(
+                "settings.channels.weixin.login.description",
+                "使用微信扫描下方二维码完成登录。",
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col items-center gap-4 py-2">
+            <div className="flex h-[240px] w-[240px] items-center justify-center rounded-lg border border-border/50 bg-white p-3">
+              {loginStatus?.qr_svg ? (
+                <div
+                  className="h-full w-full [&>svg]:h-full [&>svg]:w-full"
+                  // eslint-disable-next-line react/no-danger
+                  dangerouslySetInnerHTML={{ __html: loginStatus.qr_svg }}
+                />
+              ) : (
+                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" aria-hidden />
+              )}
+            </div>
+            <div className="flex items-center gap-2 text-[13px] text-muted-foreground">
+              {loginStatus?.state === "confirmed" ? (
+                <Check className="h-4 w-4 text-emerald-500" aria-hidden />
+              ) : loginStatus?.state === "failed" || loginStatus?.state === "expired" ? (
+                <Triangle className="h-4 w-4 text-amber-500" aria-hidden />
+              ) : (
+                <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+              )}
+              <span>{loginStateLabel}</span>
+            </div>
+            {loginStatus?.error ? (
+              <div className="max-w-full text-center text-[12px] text-destructive">
+                {loginStatus.error}
+              </div>
+            ) : null}
+            {loginStatus?.state === "expired" || loginStatus?.state === "failed" ? (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleStartLogin}
+                className="rounded-full"
+              >
+                {tx("settings.channels.weixin.login.retry", "重新获取二维码")}
+              </Button>
+            ) : null}
+          </div>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+function ToggleSwitch({
+  checked,
+  disabled,
+  onChange,
+  "aria-label": ariaLabel,
+}: {
+  checked: boolean;
+  disabled?: boolean;
+  onChange: (checked: boolean) => void;
+  "aria-label"?: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={ariaLabel}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className={cn(
+        "relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+        "disabled:cursor-not-allowed disabled:opacity-50",
+        checked ? "bg-primary" : "bg-muted",
+      )}
+    >
+      <span
+        className={cn(
+          "pointer-events-none inline-block h-5 w-5 transform rounded-full bg-background shadow-lg ring-0 transition",
+          checked ? "translate-x-5" : "translate-x-0",
+        )}
+      />
+    </button>
   );
 }
 

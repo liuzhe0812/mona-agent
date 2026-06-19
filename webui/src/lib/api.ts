@@ -9,6 +9,7 @@ import type {
   SidebarStatePayload,
   SlashCommand,
   WebSearchSettingsUpdate,
+  WeixinLoginStatus,
   WebuiThreadPersistedPayload,
 } from "./types";
 import { isTauri, getGatewayStatus, httpFetch } from "./tauri";
@@ -23,6 +24,7 @@ export class ApiError extends Error {
 }
 
 let _apiBase: string | null = null;
+let _gatewayHttpBase: string | null = null;
 
 export async function getApiBase(): Promise<string> {
   if (_apiBase) return _apiBase;
@@ -36,8 +38,27 @@ export async function getApiBase(): Promise<string> {
   return "";
 }
 
+/** Return the gateway HTTP base URL (e.g. ``http://127.0.0.1:17173``).
+ *
+ * The gateway aiohttp app serves ALL HTTP routes (/email/*, /api/kb/*,
+ * /v1/chat/completions, /health, …). Use this instead of ``getApiBase()``
+ * for routes that are registered on the gateway but NOT on the websocket
+ * server (e.g. /email/*). See project_rules.md "端口架构" for details. */
+export async function getGatewayHttpBase(): Promise<string> {
+  if (_gatewayHttpBase) return _gatewayHttpBase;
+  if (isTauri()) {
+    const status = await getGatewayStatus();
+    if (status.port) {
+      _gatewayHttpBase = `http://127.0.0.1:${status.port}`;
+      return _gatewayHttpBase;
+    }
+  }
+  return "";
+}
+
 export function resetApiBase(): void {
   _apiBase = null;
+  _gatewayHttpBase = null;
 }
 
 /** Return the cached API base synchronously (empty string if not yet resolved).
@@ -271,6 +292,70 @@ export async function updateImageGenerationSettings(
   query.set("max_images_per_turn", String(update.maxImagesPerTurn));
   return request<SettingsPayload>(
     `${effectiveBase}/api/settings/image-generation/update?${query}`,
+    token,
+  );
+}
+
+export async function updateChannelSettings(
+  token: string,
+  channel: string,
+  enabled: boolean,
+  allowFrom?: string[],
+  base?: string,
+): Promise<SettingsPayload> {
+  const effectiveBase = base ?? (await getApiBase());
+  const query = new URLSearchParams();
+  query.set("channel", channel);
+  query.set("enabled", String(enabled));
+  if (allowFrom) {
+    query.set("allowFrom", allowFrom.join(","));
+  }
+  return request<SettingsPayload>(
+    `${effectiveBase}/api/settings/channels/update?${query}`,
+    token,
+  );
+}
+
+export async function startWeixinLogin(
+  token: string,
+  base?: string,
+): Promise<WeixinLoginStatus> {
+  const effectiveBase = base ?? (await getApiBase());
+  return request<WeixinLoginStatus>(
+    `${effectiveBase}/api/channels/weixin/login/start`,
+    token,
+  );
+}
+
+export async function getWeixinLoginStatus(
+  token: string,
+  base?: string,
+): Promise<WeixinLoginStatus> {
+  const effectiveBase = base ?? (await getApiBase());
+  return request<WeixinLoginStatus>(
+    `${effectiveBase}/api/channels/weixin/login/status`,
+    token,
+  );
+}
+
+export async function cancelWeixinLogin(
+  token: string,
+  base?: string,
+): Promise<{ state: string }> {
+  const effectiveBase = base ?? (await getApiBase());
+  return request<{ state: string }>(
+    `${effectiveBase}/api/channels/weixin/login/cancel`,
+    token,
+  );
+}
+
+export async function logoutWeixin(
+  token: string,
+  base?: string,
+): Promise<{ logged_in: boolean }> {
+  const effectiveBase = base ?? (await getApiBase());
+  return request<{ logged_in: boolean }>(
+    `${effectiveBase}/api/channels/weixin/logout`,
     token,
   );
 }

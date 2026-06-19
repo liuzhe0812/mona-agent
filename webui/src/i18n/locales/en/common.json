@@ -9,7 +9,8 @@
     },
     "error": {
       "title": "Couldn't reach mona",
-      "gatewayHint": "Make sure the gateway is running (`mona gateway`) and that this page is open on the same machine."
+      "gatewayHint": "Make sure the gateway is running (`mona gateway`) and that this page is open on the same machine.",
+      "retry": "Retry"
     },
     "auth": {
       "title": "Authentication required",

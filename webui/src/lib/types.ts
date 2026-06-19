@@ -268,8 +268,36 @@ export interface SettingsPayload {
     exec_sandbox?: string | null;
     exec_path_append_set: boolean;
   };
+  channels: {
+    available: Array<ChannelInfo>;
+  };
   requires_restart: boolean;
-  restart_required_sections?: Array<"runtime" | "web" | "image">;
+  restart_required_sections?: Array<"runtime" | "web" | "image" | "channels">;
+}
+
+export interface ChannelInfo {
+  name: string;
+  display_name: string;
+  enabled: boolean;
+  supports_login: boolean;
+  logged_in?: boolean;
+  allow_from?: string[];
+}
+
+export type WeixinLoginState =
+  | "idle"
+  | "fetching_qr"
+  | "awaiting_scan"
+  | "confirmed"
+  | "expired"
+  | "failed"
+  | "cancelled";
+
+export interface WeixinLoginStatus {
+  state: WeixinLoginState;
+  qr_svg?: string;
+  error?: string;
+  logged_in?: boolean;
 }
 
 export interface SettingsUpdate {

@@ -223,6 +223,120 @@ def _image_generation_provider_rows(config: Any) -> list[dict[str, Any]]:
     return rows
 
 
+def _channels_payload(config: Any) -> dict[str, Any]:
+    """Build the ``channels`` section of the settings payload.
+
+    Lists built-in channels that opt in to UI configuration. Each entry
+    reports its enabled state and (for channels that support interactive
+    login) whether saved credentials exist on disk.
+    """
+    from mona.channels.registry import discover_all
+    from mona.webui.weixin_login import WeixinLoginSession
+
+    available: list[dict[str, Any]] = []
+    try:
+        all_channels = discover_all()
+    except Exception:
+        all_channels = {}
+
+    # Only weixin is exposed in the WebUI for the first iteration.
+    exposed = ("weixin",)
+    for name in exposed:
+        cls = all_channels.get(name)
+        if cls is None:
+            continue
+        section = getattr(config.channels, name, None)
+        if isinstance(section, dict):
+            enabled = bool(section.get("enabled", False))
+        elif section is not None:
+            enabled = bool(getattr(section, "enabled", False))
+        else:
+            enabled = False
+
+        entry: dict[str, Any] = {
+            "name": name,
+            "display_name": cls.display_name,
+            "enabled": enabled,
+            "supports_login": name == "weixin",
+        }
+        if name == "weixin":
+            entry["logged_in"] = WeixinLoginSession.has_saved_token()
+            if isinstance(section, dict):
+                entry["allow_from"] = section.get("allow_from") or section.get("allowFrom") or []
+            elif section is not None:
+                entry["allow_from"] = getattr(section, "allow_from", None) or []
+            else:
+                entry["allow_from"] = []
+        available.append(entry)
+
+    return {"available": available}
+
+
+def _parse_allow_from(value: str | None) -> list[str]:
+    """Parse a comma/newline separated allowlist into a clean list."""
+    if not value:
+        return []
+    entries: list[str] = []
+    for raw in value.replace(",", "\n").splitlines():
+        entry = raw.strip()
+        if entry:
+            entries.append(entry)
+    return entries
+
+
+def update_channel_settings(query: QueryParams) -> dict[str, Any]:
+    """Mutate a channel's WebUI-exposed settings.
+
+    Only channels exposed in the WebUI (currently ``weixin``) can be
+    mutated here. Enabling/disabling a channel requires a gateway restart.
+    """
+    channel_name = (_query_first(query, "channel") or "").strip()
+    if not channel_name:
+        raise WebUISettingsError("channel is required")
+    if channel_name != "weixin":
+        # First iteration only supports weixin.
+        raise WebUISettingsError(f"channel '{channel_name}' is not configurable in the WebUI")
+
+    config = load_config()
+    section = getattr(config.channels, channel_name, None)
+    if section is None:
+        # ChannelsConfig allows extra fields; ensure the section exists.
+        section = {"enabled": False}
+        setattr(config.channels, channel_name, section)
+
+    changed = False
+
+    enabled_raw = _query_first(query, "enabled")
+    if enabled_raw is not None:
+        enabled = _parse_bool(enabled_raw, "enabled")
+        if isinstance(section, dict):
+            if section.get("enabled") != enabled:
+                section["enabled"] = enabled
+                changed = True
+        elif getattr(section, "enabled", None) != enabled:
+            setattr(section, "enabled", enabled)
+            changed = True
+
+    allow_from_raw = _query_first_alias(query, "allow_from", "allowFrom")
+    if allow_from_raw is not None:
+        allow_from = _parse_allow_from(allow_from_raw)
+        if isinstance(section, dict):
+            existing = section.get("allow_from") or section.get("allowFrom") or []
+            if existing != allow_from:
+                section["allow_from"] = allow_from
+                section.pop("allowFrom", None)
+                changed = True
+        else:
+            existing = getattr(section, "allow_from", None) or []
+            if existing != allow_from:
+                setattr(section, "allow_from", allow_from)
+                changed = True
+
+    if changed:
+        save_config(config)
+    return settings_payload(requires_restart=True)
+
+
 def settings_payload(*, requires_restart: bool = False) -> dict[str, Any]:
     config = load_config()
     defaults = config.agents.defaults
@@ -393,6 +507,7 @@ def settings_payload(*, requires_restart: bool = False) -> dict[str, Any]:
             "exec_sandbox": exec_config.sandbox or None,
             "exec_path_append_set": bool(exec_config.path_append),
         },
+        "channels": _channels_payload(config),
         "requires_restart": requires_restart,
     }
 

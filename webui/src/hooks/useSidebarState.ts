@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { useClient } from "@/providers/ClientProvider";
+import { useClientOptional } from "@/providers/ClientProvider";
 import {
   fetchSidebarState,
   updateSidebarState as persistSidebarState,
@@ -139,7 +139,7 @@ export function useSidebarState(
     updater: (state: SidebarStatePayload) => SidebarStatePayload,
   ) => Promise<void>;
 } {
-  const { token } = useClient();
+  const { token } = useClientOptional();
   const tokenRef = useRef(token);
   const stateRef = useRef(DEFAULT_SIDEBAR_STATE);
   const persistVersionRef = useRef(0);

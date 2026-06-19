@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { useClient } from "@/providers/ClientProvider";
+import { useClientOptional } from "@/providers/ClientProvider";
 import i18n from "@/i18n";
 import {
   ApiError,
@@ -23,7 +23,7 @@ export function useSessions(): {
   createChat: () => Promise<string>;
   deleteChat: (key: string) => Promise<void>;
 } {
-  const { client, token } = useClient();
+  const { client, token } = useClientOptional();
   const [sessions, setSessions] = useState<ChatSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -32,6 +32,10 @@ export function useSessions(): {
   tokenRef.current = token;
 
   const refresh = useCallback(async () => {
+    if (!client) {
+      setLoading(false);
+      return;
+    }
     try {
       setLoading(true);
       const rows = await listSessions(tokenRef.current);
@@ -55,19 +59,23 @@ export function useSessions(): {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [client]);
 
   useEffect(() => {
     void refresh();
   }, [refresh]);
 
   useEffect(() => {
+    if (!client) return;
     return client.onSessionUpdate(() => {
       void refresh();
     });
   }, [client, refresh]);
 
   const createChat = useCallback(async (): Promise<string> => {
+    if (!client) {
+      throw new Error("runtime not ready");
+    }
     const chatId = await client.newChat();
     const key = `websocket:${chatId}`;
     optimisticKeysRef.current.add(key);
@@ -110,7 +118,7 @@ export function useSessionHistory(key: string | null): {
   /** ``true`` when the replayed transcript ends with a trace row (turn still in flight). */
   hasPendingToolCalls: boolean;
 } {
-  const { token } = useClient();
+  const { token } = useClientOptional();
   const [refreshSeq, setRefreshSeq] = useState(0);
   const refresh = useCallback(() => {
     setRefreshSeq((value) => value + 1);

@@ -55,22 +55,26 @@ impl GatewayManager {
             cmd.env("PYTHONUNBUFFERED", "1");
             cmd.env("PYTHONUTF8", "1");
 
-            // Set PYTHONPATH if source tree exists
+            // Set PYTHONPATH if source tree exists.
+            // Dev exe lives at <repo>/src-tauri/target/debug/mona.exe, so we
+            // walk up from exe_dir until we find a sibling `mona/` package dir.
             if let Ok(exe_path) = std::env::current_exe() {
-                if let Some(exe_dir) = exe_path.parent() {
-                    let project_root = exe_dir.parent().unwrap_or(exe_dir);
-                    let mona_pkg_dir = project_root.join("mona");
-                    if mona_pkg_dir.is_dir() {
+                let mut cursor = exe_path.parent().map(|p| p.to_path_buf());
+                while let Some(dir) = cursor {
+                    let mona_pkg_dir = dir.join("mona");
+                    if mona_pkg_dir.is_dir() && mona_pkg_dir.join("api").join("server.py").exists() {
                         let sep = if cfg!(windows) { ";" } else { ":" };
                         let existing = std::env::var("PYTHONPATH").unwrap_or_default();
                         let new_path = if existing.is_empty() {
-                            project_root.display().to_string()
+                            dir.display().to_string()
                         } else {
-                            format!("{}{}{}", project_root.display(), sep, existing)
+                            format!("{}{}{}", dir.display(), sep, existing)
                         };
                         cmd.env("PYTHONPATH", &new_path);
-                        log::info!("Dev mode: PYTHONPATH set to {:?}", project_root);
+                        log::info!("Dev mode: PYTHONPATH set to {:?}", dir);
+                        break;
                     }
+                    cursor = dir.parent().map(|p| p.to_path_buf());
                 }
             }
         } else {
@@ -257,37 +261,12 @@ fn open_gateway_log(port: u16) -> Option<std::fs::File> {
 }
 
 fn find_available_port(start_port: u16) -> Result<u16, String> {
-    for port in start_port..=(start_port + 5) {
-        if is_port_available(port) {
-            return Ok(port);
-        }
-        log::info!("Port {} is in use, trying next", port);
+    if is_port_available(start_port) {
+        return Ok(start_port);
     }
-
-    // All ports in range are occupied — wait briefly for the start port to free up
-    log::info!(
-        "All ports {}-{} in use, waiting up to 10s for port {} to become available",
-        start_port,
-        start_port + 5,
-        start_port
-    );
-    let wait_start = std::time::Instant::now();
-    let wait_deadline = std::time::Duration::from_secs(10);
-    loop {
-        if is_port_available(start_port) {
-            log::info!("Port {} became available after waiting", start_port);
-            return Ok(start_port);
-        }
-        if wait_start.elapsed() > wait_deadline {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(500));
-    }
-
     Err(format!(
-        "No available port in range {}-{}. Another program may be using these ports.",
-        start_port,
-        start_port + 5
+        "Gateway port {} is already in use. Another Mona gateway or process is running on this port.",
+        start_port
     ))
 }
 

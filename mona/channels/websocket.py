@@ -51,6 +51,7 @@ from mona.webui.settings_api import (
     fetch_zen_free_models,
     settings_payload,
     update_agent_settings,
+    update_channel_settings,
     update_image_generation_settings,
     update_provider_settings,
     update_web_search_settings,
@@ -588,6 +589,8 @@ class WebSocketChannel(BaseChannel):
         )
         self._runtime_model_name = runtime_model_name
         self._settings_restart_sections: set[str] = set()
+        # Process-local WeChat QR login session (single-use, replaced on each start).
+        self._weixin_login_session: Any = None
         # Process-local secret used to HMAC-sign media URLs. The signed URL is
         # the capability — anyone who holds a valid URL can fetch that one
         # file, nothing else. The secret regenerates on restart so links
@@ -773,6 +776,21 @@ class WebSocketChannel(BaseChannel):
 
         if got == "/api/settings/image-generation/update":
             return self._handle_settings_image_generation_update(request)
+
+        if got == "/api/settings/channels/update":
+            return self._handle_settings_channels_update(request)
+
+        if got == "/api/channels/weixin/login/start":
+            return self._handle_weixin_login_start(request)
+
+        if got == "/api/channels/weixin/login/status":
+            return self._handle_weixin_login_status(request)
+
+        if got == "/api/channels/weixin/login/cancel":
+            return self._handle_weixin_login_cancel(request)
+
+        if got == "/api/channels/weixin/logout":
+            return self._handle_weixin_logout(request)
 
         if got == "/api/ppt/templates":
             return self._handle_ppt_templates(request)
@@ -1128,6 +1146,93 @@ class WebSocketChannel(BaseChannel):
         except WebUISettingsError as e:
             return _http_error(e.status, e.message)
         return _http_json_response(self._with_settings_restart_state(payload, section="image"))
+
+    def _handle_settings_channels_update(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        query = _parse_query(request.path)
+        try:
+            payload = update_channel_settings(query)
+        except WebUISettingsError as e:
+            return _http_error(e.status, e.message)
+        return _http_json_response(self._with_settings_restart_state(payload, section="channels"))
+
+    def _get_weixin_config(self) -> Any:
+        """Load the current WeChat channel config (or defaults)."""
+        from mona.channels.weixin import WeixinConfig
+        from mona.config.loader import load_config
+
+        config = load_config()
+        section = getattr(config.channels, "weixin", None)
+        if section is None:
+            return WeixinConfig()
+        if isinstance(section, dict):
+            return WeixinConfig.model_validate(section)
+        return section
+
+    def _handle_weixin_login_start(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        from mona.webui.weixin_login import WeixinLoginSession
+
+        # Cancel any in-flight session before starting a new one.
+        if self._weixin_login_session is not None:
+            self._weixin_login_session._cancel_sync()
+            self._weixin_login_session = None
+
+        try:
+            config = self._get_weixin_config()
+        except Exception as e:
+            return _http_error(500, f"failed to load weixin config: {e}")
+
+        session = WeixinLoginSession(config)
+        self._weixin_login_session = session
+        session.start()
+        return _http_json_response(session.get_status())
+
+    def _handle_weixin_login_status(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        session = self._weixin_login_session
+        if session is None:
+            from mona.webui.weixin_login import WeixinLoginSession
+
+            return _http_json_response({
+                "state": "idle",
+                "logged_in": WeixinLoginSession.has_saved_token(),
+            })
+        status = session.get_status()
+        # Augment with on-disk login state for convenience.
+        from mona.webui.weixin_login import WeixinLoginSession
+
+        status = dict(status)
+        status["logged_in"] = WeixinLoginSession.has_saved_token()
+        return _http_json_response(status)
+
+    def _handle_weixin_login_cancel(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        session = self._weixin_login_session
+        self._weixin_login_session = None
+        if session is None:
+            return _http_json_response({"state": "cancelled"})
+        session._cancel_sync()
+        return _http_json_response({"state": "cancelled"})
+
+    def _handle_weixin_logout(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        from mona.webui.weixin_login import WeixinLoginSession
+
+        # Cancel any in-flight login session.
+        if self._weixin_login_session is not None:
+            self._weixin_login_session._cancel_sync()
+            self._weixin_login_session = None
+
+        ok = WeixinLoginSession.clear_saved_token()
+        if not ok:
+            return _http_error(500, "failed to delete weixin account state")
+        return _http_json_response({"logged_in": False})
 
     def _handle_ppt_templates(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):

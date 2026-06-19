@@ -9,7 +9,8 @@
     },
     "error": {
       "title": "无法连接到 mona",
-      "gatewayHint": "请确认 gateway 已启动（`mona gateway`），并且当前页面与 gateway 运行在同一台机器上。"
+      "gatewayHint": "请确认 gateway 已启动（`mona gateway`），并且当前页面与 gateway 运行在同一台机器上。",
+      "retry": "重试"
     },
     "system": {
       "section": "系统",
