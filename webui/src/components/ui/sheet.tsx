@@ -65,29 +65,42 @@ interface SheetContentProps
 const SheetContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
   SheetContentProps
->(({ side = "right", className, children, showCloseButton = true, ...props }, ref) => (
-  <SheetPortal>
-    <SheetOverlay />
-    <DialogPrimitive.Content
-      ref={ref}
-      className={cn(
-        sheetVariants({ side }),
-        "data-[state=open]:animate-in data-[state=closed]:animate-out",
-        "duration-300",
-        className,
-      )}
-      {...props}
-    >
-      {children}
-      {showCloseButton ? (
-        <DialogPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none">
-          <X className="h-4 w-4" />
-          <span className="sr-only">Close</span>
-        </DialogPrimitive.Close>
-      ) : null}
-    </DialogPrimitive.Content>
-  </SheetPortal>
-));
+>(({ side = "right", className, children, showCloseButton = true, ...props }, ref) => {
+  // 安全网：SheetContent 卸载时确保 body 的 pointer-events 被清理。
+  // Sheet 底层使用 DialogPrimitive，共享相同的 body lock 机制。
+  // 当与 ContextMenu 组合使用或因竞态导致 overlay 引用计数失衡时，
+  // body 上 pointer-events:none 可能残留，界面完全无法点击。
+  React.useEffect(() => {
+    return () => {
+      if (document.body.style.pointerEvents === "none") {
+        document.body.style.pointerEvents = "";
+      }
+    };
+  }, []);
+  return (
+    <SheetPortal>
+      <SheetOverlay />
+      <DialogPrimitive.Content
+        ref={ref}
+        className={cn(
+          sheetVariants({ side }),
+          "data-[state=open]:animate-in data-[state=closed]:animate-out",
+          "duration-300",
+          className,
+        )}
+        {...props}
+      >
+        {children}
+        {showCloseButton ? (
+          <DialogPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none">
+            <X className="h-4 w-4" />
+            <span className="sr-only">Close</span>
+          </DialogPrimitive.Close>
+        ) : null}
+      </DialogPrimitive.Content>
+    </SheetPortal>
+  );
+});
 SheetContent.displayName = DialogPrimitive.Content.displayName;
 
 const SheetHeader = ({

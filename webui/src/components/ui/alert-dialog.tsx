@@ -26,21 +26,33 @@ AlertDialogOverlay.displayName = AlertDialogPrimitive.Overlay.displayName;
 const AlertDialogContent = React.forwardRef<
   React.ElementRef<typeof AlertDialogPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Content>
->(({ className, ...props }, ref) => (
-  <AlertDialogPortal>
-    <AlertDialogOverlay />
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <AlertDialogPrimitive.Content
-        ref={ref}
-        className={cn(
-          "grid w-full max-w-lg origin-center gap-4 border bg-background p-6 shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 sm:rounded-lg",
-          className,
-        )}
-        {...props}
-      />
-    </div>
-  </AlertDialogPortal>
-));
+>(({ className, ...props }, ref) => {
+  // 安全网：AlertDialogContent 卸载时确保 body 的 pointer-events 被清理。
+  // 已知场景：从 ContextMenu 中打开 AlertDialog 时，Radix 的 overlay 引用计数
+  // 可能因竞态导致 body 上 pointer-events:none 残留，界面完全无法点击。
+  React.useEffect(() => {
+    return () => {
+      if (document.body.style.pointerEvents === "none") {
+        document.body.style.pointerEvents = "";
+      }
+    };
+  }, []);
+  return (
+    <AlertDialogPortal>
+      <AlertDialogOverlay />
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <AlertDialogPrimitive.Content
+          ref={ref}
+          className={cn(
+            "grid w-full max-w-lg origin-center gap-4 border bg-background p-6 shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 sm:rounded-lg",
+            className,
+          )}
+          {...props}
+        />
+      </div>
+    </AlertDialogPortal>
+  );
+});
 AlertDialogContent.displayName = AlertDialogPrimitive.Content.displayName;
 
 const AlertDialogHeader = ({

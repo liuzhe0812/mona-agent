@@ -3798,6 +3798,13 @@ class WebSocketChannel(BaseChannel):
             "chat_id": msg.chat_id,
             "text": text,
         }
+        # Schedule reminders carry a flag so webui clients can fire a native
+        # system notification in addition to rendering the message bubble.
+        if msg.metadata.get("_schedule_reminder"):
+            payload["schedule_reminder"] = True
+            item_id = msg.metadata.get("schedule_item_id")
+            if item_id:
+                payload["schedule_item_id"] = item_id
         if msg.media:
             payload["media"] = msg.media
             urls: list[dict[str, str]] = []

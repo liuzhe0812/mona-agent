@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { ArrowLeft, X, Rocket } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { HTML_REPORT_PROMPT } from "@/lib/report-prompt";
 
 export interface ActionConfirmResult {
   label: string;
@@ -181,7 +180,7 @@ export function ConfigPanel({
   );
 }
 
-const REPORT_INSTRUCTION = HTML_REPORT_PROMPT;
+const REPORT_INSTRUCTION = `此外，请将结果生成为一份 HTML 报告。先读取 doc-writing-guide skill 了解写作风格和内容结构规范，再读取 html-report skill 了解 HTML 报告的设计规范（主题、布局、图表、字体等）。【重要】不要在聊天回复中输出 HTML 代码。必须使用 generate_report 工具来保存报告，参数：title（报告标题）和 content（完整 HTML 字符串）。在聊天中只需告诉用户报告已生成即可。`;
 
 // ---------------------------------------------------------------------------
 // 1. Health Check

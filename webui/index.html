@@ -37,46 +37,6 @@
         background: #1a1a1a;
         color: #fafafa;
       }
-
-      .boot-splash {
-        display: flex;
-        height: 100%;
-        align-items: center;
-        justify-content: center;
-      }
-
-      .boot-splash-inner {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        color: rgba(255, 255, 255, 0.74);
-        font-size: 14px;
-      }
-
-      html:not(.dark) .boot-splash-inner {
-        color: rgba(10, 10, 10, 0.64);
-      }
-
-      .boot-dot {
-        width: 8px;
-        height: 8px;
-        border-radius: 9999px;
-        background: currentColor;
-        opacity: 0.75;
-        animation: boot-pulse 1s ease-in-out infinite;
-      }
-
-      @keyframes boot-pulse {
-        0%,
-        100% {
-          transform: scale(0.9);
-          opacity: 0.45;
-        }
-        50% {
-          transform: scale(1);
-          opacity: 0.85;
-        }
-      }
     </style>
     <script>
       (function () {
@@ -96,15 +56,12 @@
         var localeKey = "mona.locale";
         var copy = {
           en: {
-            boot: "Loading mona…",
             description: "mona web UI — chat with your mona workspace."
           },
           "zh-CN": {
-            boot: "正在加载 mona…",
             description: "mona Web UI —— 与你的 mona 工作区对话。"
           },
           "zh-TW": {
-            boot: "正在載入 mona…",
             description: "mona Web UI —— 與你的 mona 工作區對話。"
           }
         };
@@ -142,22 +99,13 @@
           document.documentElement.lang = locale;
           var description = document.querySelector('[data-i18n-meta=\"description\"]');
           if (description) description.setAttribute("content", localized.description);
-          var boot = document.querySelector("[data-boot-copy]");
-          if (boot) boot.textContent = localized.boot;
         } catch {}
       })();
     </script>
     <title>mona</title>
   </head>
   <body class="bg-background text-foreground antialiased">
-    <div id="root">
-      <div class="boot-splash">
-        <div class="boot-splash-inner">
-          <span class="boot-dot" aria-hidden="true"></span>
-          <span data-boot-copy>Loading mona…</span>
-        </div>
-      </div>
-    </div>
+    <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

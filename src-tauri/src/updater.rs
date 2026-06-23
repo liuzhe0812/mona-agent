@@ -38,6 +38,12 @@ pub struct UpdateProgress {
     pub message: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateDownloadError {
+    pub message: String,
+    pub download_url: String,
+}
+
 // ---------------------------------------------------------------------------
 // Version detection
 // ---------------------------------------------------------------------------
@@ -99,6 +105,7 @@ pub async fn download_and_verify(
     let client = reqwest::Client::new();
     let mut resp = client
         .get(url)
+        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
         .send()
         .await
         .map_err(|e| format!("Download failed: {}", e))?;
@@ -191,7 +198,7 @@ pub fn install_update(
         },
     );
 
-    extract_tar_gz(package_path, staging_dir)?;
+    extract_update_archive(package_path, staging_dir)?;
 
     #[cfg(windows)]
     let new_exe = staging_dir.join("Mona.exe");
@@ -390,14 +397,31 @@ pub fn cleanup_after_update() -> Result<(), String> {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn extract_tar_gz(archive_path: &Path, dest_dir: &Path) -> Result<(), String> {
+fn extract_update_archive(archive_path: &Path, dest_dir: &Path) -> Result<(), String> {
     let file = fs::File::open(archive_path)
         .map_err(|e| format!("Failed to open archive: {}", e))?;
-    let gz = flate2::read::GzDecoder::new(file);
-    let mut archive = tar::Archive::new(gz);
-    archive
-        .unpack(dest_dir)
-        .map_err(|e| format!("Failed to extract archive: {}", e))?;
+
+    // 同时兼容旧版 gzip 和新版 zstd 压缩包
+    let extension = archive_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
+
+    if extension.eq_ignore_ascii_case("zst") || archive_path.to_string_lossy().ends_with(".tar.zst") {
+        let decoder = zstd::stream::read::Decoder::new(file)
+            .map_err(|e| format!("Failed to create zstd decoder: {}", e))?;
+        let mut archive = tar::Archive::new(decoder);
+        archive
+            .unpack(dest_dir)
+            .map_err(|e| format!("Failed to extract zstd archive: {}", e))?;
+    } else {
+        let gz = flate2::read::GzDecoder::new(file);
+        let mut archive = tar::Archive::new(gz);
+        archive
+            .unpack(dest_dir)
+            .map_err(|e| format!("Failed to extract gzip archive: {}", e))?;
+    }
+
     Ok(())
 }
 
@@ -407,6 +431,40 @@ fn get_install_dir() -> Result<PathBuf, String> {
         .parent()
         .map(|p| p.to_path_buf())
         .ok_or_else(|| "Cannot determine install directory".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_zstd_archive() {
+        // Create a minimal tar.zst in memory and verify extraction handles both formats.
+        let tmp = std::env::temp_dir().join("mona-test-zstd");
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        let archive_path = tmp.join("test.tar.zst");
+        {
+            let file = fs::File::create(&archive_path).unwrap();
+            let mut enc = zstd::stream::write::Encoder::new(file, 3).unwrap();
+            {
+                let mut tar = tar::Builder::new(&mut enc);
+                let mut header = tar::Header::new_gnu();
+                header.set_path("Mona.exe").unwrap();
+                header.set_size(4);
+                header.set_cksum();
+                tar.append(&header, b"exe\n" as &[u8]).unwrap();
+            }
+            enc.finish().unwrap();
+        }
+
+        let out = tmp.join("out");
+        extract_update_archive(&archive_path, &out).unwrap();
+        assert!(out.join("Mona.exe").exists());
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
 }
 
 /// Recursively copy a directory tree.
@@ -464,14 +522,27 @@ pub async fn perform_update(
         .join("mona")
         .join("update");
 
-    let package_path = download_and_verify(
+    let package_path = match download_and_verify(
         &manifest.url,
         &manifest.sha256,
         manifest.size,
         &staging_dir,
         &app_handle,
     )
-    .await?;
+    .await
+    {
+        Ok(path) => path,
+        Err(e) => {
+            let _ = app_handle.emit(
+                "update-download-failed",
+                UpdateDownloadError {
+                    message: e,
+                    download_url: "https://mona.lzfun.vip/".to_string(),
+                },
+            );
+            return Err("Update download failed, user notified".to_string());
+        }
+    };
 
     install_update(&package_path, &state, &app_handle)?;
 

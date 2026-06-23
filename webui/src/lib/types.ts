@@ -371,6 +371,10 @@ export type InboundEvent =
       latency_ms?: number;
       /** Optional structured payload on progress frames (channel-specific). */
       agent_ui?: AgentUIBlob;
+      /** Set when this message is a fired personal schedule reminder;
+       * webui clients use it to trigger a native system notification. */
+      schedule_reminder?: boolean;
+      schedule_item_id?: string;
     }
   | {
       event: "file_edit";

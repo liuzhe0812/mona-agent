@@ -679,6 +679,85 @@ def serve(
 # ============================================================================
 
 
+async def _ensure_email_report_schedules(schedule_service: Any, config: Any) -> None:
+    """启动时确保邮件日报/周报的定时日程项存在。
+
+    仅当 emailIntel.enabled 且 allow_report 为 True 时创建。
+    用 source_module="email_report" 标记，避免重复创建。
+    """
+    email_config = getattr(config, "email_intel", None)
+    if not email_config or not email_config.enabled:
+        return
+    if not getattr(email_config, "allow_report", True):
+        return
+
+    from datetime import datetime, timedelta
+
+    from mona.schedule import ScheduleItem, create_schedule_item_id
+
+    existing = await schedule_service.list_items()
+    has_daily = any(
+        it.source_module == "email_report" and "日报" in it.title
+        for it in existing
+    )
+    has_weekly = any(
+        it.source_module == "email_report" and "周报" in it.title
+        for it in existing
+    )
+
+    tz = getattr(config, "agents", None)
+    tz = getattr(tz, "defaults", None) if tz else None
+    tz = getattr(tz, "timezone", "UTC") if tz else "UTC"
+
+    now = datetime.now()
+
+    if not has_daily:
+        # 每天早上 8:00
+        daily_time = now.replace(hour=8, minute=0, second=0, microsecond=0)
+        if daily_time <= now:
+            daily_time += timedelta(days=1)
+        daily_ms = int(daily_time.timestamp() * 1000)
+
+        daily_item = ScheduleItem(
+            id=create_schedule_item_id(),
+            title="邮件日报",
+            start_at_ms=daily_ms,
+            recurrence="daily",
+            tz=tz,
+            kind="ai_task",
+            ai_message="请使用 email_report 工具生成昨天的邮件日报，并将结果展示给用户。",
+            ai_deliver=True,
+            source_module="email_report",
+            color="blue",
+        )
+        await schedule_service.add_item(daily_item)
+        logger.info("Created daily email report schedule")
+
+    if not has_weekly:
+        # 每周一早上 9:00
+        days_until_monday = (7 - now.weekday()) % 7
+        if days_until_monday == 0 and now.hour >= 9:
+            days_until_monday = 7
+        monday = now + timedelta(days=days_until_monday)
+        monday_time = monday.replace(hour=9, minute=0, second=0, microsecond=0)
+        weekly_ms = int(monday_time.timestamp() * 1000)
+
+        weekly_item = ScheduleItem(
+            id=create_schedule_item_id(),
+            title="邮件周报",
+            start_at_ms=weekly_ms,
+            recurrence="weekly",
+            tz=tz,
+            kind="ai_task",
+            ai_message="请使用 email_report 工具生成本周的邮件周报，并将结果展示给用户。",
+            ai_deliver=True,
+            source_module="email_report",
+            color="blue",
+        )
+        await schedule_service.add_item(weekly_item)
+        logger.info("Created weekly email report schedule")
+
+
 @app.command()
 def gateway(
     port: int | None = typer.Option(None, "--port", "-p", help="Gateway port"),
@@ -744,6 +823,32 @@ def _run_gateway(
     cron_store_path = config.workspace_path / "cron" / "jobs.json"
     cron = CronService(cron_store_path)
 
+    # Create schedule service (personal reminders + AI tasks) sharing the cron service
+    from mona.schedule import ScheduleService
+
+    schedule_store_path = config.workspace_path / "schedule" / "items.json"
+
+    async def _on_schedule_due(item):
+        """Forward personal reminder fires to the message bus."""
+        from mona.bus.events import OutboundMessage
+
+        await _deliver_to_channel(
+            OutboundMessage(
+                channel="api",
+                chat_id=item.source_chat_id or "direct",
+                content=f"⏰ {item.title}"
+                + (f"\n\n{item.description}" if item.description else ""),
+                metadata={"_schedule_reminder": True, "schedule_item_id": item.id},
+            ),
+            record=True,
+        )
+
+    schedule_service = ScheduleService(
+        schedule_store_path,
+        cron_service=cron,
+        notify_callback=_on_schedule_due,
+    )
+
     # Create agent with cron service
     agent = AgentLoop.from_config(
         config, bus,
@@ -751,6 +856,7 @@ def _run_gateway(
         model=provider_snapshot.model,
         context_window_tokens=provider_snapshot.context_window_tokens,
         cron_service=cron,
+        schedule_service=schedule_service,
         session_manager=session_manager,
         image_generation_provider_configs=image_gen_provider_configs(config),
         provider_snapshot_loader=load_provider_snapshot,
@@ -984,48 +1090,47 @@ def _run_gateway(
 
     console.print(f"[green]✓[/green] Heartbeat: every {hb_cfg.interval_s}s")
 
-    async def _health_server(host: str, health_port: int):
-        """Lightweight HTTP health endpoint on the gateway port."""
-        import json as _json
+    async def _http_server(host: str, http_port: int):
+        """Run the aiohttp gateway app (create_app) on the gateway port.
 
-        async def handle(reader, writer):
-            try:
-                data = await asyncio.wait_for(reader.read(4096), timeout=5)
-            except (asyncio.TimeoutError, ConnectionError):
-                writer.close()
-                return
+        This serves /health AND all business routes (/email/*, /api/kb/*,
+        /v1/chat/completions, …) registered in mona.api.server.create_app.
+        The websocket channel port only handles WS + a limited set of GET
+        routes (websockets' process_request cannot read POST bodies reliably).
+        """
+        from aiohttp import web
 
-            request_line = data.split(b"\r\n", 1)[0].decode("utf-8", errors="replace")
-            method, path = "", ""
-            parts = request_line.split(" ")
-            if len(parts) >= 2:
-                method, path = parts[0], parts[1]
+        from mona.api.server import create_app
 
-            if method == "GET" and path == "/health":
-                body = _json.dumps({"status": "ok"})
-                resp = (
-                    f"HTTP/1.0 200 OK\r\n"
-                    f"Content-Type: application/json\r\n"
-                    f"Content-Length: {len(body)}\r\n"
-                    f"\r\n{body}"
-                )
-            else:
-                body = "Not Found"
-                resp = (
-                    f"HTTP/1.0 404 Not Found\r\n"
-                    f"Content-Type: text/plain\r\n"
-                    f"Content-Length: {len(body)}\r\n"
-                    f"\r\n{body}"
-                )
+        app = create_app(
+            agent,
+            model_name=_model_display(config)[0],
+            request_timeout=120.0,
+            schedule_service=schedule_service,
+        )
 
-            writer.write(resp.encode())
-            await writer.drain()
-            writer.close()
+        async def on_startup(_app):
+            await agent._connect_mcp()
+            await schedule_service.start()
+            await _ensure_email_report_schedules(schedule_service, config)
 
-        server = await asyncio.start_server(handle, host, health_port)
-        console.print(f"[green]✓[/green] Health endpoint: http://{host}:{health_port}/health")
-        async with server:
-            await server.serve_forever()
+        async def on_cleanup(_app):
+            schedule_service.stop()
+            await agent.close_mcp()
+
+        app.on_startup.append(on_startup)
+        app.on_cleanup.append(on_cleanup)
+
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, host, http_port)
+        await site.start()
+        console.print(f"[green]✓[/green] HTTP endpoint: http://{host}:{http_port}/health")
+        # Keep the task alive until POST /shutdown sets the app's shutdown_event.
+        try:
+            await app["shutdown_event"].wait()
+        finally:
+            await runner.cleanup()
     # Register Dream system job (always-on, idempotent on restart)
     dream_cfg = config.agents.defaults.dream
     if dream_cfg.model_override:
@@ -1072,7 +1177,7 @@ def _run_gateway(
             tasks = [
                 agent.run(),
                 channels.start_all(),
-                _health_server(config.gateway.host, port),
+                _http_server(config.gateway.host, port),
             ]
             if open_browser_url:
                 tasks.append(_open_browser_when_ready())

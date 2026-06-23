@@ -5,15 +5,21 @@ import {
   Copy,
   Database,
   FileCode2,
+  FilePlus2,
   Languages,
   Loader2,
   Pen,
   PenLine,
+  Pencil,
+  Plus,
   Replace,
   RotateCcw,
   Send,
+  Settings2,
   Sparkles,
   Square,
+  Trash2,
+  Wand2,
 } from "lucide-react";
 
 import { MessageBubble } from "@/components/MessageBubble";
@@ -26,30 +32,48 @@ import type { UIMessage } from "@/lib/types";
 import { useClient } from "@/providers/ClientProvider";
 import { useKnowledgeDialog } from "@/providers/KnowledgeDialogProvider";
 import { exportNoteTempFile, isTauri } from "@/lib/tauri";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
 
 import {
   NOTE_AI_ACTIONS,
   buildAgentActionPrompt,
   buildAgentResultMarkdown,
   buildFreeformAgentPrompt,
+  buildTransformationPrompt,
   createKnowledgeDraftFromCandidate,
   inferNoteActionDisplayLabel,
   parseExtractedKnowledgeCandidates,
   type ExtractedKnowledgeDraft,
 } from "./notes-ai";
 import { ConfirmDialog } from "./NotesDialogs";
-import type { KnowledgeCategory, NoteAiActionId, OperationNote } from "./notes-data";
+import {
+  TRANSFORMATION_VARIABLES,
+  type KnowledgeCategory,
+  type NoteAiActionId,
+  type NoteTransformation,
+  type OperationNote,
+} from "./notes-data";
+import { nowTimestamp } from "./notes-data";
 
 interface NoteAgentPanelProps {
   note: OperationNote | null;
   notebook: import("./notes-data").Notebook | null;
   knowledgeCategories: KnowledgeCategory[];
   knowledgeTags: string[];
+  transformations: NoteTransformation[];
   collapsed?: boolean;
   width?: number;
   onAgentChatIdChange: (chatId: string) => void;
   onApplyResult: (mode: "append" | "replace", markdown: string, messageId: string) => void;
   onSaveKnowledge: (draft: ExtractedKnowledgeDraft) => boolean;
+  onSaveAsNote?: (markdown: string, title: string) => void;
+  onTransformationsChange: (transformations: NoteTransformation[]) => void;
   onClearChat?: () => void;
   onStreamingChange?: (streaming: boolean) => void;
 }
@@ -59,11 +83,14 @@ export function NoteAgentPanel({
   notebook,
   knowledgeCategories,
   knowledgeTags,
+  transformations,
   collapsed: collapsedProp,
   width = 306,
   onAgentChatIdChange,
   onApplyResult,
   onSaveKnowledge,
+  onSaveAsNote,
+  onTransformationsChange,
   onClearChat,
   onStreamingChange,
 }: NoteAgentPanelProps) {
@@ -334,6 +361,15 @@ export function NoteAgentPanel({
     [clearKnowledgeCandidates, knowledgeCategories, knowledgeTags, messages.length, note, sendPromptToAgent],
   );
 
+  const runTransformation = useCallback(
+    async (transformation: NoteTransformation) => {
+      if (!note) return;
+      const prompt = buildTransformationPrompt(transformation, note);
+      await sendPromptToAgent(prompt, transformation.name);
+    },
+    [note, sendPromptToAgent],
+  );
+
   const sendDraft = useCallback(() => {
     if (!note) return;
     const question = draft.trim();
@@ -375,6 +411,76 @@ export function NoteAgentPanel({
     }
   }, []);
 
+  const saveAsNote = useCallback(
+    (message: UIMessage) => {
+      if (!onSaveAsNote) return;
+      const markdown = buildAgentResultMarkdown(message.content);
+      if (!markdown) return;
+      const firstLine = markdown.split("\n").find((line) => line.trim().length > 0) ?? "";
+      const title = firstLine.replace(/^#+\s*/, "").replace(/[*_~`]/g, "").trim().slice(0, 40)
+        || `AI 回复 ${new Date().toLocaleString("zh-CN")}`;
+      onSaveAsNote(markdown, title);
+      setNotice("已保存为新笔记");
+    },
+    [onSaveAsNote],
+  );
+
+  // Transformation management dialog state
+  const [managerOpen, setManagerOpen] = useState(false);
+  const [editingTransformation, setEditingTransformation] = useState<NoteTransformation | null>(null);
+  const [deleteCandidate, setDeleteCandidate] = useState<NoteTransformation | null>(null);
+
+  const handleCreateTransformation = useCallback(() => {
+    setEditingTransformation({
+      id: `transformation-${crypto.randomUUID()}`,
+      name: "",
+      description: "",
+      promptTemplate: "",
+      createdAt: nowTimestamp(),
+      updatedAt: nowTimestamp(),
+    });
+  }, []);
+
+  const handleEditTransformation = useCallback((transformation: NoteTransformation) => {
+    setEditingTransformation({ ...transformation });
+  }, []);
+
+  const handleSaveTransformation = useCallback(
+    (transformation: NoteTransformation) => {
+      const name = transformation.name.trim();
+      if (!name) {
+        setNotice("模板名称不能为空");
+        return;
+      }
+      if (!transformation.promptTemplate.trim()) {
+        setNotice("模板内容不能为空");
+        return;
+      }
+      const updated: NoteTransformation = {
+        ...transformation,
+        name,
+        updatedAt: nowTimestamp(),
+      };
+      const exists = transformations.some((t) => t.id === updated.id);
+      const next = exists
+        ? transformations.map((t) => (t.id === updated.id ? updated : t))
+        : [...transformations, updated];
+      onTransformationsChange(next);
+      setEditingTransformation(null);
+      setNotice(exists ? "模板已更新" : "模板已创建");
+    },
+    [onTransformationsChange, transformations],
+  );
+
+  const handleDeleteTransformation = useCallback(
+    (transformation: NoteTransformation) => {
+      onTransformationsChange(transformations.filter((t) => t.id !== transformation.id));
+      setDeleteCandidate(null);
+      setNotice("模板已删除");
+    },
+    [onTransformationsChange, transformations],
+  );
+
   if (collapsed) {
     return null;
   }
@@ -412,6 +518,13 @@ export function NoteAgentPanel({
         onAction={runAction}
       />
 
+      <TransformationSection
+        transformations={transformations}
+        disabled={!note || creatingChat || isStreaming}
+        onRun={runTransformation}
+        onManage={() => setManagerOpen(true)}
+      />
+
       <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden p-3 scrollbar-thin">
         <AgentChat
           messages={messages}
@@ -422,9 +535,11 @@ export function NoteAgentPanel({
           creatingChat={creatingChat}
           appliedMessageIds={note?.appliedAgentMessageIds ?? []}
           autoAppliedMessageIds={autoAppliedMessageIdsRef.current}
+          canSaveAsNote={!!onSaveAsNote}
           onAppend={(message) => applyResult("append", message)}
           onReplace={(message) => applyResult("replace", message)}
           onCopy={copyResult}
+          onSaveAsNote={saveAsNote}
           onDismissStreamError={dismissStreamError}
         />
       </div>
@@ -482,6 +597,32 @@ export function NoteAgentPanel({
       onConfirm={handleReplaceConfirm}
       onOpenChange={(open) => { if (!open) setReplaceConfirmMessage(null); }}
     />
+
+    <TransformationManagerDialog
+      open={managerOpen}
+      transformations={transformations}
+      onOpenChange={setManagerOpen}
+      onCreate={handleCreateTransformation}
+      onEdit={handleEditTransformation}
+      onDelete={setDeleteCandidate}
+    />
+
+    {editingTransformation ? (
+      <TransformationEditorDialog
+        transformation={editingTransformation}
+        onOpenChange={(open) => { if (!open) setEditingTransformation(null); }}
+        onSave={handleSaveTransformation}
+      />
+    ) : null}
+
+    <ConfirmDialog
+      open={deleteCandidate !== null}
+      title="删除模板"
+      message={`确定删除模板"${deleteCandidate?.name ?? ""}"？此操作不可撤销。`}
+      destructive
+      onConfirm={() => { if (deleteCandidate) handleDeleteTransformation(deleteCandidate); }}
+      onOpenChange={(open) => { if (!open) setDeleteCandidate(null); }}
+    />
     </>
   );
 }
@@ -525,9 +666,11 @@ function AgentChat({
   creatingChat,
   appliedMessageIds,
   autoAppliedMessageIds,
+  canSaveAsNote,
   onAppend,
   onReplace,
   onCopy,
+  onSaveAsNote,
   onDismissStreamError,
 }: {
   messages: UIMessage[];
@@ -538,9 +681,11 @@ function AgentChat({
   creatingChat: boolean;
   appliedMessageIds: string[];
   autoAppliedMessageIds: Set<string>;
+  canSaveAsNote: boolean;
   onAppend: (message: UIMessage) => void;
   onReplace: (message: UIMessage) => void;
   onCopy: (message: UIMessage) => void;
+  onSaveAsNote: (message: UIMessage) => void;
   onDismissStreamError: () => void;
 }) {
   const units = useMemo(() => buildDisplayUnits(messages), [messages]);
@@ -579,9 +724,11 @@ function AgentChat({
                 message={unit.message}
                 appliedMessageIds={appliedMessageIds}
                 autoAppliedMessageIds={autoAppliedMessageIds}
+                canSaveAsNote={canSaveAsNote}
                 onAppend={onAppend}
                 onReplace={onReplace}
                 onCopy={onCopy}
+                onSaveAsNote={onSaveAsNote}
               />
             )}
           </div>
@@ -598,16 +745,20 @@ function SingleMessageWithActions({
   message,
   appliedMessageIds,
   autoAppliedMessageIds,
+  canSaveAsNote,
   onAppend,
   onReplace,
   onCopy,
+  onSaveAsNote,
 }: {
   message: UIMessage;
   appliedMessageIds: string[];
   autoAppliedMessageIds: Set<string>;
+  canSaveAsNote: boolean;
   onAppend: (message: UIMessage) => void;
   onReplace: (message: UIMessage) => void;
   onCopy: (message: UIMessage) => void;
+  onSaveAsNote: (message: UIMessage) => void;
 }) {
   const isKnowledgeResult =
     message.role === "assistant" && !message.isStreaming && isKnowledgeJsonCandidate(message.content);
@@ -625,9 +776,11 @@ function SingleMessageWithActions({
         message={message}
         applied={appliedMessageIds.includes(message.id)}
         autoApplied={autoAppliedMessageIds.has(message.id)}
+        canSaveAsNote={canSaveAsNote}
         onAppend={onAppend}
         onReplace={onReplace}
         onCopy={onCopy}
+        onSaveAsNote={onSaveAsNote}
       />
     </div>
   );
@@ -731,20 +884,287 @@ function QuickActionSection({
   );
 }
 
+function TransformationSection({
+  transformations,
+  disabled,
+  onRun,
+  onManage,
+}: {
+  transformations: NoteTransformation[];
+  disabled: boolean;
+  onRun: (transformation: NoteTransformation) => void;
+  onManage: () => void;
+}) {
+  if (transformations.length === 0) {
+    // Show a compact entry point when there are no custom templates yet.
+    return (
+      <div className="shrink-0 border-b border-border/65 px-2.5 py-2">
+        <button
+          type="button"
+          onClick={onManage}
+          className="flex h-8 w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-border/70 text-[11.5px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        >
+          <Wand2 className="h-3.5 w-3.5" />
+          <span>自定义 AI 模板</span>
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="shrink-0 border-b border-border/65 px-2.5 py-2.5">
+      <div className="mb-1.5 flex items-center justify-between">
+        <span className="text-[10.5px] font-medium uppercase tracking-wide text-muted-foreground">
+          自定义模板
+        </span>
+        <button
+          type="button"
+          onClick={onManage}
+          aria-label="管理模板"
+          title="管理模板"
+          className="grid h-5 w-5 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+        >
+          <Settings2 className="h-3 w-3" />
+        </button>
+      </div>
+      <div className="flex max-h-32 flex-col gap-1 overflow-y-auto scrollbar-thin">
+        {transformations.map((transformation) => (
+          <button
+            key={transformation.id}
+            type="button"
+            disabled={disabled}
+            onClick={() => onRun(transformation)}
+            title={transformation.description || transformation.name}
+            className="flex h-8 items-center gap-2 rounded-lg border border-border/70 bg-background px-2.5 text-left text-[11.5px] font-medium text-foreground/82 transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+          >
+            <Wand2 className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <span className="min-w-0 truncate">{transformation.name}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function TransformationManagerDialog({
+  open,
+  transformations,
+  onOpenChange,
+  onCreate,
+  onEdit,
+  onDelete,
+}: {
+  open: boolean;
+  transformations: NoteTransformation[];
+  onOpenChange: (open: boolean) => void;
+  onCreate: () => void;
+  onEdit: (transformation: NoteTransformation) => void;
+  onDelete: (transformation: NoteTransformation) => void;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-[520px] gap-0 rounded-xl border-border/70 p-0">
+        <DialogTitle className="sr-only">管理 AI 模板</DialogTitle>
+        <div className="flex items-center justify-between border-b border-border/65 px-4 py-3">
+          <h2 className="text-[13px] font-semibold text-foreground">AI 模板管理</h2>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 gap-1 px-2 text-[11.5px]"
+            onClick={onCreate}
+          >
+            <Plus className="h-3.5 w-3.5" />
+            新建模板
+          </Button>
+        </div>
+        <div className="max-h-[420px] min-h-[120px] overflow-y-auto scrollbar-thin">
+          {transformations.length === 0 ? (
+            <div className="flex h-[120px] flex-col items-center justify-center gap-2 text-[12px] text-muted-foreground">
+              <Wand2 className="h-6 w-6 opacity-50" />
+              <span>还没有自定义模板</span>
+              <button
+                type="button"
+                onClick={onCreate}
+                className="text-[11.5px] text-primary hover:underline"
+              >
+                创建第一个模板
+              </button>
+            </div>
+          ) : (
+            <ul className="py-1">
+              {transformations.map((transformation) => (
+                <li
+                  key={transformation.id}
+                  className="group flex items-start gap-2 px-3 py-2 hover:bg-accent/50"
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <Wand2 className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                      <span className="min-w-0 truncate text-[12.5px] font-medium text-foreground">
+                        {transformation.name}
+                      </span>
+                    </div>
+                    {transformation.description ? (
+                      <p className="mt-0.5 line-clamp-1 pl-6 text-[11px] text-muted-foreground">
+                        {transformation.description}
+                      </p>
+                    ) : null}
+                  </div>
+                  <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+                    <button
+                      type="button"
+                      aria-label="编辑"
+                      onClick={() => onEdit(transformation)}
+                      className="grid h-6 w-6 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+                    >
+                      <Pencil className="h-3 w-3" />
+                    </button>
+                    <button
+                      type="button"
+                      aria-label="删除"
+                      onClick={() => onDelete(transformation)}
+                      className="grid h-6 w-6 place-items-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function TransformationEditorDialog({
+  transformation,
+  onOpenChange,
+  onSave,
+}: {
+  transformation: NoteTransformation;
+  onOpenChange: (open: boolean) => void;
+  onSave: (transformation: NoteTransformation) => void;
+}) {
+  const [draft, setDraft] = useState<NoteTransformation>(transformation);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  // Sync when a different transformation is opened
+  useEffect(() => {
+    setDraft(transformation);
+  }, [transformation.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const insertVariable = useCallback((token: string) => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const next = `${draft.promptTemplate.slice(0, start)}${token}${draft.promptTemplate.slice(end)}`;
+    setDraft({ ...draft, promptTemplate: next });
+    // Restore cursor after the inserted token
+    requestAnimationFrame(() => {
+      textarea.focus();
+      const pos = start + token.length;
+      textarea.setSelectionRange(pos, pos);
+    });
+  }, [draft]);
+
+  const handleSave = useCallback(() => {
+    onSave(draft);
+  }, [draft, onSave]);
+
+  const isValid = draft.name.trim().length > 0 && draft.promptTemplate.trim().length > 0;
+
+  return (
+    <Dialog open onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-[600px] gap-0 rounded-xl border-border/70 p-0">
+        <DialogTitle className="border-b border-border/65 px-4 py-3 text-[13px] font-semibold text-foreground">
+          {transformation.name ? `编辑模板：${transformation.name}` : "新建 AI 模板"}
+        </DialogTitle>
+        <div className="flex max-h-[60vh] flex-col gap-3 overflow-y-auto scrollbar-thin p-4">
+          <div className="flex flex-col gap-1.5">
+            <label className="text-[11.5px] font-medium text-foreground">名称</label>
+            <input
+              value={draft.name}
+              onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+              placeholder="例如：生成会议纪要"
+              className="h-8 rounded-lg border border-border/70 bg-background px-2.5 text-[12.5px] outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <label className="text-[11.5px] font-medium text-foreground">描述（可选）</label>
+            <input
+              value={draft.description}
+              onChange={(e) => setDraft({ ...draft, description: e.target.value })}
+              placeholder="简短描述这个模板的用途"
+              className="h-8 rounded-lg border border-border/70 bg-background px-2.5 text-[12.5px] outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <div className="flex items-center justify-between">
+              <label className="text-[11.5px] font-medium text-foreground">Prompt 模板</label>
+              <span className="text-[10.5px] text-muted-foreground">
+                支持变量插入
+              </span>
+            </div>
+            <div className="flex flex-wrap gap-1">
+              {TRANSFORMATION_VARIABLES.map((variable) => (
+                <button
+                  key={variable.token}
+                  type="button"
+                  onClick={() => insertVariable(variable.token)}
+                  title={variable.description}
+                  className="rounded-md border border-border/60 bg-muted/30 px-1.5 py-0.5 text-[10.5px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                >
+                  {variable.label}
+                </button>
+              ))}
+            </div>
+            <textarea
+              ref={textareaRef}
+              value={draft.promptTemplate}
+              onChange={(e) => setDraft({ ...draft, promptTemplate: e.target.value })}
+              placeholder={`请基于以下笔记内容完成任务：\n\n{{note_content}}\n\n任务：...`}
+              rows={10}
+              className="min-h-[160px] w-full resize-y rounded-lg border border-border/70 bg-background px-2.5 py-2 font-mono text-[12px] leading-5 outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            />
+            <p className="text-[10.5px] text-muted-foreground">
+              变量会在执行时替换为当前笔记的实际内容。如果不使用变量，笔记内容会自动附在 prompt 末尾。
+            </p>
+          </div>
+        </div>
+        <DialogFooter className="border-t border-border/65 px-4 py-3">
+          <Button variant="ghost" size="sm" className="h-8" onClick={() => onOpenChange(false)}>
+            取消
+          </Button>
+          <Button size="sm" className="h-8" disabled={!isValid} onClick={handleSave}>
+            保存模板
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function NoteMessageActions({
   message,
   applied,
   autoApplied,
+  canSaveAsNote,
   onAppend,
   onReplace,
   onCopy,
+  onSaveAsNote,
 }: {
   message: UIMessage;
   applied: boolean;
   autoApplied: boolean;
+  canSaveAsNote: boolean;
   onAppend: (message: UIMessage) => void;
   onReplace: (message: UIMessage) => void;
   onCopy: (message: UIMessage) => void;
+  onSaveAsNote: (message: UIMessage) => void;
 }) {
   if (message.kind === "trace") return null;
   if (message.role === "user") return null;
@@ -770,6 +1190,11 @@ function NoteMessageActions({
           <MiniAction label="复制" onClick={() => onCopy(message)}>
             <Copy className="h-3.5 w-3.5" />
           </MiniAction>
+          {canSaveAsNote ? (
+            <MiniAction label="存为笔记" onClick={() => onSaveAsNote(message)}>
+              <FilePlus2 className="h-3.5 w-3.5" />
+            </MiniAction>
+          ) : null}
         </>
       ) : null}
       {canApply ? (
@@ -783,6 +1208,11 @@ function NoteMessageActions({
           <MiniAction label="复制" onClick={() => onCopy(message)}>
             <Copy className="h-3.5 w-3.5" />
           </MiniAction>
+          {canSaveAsNote ? (
+            <MiniAction label="存为笔记" onClick={() => onSaveAsNote(message)}>
+              <FilePlus2 className="h-3.5 w-3.5" />
+            </MiniAction>
+          ) : null}
         </>
       ) : null}
     </div>

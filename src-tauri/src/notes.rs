@@ -23,6 +23,26 @@ pub struct NotesState {
     pub active_note_id: Option<String>,
     #[serde(default)]
     pub active_knowledge_category_id: String,
+    /// User-defined note AI transformation templates.
+    #[serde(default)]
+    pub transformations: Vec<NoteTransformation>,
+}
+
+/// A user-defined AI transformation template for notes.
+/// The prompt template supports variables: {{note_title}}, {{note_content}},
+/// {{note_tags}}, {{note_source}}.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteTransformation {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    pub prompt_template: String,
+    #[serde(default)]
+    pub icon: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -55,6 +75,14 @@ pub struct OperationNote {
     pub agent_chat_id: Option<String>,
     #[serde(default)]
     pub applied_agent_message_ids: Vec<String>,
+    /// Context level controls how this note participates in knowledge-base
+    /// retrieval: "full" (default) | "summary" | "none".
+    #[serde(default = "default_context_level")]
+    pub context_level: String,
+}
+
+fn default_context_level() -> String {
+    "full".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -225,6 +253,12 @@ fn initialize_schema(conn: &Connection) -> Result<(), String> {
         "TEXT NOT NULL DEFAULT '[]'",
     )?;
     ensure_column(conn, "notes", "plain_text", "TEXT")?;
+    ensure_column(
+        conn,
+        "notes",
+        "context_level",
+        "TEXT NOT NULL DEFAULT 'full'",
+    )?;
 
     // Migrate FTS5 table: if old notes_fts has column "note_id", rebuild it
     migrate_fts_if_needed(conn)
@@ -414,6 +448,8 @@ pub async fn notes_load_state() -> Result<NotesState, String> {
         })
         .unwrap_or(default_knowledge_category_id);
 
+    let transformations = load_transformations(&conn)?;
+
     Ok(NotesState {
         notebooks,
         notes,
@@ -422,7 +458,17 @@ pub async fn notes_load_state() -> Result<NotesState, String> {
         active_notebook_id,
         active_note_id,
         active_knowledge_category_id,
+        transformations,
     })
+}
+
+fn load_transformations(conn: &Connection) -> Result<Vec<NoteTransformation>, String> {
+    let raw = match read_state_value(conn, "transformations")? {
+        Some(value) if !value.is_empty() => value,
+        _ => return Ok(Vec::new()),
+    };
+    serde_json::from_str::<Vec<NoteTransformation>>(&raw)
+        .map_err(|e| format!("Failed to parse transformations JSON: {}", e))
 }
 
 #[tauri::command]
@@ -465,12 +511,17 @@ pub async fn notes_save_state(state: NotesState) -> Result<(), String> {
         let tags_json = to_json_string(&note.tags)?;
         let content_json = note.content_json.as_ref().map(to_json_string).transpose()?;
         let applied_ids_json = to_json_string(&note.applied_agent_message_ids)?;
+        let context_level = if note.context_level.is_empty() {
+            "full".to_string()
+        } else {
+            note.context_level.clone()
+        };
         tx.execute(
             "INSERT INTO notes (
                 id, notebook_id, title, preview, updated_at_label, source_kind, source_label,
                 tags_json, content_markdown, content_json, plain_text, agent_chat_id,
-                applied_agent_message_ids_json, created_at, modified_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?14)",
+                applied_agent_message_ids_json, context_level, created_at, modified_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?15)",
             params![
                 &note.id,
                 &note.notebook_id,
@@ -485,6 +536,7 @@ pub async fn notes_save_state(state: NotesState) -> Result<(), String> {
                 &note.plain_text,
                 &note.agent_chat_id,
                 &applied_ids_json,
+                &context_level,
                 &now,
             ],
         )
@@ -544,6 +596,14 @@ pub async fn notes_save_state(state: NotesState) -> Result<(), String> {
     )
     .map_err(|e| format!("Failed to save active knowledge category: {}", e))?;
 
+    let transformations_json = serde_json::to_string(&state.transformations)
+        .map_err(|e| format!("Failed to serialize transformations: {}", e))?;
+    tx.execute(
+        "INSERT INTO app_state (key, value) VALUES ('transformations', ?1)",
+        params![&transformations_json],
+    )
+    .map_err(|e| format!("Failed to save transformations: {}", e))?;
+
     tx.execute("INSERT INTO notes_fts(notes_fts) VALUES('rebuild')", [])
         .map_err(|e| format!("Failed to rebuild FTS index: {}", e))?;
 
@@ -595,6 +655,7 @@ fn load_notes(conn: &Connection) -> Result<Vec<OperationNote>, String> {
         plain_text: Option<String>,
         agent_chat_id: Option<String>,
         applied_agent_message_ids_json: String,
+        context_level: String,
     }
 
     let mut stmt = conn
@@ -602,7 +663,7 @@ fn load_notes(conn: &Connection) -> Result<Vec<OperationNote>, String> {
             "SELECT
                 id, notebook_id, title, preview, updated_at_label, source_kind, source_label,
                 tags_json, content_markdown, content_json, plain_text, agent_chat_id,
-                applied_agent_message_ids_json
+                applied_agent_message_ids_json, context_level
              FROM notes
              ORDER BY modified_at DESC, id ASC",
         )
@@ -623,6 +684,7 @@ fn load_notes(conn: &Connection) -> Result<Vec<OperationNote>, String> {
                 plain_text: row.get(10)?,
                 agent_chat_id: row.get(11)?,
                 applied_agent_message_ids_json: row.get(12)?,
+                context_level: row.get::<_, Option<String>>(13)?.unwrap_or_else(|| "full".to_string()),
             })
         })
         .map_err(|e| format!("Failed to query notes: {}", e))?;
@@ -660,6 +722,7 @@ fn load_notes(conn: &Connection) -> Result<Vec<OperationNote>, String> {
                 plain_text: row.plain_text,
                 agent_chat_id: row.agent_chat_id,
                 applied_agent_message_ids,
+                context_level: row.context_level,
             })
         })
         .collect()
@@ -1016,6 +1079,10 @@ pub struct NoteSearchResult {
     pub title: String,
     pub snippet: String,
     pub rank: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notebook_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notebook_name: Option<String>,
 }
 
 #[tauri::command]
@@ -1028,19 +1095,42 @@ pub async fn notes_search(
     let limit = limit.unwrap_or(5);
 
     // Try FTS5 search first
-    let fts_results = search_fts(&conn, &notebook_id, &query, limit)?;
+    let fts_results = search_fts(&conn, Some(&notebook_id), &query, limit)?;
 
-    if !fts_results.is_empty() {
-        return Ok(fts_results);
-    }
+    let results = if !fts_results.is_empty() {
+        fts_results
+    } else {
+        // Fallback to LIKE search for better Chinese support
+        search_like(&conn, Some(&notebook_id), &query, limit)?
+    };
 
-    // Fallback to LIKE search for better Chinese support
-    search_like(&conn, &notebook_id, &query, limit)
+    apply_context_levels(&conn, results)
+}
+
+#[tauri::command]
+pub async fn notes_search_all(
+    query: String,
+    limit: Option<usize>,
+) -> Result<Vec<NoteSearchResult>, String> {
+    let conn = open_notes_db()?;
+    let limit = limit.unwrap_or(20);
+
+    // Try FTS5 search first across all notebooks
+    let fts_results = search_fts(&conn, None, &query, limit)?;
+
+    let results = if !fts_results.is_empty() {
+        fts_results
+    } else {
+        // Fallback to LIKE search
+        search_like(&conn, None, &query, limit)?
+    };
+
+    apply_context_levels(&conn, results)
 }
 
 fn search_fts(
     conn: &Connection,
-    notebook_id: &str,
+    notebook_id: Option<&str>,
     query: &str,
     limit: usize,
 ) -> Result<Vec<NoteSearchResult>, String> {
@@ -1056,59 +1146,204 @@ fn search_fts(
         return Ok(vec![]);
     }
 
-    let sql = format!(
-        "SELECT id, title, snippet(notes_fts, 3, '⟨', '⟩', '...', 64) as snippet, rank \
-         FROM notes_fts \
-         WHERE notes_fts MATCH ?1 AND notebook_id = ?2 \
-         ORDER BY rank \
-         LIMIT {}",
-        limit
-    );
+    // FTS5 virtual tables cannot be joined directly; query FTS first, then
+    // resolve notebook names from the notebooks table.
+    let fts_sql = match notebook_id {
+        Some(_) => format!(
+            "SELECT id, title, snippet(notes_fts, 3, '⟨', '⟩', '...', 64) as snippet, rank, notebook_id \
+             FROM notes_fts \
+             WHERE notes_fts MATCH ?1 AND notebook_id = ?2 \
+             ORDER BY rank \
+             LIMIT {}",
+            limit
+        ),
+        None => format!(
+            "SELECT id, title, snippet(notes_fts, 3, '⟨', '⟩', '...', 64) as snippet, rank, notebook_id \
+             FROM notes_fts \
+             WHERE notes_fts MATCH ?1 \
+             ORDER BY rank \
+             LIMIT {}",
+            limit
+        ),
+    };
 
-    let mut stmt = conn.prepare(&sql).map_err(|e| format!("Search prepare failed: {}", e))?;
-    let results = stmt
-        .query_map(params![&fts_query, &notebook_id], |row| {
-            Ok(NoteSearchResult {
-                note_id: row.get(0)?,
-                title: row.get(1)?,
-                snippet: row.get(2)?,
-                rank: row.get(3)?,
+    let mut stmt = conn.prepare(&fts_sql).map_err(|e| format!("Search prepare failed: {}", e))?;
+    let raw_rows: Vec<(String, String, String, f64, Option<String>)> = match notebook_id {
+        Some(nid) => stmt
+            .query_map(params![&fts_query, nid], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                ))
             })
-        })
-        .map_err(|e| format!("Search query failed: {}", e))?
-        .filter_map(|r| r.ok())
-        .collect();
+            .map_err(|e| format!("Search query failed: {}", e))?
+            .filter_map(|r| r.ok())
+            .collect(),
+        None => stmt
+            .query_map(params![&fts_query], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                ))
+            })
+            .map_err(|e| format!("Search query failed: {}", e))?
+            .filter_map(|r| r.ok())
+            .collect(),
+    };
 
-    Ok(results)
+    if raw_rows.is_empty() {
+        return Ok(vec![]);
+    }
+
+    // Batch-resolve notebook names
+    let mut notebook_names: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let unique_ids: Vec<&str> = raw_rows
+        .iter()
+        .filter_map(|r| r.4.as_deref())
+        .filter(|id| !notebook_names.contains_key(*id))
+        .collect();
+    if !unique_ids.is_empty() {
+        let placeholders = unique_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!("SELECT id, name FROM notebooks WHERE id IN ({})", placeholders);
+        let mut nb_stmt = conn.prepare(&sql).map_err(|e| format!("Notebook lookup failed: {}", e))?;
+        let nb_rows = nb_stmt
+            .query_map(rusqlite::params_from_iter(unique_ids.iter()), |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|e| format!("Notebook lookup query failed: {}", e))?;
+        for nb_row in nb_rows.flatten() {
+            notebook_names.insert(nb_row.0, nb_row.1);
+        }
+    }
+
+    Ok(raw_rows
+        .into_iter()
+        .map(|(note_id, title, snippet, rank, nb_id)| NoteSearchResult {
+            note_id,
+            title,
+            snippet,
+            rank,
+            notebook_id: nb_id.clone(),
+            notebook_name: nb_id.and_then(|id| notebook_names.get(&id).cloned()),
+        })
+        .collect())
+}
+
+/// Look up `context_level` and `preview` for a batch of note IDs from the notes
+/// table. Returns a map keyed by note_id.
+fn load_note_context_levels(
+    conn: &Connection,
+    note_ids: &[String],
+) -> Result<std::collections::HashMap<String, (String, String)>, String> {
+    let mut map = std::collections::HashMap::new();
+    if note_ids.is_empty() {
+        return Ok(map);
+    }
+    let placeholders = note_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let sql = format!(
+        "SELECT id, context_level, preview FROM notes WHERE id IN ({})",
+        placeholders
+    );
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(|e| format!("Context level lookup failed: {}", e))?;
+    let rows = stmt
+        .query_map(rusqlite::params_from_iter(note_ids.iter()), |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?.unwrap_or_else(|| "full".to_string()),
+                row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+            ))
+        })
+        .map_err(|e| format!("Context level query failed: {}", e))?;
+    for row in rows.flatten() {
+        map.insert(row.0, (row.1, row.2));
+    }
+    Ok(map)
+}
+
+/// Apply context-level filtering and truncation to search results.
+/// - `none`: drop the result entirely
+/// - `summary`: replace snippet with the note's preview (short summary)
+/// - `full`: keep as-is
+fn apply_context_levels(
+    conn: &Connection,
+    results: Vec<NoteSearchResult>,
+) -> Result<Vec<NoteSearchResult>, String> {
+    if results.is_empty() {
+        return Ok(results);
+    }
+    let note_ids: Vec<String> = results.iter().map(|r| r.note_id.clone()).collect();
+    let context_map = load_note_context_levels(conn, &note_ids)?;
+
+    Ok(results
+        .into_iter()
+        .filter_map(|result| {
+            let (context_level, preview) = context_map.get(&result.note_id).cloned().unwrap_or_else(|| {
+                ("full".to_string(), String::new())
+            });
+            match context_level.as_str() {
+                "none" => None,
+                "summary" => Some(NoteSearchResult {
+                    snippet: if preview.is_empty() { result.snippet } else { preview.clone() },
+                    ..result
+                }),
+                _ => Some(result),
+            }
+        })
+        .collect())
 }
 
 fn search_like(
     conn: &Connection,
-    notebook_id: &str,
+    notebook_id: Option<&str>,
     query: &str,
     limit: usize,
 ) -> Result<Vec<NoteSearchResult>, String> {
     let pattern = format!("%{}%", query.replace('%', "\\%").replace('_', "\\_"));
-    let sql = format!(
-        "SELECT id, title, \
-         substr(content_markdown, 1, 200) as snippet \
-         FROM notes \
-         WHERE notebook_id = ?1 AND (title LIKE ?2 ESCAPE '\\' OR content_markdown LIKE ?2 ESCAPE '\\') \
-         ORDER BY modified_at DESC \
-         LIMIT {}",
-        limit
-    );
+    let (sql, params): (String, Vec<Box<dyn rusqlite::ToSql>>) = match notebook_id {
+        Some(nid) => (
+            format!(
+                "SELECT n.id, n.title, substr(n.content_markdown, 1, 200) as snippet, n.notebook_id, nb.name as notebook_name \
+                 FROM notes n LEFT JOIN notebooks nb ON nb.id = n.notebook_id \
+                 WHERE n.notebook_id = ?1 AND (n.title LIKE ?2 ESCAPE '\\' OR n.content_markdown LIKE ?2 ESCAPE '\\') \
+                 ORDER BY n.modified_at DESC \
+                 LIMIT {}",
+                limit
+            ),
+            vec![Box::new(nid.to_string()), Box::new(pattern)],
+        ),
+        None => (
+            format!(
+                "SELECT n.id, n.title, substr(n.content_markdown, 1, 200) as snippet, n.notebook_id, nb.name as notebook_name \
+                 FROM notes n LEFT JOIN notebooks nb ON nb.id = n.notebook_id \
+                 WHERE n.title LIKE ?1 ESCAPE '\\' OR n.content_markdown LIKE ?1 ESCAPE '\\' \
+                 ORDER BY n.modified_at DESC \
+                 LIMIT {}",
+                limit
+            ),
+            vec![Box::new(pattern)],
+        ),
+    };
 
     let mut stmt = conn
         .prepare(&sql)
         .map_err(|e| format!("LIKE search prepare failed: {}", e))?;
     let results = stmt
-        .query_map(params![&notebook_id, &pattern], |row| {
+        .query_map(rusqlite::params_from_iter(params.iter()), |row| {
             Ok(NoteSearchResult {
                 note_id: row.get(0)?,
                 title: row.get(1)?,
                 snippet: row.get(2)?,
                 rank: 0.0,
+                notebook_id: row.get::<_, Option<String>>(3)?,
+                notebook_name: row.get::<_, Option<String>>(4)?,
             })
         })
         .map_err(|e| format!("LIKE search query failed: {}", e))?

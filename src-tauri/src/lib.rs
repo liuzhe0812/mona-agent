@@ -1,11 +1,14 @@
 mod browser;
+mod contacts;
 mod db;
+mod email;
 mod gateway;
 mod ipc_bridge;
 mod license;
 mod notes;
 mod python;
 mod quick_ask;
+mod schedule_notifier;
 mod settings;
 mod terminal;
 mod tray;
@@ -338,6 +341,8 @@ pub fn run() {
     let gateway_state = GatewayState::new();
     let terminal_state = terminal::TerminalState::new();
     let db_state = db::DbState::new();
+    let email_state = email::EmailState::new();
+    let contacts_state = contacts::ContactsState::new();
 
     let terminal_state_for_bridge = terminal_state.clone();
 
@@ -377,12 +382,16 @@ pub fn run() {
                     }
                 })
                 .build())
+        .plugin(tauri_plugin_notification::init())
         .manage(gateway_state.clone())
         .manage(terminal_state)
         .manage(db_state)
+        .manage(email_state)
+        .manage(contacts_state)
         .manage(quick_ask::QuickAskShortcutState::default())
         .manage(browser::BrowserState::new())
         .manage(PendingMdFiles::default())
+        .manage(tray::PendingMailNavigation::default())
         .invoke_handler(tauri::generate_handler![
             get_settings,
             update_settings,
@@ -406,6 +415,7 @@ pub fn run() {
             notes::notes_export_temp,
             notes::notes_create_from_chat,
             notes::notes_search,
+            notes::notes_search_all,
             notes::notes_save_image,
             notes::notes_get_assets_dir,
             notes::notes_read_image,
@@ -498,6 +508,49 @@ pub fn run() {
             db::commands::db_list_connections,
             db::commands::db_save_connections,
             db::commands::db_load_connections,
+            email::email_list_accounts,
+            email::email_add_account,
+            email::email_delete_account,
+            email::email_get_messages,
+            email::email_mark_read,
+            email::email_toggle_starred,
+            email::email_move_message,
+            email::email_fetch_attachment,
+            email::email_save_draft,
+            email::email_test_connection,
+            email::email_open_compose_window,
+            email::email_close_compose_window,
+            email::email_list_folders,
+            email::email_get_folders,
+            email::email_sync_folders,
+            email::email_unread_counts,
+            email::email_statistics,
+            email::email_create_folder,
+            email::email_sync,
+            email::email_send,
+            email::email_delete_message,
+            email::email_mark_all_read,
+            email::email_empty_folder,
+            email::email_get_decrypted_password,
+            email::email_get_analysis,
+            email::email_save_analysis,
+            email::email_analyze,
+            email::email_search_messages,
+            email::email_batch_action,
+            email::email_start_idle,
+            email::email_stop_idle,
+            contacts::contact_list,
+            contacts::contact_search,
+            contacts::contact_add,
+            contacts::contact_update,
+            contacts::contact_delete,
+            contacts::contact_clear_account,
+            contacts::contact_get_sync_state,
+            contacts::contact_save_sync_state,
+            contacts::contact_sync,
+            contacts::contact_test_carddav,
+            contacts::contact_sync_eas,
+            contacts::contact_test_eas,
             license::get_machine_id,
             license::check_license,
             license::import_license,
@@ -538,6 +591,9 @@ pub fn run() {
             browser::storage::browser_clear_history,
             browser::storage::browser_clear_cache,
             browser::storage::browser_search_suggestions,
+            tray::set_tray_unread_count,
+            tray::send_mail_notification,
+            tray::check_and_clear_pending_mail,
         ])
         .setup(move |app| {
             // 设置高分辨率窗口图标，确保任务栏在高 DPI 下清晰
@@ -601,6 +657,12 @@ pub fn run() {
                                 {
                                     Ok(()) => {
                                         log::info!("Gateway ready on port {}", actual_port);
+                                        // Start polling for schedule reminders to fire
+                                        // native system toasts independent of webview state.
+                                        schedule_notifier::start_polling(
+                                            app_handle_clone.clone(),
+                                            actual_port,
+                                        );
                                     }
                                     Err(e) => {
                                         log::error!("Gateway failed to start: {}", e);

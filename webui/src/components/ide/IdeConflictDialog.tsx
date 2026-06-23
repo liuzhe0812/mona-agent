@@ -12,10 +12,10 @@ export function IdeConflictDialog() {
   const resolveConflict = useIdeStore((s) => s.resolveConflict);
   const clearConflict = () => useIdeStore.setState({ conflictState: null });
 
-  if (!conflict) return null;
-
+  // 不能在此 return null：Radix Dialog 需要始终挂载以正确执行关闭动画
+  // 和 body 样式清理（pointer-events）。Dialog open={!!conflict} 控制可见性。
   return (
-    <Dialog open onOpenChange={clearConflict}>
+    <Dialog open={!!conflict} onOpenChange={(open) => !open && clearConflict()}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>文件已被外部修改</DialogTitle>
@@ -29,11 +29,11 @@ export function IdeConflictDialog() {
           </Button>
           <Button
             variant="secondary"
-            onClick={() => resolveConflict(conflict.tabId, "discard")}
+            onClick={() => conflict && resolveConflict(conflict.tabId, "discard")}
           >
             放弃本地修改
           </Button>
-          <Button onClick={() => resolveConflict(conflict.tabId, "overwrite")}>
+          <Button onClick={() => conflict && resolveConflict(conflict.tabId, "overwrite")}>
             覆盖远程
           </Button>
         </div>

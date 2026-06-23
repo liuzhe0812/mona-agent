@@ -10,7 +10,7 @@ from app.database import get_db
 from app.email import send_register_code_email, send_reset_code_email
 from app.errors import AuthError
 from app.middleware import limiter
-from app.models import PasswordResetCode, UsedDeviceTrial, User
+from app.models import AppConfig, PasswordResetCode, UsedDeviceTrial, User
 from app.schemas import (
     ForgotPasswordRequest,
     LoginRequest,
@@ -21,6 +21,45 @@ from app.schemas import (
 )
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+def _get_active_promo_trial_days(db: Session) -> int | None:
+    """Return promo trial days if the registration promo is currently active, else None."""
+    row = db.query(AppConfig).filter(AppConfig.key == "promo_trial_enabled").first()
+    if not row or row.value != "true":
+        return None
+
+    days_row = db.query(AppConfig).filter(AppConfig.key == "promo_trial_days").first()
+    if not days_row:
+        return None
+    try:
+        days = int(days_row.value)
+    except (ValueError, TypeError):
+        return None
+    if days <= 0:
+        return None
+
+    now = datetime.now(timezone.utc)
+    start_row = db.query(AppConfig).filter(AppConfig.key == "promo_trial_start_at").first()
+    end_row = db.query(AppConfig).filter(AppConfig.key == "promo_trial_end_at").first()
+
+    if start_row and start_row.value:
+        try:
+            start = datetime.fromisoformat(start_row.value)
+            if now < start:
+                return None
+        except ValueError:
+            pass
+
+    if end_row and end_row.value:
+        try:
+            end = datetime.fromisoformat(end_row.value)
+            if now > end:
+                return None
+        except ValueError:
+            pass
+
+    return days
 
 
 @router.post("/send-register-code")
@@ -104,11 +143,14 @@ def register(
             bound_device_fingerprint=device_fingerprint or None,
         )
     else:
+        # Determine trial days: promo campaign overrides default
+        promo_days = _get_active_promo_trial_days(db)
+        trial_days = promo_days if promo_days else settings.trial_days
         user = User(
             email=body.email,
             password_hash=hash_password(body.password),
             trial_started_at=now,
-            trial_expires_at=now + timedelta(days=settings.trial_days),
+            trial_expires_at=now + timedelta(days=trial_days),
             bound_device_fingerprint=device_fingerprint or None,
         )
 

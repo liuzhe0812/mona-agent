@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Download,
+  Globe,
   Plus,
   Search,
   X,
@@ -13,6 +14,7 @@ import { saveMarkdownFile } from "@/lib/tauri";
 import { useLicense } from "@/hooks/useLicense";
 import { useKbStore } from "@/stores/kb-store";
 
+import { GlobalSearchDialog } from "./GlobalSearchDialog";
 import { KnowledgeView } from "./KnowledgeView";
 import { ConfirmDialog, PromptDialog } from "./NotesDialogs";
 import { NoteAgentPanel } from "./NoteAgentPanel";
@@ -26,6 +28,7 @@ import type {
   KnowledgeLinkedNote,
   Notebook,
   NoteSourceKind,
+  NoteTransformation,
   OperationNote,
 } from "./notes-data";
 import { nowTimestamp } from "./notes-data";
@@ -54,6 +57,7 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
   const [notes, setNotes] = useState<OperationNote[]>([]);
   const [knowledgeCategories, setKnowledgeCategories] = useState<KnowledgeCategory[]>([]);
   const [knowledgeItems, setKnowledgeItems] = useState<KnowledgeItem[]>([]);
+  const [transformations, setTransformations] = useState<NoteTransformation[]>([]);
   const [activeNoteId, setActiveNoteId] = useState<string | null>(null);
   const [activeKnowledgeCategoryId, setActiveKnowledgeCategoryId] = useState("");
   const [activeKnowledgeItemId, setActiveKnowledgeItemId] = useState<string | null>(null);
@@ -61,6 +65,7 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
   const [viewMode, setViewMode] = useState<"notes" | "knowledge">("notes");
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [storageReady, setStorageReady] = useState(false);
   const [storageError, setStorageError] = useState<string | null>(null);
@@ -150,6 +155,7 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
         setNotes(nextState.notes);
         setKnowledgeCategories(nextState.knowledgeCategories);
         setKnowledgeItems(nextState.knowledgeItems);
+        setTransformations(nextState.transformations ?? []);
         setActiveNotebookId(nextState.activeNotebookId);
         setActiveNoteId(nextState.activeNoteId);
         setActiveKnowledgeCategoryId(nextState.activeKnowledgeCategoryId);
@@ -180,6 +186,7 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
       notes,
       knowledgeCategories,
       knowledgeItems,
+      transformations,
       activeNotebookId,
       activeNoteId,
       activeKnowledgeCategoryId,
@@ -213,6 +220,7 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
     notes,
     storageError,
     storageReady,
+    transformations,
   ]);
 
   useEffect(() => {
@@ -220,6 +228,37 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
     const timer = window.setTimeout(() => setNotice(null), 1800);
     return () => window.clearTimeout(timer);
   }, [notice]);
+
+  // Global search shortcut: Ctrl/Cmd + K
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setGlobalSearchOpen(true);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
+  const openNoteFromGlobalSearch = useCallback(
+    (noteId: string, notebookId?: string) => {
+      const note = notes.find((item) => item.id === noteId);
+      if (!note) {
+        setNotice("笔记不存在");
+        return;
+      }
+      if (notebookId) {
+        setActiveNotebookId(notebookId);
+      } else {
+        setActiveNotebookId(note.notebookId);
+      }
+      setActiveNoteId(note.id);
+      setSearchQuery("");
+      setViewMode("notes");
+    },
+    [notes],
+  );
 
   // Sync notebook knowledge bases to kb-store for chat selector
   const setNotebookKbList = useKbStore((s) => s.setNotebookKbList);
@@ -757,6 +796,37 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
     [activeNote, updateActiveNote],
   );
 
+  const saveAgentResultAsNote = useCallback(
+    (markdown: string, title: string) => {
+      if (!activeNotebook) {
+        setNotice("请先创建笔记本");
+        return;
+      }
+      let nextNote: OperationNote;
+      try {
+        nextNote = createBlankNote(activeNotebook.id, "agent");
+      } catch (error) {
+        setNotice(error instanceof Error ? error.message : "新建笔记失败");
+        return;
+      }
+      const trimmedMarkdown = markdown.trim();
+      const previewText = trimmedMarkdown.replace(/[#*`_~>\-]/g, "").replace(/\s+/g, " ").trim();
+      nextNote = {
+        ...nextNote,
+        title,
+        contentMarkdown: trimmedMarkdown,
+        preview: previewText.slice(0, 46) || "AI 生成笔记",
+        source: { kind: "agent", label: "AI 助手" },
+        tags: ["AI生成"],
+      };
+      setNotes((current) => [nextNote, ...current]);
+      setActiveNoteId(nextNote.id);
+      setSearchQuery("");
+      setNotice("已保存为新笔记");
+    },
+    [activeNotebook],
+  );
+
   const handleDragStart = useCallback(
     (event: React.MouseEvent) => {
       event.preventDefault();
@@ -954,6 +1024,12 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
             >
               <Search className="h-3.5 w-3.5" />
             </IconButton>
+            <IconButton
+              label="全局搜索 (Ctrl+K)"
+              onClick={() => setGlobalSearchOpen(true)}
+            >
+              <Globe className="h-3.5 w-3.5" />
+            </IconButton>
             <IconButton label="导出 Markdown" disabled={!activeNote} onClick={exportActiveNote}>
               <Download className="h-3.5 w-3.5" />
             </IconButton>
@@ -1014,6 +1090,7 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
               {activeNote ? (
                 <NoteEditor
                   note={activeNote}
+                  notebook={activeNotebook}
                   saveStatus={saveStatus}
                   knowledgeReturnTitle={
                     shouldShowKnowledgeReturn ? knowledgeReturnItem?.title : undefined
@@ -1030,6 +1107,7 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
                       preview: next.plainText.slice(0, 46) || "空白笔记",
                     })
                   }
+                  onContextLevelChange={(contextLevel) => updateActiveNote({ contextLevel })}
                 />
               ) : (
                 <div className="flex flex-1 items-center justify-center text-[13px] text-muted-foreground">
@@ -1053,11 +1131,14 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
         notebook={activeNotebook}
         knowledgeCategories={knowledgeCategories}
         knowledgeTags={knowledgeTags}
+        transformations={transformations}
         collapsed={agentPanelCollapsed}
         width={agentPanelWidth}
         onAgentChatIdChange={(agentChatId) => updateActiveNote({ agentChatId })}
         onApplyResult={applyAiResult}
         onSaveKnowledge={saveKnowledgeFromAgent}
+        onSaveAsNote={saveAgentResultAsNote}
+        onTransformationsChange={setTransformations}
         onClearChat={() => updateActiveNote({ agentChatId: undefined })}
         onStreamingChange={setAgentStreaming}
       />
@@ -1077,6 +1158,11 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
         destructive
         onConfirm={handleConfirmAction}
         onOpenChange={(open) => { if (!open) setConfirmState(null); }}
+      />
+      <GlobalSearchDialog
+        open={globalSearchOpen}
+        onOpenChange={setGlobalSearchOpen}
+        onSelectNote={openNoteFromGlobalSearch}
       />
     </div>
   );
@@ -1268,6 +1354,7 @@ function serializeNotesState(state: {
   notes: OperationNote[];
   knowledgeCategories: KnowledgeCategory[];
   knowledgeItems: KnowledgeItem[];
+  transformations: NoteTransformation[];
   activeNotebookId: string;
   activeNoteId: string | null;
   activeKnowledgeCategoryId: string;

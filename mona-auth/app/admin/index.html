@@ -114,6 +114,7 @@
             <div style="display:flex;gap:8px;align-items:center">
                 <button onclick="switchTab('users')" id="tab-users" class="tab-btn active">用户</button>
                 <button onclick="switchTab('pricing')" id="tab-pricing" class="tab-btn">价格配置</button>
+                <button onclick="switchTab('promo')" id="tab-promo" class="tab-btn">注册活动</button>
                 <button onclick="switchTab('notifications')" id="tab-notifications" class="tab-btn">通知管理</button>
                 <button onclick="doLogout()">退出</button>
             </div>
@@ -185,6 +186,41 @@
 
                 <div style="margin-top:20px;display:flex;justify-content:flex-end">
                     <button class="btn btn-primary" onclick="savePricing()">保存配置</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="section-promo" class="tab-section">
+            <div class="users">
+                <div class="card">
+                    <div class="card-header"><h3>注册赠试用活动</h3></div>
+                    <div class="card-body">
+                        <p style="color:#6b7280;font-size:13px;margin-bottom:16px">活动开启后，新注册用户（设备首次注册）将获得活动设定的试用天数。活动时间外或未开启时，使用默认 31 天试用。</p>
+                        <div class="form-grid">
+                            <div class="form-field">
+                                <label>启用活动</label>
+                                <select id="promoEnabled">
+                                    <option value="false">关闭</option>
+                                    <option value="true">开启</option>
+                                </select>
+                            </div>
+                            <div class="form-field">
+                                <label>试用天数</label>
+                                <input type="number" id="promoDays" min="1" max="365" placeholder="183">
+                            </div>
+                            <div class="form-field">
+                                <label>活动开始时间（可选）</label>
+                                <input type="datetime-local" id="promoStart">
+                            </div>
+                            <div class="form-field">
+                                <label>活动结束时间（可选）</label>
+                                <input type="datetime-local" id="promoEnd">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div style="margin-top:20px;display:flex;justify-content:flex-end">
+                    <button class="btn btn-primary" onclick="savePromoTrial()">保存活动配置</button>
                 </div>
             </div>
         </div>
@@ -447,6 +483,7 @@
             document.getElementById('section-' + tab).classList.add('active');
             document.getElementById('tab-' + tab).classList.add('active');
             if (tab === 'pricing') loadPricing();
+            if (tab === 'promo') loadPromoTrial();
             if (tab === 'notifications') loadNotifications();
         }
 
@@ -561,6 +598,40 @@
                 loadPricing();
             } catch (e) {
                 showToast('删除失败', true);
+            }
+        }
+
+        async function loadPromoTrial() {
+            try {
+                const res = await fetch(`${API}/admin/promo-trial`, { headers: headers() });
+                if (!res.ok) throw new Error('加载失败');
+                const data = await res.json();
+                document.getElementById('promoEnabled').value = data.enabled ? 'true' : 'false';
+                document.getElementById('promoDays').value = data.days || '';
+                document.getElementById('promoStart').value = data.start_at ? data.start_at.slice(0, 16) : '';
+                document.getElementById('promoEnd').value = data.end_at ? data.end_at.slice(0, 16) : '';
+            } catch (e) {
+                showToast('活动配置加载失败', true);
+            }
+        }
+
+        async function savePromoTrial() {
+            const payload = {
+                enabled: document.getElementById('promoEnabled').value === 'true',
+                days: parseInt(document.getElementById('promoDays').value) || 0,
+                start_at: document.getElementById('promoStart').value || null,
+                end_at: document.getElementById('promoEnd').value || null,
+            };
+            try {
+                const res = await fetch(`${API}/admin/promo-trial`, {
+                    method: 'PUT',
+                    headers: headers(),
+                    body: JSON.stringify(payload),
+                });
+                if (!res.ok) throw new Error('保存失败');
+                showToast('活动配置已保存');
+            } catch (e) {
+                showToast('保存失败', true);
             }
         }
 

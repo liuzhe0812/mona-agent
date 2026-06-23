@@ -284,3 +284,48 @@ def delete_notification(
     db.query(Notification).filter(Notification.id == notification_id).delete()
     db.commit()
     return {"message": "Deleted"}
+
+
+# ── Registration promo trial config ──
+
+_PROMO_KEYS = ["promo_trial_enabled", "promo_trial_days", "promo_trial_start_at", "promo_trial_end_at"]
+
+
+def _get_app_config(db: Session, key: str) -> str | None:
+    row = db.query(AppConfig).filter(AppConfig.key == key).first()
+    return row.value if row else None
+
+
+def _set_app_config(db: Session, key: str, value: str | None):
+    row = db.query(AppConfig).filter(AppConfig.key == key).first()
+    if row:
+        row.value = value
+    else:
+        db.add(AppConfig(key=key, value=value))
+
+
+@router.get("/promo-trial")
+def get_promo_trial(
+    _admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    return {
+        "enabled": _get_app_config(db, "promo_trial_enabled") == "true",
+        "days": int(_get_app_config(db, "promo_trial_days") or 0),
+        "start_at": _get_app_config(db, "promo_trial_start_at"),
+        "end_at": _get_app_config(db, "promo_trial_end_at"),
+    }
+
+
+@router.put("/promo-trial")
+def update_promo_trial(
+    body: dict,
+    _admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    _set_app_config(db, "promo_trial_enabled", "true" if body.get("enabled") else "false")
+    _set_app_config(db, "promo_trial_days", str(body.get("days", 0)))
+    _set_app_config(db, "promo_trial_start_at", body.get("start_at") or "")
+    _set_app_config(db, "promo_trial_end_at", body.get("end_at") or "")
+    db.commit()
+    return {"message": "Promo trial config updated"}

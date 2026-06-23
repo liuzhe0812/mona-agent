@@ -8,6 +8,48 @@
 - 最小变更：修 bug 只改必要部分，不要捆绑无关重构；如需重构，单独提 PR
 - 显式优于隐式：配置必须在 `config/schema.py` 的 Pydantic 模型中显式声明；错误处理应抛出明确异常，而非静默纠正
 
+## 端口架构（重要，勿搞混）
+
+Mona 运行时有两个 HTTP/WebSocket 服务：
+
+| 服务 | 配置项 | 默认端口 | 实现 | 路由 |
+|------|--------|----------|------|------|
+| **Gateway HTTP server**（aiohttp） | `gateway.port` | 17173 | `mona/cli/commands.py` 的 `_http_server()` → `mona/api/server.py` 的 `create_app()` | **所有** HTTP 路由：`/health`、`/v1/chat/completions`、`/api/kb/*`、`/email/*` 等 |
+| **WebSocket Channel** | `channels.websocket.port` | 8765 | `mona/channels/websocket.py` 的 `serve()` + `_dispatch_http_inner()` | WebSocket 连接 + **仅 GET** HTTP 路由（settings、sessions 等）。websockets 库的 `process_request` **无法可靠读取 POST body** |
+
+### 前端如何选择端口
+
+- **需要 POST body 的路由**（如 `/email/*`、`/api/kb/*` 的创建/更新操作）用 `getGatewayHttpBase()`（返回 `http://127.0.0.1:${port}`，gateway 端口）
+- **纯 GET 路由或 WebSocket** 用 `getApiBase()`（返回 `http://127.0.0.1:${ws_port}`，websocket 端口）
+- **禁止硬编码端口**，必须通过上述函数动态获取
+
+### 新增 HTTP 路由的规则
+
+- 需要 POST body 的路由注册在 `mona/api/server.py` 的 `create_app()` 中 → 前端用 `getGatewayHttpBase()`
+- 纯 GET 路由可注册在 `mona/channels/websocket.py` 的 `_dispatch_http_inner()` 中 → 前端用 `getApiBase()`
+- 业务逻辑放在 `mona/api/server.py` 的辅助函数中（如 `_imap_list_folders`），由 aiohttp handler 调用
+
+### Rust 侧
+
+- `gateway_status` 命令返回 `{ port, ws_port }`：`port` 是 gateway HTTP 端口（aiohttp app），`ws_port` 是 websocket 端口
+- Rust 命令需要调用 HTTP 路由时，前端应传入 `getGatewayHttpBase()` 的返回值作为 `gateway_url` 参数
+
+## Dev 模式 Python 包安装（重要）
+
+Dev 模式下 gateway 进程通过 `python -m mona gateway` 启动，Python 会从 `site-packages` 加载 `mona` 包。**必须以可编辑模式安装源码树**，否则修改 `mona/` 下的 Python 代码不会生效：
+
+```bash
+pip install -e . --no-deps
+```
+
+- `--no-deps` 避免重复安装依赖（依赖已在环境中）
+- 安装后 `import mona` 会指向源码树（如 `D:\...\Mona\mona\`），修改立即生效
+- 验证：`python -c "import mona.api.server; print(mona.api.server.__file__)"` 应指向源码树而非 site-packages
+
+### 已知问题：gateway.rs 的 PYTHONPATH 计算
+
+`src-tauri/src/gateway.rs` 在 dev 模式下会尝试设置 PYTHONPATH 指向源码树，但路径计算有误：exe 在 `src-tauri/target/debug/`，`project_root = exe_dir.parent()` 得到的是 `src-tauri/target/`，而非项目根。导致 `mona_pkg_dir` 不存在，PYTHONPATH 不会被设置。**当前通过 `pip install -e .` 规避此问题。**
+
 ## 代码风格
 
 - Python >=3.11，使用现代 Python 特性

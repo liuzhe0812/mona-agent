@@ -1,4 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useTranslation } from "react-i18next";
 import { DeleteConfirm } from "@/components/DeleteConfirm";
 import { RenameChatDialog } from "@/components/RenameChatDialog";
@@ -21,6 +23,7 @@ import { ThemeProvider, useTheme } from "@/hooks/useTheme";
 import { LicenseProvider, useLicense } from "@/hooks/useLicense";
 import { LoginDialog } from "@/components/LoginDialog";
 import { UpdateNotification } from "@/components/UpdateNotification";
+import { useEmailStore } from "@/components/email/store/emailStore";
 import { cn } from "@/lib/utils";
 import {
   deriveWsUrl,
@@ -30,7 +33,7 @@ import {
 } from "@/lib/bootstrap";
 import { deriveTitle } from "@/lib/format";
 import { MonaClient } from "@/lib/mona-client";
-import { ClientProvider, useClient } from "@/providers/ClientProvider";
+import { ClientProvider, useClientOptional, type RuntimeStatus } from "@/providers/ClientProvider";
 import { KnowledgeDialogProvider } from "@/providers/KnowledgeDialogProvider";
 import type { ChatSummary } from "@/lib/types";
 import { isTauri, getGatewayStatus, startGateway, getDesktopSettings, type SidebarShortcuts, type UpdateCheckResult } from "@/lib/tauri";
@@ -56,7 +59,7 @@ const SIDEBAR_WIDTH = 220;
 const SIDEBAR_RAIL_WIDTH = 56;
 const TOKEN_REFRESH_MARGIN_MS = 30_000;
 const TOKEN_REFRESH_MIN_DELAY_MS = 5_000;
-type ShellView = "chat" | "settings" | "note" | "ssh" | "db" | "kb" | "ppt";
+type ShellView = "chat" | "settings" | "note" | "ssh" | "db" | "kb" | "ppt" | "email" | "schedule";
 
 interface QueuedAgentPrompt {
   id: string;
@@ -93,6 +96,24 @@ const KnowledgeBaseView = lazy(() =>
   })),
 );
 
+const EmailClientView = lazy(() =>
+  import("@/components/email/EmailClientView").then((module) => ({
+    default: module.EmailClientView,
+  })),
+);
+
+const ScheduleView = lazy(() =>
+  import("@/components/schedule/ScheduleView").then((module) => ({
+    default: module.ScheduleView,
+  })),
+);
+
+const ComposeWindow = lazy(() =>
+  import("@/components/email/ComposeWindow").then((module) => ({
+    default: module.ComposeWindow,
+  })),
+);
+
 function bootstrapTokenExpiresAt(expiresInSeconds: number): number {
   return Date.now() + Math.max(0, expiresInSeconds) * 1000;
 }
@@ -108,6 +129,10 @@ function tokenRefreshDelayMs(expiresAt: number): number {
 
 function isQuickAskRoute(): boolean {
   return typeof window !== "undefined" && window.location.hash.startsWith("#/quick-ask");
+}
+
+function isComposeRoute(): boolean {
+  return typeof window !== "undefined" && window.location.hash.startsWith("#/compose");
 }
 
 function shortcutFromKeyboardEvent(event: KeyboardEvent): string | null {
@@ -228,7 +253,6 @@ function writeCompletedRunChatIds(chatIds: Set<string>): void {
 }
 
 export default function App() {
-  const { t } = useTranslation();
   const [state, setState] = useState<BootState>({ status: "loading" });
   const bootstrapSecretRef = useRef("");
 
@@ -321,7 +345,7 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [state]);
 
-  useEffect(() => {
+  const connectRuntime = useCallback(() => {
     if (!isTauri()) {
       const saved = loadSavedSecret();
       return bootstrapWithSecret(saved);
@@ -354,46 +378,19 @@ export default function App() {
         setState({ status: "error", message: (e as Error).message });
       }
     })();
-
     return () => { cancelled = true; };
   }, [bootstrapWithSecret]);
 
-  if (state.status === "loading") {
-    return (
-      <div className="flex h-full w-full items-center justify-center">
-        <div className="flex flex-col items-center gap-3 animate-in fade-in-0 duration-300">
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <span className="relative flex h-2 w-2">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-foreground/40" />
-              <span className="relative inline-flex h-2 w-2 rounded-full bg-foreground/60" />
-            </span>
-            {t("app.loading.connecting")}
-          </div>
-        </div>
-      </div>
-    );
-  }
-  if (state.status === "auth") {
-    return (
-      <AuthForm
-        failed={!!state.failed}
-        onSecret={(s) => bootstrapWithSecret(s)}
-      />
-    );
-  }
-  if (state.status === "error") {
-    return (
-      <div className="flex h-full w-full items-center justify-center px-4 text-center">
-        <div className="flex max-w-md flex-col items-center gap-3">
-          <p className="text-lg font-semibold">{t("app.error.title")}</p>
-          <p className="text-sm text-muted-foreground">{state.message}</p>
-          <p className="text-xs text-muted-foreground">
-            {t("app.error.gatewayHint")}
-          </p>
-        </div>
-      </div>
-    );
-  }
+  useEffect(() => {
+    return connectRuntime();
+  }, [connectRuntime]);
+
+  const runtimeStatus: RuntimeStatus =
+    state.status === "loading" ? "connecting" : state.status;
+  const client = state.status === "ready" ? state.client : null;
+  const token = state.status === "ready" ? state.token : "";
+  const modelName = state.status === "ready" ? state.modelName : null;
+  const errorMessage = state.status === "error" ? state.message : null;
 
   const handleModelNameChange = (modelName: string | null) => {
     setState((current) =>
@@ -402,19 +399,31 @@ export default function App() {
   };
 
   const quickAskRoute = isQuickAskRoute();
+  const composeRoute = isComposeRoute();
 
   return (
     <ClientProvider
-      client={state.client}
-      token={state.token}
-      modelName={state.modelName}
+      client={client}
+      token={token}
+      modelName={modelName}
+      runtimeStatus={runtimeStatus}
+      runtimeError={errorMessage}
     >
       <KnowledgeDialogProvider>
-      {quickAskRoute ? (
-        <QuickAskWindow />
+      {composeRoute ? (
+        <Suspense fallback={<ModuleLoading title="正在打开写邮件" />}>
+          <ComposeWindow />
+        </Suspense>
+      ) : quickAskRoute ? (
+        client ? <QuickAskWindow /> : null
       ) : (
         <LicenseProvider>
-          <Shell onModelNameChange={handleModelNameChange} />
+          <Shell
+            onModelNameChange={handleModelNameChange}
+            onRetryConnection={connectRuntime}
+            onSubmitAuth={(s) => bootstrapWithSecret(s)}
+            authFailed={state.status === "auth" && !!state.failed}
+          />
         </LicenseProvider>
       )}
     </KnowledgeDialogProvider>
@@ -424,11 +433,17 @@ export default function App() {
 
 function Shell({
   onModelNameChange,
+  onRetryConnection,
+  onSubmitAuth,
+  authFailed,
 }: {
   onModelNameChange: (modelName: string | null) => void;
+  onRetryConnection: () => void;
+  onSubmitAuth: (secret: string) => void;
+  authFailed: boolean;
 }) {
   const { t, i18n } = useTranslation();
-  const { client } = useClient();
+  const { client, runtimeStatus, runtimeError } = useClientOptional();
   const { theme, toggle } = useTheme();
   useLicense();
   const { sessions, loading, refresh, createChat, deleteChat } = useSessions();
@@ -474,7 +489,6 @@ function Shell({
   const [loginDialogOpen, setLoginDialogOpen] = useState(false);
   const [loginDialogInitialView, setLoginDialogInitialView] = useState<"login" | "subscribe">("login");
   const [updateAvailable, setUpdateAvailable] = useState<UpdateCheckResult | null>(null);
-  const [updateDialogSignal, setUpdateDialogSignal] = useState(0);
   const runningChatIdsRef = useRef<Set<string>>(new Set());
   const sidebarShortcutsRef = useRef<SidebarShortcuts>({
     mona: "Alt+1",
@@ -493,6 +507,133 @@ function Shell({
     mql.addEventListener("change", handler);
     if (!mql.matches) setDesktopSidebarOpen(false);
     return () => mql.removeEventListener("change", handler);
+  }, []);
+
+  // 全局邮件自动同步 + IMAP IDLE 实时推送
+  // 策略：gateway 就绪后首次静默同步 → 启动 IDLE 实时监听 → 兜底轮询 10 分钟
+  useEffect(() => {
+    let cancelled = false;
+    let intervalId = 0;
+    let ws: WebSocket | null = null;
+    let wsReconnectTimer = 0;
+    const loadAccounts = useEmailStore.getState().loadAccounts;
+    const syncAllAccounts = useEmailStore.getState().syncAllAccounts;
+    const startAllIdle = useEmailStore.getState().startAllIdle;
+    const stopAllIdle = useEmailStore.getState().stopAllIdle;
+
+    const connectIdleWs = (gatewayUrl: string) => {
+      if (cancelled || !gatewayUrl) return;
+      const wsUrl = `${gatewayUrl.replace("http", "ws")}/email/idle/ws`;
+      try {
+        ws = new WebSocket(wsUrl);
+      } catch {
+        return;
+      }
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.type === "new-mail") {
+            // IDLE 收到新邮件通知，触发同步（非静默，会弹通知）
+            // eslint-disable-next-line no-console
+            console.log("[email] IDLE new-mail event", data.accountId);
+            void syncAllAccounts(gatewayUrl, false);
+          }
+        } catch {
+          // 忽略解析错误
+        }
+      };
+      ws.onclose = () => {
+        // 断线重连（5 秒后），保证 IDLE 事件不丢失
+        if (cancelled) return;
+        wsReconnectTimer = window.setTimeout(() => connectIdleWs(gatewayUrl), 5000);
+      };
+      ws.onerror = () => {
+        // 错误时关闭，触发 onclose 重连
+        try { ws?.close(); } catch { /* ignore */ }
+      };
+    };
+
+    void (async () => {
+      try {
+        // 轮询等待 gateway HTTP 端口就绪（gateway 启动可能比 Shell 挂载晚）
+        let gatewayUrl = "";
+        for (let i = 0; i < 60; i++) {
+          if (cancelled) return;
+          const status = await getGatewayStatus();
+          if (status.port) {
+            gatewayUrl = `http://127.0.0.1:${status.port}`;
+            break;
+          }
+          await new Promise((r) => setTimeout(r, 1000));
+        }
+        // eslint-disable-next-line no-console
+        console.log("[email] global sync ready", gatewayUrl);
+        if (cancelled || !gatewayUrl) return;
+        await loadAccounts();
+        if (cancelled) return;
+        // 首次启动时静默同步，避免把历史未读全部弹 toast
+        await syncAllAccounts(gatewayUrl, true);
+        if (cancelled) return;
+        // 启动 IMAP IDLE 实时监听（秒级推送）
+        await startAllIdle(gatewayUrl);
+        // 连接 WebSocket 接收 IDLE 事件
+        connectIdleWs(gatewayUrl);
+        // 兜底轮询：IDLE 可能因网络断开失效，每 10 分钟兜底同步一次
+        intervalId = window.setInterval(() => {
+          // eslint-disable-next-line no-console
+          console.log("[email] scheduled fallback sync");
+          void syncAllAccounts(gatewayUrl, false);
+        }, 10 * 60 * 1000);
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.error("[email] global sync init failed", e);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (intervalId) window.clearInterval(intervalId);
+      if (wsReconnectTimer) window.clearTimeout(wsReconnectTimer);
+      if (ws) {
+        ws.onclose = null;
+        ws.onerror = null;
+        ws.onmessage = null;
+        try { ws.close(); } catch { /* ignore */ }
+      }
+      // 停止所有 IDLE 监听
+      void (async () => {
+        try {
+          const status = await getGatewayStatus();
+          if (status.port) {
+            await stopAllIdle(`http://127.0.0.1:${status.port}`);
+          }
+        } catch {
+          // 忽略
+        }
+      })();
+    };
+  }, []);
+
+  // 通知点击后窗口获得焦点时跳转到邮件页面
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    void (async () => {
+      try {
+        const win = getCurrentWindow();
+        unlisten = await win.onFocusChanged(({ payload: focused }) => {
+          if (!focused) return;
+          void invoke<boolean>("check_and_clear_pending_mail").then((pending) => {
+            if (pending) {
+              setView("email");
+            }
+          });
+        });
+      } catch {
+        // 非桌面环境忽略
+      }
+    })();
+    return () => {
+      if (unlisten) unlisten();
+    };
   }, []);
 
   useEffect(() => {
@@ -544,7 +685,7 @@ function Shell({
   }, [loading, sessions]);
 
   useEffect(() => {
-    if (loading) return;
+    if (loading || !client) return;
     const activeRunIds = sessions
       .filter((session) => typeof session.runStartedAt === "number")
       .map((session) => session.chatId);
@@ -642,6 +783,18 @@ function Shell({
 
   const onOpenKb = useCallback(() => {
     setView("kb");
+    switchToMonaTab();
+    setMobileSidebarOpen(false);
+  }, [switchToMonaTab]);
+
+  const onOpenEmail = useCallback(() => {
+    setView("email");
+    switchToMonaTab();
+    setMobileSidebarOpen(false);
+  }, [switchToMonaTab]);
+
+  const onOpenSchedule = useCallback(() => {
+    setView("schedule");
     switchToMonaTab();
     setMobileSidebarOpen(false);
   }, [switchToMonaTab]);
@@ -899,6 +1052,8 @@ function Shell({
   }, [onOpenNote, onOpenSSHAndNew, refresh, addMdReaderTab]);
 
   // 启动时拉取 pending 的 md 文件（首次启动场景）
+  const addMdReaderTabRef = useRef(addMdReaderTab);
+  addMdReaderTabRef.current = addMdReaderTab;
   useEffect(() => {
     if (!isTauri()) return;
     let cancelled = false;
@@ -907,7 +1062,7 @@ function Shell({
         const { invoke } = await import("@tauri-apps/api/core");
         const files = await invoke<string[]>("get_pending_md_files");
         if (cancelled || !files || files.length === 0) return;
-        files.forEach((f) => addMdReaderTab(f));
+        files.forEach((f) => addMdReaderTabRef.current(f));
       } catch (err) {
         console.error("Failed to get pending md files:", err);
       }
@@ -915,7 +1070,7 @@ function Shell({
     return () => {
       cancelled = true;
     };
-  }, [addMdReaderTab]);
+  }, []);
 
   const onSelectSearchResult = useCallback(
     (key: string) => {
@@ -929,10 +1084,6 @@ function Shell({
     setSessionSearchOpen(false);
     setView("settings");
     setMobileSidebarOpen(false);
-  }, []);
-
-  const onOpenUpdateDialog = useCallback(() => {
-    setUpdateDialogSignal((n) => n + 1);
   }, []);
 
   const onOpenLogin = useCallback(() => {
@@ -959,6 +1110,7 @@ function Shell({
   }, [sessions]);
 
   const onRestart = useCallback(() => {
+    if (!client) return;
     const chatId = activeSession?.chatId ?? client.defaultChatId;
     if (!chatId) return;
     restartSawDisconnectRef.current = false;
@@ -972,12 +1124,14 @@ function Shell({
   }, [activeSession?.chatId, client]);
 
   useEffect(() => {
+    if (!client) return;
     return client.onRuntimeModelUpdate((modelName) => {
       onModelNameChange(modelName);
     });
   }, [client, onModelNameChange]);
 
   useEffect(() => {
+    if (!client) return;
     return client.onRunStatus((chatId, startedAt) => {
       if (startedAt != null) {
         const nextRunning = new Set(runningChatIdsRef.current);
@@ -1007,6 +1161,7 @@ function Shell({
   }, [client]);
 
   useEffect(() => {
+    if (!client) return;
     return client.onStatus((status) => {
       let startedAt = 0;
       try {
@@ -1093,6 +1248,8 @@ function Shell({
     onOpenSSH,
     onOpenDb,
     onOpenKb,
+    onOpenEmail,
+    onOpenSchedule,
     onToggleArchived,
     onUpdateView: onUpdateSidebarView,
     pinnedKeys: sidebarState.pinned_keys,
@@ -1117,7 +1274,7 @@ function Shell({
             onTabClick={switchBrowserTab}
             onTabClose={closeBrowserTab}
             onNewTab={addEmptyTab}
-            onOpenSettings={updateAvailable ? onOpenUpdateDialog : onOpenSettings}
+            onOpenSettings={onOpenSettings}
             onOpenSubscribe={onOpenSubscribe}
             settingsBadge={!!updateAvailable}
           />
@@ -1186,26 +1343,34 @@ function Shell({
               <div
                 className={cn(
                   "absolute inset-0 flex flex-col",
-                  (view === "settings" || view === "note" || view === "ssh" || view === "db" || view === "kb" || view === "ppt" || activeBrowserTab.type !== "mona") &&
+                  (view === "settings" || view === "note" || view === "ssh" || view === "db" || view === "kb" || view === "ppt" || view === "email" || view === "schedule" || activeBrowserTab.type !== "mona") &&
                     "invisible pointer-events-none",
                 )}
               >
-                <ThreadShell
-                  session={activeSession}
-                  title={headerTitle}
-                  onToggleSidebar={toggleSidebar}
-                  onOpenSSH={onOpenSSHAndNew}
-                  onCreateNote={onOpenNote}
-                  onCreateChat={onCreateChat}
-                  onTurnEnd={onTurnEnd}
-                  queuedPrompt={queuedAgentPrompt}
-                  onQueuedPromptConsumed={() => setQueuedAgentPrompt(null)}
-                  theme={theme}
-                  onToggleTheme={toggle}
-                  hideSidebarToggleOnDesktop
-                  showHeader={false}
-                  onModelNameChange={onModelNameChange}
-                />
+                {client ? (
+                  <ThreadShell
+                    session={activeSession}
+                    title={headerTitle}
+                    onToggleSidebar={toggleSidebar}
+                    onOpenSSH={onOpenSSHAndNew}
+                    onCreateNote={onOpenNote}
+                    onCreateChat={onCreateChat}
+                    onTurnEnd={onTurnEnd}
+                    queuedPrompt={queuedAgentPrompt}
+                    onQueuedPromptConsumed={() => setQueuedAgentPrompt(null)}
+                    theme={theme}
+                    onToggleTheme={toggle}
+                    hideSidebarToggleOnDesktop
+                    showHeader={false}
+                    onModelNameChange={onModelNameChange}
+                  />
+                ) : (
+                  <RuntimePlaceholder
+                    status={runtimeStatus}
+                    message={runtimeError}
+                    onRetry={onRetryConnection}
+                  />
+                )}
               </div>
               {view === "note" ? (
                 <div className={cn("absolute inset-0 flex flex-col", isBrowserTabActive && "hidden")}>
@@ -1236,23 +1401,71 @@ function Shell({
               </div>
               {view === "db" && (
                 <div className={cn("absolute inset-0 flex flex-col", isBrowserTabActive && "hidden")}>
-                  <Suspense fallback={<ModuleLoading title="正在打开数据库客户端" />}>
-                    <DbClientView />
-                  </Suspense>
+                  {client ? (
+                    <Suspense fallback={<ModuleLoading title="正在打开数据库客户端" />}>
+                      <DbClientView />
+                    </Suspense>
+                  ) : (
+                    <RuntimePlaceholder
+                      status={runtimeStatus}
+                      message={runtimeError}
+                      onRetry={onRetryConnection}
+                    />
+                  )}
                 </div>
               )}
               {view === "kb" && (
                 <div className={cn("absolute inset-0 flex flex-col", isBrowserTabActive && "hidden")}>
-                  <Suspense fallback={<ModuleLoading title="正在打开知识库" />}>
-                    <KnowledgeBaseView />
-                  </Suspense>
+                  {client ? (
+                    <Suspense fallback={<ModuleLoading title="正在打开知识库" />}>
+                      <KnowledgeBaseView />
+                    </Suspense>
+                  ) : (
+                    <RuntimePlaceholder
+                      status={runtimeStatus}
+                      message={runtimeError}
+                      onRetry={onRetryConnection}
+                    />
+                  )}
                 </div>
               )}
-              <div className={cn("absolute inset-0 flex flex-col", (view !== "ppt" || isBrowserTabActive) && "hidden")}>
-                <Suspense fallback={<ModuleLoading title="正在打开 PPT 制作" />}>
-                  <PptMakerView onBack={onBackToChat} />
-                </Suspense>
-              </div>
+              {view === "email" && (
+                <div className={cn("absolute inset-0 flex flex-col", isBrowserTabActive && "hidden")}>
+                  {client ? (
+                    <Suspense fallback={<ModuleLoading title="正在打开邮件" />}>
+                      <EmailClientView />
+                    </Suspense>
+                  ) : (
+                    <RuntimePlaceholder
+                      status={runtimeStatus}
+                      message={runtimeError}
+                      onRetry={onRetryConnection}
+                    />
+                  )}
+                </div>
+              )}
+              {view === "schedule" && (
+                <div className={cn("absolute inset-0 flex flex-col", isBrowserTabActive && "hidden")}>
+                  {client ? (
+                    <Suspense fallback={<ModuleLoading title="正在打开日程" />}>
+                      <ScheduleView />
+                    </Suspense>
+                  ) : (
+                    <RuntimePlaceholder
+                      status={runtimeStatus}
+                      message={runtimeError}
+                      onRetry={onRetryConnection}
+                    />
+                  )}
+                </div>
+              )}
+              {client ? (
+                <div className={cn("absolute inset-0 flex flex-col", (view !== "ppt" || isBrowserTabActive) && "hidden")}>
+                  <Suspense fallback={<ModuleLoading title="正在打开 PPT 制作" />}>
+                    <PptMakerView onBack={onBackToChat} />
+                  </Suspense>
+                </div>
+              ) : null}
               {browserTabs
                 .filter((t) => t.type === "md-reader")
                 .map((tab) => (
@@ -1310,10 +1523,7 @@ function Shell({
           initialView={loginDialogInitialView}
         />
 
-        <UpdateNotification
-          onUpdateAvailable={setUpdateAvailable}
-          openSignal={updateDialogSignal}
-        />
+        <UpdateNotification onUpdateAvailable={setUpdateAvailable} />
 
         <DeleteConfirm
           open={!!pendingDelete}
@@ -1327,6 +1537,16 @@ function Shell({
           onCancel={() => setPendingRename(null)}
           onConfirm={onConfirmRename}
         />
+        {runtimeStatus === "auth" ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm">
+            <div className="w-full max-w-sm rounded-xl border border-border bg-popover p-6 shadow-lg">
+              <AuthForm
+                failed={authFailed}
+                onSecret={onSubmitAuth}
+              />
+            </div>
+          </div>
+        ) : null}
         {restartToast ? (
           <div
             role="status"
@@ -1344,6 +1564,36 @@ function ModuleLoading({ title }: { title: string }) {
   return (
     <div className="flex h-full min-h-0 flex-1 items-center justify-center bg-background text-[13px] text-muted-foreground">
       {title}...
+    </div>
+  );
+}
+
+function RuntimePlaceholder({
+  status,
+  message,
+  onRetry,
+}: {
+  status: RuntimeStatus;
+  message?: string | null;
+  onRetry: () => void;
+}) {
+  const { t } = useTranslation();
+  // 连接中不显示任何占位内容，状态由标题栏的 ConnectionBadge 指示
+  if (status !== "error") return null;
+  return (
+    <div className="flex h-full w-full items-center justify-center px-4 text-center">
+      <div className="flex max-w-md flex-col items-center gap-3">
+        <p className="text-lg font-semibold">{t("app.error.title")}</p>
+        {message ? (
+          <p className="text-sm text-muted-foreground">{message}</p>
+        ) : null}
+        <p className="text-xs text-muted-foreground">
+          {t("app.error.gatewayHint")}
+        </p>
+        <Button variant="outline" size="sm" onClick={onRetry}>
+          {t("app.error.retry")}
+        </Button>
+      </div>
     </div>
   );
 }

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { cn } from "@/lib/utils";
-import { useClient } from "@/providers/ClientProvider";
+import { useClientOptional, type RuntimeStatus } from "@/providers/ClientProvider";
 import type { ConnectionStatus } from "@/lib/types";
 
 const COPY: Record<ConnectionStatus, { color: string }> = {
@@ -24,15 +24,34 @@ const COPY: Record<ConnectionStatus, { color: string }> = {
   },
 };
 
+function runtimeStatusToConnectionStatus(
+  status: RuntimeStatus,
+): ConnectionStatus | null {
+  if (status === "ready") return null; // ready 时由 client.status 决定
+  if (status === "connecting") return "connecting";
+  if (status === "error") return "error";
+  if (status === "auth") return "idle"; // auth 时不显示连接异常
+  return null;
+}
+
 export function ConnectionBadge() {
   const { t } = useTranslation();
-  const { client } = useClient();
-  const [status, setStatus] = useState<ConnectionStatus>(client.status);
+  const { client, runtimeStatus } = useClientOptional();
+  const [clientStatus, setClientStatus] = useState<ConnectionStatus>(
+    client ? client.status : "idle",
+  );
 
-  useEffect(() => client.onStatus(setStatus), [client]);
+  useEffect(() => {
+    if (!client) return;
+    return client.onStatus(setClientStatus);
+  }, [client]);
 
-  // 仅在断开/异常状态下显示，已连接 (open) 或未启动 (idle) 时隐藏
-  if (status === "open" || status === "idle") return null;
+  // runtime 未就绪时，用 runtimeStatus 推导显示状态
+  const status: ConnectionStatus | null = client
+    ? clientStatus
+    : runtimeStatusToConnectionStatus(runtimeStatus);
+
+  if (!status || status === "open" || status === "idle") return null;
 
   const meta = COPY[status];
   const pulsing =

@@ -9,6 +9,7 @@ import type {
   KnowledgeItem,
   Notebook,
   NoteSourceKind,
+  NoteTransformation,
   OperationNote,
 } from "./notes-data";
 import { nowTimestamp } from "./notes-data";
@@ -21,6 +22,7 @@ export interface NotesStorageState {
   activeNotebookId: string;
   activeNoteId: string | null;
   activeKnowledgeCategoryId: string;
+  transformations: NoteTransformation[];
 }
 
 export async function loadNotesState(): Promise<NotesStorageState> {
@@ -53,6 +55,7 @@ export function createBlankNote(
       ? "## SSH 会话记录\n\n```bash\n# 在这里粘贴命令和输出\n```\n\n## 判断\n\n"
       : "",
     appliedAgentMessageIds: [],
+    contextLevel: "full",
   };
 }
 
@@ -77,6 +80,22 @@ export function createCustomNotebook(name: string): Notebook {
     id: createId("notebook"),
     name,
     knowledgeBaseEnabled: false,
+  };
+}
+
+export function createTransformation(
+  name: string,
+  promptTemplate: string,
+  description = "",
+): NoteTransformation {
+  const now = nowTimestamp();
+  return {
+    id: createId("transformation"),
+    name,
+    description,
+    promptTemplate,
+    createdAt: now,
+    updatedAt: now,
   };
 }
 

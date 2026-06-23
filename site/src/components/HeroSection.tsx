@@ -6,6 +6,7 @@ import MagneticButton from "@/components/MagneticButton";
 import OpsConsole from "@/components/OpsConsole";
 import PageTurnButton from "@/components/PageTurnButton";
 import ParticleNetwork from "@/components/ParticleNetwork";
+import { DOWNLOAD_URL } from "@/lib/constants";
 
 const tags = ["极简 Agent", "白盒 SSH", "自然语言 SQL", "知识库闭环"];
 
@@ -75,7 +76,7 @@ export default function HeroSection() {
             transition={{ duration: 0.6, delay: 0.3, ease: "easeOut" }}
           >
             <MagneticButton
-              href="https://mona.lzfun.vip/releases/Mona-latest.exe"
+              href={DOWNLOAD_URL}
               className="inline-flex items-center justify-center gap-2 rounded-md border border-black bg-[#101010] px-5 py-3 text-sm font-semibold text-white transition hover:bg-white hover:text-black"
             >
               <Download className="h-4 w-4" />

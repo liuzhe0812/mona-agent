@@ -1,4 +1,4 @@
-﻿"""JSON Schema fragment types: all subclass :class:`~mona.agent.tools.base.Schema` for descriptions and constraints on tool parameters.
+"""JSON Schema fragment types: all subclass :class:`~mona.agent.tools.base.Schema` for descriptions and constraints on tool parameters.
 
 - ``to_json_schema()``: returns a dict compatible with :meth:`~mona.agent.tools.base.Schema.validate_json_schema_value` /
   :class:`~mona.agent.tools.base.Tool`.
@@ -224,9 +224,21 @@ def tool_parameters_schema(
     description: str = "",
     **properties: Any,
 ) -> dict[str, Any]:
-    """Build root tool parameters ``{"type": "object", "properties": ...}`` for :meth:`Tool.parameters`."""
+    """Build root tool parameters ``{"type": "object", "properties": ...}`` for :meth:`Tool.parameters`.
+
+    Note: if a tool needs a parameter literally named ``description``, pass a
+    :class:`StringSchema` instance — it will be detected and routed to
+    ``properties`` instead of being treated as the root schema description.
+    """
+    # A Schema instance passed as `description=` is a property named "description",
+    # not the root schema description (which must be a plain string).
+    root_description = ""
+    if hasattr(description, "to_json_schema"):
+        properties["description"] = description
+    else:
+        root_description = description
     return ObjectSchema(
+        properties=properties or None,
         required=required,
-        description=description,
-        **properties,
+        description=root_description,
     ).to_json_schema()

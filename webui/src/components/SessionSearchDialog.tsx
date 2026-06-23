@@ -100,8 +100,8 @@ export function SessionSearchDialog({
     ? t("sidebar.searchResults")
     : t("sidebar.recent");
 
-  if (!open) return null;
-
+  // 不能在此 return null：Radix Dialog 需要始终挂载以正确执行关闭动画
+  // 和 body 样式清理（pointer-events）。Dialog open={open} 控制可见性。
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent

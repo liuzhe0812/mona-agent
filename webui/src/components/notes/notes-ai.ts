@@ -1,4 +1,4 @@
-import type { KnowledgeCategory, NoteAiActionId, OperationNote } from "./notes-data";
+import type { KnowledgeCategory, NoteAiActionId, NoteTransformation, OperationNote } from "./notes-data";
 
 export interface ExtractedKnowledgeDraft {
   categoryName: string;
@@ -338,6 +338,47 @@ export function buildFreeformAgentPrompt(note: OperationNote, question: string):
 ${question}
 
 ${formatNoteContext(note)}`;
+}
+
+/**
+ * Build a prompt for a user-defined transformation template.
+ * Replaces variables {{note_title}}, {{note_content}}, {{note_tags}}, {{note_source}}
+ * with the note's actual values. If the template contains no variables, the note
+ * context is appended automatically so the agent still has access to the note.
+ */
+export function buildTransformationPrompt(
+  transformation: NoteTransformation,
+  note: OperationNote,
+): string {
+  const content = note.contentMarkdown.slice(0, 12000);
+  const truncated = note.contentMarkdown.length > content.length;
+  const noteContent = truncated ? `${content}\n\n...内容过长，已截断` : content;
+  const tags = note.tags.join("、") || "无";
+
+  let prompt = transformation.promptTemplate;
+  let hasVariable = false;
+
+  const replacements: Array<[RegExp, string]> = [
+    [/\{\{\s*note_title\s*\}\}/g, note.title],
+    [/\{\{\s*note_content\s*\}\}/g, noteContent],
+    [/\{\{\s*note_tags\s*\}\}/g, tags],
+    [/\{\{\s*note_source\s*\}\}/g, note.source.label],
+  ];
+
+  for (const [pattern, value] of replacements) {
+    if (pattern.test(prompt)) {
+      hasVariable = true;
+      prompt = prompt.replace(pattern, value);
+    }
+  }
+
+  // If the template has no variables, append the note context so the agent
+  // still has access to the note content.
+  if (!hasVariable) {
+    prompt = `${prompt}\n\n${formatNoteContext(note)}`;
+  }
+
+  return prompt;
 }
 
 /** Pattern-to-label pairs for inferring displayContent from persisted user messages. */

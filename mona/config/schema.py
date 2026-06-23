@@ -12,10 +12,16 @@ from pydantic_settings import BaseSettings
 from mona.cron.types import CronSchedule
 
 if TYPE_CHECKING:
+    from mona.agent.tools.chart import ChartToolConfig
+    from mona.agent.tools.crypto import CryptoToolConfig
+    from mona.agent.tools.dataframe import DataframeToolConfig
+    from mona.agent.tools.document import DocumentToolConfig
+    from mona.agent.tools.http import HttpToolConfig
     from mona.agent.tools.image_generation import ImageGenerationToolConfig
     from mona.agent.tools.self import MyToolConfig
     from mona.agent.tools.shell import ExecToolConfig
     from mona.agent.tools.web import WebToolsConfig
+    from mona.email_intel.config import EmailIntelConfig
 
 
 class Base(BaseModel):
@@ -351,6 +357,24 @@ class ToolsConfig(Base):
     image_generation: ImageGenerationToolConfig = Field(
         default_factory=lambda: _lazy_default("mona.agent.tools.image_generation", "ImageGenerationToolConfig"),
     )
+    document: DocumentToolConfig = Field(
+        default_factory=lambda: _lazy_default("mona.agent.tools.document", "DocumentToolConfig"),
+    )
+    http: HttpToolConfig = Field(
+        default_factory=lambda: _lazy_default("mona.agent.tools.http", "HttpToolConfig"),
+    )
+    dataframe: DataframeToolConfig = Field(
+        default_factory=lambda: _lazy_default("mona.agent.tools.dataframe", "DataframeToolConfig"),
+    )
+    chart: ChartToolConfig = Field(
+        default_factory=lambda: _lazy_default("mona.agent.tools.chart", "ChartToolConfig"),
+    )
+    crypto: CryptoToolConfig = Field(
+        default_factory=lambda: _lazy_default("mona.agent.tools.crypto", "CryptoToolConfig"),
+    )
+    email_intel: EmailIntelConfig = Field(
+        default_factory=lambda: _lazy_default("mona.email_intel.config", "EmailIntelConfig"),
+    )
     restrict_to_workspace: bool = False  # restrict all tool access to workspace directory
     mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
     ssrf_whitelist: list[str] = Field(default_factory=list)  # CIDR ranges to exempt from SSRF blocking (e.g. ["100.64.0.0/10"] for Tailscale)
@@ -543,10 +567,16 @@ def _resolve_tool_config_refs() -> None:
     """
     import sys
 
+    from mona.agent.tools.chart import ChartToolConfig
+    from mona.agent.tools.crypto import CryptoToolConfig
+    from mona.agent.tools.dataframe import DataframeToolConfig
+    from mona.agent.tools.document import DocumentToolConfig
+    from mona.agent.tools.http import HttpToolConfig
     from mona.agent.tools.image_generation import ImageGenerationToolConfig
     from mona.agent.tools.self import MyToolConfig
     from mona.agent.tools.shell import ExecToolConfig
     from mona.agent.tools.web import WebFetchConfig, WebSearchConfig, WebToolsConfig
+    from mona.email_intel.config import EmailIntelConfig
 
     # Re-export into this module's namespace
     mod = sys.modules[__name__]
@@ -556,6 +586,12 @@ def _resolve_tool_config_refs() -> None:
     mod.WebFetchConfig = WebFetchConfig  # type: ignore[attr-defined]
     mod.MyToolConfig = MyToolConfig  # type: ignore[attr-defined]
     mod.ImageGenerationToolConfig = ImageGenerationToolConfig  # type: ignore[attr-defined]
+    mod.DocumentToolConfig = DocumentToolConfig  # type: ignore[attr-defined]
+    mod.HttpToolConfig = HttpToolConfig  # type: ignore[attr-defined]
+    mod.DataframeToolConfig = DataframeToolConfig  # type: ignore[attr-defined]
+    mod.ChartToolConfig = ChartToolConfig  # type: ignore[attr-defined]
+    mod.CryptoToolConfig = CryptoToolConfig  # type: ignore[attr-defined]
+    mod.EmailIntelConfig = EmailIntelConfig  # type: ignore[attr-defined]
 
     ToolsConfig.model_rebuild()
     Config.model_rebuild()

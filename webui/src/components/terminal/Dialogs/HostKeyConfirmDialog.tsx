@@ -22,8 +22,9 @@ export function HostKeyConfirmDialog() {
   const [trusting, setTrusting] = useState(false);
   const [error, setError] = useState("");
 
-  if (!dialog.pendingConfig) return null;
-
+  // 不能在此 return null：closeHostKeyDialog 会清空 pendingConfig，若在此提前返回
+  // 会导致 Radix Dialog 被立即卸载，跳过关闭动画和 body 样式清理（pointer-events），
+  // 界面完全无法响应点击。始终渲染 Dialog，由 dialog.open 控制可见性。
   const isChanged = dialog.type === "changed";
 
   const handleTrust = async () => {

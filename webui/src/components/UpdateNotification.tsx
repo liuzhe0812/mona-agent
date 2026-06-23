@@ -18,6 +18,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { DOWNLOAD_URL } from "@/lib/constants";
 import {
   isTauri,
   checkForUpdates,
@@ -43,11 +44,6 @@ interface UpdateNotificationProps {
    * ref-backed state. We expose it via a callback.
    */
   onUpdateAvailable?: (info: UpdateCheckResult | null) => void;
-  /**
-   * Open the update dialog programmatically (e.g. from a badge click).
-   * The parent can call this to show the dialog.
-   */
-  openSignal?: number;
 }
 
 const STAGE_LABELS: Record<string, string> = {
@@ -68,14 +64,14 @@ function formatSize(bytes: number | null | undefined): string {
 
 export function UpdateNotification({
   onUpdateAvailable,
-  openSignal,
 }: UpdateNotificationProps) {
   const [toastVisible, setToastVisible] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [view, setView] = useState<UpdateView>({ kind: "idle" });
   const [currentVersion, setCurrentVersion] = useState<string>("");
+  const [fallbackOpen, setFallbackOpen] = useState(false);
+  const [fallbackMessage, setFallbackMessage] = useState<string>("");
   const toastTimerRef = useRef<number | null>(null);
-  const lastOpenSignalRef = useRef<number>(openSignal ?? 0);
 
   // Load current version on mount
   useEffect(() => {
@@ -96,6 +92,7 @@ export function UpdateNotification({
 
     let unlistenAvailable: (() => void) | null = null;
     let unlistenProgress: (() => void) | null = null;
+    let unlistenFailed: (() => void) | null = null;
 
     (async () => {
       try {
@@ -125,6 +122,14 @@ export function UpdateNotification({
             setView({ kind: "updating", progress: event.payload });
           },
         );
+        unlistenFailed = await listen<{ message: string; download_url: string }>(
+          "update-download-failed",
+          (event) => {
+            setView({ kind: "error", message: event.payload.message });
+            setFallbackMessage(event.payload.message);
+            setFallbackOpen(true);
+          },
+        );
       } catch {
         // ignore
       }
@@ -133,19 +138,12 @@ export function UpdateNotification({
     return () => {
       unlistenAvailable?.();
       unlistenProgress?.();
+      unlistenFailed?.();
       if (toastTimerRef.current) {
         window.clearTimeout(toastTimerRef.current);
       }
     };
   }, [onUpdateAvailable]);
-
-  // Allow parent to open the dialog programmatically via openSignal
-  useEffect(() => {
-    if ((openSignal ?? 0) > lastOpenSignalRef.current) {
-      lastOpenSignalRef.current = openSignal ?? 0;
-      setDialogOpen(true);
-    }
-  }, [openSignal]);
 
   const dismissToast = useCallback(() => {
     setToastVisible(false);
@@ -259,6 +257,56 @@ export function UpdateNotification({
           </div>
         </div>
       ) : null}
+
+      {/* Fallback dialog when auto-download fails */}
+      <Dialog open={fallbackOpen} onOpenChange={setFallbackOpen}>
+        <DialogContent className="max-w-[420px] gap-0 p-0">
+          <DialogHeader className="px-6 pt-6 pb-4">
+            <div className="flex items-center gap-3">
+              <span className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-destructive/10 text-destructive">
+                <AlertCircle className="h-5 w-5" />
+              </span>
+              <div>
+                <DialogTitle className="text-[17px] font-semibold tracking-[-0.01em]">
+                  自动下载失败
+                </DialogTitle>
+                <DialogDescription className="mt-0.5 text-[12px]">
+                  无法从更新服务器下载安装包
+                </DialogDescription>
+              </div>
+            </div>
+          </DialogHeader>
+          <div className="px-6 pb-4">
+            <div className="rounded-xl border border-destructive/20 bg-destructive/5 p-3">
+              <p className="text-[13px] leading-5 text-destructive">
+                {fallbackMessage}
+              </p>
+            </div>
+            <p className="mt-3 text-[13px] leading-5 text-muted-foreground">
+              你可以前往官网手动下载最新版安装包进行重装。
+            </p>
+          </div>
+          <DialogFooter className="flex-row items-center justify-end gap-2 px-6 pb-6 pt-2">
+            <Button
+              variant="outline"
+              onClick={() => setFallbackOpen(false)}
+              className="rounded-full"
+            >
+              取消
+            </Button>
+            <Button
+              onClick={() => {
+                setFallbackOpen(false);
+                window.open(DOWNLOAD_URL, "_blank");
+              }}
+              className="rounded-full"
+            >
+              <Download className="mr-1.5 h-3.5 w-3.5" />
+              前往官网下载
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Update dialog */}
       <Dialog open={dialogOpen} onOpenChange={handleDialogOpenChange}>

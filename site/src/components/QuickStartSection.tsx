@@ -2,6 +2,7 @@ import { ArrowRight, Download, HardDrive } from "lucide-react";
 import AgentLogo from "@/components/AgentLogo";
 import PageTurnButton from "@/components/PageTurnButton";
 import ScrollReveal from "@/components/ScrollReveal";
+import { DOWNLOAD_URL } from "@/lib/constants";
 
 export default function QuickStartSection() {
   return (
@@ -24,7 +25,7 @@ export default function QuickStartSection() {
                 </p>
                 <div className="mt-8 flex flex-col gap-3 sm:flex-row">
                   <a
-                    href="https://mona.lzfun.vip/releases/Mona-latest.exe"
+                    href={DOWNLOAD_URL}
                     className="inline-flex items-center justify-center gap-2 rounded-md border border-black bg-[#101010] px-5 py-3 text-sm font-semibold text-white transition hover:bg-white hover:text-black"
                   >
                     <Download className="h-4 w-4" />

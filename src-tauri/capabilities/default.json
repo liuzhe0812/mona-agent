@@ -1,7 +1,7 @@
 {
   "identifier": "default",
   "description": "Capability for the main window",
-  "windows": ["main", "quick-ask", "md-reader-*", "browser-*"],
+  "windows": ["main", "quick-ask", "md-reader-*", "browser-*", "compose-*"],
   "permissions": [
     "core:default",
     "core:window:default",
@@ -74,6 +74,10 @@
     "fs:allow-appdata-read-recursive",
     "clipboard-manager:allow-read-text",
     "clipboard-manager:allow-write-text",
+    "notification:default",
+    "notification:allow-notify",
+    "notification:allow-is-permission-granted",
+    "notification:allow-request-permission",
     {
       "identifier": "http:default",
       "allow": [

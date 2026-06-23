@@ -206,6 +206,8 @@ export interface NoteSearchResult {
   title: string;
   snippet: string;
   rank: number;
+  notebookId?: string;
+  notebookName?: string;
 }
 
 export async function searchNotebookNotes(
@@ -214,6 +216,13 @@ export async function searchNotebookNotes(
   limit?: number,
 ): Promise<NoteSearchResult[]> {
   return invoke<NoteSearchResult[]>("notes_search", { notebookId, query, limit });
+}
+
+export async function searchAllNotes(
+  query: string,
+  limit?: number,
+): Promise<NoteSearchResult[]> {
+  return invoke<NoteSearchResult[]>("notes_search_all", { query, limit });
 }
 
 export async function saveNoteImage(

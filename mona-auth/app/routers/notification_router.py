@@ -11,7 +11,7 @@ from app.schemas import NotificationInfo, NotificationListResponse, UnreadCountR
 router = APIRouter(prefix="/notifications", tags=["notifications"])
 
 
-@router.get("", response_model=NotificationListResponse)
+@router.get("/", response_model=NotificationListResponse)
 def list_notifications(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),

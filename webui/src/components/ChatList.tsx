@@ -7,7 +7,6 @@ import {
 import {
   Archive,
   ArchiveRestore,
-  MoreHorizontal,
   Pencil,
   Pin,
   PinOff,
@@ -15,12 +14,6 @@ import {
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -72,10 +65,8 @@ export const ChatList = memo(function ChatList({
   completedChatIds = [],
   density = "comfortable",
   showPreviews = false,
-  showTimestamps = false,
   sort = "updated_desc",
   showArchived = false,
-  actionMenuPortalContainer,
   loading,
   emptyLabel,
 }: ChatListProps) {
@@ -172,9 +163,7 @@ export const ChatList = memo(function ChatList({
                 const isArchived = archived.has(s.key);
                 const preview = s.preview.trim();
                 const showPreview = showPreviews && preview && preview !== title;
-                const timestamp = showTimestamps
-                  ? relativeTime(s.updatedAt ?? s.createdAt)
-                  : "";
+                const timestamp = relativeTime(s.updatedAt ?? s.createdAt);
                 const activityState = running.has(s.chatId)
                   ? "running"
                   : completed.has(s.chatId)
@@ -208,67 +197,13 @@ export const ChatList = memo(function ChatList({
                             {preview}
                           </span>
                         ) : null}
-                        {timestamp ? (
-                          <span className="block w-full truncate text-[11px] leading-4 text-muted-foreground/58">
-                            {timestamp}
-                          </span>
-                        ) : null}
                       </button>
                       <SessionActivityIndicator state={activityState} />
-                      <DropdownMenu modal={false}>
-                        <DropdownMenuTrigger
-                          className={cn(
-                            "inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground/75 opacity-40 transition-opacity",
-                            "hover:bg-sidebar-accent hover:text-sidebar-foreground group-hover:opacity-100",
-                            "focus-visible:opacity-100",
-                            active && "opacity-100",
-                          )}
-                          aria-label={t("chat.actions", { title })}
-                        >
-                          <MoreHorizontal className="h-3.5 w-3.5" />
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent
-                          align="end"
-                          portalContainer={actionMenuPortalContainer}
-                          onCloseAutoFocus={(event) => event.preventDefault()}
-                        >
-                          <DropdownMenuItem
-                            onSelect={() => onTogglePin(s.key)}
-                          >
-                            {isPinned ? (
-                              <PinOff className="mr-2 h-4 w-4" />
-                            ) : (
-                              <Pin className="mr-2 h-4 w-4" />
-                            )}
-                            {isPinned ? t("chat.unpin") : t("chat.pin")}
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            onSelect={() => onRequestRename(s.key, title)}
-                          >
-                            <Pencil className="mr-2 h-4 w-4" />
-                            {t("chat.rename")}
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            onSelect={() => onToggleArchive(s.key)}
-                          >
-                            {isArchived ? (
-                              <ArchiveRestore className="mr-2 h-4 w-4" />
-                            ) : (
-                              <Archive className="mr-2 h-4 w-4" />
-                            )}
-                            {isArchived ? t("chat.unarchive") : t("chat.archive")}
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            onSelect={() => {
-                              window.setTimeout(() => onRequestDelete(s.key, title), 0);
-                            }}
-                            className="text-destructive focus:text-destructive"
-                          >
-                            <Trash2 className="mr-2 h-4 w-4" />
-                            {t("chat.delete")}
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
+                      {timestamp ? (
+                        <span className="shrink-0 text-[11px] leading-4 text-muted-foreground/58">
+                          {timestamp}
+                        </span>
+                      ) : null}
                         </div>
                       </ContextMenuTrigger>
                     <ContextMenuContent

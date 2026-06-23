@@ -32,29 +32,41 @@ interface DialogContentProps
 const DialogContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
   DialogContentProps
->(({ className, children, showCloseButton = true, ...props }, ref) => (
-  <DialogPortal>
-    <DialogOverlay />
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <DialogPrimitive.Content
-        ref={ref}
-        className={cn(
-          "grid w-full max-w-lg origin-center gap-4 border bg-background p-6 shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 sm:rounded-lg",
-          className,
-        )}
-        {...props}
-      >
-        {children}
-        {showCloseButton ? (
-          <DialogPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none">
-            <X className="h-4 w-4" />
-            <span className="sr-only">Close</span>
-          </DialogPrimitive.Close>
-        ) : null}
-      </DialogPrimitive.Content>
-    </div>
-  </DialogPortal>
-));
+>(({ className, children, showCloseButton = true, ...props }, ref) => {
+  // 安全网：DialogContent 卸载时确保 body 的 pointer-events 被清理。
+  // 已知场景：从 ContextMenu 中打开 Dialog 时，Radix 的 overlay 引用计数
+  // 可能因竞态导致 body 上 pointer-events:none 残留，界面完全无法点击。
+  React.useEffect(() => {
+    return () => {
+      if (document.body.style.pointerEvents === "none") {
+        document.body.style.pointerEvents = "";
+      }
+    };
+  }, []);
+  return (
+    <DialogPortal>
+      <DialogOverlay />
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <DialogPrimitive.Content
+          ref={ref}
+          className={cn(
+            "grid w-full max-w-lg origin-center gap-4 border bg-background p-6 shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 sm:rounded-lg",
+            className,
+          )}
+          {...props}
+        >
+          {children}
+          {showCloseButton ? (
+            <DialogPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none">
+              <X className="h-4 w-4" />
+              <span className="sr-only">Close</span>
+            </DialogPrimitive.Close>
+          ) : null}
+        </DialogPrimitive.Content>
+      </div>
+    </DialogPortal>
+  );
+});
 DialogContent.displayName = DialogPrimitive.Content.displayName;
 
 const DialogHeader = ({

@@ -1,16 +1,9 @@
 import { useState, type ReactNode } from "react";
 import {
   Archive,
-  BookOpen,
-  Bot,
-  Database,
-  FileText,
-  ListFilter,
   LogIn,
   Menu,
-  Presentation,
   Search,
-  Terminal,
   User,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -18,22 +11,20 @@ import { useTranslation } from "react-i18next";
 import { AgentLogo } from "@/components/AgentLogo";
 import { ChatList } from "@/components/ChatList";
 
+import sidebarMonaIcon from "@/assets/icons/sidebar-mona.jpg";
+import sidebarNoteIcon from "@/assets/icons/sidebar-note.jpg";
+import sidebarTerminalIcon from "@/assets/icons/sidebar-terminal.jpg";
+import sidebarDatabaseIcon from "@/assets/icons/sidebar-database.jpg";
+import sidebarKnowledgeIcon from "@/assets/icons/sidebar-knowledge.jpg";
+import sidebarPptIcon from "@/assets/icons/sidebar-ppt.jpg";
+import sidebarEmailIcon from "@/assets/icons/sidebar-email.jpg";
+import sidebarScheduleIcon from "@/assets/icons/sidebar-schedule.jpg";
+
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuCheckboxItem,
-  DropdownMenuContent,
-  DropdownMenuLabel,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Separator } from "@/components/ui/separator";
 import { useLicense } from "@/hooks/useLicense";
 import type {
   ChatSummary,
-  SidebarSortMode,
   SidebarViewState,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -56,6 +47,8 @@ interface SidebarProps {
   onOpenSSH?: () => void;
   onOpenDb?: () => void;
   onOpenKb?: () => void;
+  onOpenEmail?: () => void;
+  onOpenSchedule?: () => void;
   onOpenSearch: () => void;
   onToggleArchived: () => void;
   onUpdateView: (view: Partial<SidebarViewState>) => void;
@@ -133,6 +126,8 @@ export function Sidebar(props: SidebarProps) {
         onOpenSSH={props.onOpenSSH ?? (() => {})}
         onOpenDb={props.onOpenDb ?? (() => {})}
         onOpenKb={props.onOpenKb ?? (() => {})}
+        onOpenEmail={props.onOpenEmail ?? (() => {})}
+        onOpenSchedule={props.onOpenSchedule ?? (() => {})}
         onGoHome={props.onGoHome ?? (() => {})}
       />
       <Separator className="mx-2 mb-2 bg-sidebar-border/50" />
@@ -148,11 +143,6 @@ export function Sidebar(props: SidebarProps) {
           label={t("sidebar.searchAria")}
           onClick={props.onOpenSearch}
           icon={<Search className="h-4 w-4" />}
-        />
-        <SidebarViewMenu
-          compact={collapsed}
-          view={props.viewState}
-          onUpdateView={props.onUpdateView}
         />
         {props.archivedCount ? (
           <SidebarActionButton
@@ -270,12 +260,14 @@ const TOOLBOX_ITEMS: Array<{
   label: string;
   icon: ReactNode;
 }> = [
-  { label: "Mona", icon: <Bot className="h-4 w-4" /> },
-  { label: "笔记", icon: <FileText className="h-4 w-4" /> },
-  { label: "终端", icon: <Terminal className="h-4 w-4" /> },
-  { label: "数据库", icon: <Database className="h-4 w-4" /> },
-  { label: "知识库", icon: <BookOpen className="h-4 w-4" /> },
-  { label: "PPT制作", icon: <Presentation className="h-4 w-4" /> },
+  { label: "Mona", icon: <img src={sidebarMonaIcon} className="h-4 w-4 rounded-md object-cover" alt="" draggable={false} /> },
+  { label: "笔记", icon: <img src={sidebarNoteIcon} className="h-4 w-4 rounded-md object-cover" alt="" draggable={false} /> },
+  { label: "终端", icon: <img src={sidebarTerminalIcon} className="h-4 w-4 rounded-md object-cover" alt="" draggable={false} /> },
+  { label: "数据库", icon: <img src={sidebarDatabaseIcon} className="h-4 w-4 rounded-md object-cover" alt="" draggable={false} /> },
+  { label: "知识库", icon: <img src={sidebarKnowledgeIcon} className="h-4 w-4 rounded-md object-cover" alt="" draggable={false} /> },
+  { label: "PPT制作", icon: <img src={sidebarPptIcon} className="h-4 w-4 rounded-md object-cover" alt="" draggable={false} /> },
+  { label: "邮件", icon: <img src={sidebarEmailIcon} className="h-4 w-4 rounded-md object-cover" alt="" draggable={false} /> },
+  { label: "日程", icon: <img src={sidebarScheduleIcon} className="h-4 w-4 rounded-md object-cover" alt="" draggable={false} /> },
 ];
 
 function ToolboxNavigation({
@@ -286,6 +278,8 @@ function ToolboxNavigation({
   onOpenSSH,
   onOpenDb,
   onOpenKb,
+  onOpenEmail,
+  onOpenSchedule,
   onGoHome,
 }: {
   collapsed: boolean;
@@ -295,10 +289,12 @@ function ToolboxNavigation({
   onOpenSSH: () => void;
   onOpenDb: () => void;
   onOpenKb: () => void;
+  onOpenEmail: () => void;
+  onOpenSchedule: () => void;
   onGoHome: () => void;
 }) {
   const { licenseActive } = useLicense();
-  const LICENSE_REQUIRED = new Set(["知识库", "PPT制作"]);
+  const LICENSE_REQUIRED = new Set(["知识库", "PPT制作", "邮件"]);
   const visibleItems = licenseActive
     ? TOOLBOX_ITEMS
     : TOOLBOX_ITEMS.filter((item) => !LICENSE_REQUIRED.has(item.label));
@@ -323,6 +319,10 @@ function ToolboxNavigation({
             ? onOpenDb
           : item.label === "知识库"
             ? onOpenKb
+          : item.label === "邮件"
+            ? onOpenEmail
+          : item.label === "日程"
+            ? onOpenSchedule
           : onGoHome;
         return (
           <SidebarActionButton
@@ -394,103 +394,4 @@ function SidebarActionButton({
       </span>
     </Button>
   );
-}
-
-function SidebarViewMenu({
-  compact = false,
-  view,
-  onUpdateView,
-}: {
-  compact?: boolean;
-  view?: SidebarViewState;
-  onUpdateView: (view: Partial<SidebarViewState>) => void;
-}) {
-  const { t } = useTranslation();
-  const sort = view?.sort ?? "updated_desc";
-  const setSort = (value: string) => {
-    if (isSidebarSortMode(value)) onUpdateView({ sort: value });
-  };
-
-  return (
-    <DropdownMenu modal={false}>
-      <DropdownMenuTrigger asChild>
-        <Button
-          type="button"
-          aria-label={t("sidebar.viewOptions")}
-          title={compact ? t("sidebar.viewOptions") : undefined}
-          className={cn(
-            "h-8 min-w-0 overflow-hidden font-medium text-sidebar-foreground/75 hover:bg-sidebar-accent/75 hover:text-sidebar-foreground",
-            "transition-[width,padding,border-radius,color,background-color] duration-300 ease-out",
-            compact
-              ? "w-9 justify-center gap-0 rounded-xl px-0"
-              : "w-full justify-start gap-2 rounded-full px-3 text-[12.5px]",
-          )}
-          variant="ghost"
-        >
-          <ListFilter className="h-4 w-4 shrink-0" aria-hidden />
-          <span
-            className={cn(
-              "min-w-0 overflow-hidden truncate whitespace-nowrap transition-[max-width,opacity,transform] duration-200 ease-out",
-              compact
-                ? "max-w-0 -translate-x-1 opacity-0"
-                : "max-w-[12rem] translate-x-0 opacity-100",
-            )}
-          >
-            {t("sidebar.viewOptions")}
-          </span>
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-52">
-        <DropdownMenuLabel className="text-xs text-muted-foreground">
-          {t("sidebar.viewOptions")}
-        </DropdownMenuLabel>
-        <DropdownMenuCheckboxItem
-          checked={view?.density === "compact"}
-          onCheckedChange={(checked) =>
-            onUpdateView({ density: checked ? "compact" : "comfortable" })
-          }
-          onSelect={(event) => event.preventDefault()}
-        >
-          {t("sidebar.compactList")}
-        </DropdownMenuCheckboxItem>
-        <DropdownMenuCheckboxItem
-          checked={Boolean(view?.show_previews)}
-          onCheckedChange={(checked) =>
-            onUpdateView({ show_previews: Boolean(checked) })
-          }
-          onSelect={(event) => event.preventDefault()}
-        >
-          {t("sidebar.showPreviews")}
-        </DropdownMenuCheckboxItem>
-        <DropdownMenuCheckboxItem
-          checked={Boolean(view?.show_timestamps)}
-          onCheckedChange={(checked) =>
-            onUpdateView({ show_timestamps: Boolean(checked) })
-          }
-          onSelect={(event) => event.preventDefault()}
-        >
-          {t("sidebar.showTimestamps")}
-        </DropdownMenuCheckboxItem>
-        <DropdownMenuSeparator />
-        <DropdownMenuLabel className="text-xs text-muted-foreground">
-          {t("sidebar.sortLabel")}
-        </DropdownMenuLabel>
-        <DropdownMenuRadioGroup value={sort} onValueChange={setSort}>
-          <DropdownMenuRadioItem value="updated_desc">
-            {t("sidebar.sortUpdated")}
-          </DropdownMenuRadioItem>
-          <DropdownMenuRadioItem value="created_desc">
-            {t("sidebar.sortCreated")}
-          </DropdownMenuRadioItem>
-          <DropdownMenuRadioItem value="title_asc">
-            {t("sidebar.sortTitle")}
-          </DropdownMenuRadioItem>
-        </DropdownMenuRadioGroup>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
-
-function isSidebarSortMode(value: string): value is SidebarSortMode {
-  return value === "updated_desc" || value === "created_desc" || value === "title_asc";
 }

@@ -7,6 +7,9 @@ use crate::settings::{self, AppSettings};
 pub struct GatewayProcess {
     child: Option<std::process::Child>,
     port: u16,
+    /// true 表示复用一个已在外部运行的 gateway（本进程未 spawn 它）。
+    /// 此时 `child` 为 None，stop 时通过 POST /shutdown 关闭。
+    external: bool,
 }
 
 pub struct GatewayManager {
@@ -24,16 +27,36 @@ impl GatewayManager {
         let mut guard = self.process.lock().map_err(|e| format!("Lock error: {}", e))?;
 
         if let Some(ref mut proc) = *guard {
-            if let Some(ref mut child) = proc.child {
-                if let Ok(status) = child.try_wait() {
-                    if status.is_none() {
-                        return Ok(proc.port);
+            // 已有自己 spawn 的子进程且活着：直接复用。
+            if !proc.external {
+                if let Some(ref mut child) = proc.child {
+                    if let Ok(status) = child.try_wait() {
+                        if status.is_none() {
+                            return Ok(proc.port);
+                        }
                     }
                 }
+            } else if proc_is_alive(proc) {
+                // 复用中的外部 gateway 仍健康：继续复用。
+                return Ok(proc.port);
             }
         }
 
-        let port = find_available_port(settings.gateway_port)?;
+        // 探测目标端口：可用则启动新进程；被一个健康 gateway 占用则复用。
+        let (port, external) = probe_gateway_port(settings.gateway_port)?;
+
+        if external {
+            log::info!(
+                "Reusing existing gateway on port {} (started by another process)",
+                port
+            );
+            *guard = Some(GatewayProcess {
+                child: None,
+                port,
+                external: true,
+            });
+            return Ok(port);
+        }
 
         let mut cmd;
 
@@ -129,6 +152,7 @@ impl GatewayManager {
         *guard = Some(GatewayProcess {
             child: Some(child),
             port,
+            external: false,
         });
 
         Ok(port)
@@ -138,7 +162,11 @@ impl GatewayManager {
         let mut guard = self.process.lock().map_err(|e| format!("Lock error: {}", e))?;
 
         if let Some(ref mut proc) = *guard {
-            if let Some(ref mut child) = proc.child {
+            if proc.external {
+                // 复用的外部 gateway：通过 HTTP /shutdown 优雅关闭，
+                // 让其主循环走 finally 清理（flush session、关 MCP 等）。
+                http_post_shutdown(proc.port);
+            } else if let Some(ref mut child) = proc.child {
                 #[cfg(windows)]
                 {
                     let pid = child.id();
@@ -169,6 +197,11 @@ impl GatewayManager {
         match guard {
             Ok(mut g) => {
                 if let Some(ref mut proc) = *g {
+                    if proc.external {
+                        // 外部 gateway 不归本进程管，乐观认为仍在运行；
+                        // 启动时 wait_for_gateway 已经验证过一次健康状态。
+                        return true;
+                    }
                     if let Some(ref mut child) = proc.child {
                         match child.try_wait() {
                             Ok(None) => return true,
@@ -185,6 +218,10 @@ impl GatewayManager {
     pub fn exit_message(&self) -> Option<String> {
         let mut guard = self.process.lock().ok()?;
         let proc = guard.as_mut()?;
+        // 外部 gateway 的进程生命周期不归本进程管，无法探测其退出状态。
+        if proc.external {
+            return None;
+        }
         let child = proc.child.as_mut()?;
         match child.try_wait() {
             Ok(Some(status)) => {
@@ -260,12 +297,22 @@ fn open_gateway_log(port: u16) -> Option<std::fs::File> {
     Some(file)
 }
 
-fn find_available_port(start_port: u16) -> Result<u16, String> {
+/// 探测目标端口，返回 (port, external)。
+///
+/// - 端口可绑定：`(port, false)`，调用方需 spawn 新 gateway。
+/// - 端口被占但跑着一个健康 gateway（GET /health 返回 200）：`(port, true)`，调用方复用。
+/// - 端口被占且不是 gateway：报错。
+fn probe_gateway_port(start_port: u16) -> Result<(u16, bool), String> {
     if is_port_available(start_port) {
-        return Ok(start_port);
+        return Ok((start_port, false));
+    }
+    // 端口被占：判断占用者是不是一个可用的 Mona gateway。
+    if http_health_ok(start_port) {
+        return Ok((start_port, true));
     }
     Err(format!(
-        "Gateway port {} is already in use. Another Mona gateway or process is running on this port.",
+        "Gateway port {} is already in use by a non-gateway process. \
+         Free the port or change the gateway port in settings.",
         start_port
     ))
 }
@@ -273,6 +320,62 @@ fn find_available_port(start_port: u16) -> Result<u16, String> {
 fn is_port_available(port: u16) -> bool {
     use std::net::TcpListener;
     TcpListener::bind(("127.0.0.1", port)).is_ok()
+}
+
+/// 同步 GET /health，判断端口上是否跑着 Mona gateway。
+fn http_health_ok(port: u16) -> bool {
+    http_request(port, "GET", "/health").map_or(false, |body| {
+        // 响应体应包含 {"status":"ok"}；只做宽松包含判断以兼容空白差异。
+        body.contains("\"ok\"") || body.contains("ok")
+    })
+}
+
+/// 同步 POST /shutdown，通知外部 gateway 优雅退出。
+fn http_post_shutdown(port: u16) {
+    let _ = http_request(port, "POST", "/shutdown");
+}
+
+/// 用 std::net 同步发一个无 body 的 HTTP 请求，返回响应体字符串（失败返回 None）。
+/// 仅用于 127.0.0.1 本地探测，不处理代理/重定向/HTTPS。
+fn http_request(port: u16, method: &str, path: &str) -> Option<String> {
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+    use std::time::Duration;
+
+    let addr = format!("127.0.0.1:{}", port);
+    let Ok(socket_addr) = addr.parse() else {
+        return None;
+    };
+    let Ok(mut stream) = TcpStream::connect_timeout(&socket_addr, Duration::from_secs(1)) else {
+        return None;
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
+
+    let request = format!(
+        "{} {} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        method, path, port
+    );
+    if stream.write_all(request.as_bytes()).is_err() {
+        return None;
+    }
+    let mut buf = Vec::with_capacity(512);
+    if stream.read_to_end(&mut buf).is_err() {
+        // 即使读不全，只要写出了请求也算成功（shutdown 场景不关心响应）。
+        if method == "POST" {
+            return Some(String::new());
+        }
+        return None;
+    }
+    Some(String::from_utf8_lossy(&buf).into_owned())
+}
+
+/// 判断当前复用中的外部 gateway 是否仍健康。
+fn proc_is_alive(proc: &GatewayProcess) -> bool {
+    if !proc.external {
+        return false;
+    }
+    http_health_ok(proc.port)
 }
 
 /// Strip environment variables that can interfere with the packaged gateway.

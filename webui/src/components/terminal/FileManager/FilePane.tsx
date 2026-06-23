@@ -281,8 +281,38 @@ export function FilePane({
         }
         return;
       }
-      if (e.dataTransfer.files.length > 0) {
-        const files: UnifiedFileItem[] = [];
+      // Use items API to detect directories via webkitGetAsEntry
+      const items = e.dataTransfer.items;
+      const files: UnifiedFileItem[] = [];
+
+      if (items && items.length > 0) {
+        for (let i = 0; i < items.length; i++) {
+          const item = items[i];
+          let isDir = false;
+
+          // Try to detect directory via webkitGetAsEntry
+          try {
+            const entry = item.webkitGetAsEntry?.();
+            if (entry?.isDirectory) {
+              isDir = true;
+            }
+          } catch {}
+
+          const f = item.getAsFile();
+          if (f) {
+            const filePath = (f as File & { path?: string }).path;
+            files.push({
+              name: f.name,
+              path: filePath && filePath.includes(":") ? filePath : f.name,
+              isDir,
+              size: f.size,
+              modified: null,
+              permissions: null,
+              _rawFile: filePath ? undefined : f,
+            });
+          }
+        }
+      } else if (e.dataTransfer.files.length > 0) {
         for (let i = 0; i < e.dataTransfer.files.length; i++) {
           const f = e.dataTransfer.files[i];
           const filePath = (f as File & { path?: string }).path;
@@ -296,9 +326,10 @@ export function FilePane({
             _rawFile: filePath ? undefined : f,
           });
         }
-        if (files.length > 0) {
-          onDropFiles(files, "system");
-        }
+      }
+
+      if (files.length > 0) {
+        onDropFiles(files, "system");
       }
     },
     [onDropFiles],

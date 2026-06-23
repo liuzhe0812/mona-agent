@@ -446,13 +446,11 @@ export function FileManager({ sessionId }: Props) {
         });
 
         try {
-          if (fromSide === "system" && file._rawFile) {
+          if (file.isDir) {
+            await sftpUploadDir(sessionId, file.path, remoteFilePath, fileTaskId);
+          } else if (fromSide === "system" && file._rawFile) {
             const buf = await file._rawFile.arrayBuffer();
             await sftpUpload(sessionId, remoteFilePath, Array.from(new Uint8Array(buf)), fileTaskId);
-          } else if (fromSide === "system" && file.path && (file.path.includes(":") || file.path.startsWith("/"))) {
-            await sftpUploadFile(sessionId, file.path, remoteFilePath, fileTaskId);
-          } else if (file.isDir) {
-            await sftpUploadDir(sessionId, file.path, remoteFilePath, fileTaskId);
           } else {
             await sftpUploadFile(sessionId, file.path, remoteFilePath, fileTaskId);
           }

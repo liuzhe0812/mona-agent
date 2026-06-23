@@ -1,13 +1,16 @@
 import { useState } from "react";
 import type { JSONContent } from "@tiptap/core";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, BookOpen } from "lucide-react";
 
 import { MarkdownEditor, type EditorMode } from "@/components/common/MarkdownEditor";
+import { cn } from "@/lib/utils";
 
-import type { OperationNote } from "./notes-data";
+import type { Notebook, NoteContextLevel, OperationNote } from "./notes-data";
+import { NOTE_CONTEXT_LEVEL_LABELS } from "./notes-data";
 
 interface NoteEditorProps {
   note: OperationNote;
+  notebook?: Notebook | null;
   saveStatus?: "idle" | "saving" | "saved" | "error";
   knowledgeReturnTitle?: string;
   onReturnToKnowledge?: () => void;
@@ -17,15 +20,18 @@ interface NoteEditorProps {
     contentJson?: JSONContent;
     plainText: string;
   }) => void;
+  onContextLevelChange?: (level: NoteContextLevel) => void;
 }
 
 export function NoteEditor({
   note,
+  notebook,
   saveStatus = "idle",
   knowledgeReturnTitle,
   onReturnToKnowledge,
   onTitleChange,
   onContentChange,
+  onContextLevelChange,
 }: NoteEditorProps) {
   const [mode, setMode] = useState<EditorMode>("visual");
 
@@ -35,6 +41,9 @@ export function NoteEditor({
       : saveStatus === "error"
         ? "保存失败"
         : "已自动保存";
+
+  const showContextLevel = !!notebook?.knowledgeBaseEnabled && !!onContextLevelChange;
+  const currentLevel: NoteContextLevel = note.contextLevel ?? "full";
 
   return (
     <MarkdownEditor
@@ -58,6 +67,12 @@ export function NoteEditor({
         note={note}
         onTitleChange={onTitleChange}
       />
+      {showContextLevel ? (
+        <ContextLevelSelector
+          level={currentLevel}
+          onChange={onContextLevelChange!}
+        />
+      ) : null}
     </MarkdownEditor>
   );
 }
@@ -98,5 +113,39 @@ function NoteTitleBlock({
       className="w-full bg-transparent text-[22px] font-semibold leading-tight tracking-normal text-foreground outline-none placeholder:text-muted-foreground"
       placeholder="未命名笔记"
     />
+  );
+}
+
+const CONTEXT_LEVEL_ORDER: NoteContextLevel[] = ["full", "summary", "none"];
+
+function ContextLevelSelector({
+  level,
+  onChange,
+}: {
+  level: NoteContextLevel;
+  onChange: (level: NoteContextLevel) => void;
+}) {
+  return (
+    <div className="mb-2 flex items-center gap-2">
+      <BookOpen className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+      <span className="shrink-0 text-[11px] text-muted-foreground">知识库上下文</span>
+      <div className="flex items-center rounded-lg border border-border/60 bg-muted/25 p-0.5">
+        {CONTEXT_LEVEL_ORDER.map((value) => (
+          <button
+            key={value}
+            type="button"
+            onClick={() => onChange(value)}
+            className={cn(
+              "h-6 rounded-md px-2 text-[11px] font-medium transition-colors",
+              level === value
+                ? "bg-background text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {NOTE_CONTEXT_LEVEL_LABELS[value]}
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }

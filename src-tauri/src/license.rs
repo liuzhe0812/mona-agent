@@ -186,7 +186,7 @@ pub async fn list_notifications() -> Result<serde_json::Value, String> {
     let token = load_auth_token().ok_or_else(|| "Not logged in".to_string())?;
     let client = build_client()?;
     let resp = client
-        .get(format!("{}/notifications", AUTH_SERVER_URL))
+        .get(format!("{}/notifications/", AUTH_SERVER_URL))
         .header("Authorization", format!("Bearer {}", token))
         .send()
         .await

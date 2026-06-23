@@ -30,7 +30,7 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "0" && ctrl) e.preventDefault();
   if (e.key === "F12") e.preventDefault();
   if (e.key === "I" && ctrl && e.shiftKey) e.preventDefault();
-  if (e.key === "Backspace" && !["INPUT", "TEXTAREA"].includes((e.target as HTMLElement)?.tagName)) e.preventDefault();
+  if (e.key === "Backspace" && !["INPUT", "TEXTAREA"].includes((e.target as HTMLElement)?.tagName) && !(e.target as HTMLElement)?.isContentEditable) e.preventDefault();
 });
 
 const root = document.getElementById("root");

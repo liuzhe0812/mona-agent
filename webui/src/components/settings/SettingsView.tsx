@@ -36,7 +36,6 @@ import {
   Keyboard,
   Layers,
   Loader2,
-  Mail,
   Monitor,
   Moon,
   Orbit,
@@ -61,7 +60,6 @@ import {
 import { useTranslation } from "react-i18next";
 
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
-import { EmailAccountsSettings } from "@/components/settings/EmailAccountsSettings";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -126,7 +124,6 @@ type SettingsSectionKey =
   | "web"
   | "channels"
   | "runtime"
-  | "email"
   | "desktop"
   | "shortcuts"
   | "advanced"
@@ -781,8 +778,6 @@ export function SettingsView({
             requiresRestartPending={pendingRestartSections.runtime}
           />
         );
-      case "email":
-        return <EmailAccountsSettings />;
       case "desktop":
         return <DesktopSettings />;
       case "shortcuts":
@@ -850,7 +845,6 @@ const SETTINGS_NAV_ITEMS: Array<{ key: SettingsSectionKey; icon: LucideIcon; fal
   { key: "web", icon: Globe2, fallback: "Web" },
   { key: "channels", icon: Radio, fallback: "频道" },
   { key: "runtime", icon: Server, fallback: "Runtime" },
-  { key: "email", icon: Mail, fallback: "邮箱", desktopOnly: true },
   { key: "desktop", icon: Monitor, fallback: "桌面", desktopOnly: true },
   { key: "shortcuts", icon: Keyboard, fallback: "快捷键", desktopOnly: true },
   { key: "advanced", icon: ShieldCheck, fallback: "Advanced" },

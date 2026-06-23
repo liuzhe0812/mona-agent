@@ -1,6 +1,6 @@
 ---
 name: "release"
-description: "Build and publish Mona releases to VPS for hot-update and website download. Invoke when user asks to release, publish, deploy, or push updates to VPS."
+description: "Build and publish Mona releases to Qiniu Cloud (CDN) + VPS for hot-update and website download. Invoke when user asks to release, publish, deploy, or push updates."
 ---
 
 # Mona Release Pipeline
@@ -10,7 +10,19 @@ Pre-check → Git commit → Bump version → Build → Update package → Chang
 ## Prerequisites
 
 - All prerequisites from the `windows-packager` skill
-- Python `paramiko` package installed (`pip install paramiko`)
+- Python packages: `paramiko`, `qiniu`, `zstandard` (`pip install paramiko qiniu zstandard`)
+- 环境变量已配置（七牛云凭证 + VPS 密码，见 `.env.example`）：
+  - `QINIU_AK` / `QINIU_SK` / `QINIU_BUCKET` / `QINIU_DOMAIN`
+  - `VPS_PASSWORD`
+
+## Distribution Architecture
+
+| 资源 | 存储位置 | 地址 | 说明 |
+|------|---------|------|------|
+| NSIS 安装包 | 七牛云 Kodo + CDN | `https://dl.mona.lzfun.vip/Mona-latest.exe` | 官网下载，大文件 CDN 加速 |
+| 热更新包 | 七牛云 Kodo + CDN | `https://dl.mona.lzfun.vip/mona-<ver>.tar.zst` | App 内热更新下载 |
+| 更新清单 | VPS Nginx | `https://mona.lzfun.vip/updates/update.json` | 小文件，频繁更新，保留 VPS |
+| 官网站点 | VPS Nginx | `https://mona.lzfun.vip/` | SPA |
 
 ## VPS Configuration
 
@@ -19,9 +31,10 @@ Already set up at `47.117.69.105`. Key paths:
 | Path | Purpose |
 |------|---------|
 | `/var/www/mona/dist/` | Official website (SPA) |
-| `/var/www/mona/updates/update.json` | Hot-update manifest |
-| `/var/www/mona/releases/` | Release packages (NSIS + hot-update) |
+| `/var/www/mona/updates/update.json` | Hot-update manifest (small file, kept on VPS) |
 | `/etc/nginx/conf.d/mona.conf` | Nginx config |
+
+> 安装包和热更新包已迁移到七牛云 CDN（`dl.mona.lzfun.vip`），不再上传到 VPS `/var/www/mona/releases/`。
 
 ## Step 0: Pre-release Checks
 
@@ -104,7 +117,7 @@ Output artifacts:
 
 ## Step 3: Create Update Package
 
-The update package is a single `mona-<version>.tar.gz` containing `Mona.exe` and the `mona-gateway/` directory.
+The update package is a single `mona-<version>.tar.zst` containing `Mona.exe` and the `mona-gateway/` directory.
 
 **NOTE:** The Tauri build outputs `mona-desktop.exe`, not `Mona.exe`. Rename during staging.
 
@@ -118,9 +131,10 @@ New-Item -ItemType Directory -Path $StagingDir -Force | Out-Null
 Copy-Item "src-tauri\target\release\mona-desktop.exe" "$StagingDir\Mona.exe"
 Copy-Item -Recurse "src-tauri\resources\mona-gateway" "$StagingDir\mona-gateway"
 
-$UpdatePackage = "dist\mona-$Version.tar.gz"
+$UpdatePackage = "dist\mona-$Version.tar.zst"
 New-Item -ItemType Directory -Path "dist" -Force | Out-Null
-tar -czf $UpdatePackage -C $StagingDir Mona.exe mona-gateway
+# Windows 的 bsdtar 支持 --zstd；如果不支持，可用 Python 脚本 scripts/build_update_package.py
+tar --zstd -cf $UpdatePackage -C $StagingDir Mona.exe mona-gateway
 
 # Compute SHA256
 $Hash = (Get-FileHash $UpdatePackage -Algorithm SHA256).Hash.ToLower()
@@ -204,99 +218,50 @@ python scripts/update_changelog.py write `
 
 This updates `site/public/changelog.json`, which the website changelog page reads at runtime.
 
-## Step 5: Upload to VPS
+## Step 5: Upload to Qiniu Cloud + Update Manifest
 
-Use Python paramiko (Windows lacks native sshpass):
-
-```python
-import paramiko
-
-ssh = paramiko.SSHClient()
-ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-ssh.connect("47.117.69.105", username="root", password="Alt34484!@#", timeout=10)
-sftp = ssh.open_sftp()
-
-# Upload NSIS installer as Mona-latest.exe (for website download)
-sftp.put(
-    "src-tauri/target/release/bundle/nsis/Mona_{version}_x64-setup.exe",
-    "/var/www/mona/releases/Mona-latest.exe",
-)
-
-# Upload update package
-sftp.put(
-    f"dist/mona-{version}.tar.gz",
-    f"/var/www/mona/releases/mona-{version}.tar.gz",
-)
-
-sftp.close()
-ssh.close()
-```
-
-## Step 6: Update Manifest
-
-Update `/var/www/mona/updates/update.json` on VPS. Include the current `git_hash` so future releases can diff against it.
-
-```python
-import paramiko, json
-from datetime import datetime, timezone
-
-ssh = paramiko.SSHClient()
-ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-ssh.connect("47.117.69.105", username="root", password="Alt34484!@#", timeout=10)
-sftp = ssh.open_sftp()
-
-manifest = {
-    "version": version,
-    "notes": release_notes,
-    "pub_date": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-    "url": f"https://mona.lzfun.vip/releases/mona-{version}.tar.gz",
-    "sha256": sha256_hash,
-    "size": file_size,
-    "git_hash": current_git_hash,
-}
-
-with sftp.open("/var/www/mona/updates/update.json", "w") as f:
-    f.write(json.dumps(manifest, indent=2))
-
-sftp.close()
-ssh.close()
-```
-
-## Step 7: Deploy Website
-
-The website source in `site/` includes a changelog page that reads `site/public/changelog.json`. Build and deploy it:
+安装包和热更新包上传到七牛云 CDN（`dl.mona.lzfun.vip`），清单 `update.json` 更新到 VPS。使用统一脚本 `scripts/release_upload.py`（自动从 `.env` 读取凭证，无需手动设置环境变量）：
 
 ```powershell
-npm --prefix site run build
+python scripts/release_upload.py `
+  $Version `
+  "src-tauri/target/release/bundle/nsis/Mona_${Version}_x64-setup.exe" `
+  "dist/mona-$Version.tar.zst" `
+  $Hash `
+  $ReleaseNotes `
+  $CurrentGitHash
 ```
 
-Then upload `site/dist/` to VPS `/var/www/mona/dist/` via paramiko.
+脚本内部逻辑：
+1. 上传 NSIS → 七牛 `Mona-latest.exe`（覆盖，触发 CDN 预取）
+2. 上传热更新包 → 七牛 `mona-<version>.tar.zst`
+3. 生成 `update.json` 清单（`url` 指向七牛 CDN）→ SFTP 到 VPS
 
-```python
-import paramiko, os
+生成的 `update.json` 结构：
 
-ssh = paramiko.SSHClient()
-ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-ssh.connect("47.117.69.105", username="root", password="Alt34484!@#", timeout=10)
-sftp = ssh.open_sftp()
-
-local_dist = "site/dist"
-remote_dist = "/var/www/mona/dist"
-
-for root, dirs, files in os.walk(local_dist):
-    rel = os.path.relpath(root, local_dist).replace("\\", "/")
-    remote_root = f"{remote_dist}/{rel}" if rel != "." else remote_dist
-    ssh.exec_command(f"mkdir -p {remote_root}")
-    for f in files:
-        local_path = os.path.join(root, f).replace("\\", "/")
-        remote_path = f"{remote_root}/{f}"
-        sftp.put(local_path, remote_path)
-
-sftp.close()
-ssh.close()
+```json
+{
+  "version": "<version>",
+  "notes": "<release_notes>",
+  "pub_date": "<UTC timestamp>",
+  "url": "https://dl.mona.lzfun.vip/mona-<version>.tar.zst",
+  "sha256": "<hash>",
+  "size": <bytes>,
+  "git_hash": "<current_git_hash>"
+}
 ```
 
-### Nginx SPA fallback
+## Step 6: Deploy Website
+
+The website source in `site/` includes a changelog page that reads `site/public/changelog.json`. Build and deploy using the unified script (reads VPS credentials from `.env`):
+
+```powershell
+python scripts/deploy_site.py
+```
+
+脚本自动完成：构建 `site/dist/` → SFTP 上传到 VPS `/var/www/mona/dist/`。
+
+### Nginx SPA fallback（一次性配置，无需每次发布检查）
 
 The site is a SPA. Nginx must fallback non-file requests to `index.html` so routes like `/changelog` work. Verify the config contains:
 
@@ -308,23 +273,23 @@ location / {
 
 If missing, add to `/etc/nginx/conf.d/mona.conf` and run `nginx -s reload`.
 
-## Step 8: Verify
+## Step 7: Verify
 
 ```powershell
 curl.exe -s https://mona.lzfun.vip/updates/update.json
 curl.exe -s https://mona.lzfun.vip/changelog.json
-curl.exe -sI https://mona.lzfun.vip/releases/mona-<ver>.tar.gz
-curl.exe -sI https://mona.lzfun.vip/releases/Mona-latest.exe
+curl.exe -sI https://dl.mona.lzfun.vip/mona-<ver>.tar.zst
+curl.exe -sI https://dl.mona.lzfun.vip/Mona-latest.exe
 ```
 
 Check:
-1. `update.json` — version matches, `git_hash` present
+1. `update.json` — version matches, `git_hash` present, `url` 指向 `dl.mona.lzfun.vip`
 2. `changelog.json` — new release entry present with correct items
 3. Update package — HTTP 200, size matches local file
 4. NSIS installer — HTTP 200
 5. Open `https://mona.lzfun.vip/changelog` in browser — page renders correctly
 
-## Step 9: Cleanup
+## Step 8: Cleanup
 
 ```powershell
 Remove-Item -Recurse -Force "$env:TEMP\mona-python-build" -ErrorAction SilentlyContinue
@@ -337,8 +302,8 @@ Remove-Item -Force tmp_*.txt -ErrorAction SilentlyContinue
 
 | User says | Action |
 |-----------|--------|
-| "发布新版本" / "release" | Ask for version, then execute full pipeline (Steps 0-9) |
-| "只部署官网" / "deploy site" | Build site + upload to VPS only (Step 7) |
+| "发布新版本" / "release" | Ask for version, then execute full pipeline (Steps 0-8) |
+| "只部署官网" / "deploy site" | Build site + upload to VPS only (Step 6) |
 
 ## Troubleshooting
 
@@ -346,6 +311,10 @@ Remove-Item -Force tmp_*.txt -ErrorAction SilentlyContinue
 |---------|-----|
 | `mona.__file__` points to source dir | Rebuild with `pip install ".[extras]"` (no `-e`), verify from `C:\` |
 | VPS upload fails | Check SSH: `ssh root@47.117.69.105` |
+| 七牛上传 401 / 403 | AK/SK 错误或已失效，去控制台重新生成并更新环境变量 |
+| 七牛上传 404 | bucket 名错误，或 bucket 不存在 |
+| CDN 下载 404 | CNAME 未生效或未配置；检查 DNS 解析 `nslookup dl.mona.lzfun.vip` |
+| CDN 下载旧版本 | CDN 缓存未刷新，脚本会自动预取；手动刷新去七牛控制台 CDN → 缓存刷新 |
 | Nginx 403 | Check permissions: `chmod -R 755 /var/www/mona/` |
 | Nginx 404 on `/changelog` | Add SPA fallback: `try_files $uri $uri/ /index.html;` in nginx config |
 | `cargo tauri build` fails with `--ci` error | Set `$env:CI = ""` before building |

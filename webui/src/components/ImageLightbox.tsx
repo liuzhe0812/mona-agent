@@ -13,6 +13,20 @@ interface ImageLightboxProps {
   onOpenChange: (open: boolean) => void;
 }
 
+// 安全网：组件卸载时清理 body 残留的 pointer-events:none。
+// Radix Dialog 关闭时需要保持挂载以完成动画和样式清理，若因竞态或
+// 调用方状态变更导致提前卸载，body 上的 pointer-events:none 会残留，
+// 界面完全无法响应点击。
+function useBodyPointerEventsCleanup() {
+  useEffect(() => {
+    return () => {
+      if (document.body.style.pointerEvents === "none") {
+        document.body.style.pointerEvents = "";
+      }
+    };
+  }, []);
+}
+
 /**
  * Modal image viewer. Uses the Radix Dialog primitives directly so we can
  * fill the viewport (the shared `DialogContent` wrapper caps at max-w-lg,
@@ -37,6 +51,8 @@ export function ImageLightbox({
   const open = index !== null;
   const total = images.length;
   const current = index !== null ? images[index] : null;
+  // 安全网：无论以何种路径卸载，都清理 body 残留的 pointer-events:none。
+  useBodyPointerEventsCleanup();
 
   const go = useCallback(
     (delta: number) => {
@@ -76,98 +92,104 @@ export function ImageLightbox({
     return [prev, next].filter((i) => i && i.url);
   }, [images, index, total]);
 
-  if (!current || !current.url) return null;
-
+  // 不能在此 return null：关闭时调用方会将 index 置为 null，导致 current 变为 null，
+  // 组件立即卸载会跳过 Radix Dialog 的关闭动画和 body 样式清理，
+  // pointer-events:none 残留在 body 上，界面完全无法响应点击。
+  // 始终渲染 DialogPrimitive.Root，由 open prop 控制可见性，内容在 Portal 内条件渲染。
   const hasMany = total > 1;
-  const counter = hasMany ? `${index! + 1} / ${total}` : null;
+  const counter = hasMany && index !== null ? `${index + 1} / ${total}` : null;
+  const currentUrl = current?.url ?? "";
+  const currentName = current?.name ?? null;
 
   return (
     <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
-      <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay
-          className={cn(
-            "fixed inset-0 z-50 bg-black/80 backdrop-blur-sm",
-            "data-[state=open]:animate-in data-[state=closed]:animate-out",
-            "data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
-            "motion-reduce:data-[state=open]:animate-none motion-reduce:data-[state=closed]:animate-none",
-          )}
-        />
-        <DialogPrimitive.Content
-          aria-label={current.name ?? t("lightbox.title")}
-          className={cn(
-            "fixed inset-0 z-50 flex items-center justify-center",
-            "focus:outline-none",
-            "data-[state=open]:animate-in data-[state=closed]:animate-out",
-            "data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
-            "data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
-            "motion-reduce:data-[state=open]:animate-none motion-reduce:data-[state=closed]:animate-none",
-          )}
-        >
-          <DialogPrimitive.Title className="sr-only">
-            {current.name ?? t("lightbox.title")}
-          </DialogPrimitive.Title>
-
-          <div
-            className="relative flex max-h-[92vh] max-w-[94vw] items-center justify-center"
-            style={{
-              transform: "translate3d(0,0,0)",
-              willChange: "transform",
-            }}
-          >
-            <img
-              key={current.url}
-              src={current.url}
-              alt={current.name ?? ""}
-              decoding="async"
-              draggable={false}
-              className="max-h-[92vh] max-w-[94vw] select-none rounded-[6px] object-contain shadow-2xl"
-            />
-          </div>
-
-          {hasMany ? (
-            <>
-              <NavButton
-                side="left"
-                label={t("lightbox.prev")}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  go(-1);
-                }}
-              />
-              <NavButton
-                side="right"
-                label={t("lightbox.next")}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  go(1);
-                }}
-              />
-              <div className="pointer-events-none absolute bottom-5 left-1/2 -translate-x-1/2 rounded-full bg-black/55 px-3 py-1 text-xs font-medium text-white/90 tabular-nums">
-                {counter}
-              </div>
-            </>
-          ) : null}
-
-          <DialogPrimitive.Close
-            aria-label={t("lightbox.close")}
+      {current && currentUrl && (
+        <DialogPrimitive.Portal>
+          <DialogPrimitive.Overlay
             className={cn(
-              "absolute right-4 top-4 grid h-9 w-9 place-items-center rounded-full",
-              "bg-black/55 text-white/90 hover:bg-black/70 hover:text-white",
-              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70",
-              "transition-colors motion-reduce:transition-none",
+              "fixed inset-0 z-50 bg-black/80 backdrop-blur-sm",
+              "data-[state=open]:animate-in data-[state=closed]:animate-out",
+              "data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
+              "motion-reduce:data-[state=open]:animate-none motion-reduce:data-[state=closed]:animate-none",
+            )}
+          />
+          <DialogPrimitive.Content
+            aria-label={currentName ?? t("lightbox.title")}
+            className={cn(
+              "fixed inset-0 z-50 flex items-center justify-center",
+              "focus:outline-none",
+              "data-[state=open]:animate-in data-[state=closed]:animate-out",
+              "data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
+              "data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
+              "motion-reduce:data-[state=open]:animate-none motion-reduce:data-[state=closed]:animate-none",
             )}
           >
-            <X className="h-4 w-4" aria-hidden />
-          </DialogPrimitive.Close>
+            <DialogPrimitive.Title className="sr-only">
+              {currentName ?? t("lightbox.title")}
+            </DialogPrimitive.Title>
 
-          {/* Invisible preload — browser decodes adjacent images so prev/next swap is instant. */}
-          <div aria-hidden className="hidden">
-            {preload.map((img, i) => (
-              <img key={`${img.url}-${i}`} src={img.url} alt="" />
-            ))}
-          </div>
-        </DialogPrimitive.Content>
-      </DialogPrimitive.Portal>
+            <div
+              className="relative flex max-h-[92vh] max-w-[94vw] items-center justify-center"
+              style={{
+                transform: "translate3d(0,0,0)",
+                willChange: "transform",
+              }}
+            >
+              <img
+                key={currentUrl}
+                src={currentUrl}
+                alt={currentName ?? ""}
+                decoding="async"
+                draggable={false}
+                className="max-h-[92vh] max-w-[94vw] select-none rounded-[6px] object-contain shadow-2xl"
+              />
+            </div>
+
+            {hasMany ? (
+              <>
+                <NavButton
+                  side="left"
+                  label={t("lightbox.prev")}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    go(-1);
+                  }}
+                />
+                <NavButton
+                  side="right"
+                  label={t("lightbox.next")}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    go(1);
+                  }}
+                />
+                <div className="pointer-events-none absolute bottom-5 left-1/2 -translate-x-1/2 rounded-full bg-black/55 px-3 py-1 text-xs font-medium text-white/90 tabular-nums">
+                  {counter}
+                </div>
+              </>
+            ) : null}
+
+            <DialogPrimitive.Close
+              aria-label={t("lightbox.close")}
+              className={cn(
+                "absolute right-4 top-4 grid h-9 w-9 place-items-center rounded-full",
+                "bg-black/55 text-white/90 hover:bg-black/70 hover:text-white",
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70",
+                "transition-colors motion-reduce:transition-none",
+              )}
+            >
+              <X className="h-4 w-4" aria-hidden />
+            </DialogPrimitive.Close>
+
+            {/* Invisible preload — browser decodes adjacent images so prev/next swap is instant. */}
+            <div aria-hidden className="hidden">
+              {preload.map((img, i) => (
+                <img key={`${img.url}-${i}`} src={img.url} alt="" />
+              ))}
+            </div>
+          </DialogPrimitive.Content>
+        </DialogPrimitive.Portal>
+      )}
     </DialogPrimitive.Root>
   );
 }

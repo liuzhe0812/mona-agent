@@ -3,6 +3,43 @@ import type { JSONContent } from "@tiptap/core";
 export type NoteSourceKind = "agent" | "manual" | "ssh" | "windows";
 export type NoteAiActionId = "summary" | "extractKnowledge" | "freeform" | "polish" | "translate" | "continue" | "generateHtml";
 
+/** Context level controls how a note participates in knowledge-base retrieval. */
+export type NoteContextLevel = "full" | "summary" | "none";
+
+export const NOTE_CONTEXT_LEVELS: NoteContextLevel[] = ["full", "summary", "none"];
+
+export const NOTE_CONTEXT_LEVEL_LABELS: Record<NoteContextLevel, string> = {
+  full: "完整内容",
+  summary: "仅摘要",
+  none: "不参与",
+};
+
+/**
+ * A user-defined AI transformation template for notes.
+ * The prompt template supports variables:
+ * - {{note_title}}   - note title
+ * - {{note_content}} - note markdown content
+ * - {{note_tags}}    - comma-separated tags
+ * - {{note_source}}  - source label
+ */
+export interface NoteTransformation {
+  id: string;
+  name: string;
+  description: string;
+  promptTemplate: string;
+  icon?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Variables that can be inserted into a transformation prompt template. */
+export const TRANSFORMATION_VARIABLES: Array<{ token: string; label: string; description: string }> = [
+  { token: "{{note_title}}", label: "笔记标题", description: "当前笔记的标题" },
+  { token: "{{note_content}}", label: "笔记内容", description: "笔记的 Markdown 全文" },
+  { token: "{{note_tags}}", label: "笔记标签", description: "笔记的标签，逗号分隔" },
+  { token: "{{note_source}}", label: "笔记来源", description: "笔记的来源标签" },
+];
+
 /** Format an ISO timestamp or relative label into a human-readable relative time string. */
 export function formatRelativeTime(timestamp: string): string {
   // If it's not an ISO date, return as-is (legacy labels like "刚刚")
@@ -51,6 +88,8 @@ export interface OperationNote {
   plainText?: string;
   agentChatId?: string;
   appliedAgentMessageIds?: string[];
+  /** Context level for knowledge-base retrieval. Defaults to "full". */
+  contextLevel?: NoteContextLevel;
 }
 
 export interface KnowledgeCategory {
