@@ -6,6 +6,7 @@ import {
   ChevronsUpDown,
   ChevronRight,
   Copy,
+  Crosshair,
   Database,
   Download,
   FileCode2,
@@ -1111,6 +1112,28 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
                       </DropdownMenuRadioGroup>
                     </DropdownMenuContent>
                   </DropdownMenu>
+                  <IconButton
+                    label="定位当前笔记"
+                    onClick={() => {
+                      if (!activeNoteId) return;
+                      const target = notes.find((n) => n.id === activeNoteId);
+                      if (!target) return;
+                      setExpandedNotebookIds((prev) => {
+                        const next = new Set(prev);
+                        if (target.notebookId) next.add(target.notebookId);
+                        return next;
+                      });
+                      if (searchQuery) setSearchQuery("");
+                      window.setTimeout(() => {
+                        const el = document.querySelector<HTMLElement>(
+                          `[data-note-id="${activeNoteId}"]`,
+                        );
+                        el?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+                      }, 60);
+                    }}
+                  >
+                    <Crosshair className="h-3.5 w-3.5" />
+                  </IconButton>
                   <IconButton
                     label={allNotebooksExpanded ? "全部折叠" : "全部展开"}
                     onClick={toggleExpandAll}

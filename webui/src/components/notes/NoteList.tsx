@@ -441,6 +441,7 @@ function NoteRow({
       <ContextMenuTrigger asChild>
         <button
           type="button"
+          data-note-id={note.id}
           draggable
           onDragStart={(e) => {
             e.dataTransfer.effectAllowed = "move";
