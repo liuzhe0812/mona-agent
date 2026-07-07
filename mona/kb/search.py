@@ -82,10 +82,18 @@ def _extract_snippet(body: str, terms: list[str], max_chars: int = 300) -> str:
     return snippet
 
 
-def search_wiki(project_path: Path, query: str, count: int = 10) -> list[dict[str, Any]]:
-    """Full-text keyword search wiki pages (backward compatible)."""
-    wiki_dir = project_path / "wiki"
-    if not wiki_dir.exists():
+def search_wiki(
+    project_path: Path,
+    query: str,
+    count: int = 10,
+    markdown_dir: Path | str | None = None,
+) -> list[dict[str, Any]]:
+    """Full-text keyword search wiki pages (backward compatible).
+
+    Pass `markdown_dir` to search a non-default directory (e.g. a notes vault).
+    """
+    md_dir = Path(markdown_dir) if markdown_dir is not None else project_path / "wiki"
+    if not md_dir.exists():
         return []
 
     terms = query.split()
@@ -93,7 +101,7 @@ def search_wiki(project_path: Path, query: str, count: int = 10) -> list[dict[st
         return []
 
     results: list[dict[str, Any]] = []
-    for md_file in wiki_dir.rglob("*.md"):
+    for md_file in md_dir.rglob("*.md"):
         content = md_file.read_text(encoding="utf-8")
         frontmatter, body = parse_frontmatter(content)
         lower_content = content.lower()
@@ -101,7 +109,7 @@ def search_wiki(project_path: Path, query: str, count: int = 10) -> list[dict[st
         if score == 0:
             continue
 
-        rel_path = str(md_file.relative_to(wiki_dir)).replace("\\", "/")
+        rel_path = str(md_file.relative_to(md_dir)).replace("\\", "/")
         title = frontmatter.get("title", rel_path)
         page_type = frontmatter.get("type", "")
         tags = frontmatter.get("tags", [])
@@ -122,14 +130,19 @@ async def search_wiki_hybrid(
     query: str,
     embedding_config: EmbeddingConfig | None = None,
     count: int = 10,
+    markdown_dir: Path | str | None = None,
+    vectorstore_db: Path | str | None = None,
 ) -> dict[str, Any]:
     """Hybrid search: keyword + vector with RRF fusion.
 
     Returns {"mode": "keyword"|"vector"|"hybrid", "results": [...]}.
     Gracefully degrades to keyword-only when embedding is unavailable.
+
+    Pass `markdown_dir` to search a non-default directory (e.g. a notes vault),
+    and `vectorstore_db` for the corresponding vectorstore db path.
     """
-    wiki_dir = project_path / "wiki"
-    if not wiki_dir.exists():
+    md_dir = Path(markdown_dir) if markdown_dir is not None else project_path / "wiki"
+    if not md_dir.exists():
         return {"mode": "keyword", "results": []}
 
     tokens = _tokenize_query(query)
@@ -140,8 +153,8 @@ async def search_wiki_hybrid(
     slug_to_path: dict[str, str] = {}
     keyword_results: list[dict[str, Any]] = []
 
-    for md_file in sorted(wiki_dir.rglob("*.md")):
-        rel = str(md_file.relative_to(wiki_dir)).replace("\\", "/")
+    for md_file in sorted(md_dir.rglob("*.md")):
+        rel = str(md_file.relative_to(md_dir)).replace("\\", "/")
         stem = rel.replace(".md", "").split("/")[-1].lower()
         slug_to_path[stem] = rel
 
@@ -193,7 +206,9 @@ async def search_wiki_hybrid(
 
     if query_embedding:
         try:
-            raw_chunks = await vectorstore.search_chunks(project_path, query_embedding, max(count * 3, 30))
+            raw_chunks = await vectorstore.search_chunks(
+                project_path, query_embedding, max(count * 3, 30), db_path=vectorstore_db,
+            )
             vector_hits = len(raw_chunks)
 
             # Group by page_id, compute blended score
@@ -220,7 +235,7 @@ async def search_wiki_hybrid(
                 rel = slug_to_path.get(page_id)
                 if not rel or rel in known_paths:
                     continue
-                page_file = wiki_dir / rel
+                page_file = md_dir / rel
                 if not page_file.exists():
                     continue
                 content = page_file.read_text(encoding="utf-8")

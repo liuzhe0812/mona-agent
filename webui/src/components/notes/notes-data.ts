@@ -1,7 +1,7 @@
 import type { JSONContent } from "@tiptap/core";
 
 export type NoteSourceKind = "agent" | "manual" | "ssh" | "windows";
-export type NoteAiActionId = "summary" | "extractKnowledge" | "freeform" | "polish" | "translate" | "continue" | "generateHtml";
+export type NoteAiActionId = "summary" | "freeform" | "polish" | "translate" | "continue" | "generateHtml";
 
 /** Context level controls how a note participates in knowledge-base retrieval. */
 export type NoteContextLevel = "full" | "summary" | "none";
@@ -12,6 +12,17 @@ export const NOTE_CONTEXT_LEVEL_LABELS: Record<NoteContextLevel, string> = {
   full: "完整内容",
   summary: "仅摘要",
   none: "不参与",
+};
+
+/** Note type controls the role of a note in the vault. */
+export type NoteType = "note" | "moc" | "daily" | "template" | "agent-experience";
+
+export const NOTE_TYPE_LABELS: Record<NoteType, string> = {
+  note: "笔记",
+  moc: "MOC 索引",
+  daily: "每日笔记",
+  template: "模板",
+  "agent-experience": "Agent 经验",
 };
 
 /**
@@ -77,6 +88,7 @@ export interface OperationNote {
   notebookId: string;
   title: string;
   preview: string;
+  createdAt: string;
   updatedAt: string;
   source: {
     kind: NoteSourceKind;
@@ -90,31 +102,107 @@ export interface OperationNote {
   appliedAgentMessageIds?: string[];
   /** Context level for knowledge-base retrieval. Defaults to "full". */
   contextLevel?: NoteContextLevel;
+  /** Note type. Defaults to "note". MOC notes are index notes that organize other notes via [[links]]. */
+  type?: NoteType;
+  /** Aliases used for [[wiki link]] matching besides the title. */
+  aliases?: string[];
 }
 
-export interface KnowledgeCategory {
+// ---------------------------------------------------------------------------
+// Bidirectional links / graph data
+// ---------------------------------------------------------------------------
+
+export interface LinkNode {
   id: string;
-  name: string;
-  parentId?: string | null;
-}
-
-export interface KnowledgeLinkedNote {
-  noteId: string;
-  noteTitle: string;
-  description: string;
-  linkedAt: string;
-}
-
-export interface KnowledgeItem {
-  id: string;
-  categoryId: string;
   title: string;
-  summary: string;
-  content: string;
-  sourceNoteId: string;
-  sourceNoteTitle: string;
-  sourceDescription: string;
-  updatedAt: string;
-  tags: string[];
-  linkedNotes?: KnowledgeLinkedNote[];
+  path: string;
+  aliases: string[];
+  noteType: string;
+}
+
+export interface LinkEdge {
+  source: string;
+  targetTitle: string;
+  resolvedTarget: string | null;
+  kind: "link" | "embed";
+  anchor: string | null;
+}
+
+export interface LinkGraph {
+  nodes: LinkNode[];
+  edges: LinkEdge[];
+  lastScanAt: string;
+}
+
+export interface BacklinkItem {
+  noteId: string;
+  title: string;
+  path: string;
+  snippet: string;
+  line: number;
+}
+
+export interface MentionItem {
+  noteId: string;
+  title: string;
+  path: string;
+  snippet: string;
+  line: number;
+}
+
+export interface RenameResult {
+  updatedFiles: number;
+  updatedLinks: number;
+}
+
+export interface MocItem {
+  id: string;
+  title: string;
+  path: string;
+  outgoingCount: number;
+  incomingCount: number;
+}
+
+/** Build a nested tag tree from a flat list of tags (e.g. "工作/项目A"). */
+export interface TagTreeNode {
+  name: string;
+  fullPath: string;
+  count: number;
+  children: TagTreeNode[];
+}
+
+export function buildTagTree(tags: Array<string | { tag: string; count?: number }>): TagTreeNode[] {
+  const root: TagTreeNode[] = [];
+  const map = new Map<string, TagTreeNode>();
+
+  for (const entry of tags) {
+    const tag = typeof entry === "string" ? entry : entry.tag;
+    const count = typeof entry === "string" ? 1 : entry.count ?? 1;
+    const parts = tag.split("/").map((p) => p.trim()).filter(Boolean);
+    if (parts.length === 0) continue;
+
+    let currentPath = "";
+    let currentLevel = root;
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i];
+      currentPath = i === 0 ? part : `${currentPath}/${part}`;
+      let node = map.get(currentPath);
+      if (!node) {
+        node = { name: part, fullPath: currentPath, count: 0, children: [] };
+        map.set(currentPath, node);
+        currentLevel.push(node);
+      }
+      if (i === parts.length - 1) {
+        node.count += count;
+      }
+      currentLevel = node.children;
+    }
+  }
+
+  const sortTree = (nodes: TagTreeNode[]): TagTreeNode[] => {
+    nodes.sort((a, b) => a.name.localeCompare(b.name, "zh-Hans"));
+    for (const n of nodes) sortTree(n.children);
+    return nodes;
+  };
+  return sortTree(root);
 }

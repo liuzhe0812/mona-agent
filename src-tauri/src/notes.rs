@@ -1,28 +1,23 @@
 use crate::settings::app_data_dir;
-use base64::Engine;
-use rusqlite::{params, Connection, OptionalExtension};
-use serde::de::DeserializeOwned;
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use tauri_plugin_dialog::DialogExt;
 
 const NOTES_DB_FILE: &str = "notes.sqlite3";
+const VAULT_PATH_FILE: &str = "vault_path.txt";
+const DEFAULT_NOTEBOOK_NAME: &str = "默认分类";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NotesState {
     pub notebooks: Vec<Notebook>,
     pub notes: Vec<OperationNote>,
-    #[serde(default)]
-    pub knowledge_categories: Vec<KnowledgeCategory>,
-    #[serde(default)]
-    pub knowledge_items: Vec<KnowledgeItem>,
     pub active_notebook_id: String,
     pub active_note_id: Option<String>,
-    #[serde(default)]
-    pub active_knowledge_category_id: String,
     /// User-defined note AI transformation templates.
     #[serde(default)]
     pub transformations: Vec<NoteTransformation>,
@@ -62,6 +57,7 @@ pub struct OperationNote {
     pub notebook_id: String,
     pub title: String,
     pub preview: String,
+    pub created_at: String,
     pub updated_at: String,
     pub source: NoteSource,
     #[serde(default)]
@@ -79,10 +75,21 @@ pub struct OperationNote {
     /// retrieval: "full" (default) | "summary" | "none".
     #[serde(default = "default_context_level")]
     pub context_level: String,
+    /// Note type: "note" (default) | "moc" | "daily" | "template" | "agent-experience".
+    /// MOC notes are Map-of-Content index notes that organize other notes via [[links]].
+    #[serde(default = "default_note_type", rename = "type")]
+    pub note_type: String,
+    /// Aliases used for [[wiki link]] matching besides the title.
+    #[serde(default)]
+    pub aliases: Vec<String>,
 }
 
 fn default_context_level() -> String {
     "full".to_string()
+}
+
+fn default_note_type() -> String {
+    "note".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -91,753 +98,1236 @@ pub struct NoteSource {
     pub label: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+// ---------------------------------------------------------------------------
+// Vault metadata (.mona/vault.json)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct KnowledgeCategory {
-    pub id: String,
-    pub name: String,
+struct VaultMeta {
     #[serde(default)]
-    pub parent_id: Option<String>,
+    notebooks: HashMap<String, VaultNotebookMeta>,
+    #[serde(default)]
+    active_notebook_id: String,
+    #[serde(default)]
+    active_note_id: Option<String>,
+    #[serde(default)]
+    transformations: Vec<NoteTransformation>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct KnowledgeItem {
-    pub id: String,
-    pub category_id: String,
-    pub title: String,
-    pub summary: String,
-    pub content: String,
-    pub source_note_id: String,
-    pub source_note_title: String,
-    pub source_description: String,
-    pub updated_at: String,
-    pub tags: Vec<String>,
+struct VaultNotebookMeta {
     #[serde(default)]
-    pub linked_notes: Vec<KnowledgeLinkedNote>,
+    knowledge_base_enabled: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct KnowledgeLinkedNote {
-    pub note_id: String,
-    pub note_title: String,
-    pub description: String,
-    pub linked_at: String,
-}
+// ---------------------------------------------------------------------------
+// Database helpers
+// ---------------------------------------------------------------------------
 
 fn notes_db_path() -> PathBuf {
     app_data_dir().join("notes").join(NOTES_DB_FILE)
 }
 
-fn open_notes_db() -> Result<Connection, String> {
-    let path = notes_db_path();
-    let parent = path.parent().ok_or("Invalid notes database path")?;
+// ---------------------------------------------------------------------------
+// Vault path management
+// ---------------------------------------------------------------------------
+
+fn vault_path_file() -> PathBuf {
+    app_data_dir().join("notes").join(VAULT_PATH_FILE)
+}
+
+pub(crate) fn read_vault_path() -> Option<PathBuf> {
+    let content = fs::read_to_string(vault_path_file()).ok()?;
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(trimmed))
+    }
+}
+
+fn write_vault_path(path: &Path) -> Result<(), String> {
+    let file = vault_path_file();
+    let parent = file.parent().ok_or("Invalid vault path file location")?;
     fs::create_dir_all(parent).map_err(|e| format!("Failed to create notes dir: {}", e))?;
-
-    let conn = Connection::open(&path).map_err(|e| format!("Failed to open notes database: {}", e))?;
-    conn.pragma_update(None, "foreign_keys", true)
-        .map_err(|e| format!("Failed to enable notes foreign keys: {}", e))?;
-    initialize_schema(&conn)?;
-    seed_default_notebooks(&conn)?;
-    seed_default_knowledge_categories(&conn)?;
-    Ok(conn)
-}
-
-fn initialize_schema(conn: &Connection) -> Result<(), String> {
-    conn.execute_batch(
-        r#"
-        CREATE TABLE IF NOT EXISTS notebooks (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            description TEXT NOT NULL,
-            knowledge_base_enabled INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS notes (
-            id TEXT PRIMARY KEY,
-            notebook_id TEXT NOT NULL,
-            title TEXT NOT NULL,
-            preview TEXT NOT NULL,
-            updated_at_label TEXT NOT NULL,
-            source_kind TEXT NOT NULL,
-            source_label TEXT NOT NULL,
-            tags_json TEXT NOT NULL,
-            content_markdown TEXT NOT NULL,
-            content_json TEXT,
-            plain_text TEXT,
-            agent_chat_id TEXT,
-            applied_agent_message_ids_json TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            modified_at TEXT NOT NULL,
-            FOREIGN KEY (notebook_id) REFERENCES notebooks(id) ON DELETE CASCADE
-        );
-
-        CREATE TABLE IF NOT EXISTS app_state (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS knowledge_categories (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            description TEXT NOT NULL DEFAULT '',
-            parent_id TEXT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS knowledge_items (
-            id TEXT PRIMARY KEY,
-            category_id TEXT NOT NULL,
-            title TEXT NOT NULL,
-            summary TEXT NOT NULL,
-            content TEXT NOT NULL,
-            source_note_id TEXT NOT NULL,
-            source_note_title TEXT NOT NULL,
-            source_description TEXT NOT NULL,
-            updated_at_label TEXT NOT NULL,
-            tags_json TEXT NOT NULL,
-            linked_notes_json TEXT NOT NULL DEFAULT '[]',
-            created_at TEXT NOT NULL,
-            modified_at TEXT NOT NULL,
-            FOREIGN KEY (category_id) REFERENCES knowledge_categories(id) ON DELETE CASCADE
-        );
-
-        CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
-            id,
-            notebook_id,
-            title,
-            content_markdown,
-            tags_json,
-            content='notes',
-            content_rowid='rowid'
-        );
-        CREATE TRIGGER IF NOT EXISTS notes_fts_insert AFTER INSERT ON notes BEGIN
-            INSERT INTO notes_fts(rowid, id, notebook_id, title, content_markdown, tags_json)
-            VALUES (new.rowid, new.id, new.notebook_id, new.title, new.content_markdown, new.tags_json);
-        END;
-        CREATE TRIGGER IF NOT EXISTS notes_fts_update AFTER UPDATE ON notes BEGIN
-            DELETE FROM notes_fts WHERE rowid = old.rowid;
-            INSERT INTO notes_fts(rowid, id, notebook_id, title, content_markdown, tags_json)
-            VALUES (new.rowid, new.id, new.notebook_id, new.title, new.content_markdown, new.tags_json);
-        END;
-        CREATE TRIGGER IF NOT EXISTS notes_fts_delete AFTER DELETE ON notes BEGIN
-            INSERT INTO notes_fts(notes_fts, rowid, id, notebook_id, title, content_markdown, tags_json)
-            VALUES ('delete', old.rowid, old.id, old.notebook_id, old.title, old.content_markdown, old.tags_json);
-        END;
-        "#,
-    )
-    .map_err(|e| format!("Failed to initialize notes schema: {}", e))?;
-
-    ensure_column(conn, "knowledge_categories", "parent_id", "TEXT")?;
-    ensure_column(
-        conn,
-        "knowledge_items",
-        "linked_notes_json",
-        "TEXT NOT NULL DEFAULT '[]'",
-    )?;
-    ensure_column(
-        conn,
-        "notebooks",
-        "knowledge_base_enabled",
-        "INTEGER NOT NULL DEFAULT 0",
-    )?;
-    ensure_column(conn, "notes", "agent_chat_id", "TEXT")?;
-    ensure_column(
-        conn,
-        "notes",
-        "applied_agent_message_ids_json",
-        "TEXT NOT NULL DEFAULT '[]'",
-    )?;
-    ensure_column(conn, "notes", "plain_text", "TEXT")?;
-    ensure_column(
-        conn,
-        "notes",
-        "context_level",
-        "TEXT NOT NULL DEFAULT 'full'",
-    )?;
-
-    // Migrate FTS5 table: if old notes_fts has column "note_id", rebuild it
-    migrate_fts_if_needed(conn)
-}
-
-fn migrate_fts_if_needed(conn: &Connection) -> Result<(), String> {
-    // Check if notes_fts has the old "note_id" column (should be "id" now)
-    let has_old_schema: bool = conn
-        .query_row(
-            "SELECT COUNT(*) FROM pragma_table_info('notes_fts') WHERE name = 'note_id'",
-            [],
-            |row| row.get::<_, i64>(0),
-        )
-        .unwrap_or(0)
-        > 0;
-
-    if !has_old_schema {
-        return Ok(());
-    }
-
-    // Drop old FTS table and triggers, they will be recreated by initialize_schema
-    // on next app launch. But since CREATE VIRTUAL TABLE IF NOT EXISTS won't recreate,
-    // we need to drop them now.
-    conn.execute_batch(
-        "DROP TRIGGER IF EXISTS notes_fts_insert;
-         DROP TRIGGER IF EXISTS notes_fts_update;
-         DROP TRIGGER IF EXISTS notes_fts_delete;
-         DROP TABLE IF EXISTS notes_fts;",
-    )
-    .map_err(|e| format!("Failed to drop old FTS table: {}", e))?;
-
-    // Recreate with correct column names
-    conn.execute_batch(
-        "CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
-            id,
-            notebook_id,
-            title,
-            content_markdown,
-            tags_json,
-            content='notes',
-            content_rowid='rowid'
-        );
-        CREATE TRIGGER IF NOT EXISTS notes_fts_insert AFTER INSERT ON notes BEGIN
-            INSERT INTO notes_fts(rowid, id, notebook_id, title, content_markdown, tags_json)
-            VALUES (new.rowid, new.id, new.notebook_id, new.title, new.content_markdown, new.tags_json);
-        END;
-        CREATE TRIGGER IF NOT EXISTS notes_fts_update AFTER UPDATE ON notes BEGIN
-            DELETE FROM notes_fts WHERE rowid = old.rowid;
-            INSERT INTO notes_fts(rowid, id, notebook_id, title, content_markdown, tags_json)
-            VALUES (new.rowid, new.id, new.notebook_id, new.title, new.content_markdown, new.tags_json);
-        END;
-        CREATE TRIGGER IF NOT EXISTS notes_fts_delete AFTER DELETE ON notes BEGIN
-            INSERT INTO notes_fts(notes_fts, rowid, id, notebook_id, title, content_markdown, tags_json)
-            VALUES ('delete', old.rowid, old.id, old.notebook_id, old.title, old.content_markdown, old.tags_json);
-        END;
-        INSERT INTO notes_fts(notes_fts) VALUES('rebuild');",
-    )
-    .map_err(|e| format!("Failed to recreate FTS table: {}", e))?;
-
+    fs::write(&file, path.to_string_lossy().to_string())
+        .map_err(|e| format!("Failed to write vault path: {}", e))?;
     Ok(())
 }
 
-fn ensure_column(
-    conn: &Connection,
-    table: &'static str,
-    column: &'static str,
-    definition: &'static str,
-) -> Result<(), String> {
-    let mut stmt = conn
-        .prepare(&format!("PRAGMA table_info({})", table))
-        .map_err(|e| format!("Failed to inspect {} schema: {}", table, e))?;
-    let rows = stmt
-        .query_map([], |row| row.get::<_, String>(1))
-        .map_err(|e| format!("Failed to read {} schema: {}", table, e))?;
-    let columns = rows
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| format!("Failed to collect {} schema: {}", table, e))?;
-
-    if columns.iter().any(|name| name == column) {
-        return Ok(());
-    }
-
-    conn.execute(
-        &format!("ALTER TABLE {} ADD COLUMN {} {}", table, column, definition),
-        [],
-    )
-    .map_err(|e| format!("Failed to add {}.{}: {}", table, column, e))?;
-    Ok(())
+fn vault_meta_file(vault: &Path) -> PathBuf {
+    vault.join(".mona").join("vault.json")
 }
 
-fn seed_default_notebooks(conn: &Connection) -> Result<(), String> {
-    let count: i64 = conn
-        .query_row("SELECT COUNT(*) FROM notebooks", [], |row| row.get(0))
-        .map_err(|e| format!("Failed to count notebooks: {}", e))?;
-    if count > 0 {
-        return Ok(());
+fn read_vault_meta(vault: &Path) -> Result<VaultMeta, String> {
+    let file = vault_meta_file(vault);
+    if !file.exists() {
+        return Ok(VaultMeta::default());
     }
-
-    let now = chrono::Utc::now().to_rfc3339();
-    let defaults = [
-        (
-            "default",
-            "默认分类",
-            "",
-            false,
-        ),
-    ];
-
-    for (id, name, description, knowledge_base_enabled) in defaults {
-        conn.execute(
-            "INSERT INTO notebooks (id, name, description, knowledge_base_enabled, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
-            params![id, name, description, bool_to_i64(knowledge_base_enabled), now],
-        )
-        .map_err(|e| format!("Failed to seed notebooks: {}", e))?;
+    let content = fs::read_to_string(&file).map_err(|e| format!("Failed to read vault.json: {}", e))?;
+    if content.trim().is_empty() {
+        return Ok(VaultMeta::default());
     }
-
-    conn.execute(
-        "INSERT OR REPLACE INTO app_state (key, value) VALUES ('activeNotebookId', 'default')",
-        [],
-    )
-    .map_err(|e| format!("Failed to seed notes state: {}", e))?;
-
-    Ok(())
+    serde_json::from_str(&content).map_err(|e| format!("Failed to parse vault.json: {}", e))
 }
 
-fn seed_default_knowledge_categories(conn: &Connection) -> Result<(), String> {
-    let count: i64 = conn
-        .query_row("SELECT COUNT(*) FROM knowledge_categories", [], |row| row.get(0))
-        .map_err(|e| format!("Failed to count knowledge categories: {}", e))?;
-    if count > 0 {
-        return Ok(());
-    }
-
-    let now = chrono::Utc::now().to_rfc3339();
-    let defaults = [("inbox", "未分类", None::<String>)];
-
-    for (id, name, parent_id) in defaults {
-        conn.execute(
-            "INSERT INTO knowledge_categories (id, name, description, parent_id, created_at, updated_at)
-             VALUES (?1, ?2, '', ?3, ?4, ?4)",
-            params![id, name, parent_id, now],
-        )
-        .map_err(|e| format!("Failed to seed knowledge categories: {}", e))?;
-    }
-
-    conn.execute(
-        "INSERT OR REPLACE INTO app_state (key, value) VALUES ('activeKnowledgeCategoryId', 'inbox')",
-        [],
-    )
-    .map_err(|e| format!("Failed to seed knowledge state: {}", e))?;
-
+fn write_vault_meta(vault: &Path, meta: &VaultMeta) -> Result<(), String> {
+    let dir = vault.join(".mona");
+    fs::create_dir_all(&dir).map_err(|e| format!("Failed to create .mona dir: {}", e))?;
+    let content = serde_json::to_string_pretty(meta)
+        .map_err(|e| format!("Failed to serialize vault.json: {}", e))?;
+    fs::write(vault_meta_file(vault), content)
+        .map_err(|e| format!("Failed to write vault.json: {}", e))?;
     Ok(())
 }
 
 #[tauri::command]
+pub async fn notes_vault_get_path() -> Result<Option<String>, String> {
+    Ok(read_vault_path().map(|p| p.to_string_lossy().to_string()))
+}
+
+/// Register the vault's assets directory with the Tauri asset protocol and fs
+/// plugin scopes, so the frontend can render images via `convertFileSrc()` and
+/// write images directly via `tauri-plugin-fs`.
+///
+/// Must be called after the vault path is set/known. Safe to call repeatedly.
+pub fn register_vault_assets_scope(app: &tauri::AppHandle, vault: &Path) {
+    use tauri::Manager;
+    use tauri_plugin_fs::FsExt;
+    let assets_dir = vault.join("assets");
+    if let Err(e) = fs::create_dir_all(&assets_dir) {
+        log::warn!("Failed to ensure assets dir for scope: {}", e);
+    }
+    let asset_scope = app.asset_protocol_scope();
+    if let Err(e) = asset_scope.allow_directory(&assets_dir, true) {
+        log::warn!("Failed to allow assets dir in asset protocol scope: {}", e);
+    }
+    let fs_scope = app.fs_scope();
+    if let Err(e) = fs_scope.allow_directory(&assets_dir, true) {
+        log::warn!("Failed to allow assets dir in fs scope: {}", e);
+    }
+}
+
+/// Public accessor for the configured vault path, used by `lib.rs` setup
+/// to register the asset protocol scope at app startup.
+pub fn read_vault_path_for_setup() -> Option<PathBuf> {
+    read_vault_path()
+}
+
+#[tauri::command]
+pub async fn notes_vault_set_path(
+    app: tauri::AppHandle,
+    path: String,
+) -> Result<(), String> {
+    let vault = PathBuf::from(&path);
+    fs::create_dir_all(&vault).map_err(|e| format!("Failed to create vault root: {}", e))?;
+    fs::create_dir_all(vault.join(".mona"))
+        .map_err(|e| format!("Failed to create .mona dir: {}", e))?;
+    fs::create_dir_all(vault.join("assets"))
+        .map_err(|e| format!("Failed to create assets dir: {}", e))?;
+
+    // Register the assets directory in the asset protocol scope so the
+    // frontend can use convertFileSrc() to render images directly.
+    register_vault_assets_scope(&app, &vault);
+
+    write_vault_path(&vault)?;
+
+    // One-shot migration: if the legacy SQLite DB has notes/notebooks data,
+    // export them to .md files into the vault and then drop the legacy tables.
+    // Only runs if the vault looks empty (no .md files yet) to avoid clobbering.
+    match migrate_legacy_sqlite_to_vault(&vault) {
+        Ok(Some(count)) => log::info!("Migrated {} legacy notes into vault", count),
+        Ok(None) => {}
+        Err(e) => log::warn!("Legacy notes migration skipped: {}", e),
+    }
+
+    Ok(())
+}
+
+/// Migrate notes/notebooks from the legacy SQLite tables into the vault as .md
+/// files. Returns Some(n) if n notes were migrated, or None if there was
+/// nothing to migrate (no DB, no legacy tables, or vault already had notes).
+fn migrate_legacy_sqlite_to_vault(vault: &Path) -> Result<Option<usize>, String> {
+    // Skip if the vault already contains .md files (user picked an existing vault).
+    let vault_has_md = walkdir_md_count(vault)?;
+    if vault_has_md > 0 {
+        return Ok(None);
+    }
+
+    let db_path = notes_db_path();
+    if !db_path.exists() {
+        return Ok(None);
+    }
+
+    let conn = Connection::open(&db_path)
+        .map_err(|e| format!("Failed to open legacy notes DB: {}", e))?;
+
+    // Check for legacy `notes` table.
+    let has_notes_table: bool = conn
+        .query_row(
+            "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='notes'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(false);
+    if !has_notes_table {
+        return Ok(None);
+    }
+
+    let note_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM notes", [], |row| row.get(0))
+        .unwrap_or(0);
+    if note_count == 0 {
+        // Still drop the empty legacy tables to keep the DB clean.
+        drop_legacy_tables(&conn)?;
+        return Ok(None);
+    }
+
+    // Load notebooks (id -> name) so we can map notes to folder names.
+    let mut notebook_names: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    {
+        let mut stmt = conn
+            .prepare("SELECT id, name FROM notebooks")
+            .map_err(|e| format!("Failed to prepare notebooks query: {}", e))?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|e| format!("Failed to query notebooks: {}", e))?;
+        for row in rows {
+            let (id, name) = row.map_err(|e| format!("Failed to read notebook row: {}", e))?;
+            notebook_names.insert(id, name);
+        }
+    }
+    // Ensure the default notebook folder always exists in the map.
+    notebook_names
+        .entry("default".to_string())
+        .or_insert_with(|| DEFAULT_NOTEBOOK_NAME.to_string());
+
+    // Load active pointers from app_state so we can restore them into vault.json.
+    let active_notebook_id = read_legacy_state_value(&conn, "activeNotebookId")
+        .unwrap_or_else(|| DEFAULT_NOTEBOOK_NAME.to_string());
+    let active_note_id = read_legacy_state_value(&conn, "activeNoteId");
+    let transformations_raw = read_legacy_state_value(&conn, "transformations");
+
+    // Load each note row and write it as .md into the matching notebook folder.
+    let mut migrated: usize = 0;
+    let mut used_filenames: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+    {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, notebook_id, title, preview, updated_at_label, source_kind,
+                        source_label, tags_json, content_markdown, agent_chat_id,
+                        applied_agent_message_ids_json, context_level
+                 FROM notes",
+            )
+            .map_err(|e| format!("Failed to prepare notes query: {}", e))?;
+        let rows = stmt
+            .query_map([], |row| {
+                let id: String = row.get(0)?;
+                let notebook_id: String = row.get(1)?;
+                let title: String = row.get(2)?;
+                let _preview: String = row.get(3)?;
+                let updated_at: String = row.get(4)?;
+                let source_kind: String = row.get(5)?;
+                let source_label: String = row.get(6)?;
+                let tags_json: String = row.get(7)?;
+                let content_markdown: String = row.get(8)?;
+                let agent_chat_id: Option<String> = row.get(9)?;
+                let applied_ids_json: String = row.get(10)?;
+                let context_level: String = row.get(11)?;
+                Ok((
+                    id,
+                    notebook_id,
+                    title,
+                    updated_at,
+                    source_kind,
+                    source_label,
+                    tags_json,
+                    content_markdown,
+                    agent_chat_id,
+                    applied_ids_json,
+                    context_level,
+                ))
+            })
+            .map_err(|e| format!("Failed to query notes: {}", e))?;
+
+        for row in rows {
+            let (
+                id,
+                notebook_id,
+                title,
+                updated_at,
+                source_kind,
+                source_label,
+                tags_json,
+                content_markdown,
+                agent_chat_id,
+                applied_ids_json,
+                context_level,
+            ) = row.map_err(|e| format!("Failed to read note row: {}", e))?;
+
+            let folder_name = notebook_names
+                .get(&notebook_id)
+                .cloned()
+                .unwrap_or_else(|| DEFAULT_NOTEBOOK_NAME.to_string());
+            let folder_path = vault.join(&folder_name);
+            fs::create_dir_all(&folder_path)
+                .map_err(|e| format!("Failed to create notebook folder: {}", e))?;
+
+            let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
+            let applied_ids: Vec<String> =
+                serde_json::from_str(&applied_ids_json).unwrap_or_default();
+            let note = OperationNote {
+                id: id.clone(),
+                notebook_id: folder_name.clone(),
+                title: title.clone(),
+                preview: make_preview(&content_markdown),
+                created_at: updated_at.clone(),
+                updated_at: updated_at.clone(),
+                source: NoteSource {
+                    kind: source_kind,
+                    label: source_label,
+                },
+                tags,
+                content_markdown,
+                content_json: None,
+                plain_text: None,
+                agent_chat_id,
+                applied_agent_message_ids: applied_ids,
+                context_level: if context_level.is_empty() {
+                    "full".to_string()
+                } else {
+                    context_level
+                },
+                note_type: default_note_type(),
+                aliases: Vec::new(),
+            };
+
+            let mut file_name = format!("{}.md", sanitize_filename(&title));
+            // Resolve collisions within the same notebook folder.
+            let mut counter = 1;
+            while used_filenames.contains(&format!("{}/{}", folder_name, file_name)) {
+                let suffix = format!("_{}", &id[..id.len().min(6)]);
+                let base = file_name.trim_end_matches(".md");
+                file_name = format!("{}{}.md", base, suffix);
+                counter += 1;
+                if counter > 100 {
+                    break;
+                }
+            }
+            used_filenames.insert(format!("{}/{}", folder_name, file_name));
+
+            let file_path = folder_path.join(&file_name);
+            fs::write(&file_path, serialize_note_to_file(&note))
+                .map_err(|e| format!("Failed to write note file {:?}: {}", file_path, e))?;
+            migrated += 1;
+        }
+    }
+
+    // Copy legacy assets (app_data_dir/notes/assets/*) into vault/assets.
+    let legacy_assets_dir = app_data_dir().join("notes").join("assets");
+    if legacy_assets_dir.is_dir() {
+        let vault_assets_dir = vault.join("assets");
+        fs::create_dir_all(&vault_assets_dir)
+            .map_err(|e| format!("Failed to create vault assets dir: {}", e))?;
+        if let Ok(entries) = fs::read_dir(&legacy_assets_dir) {
+            for entry in entries.flatten() {
+                let from = entry.path();
+                if from.is_file() {
+                    let to = vault_assets_dir.join(entry.file_name());
+                    let _ = fs::copy(&from, &to);
+                }
+            }
+        }
+    }
+
+    // Write vault.json with the migrated active pointers + transformations,
+    // so the UI restores the user's last selection.
+    let vault_meta = VaultMeta {
+        notebooks: notebook_names
+            .values()
+            .map(|name| (name.clone(), VaultNotebookMeta { knowledge_base_enabled: false }))
+            .collect(),
+        active_notebook_id,
+        active_note_id,
+        transformations: transformations_raw
+            .and_then(|raw| serde_json::from_str::<Vec<NoteTransformation>>(&raw).ok())
+            .unwrap_or_default(),
+    };
+    let _ = write_vault_meta(vault, &vault_meta);
+
+    // Finally drop the legacy tables we no longer use.
+    drop_legacy_tables(&conn)?;
+
+    Ok(Some(migrated))
+}
+
+fn walkdir_md_count(dir: &Path) -> Result<usize, String> {
+    let mut count = 0usize;
+    let stack = vec![dir.to_path_buf()];
+    let mut visited: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+    let mut queue = stack;
+    while let Some(cur) = queue.pop() {
+        if !visited.insert(cur.clone()) {
+            continue;
+        }
+        let entries = match fs::read_dir(&cur) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                if name == ".mona" || name == "assets" {
+                    continue;
+                }
+                queue.push(path);
+            } else if path.extension().and_then(|e| e.to_str()) == Some("md") {
+                count += 1;
+            }
+        }
+    }
+    Ok(count)
+}
+
+fn read_legacy_state_value(conn: &Connection, key: &str) -> Option<String> {
+    conn.query_row(
+        "SELECT value FROM app_state WHERE key = ?1",
+        params![key],
+        |row| row.get::<_, String>(0),
+    )
+    .ok()
+}
+
+fn drop_legacy_tables(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        "DROP TRIGGER IF EXISTS notes_fts_insert;
+         DROP TRIGGER IF EXISTS notes_fts_update;
+         DROP TRIGGER IF EXISTS notes_fts_delete;
+         DROP TABLE IF EXISTS notes_fts;
+         DROP TABLE IF EXISTS notes;
+         DROP TABLE IF EXISTS notebooks;
+         DROP TABLE IF EXISTS app_state;",
+    )
+    .map_err(|e| format!("Failed to drop legacy tables: {}", e))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn notes_vault_pick_directory(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.dialog()
+        .file()
+        .set_title("选择笔记仓库")
+        .pick_folder(move |path| {
+            let _ = tx.send(path);
+        });
+    let result = rx.recv().map_err(|e| e.to_string())?;
+    Ok(result
+        .and_then(|p| p.into_path().ok())
+        .map(|p| p.to_string_lossy().to_string()))
+}
+
+// ---------------------------------------------------------------------------
+// YAML frontmatter parsing / serialization (hand-written, no serde_yaml)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Default)]
+struct ParsedFrontmatter {
+    id: Option<String>,
+    notebook_id: Option<String>,
+    title: Option<String>,
+    source_kind: Option<String>,
+    source_label: Option<String>,
+    tags: Vec<String>,
+    context_level: Option<String>,
+    agent_chat_id: Option<String>,
+    applied_agent_message_ids: Vec<String>,
+    created_at: Option<String>,
+    updated_at: Option<String>,
+    /// Note type: "note" (default) | "moc" | "daily" | "template" | "agent-experience".
+    note_type: Option<String>,
+    /// Aliases used for [[wiki link]] matching besides the title.
+    aliases: Vec<String>,
+}
+
+/// Split a markdown file into (frontmatter lines, body). If the file does not
+/// start with a `---` frontmatter block, returns (None, full content).
+fn split_frontmatter(content: &str) -> (Option<Vec<String>>, String) {
+    let mut lines = content.lines();
+    let first = match lines.next() {
+        Some(l) => l,
+        None => return (None, String::new()),
+    };
+    if first.trim_end() != "---" {
+        return (None, content.to_string());
+    }
+
+    let mut fm_lines: Vec<String> = Vec::new();
+    let mut body_lines: Vec<String> = Vec::new();
+    let mut found_close = false;
+    for line in lines {
+        if !found_close {
+            if line.trim_end() == "---" {
+                found_close = true;
+            } else {
+                fm_lines.push(line.to_string());
+            }
+        } else {
+            body_lines.push(line.to_string());
+        }
+    }
+
+    if !found_close {
+        return (None, content.to_string());
+    }
+
+    let body = body_lines.join("\n").trim_start_matches(['\n', '\r']).to_string();
+    (Some(fm_lines), body)
+}
+
+fn yaml_value(raw: &str) -> String {
+    let v = raw.trim();
+    if v.len() >= 2 {
+        let b = v.as_bytes();
+        if (b[0] == b'"' && b[b.len() - 1] == b'"') || (b[0] == b'\'' && b[b.len() - 1] == b'\'') {
+            return v[1..v.len() - 1].to_string();
+        }
+    }
+    v.to_string()
+}
+
+fn split_kv(line: &str) -> Option<(&str, &str)> {
+    let colon = line.find(':')?;
+    Some((line[..colon].trim(), line[colon + 1..].trim()))
+}
+
+fn parse_inline_array(value: &str) -> Option<Vec<String>> {
+    let v = value.trim();
+    if !(v.starts_with('[') && v.ends_with(']')) {
+        return None;
+    }
+    let inner = &v[1..v.len() - 1];
+    let mut out = Vec::new();
+    for item in inner.split(',') {
+        let t = yaml_value(item);
+        if !t.is_empty() {
+            out.push(t);
+        }
+    }
+    Some(out)
+}
+
+fn parse_frontmatter_lines(lines: &[String]) -> ParsedFrontmatter {
+    let mut fm = ParsedFrontmatter::default();
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i].as_str();
+        if line.trim().is_empty() {
+            i += 1;
+            continue;
+        }
+        let (key, value) = match split_kv(line) {
+            Some(kv) => kv,
+            None => {
+                i += 1;
+                continue;
+            }
+        };
+        match key {
+            "id" => fm.id = Some(yaml_value(value)),
+            "notebookId" => fm.notebook_id = Some(yaml_value(value)),
+            "title" => fm.title = Some(yaml_value(value)),
+            "contextLevel" => fm.context_level = Some(yaml_value(value)),
+            "agentChatId" => {
+                let v = yaml_value(value);
+                fm.agent_chat_id = if v.is_empty() || v == "null" || v == "~" {
+                    None
+                } else {
+                    Some(v)
+                };
+            }
+            "createdAt" => fm.created_at = Some(yaml_value(value)),
+            "updatedAt" => fm.updated_at = Some(yaml_value(value)),
+            "source" => {
+                if value.is_empty() {
+                    // Block-style nested object.
+                    i += 1;
+                    while i < lines.len() {
+                        let sub = lines[i].as_str();
+                        if !(sub.starts_with("  ") || sub.starts_with('\t')) {
+                            break;
+                        }
+                        if let Some((k, v)) = split_kv(sub.trim_start()) {
+                            match k {
+                                "kind" => fm.source_kind = Some(yaml_value(v)),
+                                "label" => fm.source_label = Some(yaml_value(v)),
+                                _ => {}
+                            }
+                        }
+                        i += 1;
+                    }
+                    continue;
+                } else if value.starts_with('{') {
+                    // Inline flow object: {kind: manual, label: 手动记录}
+                    let v = value.trim();
+                    if v.ends_with('}') && v.len() >= 2 {
+                        let inner = &v[1..v.len() - 1];
+                        for pair in inner.split(',') {
+                            if let Some((k, v)) = split_kv(pair.trim()) {
+                                match k {
+                                    "kind" => fm.source_kind = Some(yaml_value(v)),
+                                    "label" => fm.source_label = Some(yaml_value(v)),
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            "tags" | "appliedAgentMessageIds" | "aliases" => {
+                let target = match key {
+                    "tags" => &mut fm.tags,
+                    "aliases" => &mut fm.aliases,
+                    _ => &mut fm.applied_agent_message_ids,
+                };
+                if let Some(items) = parse_inline_array(value) {
+                    target.extend(items);
+                    i += 1;
+                    continue;
+                }
+                // Block-style array.
+                i += 1;
+                while i < lines.len() {
+                    let sub = lines[i].as_str();
+                    let trimmed = sub.trim_start();
+                    if !(trimmed.starts_with("- ") || trimmed == "-") {
+                        break;
+                    }
+                    let item = if trimmed.len() > 1 {
+                        yaml_value(&trimmed[1..].trim())
+                    } else {
+                        String::new()
+                    };
+                    target.push(item);
+                    i += 1;
+                }
+                continue;
+            }
+            "type" => fm.note_type = Some(yaml_value(value)),
+            _ => {}
+        }
+        i += 1;
+    }
+    fm
+}
+
+/// Quote a scalar for YAML output when it contains characters that would
+/// otherwise be ambiguous.
+fn yaml_scalar(s: &str) -> String {
+    let needs_quote = s.is_empty()
+        || s.contains(':')
+        || s.contains('#')
+        || s.contains('\n')
+        || s.contains('"')
+        || s.contains('\'')
+        || s.trim_start().starts_with('-')
+        || s.trim_start().starts_with('[')
+        || s.trim_start().starts_with('{')
+        || s.trim() != s
+        || s == "null"
+        || s == "~"
+        || s == "true"
+        || s == "false";
+    if needs_quote {
+        let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
+        format!("\"{}\"", escaped)
+    } else {
+        s.to_string()
+    }
+}
+
+fn serialize_frontmatter(note: &OperationNote) -> String {
+    let mut out = String::from("---\n");
+    out.push_str(&format!("id: {}\n", yaml_scalar(&note.id)));
+    out.push_str(&format!("notebookId: {}\n", yaml_scalar(&note.notebook_id)));
+    out.push_str(&format!("title: {}\n", yaml_scalar(&note.title)));
+    out.push_str("source:\n");
+    out.push_str(&format!("  kind: {}\n", yaml_scalar(&note.source.kind)));
+    out.push_str(&format!("  label: {}\n", yaml_scalar(&note.source.label)));
+    if note.tags.is_empty() {
+        out.push_str("tags: []\n");
+    } else {
+        out.push_str("tags:\n");
+        for tag in &note.tags {
+            out.push_str(&format!("  - {}\n", yaml_scalar(tag)));
+        }
+    }
+    out.push_str(&format!(
+        "contextLevel: {}\n",
+        yaml_scalar(if note.context_level.is_empty() {
+            "full"
+        } else {
+            &note.context_level
+        })
+    ));
+    match &note.agent_chat_id {
+        Some(c) => out.push_str(&format!("agentChatId: {}\n", yaml_scalar(c))),
+        None => out.push_str("agentChatId:\n"),
+    }
+    if note.applied_agent_message_ids.is_empty() {
+        out.push_str("appliedAgentMessageIds: []\n");
+    } else {
+        out.push_str("appliedAgentMessageIds:\n");
+        for id in &note.applied_agent_message_ids {
+            out.push_str(&format!("  - {}\n", yaml_scalar(id)));
+        }
+    }
+    out.push_str(&format!("createdAt: {}\n", yaml_scalar(&note.created_at)));
+    out.push_str(&format!("updatedAt: {}\n", yaml_scalar(&note.updated_at)));
+    if !note.aliases.is_empty() {
+        out.push_str("aliases:\n");
+        for alias in &note.aliases {
+            out.push_str(&format!("  - {}\n", yaml_scalar(alias)));
+        }
+    }
+    // Only write `type:` when non-default, to keep legacy files minimal.
+    if !note.note_type.is_empty() && note.note_type != "note" {
+        out.push_str(&format!("type: {}\n", yaml_scalar(&note.note_type)));
+    }
+    out.push_str("---\n");
+    out
+}
+
+fn serialize_note_to_file(note: &OperationNote) -> String {
+    let mut out = serialize_frontmatter(note);
+    out.push('\n');
+    out.push_str(&note.content_markdown);
+    out
+}
+
+// ---------------------------------------------------------------------------
+// Markdown helpers
+// ---------------------------------------------------------------------------
+
+fn strip_markdown(md: &str) -> String {
+    let mut result = String::new();
+    let mut in_code_block = false;
+    for line in md.lines() {
+        if line.trim_start().starts_with("```") {
+            in_code_block = !in_code_block;
+            continue;
+        }
+        if in_code_block {
+            result.push_str(line);
+            result.push(' ');
+            continue;
+        }
+        let stripped: String = line
+            .chars()
+            .filter(|&c| !matches!(c, '#' | '*' | '_' | '`' | '>' | '|' | '[' | ']' | '(' | ')'))
+            .collect();
+        result.push_str(&stripped);
+        result.push(' ');
+    }
+    result.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn make_preview(content: &str) -> String {
+    strip_markdown(content).chars().take(46).collect()
+}
+
+/// Remove filesystem-illegal characters and truncate to 80 chars.
+fn sanitize_filename(title: &str) -> String {
+    let sanitized: String = title
+        .chars()
+        .filter(|&c| !matches!(c, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|'))
+        .collect();
+    let trimmed = sanitized.trim();
+    let result: String = trimmed.chars().take(80).collect();
+    if result.is_empty() {
+        "untitled".to_string()
+    } else {
+        result
+    }
+}
+
+fn floor_char_boundary(s: &str, mut idx: usize) -> usize {
+    if idx >= s.len() {
+        return s.len();
+    }
+    while !s.is_char_boundary(idx) {
+        idx -= 1;
+    }
+    idx
+}
+
+fn ceil_char_boundary(s: &str, mut idx: usize) -> usize {
+    if idx >= s.len() {
+        return s.len();
+    }
+    while !s.is_char_boundary(idx) {
+        idx += 1;
+    }
+    idx
+}
+
+fn make_snippet(content: &str, query: &str) -> String {
+    let lower = content.to_lowercase();
+    let q = query.to_lowercase();
+    if let Some(pos) = lower.find(&q) {
+        let start = floor_char_boundary(&lower, pos.saturating_sub(64));
+        let end = ceil_char_boundary(&lower, (pos + q.len() + 64).min(lower.len()));
+        let mut snippet = String::new();
+        if start > 0 {
+            snippet.push_str("...");
+        }
+        snippet.push_str(&content[start..end]);
+        if end < content.len() {
+            snippet.push_str("...");
+        }
+        snippet
+    } else {
+        content.chars().take(128).collect()
+    }
+}
+
+fn collect_asset_refs(md: &str, set: &mut HashSet<String>) {
+    let mut start = 0;
+    while let Some(pos) = md[start..].find("assets/") {
+        let abs = start + pos;
+        let rest = &md[abs + "assets/".len()..];
+        let end = rest
+            .char_indices()
+            .take_while(|(i, c)| {
+                (*i == 0 && c.is_alphanumeric())
+                    || (*i > 0 && (c.is_alphanumeric() || *c == '.' || *c == '-' || *c == '_'))
+            })
+            .last()
+            .map(|(i, c)| i + c.len_utf8())
+            .unwrap_or(0);
+        let name = &rest[..end];
+        if !name.is_empty() && name.contains('.') {
+            set.insert(name.to_string());
+        }
+        start = abs + "assets/".len();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Vault scanning
+// ---------------------------------------------------------------------------
+
+pub(crate) fn is_notebook_folder(name: &str) -> bool {
+    name != ".mona" && name != "assets"
+}
+
+pub(crate) fn parse_note_file(path: &Path, notebook_name: &str) -> Result<OperationNote, String> {
+    let content =
+        fs::read_to_string(path).map_err(|e| format!("Failed to read note {:?}: {}", path, e))?;
+    let (fm_opt, body) = split_frontmatter(&content);
+    let fm = fm_opt
+        .as_ref()
+        .map(|lines| parse_frontmatter_lines(lines))
+        .unwrap_or_default();
+
+    let file_stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("untitled")
+        .to_string();
+
+    let id = fm.id.unwrap_or_else(|| file_stem.clone());
+    let title = fm.title.unwrap_or_else(|| file_stem.clone());
+    let notebook_id = fm
+        .notebook_id
+        .unwrap_or_else(|| notebook_name.to_string());
+    let source = NoteSource {
+        kind: fm.source_kind.unwrap_or_else(|| "manual".to_string()),
+        label: fm.source_label.unwrap_or_else(|| "手动记录".to_string()),
+    };
+    let context_level = fm.context_level.unwrap_or_else(|| "full".to_string());
+    let agent_chat_id = fm.agent_chat_id.filter(|s| !s.is_empty());
+    let created_at = fm.created_at.clone().unwrap_or_default();
+    let updated_at = fm.updated_at.or(fm.created_at).unwrap_or_default();
+
+    Ok(OperationNote {
+        id,
+        notebook_id,
+        title,
+        preview: make_preview(&body),
+        created_at,
+        updated_at,
+        source,
+        tags: fm.tags,
+        content_markdown: body.clone(),
+        content_json: None,
+        plain_text: Some(strip_markdown(&body)),
+        agent_chat_id,
+        applied_agent_message_ids: fm.applied_agent_message_ids,
+        context_level,
+        note_type: fm.note_type.unwrap_or_else(default_note_type),
+        aliases: fm.aliases,
+    })
+}
+
+/// Scan a vault directory into notebooks and notes.
+///
+/// The vault root is treated as a special "root" notebook with id=""
+/// (empty string). Notes placed directly in the vault root have
+/// notebook_id = "". Subdirectories become regular notebooks.
+fn scan_vault(
+    vault: &Path,
+    meta: &VaultMeta,
+) -> Result<(Vec<Notebook>, Vec<OperationNote>), String> {
+    let mut notebooks = Vec::new();
+    let mut notes = Vec::new();
+
+    // Scan root-level .md files (notebook_id = "") — these live directly in the
+    // vault and are not wrapped in any notebook.
+    if let Ok(root_entries) = fs::read_dir(vault) {
+        for entry in root_entries.flatten() {
+            let md_path = entry.path();
+            if md_path.extension().and_then(|e| e.to_str()) != Some("md") {
+                continue;
+            }
+            match parse_note_file(&md_path, "") {
+                Ok(note) => notes.push(note),
+                Err(e) => log::warn!("Failed to parse note {:?}: {}", md_path, e),
+            }
+        }
+    }
+
+    // Scan subdirectories as notebooks.
+    let entries = fs::read_dir(vault).map_err(|e| format!("Failed to read vault: {}", e))?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+        if !is_notebook_folder(&name) {
+            continue;
+        }
+
+        let knowledge_base_enabled = meta
+            .notebooks
+            .get(&name)
+            .map(|m| m.knowledge_base_enabled)
+            .unwrap_or(false);
+        notebooks.push(Notebook {
+            id: name.clone(),
+            name: name.clone(),
+            description: String::new(),
+            knowledge_base_enabled,
+        });
+
+        if let Ok(md_entries) = fs::read_dir(&path) {
+            for md_entry in md_entries.flatten() {
+                let md_path = md_entry.path();
+                if md_path.extension().and_then(|e| e.to_str()) != Some("md") {
+                    continue;
+                }
+                match parse_note_file(&md_path, &name) {
+                    Ok(note) => notes.push(note),
+                    Err(e) => log::warn!("Failed to parse note {:?}: {}", md_path, e),
+                }
+            }
+        }
+    }
+
+    notes.sort_by(|a, b| a.title.cmp(&b.title));
+    Ok((notebooks, notes))
+}
+
+fn scan_vault_notes(vault: &Path) -> Result<Vec<OperationNote>, String> {
+    let meta = read_vault_meta(vault)?;
+    let (_, notes) = scan_vault(vault, &meta)?;
+    Ok(notes)
+}
+
+/// Build a map of note id -> existing .md file path across the vault,
+/// including both root-level .md files and those inside notebook folders.
+fn scan_existing_note_files(vault: &Path) -> Result<HashMap<String, PathBuf>, String> {
+    let mut map = HashMap::new();
+
+    // Helper: register a single .md file by its frontmatter id.
+    let mut register = |md_path: &Path| {
+        if let Ok(content) = fs::read_to_string(md_path) {
+            let (fm_opt, _) = split_frontmatter(&content);
+            let id = fm_opt
+                .as_ref()
+                .and_then(|lines| parse_frontmatter_lines(lines).id)
+                .unwrap_or_else(|| {
+                    md_path
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("untitled")
+                        .to_string()
+                });
+            map.insert(id, md_path.to_path_buf());
+        }
+    };
+
+    let entries = fs::read_dir(vault).map_err(|e| format!("Failed to read vault: {}", e))?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file() {
+            // Root-level .md file
+            if path.extension().and_then(|e| e.to_str()) == Some("md") {
+                register(&path);
+            }
+            continue;
+        }
+        if !path.is_dir() {
+            continue;
+        }
+        let name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+        if !is_notebook_folder(&name) {
+            continue;
+        }
+        if let Ok(md_entries) = fs::read_dir(&path) {
+            for md_entry in md_entries.flatten() {
+                let md_path = md_entry.path();
+                if md_path.extension().and_then(|e| e.to_str()) == Some("md") {
+                    register(&md_path);
+                }
+            }
+        }
+    }
+    Ok(map)
+}
+
+// ---------------------------------------------------------------------------
+// State load / save
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
 pub async fn notes_load_state() -> Result<NotesState, String> {
-    let conn = open_notes_db()?;
-    let notebooks = load_notebooks(&conn)?;
-    let notes = load_notes(&conn)?;
-    let knowledge_categories = load_knowledge_categories(&conn)?;
-    let knowledge_items = load_knowledge_items(&conn)?;
+    let vault_path = read_vault_path();
+    let vault_meta = match &vault_path {
+        Some(vault) => read_vault_meta(vault).unwrap_or_default(),
+        None => VaultMeta::default(),
+    };
+
+    let (notebooks, notes) = match &vault_path {
+        Some(vault) => scan_vault(vault, &vault_meta)?,
+        None => (Vec::new(), Vec::new()),
+    };
+
     let default_notebook_id = notebooks
         .first()
-        .map(|notebook| notebook.id.clone())
-        .ok_or("Notes database has no notebooks")?;
-    let default_knowledge_category_id = knowledge_categories
-        .first()
-        .map(|category| category.id.clone())
-        .ok_or("Notes database has no knowledge categories")?;
-    let active_notebook_id = read_state_value(&conn, "activeNotebookId")?
-        .filter(|id| notebooks.iter().any(|notebook| notebook.id == *id))
-        .unwrap_or(default_notebook_id);
-    let active_note_id = read_state_value(&conn, "activeNoteId")?
-        .filter(|id| notes.iter().any(|note| note.id == *id))
+        .map(|n| n.id.clone())
+        .unwrap_or_default();
+    let active_notebook_id = if vault_meta.active_notebook_id.is_empty() {
+        default_notebook_id
+    } else if notebooks.iter().any(|n| n.id == vault_meta.active_notebook_id) {
+        vault_meta.active_notebook_id.clone()
+    } else {
+        default_notebook_id
+    };
+    let active_note_id = vault_meta
+        .active_note_id
+        .as_deref()
+        .filter(|id| notes.iter().any(|n| n.id == *id))
+        .map(|s| s.to_string())
         .or_else(|| {
             notes
                 .iter()
-                .find(|note| note.notebook_id == active_notebook_id)
-                .map(|note| note.id.clone())
+                .find(|n| n.notebook_id == active_notebook_id)
+                .map(|n| n.id.clone())
         });
-    let active_knowledge_category_id = read_state_value(&conn, "activeKnowledgeCategoryId")?
-        .filter(|id| {
-            knowledge_categories
-                .iter()
-                .any(|category| category.id == *id)
-        })
-        .unwrap_or(default_knowledge_category_id);
-
-    let transformations = load_transformations(&conn)?;
 
     Ok(NotesState {
         notebooks,
         notes,
-        knowledge_categories,
-        knowledge_items,
         active_notebook_id,
         active_note_id,
-        active_knowledge_category_id,
-        transformations,
+        transformations: vault_meta.transformations,
     })
-}
-
-fn load_transformations(conn: &Connection) -> Result<Vec<NoteTransformation>, String> {
-    let raw = match read_state_value(conn, "transformations")? {
-        Some(value) if !value.is_empty() => value,
-        _ => return Ok(Vec::new()),
-    };
-    serde_json::from_str::<Vec<NoteTransformation>>(&raw)
-        .map_err(|e| format!("Failed to parse transformations JSON: {}", e))
 }
 
 #[tauri::command]
 pub async fn notes_save_state(state: NotesState) -> Result<(), String> {
     validate_state(&state)?;
 
-    let mut conn = open_notes_db()?;
-    let tx = conn
-        .transaction()
-        .map_err(|e| format!("Failed to start notes transaction: {}", e))?;
+    let vault = match read_vault_path() {
+        Some(p) => p,
+        None => return Ok(()),
+    };
 
-    tx.execute("DELETE FROM notes", [])
-        .map_err(|e| format!("Failed to clear notes: {}", e))?;
-    tx.execute("DELETE FROM notebooks", [])
-        .map_err(|e| format!("Failed to clear notebooks: {}", e))?;
-    tx.execute("DELETE FROM app_state", [])
-        .map_err(|e| format!("Failed to clear notes state: {}", e))?;
-    tx.execute("DELETE FROM knowledge_items", [])
-        .map_err(|e| format!("Failed to clear knowledge items: {}", e))?;
-    tx.execute("DELETE FROM knowledge_categories", [])
-        .map_err(|e| format!("Failed to clear knowledge categories: {}", e))?;
+    let notebook_name_by_id: HashMap<String, String> = state
+        .notebooks
+        .iter()
+        .map(|n| (n.id.clone(), n.name.clone()))
+        .collect();
 
-    let now = chrono::Utc::now().to_rfc3339();
+    // Ensure every non-root notebook in state has a corresponding folder.
+    // The root notebook (id="") maps to the vault itself — no folder to create.
     for notebook in &state.notebooks {
-        tx.execute(
-            "INSERT INTO notebooks (id, name, description, knowledge_base_enabled, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
-            params![
-                &notebook.id,
-                &notebook.name,
-                &notebook.description,
-                bool_to_i64(notebook.knowledge_base_enabled),
-                &now,
-            ],
-        )
-        .map_err(|e| format!("Failed to save notebook: {}", e))?;
+        if notebook.id.is_empty() {
+            continue;
+        }
+        fs::create_dir_all(vault.join(&notebook.name))
+            .map_err(|e| format!("Failed to create notebook folder: {}", e))?;
     }
+
+    // Map existing files by note id so we can detect renames and orphans.
+    let mut files_by_id = scan_existing_note_files(&vault)?;
+    let mut path_to_id: HashMap<PathBuf, String> = files_by_id
+        .iter()
+        .map(|(id, p)| (p.clone(), id.clone()))
+        .collect();
+
+    let state_note_ids: HashSet<String> =
+        state.notes.iter().map(|n| n.id.clone()).collect();
 
     for note in &state.notes {
-        let tags_json = to_json_string(&note.tags)?;
-        let content_json = note.content_json.as_ref().map(to_json_string).transpose()?;
-        let applied_ids_json = to_json_string(&note.applied_agent_message_ids)?;
-        let context_level = if note.context_level.is_empty() {
-            "full".to_string()
+        // notebook_id = "" → vault root; otherwise → subdirectory by notebook name.
+        let notebook_dir = if note.notebook_id.is_empty() {
+            vault.to_path_buf()
         } else {
-            note.context_level.clone()
+            let notebook_name = notebook_name_by_id
+                .get(&note.notebook_id)
+                .cloned()
+                .unwrap_or_else(|| note.notebook_id.clone());
+            let dir = vault.join(&notebook_name);
+            fs::create_dir_all(&dir)
+                .map_err(|e| format!("Failed to create notebook folder: {}", e))?;
+            dir
         };
-        tx.execute(
-            "INSERT INTO notes (
-                id, notebook_id, title, preview, updated_at_label, source_kind, source_label,
-                tags_json, content_markdown, content_json, plain_text, agent_chat_id,
-                applied_agent_message_ids_json, context_level, created_at, modified_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?15)",
-            params![
-                &note.id,
-                &note.notebook_id,
-                &note.title,
-                &note.preview,
-                &note.updated_at,
-                &note.source.kind,
-                &note.source.label,
-                &tags_json,
-                &note.content_markdown,
-                &content_json,
-                &note.plain_text,
-                &note.agent_chat_id,
-                &applied_ids_json,
-                &context_level,
-                &now,
-            ],
-        )
-        .map_err(|e| format!("Failed to save note: {}", e))?;
+
+        let base = sanitize_filename(&note.title);
+        let mut filename = format!("{}.md", base);
+        let mut file_path = notebook_dir.join(&filename);
+
+        // Resolve collisions with files belonging to a different note.
+        let mut guard = 0;
+        loop {
+            let occupied_by_other = path_to_id
+                .get(&file_path)
+                .map(|id| id != &note.id)
+                .unwrap_or(false);
+            if !occupied_by_other {
+                break;
+            }
+            guard += 1;
+            let suffix_source = if note.id.len() >= 6 {
+                &note.id[note.id.len() - 6..]
+            } else {
+                &note.id
+            };
+            filename = format!("{}_{}.md", base, if guard == 1 {
+                suffix_source.to_string()
+            } else {
+                format!("{}{}", suffix_source, guard)
+            });
+            file_path = notebook_dir.join(&filename);
+            if guard > 32 {
+                break;
+            }
+        }
+
+        // Remove the note's previous file if its path changed.
+        if let Some(old_path) = files_by_id.get(&note.id) {
+            if *old_path != file_path {
+                let _ = fs::remove_file(old_path);
+                path_to_id.remove(old_path);
+            }
+        }
+
+        let content = serialize_note_to_file(note);
+        fs::write(&file_path, content)
+            .map_err(|e| format!("Failed to write note {:?}: {}", file_path, e))?;
+        path_to_id.insert(file_path.clone(), note.id.clone());
+        files_by_id.insert(note.id.clone(), file_path);
     }
 
-    for category in &state.knowledge_categories {
-        tx.execute(
-            "INSERT INTO knowledge_categories (id, name, description, parent_id, created_at, updated_at)
-             VALUES (?1, ?2, '', ?3, ?4, ?4)",
-            params![&category.id, &category.name, &category.parent_id, &now],
-        )
-        .map_err(|e| format!("Failed to save knowledge category: {}", e))?;
+    // Delete orphan .md files (whose note id is no longer in state).
+    for (id, path) in &files_by_id {
+        if !state_note_ids.contains(id) {
+            let _ = fs::remove_file(path);
+        }
     }
 
-    for item in &state.knowledge_items {
-        let tags_json = to_json_string(&item.tags)?;
-        let linked_notes_json = to_json_string(&item.linked_notes)?;
-        tx.execute(
-            "INSERT INTO knowledge_items (
-                id, category_id, title, summary, content, source_note_id, source_note_title,
-                source_description, updated_at_label, tags_json, linked_notes_json, created_at, modified_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12)",
-            params![
-                &item.id,
-                &item.category_id,
-                &item.title,
-                &item.summary,
-                &item.content,
-                &item.source_note_id,
-                &item.source_note_title,
-                &item.source_description,
-                &item.updated_at,
-                &tags_json,
-                &linked_notes_json,
-                &now,
-            ],
-        )
-        .map_err(|e| format!("Failed to save knowledge item: {}", e))?;
+    // Remove notebook folders that are no longer in state and are empty.
+    // (save_state already deleted orphan .md files, so a removed notebook's
+    // folder should be empty now; only remove if empty to avoid data loss.)
+    let state_notebook_names: HashSet<String> = state
+        .notebooks
+        .iter()
+        .map(|n| n.name.clone())
+        .collect();
+    if let Ok(entries) = fs::read_dir(&vault) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let name = match path.file_name().and_then(|n| n.to_str()) {
+                Some(n) => n.to_string(),
+                None => continue,
+            };
+            if !is_notebook_folder(&name) {
+                continue;
+            }
+            if state_notebook_names.contains(&name) {
+                continue;
+            }
+            // Only remove if the folder is empty (no .md files left).
+            let has_md = fs::read_dir(&path)
+                .ok()
+                .map(|it| {
+                    it.flatten()
+                        .any(|e| e.path().extension().and_then(|x| x.to_str()) == Some("md"))
+                })
+                .unwrap_or(false);
+            if !has_md {
+                let _ = fs::remove_dir(&path);
+            }
+        }
     }
 
-    tx.execute(
-        "INSERT INTO app_state (key, value) VALUES ('activeNotebookId', ?1)",
-        params![&state.active_notebook_id],
-    )
-    .map_err(|e| format!("Failed to save active notebook: {}", e))?;
-    if let Some(active_note_id) = &state.active_note_id {
-        tx.execute(
-            "INSERT INTO app_state (key, value) VALUES ('activeNoteId', ?1)",
-            params![active_note_id],
-        )
-            .map_err(|e| format!("Failed to save active note: {}", e))?;
-    }
-    tx.execute(
-        "INSERT INTO app_state (key, value) VALUES ('activeKnowledgeCategoryId', ?1)",
-        params![&state.active_knowledge_category_id],
-    )
-    .map_err(|e| format!("Failed to save active knowledge category: {}", e))?;
+    // Persist vault metadata.
+    let meta = VaultMeta {
+        notebooks: state
+            .notebooks
+            .iter()
+            .map(|n| {
+                (
+                    n.name.clone(),
+                    VaultNotebookMeta {
+                        knowledge_base_enabled: n.knowledge_base_enabled,
+                    },
+                )
+            })
+            .collect(),
+        active_notebook_id: state.active_notebook_id.clone(),
+        active_note_id: state.active_note_id.clone(),
+        transformations: state.transformations.clone(),
+    };
+    write_vault_meta(&vault, &meta)?;
 
-    let transformations_json = serde_json::to_string(&state.transformations)
-        .map_err(|e| format!("Failed to serialize transformations: {}", e))?;
-    tx.execute(
-        "INSERT INTO app_state (key, value) VALUES ('transformations', ?1)",
-        params![&transformations_json],
-    )
-    .map_err(|e| format!("Failed to save transformations: {}", e))?;
-
-    tx.execute("INSERT INTO notes_fts(notes_fts) VALUES('rebuild')", [])
-        .map_err(|e| format!("Failed to rebuild FTS index: {}", e))?;
-
-    tx.commit()
-        .map_err(|e| format!("Failed to commit notes transaction: {}", e))?;
-
-    // Clean up orphaned image files no longer referenced by any note
-    cleanup_orphaned_assets(&state.notes)?;
+    // Clean up orphan images.
+    cleanup_orphaned_assets_vault(&vault, &state.notes)?;
 
     Ok(())
 }
 
-fn load_notebooks(conn: &Connection) -> Result<Vec<Notebook>, String> {
-    let mut stmt = conn
-        .prepare(
-            "SELECT id, name, description, knowledge_base_enabled
-             FROM notebooks
-             ORDER BY created_at ASC, id ASC",
-        )
-        .map_err(|e| format!("Failed to prepare notebooks query: {}", e))?;
-    let rows = stmt
-        .query_map([], |row| {
-            Ok(Notebook {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                description: row.get(2)?,
-                knowledge_base_enabled: row.get::<_, i64>(3)? != 0,
-            })
-        })
-        .map_err(|e| format!("Failed to query notebooks: {}", e))?;
-
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|e| format!("Failed to read notebooks: {}", e))
-}
-
-fn load_notes(conn: &Connection) -> Result<Vec<OperationNote>, String> {
-    #[derive(Debug)]
-    struct NoteRow {
-        id: String,
-        notebook_id: String,
-        title: String,
-        preview: String,
-        updated_at: String,
-        source_kind: String,
-        source_label: String,
-        tags_json: String,
-        content_markdown: String,
-        content_json: Option<String>,
-        plain_text: Option<String>,
-        agent_chat_id: Option<String>,
-        applied_agent_message_ids_json: String,
-        context_level: String,
-    }
-
-    let mut stmt = conn
-        .prepare(
-            "SELECT
-                id, notebook_id, title, preview, updated_at_label, source_kind, source_label,
-                tags_json, content_markdown, content_json, plain_text, agent_chat_id,
-                applied_agent_message_ids_json, context_level
-             FROM notes
-             ORDER BY modified_at DESC, id ASC",
-        )
-        .map_err(|e| format!("Failed to prepare notes query: {}", e))?;
-    let rows = stmt
-        .query_map([], |row| {
-            Ok(NoteRow {
-                id: row.get(0)?,
-                notebook_id: row.get(1)?,
-                title: row.get(2)?,
-                preview: row.get(3)?,
-                updated_at: row.get(4)?,
-                source_kind: row.get(5)?,
-                source_label: row.get(6)?,
-                tags_json: row.get(7)?,
-                content_markdown: row.get(8)?,
-                content_json: row.get(9)?,
-                plain_text: row.get(10)?,
-                agent_chat_id: row.get(11)?,
-                applied_agent_message_ids_json: row.get(12)?,
-                context_level: row.get::<_, Option<String>>(13)?.unwrap_or_else(|| "full".to_string()),
-            })
-        })
-        .map_err(|e| format!("Failed to query notes: {}", e))?;
-
-    let rows = rows
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| format!("Failed to read notes: {}", e))?;
-
-    rows.into_iter()
-        .map(|row| {
-            let tags = parse_json_field(&row.tags_json, "tags_json")?;
-            let content_json = row
-                .content_json
-                .as_deref()
-                .map(|raw| parse_json_field::<Value>(raw, "content_json"))
-                .transpose()?;
-            let applied_agent_message_ids = parse_json_field(
-                &row.applied_agent_message_ids_json,
-                "applied_agent_message_ids_json",
-            )?;
-
-            Ok(OperationNote {
-                id: row.id,
-                notebook_id: row.notebook_id,
-                title: row.title,
-                preview: row.preview,
-                updated_at: row.updated_at,
-                source: NoteSource {
-                    kind: row.source_kind,
-                    label: row.source_label,
-                },
-                tags,
-                content_markdown: row.content_markdown,
-                content_json,
-                plain_text: row.plain_text,
-                agent_chat_id: row.agent_chat_id,
-                applied_agent_message_ids,
-                context_level: row.context_level,
-            })
-        })
-        .collect()
-}
-
-fn load_knowledge_categories(conn: &Connection) -> Result<Vec<KnowledgeCategory>, String> {
-    let mut stmt = conn
-        .prepare(
-            "SELECT id, name, parent_id
-             FROM knowledge_categories
-             ORDER BY created_at ASC, id ASC",
-        )
-        .map_err(|e| format!("Failed to prepare knowledge categories query: {}", e))?;
-    let rows = stmt
-        .query_map([], |row| {
-            Ok(KnowledgeCategory {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                parent_id: row.get(2)?,
-            })
-        })
-        .map_err(|e| format!("Failed to query knowledge categories: {}", e))?;
-
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|e| format!("Failed to read knowledge categories: {}", e))
-}
-
-fn load_knowledge_items(conn: &Connection) -> Result<Vec<KnowledgeItem>, String> {
-    #[derive(Debug)]
-    struct KnowledgeItemRow {
-        id: String,
-        category_id: String,
-        title: String,
-        summary: String,
-        content: String,
-        source_note_id: String,
-        source_note_title: String,
-        source_description: String,
-        updated_at: String,
-        tags_json: String,
-        linked_notes_json: String,
-    }
-
-    let mut stmt = conn
-        .prepare(
-            "SELECT
-                id, category_id, title, summary, content, source_note_id, source_note_title,
-                source_description, updated_at_label, tags_json, linked_notes_json
-             FROM knowledge_items
-             ORDER BY modified_at DESC, id ASC",
-        )
-        .map_err(|e| format!("Failed to prepare knowledge items query: {}", e))?;
-    let rows = stmt
-        .query_map([], |row| {
-            Ok(KnowledgeItemRow {
-                id: row.get(0)?,
-                category_id: row.get(1)?,
-                title: row.get(2)?,
-                summary: row.get(3)?,
-                content: row.get(4)?,
-                source_note_id: row.get(5)?,
-                source_note_title: row.get(6)?,
-                source_description: row.get(7)?,
-                updated_at: row.get(8)?,
-                tags_json: row.get(9)?,
-                linked_notes_json: row.get(10)?,
-            })
-        })
-        .map_err(|e| format!("Failed to query knowledge items: {}", e))?;
-
-    let rows = rows
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| format!("Failed to read knowledge items: {}", e))?;
-
-    rows.into_iter()
-        .map(|row| {
-            let tags = parse_json_field(&row.tags_json, "knowledge_tags_json")?;
-            let linked_notes =
-                parse_json_field(&row.linked_notes_json, "knowledge_linked_notes_json")?;
-            Ok(KnowledgeItem {
-                id: row.id,
-                category_id: row.category_id,
-                title: row.title,
-                summary: row.summary,
-                content: row.content,
-                source_note_id: row.source_note_id,
-                source_note_title: row.source_note_title,
-                source_description: row.source_description,
-                updated_at: row.updated_at,
-                tags,
-                linked_notes,
-            })
-        })
-        .collect()
-}
-
-fn read_state_value(conn: &Connection, key: &str) -> Result<Option<String>, String> {
-    conn.query_row(
-        "SELECT value FROM app_state WHERE key = ?1",
-        params![key],
-        |row| row.get(0),
-    )
-    .optional()
-    .map_err(|e| format!("Failed to read notes state {}: {}", key, e))
-}
-
 fn validate_state(state: &NotesState) -> Result<(), String> {
-    if state.notebooks.is_empty() {
-        return Err("Notes state must contain at least one notebook".to_string());
-    }
-    if state.knowledge_categories.is_empty() {
-        return Err("Notes state must contain at least one knowledge category".to_string());
-    }
-
-    let mut notebook_ids = HashSet::new();
+    let mut notebook_ids: HashSet<&str> = HashSet::new();
     for notebook in &state.notebooks {
         if notebook.id.trim().is_empty() || notebook.name.trim().is_empty() {
             return Err("Notebook id and name are required".to_string());
@@ -847,16 +1337,23 @@ fn validate_state(state: &NotesState) -> Result<(), String> {
         }
     }
 
-    if !notebook_ids.contains(state.active_notebook_id.as_str()) {
-        return Err("Active notebook does not exist".to_string());
+    if !state.notebooks.is_empty() && !state.active_notebook_id.is_empty() {
+        if !notebook_ids.contains(state.active_notebook_id.as_str()) {
+            return Err("Active notebook does not exist".to_string());
+        }
     }
 
-    let mut note_ids = HashSet::new();
+    let mut note_ids: HashSet<&str> = HashSet::new();
     for note in &state.notes {
         if note.id.trim().is_empty() {
             return Err("Note id is required".to_string());
         }
-        if !notebook_ids.contains(note.notebook_id.as_str()) {
+        // notebook_id = "" means the note lives in the vault root — allowed
+        // even though no notebook with id="" exists in `notebooks`.
+        if !note.notebook_id.is_empty()
+            && !notebook_ids.is_empty()
+            && !notebook_ids.contains(note.notebook_id.as_str())
+        {
             return Err(format!("Note references missing notebook: {}", note.id));
         }
         if !note_ids.insert(note.id.as_str()) {
@@ -865,76 +1362,449 @@ fn validate_state(state: &NotesState) -> Result<(), String> {
     }
 
     if let Some(active_note_id) = &state.active_note_id {
-        if !note_ids.contains(active_note_id.as_str()) {
+        if !active_note_id.is_empty() && !note_ids.contains(active_note_id.as_str()) {
             return Err("Active note does not exist".to_string());
         }
     }
 
-    let mut category_ids = HashSet::new();
-    for category in &state.knowledge_categories {
-        if category.id.trim().is_empty() || category.name.trim().is_empty() {
-            return Err("Knowledge category id and name are required".to_string());
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Create from chat
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn notes_create_from_chat(
+    title: String,
+    content_markdown: String,
+    notebook_id: Option<String>,
+    tags: Option<Vec<String>>,
+) -> Result<String, String> {
+    let vault = read_vault_path()
+        .ok_or_else(|| "Notes vault is not configured".to_string())?;
+
+    // notebook_id = None or "" → vault root; otherwise → subdirectory.
+    let folder_name = notebook_id.unwrap_or_default();
+    let notebook_dir = if folder_name.is_empty() {
+        vault.to_path_buf()
+    } else {
+        let dir = vault.join(&folder_name);
+        fs::create_dir_all(&dir)
+            .map_err(|e| format!("Failed to create notebook folder: {}", e))?;
+        dir
+    };
+
+    let note_id = format!("note-{}", uuid::Uuid::new_v4());
+    let now_iso = chrono::Utc::now().to_rfc3339();
+    let note = OperationNote {
+        id: note_id.clone(),
+        notebook_id: folder_name,
+        title: title.clone(),
+        preview: make_preview(&content_markdown),
+        created_at: now_iso.clone(),
+        updated_at: now_iso,
+        source: NoteSource {
+            kind: "agent".to_string(),
+            label: "聊天保存".to_string(),
+        },
+        tags: tags.unwrap_or_default(),
+        content_markdown,
+        content_json: None,
+        plain_text: None,
+        agent_chat_id: None,
+        applied_agent_message_ids: Vec::new(),
+        context_level: "full".to_string(),
+        note_type: default_note_type(),
+        aliases: Vec::new(),
+    };
+
+    let base = sanitize_filename(&title);
+    let mut filename = format!("{}.md", base);
+    let mut file_path = notebook_dir.join(&filename);
+    let mut counter = 1;
+    while file_path.exists() {
+        filename = format!("{}_{}.md", base, counter);
+        file_path = notebook_dir.join(&filename);
+        counter += 1;
+    }
+
+    fs::write(&file_path, serialize_note_to_file(&note))
+        .map_err(|e| format!("Failed to write note: {}", e))?;
+
+    Ok(note_id)
+}
+
+// ---------------------------------------------------------------------------
+// Read note content (for agent tools)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteContent {
+    pub note_id: String,
+    pub title: String,
+    pub content_markdown: String,
+    pub tags: Vec<String>,
+    pub notebook_id: String,
+    pub notebook_name: String,
+    pub updated_at: String,
+    pub context_level: String,
+}
+
+#[tauri::command]
+pub async fn notes_read_note_content(note_id: String) -> Result<NoteContent, String> {
+    let vault = read_vault_path()
+        .ok_or_else(|| "Notes vault is not configured".to_string())?;
+
+    let notes = scan_vault_notes(&vault)?;
+    let note = notes
+        .iter()
+        .find(|n| n.id == note_id)
+        .ok_or_else(|| format!("Note not found: {}", note_id))?;
+
+    let context_level = if note.context_level.is_empty() {
+        "full".to_string()
+    } else {
+        note.context_level.clone()
+    };
+
+    if context_level == "none" {
+        return Err(format!(
+            "Note {} is marked as not participating in retrieval (contextLevel=none)",
+            note_id
+        ));
+    }
+
+    let content_markdown = if context_level == "summary" {
+        note.preview.clone()
+    } else {
+        note.content_markdown.clone()
+    };
+
+    Ok(NoteContent {
+        note_id: note.id.clone(),
+        title: note.title.clone(),
+        content_markdown,
+        tags: note.tags.clone(),
+        notebook_id: note.notebook_id.clone(),
+        notebook_name: note.notebook_id.clone(),
+        updated_at: note.updated_at.clone(),
+        context_level,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Search
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteSearchResult {
+    pub note_id: String,
+    pub title: String,
+    pub snippet: String,
+    pub rank: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notebook_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notebook_name: Option<String>,
+}
+
+fn search_notes_in_memory(
+    notes: &[OperationNote],
+    notebook_filter: Option<&str>,
+    query: &str,
+    limit: usize,
+) -> Vec<NoteSearchResult> {
+    let q = query.to_lowercase();
+    if q.is_empty() {
+        return Vec::new();
+    }
+    let mut results = Vec::new();
+    for note in notes {
+        if let Some(nb) = notebook_filter {
+            if note.notebook_id != nb {
+                continue;
+            }
         }
-        if !category_ids.insert(category.id.as_str()) {
-            return Err(format!("Duplicate knowledge category id: {}", category.id));
+        let title_l = note.title.to_lowercase();
+        let content_l = note.content_markdown.to_lowercase();
+        let tags_l = note.tags.join(" ").to_lowercase();
+        if title_l.contains(&q) || content_l.contains(&q) || tags_l.contains(&q) {
+            results.push(NoteSearchResult {
+                note_id: note.id.clone(),
+                title: note.title.clone(),
+                snippet: make_snippet(&note.content_markdown, query),
+                rank: 0.0,
+                notebook_id: Some(note.notebook_id.clone()),
+                notebook_name: Some(note.notebook_id.clone()),
+            });
         }
     }
 
-    for category in &state.knowledge_categories {
-        if let Some(parent_id) = &category.parent_id {
-            if parent_id.trim().is_empty() {
-                return Err(format!("Knowledge category has empty parent id: {}", category.id));
-            }
-            if !category_ids.contains(parent_id.as_str()) {
-                return Err(format!(
-                    "Knowledge category references missing parent: {}",
-                    category.id
-                ));
-            }
-        }
+    results = apply_context_levels_mem(results, notes);
+    results.truncate(limit);
+    results
+}
 
-        let mut seen_parent_ids = HashSet::new();
-        let mut parent_id = category.parent_id.as_deref();
-        while let Some(current_parent_id) = parent_id {
-            if current_parent_id == category.id || !seen_parent_ids.insert(current_parent_id) {
-                return Err(format!("Knowledge category cycle detected: {}", category.id));
+fn apply_context_levels_mem(
+    results: Vec<NoteSearchResult>,
+    notes: &[OperationNote],
+) -> Vec<NoteSearchResult> {
+    let map: HashMap<&str, &OperationNote> =
+        notes.iter().map(|n| (n.id.as_str(), n)).collect();
+    results
+        .into_iter()
+        .filter_map(|result| {
+            let note = map.get(result.note_id.as_str())?;
+            match note.context_level.as_str() {
+                "none" => None,
+                "summary" => Some(NoteSearchResult {
+                    snippet: if note.preview.is_empty() {
+                        result.snippet
+                    } else {
+                        note.preview.clone()
+                    },
+                    ..result
+                }),
+                _ => Some(result),
             }
-            parent_id = state
-                .knowledge_categories
-                .iter()
-                .find(|item| item.id == current_parent_id)
-                .and_then(|item| item.parent_id.as_deref());
-        }
+        })
+        .collect()
+}
+
+#[tauri::command]
+pub async fn notes_search(
+    notebook_id: String,
+    query: String,
+    limit: Option<usize>,
+) -> Result<Vec<NoteSearchResult>, String> {
+    let vault = match read_vault_path() {
+        Some(p) => p,
+        None => return Ok(Vec::new()),
+    };
+    let notes = scan_vault_notes(&vault)?;
+    Ok(search_notes_in_memory(
+        &notes,
+        Some(&notebook_id),
+        &query,
+        limit.unwrap_or(5),
+    ))
+}
+
+#[tauri::command]
+pub async fn notes_search_all(
+    query: String,
+    limit: Option<usize>,
+) -> Result<Vec<NoteSearchResult>, String> {
+    let vault = match read_vault_path() {
+        Some(p) => p,
+        None => return Ok(Vec::new()),
+    };
+    let notes = scan_vault_notes(&vault)?;
+    Ok(search_notes_in_memory(
+        &notes,
+        None,
+        &query,
+        limit.unwrap_or(20),
+    ))
+}
+
+// ---------------------------------------------------------------------------
+// Create note from template
+// ---------------------------------------------------------------------------
+
+/// Supported template variables (Obsidian-style, simplified).
+///
+/// - `{{title}}`      → new note's title
+/// - `{{date}}`       → current date (YYYY-MM-DD)
+/// - `{{time}}`       → current time (HH:mm:ss)
+/// - `{{timestamp}}`  → ISO 8601 UTC timestamp
+/// - `{{notebook}}`   → target notebook name
+/// - `{{note_id}}`    → new note's id
+fn apply_template_vars(text: &str, title: &str, notebook_name: &str, note_id: &str) -> String {
+    let now = chrono::Utc::now();
+    let date = now.format("%Y-%m-%d").to_string();
+    let time = now.format("%H:%M:%S").to_string();
+    let timestamp = now.to_rfc3339();
+
+    text.replace("{{title}}", title)
+        .replace("{{date}}", &date)
+        .replace("{{time}}", &time)
+        .replace("{{timestamp}}", &timestamp)
+        .replace("{{notebook}}", notebook_name)
+        .replace("{{note_id}}", note_id)
+}
+
+#[tauri::command]
+pub async fn notes_create_from_template(
+    template_id: String,
+    title: String,
+    notebook_id: Option<String>,
+) -> Result<String, String> {
+    let vault = read_vault_path()
+        .ok_or_else(|| "Notes vault is not configured".to_string())?;
+
+    // Find the template note by id.
+    let notes = scan_vault_notes(&vault)?;
+    let template = notes
+        .iter()
+        .find(|n| n.id == template_id)
+        .ok_or_else(|| format!("Template not found: {}", template_id))?;
+
+    if template.note_type != "template" {
+        return Err(format!(
+            "Note '{}' is not a template (type={})",
+            template_id, template.note_type
+        ));
     }
 
-    if !category_ids.contains(state.active_knowledge_category_id.as_str()) {
-        return Err("Active knowledge category does not exist".to_string());
+    // Determine target notebook folder.
+    let folder_name = notebook_id
+        .clone()
+        .unwrap_or_else(|| template.notebook_id.clone());
+    let notebook_name = if folder_name.is_empty() {
+        "默认分类".to_string()
+    } else {
+        folder_name.clone()
+    };
+    let notebook_dir = if folder_name.is_empty() {
+        vault.to_path_buf()
+    } else {
+        let dir = vault.join(&folder_name);
+        fs::create_dir_all(&dir)
+            .map_err(|e| format!("Failed to create notebook folder: {}", e))?;
+        dir
+    };
+
+    let note_id = format!("note-{}", uuid::Uuid::new_v4());
+    let now_iso = chrono::Utc::now().to_rfc3339();
+
+    // Apply template variables to the body (frontmatter is regenerated).
+    let body = apply_template_vars(
+        &template.content_markdown,
+        &title,
+        &notebook_name,
+        &note_id,
+    );
+    let preview = make_preview(&body);
+
+    let note = OperationNote {
+        id: note_id.clone(),
+        notebook_id: folder_name,
+        title: title.clone(),
+        preview,
+        created_at: now_iso.clone(),
+        updated_at: now_iso,
+        source: NoteSource {
+            kind: "template".to_string(),
+            label: format!("模板: {}", template.title),
+        },
+        tags: Vec::new(),
+        content_markdown: body,
+        content_json: None,
+        plain_text: None,
+        agent_chat_id: None,
+        applied_agent_message_ids: Vec::new(),
+        context_level: "full".to_string(),
+        note_type: default_note_type(),
+        aliases: Vec::new(),
+    };
+
+    let base = sanitize_filename(&title);
+    let mut filename = format!("{}.md", base);
+    let mut file_path = notebook_dir.join(&filename);
+    let mut counter = 1;
+    while file_path.exists() {
+        filename = format!("{}_{}.md", base, counter);
+        file_path = notebook_dir.join(&filename);
+        counter += 1;
     }
 
-    let mut knowledge_item_ids = HashSet::new();
-    for item in &state.knowledge_items {
-        if item.id.trim().is_empty()
-            || item.title.trim().is_empty()
-            || item.summary.trim().is_empty()
-            || item.content.trim().is_empty()
-        {
-            return Err("Knowledge item id, title, summary and content are required".to_string());
-        }
-        if !category_ids.contains(item.category_id.as_str()) {
-            return Err(format!(
-                "Knowledge item references missing category: {}",
-                item.id
-            ));
-        }
-        if !knowledge_item_ids.insert(item.id.as_str()) {
-            return Err(format!("Duplicate knowledge item id: {}", item.id));
-        }
-        for linked_note in &item.linked_notes {
-            if linked_note.note_id.trim().is_empty() || linked_note.note_title.trim().is_empty() {
-                return Err(format!(
-                    "Knowledge item has invalid linked note: {}",
-                    item.id
-                ));
+    fs::write(&file_path, serialize_note_to_file(&note))
+        .map_err(|e| format!("Failed to write note: {}", e))?;
+
+    Ok(note_id)
+}
+
+#[tauri::command]
+pub async fn notes_list_templates() -> Result<Vec<TemplateItem>, String> {
+    let vault = match read_vault_path() {
+        Some(p) => p,
+        None => return Ok(Vec::new()),
+    };
+    let notes = scan_vault_notes(&vault)?;
+    let templates: Vec<TemplateItem> = notes
+        .iter()
+        .filter(|n| n.note_type == "template")
+        .map(|n| TemplateItem {
+            id: n.id.clone(),
+            title: n.title.clone(),
+            notebook_id: n.notebook_id.clone(),
+            preview: if n.preview.is_empty() {
+                n.content_markdown.chars().take(120).collect()
+            } else {
+                n.preview.clone()
+            },
+        })
+        .collect();
+    Ok(templates)
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TemplateItem {
+    pub id: String,
+    pub title: String,
+    pub notebook_id: String,
+    pub preview: String,
+}
+
+// ---------------------------------------------------------------------------
+// Export / images
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn notes_export_temp(note_id: String, content: String) -> Result<String, String> {
+    let workspace = read_workspace_path_from_config();
+    let tmp_dir = workspace.join(".mona").join("tmp").join("notes");
+    fs::create_dir_all(&tmp_dir).map_err(|e| format!("Failed to create temp dir: {}", e))?;
+
+    let file_path = tmp_dir.join(format!("{}.md", note_id));
+    fs::write(&file_path, &content).map_err(|e| format!("Failed to write temp file: {}", e))?;
+
+    Ok(format!(".mona/tmp/notes/{}.md", note_id))
+}
+
+/// Resolve the assets directory. Prefers the vault's `assets/` folder; falls
+/// back to the legacy app-data location when no vault is configured.
+fn assets_dir_create() -> Result<PathBuf, String> {
+    let dir = match read_vault_path() {
+        Some(vault) => vault.join("assets"),
+        None => app_data_dir().join("notes").join("assets"),
+    };
+    fs::create_dir_all(&dir).map_err(|e| format!("Failed to create notes assets dir: {}", e))?;
+    Ok(dir)
+}
+
+fn cleanup_orphaned_assets_vault(vault: &Path, notes: &[OperationNote]) -> Result<(), String> {
+    let assets_dir = vault.join("assets");
+    if !assets_dir.exists() {
+        return Ok(());
+    }
+
+    let mut referenced = HashSet::new();
+    for note in notes {
+        collect_asset_refs(&note.content_markdown, &mut referenced);
+    }
+
+    let entries = fs::read_dir(&assets_dir)
+        .map_err(|e| format!("Failed to read assets dir: {}", e))?;
+    for entry in entries.flatten() {
+        if let Some(name) = entry.file_name().to_str() {
+            if !referenced.contains(name) {
+                let _ = fs::remove_file(entry.path());
             }
         }
     }
@@ -942,21 +1812,40 @@ fn validate_state(state: &NotesState) -> Result<(), String> {
     Ok(())
 }
 
-fn to_json_string<T: Serialize>(value: &T) -> Result<String, String> {
-    serde_json::to_string(value).map_err(|e| format!("Failed to serialize notes field: {}", e))
-}
-
-fn parse_json_field<T: DeserializeOwned>(raw: &str, field: &str) -> Result<T, String> {
-    serde_json::from_str(raw).map_err(|e| format!("Invalid notes field {}: {}", field, e))
-}
-
-fn bool_to_i64(value: bool) -> i64 {
-    if value {
-        1
-    } else {
-        0
+#[tauri::command]
+pub async fn notes_save_image(
+    file_path: String,
+    file_name: Option<String>,
+) -> Result<String, String> {
+    let src = PathBuf::from(&file_path);
+    if !src.exists() {
+        return Err(format!("Source image not found: {}", file_path));
     }
+
+    let final_name = file_name
+        .filter(|n| !n.trim().is_empty())
+        .map(|n| n.trim().to_string())
+        .or_else(|| {
+            src.file_name().and_then(|n| n.to_str()).map(|n| n.to_string())
+        })
+        .ok_or_else(|| "Cannot derive file name from path".to_string())?;
+
+    let assets_dir = assets_dir_create()?;
+    let dest = assets_dir.join(&final_name);
+    fs::copy(&src, &dest).map_err(|e| format!("Failed to copy image to assets: {}", e))?;
+
+    Ok(format!("assets/{}", final_name))
 }
+
+#[tauri::command]
+pub async fn notes_get_assets_dir() -> Result<String, String> {
+    let assets_dir = assets_dir_create()?;
+    Ok(assets_dir.to_string_lossy().to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Workspace path (used by notes_export_temp and ipc_bridge)
+// ---------------------------------------------------------------------------
 
 pub fn read_workspace_path_from_config() -> PathBuf {
     let config_path = crate::settings::mona_config_path();
@@ -1003,471 +1892,9 @@ trait PathExt {
 impl PathExt for PathBuf {
     fn expand_tilde(self) -> PathBuf {
         if let Ok(rest) = self.strip_prefix("~") {
-            dirs::home_dir()
-                .map(|home| home.join(rest))
-                .unwrap_or(self)
+            dirs::home_dir().map(|home| home.join(rest)).unwrap_or(self)
         } else {
             self
         }
     }
-}
-
-#[tauri::command]
-pub async fn notes_create_from_chat(
-    title: String,
-    content_markdown: String,
-    notebook_id: Option<String>,
-) -> Result<String, String> {
-    let conn = open_notes_db()?;
-
-    let target_notebook_id = match notebook_id {
-        Some(id) => {
-            let exists: bool = conn
-                .query_row(
-                    "SELECT COUNT(*) > 0 FROM notebooks WHERE id = ?1",
-                    params![&id],
-                    |row| row.get(0),
-                )
-                .map_err(|e| format!("Failed to check notebook: {}", e))?;
-            if !exists {
-                return Err(format!("Notebook not found: {}", id));
-            }
-            id
-        }
-        None => "default".to_string(),
-    };
-
-    let note_id = format!("note-{}", uuid::Uuid::new_v4());
-    let now = chrono::Utc::now().to_rfc3339();
-    let preview: String = content_markdown
-        .chars()
-        .take(120)
-        .collect::<String>()
-        .lines()
-        .next()
-        .unwrap_or("")
-        .to_string();
-
-    conn.execute(
-        "INSERT INTO notes (
-            id, notebook_id, title, preview, updated_at_label, source_kind, source_label,
-            tags_json, content_markdown, content_json, plain_text, agent_chat_id,
-            applied_agent_message_ids_json, created_at, modified_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, NULL, NULL, '[]', ?10, ?10)",
-        params![
-            &note_id,
-            &target_notebook_id,
-            &title,
-            &preview,
-            "刚刚",
-            "agent",
-            "聊天保存",
-            "[]",
-            &content_markdown,
-            &now,
-        ],
-    )
-    .map_err(|e| format!("Failed to create note from chat: {}", e))?;
-
-    Ok(note_id)
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct NoteSearchResult {
-    pub note_id: String,
-    pub title: String,
-    pub snippet: String,
-    pub rank: f64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub notebook_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub notebook_name: Option<String>,
-}
-
-#[tauri::command]
-pub async fn notes_search(
-    notebook_id: String,
-    query: String,
-    limit: Option<usize>,
-) -> Result<Vec<NoteSearchResult>, String> {
-    let conn = open_notes_db()?;
-    let limit = limit.unwrap_or(5);
-
-    // Try FTS5 search first
-    let fts_results = search_fts(&conn, Some(&notebook_id), &query, limit)?;
-
-    let results = if !fts_results.is_empty() {
-        fts_results
-    } else {
-        // Fallback to LIKE search for better Chinese support
-        search_like(&conn, Some(&notebook_id), &query, limit)?
-    };
-
-    apply_context_levels(&conn, results)
-}
-
-#[tauri::command]
-pub async fn notes_search_all(
-    query: String,
-    limit: Option<usize>,
-) -> Result<Vec<NoteSearchResult>, String> {
-    let conn = open_notes_db()?;
-    let limit = limit.unwrap_or(20);
-
-    // Try FTS5 search first across all notebooks
-    let fts_results = search_fts(&conn, None, &query, limit)?;
-
-    let results = if !fts_results.is_empty() {
-        fts_results
-    } else {
-        // Fallback to LIKE search
-        search_like(&conn, None, &query, limit)?
-    };
-
-    apply_context_levels(&conn, results)
-}
-
-fn search_fts(
-    conn: &Connection,
-    notebook_id: Option<&str>,
-    query: &str,
-    limit: usize,
-) -> Result<Vec<NoteSearchResult>, String> {
-    // Build FTS query: split into words, filter short ones, join with OR
-    let fts_query = query
-        .split_whitespace()
-        .filter(|w| w.len() >= 2)
-        .map(|w| format!("\"{}\"", w))
-        .collect::<Vec<_>>()
-        .join(" OR ");
-
-    if fts_query.is_empty() {
-        return Ok(vec![]);
-    }
-
-    // FTS5 virtual tables cannot be joined directly; query FTS first, then
-    // resolve notebook names from the notebooks table.
-    let fts_sql = match notebook_id {
-        Some(_) => format!(
-            "SELECT id, title, snippet(notes_fts, 3, '⟨', '⟩', '...', 64) as snippet, rank, notebook_id \
-             FROM notes_fts \
-             WHERE notes_fts MATCH ?1 AND notebook_id = ?2 \
-             ORDER BY rank \
-             LIMIT {}",
-            limit
-        ),
-        None => format!(
-            "SELECT id, title, snippet(notes_fts, 3, '⟨', '⟩', '...', 64) as snippet, rank, notebook_id \
-             FROM notes_fts \
-             WHERE notes_fts MATCH ?1 \
-             ORDER BY rank \
-             LIMIT {}",
-            limit
-        ),
-    };
-
-    let mut stmt = conn.prepare(&fts_sql).map_err(|e| format!("Search prepare failed: {}", e))?;
-    let raw_rows: Vec<(String, String, String, f64, Option<String>)> = match notebook_id {
-        Some(nid) => stmt
-            .query_map(params![&fts_query, nid], |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get::<_, Option<String>>(4)?,
-                ))
-            })
-            .map_err(|e| format!("Search query failed: {}", e))?
-            .filter_map(|r| r.ok())
-            .collect(),
-        None => stmt
-            .query_map(params![&fts_query], |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get::<_, Option<String>>(4)?,
-                ))
-            })
-            .map_err(|e| format!("Search query failed: {}", e))?
-            .filter_map(|r| r.ok())
-            .collect(),
-    };
-
-    if raw_rows.is_empty() {
-        return Ok(vec![]);
-    }
-
-    // Batch-resolve notebook names
-    let mut notebook_names: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-    let unique_ids: Vec<&str> = raw_rows
-        .iter()
-        .filter_map(|r| r.4.as_deref())
-        .filter(|id| !notebook_names.contains_key(*id))
-        .collect();
-    if !unique_ids.is_empty() {
-        let placeholders = unique_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-        let sql = format!("SELECT id, name FROM notebooks WHERE id IN ({})", placeholders);
-        let mut nb_stmt = conn.prepare(&sql).map_err(|e| format!("Notebook lookup failed: {}", e))?;
-        let nb_rows = nb_stmt
-            .query_map(rusqlite::params_from_iter(unique_ids.iter()), |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })
-            .map_err(|e| format!("Notebook lookup query failed: {}", e))?;
-        for nb_row in nb_rows.flatten() {
-            notebook_names.insert(nb_row.0, nb_row.1);
-        }
-    }
-
-    Ok(raw_rows
-        .into_iter()
-        .map(|(note_id, title, snippet, rank, nb_id)| NoteSearchResult {
-            note_id,
-            title,
-            snippet,
-            rank,
-            notebook_id: nb_id.clone(),
-            notebook_name: nb_id.and_then(|id| notebook_names.get(&id).cloned()),
-        })
-        .collect())
-}
-
-/// Look up `context_level` and `preview` for a batch of note IDs from the notes
-/// table. Returns a map keyed by note_id.
-fn load_note_context_levels(
-    conn: &Connection,
-    note_ids: &[String],
-) -> Result<std::collections::HashMap<String, (String, String)>, String> {
-    let mut map = std::collections::HashMap::new();
-    if note_ids.is_empty() {
-        return Ok(map);
-    }
-    let placeholders = note_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-    let sql = format!(
-        "SELECT id, context_level, preview FROM notes WHERE id IN ({})",
-        placeholders
-    );
-    let mut stmt = conn
-        .prepare(&sql)
-        .map_err(|e| format!("Context level lookup failed: {}", e))?;
-    let rows = stmt
-        .query_map(rusqlite::params_from_iter(note_ids.iter()), |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, Option<String>>(1)?.unwrap_or_else(|| "full".to_string()),
-                row.get::<_, Option<String>>(2)?.unwrap_or_default(),
-            ))
-        })
-        .map_err(|e| format!("Context level query failed: {}", e))?;
-    for row in rows.flatten() {
-        map.insert(row.0, (row.1, row.2));
-    }
-    Ok(map)
-}
-
-/// Apply context-level filtering and truncation to search results.
-/// - `none`: drop the result entirely
-/// - `summary`: replace snippet with the note's preview (short summary)
-/// - `full`: keep as-is
-fn apply_context_levels(
-    conn: &Connection,
-    results: Vec<NoteSearchResult>,
-) -> Result<Vec<NoteSearchResult>, String> {
-    if results.is_empty() {
-        return Ok(results);
-    }
-    let note_ids: Vec<String> = results.iter().map(|r| r.note_id.clone()).collect();
-    let context_map = load_note_context_levels(conn, &note_ids)?;
-
-    Ok(results
-        .into_iter()
-        .filter_map(|result| {
-            let (context_level, preview) = context_map.get(&result.note_id).cloned().unwrap_or_else(|| {
-                ("full".to_string(), String::new())
-            });
-            match context_level.as_str() {
-                "none" => None,
-                "summary" => Some(NoteSearchResult {
-                    snippet: if preview.is_empty() { result.snippet } else { preview.clone() },
-                    ..result
-                }),
-                _ => Some(result),
-            }
-        })
-        .collect())
-}
-
-fn search_like(
-    conn: &Connection,
-    notebook_id: Option<&str>,
-    query: &str,
-    limit: usize,
-) -> Result<Vec<NoteSearchResult>, String> {
-    let pattern = format!("%{}%", query.replace('%', "\\%").replace('_', "\\_"));
-    let (sql, params): (String, Vec<Box<dyn rusqlite::ToSql>>) = match notebook_id {
-        Some(nid) => (
-            format!(
-                "SELECT n.id, n.title, substr(n.content_markdown, 1, 200) as snippet, n.notebook_id, nb.name as notebook_name \
-                 FROM notes n LEFT JOIN notebooks nb ON nb.id = n.notebook_id \
-                 WHERE n.notebook_id = ?1 AND (n.title LIKE ?2 ESCAPE '\\' OR n.content_markdown LIKE ?2 ESCAPE '\\') \
-                 ORDER BY n.modified_at DESC \
-                 LIMIT {}",
-                limit
-            ),
-            vec![Box::new(nid.to_string()), Box::new(pattern)],
-        ),
-        None => (
-            format!(
-                "SELECT n.id, n.title, substr(n.content_markdown, 1, 200) as snippet, n.notebook_id, nb.name as notebook_name \
-                 FROM notes n LEFT JOIN notebooks nb ON nb.id = n.notebook_id \
-                 WHERE n.title LIKE ?1 ESCAPE '\\' OR n.content_markdown LIKE ?1 ESCAPE '\\' \
-                 ORDER BY n.modified_at DESC \
-                 LIMIT {}",
-                limit
-            ),
-            vec![Box::new(pattern)],
-        ),
-    };
-
-    let mut stmt = conn
-        .prepare(&sql)
-        .map_err(|e| format!("LIKE search prepare failed: {}", e))?;
-    let results = stmt
-        .query_map(rusqlite::params_from_iter(params.iter()), |row| {
-            Ok(NoteSearchResult {
-                note_id: row.get(0)?,
-                title: row.get(1)?,
-                snippet: row.get(2)?,
-                rank: 0.0,
-                notebook_id: row.get::<_, Option<String>>(3)?,
-                notebook_name: row.get::<_, Option<String>>(4)?,
-            })
-        })
-        .map_err(|e| format!("LIKE search query failed: {}", e))?
-        .filter_map(|r| r.ok())
-        .collect();
-
-    Ok(results)
-}
-
-#[tauri::command]
-pub async fn notes_export_temp(note_id: String, content: String) -> Result<String, String> {
-    let workspace = read_workspace_path_from_config();
-    let tmp_dir = workspace.join(".mona").join("tmp").join("notes");
-    fs::create_dir_all(&tmp_dir).map_err(|e| format!("Failed to create temp dir: {}", e))?;
-
-    let file_path = tmp_dir.join(format!("{}.md", note_id));
-    fs::write(&file_path, &content).map_err(|e| format!("Failed to write temp file: {}", e))?;
-
-    Ok(format!(".mona/tmp/notes/{}.md", note_id))
-}
-
-/// Scan all notes' Markdown for `assets/xxx.png` references and delete
-/// files in the assets directory that are no longer referenced by any note.
-fn cleanup_orphaned_assets(notes: &[OperationNote]) -> Result<(), String> {
-    let assets_dir = app_data_dir().join("notes").join("assets");
-    if !assets_dir.exists() {
-        return Ok(());
-    }
-
-    // Collect all referenced file names from note Markdown
-    let mut referenced = std::collections::HashSet::new();
-    for note in notes {
-        let md = &note.content_markdown;
-        let mut start = 0;
-        while let Some(pos) = md[start..].find("assets/") {
-            let abs_pos = start + pos;
-            let rest = &md[abs_pos + "assets/".len()..];
-            // Extract file name: alphanumeric + dots + extension
-            let end = rest
-                .char_indices()
-                .take_while(|(i, c)| {
-                    *i == 0 && c.is_alphanumeric()
-                        || *i > 0 && (c.is_alphanumeric() || *c == '.' || *c == '-' || *c == '_')
-                })
-                .last()
-                .map(|(i, c)| i + c.len_utf8())
-                .unwrap_or(0);
-            let name = &rest[..end];
-            if !name.is_empty() && name.contains('.') {
-                referenced.insert(name.to_string());
-            }
-            start = abs_pos + "assets/".len();
-        }
-    }
-
-    // Delete files not in the referenced set
-    let entries = fs::read_dir(&assets_dir)
-        .map_err(|e| format!("Failed to read assets dir: {}", e))?;
-    for entry in entries.flatten() {
-        if let Some(name) = entry.file_name().to_str() {
-            if !referenced.contains(name) {
-                let _ = fs::remove_file(entry.path());
-            }
-        }
-    }
-
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn notes_save_image(
-    file_name: String,
-    image_data: Vec<u8>,
-) -> Result<String, String> {
-    let assets_dir = app_data_dir().join("notes").join("assets");
-    fs::create_dir_all(&assets_dir)
-        .map_err(|e| format!("Failed to create notes assets dir: {}", e))?;
-
-    let file_path = assets_dir.join(&file_name);
-    fs::write(&file_path, &image_data)
-        .map_err(|e| format!("Failed to save note image: {}", e))?;
-
-    Ok(file_path.to_string_lossy().to_string())
-}
-
-#[tauri::command]
-pub async fn notes_get_assets_dir() -> Result<String, String> {
-    let assets_dir = app_data_dir().join("notes").join("assets");
-    fs::create_dir_all(&assets_dir)
-        .map_err(|e| format!("Failed to ensure notes assets dir: {}", e))?;
-    Ok(assets_dir.to_string_lossy().to_string())
-}
-
-/// Read a note image file and return it as a data URL for rendering.
-/// Only used for in-browser display; the database still stores relative paths like `assets/xxx.png`.
-#[tauri::command]
-pub async fn notes_read_image(file_name: String) -> Result<String, String> {
-    let assets_dir = app_data_dir().join("notes").join("assets");
-    let file_path = assets_dir.join(&file_name);
-
-    if !file_path.exists() {
-        return Err(format!("Image file not found: {}", file_name));
-    }
-
-    let data = fs::read(&file_path)
-        .map_err(|e| format!("Failed to read image: {}", e))?;
-
-    let ext = file_path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("png")
-        .to_lowercase();
-
-    let mime = match ext.as_str() {
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "gif" => "image/gif",
-        "webp" => "image/webp",
-        "svg" => "image/svg+xml",
-        "bmp" => "image/bmp",
-        "ico" => "image/x-icon",
-        _ => "image/png",
-    };
-
-    let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
-    Ok(format!("data:{};base64,{}", mime, b64))
 }

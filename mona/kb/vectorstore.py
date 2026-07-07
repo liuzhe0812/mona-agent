@@ -28,6 +28,19 @@ def _db_path(project_path: Path) -> Path:
     return project_path / ".llm-wiki" / "vectorstore.db"
 
 
+def _resolve_db_path(project_path: Path | None, db_path: Path | str | None) -> Path:
+    """Resolve a vectorstore db path, preferring an explicit override.
+
+    If `db_path` is provided, it's used as-is (string or Path).
+    Otherwise, falls back to `<project_path>/.llm-wiki/vectorstore.db`.
+    """
+    if db_path is not None:
+        return Path(db_path)
+    if project_path is None:
+        raise ValueError("Either project_path or db_path must be provided")
+    return _db_path(project_path)
+
+
 def _validate_page_id(page_id: str) -> None:
     if not page_id or len(page_id) > 256:
         raise ValueError(f"Invalid page_id: {page_id!r}")
@@ -56,8 +69,16 @@ def _floats_to_bytes(vectors: list[float]) -> bytes:
     return struct.pack(f"{len(vectors)}f", *vectors)
 
 
-async def upsert_chunks(project_path: Path, page_id: str, chunks: list[dict[str, Any]]) -> None:
-    """Upsert a batch of chunks for a single page. Existing chunks are deleted first."""
+async def upsert_chunks(
+    project_path: Path,
+    page_id: str,
+    chunks: list[dict[str, Any]],
+    db_path: Path | str | None = None,
+) -> None:
+    """Upsert a batch of chunks for a single page. Existing chunks are deleted first.
+
+    Pass `db_path` to use a non-default vectorstore location (e.g. for notes vault).
+    """
     _validate_page_id(page_id)
     if not chunks:
         return
@@ -66,7 +87,7 @@ async def upsert_chunks(project_path: Path, page_id: str, chunks: list[dict[str,
     if dim == 0:
         raise ValueError("Chunk #0 has empty embedding")
 
-    conn = _connect(_db_path(project_path))
+    conn = _connect(_resolve_db_path(project_path, db_path))
     try:
         _ensure_table(conn, dim)
 
@@ -95,13 +116,14 @@ async def search_chunks(
     project_path: Path,
     query_embedding: list[float],
     top_k: int = 30,
+    db_path: Path | str | None = None,
 ) -> list[dict[str, Any]]:
     """Search for similar chunks by embedding vector."""
-    db_path = _db_path(project_path)
-    if not db_path.exists():
+    resolved = _resolve_db_path(project_path, db_path)
+    if not resolved.exists():
         return []
 
-    conn = _connect(db_path)
+    conn = _connect(resolved)
     try:
         # Check table exists
         tables = conn.execute(
@@ -133,14 +155,18 @@ async def search_chunks(
         conn.close()
 
 
-async def delete_page(project_path: Path, page_id: str) -> None:
+async def delete_page(
+    project_path: Path,
+    page_id: str,
+    db_path: Path | str | None = None,
+) -> None:
     """Delete all chunks for a page."""
     _validate_page_id(page_id)
-    db_path = _db_path(project_path)
-    if not db_path.exists():
+    resolved = _resolve_db_path(project_path, db_path)
+    if not resolved.exists():
         return
 
-    conn = _connect(db_path)
+    conn = _connect(resolved)
     try:
         tables = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (TABLE_V2,)
@@ -154,13 +180,16 @@ async def delete_page(project_path: Path, page_id: str) -> None:
         conn.close()
 
 
-async def count_chunks(project_path: Path) -> int:
+async def count_chunks(
+    project_path: Path,
+    db_path: Path | str | None = None,
+) -> int:
     """Count total chunks in the v2 index."""
-    db_path = _db_path(project_path)
-    if not db_path.exists():
+    resolved = _resolve_db_path(project_path, db_path)
+    if not resolved.exists():
         return 0
 
-    conn = _connect(db_path)
+    conn = _connect(resolved)
     try:
         tables = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (TABLE_V2,)
