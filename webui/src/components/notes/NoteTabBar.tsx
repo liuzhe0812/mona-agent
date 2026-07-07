@@ -28,8 +28,6 @@ export function NoteTabBar({
   onCloseOthers,
   onCloseAll,
 }: NoteTabBarProps) {
-  if (tabs.length === 0) return null;
-
   return (
     <div className="flex h-8 shrink-0 items-stretch overflow-x-auto border-b border-border/55 bg-background/50 scrollbar-thin">
       {tabs.map((note) => {

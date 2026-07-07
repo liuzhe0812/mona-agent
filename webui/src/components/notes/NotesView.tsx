@@ -1299,18 +1299,18 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
                 </div>
               </aside>
               <div className="flex min-w-0 flex-1 flex-col">
+              <NoteTabBar
+                tabs={openTabIds
+                  .map((id) => notes.find((n) => n.id === id))
+                  .filter((n): n is OperationNote => n !== null)}
+                activeNoteId={activeNoteId}
+                onSelect={selectNote}
+                onClose={closeTab}
+                onCloseOthers={closeOtherTabs}
+                onCloseAll={closeAllTabs}
+              />
               {activeNote ? (
                 <>
-                  <NoteTabBar
-                    tabs={openTabIds
-                      .map((id) => notes.find((n) => n.id === id))
-                      .filter((n): n is OperationNote => n !== null)}
-                    activeNoteId={activeNoteId}
-                    onSelect={selectNote}
-                    onClose={closeTab}
-                    onCloseOthers={closeOtherTabs}
-                    onCloseAll={closeAllTabs}
-                  />
                   <NoteEditor
                     note={activeNote}
                     saveStatus={saveStatus}
