@@ -29,7 +29,7 @@ export function NoteTabBar({
   onCloseAll,
 }: NoteTabBarProps) {
   return (
-    <div className="flex h-8 shrink-0 items-stretch overflow-x-auto border-b border-border/55 bg-background/50 scrollbar-thin">
+    <div className="flex h-8 min-w-0 flex-1 items-stretch overflow-x-auto border-b border-border/55 bg-background/50 scrollbar-thin">
       {tabs.map((note) => {
         const isActive = note.id === activeNoteId;
         return (

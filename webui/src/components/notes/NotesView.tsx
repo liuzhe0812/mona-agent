@@ -1075,9 +1075,6 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
                   <IconButton label="全局搜索 (Ctrl+K)" onClick={() => setGlobalSearchOpen(true)}>
                     <Search className="h-3.5 w-3.5" />
                   </IconButton>
-                  <IconButton label="关系图" onClick={() => setGraphViewOpen(true)}>
-                    <GitFork className="h-3.5 w-3.5" />
-                  </IconButton>
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                       <button
@@ -1279,17 +1276,28 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
                   </button>
                 </div>
               </aside>
-              <div className="flex min-w-0 flex-1 flex-col">
-              <NoteTabBar
-                tabs={openTabIds
-                  .map((id) => notes.find((n) => n.id === id))
-                  .filter((n): n is OperationNote => n !== null)}
-                activeNoteId={activeNoteId}
-                onSelect={selectNote}
-                onClose={closeTab}
-                onCloseOthers={closeOtherTabs}
-                onCloseAll={closeAllTabs}
-              />
+              <div className="relative flex min-w-0 flex-1 flex-col">
+              <div className="flex shrink-0 items-stretch">
+                <NoteTabBar
+                  tabs={openTabIds
+                    .map((id) => notes.find((n) => n.id === id))
+                    .filter((n): n is OperationNote => n !== null)}
+                  activeNoteId={activeNoteId}
+                  onSelect={selectNote}
+                  onClose={closeTab}
+                  onCloseOthers={closeOtherTabs}
+                  onCloseAll={closeAllTabs}
+                />
+                <button
+                  type="button"
+                  title="关系图"
+                  aria-label="关系图"
+                  onClick={() => setGraphViewOpen(true)}
+                  className="grid h-8 w-8 shrink-0 place-items-center border-b border-border/55 border-l border-border/40 text-muted-foreground hover:bg-accent hover:text-foreground"
+                >
+                  <GitFork className="h-3.5 w-3.5" />
+                </button>
+              </div>
               {activeNote ? (
                 <>
                   <NoteEditor
@@ -1443,6 +1451,12 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
                   当前笔记本还没有笔记。
                 </div>
               )}
+              <GraphViewDialog
+                open={graphViewOpen}
+                onOpenChange={setGraphViewOpen}
+                activeNoteId={activeNoteId}
+                onSelectNote={(noteId) => selectNote(noteId)}
+              />
               </div>
             </>
           )}
@@ -1490,12 +1504,6 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
         open={globalSearchOpen}
         onOpenChange={setGlobalSearchOpen}
         onSelectNote={openNoteFromGlobalSearch}
-      />
-      <GraphViewDialog
-        open={graphViewOpen}
-        onOpenChange={setGraphViewOpen}
-        activeNoteId={activeNoteId}
-        onSelectNote={(noteId) => selectNote(noteId)}
       />
     </div>
   );

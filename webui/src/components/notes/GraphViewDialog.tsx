@@ -59,7 +59,7 @@ export function GraphViewDialog({
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [dimensions, setDimensions] = useState({ w: 800, h: 600 });
 
-  // Load graph data.
+  // Load graph data once per open.
   useEffect(() => {
     if (!open) return;
     setLoading(true);
@@ -82,8 +82,9 @@ export function GraphViewDialog({
           degreeMap.set(tgt, (degreeMap.get(tgt) ?? 0) + 1);
         }
         edgesRef.current = edges;
-        const cx = dimensions.w / 2;
-        const cy = dimensions.h / 2;
+        const rect = containerRef.current?.getBoundingClientRect();
+        const cx = (rect?.width ?? dimensions.w) / 2;
+        const cy = (rect?.height ?? dimensions.h) / 2;
         nodesRef.current = data.nodes.map((n, i) => {
           const angle = (i / Math.max(data.nodes.length, 1)) * Math.PI * 2;
           const r = 120;
@@ -99,7 +100,7 @@ export function GraphViewDialog({
       })
       .catch((err) => setError(String(err)))
       .finally(() => setLoading(false));
-  }, [open, dimensions.w, dimensions.h]);
+  }, [open]);
 
   // Track container size.
   useEffect(() => {
@@ -107,7 +108,6 @@ export function GraphViewDialog({
     const observer = new ResizeObserver((entries) => {
       for (const entry of entries) {
         const cr = entry.contentRect;
-        setDimensions({ w: cr.width, y: 0 } as unknown as { w: number; h: number });
         setDimensions({ w: cr.width, h: cr.height });
       }
     });
@@ -369,7 +369,7 @@ export function GraphViewDialog({
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-background/95 backdrop-blur-sm">
+    <div className="absolute inset-0 z-30 flex flex-col bg-background/95 backdrop-blur-sm">
       <div className="flex h-10 shrink-0 items-center justify-between border-b border-border/60 px-3">
         <div className="flex items-center gap-2 text-[13px] font-medium">
           <span>关系图</span>
