@@ -259,8 +259,8 @@ fn extract_wiki_links(content: &str) -> Vec<WikiLinkRef> {
             }
             i = inner_start + rel_close + 2;
         } else {
-            // No closing `]]`; skip past `[[`.
-            i = inner_start;
+            // No closing `]]`; advance past the opening marker to avoid infinite loop.
+            i = inner_start + 1;
         }
     }
 
@@ -338,7 +338,9 @@ fn build_title_index(scanned: &[ScannedNote]) -> HashMap<String, String> {
 // ---------------------------------------------------------------------------
 
 fn build_graph(vault: &Path) -> LinkGraph {
+    let t0 = std::time::Instant::now();
     let scanned = scan_vault_links(vault);
+    log::info!("[graph] scan_vault_links: {} notes, {:?}", scanned.len(), t0.elapsed());
     let title_index = build_title_index(&scanned);
 
     let nodes: Vec<LinkNode> = scanned
@@ -409,12 +411,18 @@ fn save_cached_graph(vault: &Path, graph: &LinkGraph) -> Result<(), String> {
 
 /// Get the current graph, rebuilding from disk if no cache exists.
 fn current_graph() -> Result<LinkGraph, String> {
+    let start = std::time::Instant::now();
     let vault = notes::read_vault_path().ok_or_else(|| "No vault configured".to_string())?;
+    log::info!("[graph] current_graph start, vault={:?}", vault);
     if let Some(cached) = load_cached_graph(&vault) {
+        log::info!("[graph] loaded from cache, {} nodes, elapsed {:?}", cached.nodes.len(), start.elapsed());
         return Ok(cached);
     }
+    log::info!("[graph] no cache, building...");
     let graph = build_graph(&vault);
+    log::info!("[graph] built {} nodes {} edges, elapsed {:?}", graph.nodes.len(), graph.edges.len(), start.elapsed());
     save_cached_graph(&vault, &graph)?;
+    log::info!("[graph] saved, total elapsed {:?}", start.elapsed());
     Ok(graph)
 }
 
