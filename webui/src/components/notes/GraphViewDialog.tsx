@@ -351,10 +351,9 @@ export function GraphViewDialog({
       );
       if (node && onSelectNote) {
         onSelectNote(node.id);
-        onOpenChange(false);
       }
     },
-    [onSelectNote, onOpenChange],
+    [onSelectNote],
   );
 
   const handleWheel = useCallback((e: React.WheelEvent<HTMLCanvasElement>) => {
