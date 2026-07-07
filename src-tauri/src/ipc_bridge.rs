@@ -433,7 +433,9 @@ impl IpcBridge {
                 let browser_state = self.app_handle.state::<crate::browser::BrowserState>();
                 let id = args.get("id").and_then(|v| v.as_str()).ok_or("Missing id")?;
                 let url = args.get("url").and_then(|v| v.as_str()).ok_or("Missing url")?;
-                let result = browser_state.create_tab(&self.app_handle, id, url)?;
+                let is_incognito = args.get("isIncognito").and_then(|v| v.as_bool()).unwrap_or(false);
+                let ad_block_enabled = args.get("adBlockEnabled").and_then(|v| v.as_bool()).unwrap_or(true);
+                let result = browser_state.create_tab(&self.app_handle, id, url, is_incognito, ad_block_enabled)?;
                 serde_json::to_value(result).map_err(|e| e.to_string())
             }
             "browser_close_tab" => {
@@ -477,6 +479,78 @@ impl IpcBridge {
                 let id = args.get("id").and_then(|v| v.as_str()).ok_or("Missing id")?;
                 let port = browser_state.get_cdp_port(id)?;
                 Ok(Value::Number(port.into()))
+            }
+            "notes_vault_get_path" => {
+                let path = crate::notes::notes_vault_get_path().await?;
+                serde_json::to_value(path).map_err(|e| e.to_string())
+            }
+            "notes_create_from_chat" => {
+                let title = args
+                    .get("title")
+                    .and_then(|v| v.as_str())
+                    .ok_or("Missing title")?
+                    .to_string();
+                let content_markdown = args
+                    .get("contentMarkdown")
+                    .and_then(|v| v.as_str())
+                    .ok_or("Missing contentMarkdown")?
+                    .to_string();
+                let notebook_id = args
+                    .get("notebookId")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let tags = args
+                    .get("tags")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|t| t.as_str().map(|s| s.to_string()))
+                            .collect::<Vec<_>>()
+                    });
+                let note_id = crate::notes::notes_create_from_chat(
+                    title,
+                    content_markdown,
+                    notebook_id,
+                    tags,
+                )
+                .await?;
+                Ok(Value::String(note_id))
+            }
+            "notes_search_all" => {
+                let query = args
+                    .get("query")
+                    .and_then(|v| v.as_str())
+                    .ok_or("Missing query")?
+                    .to_string();
+                let limit = args
+                    .get("limit")
+                    .and_then(|v| v.as_i64())
+                    .map(|n| n as usize);
+                let results = crate::notes::notes_search_all(query, limit).await?;
+                serde_json::to_value(results).map_err(|e| e.to_string())
+            }
+            "notes_read_note_content" => {
+                let note_id = args
+                    .get("noteId")
+                    .and_then(|v| v.as_str())
+                    .ok_or("Missing noteId")?
+                    .to_string();
+                let content = crate::notes::notes_read_note_content(note_id).await?;
+                serde_json::to_value(content).map_err(|e| e.to_string())
+            }
+            "notes_save_image" => {
+                let file_path = args
+                    .get("filePath")
+                    .and_then(|v| v.as_str())
+                    .ok_or("Missing filePath")?
+                    .to_string();
+                let file_name = args
+                    .get("fileName")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let saved_path =
+                    crate::notes::notes_save_image(file_path, file_name).await?;
+                Ok(Value::String(saved_path))
             }
             _ => Err(format!("Unknown command: {}", cmd)),
         }

@@ -14,19 +14,18 @@ import {
   X,
   Check,
   AlertCircle,
+  Upload,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { useEmailStore } from "../store/emailStore";
-import * as emailApi from "../lib/emailApi";
 import * as contactsApi from "./lib/contactsApi";
 import {
   getAllEmails,
   parseEmailList,
   type Contact,
-  type ContactSyncResult,
   type ContactSyncState,
 } from "./lib/types";
 
@@ -46,6 +45,7 @@ export function ContactsView({ gatewayUrl }: ContactsViewProps) {
   const [syncing, setSyncing] = useState(false);
   const [syncStates, setSyncStates] = useState<Record<string, ContactSyncState>>({});
   const [error, setError] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
 
   const selectedAccount = useEmailStore((s) =>
     s.accounts.find((a) => a.id === s.selectedAccountId) ?? null,
@@ -106,39 +106,9 @@ export function ContactsView({ gatewayUrl }: ContactsViewProps) {
     setSyncing(true);
     setError(null);
     try {
-      // 获取 IMAP 密码作为同步凭据（大多数服务商相同）
-      const password = await emailApi.getDecryptedPassword(selectedAccount.id, "imap");
-      const carddavUrl = selectedAccount.carddavUrl || "";
-      const easUrl = selectedAccount.easUrl || "";
-
-      if (!carddavUrl && !easUrl) {
-        setError("该账号未配置通讯录同步地址，请在账号设置中填写 CardDAV 或 ActiveSync 地址");
-        return;
-      }
-
-      let result: ContactSyncResult;
-      if (easUrl) {
-        // 优先使用 ActiveSync（企业邮）
-        result = await contactsApi.syncContactsEas(gatewayUrl, {
-          accountId: selectedAccount.id,
-          easUrl,
-          username: selectedAccount.imapUsername,
-          password: password ?? "",
-        });
-      } else {
-        result = await contactsApi.syncContacts(gatewayUrl, {
-          accountId: selectedAccount.id,
-          carddavUrl,
-          username: selectedAccount.imapUsername,
-          password: password ?? "",
-        });
-      }
-      if (result.error) {
-        setError(result.error);
-      } else {
-        await loadContacts();
-        await loadSyncStates();
-      }
+      // 联系人来源：邮件自动收集 + CSV 导入。同步按钮仅刷新本地列表。
+      await loadContacts();
+      await loadSyncStates();
     } catch (e) {
       setError(String(e));
     } finally {
@@ -229,34 +199,74 @@ export function ContactsView({ gatewayUrl }: ContactsViewProps) {
     setEditForm({});
   };
 
+  // 解析 CSV 一行（支持引号包裹的逗号）— 仅用于前端兜底，实际解析在后端
+  const handleImportCsv = async () => {
+    if (!selectedAccount) return;
+    setImporting(true);
+    setError(null);
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const selected = await open({
+        multiple: false,
+        filters: [{ name: "CSV", extensions: ["csv"] }],
+      });
+      if (!selected || typeof selected !== "string") {
+        setImporting(false);
+        return;
+      }
+      const result = await contactsApi.importCsv(selectedAccount.id, selected);
+      await loadContacts();
+      setError(`导入完成：新增 ${result.added} 个联系人，跳过 ${result.skipped} 行`);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setImporting(false);
+    }
+  };
+
   return (
     <div className="flex h-full flex-col bg-background">
       {/* 工具栏 */}
-      <div className="flex h-12 shrink-0 items-center gap-1 border-b-2 border-border bg-muted/30 px-2">
+      <div className="flex h-9 shrink-0 items-center gap-1 border-b border-border bg-muted/30 px-2">
         <Button
           type="button"
           variant="ghost"
           size="sm"
           disabled={!selectedAccount || syncing || !gatewayUrl}
           onClick={() => void handleSync()}
-          className="h-8 gap-1.5 px-2.5 text-[12px] text-blue-600 hover:bg-blue-500/10 hover:text-blue-700 dark:text-blue-400"
+          className="h-7 gap-1.5 px-2.5 text-[12px] text-blue-600 hover:bg-blue-500/10 hover:text-blue-700 dark:text-blue-400"
         >
           {syncing ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
           ) : (
             <RefreshCw className="h-3.5 w-3.5" />
           )}
-          同步通讯录
+          刷新联系人
         </Button>
         <Button
           type="button"
           variant="ghost"
           size="sm"
           onClick={handleAdd}
-          className="h-8 gap-1.5 px-2.5 text-[12px] text-muted-foreground hover:text-foreground"
+          className="h-7 gap-1.5 px-2.5 text-[12px] text-muted-foreground hover:text-foreground"
         >
           <Plus className="h-3.5 w-3.5" />
           新建
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          disabled={!selectedAccount || importing}
+          onClick={() => void handleImportCsv()}
+          className="h-7 gap-1.5 px-2.5 text-[12px] text-muted-foreground hover:text-foreground"
+        >
+          {importing ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Upload className="h-3.5 w-3.5" />
+          )}
+          导入 CSV
         </Button>
         <div className="flex-1" />
         {selectedAccount && syncStates[selectedAccount.id] && (
@@ -279,14 +289,14 @@ export function ContactsView({ gatewayUrl }: ContactsViewProps) {
       <div className="flex min-h-0 flex-1">
         {/* 左：列表 */}
         <div className="flex w-[280px] shrink-0 flex-col border-r border-border bg-background">
-          <div className="border-b border-border/60 p-2">
+          <div className="p-2">
             <div className="relative">
               <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
               <Input
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="搜索联系人..."
-                className="h-8 rounded-full pl-7 text-[13px]"
+                className="h-7 rounded-full pl-7 text-[13px]"
               />
             </div>
           </div>
@@ -341,9 +351,9 @@ export function ContactsView({ gatewayUrl }: ContactsViewProps) {
                           {c.email || c.phone || "—"}
                         </div>
                       </div>
-                      {c.source === "carddav" && (
+                      {(c.source === "carddav" || c.source === "auto") && (
                         <span className="shrink-0 rounded bg-blue-500/10 px-1 py-0.5 text-[9px] text-blue-600">
-                          同步
+                          {c.source === "auto" ? "自动" : "同步"}
                         </span>
                       )}
                     </button>

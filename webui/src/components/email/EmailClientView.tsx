@@ -8,6 +8,7 @@ import {
   Trash2,
   Sparkles,
   Loader2,
+  WifiOff,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -29,11 +30,21 @@ const FOLDER_TREE_WIDTH = 180;
 export function EmailClientView() {
   const loadAccounts = useEmailStore((s) => s.loadAccounts);
   const selectedAccountId = useEmailStore((s) => s.selectedAccountId);
+  const selectedFolder = useEmailStore((s) => s.selectedFolder);
   const selectedMessage = useEmailStore((s) => s.selectedMessage);
+  const messages = useEmailStore((s) => s.messages);
+  const selectMessage = useEmailStore((s) => s.selectMessage);
+  const toggleRead = useEmailStore((s) => s.toggleRead);
+  const toggleStarred = useEmailStore((s) => s.toggleStarred);
   const loadMessages = useEmailStore((s) => s.loadMessages);
   const syncMail = useEmailStore((s) => s.syncMail);
+  const syncAllAccounts = useEmailStore((s) => s.syncAllAccounts);
+  const isUnifiedInbox = useEmailStore((s) => s.isUnifiedInbox);
   const deleteMessage = useEmailStore((s) => s.deleteMessage);
   const syncing = useEmailStore((s) => s.syncing);
+  const backgroundSyncing = useEmailStore((s) => s.backgroundSyncing);
+  const isOnline = useEmailStore((s) => s.isOnline);
+  const checkGatewayHealth = useEmailStore((s) => s.checkGatewayHealth);
   const setStoreGatewayUrl = useEmailStore((s) => s.setGatewayUrl);
   const [gatewayUrl, setGatewayUrl] = useState("");
   const [agentPanelVisible, setAgentPanelVisible] = useState(false);
@@ -58,11 +69,36 @@ export function EmailClientView() {
     });
   }, [loadAccounts]);
 
+  // 离线模式：定期检测 gateway 健康状态（每 30 秒）
+  useEffect(() => {
+    if (!gatewayUrl) return;
+    void checkGatewayHealth(gatewayUrl);
+    const timer = window.setInterval(() => {
+      void checkGatewayHealth(gatewayUrl);
+    }, 30_000);
+    return () => window.clearInterval(timer);
+  }, [gatewayUrl, checkGatewayHealth]);
+
+  // 定时处理 outbox 中到期的延迟发送邮件（每 60 秒检查一次，仅在线时执行）
+  useEffect(() => {
+    if (!gatewayUrl || !isOnline) return;
+    const check = () => {
+      import("./lib/emailApi").then(({ outboxProcess }) => {
+        outboxProcess(gatewayUrl).catch(() => {
+          // ignore
+        });
+      });
+    };
+    check(); // 启动时立即检查一次
+    const timer = window.setInterval(check, 60_000);
+    return () => window.clearInterval(timer);
+  }, [gatewayUrl, isOnline]);
+
   useEffect(() => {
     if (selectedAccountId) {
-      void loadMessages(selectedAccountId);
+      void loadMessages(selectedAccountId, selectedFolder);
     }
-  }, [selectedAccountId, loadMessages]);
+  }, [selectedAccountId, selectedFolder, loadMessages]);
 
   // 邮件列表与正文之间的拖动调整
   useEffect(() => {
@@ -127,19 +163,110 @@ export function EmailClientView() {
     }
   };
 
+  // 键盘快捷键
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      // 输入框/文本域/富文本聚焦时不触发导航快捷键
+      const target = e.target as HTMLElement;
+      const isInputFocused =
+        target.tagName === "INPUT" ||
+        target.tagName === "TEXTAREA" ||
+        target.isContentEditable;
+
+      // Ctrl/Cmd+N: 新邮件（即使输入框聚焦也生效）
+      if ((e.ctrlKey || e.metaKey) && e.key === "n" && !e.shiftKey) {
+        e.preventDefault();
+        openCompose();
+        return;
+      }
+
+      if (isInputFocused) return;
+
+      // Ctrl/Cmd+R: 回复
+      if ((e.ctrlKey || e.metaKey) && e.key === "r" && !e.shiftKey) {
+        e.preventDefault();
+        if (selectedMessage) openReply(selectedMessage, "reply");
+        return;
+      }
+      // Ctrl/Cmd+Shift+R: 回复全部
+      if ((e.ctrlKey || e.metaKey) && e.key === "R" && e.shiftKey) {
+        e.preventDefault();
+        if (selectedMessage) openReply(selectedMessage, "replyAll");
+        return;
+      }
+      // Ctrl/Cmd+F: 转发
+      if ((e.ctrlKey || e.metaKey) && e.key === "f") {
+        e.preventDefault();
+        if (selectedMessage) openForward(selectedMessage);
+        return;
+      }
+      // Delete: 删除选中邮件
+      if (e.key === "Delete") {
+        e.preventDefault();
+        void handleDelete();
+        return;
+      }
+      // J / ↓: 下一封
+      if ((e.key === "j" || e.key === "ArrowDown") && selectedMessage) {
+        e.preventDefault();
+        const idx = messages.findIndex((m) => m.uid === selectedMessage.uid);
+        if (idx >= 0 && idx < messages.length - 1) {
+          selectMessage(messages[idx + 1]);
+        }
+        return;
+      }
+      // K / ↑: 上一封
+      if ((e.key === "k" || e.key === "ArrowUp") && selectedMessage) {
+        e.preventDefault();
+        const idx = messages.findIndex((m) => m.uid === selectedMessage.uid);
+        if (idx > 0) {
+          selectMessage(messages[idx - 1]);
+        }
+        return;
+      }
+      // S: 切换星标
+      if (e.key === "s" && selectedMessage && gatewayUrl) {
+        e.preventDefault();
+        void toggleStarred(gatewayUrl, selectedMessage);
+        return;
+      }
+      // R: 切换已读/未读（无 Ctrl 时）
+      if (e.key === "r" && !e.ctrlKey && !e.metaKey && selectedMessage && gatewayUrl) {
+        e.preventDefault();
+        void toggleRead(gatewayUrl, selectedMessage);
+        return;
+      }
+      // Esc: 取消选中
+      if (e.key === "Escape") {
+        e.preventDefault();
+        selectMessage(null);
+        return;
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [selectedMessage, messages, gatewayUrl, selectMessage, toggleRead, toggleStarred]);
+
   const hasSelection = !!selectedMessage;
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-background">
       {/* Foxmail 风格工具栏 */}
-      <div className="flex h-12 shrink-0 items-center gap-1 border-b-2 border-border bg-muted/30 px-2">
+      <div className="flex h-9 shrink-0 items-center gap-1 border-b border-border bg-muted/30 px-2">
         <ToolbarButton
           icon={Inbox}
           label="收取"
           variant="primary"
-          disabled={!selectedAccountId || syncing || !gatewayUrl}
-          onClick={() => void syncMail(gatewayUrl)}
-          loading={syncing}
+          disabled={(!selectedAccountId && !isUnifiedInbox) || syncing || backgroundSyncing || !gatewayUrl || !isOnline}
+          onClick={() => {
+            // 统一收件箱模式：同步所有账号；单账号模式：仅同步当前账号
+            if (isUnifiedInbox) {
+              void syncAllAccounts(gatewayUrl);
+            } else {
+              void syncMail(gatewayUrl);
+            }
+          }}
+          loading={syncing || backgroundSyncing}
         />
         <ToolbarButton
           icon={PenSquare}
@@ -175,12 +302,18 @@ export function EmailClientView() {
           loading={deleting}
         />
         <div className="flex-1" />
+        {!isOnline && (
+          <div className="flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] text-amber-600 dark:text-amber-400">
+            <WifiOff className="h-3 w-3" />
+            离线模式
+          </div>
+        )}
         <Button
           type="button"
           variant="ghost"
           size="sm"
           className={cn(
-            "h-8 w-8 p-0",
+            "h-7 w-7 p-0",
             agentPanelVisible ? "text-foreground" : "text-muted-foreground hover:text-foreground",
           )}
           onClick={() => setAgentPanelVisible((v) => !v)}
@@ -259,7 +392,7 @@ function ToolbarButton({
       disabled={disabled || loading}
       onClick={onClick}
       className={cn(
-        "h-8 gap-1.5 px-2.5 text-[12px]",
+        "h-7 gap-1.5 px-2.5 text-[12px]",
         variant === "primary"
           ? "text-blue-600 hover:bg-blue-500/10 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
           : "text-muted-foreground hover:text-foreground",

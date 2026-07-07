@@ -17,6 +17,54 @@ export interface EmailAccount {
   carddavUrl?: string | null;
   /** Exchange ActiveSync 服务地址（企业邮通讯录同步，为空表示不使用） */
   easUrl?: string | null;
+  /** IMAP 是否使用 SSL */
+  imapUseSsl: boolean;
+  /** SMTP 是否使用 SSL（465 端口），587 用 STARTTLS */
+  smtpUseSsl: boolean;
+  /** 签名列表 */
+  signatures?: EmailSignature[];
+}
+
+export interface EmailSignature {
+  id: string;
+  name: string;
+  /** 签名内容（HTML） */
+  content: string;
+  isDefault?: boolean;
+}
+
+export interface EmailRule {
+  id: string;
+  accountId: string;
+  name: string;
+  /** 条件字段：from_contains / subject_contains / to_contains */
+  conditionField: string;
+  conditionValue: string;
+  /** 动作：move / mark_read / star / delete */
+  action: string;
+  /** 动作目标（move 时为目标文件夹） */
+  actionTarget?: string | null;
+  enabled?: boolean;
+  priority?: number;
+}
+
+export interface OutboxEmail {
+  id: string;
+  accountId: string;
+  toAddresses: string;
+  ccAddresses?: string | null;
+  bccAddresses?: string | null;
+  subject: string;
+  bodyText: string;
+  bodyHtml?: string | null;
+  inReplyTo?: string | null;
+  attachmentsJson?: string | null;
+  /** 计划发送时间（ISO 8601） */
+  scheduledAt: string;
+  /** 状态：pending / sent / failed */
+  status: string;
+  error?: string | null;
+  createdAt: string;
 }
 
 export interface EmailMessage {
@@ -37,6 +85,10 @@ export interface EmailMessage {
   rawSize: number;
   messageId?: string | null;
   attachments?: EmailAttachment[];
+  /** 正文是否已拉取（按需拉取模式下，未拉取时点击邮件才加载） */
+  bodyFetched?: boolean;
+  /** 拉取正文失败时的错误信息（用于 UI 显示，避免永远 loading） */
+  bodyError?: string | null;
 }
 
 export interface EmailAttachment {

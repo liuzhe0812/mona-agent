@@ -1,30 +1,49 @@
 /**
- * Decode IMAP modified UTF-7 folder names (RFC 3501) to a human-readable string.
+ * Decode IMAP Modified UTF-7 folder names (RFC 3501 Section 5.1.3).
  *
- * Examples:
- *   "INBOX" -> "INBOX"
- *   "&g0l6P3ux-" -> "Sent Messages"
- *   "&XfJSIJZk-" -> "Drafts"
- *   "&-" -> "&"
+ * IMAP servers return folder names containing non-ASCII characters as
+ * `&...-` segments. Modified BASE64 uses `,` instead of standard `/`.
+ * Returns the input unchanged if decoding fails.
  */
-
 export function decodeImapUtf7(input: string): string {
-  return input.replace(/&([^-]*)-/g, (_, seq: string) => {
-    if (seq === "") return "&";
-    try {
-      // Modified UTF-7 uses ',' instead of '/' for base64
-      const b64 = seq.replace(/,/g, "/");
-      const pad = (4 - (b64.length % 4)) % 4;
-      const padded = b64 + "=".repeat(pad);
-      const binary = atob(padded);
-      const codes: number[] = [];
-      for (let i = 0; i < binary.length; i += 2) {
-        codes.push((binary.charCodeAt(i) << 8) | binary.charCodeAt(i + 1));
+  let result = "";
+  let i = 0;
+  while (i < input.length) {
+    if (input[i] === "&") {
+      const j = input.indexOf("-", i + 1);
+      if (j === -1) {
+        result += input[i];
+        i += 1;
+        continue;
       }
-      return String.fromCharCode(...codes);
-    } catch {
-      // If decoding fails, leave the original sequence as-is
-      return `&${seq}-`;
+      const encoded = input.slice(i + 1, j);
+      if (encoded === "") {
+        // "&-" represents a literal ampersand.
+        result += "&";
+      } else {
+        try {
+          const normalized = encoded.replace(/,/g, "/");
+          const padded = normalized.padEnd(
+            normalized.length + ((4 - (normalized.length % 4)) % 4),
+            "=",
+          );
+          const raw = Uint8Array.from(atob(padded), (c) => c.charCodeAt(0));
+          let decoded = "";
+          for (let k = 0; k + 1 < raw.length; k += 2) {
+            decoded += String.fromCharCode(
+              (raw[k] << 8) | raw[k + 1],
+            );
+          }
+          result += decoded;
+        } catch {
+          result += input.slice(i, j + 1);
+        }
+      }
+      i = j + 1;
+    } else {
+      result += input[i];
+      i += 1;
     }
-  });
+  }
+  return result;
 }

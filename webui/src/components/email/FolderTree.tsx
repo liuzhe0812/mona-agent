@@ -18,6 +18,7 @@ import {
   FileText,
   Star,
   Folder,
+  Pencil,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -27,13 +28,17 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import { Input } from "@/components/ui/input";
 import { useEmailStore } from "./store/emailStore";
 import { EmailStatisticsDialog } from "./EmailStatisticsDialog";
 import { NewFolderDialog } from "./NewFolderDialog";
 import { AccountSettingsDialog } from "./AccountSettingsDialog";
 import { NewAccountDialog } from "./NewAccountDialog";
-import { decodeImapUtf7 } from "./lib/imapUtf7";
 import { getFolderDisplayName } from "./lib/folderUtils";
+import {
+  deleteFolder,
+  renameFolder,
+} from "./lib/emailApi";
 import type { EmailAccount } from "./lib/types";
 
 import sidebarEmailIcon from "@/assets/icons/sidebar-email.jpg";
@@ -110,8 +115,10 @@ export function FolderTree({ gatewayUrl, view = "mail", onViewChange }: FolderTr
   const foldersLoading = useEmailStore((s) => s.foldersLoading);
   const foldersError = useEmailStore((s) => s.foldersError);
   const selectedFolder = useEmailStore((s) => s.selectedFolder);
+  const isUnifiedInbox = useEmailStore((s) => s.isUnifiedInbox);
   const selectAccount = useEmailStore((s) => s.selectAccount);
   const selectFolder = useEmailStore((s) => s.selectFolder);
+  const selectUnifiedInbox = useEmailStore((s) => s.selectUnifiedInbox);
   const loadFolders = useEmailStore((s) => s.loadFolders);
   const loadMessages = useEmailStore((s) => s.loadMessages);
   const syncMail = useEmailStore((s) => s.syncMail);
@@ -126,6 +133,8 @@ export function FolderTree({ gatewayUrl, view = "mail", onViewChange }: FolderTr
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [newAccountOpen, setNewAccountOpen] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
+  const [renamingFolder, setRenamingFolder] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
 
   // 默认展开所有邮箱账号（仅在首次加载账号列表时触发一次）
   const autoExpandedRef = useRef(false);
@@ -158,7 +167,7 @@ export function FolderTree({ gatewayUrl, view = "mail", onViewChange }: FolderTr
     if (!isCurrentlyExpanded) {
       selectAccount(accountId);
       void loadFolders(gatewayUrl, accountId);
-      void loadMessages(accountId);
+      void loadMessages(accountId, "INBOX");
     }
   };
 
@@ -168,7 +177,8 @@ export function FolderTree({ gatewayUrl, view = "mail", onViewChange }: FolderTr
       selectAccount(accountId);
     }
     selectFolder(folderName);
-    void loadMessages(accountId);
+    // 显式传入 folder，避免 selectFolder 的 set 与 loadMessages 读 state 之间的竞态
+    void loadMessages(accountId, folderName);
   };
 
   const handleMarkAllRead = async (folderName: string) => {
@@ -196,6 +206,50 @@ export function FolderTree({ gatewayUrl, view = "mail", onViewChange }: FolderTr
     }
   };
 
+  const handleStartRename = (folderName: string) => {
+    setRenamingFolder(folderName);
+    setRenameValue(folderName);
+  };
+
+  const handleRenameCancel = () => {
+    setRenamingFolder(null);
+    setRenameValue("");
+  };
+
+  const handleRenameSubmit = async (account: EmailAccount, oldName: string) => {
+    const newName = renameValue.trim();
+    if (!newName || newName === oldName) {
+      handleRenameCancel();
+      return;
+    }
+    setActionLoading(true);
+    try {
+      await renameFolder(gatewayUrl, account, oldName, newName);
+      setRenamingFolder(null);
+      setRenameValue("");
+      await loadFolders(gatewayUrl, account.id);
+    } catch (e) {
+      console.error("rename folder failed:", e);
+      window.alert(`重命名文件夹失败：${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleDeleteFolder = async (account: EmailAccount, folderName: string) => {
+    if (!window.confirm(`确定要删除文件夹「${getFolderDisplayName(folderName)}」吗？其中的邮件也会被删除，此操作不可恢复。`)) return;
+    setActionLoading(true);
+    try {
+      await deleteFolder(gatewayUrl, account, folderName);
+      await loadFolders(gatewayUrl, account.id);
+    } catch (e) {
+      console.error("delete folder failed:", e);
+      window.alert(`删除文件夹失败：${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
   return (
     <div className="flex h-full flex-col bg-sidebar">
       <div className="flex h-10 shrink-0 items-center justify-between border-b border-border bg-sidebar-accent/40 px-3">
@@ -210,7 +264,7 @@ export function FolderTree({ gatewayUrl, view = "mail", onViewChange }: FolderTr
           <Plus className="h-3.5 w-3.5" />
         </button>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto p-1.5">
+      <div className="min-h-0 flex-1 overflow-y-auto p-1.5 scrollbar-hover">
         {accounts.length === 0 ? (
           <div className="flex flex-col items-center justify-center gap-2 px-3 py-8 text-center">
             <Mail className="h-6 w-6 text-muted-foreground/50" />
@@ -228,6 +282,41 @@ export function FolderTree({ gatewayUrl, view = "mail", onViewChange }: FolderTr
           </div>
         ) : (
           <div className="flex flex-col gap-0.5">
+            {/* 统一收件箱：聚合所有账号 INBOX，按日期降序，账号颜色标识 */}
+            <div
+              className={cn(
+                "group flex items-center gap-1.5 rounded-md px-1.5 py-1.5 cursor-pointer",
+                isUnifiedInbox
+                  ? "bg-accent text-foreground"
+                  : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+              )}
+              onClick={() => void selectUnifiedInbox()}
+              title="聚合所有账号收件箱"
+            >
+              <Inbox className="h-3.5 w-3.5 shrink-0" />
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-[12px] font-medium">
+                  全部收件箱
+                </div>
+              </div>
+              {accounts.length > 1 && (
+                <div className="flex shrink-0 items-center gap-0.5">
+                  {accounts.slice(0, 4).map((a, idx) => (
+                    <span
+                      key={a.id}
+                      className="h-1.5 w-1.5 rounded-full"
+                      style={{
+                        backgroundColor: [
+                          "#3b82f6", "#10b981", "#f59e0b", "#ef4444",
+                          "#8b5cf6", "#ec4899", "#14b8a6", "#f97316",
+                        ][idx % 8],
+                      }}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="mx-1.5 my-0.5 border-t border-border/50" />
             {accounts.map((account) => {
               const isExpanded = expanded.has(account.id);
               const isSelected = account.id === selectedAccountId;
@@ -332,11 +421,13 @@ export function FolderTree({ gatewayUrl, view = "mail", onViewChange }: FolderTr
                         </div>
                       ) : (
                         accountFolders.map((folder) => {
-                          const decodedName = decodeImapUtf7(folder.name);
+                          const decodedName = folder.name;
                           const FolderIcon = getFolderIcon(decodedName);
                           const isFolderSelected =
                             isSelected && folder.name === selectedFolder;
                           const isJunk = isJunkFolder(decodedName);
+                          const isSystem = isSystemFolder(decodedName);
+                          const isRenaming = renamingFolder === folder.name;
                           return (
                             <ContextMenu key={folder.name}>
                               <ContextMenuTrigger asChild>
@@ -347,13 +438,40 @@ export function FolderTree({ gatewayUrl, view = "mail", onViewChange }: FolderTr
                                       ? "bg-blue-500/10 text-foreground"
                                       : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
                                   )}
-                                  onClick={() => handleFolderClick(account.id, folder.name)}
+                                  onClick={() => {
+                                    if (!isRenaming) handleFolderClick(account.id, folder.name);
+                                  }}
                                 >
                                   <FolderIcon className="h-3.5 w-3.5 shrink-0" />
-                                  <span className="min-w-0 flex-1 truncate text-[12px]">
-                                    {getFolderDisplayName(decodedName)}
-                                  </span>
-                                  {folder.unreadCount && folder.unreadCount > 0 ? (
+                                  {isRenaming ? (
+                                    <Input
+                                      className="h-6 flex-1 rounded px-1 py-0 text-[12px]"
+                                      value={renameValue}
+                                      autoFocus
+                                      disabled={actionLoading}
+                                      onClick={(e) => e.stopPropagation()}
+                                      onChange={(e) => setRenameValue(e.target.value)}
+                                      onKeyDown={(e) => {
+                                        if (e.key === "Enter") {
+                                          e.preventDefault();
+                                          void handleRenameSubmit(account, folder.name);
+                                        } else if (e.key === "Escape") {
+                                          e.preventDefault();
+                                          handleRenameCancel();
+                                        }
+                                      }}
+                                      onBlur={() => {
+                                        if (renamingFolder === folder.name) {
+                                          void handleRenameSubmit(account, folder.name);
+                                        }
+                                      }}
+                                    />
+                                  ) : (
+                                    <span className="min-w-0 flex-1 truncate text-[12px]">
+                                      {getFolderDisplayName(decodedName)}
+                                    </span>
+                                  )}
+                                  {!isRenaming && folder.unreadCount && folder.unreadCount > 0 ? (
                                     <span className="shrink-0 rounded-full bg-blue-500 px-1.5 py-0.5 text-[10px] font-medium text-white">
                                       {folder.unreadCount > 99 ? "99+" : folder.unreadCount}
                                     </span>
@@ -373,6 +491,15 @@ export function FolderTree({ gatewayUrl, view = "mail", onViewChange }: FolderTr
                                   )}
                                   全部标为已读
                                 </ContextMenuItem>
+                                <ContextMenuSeparator />
+                                <ContextMenuItem
+                                  className="text-[12px]"
+                                  disabled={actionLoading || !gatewayUrl || isSystem}
+                                  onClick={() => handleStartRename(folder.name)}
+                                >
+                                  <Pencil className="mr-2 h-3.5 w-3.5" />
+                                  重命名
+                                </ContextMenuItem>
                                 {isJunk && (
                                   <>
                                     <ContextMenuSeparator />
@@ -390,6 +517,19 @@ export function FolderTree({ gatewayUrl, view = "mail", onViewChange }: FolderTr
                                     </ContextMenuItem>
                                   </>
                                 )}
+                                <ContextMenuSeparator />
+                                <ContextMenuItem
+                                  className="text-[12px] text-destructive focus:text-destructive"
+                                  disabled={actionLoading || !gatewayUrl || isSystem}
+                                  onClick={() => void handleDeleteFolder(account, folder.name)}
+                                >
+                                  {actionLoading ? (
+                                    <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                                  ) : (
+                                    <Trash2 className="mr-2 h-3.5 w-3.5" />
+                                  )}
+                                  删除文件夹
+                                </ContextMenuItem>
                               </ContextMenuContent>
                             </ContextMenu>
                           );

@@ -6,8 +6,10 @@ import type {
   EmailAnalysis,
   EmailFolder,
   EmailMessage,
+  EmailRule,
   EmailSearchRequest,
   EmailSearchResult,
+  OutboxEmail,
 } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -25,13 +27,24 @@ export interface SyncRequest {
   lastUid: string | null;
 }
 
+/// email_sync 返回值：新增邮件数 + 新邮件列表（规则应用后仍在当前文件夹的）
+/// 前端可直接 prepend 到列表，无需全量 reload
+export interface SyncResult {
+  newCount: number;
+  newMessages: EmailMessage[];
+}
+
 export interface EmailAttachmentInput {
   filename: string;
   contentType: string;
   data: string; // base64 编码（无 data: 前缀）
+  /// 内联图片的 Content-ID（不含尖括号）。设置后附件以 inline 方式嵌入，
+  /// HTML 中通过 cid:xxx 引用，避免被 Gmail/Outlook 剥离 data URI 图片。
+  contentId?: string;
 }
 
 export interface SendRequest {
+  accountId: string;
   smtpHost: string;
   smtpPort: number;
   smtpUsername: string;
@@ -56,17 +69,17 @@ export interface SendRequest {
 }
 
 // ---------------------------------------------------------------------------
-// 辅助：根据端口推断 SSL/TLS
+// 辅助：从账号配置读取 SSL/TLS 设置（优先用显式字段，兼容旧数据按端口推断）
 // ---------------------------------------------------------------------------
 
-function inferImapSsl(port: number): boolean {
-  // 993 = IMAPS (SSL)，143 = 明文/STARTTLS
-  return port === 993;
+function imapSsl(account: EmailAccount): boolean {
+  return account.imapUseSsl ?? account.imapPort === 993;
 }
 
-function inferSmtpTls(port: number): { useTls: boolean; useSsl: boolean } {
+function smtpTls(account: EmailAccount): { useTls: boolean; useSsl: boolean } {
+  if (account.smtpUseSsl) return { useTls: false, useSsl: true };
   // 465 = SMTPS (SSL)，587 = STARTTLS
-  if (port === 465) return { useTls: false, useSsl: true };
+  if (account.smtpPort === 465) return { useTls: false, useSsl: true };
   return { useTls: true, useSsl: false };
 }
 
@@ -107,8 +120,29 @@ export async function updateAccount(account: EmailAccount): Promise<void> {
   return invoke("email_add_account", { account });
 }
 
-export async function deleteAccount(accountId: string): Promise<void> {
-  return invoke("email_delete_account", { accountId });
+/**
+ * 更新账号设置（不会双重加密密码）。
+ *
+ * - 如果 newPassword 非空，会加密后写入数据库
+ * - 如果 newPassword 为 null/undefined/空字符串，保留数据库原密码
+ *
+ * 用于账号设置对话框：用户不修改密码时不会破坏已有密码。
+ */
+export async function updateAccountSettings(
+  account: EmailAccount,
+  newPassword?: string | null,
+): Promise<void> {
+  return invoke("email_update_account_settings", {
+    account,
+    newPassword: newPassword && newPassword.trim() ? newPassword : null,
+  });
+}
+
+export async function deleteAccount(
+  gatewayUrl: string,
+  accountId: string,
+): Promise<void> {
+  return invoke("email_delete_account", { gatewayUrl, accountId });
 }
 
 export interface TestConnectionRequest {
@@ -134,7 +168,7 @@ export async function testConnection(
     imapPort: account.imapPort,
     imapUsername: account.imapUsername,
     imapPassword: password,
-    useSsl: account.imapPort === 993,
+    useSsl: imapSsl(account),
   };
   return invoke<TestConnectionResponse>("email_test_connection", { gatewayUrl, req });
 }
@@ -165,7 +199,7 @@ export async function deleteMessage(
     imapPassword,
     mailbox,
     uid,
-    useSsl: account.imapPort === 993,
+    useSsl: imapSsl(account),
   };
   return invoke("email_delete_message", { gatewayUrl, req });
 }
@@ -173,10 +207,47 @@ export async function deleteMessage(
 export async function getMessages(
   accountId: string,
   folder: string,
-  offset: number,
+  beforeUid: string | null,
   limit: number,
 ): Promise<EmailMessage[]> {
-  return invoke<EmailMessage[]>("email_get_messages", { accountId, folder, offset, limit });
+  return invoke<EmailMessage[]>("email_get_messages", {
+    accountId,
+    folder,
+    beforeUid,
+    limit,
+  });
+}
+
+/// 统一收件箱：聚合所有账号 INBOX，按日期降序，使用 date 作为游标
+export async function getUnifiedInbox(
+  beforeDate: string | null,
+  limit: number,
+): Promise<EmailMessage[]> {
+  return invoke<EmailMessage[]>("email_get_unified_inbox", {
+    beforeDate,
+    limit,
+  });
+}
+
+/// 账号颜色调色板（用于统一收件箱中区分不同账号）
+export const ACCOUNT_COLORS = [
+  "#3b82f6", // blue
+  "#10b981", // emerald
+  "#f59e0b", // amber
+  "#ef4444", // red
+  "#8b5cf6", // violet
+  "#ec4899", // pink
+  "#14b8a6", // teal
+  "#f97316", // orange
+];
+
+export function getAccountColor(
+  accountId: string,
+  accounts: EmailAccount[],
+): string {
+  const idx = accounts.findIndex((a) => a.id === accountId);
+  if (idx < 0) return "#6b7280";
+  return ACCOUNT_COLORS[idx % ACCOUNT_COLORS.length];
 }
 
 export interface SetFlagRequest {
@@ -210,7 +281,7 @@ export async function markRead(
     uid,
     flag: "\\Seen",
     add: isRead,
-    useSsl: account.imapPort === 993,
+    useSsl: imapSsl(account),
   };
   return invoke("email_mark_read", { gatewayUrl, req });
 }
@@ -233,7 +304,7 @@ export async function toggleStarred(
     uid,
     flag: "\\Flagged",
     add: starred,
-    useSsl: account.imapPort === 993,
+    useSsl: imapSsl(account),
   };
   return invoke("email_toggle_starred", { gatewayUrl, req });
 }
@@ -262,7 +333,7 @@ export async function markAllRead(
     imapUsername: account.imapUsername,
     imapPassword,
     mailbox,
-    useSsl: account.imapPort === 993,
+    useSsl: imapSsl(account),
   };
   return invoke<number>("email_mark_all_read", { gatewayUrl, req });
 }
@@ -281,7 +352,7 @@ export async function emptyFolder(
     imapUsername: account.imapUsername,
     imapPassword,
     mailbox,
-    useSsl: account.imapPort === 993,
+    useSsl: imapSsl(account),
   };
   return invoke<number>("email_empty_folder", { gatewayUrl, req });
 }
@@ -315,7 +386,7 @@ export async function moveMessage(
     mailbox,
     destMailbox,
     uid,
-    useSsl: account.imapPort === 993,
+    useSsl: imapSsl(account),
   };
   return invoke("email_move_message", { gatewayUrl, req });
 }
@@ -356,9 +427,110 @@ export async function fetchAttachment(
     mailbox,
     uid,
     filename,
-    useSsl: account.imapPort === 993,
+    useSsl: imapSsl(account),
   };
   return invoke<FetchAttachmentResponse>("email_fetch_attachment", { gatewayUrl, req });
+}
+
+/// 直接下载附件到指定文件路径，避免前端处理大 base64 字符串（适合大附件）
+export async function downloadAttachmentToFile(
+  gatewayUrl: string,
+  account: EmailAccount,
+  mailbox: string,
+  uid: string,
+  filename: string,
+  savePath: string,
+): Promise<number> {
+  const imapPassword = await getDecryptedPassword(account.id, "imap");
+  const req: FetchAttachmentRequest = {
+    accountId: account.id,
+    imapHost: account.imapHost,
+    imapPort: account.imapPort,
+    imapUsername: account.imapUsername,
+    imapPassword,
+    mailbox,
+    uid,
+    filename,
+    useSsl: imapSsl(account),
+  };
+  return invoke<number>("email_download_attachment_to_file", { gatewayUrl, req, savePath });
+}
+
+/// 按需拉取单封邮件的完整正文（同步时只拉头部，点击邮件时调用此命令拉取正文）
+export async function fetchEmailBody(
+  gatewayUrl: string,
+  accountId: string,
+  uid: string,
+  mailbox: string,
+): Promise<{ bodyText: string; bodyHtml: string | null }> {
+  return invoke<{ bodyText: string; bodyHtml: string | null }>("email_fetch_body", {
+    gatewayUrl,
+    accountId,
+    uid,
+    mailbox,
+  });
+}
+
+/// 拉取邮件原始 RFC822 字节（用于 .eml 导出）
+export async function fetchRawEmail(
+  gatewayUrl: string,
+  accountId: string,
+  uid: string,
+  mailbox: string,
+): Promise<{ rawBase64: string; size: number }> {
+  return invoke<{ rawBase64: string; size: number }>("email_fetch_raw", {
+    gatewayUrl,
+    accountId,
+    uid,
+    mailbox,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// 邮件规则/过滤器
+// ---------------------------------------------------------------------------
+
+export async function listRules(accountId: string): Promise<EmailRule[]> {
+  return invoke<EmailRule[]>("email_list_rules", { accountId });
+}
+
+export async function saveRule(rule: EmailRule): Promise<void> {
+  return invoke<void>("email_save_rule", { rule });
+}
+
+export async function deleteRule(ruleId: string): Promise<void> {
+  return invoke<void>("email_delete_rule", { ruleId });
+}
+
+/** 对账号下已有邮件批量应用收件规则（用于规则创建后归类历史邮件） */
+export async function applyRules(
+  gatewayUrl: string,
+  accountId: string,
+): Promise<{ matched: number; success: number; failed: number; errors: string[] }> {
+  return invoke<{ matched: number; success: number; failed: number; errors: string[] }>(
+    "email_apply_rules",
+    { gatewayUrl, accountId },
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 延迟发送（outbox）
+// ---------------------------------------------------------------------------
+
+export async function outboxAdd(email: OutboxEmail): Promise<void> {
+  return invoke<void>("email_outbox_add", { email });
+}
+
+export async function outboxList(accountId: string): Promise<OutboxEmail[]> {
+  return invoke<OutboxEmail[]>("email_outbox_list", { accountId });
+}
+
+export async function outboxDelete(id: string): Promise<void> {
+  return invoke<void>("email_outbox_delete", { id });
+}
+
+export async function outboxProcess(gatewayUrl: string): Promise<number> {
+  return invoke<number>("email_outbox_process", { gatewayUrl });
 }
 
 export interface SaveDraftRequest {
@@ -391,7 +563,7 @@ export async function saveDraft(
     imapPort: account.imapPort,
     imapUsername: account.imapUsername,
     imapPassword,
-    useSsl: account.imapPort === 993,
+    useSsl: imapSsl(account),
     fromAddress: account.fromAddress,
     fromName: account.fromName ?? null,
     to,
@@ -419,7 +591,7 @@ export async function syncEmail(
   gatewayUrl: string,
   account: EmailAccount,
   mailbox: string = "INBOX",
-): Promise<number> {
+): Promise<SyncResult> {
   // Rust 侧 field 只接受 "imap" 或 "smtp"
   const imapPassword = await getDecryptedPassword(account.id, "imap");
   const req: SyncRequest = {
@@ -429,10 +601,10 @@ export async function syncEmail(
     imapUsername: account.imapUsername,
     imapPassword,
     mailbox,
-    useSsl: inferImapSsl(account.imapPort),
+    useSsl: imapSsl(account),
     lastUid: account.lastSyncedUid ?? null,
   };
-  return invoke<number>("email_sync", { gatewayUrl, req });
+  return invoke<SyncResult>("email_sync", { gatewayUrl, req });
 }
 
 // ---------------------------------------------------------------------------
@@ -454,7 +626,7 @@ export async function startIdle(
       imapUsername: account.imapUsername,
       imapPassword,
       mailbox,
-      useSsl: inferImapSsl(account.imapPort),
+      useSsl: imapSsl(account),
     },
   });
 }
@@ -490,9 +662,61 @@ export async function createFolder(
     imapUsername: account.imapUsername,
     imapPassword,
     mailbox: folderName,
-    useSsl: account.imapPort === 993,
+    useSsl: imapSsl(account),
   };
   return invoke("email_create_folder", { gatewayUrl, req });
+}
+
+export async function renameFolder(
+  gatewayUrl: string,
+  account: EmailAccount,
+  oldName: string,
+  newName: string,
+): Promise<void> {
+  const imapPassword = await getDecryptedPassword(account.id, "imap");
+  const req = {
+    imapHost: account.imapHost,
+    imapPort: account.imapPort,
+    imapUsername: account.imapUsername,
+    imapPassword,
+    useSsl: imapSsl(account),
+    oldName,
+    newName,
+  };
+  const resp = await fetch(`${gatewayUrl}/email/rename_folder`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(req),
+  });
+  if (!resp.ok) {
+    const detail = await resp.text().catch(() => "");
+    throw new Error(`重命名文件夹失败: ${resp.status} ${detail}`);
+  }
+}
+
+export async function deleteFolder(
+  gatewayUrl: string,
+  account: EmailAccount,
+  folderName: string,
+): Promise<void> {
+  const imapPassword = await getDecryptedPassword(account.id, "imap");
+  const req = {
+    imapHost: account.imapHost,
+    imapPort: account.imapPort,
+    imapUsername: account.imapUsername,
+    imapPassword,
+    useSsl: imapSsl(account),
+    folderName,
+  };
+  const resp = await fetch(`${gatewayUrl}/email/delete_folder`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(req),
+  });
+  if (!resp.ok) {
+    const detail = await resp.text().catch(() => "");
+    throw new Error(`删除文件夹失败: ${resp.status} ${detail}`);
+  }
 }
 
 export async function listFolders(
@@ -507,7 +731,7 @@ export async function listFolders(
       imapPort: account.imapPort,
       imapUsername: account.imapUsername,
       imapPassword,
-      useSsl: account.imapPort === 993,
+      useSsl: imapSsl(account),
     },
   });
 }
@@ -531,7 +755,7 @@ export async function syncFolders(
       imapPort: account.imapPort,
       imapUsername: account.imapUsername,
       imapPassword,
-      useSsl: account.imapPort === 993,
+      useSsl: imapSsl(account),
     },
   });
 }
@@ -599,13 +823,18 @@ export async function sendEmail(
     getDecryptedPassword(account.id, "smtp"),
     getDecryptedPassword(account.id, "imap"),
   ]);
-  const { useTls, useSsl } = inferSmtpTls(account.smtpPort);
+  const { useTls, useSsl } = smtpTls(account);
   const to = parseAddressList(payload.toAddresses);
   const cc = payload.ccAddresses ? parseAddressList(payload.ccAddresses) : [];
   const bcc = payload.bccAddresses ? parseAddressList(payload.bccAddresses) : [];
   const bodyHtml = payload.bodyHtml ?? textToHtml(payload.bodyText);
 
+  // 将 bodyHtml 中的 base64 内嵌图片转换为 CID 内联附件。
+  // Gmail/Outlook 等主流邮件客户端会剥离 data URI 图片，必须用 cid 引用。
+  const { html: htmlWithCid, inlineImages } = extractInlineImagesAsAttachments(bodyHtml);
+
   const req: SendRequest = {
+    accountId: account.id,
     smtpHost: account.smtpHost,
     smtpPort: account.smtpPort,
     smtpUsername: account.smtpUsername,
@@ -618,17 +847,50 @@ export async function sendEmail(
     cc,
     bcc,
     subject: payload.subject,
-    bodyHtml,
+    bodyHtml: htmlWithCid,
     inReplyTo: payload.inReplyTo ?? null,
-    attachments: payload.attachments,
+    attachments: [...(payload.attachments ?? []), ...inlineImages],
     // IMAP 配置：用于发送成功后保存副本到"已发送"
     imapHost: account.imapHost,
     imapPort: account.imapPort,
     imapUsername: account.imapUsername,
     imapPassword,
-    imapUseSsl: inferImapSsl(account.imapPort),
+    imapUseSsl: imapSsl(account),
   };
   return invoke("email_send", { gatewayUrl, req });
+}
+
+/**
+ * 扫描 HTML 中的 data:image/...;base64,... 图片，提取为内联附件，
+ * 并把 src 替换为 cid:xxx 引用。
+ *
+ * 邮件客户端（Gmail/Outlook 等）出于安全考虑会剥离 data URI 图片，
+ * 必须把图片作为 MIME 内联附件（带 Content-ID）发送，HTML 中用 cid 引用。
+ */
+function extractInlineImagesAsAttachments(html: string): {
+  html: string;
+  inlineImages: EmailAttachmentInput[];
+} {
+  const inlineImages: EmailAttachmentInput[] = [];
+  let idx = 0;
+  // 匹配 <img src="data:image/png;base64,xxxx"> 或单引号变体
+  const result = html.replace(
+    /src=["'](data:image\/([^;]+);base64,([^"']+))["']/gi,
+    (_m, _fullDataUrl: string, ext: string, base64: string) => {
+      idx += 1;
+      const cid = `inline-image-${idx}-${Date.now()}`;
+      const mime = `image/${ext.toLowerCase()}`;
+      const filename = `image-${idx}.${ext.toLowerCase() === "jpeg" ? "jpg" : ext.toLowerCase()}`;
+      inlineImages.push({
+        filename,
+        contentType: mime,
+        data: base64,
+        contentId: cid,
+      });
+      return `src="cid:${cid}"`;
+    },
+  );
+  return { html: result, inlineImages };
 }
 
 // ---------------------------------------------------------------------------
@@ -817,4 +1079,23 @@ export async function batchAction(
   req: BatchActionRequest,
 ): Promise<BatchActionResponse> {
   return invoke<BatchActionResponse>("email_batch_action", { gatewayUrl, req });
+}
+
+/// 重置指定账号的 IMAP 连接池（删除账号/修改配置/连接异常时调用）
+export async function resetImapPool(
+  gatewayUrl: string,
+  account: EmailAccount,
+): Promise<void> {
+  const resp = await fetch(`${gatewayUrl}/email/reset_pool`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      imapHost: account.imapHost,
+      imapUsername: account.imapUsername,
+    }),
+  });
+  if (!resp.ok) {
+    // 重置失败不阻塞业务流程，只记录日志
+    console.warn("[email] resetImapPool failed:", resp.status);
+  }
 }

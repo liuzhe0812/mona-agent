@@ -303,6 +303,210 @@ pub async fn contact_add(
     Ok(id)
 }
 
+/// 自动从邮件往来收集联系人：按邮箱地址去重，已存在则跳过。
+/// source 固定为 "auto"。返回新增联系人 id（已存在则返回 None）。
+#[tauri::command]
+pub async fn contact_add_if_not_exists(
+    state: tauri::State<'_, ContactsState>,
+    account_id: String,
+    display_name: String,
+    email: String,
+) -> Result<Option<String>, String> {
+    let email_clean = email.trim().to_lowercase();
+    if email_clean.is_empty() {
+        return Ok(None);
+    }
+    let conn = state.conn()?;
+    // 全局按 email 去重（不限定 account_id，避免同一人在多账号下重复入库）
+    let exists: Option<String> = conn
+        .query_row(
+            "SELECT id FROM contacts WHERE lower(email) = ?1 LIMIT 1",
+            params![&email_clean],
+            |r| r.get(0),
+        )
+        .ok();
+    if exists.is_some() {
+        return Ok(None);
+    }
+    let id = uuid::Uuid::new_v4().to_string();
+    let now = chrono::Utc::now().timestamp();
+    let name = if display_name.trim().is_empty() {
+        email_clean.clone()
+    } else {
+        display_name.trim().to_string()
+    };
+    conn.execute(
+        "INSERT INTO contacts
+         (id, account_id, source, display_name, email, updated_at)
+         VALUES (?1, ?2, 'auto', ?3, ?4, ?5)",
+        params![id, account_id, name, email_clean, now],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(Some(id))
+}
+
+/// CSV 导入结果
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CsvImportResult {
+    pub added: u32,
+    pub skipped: u32,
+}
+
+/// 解析 CSV 一行（支持引号包裹的逗号）
+fn parse_csv_line(line: &str) -> Vec<String> {
+    let mut result = Vec::new();
+    let mut cur = String::new();
+    let mut in_quotes = false;
+    let mut chars = line.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if in_quotes {
+            if ch == '"' {
+                if chars.peek() == Some(&'"') {
+                    cur.push('"');
+                    chars.next();
+                } else {
+                    in_quotes = false;
+                }
+            } else {
+                cur.push(ch);
+            }
+        } else if ch == '"' {
+            in_quotes = true;
+        } else if ch == ',' {
+            result.push(std::mem::take(&mut cur));
+        } else {
+            cur.push(ch);
+        }
+    }
+    result.push(cur);
+    result
+}
+
+/// 导入 CSV 联系人文件。自动检测 GBK/UTF-8 编码，按 email 去重。
+#[tauri::command]
+pub async fn contact_import_csv(
+    state: tauri::State<'_, ContactsState>,
+    account_id: String,
+    file_path: String,
+) -> Result<CsvImportResult, String> {
+    let raw = std::fs::read(&file_path)
+        .map_err(|e| format!("读取文件失败: {e}"))?;
+
+    // 编码检测：含 BOM 用 UTF-8；否则尝试 UTF-8 严格解码，失败用 GBK
+    let text = if raw.starts_with(&[0xEF, 0xBB, 0xBF]) {
+        String::from_utf8_lossy(&raw[3..]).into_owned()
+    } else if let Ok(s) = std::str::from_utf8(&raw) {
+        s.to_string()
+    } else {
+        // GBK / GB18030 解码
+        let (decoded, _, had_error) = encoding_rs::GBK.decode(&raw);
+        if had_error {
+            decoded.into_owned()
+        } else {
+            decoded.into_owned()
+        }
+    };
+
+    let mut lines = text.lines().filter(|l| !l.trim().is_empty());
+    let header_line = match lines.next() {
+        Some(l) => l,
+        None => return Err("CSV 文件为空".to_string()),
+    };
+    let headers = parse_csv_line(header_line)
+        .into_iter()
+        .map(|h| h.trim().to_lowercase())
+        .collect::<Vec<_>>();
+
+    let find_idx = |keys: &[&str]| -> Option<usize> {
+        headers.iter().position(|h| keys.contains(&h.as_str()))
+    };
+    let name_idx = find_idx(&["姓名", "name", "显示名", "display name"]);
+    let email_idx = find_idx(&["电子邮件地址", "email", "e-mail", "邮箱"]);
+    let phone_idx = find_idx(&["手机", "电话", "phone", "mobile"]);
+    let org_idx = find_idx(&["公司", "organization", "组织"]);
+
+    let conn = state.conn()?;
+    let now = chrono::Utc::now().timestamp();
+    let mut added = 0u32;
+    let mut skipped = 0u32;
+
+    for line in lines {
+        let cols = parse_csv_line(line);
+        let get = |idx: Option<usize>| -> String {
+            match idx {
+                Some(i) => cols.get(i).map(|s| s.trim().to_string()).unwrap_or_default(),
+                None => String::new(),
+            }
+        };
+        let name = get(name_idx);
+        let email = get(email_idx);
+        if email.is_empty() || !email.contains('@') {
+            skipped += 1;
+            continue;
+        }
+        let has_name = !name.is_empty() && name != email;
+        // 显示名优先用姓名，没有姓名才用邮箱
+        let display = if has_name { name.clone() } else { email.clone() };
+        let phone = get(phone_idx);
+        let org = get(org_idx);
+        let email_lower = email.to_lowercase();
+
+        // 按 email 去重：已存在时尝试修复旧的错误数据（display_name == email）
+        let existing: Option<(String, String)> = conn
+            .query_row(
+                "SELECT id, display_name FROM contacts WHERE lower(email) = ?1 LIMIT 1",
+                params![&email_lower],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+            )
+            .ok();
+        if let Some((id, old_name)) = existing {
+            // 仅当旧 display_name 等于邮箱（导入损坏状态）且 CSV 提供了真实姓名时更新
+            if has_name && old_name.trim().eq_ignore_ascii_case(&email) {
+                let _ = conn.execute(
+                    "UPDATE contacts SET display_name = ?1, phone = COALESCE(NULLIF(?2, ''), phone),
+                     organization = COALESCE(NULLIF(?3, ''), organization), updated_at = ?4
+                     WHERE id = ?5",
+                    params![&display, &phone, &org, now, &id],
+                );
+                added += 1;
+            } else {
+                skipped += 1;
+            }
+            continue;
+        }
+
+        let id = uuid::Uuid::new_v4().to_string();
+        match conn.execute(
+            "INSERT INTO contacts
+             (id, account_id, source, display_name, email, phone, organization, updated_at)
+             VALUES (?1, ?2, 'manual', ?3, ?4, ?5, ?6, ?7)",
+            params![id, &account_id, &display, &email, &phone, &org, now],
+        ) {
+            Ok(_) => added += 1,
+            Err(_) => skipped += 1,
+        }
+    }
+
+    Ok(CsvImportResult { added, skipped })
+}
+
+/// camelCase → snake_case 归一化（前端传 camelCase，DB 字段是 snake_case）
+fn to_snake_case(s: &str) -> String {
+    let mut result = String::new();
+    for ch in s.chars() {
+        if ch.is_uppercase() {
+            if !result.is_empty() {
+                result.push('_');
+            }
+            result.push(ch.to_ascii_lowercase());
+        } else {
+            result.push(ch);
+        }
+    }
+    result
+}
+
 #[tauri::command]
 pub async fn contact_update(
     state: tauri::State<'_, ContactsState>,
@@ -318,8 +522,13 @@ pub async fn contact_update(
     ];
     let mut sets: Vec<String> = Vec::new();
     let mut values: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+    // 前端可能传 camelCase 或 snake_case，统一转 snake_case 后匹配白名单
+    let normalized: std::collections::HashMap<String, &serde_json::Value> = obj
+        .iter()
+        .map(|(k, v)| (to_snake_case(k), v))
+        .collect();
     for key in allowed.iter() {
-        if let Some(val) = obj.get(*key) {
+        if let Some(val) = normalized.get(*key) {
             sets.push(format!("{} = ?", key));
             let v: Box<dyn rusqlite::ToSql> = match val {
                 serde_json::Value::Null => Box::new(None::<String>),

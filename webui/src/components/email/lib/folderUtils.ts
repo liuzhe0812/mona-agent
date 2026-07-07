@@ -1,3 +1,5 @@
+import { decodeImapUtf7 } from "./imapUtf7";
+
 const FOLDER_DISPLAY_NAMES: Record<string, string> = {
   inbox: "收件箱",
   "sent messages": "已发送",
@@ -33,8 +35,9 @@ const LOW_PRIORITY_FOLDERS = new Set(["其他文件夹"]);
 const LOW_PRIORITY_VALUE = 1000;
 
 export function getFolderDisplayName(name: string): string {
-  const key = name.toLowerCase().trim();
-  return FOLDER_DISPLAY_NAMES[key] ?? name;
+  const decoded = decodeImapUtf7(name);
+  const key = decoded.toLowerCase().trim();
+  return FOLDER_DISPLAY_NAMES[key] ?? decoded;
 }
 
 // 稳定排序：按预定义优先级 + 名称字母序，保证本地缓存与 IMAP 同步后顺序一致

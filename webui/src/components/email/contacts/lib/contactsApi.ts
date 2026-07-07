@@ -46,6 +46,17 @@ export async function clearAccountContacts(
   return invoke<number>("contact_clear_account", { accountId, source: source ?? null });
 }
 
+/** CSV 导入结果 */
+export interface CsvImportResult {
+  added: number;
+  skipped: number;
+}
+
+/** 从指定 CSV 文件导入联系人（后端自动检测 GBK/UTF-8 编码） */
+export async function importCsv(accountId: string, filePath: string): Promise<CsvImportResult> {
+  return invoke<CsvImportResult>("contact_import_csv", { accountId, filePath });
+}
+
 // ---------------------------------------------------------------------------
 // 同步状态
 // ---------------------------------------------------------------------------

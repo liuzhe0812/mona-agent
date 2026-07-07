@@ -92,7 +92,7 @@ class EASClient:
         username: str,
         password: str,
         device_id: str,
-        device_type: str = "Mona",
+        device_type: str = "iPhone",
     ) -> None:
         # server_url 形如 https://ex.exmail.qq.com/Microsoft-Server-ActiveSync
         # 自动补全 scheme，兼容用户省略 https:// 的输入
@@ -100,6 +100,7 @@ class EASClient:
         self.username = username
         self.password = password
         self.device_id = device_id
+        # 腾讯企业邮等服务商对 DeviceType 有白名单，iPhone 兼容性最好
         self.device_type = device_type
         self.policy_key: str | None = None
         self._client: httpx.AsyncClient | None = None
@@ -114,7 +115,7 @@ class EASClient:
                 "Authorization": f"Basic {auth}",
                 "Content-Type": "application/vnd.ms-sync.wbxml",
                 "MS-ASProtocolVersion": EAS_PROTOCOL_VERSION,
-                "User-Agent": "Mona-Desktop/1.0 (ActiveSync)",
+                "User-Agent": "Apple-iPhone7C2/1202.466",
             },
         )
         return self
@@ -162,9 +163,20 @@ class EASClient:
         except httpx.HTTPError as e:
             raise EASError(f"HTTP 请求失败 ({cmd}): {e}") from e
 
+        logger.debug(
+            f"EAS {cmd} status={resp.status_code} headers={dict(resp.headers)} "
+            f"body={resp.text[:500]!r}"
+        )
+
         if resp.status_code == 401:
             raise EASError("认证失败：用户名或密码错误")
         if resp.status_code == 403:
+            # 部分服务器在 PROVISION 前或策略未满足时返回 403；
+            # 把原始响应片段暴露给日志，便于定位是策略、设备类型还是权限问题。
+            logger.warning(
+                f"EAS {cmd} 403 for {self.username} at {self.server_url}; "
+                f"headers={dict(resp.headers)} body={resp.text[:500]!r}"
+            )
             raise EASError("禁止访问：账号无权限或未启用 ActiveSync")
         if resp.status_code == 449:
             raise EASError("需要重新 Provision（449）")

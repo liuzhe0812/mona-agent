@@ -9,16 +9,25 @@ import {
   ChevronDown,
   X,
   File as FileIcon,
+  FileText,
+  Clock,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+  DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu";
 import { useEmailStore } from "./store/emailStore";
 import { sendEmail, saveDraft, type EmailAttachmentInput } from "./lib/emailApi";
 import { EmailRichEditor, type EmailRichEditorHandle } from "./EmailRichEditor";
 import { ContactPicker } from "./contacts/ContactPicker";
-import type { EmailAccount, EmailMessage } from "./lib/types";
+import type { EmailAccount, EmailMessage, EmailSignature } from "./lib/types";
 
 export type ComposerMode = "compose" | "reply" | "replyAll" | "forward";
 
@@ -113,12 +122,19 @@ export function MailComposer({
   const [showCc, setShowCc] = useState(false);
   const [showBcc, setShowBcc] = useState(false);
   const [attachments, setAttachments] = useState<EmailAttachmentInput[]>([]);
+  const [selectedSignatureId, setSelectedSignatureId] = useState<string | null>(null);
   const editorRef = useRef<EmailRichEditorHandle>(null);
+
+  // 获取当前账号的签名列表
+  const signatures: EmailSignature[] = account?.signatures ?? [];
+  const defaultSignature = signatures.find((s) => s.isDefault) ?? signatures[0] ?? null;
 
   useEffect(() => {
     if (!open) return;
     setError(null);
     setAttachments([]);
+    // 默认选中默认签名（仅 compose 模式自动追加）
+    setSelectedSignatureId(defaultSignature?.id ?? null);
     if (mode === "compose" || !baseMessage) {
       setToAddresses("");
       setCcAddresses("");
@@ -206,13 +222,22 @@ export function MailComposer({
     setSending(true);
     setError(null);
     try {
+      // 追加签名到正文末尾
+      const selectedSig = signatures.find((s) => s.id === selectedSignatureId) ?? null;
+      const finalBodyHtml = selectedSig?.content
+        ? `${bodyHtml}<br/><br/>${selectedSig.content}`
+        : bodyHtml;
+      const sigText = selectedSig?.content
+        ? selectedSig.content.replace(/<[^>]*>/g, "").trim()
+        : "";
+      const finalBodyText = sigText ? `${bodyText}\n\n${sigText}` : bodyText;
       await sendEmail(gatewayUrl, account, {
         toAddresses: toAddresses.trim(),
         ccAddresses: ccAddresses.trim() || undefined,
         bccAddresses: bccAddresses.trim() || undefined,
         subject: subject.trim(),
-        bodyText,
-        bodyHtml,
+        bodyText: finalBodyText,
+        bodyHtml: finalBodyHtml,
         inReplyTo: baseMessage?.messageId ?? null,
         attachments: attachments.length > 0 ? attachments : undefined,
       });
@@ -247,6 +272,67 @@ export function MailComposer({
       setError(String(e));
     } finally {
       setSavingDraft(false);
+    }
+  };
+
+  const handleScheduleSend = async () => {
+    if (!account) {
+      setError("请先选择一个邮箱账号");
+      return;
+    }
+    if (!toAddresses.trim()) {
+      setError("请填写收件人");
+      return;
+    }
+    const datetimeStr = window.prompt(
+      "请输入定时发送时间（格式：YYYY-MM-DD HH:MM）\n例如：2026-06-25 09:00",
+      new Date(Date.now() + 3600_000).toISOString().slice(0, 16).replace("T", " "),
+    );
+    if (!datetimeStr) return;
+    // 解析本地时间
+    const scheduled = new Date(datetimeStr.replace(" ", "T"));
+    if (isNaN(scheduled.getTime())) {
+      setError("时间格式无效，请使用 YYYY-MM-DD HH:MM 格式");
+      return;
+    }
+    if (scheduled.getTime() <= Date.now()) {
+      setError("定时发送时间必须晚于当前时间");
+      return;
+    }
+    setSending(true);
+    setError(null);
+    try {
+      // 追加签名
+      const selectedSig = signatures.find((s) => s.id === selectedSignatureId) ?? null;
+      const finalBodyHtml = selectedSig?.content
+        ? `${bodyHtml}<br/><br/>${selectedSig.content}`
+        : bodyHtml;
+      const sigText = selectedSig?.content
+        ? selectedSig.content.replace(/<[^>]*>/g, "").trim()
+        : "";
+      const finalBodyText = sigText ? `${bodyText}\n\n${sigText}` : bodyText;
+      const { outboxAdd } = await import("./lib/emailApi");
+      await outboxAdd({
+        id: crypto.randomUUID(),
+        accountId: account.id,
+        toAddresses: toAddresses.trim(),
+        ccAddresses: ccAddresses.trim() || null,
+        bccAddresses: bccAddresses.trim() || null,
+        subject: subject.trim(),
+        bodyText: finalBodyText,
+        bodyHtml: finalBodyHtml,
+        inReplyTo: baseMessage?.messageId ?? null,
+        attachmentsJson: attachments.length > 0 ? JSON.stringify(attachments) : null,
+        scheduledAt: scheduled.toISOString(),
+        status: "pending",
+        error: null,
+        createdAt: new Date().toISOString(),
+      });
+      handleClose();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSending(false);
     }
   };
 
@@ -326,6 +412,18 @@ export function MailComposer({
         {savingDraft ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
         保存
       </Button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        className="h-7 gap-1.5 px-2 text-[12px] text-muted-foreground hover:text-foreground"
+        disabled={sending || savingDraft || !account}
+        onClick={() => void handleScheduleSend()}
+        title="定时发送"
+      >
+        <Clock className="h-3.5 w-3.5" />
+        定时
+      </Button>
       <span className="mx-1 h-4 w-px bg-border/70" />
       <Button
         type="button"
@@ -360,6 +458,42 @@ export function MailComposer({
         <Camera className="h-3.5 w-3.5" />
         截屏
       </Button>
+      {signatures.length > 0 && (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-7 gap-1 px-2 text-[12px] text-muted-foreground hover:text-foreground"
+              disabled={!account}
+            >
+              <FileText className="h-3.5 w-3.5" />
+              {selectedSignatureId
+                ? signatures.find((s) => s.id === selectedSignatureId)?.name ?? "签名"
+                : "签名"}
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start">
+            <DropdownMenuItem onClick={() => setSelectedSignatureId(null)}>
+              不使用签名
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            {signatures.map((sig) => (
+              <DropdownMenuItem
+                key={sig.id}
+                onClick={() => setSelectedSignatureId(sig.id)}
+                className={sig.id === selectedSignatureId ? "font-medium" : ""}
+              >
+                {sig.name}
+                {sig.isDefault && (
+                  <span className="ml-1 text-[10px] text-blue-600">默认</span>
+                )}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
       <div className="flex-1" />
       <div className="flex items-center gap-1 text-[12px] text-muted-foreground">
         <span className="truncate max-w-[180px]">

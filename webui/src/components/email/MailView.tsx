@@ -14,10 +14,13 @@ import {
   Link as LinkIcon,
   Flag,
   AlertCircle,
+  Eye,
+  X,
+  FileDown,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useEmailStore } from "./store/emailStore";
-import type { EmailAnalysis, EmailKeyInfo, EmailMessage } from "./lib/types";
+import type { EmailAnalysis, EmailAttachment, EmailKeyInfo, EmailMessage } from "./lib/types";
 import * as emailApi from "./lib/emailApi";
 import { save } from "@tauri-apps/plugin-dialog";
 import { writeFile } from "@tauri-apps/plugin-fs";
@@ -33,15 +36,20 @@ export function MailView() {
   const analysisError = useEmailStore((s) => s.analysisError);
   const loadAnalysis = useEmailStore((s) => s.loadAnalysis);
   const runAnalysis = useEmailStore((s) => s.runAnalysis);
+  const fetchBody = useEmailStore((s) => s.fetchBody);
+  const isOnline = useEmailStore((s) => s.isOnline);
   const [downloading, setDownloading] = useState<string | null>(null);
   const [analysisCollapsed, setAnalysisCollapsed] = useState(false);
+  const [previewing, setPreviewing] = useState<{ filename: string; dataUrl: string; contentType: string } | null>(null);
+  const [loadingPreview, setLoadingPreview] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
 
-  // 选中邮件时，若未读则自动标记为已读
+  // 选中邮件时，若未读则自动标记为已读（仅在线时）
   useEffect(() => {
-    if (selectedMessage && !selectedMessage.isRead && gatewayUrl) {
+    if (selectedMessage && !selectedMessage.isRead && gatewayUrl && isOnline) {
       void toggleRead(gatewayUrl, selectedMessage);
     }
-  }, [selectedMessage, gatewayUrl, toggleRead]);
+  }, [selectedMessage, gatewayUrl, toggleRead, isOnline]);
 
   // 选中邮件时，从本地缓存加载 AI 分析结果（不自动调用 LLM）
   useEffect(() => {
@@ -50,6 +58,20 @@ export function MailView() {
       setAnalysisCollapsed(false);
     }
   }, [selectedMessage, loadAnalysis]);
+
+  // 按需拉取正文：选中邮件且正文未拉取时，调用 fetchBody 加载完整正文（仅在线时）
+  // 兼容旧数据：bodyFetched=true 但 bodyText/bodyHtml 都空（Foxmail 模式 SQLite 不存正文），也需要拉取
+  useEffect(() => {
+    if (
+      selectedMessage &&
+      gatewayUrl &&
+      isOnline &&
+      (!selectedMessage.bodyFetched ||
+        (!selectedMessage.bodyText && !selectedMessage.bodyHtml && !selectedMessage.bodyError))
+    ) {
+      void fetchBody(gatewayUrl, selectedMessage);
+    }
+  }, [selectedMessage, gatewayUrl, fetchBody, isOnline]);
 
   const analysisKey = selectedMessage
     ? `${selectedMessage.uid}:${selectedMessage.accountId}:${selectedMessage.folder}`
@@ -82,29 +104,73 @@ export function MailView() {
     if (!account) return;
     setDownloading(filename);
     try {
-      const resp = await emailApi.fetchAttachment(
-        gatewayUrl,
-        account,
-        m.folder,
-        m.uid,
-        filename,
-      );
-      // 将 base64 转为二进制
-      const binary = atob(resp.data);
-      const bytes = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i++) {
-        bytes[i] = binary.charCodeAt(i);
-      }
       const savePath = await save({
         defaultPath: filename,
       });
       if (savePath) {
-        await writeFile(savePath, bytes);
+        // 直接下载到文件，避免前端处理大 base64 字符串
+        await emailApi.downloadAttachmentToFile(
+          gatewayUrl,
+          account,
+          m.folder,
+          m.uid,
+          filename,
+          savePath,
+        );
       }
     } catch (e) {
       console.error("下载附件失败:", e);
     } finally {
       setDownloading(null);
+    }
+  };
+
+  const handlePreviewAttachment = async (att: EmailAttachment) => {
+    if (!gatewayUrl) return;
+    const account = accounts.find((a) => a.id === m.accountId);
+    if (!account) return;
+    setLoadingPreview(att.filename);
+    try {
+      const resp = await emailApi.fetchAttachment(
+        gatewayUrl,
+        account,
+        m.folder,
+        m.uid,
+        att.filename,
+      );
+      const dataUrl = `data:${att.contentType || "application/octet-stream"};base64,${resp.data}`;
+      setPreviewing({ filename: att.filename, dataUrl, contentType: att.contentType });
+    } catch (e) {
+      console.error("预览附件失败:", e);
+    } finally {
+      setLoadingPreview(null);
+    }
+  };
+
+  const isPreviewable = (att: EmailAttachment): boolean => {
+    const ct = att.contentType.toLowerCase();
+    return ct.startsWith("image/") || ct === "application/pdf";
+  };
+
+  const handleExportEml = async () => {
+    if (!gatewayUrl) return;
+    setExporting(true);
+    try {
+      const resp = await emailApi.fetchRawEmail(gatewayUrl, m.accountId, m.uid, m.folder);
+      const binary = atob(resp.rawBase64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+      }
+      const safeName = (m.subject || "email").replace(/[<>:"/\\|?*]/g, "_").slice(0, 80);
+      const savePath = await save({ defaultPath: `${safeName}.eml` });
+      if (savePath) {
+        await writeFile(savePath, bytes);
+      }
+    } catch (e) {
+      console.error("导出 .eml 失败:", e);
+    } finally {
+      setExporting(false);
     }
   };
 
@@ -144,6 +210,22 @@ export function MailView() {
                 }
               />
             </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 text-muted-foreground hover:text-foreground"
+              disabled={exporting}
+              onClick={() => void handleExportEml()}
+              aria-label="导出为 .eml"
+              title="导出为 .eml"
+            >
+              {exporting ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <FileDown className="h-3.5 w-3.5" />
+              )}
+            </Button>
           </div>
         </div>
         <div className="mt-2 flex flex-col gap-0.5 text-[12px] text-muted-foreground">
@@ -181,6 +263,23 @@ export function MailView() {
                   <span className="shrink-0 text-[11px] text-muted-foreground">
                     {formatSize(att.size)}
                   </span>
+                  {isPreviewable(att) && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="h-6 w-6 shrink-0"
+                      disabled={loadingPreview === att.filename}
+                      onClick={() => void handlePreviewAttachment(att)}
+                      title="预览"
+                    >
+                      {loadingPreview === att.filename ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        <Eye className="h-3 w-3" />
+                      )}
+                    </Button>
+                  )}
                   <Button
                     type="button"
                     variant="ghost"
@@ -202,8 +301,48 @@ export function MailView() {
           )}
         </div>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-        {m.bodyHtml ? (
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3 scrollbar-hover">
+        {!m.bodyFetched || (!m.bodyText && !m.bodyHtml) ? (
+          <div className="flex h-full min-h-[200px] flex-col items-center justify-center gap-2 text-muted-foreground">
+            {m.bodyError ? (
+              <>
+                <span className="text-[13px] text-destructive">正文加载失败</span>
+                <span className="max-w-md text-center text-[12px] text-muted-foreground">{m.bodyError}</span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="mt-2 h-7 text-[12px]"
+                  onClick={() => {
+                    if (gatewayUrl && isOnline) {
+                      // 清除错误状态后重试
+                      useEmailStore.setState((state) => ({
+                        messages: state.messages.map((mm) =>
+                          mm.uid === m.uid && mm.accountId === m.accountId
+                            ? { ...mm, bodyError: null }
+                            : mm,
+                        ),
+                        selectedMessage:
+                          state.selectedMessage?.uid === m.uid
+                            ? { ...state.selectedMessage, bodyError: null }
+                            : state.selectedMessage,
+                      }));
+                      void fetchBody(gatewayUrl, m);
+                    }
+                  }}
+                >
+                  重试
+                </Button>
+              </>
+            ) : isOnline ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin" />
+                <span className="ml-2 text-[13px]">正在加载正文...</span>
+              </>
+            ) : (
+              <span className="text-[13px]">离线模式 — 正文未缓存，连接恢复后可加载</span>
+            )}
+          </div>
+        ) : m.bodyHtml ? (
           <SafeHtmlFrame html={m.bodyHtml} />
         ) : (
           <pre className="whitespace-pre-wrap break-words font-sans text-[13px] leading-relaxed text-foreground">
@@ -221,6 +360,79 @@ export function MailView() {
           onRun={handleRunAnalysis}
         />
       ) : null}
+      {previewing && (
+        <AttachmentPreviewModal
+          filename={previewing.filename}
+          dataUrl={previewing.dataUrl}
+          contentType={previewing.contentType}
+          onClose={() => setPreviewing(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * 附件预览模态框：图片直接显示，PDF 用 iframe 内嵌。
+ */
+function AttachmentPreviewModal({
+  filename,
+  dataUrl,
+  contentType,
+  onClose,
+}: {
+  filename: string;
+  dataUrl: string;
+  contentType: string;
+  onClose: () => void;
+}) {
+  const isImage = contentType.toLowerCase().startsWith("image/");
+  const isPdf = contentType.toLowerCase() === "application/pdf";
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+      onClick={onClose}
+    >
+      <div
+        className="flex h-[90vh] w-[90vw] max-w-[1000px] flex-col rounded-lg bg-background shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3">
+          <Eye className="h-4 w-4 text-muted-foreground" />
+          <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{filename}</span>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7"
+            onClick={onClose}
+            aria-label="关闭"
+          >
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-auto p-4">
+          {isImage ? (
+            <div className="flex h-full items-center justify-center">
+              <img
+                src={dataUrl}
+                alt={filename}
+                className="max-h-full max-w-full object-contain"
+              />
+            </div>
+          ) : isPdf ? (
+            <iframe
+              src={dataUrl}
+              className="h-full w-full border-0"
+              title={filename}
+            />
+          ) : (
+            <div className="flex h-full items-center justify-center text-muted-foreground">
+              <span className="text-[13px]">不支持预览此文件类型</span>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -243,13 +455,15 @@ function SafeHtmlFrame({ html }: { html: string }) {
       img { max-width: 100% !important; height: auto !important; }
       div, p, span, td, th { word-wrap: break-word !important; overflow-wrap: break-word !important; }
     </style>`;
+    // referrer policy：加载网络图片时不带 Referer，避免部分图床防盗链 403
+    const referrerMeta = `<meta name="referrer" content="no-referrer">`;
     if (html.includes("</head>")) {
-      return html.replace("</head>", `${wrapCss}</head>`);
+      return html.replace("</head>", `${referrerMeta}${wrapCss}</head>`);
     }
     if (html.includes("<body")) {
-      return html.replace("<body", `${wrapCss}<body`);
+      return `${referrerMeta}${wrapCss}${html}`;
     }
-    return `${wrapCss}${html}`;
+    return `${referrerMeta}${wrapCss}${html}`;
   }, [html]);
 
   useEffect(() => {

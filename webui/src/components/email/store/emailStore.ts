@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { EmailAccount, EmailAnalysis, EmailFolder, EmailMessage } from "../lib/types";
 import * as api from "../lib/emailApi";
 import { sortFolders } from "../lib/folderUtils";
+import { showNotification } from "@/lib/tauri";
 
 function calcTotalUnread(foldersByAccount: Record<string, EmailFolder[]>): number {
   let total = 0;
@@ -22,7 +23,7 @@ async function setTrayUnreadCount(count: number): Promise<void> {
   }
 }
 
-/** 发送系统级新邮件通知（Rust 侧 Windows Toast），点击后可跳转邮件页面 */
+/** 发送新邮件通知（自定义右下角弹窗，独立 Tauri 窗口） */
 async function notifyNewMail(
   count: number,
   accountDisplayName: string,
@@ -34,7 +35,14 @@ async function notifyNewMail(
       count === 1
         ? `${firstMessage.fromName || firstMessage.fromAddress}: ${firstMessage.subject || "(无主题)"}`
         : `${accountDisplayName} - 最新: ${firstMessage.subject || "(无主题)"}`;
-    await invoke("send_mail_notification", { title, body });
+    await showNotification({
+      id: `mail-${firstMessage.uid}-${Date.now()}`,
+      title,
+      body,
+      icon: "mail",
+      autoCloseMs: 6000,
+      clickAction: "open-email",
+    });
   } catch {
     // 通知不可用时静默忽略
   }
@@ -52,6 +60,8 @@ interface EmailState {
   selectedMessage: EmailMessage | null;
   loading: boolean;
   syncing: boolean;
+  // 后台同步（IDLE 推送/定时轮询触发），不阻塞 UI
+  backgroundSyncing: boolean;
   error: string | null;
   gatewayUrl: string;
   // AI 分析结果缓存：key = `${uid}:${accountId}:${folder}`
@@ -62,15 +72,27 @@ interface EmailState {
   agentChatId: string | null;
   // 所有账号总未读数（用于托盘图标）
   totalUnreadCount: number;
+  // gateway 是否在线（离线时仅可查看本地缓存）
+  isOnline: boolean;
+  // 游标分页：是否还有更旧的邮件可加载（上次拉取数量等于 limit 时为 true）
+  hasMore: boolean;
+  // 正在加载下一页（不阻塞首屏，仅控制底部 spinner）
+  loadingMore: boolean;
+  // 是否处于统一收件箱模式（聚合所有账号 INBOX）
+  isUnifiedInbox: boolean;
 
   loadAccounts: () => Promise<void>;
   addAccount: (account: EmailAccount) => Promise<void>;
-  updateAccount: (account: EmailAccount) => Promise<void>;
+  updateAccount: (account: EmailAccount, newPassword?: string | null) => Promise<void>;
   removeAccount: (accountId: string) => Promise<void>;
   selectAccount: (accountId: string) => void;
   loadFolders: (gatewayUrl: string, accountId: string, localOnly?: boolean) => Promise<void>;
   selectFolder: (folder: string) => void;
-  loadMessages: (accountId: string) => Promise<void>;
+  loadMessages: (accountId: string, folder?: string) => Promise<void>;
+  // 加载下一页（基于当前列表最旧 uid 作为游标）
+  loadMore: () => Promise<void>;
+  // 切换到统一收件箱模式并加载
+  selectUnifiedInbox: () => Promise<void>;
   syncMail: (gatewayUrl: string, mailbox?: string) => Promise<void>;
   // 全局同步所有账号 INBOX，返回每个账号的新邮件数；silent 为 true 时不弹通知
   syncAllAccounts: (gatewayUrl: string, silent?: boolean) => Promise<Record<string, number>>;
@@ -79,6 +101,8 @@ interface EmailState {
   // 停止所有账号的 IDLE 监听
   stopAllIdle: (gatewayUrl: string) => Promise<void>;
   selectMessage: (message: EmailMessage | null) => void;
+  // 按需拉取邮件正文（同步时只拉头部，点击邮件时调用）
+  fetchBody: (gatewayUrl: string, message: EmailMessage) => Promise<void>;
   toggleRead: (gatewayUrl: string, message: EmailMessage) => Promise<void>;
   toggleStarred: (gatewayUrl: string, message: EmailMessage) => Promise<void>;
   deleteMessage: (gatewayUrl: string, message: EmailMessage) => Promise<void>;
@@ -94,6 +118,8 @@ interface EmailState {
   runAnalysis: (gatewayUrl: string, message: EmailMessage) => Promise<EmailAnalysis>;
   // AI 对话会话管理
   setAgentChatId: (chatId: string | null) => void;
+  // 检测 gateway 是否在线（ping /health），更新 isOnline 状态
+  checkGatewayHealth: (gatewayUrl: string) => Promise<boolean>;
 }
 
 export const useEmailStore = create<EmailState>((set, get) => ({
@@ -108,6 +134,7 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   selectedMessage: null,
   loading: false,
   syncing: false,
+  backgroundSyncing: false,
   error: null,
   gatewayUrl: "",
   analysisCache: {},
@@ -115,6 +142,10 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   analysisError: null,
   agentChatId: null,
   totalUnreadCount: 0,
+  isOnline: true,
+  hasMore: false,
+  loadingMore: false,
+  isUnifiedInbox: false,
 
   setGatewayUrl: (url) => set({ gatewayUrl: url }),
 
@@ -149,10 +180,11 @@ export const useEmailStore = create<EmailState>((set, get) => ({
     }
   },
 
-  updateAccount: async (account) => {
+  updateAccount: async (account, newPassword) => {
     set({ error: null });
     try {
-      await api.updateAccount(account);
+      // 调用 updateAccountSettings：未传 newPassword 时保留原密码，避免双重加密
+      await api.updateAccountSettings(account, newPassword ?? null);
       const accounts = get().accounts.map((a) => (a.id === account.id ? account : a));
       set({ accounts });
     } catch (e) {
@@ -164,7 +196,8 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   removeAccount: async (accountId) => {
     set({ error: null });
     try {
-      await api.deleteAccount(accountId);
+      const gatewayUrl = get().gatewayUrl;
+      await api.deleteAccount(gatewayUrl, accountId);
       const accounts = get().accounts.filter((a) => a.id !== accountId);
       const selectedId = get().selectedAccountId;
       const isSelected = selectedId === accountId;
@@ -180,6 +213,7 @@ export const useEmailStore = create<EmailState>((set, get) => ({
         messages: isSelected ? [] : get().messages,
         selectedMessage: isSelected ? null : get().selectedMessage,
         totalUnreadCount: total,
+        hasMore: false,
       });
       await setTrayUnreadCount(total);
     } catch (e) {
@@ -195,6 +229,8 @@ export const useEmailStore = create<EmailState>((set, get) => ({
       selectedFolder: "INBOX",
       messages: [],
       selectedMessage: null,
+      hasMore: false,
+      isUnifiedInbox: false,
     });
   },
 
@@ -291,20 +327,36 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   refreshUnreadCounts: async (accountId) => {
     try {
       const localCounts = await api.getUnreadCounts(accountId);
+      let shouldLoadMessages = false;
+      const selectedFolder = get().selectedFolder;
       set((state) => {
         const cached = state.foldersByAccount[accountId] ?? state.folders;
+        const prevUnread = cached.find((f) => f.name === selectedFolder)?.unreadCount ?? 0;
+        const newUnread = localCounts[selectedFolder] ?? 0;
         const merged = cached.map((f) => ({
           ...f,
           unreadCount: localCounts[f.name] ?? 0,
         }));
         const nextFoldersByAccount = { ...state.foldersByAccount, [accountId]: merged };
         const total = calcTotalUnread(nextFoldersByAccount);
+        // 兜底：当前选中文件夹的未读数增加，说明有新邮件但列表未刷新
+        // 或文件夹显示有未读但当前列表为空（loadMessages 可能因竞态失败）
+        if (
+          state.selectedAccountId === accountId &&
+          state.selectedFolder === selectedFolder &&
+          (newUnread > prevUnread || (newUnread > 0 && state.messages.length === 0))
+        ) {
+          shouldLoadMessages = true;
+        }
         return {
           folders: state.selectedAccountId === accountId ? merged : state.folders,
           foldersByAccount: nextFoldersByAccount,
           totalUnreadCount: total,
         };
       });
+      if (shouldLoadMessages) {
+        await get().loadMessages(accountId, selectedFolder);
+      }
     } catch {
       // ignore
     }
@@ -315,15 +367,108 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   },
 
   selectFolder: (folder) => {
-    set({ selectedFolder: folder, messages: [], selectedMessage: null });
+    // 不清空 messages，避免切换文件夹时列表瞬间空白闪烁
+    // loadMessages 会无缝替换为新文件夹的内容
+    set({ selectedFolder: folder, selectedMessage: null, hasMore: false, isUnifiedInbox: false });
   },
 
-  loadMessages: async (accountId) => {
-    const folder = get().selectedFolder;
-    set({ loading: true, error: null });
+  loadMessages: async (accountId, folderParam) => {
+    // 显式传入 folder，避免 selectFolder/set 的异步竞态导致读到旧文件夹
+    const folder = folderParam ?? get().selectedFolder;
+    // 不设置 loading: true，避免本地 SQLite 查询（<10ms）时显示"加载中"闪烁
+    // 本地查询极快，直接无缝替换列表内容（foxmail 式体验）
     try {
-      const messages = await api.getMessages(accountId, folder, 0, 50);
-      set({ messages, loading: false });
+      const PAGE_SIZE = 50;
+      const messages = await api.getMessages(accountId, folder, null, PAGE_SIZE);
+      // 仅在用户仍停留在同一账号同一文件夹时才更新（避免异步竞态：用户已切换走）
+      if (get().selectedAccountId === accountId && get().selectedFolder === folder) {
+        set({
+          messages,
+          loading: false,
+          error: null,
+          hasMore: messages.length === PAGE_SIZE,
+        });
+      }
+    } catch (e) {
+      set({ loading: false, error: String(e) });
+    }
+  },
+
+  loadMore: async () => {
+    // 防止重复加载 / 已无更多 / 正在加载
+    if (get().loadingMore || !get().hasMore) return;
+    if (get().isUnifiedInbox) {
+      // 统一收件箱模式：使用 date 作为游标（uid 跨账号会冲突）
+      const { messages } = get();
+      if (messages.length === 0) return;
+      // 取列表中最早的 date 作为游标
+      const oldestDate = messages.reduce((min, m) => (m.date < min ? m.date : min), messages[0].date);
+      set({ loadingMore: true });
+      try {
+        const PAGE_SIZE = 50;
+        const older = await api.getUnifiedInbox(oldestDate, PAGE_SIZE);
+        if (get().isUnifiedInbox) {
+          // 去重：避免相同 (accountId, uid) 重复
+          const existingKeys = new Set(get().messages.map((m) => `${m.accountId}:${m.uid}`));
+          const fresh = older.filter((m) => !existingKeys.has(`${m.accountId}:${m.uid}`));
+          set((state) => ({
+            messages: [...state.messages, ...fresh],
+            loadingMore: false,
+            hasMore: older.length === PAGE_SIZE,
+          }));
+        } else {
+          set({ loadingMore: false });
+        }
+      } catch (e) {
+        set({ loadingMore: false, error: String(e) });
+      }
+      return;
+    }
+    const { selectedAccountId, selectedFolder, messages } = get();
+    if (!selectedAccountId || messages.length === 0) return;
+    // 取当前列表中最旧的 uid 作为游标（uid 是字符串，按数值大小排序）
+    const oldestUid = messages.reduce((min, m) => {
+      const cur = parseInt(m.uid, 10) || 0;
+      const minVal = parseInt(min, 10) || 0;
+      return cur < minVal ? m.uid : min;
+    }, messages[0].uid);
+    set({ loadingMore: true });
+    try {
+      const PAGE_SIZE = 50;
+      const older = await api.getMessages(selectedAccountId, selectedFolder, oldestUid, PAGE_SIZE);
+      // 防竞态：用户可能在 await 期间切换文件夹，确保仍是同一账号同一文件夹
+      if (get().selectedAccountId === selectedAccountId && get().selectedFolder === selectedFolder) {
+        // 去重：避免游标计算错误导致重复
+        const existingUids = new Set(get().messages.map((m) => m.uid));
+        const fresh = older.filter((m) => !existingUids.has(m.uid));
+        set((state) => ({
+          messages: [...state.messages, ...fresh],
+          loadingMore: false,
+          hasMore: older.length === PAGE_SIZE,
+        }));
+      } else {
+        set({ loadingMore: false });
+      }
+    } catch (e) {
+      set({ loadingMore: false, error: String(e) });
+    }
+  },
+
+  selectUnifiedInbox: async () => {
+    set({
+      isUnifiedInbox: true,
+      selectedAccountId: null,
+      selectedFolder: "INBOX",
+      selectedMessage: null,
+      messages: [],
+      hasMore: false,
+    });
+    try {
+      const PAGE_SIZE = 50;
+      const messages = await api.getUnifiedInbox(null, PAGE_SIZE);
+      if (get().isUnifiedInbox) {
+        set({ messages, loading: false, error: null, hasMore: messages.length === PAGE_SIZE });
+      }
     } catch (e) {
       set({ loading: false, error: String(e) });
     }
@@ -333,22 +478,37 @@ export const useEmailStore = create<EmailState>((set, get) => ({
     const account = get().accounts.find((a) => a.id === get().selectedAccountId);
     if (!account) return;
     const targetMailbox = mailbox ?? get().selectedFolder;
-    // 记录同步前的 UID 集合，用于检测新邮件
+    // 记录同步前的 UID 集合，用于检测是否需要通知（首次加载不通知）
     const prevUids = new Set(get().messages.map((m) => m.uid));
     const hadPrevMessages = prevUids.size > 0;
     set({ syncing: true, error: null });
     try {
-      await api.syncEmail(gatewayUrl, account, targetMailbox);
-      await get().loadMessages(account.id);
-      // 检测新邮件并发系统通知（首次加载不通知）
-      const newMessages = get().messages.filter((m) => !prevUids.has(m.uid));
-      if (newMessages.length > 0 && hadPrevMessages) {
-        await notifyNewMail(newMessages.length, account.displayName, newMessages[0]);
+      const result = await api.syncEmail(gatewayUrl, account, targetMailbox);
+      // 增量 prepend：只把新邮件插入到列表头部，不全量 reload
+      // 避免列表重新渲染、滚动位置丢失、视觉闪烁
+      const freshNew = result.newMessages.filter((m) => !prevUids.has(m.uid));
+      if (freshNew.length > 0) {
+        set((state) => ({
+          messages: [...freshNew, ...state.messages],
+        }));
+      }
+      // 新邮件通知（首次加载不通知）
+      if (freshNew.length > 0 && hadPrevMessages) {
+        await notifyNewMail(freshNew.length, account.displayName, freshNew[0]);
       }
       // 同步后用本地数据库刷新未读数
       await get().refreshUnreadCounts(account.id);
       await setTrayUnreadCount(get().totalUnreadCount);
       set({ syncing: false });
+      // 兜底：如果当前选中文件夹是本次同步的目标，但 prepend 没新增（newMessages 为空
+      // 或都是已存在邮件），从 SQLite 重新加载列表，确保新邮件能显示
+      if (
+        get().selectedAccountId === account.id &&
+        get().selectedFolder === targetMailbox &&
+        freshNew.length === 0
+      ) {
+        await get().loadMessages(account.id, targetMailbox);
+      }
     } catch (e) {
       set({ syncing: false, error: String(e) });
     }
@@ -358,42 +518,58 @@ export const useEmailStore = create<EmailState>((set, get) => ({
     const accounts = get().accounts;
     if (accounts.length === 0 || !gatewayUrl) return {};
     const result: Record<string, number> = {};
-    set({ syncing: true, error: null });
-    try {
-      for (const account of accounts) {
+    // 后台同步用 backgroundSyncing，不阻塞 UI（不显示"正在收取..."，不禁用按钮）
+    set({ backgroundSyncing: true, error: null });
+    // 并行同步所有账号 INBOX：各账号 IMAP 连接独立，互不阻塞
+    // 单账号失败不影响其他账号；result 在每个 task 内部独立写入（无并发写竞态）
+    await Promise.all(
+      accounts.map(async (account) => {
         try {
-          const newCount = await api.syncEmail(gatewayUrl, account, "INBOX");
+          const syncResult = await api.syncEmail(gatewayUrl, account, "INBOX");
           // 用本地数据库刷新未读数
           await get().refreshUnreadCounts(account.id);
-          result[account.id] = newCount;
+          result[account.id] = syncResult.newCount;
           // 非首次全局同步且检测到新邮件时发系统通知
-          if (!silent && newCount > 0) {
-            const messages = await api.getMessages(account.id, "INBOX", 0, 50);
-            const latest = messages[0];
-            if (latest) {
-              await notifyNewMail(newCount, account.displayName, latest);
+          if (!silent && syncResult.newCount > 0 && syncResult.newMessages.length > 0) {
+            await notifyNewMail(syncResult.newCount, account.displayName, syncResult.newMessages[0]);
+          }
+          // 如果当前选中的是 INBOX，增量 prepend 新邮件
+          const selectedAccountId = get().selectedAccountId;
+          const selectedFolder = get().selectedFolder;
+          if (
+            selectedAccountId === account.id &&
+            selectedFolder === "INBOX"
+          ) {
+            if (syncResult.newMessages.length > 0) {
+              const prevUids = new Set(get().messages.map((m) => m.uid));
+              const freshNew = syncResult.newMessages.filter((m) => !prevUids.has(m.uid));
+              if (freshNew.length > 0) {
+                set((state) => ({
+                  messages: [...freshNew, ...state.messages],
+                }));
+              }
+            }
+            // 兜底：如果 syncResult.newMessages 为空但 newCount > 0，
+            // 或当前列表为空，从 SQLite 重新加载，避免新邮件不显示
+            if (syncResult.newCount > 0 && syncResult.newMessages.length === 0) {
+              await get().loadMessages(account.id, "INBOX");
             }
           }
         } catch (e) {
           // eslint-disable-next-line no-console
           console.error("[email] sync account failed", account.id, e);
         }
-      }
-      // 全部同步后刷新一次总未读数并同步托盘
-      await get().recalcTotalUnread();
-      await setTrayUnreadCount(get().totalUnreadCount);
-      // 如果当前选中的是 INBOX，刷新邮件列表以便用户看到新邮件
-      const selectedAccountId = get().selectedAccountId;
-      const selectedFolder = get().selectedFolder;
-      if (selectedAccountId && selectedFolder === "INBOX") {
-        await get().loadMessages(selectedAccountId);
-      }
-      set({ syncing: false });
-      return result;
-    } catch (e) {
-      set({ syncing: false, error: String(e) });
-      return result;
+      }),
+    );
+    // 全部同步后刷新一次总未读数并同步托盘
+    await get().recalcTotalUnread();
+    await setTrayUnreadCount(get().totalUnreadCount);
+    set({ backgroundSyncing: false });
+    // 统一收件箱模式：同步后重新加载聚合列表以显示新邮件
+    if (get().isUnifiedInbox) {
+      await get().selectUnifiedInbox();
     }
+    return result;
   },
 
   startAllIdle: async (gatewayUrl) => {
@@ -423,6 +599,53 @@ export const useEmailStore = create<EmailState>((set, get) => ({
 
   selectMessage: (message) => {
     set({ selectedMessage: message });
+  },
+
+  fetchBody: async (gatewayUrl, message) => {
+    // 已缓存且有内容才跳过（兼容旧数据 body_fetched 默认 1 但正文为空的情况）
+    if (message.bodyFetched && (message.bodyText || message.bodyHtml)) return;
+    try {
+      const result = await api.fetchEmailBody(
+        gatewayUrl,
+        message.accountId,
+        message.uid,
+        message.folder,
+      );
+      // 更新本地消息对象（messages 列表 + selectedMessage）
+      set((state) => ({
+        messages: state.messages.map((m) =>
+          m.uid === message.uid && m.accountId === message.accountId
+            ? { ...m, bodyText: result.bodyText, bodyHtml: result.bodyHtml, bodyFetched: true, bodyError: null }
+            : m,
+        ),
+        selectedMessage:
+          state.selectedMessage?.uid === message.uid
+            ? {
+                ...state.selectedMessage,
+                bodyText: result.bodyText,
+                bodyHtml: result.bodyHtml,
+                bodyFetched: true,
+                bodyError: null,
+              }
+            : state.selectedMessage,
+      }));
+    } catch (e) {
+      const errMsg = e instanceof Error ? e.message : String(e);
+      console.error("fetchBody failed:", errMsg);
+      // 记录错误到 UI 状态，避免永远 loading；用户可重新点击邮件触发重试
+      set((state) => ({
+        messages: state.messages.map((m) =>
+          m.uid === message.uid && m.accountId === message.accountId
+            ? { ...m, bodyError: errMsg }
+            : m,
+        ),
+        selectedMessage:
+          state.selectedMessage?.uid === message.uid
+            ? { ...state.selectedMessage, bodyError: errMsg }
+            : state.selectedMessage,
+      }));
+      throw e;
+    }
   },
 
   toggleRead: async (gatewayUrl, message) => {
@@ -490,19 +713,22 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   deleteMessage: async (gatewayUrl, message) => {
     const account = get().accounts.find((a) => a.id === message.accountId);
     if (!account) return;
-    set({ loading: true, error: null });
+    // 乐观更新：先从本地列表移除，UI 立即响应，后端失败时回滚
+    const prevMessages = get().messages;
+    const prevSelected = get().selectedMessage;
+    set((state) => ({
+      messages: state.messages.filter((m) => m.uid !== message.uid),
+      selectedMessage:
+        state.selectedMessage?.uid === message.uid ? null : state.selectedMessage,
+      error: null,
+    }));
     try {
       await api.deleteMessage(gatewayUrl, account, message.folder, message.uid);
-      set((state) => ({
-        messages: state.messages.filter((m) => m.uid !== message.uid),
-        selectedMessage:
-          state.selectedMessage?.uid === message.uid ? null : state.selectedMessage,
-        loading: false,
-      }));
-      // 删除后刷新未读数
+      // 后端成功后用本地数据库刷新未读数（不触发 IMAP）
       await get().refreshUnreadCounts(account.id);
     } catch (e) {
-      set({ loading: false, error: String(e) });
+      // 回滚
+      set({ messages: prevMessages, selectedMessage: prevSelected, error: String(e) });
       throw e;
     }
   },
@@ -510,21 +736,21 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   markAllRead: async (gatewayUrl, accountId, mailbox) => {
     const account = get().accounts.find((a) => a.id === accountId);
     if (!account) return;
-    set({ loading: true, error: null });
+    // 乐观更新：先本地标记已读
+    const prevMessages = get().messages;
+    set((state) => ({
+      messages: state.messages.map((m) =>
+        m.folder === mailbox && m.accountId === accountId
+          ? { ...m, isRead: true }
+          : m,
+      ),
+      error: null,
+    }));
     try {
       await api.markAllRead(gatewayUrl, account, mailbox);
-      // 本地缓存同步
-      set((state) => ({
-        messages: state.messages.map((m) =>
-          m.folder === mailbox && m.accountId === accountId
-            ? { ...m, isRead: true }
-            : m,
-        ),
-        loading: false,
-      }));
       await get().refreshUnreadCounts(accountId);
     } catch (e) {
-      set({ loading: false, error: String(e) });
+      set({ messages: prevMessages, error: String(e) });
       throw e;
     }
   },
@@ -532,21 +758,20 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   emptyFolder: async (gatewayUrl, accountId, mailbox) => {
     const account = get().accounts.find((a) => a.id === accountId);
     if (!account) return;
-    set({ loading: true, error: null });
+    // 乐观更新：先清空本地列表
+    const prevMessages = get().messages;
+    const prevSelected = get().selectedMessage;
+    set((state) => ({
+      messages: state.selectedFolder === mailbox ? [] : state.messages,
+      selectedMessage:
+        state.selectedMessage?.folder === mailbox ? null : state.selectedMessage,
+      error: null,
+    }));
     try {
       await api.emptyFolder(gatewayUrl, account, mailbox);
-      set((state) => ({
-        messages:
-          state.selectedFolder === mailbox
-            ? []
-            : state.messages,
-        selectedMessage:
-          state.selectedMessage?.folder === mailbox ? null : state.selectedMessage,
-        loading: false,
-      }));
       await get().refreshUnreadCounts(accountId);
     } catch (e) {
-      set({ loading: false, error: String(e) });
+      set({ messages: prevMessages, selectedMessage: prevSelected, error: String(e) });
       throw e;
     }
   },
@@ -606,6 +831,30 @@ export const useEmailStore = create<EmailState>((set, get) => ({
     } catch (e) {
       set({ analysisLoading: false, analysisError: String(e) });
       throw e;
+    }
+  },
+
+  checkGatewayHealth: async (gatewayUrl) => {
+    if (!gatewayUrl) {
+      if (get().isOnline) set({ isOnline: false });
+      return false;
+    }
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 3000);
+      const resp = await fetch(`${gatewayUrl}/health`, { signal: controller.signal });
+      clearTimeout(timeout);
+      const online = resp.ok;
+      const wasOffline = !get().isOnline;
+      set({ isOnline: online });
+      // 从离线恢复到在线时，自动同步所有账号
+      if (online && wasOffline) {
+        void get().syncAllAccounts(gatewayUrl, true);
+      }
+      return online;
+    } catch {
+      if (get().isOnline) set({ isOnline: false });
+      return false;
     }
   },
 }));

@@ -122,6 +122,7 @@ export async function listSessions(
     updatedAt: s.updated_at,
     title: s.title ?? "",
     preview: s.preview ?? "",
+    workspace: (s as Row & { workspace?: string | null }).workspace ?? null,
     runStartedAt: s.run_started_at ?? null,
   }));
 }
@@ -152,6 +153,52 @@ export async function deleteSession(
     token,
   );
   return body.deleted;
+}
+
+/** Bind a session to a project working directory.
+ *
+ *  POSTs to the gateway HTTP server (aiohttp app) because the websocket
+ *  HTTP surface cannot reliably read POST bodies. Pass ``null`` to clear
+ *  the binding and return the session to the default "会话" section. */
+export async function updateSessionWorkspace(
+  token: string,
+  key: string,
+  workspace: string | null,
+  base?: string,
+): Promise<{ ok: boolean; workspace: string | null }> {
+  const effectiveBase = base ?? (await getGatewayHttpBase());
+  if (workspace === null) {
+    return request<{ ok: boolean; workspace: string | null }>(
+      `${effectiveBase}/api/sessions/${encodeURIComponent(key)}/clear-workspace`,
+      token,
+      { method: "POST" },
+    );
+  }
+  return request<{ ok: boolean; workspace: string | null }>(
+    `${effectiveBase}/api/sessions/${encodeURIComponent(key)}/set-workspace`,
+    token,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ workspace }),
+    },
+  );
+}
+
+/** List distinct project workspaces bound to any session.
+ *
+ *  Used by the sidebar to keep project sections visible even after all
+ *  their sessions are deleted (so the project folder remains discoverable). */
+export async function listProjects(
+  token: string,
+  base?: string,
+): Promise<string[]> {
+  const effectiveBase = base ?? (await getGatewayHttpBase());
+  const body = await request<{ projects: string[] }>(
+    `${effectiveBase}/api/projects`,
+    token,
+  );
+  return body.projects ?? [];
 }
 
 export async function fetchSettings(

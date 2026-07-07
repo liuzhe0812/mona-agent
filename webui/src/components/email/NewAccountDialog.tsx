@@ -119,21 +119,27 @@ export function NewAccountDialog({
   const buildAccount = (): EmailAccount => {
     // 编辑模式下若密码留空，保留原密码
     const finalPassword = password || editAccount?.imapPassword || "";
+    const imapPortNum = parseInt(imapPort, 10) || 993;
+    const smtpPortNum = parseInt(smtpPort, 10) || 587;
     return {
       id: editAccount?.id ?? crypto.randomUUID(),
       displayName: displayName || emailAddress,
       imapHost,
-      imapPort: parseInt(imapPort, 10) || 993,
+      imapPort: imapPortNum,
       imapUsername: emailAddress,
       imapPassword: finalPassword,
       smtpHost,
-      smtpPort: parseInt(smtpPort, 10) || 587,
+      smtpPort: smtpPortNum,
       smtpUsername: emailAddress,
       smtpPassword: finalPassword,
       fromAddress: emailAddress,
       lastSyncedUid: editAccount?.lastSyncedUid ?? null,
       carddavUrl: carddavUrl.trim() || null,
       easUrl: easUrl.trim() || null,
+      // 993 端口默认 SSL，465 端口默认 SSL，其他端口默认非 SSL
+      imapUseSsl: editAccount?.imapUseSsl ?? imapPortNum === 993,
+      smtpUseSsl: editAccount?.smtpUseSsl ?? smtpPortNum === 465,
+      signatures: editAccount?.signatures ?? [],
     };
   };
 

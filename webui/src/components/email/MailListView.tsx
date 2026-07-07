@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   Loader2,
   Inbox,
@@ -36,7 +37,7 @@ import {
 } from "@/components/ui/context-menu";
 import { useEmailStore } from "./store/emailStore";
 import { getFolderDisplayName, sortFolders } from "./lib/folderUtils";
-import { moveMessage } from "./lib/emailApi";
+import { moveMessage, getAccountColor } from "./lib/emailApi";
 import type { EmailMessage } from "./lib/types";
 
 type SortKey = "date" | "from" | "subject" | "size" | "starred";
@@ -75,14 +76,36 @@ export function MailListView({ onReply, onReplyAll, onForward }: MailListViewPro
   const toggleRead = useEmailStore((s) => s.toggleRead);
   const toggleStarred = useEmailStore((s) => s.toggleStarred);
   const deleteMessage = useEmailStore((s) => s.deleteMessage);
-  const loadMessages = useEmailStore((s) => s.loadMessages);
-  const loadFolders = useEmailStore((s) => s.loadFolders);
   const folders = useEmailStore((s) => s.folders);
   const gatewayUrl = useEmailStore((s) => s.gatewayUrl);
   const runAnalysis = useEmailStore((s) => s.runAnalysis);
+  const hasMore = useEmailStore((s) => s.hasMore);
+  const loadingMore = useEmailStore((s) => s.loadingMore);
+  const loadMore = useEmailStore((s) => s.loadMore);
+  const isUnifiedInbox = useEmailStore((s) => s.isUnifiedInbox);
+  const accounts = useEmailStore((s) => s.accounts);
   const [searchQuery, setSearchQuery] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("date");
   const [filterKey, setFilterKey] = useState<FilterKey>("all");
+
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  // 滚动接近底部时自动加载下一页（游标分页）
+  // 仅当无搜索/过滤条件时触发（过滤后的子集不能正确反映分页状态）
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const handler = () => {
+      if (!hasMore || loadingMore) return;
+      // 距离底部 200px 内触发加载
+      const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+      if (distanceToBottom < 200) {
+        void loadMore();
+      }
+    };
+    el.addEventListener("scroll", handler, { passive: true });
+    return () => el.removeEventListener("scroll", handler);
+  }, [hasMore, loadingMore, loadMore]);
 
   const handleAnalyze = async (message: EmailMessage) => {
     // 先选中该邮件，让 MailView 顶部卡片展示分析进度
@@ -144,6 +167,13 @@ export function MailListView({ onReply, onReplyAll, onForward }: MailListViewPro
     return sorted;
   }, [messages, searchQuery, filterKey, sortKey]);
 
+  const rowVirtualizer = useVirtualizer({
+    count: filteredMessages.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 56,
+    overscan: 8,
+  });
+
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === "Delete" || e.key === "Backspace") {
@@ -171,14 +201,23 @@ export function MailListView({ onReply, onReplyAll, onForward }: MailListViewPro
       .getState()
       .accounts.find((a) => a.id === message.accountId);
     if (!account) return;
+    // 乐观更新：先从当前列表移除，UI 立即响应
+    const prevMessages = useEmailStore.getState().messages;
+    useEmailStore.setState((state) => ({
+      messages: state.messages.filter(
+        (m) => !(m.uid === message.uid && m.accountId === message.accountId),
+      ),
+      selectedMessage:
+        state.selectedMessage?.uid === message.uid ? null : state.selectedMessage,
+      error: null,
+    }));
     try {
       await moveMessage(gatewayUrl, account, message.folder, destFolder, message.uid);
-      if (message.folder === selectedFolder) {
-        await loadMessages(account.id);
-      }
-      await loadFolders(gatewayUrl, account.id);
+      // 后端成功后用本地数据库刷新未读数（不触发 IMAP 同步，避免转圈）
+      await useEmailStore.getState().refreshUnreadCounts(account.id);
     } catch (e) {
-      useEmailStore.setState({ error: String(e) });
+      // 回滚
+      useEmailStore.setState({ messages: prevMessages, error: String(e) });
     }
   };
 
@@ -186,15 +225,9 @@ export function MailListView({ onReply, onReplyAll, onForward }: MailListViewPro
     <div className="flex h-full flex-col bg-background" tabIndex={-1}>
       <div className="flex h-10 shrink-0 items-center border-b border-border bg-muted/20 px-3">
         <span className="text-[12px] font-semibold text-foreground">
-          {getFolderDisplayName(selectedFolder)}
+          {isUnifiedInbox ? "全部收件箱" : getFolderDisplayName(selectedFolder)}
         </span>
-        {syncing && (
-          <span className="ml-2 flex items-center gap-1 text-[11px] text-muted-foreground">
-            <Loader2 className="h-3 w-3 animate-spin" />
-            收取中...
-          </span>
-        )}
-        {!syncing && messages.length > 0 && (
+        {messages.length > 0 && (
           <span className="ml-2 text-[11px] text-muted-foreground">
             {filteredMessages.length}/{messages.length} 封
           </span>
@@ -257,7 +290,7 @@ export function MailListView({ onReply, onReplyAll, onForward }: MailListViewPro
           {error}
         </div>
       )}
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto scrollbar-hover">
         {!selectedAccountId ? (
           <EmptyHint text="请先选择账号" />
         ) : syncing && messages.length === 0 ? (
@@ -280,30 +313,62 @@ export function MailListView({ onReply, onReplyAll, onForward }: MailListViewPro
             icon={<Inbox className="h-6 w-6 text-muted-foreground/50" />}
           />
         ) : (
-          <div className="flex flex-col">
-            {filteredMessages.map((message) => (
-              <MailListItem
-                key={message.uid}
-                message={message}
-                active={selectedMessage?.uid === message.uid}
-                folders={folders}
-                onClick={() => selectMessage(message)}
-                onToggleRead={() => {
-                  if (gatewayUrl) void toggleRead(gatewayUrl, message);
-                }}
-                onToggleStar={() => {
-                  if (gatewayUrl) void toggleStarred(gatewayUrl, message);
-                }}
-                onDelete={() => {
-                  if (gatewayUrl) void deleteMessage(gatewayUrl, message);
-                }}
-                onMove={(dest) => void handleMove(message, dest)}
-                onReply={() => onReply?.(message)}
-                onReplyAll={() => onReplyAll?.(message)}
-                onForward={() => onForward?.(message)}
-                onAnalyze={() => void handleAnalyze(message)}
-              />
-            ))}
+          <div
+            style={{
+              height: `${rowVirtualizer.getTotalSize()}px`,
+              position: "relative",
+              width: "100%",
+            }}
+          >
+            {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+              const message = filteredMessages[virtualRow.index];
+              return (
+                <div
+                  key={message.uid}
+                  data-index={virtualRow.index}
+                  ref={rowVirtualizer.measureElement}
+                  style={{
+                    position: "absolute",
+                    top: 0,
+                    left: 0,
+                    width: "100%",
+                    transform: `translateY(${virtualRow.start}px)`,
+                  }}
+                >
+                  <MailListItem
+                    message={message}
+                    active={selectedMessage?.uid === message.uid}
+                    folders={folders}
+                    onClick={() => selectMessage(message)}
+                    onToggleRead={() => {
+                      if (gatewayUrl) void toggleRead(gatewayUrl, message);
+                    }}
+                    onToggleStar={() => {
+                      if (gatewayUrl) void toggleStarred(gatewayUrl, message);
+                    }}
+                    onDelete={() => {
+                      if (gatewayUrl) void deleteMessage(gatewayUrl, message);
+                    }}
+                    onMove={(dest) => void handleMove(message, dest)}
+                    onReply={() => onReply?.(message)}
+                    onReplyAll={() => onReplyAll?.(message)}
+                    onForward={() => onForward?.(message)}
+                    onAnalyze={() => void handleAnalyze(message)}
+                    accountColor={
+                      isUnifiedInbox
+                        ? getAccountColor(message.accountId, accounts)
+                        : undefined
+                    }
+                  />
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {loadingMore && (
+          <div className="flex items-center justify-center gap-2 py-3 text-[11.5px] text-muted-foreground">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            加载更多...
           </div>
         )}
       </div>
@@ -324,6 +389,8 @@ interface MailListItemProps {
   onReplyAll: () => void;
   onForward: () => void;
   onAnalyze: () => void;
+  // 统一收件箱模式下的账号颜色标识（为空表示非统一模式）
+  accountColor?: string;
 }
 
 function MailListItem({
@@ -339,6 +406,7 @@ function MailListItem({
   onReplyAll,
   onForward,
   onAnalyze,
+  accountColor,
 }: MailListItemProps) {
   const moveTargets = sortFolders(
     folders.filter((f) => f.name !== message.folder),
@@ -361,6 +429,13 @@ function MailListItem({
           <div className="flex items-center gap-2">
             {!message.isRead && (
               <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-blue-500" />
+            )}
+            {accountColor && (
+              <span
+                className="h-2 w-2 shrink-0 rounded-full"
+                style={{ backgroundColor: accountColor }}
+                title={message.accountId}
+              />
             )}
             <span
               className={cn(
@@ -391,9 +466,6 @@ function MailListItem({
             )}
           >
             {message.subject || "(无主题)"}
-          </div>
-          <div className="truncate text-[11.5px] text-muted-foreground/80">
-            {message.bodyText.slice(0, 80) || "(无正文)"}
           </div>
         </div>
       </ContextMenuTrigger>

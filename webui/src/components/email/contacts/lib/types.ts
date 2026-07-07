@@ -1,6 +1,6 @@
 // 联系人（地址簿）相关类型定义，字段与 Rust 侧 contacts.rs 的 camelCase 序列化对齐
 
-export type ContactSource = "carddav" | "eas" | "manual";
+export type ContactSource = "carddav" | "eas" | "auto" | "manual";
 
 export interface Contact {
   id: string;
@@ -104,3 +104,5 @@ export function inferEasUrl(email: string): string {
   }
   return "";
 }
+
+

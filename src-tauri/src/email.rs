@@ -12,11 +12,120 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::PathBuf;
-use tauri::{AppHandle, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use std::time::Duration;
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 const EMAIL_DB_FILE: &str = "email.sqlite3";
+const MAIL_DIR: &str = "mail";
 const ENCRYPT_SALT: &[u8] = b"mona-email-v1-salt";
 const NONCE_LEN: usize = 12;
+
+// ---------------------------------------------------------------------------
+// 文件存储层（Foxmail 风格：一邮件一 .eml 文件）
+// ---------------------------------------------------------------------------
+
+/// 返回邮件文件根目录：<app_data>/mona/mail
+fn mail_root() -> PathBuf {
+    app_data_dir().join(MAIL_DIR)
+}
+
+/// 清理路径段：替换文件系统非法字符（/ \ : * ? " < > |）为下划线，避免破坏目录结构。
+/// 保留中文、空格等合法字符。
+fn sanitize_path_segment(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+            _ => c,
+        })
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
+/// 计算 .eml 文件相对路径：<account_id>/<folder>/<uid>.eml
+/// 返回的路径使用正斜杠分隔，跨平台一致。
+fn eml_relative_path(account_id: &str, folder: &str, uid: &str) -> String {
+    format!(
+        "{}/{}/{}.eml",
+        sanitize_path_segment(account_id),
+        sanitize_path_segment(folder),
+        sanitize_path_segment(uid)
+    )
+}
+
+/// 将相对路径转为绝对路径
+fn eml_absolute_path(relative_path: &str) -> PathBuf {
+    mail_root().join(relative_path)
+}
+
+/// 写入 .eml 文件，自动创建父目录。返回相对路径（存入 SQLite）。
+fn write_eml_file(
+    account_id: &str,
+    folder: &str,
+    uid: &str,
+    bytes: &[u8],
+) -> Result<String, String> {
+    let rel = eml_relative_path(account_id, folder, uid);
+    let abs = eml_absolute_path(&rel);
+    if let Some(parent) = abs.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("创建邮件目录失败: {e}"))?;
+    }
+    std::fs::write(&abs, bytes).map_err(|e| format!("写入 .eml 文件失败: {e}"))?;
+    Ok(rel)
+}
+
+/// 读取 .eml 文件字节。文件不存在返回 None，存在返回 Ok(Some(bytes))。
+fn read_eml_file(relative_path: &str) -> Option<Vec<u8>> {
+    if relative_path.is_empty() {
+        return None;
+    }
+    let abs = eml_absolute_path(relative_path);
+    if !abs.exists() {
+        return None;
+    }
+    std::fs::read(&abs).ok()
+}
+
+/// 删除 .eml 文件。文件不存在视为成功。
+fn delete_eml_file(relative_path: &str) -> Result<(), String> {
+    if relative_path.is_empty() {
+        return Ok(());
+    }
+    let abs = eml_absolute_path(relative_path);
+    if abs.exists() {
+        std::fs::remove_file(&abs).map_err(|e| format!("删除 .eml 文件失败: {e}"))?;
+    }
+    Ok(())
+}
+
+/// 移动 .eml 文件到新位置（跨文件夹移动）。返回新的相对路径。
+fn move_eml_file(
+    old_relative: &str,
+    new_account: &str,
+    new_folder: &str,
+    uid: &str,
+) -> Result<String, String> {
+    let new_relative = eml_relative_path(new_account, new_folder, uid);
+    if old_relative.is_empty() {
+        return Ok(new_relative);
+    }
+    let old_abs = eml_absolute_path(old_relative);
+    let new_abs = eml_absolute_path(&new_relative);
+    if !old_abs.exists() {
+        // 旧文件不存在，直接返回新路径（调用方应负责重新拉取）
+        return Ok(new_relative);
+    }
+    if let Some(parent) = new_abs.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("创建目标目录失败: {e}"))?;
+    }
+    // 如果目标已存在（同名 uid），覆盖
+    if new_abs.exists() {
+        std::fs::remove_file(&new_abs).map_err(|e| format!("清理目标文件失败: {e}"))?;
+    }
+    std::fs::rename(&old_abs, &new_abs)
+        .map_err(|e| format!("移动 .eml 文件失败: {e}"))?;
+    Ok(new_relative)
+}
 
 // ---------------------------------------------------------------------------
 // 数据结构
@@ -47,6 +156,77 @@ pub struct EmailAccount {
     /// Exchange ActiveSync 服务地址（企业邮通讯录同步，为空表示不使用）
     #[serde(default)]
     pub eas_url: Option<String>,
+    /// IMAP 是否使用 SSL（993 端口默认 true，143 默认 false）
+    #[serde(default = "default_true")]
+    pub imap_use_ssl: bool,
+    /// SMTP 是否使用 SSL（465 端口默认 true，587/25 默认 false，587 用 STARTTLS）
+    #[serde(default)]
+    pub smtp_use_ssl: bool,
+    /// 签名列表（JSON 序列化存储，每账号可有多条签名）
+    #[serde(default)]
+    pub signatures: Vec<EmailSignature>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmailSignature {
+    pub id: String,
+    pub name: String,
+    /// 签名内容（HTML）
+    pub content: String,
+    #[serde(default)]
+    pub is_default: bool,
+}
+
+/// 邮件规则/过滤器
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmailRule {
+    pub id: String,
+    pub account_id: String,
+    pub name: String,
+    /// 条件类型：from_contains / subject_contains / to_contains
+    pub condition_field: String,
+    /// 条件值
+    pub condition_value: String,
+    /// 动作类型：move / mark_read / star / delete
+    pub action: String,
+    /// 动作目标（move 时为目标文件夹）
+    #[serde(default)]
+    pub action_target: Option<String>,
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub priority: i32,
+}
+
+/// 延迟发送的邮件（outbox）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OutboxEmail {
+    pub id: String,
+    pub account_id: String,
+    pub to_addresses: String,
+    #[serde(default)]
+    pub cc_addresses: Option<String>,
+    #[serde(default)]
+    pub bcc_addresses: Option<String>,
+    pub subject: String,
+    pub body_text: String,
+    #[serde(default)]
+    pub body_html: Option<String>,
+    #[serde(default)]
+    pub in_reply_to: Option<String>,
+    /// 附件 JSON（与 EmailAttachment 一致）
+    #[serde(default)]
+    pub attachments_json: Option<String>,
+    /// 计划发送时间（ISO 8601）
+    pub scheduled_at: String,
+    /// 状态：pending / sent / failed
+    pub status: String,
+    #[serde(default)]
+    pub error: Option<String>,
+    pub created_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,6 +244,9 @@ pub struct EmailMessage {
     #[serde(default)]
     pub cc_addresses: Option<String>,
     pub date: String,
+    /// 正文不再存入 SQLite，前端通过 email_fetch_body 按需从 .eml 文件解析。
+    /// 此字段保留为空字符串，仅用于兼容旧前端接口形状。
+    #[serde(default)]
     pub body_text: String,
     #[serde(default)]
     pub body_html: Option<String>,
@@ -73,8 +256,16 @@ pub struct EmailMessage {
     pub raw_size: u32,
     #[serde(default)]
     pub message_id: Option<String>,
+    /// 附件元信息不再存入 SQLite，前端通过 email_fetch_attachment 按需从 .eml 解析。
+    /// 此字段保留为空数组，仅用于兼容旧前端接口形状。
     #[serde(default)]
     pub attachments: Vec<EmailAttachment>,
+    /// 正文是否已拉取（.eml 文件是否已落盘到本地）
+    #[serde(default)]
+    pub body_fetched: bool,
+    /// .eml 文件相对路径（<account_id>/<folder>/<uid>.eml），空表示未落盘
+    #[serde(default)]
+    pub eml_path: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -101,9 +292,20 @@ pub struct SyncRequest {
     pub last_uid: Option<String>,
 }
 
+/// email_sync 返回值：新增邮件数 + 新邮件列表（规则应用后仍在当前文件夹的）
+/// 前端可直接 prepend 到列表，无需全量 reload
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncResult {
+    pub new_count: u32,
+    pub new_messages: Vec<EmailMessage>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SendRequest {
+    #[serde(default)]
+    pub account_id: String,
     pub smtp_host: String,
     pub smtp_port: u16,
     pub smtp_username: String,
@@ -263,18 +465,21 @@ impl EmailState {
             CREATE TABLE IF NOT EXISTS messages (
                 uid TEXT NOT NULL,
                 account_id TEXT NOT NULL,
+                folder TEXT NOT NULL DEFAULT 'INBOX',
                 subject TEXT NOT NULL,
                 from_address TEXT NOT NULL,
                 from_name TEXT,
                 to_addresses TEXT NOT NULL,
+                cc_addresses TEXT,
                 date TEXT NOT NULL,
-                body_text TEXT NOT NULL,
-                body_html TEXT,
                 has_attachments INTEGER NOT NULL DEFAULT 0,
                 is_read INTEGER NOT NULL DEFAULT 0,
                 is_starred INTEGER NOT NULL DEFAULT 0,
                 raw_size INTEGER NOT NULL DEFAULT 0,
-                PRIMARY KEY (uid, account_id)
+                message_id TEXT,
+                body_fetched INTEGER NOT NULL DEFAULT 0,
+                eml_path TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY (uid, account_id, folder)
             );
             ",
         )
@@ -365,21 +570,7 @@ impl EmailState {
             )
             .map_err(|e| e.to_string())?;
         }
-        // 迁移：添加 attachments_json 列
-        let has_att: bool = conn
-            .query_row(
-                "SELECT COUNT(*) > 0 FROM pragma_table_info('messages') WHERE name='attachments_json'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap_or(false);
-        if !has_att {
-            conn.execute(
-                "ALTER TABLE messages ADD COLUMN attachments_json TEXT",
-                [],
-            )
-            .map_err(|e| e.to_string())?;
-        }
+        // attachments_json 列已弃用：eml_path 迁移会重建表丢弃此列，新安装不再创建
         // 迁移：添加 from_name 列
         let has_from_name: bool = conn
             .query_row(
@@ -440,6 +631,198 @@ impl EmailState {
             )
             .map_err(|e| e.to_string())?;
         }
+        // 迁移：accounts 表添加 imap_use_ssl 列
+        let has_imap_use_ssl: bool = conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM pragma_table_info('accounts') WHERE name='imap_use_ssl'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(false);
+        if !has_imap_use_ssl {
+            conn.execute(
+                "ALTER TABLE accounts ADD COLUMN imap_use_ssl INTEGER NOT NULL DEFAULT 1",
+                [],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        // 迁移：accounts 表添加 smtp_use_ssl 列
+        let has_smtp_use_ssl: bool = conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM pragma_table_info('accounts') WHERE name='smtp_use_ssl'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(false);
+        if !has_smtp_use_ssl {
+            conn.execute(
+                "ALTER TABLE accounts ADD COLUMN smtp_use_ssl INTEGER NOT NULL DEFAULT 0",
+                [],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        // 迁移：accounts 表添加 signatures 列（JSON 数组，存储每账号的多条签名）
+        let has_signatures: bool = conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM pragma_table_info('accounts') WHERE name='signatures'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(false);
+        if !has_signatures {
+            conn.execute(
+                "ALTER TABLE accounts ADD COLUMN signatures TEXT NOT NULL DEFAULT '[]'",
+                [],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        // 迁移：messages 表添加 body_fetched 列
+        // 默认值 1 表示旧数据已认为正文已拉取（兼容已同步的邮件）
+        let has_body_fetched: bool = conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM pragma_table_info('messages') WHERE name='body_fetched'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(false);
+        if !has_body_fetched {
+            conn.execute(
+                "ALTER TABLE messages ADD COLUMN body_fetched INTEGER NOT NULL DEFAULT 1",
+                [],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        // 迁移：Foxmail 风格文件存储改造
+        // 重建 messages 表：移除 body_text/body_html/attachments_json，新增 eml_path
+        // 邮件正文和附件改为存入 .eml 文件（<app_data>/mona/mail/<account>/<folder>/<uid>.eml）
+        // FTS5 重建为只索引头字段（body_text 不再存于 SQLite）
+        let has_eml_path: bool = conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM pragma_table_info('messages') WHERE name='eml_path'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(false);
+        if !has_eml_path {
+            log::info!("[email-migration] 开始 Foxmail 风格文件存储改造：重建 messages 表");
+            // 1. 删除旧 FTS5 触发器和表（依赖 body_text 列，必须先删）
+            conn.execute_batch(
+                "DROP TRIGGER IF EXISTS messages_ai;
+                DROP TRIGGER IF EXISTS messages_ad;
+                DROP TRIGGER IF EXISTS messages_au;
+                DROP TABLE IF EXISTS messages_fts;",
+            )
+            .map_err(|e| e.to_string())?;
+            // 2. 创建新表（不含 body_text/body_html/attachments_json，含 eml_path）
+            conn.execute_batch(
+                "CREATE TABLE messages_new (
+                    uid TEXT NOT NULL,
+                    account_id TEXT NOT NULL,
+                    folder TEXT NOT NULL DEFAULT 'INBOX',
+                    subject TEXT NOT NULL,
+                    from_address TEXT NOT NULL,
+                    from_name TEXT,
+                    to_addresses TEXT NOT NULL,
+                    cc_addresses TEXT,
+                    date TEXT NOT NULL,
+                    has_attachments INTEGER NOT NULL DEFAULT 0,
+                    is_read INTEGER NOT NULL DEFAULT 0,
+                    is_starred INTEGER NOT NULL DEFAULT 0,
+                    raw_size INTEGER NOT NULL DEFAULT 0,
+                    message_id TEXT,
+                    body_fetched INTEGER NOT NULL DEFAULT 0,
+                    eml_path TEXT NOT NULL DEFAULT '',
+                    PRIMARY KEY (uid, account_id, folder)
+                );",
+            )
+            .map_err(|e| e.to_string())?;
+            // 3. 复制数据（不复制 body_text/body_html/attachments_json）
+            // body_fetched 重置为 0：.eml 文件尚未落盘，待迁移脚本或下次 fetch_body 时落盘
+            // 使用 PRAGMA 检查旧表是否有 cc_addresses/message_id 列（极旧版本可能没有）
+            let has_cc_col: bool = conn
+                .query_row(
+                    "SELECT COUNT(*) > 0 FROM pragma_table_info('messages') WHERE name='cc_addresses'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap_or(false);
+            let has_msgid_col: bool = conn
+                .query_row(
+                    "SELECT COUNT(*) > 0 FROM pragma_table_info('messages') WHERE name='message_id'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap_or(false);
+            let select_sql = if has_cc_col && has_msgid_col {
+                "INSERT OR IGNORE INTO messages_new
+                    (uid, account_id, folder, subject, from_address, from_name, to_addresses, cc_addresses,
+                     date, has_attachments, is_read, is_starred, raw_size, message_id, body_fetched, eml_path)
+                SELECT uid, account_id, folder, subject, from_address, from_name, to_addresses, cc_addresses,
+                       date, has_attachments, is_read, is_starred, raw_size, message_id, 0, ''
+                FROM messages"
+            } else if has_msgid_col {
+                "INSERT OR IGNORE INTO messages_new
+                    (uid, account_id, folder, subject, from_address, from_name, to_addresses, cc_addresses,
+                     date, has_attachments, is_read, is_starred, raw_size, message_id, body_fetched, eml_path)
+                SELECT uid, account_id, folder, subject, from_address, from_name, to_addresses, NULL,
+                       date, has_attachments, is_read, is_starred, raw_size, message_id, 0, ''
+                FROM messages"
+            } else {
+                "INSERT OR IGNORE INTO messages_new
+                    (uid, account_id, folder, subject, from_address, from_name, to_addresses, cc_addresses,
+                     date, has_attachments, is_read, is_starred, raw_size, message_id, body_fetched, eml_path)
+                SELECT uid, account_id, folder, subject, from_address, from_name, to_addresses, NULL,
+                       date, has_attachments, is_read, is_starred, raw_size, NULL, 0, ''
+                FROM messages"
+            };
+            conn.execute(select_sql, []).map_err(|e| e.to_string())?;
+            let migrated_count: i64 = conn
+                .query_row("SELECT COUNT(*) FROM messages_new", [], |row| row.get(0))
+                .unwrap_or(0);
+            log::info!("[email-migration] 已迁移 {} 条邮件记录到新 schema", migrated_count);
+            // 4. 替换旧表
+            conn.execute("DROP TABLE messages", [])
+                .map_err(|e| e.to_string())?;
+            conn.execute("ALTER TABLE messages_new RENAME TO messages", [])
+                .map_err(|e| e.to_string())?;
+            // 5. 重建索引
+            conn.execute_batch(
+                "CREATE INDEX IF NOT EXISTS idx_messages_account_folder_date
+                    ON messages(account_id, folder, date DESC);",
+            )
+            .map_err(|e| e.to_string())?;
+            // 6. 重建 FTS5（只索引头字段，body_text 不再参与全文搜索）
+            conn.execute_batch(
+                "CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+                    subject, from_name, from_address, to_addresses,
+                    content='messages', content_rowid='rowid',
+                    tokenize='unicode61'
+                );",
+            )
+            .map_err(|e| e.to_string())?;
+            // 7. 重建触发器（不再引用 body_text）
+            conn.execute_batch(
+                "CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
+                    INSERT INTO messages_fts(rowid, subject, from_name, from_address, to_addresses)
+                    VALUES (new.rowid, new.subject, new.from_name, new.from_address, new.to_addresses);
+                END;
+                CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
+                    INSERT INTO messages_fts(messages_fts, rowid, subject, from_name, from_address, to_addresses)
+                    VALUES ('delete', old.rowid, old.subject, old.from_name, old.from_address, old.to_addresses);
+                END;
+                CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
+                    INSERT INTO messages_fts(messages_fts, rowid, subject, from_name, from_address, to_addresses)
+                    VALUES ('delete', old.rowid, old.subject, old.from_name, old.from_address, old.to_addresses);
+                    INSERT INTO messages_fts(rowid, subject, from_name, from_address, to_addresses)
+                    VALUES (new.rowid, new.subject, new.from_name, new.from_address, new.to_addresses);
+                END;",
+            )
+            .map_err(|e| e.to_string())?;
+            // 8. 重建 FTS 索引
+            conn.execute_batch("INSERT INTO messages_fts(messages_fts) VALUES('rebuild');")
+                .map_err(|e| e.to_string())?;
+            log::info!("[email-migration] Foxmail 风格文件存储改造完成");
+        }
         // AI 分析结果表（人工单次触发后存储）
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS email_ai_analysis (
@@ -472,12 +855,147 @@ impl EmailState {
                 flags TEXT NOT NULL DEFAULT '',
                 has_children INTEGER NOT NULL DEFAULT 0,
                 updated_at TEXT NOT NULL,
+                uid_validity TEXT,
                 PRIMARY KEY (account_id, name)
             );
             CREATE INDEX IF NOT EXISTS idx_folders_account ON folders(account_id);
             ",
         )
         .map_err(|e| e.to_string())?;
+        // 迁移：给旧 folders 表加 uid_validity 列（用于 UIDVALIDITY 检测）
+        let has_uid_validity: bool = conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM pragma_table_info('folders') WHERE name='uid_validity'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(false);
+        if !has_uid_validity {
+            conn.execute(
+                "ALTER TABLE folders ADD COLUMN uid_validity TEXT",
+                [],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        // FTS5 全文搜索索引（外部内容表，关联 messages）
+        // 注意：body_text 已移除，FTS5 只索引头字段
+        conn.execute_batch(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+                subject, from_name, from_address, to_addresses,
+                content='messages', content_rowid='rowid',
+                tokenize='unicode61'
+            );",
+        )
+        .map_err(|e| e.to_string())?;
+        // 触发器：messages 表变更时同步到 FTS 表（不再引用 body_text）
+        conn.execute_batch(
+            "CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
+                INSERT INTO messages_fts(rowid, subject, from_name, from_address, to_addresses)
+                VALUES (new.rowid, new.subject, new.from_name, new.from_address, new.to_addresses);
+            END;
+            CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
+                INSERT INTO messages_fts(messages_fts, rowid, subject, from_name, from_address, to_addresses)
+                VALUES ('delete', old.rowid, old.subject, old.from_name, old.from_address, old.to_addresses);
+            END;
+            CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
+                INSERT INTO messages_fts(messages_fts, rowid, subject, from_name, from_address, to_addresses)
+                VALUES ('delete', old.rowid, old.subject, old.from_name, old.from_address, old.to_addresses);
+                INSERT INTO messages_fts(rowid, subject, from_name, from_address, to_addresses)
+                VALUES (new.rowid, new.subject, new.from_name, new.from_address, new.to_addresses);
+            END;",
+        )
+        .map_err(|e| e.to_string())?;
+        // 首次创建 FTS 表时，重建索引灌入现有数据
+        let fts_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM messages_fts", [], |row| row.get(0))
+            .unwrap_or(0);
+        let msg_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM messages", [], |row| row.get(0))
+            .unwrap_or(0);
+        if fts_count == 0 && msg_count > 0 {
+            conn.execute_batch("INSERT INTO messages_fts(messages_fts) VALUES('rebuild');")
+                .map_err(|e| e.to_string())?;
+        }
+        // 邮件规则/过滤器表
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS email_rules (
+                id TEXT NOT NULL PRIMARY KEY,
+                account_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                condition_field TEXT NOT NULL,
+                condition_value TEXT NOT NULL,
+                action TEXT NOT NULL,
+                action_target TEXT,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                priority INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS idx_email_rules_account ON email_rules(account_id);
+            ",
+        )
+        .map_err(|e| e.to_string())?;
+        // 延迟发送 outbox 表
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS email_outbox (
+                id TEXT NOT NULL PRIMARY KEY,
+                account_id TEXT NOT NULL,
+                to_addresses TEXT NOT NULL,
+                cc_addresses TEXT,
+                bcc_addresses TEXT,
+                subject TEXT NOT NULL,
+                body_text TEXT NOT NULL,
+                body_html TEXT,
+                in_reply_to TEXT,
+                attachments_json TEXT,
+                scheduled_at TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                error TEXT,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_email_outbox_status ON email_outbox(status, scheduled_at);
+            ",
+        )
+        .map_err(|e| e.to_string())?;
+        // 账号冷却表：记录 IMAP/SMTP 认证失败时间，避免重启后立即重试加剧风控
+        // PRIMARY KEY 必须是 (account_id, service) 复合键，否则 IMAP/SMTP 冷却会互相覆盖
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS account_cooldowns_new (
+                account_id TEXT NOT NULL,
+                service TEXT NOT NULL,
+                failed_until TEXT NOT NULL,
+                reason TEXT,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (account_id, service)
+            );
+            ",
+        )
+        .map_err(|e| e.to_string())?;
+        // 迁移：如果旧表存在（PRIMARY KEY 只有 account_id），迁移数据到新表
+        let old_table_exists: bool = conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='account_cooldowns'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(false);
+        let new_table_has_data: bool = conn
+            .query_row("SELECT COUNT(*) > 0 FROM account_cooldowns_new", [], |row| row.get(0))
+            .unwrap_or(false);
+        if old_table_exists && !new_table_has_data {
+            conn.execute(
+                "INSERT OR IGNORE INTO account_cooldowns_new (account_id, service, failed_until, reason, updated_at)
+                 SELECT account_id, service, failed_until, reason, updated_at FROM account_cooldowns",
+                [],
+            )
+            .map_err(|e| e.to_string())?;
+            conn.execute("DROP TABLE account_cooldowns", [])
+                .map_err(|e| e.to_string())?;
+            conn.execute("ALTER TABLE account_cooldowns_new RENAME TO account_cooldowns", [])
+                .map_err(|e| e.to_string())?;
+        } else if !old_table_exists {
+            // 首次创建：直接重命名
+            conn.execute("ALTER TABLE account_cooldowns_new RENAME TO account_cooldowns", [])
+                .map_err(|e| e.to_string())?;
+        }
         Ok(conn)
     }
 }
@@ -572,12 +1090,14 @@ pub async fn email_list_accounts(
         .prepare(
             "SELECT id, display_name, imap_host, imap_port, imap_username, imap_password,
                     smtp_host, smtp_port, smtp_username, smtp_password, from_address,
-                    from_name, last_synced_uid, carddav_url, eas_url
+                    from_name, last_synced_uid, carddav_url, eas_url, imap_use_ssl, smtp_use_ssl,
+                    signatures
              FROM accounts ORDER BY display_name",
         )
         .map_err(|e| e.to_string())?;
     let accounts = stmt
         .query_map([], |row| {
+            let sigs_str: String = row.get(17).unwrap_or_else(|_| "[]".to_string());
             Ok(EmailAccount {
                 id: row.get(0)?,
                 display_name: row.get(1)?,
@@ -594,6 +1114,9 @@ pub async fn email_list_accounts(
                 last_synced_uid: row.get(12)?,
                 carddav_url: row.get(13)?,
                 eas_url: row.get(14)?,
+                imap_use_ssl: row.get::<_, i32>(15)? != 0,
+                smtp_use_ssl: row.get::<_, i32>(16)? != 0,
+                signatures: serde_json::from_str(&sigs_str).unwrap_or_default(),
             })
         })
         .map_err(|e| e.to_string())?
@@ -614,8 +1137,8 @@ pub async fn email_add_account(
         "INSERT OR REPLACE INTO accounts
          (id, display_name, imap_host, imap_port, imap_username, imap_password,
           smtp_host, smtp_port, smtp_username, smtp_password, from_address, from_name,
-          last_synced_uid, carddav_url, eas_url)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+          last_synced_uid, carddav_url, eas_url, imap_use_ssl, smtp_use_ssl, signatures)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
         params![
             account.id,
             account.display_name,
@@ -632,6 +1155,67 @@ pub async fn email_add_account(
             account.last_synced_uid,
             account.carddav_url,
             account.eas_url,
+            account.imap_use_ssl as i32,
+            account.smtp_use_ssl as i32,
+            serde_json::to_string(&account.signatures).unwrap_or_else(|_| "[]".to_string()),
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn email_update_account_settings(
+    state: tauri::State<'_, EmailState>,
+    account: EmailAccount,
+    new_password: Option<String>,
+) -> Result<(), String> {
+    let conn = state.conn()?;
+    // 密码：仅在显式传入非空新密码时才更新（避免双重加密 / 误清空）
+    let (imap_pwd, smtp_pwd) = match new_password.as_deref() {
+        Some(p) if !p.is_empty() => {
+            let enc = encrypt_password(p)?;
+            (enc.clone(), enc)
+        }
+        _ => {
+            // 保留数据库原密码
+            let row: (String, String) = conn
+                .query_row(
+                    "SELECT imap_password, smtp_password FROM accounts WHERE id = ?1",
+                    params![&account.id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .map_err(|e| e.to_string())?;
+            row
+        }
+    };
+    conn.execute(
+        "UPDATE accounts SET
+            display_name = ?2, imap_host = ?3, imap_port = ?4, imap_username = ?5,
+            imap_password = ?6, smtp_host = ?7, smtp_port = ?8, smtp_username = ?9,
+            smtp_password = ?10, from_address = ?11, from_name = ?12,
+            last_synced_uid = ?13, carddav_url = ?14, eas_url = ?15,
+            imap_use_ssl = ?16, smtp_use_ssl = ?17, signatures = ?18
+         WHERE id = ?1",
+        params![
+            account.id,
+            account.display_name,
+            account.imap_host,
+            account.imap_port,
+            account.imap_username,
+            imap_pwd,
+            account.smtp_host,
+            account.smtp_port,
+            account.smtp_username,
+            smtp_pwd,
+            account.from_address,
+            account.from_name,
+            account.last_synced_uid,
+            account.carddav_url,
+            account.eas_url,
+            account.imap_use_ssl as i32,
+            account.smtp_use_ssl as i32,
+            serde_json::to_string(&account.signatures).unwrap_or_else(|_| "[]".to_string()),
         ],
     )
     .map_err(|e| e.to_string())?;
@@ -641,16 +1225,477 @@ pub async fn email_add_account(
 #[tauri::command]
 pub async fn email_delete_account(
     state: tauri::State<'_, EmailState>,
+    gateway_url: String,
     account_id: String,
 ) -> Result<(), String> {
+    // 先获取账号信息，用于通知 gateway 清理 IDLE 和连接池
+    let (imap_host, imap_username) = {
+        let conn = state.conn()?;
+        conn.query_row(
+            "SELECT imap_host, imap_username FROM accounts WHERE id = ?1",
+            params![&account_id],
+            |row| {
+                let host: String = row.get(0)?;
+                let user: String = row.get(1)?;
+                Ok((host, user))
+            },
+        )
+        .map_err(|e| format!("获取账号信息失败: {e}"))?
+    };
+
+    // 通知 gateway 停止该账号的 IDLE 监听并移除 IMAP 连接池
+    // 必须在删除 SQLite 记录前调用，否则无法拿到 imap_host/username
+    if !gateway_url.is_empty() && !imap_host.is_empty() && !imap_username.is_empty() {
+        let url = format!("{}/email/account_removed", gateway_url.trim_end_matches('/'));
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
+        let payload = serde_json::json!({
+            "accountId": &account_id,
+            "imapHost": &imap_host,
+            "imapUsername": &imap_username,
+        });
+        let _ = client.post(&url).json(&payload).send().await;
+        // 清理失败不应阻断账号删除，仅记录（无法在这里 eprintln，忽略即可）
+    }
+
     let conn = state.conn()?;
-    conn.execute("DELETE FROM messages WHERE account_id = ?1", params![account_id])
+    // 删除该账号的所有 .eml 文件（整个账号目录）
+    let account_dir = mail_root().join(sanitize_path_segment(&account_id));
+    if account_dir.exists() {
+        if let Err(e) = std::fs::remove_dir_all(&account_dir) {
+            log::warn!(
+                "[email-delete-account] account={} remove eml dir failed: {}",
+                account_id,
+                e
+            );
+        }
+    }
+    conn.execute("DELETE FROM messages WHERE account_id = ?1", params![&account_id])
         .map_err(|e| e.to_string())?;
-    conn.execute("DELETE FROM folders WHERE account_id = ?1", params![account_id])
+    conn.execute("DELETE FROM folders WHERE account_id = ?1", params![&account_id])
         .map_err(|e| e.to_string())?;
-    conn.execute("DELETE FROM accounts WHERE id = ?1", params![account_id])
+    conn.execute("DELETE FROM email_rules WHERE account_id = ?1", params![&account_id])
+        .map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM accounts WHERE id = ?1", params![&account_id])
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Tauri 命令 — 邮件规则/过滤器
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn email_list_rules(
+    state: tauri::State<'_, EmailState>,
+    account_id: String,
+) -> Result<Vec<EmailRule>, String> {
+    let conn = state.conn()?;
+    let mut stmt = conn
+        .prepare("SELECT id, account_id, name, condition_field, condition_value, action, action_target, enabled, priority FROM email_rules WHERE account_id = ?1 ORDER BY priority DESC, name")
+        .map_err(|e| e.to_string())?;
+    let rules = stmt
+        .query_map(params![account_id], |row| {
+            Ok(EmailRule {
+                id: row.get(0)?,
+                account_id: row.get(1)?,
+                name: row.get(2)?,
+                condition_field: row.get(3)?,
+                condition_value: row.get(4)?,
+                action: row.get(5)?,
+                action_target: row.get(6)?,
+                enabled: row.get::<_, i32>(7)? != 0,
+                priority: row.get(8)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(rules)
+}
+
+#[tauri::command]
+pub async fn email_save_rule(
+    state: tauri::State<'_, EmailState>,
+    rule: EmailRule,
+) -> Result<(), String> {
+    let conn = state.conn()?;
+    conn.execute(
+        "INSERT OR REPLACE INTO email_rules
+         (id, account_id, name, condition_field, condition_value, action, action_target, enabled, priority)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![
+            rule.id,
+            rule.account_id,
+            rule.name,
+            rule.condition_field,
+            rule.condition_value,
+            rule.action,
+            rule.action_target,
+            rule.enabled as i32,
+            rule.priority,
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn email_delete_rule(
+    state: tauri::State<'_, EmailState>,
+    rule_id: String,
+) -> Result<(), String> {
+    let conn = state.conn()?;
+    conn.execute("DELETE FROM email_rules WHERE id = ?1", params![rule_id])
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 获取账号下所有启用的规则（供同步时应用）
+pub fn get_enabled_rules(conn: &Connection, account_id: &str) -> Result<Vec<EmailRule>, String> {
+    let mut stmt = conn
+        .prepare("SELECT id, account_id, name, condition_field, condition_value, action, action_target, enabled, priority FROM email_rules WHERE account_id = ?1 AND enabled = 1 ORDER BY priority DESC")
+        .map_err(|e| e.to_string())?;
+    let rules = stmt
+        .query_map(params![account_id], |row| {
+            Ok(EmailRule {
+                id: row.get(0)?,
+                account_id: row.get(1)?,
+                name: row.get(2)?,
+                condition_field: row.get(3)?,
+                condition_value: row.get(4)?,
+                action: row.get(5)?,
+                action_target: row.get(6)?,
+                enabled: row.get::<_, i32>(7)? != 0,
+                priority: row.get(8)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(rules)
+}
+
+/// 从邮件的 from/to/cc 字段解析 (display_name, email) 列表。
+/// 支持的格式：
+///   - `"Name" <email@example.com>`
+///   - `Name <email@example.com>`
+///   - `email@example.com`
+///   - JSON 数组字符串（to/cc 字段用）
+fn parse_addresses_from_field(raw: &str) -> Vec<(String, String)> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Vec::new();
+    }
+    // JSON 数组格式（to/cc 字段）
+    if raw.starts_with('[') {
+        if let Ok(arr) = serde_json::from_str::<Vec<Value>>(raw) {
+            return arr
+                .iter()
+                .filter_map(|v| {
+                    let email = v["email"].as_str()?.to_string();
+                    if email.is_empty() {
+                        return None;
+                    }
+                    let name = v["name"].as_str().unwrap_or("").to_string();
+                    Some((name, email))
+                })
+                .collect();
+        }
+        return Vec::new();
+    }
+    // 逗号分隔的地址列表
+    let mut result = Vec::new();
+    for part in raw.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        // 提取 <email>
+        if let Some(lt) = part.find('<') {
+            if let Some(gt) = part.find('>') {
+                let email = part[lt + 1..gt].trim().to_string();
+                let name = part[..lt].trim().trim_matches('"').to_string();
+                if !email.is_empty() {
+                    result.push((name, email));
+                }
+                continue;
+            }
+        }
+        // 纯邮箱
+        if part.contains('@') {
+            result.push((String::new(), part.to_string()));
+        }
+    }
+    result
+}
+
+/// 自动从新邮件收集联系人：提取 From/To/Cc，按 email 全局去重后插入 contacts 表。
+/// source 固定为 "auto"。失败仅记录日志，不影响邮件同步主流程。
+fn auto_collect_contacts(conn: &Connection, account_id: &str, messages: &[Value]) {
+    let now = chrono::Utc::now().timestamp();
+    for msg in messages {
+        let from_addr = msg["from"].as_str().unwrap_or("");
+        let from_name = msg.get("fromName").and_then(|v| v.as_str()).unwrap_or("");
+        let to_addrs = msg["to"].as_str().unwrap_or("");
+        let cc_addrs = msg.get("cc").and_then(|v| v.as_str()).unwrap_or("");
+
+        let mut candidates: Vec<(String, String)> = Vec::new();
+        // From：优先用 fromName
+        candidates.push((from_name.to_string(), from_addr.to_string()));
+        // To / Cc
+        for raw in [to_addrs, cc_addrs] {
+            candidates.extend(parse_addresses_from_field(raw));
+        }
+
+        for (name, email) in candidates {
+            let email_clean = email.trim().to_lowercase();
+            if email_clean.is_empty() || !email_clean.contains('@') {
+                continue;
+            }
+            // 全局按 email 去重
+            let exists: bool = conn
+                .query_row(
+                    "SELECT 1 FROM contacts WHERE lower(email) = ?1 LIMIT 1",
+                    params![&email_clean],
+                    |_| Ok(true),
+                )
+                .unwrap_or(false);
+            if exists {
+                continue;
+            }
+            let display = if name.trim().is_empty() {
+                email_clean.clone()
+            } else {
+                name.trim().to_string()
+            };
+            let id = uuid::Uuid::new_v4().to_string();
+            if let Err(e) = conn.execute(
+                "INSERT INTO contacts
+                 (id, account_id, source, display_name, email, updated_at)
+                 VALUES (?1, ?2, 'auto', ?3, ?4, ?5)",
+                params![id, account_id, display, email_clean, now],
+            ) {
+                log::warn!("[auto-collect] insert contact failed: {e}");
+            }
+        }
+    }
+}
+
+/// 判断邮件是否匹配规则条件
+pub fn rule_matches(rule: &EmailRule, subject: &str, from_address: &str, from_name: &str, to_addresses: &str) -> bool {
+    let value = rule.condition_value.to_lowercase();
+    if value.is_empty() {
+        return false;
+    }
+    let field_value = match rule.condition_field.as_str() {
+        "from_contains" => format!("{} {}", from_address, from_name).to_lowercase(),
+        "subject_contains" => subject.to_lowercase(),
+        "to_contains" => to_addresses.to_lowercase(),
+        _ => return false,
+    };
+    field_value.contains(&value)
+}
+
+// ---------------------------------------------------------------------------
+// Tauri 命令 — 延迟发送（outbox）
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn email_outbox_add(
+    state: tauri::State<'_, EmailState>,
+    email: OutboxEmail,
+) -> Result<(), String> {
+    let conn = state.conn()?;
+    conn.execute(
+        "INSERT INTO email_outbox
+         (id, account_id, to_addresses, cc_addresses, bcc_addresses, subject, body_text,
+          body_html, in_reply_to, attachments_json, scheduled_at, status, error, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+        params![
+            email.id,
+            email.account_id,
+            email.to_addresses,
+            email.cc_addresses,
+            email.bcc_addresses,
+            email.subject,
+            email.body_text,
+            email.body_html,
+            email.in_reply_to,
+            email.attachments_json,
+            email.scheduled_at,
+            email.status,
+            email.error,
+            email.created_at,
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn email_outbox_list(
+    state: tauri::State<'_, EmailState>,
+    account_id: String,
+) -> Result<Vec<OutboxEmail>, String> {
+    let conn = state.conn()?;
+    let mut stmt = conn
+        .prepare("SELECT id, account_id, to_addresses, cc_addresses, bcc_addresses, subject, body_text, body_html, in_reply_to, attachments_json, scheduled_at, status, error, created_at FROM email_outbox WHERE account_id = ?1 ORDER BY scheduled_at DESC")
+        .map_err(|e| e.to_string())?;
+    let emails = stmt
+        .query_map(params![account_id], |row| {
+            Ok(OutboxEmail {
+                id: row.get(0)?,
+                account_id: row.get(1)?,
+                to_addresses: row.get(2)?,
+                cc_addresses: row.get(3)?,
+                bcc_addresses: row.get(4)?,
+                subject: row.get(5)?,
+                body_text: row.get(6)?,
+                body_html: row.get(7)?,
+                in_reply_to: row.get(8)?,
+                attachments_json: row.get(9)?,
+                scheduled_at: row.get(10)?,
+                status: row.get(11)?,
+                error: row.get(12)?,
+                created_at: row.get(13)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(emails)
+}
+
+#[tauri::command]
+pub async fn email_outbox_delete(
+    state: tauri::State<'_, EmailState>,
+    id: String,
+) -> Result<(), String> {
+    let conn = state.conn()?;
+    conn.execute("DELETE FROM email_outbox WHERE id = ?1", params![id])
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 处理到期的 outbox 邮件：调用 gateway 发送，成功后更新状态
+#[tauri::command]
+pub async fn email_outbox_process(
+    state: tauri::State<'_, EmailState>,
+    gateway_url: String,
+) -> Result<u32, String> {
+    if gateway_url.is_empty() {
+        return Err("gateway URL 为空".into());
+    }
+    let db_path = state.db_path.clone();
+
+    // Phase 1: 同步读取 — 查询到期邮件 + 获取凭据 + 构建请求体（不跨 await）
+    struct PendingSend {
+        id: String,
+        req_body: Value,
+    }
+    let pending: Vec<PendingSend> = {
+        let conn = Connection::open(&db_path).map_err(|e| e.to_string())?;
+        let now = chrono::Utc::now().to_rfc3339();
+        let mut stmt = conn
+            .prepare("SELECT id, account_id, to_addresses, cc_addresses, bcc_addresses, subject, body_text, body_html, in_reply_to, attachments_json FROM email_outbox WHERE status = 'pending' AND scheduled_at <= ?1")
+            .map_err(|e| e.to_string())?;
+        let rows: Vec<(String, String, String, Option<String>, Option<String>, String, String, Option<String>, Option<String>, Option<String>)> = stmt
+            .query_map(params![now], |row| {
+                Ok((
+                    row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?,
+                    row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?, row.get(9)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+        drop(stmt);
+
+        let mut result = Vec::new();
+        for (id, account_id, to, cc, bcc, subject, body_text, body_html, in_reply_to, attachments_json) in rows {
+            let account = match get_imap_credentials(&conn, &account_id) {
+                Ok(a) => a,
+                Err(e) => {
+                    let _ = conn.execute(
+                        "UPDATE email_outbox SET status = 'failed', error = ?1 WHERE id = ?2",
+                        params![format!("账号不存在: {e}"), id],
+                    );
+                    continue;
+                }
+            };
+            let smtp_password = match decrypt_password(&account.smtp_password) {
+                Ok(p) => p,
+                Err(e) => {
+                    let _ = conn.execute(
+                        "UPDATE email_outbox SET status = 'failed', error = ?1 WHERE id = ?2",
+                        params![format!("密码解密失败: {e}"), id],
+                    );
+                    continue;
+                }
+            };
+            let attachments: Value = attachments_json
+                .as_deref()
+                .and_then(|s| serde_json::from_str(s).ok())
+                .unwrap_or(Value::Array(vec![]));
+            let req_body = serde_json::json!({
+                "smtpHost": account.smtp_host,
+                "smtpPort": account.smtp_port,
+                "smtpUsername": account.smtp_username,
+                "smtpPassword": smtp_password,
+                "useSsl": account.smtp_use_ssl,
+                "fromAddress": account.from_address,
+                "fromName": account.from_name,
+                "to": to.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect::<Vec<_>>(),
+                "cc": cc.as_deref().unwrap_or("").split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect::<Vec<_>>(),
+                "bcc": bcc.as_deref().unwrap_or("").split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect::<Vec<_>>(),
+                "subject": subject,
+                "bodyHtml": body_html.as_deref().unwrap_or(""),
+                "bodyText": body_text,
+                "inReplyTo": in_reply_to,
+                "attachments": attachments,
+            });
+            result.push(PendingSend { id, req_body });
+        }
+        result
+    }; // conn dropped
+
+    // Phase 2: 异步发送 — 不持有 Connection
+    let url = format!("{}/email/send", gateway_url.trim_end_matches('/'));
+    let client = reqwest::Client::new();
+    let mut sent_count = 0u32;
+    let mut updates: Vec<(String, &'static str, Option<String>)> = Vec::new();
+
+    for item in pending {
+        match client.post(&url).json(&item.req_body).send().await {
+            Ok(resp) if resp.status().is_success() => {
+                updates.push((item.id, "sent", None));
+                sent_count += 1;
+            }
+            Ok(resp) => {
+                let text = resp.text().await.unwrap_or_default();
+                updates.push((item.id, "failed", Some(text)));
+            }
+            Err(e) => {
+                updates.push((item.id, "failed", Some(format!("网络错误: {e}"))));
+            }
+        }
+    }
+
+    // Phase 3: 同步写入 — 更新状态
+    if !updates.is_empty() {
+        let conn = Connection::open(&db_path).map_err(|e| e.to_string())?;
+        for (id, status, error) in updates {
+            let _ = conn.execute(
+                "UPDATE email_outbox SET status = ?1, error = ?2 WHERE id = ?3",
+                params![status, error, id],
+            );
+        }
+    }
+
+    Ok(sent_count)
 }
 
 // ---------------------------------------------------------------------------
@@ -662,26 +1707,46 @@ pub async fn email_get_messages(
     state: tauri::State<'_, EmailState>,
     account_id: String,
     folder: String,
-    offset: u32,
+    before_uid: Option<String>,
     limit: u32,
 ) -> Result<Vec<EmailMessage>, String> {
     let conn = state.conn()?;
-    let mut stmt = conn
-        .prepare(
+    // 游标分页：before_uid 为空时拉取最新一页；非空时拉取 uid < before_uid 的下一页
+    // 替代 OFFSET，避免大表越往后翻越慢
+    let (sql, params_vec): (String, Vec<Box<dyn rusqlite::ToSql>>) = match &before_uid {
+        Some(b) if !b.is_empty() => {
+            let parsed = b.parse::<i64>().unwrap_or(0);
+            (
+                "SELECT uid, account_id, folder, subject, from_address, from_name, to_addresses, cc_addresses,
+                        date, has_attachments, is_read, is_starred, raw_size, message_id, body_fetched, eml_path
+                 FROM messages WHERE account_id = ?1 AND folder = ?2 AND CAST(uid AS INTEGER) < ?3
+                 ORDER BY CAST(uid AS INTEGER) DESC LIMIT ?4"
+                    .to_string(),
+                vec![
+                    Box::new(account_id) as Box<dyn rusqlite::ToSql>,
+                    Box::new(folder),
+                    Box::new(parsed),
+                    Box::new(limit),
+                ],
+            )
+        }
+        _ => (
             "SELECT uid, account_id, folder, subject, from_address, from_name, to_addresses, cc_addresses,
-                    date, body_text, body_html, has_attachments, is_read, is_starred, raw_size,
-                    message_id, attachments_json
+                    date, has_attachments, is_read, is_starred, raw_size, message_id, body_fetched, eml_path
              FROM messages WHERE account_id = ?1 AND folder = ?2
-             ORDER BY date DESC LIMIT ?3 OFFSET ?4",
-        )
-        .map_err(|e| e.to_string())?;
+             ORDER BY CAST(uid AS INTEGER) DESC LIMIT ?3"
+                .to_string(),
+            vec![
+                Box::new(account_id) as Box<dyn rusqlite::ToSql>,
+                Box::new(folder),
+                Box::new(limit),
+            ],
+        ),
+    };
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let param_refs: Vec<&dyn rusqlite::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
     let msgs = stmt
-        .query_map(params![account_id, folder, limit, offset], |row| {
-            let attachments_json: Option<String> = row.get(16)?;
-            let attachments: Vec<EmailAttachment> = attachments_json
-                .as_deref()
-                .and_then(|s| serde_json::from_str(s).ok())
-                .unwrap_or_default();
+        .query_map(param_refs.as_slice(), |row| {
             Ok(EmailMessage {
                 uid: row.get(0)?,
                 account_id: row.get(1)?,
@@ -692,14 +1757,80 @@ pub async fn email_get_messages(
                 to_addresses: row.get(6)?,
                 cc_addresses: row.get(7)?,
                 date: row.get(8)?,
-                body_text: row.get(9)?,
-                body_html: row.get(10)?,
-                has_attachments: row.get::<_, i32>(11)? != 0,
-                is_read: row.get::<_, i32>(12)? != 0,
-                is_starred: row.get::<_, i32>(13)? != 0,
-                raw_size: row.get(14)?,
-                message_id: row.get(15)?,
-                attachments,
+                body_text: String::new(),
+                body_html: None,
+                has_attachments: row.get::<_, i32>(9)? != 0,
+                is_read: row.get::<_, i32>(10)? != 0,
+                is_starred: row.get::<_, i32>(11)? != 0,
+                raw_size: row.get(12)?,
+                message_id: row.get(13)?,
+                attachments: Vec::new(),
+                body_fetched: row.get::<_, i32>(14)? != 0,
+                eml_path: row.get(15)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(msgs)
+}
+
+/// 统一收件箱：聚合所有账号 INBOX，按日期降序，使用 date 作为游标（uid 跨账号会冲突）
+/// 用于 P5-2 统一收件箱视图
+#[tauri::command]
+pub async fn email_get_unified_inbox(
+    state: tauri::State<'_, EmailState>,
+    before_date: Option<String>,
+    limit: u32,
+) -> Result<Vec<EmailMessage>, String> {
+    let conn = state.conn()?;
+    let (sql, params_vec): (String, Vec<Box<dyn rusqlite::ToSql>>) = match &before_date {
+        Some(b) if !b.is_empty() => (
+            "SELECT uid, account_id, folder, subject, from_address, from_name, to_addresses, cc_addresses,
+                    date, has_attachments, is_read, is_starred, raw_size, message_id, body_fetched, eml_path
+             FROM messages
+             WHERE folder = 'INBOX' AND date < ?1
+             ORDER BY date DESC LIMIT ?2"
+                .to_string(),
+            vec![
+                Box::new(b.clone()) as Box<dyn rusqlite::ToSql>,
+                Box::new(limit),
+            ],
+        ),
+        _ => (
+            "SELECT uid, account_id, folder, subject, from_address, from_name, to_addresses, cc_addresses,
+                    date, has_attachments, is_read, is_starred, raw_size, message_id, body_fetched, eml_path
+             FROM messages
+             WHERE folder = 'INBOX'
+             ORDER BY date DESC LIMIT ?1"
+                .to_string(),
+            vec![Box::new(limit) as Box<dyn rusqlite::ToSql>],
+        ),
+    };
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let param_refs: Vec<&dyn rusqlite::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
+    let msgs = stmt
+        .query_map(param_refs.as_slice(), |row| {
+            Ok(EmailMessage {
+                uid: row.get(0)?,
+                account_id: row.get(1)?,
+                folder: row.get(2)?,
+                subject: row.get(3)?,
+                from_address: row.get(4)?,
+                from_name: row.get(5)?,
+                to_addresses: row.get(6)?,
+                cc_addresses: row.get(7)?,
+                date: row.get(8)?,
+                body_text: String::new(),
+                body_html: None,
+                has_attachments: row.get::<_, i32>(9)? != 0,
+                is_read: row.get::<_, i32>(10)? != 0,
+                is_starred: row.get::<_, i32>(11)? != 0,
+                raw_size: row.get(12)?,
+                message_id: row.get(13)?,
+                attachments: Vec::new(),
+                body_fetched: row.get::<_, i32>(14)? != 0,
+                eml_path: row.get(15)?,
             })
         })
         .map_err(|e| e.to_string())?
@@ -804,6 +1935,19 @@ pub async fn email_move_message(
     }
     // 本地缓存：从原文件夹删除（目标文件夹会在下次同步时拉取）
     let conn = state.conn()?;
+    // 查询并删除本地 .eml 文件（MOVE 后 UID 改变，旧 .eml 成为孤儿）
+    let eml_path: String = conn
+        .query_row(
+            "SELECT eml_path FROM messages WHERE uid = ?1 AND account_id = ?2 AND folder = ?3",
+            params![req.uid, req.account_id, req.mailbox],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap_or_default();
+    if !eml_path.is_empty() {
+        if let Err(e) = delete_eml_file(&eml_path) {
+            log::warn!("[email-move] 删除 .eml 文件失败: {}", e);
+        }
+    }
     conn.execute(
         "DELETE FROM messages WHERE uid = ?1 AND account_id = ?2 AND folder = ?3",
         params![req.uid, req.account_id, req.mailbox],
@@ -842,6 +1986,10 @@ pub struct EmailAttachmentInput {
     pub filename: String,
     pub content_type: String,
     pub data: String, // base64 编码（无 data: 前缀）
+    /// 内联图片的 Content-ID（不含尖括号）。设置后附件会以 inline 方式嵌入，
+    /// HTML 中可通过 cid:xxx 引用，避免被 Gmail/Outlook 等客户端剥离 data URI 图片。
+    #[serde(default)]
+    pub content_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -941,12 +2089,57 @@ pub async fn email_test_connection(
 
 #[tauri::command]
 pub async fn email_fetch_attachment(
+    state: tauri::State<'_, EmailState>,
     gateway_url: String,
     req: FetchAttachmentRequest,
 ) -> Result<FetchAttachmentResponse, String> {
     if gateway_url.is_empty() {
         return Err("gateway URL 为空，请确认 Mona 运行时已启动".into());
     }
+
+    // Foxmail 风格：优先从本地 .eml 文件解析附件
+    let eml_path: String = {
+        let conn = state.conn()?;
+        conn.query_row(
+            "SELECT eml_path FROM messages WHERE uid = ?1 AND account_id = ?2 AND folder = ?3",
+            params![&req.uid, &req.account_id, &req.mailbox],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap_or_default()
+    };
+    if !eml_path.is_empty() {
+        if let Some(eml_bytes) = read_eml_file(&eml_path) {
+            let raw_b64 = base64::engine::general_purpose::STANDARD.encode(&eml_bytes);
+            let parse_req = serde_json::json!({
+                "rawBytes": raw_b64,
+                "filename": req.filename,
+            });
+            let url = format!("{}/email/parse_attachment", gateway_url.trim_end_matches('/'));
+            let client = reqwest::Client::builder()
+                .timeout(Duration::from_secs(15))
+                .build()
+                .map_err(|e| format!("构建 HTTP 客户端失败: {e}"))?;
+            let resp = client
+                .post(&url)
+                .json(&parse_req)
+                .send()
+                .await
+                .map_err(|e| format!("请求 gateway 解析附件失败: {e}"))?;
+            if resp.status().is_success() {
+                return resp.json::<FetchAttachmentResponse>()
+                    .await
+                    .map_err(|e| format!("解析响应失败: {e}"));
+            }
+            log::warn!(
+                "[email-fetch-attachment] /email/parse_attachment 失败，回退到 IMAP 拉取: {}",
+                resp.status()
+            );
+        } else {
+            log::warn!("[email-fetch-attachment] eml_path 非空但文件不存在，回退到 IMAP 拉取");
+        }
+    }
+
+    // 本地无 .eml，调 gateway /email/fetch_attachment（旧逻辑）
     let url = format!("{}/email/fetch_attachment", gateway_url.trim_end_matches('/'));
     let client = reqwest::Client::new();
     let resp = client
@@ -965,6 +2158,38 @@ pub async fn email_fetch_attachment(
     resp.json::<FetchAttachmentResponse>()
         .await
         .map_err(|e| format!("解析响应失败: {e}"))
+}
+
+/// 直接下载附件到用户指定路径，避免前端处理大 base64 字符串。
+///
+/// 与 email_fetch_attachment 相比：
+/// - 不返回 base64 数据到前端，节省内存
+/// - Rust 侧解码后直接写入文件，适合大附件
+/// - 前端调用 save() 选择路径后调用此命令
+#[tauri::command]
+pub async fn email_download_attachment_to_file(
+    state: tauri::State<'_, EmailState>,
+    gateway_url: String,
+    req: FetchAttachmentRequest,
+    save_path: String,
+) -> Result<u64, String> {
+    if gateway_url.is_empty() {
+        return Err("gateway URL 为空".into());
+    }
+    if save_path.is_empty() {
+        return Err("save_path 不能为空".into());
+    }
+    let resp = email_fetch_attachment(state, gateway_url, req).await?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(&resp.data)
+        .map_err(|e| format!("base64 解码失败: {e}"))?;
+    let path = std::path::Path::new(&save_path);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("创建目录失败: {e}"))?;
+    }
+    std::fs::write(path, &bytes).map_err(|e| format!("写入文件失败: {e}"))?;
+    Ok(bytes.len() as u64)
 }
 
 // ---------------------------------------------------------------------------
@@ -1237,7 +2462,20 @@ pub async fn email_sync(
     state: tauri::State<'_, EmailState>,
     gateway_url: String,
     req: SyncRequest,
-) -> Result<u32, String> {
+) -> Result<SyncResult, String> {
+    sync_folder_internal(&state, &gateway_url, req, true).await
+}
+
+/// 邮件同步核心逻辑：调用 gateway /email/sync，UPSERT 到 SQLite，应用规则。
+///
+/// 此函数与 #[tauri::command] 解耦，可被命令和后台同步任务复用。
+/// `apply_rules=false` 时跳过规则应用，用于规则 MOVE 后同步目标文件夹（避免递归触发规则）。
+async fn sync_folder_internal(
+    state: &EmailState,
+    gateway_url: &str,
+    req: SyncRequest,
+    apply_rules: bool,
+) -> Result<SyncResult, String> {
     if gateway_url.is_empty() {
         return Err("gateway URL 为空，请确认 Mona 运行时已启动".into());
     }
@@ -1259,7 +2497,16 @@ pub async fn email_sync(
     let new_messages: Vec<Value> = resp.json().await.map_err(|e| format!("解析响应失败: {e}"))?;
 
     let conn = state.conn()?;
+    log::info!(
+        "[email-sync] account={} mailbox={} last_uid={:?} gateway_returned={}",
+        req.account_id,
+        req.mailbox,
+        req.last_uid,
+        new_messages.len()
+    );
     let mut new_count = 0u32;
+    // 记录真正新增的 UID（规则应用前在当前文件夹中的新邮件）
+    let mut new_uids: Vec<String> = Vec::new();
     for msg in &new_messages {
         let uid = msg["uid"].as_str().unwrap_or("").to_string();
         if uid.is_empty() {
@@ -1273,18 +2520,35 @@ pub async fn email_sync(
                 |_| Ok(true),
             )
             .unwrap_or(false);
-        // UPSERT：更新邮件内容但保留用户已设置的 is_read/is_starred
-        let attachments_json = if msg.get("attachments").is_some() {
-            serde_json::to_string(&msg["attachments"]).unwrap_or_default()
+        // Foxmail 风格文件存储：如果 gateway 返回 rawBytes（完整 RFC822），落盘为 .eml 文件
+        // 同步时通常只拉 header（无 rawBytes），.eml 在 fetch_body 时按需落盘
+        let raw_bytes_b64 = msg.get("rawBytes").and_then(|v| v.as_str()).unwrap_or("");
+        let eml_path_value: String = if !raw_bytes_b64.is_empty() {
+            match base64::engine::general_purpose::STANDARD.decode(raw_bytes_b64) {
+                Ok(bytes) => match write_eml_file(&req.account_id, &req.mailbox, &uid, &bytes) {
+                    Ok(rel_path) => rel_path,
+                    Err(e) => {
+                        log::warn!("[email-sync] 写入 .eml 失败 uid={}: {}", uid, e);
+                        String::new()
+                    }
+                },
+                Err(e) => {
+                    log::warn!("[email-sync] base64 解码 rawBytes 失败 uid={}: {}", uid, e);
+                    String::new()
+                }
+            }
         } else {
             String::new()
         };
+        let body_fetched_value: i32 = if eml_path_value.is_empty() { 0 } else { 1 };
+        // UPSERT：更新邮件内容但保留用户已设置的 is_read/is_starred
+        // 不再存储 body_text/body_html/attachments_json（已移除字段），改为存 eml_path
+        // Foxmail 风格：正文完全存 .eml 文件，SQLite 仅做索引
         conn.execute(
             "INSERT INTO messages
              (uid, account_id, folder, subject, from_address, from_name, to_addresses, cc_addresses,
-              date, body_text, body_html, has_attachments, is_read, is_starred, raw_size,
-              message_id, attachments_json)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 0, ?14, ?15, ?16)
+              date, has_attachments, is_read, is_starred, raw_size, message_id, body_fetched, eml_path)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
              ON CONFLICT(uid, account_id, folder) DO UPDATE SET
               subject=excluded.subject,
               from_address=excluded.from_address,
@@ -1292,13 +2556,13 @@ pub async fn email_sync(
               to_addresses=excluded.to_addresses,
               cc_addresses=excluded.cc_addresses,
               date=excluded.date,
-              body_text=excluded.body_text,
-              body_html=excluded.body_html,
               has_attachments=excluded.has_attachments,
               raw_size=excluded.raw_size,
               message_id=excluded.message_id,
-              attachments_json=excluded.attachments_json,
-              is_read=CASE WHEN messages.is_read=1 THEN 1 ELSE excluded.is_read END",
+              body_fetched=CASE WHEN excluded.eml_path != '' THEN 1 ELSE messages.body_fetched END,
+              eml_path=CASE WHEN excluded.eml_path != '' THEN excluded.eml_path ELSE messages.eml_path END,
+              is_read=CASE WHEN messages.is_read=1 THEN 1 ELSE excluded.is_read END,
+              is_starred=CASE WHEN messages.is_starred=1 THEN 1 ELSE excluded.is_starred END",
             params![
                 uid,
                 req.account_id,
@@ -1309,20 +2573,24 @@ pub async fn email_sync(
                 msg["to"].as_str().unwrap_or("[]"),
                 msg.get("cc").and_then(|v| v.as_str()),
                 msg["date"].as_str().unwrap_or(""),
-                msg["bodyText"].as_str().unwrap_or(""),
-                msg.get("bodyHtml").and_then(|v| v.as_str()),
                 msg["hasAttachments"].as_bool().unwrap_or(false) as i32,
                 msg["isRead"].as_bool().unwrap_or(false) as i32,
+                msg["isStarred"].as_bool().unwrap_or(false) as i32,
                 msg["rawSize"].as_u64().unwrap_or(0) as u32,
                 msg.get("messageId").and_then(|v| v.as_str()),
-                if attachments_json.is_empty() { None } else { Some(&attachments_json) },
+                body_fetched_value,
+                eml_path_value,
             ],
         )
         .map_err(|e| e.to_string())?;
         if !existed {
             new_count += 1;
+            new_uids.push(uid);
         }
     }
+
+    // 自动从新邮件收集联系人（发件人 + 收件人 + 抄送）
+    auto_collect_contacts(&conn, &req.account_id, &new_messages);
     // 更新 last_synced_uid（取本次同步中最大的 UID）
     if let Some(max_uid) = new_messages
         .iter()
@@ -1336,7 +2604,1043 @@ pub async fn email_sync(
         )
         .map_err(|e| e.to_string())?;
     }
-    Ok(new_count)
+
+    // 应用邮件规则（仅对本次同步的新邮件）
+    // apply_rules=false 时跳过（用于规则 MOVE 后同步目标文件夹，避免递归触发规则）
+    if apply_rules {
+        let rules = get_enabled_rules(&conn, &req.account_id).unwrap_or_default();
+        if !rules.is_empty() {
+            // 收集匹配规则的新邮件（owned EmailRule，避免跨越 await 持有引用）
+            let mut matched: Vec<(String, String, EmailRule)> = Vec::new();
+            for msg in &new_messages {
+                let uid = match msg["uid"].as_str() {
+                    Some(s) if !s.is_empty() => s.to_string(),
+                    _ => continue,
+                };
+                let subject = msg["subject"].as_str().unwrap_or("");
+                let from_address = msg["from"].as_str().unwrap_or("");
+                let from_name = msg.get("fromName").and_then(|v| v.as_str()).unwrap_or("");
+                let to_addresses = msg["to"].as_str().unwrap_or("");
+                for rule in &rules {
+                    // 跳过"移动到当前文件夹"的规则：邮件已在目标文件夹，再次 MOVE 会导致
+                    // update_local_cache 删除刚插入的记录（规则循环应用 bug）
+                    if rule.action == "move" && rule.action_target.as_deref() == Some(req.mailbox.as_str()) {
+                        continue;
+                    }
+                    if rule_matches(rule, subject, from_address, from_name, to_addresses) {
+                        matched.push((uid.clone(), req.mailbox.clone(), rule.clone()));
+                        break; // 一个邮件只应用第一条匹配的规则
+                    }
+                }
+            }
+            // 执行规则动作（mark_read/star 本地+IMAP；move/delete 调用 gateway）
+            if !matched.is_empty() {
+                let (account, plain_password) = {
+                    let conn2 = state.conn()?;
+                    let account = get_imap_credentials(&conn2, &req.account_id)?;
+                    let plain = decrypt_password(&account.imap_password)?;
+                    (account, plain)
+                };
+                let matched_refs: Vec<(String, String, &EmailRule)> = matched
+                    .iter()
+                    .map(|(uid, folder, rule)| (uid.clone(), folder.clone(), rule))
+                    .collect();
+                apply_rule_actions(
+                    state,
+                    gateway_url,
+                    &matched_refs,
+                    &account,
+                    &plain_password,
+                )
+                .await;
+            }
+        }
+    }
+
+    // 规则应用后，从本地 SQLite 查询仍在当前文件夹的新邮件（规则可能 move/delete 了部分）
+    let new_messages_in_folder: Vec<EmailMessage> = if new_uids.is_empty() {
+        Vec::new()
+    } else {
+        // 构造 IN 占位符
+        let placeholders: Vec<&str> = new_uids.iter().map(|_| "?").collect();
+        let in_clause = placeholders.join(",");
+        let sql = format!(
+            "SELECT uid, account_id, folder, subject, from_address, from_name, to_addresses, cc_addresses,
+                    date, has_attachments, is_read, is_starred, raw_size, message_id, body_fetched, eml_path
+             FROM messages WHERE account_id = ? AND folder = ? AND uid IN ({})
+             ORDER BY CAST(uid AS INTEGER) DESC",
+            in_clause
+        );
+        let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+        let mut params_vec: Vec<&dyn rusqlite::ToSql> = vec![&req.account_id, &req.mailbox];
+        for uid in &new_uids {
+            params_vec.push(uid);
+        }
+        let msgs = stmt
+            .query_map(params_vec.as_slice(), |row| {
+                Ok(EmailMessage {
+                    uid: row.get(0)?,
+                    account_id: row.get(1)?,
+                    folder: row.get(2)?,
+                    subject: row.get(3)?,
+                    from_address: row.get(4)?,
+                    from_name: row.get(5)?,
+                    to_addresses: row.get(6)?,
+                    cc_addresses: row.get(7)?,
+                    date: row.get(8)?,
+                    body_text: String::new(),
+                    body_html: None,
+                    has_attachments: row.get::<_, i32>(9)? != 0,
+                    is_read: row.get::<_, i32>(10)? != 0,
+                    is_starred: row.get::<_, i32>(11)? != 0,
+                    raw_size: row.get(12)?,
+                    message_id: row.get(13)?,
+                    attachments: Vec::new(),
+                    body_fetched: row.get::<_, i32>(14)? != 0,
+                    eml_path: row.get(15)?,
+                })
+            })
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+        msgs
+    };
+
+    log::info!(
+        "[email-sync] account={} done new_count={} returned_to_frontend={}",
+        req.account_id,
+        new_count,
+        new_messages_in_folder.len()
+    );
+    Ok(SyncResult {
+        new_count,
+        new_messages: new_messages_in_folder,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// 后台静默同步引擎
+// ---------------------------------------------------------------------------
+// 启动后等待 30s 执行首次全量同步（让前端首屏先完成），之后每 5 分钟轮询一次。
+// 遍历 SQLite 中所有账号 + 文件夹，调用 gateway /email/sync 进行增量同步。
+// 单个账号/文件夹失败不影响其他，全部错误静默记录日志。
+
+const BG_SYNC_INITIAL_DELAY_SECS: u64 = 30;
+const BG_SYNC_INTERVAL_SECS: u64 = 300;
+
+/// 检查账号是否在冷却期内（IMAP 认证失败后 1 小时不再尝试）
+/// 返回 Some(剩余秒数) 表示在冷却期内，None 表示可以尝试
+fn check_account_cooldown(state: &EmailState, account_id: &str, service: &str) -> Option<i64> {
+    let conn = state.conn().ok()?;
+    let failed_until: String = conn
+        .query_row(
+            "SELECT failed_until FROM account_cooldowns WHERE account_id = ?1 AND service = ?2",
+            params![account_id, service],
+            |row| row.get(0),
+        )
+        .ok()?;
+    let failed_until_ts = chrono::DateTime::parse_from_rfc3339(&failed_until).ok()?;
+    let now = chrono::Local::now();
+    let remaining = (failed_until_ts.with_timezone(&now.timezone()) - now).num_seconds();
+    if remaining > 0 {
+        Some(remaining)
+    } else {
+        None
+    }
+}
+
+/// 标记账号认证失败，设置冷却期（1 小时）
+fn mark_account_cooldown(
+    state: &EmailState,
+    account_id: &str,
+    service: &str,
+    reason: &str,
+) {
+    let Ok(conn) = state.conn() else { return };
+    let now = chrono::Local::now();
+    let failed_until = now + chrono::Duration::hours(1);
+    let _ = conn.execute(
+        "INSERT OR REPLACE INTO account_cooldowns (account_id, service, failed_until, reason, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![
+            account_id,
+            service,
+            failed_until.to_rfc3339(),
+            reason,
+            now.to_rfc3339(),
+        ],
+    );
+}
+
+/// 清除账号冷却期（认证成功后调用）
+fn clear_account_cooldown(state: &EmailState, account_id: &str, service: &str) {
+    let Ok(conn) = state.conn() else { return };
+    let _ = conn.execute(
+        "DELETE FROM account_cooldowns WHERE account_id = ?1 AND service = ?2",
+        params![account_id, service],
+    );
+}
+
+/// 判断错误是否为永久性认证失败（IMAP/SMTP 密码错误/账号异常）
+/// 用于触发账号冷却期，避免反复尝试加剧服务器限流
+fn is_permanent_auth_error(error_text: &str) -> bool {
+    let lower = error_text.to_lowercase();
+    // 认证失败类（密码错误、授权码错误、账号异常）
+    lower.contains("authentication failed")
+        || lower.contains("认证失败")
+        || lower.contains("login fail")
+        || lower.contains("登录失败")
+        || lower.contains("account is abnormal")
+        || lower.contains("账号异常")
+        || lower.contains("不允许尝试登录")
+        || lower.contains("service is not open")
+        || lower.contains("服务未开通")
+        // 频率限制类（真正的风控）
+        || lower.contains("login frequency limited")
+        || lower.contains("频率限制")
+}
+
+/// 启动后台静默同步引擎。应在 gateway 启动成功后调用。
+pub fn start_background_sync(app_handle: AppHandle, gateway_port: u16) {
+    let gateway_url = format!("http://127.0.0.1:{}", gateway_port);
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(BG_SYNC_INITIAL_DELAY_SECS)).await;
+        loop {
+            let started = std::time::Instant::now();
+            let mut total_new: u32 = 0;
+
+            // 1. 处理到期的 outbox 邮件（延迟发送）
+            let email_state = app_handle.state::<EmailState>();
+            match email_outbox_process(email_state, gateway_url.clone()).await {
+                Ok(n) => {
+                    if n > 0 {
+                        log::info!("[email-bg] outbox processed: {} sent", n);
+                        let _ = app_handle.emit("email-outbox-updated", ());
+                    }
+                }
+                Err(e) => log::warn!("[email-bg] outbox process failed: {}", e),
+            }
+
+            // 2. 邮件同步 + 删除对账 + 预下载
+            match run_bg_sync_cycle(&app_handle, &gateway_url, &mut total_new).await {
+                Ok(()) => {
+                    log::info!(
+                        "[email-bg] sync cycle done in {:.1}s, new={}",
+                        started.elapsed().as_secs_f32(),
+                        total_new
+                    );
+                }
+                Err(e) => {
+                    log::warn!("[email-bg] sync cycle error: {}", e);
+                }
+            }
+            tokio::time::sleep(Duration::from_secs(BG_SYNC_INTERVAL_SECS)).await;
+        }
+    });
+}
+
+/// 执行一次后台同步：遍历所有账号 + 所有文件夹，调用 sync_folder_internal。
+async fn run_bg_sync_cycle(
+    app_handle: &AppHandle,
+    gateway_url: &str,
+    total_new: &mut u32,
+) -> Result<(), String> {
+    let email_state = app_handle.state::<EmailState>();
+
+    // 读取所有账号
+    let accounts: Vec<EmailAccount> = {
+        let conn = email_state.conn()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, display_name, imap_host, imap_port, imap_username, imap_password,
+                        smtp_host, smtp_port, smtp_username, smtp_password, from_address,
+                        from_name, last_synced_uid, carddav_url, eas_url, imap_use_ssl,
+                        smtp_use_ssl, signatures
+                 FROM accounts ORDER BY display_name",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| {
+                let sigs_str: String = row.get(17).unwrap_or_else(|_| "[]".to_string());
+                Ok(EmailAccount {
+                    id: row.get(0)?,
+                    display_name: row.get(1)?,
+                    imap_host: row.get(2)?,
+                    imap_port: row.get(3)?,
+                    imap_username: row.get(4)?,
+                    imap_password: row.get(5)?,
+                    smtp_host: row.get(6)?,
+                    smtp_port: row.get(7)?,
+                    smtp_username: row.get(8)?,
+                    smtp_password: row.get(9)?,
+                    from_address: row.get(10)?,
+                    from_name: row.get(11)?,
+                    last_synced_uid: row.get(12)?,
+                    carddav_url: row.get(13)?,
+                    eas_url: row.get(14)?,
+                    imap_use_ssl: row.get::<_, i32>(15)? != 0,
+                    smtp_use_ssl: row.get::<_, i32>(16)? != 0,
+                    signatures: serde_json::from_str(&sigs_str).unwrap_or_default(),
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        let mut accs: Vec<EmailAccount> = Vec::new();
+        for r in rows {
+            if let Ok(a) = r {
+                accs.push(a);
+            }
+        }
+        accs
+    };
+
+    if accounts.is_empty() {
+        return Ok(());
+    }
+
+    for account in accounts {
+        // 检查 IMAP 冷却期：如果账号最近认证失败，跳过避免加剧风控
+        if let Some(remaining) = check_account_cooldown(&email_state, &account.id, "imap") {
+            log::info!(
+                "[email-bg] account={} in IMAP cooldown, skip ({}s remaining)",
+                account.id,
+                remaining
+            );
+            continue;
+        }
+
+        let plain_password = match decrypt_password(&account.imap_password) {
+            Ok(p) => p,
+            Err(e) => {
+                log::warn!(
+                    "[email-bg] account={} password decrypt failed: {}",
+                    account.id,
+                    e
+                );
+                continue;
+            }
+        };
+
+        // 该账号的所有文件夹（folders 表，由前端首次展开时同步）
+        let mut folders: Vec<String> = {
+            let conn = match email_state.conn() {
+                Ok(c) => c,
+                Err(e) => {
+                    log::warn!("[email-bg] account={} open conn failed: {}", account.id, e);
+                    continue;
+                }
+            };
+            let mut stmt = match conn.prepare(
+                "SELECT name FROM folders WHERE account_id = ?1 ORDER BY name",
+            ) {
+                Ok(s) => s,
+                Err(e) => {
+                    log::warn!("[email-bg] account={} prepare failed: {}", account.id, e);
+                    continue;
+                }
+            };
+            let rows = stmt
+                .query_map(params![&account.id], |row| row.get::<_, String>(0))
+                .map_err(|e| e.to_string());
+            let mut fs: Vec<String> = Vec::new();
+            if let Ok(rows) = rows {
+                for r in rows.flatten() {
+                    fs.push(r);
+                }
+            }
+            fs
+        };
+
+        // folders 为空：可能是新账号还没在前端展开过。先调用 gateway 拉取文件夹列表，
+        // 写入 SQLite 缓存后再进行邮件同步，确保新账号也能被后台同步覆盖。
+        if folders.is_empty() {
+            log::info!(
+                "[email-bg] account={} folders empty, syncing folder list from IMAP",
+                account.id
+            );
+            let folder_req = FolderRequest {
+                imap_host: account.imap_host.clone(),
+                imap_port: account.imap_port,
+                imap_username: account.imap_username.clone(),
+                imap_password: plain_password.clone(),
+                use_ssl: account.imap_use_ssl,
+            };
+            match email_list_folders(gateway_url.to_string(), folder_req).await {
+                Ok(remote_folders) => {
+                    if let Ok(conn) = email_state.conn() {
+                        let now = chrono::Local::now().to_rfc3339();
+                        for folder in &remote_folders {
+                            let _ = conn.execute(
+                                "INSERT OR REPLACE INTO folders
+                                 (account_id, name, delimiter, flags, has_children, updated_at)
+                                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                                params![
+                                    &account.id,
+                                    folder.name,
+                                    folder.delimiter.clone(),
+                                    folder.flags.clone(),
+                                    if folder.has_children { 1 } else { 0 },
+                                    now.clone(),
+                                ],
+                            );
+                        }
+                    }
+                    folders = remote_folders.iter().map(|f| f.name.clone()).collect();
+                    log::info!(
+                        "[email-bg] account={} synced {} folders from IMAP",
+                        account.id,
+                        folders.len()
+                    );
+                }
+                Err(e) => {
+                    log::warn!(
+                        "[email-bg] account={} sync folders failed: {}",
+                        account.id,
+                        e
+                    );
+                    continue;
+                }
+            }
+        }
+
+        if folders.is_empty() {
+            log::debug!("[email-bg] account={} still no folders after sync, skip", account.id);
+            continue;
+        }
+
+        for folder in folders {
+            // 该文件夹下本地的最大 UID（按整数排序）
+            let last_uid: Option<String> = email_state
+                .conn()
+                .ok()
+                .and_then(|conn| {
+                    conn.query_row(
+                        "SELECT MAX(CAST(uid AS INTEGER)) FROM messages
+                         WHERE account_id = ?1 AND folder = ?2",
+                        params![&account.id, &folder],
+                        |row| row.get::<_, Option<i64>>(0),
+                    )
+                    .ok()
+                    .flatten()
+                })
+                .map(|n| n.to_string());
+
+            let req = SyncRequest {
+                account_id: account.id.clone(),
+                imap_host: account.imap_host.clone(),
+                imap_port: account.imap_port,
+                imap_username: account.imap_username.clone(),
+                imap_password: plain_password.clone(),
+                mailbox: folder.clone(),
+                use_ssl: account.imap_use_ssl,
+                last_uid,
+            };
+
+            match sync_folder_internal(&email_state, gateway_url, req, true).await {
+                Ok(result) => {
+                    // 同步成功，清除 IMAP 冷却期（如果之前有）
+                    clear_account_cooldown(&email_state, &account.id, "imap");
+                    if result.new_count > 0 {
+                        log::info!(
+                            "[email-bg] account={} folder={} new={}",
+                            account.id,
+                            folder,
+                            result.new_count
+                        );
+                        *total_new += result.new_count;
+                        // 通知前端有新邮件，由前端决定是否刷新当前列表
+                        let _ = app_handle.emit(
+                            "email-bg-sync",
+                            serde_json::json!({
+                                "accountId": account.id,
+                                "folder": folder,
+                                "newCount": result.new_count,
+                                "newMessages": result.new_messages,
+                            }),
+                        );
+                    }
+                }
+                Err(e) => {
+                    // 检测到永久性认证错误：标记账号冷却 1 小时，跳过后续文件夹
+                    if is_permanent_auth_error(&e) {
+                        log::warn!(
+                            "[email-bg] account={} permanent auth error, marking cooldown 1h: {}",
+                            account.id,
+                            e
+                        );
+                        mark_account_cooldown(&email_state, &account.id, "imap", &e);
+                        break; // 跳过该账号剩余文件夹
+                    }
+                    log::warn!(
+                        "[email-bg] account={} folder={} sync failed: {}",
+                        account.id,
+                        folder,
+                        e
+                    );
+                    // 同步失败则跳过该文件夹的删除对账（避免误删）
+                    continue;
+                }
+            }
+
+            // 删除对账：拉取服务器 UID 列表，删除本地有但服务器没有的邮件
+            if let Err(e) = reconcile_deletions(&email_state, gateway_url, &account, &plain_password, &folder).await {
+                log::warn!(
+                    "[email-bg] account={} folder={} reconcile deletions failed: {}",
+                    account.id,
+                    folder,
+                    e
+                );
+            }
+
+            // P1-1: 正文预下载（仅 INBOX，最近 N 封未读且未拉取正文的邮件）
+            // 用户大概率会查看未读邮件，提前下载避免点击时的等待
+            if folder == "INBOX" {
+                if let Err(e) = prefetch_unread_bodies(&email_state, gateway_url, &account, &plain_password, &folder).await {
+                    log::warn!(
+                        "[email-bg] account={} folder={} prefetch unread bodies failed: {}",
+                        account.id,
+                        folder,
+                        e
+                    );
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+const PREFETCH_UNREAD_LIMIT: u32 = 50;
+
+/// 预下载未读邮件的正文（仅 INBOX，最近 50 封未读且 body_fetched=0）。
+///
+/// 同步时只拉取 HEADER + FLAGS，正文按需拉取。但未读邮件用户大概率会查看，
+/// 后台静默预下载可让用户点击时秒开，提升体验。
+/// 单封失败不影响其他，整体不阻塞同步主流程。
+async fn prefetch_unread_bodies(
+    state: &EmailState,
+    gateway_url: &str,
+    account: &EmailAccount,
+    plain_password: &str,
+    folder: &str,
+) -> Result<(), String> {
+    if gateway_url.is_empty() {
+        return Ok(());
+    }
+    // 查询未读且未拉取正文的邮件，按 UID 倒序取最近 N 封
+    let uids_to_prefetch: Vec<String> = {
+        let conn = state.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT uid FROM messages
+             WHERE account_id = ?1 AND folder = ?2 AND is_read = 0 AND body_fetched = 0
+             ORDER BY CAST(uid AS INTEGER) DESC
+             LIMIT ?3",
+        ).map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![&account.id, folder, PREFETCH_UNREAD_LIMIT], |row| {
+                row.get::<_, String>(0)
+            })
+            .map_err(|e| e.to_string())?;
+        let mut uids: Vec<String> = Vec::new();
+        for r in rows {
+            if let Ok(u) = r {
+                uids.push(u);
+            }
+        }
+        uids
+    };
+
+    if uids_to_prefetch.is_empty() {
+        return Ok(());
+    }
+
+    log::info!(
+        "[email-bg] account={} folder={} prefetching {} unread bodies",
+        account.id,
+        folder,
+        uids_to_prefetch.len()
+    );
+
+    let url = format!("{}/email/fetch_body", gateway_url.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("构建 HTTP 客户端失败: {e}"))?;
+    let base_req = serde_json::json!({
+        "imapHost": account.imap_host,
+        "imapPort": account.imap_port,
+        "imapUsername": account.imap_username,
+        "imapPassword": plain_password,
+        "mailbox": folder,
+        "useSsl": account.imap_use_ssl,
+    });
+
+    let mut success = 0u32;
+    let mut failed = 0u32;
+    for uid in &uids_to_prefetch {
+        let mut req = base_req.clone();
+        req["uid"] = serde_json::Value::String(uid.clone());
+        match client.post(&url).json(&req).send().await {
+            Ok(resp) if resp.status().is_success() => {
+                let body: Value = match resp.json().await {
+                    Ok(v) => v,
+                    Err(e) => {
+                        log::warn!(
+                            "[email-bg] account={} uid={} parse body failed: {}",
+                            account.id,
+                            uid,
+                            e
+                        );
+                        failed += 1;
+                        continue;
+                    }
+                };
+                // Foxmail 风格：如果 gateway 返回 rawBytes，落盘为 .eml 文件
+                let raw_b64 = body.get("rawBytes").and_then(|v| v.as_str()).unwrap_or("");
+                let eml_path = if !raw_b64.is_empty() {
+                    match base64::engine::general_purpose::STANDARD.decode(raw_b64) {
+                        Ok(bytes) => match write_eml_file(&account.id, folder, uid, &bytes) {
+                            Ok(rel) => rel,
+                            Err(e) => {
+                                log::warn!(
+                                    "[email-bg] account={} uid={} write eml failed: {}",
+                                    account.id,
+                                    uid,
+                                    e
+                                );
+                                String::new()
+                            }
+                        },
+                        Err(e) => {
+                            log::warn!(
+                                "[email-bg] account={} uid={} decode rawBytes failed: {}",
+                                account.id,
+                                uid,
+                                e
+                            );
+                            String::new()
+                        }
+                    }
+                } else {
+                    String::new()
+                };
+                // 更新 SQLite：eml_path + body_fetched=1（不再写 body_text）
+                if let Ok(conn) = state.conn() {
+                    if eml_path.is_empty() {
+                        let _ = conn.execute(
+                            "UPDATE messages SET body_fetched = 1
+                             WHERE uid = ?1 AND account_id = ?2 AND folder = ?3",
+                            params![uid, &account.id, folder],
+                        );
+                    } else {
+                        let _ = conn.execute(
+                            "UPDATE messages SET body_fetched = 1, eml_path = ?1
+                             WHERE uid = ?2 AND account_id = ?3 AND folder = ?4",
+                            params![eml_path, uid, &account.id, folder],
+                        );
+                    }
+                }
+                success += 1;
+            }
+            Ok(resp) => {
+                log::warn!(
+                    "[email-bg] account={} uid={} fetch_body status={}",
+                    account.id,
+                    uid,
+                    resp.status()
+                );
+                failed += 1;
+            }
+            Err(e) => {
+                log::warn!(
+                    "[email-bg] account={} uid={} fetch_body error: {}",
+                    account.id,
+                    uid,
+                    e
+                );
+                failed += 1;
+            }
+        }
+    }
+
+    log::info!(
+        "[email-bg] account={} folder={} prefetch done success={} failed={}",
+        account.id,
+        folder,
+        success,
+        failed
+    );
+    Ok(())
+}
+
+/// 删除对账 + UIDVALIDITY 检测：
+/// - 拉取服务器 UID 列表和 UIDVALIDITY
+/// - UIDVALIDITY 变化时清空该文件夹的本地缓存（UID 已失效）
+/// - 删除本地有但服务器没有的邮件（用户在其他设备删除）
+///
+/// 只在后台同步时调用，避免阻塞前端手动同步。
+async fn reconcile_deletions(
+    state: &EmailState,
+    gateway_url: &str,
+    account: &EmailAccount,
+    plain_password: &str,
+    folder: &str,
+) -> Result<(), String> {
+    if gateway_url.is_empty() {
+        return Ok(());
+    }
+    let url = format!("{}/email/list_uids", gateway_url.trim_end_matches('/'));
+    let req = FolderRequest {
+        imap_host: account.imap_host.clone(),
+        imap_port: account.imap_port,
+        imap_username: account.imap_username.clone(),
+        imap_password: plain_password.to_string(),
+        use_ssl: account.imap_use_ssl,
+    };
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(&url)
+        .json(&req)
+        .send()
+        .await
+        .map_err(|e| format!("请求 gateway 失败 ({url}): {e}"))?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!("gateway 返回 {status} ({url}): {text}"));
+    }
+    let resp_json: Value = resp.json().await.map_err(|e| format!("解析响应失败: {e}"))?;
+    let server_uids: std::collections::HashSet<String> = resp_json
+        .get("uids")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|u| u.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let server_uid_validity: String = resp_json
+        .get("uidValidity")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    if server_uids.is_empty() {
+        // 服务器返回空可能是临时故障（如 select 失败、网络抖动），不删除本地数据
+        log::warn!(
+            "[email-bg] account={} folder={} server returned empty uids, skip reconcile",
+            account.id,
+            folder
+        );
+        return Ok(());
+    }
+
+    let conn = state.conn()?;
+
+    // UIDVALIDITY 检测：服务器返回的 UIDVALIDITY 与本地不同，说明文件夹 UID 已重置，
+    // 本地缓存的 UID 全部失效，需清空该文件夹的所有邮件并更新 UIDVALIDITY
+    // 重要：如果 server_uid_validity 为空（服务器未返回或解析失败），跳过 UIDVALIDITY 检测，
+    //       但仍可以做普通删除对账（因为 server_uids 非空）
+    let local_uid_validity: Option<String> = conn
+        .query_row(
+            "SELECT uid_validity FROM folders WHERE account_id = ?1 AND name = ?2",
+            params![&account.id, folder],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .ok()
+        .flatten();
+
+    if !server_uid_validity.is_empty()
+        && local_uid_validity.as_deref() != Some(server_uid_validity.as_str())
+    {
+        log::warn!(
+            "[email-bg] account={} folder={} UIDVALIDITY changed: local={:?} server={}, \
+             clearing local cache for this folder",
+            account.id,
+            folder,
+            local_uid_validity,
+            server_uid_validity
+        );
+        // 删除该文件夹的所有 .eml 文件（清空整个目录）
+        let folder_dir = mail_root()
+            .join(sanitize_path_segment(&account.id))
+            .join(sanitize_path_segment(folder));
+        if folder_dir.exists() {
+            if let Err(e) = std::fs::remove_dir_all(&folder_dir) {
+                log::warn!(
+                    "[email-bg] account={} folder={} remove eml dir failed: {}",
+                    account.id,
+                    folder,
+                    e
+                );
+            }
+        }
+        conn.execute(
+            "DELETE FROM messages WHERE account_id = ?1 AND folder = ?2",
+            params![&account.id, folder],
+        )
+        .map_err(|e| e.to_string())?;
+        conn.execute(
+            "UPDATE folders SET uid_validity = ?1 WHERE account_id = ?2 AND name = ?3",
+            params![&server_uid_validity, &account.id, folder],
+        )
+        .map_err(|e| e.to_string())?;
+        // UIDVALIDITY 变化后已清空，无需再做单条删除对账
+        return Ok(());
+    }
+
+    // 普通删除对账：本地有但服务器没有的 UID 即为已删除邮件
+    // 保护：如果本地邮件数远大于服务器返回数（如服务器只返回部分 UID），
+    //       可能是临时故障，跳过对账避免误删
+    {
+        let local_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM messages WHERE account_id = ?1 AND folder = ?2",
+                params![&account.id, folder],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        if local_count > (server_uids.len() as i64 * 2) && local_count > 100 {
+            // 本地邮件数是服务器的 2 倍以上且超过 100 封，可能是服务器临时返回不完整
+            log::warn!(
+                "[email-bg] account={} folder={} local_count={} but server_uids={}, \
+                 suspicious mismatch, skip reconcile to avoid mass deletion",
+                account.id,
+                folder,
+                local_count,
+                server_uids.len()
+            );
+            return Ok(());
+        }
+    }
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT uid, eml_path FROM messages WHERE account_id = ?1 AND folder = ?2",
+        )
+        .map_err(|e| e.to_string())?;
+    let local_uids: Vec<String> = stmt
+        .query_map(params![&account.id, folder], |row| row.get::<_, String>(0))
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+    drop(stmt);
+
+    let orphaned: Vec<&String> = local_uids.iter().filter(|u| !server_uids.contains(*u)).collect();
+    if orphaned.is_empty() {
+        return Ok(());
+    }
+
+    // 查询孤儿邮件的 eml_path（在 DELETE 之前查询）
+    let orphaned_eml_paths: Vec<String> = {
+        let placeholders: Vec<&str> = orphaned.iter().map(|_| "?").collect();
+        let in_clause = placeholders.join(",");
+        let sql = format!(
+            "SELECT eml_path FROM messages WHERE account_id = ? AND folder = ? AND uid IN ({})",
+            in_clause
+        );
+        let mut params_vec: Vec<&dyn rusqlite::ToSql> = vec![&account.id, &folder];
+        for uid in &orphaned {
+            params_vec.push(uid);
+        }
+        let mut stmt2 = conn.prepare(&sql).map_err(|e| e.to_string())?;
+        let rows = stmt2
+            .query_map(params_vec.as_slice(), |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?;
+        let mut paths: Vec<String> = Vec::new();
+        for r in rows {
+            if let Ok(p) = r {
+                paths.push(p);
+            }
+        }
+        paths
+    };
+
+    let deleted_count = orphaned.len();
+    let placeholders: Vec<&str> = orphaned.iter().map(|_| "?").collect();
+    let in_clause = placeholders.join(",");
+    let sql = format!(
+        "DELETE FROM messages WHERE account_id = ? AND folder = ? AND uid IN ({})",
+        in_clause
+    );
+    let mut params_vec: Vec<&dyn rusqlite::ToSql> = vec![&account.id, &folder];
+    for uid in &orphaned {
+        params_vec.push(uid);
+    }
+    conn.execute(&sql, params_vec.as_slice())
+        .map_err(|e| e.to_string())?;
+
+    // 删除孤儿 .eml 文件
+    for eml_path in &orphaned_eml_paths {
+        if !eml_path.is_empty() {
+            if let Err(e) = delete_eml_file(eml_path) {
+                log::warn!(
+                    "[email-bg] account={} folder={} delete orphan eml failed: {}",
+                    account.id,
+                    folder,
+                    e
+                );
+            }
+        }
+    }
+
+    log::info!(
+        "[email-bg] account={} folder={} reconciled {} deleted-from-server messages",
+        account.id,
+        folder,
+        deleted_count
+    );
+    Ok(())
+}
+
+/// 对一批邮件应用规则动作。
+/// - mark_read/star: 本地更新 + 调用 gateway /email/set_flag 同步 IMAP 服务器
+/// - move: 调用 gateway /email/move + 删除本地缓存（目标文件夹下次同步拉取）
+/// - delete: 调用 gateway /email/delete + 删除本地缓存
+///
+/// 返回 (success_count, failed_count, errors)。错误不向上抛出（规则失败不应阻塞 sync）。
+async fn apply_rule_actions(
+    state: &EmailState,
+    gateway_url: &str,
+    matched: &[(String, String, &EmailRule)],
+    account: &EmailAccount,
+    plain_password: &str,
+) -> (u32, u32, Vec<String>) {
+    if gateway_url.is_empty() || matched.is_empty() {
+        return (0, 0, Vec::new());
+    }
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
+    let base = gateway_url.trim_end_matches('/');
+
+    let mut success: u32 = 0;
+    let mut failed: u32 = 0;
+    let mut errors: Vec<String> = Vec::new();
+
+    for (uid, folder, rule) in matched {
+        let target = BatchActionTarget {
+            uid: uid.clone(),
+            account_id: account.id.clone(),
+            folder: folder.clone(),
+        };
+        let result = execute_single_action(
+            &client,
+            base,
+            &rule.action,
+            &target,
+            account,
+            plain_password,
+            rule.action_target.as_deref(),
+        )
+        .await;
+
+        match result {
+            Ok(()) => {
+                // 同步本地缓存
+                if let Err(e) = update_local_cache(state, gateway_url, &rule.action, &target, rule.action_target.as_deref(), account, plain_password).await {
+                    failed += 1;
+                    let msg = format!("uid={uid} 本地缓存更新失败: {e}");
+                    eprintln!("[rule] {msg}");
+                    errors.push(msg);
+                } else {
+                    success += 1;
+                }
+            }
+            Err(e) => {
+                failed += 1;
+                let msg = format!("uid={uid} action={}: {e}", rule.action);
+                eprintln!("[rule] 规则动作失败 {msg}");
+                errors.push(msg);
+            }
+        }
+    }
+    (success, failed, errors)
+}
+
+/// 对历史邮件批量应用收件规则。
+/// 扫描指定账号 INBOX 中所有已缓存的邮件，匹配启用规则并执行动作。
+/// 用于用户创建规则后对已有邮件进行归类。
+#[tauri::command]
+pub async fn email_apply_rules(
+    state: tauri::State<'_, EmailState>,
+    gateway_url: String,
+    account_id: String,
+) -> Result<serde_json::Value, String> {
+    if gateway_url.is_empty() {
+        return Err("gateway URL 为空".into());
+    }
+
+    // 收集匹配规则（持有 owned EmailRule，避免跨越 await 持有引用）
+    let mut matched: Vec<(String, String, EmailRule)> = Vec::new();
+    {
+        let conn = state.conn()?;
+        let rules = get_enabled_rules(&conn, &account_id)?;
+        if rules.is_empty() {
+            return Ok(serde_json::json!({ "matched": 0, "success": 0, "failed": 0 }));
+        }
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT uid, folder, subject, from_address, from_name, to_addresses
+                 FROM messages
+                 WHERE account_id = ?1 AND folder = 'INBOX'
+                 ORDER BY CAST(uid AS INTEGER) DESC",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows: Vec<(String, String, String, String, String, String)> = stmt
+            .query_map(params![&account_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+        drop(stmt);
+
+        for (uid, folder, subject, from_address, from_name, to_addresses) in &rows {
+            for rule in &rules {
+                if rule_matches(rule, subject, from_address, from_name, to_addresses) {
+                    matched.push((uid.clone(), folder.clone(), rule.clone()));
+                    break;
+                }
+            }
+        }
+    }
+
+    let total_matched = matched.len() as u32;
+    if total_matched == 0 {
+        return Ok(serde_json::json!({ "matched": 0, "success": 0, "failed": 0 }));
+    }
+
+    // 获取账号凭据
+    let (account, plain_password) = {
+        let conn2 = state.conn()?;
+        let account = get_imap_credentials(&conn2, &account_id)?;
+        let plain = decrypt_password(&account.imap_password)?;
+        (account, plain)
+    };
+
+    // 执行规则动作
+    let matched_refs: Vec<(String, String, &EmailRule)> = matched
+        .iter()
+        .map(|(uid, folder, rule)| (uid.clone(), folder.clone(), rule))
+        .collect();
+    let (success, failed, errors) =
+        apply_rule_actions(&state, &gateway_url, &matched_refs, &account, &plain_password).await;
+
+    Ok(serde_json::json!({
+        "matched": total_matched,
+        "success": success,
+        "failed": failed,
+        "errors": errors,
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -1405,10 +3709,18 @@ pub async fn email_stop_idle(gateway_url: String, account_id: String) -> Result<
 }
 
 #[tauri::command]
-pub async fn email_send(gateway_url: String, req: SendRequest) -> Result<(), String> {
+pub async fn email_send(
+    state: tauri::State<'_, EmailState>,
+    gateway_url: String,
+    req: SendRequest,
+) -> Result<(), String> {
     if gateway_url.is_empty() {
         return Err("gateway URL 为空，请确认 Mona 运行时已启动".into());
     }
+
+    // 注意：用户手动发信不检查冷却期。
+    // 冷却期仅用于后台同步引擎避免反复触发风控。
+    // 如果用户改对了密码，应能立即尝试发信，发信成功后自动清除冷却。
     let url = format!("{}/email/send", gateway_url.trim_end_matches('/'));
     let client = reqwest::Client::new();
     let resp = client
@@ -1420,10 +3732,117 @@ pub async fn email_send(gateway_url: String, req: SendRequest) -> Result<(), Str
     if !resp.status().is_success() {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
+        // 检测永久性认证错误，标记 SMTP 冷却期（仅影响后台同步，不影响用户手动发信）
+        if is_permanent_auth_error(&text) {
+            mark_account_cooldown(&state, &req.account_id, "smtp", &text);
+        }
         return Err(format!(
             "gateway 返回 {status} ({url}): {text}\n若刚更新代码，请重启 Mona 使新路由生效"
         ));
     }
+    // 发送成功，清除 SMTP 冷却期
+    clear_account_cooldown(&state, &req.account_id, "smtp");
+
+    // 自动收集收件人/抄送人到联系人库
+    if let Ok(conn) = state.conn() {
+        let now = chrono::Utc::now().timestamp();
+        for raw in req.to.iter().chain(req.cc.iter()) {
+            for (name, email) in parse_addresses_from_field(raw) {
+                let email_clean = email.trim().to_lowercase();
+                if email_clean.is_empty() || !email_clean.contains('@') {
+                    continue;
+                }
+                let exists: bool = conn
+                    .query_row(
+                        "SELECT 1 FROM contacts WHERE lower(email) = ?1 LIMIT 1",
+                        params![&email_clean],
+                        |_| Ok(true),
+                    )
+                    .unwrap_or(false);
+                if exists {
+                    continue;
+                }
+                let display = if name.trim().is_empty() {
+                    email_clean.clone()
+                } else {
+                    name.trim().to_string()
+                };
+                let id = uuid::Uuid::new_v4().to_string();
+                if let Err(e) = conn.execute(
+                    "INSERT INTO contacts
+                     (id, account_id, source, display_name, email, updated_at)
+                     VALUES (?1, ?2, 'auto', ?3, ?4, ?5)",
+                    params![id, &req.account_id, display, email_clean, now],
+                ) {
+                    log::warn!("[auto-collect] insert contact on send failed: {e}");
+                }
+            }
+        }
+    }
+
+    // 发送成功后，同步"已发送"文件夹索引（同步执行，不依赖后台任务）。
+    // 必要性：gateway 已同步完成 IMAP APPEND，本地 SQLite 索引不会有这条记录，
+    //   IDLE 默认只监听 INBOX 不会推送"已发送"变更，用户切到"已发送"会看到空列表。
+    // 实现：用 folders 表中的实际文件夹名（Sent Messages/Sent/已发送等），
+    //   全量同步（last_uid=None 拉取最近 20 封），确保新邮件被写入索引。
+    //   失败只记日志，不影响发送结果（用户下次手动收取时也会拉回）。
+    log::info!("[email-send] 开始同步已发送文件夹索引: account={}", req.account_id);
+    let account_id = req.account_id.clone();
+    let gw = gateway_url.clone();
+    let db_path = state.db_path.clone();
+    let sync_result: Result<SyncResult, String> = async {
+        let state_inner = EmailState { db_path };
+        let conn = state_inner.conn()?;
+        let account = get_imap_credentials(&conn, &account_id)?;
+        let plain = decrypt_password(&account.imap_password)?;
+        // 取本地"已发送"文件夹最大 UID 做增量同步（首次为 None，全量拉最近 20 封）
+        let last_uid: Option<String> = conn
+            .query_row(
+                "SELECT MAX(CAST(uid AS INTEGER)) FROM messages
+                 WHERE account_id = ?1 AND (folder = 'Sent' OR folder = 'Sent Items' OR folder = 'Sent Messages' OR folder = '已发送')",
+                params![&account_id],
+                |row| row.get::<_, Option<i64>>(0),
+            )
+            .ok()
+            .flatten()
+            .map(|n| n.to_string());
+        // 从 folders 表探测"已发送"文件夹的实际名称
+        let sent_folder: String = conn
+            .query_row(
+                "SELECT name FROM folders
+                 WHERE account_id = ?1 AND (
+                   lower(name) = 'sent' OR lower(name) = 'sent items'
+                   OR lower(name) = 'sent messages' OR name = '已发送'
+                   OR lower(name) LIKE 'sent%' OR name LIKE '%已发送%'
+                 ) LIMIT 1",
+                params![&account_id],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap_or_else(|_| "Sent".to_string());
+        drop(conn);
+        log::info!("[email-send] 同步已发送文件夹: name={}, last_uid={:?}", sent_folder, last_uid);
+        let sync_req = SyncRequest {
+            account_id: account.id.clone(),
+            imap_host: account.imap_host.clone(),
+            imap_port: account.imap_port,
+            imap_username: account.imap_username.clone(),
+            imap_password: plain,
+            mailbox: sent_folder.clone(),
+            use_ssl: account.imap_use_ssl,
+            last_uid,
+        };
+        sync_folder_internal(&state_inner, &gw, sync_req, false).await
+    }
+    .await;
+    match sync_result {
+        Ok(r) => log::info!(
+            "[email-send] 已发送文件夹同步完成: new={}, msgs={}",
+            r.new_count,
+            r.new_messages.len()
+        ),
+        Err(e) => log::warn!("[email-send] 已发送文件夹同步失败: {e}"),
+    }
+
     Ok(())
 }
 
@@ -1437,7 +3856,10 @@ pub async fn email_delete_message(
         return Err("gateway URL 为空，请确认 Mona 运行时已启动".into());
     }
     let url = format!("{}/email/delete", gateway_url.trim_end_matches('/'));
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| e.to_string())?;
     let resp = client
         .post(&url)
         .json(&req)
@@ -1451,13 +3873,79 @@ pub async fn email_delete_message(
             "gateway 返回 {status} ({url}): {text}\n若刚更新代码，请重启 Mona 使新路由生效"
         ));
     }
-    // 本地缓存也删除
+    // 解析返回值：{"status":"ok","action":"moved"|"deleted","target":"<folder>"|null}
+    let result: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    let action = result
+        .get("action")
+        .and_then(|v| v.as_str())
+        .unwrap_or("deleted");
+    let target = result.get("target").and_then(|v| v.as_str());
+
     let conn = state.conn()?;
-    conn.execute(
-        "DELETE FROM messages WHERE uid = ?1 AND account_id = ?2 AND folder = ?3",
-        params![req.uid, req.account_id, req.mailbox],
-    )
-    .map_err(|e| e.to_string())?;
+
+    // 查询本地 .eml 文件路径（用于同步文件操作）
+    let eml_path: String = conn
+        .query_row(
+            "SELECT eml_path FROM messages WHERE uid = ?1 AND account_id = ?2 AND folder = ?3",
+            params![req.uid, req.account_id, req.mailbox],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap_or_default();
+
+    if action == "moved" {
+        // MOVE 到回收站：更新本地缓存的 folder 字段 + 移动 .eml 文件
+        if let Some(trash_folder) = target {
+            conn.execute(
+                "UPDATE messages SET folder = ?1 WHERE uid = ?2 AND account_id = ?3 AND folder = ?4",
+                params![trash_folder, req.uid, req.account_id, req.mailbox],
+            )
+            .map_err(|e| e.to_string())?;
+
+            // 移动 .eml 文件到回收站目录（保留 UID）
+            if !eml_path.is_empty() {
+                match move_eml_file(&eml_path, &req.account_id, trash_folder, &req.uid) {
+                    Ok(new_path) => {
+                        let _ = conn.execute(
+                            "UPDATE messages SET eml_path = ?1 WHERE uid = ?2 AND account_id = ?3 AND folder = ?4",
+                            params![new_path, req.uid, req.account_id, trash_folder],
+                        );
+                    }
+                    Err(e) => {
+                        log::warn!("[email-delete] 移动 .eml 文件失败: {}", e);
+                        // 移动失败则清空 eml_path，下次点击时重新拉取
+                        let _ = conn.execute(
+                            "UPDATE messages SET eml_path = '', body_fetched = 0 WHERE uid = ?1 AND account_id = ?2 AND folder = ?3",
+                            params![req.uid, req.account_id, trash_folder],
+                        );
+                    }
+                }
+            }
+        } else {
+            // action=moved 但 target 为空，兜底删除
+            conn.execute(
+                "DELETE FROM messages WHERE uid = ?1 AND account_id = ?2 AND folder = ?3",
+                params![req.uid, req.account_id, req.mailbox],
+            )
+            .map_err(|e| e.to_string())?;
+            if !eml_path.is_empty() {
+                if let Err(e) = delete_eml_file(&eml_path) {
+                    log::warn!("[email-delete] 删除 .eml 文件失败: {}", e);
+                }
+            }
+        }
+    } else {
+        // 永久删除：删除本地缓存 + .eml 文件
+        conn.execute(
+            "DELETE FROM messages WHERE uid = ?1 AND account_id = ?2 AND folder = ?3",
+            params![req.uid, req.account_id, req.mailbox],
+        )
+        .map_err(|e| e.to_string())?;
+        if !eml_path.is_empty() {
+            if let Err(e) = delete_eml_file(&eml_path) {
+                log::warn!("[email-delete] 删除 .eml 文件失败: {}", e);
+            }
+        }
+    }
     Ok(())
 }
 
@@ -1527,8 +4015,22 @@ pub async fn email_empty_folder(
         .get("count")
         .and_then(|v| v.as_u64())
         .unwrap_or(0) as u32;
-    // 本地缓存同步：删除该文件夹所有邮件
+    // 本地缓存同步：删除该文件夹所有邮件 + 清空 .eml 目录
     let conn = state.conn()?;
+    // 删除整个文件夹的 .eml 目录
+    let folder_dir = mail_root()
+        .join(sanitize_path_segment(&req.account_id))
+        .join(sanitize_path_segment(&req.mailbox));
+    if folder_dir.exists() {
+        if let Err(e) = std::fs::remove_dir_all(&folder_dir) {
+            log::warn!(
+                "[email-empty] account={} folder={} remove eml dir failed: {}",
+                req.account_id,
+                req.mailbox,
+                e
+            );
+        }
+    }
     conn.execute(
         "DELETE FROM messages WHERE account_id = ?1 AND folder = ?2",
         params![req.account_id, req.mailbox],
@@ -1817,80 +4319,102 @@ pub struct EmailSearchRequest {
     pub offset: u32,
 }
 
-/// 跨文件夹/跨账号搜索邮件（SQL LIKE，只读本地缓存）
+/// 跨文件夹/跨账号搜索邮件（FTS5 全文搜索，只读本地缓存）
 #[tauri::command]
 pub async fn email_search_messages(
     state: tauri::State<'_, EmailState>,
     req: EmailSearchRequest,
 ) -> Result<Vec<EmailSearchResult>, String> {
     let conn = state.conn()?;
+    // 有关键词时用 FTS5 MATCH，否则用普通查询
+    let use_fts = req.keyword.as_ref().map_or(false, |k| !k.is_empty());
+
     let mut conditions: Vec<String> = Vec::new();
     let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
 
+    // FTS 模式下 MATCH 参数放在第一位
+    if use_fts {
+        let keyword = req.keyword.as_ref().unwrap();
+        // 用双引号包裹作为短语查询，避免 FTS5 特殊字符问题
+        let fts_query = format!("\"{}\"", keyword.replace('"', " "));
+        params.push(Box::new(fts_query));
+    }
+
+    // FTS 模式下字段需要 m. 前缀（JOIN 了 messages_fts）
+    let col_prefix = if use_fts { "m." } else { "" };
+
     if let Some(ref v) = req.account_id {
-        conditions.push(format!("account_id = ?{}", params.len() + 1));
+        conditions.push(format!("{col_prefix}account_id = ?{}", params.len() + 1));
         params.push(Box::new(v.clone()));
     }
     if let Some(ref v) = req.folder {
-        conditions.push(format!("folder = ?{}", params.len() + 1));
+        conditions.push(format!("{col_prefix}folder = ?{}", params.len() + 1));
         params.push(Box::new(v.clone()));
     }
-    if let Some(ref v) = req.keyword {
-        conditions.push(format!(
-            "(subject LIKE ?{} OR body_text LIKE ?{})",
-            params.len() + 1,
-            params.len() + 2
-        ));
-        let kw = format!("%{v}%");
-        params.push(Box::new(kw.clone()));
-        params.push(Box::new(kw));
-    }
     if let Some(ref v) = req.from_address {
-        conditions.push(format!("from_address LIKE ?{}", params.len() + 1));
+        conditions.push(format!("{col_prefix}from_address LIKE ?{}", params.len() + 1));
         params.push(Box::new(format!("%{v}%")));
     }
     if let Some(ref v) = req.from_name {
-        conditions.push(format!("from_name LIKE ?{}", params.len() + 1));
+        conditions.push(format!("{col_prefix}from_name LIKE ?{}", params.len() + 1));
         params.push(Box::new(format!("%{v}%")));
     }
     if let Some(ref v) = req.date_from {
-        conditions.push(format!("date >= ?{}", params.len() + 1));
+        conditions.push(format!("{col_prefix}date >= ?{}", params.len() + 1));
         params.push(Box::new(v.clone()));
     }
     if let Some(ref v) = req.date_to {
-        conditions.push(format!("date <= ?{}", params.len() + 1));
+        conditions.push(format!("{col_prefix}date <= ?{}", params.len() + 1));
         params.push(Box::new(v.clone()));
     }
     if let Some(v) = req.is_read {
-        conditions.push(format!("is_read = ?{}", params.len() + 1));
+        conditions.push(format!("{col_prefix}is_read = ?{}", params.len() + 1));
         params.push(Box::new(if v { 1i32 } else { 0i32 }));
     }
     if let Some(v) = req.is_starred {
-        conditions.push(format!("is_starred = ?{}", params.len() + 1));
+        conditions.push(format!("{col_prefix}is_starred = ?{}", params.len() + 1));
         params.push(Box::new(if v { 1i32 } else { 0i32 }));
     }
     if let Some(v) = req.has_attachments {
-        conditions.push(format!("has_attachments = ?{}", params.len() + 1));
+        conditions.push(format!("{col_prefix}has_attachments = ?{}", params.len() + 1));
         params.push(Box::new(if v { 1i32 } else { 0i32 }));
     }
 
     let limit = req.limit.clamp(1, 200);
     let offset = req.offset;
 
-    let where_clause = if conditions.is_empty() {
-        String::new()
+    let sql = if use_fts {
+        let extra = if conditions.is_empty() {
+            String::new()
+        } else {
+            format!("AND {}", conditions.join(" AND "))
+        };
+        format!(
+            "SELECT m.uid, m.account_id, m.folder, m.subject, m.from_address, m.from_name,
+                    m.to_addresses, m.date, m.has_attachments, m.is_read, m.is_starred, m.raw_size
+             FROM messages m
+             JOIN messages_fts ON m.rowid = messages_fts.rowid
+             WHERE messages_fts MATCH ?1
+             {extra}
+             ORDER BY CAST(m.uid AS INTEGER) DESC LIMIT ?{} OFFSET ?{}",
+            params.len() + 1,
+            params.len() + 2
+        )
     } else {
-        format!("WHERE {}", conditions.join(" AND "))
+        let where_clause = if conditions.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE {}", conditions.join(" AND "))
+        };
+        format!(
+            "SELECT uid, account_id, folder, subject, from_address, from_name, to_addresses,
+                    date, has_attachments, is_read, is_starred, raw_size
+             FROM messages {where_clause}
+             ORDER BY CAST(uid AS INTEGER) DESC LIMIT ?{} OFFSET ?{}",
+            params.len() + 1,
+            params.len() + 2
+        )
     };
-
-    let sql = format!(
-        "SELECT uid, account_id, folder, subject, from_address, from_name, to_addresses,
-                date, has_attachments, is_read, is_starred, raw_size
-         FROM messages {where_clause}
-         ORDER BY date DESC LIMIT ?{} OFFSET ?{}",
-        params.len() + 1,
-        params.len() + 2
-    );
 
     params.push(Box::new(limit));
     params.push(Box::new(offset));
@@ -1952,10 +4476,12 @@ fn get_imap_credentials(conn: &Connection, account_id: &str) -> Result<EmailAcco
     conn.query_row(
         "SELECT id, display_name, imap_host, imap_port, imap_username, imap_password,
                 smtp_host, smtp_port, smtp_username, smtp_password, from_address,
-                from_name, last_synced_uid, carddav_url, eas_url
+                from_name, last_synced_uid, carddav_url, eas_url, imap_use_ssl, smtp_use_ssl,
+                signatures
          FROM accounts WHERE id = ?1",
         params![account_id],
         |row| {
+            let sigs_str: String = row.get(17).unwrap_or_else(|_| "[]".to_string());
             Ok(EmailAccount {
                 id: row.get(0)?,
                 display_name: row.get(1)?,
@@ -1972,6 +4498,9 @@ fn get_imap_credentials(conn: &Connection, account_id: &str) -> Result<EmailAcco
                 last_synced_uid: row.get(12)?,
                 carddav_url: row.get(13)?,
                 eas_url: row.get(14)?,
+                imap_use_ssl: row.get::<_, i32>(15)? != 0,
+                smtp_use_ssl: row.get::<_, i32>(16)? != 0,
+                signatures: serde_json::from_str(&sigs_str).unwrap_or_default(),
             })
         },
     )
@@ -2043,7 +4572,7 @@ pub async fn email_batch_action(
             match result {
                 Ok(()) => {
                     // 同步本地缓存
-                    if let Err(e) = update_local_cache(&state, &req.action, target, req.dest_folder.as_deref()) {
+                    if let Err(e) = update_local_cache(&state, &gateway_url, &req.action, target, req.dest_folder.as_deref(), &account, &plain_password).await {
                         // 本地缓存更新失败不影响整体结果，但记录错误
                         errors.push(format!(
                             "uid={} 本地缓存更新失败: {e}",
@@ -2068,6 +4597,42 @@ pub async fn email_batch_action(
 }
 
 /// 执行单个邮件操作（调用 gateway）
+/// 把字符串中的 \\uXXXX 转义解码为可读中文字符，用于 gateway 返回的错误提示。
+fn decode_unicode_escapes(input: &str) -> String {
+    let mut output = String::with_capacity(input.len());
+    let mut chars = input.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some('u') => {
+                    let hex: String = chars.by_ref().take(4).collect();
+                    if let Ok(code) = u32::from_str_radix(&hex, 16) {
+                        if let Some(decoded) = char::from_u32(code) {
+                            output.push(decoded);
+                        } else {
+                            output.push('\\');
+                            output.push('u');
+                            output.push_str(&hex);
+                        }
+                    } else {
+                        output.push('\\');
+                        output.push('u');
+                        output.push_str(&hex);
+                    }
+                }
+                Some(next) => {
+                    output.push('\\');
+                    output.push(next);
+                }
+                None => output.push('\\'),
+            }
+        } else {
+            output.push(c);
+        }
+    }
+    output
+}
+
 async fn execute_single_action(
     client: &reqwest::Client,
     gateway_url: &str,
@@ -2098,7 +4663,7 @@ async fn execute_single_action(
                 uid: target.uid.clone(),
                 flag: flag.to_string(),
                 add,
-                use_ssl: true,
+                use_ssl: account.imap_use_ssl,
             };
             let url = format!("{base}/email/set_flag");
             let resp = client
@@ -2109,7 +4674,7 @@ async fn execute_single_action(
                 .map_err(|e| format!("请求 gateway 失败: {e}"))?;
             if !resp.status().is_success() {
                 let text = resp.text().await.unwrap_or_default();
-                return Err(format!("gateway 返回错误: {text}"));
+                return Err(format!("gateway 返回错误: {}", decode_unicode_escapes(&text)));
             }
             Ok(())
         }
@@ -2124,7 +4689,7 @@ async fn execute_single_action(
                 mailbox: target.folder.clone(),
                 dest_mailbox: dest.to_string(),
                 uid: target.uid.clone(),
-                use_ssl: true,
+                use_ssl: account.imap_use_ssl,
             };
             let url = format!("{base}/email/move");
             let resp = client
@@ -2135,7 +4700,7 @@ async fn execute_single_action(
                 .map_err(|e| format!("请求 gateway 失败: {e}"))?;
             if !resp.status().is_success() {
                 let text = resp.text().await.unwrap_or_default();
-                return Err(format!("gateway 返回错误: {text}"));
+                return Err(format!("gateway 返回错误: {}", decode_unicode_escapes(&text)));
             }
             Ok(())
         }
@@ -2148,7 +4713,7 @@ async fn execute_single_action(
                 imap_password: plain_password.to_string(),
                 mailbox: target.folder.clone(),
                 uid: target.uid.clone(),
-                use_ssl: true,
+                use_ssl: account.imap_use_ssl,
             };
             let url = format!("{base}/email/delete");
             let resp = client
@@ -2159,7 +4724,7 @@ async fn execute_single_action(
                 .map_err(|e| format!("请求 gateway 失败: {e}"))?;
             if !resp.status().is_success() {
                 let text = resp.text().await.unwrap_or_default();
-                return Err(format!("gateway 返回错误: {text}"));
+                return Err(format!("gateway 返回错误: {}", decode_unicode_escapes(&text)));
             }
             Ok(())
         }
@@ -2168,11 +4733,14 @@ async fn execute_single_action(
 }
 
 /// 批量操作后同步本地缓存
-fn update_local_cache(
-    state: &tauri::State<'_, EmailState>,
+async fn update_local_cache(
+    state: &EmailState,
+    gateway_url: &str,
     action: &str,
     target: &BatchActionTarget,
-    _dest_folder: Option<&str>,
+    dest_folder: Option<&str>,
+    account: &EmailAccount,
+    plain_password: &str,
 ) -> Result<(), String> {
     let conn = state.conn()?;
     match action {
@@ -2205,14 +4773,64 @@ fn update_local_cache(
             .map_err(|e| e.to_string())?;
         }
         "move" => {
-            // 移动：从原文件夹删除（目标文件夹会在下次同步时拉取）
+            // IMAP MOVE 后 UID 改变，旧 .eml 成为孤儿；先删旧索引和旧 .eml
+            let eml_path: String = conn
+                .query_row(
+                    "SELECT eml_path FROM messages WHERE uid = ?1 AND account_id = ?2 AND folder = ?3",
+                    params![target.uid, target.account_id, target.folder],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap_or_default();
+            if !eml_path.is_empty() {
+                if let Err(e) = delete_eml_file(&eml_path) {
+                    log::warn!("[rule-move] delete eml failed: {}", e);
+                }
+            }
             conn.execute(
                 "DELETE FROM messages WHERE uid = ?1 AND account_id = ?2 AND folder = ?3",
                 params![target.uid, target.account_id, target.folder],
             )
             .map_err(|e| e.to_string())?;
+            drop(conn);
+
+            // 同步目标文件夹索引：从 IMAP 拉取新邮件写入 SQLite
+            // apply_rules=false 跳过规则应用，避免 MOVE 已完成后再次触发规则循环
+            // Box 递归调用（sync_folder_internal → apply_rule_actions → update_local_cache → sync_folder_internal）
+            if let Some(dest) = dest_folder {
+                log::info!(
+                    "[rule-move] uid={} {} -> {}，开始同步目标文件夹索引",
+                    target.uid, target.folder, dest
+                );
+                let sync_req = SyncRequest {
+                    account_id: account.id.clone(),
+                    imap_host: account.imap_host.clone(),
+                    imap_port: account.imap_port,
+                    imap_username: account.imap_username.clone(),
+                    imap_password: plain_password.to_string(),
+                    mailbox: dest.to_string(),
+                    use_ssl: account.imap_use_ssl,
+                    last_uid: None, // 全量同步目标文件夹
+                };
+                let sync_result = Box::pin(sync_folder_internal(state, gateway_url, sync_req, false)).await;
+                if let Err(e) = sync_result {
+                    log::warn!("[rule-move] 同步目标文件夹 {} 失败: {}", dest, e);
+                }
+            }
         }
         "delete" => {
+            // 查询并删除 .eml 文件，然后删除索引
+            let eml_path: String = conn
+                .query_row(
+                    "SELECT eml_path FROM messages WHERE uid = ?1 AND account_id = ?2 AND folder = ?3",
+                    params![target.uid, target.account_id, target.folder],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap_or_default();
+            if !eml_path.is_empty() {
+                if let Err(e) = delete_eml_file(&eml_path) {
+                    log::warn!("[rule-delete] delete eml failed: {}", e);
+                }
+            }
             conn.execute(
                 "DELETE FROM messages WHERE uid = ?1 AND account_id = ?2 AND folder = ?3",
                 params![target.uid, target.account_id, target.folder],
@@ -2222,4 +4840,234 @@ fn update_local_cache(
         _ => {}
     }
     Ok(())
+}
+
+/// 按需拉取单封邮件的完整正文（同步时只拉头部，点击邮件时调用此命令拉正文）。
+/// Foxmail 风格：优先读本地 .eml 文件，未落盘时调 gateway 拉取 RFC822 并落盘。
+#[tauri::command]
+pub async fn email_fetch_body(
+    state: tauri::State<'_, EmailState>,
+    gateway_url: String,
+    account_id: String,
+    uid: String,
+    mailbox: String,
+) -> Result<serde_json::Value, String> {
+    if gateway_url.is_empty() {
+        return Err("gateway URL 为空".into());
+    }
+
+    // 1. 检查本地 .eml 是否已落盘
+    let conn = state.conn()?;
+    let eml_path: String = conn
+        .query_row(
+            "SELECT eml_path FROM messages WHERE uid = ?1 AND account_id = ?2 AND folder = ?3",
+            params![&uid, &account_id, &mailbox],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap_or_default();
+    drop(conn);
+
+    // 2. 如果本地有 .eml 文件，调用 /email/parse_body 解析（不重新走 IMAP）
+    if !eml_path.is_empty() {
+        if let Some(eml_bytes) = read_eml_file(&eml_path) {
+            let raw_b64 = base64::engine::general_purpose::STANDARD.encode(&eml_bytes);
+            let parse_req = serde_json::json!({ "rawBytes": raw_b64 });
+            let url = format!("{}/email/parse_body", gateway_url.trim_end_matches('/'));
+            let client = reqwest::Client::builder()
+                .timeout(Duration::from_secs(15))
+                .build()
+                .map_err(|e| format!("构建 HTTP 客户端失败: {e}"))?;
+            let resp = client
+                .post(&url)
+                .json(&parse_req)
+                .send()
+                .await
+                .map_err(|e| format!("请求 gateway 解析 .eml 失败: {e}"))?;
+            if resp.status().is_success() {
+                return resp.json().await.map_err(|e| format!("解析响应失败: {e}"));
+            }
+            log::warn!(
+                "[email-fetch-body] /email/parse_body 失败，回退到 IMAP 拉取: {}",
+                resp.status()
+            );
+        } else {
+            log::warn!("[email-fetch-body] eml_path 非空但文件不存在，回退到 IMAP 拉取");
+        }
+    }
+
+    // 3. 本地无 .eml，调 gateway /email/fetch_body（旧逻辑，会拉 RFC822 并解析）
+    let (account, plain_password) = {
+        let conn = state.conn()?;
+        let account = get_imap_credentials(&conn, &account_id)?;
+        let plain = decrypt_password(&account.imap_password)?;
+        (account, plain)
+    };
+
+    let req = serde_json::json!({
+        "accountId": account_id,
+        "imapHost": account.imap_host,
+        "imapPort": account.imap_port,
+        "imapUsername": account.imap_username,
+        "imapPassword": plain_password,
+        "mailbox": mailbox,
+        "uid": uid,
+        "useSsl": account.imap_use_ssl,
+    });
+
+    let url = format!("{}/email/fetch_body", gateway_url.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("构建 HTTP 客户端失败: {e}"))?;
+    let resp = client
+        .post(&url)
+        .json(&req)
+        .send()
+        .await
+        .map_err(|e| format!("请求 gateway 失败: {e}"))?;
+    if !resp.status().is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!("gateway 返回错误: {text}"));
+    }
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("解析响应失败: {e}"))?;
+
+    // 4. 如果 gateway 返回 rawBytes（完整 RFC822），落盘为 .eml 文件
+    let raw_bytes_b64 = body.get("rawBytes").and_then(|v| v.as_str()).unwrap_or("");
+    let new_eml_path: String = if !raw_bytes_b64.is_empty() {
+        match base64::engine::general_purpose::STANDARD.decode(raw_bytes_b64) {
+            Ok(bytes) => match write_eml_file(&account_id, &mailbox, &uid, &bytes) {
+                Ok(rel) => rel,
+                Err(e) => {
+                    log::warn!("[email-fetch-body] 落盘 .eml 失败: {}", e);
+                    String::new()
+                }
+            },
+            Err(e) => {
+                log::warn!("[email-fetch-body] base64 解码 rawBytes 失败: {}", e);
+                String::new()
+            }
+        }
+    } else {
+        String::new()
+    };
+
+    // 5. 更新本地缓存：eml_path + body_fetched（不再写 body_text）
+    let conn = state.conn()?;
+    if new_eml_path.is_empty() {
+        conn.execute(
+            "UPDATE messages SET body_fetched = 1
+             WHERE uid = ?1 AND account_id = ?2 AND folder = ?3",
+            params![uid, account_id, mailbox],
+        )
+        .map_err(|e| e.to_string())?;
+    } else {
+        conn.execute(
+            "UPDATE messages SET body_fetched = 1, eml_path = ?1
+             WHERE uid = ?2 AND account_id = ?3 AND folder = ?4",
+            params![new_eml_path, uid, account_id, mailbox],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+
+    Ok(body)
+}
+
+/// 拉取邮件原始 RFC822 字节（用于 .eml 导出）
+/// Foxmail 风格：优先读本地 .eml 文件，未落盘时调 gateway 拉取并落盘。
+#[tauri::command]
+pub async fn email_fetch_raw(
+    state: tauri::State<'_, EmailState>,
+    gateway_url: String,
+    account_id: String,
+    uid: String,
+    mailbox: String,
+) -> Result<serde_json::Value, String> {
+    if gateway_url.is_empty() {
+        return Err("gateway URL 为空".into());
+    }
+
+    // 1. 优先读本地 .eml 文件
+    let conn = state.conn()?;
+    let eml_path: String = conn
+        .query_row(
+            "SELECT eml_path FROM messages WHERE uid = ?1 AND account_id = ?2 AND folder = ?3",
+            params![&uid, &account_id, &mailbox],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap_or_default();
+    drop(conn);
+
+    if !eml_path.is_empty() {
+        if let Some(eml_bytes) = read_eml_file(&eml_path) {
+            let size = eml_bytes.len();
+            let raw_b64 = base64::engine::general_purpose::STANDARD.encode(&eml_bytes);
+            return Ok(serde_json::json!({
+                "rawBase64": raw_b64,
+                "size": size,
+            }));
+        }
+    }
+
+    // 2. 本地无 .eml，调 gateway 拉取 RFC822
+    let (account, plain_password) = {
+        let conn = state.conn()?;
+        let account = get_imap_credentials(&conn, &account_id)?;
+        let plain = decrypt_password(&account.imap_password)?;
+        (account, plain)
+    };
+
+    let req = serde_json::json!({
+        "accountId": account_id,
+        "imapHost": account.imap_host,
+        "imapPort": account.imap_port,
+        "imapUsername": account.imap_username,
+        "imapPassword": plain_password,
+        "mailbox": mailbox,
+        "uid": uid,
+        "useSsl": account.imap_use_ssl,
+    });
+
+    let url = format!("{}/email/fetch_raw", gateway_url.trim_end_matches('/'));
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(&url)
+        .json(&req)
+        .send()
+        .await
+        .map_err(|e| format!("请求 gateway 失败: {e}"))?;
+    if !resp.status().is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!("gateway 返回错误: {text}"));
+    }
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("解析响应失败: {e}"))?;
+
+    // 3. 落盘 .eml 文件供下次使用
+    if let Some(raw_b64) = body.get("rawBase64").and_then(|v| v.as_str()) {
+        if !raw_b64.is_empty() {
+            match base64::engine::general_purpose::STANDARD.decode(raw_b64) {
+                Ok(bytes) => {
+                    match write_eml_file(&account_id, &mailbox, &uid, &bytes) {
+                        Ok(rel) => {
+                            let conn = state.conn()?;
+                            let _ = conn.execute(
+                                "UPDATE messages SET body_fetched = 1, eml_path = ?1
+                                 WHERE uid = ?2 AND account_id = ?3 AND folder = ?4",
+                                params![rel, uid, account_id, mailbox],
+                            );
+                        }
+                        Err(e) => log::warn!("[email-fetch-raw] 落盘 .eml 失败: {}", e),
+                    }
+                }
+                Err(e) => log::warn!("[email-fetch-raw] base64 解码失败: {}", e),
+            }
+        }
+    }
+
+    Ok(body)
 }
