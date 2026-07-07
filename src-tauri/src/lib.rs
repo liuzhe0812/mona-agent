@@ -416,8 +416,6 @@ pub fn run() {
             notes::notes_save_state,
             notes::notes_export_temp,
             notes::notes_create_from_chat,
-            notes::notes_create_from_template,
-            notes::notes_list_templates,
             notes::notes_read_note_content,
             notes::notes_search,
             notes::notes_search_all,

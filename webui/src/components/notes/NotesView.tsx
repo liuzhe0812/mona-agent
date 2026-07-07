@@ -62,7 +62,6 @@ import { BacklinksPanel } from "./BacklinksPanel";
 import { GraphViewDialog } from "./GraphViewDialog";
 import { QuickSwitchDialog } from "./QuickSwitchDialog";
 import { RelatedNotesPanel } from "./RelatedNotesPanel";
-import { TemplatePickerDialog } from "./TemplatePickerDialog";
 import { NoteEditor } from "./NoteEditor";
 import type { EditorMode } from "@/components/common/MarkdownEditor";
 import { NoteList, type SortMode } from "./NoteList";
@@ -113,7 +112,6 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
   const [agentPanelWidth, setAgentPanelWidth] = useState(AGENT_PANEL_DEFAULT_WIDTH);
   const [backlinksCollapsed, setBacklinksCollapsed] = useState(false);
   const [agentStreaming, setAgentStreaming] = useState(false);
-  const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
   const [graphViewOpen, setGraphViewOpen] = useState(false);
   const [quickSwitchOpen, setQuickSwitchOpen] = useState(false);
   const dragRef = useRef<{ startX: number; startWidth: number } | null>(null);
@@ -1092,12 +1090,6 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
                   <IconButton label="新建笔记" onClick={() => createNote()}>
                     <Plus className="h-3.5 w-3.5" />
                   </IconButton>
-                  <IconButton
-                    label="从模板创建"
-                    onClick={() => setTemplatePickerOpen(true)}
-                  >
-                    <FileCode2 className="h-3.5 w-3.5" />
-                  </IconButton>
                   <IconButton label="新建文件夹" onClick={createNotebook}>
                     <FolderPlus className="h-3.5 w-3.5" />
                   </IconButton>
@@ -1290,10 +1282,6 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
                     <ContextMenuItem onSelect={() => createNote("manual")}>
                       <FileText className="mr-2 h-3.5 w-3.5" />
                       新建笔记
-                    </ContextMenuItem>
-                    <ContextMenuItem onSelect={() => setTemplatePickerOpen(true)}>
-                      <FileCode2 className="mr-2 h-3.5 w-3.5" />
-                      从模板创建
                     </ContextMenuItem>
                     <ContextMenuItem onSelect={createNotebook}>
                       <FolderPlus className="mr-2 h-3.5 w-3.5" />
@@ -1529,15 +1517,6 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
         open={globalSearchOpen}
         onOpenChange={setGlobalSearchOpen}
         onSelectNote={openNoteFromGlobalSearch}
-      />
-      <TemplatePickerDialog
-        open={templatePickerOpen}
-        onOpenChange={setTemplatePickerOpen}
-        defaultNotebookId={activeNotebookId ?? undefined}
-        onCreated={(noteId) => {
-          selectNote(noteId);
-          setNotice("已从模板创建笔记");
-        }}
       />
       <GraphViewDialog
         open={graphViewOpen}

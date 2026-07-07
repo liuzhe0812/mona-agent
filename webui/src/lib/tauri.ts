@@ -304,30 +304,6 @@ export async function listMocNotes(): Promise<unknown[]> {
   return invoke<unknown[]>("notes_moc_list");
 }
 
-export interface TemplateItem {
-  id: string;
-  title: string;
-  notebookId: string;
-  preview: string;
-}
-
-export async function listNoteTemplates(): Promise<TemplateItem[]> {
-  if (!isTauri()) return [];
-  return invoke<TemplateItem[]>("notes_list_templates");
-}
-
-export async function createNoteFromTemplate(
-  templateId: string,
-  title: string,
-  notebookId?: string,
-): Promise<string> {
-  return invoke<string>("notes_create_from_template", {
-    templateId,
-    title,
-    notebookId: notebookId ?? null,
-  });
-}
-
 export async function openPathWithSystemApp(path: string): Promise<void> {
   if (!isTauri()) return;
   try {
