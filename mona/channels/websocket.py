@@ -3562,6 +3562,30 @@ class WebSocketChannel(BaseChannel):
             if ephemeral:
                 new_id = f"ephemeral:{new_id}"
             self._attach(connection, new_id)
+            # Persist workspace binding on the session so AgentLoop can route
+            # file operations to the project directory. ``None`` (or omitted)
+            # means the default workspace (~/.mona/workspace/).
+            workspace = envelope.get("workspace")
+            if workspace is not None and not isinstance(workspace, str):
+                workspace = None
+            if isinstance(workspace, str):
+                workspace = workspace.strip() or None
+            # ``agent_kind`` marks the session for a dedicated agent loop.
+            # Currently only ``"ppt"`` is supported — routes to PPTAgentLoop
+            # (tool whitelist + ppt_soul.md + no memory).
+            agent_kind = envelope.get("agent_kind")
+            if not isinstance(agent_kind, str):
+                agent_kind = None
+            agent_kind = agent_kind.strip() if agent_kind else None
+            if agent_kind not in ("ppt", None):
+                agent_kind = None
+            if (workspace is not None or agent_kind is not None) and self._session_manager is not None:
+                session = self._session_manager.get_or_create(f"websocket:{new_id}")
+                if workspace is not None:
+                    session.metadata["workspace"] = workspace
+                if agent_kind is not None:
+                    session.metadata["agent_kind"] = agent_kind
+                self._session_manager.save(session)
             await self._send_event(connection, "attached", chat_id=new_id)
             await self._hydrate_after_subscribe(new_id)
             return

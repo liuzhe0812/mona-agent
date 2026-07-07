@@ -117,6 +117,12 @@ class ChannelManager:
                 channel.transcription_api_key = transcription_key
                 channel.transcription_api_base = transcription_base
                 channel.transcription_language = transcription_language
+                # TTS config (fixed voice per PRD)
+                channel.tts_provider = self.config.channels.tts_provider
+                channel.tts_voice = self.config.channels.tts_voice
+                channel.tts_api_key = self.config.channels.tts_api_key
+                channel.tts_api_base = self.config.channels.tts_api_base
+                channel.tts_model = self.config.channels.tts_model
                 channel.send_progress = self._resolve_bool_override(
                     section, "send_progress", self.config.channels.send_progress,
                 )

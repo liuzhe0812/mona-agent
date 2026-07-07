@@ -1,4 +1,4 @@
-﻿"""Email channel implementation using IMAP polling + SMTP replies."""
+"""Email channel implementation using IMAP polling + SMTP replies."""
 
 import asyncio
 import html
@@ -551,10 +551,24 @@ class EmailChannel(BaseChannel):
     def _decode_header_value(value: str) -> str:
         if not value:
             return ""
-        try:
-            return str(make_header(decode_header(value)))
-        except Exception:
-            return value
+        # 含 MIME encoded-word 标记：用 decode_header 解码
+        if "=?" in value and "?=" in value:
+            try:
+                return str(make_header(decode_header(value)))
+            except Exception:
+                return value
+        # 检测 surrogate（policy.default 对 raw 字节用 surrogateescape 处理）
+        if any(0xDC80 <= ord(c) <= 0xDCFF for c in value):
+            try:
+                raw_bytes = value.encode("latin-1", errors="surrogateescape")
+                for charset in ("utf-8", "gbk", "gb18030", "big5"):
+                    try:
+                        return raw_bytes.decode(charset)
+                    except UnicodeDecodeError:
+                        continue
+            except Exception:
+                pass
+        return value
 
     @classmethod
     def _extract_text_body(cls, msg: Any) -> str:

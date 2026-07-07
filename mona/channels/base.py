@@ -5,6 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from loguru import logger
 
@@ -32,6 +33,11 @@ class BaseChannel(ABC):
     transcription_api_key: str = ""
     transcription_api_base: str = ""
     transcription_language: str | None = None
+    tts_provider: str = "edge"
+    tts_voice: str = "zh-CN-XiaoyiNeural"
+    tts_api_key: str = ""
+    tts_api_base: str = ""
+    tts_model: str = ""
     send_progress: bool = True
     send_tool_hints: bool = False
     show_reasoning: bool = True
@@ -72,6 +78,39 @@ class BaseChannel(ABC):
         except Exception:
             self.logger.exception("Audio transcription failed")
             return ""
+
+    async def synthesize_speech(self, text: str, output_path: str | Path | None = None) -> Path | None:
+        """Synthesize text to an audio file via TTS provider. Returns Path or None on failure.
+
+        Uses the channel's configured tts_provider and tts_voice (fixed voice
+        per PRD — same voice every synthesis). When *output_path* is omitted a
+        temporary file under the media directory is used.
+        """
+        if not text.strip():
+            return None
+        try:
+            from mona.providers.tts import get_tts_provider
+
+            provider = get_tts_provider(
+                self.tts_provider,
+                api_key=self.tts_api_key or None,
+                api_base=self.tts_api_base or None,
+                voice=self.tts_voice,
+                model=self.tts_model or "",
+            )
+            if output_path is None:
+                from mona.config.paths import get_media_dir
+
+                out = get_media_dir() / f"tts_{uuid4().hex[:8]}.mp3"
+            else:
+                out = Path(output_path)
+            result = await provider.synthesize(text, out)
+            if result is None:
+                self.logger.warning("TTS synthesis returned no audio")
+            return result
+        except Exception:
+            self.logger.exception("TTS synthesis failed")
+            return None
 
     async def login(self, force: bool = False) -> bool:
         """
