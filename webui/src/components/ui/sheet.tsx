@@ -4,8 +4,26 @@ import { X } from "lucide-react";
 import { cva, type VariantProps } from "class-variance-authority";
 
 import { cn } from "@/lib/utils";
+import { cleanupBodyLocks } from "@/components/ui/dialog";
 
-const Sheet = DialogPrimitive.Root;
+const Sheet = ({
+  onOpenChange,
+  ...props
+}: React.ComponentProps<typeof DialogPrimitive.Root>) => {
+  const handleOpenChange = (open: boolean) => {
+    onOpenChange?.(open);
+    if (!open) {
+      [50, 200, 400, 600].forEach((delay) => {
+        window.setTimeout(() => {
+          if (document.body.style.pointerEvents === "none") {
+            document.body.style.pointerEvents = "";
+          }
+        }, delay);
+      });
+    }
+  };
+  return <DialogPrimitive.Root onOpenChange={handleOpenChange} {...props} />;
+};
 const SheetTrigger = DialogPrimitive.Trigger;
 const SheetClose = DialogPrimitive.Close;
 const SheetPortal = DialogPrimitive.Portal;
@@ -66,15 +84,10 @@ const SheetContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
   SheetContentProps
 >(({ side = "right", className, children, showCloseButton = true, ...props }, ref) => {
-  // 安全网：SheetContent 卸载时确保 body 的 pointer-events 被清理。
-  // Sheet 底层使用 DialogPrimitive，共享相同的 body lock 机制。
-  // 当与 ContextMenu 组合使用或因竞态导致 overlay 引用计数失衡时，
-  // body 上 pointer-events:none 可能残留，界面完全无法点击。
+  // 安全网：SheetContent 卸载时清理 body 残留状态（兜底 onOpenChange 延迟清理）。
   React.useEffect(() => {
     return () => {
-      if (document.body.style.pointerEvents === "none") {
-        document.body.style.pointerEvents = "";
-      }
+      cleanupBodyLocks();
     };
   }, []);
   return (

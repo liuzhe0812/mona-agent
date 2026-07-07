@@ -128,6 +128,9 @@ export interface ChatSummary {
   updatedAt: string | null;
   title?: string;
   preview: string;
+  /** Project workspace directory bound to this session. ``null`` (or omitted)
+   *  means the session belongs to the default "会话" section (default workspace). */
+  workspace?: string | null;
   /** Unix epoch seconds when this session currently has a turn in flight. */
   runStartedAt?: number | null;
 }
@@ -497,7 +500,7 @@ export interface WebuiThreadPersistedPayload {
 }
 
 export type Outbound =
-  | { type: "new_chat"; ephemeral?: boolean }
+  | { type: "new_chat"; ephemeral?: boolean; workspace?: string | null; agent_kind?: string | null }
   | { type: "attach"; chat_id: string }
   | {
       type: "message";

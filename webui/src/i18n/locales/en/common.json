@@ -10,6 +10,7 @@
     "error": {
       "title": "Couldn't reach mona",
       "gatewayHint": "Make sure the gateway is running (`mona gateway`) and that this page is open on the same machine.",
+      "otherFeaturesHint": "Notes, Settings, SSH, Browser and other features don't depend on the runtime and remain available.",
       "retry": "Retry"
     },
     "auth": {
@@ -307,12 +308,16 @@
     "newChat": "New chat",
     "groups": {
       "pinned": "Pinned",
+      "conversations": "Conversations",
       "all": "Chats",
       "today": "Today",
       "yesterday": "Yesterday",
       "earlier": "Earlier",
       "archived": "Archived"
-    }
+    },
+    "moveToProject": "Move to project…",
+    "newProjectChat": "New chat in project",
+    "bindProjectFolder": "Bind project folder…"
   },
   "deleteConfirm": {
     "title": "Delete this chat?",
@@ -421,6 +426,10 @@
           "4_3": "Landscape 4:3",
           "16_9": "Wide 16:9"
         }
+      },
+      "workspace": {
+        "placeholder": "Select folder (optional)",
+        "clear": "Clear folder selection"
       },
       "tools": {
         "search": "Search",

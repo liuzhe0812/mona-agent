@@ -12,6 +12,7 @@ import { ThreadShell } from "@/components/thread/ThreadShell";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { AppTitleBar } from "@/components/workspace/AppTitleBar";
 import { BrowserTabView } from "@/components/browser/BrowserTabView";
+import { HistoryPage } from "@/components/browser/HistoryPage";
 import { useBrowserTabs } from "@/hooks/useBrowserTabs";
 import { TerminalView } from "@/components/terminal/TerminalView";
 import { useTerminalStore } from "@/components/terminal/store/terminalStore";
@@ -34,7 +35,6 @@ import {
 import { deriveTitle } from "@/lib/format";
 import { MonaClient } from "@/lib/mona-client";
 import { ClientProvider, useClientOptional, type RuntimeStatus } from "@/providers/ClientProvider";
-import { KnowledgeDialogProvider } from "@/providers/KnowledgeDialogProvider";
 import type { ChatSummary } from "@/lib/types";
 import { isTauri, getGatewayStatus, startGateway, getDesktopSettings, type SidebarShortcuts, type UpdateCheckResult } from "@/lib/tauri";
 import { Button } from "@/components/ui/button";
@@ -114,6 +114,12 @@ const ComposeWindow = lazy(() =>
   })),
 );
 
+const NotificationWindow = lazy(() =>
+  import("@/components/notification/NotificationWindow").then((module) => ({
+    default: module.NotificationWindow,
+  })),
+);
+
 function bootstrapTokenExpiresAt(expiresInSeconds: number): number {
   return Date.now() + Math.max(0, expiresInSeconds) * 1000;
 }
@@ -133,6 +139,10 @@ function isQuickAskRoute(): boolean {
 
 function isComposeRoute(): boolean {
   return typeof window !== "undefined" && window.location.hash.startsWith("#/compose");
+}
+
+function isNotificationRoute(): boolean {
+  return typeof window !== "undefined" && window.location.hash.startsWith("#/notification");
 }
 
 function shortcutFromKeyboardEvent(event: KeyboardEvent): string | null {
@@ -400,6 +410,7 @@ export default function App() {
 
   const quickAskRoute = isQuickAskRoute();
   const composeRoute = isComposeRoute();
+  const notificationRoute = isNotificationRoute();
 
   return (
     <ClientProvider
@@ -409,8 +420,11 @@ export default function App() {
       runtimeStatus={runtimeStatus}
       runtimeError={errorMessage}
     >
-      <KnowledgeDialogProvider>
-      {composeRoute ? (
+      {notificationRoute ? (
+        <Suspense fallback={null}>
+          <NotificationWindow />
+        </Suspense>
+      ) : composeRoute ? (
         <Suspense fallback={<ModuleLoading title="正在打开写邮件" />}>
           <ComposeWindow />
         </Suspense>
@@ -426,7 +440,6 @@ export default function App() {
           />
         </LicenseProvider>
       )}
-    </KnowledgeDialogProvider>
     </ClientProvider>
   );
 }
@@ -467,6 +480,16 @@ function Shell({
     browserFullscreen,
     toggleFullscreen,
     exitFullscreen,
+    reorderTabs,
+    togglePinTab,
+    closeOtherTabs,
+    closeTabsToRight,
+    duplicateTab,
+    openHistoryPage,
+    toggleMute,
+    toggleAdBlock,
+    toggleDarkMode,
+    openDevtools,
   } = useBrowserTabs();
   const [desktopSidebarOpen, setDesktopSidebarOpen] =
     useState<boolean>(readSidebarOpen);
@@ -799,9 +822,9 @@ function Shell({
     setMobileSidebarOpen(false);
   }, [switchToMonaTab]);
 
-  const onCreateChat = useCallback(async () => {
+  const onCreateChat = useCallback(async (workspace?: string | null) => {
     try {
-      const chatId = await createChat();
+      const chatId = await createChat(workspace);
       setActiveKey(`websocket:${chatId}`);
       setView("chat");
       switchToMonaTab();
@@ -1036,20 +1059,37 @@ function Shell({
           addMdReaderTab(filePath);
         }
       });
+      const un5 = await listen<{ action: string }>("notification-action", async (event) => {
+        const action = event.payload?.action;
+        if (action === "open-email" || action === "open-schedule") {
+          try {
+            const { getCurrentWindow } = await import("@tauri-apps/api/window");
+            const mainWin = getCurrentWindow();
+            await mainWin.show();
+            await mainWin.unminimize();
+            await mainWin.setFocus();
+          } catch {
+            // ignore
+          }
+          if (action === "open-email") onOpenEmail();
+          else if (action === "open-schedule") onOpenSchedule();
+        }
+      });
       if (cancelled) {
         un1();
         un2();
         un3();
         un4();
+        un5();
         return;
       }
-      unlisteners.push(un1, un2, un3, un4);
+      unlisteners.push(un1, un2, un3, un4, un5);
     })();
     return () => {
       cancelled = true;
       unlisteners.forEach((fn) => fn());
     };
-  }, [onOpenNote, onOpenSSHAndNew, refresh, addMdReaderTab]);
+  }, [onOpenNote, onOpenSSHAndNew, refresh, addMdReaderTab, onOpenEmail, onOpenSchedule]);
 
   // 启动时拉取 pending 的 md 文件（首次启动场景）
   const addMdReaderTabRef = useRef(addMdReaderTab);
@@ -1277,6 +1317,12 @@ function Shell({
             onOpenSettings={onOpenSettings}
             onOpenSubscribe={onOpenSubscribe}
             settingsBadge={!!updateAvailable}
+            onPinToggle={togglePinTab}
+            onDuplicate={duplicateTab}
+            onCloseOthers={closeOtherTabs}
+            onCloseRight={closeTabsToRight}
+            onReorder={reorderTabs}
+            onToggleMute={toggleMute}
           />
         )}
 
@@ -1480,6 +1526,29 @@ function Shell({
                   </div>
                 ))}
               {browserTabs
+                .filter((t) => t.type === "history")
+                .map((tab) => (
+                  <div
+                    key={tab.id}
+                    className="absolute inset-0 flex flex-col bg-background"
+                    style={{ display: tab.id === activeBrowserTabId ? "flex" : "none" }}
+                  >
+                    <HistoryPage
+                      onNavigate={(url) => {
+                        // 关闭历史记录标签，打开新标签导航
+                        void closeBrowserTab(tab.id);
+                        addEmptyTab();
+                        // 使用 setTimeout 等待新标签创建
+                        setTimeout(() => {
+                          const newTabId = `tab-${Date.now()}`;
+                          navigateToUrl(newTabId, url).catch(() => {});
+                        }, 100);
+                      }}
+                      onBack={() => void closeBrowserTab(tab.id)}
+                    />
+                  </div>
+                ))}
+              {browserTabs
                 .filter((t) => t.type === "browser")
                 .map((tab) => (
                   <div
@@ -1499,6 +1568,11 @@ function Shell({
                       onGoForward={() => goForward(tab.id)}
                       onReload={() => reload(tab.id)}
                       onUrlChange={(url) => updateTabUrl(tab.id, url)}
+                      onOpenHistory={openHistoryPage}
+                      onToggleMute={() => toggleMute(tab.id)}
+                      onToggleAdBlock={() => toggleAdBlock(tab.id)}
+                      onToggleDarkMode={() => toggleDarkMode(tab.id)}
+                      onOpenDevtools={() => openDevtools(tab.id)}
                     />
                   </div>
                 ))}
@@ -1578,7 +1652,19 @@ function RuntimePlaceholder({
   onRetry: () => void;
 }) {
   const { t } = useTranslation();
-  // 连接中不显示任何占位内容，状态由标题栏的 ConnectionBadge 指示
+  // 连接中：显示简洁的连接提示，避免聊天区空白造成"应用卡住"的错觉
+  if (status === "connecting") {
+    return (
+      <div className="flex h-full w-full items-center justify-center px-4 text-center">
+        <div className="flex flex-col items-center gap-3">
+          <div className="h-2 w-2 animate-pulse rounded-full bg-amber-500" />
+          <p className="text-sm text-muted-foreground">
+            {t("app.loading.connecting")}
+          </p>
+        </div>
+      </div>
+    );
+  }
   if (status !== "error") return null;
   return (
     <div className="flex h-full w-full items-center justify-center px-4 text-center">
@@ -1589,6 +1675,9 @@ function RuntimePlaceholder({
         ) : null}
         <p className="text-xs text-muted-foreground">
           {t("app.error.gatewayHint")}
+        </p>
+        <p className="text-xs text-muted-foreground">
+          {t("app.error.otherFeaturesHint")}
         </p>
         <Button variant="outline" size="sm" onClick={onRetry}>
           {t("app.error.retry")}

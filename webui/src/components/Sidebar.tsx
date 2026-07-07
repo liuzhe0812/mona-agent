@@ -1,6 +1,8 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   Archive,
+  ChevronDown,
+  ChevronUp,
   LogIn,
   Menu,
   Search,
@@ -22,7 +24,9 @@ import sidebarScheduleIcon from "@/assets/icons/sidebar-schedule.jpg";
 
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useLicense } from "@/hooks/useLicense";
+import { deriveTitle } from "@/lib/format";
 import type {
   ChatSummary,
   SidebarViewState,
@@ -156,10 +160,16 @@ export function Sidebar(props: SidebarProps) {
       <div
         className={cn(
           "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden transition-opacity duration-200",
-          collapsed && "pointer-events-none opacity-0",
         )}
       >
-        {!collapsed && (
+        {collapsed ? (
+          <CollapsedChatList
+            sessions={props.sessions}
+            activeKey={props.activeKey}
+            onSelect={props.onSelect}
+            titleOverrides={props.titleOverrides ?? {}}
+          />
+        ) : (
           <ChatList
             sessions={props.sessions}
             activeKey={props.activeKey}
@@ -393,5 +403,110 @@ function SidebarActionButton({
         {label}
       </span>
     </Button>
+  );
+}
+
+function CollapsedChatList({
+  sessions,
+  activeKey,
+  onSelect,
+  titleOverrides,
+}: {
+  sessions: ChatSummary[];
+  activeKey: string | null;
+  onSelect: (key: string) => void;
+  titleOverrides: Record<string, string>;
+}) {
+  const { t } = useTranslation();
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [canScrollUp, setCanScrollUp] = useState(false);
+  const [canScrollDown, setCanScrollDown] = useState(false);
+
+  const sorted = [...sessions].sort((a, b) => {
+    const at = Date.parse(a.updatedAt ?? a.createdAt ?? "");
+    const bt = Date.parse(b.updatedAt ?? b.createdAt ?? "");
+    return bt - at;
+  });
+  const recent = sorted.slice(0, 30);
+
+  const updateScrollState = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    setCanScrollUp(el.scrollTop > 4);
+    setCanScrollDown(el.scrollTop + el.clientHeight < el.scrollHeight - 4);
+  };
+
+  useEffect(() => {
+    updateScrollState();
+  }, [recent.length]);
+
+  if (recent.length === 0) {
+    return null;
+  }
+
+  const scrollBy = (delta: number) => {
+    scrollRef.current?.scrollBy({ top: delta, behavior: "smooth" });
+  };
+
+  return (
+    <TooltipProvider delayDuration={300}>
+      <div className="relative flex h-full min-h-0 flex-col items-center">
+        {canScrollUp && (
+          <button
+            type="button"
+            onClick={() => scrollBy(-108)}
+            aria-label={t("common.scrollUp", "向上滚动")}
+            className="absolute top-0 z-10 flex h-5 w-9 items-center justify-center rounded-full bg-sidebar/90 text-muted-foreground shadow-sm backdrop-blur-sm transition-opacity hover:text-sidebar-foreground"
+          >
+            <ChevronUp className="h-3.5 w-3.5" />
+          </button>
+        )}
+        <div
+          ref={scrollRef}
+          onScroll={updateScrollState}
+          className="flex h-full flex-col items-center gap-1 overflow-y-auto overflow-x-hidden px-0 py-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        >
+          {recent.map((s) => {
+            const active = s.key === activeKey;
+            const title =
+              titleOverrides[s.key]?.trim() ||
+              s.title?.trim() ||
+              deriveTitle(s.preview, t("chat.newChat"));
+            const initial = title.charAt(0).toUpperCase() || "?";
+            return (
+              <Tooltip key={s.key}>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={() => onSelect(s.key)}
+                    className={cn(
+                      "flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[13px] font-medium transition-colors",
+                      active
+                        ? "bg-sidebar-accent/80 text-sidebar-foreground shadow-[inset_0_0_0_1px_hsl(var(--sidebar-border)/0.35)]"
+                        : "text-muted-foreground/70 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground",
+                    )}
+                  >
+                    {initial}
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="right" className="max-w-[200px] truncate">
+                  {title}
+                </TooltipContent>
+              </Tooltip>
+            );
+          })}
+        </div>
+        {canScrollDown && (
+          <button
+            type="button"
+            onClick={() => scrollBy(108)}
+            aria-label={t("common.scrollDown", "向下滚动")}
+            className="absolute bottom-0 z-10 flex h-5 w-9 items-center justify-center rounded-full bg-sidebar/90 text-muted-foreground shadow-sm backdrop-blur-sm transition-opacity hover:text-sidebar-foreground"
+          >
+            <ChevronDown className="h-3.5 w-3.5" />
+          </button>
+        )}
+      </div>
+    </TooltipProvider>
   );
 }

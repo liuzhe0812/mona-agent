@@ -19,6 +19,7 @@ import {
   ChevronUp,
   CircleHelp,
   Database,
+  Folder,
   History,
   ImageIcon,
   Loader2,
@@ -88,6 +89,9 @@ interface ThreadComposerProps {
   kbProjectName?: string | null;
   kbProjects?: Array<{ id: string; name: string; isNotebook?: boolean }>;
   onKbSelect?: (id: string | null) => void;
+  /** Project workspace bound to a new-chat composer. Only shown in hero mode. */
+  workspace?: string | null;
+  onWorkspaceChange?: (workspace: string | null) => void;
   /** Pending message queue for mid-turn staging. */
   pendingMessages?: PendingMessage[];
   onPendingAppend?: (id: string) => void;
@@ -413,6 +417,8 @@ export function ThreadComposer({
   kbProjectName,
   kbProjects,
   onKbSelect,
+  workspace,
+  onWorkspaceChange,
 }: ThreadComposerProps) {
   const { t } = useTranslation();
   const [value, setValue] = useState("");
@@ -908,6 +914,13 @@ export function ThreadComposer({
             {leadingActions ? (
               <div className="flex min-w-0 items-center gap-1">{leadingActions}</div>
             ) : null}
+            {isHero ? (
+              <WorkspaceSelector
+                workspace={workspace}
+                onChange={onWorkspaceChange ?? (() => {})}
+                disabled={disabled}
+              />
+            ) : null}
             <div ref={aspectControlRef} className="relative flex items-center gap-1">
               <Button
                 type="button"
@@ -1164,6 +1177,95 @@ interface SlashCommandPaletteProps {
   isHero: boolean;
   onHover: (index: number) => void;
   onChoose: (command: SlashCommand) => void;
+}
+
+interface WorkspaceSelectorProps {
+  workspace?: string | null;
+  onChange: (workspace: string | null) => void;
+  disabled?: boolean;
+}
+
+function WorkspaceSelector({ workspace, onChange, disabled }: WorkspaceSelectorProps) {
+  const { t } = useTranslation();
+  const [picking, setPicking] = useState(false);
+
+  const pickWorkspace = useCallback(async () => {
+    if (disabled || picking) return;
+    setPicking(true);
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const selected = await open({ directory: true, multiple: false });
+      if (typeof selected === "string" && selected.trim()) {
+        onChange(selected.trim());
+      }
+    } catch (e) {
+      console.error("Failed to pick workspace folder", e);
+    } finally {
+      setPicking(false);
+    }
+  }, [disabled, onChange, picking]);
+
+  const clearWorkspace = useCallback(() => {
+    onChange(null);
+  }, [onChange]);
+
+  if (workspace) {
+    const normalized = workspace.replace(/\\/g, "/");
+    const parts = normalized.split("/").filter(Boolean);
+    const basename = parts[parts.length - 1] ?? workspace;
+    return (
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          disabled={disabled || picking}
+          onClick={pickWorkspace}
+          title={workspace}
+          className={cn(
+            "inline-flex min-w-0 items-center gap-1.5 rounded-lg border px-2.5 py-1.5",
+            "border-border/60 bg-muted/60 text-[12px] font-medium text-foreground/80",
+            "hover:bg-muted/80 transition-colors cursor-pointer",
+            (disabled || picking) && "pointer-events-none opacity-55",
+          )}
+        >
+          <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          <span className="truncate max-w-[12rem]">{basename}</span>
+          <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground/70" />
+        </button>
+        <button
+          type="button"
+          onClick={clearWorkspace}
+          disabled={disabled || picking}
+          aria-label={t("thread.composer.workspace.clear")}
+          className={cn(
+            "inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full",
+            "text-muted-foreground/80 hover:bg-muted/70 hover:text-foreground",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            (disabled || picking) && "pointer-events-none opacity-55",
+          )}
+        >
+          <X className="h-3 w-3" />
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      disabled={disabled || picking}
+      onClick={pickWorkspace}
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5",
+        "border-transparent bg-muted/80 text-[12px] font-medium text-foreground/65",
+        "hover:bg-muted transition-colors cursor-pointer",
+        (disabled || picking) && "pointer-events-none opacity-55",
+      )}
+    >
+      <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground/80" />
+      <span>{t("thread.composer.workspace.placeholder")}</span>
+      <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground/60" />
+    </button>
+  );
 }
 
 function ImageAspectMenu({

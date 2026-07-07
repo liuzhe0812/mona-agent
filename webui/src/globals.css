@@ -89,6 +89,12 @@
     background: transparent;
   }
 
+  body.notification-body,
+  body.notification-body #root {
+    background: transparent !important;
+    overflow: hidden;
+  }
+
   ::selection {
     @apply bg-primary/15;
   }
@@ -254,5 +260,34 @@
   }
   .scrollbar-track-transparent::-webkit-scrollbar-track {
     background: transparent;
+  }
+  /* Hover-reveal scrollbar: hidden by default, shows a light thumb on hover. */
+  .scrollbar-hover {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+    transition: scrollbar-color 0.2s ease;
+  }
+  .scrollbar-hover:hover {
+    scrollbar-color: hsl(var(--muted-foreground) / 0.25) transparent;
+  }
+  .scrollbar-hover::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  .scrollbar-hover::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .scrollbar-hover::-webkit-scrollbar-thumb {
+    background-color: transparent;
+    border-radius: 9999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+    transition: background-color 0.2s ease;
+  }
+  .scrollbar-hover:hover::-webkit-scrollbar-thumb {
+    background-color: hsl(var(--muted-foreground) / 0.25);
+  }
+  .scrollbar-hover:hover::-webkit-scrollbar-thumb:hover {
+    background-color: hsl(var(--muted-foreground) / 0.4);
   }
 }

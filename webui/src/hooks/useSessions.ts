@@ -7,6 +7,7 @@ import {
   deleteSession as apiDeleteSession,
   fetchWebuiThread,
   listSessions,
+  updateSessionWorkspace as apiUpdateSessionWorkspace,
 } from "@/lib/api";
 import { deriveTitle } from "@/lib/format";
 import { resolveUIImageUrls, resolveMediaAttachmentUrls } from "@/lib/media";
@@ -20,8 +21,9 @@ export function useSessions(): {
   loading: boolean;
   error: string | null;
   refresh: () => Promise<void>;
-  createChat: () => Promise<string>;
+  createChat: (workspace?: string | null) => Promise<string>;
   deleteChat: (key: string) => Promise<void>;
+  updateWorkspace: (key: string, workspace: string | null) => Promise<void>;
 } {
   const { client, token } = useClientOptional();
   const [sessions, setSessions] = useState<ChatSummary[]>([]);
@@ -72,11 +74,11 @@ export function useSessions(): {
     });
   }, [client, refresh]);
 
-  const createChat = useCallback(async (): Promise<string> => {
+  const createChat = useCallback(async (workspace?: string | null): Promise<string> => {
     if (!client) {
       throw new Error("runtime not ready");
     }
-    const chatId = await client.newChat();
+    const chatId = await client.newChat(5_000, false, workspace);
     const key = `websocket:${chatId}`;
     optimisticKeysRef.current.add(key);
     // Optimistic insert; a subsequent refresh will replace it with the
@@ -90,6 +92,7 @@ export function useSessions(): {
         updatedAt: new Date().toISOString(),
         title: "",
         preview: "",
+        workspace: workspace ?? null,
       },
       ...prev.filter((s) => s.key !== key),
     ]);
@@ -105,7 +108,19 @@ export function useSessions(): {
     [],
   );
 
-  return { sessions, loading, error, refresh, createChat, deleteChat };
+  const updateWorkspace = useCallback(
+    async (key: string, workspace: string | null) => {
+      await apiUpdateSessionWorkspace(tokenRef.current, key, workspace);
+      setSessions((prev) =>
+        prev.map((s) =>
+          s.key === key ? { ...s, workspace: workspace ?? null } : s,
+        ),
+      );
+    },
+    [],
+  );
+
+  return { sessions, loading, error, refresh, createChat, deleteChat, updateWorkspace };
 }
 
 /** Lazy-load a session's on-disk messages the first time the UI displays it. */

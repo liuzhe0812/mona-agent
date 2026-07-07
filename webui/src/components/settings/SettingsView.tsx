@@ -449,7 +449,9 @@ export function SettingsView({
     try {
       const payload = await updateProviderSettings(token, {
         provider: providerName,
-        apiKey,
+        // apiKey 为空表示"未输入/不修改"，传 undefined 让 api.ts 不发送该字段，
+        // 避免空字符串覆盖后端已有密钥（用户主动清除应走 deleteProvider）。
+        apiKey: apiKey || undefined,
         apiBase,
         model: model || undefined,
       });

@@ -3,8 +3,26 @@ import * as AlertDialogPrimitive from "@radix-ui/react-alert-dialog";
 
 import { cn } from "@/lib/utils";
 import { buttonVariants } from "@/components/ui/button";
+import { cleanupBodyLocks } from "@/components/ui/dialog";
 
-const AlertDialog = AlertDialogPrimitive.Root;
+const AlertDialog = ({
+  onOpenChange,
+  ...props
+}: React.ComponentProps<typeof AlertDialogPrimitive.Root>) => {
+  const handleOpenChange = (open: boolean) => {
+    onOpenChange?.(open);
+    if (!open) {
+      [50, 200, 400, 600].forEach((delay) => {
+        window.setTimeout(() => {
+          if (document.body.style.pointerEvents === "none") {
+            document.body.style.pointerEvents = "";
+          }
+        }, delay);
+      });
+    }
+  };
+  return <AlertDialogPrimitive.Root onOpenChange={handleOpenChange} {...props} />;
+};
 const AlertDialogTrigger = AlertDialogPrimitive.Trigger;
 const AlertDialogPortal = AlertDialogPrimitive.Portal;
 
@@ -27,14 +45,10 @@ const AlertDialogContent = React.forwardRef<
   React.ElementRef<typeof AlertDialogPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Content>
 >(({ className, ...props }, ref) => {
-  // 安全网：AlertDialogContent 卸载时确保 body 的 pointer-events 被清理。
-  // 已知场景：从 ContextMenu 中打开 AlertDialog 时，Radix 的 overlay 引用计数
-  // 可能因竞态导致 body 上 pointer-events:none 残留，界面完全无法点击。
+  // 安全网：AlertDialogContent 卸载时清理 body 残留状态（兜底 onOpenChange 延迟清理）。
   React.useEffect(() => {
     return () => {
-      if (document.body.style.pointerEvents === "none") {
-        document.body.style.pointerEvents = "";
-      }
+      cleanupBodyLocks();
     };
   }, []);
   return (

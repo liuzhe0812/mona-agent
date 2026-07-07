@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { useClient } from "@/providers/ClientProvider";
+import { useClientOptional } from "@/providers/ClientProvider";
 import { toMediaAttachment } from "@/lib/media";
 import { mergeUniqueToolTraceLines, toolTraceLinesFromEvents } from "@/lib/tool-traces";
 import type { StreamError } from "@/lib/mona-client";
@@ -376,7 +376,7 @@ export function useMonaStream(
    * notification or starts a fresh action). */
   dismissStreamError: () => void;
 } {
-  const { client } = useClient();
+  const { client } = useClientOptional();
   const [messages, setMessages] = useState<UIMessage[]>(initialMessages);
   /** If the last loaded message is a trace row (e.g. "Using 2 tools"),
    * the model was still processing when the page loaded — keep the
@@ -409,6 +409,7 @@ export function useMonaStream(
   const streamEndTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
+    if (!client) return undefined;
     return client.onError((err) => setStreamError(err));
   }, [client]);
 
@@ -617,8 +618,8 @@ export function useMonaStream(
         : false) || hasPendingToolCalls,
     );
     setStreamError(null);
-    setRunStartedAt(chatId ? client.getRunStartedAt(chatId) : null);
-    setGoalState(chatId ? client.getGoalState(chatId) : undefined);
+    setRunStartedAt(chatId && client ? client.getRunStartedAt(chatId) : null);
+    setGoalState(chatId && client ? client.getGoalState(chatId) : undefined);
     buffer.current = null;
     activeAssistantRef.current = null;
     closedAssistantStreamIdsRef.current.clear();
@@ -638,7 +639,7 @@ export function useMonaStream(
   }, [hasPendingToolCalls]);
 
   useEffect(() => {
-    if (!chatId) return;
+    if (!chatId || !client) return;
 
     const handle = (ev: InboundEvent) => {
       // Any incoming event while the debounce timer is alive means the model
@@ -955,7 +956,7 @@ export function useMonaStream(
 
   const send = useCallback(
     (content: string, images?: SendImage[], options?: SendOptions) => {
-      if (!chatId) return;
+      if (!chatId || !client) return;
       const hasImages = !!images && images.length > 0;
       // Text is optional when images are attached — the agent will still see
       // the image blocks via ``media`` paths.
@@ -1008,7 +1009,7 @@ export function useMonaStream(
 
   const inject = useCallback(
     (content: string, images?: SendImage[]) => {
-      if (!chatId) return;
+      if (!chatId || !client) return;
       const hasImages = !!images && images.length > 0;
       if (!hasImages && !content.trim()) return;
 
@@ -1031,7 +1032,7 @@ export function useMonaStream(
   );
 
   const stop = useCallback(() => {
-    if (!chatId) return;
+    if (!chatId || !client) return;
     flushPendingStreamEvents();
     setIsStreaming(false);
     setMessages((prev) => {

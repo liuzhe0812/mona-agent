@@ -20,6 +20,13 @@ interface AppTitleBarProps {
   onOpenSubscribe?: () => void;
   /** When true, renders a pulsing badge on the settings button (e.g. update available). */
   settingsBadge?: boolean;
+  // 标签管理增强
+  onPinToggle?: (id: string) => void;
+  onDuplicate?: (id: string) => void;
+  onCloseOthers?: (id: string) => void;
+  onCloseRight?: (id: string) => void;
+  onReorder?: (fromId: string, toId: string) => void;
+  onToggleMute?: (id: string) => void;
 }
 
 async function withCurrentWindow(
@@ -45,6 +52,12 @@ export function AppTitleBar({
   onOpenSettings,
   onOpenSubscribe,
   settingsBadge,
+  onPinToggle,
+  onDuplicate,
+  onCloseOthers,
+  onCloseRight,
+  onReorder,
+  onToggleMute,
 }: AppTitleBarProps) {
   const { licenseActive, checking } = useLicense();
   const showUpgradePro = !checking && !licenseActive && Boolean(onOpenSubscribe);
@@ -63,6 +76,12 @@ export function AppTitleBar({
             active={tab.id === activeTabId}
             onClick={() => onTabClick(tab.id)}
             onClose={tab.type !== "mona" ? () => onTabClose(tab.id) : undefined}
+            onPinToggle={tab.type !== "mona" && onPinToggle ? () => onPinToggle(tab.id) : undefined}
+            onDuplicate={tab.type === "browser" && onDuplicate ? () => onDuplicate(tab.id) : undefined}
+            onCloseOthers={tab.type !== "mona" && onCloseOthers ? () => onCloseOthers(tab.id) : undefined}
+            onCloseRight={tab.type !== "mona" && onCloseRight ? () => onCloseRight(tab.id) : undefined}
+            onReorder={onReorder}
+            onToggleMute={tab.type === "browser" && onToggleMute ? () => onToggleMute(tab.id) : undefined}
           />
         ))}
         <Button

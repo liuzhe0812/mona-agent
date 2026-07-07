@@ -10,6 +10,7 @@
     "error": {
       "title": "无法连接到 mona",
       "gatewayHint": "请确认 gateway 已启动（`mona gateway`），并且当前页面与 gateway 运行在同一台机器上。",
+      "otherFeaturesHint": "笔记、设置、SSH、浏览器等功能不依赖运行时，可正常使用。",
       "retry": "重试"
     },
     "system": {
@@ -319,12 +320,16 @@
     "newChat": "新建对话",
     "groups": {
       "pinned": "置顶",
+      "conversations": "会话",
       "all": "对话",
       "today": "今天",
       "yesterday": "昨天",
       "earlier": "更早",
       "archived": "已归档"
-    }
+    },
+    "moveToProject": "移动到项目…",
+    "newProjectChat": "在项目中新建对话",
+    "bindProjectFolder": "绑定项目目录…"
   },
   "deleteConfirm": {
     "title": "删除这个对话？",
@@ -432,6 +437,10 @@
           "4_3": "横版 4:3",
           "16_9": "宽屏 16:9"
         }
+      },
+      "workspace": {
+        "placeholder": "选择文件夹（可选）",
+        "clear": "清除文件夹选择"
       },
       "tools": {
         "search": "搜索",

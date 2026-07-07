@@ -74,7 +74,7 @@ export const ChatList = memo(function ChatList({
   const [visibleLimit, setVisibleLimit] = useState(INITIAL_VISIBLE_SESSIONS);
   const labels = useMemo(() => ({
     pinned: t("chat.groups.pinned"),
-    all: t("chat.groups.all"),
+    conversations: t("chat.groups.conversations", "会话"),
     today: t("chat.groups.today"),
     yesterday: t("chat.groups.yesterday"),
     earlier: t("chat.groups.earlier"),
@@ -312,7 +312,7 @@ function groupSessions(
   sessions: ChatSummary[],
   labels: {
     pinned: string;
-    all: string;
+    conversations: string;
     today: string;
     yesterday: string;
     earlier: string;
@@ -330,13 +330,28 @@ function groupSessions(
   const now = new Date();
   const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
   const startOfYesterday = startOfToday - 24 * 60 * 60 * 1000;
-  const buckets = new Map<string, ChatSummary[]>();
   const pinned = new Set(options.pinnedKeys);
   const archived = new Set(options.archivedKeys);
 
   const pinnedSessions: ChatSummary[] = [];
   const archivedSessions: ChatSummary[] = [];
-  const normalSessions: ChatSummary[] = [];
+
+  // Partition non-pinned, non-archived sessions by workspace.
+  // Default workspace (null/empty) → "会话" section.
+  // Project workspace → "{basename} · {fullpath}" section.
+  const workspaceOrder: string[] = [];
+  const workspaceBuckets = new Map<string, ChatSummary[]>();
+  const DEFAULT_KEY = "__default__";
+
+  const bucketOf = (ws: string | null | undefined): string =>
+    ws && ws.trim() ? ws : DEFAULT_KEY;
+
+  const ensureBucket = (key: string) => {
+    if (!workspaceBuckets.has(key)) {
+      workspaceBuckets.set(key, []);
+      workspaceOrder.push(key);
+    }
+  };
 
   for (const session of sessions) {
     if (archived.has(session.key)) {
@@ -347,62 +362,89 @@ function groupSessions(
       pinnedSessions.push(session);
       continue;
     }
-    if (options.sort === "title_asc") {
-      normalSessions.push(session);
-      continue;
-    }
-    const timestamp = Date.parse(session.updatedAt ?? session.createdAt ?? "");
-    const label = Number.isFinite(timestamp) && timestamp >= startOfToday
-      ? labels.today
-      : Number.isFinite(timestamp) && timestamp >= startOfYesterday
-        ? labels.yesterday
-        : labels.earlier;
-    const bucket = buckets.get(label) ?? [];
-    bucket.push(session);
-    buckets.set(label, bucket);
+    const bucketKey = bucketOf(session.workspace);
+    ensureBucket(bucketKey);
+    workspaceBuckets.get(bucketKey)!.push(session);
   }
 
-  const groups = [labels.today, labels.yesterday, labels.earlier]
-    .map((label) => ({
-      label,
-      sessions: sortSessions(
-        buckets.get(label) ?? [],
-        options.sort,
-        options.titleOverrides,
-      ),
-    }))
-    .filter((group) => group.sessions.length > 0);
-  if (options.sort === "title_asc" && normalSessions.length) {
-    groups.push({
-      label: labels.all,
-      sessions: sortSessions(
-        normalSessions,
-        options.sort,
-        options.titleOverrides,
-      ),
-    });
+  // Ensure the default "会话" section always renders first, even when empty,
+  // so users have a stable anchor for the "new chat" affordance.
+  ensureBucket(DEFAULT_KEY);
+
+  const groups: Array<{ label: string; sessions: ChatSummary[] }> = [];
+
+  // Time-bucket a list of sessions into today/yesterday/earlier sub-groups.
+  const timeBucketed = (list: ChatSummary[]) => {
+    if (options.sort === "title_asc") {
+      return [{ label: labels.today, sessions: sortSessions(list, options.sort, options.titleOverrides) }]
+        .filter((g) => g.sessions.length > 0);
+    }
+    const buckets = new Map<string, ChatSummary[]>();
+    for (const session of list) {
+      const ts = Date.parse(session.updatedAt ?? session.createdAt ?? "");
+      const label = Number.isFinite(ts) && ts >= startOfToday
+        ? labels.today
+        : Number.isFinite(ts) && ts >= startOfYesterday
+          ? labels.yesterday
+          : labels.earlier;
+      const bucket = buckets.get(label) ?? [];
+      bucket.push(session);
+      buckets.set(label, bucket);
+    }
+    return [labels.today, labels.yesterday, labels.earlier]
+      .map((label) => ({
+        label,
+        sessions: sortSessions(buckets.get(label) ?? [], options.sort, options.titleOverrides),
+      }))
+      .filter((g) => g.sessions.length > 0);
+  };
+
+  for (const bucketKey of workspaceOrder) {
+    const list = workspaceBuckets.get(bucketKey) ?? [];
+    if (bucketKey === DEFAULT_KEY) {
+      // Default "会话" section: keep time-based sub-grouping for browsability.
+      const subGroups = timeBucketed(list);
+      if (subGroups.length === 0) {
+        // Still emit the header so the section is visible even when empty.
+        groups.push({ label: labels.conversations, sessions: [] });
+      } else {
+        for (const sub of subGroups) {
+          groups.push({ label: `${labels.conversations} · ${sub.label}`, sessions: sub.sessions });
+        }
+      }
+    } else {
+      // Project section: flat list under "{basename} · {fullpath}".
+      // Use full path as label; basename is computed for display only when needed.
+      groups.push({
+        label: workspaceLabel(bucketKey),
+        sessions: sortSessions(list, options.sort, options.titleOverrides),
+      });
+    }
   }
+
   if (pinnedSessions.length) {
     groups.unshift({
       label: labels.pinned,
-      sessions: sortSessions(
-        pinnedSessions,
-        options.sort,
-        options.titleOverrides,
-      ),
+      sessions: sortSessions(pinnedSessions, options.sort, options.titleOverrides),
     });
   }
   if (archivedSessions.length) {
     groups.push({
       label: labels.archived,
-      sessions: sortSessions(
-        archivedSessions,
-        options.sort,
-        options.titleOverrides,
-      ),
+      sessions: sortSessions(archivedSessions, options.sort, options.titleOverrides),
     });
   }
-  return groups;
+  // Drop empty groups except the default "会话" anchor (handled above).
+  return groups.filter((g) => g.sessions.length > 0 || g.label === labels.conversations);
+}
+
+/** Render a workspace path as ``{basename} · {fullpath}`` for the section header. */
+function workspaceLabel(workspacePath: string): string {
+  // Normalize Windows backslashes.
+  const normalized = workspacePath.replace(/\\/g, "/");
+  const parts = normalized.split("/").filter(Boolean);
+  const basename = parts[parts.length - 1] ?? workspacePath;
+  return `${basename} · ${workspacePath}`;
 }
 
 function limitGroups(

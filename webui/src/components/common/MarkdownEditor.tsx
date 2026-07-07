@@ -13,22 +13,28 @@ import {
   Bold,
   CheckSquare,
   Code2,
+  Code,
   ClipboardPaste,
   Copy,
+  ExternalLink,
   FileCode2,
   Heading1,
   Heading2,
   Heading3,
+  Heading4,
   Image as ImageIcon,
   Italic,
   Link2,
   ListChecks,
   ListOrdered,
+  MoveRight,
   Quote,
   Redo2,
   Scissors,
+  Search,
   Strikethrough,
   Table2,
+  TextSelect,
   Type,
   Undo2,
 } from "lucide-react";
@@ -39,6 +45,9 @@ import {
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { cn } from "@/lib/utils";
@@ -54,6 +63,7 @@ export interface MarkdownEditorProps {
     contentJson?: JSONContent;
     plainText: string;
   }) => void;
+  onMoveSelectionToNote?: (selectedText: string) => void;
   placeholder?: string;
   showToolbar?: boolean;
   showStats?: boolean;
@@ -61,6 +71,9 @@ export interface MarkdownEditorProps {
   className?: string;
   editorClassName?: string;
   children?: React.ReactNode;
+  toolbarExtra?: React.ReactNode;
+  /** Note titles for `[[wiki link]]` autocomplete in markdown mode. */
+  noteTitles?: string[];
 }
 
 // Custom Image extension that serializes `assets/xxx.png` from title/alt instead of data URL
@@ -98,6 +111,7 @@ export function MarkdownEditor({
   mode = "visual",
   onModeChange,
   onContentChange,
+  onMoveSelectionToNote,
   placeholder = "记录想法、资料、处理过程或 Agent 输出...",
   showToolbar = true,
   showStats = true,
@@ -105,107 +119,206 @@ export function MarkdownEditor({
   className,
   editorClassName,
   children,
+  toolbarExtra,
+  noteTitles,
 }: MarkdownEditorProps) {
   const settingContentRef = useRef(false);
   const lastMarkdownRef = useRef(content);
   const onContentChangeRef = useRef(onContentChange);
   onContentChangeRef.current = onContentChange;
 
-  // Cache for data URLs: assets/xxx.png -> data:image/png;base64,...
-  const dataUrlCacheRef = useRef<Map<string, string>>(new Map());
+  // Wiki-link autocomplete state (markdown mode only).
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const editorRef = useRef<Editor | null>(null);
+  const [wikiLinkState, setWikiLinkState] = useState<{
+    open: boolean;
+    query: string;
+    startPos: number;
+    selectedIndex: number;
+  } | null>(null);
 
-  // Convert assets/ relative paths to data URLs for rendering
+  const wikiLinkSuggestions = useMemo(() => {
+    if (!wikiLinkState?.open || !noteTitles?.length) return [];
+    const q = wikiLinkState.query.toLowerCase();
+    if (!q) return noteTitles.slice(0, 10);
+    return noteTitles
+      .filter((t) => t.toLowerCase().includes(q))
+      .slice(0, 10);
+  }, [wikiLinkState, noteTitles]);
+
+  const detectWikiLinkTrigger = useCallback((value: string, caret: number) => {
+    // Look backwards from caret for an unclosed `[[`.
+    const before = value.slice(0, caret);
+    const lastOpen = before.lastIndexOf("[[");
+    if (lastOpen === -1) {
+      setWikiLinkState(null);
+      return;
+    }
+    // Must be the start of a link (not inside `[[[...]]`).
+    if (lastOpen > 0 && before[lastOpen - 1] === "[") {
+      setWikiLinkState(null);
+      return;
+    }
+    // Closing `]]` must not exist after the open.
+    const afterOpen = before.slice(lastOpen + 2);
+    if (afterOpen.includes("]]")) {
+      setWikiLinkState(null);
+      return;
+    }
+    // No newlines inside the link.
+    if (afterOpen.includes("\n")) {
+      setWikiLinkState(null);
+      return;
+    }
+    setWikiLinkState({
+      open: true,
+      query: afterOpen,
+      startPos: lastOpen,
+      selectedIndex: 0,
+    });
+  }, []);
+
+  const insertWikiLink = useCallback((title: string) => {
+    const textarea = textareaRef.current;
+    if (!textarea || !wikiLinkState) return;
+    const value = textarea.value;
+    const before = value.slice(0, wikiLinkState.startPos);
+    const after = value.slice(textarea.selectionStart);
+    const inserted = `[[${title}]]`;
+    const next = before + inserted + after;
+    setWikiLinkState(null);
+    // Inline the markdown update to avoid TDZ on `handleMarkdownChange`.
+    const ed = editorRef.current;
+    if (ed) {
+      settingContentRef.current = true;
+      ed.commands.setContent(next, { contentType: "markdown" });
+      settingContentRef.current = false;
+    }
+    lastMarkdownRef.current = next;
+    onContentChangeRef.current({
+      contentMarkdown: next,
+      contentJson: ed?.getJSON(),
+      plainText: ed?.getText() ?? next,
+    });
+    requestAnimationFrame(() => {
+      const ta = textareaRef.current;
+      if (!ta) return;
+      const pos = before.length + inserted.length;
+      ta.focus();
+      ta.setSelectionRange(pos, pos);
+    });
+  }, [wikiLinkState]);
+
+  const handleTextareaKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (!wikiLinkState?.open || wikiLinkSuggestions.length === 0) return;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setWikiLinkState((s) => s ? { ...s, selectedIndex: (s.selectedIndex + 1) % wikiLinkSuggestions.length } : s);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setWikiLinkState((s) => s ? { ...s, selectedIndex: (s.selectedIndex - 1 + wikiLinkSuggestions.length) % wikiLinkSuggestions.length } : s);
+    } else if (e.key === "Enter" || e.key === "Tab") {
+      e.preventDefault();
+      const selected = wikiLinkSuggestions[wikiLinkState.selectedIndex];
+      if (selected) insertWikiLink(selected);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      setWikiLinkState(null);
+    }
+  }, [wikiLinkState, wikiLinkSuggestions, insertWikiLink]);
+
+  // Cache: fileName -> asset URL (convertFileSrc result). The URL is stable for
+  // a given vault path, so we can safely cache it for the editor's lifetime.
+  const assetUrlCacheRef = useRef<Map<string, string>>(new Map());
+  const vaultPathRef = useRef<string | null>(null);
+
+  // Convert assets/ relative paths to asset-protocol URLs for rendering.
   const convertAssetsPaths = useCallback(async (editor: Editor) => {
-    const { readNoteImage } = await import("@/lib/tauri");
+    const { convertFileSrc } = await import("@tauri-apps/api/core");
+    const { getNotesVaultPath } = await import("@/lib/tauri");
+
+    if (vaultPathRef.current === null) {
+      vaultPathRef.current = await getNotesVaultPath();
+    }
+    const vaultPath = vaultPathRef.current;
+    if (!vaultPath) return;
+
     const dpr = window.devicePixelRatio || 1;
     const tr = editor.state.tr;
     let modified = false;
-    const tasks: Promise<{ fileName: string; dataUrl: string; displayWidth: number | null }>[] = [];
+    const pending: { pos: number; node: any; fileName: string; url: string }[] = [];
 
     editor.state.doc.descendants((node, pos) => {
-      if (node.type.name === "image" && node.attrs.src) {
-        const src = node.attrs.src as string;
-        if (
-          src.startsWith("assets/") ||
-          (!src.startsWith("http") && !src.startsWith("data:") && !src.includes(":"))
-        ) {
-          const fileName = src.startsWith("assets/") ? src.slice("assets/".length) : src;
+      if (node.type.name !== "image" || !node.attrs.src) return;
+      const src = node.attrs.src as string;
+      const isRelativeAsset =
+        src.startsWith("assets/") ||
+        (!src.startsWith("http") && !src.startsWith("data:") && !src.includes(":") &&
+         !src.startsWith("tauri:") && !src.startsWith("blob:"));
+      if (!isRelativeAsset) return;
 
-          // Use cached data URL if available
-          const cached = dataUrlCacheRef.current.get(fileName);
-          if (cached) {
-            tr.setNodeMarkup(pos, undefined, {
-              ...node.attrs,
-              src: cached,
-              alt: node.attrs.alt || src,
-              title: src,
-            });
-            modified = true;
-            return;
-          }
-
-          // Load data URL asynchronously with DPI detection
-          tasks.push(
-            readNoteImage(fileName).then(async (dataUrl) => {
-              dataUrlCacheRef.current.set(fileName, dataUrl);
-              const displayWidth = await new Promise<number | null>((resolve) => {
-                if (dpr <= 1) { resolve(null); return; }
-                const img = new Image();
-                img.onload = () => {
-                  resolve(img.naturalWidth > 0 ? Math.round(img.naturalWidth / dpr) : null);
-                };
-                img.onerror = () => resolve(null);
-                img.src = dataUrl;
-              });
-              return { fileName, dataUrl, displayWidth };
-            }).catch((err) => {
-              console.warn("[MarkdownEditor] Failed to load image:", fileName, err);
-              return { fileName, dataUrl: "", displayWidth: null };
-            }),
-          );
-        }
+      const fileName = src.startsWith("assets/") ? src.slice("assets/".length) : src;
+      let url = assetUrlCacheRef.current.get(fileName);
+      if (!url) {
+        url = convertFileSrc(`${vaultPath}/assets/${fileName}`);
+        assetUrlCacheRef.current.set(fileName, url);
       }
+
+      // If src is already the asset URL, no rewrite needed.
+      if (src === url) return;
+
+      // Sync rewrite for cached URL (no DPI detection needed — CSS handles it)
+      tr.setNodeMarkup(pos, undefined, {
+        ...node.attrs,
+        src: url,
+        alt: node.attrs.alt || src,
+        title: src,
+      });
+      modified = true;
+      pending.push({ pos, node, fileName, url });
     });
 
-    // Apply cached results first
     if (modified) {
       settingContentRef.current = true;
       editor.view.dispatch(tr);
       settingContentRef.current = false;
     }
 
-    // Load uncached images and apply in a second pass
-    if (tasks.length > 0) {
-      const results = await Promise.all(tasks);
-      const tr2 = editor.state.tr;
-      let modified2 = false;
-      editor.state.doc.descendants((node, pos) => {
-        if (node.type.name === "image" && node.attrs.src) {
-          const src = node.attrs.src as string;
-          if (
-            src.startsWith("assets/") ||
-            (!src.startsWith("http") && !src.startsWith("data:") && !src.includes(":"))
-          ) {
-            const fileName = src.startsWith("assets/") ? src.slice("assets/".length) : src;
-            const result = results.find((r) => r.fileName === fileName);
-            if (result?.dataUrl) {
-              tr2.setNodeMarkup(pos, undefined, {
-                ...node.attrs,
-                src: result.dataUrl,
-                alt: node.attrs.alt || src,
-                title: src,
-                ...(result.displayWidth != null ? { width: result.displayWidth } : {}),
-              });
-              modified2 = true;
-            }
-          }
-        }
+    // Optional: detect natural dimensions for HiDPI scaling. Skipped on dpr<=1
+    // since CSS max-width:100% already constrains the image.
+    if (dpr <= 1 || pending.length === 0) return;
+
+    const tr2 = editor.state.tr;
+    let modified2 = false;
+    await Promise.all(pending.map(async ({ pos, url }) => {
+      const displayWidth = await new Promise<number | null>((resolve) => {
+        const img = new Image();
+        img.onload = () => {
+          resolve(img.naturalWidth > 0 ? Math.round(img.naturalWidth / dpr) : null);
+        };
+        img.onerror = () => resolve(null);
+        img.src = url;
       });
-      if (modified2) {
-        settingContentRef.current = true;
-        editor.view.dispatch(tr2);
-        settingContentRef.current = false;
-      }
+      if (displayWidth == null) return;
+      // Re-find the node at pos — it may have moved after the first dispatch.
+      let found = false;
+      editor.state.doc.descendants((n, p) => {
+        if (found) return false;
+        if (p !== pos) return;
+        if (n.type.name !== "image") return;
+        tr2.setNodeMarkup(p, undefined, {
+          ...n.attrs,
+          width: displayWidth,
+        });
+        modified2 = true;
+        found = true;
+        return false;
+      });
+    }));
+    if (modified2) {
+      settingContentRef.current = true;
+      editor.view.dispatch(tr2);
+      settingContentRef.current = false;
     }
   }, []);
 
@@ -214,16 +327,28 @@ export function MarkdownEditor({
     const id = crypto.randomUUID().replace(/-/g, "").slice(0, 16);
     const fileName = `${id}.${ext}`;
     const arrayBuffer = await file.arrayBuffer();
-    const imageData = Array.from(new Uint8Array(arrayBuffer));
+    const bytes = new Uint8Array(arrayBuffer);
 
     try {
-      const { saveNoteImage, readNoteImage } = await import("@/lib/tauri");
-      await saveNoteImage(fileName, imageData);
-      const dataUrl = await readNoteImage(fileName);
-      dataUrlCacheRef.current.set(fileName, dataUrl);
+      const { writeFile } = await import("@tauri-apps/plugin-fs");
+      const { convertFileSrc } = await import("@tauri-apps/api/core");
+      const { getNotesVaultPath } = await import("@/lib/tauri");
+
+      if (vaultPathRef.current === null) {
+        vaultPathRef.current = await getNotesVaultPath();
+      }
+      const vaultPath = vaultPathRef.current;
+      if (!vaultPath) {
+        console.warn("[MarkdownEditor] No vault path configured");
+        return;
+      }
+
+      const absPath = `${vaultPath}/assets/${fileName}`;
+      await writeFile(absPath, bytes);
+      const url = convertFileSrc(absPath);
+      assetUrlCacheRef.current.set(fileName, url);
       const markdownSrc = `assets/${fileName}`;
 
-      // Detect natural dimensions and apply DPI scaling
       const displayWidth = await new Promise<number | null>((resolve) => {
         const img = new Image();
         img.onload = () => {
@@ -235,13 +360,13 @@ export function MarkdownEditor({
           }
         };
         img.onerror = () => resolve(null);
-        img.src = dataUrl;
+        img.src = url;
       });
 
       view.dispatch(
         view.state.tr.replaceSelectionWith(
           view.state.schema.nodes.image.create({
-            src: dataUrl,
+            src: url,
             alt: markdownSrc,
             title: markdownSrc,
             ...(displayWidth != null ? { width: displayWidth } : {}),
@@ -330,6 +455,10 @@ export function MarkdownEditor({
     },
   });
 
+  // Keep editorRef in sync so wiki-link callbacks can access the editor
+  // without being in its useCallback dependency array (avoids TDZ).
+  editorRef.current = editor;
+
   useEffect(() => {
     if (!editor) return;
     const editorMarkdown = editor.getMarkdown();
@@ -367,40 +496,42 @@ export function MarkdownEditor({
     <section className={cn("flex min-h-0 min-w-0 flex-1 flex-col bg-background", className)}>
       <div className="flex h-10 shrink-0 items-center justify-between border-b border-border/65 px-3">
         {showToolbar ? <EditorToolbar editor={editor} /> : <div />}
-        <div className="flex items-center gap-0.5 rounded-lg border border-border/70 bg-muted/30 p-0.5">
-          <button
-            type="button"
-            title="可视化编辑"
-            aria-label="可视化编辑"
-            onClick={() => onModeChange?.("visual")}
-            className={cn(
-              "grid h-6 w-6 place-items-center rounded-md transition-colors",
-              mode === "visual"
-                ? "bg-background text-foreground shadow-sm"
-                : "text-muted-foreground hover:text-foreground",
-            )}
-          >
-            <Type className="h-3.5 w-3.5" />
-          </button>
-          <button
-            type="button"
-            title="MD 源码"
-            aria-label="MD 源码"
-            onClick={() => onModeChange?.("markdown")}
-            className={cn(
-              "grid h-6 w-6 place-items-center rounded-md transition-colors",
-              mode === "markdown"
-                ? "bg-background text-foreground shadow-sm"
-                : "text-muted-foreground hover:text-foreground",
-            )}
-          >
-            <FileCode2 className="h-3.5 w-3.5" />
-          </button>
-        </div>
+        {toolbarExtra ?? (onModeChange ? (
+          <div className="flex items-center gap-0.5 rounded-lg border border-border/70 bg-muted/30 p-0.5">
+            <button
+              type="button"
+              title="可视化编辑"
+              aria-label="可视化编辑"
+              onClick={() => onModeChange("visual")}
+              className={cn(
+                "grid h-6 w-6 place-items-center rounded-md transition-colors",
+                mode === "visual"
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              <Type className="h-3.5 w-3.5" />
+            </button>
+            <button
+              type="button"
+              title="MD 源码"
+              aria-label="MD 源码"
+              onClick={() => onModeChange("markdown")}
+              className={cn(
+                "grid h-6 w-6 place-items-center rounded-md transition-colors",
+                mode === "markdown"
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              <FileCode2 className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        ) : null)}
       </div>
 
       {mode === "visual" ? (
-        <EditorContextMenu editor={editor}>
+        <EditorContextMenu editor={editor} onMoveSelectionToNote={onMoveSelectionToNote}>
           <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin">
             <div className={cn("mx-auto w-full max-w-[700px] px-5 py-5", editorClassName)}>
               {children}
@@ -415,12 +546,43 @@ export function MarkdownEditor({
         <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin">
           <div className={cn("mx-auto flex h-full w-full max-w-[700px] flex-col px-5 py-5", editorClassName)}>
             {children}
-            <textarea
-              value={content}
-              onChange={(event) => handleMarkdownChange(event.target.value)}
-              className="mt-4 min-h-[380px] flex-1 resize-none rounded-lg border border-border/70 bg-background px-3 py-2.5 font-mono text-[12.5px] leading-6 text-foreground outline-none scrollbar-thin focus:border-[#6aa7ff]/65"
-              spellCheck={false}
-            />
+            <div className="relative mt-4 flex-1">
+              <textarea
+                ref={textareaRef}
+                value={content}
+                onChange={(event) => {
+                  handleMarkdownChange(event.target.value);
+                  const ta = event.target;
+                  detectWikiLinkTrigger(ta.value, ta.selectionStart);
+                }}
+                onKeyDown={handleTextareaKeyDown}
+                onBlur={() => setTimeout(() => setWikiLinkState(null), 200)}
+                className="min-h-[380px] w-full flex-1 resize-none rounded-lg border border-border/70 bg-background px-3 py-2.5 font-mono text-[12.5px] leading-6 text-foreground outline-none scrollbar-thin focus:border-[#6aa7ff]/65"
+                spellCheck={false}
+              />
+              {wikiLinkState?.open && wikiLinkSuggestions.length > 0 && (
+                <div className="absolute z-50 min-w-[200px] max-w-[320px] rounded-md border border-border/70 bg-popover py-1 shadow-lg">
+                  {wikiLinkSuggestions.map((title, idx) => (
+                    <button
+                      key={title}
+                      type="button"
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        insertWikiLink(title);
+                      }}
+                      className={cn(
+                        "flex w-full items-center px-2.5 py-1 text-left text-[12px]",
+                        idx === wikiLinkState.selectedIndex
+                          ? "bg-accent text-foreground"
+                          : "text-foreground/85 hover:bg-accent/60",
+                      )}
+                    >
+                      <span className="truncate">{title}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -437,13 +599,18 @@ export function MarkdownEditor({
   );
 }
 
-function EditorContextMenu({ editor, children }: { editor: Editor | null; children: React.ReactNode }) {
+function EditorContextMenu({ editor, children, onMoveSelectionToNote }: { editor: Editor | null; children: React.ReactNode; onMoveSelectionToNote?: (selectedText: string) => void; }) {
   const [hasSelection, setHasSelection] = useState(false);
+  const [selectedText, setSelectedText] = useState("");
 
   const updateSelection = () => {
     if (!editor) return;
     const { from, to } = editor.state.selection;
-    setHasSelection(from !== to);
+    const hasSel = from !== to;
+    setHasSelection(hasSel);
+    if (hasSel) {
+      setSelectedText(editor.state.doc.textBetween(from, to, "\n"));
+    }
   };
 
   const handleCopy = async () => {
@@ -475,7 +642,27 @@ function EditorContextMenu({ editor, children }: { editor: Editor | null; childr
     } catch {}
   };
 
-  const handleAddLink = () => {
+  const handlePasteAsPlainText = async () => {
+    if (!editor) return;
+    try {
+      const text = await navigator.clipboard.readText();
+      editor.chain().focus().insertContent(text).run();
+    } catch {}
+  };
+
+  const handleSelectAll = () => {
+    editor?.chain().focus().selectAll().run();
+  };
+
+  const handleAddInternalLink = () => {
+    if (!editor) return;
+    const { from, to } = editor.state.selection;
+    if (from === to) return;
+    const text = editor.state.doc.textBetween(from, to, "\n");
+    editor.chain().focus().deleteSelection().insertContent(`[[${text}]]`).run();
+  };
+
+  const handleAddExternalLink = () => {
     if (!editor) return;
     const url = window.prompt("输入链接地址");
     if (!url) return;
@@ -486,21 +673,169 @@ function EditorContextMenu({ editor, children }: { editor: Editor | null; childr
     editor?.chain().focus().unsetLink().run();
   };
 
+  const handleFind = () => {
+    if (!selectedText) return;
+    try {
+      (window as any).find(selectedText, false, false, true);
+    } catch {}
+  };
+
+  const handleMoveToNote = () => {
+    if (!editor || !onMoveSelectionToNote) return;
+    const { from, to } = editor.state.selection;
+    if (from === to) return;
+    const text = editor.state.doc.textBetween(from, to, "\n");
+    onMoveSelectionToNote(text);
+    editor.chain().focus().deleteSelection().run();
+  };
+
   return (
     <ContextMenu onOpenChange={updateSelection}>
       <ContextMenuTrigger asChild>
         {children}
       </ContextMenuTrigger>
-      <ContextMenuContent className="w-44">
+      <ContextMenuContent className="w-52">
         {hasSelection ? (
           <>
-            <ContextMenuItem onSelect={handleCopy}>
-              <Copy className="mr-2 h-3.5 w-3.5" />
-              复制
+            <ContextMenuItem onSelect={handleAddInternalLink}>
+              <Link2 className="mr-2 h-3.5 w-3.5" />
+              新增链接
             </ContextMenuItem>
+            <ContextMenuItem onSelect={handleAddExternalLink}>
+              <ExternalLink className="mr-2 h-3.5 w-3.5" />
+              新增外部链接
+            </ContextMenuItem>
+            <ContextMenuSeparator />
+            <ContextMenuItem onSelect={handleFind}>
+              <Search className="mr-2 h-3.5 w-3.5" />
+              查找“{selectedText.length > 12 ? `${selectedText.slice(0, 12)}…` : selectedText}”
+            </ContextMenuItem>
+            {onMoveSelectionToNote ? (
+              <ContextMenuItem onSelect={handleMoveToNote}>
+                <MoveRight className="mr-2 h-3.5 w-3.5" />
+                移动到其他笔记
+              </ContextMenuItem>
+            ) : null}
+          </>
+        ) : null}
+
+        <ContextMenuSeparator />
+        {/* 段落设置 submenu */}
+        <ContextMenuSub>
+          <ContextMenuSubTrigger className="text-[13px]">
+            <Type className="mr-2 h-3.5 w-3.5" />
+            段落设置
+          </ContextMenuSubTrigger>
+          <ContextMenuSubContent className="w-44">
+            <ContextMenuItem onSelect={() => editor?.chain().focus().toggleHeading({ level: 1 }).run()}>
+              <Heading1 className="mr-2 h-3.5 w-3.5" />
+              标题 1
+            </ContextMenuItem>
+            <ContextMenuItem onSelect={() => editor?.chain().focus().toggleHeading({ level: 2 }).run()}>
+              <Heading2 className="mr-2 h-3.5 w-3.5" />
+              标题 2
+            </ContextMenuItem>
+            <ContextMenuItem onSelect={() => editor?.chain().focus().toggleHeading({ level: 3 }).run()}>
+              <Heading3 className="mr-2 h-3.5 w-3.5" />
+              标题 3
+            </ContextMenuItem>
+            <ContextMenuItem onSelect={() => editor?.chain().focus().toggleHeading({ level: 4 }).run()}>
+              <Heading4 className="mr-2 h-3.5 w-3.5" />
+              标题 4
+            </ContextMenuItem>
+            <ContextMenuSeparator />
+            <ContextMenuItem onSelect={() => editor?.chain().focus().setParagraph().run()}>
+              <Type className="mr-2 h-3.5 w-3.5" />
+              正文
+            </ContextMenuItem>
+            <ContextMenuItem onSelect={() => editor?.chain().focus().toggleBlockquote().run()}>
+              <Quote className="mr-2 h-3.5 w-3.5" />
+              引用
+            </ContextMenuItem>
+            <ContextMenuItem onSelect={() => editor?.chain().focus().toggleCodeBlock().run()}>
+              <Code2 className="mr-2 h-3.5 w-3.5" />
+              代码块
+            </ContextMenuItem>
+          </ContextMenuSubContent>
+        </ContextMenuSub>
+
+        {hasSelection ? (
+          /* 文本格式 submenu */
+          <ContextMenuSub>
+            <ContextMenuSubTrigger className="text-[13px]">
+              <Bold className="mr-2 h-3.5 w-3.5" />
+              文本格式
+            </ContextMenuSubTrigger>
+            <ContextMenuSubContent className="w-40">
+              <ContextMenuItem onSelect={() => editor?.chain().focus().toggleBold().run()}>
+                <Bold className="mr-2 h-3.5 w-3.5" />
+                加粗
+              </ContextMenuItem>
+              <ContextMenuItem onSelect={() => editor?.chain().focus().toggleItalic().run()}>
+                <Italic className="mr-2 h-3.5 w-3.5" />
+                斜体
+              </ContextMenuItem>
+              <ContextMenuItem onSelect={() => editor?.chain().focus().toggleStrike().run()}>
+                <Strikethrough className="mr-2 h-3.5 w-3.5" />
+                删除线
+              </ContextMenuItem>
+              <ContextMenuItem onSelect={() => editor?.chain().focus().toggleCode().run()}>
+                <Code className="mr-2 h-3.5 w-3.5" />
+                行内代码
+              </ContextMenuItem>
+              <ContextMenuSeparator />
+              {editor?.isActive("link") ? (
+                <ContextMenuItem onSelect={handleRemoveLink}>
+                  <Link2 className="mr-2 h-3.5 w-3.5" />
+                  移除链接
+                </ContextMenuItem>
+              ) : (
+                <ContextMenuItem onSelect={handleAddExternalLink}>
+                  <Link2 className="mr-2 h-3.5 w-3.5" />
+                  添加链接
+                </ContextMenuItem>
+              )}
+            </ContextMenuSubContent>
+          </ContextMenuSub>
+        ) : null}
+
+        {/* 插入 submenu */}
+        <ContextMenuSub>
+          <ContextMenuSubTrigger className="text-[13px]">
+            <ListChecks className="mr-2 h-3.5 w-3.5" />
+            插入
+          </ContextMenuSubTrigger>
+          <ContextMenuSubContent className="w-44">
+            <ContextMenuItem onSelect={() => editor?.chain().focus().toggleTaskList().run()}>
+              <CheckSquare className="mr-2 h-3.5 w-3.5" />
+              任务清单
+            </ContextMenuItem>
+            <ContextMenuItem onSelect={() => editor?.chain().focus().toggleBulletList().run()}>
+              <ListChecks className="mr-2 h-3.5 w-3.5" />
+              项目列表
+            </ContextMenuItem>
+            <ContextMenuItem onSelect={() => editor?.chain().focus().toggleOrderedList().run()}>
+              <ListOrdered className="mr-2 h-3.5 w-3.5" />
+              编号列表
+            </ContextMenuItem>
+            <ContextMenuSeparator />
+            <ContextMenuItem onSelect={() => editor?.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()}>
+              <Table2 className="mr-2 h-3.5 w-3.5" />
+              表格
+            </ContextMenuItem>
+          </ContextMenuSubContent>
+        </ContextMenuSub>
+
+        <ContextMenuSeparator />
+        {hasSelection ? (
+          <>
             <ContextMenuItem onSelect={handleCut}>
               <Scissors className="mr-2 h-3.5 w-3.5" />
               剪切
+            </ContextMenuItem>
+            <ContextMenuItem onSelect={handleCopy}>
+              <Copy className="mr-2 h-3.5 w-3.5" />
+              复制
             </ContextMenuItem>
           </>
         ) : null}
@@ -508,109 +843,15 @@ function EditorContextMenu({ editor, children }: { editor: Editor | null; childr
           <ClipboardPaste className="mr-2 h-3.5 w-3.5" />
           粘贴
         </ContextMenuItem>
-
-        {hasSelection ? (
-          <>
-            <ContextMenuSeparator />
-            <ContextMenuItem
-              onSelect={() => editor?.chain().focus().toggleBold().run()}
-            >
-              <Bold className="mr-2 h-3.5 w-3.5" />
-              加粗
-            </ContextMenuItem>
-            <ContextMenuItem
-              onSelect={() => editor?.chain().focus().toggleItalic().run()}
-            >
-              <Italic className="mr-2 h-3.5 w-3.5" />
-              斜体
-            </ContextMenuItem>
-            <ContextMenuItem
-              onSelect={() => editor?.chain().focus().toggleStrike().run()}
-            >
-              <Strikethrough className="mr-2 h-3.5 w-3.5" />
-              删除线
-            </ContextMenuItem>
-
-            <ContextMenuSeparator />
-            <ContextMenuItem
-              onSelect={() => editor?.chain().focus().toggleHeading({ level: 1 }).run()}
-            >
-              <Heading1 className="mr-2 h-3.5 w-3.5" />
-              标题 1
-            </ContextMenuItem>
-            <ContextMenuItem
-              onSelect={() => editor?.chain().focus().toggleHeading({ level: 2 }).run()}
-            >
-              <Heading2 className="mr-2 h-3.5 w-3.5" />
-              标题 2
-            </ContextMenuItem>
-            <ContextMenuItem
-              onSelect={() => editor?.chain().focus().toggleHeading({ level: 3 }).run()}
-            >
-              <Heading3 className="mr-2 h-3.5 w-3.5" />
-              标题 3
-            </ContextMenuItem>
-            <ContextMenuItem
-              onSelect={() => editor?.chain().focus().setParagraph().run()}
-            >
-              <Type className="mr-2 h-3.5 w-3.5" />
-              正文
-            </ContextMenuItem>
-
-            <ContextMenuSeparator />
-            <ContextMenuItem
-              onSelect={() => editor?.chain().focus().toggleBlockquote().run()}
-            >
-              <Quote className="mr-2 h-3.5 w-3.5" />
-              引用
-            </ContextMenuItem>
-            <ContextMenuItem
-              onSelect={() => editor?.chain().focus().toggleCodeBlock().run()}
-            >
-              <Code2 className="mr-2 h-3.5 w-3.5" />
-              代码块
-            </ContextMenuItem>
-            {editor?.isActive("link") ? (
-              <ContextMenuItem onSelect={handleRemoveLink}>
-                <Link2 className="mr-2 h-3.5 w-3.5" />
-                移除链接
-              </ContextMenuItem>
-            ) : (
-              <ContextMenuItem onSelect={handleAddLink}>
-                <Link2 className="mr-2 h-3.5 w-3.5" />
-                添加链接
-              </ContextMenuItem>
-            )}
-          </>
-        ) : (
-          <>
-            <ContextMenuSeparator />
-            <ContextMenuItem
-              onSelect={() => editor?.chain().focus().toggleHeading({ level: 1 }).run()}
-            >
-              <Heading1 className="mr-2 h-3.5 w-3.5" />
-              标题 1
-            </ContextMenuItem>
-            <ContextMenuItem
-              onSelect={() => editor?.chain().focus().toggleHeading({ level: 2 }).run()}
-            >
-              <Heading2 className="mr-2 h-3.5 w-3.5" />
-              标题 2
-            </ContextMenuItem>
-            <ContextMenuItem
-              onSelect={() => editor?.chain().focus().toggleHeading({ level: 3 }).run()}
-            >
-              <Heading3 className="mr-2 h-3.5 w-3.5" />
-              标题 3
-            </ContextMenuItem>
-            <ContextMenuItem
-              onSelect={() => editor?.chain().focus().setParagraph().run()}
-            >
-              <Type className="mr-2 h-3.5 w-3.5" />
-              正文
-            </ContextMenuItem>
-          </>
-        )}
+        <ContextMenuItem onSelect={handlePasteAsPlainText}>
+          <ClipboardPaste className="mr-2 h-3.5 w-3.5" />
+          以纯文本形式粘贴
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem onSelect={handleSelectAll}>
+          <TextSelect className="mr-2 h-3.5 w-3.5" />
+          全选
+        </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
   );
@@ -739,17 +980,18 @@ function EditorToolbar({ editor }: { editor: Editor | null }) {
             if (!selected) return;
             const filePath = selected;
             if (!filePath) return;
-            const { readFile } = await import("@tauri-apps/plugin-fs");
-            const data = await readFile(filePath);
+            const { copyFile } = await import("@tauri-apps/plugin-fs");
+            const { convertFileSrc } = await import("@tauri-apps/api/core");
+            const { getNotesVaultPath } = await import("@/lib/tauri");
+            const vaultPath = await getNotesVaultPath();
+            if (!vaultPath) return;
             const ext = filePath.split(".").pop() || "png";
             const id = crypto.randomUUID().replace(/-/g, "").slice(0, 16);
             const fileName = `${id}.${ext}`;
-            const imageData = Array.from(data);
-            const { saveNoteImage, readNoteImage } = await import("@/lib/tauri");
-            await saveNoteImage(fileName, imageData);
-            const dataUrl = await readNoteImage(fileName);
+            const absPath = `${vaultPath}/assets/${fileName}`;
+            await copyFile(filePath, absPath);
+            const url = convertFileSrc(absPath);
             const markdownSrc = `assets/${fileName}`;
-            // DPI scaling for HiDPI screenshots
             const dpr = window.devicePixelRatio || 1;
             const displayWidth = await new Promise<number | null>((resolve) => {
               if (dpr <= 1) { resolve(null); return; }
@@ -758,10 +1000,10 @@ function EditorToolbar({ editor }: { editor: Editor | null }) {
                 resolve(img.naturalWidth > 0 ? Math.round(img.naturalWidth / dpr) : null);
               };
               img.onerror = () => resolve(null);
-              img.src = dataUrl;
+              img.src = url;
             });
             editor?.chain().focus().setImage({
-              src: dataUrl,
+              src: url,
               alt: markdownSrc,
               title: markdownSrc,
               ...(displayWidth != null ? { width: displayWidth } : {}),

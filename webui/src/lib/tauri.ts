@@ -210,6 +210,28 @@ export interface NoteSearchResult {
   notebookName?: string;
 }
 
+export interface LinkNode {
+  id: string;
+  title: string;
+  path: string;
+  aliases: string[];
+  noteType: string;
+}
+
+export interface LinkEdge {
+  source: string;
+  targetTitle: string;
+  resolvedTarget: string | null;
+  kind: "link" | "embed";
+  anchor: string | null;
+}
+
+export interface LinkGraph {
+  nodes: LinkNode[];
+  edges: LinkEdge[];
+  lastScanAt: string;
+}
+
 export async function searchNotebookNotes(
   notebookId: string,
   query: string,
@@ -225,19 +247,85 @@ export async function searchAllNotes(
   return invoke<NoteSearchResult[]>("notes_search_all", { query, limit });
 }
 
-export async function saveNoteImage(
-  fileName: string,
-  imageData: number[],
-): Promise<string> {
-  return invoke<string>("notes_save_image", { fileName, imageData });
-}
-
 export async function getNotesAssetsDir(): Promise<string> {
   return invoke<string>("notes_get_assets_dir");
 }
 
-export async function readNoteImage(fileName: string): Promise<string> {
-  return invoke<string>("notes_read_image", { fileName });
+export async function getNotesVaultPath(): Promise<string | null> {
+  if (!isTauri()) return null;
+  return invoke<string | null>("notes_vault_get_path");
+}
+
+export async function setNotesVaultPath(path: string): Promise<void> {
+  return invoke<void>("notes_vault_set_path", { path });
+}
+
+export async function pickNotesVaultDirectory(): Promise<string | null> {
+  if (!isTauri()) return null;
+  return invoke<string | null>("notes_vault_pick_directory");
+}
+
+// ---------------------------------------------------------------------------
+// Notes bidirectional links (Obsidian-style [[wiki links]])
+// ---------------------------------------------------------------------------
+
+export async function getNotesLinkGraph(): Promise<LinkGraph | null> {
+  if (!isTauri()) return null;
+  return invoke<LinkGraph>("notes_links_get_graph");
+}
+
+export async function getNoteBacklinks(noteId: string): Promise<unknown[]> {
+  if (!isTauri()) return [];
+  return invoke<unknown[]>("notes_links_get_backlinks", { noteId });
+}
+
+export async function getNoteMentions(noteId: string): Promise<unknown[]> {
+  if (!isTauri()) return [];
+  return invoke<unknown[]>("notes_links_get_mentions", { noteId });
+}
+
+export async function renameSyncWikiLinks(oldTitle: string, newTitle: string): Promise<{
+  updatedFiles: number;
+  updatedLinks: number;
+}> {
+  return invoke<{ updatedFiles: number; updatedLinks: number }>(
+    "notes_links_rename_sync",
+    { oldTitle, newTitle },
+  );
+}
+
+export async function searchNoteMentions(query: string): Promise<unknown[]> {
+  if (!isTauri()) return [];
+  return invoke<unknown[]>("notes_links_search_mentions", { query });
+}
+
+export async function listMocNotes(): Promise<unknown[]> {
+  if (!isTauri()) return [];
+  return invoke<unknown[]>("notes_moc_list");
+}
+
+export interface TemplateItem {
+  id: string;
+  title: string;
+  notebookId: string;
+  preview: string;
+}
+
+export async function listNoteTemplates(): Promise<TemplateItem[]> {
+  if (!isTauri()) return [];
+  return invoke<TemplateItem[]>("notes_list_templates");
+}
+
+export async function createNoteFromTemplate(
+  templateId: string,
+  title: string,
+  notebookId?: string,
+): Promise<string> {
+  return invoke<string>("notes_create_from_template", {
+    templateId,
+    title,
+    notebookId: notebookId ?? null,
+  });
 }
 
 export async function openPathWithSystemApp(path: string): Promise<void> {
@@ -333,4 +421,37 @@ export async function performUpdate(): Promise<void> {
 
 export async function getCurrentVersion(): Promise<string> {
   return invoke<string>("get_current_version");
+}
+
+// ---------------------------------------------------------------------------
+// 全局右下角通知弹窗（独立 Tauri 窗口）
+// ---------------------------------------------------------------------------
+
+export interface NotificationActionInput {
+  label: string;
+  action: string;
+  primary?: boolean;
+}
+
+export interface NotificationPayloadInput {
+  id: string;
+  title: string;
+  body: string;
+  /** mail / schedule / update / success / warning / error / info */
+  icon?: string;
+  actions?: NotificationActionInput[];
+  /** 自动关闭毫秒，0 不自动关闭，默认 6000 */
+  autoCloseMs?: number;
+  /** 点击卡片本身触发的 action */
+  clickAction?: string;
+}
+
+export async function showNotification(
+  payload: NotificationPayloadInput,
+): Promise<void> {
+  return invoke<void>("show_notification", { payload });
+}
+
+export async function closeNotificationWindow(label: string): Promise<void> {
+  return invoke<void>("close_notification_window", { label });
 }

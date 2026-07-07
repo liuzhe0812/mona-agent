@@ -6,7 +6,6 @@ import {
   Loader2,
   RefreshCw,
   Sparkles,
-  X,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -23,6 +22,7 @@ import {
   isTauri,
   checkForUpdates,
   performUpdate,
+  showNotification,
   type UpdateCheckResult,
   type UpdateProgress,
 } from "@/lib/tauri";
@@ -65,13 +65,13 @@ function formatSize(bytes: number | null | undefined): string {
 export function UpdateNotification({
   onUpdateAvailable,
 }: UpdateNotificationProps) {
-  const [toastVisible, setToastVisible] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [view, setView] = useState<UpdateView>({ kind: "idle" });
   const [currentVersion, setCurrentVersion] = useState<string>("");
   const [fallbackOpen, setFallbackOpen] = useState(false);
   const [fallbackMessage, setFallbackMessage] = useState<string>("");
-  const toastTimerRef = useRef<number | null>(null);
+  // 缓存最新的更新信息，供通知 action 回调使用
+  const availableInfoRef = useRef<UpdateCheckResult | null>(null);
 
   // Load current version on mount
   useEffect(() => {
@@ -93,6 +93,7 @@ export function UpdateNotification({
     let unlistenAvailable: (() => void) | null = null;
     let unlistenProgress: (() => void) | null = null;
     let unlistenFailed: (() => void) | null = null;
+    let unlistenNotifAction: (() => void) | null = null;
 
     (async () => {
       try {
@@ -103,16 +104,22 @@ export function UpdateNotification({
             const info = event.payload;
             if (info?.has_update) {
               setView({ kind: "available", info });
+              availableInfoRef.current = info;
               onUpdateAvailable?.(info);
-              // Show toast notification (non-intrusive)
-              setToastVisible(true);
-              // Auto-dismiss toast after 12 seconds if user doesn't interact
-              if (toastTimerRef.current) {
-                window.clearTimeout(toastTimerRef.current);
-              }
-              toastTimerRef.current = window.setTimeout(() => {
-                setToastVisible(false);
-              }, 12_000);
+              // 弹出全局右下角通知（独立窗口）
+              void showNotification({
+                id: `update-${info.latest_version}-${Date.now()}`,
+                title: `发现新版本 v${info.latest_version}`,
+                body: `当前版本 v${info.current_version}${
+                  info.size ? ` · ${formatSize(info.size)}` : ""
+                }`,
+                icon: "update",
+                autoCloseMs: 10000,
+                actions: [
+                  { label: "立即更新", action: "update-now", primary: true },
+                  { label: "稍后", action: "update-dismiss" },
+                ],
+              });
             }
           },
         );
@@ -130,6 +137,17 @@ export function UpdateNotification({
             setFallbackOpen(true);
           },
         );
+        // 监听通知窗口的 action 回调
+        unlistenNotifAction = await listen<{ action: string }>(
+          "notification-action",
+          (event) => {
+            const action = event.payload?.action;
+            if (action === "update-now") {
+              setDialogOpen(true);
+            }
+            // update-dismiss: 无操作，通知窗口会自行关闭
+          },
+        );
       } catch {
         // ignore
       }
@@ -139,18 +157,9 @@ export function UpdateNotification({
       unlistenAvailable?.();
       unlistenProgress?.();
       unlistenFailed?.();
-      if (toastTimerRef.current) {
-        window.clearTimeout(toastTimerRef.current);
-      }
+      unlistenNotifAction?.();
     };
   }, [onUpdateAvailable]);
-
-  const dismissToast = useCallback(() => {
-    setToastVisible(false);
-    if (toastTimerRef.current) {
-      window.clearTimeout(toastTimerRef.current);
-    }
-  }, []);
 
   const handleCheckUpdate = useCallback(async () => {
     setView({ kind: "checking" });
@@ -158,6 +167,7 @@ export function UpdateNotification({
       const result = await checkForUpdates();
       if (result.has_update) {
         setView({ kind: "available", info: result });
+        availableInfoRef.current = result;
         onUpdateAvailable?.(result);
       } else {
         setView({ kind: "upToDate" });
@@ -184,11 +194,6 @@ export function UpdateNotification({
     }
   }, []);
 
-  const openDialogFromToast = useCallback(() => {
-    dismissToast();
-    setDialogOpen(true);
-  }, [dismissToast]);
-
   const handleDialogOpenChange = useCallback(
     (open: boolean) => {
       // Don't allow closing during update
@@ -202,62 +207,9 @@ export function UpdateNotification({
   );
 
   const isUpdating = view.kind === "updating";
-  const availableInfo = view.kind === "available" ? view.info : null;
 
   return (
     <>
-      {/* Toast notification (auto-show on startup detection) */}
-      {toastVisible && availableInfo ? (
-        <div className="fixed bottom-5 right-5 z-50 w-[360px] max-w-[calc(100vw-2.5rem)] animate-in slide-in-from-bottom-4 fade-in-0 duration-300">
-          <div className="relative overflow-hidden rounded-2xl border border-border/60 bg-popover/95 p-4 shadow-[0_18px_55px_rgba(15,23,42,0.18)] backdrop-blur-xl dark:border-white/10 dark:shadow-[0_22px_55px_rgba(0,0,0,0.45)]">
-            <div className="flex items-start gap-3">
-              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-blue-500/10 text-blue-600 dark:text-blue-300">
-                <Sparkles className="h-4 w-4" aria-hidden />
-              </span>
-              <div className="min-w-0 flex-1">
-                <p className="text-[13px] font-semibold leading-5 text-foreground">
-                  发现新版本 v{availableInfo.latest_version}
-                </p>
-                <p className="mt-0.5 text-[12px] leading-4 text-muted-foreground">
-                  当前版本 v{availableInfo.current_version}
-                  {availableInfo.size
-                    ? ` · ${formatSize(availableInfo.size)}`
-                    : ""}
-                </p>
-                <div className="mt-2.5 flex items-center gap-2">
-                  <Button
-                    size="sm"
-                    onClick={openDialogFromToast}
-                    className="h-7 rounded-full px-3 text-[12px]"
-                  >
-                    <Download className="mr-1 h-3 w-3" aria-hidden />
-                    立即更新
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={dismissToast}
-                    className="h-7 rounded-full px-3 text-[12px] text-muted-foreground"
-                  >
-                    稍后
-                  </Button>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={dismissToast}
-                aria-label="关闭"
-                className="absolute right-2 top-2 grid h-6 w-6 place-items-center rounded-full text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground"
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
-            </div>
-            {/* Progress bar accent at bottom */}
-            <div className="absolute inset-x-0 bottom-0 h-0.5 bg-gradient-to-r from-blue-500/0 via-blue-500/60 to-blue-500/0" />
-          </div>
-        </div>
-      ) : null}
-
       {/* Fallback dialog when auto-download fails */}
       <Dialog open={fallbackOpen} onOpenChange={setFallbackOpen}>
         <DialogContent className="max-w-[420px] gap-0 p-0">

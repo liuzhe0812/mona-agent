@@ -362,8 +362,19 @@ export class MonaClient {
 
   /** Ask the server to provision a new chat_id; resolves with the assigned id.
    *  When ``ephemeral`` is true the session is hidden from the session list
-   *  and deleted when the client explicitly calls ``deleteChat``. */
-  newChat(timeoutMs: number = 5_000, ephemeral = false): Promise<string> {
+   *  and deleted when the client explicitly calls ``deleteChat``.
+   *
+   *  ``workspace`` binds the session to a project working directory. Pass
+   *  ``null`` or omit for the default "会话" section.
+   *
+   *  ``agentKind`` routes the session to a dedicated agent loop. Currently
+   *  only ``"ppt"`` is supported (PPTAgentLoop with tool whitelist + ppt_soul.md). */
+  newChat(
+    timeoutMs: number = 5_000,
+    ephemeral = false,
+    workspace?: string | null,
+    agentKind?: string | null,
+  ): Promise<string> {
     if (this.pendingNewChat) {
       return Promise.reject(new Error("newChat already in flight"));
     }
@@ -373,7 +384,11 @@ export class MonaClient {
         reject(new Error("newChat timed out"));
       }, timeoutMs);
       this.pendingNewChat = { resolve, reject, timer };
-      this.queueSend({ type: "new_chat", ...(ephemeral ? { ephemeral: true } : {}) });
+      const payload: Record<string, unknown> = { type: "new_chat" };
+      if (ephemeral) payload.ephemeral = true;
+      if (workspace) payload.workspace = workspace;
+      if (agentKind) payload.agent_kind = agentKind;
+      this.queueSend(payload as Outbound);
     });
   }
 

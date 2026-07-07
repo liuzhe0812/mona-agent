@@ -9,7 +9,9 @@
     },
     "error": {
       "title": "無法連線到 mona",
-      "gatewayHint": "請確認 gateway 已啟動（`mona gateway`），並且目前頁面與 gateway 在同一台機器上開啟。"
+      "gatewayHint": "請確認 gateway 已啟動（`mona gateway`），並且目前頁面與 gateway 在同一台機器上開啟。",
+      "otherFeaturesHint": "筆記、設定、SSH、瀏覽器等功能不依賴執行階段，可正常使用。",
+      "retry": "重試"
     },
     "system": {
       "section": "系統",
@@ -259,12 +261,16 @@
     "newChat": "新增對話",
     "groups": {
       "pinned": "置頂",
+      "conversations": "會話",
       "all": "對話",
       "today": "今天",
       "yesterday": "昨天",
       "earlier": "更早",
       "archived": "已封存"
-    }
+    },
+    "moveToProject": "移動到專案…",
+    "newProjectChat": "在專案中新建會話",
+    "bindProjectFolder": "綁定專案目錄…"
   },
   "deleteConfirm": {
     "title": "刪除這個對話？",
@@ -370,6 +376,10 @@
           "4_3": "橫式 4:3",
           "16_9": "寬螢幕 16:9"
         }
+      },
+      "workspace": {
+        "placeholder": "選擇資料夾（可選）",
+        "clear": "清除資料夾選擇"
       },
       "encoding": "處理中…",
       "remove": "移除附件",

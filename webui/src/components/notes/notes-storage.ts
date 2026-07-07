@@ -5,8 +5,6 @@ import {
 } from "@/lib/tauri";
 
 import type {
-  KnowledgeCategory,
-  KnowledgeItem,
   Notebook,
   NoteSourceKind,
   NoteTransformation,
@@ -17,11 +15,8 @@ import { nowTimestamp } from "./notes-data";
 export interface NotesStorageState {
   notebooks: Notebook[];
   notes: OperationNote[];
-  knowledgeCategories: KnowledgeCategory[];
-  knowledgeItems: KnowledgeItem[];
   activeNotebookId: string;
   activeNoteId: string | null;
-  activeKnowledgeCategoryId: string;
   transformations: NoteTransformation[];
 }
 
@@ -46,6 +41,7 @@ export function createBlankNote(
     notebookId,
     title: isSsh ? "SSH 会话记录" : "未命名笔记",
     preview: isSsh ? "记录 SSH 命令、输出和处理思路。" : "新的笔记。",
+    createdAt: nowTimestamp(),
     updatedAt: nowTimestamp(),
     source: isSsh
       ? { kind: "ssh", label: "SSH 记录" }
@@ -61,18 +57,6 @@ export function createBlankNote(
 
 export function createNoteId(): string {
   return createId("note");
-}
-
-export function createKnowledgeItemId(): string {
-  return createId("knowledge");
-}
-
-export function createKnowledgeCategory(name: string, parentId: string | null = null): KnowledgeCategory {
-  return {
-    id: createId("knowledge-category"),
-    name,
-    parentId,
-  };
 }
 
 export function createCustomNotebook(name: string): Notebook {

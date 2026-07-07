@@ -3,7 +3,6 @@ import {
   Check,
   Clipboard,
   Copy,
-  Database,
   FileCode2,
   FilePlus2,
   Languages,
@@ -29,8 +28,7 @@ import { buildDisplayUnits, type DisplayUnit } from "@/components/thread/ThreadM
 import { useMonaStream } from "@/hooks/useMonaStream";
 import { useSessionHistory } from "@/hooks/useSessions";
 import type { UIMessage } from "@/lib/types";
-import { useClient } from "@/providers/ClientProvider";
-import { useKnowledgeDialog } from "@/providers/KnowledgeDialogProvider";
+import { useClientOptional } from "@/providers/ClientProvider";
 import { exportNoteTempFile, isTauri } from "@/lib/tauri";
 import {
   Dialog,
@@ -46,15 +44,11 @@ import {
   buildAgentResultMarkdown,
   buildFreeformAgentPrompt,
   buildTransformationPrompt,
-  createKnowledgeDraftFromCandidate,
   inferNoteActionDisplayLabel,
-  parseExtractedKnowledgeCandidates,
-  type ExtractedKnowledgeDraft,
 } from "./notes-ai";
 import { ConfirmDialog } from "./NotesDialogs";
 import {
   TRANSFORMATION_VARIABLES,
-  type KnowledgeCategory,
   type NoteAiActionId,
   type NoteTransformation,
   type OperationNote,
@@ -64,14 +58,11 @@ import { nowTimestamp } from "./notes-data";
 interface NoteAgentPanelProps {
   note: OperationNote | null;
   notebook: import("./notes-data").Notebook | null;
-  knowledgeCategories: KnowledgeCategory[];
-  knowledgeTags: string[];
   transformations: NoteTransformation[];
   collapsed?: boolean;
   width?: number;
   onAgentChatIdChange: (chatId: string) => void;
   onApplyResult: (mode: "append" | "replace", markdown: string, messageId: string) => void;
-  onSaveKnowledge: (draft: ExtractedKnowledgeDraft) => boolean;
   onSaveAsNote?: (markdown: string, title: string) => void;
   onTransformationsChange: (transformations: NoteTransformation[]) => void;
   onClearChat?: () => void;
@@ -81,14 +72,11 @@ interface NoteAgentPanelProps {
 export function NoteAgentPanel({
   note,
   notebook,
-  knowledgeCategories,
-  knowledgeTags,
   transformations,
   collapsed: collapsedProp,
   width = 306,
   onAgentChatIdChange,
   onApplyResult,
-  onSaveKnowledge,
   onSaveAsNote,
   onTransformationsChange,
   onClearChat,
@@ -101,24 +89,10 @@ export function NoteAgentPanel({
   const [replaceConfirmMessage, setReplaceConfirmMessage] = useState<UIMessage | null>(null);
   const pendingPromptRef = useRef<string | null>(null);
   const pendingDisplayContentRef = useRef<string | null>(null);
-  const pendingKnowledgeStartIndexRef = useRef<number | null>(null);
   const pendingActionRef = useRef<Exclude<NoteAiActionId, "freeform"> | null>(null);
   const autoAppliedMessageIdsRef = useRef<Set<string>>(new Set());
-  const processedKnowledgeMessageIdsRef = useRef<Set<string>>(new Set());
   const lastNoteIdRef = useRef<string | null | undefined>(note?.id);
-  const processedSaveIdsRef = useRef<Set<string>>(new Set());
-  const onSaveKnowledgeRef = useRef(onSaveKnowledge);
-  onSaveKnowledgeRef.current = onSaveKnowledge;
-  const { client } = useClient();
-
-  const {
-    candidates: knowledgeCandidates,
-    isDialogOpen: knowledgeDialogOpen,
-    openDialog: openKnowledgeDialog,
-    reopenDialog: reopenKnowledgeDialog,
-    clearCandidates: clearKnowledgeCandidates,
-    registerSaveHandler,
-  } = useKnowledgeDialog();
+  const { client } = useClientOptional();
 
   const chatId = note?.agentChatId ?? null;
   const historyKey = chatId ? `websocket:${chatId}` : null;
@@ -144,48 +118,16 @@ export function NoteAgentPanel({
     onStreamingChange?.(isStreaming);
   }, [isStreaming, onStreamingChange]);
 
-  // Register save handler for the global knowledge dialog
-  useEffect(() => {
-    registerSaveHandler((candidateId, draft) => {
-      processedSaveIdsRef.current.add(candidateId);
-      const success = onSaveKnowledgeRef.current(draft);
-      if (success) setNotice("知识点已保存");
-      return success;
-    });
-  }, [registerSaveHandler]);
-
-  // Process saved candidates that were persisted without a handler (e.g. user saved while on another page)
-  useEffect(() => {
-    const currentNoteId = note?.id;
-    if (!currentNoteId) return;
-
-    for (const candidate of knowledgeCandidates) {
-      if (
-        candidate.status === "saved" &&
-        candidate.noteId === currentNoteId &&
-        !processedSaveIdsRef.current.has(candidate.id)
-      ) {
-        processedSaveIdsRef.current.add(candidate.id);
-        const draft = createKnowledgeDraftFromCandidate(candidate.draft);
-        onSaveKnowledge(draft);
-      }
-    }
-  }, [knowledgeCandidates, note?.id, onSaveKnowledge]);
-
   useEffect(() => {
     const noteId = note?.id ?? null;
     if (lastNoteIdRef.current === noteId) return;
     lastNoteIdRef.current = noteId;
     setDraft("");
     setNotice(null);
-    clearKnowledgeCandidates();
-    pendingKnowledgeStartIndexRef.current = null;
     pendingActionRef.current = null;
     autoAppliedMessageIdsRef.current = new Set();
-    processedKnowledgeMessageIdsRef.current = new Set();
-    processedSaveIdsRef.current = new Set();
     if (!note?.agentChatId) setMessages([]);
-  }, [note?.id, note?.agentChatId, setMessages, clearKnowledgeCandidates]);
+  }, [note?.id, note?.agentChatId, setMessages]);
 
   useEffect(() => {
     if (!chatId || loading) return;
@@ -218,37 +160,6 @@ export function NoteAgentPanel({
     const timer = window.setTimeout(() => setNotice(null), 1800);
     return () => window.clearTimeout(timer);
   }, [notice]);
-
-  useEffect(() => {
-    const startIndex = pendingKnowledgeStartIndexRef.current;
-    if (startIndex === null || loading || creatingChat || isStreaming) return;
-
-    const completedMessages = messages
-      .slice(startIndex)
-      .filter(
-        (item) =>
-          item.role === "assistant" &&
-          !item.isStreaming &&
-          item.content.trim().length > 0 &&
-          !processedKnowledgeMessageIdsRef.current.has(item.id),
-      );
-    const message =
-      completedMessages.find((item) => isKnowledgeJsonCandidate(item.content)) ??
-      completedMessages[completedMessages.length - 1];
-    if (!message) return;
-
-    pendingKnowledgeStartIndexRef.current = null;
-    processedKnowledgeMessageIdsRef.current.add(message.id);
-
-    try {
-      const candidates = parseExtractedKnowledgeCandidates(message.content);
-      openKnowledgeDialog(candidates, note?.id ?? "");
-      setNotice(`生成 ${candidates.length} 个候选知识点`);
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : "未识别到候选知识点";
-      setNotice(msg);
-    }
-  }, [creatingChat, isStreaming, loading, messages, note?.id, openKnowledgeDialog]);
 
   useEffect(() => {
     const action = pendingActionRef.current;
@@ -292,9 +203,9 @@ export function NoteAgentPanel({
       if (notebook?.knowledgeBaseEnabled && isTauri()) {
         try {
           const { searchNotebookNotes } = await import("@/lib/tauri");
-          const { formatKnowledgeBaseContext } = await import("./notes-ai");
+          const { formatNotebookBaseContext } = await import("./notes-ai");
           const results = await searchNotebookNotes(notebook.id, trimmed);
-          const kbContext = formatKnowledgeBaseContext(results);
+          const kbContext = formatNotebookBaseContext(results);
           if (kbContext) {
             finalPrompt = `${kbContext}\n\n---\n\n${trimmed}`;
           }
@@ -308,6 +219,11 @@ export function NoteAgentPanel({
         return true;
       }
 
+      if (!client) {
+        setNotice("运行时未就绪，请稍后再试");
+        return false;
+      }
+
       setCreatingChat(true);
       setNotice("正在创建笔记专属会话");
       pendingPromptRef.current = finalPrompt;
@@ -319,7 +235,6 @@ export function NoteAgentPanel({
       } catch {
         pendingPromptRef.current = null;
         pendingDisplayContentRef.current = null;
-        pendingKnowledgeStartIndexRef.current = null;
         setNotice("创建会话失败");
         return false;
       } finally {
@@ -332,10 +247,6 @@ export function NoteAgentPanel({
   const runAction = useCallback(
     async (actionId: Exclude<NoteAiActionId, "freeform">) => {
       if (!note) return;
-      if (actionId === "extractKnowledge") {
-        pendingKnowledgeStartIndexRef.current = messages.length;
-        clearKnowledgeCandidates();
-      }
       pendingActionRef.current = actionId;
       let filePath: string | undefined;
       if (isTauri()) {
@@ -348,17 +259,14 @@ export function NoteAgentPanel({
       const action = NOTE_AI_ACTIONS.find((a) => a.id === actionId);
       const label = action?.label ?? actionId;
       const sent = await sendPromptToAgent(
-        buildAgentActionPrompt(actionId, note, filePath, knowledgeCategories, knowledgeTags),
+        buildAgentActionPrompt(actionId, note, filePath),
         label,
       );
       if (!sent) {
-        if (actionId === "extractKnowledge") {
-          pendingKnowledgeStartIndexRef.current = null;
-        }
         pendingActionRef.current = null;
       }
     },
-    [clearKnowledgeCandidates, knowledgeCategories, knowledgeTags, messages.length, note, sendPromptToAgent],
+    [note, sendPromptToAgent],
   );
 
   const runTransformation = useCallback(
@@ -544,12 +452,6 @@ export function NoteAgentPanel({
         />
       </div>
 
-      <KnowledgeCandidateDock
-        candidates={knowledgeCandidates}
-        isDialogOpen={knowledgeDialogOpen}
-        onReopen={reopenKnowledgeDialog}
-      />
-
       <div className="shrink-0 p-2">
         <div className="flex min-h-[52px] items-end gap-1.5 rounded-xl border border-border/75 bg-background px-2.5 py-1.5 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
           <textarea
@@ -564,7 +466,7 @@ export function NoteAgentPanel({
             disabled={!note || creatingChat}
             className="min-h-[36px] flex-1 resize-none bg-transparent text-[12px] leading-5 outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
             rows={2}
-            placeholder="问当前笔记、总结内容或提取知识点..."
+            placeholder="问当前笔记、总结内容..."
           />
           <button
             type="button"
@@ -624,36 +526,6 @@ export function NoteAgentPanel({
       onOpenChange={(open) => { if (!open) setDeleteCandidate(null); }}
     />
     </>
-  );
-}
-
-function KnowledgeCandidateDock({
-  candidates,
-  isDialogOpen,
-  onReopen,
-}: {
-  candidates: { status: string }[];
-  isDialogOpen: boolean;
-  onReopen: () => void;
-}) {
-  const pendingCount = candidates.filter((c) => c.status === "pending").length;
-  if (pendingCount === 0 || isDialogOpen) return null;
-
-  return (
-    <div className="shrink-0 border-t border-border/65 bg-background px-2.5 py-2">
-      <button
-        type="button"
-        onClick={onReopen}
-        className="flex h-9 w-full items-center justify-between gap-2 rounded-lg border border-border/70 bg-muted/25 px-2.5 text-left text-[11.5px] text-muted-foreground hover:bg-accent hover:text-foreground"
-      >
-        <span className="min-w-0 truncate">
-          {pendingCount > 0 ? `${pendingCount} 条知识点待确认` : "查看已生成知识点"}
-        </span>
-        <span className="shrink-0 rounded-full border border-border/65 bg-background px-1.5 py-0.5 text-[10.5px]">
-          打开
-        </span>
-      </button>
-    </div>
   );
 }
 
@@ -760,18 +632,9 @@ function SingleMessageWithActions({
   onCopy: (message: UIMessage) => void;
   onSaveAsNote: (message: UIMessage) => void;
 }) {
-  const isKnowledgeResult =
-    message.role === "assistant" && !message.isStreaming && isKnowledgeJsonCandidate(message.content);
-
   return (
     <div className="min-w-0">
-      {isKnowledgeResult ? (
-        <div className="rounded-lg border border-border/65 bg-muted/25 px-2.5 py-2 text-[12px] leading-5 text-muted-foreground">
-          已生成候选知识点，请在弹窗中确认保存。
-        </div>
-      ) : (
-        <MessageBubble message={message} showAssistantCopyAction={false} />
-      )}
+      <MessageBubble message={message} showAssistantCopyAction={false} />
       <NoteMessageActions
         message={message}
         applied={appliedMessageIds.includes(message.id)}
@@ -833,15 +696,6 @@ function QuickActionSection({
         >
           <Sparkles className="h-4 w-4 shrink-0 text-muted-foreground" />
           <span className="min-w-0 truncate">总结当前笔记</span>
-        </button>
-        <button
-          type="button"
-          disabled={!note || disabled}
-          onClick={() => onAction("extractKnowledge")}
-          className="flex h-9 items-center gap-2 rounded-lg border border-border/70 bg-background px-2.5 text-left text-[11.5px] font-medium text-foreground/82 transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
-        >
-          <Database className="h-4 w-4 shrink-0 text-muted-foreground" />
-          <span className="min-w-0 truncate">提取知识点</span>
         </button>
         <button
           type="button"
@@ -1169,12 +1023,10 @@ function NoteMessageActions({
   if (message.kind === "trace") return null;
   if (message.role === "user") return null;
 
-  const isKnowledgeResult = !message.isStreaming && isKnowledgeJsonCandidate(message.content);
   const canApply =
     message.role === "assistant" &&
     !message.isStreaming &&
     message.content.trim().length > 0 &&
-    !isKnowledgeResult &&
     !autoApplied;
 
   if (!canApply && !autoApplied) return null;
@@ -1274,16 +1126,3 @@ function MiniAction({
     </button>
   );
 }
-
-function isKnowledgeJsonCandidate(content: string): boolean {
-  return (
-    content.includes('"items"') &&
-    content.includes('"categoryName"') &&
-    content.includes('"title"') &&
-    content.includes('"summary"') &&
-    content.includes('"sourceDescription"') &&
-    content.includes('"tags"')
-  );
-}
-
-

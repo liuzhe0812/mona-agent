@@ -164,7 +164,7 @@ export function PptMakerView({ onBack: _onBack }: PptMakerViewProps) {
       const prompt = buildPptPrompt(config, name);
       const displayText = `请制作一份 PPT。\n项目名：${name}`;
       await markPptGenerating(token, name, "start");
-      const newChatId = await client.newChat(5_000);
+      const newChatId = await client.newChat(5_000, false, null, "ppt");
       setChatId(newChatId);
       setDisplayContentMap((prev) => ({ ...prev, [newChatId]: displayText }));
       await savePptChatId(token, name, newChatId);

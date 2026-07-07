@@ -62,7 +62,7 @@ interface ThreadShellProps {
   onGoHome?: () => void;
   onOpenSSH?: () => void;
   onCreateNote?: () => void;
-  onCreateChat?: () => Promise<string | null>;
+  onCreateChat?: (workspace?: string | null) => Promise<string | null>;
   onTurnEnd?: () => void;
   queuedPrompt?: QueuedPrompt | null;
   onQueuedPromptConsumed?: (id: string) => void;
@@ -111,6 +111,7 @@ export function ThreadShell({
   const { t } = useTranslation();
   const chatId = session?.chatId ?? null;
   const historyKey = session?.key ?? null;
+  const [selectedWorkspace, setSelectedWorkspace] = useState<string | null>(null);
   const {
     messages: historical,
     loading,
@@ -433,9 +434,9 @@ export function ThreadShell({
         if (selectedKbForChat.startsWith("notebook:")) {
           const notebookId = selectedKbForChat.slice("notebook:".length);
           const { searchNotebookNotes } = await import("@/lib/tauri");
-          const { formatKnowledgeBaseContext } = await import("@/components/notes/notes-ai");
+          const { formatNotebookBaseContext } = await import("@/components/notes/notes-ai");
           const results = await searchNotebookNotes(notebookId, content);
-          const kbContext = formatKnowledgeBaseContext(results);
+          const kbContext = formatNotebookBaseContext(results);
           if (kbContext) return `${kbContext}\n\n---\n\n${content}`;
         } else {
           const ragContext = await retrieveKbContext(selectedKbForChat, content);
@@ -458,13 +459,15 @@ export function ThreadShell({
       setBooting(true);
       const finalContent = await injectKbContext(content);
       pendingFirstRef.current = { content: finalContent, images, options };
-      const newId = await onCreateChat?.();
+      const newId = await onCreateChat?.(selectedWorkspace);
       if (!newId) {
         pendingFirstRef.current = null;
         setBooting(false);
       }
+      // Clear the transient workspace selection after creating the chat.
+      setSelectedWorkspace(null);
     },
-    [booting, onCreateChat, injectKbContext],
+    [booting, onCreateChat, injectKbContext, selectedWorkspace],
   );
 
   const handleThreadSend = useCallback(
@@ -592,6 +595,8 @@ export function ThreadShell({
           kbProjectName={selectedKbProjectName}
           kbProjects={kbProjects.length > 0 ? kbProjects : undefined}
           onKbSelect={setSelectedKbForChat}
+          workspace={selectedWorkspace}
+          onWorkspaceChange={setSelectedWorkspace}
         />
       )}
     </>
