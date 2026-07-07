@@ -33,20 +33,18 @@ class HeartbeatUpdateTool(Tool):
             "Supports modes: 'replace' (overwrite), 'append' (add to end), 'prepend' (add to start)."
         )
 
+    @property
     def parameters(self) -> dict[str, Any]:
-        return tool_parameters_schema([
-            StringSchema(
-                "content",
+        return tool_parameters_schema(
+            content=StringSchema(
                 description="New content (for replace) or text to append/prepend.",
-                required=True,
             ),
-            StringSchema(
-                "mode",
+            mode=StringSchema(
                 description="Update mode: 'replace' (default), 'append', or 'prepend'.",
-                default="replace",
                 enum=["replace", "append", "prepend"],
             ),
-        ])
+            required=["content"],
+        )
 
     async def execute(
         self,

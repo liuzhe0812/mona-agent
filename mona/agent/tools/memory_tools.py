@@ -68,15 +68,15 @@ class MemoryReadTool(Tool):
     def read_only(self) -> bool:
         return True
 
+    @property
     def parameters(self) -> dict[str, Any]:
-        return tool_parameters_schema([
-            StringSchema(
-                "file",
+        return tool_parameters_schema(
+            file=StringSchema(
                 description="Which memory file to read.",
-                required=True,
                 enum=sorted(_VALID_FILES),
             ),
-        ])
+            required=["file"],
+        )
 
     async def execute(self, file: str | None = None, **kwargs: Any) -> str:
         if not file:
@@ -125,26 +125,22 @@ class MemoryEditTool(Tool):
             "'user' → USER.md, 'agents' → AGENTS.md."
         )
 
+    @property
     def parameters(self) -> dict[str, Any]:
-        return tool_parameters_schema([
-            StringSchema(
-                "file",
+        return tool_parameters_schema(
+            file=StringSchema(
                 description="Which memory file to edit.",
-                required=True,
                 enum=sorted(_VALID_FILES),
             ),
-            StringSchema(
-                "content",
+            content=StringSchema(
                 description="Content to write or append.",
-                required=True,
             ),
-            StringSchema(
-                "mode",
+            mode=StringSchema(
                 description="Edit mode: 'replace' (default) or 'append'.",
-                default="replace",
                 enum=["replace", "append"],
             ),
-        ])
+            required=["file", "content"],
+        )
 
     async def execute(
         self,
@@ -203,26 +199,23 @@ class MemorySearchTool(Tool):
     def read_only(self) -> bool:
         return True
 
+    @property
     def parameters(self) -> dict[str, Any]:
-        return tool_parameters_schema([
-            StringSchema(
-                "query",
+        return tool_parameters_schema(
+            query=StringSchema(
                 description="Search query (case-insensitive).",
-                required=True,
             ),
-            IntegerSchema(
-                "limit",
+            limit=IntegerSchema(
+                self._DEFAULT_LIMIT,
                 description=f"Max results (default {self._DEFAULT_LIMIT}, max {self._MAX_LIMIT}).",
-                default=self._DEFAULT_LIMIT,
                 minimum=1,
                 maximum=self._MAX_LIMIT,
             ),
-            BooleanSchema(
-                "fixed_strings",
+            fixed_strings=BooleanSchema(
                 description="Treat query as literal string (no regex). Default false.",
-                default=False,
             ),
-        ])
+            required=["query"],
+        )
 
     async def execute(
         self,

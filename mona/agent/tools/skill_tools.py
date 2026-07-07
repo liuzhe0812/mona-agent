@@ -53,14 +53,14 @@ class SkillReadTool(Tool):
     def read_only(self) -> bool:
         return True
 
+    @property
     def parameters(self) -> dict[str, Any]:
-        return tool_parameters_schema([
-            StringSchema(
-                "name",
+        return tool_parameters_schema(
+            name=StringSchema(
                 description="Skill name (directory name under ~/.mona/skills/ or builtin).",
-                required=True,
             ),
-        ])
+            required=["name"],
+        )
 
     async def execute(self, name: str | None = None, **kwargs: Any) -> str:
         if not name:
@@ -93,19 +93,17 @@ class SkillCreateTool(Tool):
             "Fails if the skill already exists (use skill_read to inspect first)."
         )
 
+    @property
     def parameters(self) -> dict[str, Any]:
-        return tool_parameters_schema([
-            StringSchema(
-                "name",
+        return tool_parameters_schema(
+            name=StringSchema(
                 description="Skill name (directory name, alphanumeric + dashes).",
-                required=True,
             ),
-            StringSchema(
-                "content",
+            content=StringSchema(
                 description="Full SKILL.md content (with optional YAML frontmatter).",
-                required=True,
             ),
-        ])
+            required=["name", "content"],
+        )
 
     async def execute(
         self,
@@ -155,24 +153,20 @@ class SkillScriptRunTool(Tool):
             "the skill directory automatically and runs in a controlled manner."
         )
 
+    @property
     def parameters(self) -> dict[str, Any]:
-        return tool_parameters_schema([
-            StringSchema(
-                "skill",
+        return tool_parameters_schema(
+            skill=StringSchema(
                 description="Skill name (directory name).",
-                required=True,
             ),
-            StringSchema(
-                "script",
+            script=StringSchema(
                 description="Script filename (e.g. 'svg_quality_checker.py').",
-                required=True,
             ),
-            StringSchema(
-                "args",
+            args=StringSchema(
                 description="Arguments to pass to the script (as a single string).",
-                default="",
             ),
-        ])
+            required=["skill", "script"],
+        )
 
     async def execute(
         self,
@@ -245,19 +239,17 @@ class SkillReferenceReadTool(Tool):
     def read_only(self) -> bool:
         return True
 
+    @property
     def parameters(self) -> dict[str, Any]:
-        return tool_parameters_schema([
-            StringSchema(
-                "skill",
+        return tool_parameters_schema(
+            skill=StringSchema(
                 description="Skill name (directory name).",
-                required=True,
             ),
-            StringSchema(
-                "ref_path",
+            ref_path=StringSchema(
                 description="Reference file path relative to <skill_dir>/references/ (e.g. 'design_principles.md').",
-                required=True,
             ),
-        ])
+            required=["skill", "ref_path"],
+        )
 
     async def execute(
         self,
@@ -305,24 +297,20 @@ class SkillAssetCopyTool(Tool):
             "Use this to bundle skill-provided resources into the workspace when needed."
         )
 
+    @property
     def parameters(self) -> dict[str, Any]:
-        return tool_parameters_schema([
-            StringSchema(
-                "skill",
+        return tool_parameters_schema(
+            skill=StringSchema(
                 description="Skill name (directory name).",
-                required=True,
             ),
-            StringSchema(
-                "asset",
+            asset=StringSchema(
                 description="Asset file path relative to <skill_dir>/assets/ (e.g. 'fonts/noto.ttf').",
-                required=True,
             ),
-            StringSchema(
-                "dest",
+            dest=StringSchema(
                 description="Destination path (absolute or relative to workspace).",
-                required=True,
             ),
-        ])
+            required=["skill", "asset", "dest"],
+        )
 
     async def execute(
         self,
