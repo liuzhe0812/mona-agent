@@ -117,3 +117,40 @@ def contains_internal_url(command: str) -> bool:
         if not ok:
             return True
     return False
+
+
+def validate_host(host: str, allow_loopback: bool = False) -> tuple[bool, str]:
+    """Validate a bare hostname (no scheme) is safe to connect to.
+
+    Used for IMAP/SMTP servers where the host comes from user configuration.
+    Blocks private/internal IPs to prevent SSRF via mail server config.
+
+    Args:
+        host: Hostname or IP address string.
+        allow_loopback: If True, allow 127.0.0.0/8 and ::1 (local mail servers).
+
+    Returns (ok, error_message).
+    """
+    host = (host or "").strip()
+    if not host:
+        return False, "Missing host"
+
+    try:
+        infos = socket.getaddrinfo(host, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+    except socket.gaierror:
+        return False, f"Cannot resolve hostname: {host}"
+
+    for info in infos:
+        try:
+            addr = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            continue
+        if _is_private(addr):
+            # Allow loopback (127.0.0.1/::1) for local mail servers if requested
+            if allow_loopback and addr in ipaddress.ip_network("127.0.0.0/8"):
+                continue
+            if allow_loopback and addr in ipaddress.ip_network("::1/128"):
+                continue
+            return False, f"Blocked: {host} resolves to private/internal address {addr}"
+
+    return True, ""

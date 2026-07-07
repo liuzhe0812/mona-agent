@@ -1,4 +1,4 @@
-﻿"""Runtime path helpers derived from the active config context."""
+"""Runtime path helpers derived from the active config context."""
 
 from __future__ import annotations
 
@@ -74,3 +74,43 @@ def get_bridge_install_dir() -> Path:
 def get_legacy_sessions_dir() -> Path:
     """Return the legacy global session directory used for migration fallback."""
     return Path.home() / ".mona" / "sessions"
+
+
+# ---------------------------------------------------------------------------
+# Global resource directories (stored OUTSIDE workspace for hard boundary)
+# ---------------------------------------------------------------------------
+
+
+def get_memory_dir() -> Path:
+    """Return the global memory directory (~/.mona/memory/).
+
+    Stores MEMORY.md, SOUL.md, USER.md, AGENTS.md, history.jsonl.
+    Moved out of workspace to enforce _FsTool hard boundary.
+    """
+    return ensure_dir(get_data_dir() / "memory")
+
+
+def get_memory_file(name: str) -> Path:
+    """Return path to a memory file (MEMORY.md/SOUL.md/USER.md/AGENTS.md)."""
+    return get_memory_dir() / name
+
+
+def get_memory_history_path() -> Path:
+    """Return path to memory/history.jsonl."""
+    return get_memory_dir() / "history.jsonl"
+
+
+def get_skills_dir() -> Path:
+    """Return the global user skills directory (~/.mona/skills/).
+
+    Moved out of workspace to enforce _FsTool hard boundary.
+    """
+    return ensure_dir(get_data_dir() / "skills")
+
+
+def get_heartbeat_path() -> Path:
+    """Return path to HEARTBEAT.md (~/.mona/HEARTBEAT.md).
+
+    Moved out of workspace to enforce _FsTool hard boundary.
+    """
+    return get_data_dir() / "HEARTBEAT.md"

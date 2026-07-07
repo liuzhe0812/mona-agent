@@ -27,32 +27,42 @@ async def _post_transcription_with_retry(
     url: str,
     *,
     api_key: str | None,
-    path: Path,
+    path: Path | None = None,
+    audio_data: bytes | None = None,
+    filename: str = "audio.webm",
     model: str,
     provider_label: str,
     language: str | None = None,
 ) -> str:
-    """POST an audio file for transcription, retrying on transient errors.
+    """POST audio for transcription, retrying on transient errors.
+
+    Accepts either a file *path* (read from disk) or raw *audio_data* bytes.
+    When *audio_data* is provided, no temp file is needed — this enables
+    real-time streaming from browser/MicRecorder.
 
     Retries on connect/read/timeout failures and on 408/429/5xx responses.
     Other errors (including 4xx such as 401/403) return "" immediately — the
     caller's config is wrong and retrying only wastes quota.
-
-    When ``language`` is provided, it is forwarded as the ``language``
-    multipart field on every attempt (the dict is rebuilt per attempt so the
-    same field is present on retries).
     """
-    try:
-        data = path.read_bytes()
-    except OSError as e:
-        logger.exception("{} transcription error: cannot read audio file: {}", provider_label, e)
+    if audio_data is not None:
+        data = audio_data
+    elif path is not None:
+        try:
+            data = path.read_bytes()
+        except OSError as e:
+            logger.exception("{} transcription error: cannot read audio file: {}", provider_label, e)
+            return ""
+    else:
+        logger.error("{} transcription error: no audio source provided", provider_label)
         return ""
+
+    fname = filename if audio_data is not None else (path.name if path else "audio.webm")
     headers = {"Authorization": f"Bearer {api_key}"}
 
     async with httpx.AsyncClient() as client:
         for attempt in range(_MAX_RETRIES + 1):
             files = {
-                "file": (path.name, data),
+                "file": (fname, data),
                 "model": (None, model),
             }
             if language:
@@ -151,6 +161,21 @@ class OpenAITranscriptionProvider:
             language=self.language,
         )
 
+    async def transcribe_bytes(self, audio_data: bytes, filename: str = "audio.webm") -> str:
+        """Transcribe raw audio bytes directly (no temp file needed)."""
+        if not self.api_key:
+            logger.warning("OpenAI API key not configured for transcription")
+            return ""
+        return await _post_transcription_with_retry(
+            self.api_url,
+            api_key=self.api_key,
+            audio_data=audio_data,
+            filename=filename,
+            model="whisper-1",
+            provider_label="OpenAI",
+            language=self.language,
+        )
+
 
 class GroqTranscriptionProvider:
     """
@@ -171,6 +196,7 @@ class GroqTranscriptionProvider:
             or os.environ.get("GROQ_BASE_URL")
             or "https://api.groq.com/openai/v1/audio/transcriptions"
         )
+        self.model = os.environ.get("GROQ_TRANSCRIPTION_MODEL") or "whisper-large-v3"
         self.language = language or None
 
     async def transcribe(self, file_path: str | Path) -> str:
@@ -196,7 +222,22 @@ class GroqTranscriptionProvider:
             self.api_url,
             api_key=self.api_key,
             path=path,
-            model="whisper-large-v3",
+            model=self.model,
+            provider_label="Groq",
+            language=self.language,
+        )
+
+    async def transcribe_bytes(self, audio_data: bytes, filename: str = "audio.webm") -> str:
+        """Transcribe raw audio bytes directly (no temp file needed)."""
+        if not self.api_key:
+            logger.warning("Groq API key not configured for transcription")
+            return ""
+        return await _post_transcription_with_retry(
+            self.api_url,
+            api_key=self.api_key,
+            audio_data=audio_data,
+            filename=filename,
+            model=self.model,
             provider_label="Groq",
             language=self.language,
         )

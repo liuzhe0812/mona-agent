@@ -1,4 +1,4 @@
-﻿"""Session management for conversation history."""
+"""Session management for conversation history."""
 
 import json
 import os
@@ -625,6 +625,7 @@ class SessionManager:
                                 "updated_at": data.get("updated_at"),
                                 "title": title if isinstance(title, str) else "",
                                 "preview": preview,
+                                "workspace": metadata.get("workspace") if isinstance(metadata, dict) else None,
                                 "path": str(path)
                             })
             except Exception:
@@ -647,6 +648,7 @@ class SessionManager:
                             ),
                             "",
                         ),
+                        "workspace": repaired.metadata.get("workspace"),
                         "path": str(path)
                     })
                 continue

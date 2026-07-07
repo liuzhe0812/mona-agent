@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from loguru import logger
+
 from mona.config.schema import Config, InlineFallbackConfig, ModelPresetConfig
 from mona.providers.base import LLMProvider
 from mona.providers.fallback_provider import FallbackProvider
@@ -50,7 +52,10 @@ def _make_provider_core(
         needs_key = not (p and p.api_key)
         exempt = spec and (spec.is_oauth or spec.is_local or spec.is_direct)
         if needs_key and not exempt and (spec and spec.api_key_required):
-            raise ValueError(f"No API key configured for provider '{provider_name}'.")
+            logger.warning(
+                f"Provider '{provider_name}' 未配置 api_key，runtime 将启动但实际调用时会失败。"
+                f"请在设置中补全 API Key。"
+            )
 
     if backend == "openai_codex":
         from mona.providers.openai_codex_provider import OpenAICodexProvider

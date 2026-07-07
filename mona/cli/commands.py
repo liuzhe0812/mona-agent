@@ -807,6 +807,9 @@ def _run_gateway(
 
     console.print(f"{__logo__} Starting mona gateway version {__version__} on port {port}...")
     sync_workspace_templates(config.workspace_path)
+    # One-time migration: move memory/skills/HEARTBEAT.md out of workspace
+    from mona.config.migrate_global import migrate_global_resources
+    migrate_global_resources()
     bus = MessageBus()
     try:
         provider_snapshot = build_provider_snapshot(config)

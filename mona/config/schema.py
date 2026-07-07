@@ -47,6 +47,13 @@ class ChannelsConfig(Base):
     transcription_provider: str = "groq"  # Voice transcription backend: "groq" or "openai"
     transcription_language: str | None = Field(default=None, pattern=r"^[a-z]{2,3}$")  # Optional ISO-639-1 hint for audio transcription
 
+    # TTS (text-to-speech) — used by /v1/audio/speech and channel synthesize_speech
+    tts_provider: str = "edge"  # "edge", "minimax", or "cosyvoice"
+    tts_voice: str = "zh-CN-XiaoyiNeural"  # Voice ID (fixed per PRD: same voice every synthesis)
+    tts_api_key: str = ""  # API key for minimax/cosyvoice (edge is free)
+    tts_api_base: str = ""  # Optional custom API base URL
+    tts_model: str = ""  # Optional model override (provider-specific)
+
 
 class DreamConfig(Base):
     """Dream memory consolidation configuration."""
@@ -294,6 +301,13 @@ class PPTMasterConfig(Base):
     preview_port: int = 5050
 
 
+class NotesToolsConfig(Base):
+    """Configuration for notes agent tools (create/search/read/save_image)."""
+
+    enabled: bool = True
+    allow_create: bool = True  # controls notes_create and notes_save_image
+
+
 class TerminalToolConfig(Base):
     enable: bool = True
     exec_mode: TerminalExecMode = TerminalExecMode.AUTO
@@ -375,6 +389,7 @@ class ToolsConfig(Base):
     email_intel: EmailIntelConfig = Field(
         default_factory=lambda: _lazy_default("mona.email_intel.config", "EmailIntelConfig"),
     )
+    notes_tools: NotesToolsConfig = Field(default_factory=NotesToolsConfig)
     restrict_to_workspace: bool = False  # restrict all tool access to workspace directory
     mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
     ssrf_whitelist: list[str] = Field(default_factory=list)  # CIDR ranges to exempt from SSRF blocking (e.g. ["100.64.0.0/10"] for Tailscale)
