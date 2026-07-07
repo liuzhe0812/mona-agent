@@ -17,6 +17,12 @@
   },
   "app": {
     "withGlobalTauri": true,
+    "security": {
+      "assetProtocol": {
+        "enable": true,
+        "scope": []
+      }
+    },
     "windows": [
       {
         "title": "Mona",

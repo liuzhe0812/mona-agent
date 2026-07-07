@@ -1,16 +1,16 @@
 //! Schedule reminder notifier.
 //!
 //! Polls the Python gateway's ``/api/schedule/notifications`` endpoint on a
-//! background tokio task and fires native Windows toast notifications for
-//! each pending reminder. This works independently of the webview state —
-//! even when the window is minimized to the tray, the Rust side keeps
-//! polling and showing toasts.
+//! background tokio task and fires custom notification windows for each
+//! pending reminder. This works independently of the webview state — even
+//! when the window is minimized to the tray, the Rust side keeps polling
+//! and showing notifications.
 
 use std::time::Duration;
 
 use serde::Deserialize;
 
-use crate::tray;
+use crate::notification_window::{self, NotificationPayload};
 
 #[derive(Deserialize)]
 struct NotificationsResponse {
@@ -26,7 +26,7 @@ struct NotificationEntry {
     item_id: Option<String>,
 }
 
-/// Start a background polling task that fires native toast notifications
+/// Start a background polling task that fires custom notification windows
 /// for schedule reminders. Should be called once after the gateway is ready.
 pub fn start_polling(app: tauri::AppHandle, port: u16) {
     let url = format!("http://127.0.0.1:{}/api/schedule/notifications", port);
@@ -38,7 +38,20 @@ pub fn start_polling(app: tauri::AppHandle, port: u16) {
                 Ok(resp) => match resp.json::<NotificationsResponse>().await {
                     Ok(data) => {
                         for n in data.notifications {
-                            tray::show_generic_toast(&app, n.title, n.body);
+                            let payload = NotificationPayload {
+                                id: format!("schedule-{}", uuid::Uuid::new_v4()),
+                                title: n.title,
+                                body: n.body,
+                                icon: "schedule".to_string(),
+                                actions: vec![],
+                                auto_close_ms: 8000,
+                                click_action: Some("open-schedule".to_string()),
+                            };
+                            if let Err(e) =
+                                notification_window::show_notification_inner(&app, payload)
+                            {
+                                log::error!("Failed to show schedule notification: {}", e);
+                            }
                         }
                     }
                     Err(e) => {

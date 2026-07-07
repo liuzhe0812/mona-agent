@@ -6,6 +6,8 @@ mod gateway;
 mod ipc_bridge;
 mod license;
 mod notes;
+mod notes_links;
+mod notification_window;
 mod python;
 mod quick_ask;
 mod schedule_notifier;
@@ -414,11 +416,22 @@ pub fn run() {
             notes::notes_save_state,
             notes::notes_export_temp,
             notes::notes_create_from_chat,
+            notes::notes_create_from_template,
+            notes::notes_list_templates,
+            notes::notes_read_note_content,
             notes::notes_search,
             notes::notes_search_all,
             notes::notes_save_image,
             notes::notes_get_assets_dir,
-            notes::notes_read_image,
+            notes::notes_vault_get_path,
+            notes::notes_vault_set_path,
+            notes::notes_vault_pick_directory,
+            notes_links::notes_links_get_graph,
+            notes_links::notes_links_get_backlinks,
+            notes_links::notes_links_get_mentions,
+            notes_links::notes_links_rename_sync,
+            notes_links::notes_links_search_mentions,
+            notes_links::notes_moc_list,
             terminal::commands::ssh_connect,
             terminal::commands::ssh_connect_with_id,
             terminal::commands::ssh_disconnect,
@@ -510,12 +523,23 @@ pub fn run() {
             db::commands::db_load_connections,
             email::email_list_accounts,
             email::email_add_account,
+            email::email_update_account_settings,
             email::email_delete_account,
             email::email_get_messages,
+            email::email_get_unified_inbox,
             email::email_mark_read,
             email::email_toggle_starred,
             email::email_move_message,
             email::email_fetch_attachment,
+            email::email_fetch_body,
+            email::email_fetch_raw,
+            email::email_list_rules,
+            email::email_save_rule,
+            email::email_delete_rule,
+            email::email_outbox_add,
+            email::email_outbox_list,
+            email::email_outbox_delete,
+            email::email_outbox_process,
             email::email_save_draft,
             email::email_test_connection,
             email::email_open_compose_window,
@@ -527,6 +551,7 @@ pub fn run() {
             email::email_statistics,
             email::email_create_folder,
             email::email_sync,
+            email::email_download_attachment_to_file,
             email::email_send,
             email::email_delete_message,
             email::email_mark_all_read,
@@ -537,11 +562,14 @@ pub fn run() {
             email::email_analyze,
             email::email_search_messages,
             email::email_batch_action,
+            email::email_apply_rules,
             email::email_start_idle,
             email::email_stop_idle,
             contacts::contact_list,
             contacts::contact_search,
             contacts::contact_add,
+            contacts::contact_add_if_not_exists,
+            contacts::contact_import_csv,
             contacts::contact_update,
             contacts::contact_delete,
             contacts::contact_clear_account,
@@ -581,6 +609,27 @@ pub fn run() {
             browser::commands::browser_go_forward,
             browser::commands::browser_reload,
             browser::commands::browser_on_url_changed,
+            browser::commands::browser_cancel_download,
+            browser::commands::browser_pause_download,
+            browser::commands::browser_resume_download,
+            browser::commands::browser_list_downloads,
+            browser::commands::browser_open_download,
+            browser::commands::browser_reveal_download,
+            browser::commands::browser_remove_download,
+            browser::commands::browser_set_zoom,
+            browser::commands::browser_get_zoom,
+            browser::commands::browser_print_page,
+            browser::commands::browser_get_page_source,
+            browser::commands::browser_eval_script,
+            browser::commands::browser_get_cookies,
+            browser::commands::browser_clear_cookies,
+            browser::commands::browser_set_ad_block,
+            browser::commands::browser_set_muted,
+            browser::commands::browser_is_muted,
+            browser::commands::browser_is_incognito,
+            browser::commands::browser_open_devtools,
+            browser::commands::browser_set_dark_mode,
+            browser::commands::browser_get_page_info,
             browser::storage::browser_add_bookmark,
             browser::storage::browser_remove_bookmark,
             browser::storage::browser_update_bookmark,
@@ -589,11 +638,16 @@ pub fn run() {
             browser::storage::browser_import_bookmarks,
             browser::storage::browser_record_visit,
             browser::storage::browser_clear_history,
+            browser::storage::browser_list_history,
+            browser::storage::browser_delete_history,
             browser::storage::browser_clear_cache,
             browser::storage::browser_search_suggestions,
             tray::set_tray_unread_count,
             tray::send_mail_notification,
             tray::check_and_clear_pending_mail,
+            notification_window::show_notification,
+            notification_window::close_notification_window,
+            notification_window::emit_notification_action,
         ])
         .setup(move |app| {
             // 设置高分辨率窗口图标，确保任务栏在高 DPI 下清晰
@@ -602,6 +656,12 @@ pub fn run() {
             }
 
             tray::setup_tray(app)?;
+
+            // Register the existing notes vault's assets directory with the
+            // asset protocol scope so images can be rendered via convertFileSrc.
+            if let Some(vault) = notes::read_vault_path_for_setup() {
+                notes::register_vault_assets_scope(app.handle(), &vault);
+            }
 
             let app_handle_for_file = app.handle().clone();
             app.listen("tauri://file-open", move |event| {
@@ -660,6 +720,11 @@ pub fn run() {
                                         // Start polling for schedule reminders to fire
                                         // native system toasts independent of webview state.
                                         schedule_notifier::start_polling(
+                                            app_handle_clone.clone(),
+                                            actual_port,
+                                        );
+                                        // 启动邮箱后台静默同步引擎：30s 后首次执行，之后每 5 分钟一次
+                                        email::start_background_sync(
                                             app_handle_clone.clone(),
                                             actual_port,
                                         );
