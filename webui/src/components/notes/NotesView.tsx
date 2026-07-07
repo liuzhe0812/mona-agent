@@ -60,7 +60,6 @@ import { ConfirmDialog, PromptDialog } from "./NotesDialogs";
 import { NoteAgentPanel } from "./NoteAgentPanel";
 import { BacklinksPanel } from "./BacklinksPanel";
 import { GraphViewDialog } from "./GraphViewDialog";
-import { QuickSwitchDialog } from "./QuickSwitchDialog";
 import { RelatedNotesPanel } from "./RelatedNotesPanel";
 import { NoteEditor } from "./NoteEditor";
 import type { EditorMode } from "@/components/common/MarkdownEditor";
@@ -113,7 +112,6 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
   const [backlinksCollapsed, setBacklinksCollapsed] = useState(false);
   const [agentStreaming, setAgentStreaming] = useState(false);
   const [graphViewOpen, setGraphViewOpen] = useState(false);
-  const [quickSwitchOpen, setQuickSwitchOpen] = useState(false);
   const dragRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const lastSavedSnapshotRef = useRef<string | null>(null);
   const latestSnapshotRef = useRef<string | null>(null);
@@ -375,7 +373,7 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
     return () => window.clearTimeout(timer);
   }, [notice]);
 
-  // Global search shortcut: Ctrl/Cmd + K; Quick switch: Ctrl/Cmd + O
+  // Global search shortcut: Ctrl/Cmd + K
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (!(e.ctrlKey || e.metaKey)) return;
@@ -383,9 +381,6 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
       if (k === "k") {
         e.preventDefault();
         setGlobalSearchOpen(true);
-      } else if (k === "o") {
-        e.preventDefault();
-        setQuickSwitchOpen(true);
       }
     };
     window.addEventListener("keydown", handleKeyDown);
@@ -1096,9 +1091,6 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
                   <IconButton label="全局搜索 (Ctrl+K)" onClick={() => setGlobalSearchOpen(true)}>
                     <Search className="h-3.5 w-3.5" />
                   </IconButton>
-                  <IconButton label="快速切换 (Ctrl+O)" onClick={() => setQuickSwitchOpen(true)}>
-                    <ArrowDownUp className="h-3.5 w-3.5" />
-                  </IconButton>
                   <IconButton label="关系图" onClick={() => setGraphViewOpen(true)}>
                     <GitFork className="h-3.5 w-3.5" />
                   </IconButton>
@@ -1522,12 +1514,6 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
         open={graphViewOpen}
         onOpenChange={setGraphViewOpen}
         activeNoteId={activeNoteId}
-        onSelectNote={(noteId) => selectNote(noteId)}
-      />
-      <QuickSwitchDialog
-        open={quickSwitchOpen}
-        onOpenChange={setQuickSwitchOpen}
-        notes={notes}
         onSelectNote={(noteId) => selectNote(noteId)}
       />
     </div>
