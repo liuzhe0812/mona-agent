@@ -1,4 +1,4 @@
-import { ArrowLeft, ArrowRight, RotateCw, Star, Lock, Globe, Search, Maximize, Minimize, Settings2, Trash2, HardDrive, BookmarkPlus, Upload } from "lucide-react";
+import { ArrowLeft, ArrowRight, RotateCw, Star, Lock, Globe, Search, Maximize, Minimize, Settings2, Trash2, HardDrive, BookmarkPlus, Upload, ZoomIn, ZoomOut, Printer, Code, Search as FindIcon, Clock, Cookie, Volume2, VolumeX, Shield, ShieldOff, Eye, Terminal, Moon, Sun, Share2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { AgentLogo } from "@/components/AgentLogo";
@@ -34,6 +34,30 @@ interface ChromeBookmarksJson {
   roots?: Record<string, ChromeBookmarkNode | undefined>;
 }
 
+const DEFAULT_SEARCH_ENGINE = "https://www.google.com/search?q=";
+
+function isLikelyUrl(input: string): boolean {
+  // 包含协议
+  if (/^https?:\/\//i.test(input)) return true;
+  // 看起来像域名（example.com, sub.example.co.uk）
+  if (/^[a-z0-9-]+(\.[a-z0-9-]+)+(\/.*)?$/i.test(input)) return true;
+  // localhost
+  if (/^localhost(:\d+)?(\/.*)?$/i.test(input)) return true;
+  // IP 地址
+  if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?(\/.*)?$/.test(input)) return true;
+  return false;
+}
+
+function normalizeUrlOrSearch(input: string): string {
+  const trimmed = input.trim();
+  if (!trimmed) return "";
+  if (isLikelyUrl(trimmed)) {
+    return trimmed.includes("://") ? trimmed : `https://${trimmed}`;
+  }
+  // 当作搜索查询
+  return `${DEFAULT_SEARCH_ENGINE}${encodeURIComponent(trimmed)}`;
+}
+
 interface BrowserToolbarProps {
   url: string;
   title: string;
@@ -41,6 +65,10 @@ interface BrowserToolbarProps {
   isAiPanelOpen: boolean;
   isFullscreen?: boolean;
   bookmarkBarVisible: boolean;
+  isIncognito?: boolean;
+  isMuted?: boolean;
+  adBlockEnabled?: boolean;
+  isDarkMode?: boolean;
   onNavigate: (url: string) => void;
   onGoBack: () => void;
   onGoForward: () => void;
@@ -50,6 +78,19 @@ interface BrowserToolbarProps {
   onToggleFullscreen?: () => void;
   onExitFullscreen?: () => void;
   onDropdownOpenChange?: (open: boolean) => void;
+  onFind?: () => void;
+  onPrint?: () => void;
+  onViewSource?: () => void;
+  onZoomIn?: () => void;
+  onZoomOut?: () => void;
+  onZoomReset?: () => void;
+  onOpenHistory?: () => void;
+  onOpenCookieManager?: () => void;
+  onToggleMute?: () => void;
+  onToggleAdBlock?: () => void;
+  onToggleDarkMode?: () => void;
+  onOpenDevtools?: () => void;
+  onShare?: () => void;
 }
 
 export function BrowserToolbar({
@@ -59,6 +100,10 @@ export function BrowserToolbar({
   isAiPanelOpen,
   isFullscreen = false,
   bookmarkBarVisible,
+  isIncognito = false,
+  isMuted = false,
+  adBlockEnabled = true,
+  isDarkMode = false,
   onNavigate,
   onGoBack,
   onGoForward,
@@ -68,6 +113,19 @@ export function BrowserToolbar({
   onToggleFullscreen,
   onExitFullscreen,
   onDropdownOpenChange,
+  onFind,
+  onPrint,
+  onViewSource,
+  onZoomIn,
+  onZoomOut,
+  onZoomReset,
+  onOpenHistory,
+  onOpenCookieManager,
+  onToggleMute,
+  onToggleAdBlock,
+  onToggleDarkMode,
+  onOpenDevtools,
+  onShare,
 }: BrowserToolbarProps) {
   const [inputUrl, setInputUrl] = useState(url);
   const [isFocused, setIsFocused] = useState(false);
@@ -77,6 +135,20 @@ export function BrowserToolbar({
   const [selectedIdx, setSelectedIdx] = useState(-1);
   const suggestionsRef = useRef<HTMLDivElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>();
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // 监听 Ctrl+L 聚焦地址栏事件
+  useEffect(() => {
+    const handleFocusAddressBar = () => {
+      const input = inputRef.current;
+      if (input) {
+        input.focus();
+        input.select();
+      }
+    };
+    window.addEventListener("mona-focus-address-bar", handleFocusAddressBar);
+    return () => window.removeEventListener("mona-focus-address-bar", handleFocusAddressBar);
+  }, []);
 
   // 同步外部 url 到输入框（仅未聚焦时）
   useEffect(() => {
@@ -154,7 +226,7 @@ export function BrowserToolbar({
     e.preventDefault();
     const trimmed = inputUrl.trim();
     if (!trimmed) return;
-    const finalUrl = trimmed.includes("://") ? trimmed : `https://${trimmed}`;
+    const finalUrl = normalizeUrlOrSearch(trimmed);
     onNavigate(finalUrl);
     setShowSuggestions(false);
   };
@@ -292,6 +364,7 @@ export function BrowserToolbar({
             <Globe className="h-3 w-3 shrink-0 text-muted-foreground" />
           )}
           <Input
+            ref={inputRef}
             value={inputUrl}
             onChange={(e) => handleInputChange(e.target.value)}
             onFocus={handleFocus}
@@ -378,14 +451,113 @@ export function BrowserToolbar({
             书签栏
           </DropdownMenuCheckboxItem>
           <DropdownMenuSeparator />
+          {onFind && (
+            <DropdownMenuItem onClick={onFind}>
+              <FindIcon className="mr-2 h-3.5 w-3.5" />
+              查找 (Ctrl+F)
+            </DropdownMenuItem>
+          )}
+          {onPrint && (
+            <DropdownMenuItem onClick={onPrint}>
+              <Printer className="mr-2 h-3.5 w-3.5" />
+              打印
+            </DropdownMenuItem>
+          )}
+          {onViewSource && (
+            <DropdownMenuItem onClick={onViewSource}>
+              <Code className="mr-2 h-3.5 w-3.5" />
+              查看源码
+            </DropdownMenuItem>
+          )}
+          {(onZoomIn || onZoomOut || onZoomReset) && (
+            <>
+              <DropdownMenuSeparator />
+              {onZoomIn && (
+                <DropdownMenuItem onClick={onZoomIn}>
+                  <ZoomIn className="mr-2 h-3.5 w-3.5" />
+                  放大
+                </DropdownMenuItem>
+              )}
+              {onZoomOut && (
+                <DropdownMenuItem onClick={onZoomOut}>
+                  <ZoomOut className="mr-2 h-3.5 w-3.5" />
+                  缩小
+                </DropdownMenuItem>
+              )}
+              {onZoomReset && (
+                <DropdownMenuItem onClick={onZoomReset}>
+                  <RotateCw className="mr-2 h-3.5 w-3.5" />
+                  重置缩放
+                </DropdownMenuItem>
+              )}
+            </>
+          )}
+          <DropdownMenuSeparator />
           <DropdownMenuItem onClick={handleClearHistory}>
             <Trash2 className="mr-2 h-3.5 w-3.5" />
             清理历史记录
           </DropdownMenuItem>
+          {onOpenHistory && (
+            <DropdownMenuItem onClick={onOpenHistory}>
+              <Clock className="mr-2 h-3.5 w-3.5" />
+              历史记录
+            </DropdownMenuItem>
+          )}
           <DropdownMenuItem onClick={handleClearCache}>
             <HardDrive className="mr-2 h-3.5 w-3.5" />
             清理缓存
           </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          {/* 隐私安全 */}
+          {onToggleMute && (
+            <DropdownMenuItem onClick={onToggleMute}>
+              {isMuted ? (
+                <VolumeX className="mr-2 h-3.5 w-3.5" />
+              ) : (
+                <Volume2 className="mr-2 h-3.5 w-3.5" />
+              )}
+              {isMuted ? "取消静音" : "静音标签"}
+            </DropdownMenuItem>
+          )}
+          {onToggleAdBlock && (
+            <DropdownMenuItem onClick={onToggleAdBlock}>
+              {adBlockEnabled ? (
+                <Shield className="mr-2 h-3.5 w-3.5" />
+              ) : (
+                <ShieldOff className="mr-2 h-3.5 w-3.5" />
+              )}
+              {adBlockEnabled ? "关闭广告拦截" : "开启广告拦截"}
+            </DropdownMenuItem>
+          )}
+          {onOpenCookieManager && (
+            <DropdownMenuItem onClick={onOpenCookieManager}>
+              <Cookie className="mr-2 h-3.5 w-3.5" />
+              Cookie 管理器
+            </DropdownMenuItem>
+          )}
+          {onToggleDarkMode && (
+            <DropdownMenuItem onClick={onToggleDarkMode}>
+              {isDarkMode ? (
+                <Sun className="mr-2 h-3.5 w-3.5" />
+              ) : (
+                <Moon className="mr-2 h-3.5 w-3.5" />
+              )}
+              {isDarkMode ? "关闭暗色模式" : "开启暗色模式"}
+            </DropdownMenuItem>
+          )}
+          {onShare && (
+            <DropdownMenuItem onClick={onShare}>
+              <Share2 className="mr-2 h-3.5 w-3.5" />
+              分享 / 二维码
+            </DropdownMenuItem>
+          )}
+          <DropdownMenuSeparator />
+          {onOpenDevtools && (
+            <DropdownMenuItem onClick={onOpenDevtools}>
+              <Terminal className="mr-2 h-3.5 w-3.5" />
+              开发者工具
+            </DropdownMenuItem>
+          )}
           <DropdownMenuSeparator />
           <DropdownMenuItem onClick={handleImportChromeBookmarks}>
             <Upload className="mr-2 h-3.5 w-3.5" />
@@ -393,6 +565,13 @@ export function BrowserToolbar({
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+
+      {/* 无痕模式指示器 */}
+      {isIncognito && (
+        <div className="flex items-center gap-1 px-2 text-xs text-muted-foreground" title="无痕模式">
+          <Eye className="h-3.5 w-3.5" />
+        </div>
+      )}
 
       {/* AI 按钮 */}
       <button

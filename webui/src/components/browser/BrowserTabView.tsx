@@ -2,9 +2,20 @@ import { useEffect, useRef, useCallback, useState } from "react";
 import { BrowserToolbar } from "./BrowserToolbar";
 import { AiAssistantPanel } from "./AiAssistantPanel";
 import { BookmarkBar } from "./BookmarkBar";
+import { DownloadBar } from "./DownloadBar";
+import { FindBar } from "./FindBar";
+import { ErrorPageOverlay } from "./ErrorPageOverlay";
+import { CookieManagerDialog } from "./CookieManagerDialog";
+import { ShareDialog } from "./ShareDialog";
 import type { Tab } from "@/hooks/useBrowserTabs";
 import type { ChatSummary } from "@/lib/types";
 import { isTauri } from "@/lib/tauri";
+import {
+  browserSetZoom,
+  browserGetZoom,
+  browserPrintPage,
+  browserEvalScript,
+} from "@/lib/browser-ipc";
 
 interface BrowserTabViewProps {
   tab: Tab;
@@ -18,6 +29,11 @@ interface BrowserTabViewProps {
   onGoForward: () => void;
   onReload: () => void;
   onUrlChange?: (url: string) => void;
+  onOpenHistory?: () => void;
+  onToggleMute?: () => void;
+  onToggleAdBlock?: () => void;
+  onToggleDarkMode?: () => void;
+  onOpenDevtools?: () => void;
 }
 
 export function BrowserTabView({
@@ -32,6 +48,11 @@ export function BrowserTabView({
   onGoForward,
   onReload,
   onUrlChange,
+  onOpenHistory,
+  onToggleMute,
+  onToggleAdBlock,
+  onToggleDarkMode,
+  onOpenDevtools,
 }: BrowserTabViewProps) {
   const webviewContainerRef = useRef<HTMLDivElement>(null);
   const resizeObserverRef = useRef<ResizeObserver | null>(null);
@@ -39,6 +60,12 @@ export function BrowserTabView({
   const [isAiPanelOpen, setIsAiPanelOpen] = useState(false);
   const [bookmarkBarVisible, setBookmarkBarVisible] = useState(true);
   const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [downloadBarOpen, setDownloadBarOpen] = useState(false);
+  const [findBarVisible, setFindBarVisible] = useState(false);
+  const [navError, setNavError] = useState(false);
+  const [zoomFactor, setZoomFactor] = useState(1.0);
+  const [cookieManagerOpen, setCookieManagerOpen] = useState(false);
+  const [shareDialogOpen, setShareDialogOpen] = useState(false);
   // 全屏模式下鼠标悬停顶部时显示工具栏
   const [showFullscreenToolbar, setShowFullscreenToolbar] = useState(false);
   const toolbarHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -156,6 +183,8 @@ export function BrowserTabView({
     if (!isTauri() || !tab.webviewCreated) return;
 
     let unlisten: (() => void) | undefined;
+    let unlistenNavCompleted: (() => void) | undefined;
+    let unlistenNavStarted: (() => void) | undefined;
 
     (async () => {
       const { listen } = await import("@tauri-apps/api/event");
@@ -167,12 +196,126 @@ export function BrowserTabView({
           }
         }
       );
+
+      // 导航完成时检查是否成功
+      unlistenNavCompleted = await listen<{ id: string; success: boolean }>(
+        "browser-nav-completed",
+        (event) => {
+          if (event.payload.id === tab.id) {
+            setNavError(!event.payload.success);
+          }
+        }
+      );
+
+      // 导航开始时清除错误状态
+      unlistenNavStarted = await listen<{ id: string; url: string }>(
+        "browser-nav-started",
+        (event) => {
+          if (event.payload.id === tab.id) {
+            setNavError(false);
+          }
+        }
+      );
     })();
 
     return () => {
       unlisten?.();
+      unlistenNavCompleted?.();
+      unlistenNavStarted?.();
     };
   }, [tab.id, tab.webviewCreated, onUrlChange]);
+
+  // Ctrl+F 切换查找栏
+  useEffect(() => {
+    if (!isVisible) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "f") {
+        e.preventDefault();
+        setFindBarVisible((prev) => !prev);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isVisible]);
+
+  // 同步当前标签的缩放值
+  useEffect(() => {
+    if (!isTauri() || !tab.webviewCreated) return;
+    browserGetZoom(tab.id).then(setZoomFactor).catch(() => {});
+  }, [tab.id, tab.webviewCreated]);
+
+  // 缩放控制
+  const handleZoomIn = useCallback(async () => {
+    if (!isTauri() || !tab.webviewCreated) return;
+    const next = Math.min(5.0, Math.round((zoomFactor + 0.1) * 10) / 10);
+    try {
+      await browserSetZoom(tab.id, next);
+      setZoomFactor(next);
+    } catch (e) {
+      console.error("[BrowserTabView] zoom in failed:", e);
+    }
+  }, [tab.id, tab.webviewCreated, zoomFactor]);
+
+  const handleZoomOut = useCallback(async () => {
+    if (!isTauri() || !tab.webviewCreated) return;
+    const next = Math.max(0.25, Math.round((zoomFactor - 0.1) * 10) / 10);
+    try {
+      await browserSetZoom(tab.id, next);
+      setZoomFactor(next);
+    } catch (e) {
+      console.error("[BrowserTabView] zoom out failed:", e);
+    }
+  }, [tab.id, tab.webviewCreated, zoomFactor]);
+
+  const handleZoomReset = useCallback(async () => {
+    if (!isTauri() || !tab.webviewCreated) return;
+    try {
+      await browserSetZoom(tab.id, 1.0);
+      setZoomFactor(1.0);
+    } catch (e) {
+      console.error("[BrowserTabView] zoom reset failed:", e);
+    }
+  }, [tab.id, tab.webviewCreated]);
+
+  // 打印
+  const handlePrint = useCallback(async () => {
+    if (!isTauri() || !tab.webviewCreated) return;
+    try {
+      await browserPrintPage(tab.id);
+    } catch (e) {
+      console.error("[BrowserTabView] print failed:", e);
+    }
+  }, [tab.id, tab.webviewCreated]);
+
+  // 查看源码：通过 JS 获取并打开新标签
+  const handleViewSource = useCallback(async () => {
+    if (!isTauri() || !tab.webviewCreated || !tab.url) return;
+    try {
+      await browserEvalScript(
+        tab.id,
+        `(function() { var doctype = document.doctype ? '<!DOCTYPE ' + document.doctype.name + '>' : ''; var source = doctype + '\\n' + document.documentElement.outerHTML; window.__TAURI__.event.emit('mona-view-source', { source: source }); })();`
+      );
+    } catch (e) {
+      console.error("[BrowserTabView] view source failed:", e);
+    }
+  }, [tab.id, tab.webviewCreated, tab.url]);
+
+  // 监听查看源码事件
+  useEffect(() => {
+    if (!isTauri() || !tab.webviewCreated) return;
+    let unlisten: (() => void) | undefined;
+    (async () => {
+      const { listen } = await import("@tauri-apps/api/event");
+      unlisten = await listen<{ source: string }>("mona-view-source", async (event) => {
+        const source = event.payload.source;
+        // 创建 data URI 并在新标签中打开
+        const encoded = encodeURIComponent(source);
+        const dataUri = `data:text/html;charset=utf-8,<html><head><title>Source of ${tab.url}</title><style>body{font-family:monospace;font-size:12px;padding:8px;white-space:pre-wrap;background:#fff;color:#000;}</style></head><body>${encoded}</body></html>`;
+        window.dispatchEvent(new CustomEvent("mona-open-source-tab", { detail: { url: dataUri } }));
+      });
+    })();
+    return () => { unlisten?.(); };
+  }, [tab.id, tab.webviewCreated, tab.url]);
 
   // 全屏模式下鼠标移到顶部区域显示工具栏，移开后自动隐藏
   const handleFullscreenMouseMove = useCallback((e: React.MouseEvent) => {
@@ -251,6 +394,10 @@ export function BrowserTabView({
         isAiControlled={tab.isAiControlled}
         isAiPanelOpen={isAiPanelOpen}
         bookmarkBarVisible={bookmarkBarVisible}
+        isIncognito={tab.isIncognito}
+        isMuted={tab.isMuted}
+        adBlockEnabled={tab.adBlockEnabled}
+        isDarkMode={tab.isDarkMode}
         onNavigate={onNavigate}
         onGoBack={onGoBack}
         onGoForward={onGoForward}
@@ -259,6 +406,19 @@ export function BrowserTabView({
         onToggleBookmarkBar={() => setBookmarkBarVisible((prev) => !prev)}
         onToggleFullscreen={onToggleFullscreen}
         onDropdownOpenChange={setDropdownOpen}
+        onFind={() => setFindBarVisible(true)}
+        onPrint={handlePrint}
+        onViewSource={handleViewSource}
+        onZoomIn={handleZoomIn}
+        onZoomOut={handleZoomOut}
+        onZoomReset={handleZoomReset}
+        onOpenHistory={onOpenHistory}
+        onOpenCookieManager={() => setCookieManagerOpen(true)}
+        onToggleMute={onToggleMute}
+        onToggleAdBlock={onToggleAdBlock}
+        onToggleDarkMode={onToggleDarkMode}
+        onOpenDevtools={onOpenDevtools}
+        onShare={() => setShareDialogOpen(true)}
       />
       <BookmarkBar onNavigate={onNavigate} visible={bookmarkBarVisible} onDropdownOpenChange={setDropdownOpen} />
       <div className="flex flex-1 min-h-0">
@@ -268,6 +428,16 @@ export function BrowserTabView({
               在地址栏输入网址开始浏览
             </div>
           )}
+          <ErrorPageOverlay
+            visible={navError && tab.webviewCreated}
+            url={tab.url}
+            onReload={onReload}
+          />
+          <FindBar
+            tabId={tab.id}
+            visible={findBarVisible && tab.webviewCreated}
+            onClose={() => setFindBarVisible(false)}
+          />
         </div>
         {isAiPanelOpen && (
           <AiAssistantPanel
@@ -282,6 +452,19 @@ export function BrowserTabView({
           />
         )}
       </div>
+      <DownloadBar open={downloadBarOpen} onOpenChange={setDownloadBarOpen} />
+      <CookieManagerDialog
+        open={cookieManagerOpen}
+        onOpenChange={setCookieManagerOpen}
+        tabId={tab.webviewCreated ? tab.id : null}
+      />
+      <ShareDialog
+        open={shareDialogOpen}
+        onOpenChange={setShareDialogOpen}
+        tabId={tab.webviewCreated ? tab.id : null}
+        url={tab.url ?? ""}
+        title={tab.title ?? ""}
+      />
     </div>
   );
 }

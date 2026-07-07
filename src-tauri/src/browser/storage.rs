@@ -281,6 +281,53 @@ pub async fn browser_clear_history() -> Result<(), String> {
     .map_err(|e| format!("Task error: {}", e))?
 }
 
+/// 获取完整历史记录（按访问时间倒序）
+#[tauri::command]
+pub async fn browser_list_history(limit: Option<i64>) -> Result<Vec<VisitRecord>, String> {
+    tokio::task::spawn_blocking(move || {
+        let conn = open_db()?;
+        let max = limit.unwrap_or(500);
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, url, title, visit_count, last_visited_at FROM visit_history ORDER BY last_visited_at DESC LIMIT ?1",
+            )
+            .map_err(|e| format!("Failed to prepare statement: {}", e))?;
+        let rows = stmt
+            .query_map(params![max], |row| {
+                Ok(VisitRecord {
+                    id: row.get(0)?,
+                    url: row.get(1)?,
+                    title: row.get(2)?,
+                    visit_count: row.get(3)?,
+                    last_visited_at: row.get(4)?,
+                })
+            })
+            .map_err(|e| format!("Failed to query history: {}", e))?;
+        let mut records = Vec::new();
+        for row in rows {
+            if let Ok(r) = row {
+                records.push(r);
+            }
+        }
+        Ok(records)
+    })
+    .await
+    .map_err(|e| format!("Task error: {}", e))?
+}
+
+/// 删除单条历史记录
+#[tauri::command]
+pub async fn browser_delete_history(id: i64) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        let conn = open_db()?;
+        conn.execute("DELETE FROM visit_history WHERE id = ?1", params![id])
+            .map_err(|e| format!("Failed to delete history: {}", e))?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("Task error: {}", e))?
+}
+
 /// 清理浏览器缓存（通过 WebView2 CDP 协议）
 #[tauri::command]
 pub async fn browser_clear_cache(

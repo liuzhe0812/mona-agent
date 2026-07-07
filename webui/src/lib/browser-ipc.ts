@@ -23,8 +23,8 @@ export interface CreateTabResult {
 }
 
 /** 创建浏览器标签（Rust 侧创建 WebView） */
-export async function browserCreateTab(id: string, url: string): Promise<CreateTabResult> {
-  return invoke<CreateTabResult>("browser_create_tab", { id, url });
+export async function browserCreateTab(id: string, url: string, isIncognito?: boolean, adBlockEnabled?: boolean): Promise<CreateTabResult> {
+  return invoke<CreateTabResult>("browser_create_tab", { id, url, isIncognito: isIncognito ?? false, adBlockEnabled: adBlockEnabled ?? true });
 }
 
 /** 关闭标签 */
@@ -141,6 +141,25 @@ export async function browserClearHistory(): Promise<void> {
   return invoke<void>("browser_clear_history");
 }
 
+/** 历史记录条目 */
+export interface HistoryRecord {
+  id: number;
+  url: string;
+  title: string;
+  visitCount: number;
+  lastVisitedAt: string;
+}
+
+/** 获取历史记录列表 */
+export async function browserListHistory(limit?: number): Promise<HistoryRecord[]> {
+  return invoke<HistoryRecord[]>("browser_list_history", { limit });
+}
+
+/** 删除单条历史记录 */
+export async function browserDeleteHistory(id: number): Promise<void> {
+  return invoke<void>("browser_delete_history", { id });
+}
+
 /** 清理浏览器缓存 */
 export async function browserClearCache(): Promise<void> {
   return invoke<void>("browser_clear_cache");
@@ -149,4 +168,144 @@ export async function browserClearCache(): Promise<void> {
 /** 搜索地址栏建议（收藏+历史） */
 export async function browserSearchSuggestions(query: string, limit?: number): Promise<AddressBarSuggestion[]> {
   return invoke<AddressBarSuggestion[]>("browser_search_suggestions", { query, limit });
+}
+
+// ── Download Management ──
+
+export interface DownloadInfo {
+  id: string;
+  url: string;
+  filename: string;
+  mimeType: string;
+  totalBytes: number;
+  receivedBytes: number;
+  state: string; // "in_progress" | "interrupted" | "completed" | "cancelled"
+  savePath: string;
+}
+
+/** 取消下载 */
+export async function browserCancelDownload(id: string): Promise<void> {
+  return invoke<void>("browser_cancel_download", { id });
+}
+
+/** 暂停下载 */
+export async function browserPauseDownload(id: string): Promise<void> {
+  return invoke<void>("browser_pause_download", { id });
+}
+
+/** 恢复下载 */
+export async function browserResumeDownload(id: string): Promise<void> {
+  return invoke<void>("browser_resume_download", { id });
+}
+
+/** 列出所有下载 */
+export async function browserListDownloads(): Promise<DownloadInfo[]> {
+  return invoke<DownloadInfo[]>("browser_list_downloads");
+}
+
+/** 打开下载的文件 */
+export async function browserOpenDownload(id: string): Promise<void> {
+  return invoke<void>("browser_open_download", { id });
+}
+
+/** 在文件管理器中显示 */
+export async function browserRevealDownload(id: string): Promise<void> {
+  return invoke<void>("browser_reveal_download", { id });
+}
+
+/** 移除下载记录 */
+export async function browserRemoveDownload(id: string): Promise<void> {
+  return invoke<void>("browser_remove_download", { id });
+}
+
+// ── Navigation Enhancements ──
+
+/** 设置页面缩放（0.25 ~ 5.0） */
+export async function browserSetZoom(id: string, zoomFactor: number): Promise<void> {
+  return invoke<void>("browser_set_zoom", { id, zoomFactor });
+}
+
+/** 获取当前缩放 */
+export async function browserGetZoom(id: string): Promise<number> {
+  return invoke<number>("browser_get_zoom", { id });
+}
+
+/** 打印当前页面 */
+export async function browserPrintPage(id: string): Promise<void> {
+  return invoke<void>("browser_print_page", { id });
+}
+
+/** 获取页面源码 */
+export async function browserGetPageSource(id: string): Promise<string> {
+  return invoke<string>("browser_get_page_source", { id });
+}
+
+/** 在 WebView 中执行 JS 代码 */
+export async function browserEvalScript(id: string, script: string): Promise<void> {
+  return invoke<void>("browser_eval_script", { id, script });
+}
+
+// ── Privacy & Security ──
+
+/** Cookie 信息 */
+export interface CookieInfo {
+  name: string;
+  value: string;
+  domain: string;
+  path: string;
+}
+
+/** 获取当前页面的 Cookie（结果通过 browser-cookies-result 事件回传） */
+export async function browserGetCookies(id: string): Promise<void> {
+  return invoke<void>("browser_get_cookies", { id });
+}
+
+/** 清除当前页面的 Cookie */
+export async function browserClearCookies(id: string): Promise<void> {
+  return invoke<void>("browser_clear_cookies", { id });
+}
+
+/** 切换广告拦截状态 */
+export async function browserSetAdBlock(id: string, enabled: boolean): Promise<void> {
+  return invoke<void>("browser_set_ad_block", { id, enabled });
+}
+
+/** 切换标签静音 */
+export async function browserSetMuted(id: string, muted: boolean): Promise<void> {
+  return invoke<void>("browser_set_muted", { id, muted });
+}
+
+/** 获取标签静音状态 */
+export async function browserIsMuted(id: string): Promise<boolean> {
+  return invoke<boolean>("browser_is_muted", { id });
+}
+
+/** 获取标签无痕状态 */
+export async function browserIsIncognito(id: string): Promise<boolean> {
+  return invoke<boolean>("browser_is_incognito", { id });
+}
+
+// ── Advanced Features ──
+
+/** 页面元信息 */
+export interface PageInfo {
+  url: string;
+  title: string;
+  description: string;
+  ogImage: string;
+}
+
+/** 打开开发者工具 */
+export async function browserOpenDevtools(id: string): Promise<void> {
+  return invoke<void>("browser_open_devtools", { id });
+}
+
+/** 切换暗色模式 */
+export async function browserSetDarkMode(id: string, enabled: boolean): Promise<void> {
+  return invoke<void>("browser_set_dark_mode", { id, enabled });
+}
+
+/** 获取页面元信息（结果通过 browser-page-info-result 事件回传） */
+export async function browserGetPageInfo(id: string): Promise<void> {
+  return invoke<void>("browser_get_page_info", { id });
 }

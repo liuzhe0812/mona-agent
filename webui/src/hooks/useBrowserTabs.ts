@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   browserCreateTab,
   browserCloseTab as closeTabIpc,
@@ -13,15 +13,26 @@ import {
 } from "@/lib/browser-ipc";
 import { isTauri } from "@/lib/tauri";
 
+const SESSION_STORAGE_KEY = "mona-browser-session";
+const SESSION_RESTORE_DELAY = 800; // ms，等待主窗口初始化完成
+
 export interface Tab {
   id: string;
-  type: "mona" | "browser" | "md-reader";
+  type: "mona" | "browser" | "md-reader" | "history";
   title: string;
   url?: string;
   favicon?: string;
   isAiControlled: boolean;
   webviewCreated: boolean; // WebView 是否已在 Rust 侧创建
   mdFilePath?: string; // md-reader 类型标签的文件路径
+  isLoading?: boolean; // 页面是否正在加载
+  canGoBack?: boolean; // 是否可以后退
+  canGoForward?: boolean; // 是否可以前进
+  isPinned?: boolean; // 标签是否固定
+  isMuted?: boolean; // 标签是否静音
+  isIncognito?: boolean; // 是否为无痕模式
+  adBlockEnabled?: boolean; // 是否启用广告拦截
+  isDarkMode?: boolean; // 是否启用暗色模式
   aiStatus?: {
     description: string;
     steps?: string[];
@@ -43,6 +54,90 @@ export function useBrowserTabs() {
   const [tabs, setTabs] = useState<Tab[]>([MONA_TAB]);
   const [activeTabId, setActiveTabId] = useState<string>("mona");
   const [browserFullscreen, setBrowserFullscreen] = useState(false);
+
+  // 最近关闭的标签（用于 Ctrl+Shift+T 恢复）
+  const recentlyClosedRef = useRef<Array<{ url: string; title: string }>>([]);
+
+  // tabs 的 ref，用于在事件监听器中访问最新状态（避免 stale closure）
+  const tabsRef = useRef<Tab[]>([MONA_TAB]);
+  tabsRef.current = tabs;
+
+  // activeTabId 的 ref，用于在事件监听器中访问最新状态
+  const activeTabIdRef = useRef("mona");
+  activeTabIdRef.current = activeTabId;
+
+  // ── 会话恢复 ──
+  // 启动时恢复上次的标签页
+  useEffect(() => {
+    if (!isTauri()) return;
+    let cancelled = false;
+
+    const restoreSession = async () => {
+      try {
+        const saved = localStorage.getItem(SESSION_STORAGE_KEY);
+        if (!saved) return;
+        const session = JSON.parse(saved) as { tabs: Array<{ url: string; title: string }>; activeUrl?: string };
+        if (!session.tabs || session.tabs.length === 0) return;
+
+        // 等待主窗口完全初始化
+        await new Promise((resolve) => setTimeout(resolve, SESSION_RESTORE_DELAY));
+        if (cancelled) return;
+
+        for (const savedTab of session.tabs.slice(0, 10)) {
+          // 限制最多恢复 10 个标签
+          if (cancelled) return;
+          _tabCounter++;
+          const id = `tab-${_tabCounter}`;
+          const newTab: Tab = {
+            id,
+            type: "browser",
+            title: savedTab.title || savedTab.url,
+            url: savedTab.url,
+            isAiControlled: false,
+            webviewCreated: false,
+            isLoading: true,
+            adBlockEnabled: true,
+          };
+          setTabs((prev) => [...prev, newTab]);
+          try {
+            await browserCreateTab(id, savedTab.url, false, true);
+            if (cancelled) return;
+            setTabs((prev) =>
+              prev.map((t) => (t.id === id ? { ...t, webviewCreated: true } : t))
+            );
+          } catch (e) {
+            console.error("[useBrowserTabs] restore session tab failed:", e);
+          }
+        }
+      } catch (e) {
+        console.error("[useBrowserTabs] restore session failed:", e);
+      }
+    };
+
+    void restoreSession();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // 定期保存会话（标签 URL 列表）
+  useEffect(() => {
+    if (!isTauri()) return;
+    const saveSession = () => {
+      try {
+        const browserTabsList = tabs
+          .filter((t) => t.type === "browser" && t.url && t.webviewCreated && !t.isIncognito)
+          .map((t) => ({ url: t.url!, title: t.title }));
+        const session = { tabs: browserTabsList, savedAt: Date.now() };
+        localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
+      } catch (e) {
+        // ignore quota errors
+      }
+    };
+    // 节流保存：标签变化后 1 秒保存
+    const timer = setTimeout(saveSession, 1000);
+    return () => clearTimeout(timer);
+  }, [tabs]);
 
   // 全屏切换
   const toggleFullscreen = useCallback(async () => {
@@ -167,6 +262,11 @@ export function useBrowserTabs() {
     let unlistenClosed: (() => void) | undefined;
     let unlistenUrlChanged: (() => void) | undefined;
     let unlistenOpenNewTab: (() => void) | undefined;
+    let unlistenNavStarted: (() => void) | undefined;
+    let unlistenNavCompleted: (() => void) | undefined;
+    let unlistenTitleChanged: (() => void) | undefined;
+    let unlistenFaviconChanged: (() => void) | undefined;
+    let unlistenHistoryChanged: (() => void) | undefined;
 
     (async () => {
       const { listen } = await import("@tauri-apps/api/event");
@@ -185,6 +285,7 @@ export function useBrowserTabs() {
               url,
               isAiControlled: false,
               webviewCreated: true,
+              isLoading: true,
             }];
           });
           setActiveTabId(id);
@@ -204,8 +305,9 @@ export function useBrowserTabs() {
           setTabs((prev) =>
             prev.map((t) => (t.id === id ? { ...t, url } : t))
           );
-          // 记录访问历史
-          if (url && (url.startsWith("http://") || url.startsWith("https://"))) {
+          // 记录访问历史（无痕模式跳过）
+          const tab = tabsRef.current.find((t) => t.id === id);
+          if (url && (url.startsWith("http://") || url.startsWith("https://")) && !tab?.isIncognito) {
             browserRecordVisit(url, "").catch(() => {});
           }
         }
@@ -218,6 +320,9 @@ export function useBrowserTabs() {
           const { url } = event.payload;
           _tabCounter++;
           const id = `tab-${_tabCounter}`;
+          // 继承当前活动标签的无痕状态
+          const currentTab = tabsRef.current.find((t) => t.id === activeTabIdRef.current);
+          const isIncognito = currentTab?.isIncognito ?? false;
           const newTab: Tab = {
             id,
             type: "browser",
@@ -225,11 +330,14 @@ export function useBrowserTabs() {
             url,
             isAiControlled: false,
             webviewCreated: false,
+            isLoading: true,
+            isIncognito,
+            adBlockEnabled: currentTab?.adBlockEnabled ?? true,
           };
           setTabs((prev) => [...prev, newTab]);
           setActiveTabId(id);
           // 创建 WebView
-          browserCreateTab(id, url).then(() => {
+          browserCreateTab(id, url, isIncognito, newTab.adBlockEnabled).then(() => {
             setTabs((prev) =>
               prev.map((t) =>
                 t.id === id ? { ...t, webviewCreated: true } : t
@@ -240,6 +348,66 @@ export function useBrowserTabs() {
           });
         }
       );
+
+      // 导航开始
+      unlistenNavStarted = await listen<{ id: string; url: string }>(
+        "browser-nav-started",
+        (event) => {
+          const { id } = event.payload;
+          setTabs((prev) =>
+            prev.map((t) => (t.id === id ? { ...t, isLoading: true } : t))
+          );
+        }
+      );
+
+      // 导航完成
+      unlistenNavCompleted = await listen<{ id: string; success: boolean }>(
+        "browser-nav-completed",
+        (event) => {
+          const { id } = event.payload;
+          setTabs((prev) =>
+            prev.map((t) => (t.id === id ? { ...t, isLoading: false } : t))
+          );
+        }
+      );
+
+      // 标题变化
+      unlistenTitleChanged = await listen<{ id: string; title: string }>(
+        "browser-tab-title-changed",
+        (event) => {
+          const { id, title } = event.payload;
+          setTabs((prev) =>
+            prev.map((t) => (t.id === id ? { ...t, title } : t))
+          );
+          // 更新历史记录中的标题（无痕模式跳过）
+          const tab = tabsRef.current.find((t) => t.id === id);
+          if (tab?.url && title && !tab.isIncognito) {
+            browserRecordVisit(tab.url, title).catch(() => {});
+          }
+        }
+      );
+
+      // Favicon 变化
+      unlistenFaviconChanged = await listen<{ id: string; favicon: string }>(
+        "browser-favicon-changed",
+        (event) => {
+          const { id, favicon } = event.payload;
+          setTabs((prev) =>
+            prev.map((t) => (t.id === id ? { ...t, favicon } : t))
+          );
+        }
+      );
+
+      // 后退/前进状态变化
+      unlistenHistoryChanged = await listen<{ id: string; canGoBack: boolean; canGoForward: boolean }>(
+        "browser-history-changed",
+        (event) => {
+          const { id, canGoBack, canGoForward } = event.payload;
+          setTabs((prev) =>
+            prev.map((t) => (t.id === id ? { ...t, canGoBack, canGoForward } : t))
+          );
+        }
+      );
     })();
 
     return () => {
@@ -248,11 +416,16 @@ export function useBrowserTabs() {
       unlistenClosed?.();
       unlistenUrlChanged?.();
       unlistenOpenNewTab?.();
+      unlistenNavStarted?.();
+      unlistenNavCompleted?.();
+      unlistenTitleChanged?.();
+      unlistenFaviconChanged?.();
+      unlistenHistoryChanged?.();
     };
   }, []);
 
   // 创建纯 UI 标签（不创建 WebView，等用户输入 URL 后再创建）
-  const addEmptyTab = useCallback(() => {
+  const addEmptyTab = useCallback((opts?: { isIncognito?: boolean }) => {
     _tabCounter++;
     const id = `tab-${_tabCounter}`;
     const newTab: Tab = {
@@ -262,6 +435,8 @@ export function useBrowserTabs() {
       url: "",
       isAiControlled: false,
       webviewCreated: false,
+      isIncognito: opts?.isIncognito ?? false,
+      adBlockEnabled: true,
     };
     setTabs((prev) => [...prev, newTab]);
     setActiveTabId(id);
@@ -286,20 +461,20 @@ export function useBrowserTabs() {
         await browserNavigateTab(tabId, normalizedUrl);
         setTabs((prev) =>
           prev.map((t) =>
-            t.id === tabId ? { ...t, url: normalizedUrl, title: normalizedUrl } : t
+            t.id === tabId ? { ...t, url: normalizedUrl, title: normalizedUrl, isLoading: true } : t
           )
         );
       } catch (e) {
         console.error("[useBrowserTabs] navigate tab failed:", e);
       }
     } else {
-      // WebView 未创建，创建新 WebView
+      // WebView 未创建，创建新 WebView（传入无痕和广告拦截标志）
       try {
-        await browserCreateTab(tabId, normalizedUrl);
+        await browserCreateTab(tabId, normalizedUrl, tab?.isIncognito ?? false, tab?.adBlockEnabled ?? true);
         setTabs((prev) =>
           prev.map((t) =>
             t.id === tabId
-              ? { ...t, url: normalizedUrl, title: normalizedUrl, webviewCreated: true }
+              ? { ...t, url: normalizedUrl, title: normalizedUrl, webviewCreated: true, isLoading: true }
               : t
           )
         );
@@ -315,6 +490,11 @@ export function useBrowserTabs() {
 
     const tab = tabs.find((t) => t.id === id);
     if (!tab) return;
+
+    // 记录到最近关闭列表（供 Ctrl+Shift+T 恢复）
+    if (tab.url && tab.type === "browser") {
+      recentlyClosedRef.current.push({ url: tab.url, title: tab.title });
+    }
 
     if (isTauri() && tab.webviewCreated) {
       try {
@@ -427,7 +607,296 @@ export function useBrowserTabs() {
     setActiveTabId(id);
   }, [tabs]);
 
+  // 打开历史记录页面
+  const openHistoryPage = useCallback(() => {
+    // 检查是否已有历史记录标签
+    const existing = tabs.find((t) => t.type === "history");
+    if (existing) {
+      setActiveTabId(existing.id);
+      return;
+    }
+    _tabCounter++;
+    const id = `history-${_tabCounter}`;
+    const newTab: Tab = {
+      id,
+      type: "history",
+      title: "历史记录",
+      isAiControlled: false,
+      webviewCreated: false,
+    };
+    setTabs((prev) => [...prev, newTab]);
+    setActiveTabId(id);
+  }, [tabs]);
+
+  // ── 标签管理增强 ──
+
+  // 重排标签（拖拽排序）
+  const reorderTabs = useCallback((fromId: string, toId: string) => {
+    if (fromId === toId || fromId === "mona" || toId === "mona") return;
+    setTabs((prev) => {
+      const fromIdx = prev.findIndex((t) => t.id === fromId);
+      const toIdx = prev.findIndex((t) => t.id === toId);
+      if (fromIdx === -1 || toIdx === -1) return prev;
+      const next = [...prev];
+      const [moved] = next.splice(fromIdx, 1);
+      next.splice(toIdx, 0, moved);
+      return next;
+    });
+  }, []);
+
+  // 固定/取消固定标签
+  const togglePinTab = useCallback((id: string) => {
+    if (id === "mona") return;
+    setTabs((prev) =>
+      prev.map((t) => (t.id === id ? { ...t, isPinned: !t.isPinned } : t))
+    );
+  }, []);
+
+  // 切换标签静音
+  const toggleMute = useCallback(async (id: string) => {
+    if (id === "mona" || !isTauri()) return;
+    const tab = tabs.find((t) => t.id === id);
+    if (!tab || !tab.webviewCreated) return;
+    const newMuted = !tab.isMuted;
+    try {
+      const { browserSetMuted } = await import("@/lib/browser-ipc");
+      await browserSetMuted(id, newMuted);
+      setTabs((prev) =>
+        prev.map((t) => (t.id === id ? { ...t, isMuted: newMuted } : t))
+      );
+    } catch (e) {
+      console.error("[toggleMute]", e);
+    }
+  }, [tabs]);
+
+  // 切换广告拦截
+  const toggleAdBlock = useCallback(async (id: string) => {
+    if (id === "mona" || !isTauri()) return;
+    const tab = tabs.find((t) => t.id === id);
+    if (!tab || !tab.webviewCreated) return;
+    const newEnabled = !tab.adBlockEnabled;
+    try {
+      const { browserSetAdBlock } = await import("@/lib/browser-ipc");
+      await browserSetAdBlock(id, newEnabled);
+      setTabs((prev) =>
+        prev.map((t) => (t.id === id ? { ...t, adBlockEnabled: newEnabled } : t))
+      );
+    } catch (e) {
+      console.error("[toggleAdBlock]", e);
+    }
+  }, [tabs]);
+
+  // 切换暗色模式
+  const toggleDarkMode = useCallback(async (id: string) => {
+    if (id === "mona" || !isTauri()) return;
+    const tab = tabs.find((t) => t.id === id);
+    if (!tab || !tab.webviewCreated) return;
+    const newEnabled = !tab.isDarkMode;
+    try {
+      const { browserSetDarkMode } = await import("@/lib/browser-ipc");
+      await browserSetDarkMode(id, newEnabled);
+      setTabs((prev) =>
+        prev.map((t) => (t.id === id ? { ...t, isDarkMode: newEnabled } : t))
+      );
+    } catch (e) {
+      console.error("[toggleDarkMode]", e);
+    }
+  }, [tabs]);
+
+  // 打开开发者工具
+  const openDevtools = useCallback(async (id: string) => {
+    if (id === "mona" || !isTauri()) return;
+    const tab = tabs.find((t) => t.id === id);
+    if (!tab || !tab.webviewCreated) return;
+    try {
+      const { browserOpenDevtools } = await import("@/lib/browser-ipc");
+      await browserOpenDevtools(id);
+    } catch (e) {
+      console.error("[openDevtools]", e);
+    }
+  }, [tabs]);
+
+  // 关闭其他标签
+  const closeOtherTabs = useCallback(async (id: string) => {
+    const toClose = tabs.filter((t) => t.id !== id && t.id !== "mona");
+    for (const t of toClose) {
+      if (t.webviewCreated && isTauri()) {
+        try { await closeTabIpc(t.id); } catch (e) { console.error("[closeOtherTabs]", e); }
+      }
+      if (t.url) recentlyClosedRef.current.push({ url: t.url, title: t.title });
+    }
+    setTabs((prev) => prev.filter((t) => t.id === id || t.id === "mona"));
+    setActiveTabId(id);
+  }, [tabs]);
+
+  // 关闭右侧标签
+  const closeTabsToRight = useCallback(async (id: string) => {
+    const idx = tabs.findIndex((t) => t.id === id);
+    if (idx === -1) return;
+    const toClose = tabs.slice(idx + 1).filter((t) => t.id !== "mona");
+    for (const t of toClose) {
+      if (t.webviewCreated && isTauri()) {
+        try { await closeTabIpc(t.id); } catch (e) { console.error("[closeTabsToRight]", e); }
+      }
+      if (t.url) recentlyClosedRef.current.push({ url: t.url, title: t.title });
+    }
+    setTabs((prev) => {
+      const i = prev.findIndex((t) => t.id === id);
+      return [...prev.slice(0, i + 1)];
+    });
+  }, [tabs]);
+
+  // 复制标签
+  const duplicateTab = useCallback(async (id: string) => {
+    const tab = tabs.find((t) => t.id === id);
+    if (!tab || tab.type !== "browser" || !tab.url) return;
+    _tabCounter++;
+    const newId = `tab-${_tabCounter}`;
+    const newTab: Tab = {
+      id: newId,
+      type: "browser",
+      title: tab.title,
+      url: tab.url,
+      isAiControlled: false,
+      webviewCreated: false,
+      isLoading: true,
+      isIncognito: tab.isIncognito,
+      adBlockEnabled: tab.adBlockEnabled,
+    };
+    setTabs((prev) => [...prev, newTab]);
+    setActiveTabId(newId);
+    if (isTauri()) {
+      try {
+        await browserCreateTab(newId, tab.url, tab.isIncognito ?? false, tab.adBlockEnabled ?? true);
+        setTabs((prev) =>
+          prev.map((t) => (t.id === newId ? { ...t, webviewCreated: true } : t))
+        );
+      } catch (e) {
+        console.error("[duplicateTab]", e);
+      }
+    }
+  }, [tabs]);
+
+  // 恢复最近关闭的标签
+  const reopenClosedTab = useCallback(async () => {
+    const last = recentlyClosedRef.current.pop();
+    if (!last) return;
+    _tabCounter++;
+    const id = `tab-${_tabCounter}`;
+    const newTab: Tab = {
+      id,
+      type: "browser",
+      title: last.title || last.url,
+      url: last.url,
+      isAiControlled: false,
+      webviewCreated: false,
+      isLoading: true,
+    };
+    setTabs((prev) => [...prev, newTab]);
+    setActiveTabId(id);
+    if (isTauri()) {
+      try {
+        await browserCreateTab(id, last.url, false, true);
+        setTabs((prev) =>
+          prev.map((t) => (t.id === id ? { ...t, webviewCreated: true } : t))
+        );
+      } catch (e) {
+        console.error("[reopenClosedTab]", e);
+      }
+    }
+  }, []);
+
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? MONA_TAB;
+
+  // ── 键盘快捷键 ──
+  // 在 closeTab 中记录已关闭的标签，供 Ctrl+Shift+T 恢复
+  const closeTabRef = useRef(closeTab);
+  closeTabRef.current = closeTab;
+  const openDevtoolsRef = useRef(openDevtools);
+  openDevtoolsRef.current = openDevtools;
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // 仅在浏览器标签激活时响应（避免与聊天输入冲突）
+      const isBrowserActive = activeTabId !== "mona";
+      const ctrl = e.ctrlKey || e.metaKey;
+
+      // Ctrl+T: 新标签
+      if (ctrl && e.key === "t" && !e.shiftKey) {
+        e.preventDefault();
+        addEmptyTab();
+        return;
+      }
+
+      // Ctrl+Shift+N: 新无痕标签
+      if (ctrl && e.shiftKey && (e.key === "N" || e.key === "n")) {
+        e.preventDefault();
+        addEmptyTab({ isIncognito: true });
+        return;
+      }
+
+      // Ctrl+Shift+T: 恢复关闭的标签
+      if (ctrl && e.shiftKey && (e.key === "T" || e.key === "t")) {
+        e.preventDefault();
+        void reopenClosedTab();
+        return;
+      }
+
+      // Ctrl+W: 关闭当前标签
+      if (ctrl && e.key === "w" && !e.shiftKey) {
+        if (isBrowserActive) {
+          e.preventDefault();
+          void closeTabRef.current(activeTabId);
+        }
+        return;
+      }
+
+      // Ctrl+Tab / Ctrl+Shift+Tab: 切换标签
+      if (ctrl && e.key === "Tab") {
+        const browserTabsList = tabs.filter((t) => t.id !== "mona" || tabs.length === 1);
+        if (browserTabsList.length < 2) return;
+        const currentIdx = browserTabsList.findIndex((t) => t.id === activeTabId);
+        if (currentIdx === -1) return;
+        e.preventDefault();
+        const dir = e.shiftKey ? -1 : 1;
+        const nextIdx = (currentIdx + dir + browserTabsList.length) % browserTabsList.length;
+        setActiveTabId(browserTabsList[nextIdx].id);
+        return;
+      }
+
+      // Ctrl+L: 聚焦地址栏（仅浏览器标签）
+      if (ctrl && e.key === "l" && !e.shiftKey && isBrowserActive) {
+        e.preventDefault();
+        window.dispatchEvent(new CustomEvent("mona-focus-address-bar"));
+        return;
+      }
+
+      // Ctrl+R / F5: 刷新（仅浏览器标签）
+      if ((ctrl && e.key === "r" && !e.shiftKey) || e.key === "F5") {
+        if (isBrowserActive) {
+          e.preventDefault();
+          void reload(activeTabId);
+        }
+        return;
+      }
+
+      // F12: 开发者工具（仅浏览器标签）
+      if (e.key === "F12" && isBrowserActive) {
+        e.preventDefault();
+        void openDevtoolsRef.current(activeTabId);
+        return;
+      }
+
+      // Alt+Home: 回到 Mona 标签
+      if (e.altKey && e.key === "Home") {
+        e.preventDefault();
+        setActiveTabId("mona");
+        return;
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [tabs, activeTabId, addEmptyTab, reopenClosedTab, reload]);
 
   return {
     tabs,
@@ -435,6 +904,7 @@ export function useBrowserTabs() {
     activeTab,
     addEmptyTab,
     addMdReaderTab,
+    openHistoryPage,
     navigateToUrl,
     closeTab,
     switchTab,
@@ -447,5 +917,18 @@ export function useBrowserTabs() {
     browserFullscreen,
     toggleFullscreen,
     exitFullscreen,
+    // 标签管理增强
+    reorderTabs,
+    togglePinTab,
+    closeOtherTabs,
+    closeTabsToRight,
+    duplicateTab,
+    reopenClosedTab,
+    // 隐私安全
+    toggleMute,
+    toggleAdBlock,
+    // 高级功能
+    toggleDarkMode,
+    openDevtools,
   };
 }
