@@ -389,7 +389,7 @@ export function GraphViewDialog({
   if (!open) return null;
 
   return (
-    <div className="absolute inset-0 z-30 flex flex-col bg-background/95 backdrop-blur-sm">
+    <div className="flex min-h-0 flex-1 flex-col bg-background">
       <div className="flex h-10 shrink-0 items-center justify-between border-b border-border/60 px-3">
         <div className="flex items-center gap-2 text-[13px] font-medium">
           <span>关系图</span>

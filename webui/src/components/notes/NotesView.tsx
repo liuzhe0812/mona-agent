@@ -1290,15 +1290,28 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
                 />
                 <button
                   type="button"
-                  title="关系图"
-                  aria-label="关系图"
-                  onClick={() => setGraphViewOpen(true)}
-                  className="grid h-8 w-8 shrink-0 place-items-center border-b border-border/55 border-l border-border/40 text-muted-foreground hover:bg-accent hover:text-foreground"
+                  title={graphViewOpen ? "返回笔记" : "关系图"}
+                  aria-label={graphViewOpen ? "返回笔记" : "关系图"}
+                  onClick={() => setGraphViewOpen((v) => !v)}
+                  className={cn(
+                    "grid h-8 w-8 shrink-0 place-items-center border-b border-border/55 border-l border-border/40 hover:bg-accent hover:text-foreground",
+                    graphViewOpen ? "bg-accent text-foreground" : "text-muted-foreground",
+                  )}
                 >
                   <GitFork className="h-3.5 w-3.5" />
                 </button>
               </div>
-              {activeNote ? (
+              {graphViewOpen ? (
+                <GraphViewDialog
+                  open={graphViewOpen}
+                  onOpenChange={setGraphViewOpen}
+                  activeNoteId={activeNoteId}
+                  onSelectNote={(noteId) => {
+                    selectNote(noteId);
+                    setGraphViewOpen(false);
+                  }}
+                />
+              ) : activeNote ? (
                 <>
                   <NoteEditor
                     note={activeNote}
@@ -1451,12 +1464,6 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
                   当前笔记本还没有笔记。
                 </div>
               )}
-              <GraphViewDialog
-                open={graphViewOpen}
-                onOpenChange={setGraphViewOpen}
-                activeNoteId={activeNoteId}
-                onSelectNote={(noteId) => selectNote(noteId)}
-              />
               </div>
             </>
           )}
