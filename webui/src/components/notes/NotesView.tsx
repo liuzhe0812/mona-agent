@@ -444,22 +444,6 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
     }
   }, [activeNote, activeNoteId, notebookNotes]);
 
-  const selectNotebook = useCallback(
-    (notebookId: string) => {
-      const nextNotes = notes.filter((note) => note.notebookId === notebookId);
-      setActiveNotebookId(notebookId);
-      setActiveNoteId(nextNotes[0]?.id ?? null);
-      setSearchQuery("");
-      setSelectedNoteIds(new Set());
-      setExpandedNotebookIds((prev) => {
-        const next = new Set(prev);
-        next.add(notebookId);
-        return next;
-      });
-    },
-    [notes],
-  );
-
   const updateActiveNote = useCallback(
     (patch: Partial<OperationNote>) => {
       if (!activeNote) return;
@@ -1232,9 +1216,6 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
                             sortMode={sortMode}
                             onSortChange={setSortMode}
                             onToggle={() => {
-                              if (!isActive) {
-                                selectNotebook(notebook.id);
-                              }
                               toggleNotebookExpanded(notebook.id);
                             }}
                             onSelectNote={selectNote}
