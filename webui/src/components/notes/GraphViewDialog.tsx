@@ -62,10 +62,19 @@ export function GraphViewDialog({
   // Load graph data once per open.
   useEffect(() => {
     if (!open) return;
+    let cancelled = false;
     setLoading(true);
     setError(null);
+
+    const timeoutId = window.setTimeout(() => {
+      if (cancelled) return;
+      setError("加载关系图超时，请检查 vault 配置后重试");
+      setLoading(false);
+    }, 8000);
+
     getNotesLinkGraph()
       .then((data) => {
+        if (cancelled) return;
         if (!data) {
           setGraph(null);
           return;
@@ -98,8 +107,20 @@ export function GraphViewDialog({
           };
         });
       })
-      .catch((err) => setError(String(err)))
-      .finally(() => setLoading(false));
+      .catch((err) => {
+        if (cancelled) return;
+        setError(String(err));
+      })
+      .finally(() => {
+        if (cancelled) return;
+        window.clearTimeout(timeoutId);
+        setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+    };
   }, [open]);
 
   // Track container size.
