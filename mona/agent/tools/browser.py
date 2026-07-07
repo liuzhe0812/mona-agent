@@ -12,6 +12,7 @@ Architecture:
 
 from __future__ import annotations
 
+import base64
 import json
 import urllib.request
 from pathlib import Path
@@ -21,48 +22,8 @@ from loguru import logger
 
 from mona.agent.tools.base import Tool, tool_parameters
 from mona.agent.tools.schema import StringSchema, tool_parameters_schema
+from mona.agent.tools.tauri_ipc import tauri_invoke as _tauri_invoke
 from mona.config.schema import Base
-
-# ---------------------------------------------------------------------------
-# IPC helpers — reuse the same mechanism as terminal.py
-# ---------------------------------------------------------------------------
-
-_GATEWAY_BASE = "http://127.0.0.1"
-_FALLBACK_IPC_PORT = 17860
-_IPC_PORT_FILE = Path.home() / ".mona" / "ipc_bridge_port"
-
-
-def _read_ipc_port() -> int:
-    try:
-        text = _IPC_PORT_FILE.read_text().strip()
-        port = int(text)
-        if 1 <= port <= 65535:
-            return port
-    except (FileNotFoundError, ValueError, PermissionError):
-        pass
-    return _FALLBACK_IPC_PORT
-
-
-def _tauri_invoke(cmd: str, args: dict[str, Any] | None = None) -> Any:
-    """Call a Tauri IPC command via the HTTP bridge."""
-    port = _read_ipc_port()
-    payload = json.dumps({"cmd": cmd, "args": args or {}}).encode()
-    url = f"{_GATEWAY_BASE}:{port}"
-    req = urllib.request.Request(
-        url, data=payload, headers={"Content-Type": "application/json"}
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            result = json.loads(resp.read().decode())
-            if isinstance(result, dict) and "error" in result:
-                logger.warning("IPC bridge error for cmd={!r}: {}", cmd, result["error"])
-                raise RuntimeError(result["error"])
-            return result.get("result", result)
-    except urllib.error.URLError as e:
-        raise RuntimeError(
-            f"IPC bridge unavailable for {cmd!r}: {e}. "
-            "Is the Mona app running?"
-        ) from e
 
 
 # ---------------------------------------------------------------------------
@@ -660,16 +621,26 @@ class BrowserTypeTool(Tool):
 @tool_parameters(
     tool_parameters_schema(
         tabId=StringSchema("Browser tab ID"),
+        target=StringSchema(
+            "Optional element reference to capture only that region/element. "
+            "Use ref=e12 (from browser_snapshot), text=..., role=..., placeholder=..., label=..., "
+            "or CSS selector. If omitted, captures the full visible page."
+        ),
         required=["tabId"],
     )
 )
 class BrowserScreenshotTool(Tool):
-    """Take a screenshot of the current page."""
+    """Take a screenshot of the current page or a specific element/region."""
 
     _scopes = {"core", "subagent"}
 
     name = "browser_screenshot"
-    description = "Take a screenshot of the current page and save to a temp file."
+    description = (
+        "Take a screenshot of the current page or a specific element/region and save to a temp file. "
+        "To capture a region/element, use ref= from browser_snapshot (e.g. ref=e12). "
+        "Also supports text=, role=, placeholder=, label=, or CSS selectors. "
+        "If no target is provided, captures the full visible page."
+    )
     config_key = "browser"
 
     @classmethod
@@ -684,13 +655,35 @@ class BrowserScreenshotTool(Tool):
     def read_only(self) -> bool:
         return True
 
-    async def execute(self, tabId: str, **kwargs: Any) -> str:
+    async def execute(self, tabId: str, target: str | None = None, **kwargs: Any) -> str:
         mgr = await _get_connection_manager()
         try:
             page = await mgr.get_page(tabId)
-            screenshot_bytes = await page.screenshot(timeout=15000)
+            import base64
             import tempfile
             import time
+
+            if target:
+                # For region screenshots we still need Playwright's locator API,
+                # which waits for fonts. Use a short timeout and fall back to
+                # full-page CDP screenshot on failure.
+                try:
+                    locator = _resolve_locator(page, target)
+                    screenshot_bytes = await locator.screenshot(timeout=8000)
+                    region_label = f"region: {target}"
+                except Exception as loc_err:
+                    logger.warning(
+                        "Locator screenshot failed ({}), falling back to full page CDP",
+                        loc_err,
+                    )
+                    screenshot_bytes = await _cdp_screenshot(page)
+                    region_label = f"full visible page (region {target} unavailable)"
+            else:
+                # Full-page screenshot via raw CDP — bypasses Playwright's
+                # internal `document.fonts.ready` wait that hangs on sites
+                # with slow/unreachable @font-face CDNs (e.g. Google Fonts in CN).
+                screenshot_bytes = await _cdp_screenshot(page)
+                region_label = "full visible page"
 
             screenshots_dir = Path(tempfile.gettempdir()) / "mona-browser-screenshots"
             screenshots_dir.mkdir(parents=True, exist_ok=True)
@@ -701,11 +694,34 @@ class BrowserScreenshotTool(Tool):
 
             return (
                 f"Screenshot saved to: {filepath}\n"
+                f"Region: {region_label}\n"
                 f"File size: {len(screenshot_bytes)} bytes\n"
                 f"Tab: {tabId}"
             )
         except Exception as e:
             return f"Error taking screenshot: {e}"
+
+
+async def _cdp_screenshot(page: Any) -> bytes:
+    """Take a full-page screenshot via raw CDP, bypassing Playwright's font wait.
+
+    Playwright's `page.screenshot()` internally waits for `document.fonts.ready`,
+    which hangs for ~30s on sites with @font-face pointing to unreachable CDNs.
+    Going straight to the CDP `Page.captureScreenshot` command skips that wait
+    and captures the page as currently rendered (with fallback fonts).
+    """
+    client = await page.context.new_cdp_session(page)
+    try:
+        result = await client.send(
+            "Page.captureScreenshot",
+            {"format": "png", "captureBeyondViewport": False},
+        )
+        data_b64 = result.get("data") if isinstance(result, dict) else None
+        if not data_b64:
+            raise RuntimeError("CDP captureScreenshot returned no data")
+        return base64.b64decode(data_b64)
+    finally:
+        await client.detach()
 
 
 @tool_parameters(

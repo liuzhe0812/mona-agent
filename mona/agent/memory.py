@@ -1,4 +1,4 @@
-﻿"""Memory system: pure file I/O store, lightweight Consolidator, and Dream processor."""
+"""Memory system: pure file I/O store, lightweight Consolidator, and Dream processor."""
 
 from __future__ import annotations
 
@@ -20,7 +20,6 @@ from mona.agent.tools.registry import ToolRegistry
 from mona.session.manager import Session
 from mona.utils.gitstore import GitStore
 from mona.utils.helpers import (
-    ensure_dir,
     estimate_message_tokens,
     estimate_prompt_tokens_chain,
     find_legal_message_start,
@@ -49,20 +48,24 @@ class MemoryStore:
     )
 
     def __init__(self, workspace: Path, max_history_entries: int = _DEFAULT_MAX_HISTORY):
+        from mona.config.paths import get_memory_dir
         self.workspace = workspace
         self.max_history_entries = max_history_entries
-        self.memory_dir = ensure_dir(workspace / "memory")
+        # Memory files live OUTSIDE workspace (~/.mona/memory/) for hard boundary.
+        # SOUL.md / USER.md / AGENTS.md also live there for unified MemoryStore access.
+        self.memory_dir = get_memory_dir()
         self.memory_file = self.memory_dir / "MEMORY.md"
         self.history_file = self.memory_dir / "history.jsonl"
         self.legacy_history_file = self.memory_dir / "HISTORY.md"
-        self.soul_file = workspace / "SOUL.md"
-        self.user_file = workspace / "USER.md"
+        self.soul_file = self.memory_dir / "SOUL.md"
+        self.user_file = self.memory_dir / "USER.md"
+        self.agents_file = self.memory_dir / "AGENTS.md"
         self._cursor_file = self.memory_dir / ".cursor"
         self._dream_cursor_file = self.memory_dir / ".dream_cursor"
         self._corruption_logged = False  # rate-limit non-int cursor warning
         self._oversize_logged = False  # rate-limit oversized-entry warning
-        self._git = GitStore(workspace, tracked_files=[
-            "SOUL.md", "USER.md", "memory/MEMORY.md", "memory/.dream_cursor",
+        self._git = GitStore(self.memory_dir, tracked_files=[
+            "MEMORY.md", "SOUL.md", "USER.md", "AGENTS.md", ".dream_cursor",
         ])
         self._maybe_migrate_legacy_history()
 
@@ -905,30 +908,33 @@ class Dream:
     # -- tool registry -------------------------------------------------------
 
     def _build_tools(self) -> ToolRegistry:
-        """Build a minimal tool registry for the Dream agent."""
-        from mona.agent.skills import BUILTIN_SKILLS_DIR
-        from mona.agent.tools.file_state import FileStates
-        from mona.agent.tools.filesystem import EditFileTool, ReadFileTool, WriteFileTool
+        """Build a minimal tool registry for the Dream agent.
+
+        Dream uses dedicated memory/skill tools instead of _FsTool because
+        memory files and skills live OUTSIDE the workspace (~/.mona/memory/,
+        ~/.mona/skills/) and the _FsTool hard boundary blocks access.
+        """
+        from mona.agent.tools.heartbeat_tools import HeartbeatUpdateTool
+        from mona.agent.tools.memory_tools import (
+            MemoryEditTool,
+            MemoryReadTool,
+            MemorySearchTool,
+        )
+        from mona.agent.tools.skill_tools import (
+            SkillCreateTool,
+            SkillReadTool,
+        )
 
         tools = ToolRegistry()
-        workspace = self.store.workspace
-        # Allow reading builtin skills for reference during skill creation
-        extra_read = [BUILTIN_SKILLS_DIR] if BUILTIN_SKILLS_DIR.exists() else None
-        # Dream gets its own FileStates so its caches stay isolated from the
-        # main loop's sessions (issue #3571).
-        file_states = FileStates()
-        tools.register(ReadFileTool(
-            workspace=workspace,
-            allowed_dir=workspace,
-            extra_allowed_dirs=extra_read,
-            file_states=file_states,
-        ))
-        tools.register(EditFileTool(workspace=workspace, allowed_dir=workspace, file_states=file_states))
-        # write_file resolves relative paths from workspace root, but can only
-        # write under skills/ so the prompt can safely use skills/<name>/SKILL.md.
-        skills_dir = workspace / "skills"
-        skills_dir.mkdir(parents=True, exist_ok=True)
-        tools.register(WriteFileTool(workspace=workspace, allowed_dir=skills_dir, file_states=file_states))
+        # Memory access (MEMORY.md / SOUL.md / USER.md / AGENTS.md / history.jsonl)
+        tools.register(MemoryReadTool())
+        tools.register(MemoryEditTool())
+        tools.register(MemorySearchTool())
+        # Skill access (read existing + create new)
+        tools.register(SkillReadTool())
+        tools.register(SkillCreateTool())
+        # Heartbeat (Dream may add recurring tasks discovered from memory)
+        tools.register(HeartbeatUpdateTool())
         return tools
 
     # -- skill listing --------------------------------------------------------
@@ -938,10 +944,11 @@ class Dream:
         import re as _re
 
         from mona.agent.skills import BUILTIN_SKILLS_DIR
+        from mona.config.paths import get_skills_dir
 
         desc_re = _re.compile(r"^description:\s*(.+)$", _re.MULTILINE | _re.IGNORECASE)
         entries: dict[str, str] = {}
-        for base in (self.store.workspace / "skills", BUILTIN_SKILLS_DIR):
+        for base in (get_skills_dir(), BUILTIN_SKILLS_DIR):
             if not base.exists():
                 continue
             for d in base.iterdir():
@@ -950,7 +957,7 @@ class Dream:
                 skill_md = d / "SKILL.md"
                 if not skill_md.exists():
                     continue
-                # Prefer workspace skills over builtin (same name)
+                # Prefer user skills over builtin (same name)
                 if d.name in entries and base == BUILTIN_SKILLS_DIR:
                     continue
                 content = skill_md.read_text(encoding="utf-8")[:500]
@@ -972,7 +979,7 @@ class Dream:
         skip annotation than to tag the wrong line).
         SOUL.md and USER.md are never annotated.
         """
-        file_path = "memory/MEMORY.md"
+        file_path = "MEMORY.md"
         try:
             ages = self.store.git.line_ages(file_path)
         except Exception:

@@ -1,4 +1,4 @@
-﻿"""File system tools: read, write, edit, list."""
+"""File system tools: read, write, edit, list."""
 
 import difflib
 import mimetypes
@@ -9,7 +9,7 @@ from typing import Any
 
 from mona.agent.tools.base import Tool, tool_parameters
 from mona.agent.tools.file_state import FileStates, _hash_file, current_file_states
-from mona.agent.tools.path_utils import resolve_workspace_path
+from mona.agent.tools.path_utils import get_current_workspace, resolve_workspace_path
 from mona.agent.tools.schema import (
     BooleanSchema,
     IntegerSchema,
@@ -40,18 +40,17 @@ class _FsTool(Tool):
 
     @classmethod
     def create(cls, ctx: Any) -> Tool:
-        from mona.agent.skills import BUILTIN_SKILLS_DIR
-
         restrict = (
             ctx.config.restrict_to_workspace
             or ctx.config.exec.sandbox
         )
         allowed_dir = Path(ctx.workspace) if restrict else None
-        extra_read = [BUILTIN_SKILLS_DIR] if allowed_dir else None
+        # Hard boundary: no extra_allowed_dirs. Global resources (memory/,
+        # skills/, HEARTBEAT.md) are accessed via dedicated tools, not _FsTool.
         return cls(
             workspace=Path(ctx.workspace),
             allowed_dir=allowed_dir,
-            extra_allowed_dirs=extra_read,
+            extra_allowed_dirs=None,
             file_states=ctx.file_state_store,
         )
 
@@ -62,10 +61,20 @@ class _FsTool(Tool):
         return current_file_states(self._fallback_file_states)
 
     def _resolve(self, path: str) -> Path:
+        # Use session workspace from contextvar (set per-task by AgentLoop),
+        # falling back to the tool's configured workspace.
+        ws = get_current_workspace(self._workspace)
+        # allowed_dir follows the active workspace when restrict_to_workspace
+        # is enabled; self._allowed_dir remains the configured default.
+        allowed = self._allowed_dir
+        if allowed is not None and ws is not None and ws != self._workspace:
+            # Session-bound workspace override: enforce boundary on the
+            # override path rather than the configured default workspace.
+            allowed = ws
         return resolve_workspace_path(
             path,
-            self._workspace,
-            self._allowed_dir,
+            ws,
+            allowed,
             self._extra_allowed_dirs,
         )
 

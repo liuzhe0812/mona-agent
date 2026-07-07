@@ -67,5 +67,16 @@ documents the general tool contract and non-obvious usage patterns.
 ## Scheduling and Background Work
 
 - Use `cron` for scheduled reminders or recurring jobs; do not run `mona cron` through `exec`.
-- For heartbeat tasks, update `HEARTBEAT.md` according to the agent instructions.
+- For heartbeat tasks, use the `heartbeat_update` tool — do not use `apply_patch`/`edit_file`/`write_file` on HEARTBEAT.md.
 - Do not write reminders only to memory files when the user expects an actual notification.
+
+## Global Resources (Outside Workspace)
+
+The following resources are stored OUTSIDE the workspace and must be accessed via dedicated tools — `read_file`/`write_file`/`edit_file`/`grep` cannot reach them:
+
+- Memory (MEMORY.md / SOUL.md / USER.md / AGENTS.md / history.jsonl): use `memory_read` / `memory_edit` (Dream only) / `memory_search`
+- Skills (SKILL.md files): use `skill_read` to load content, `skill_create` (Dream only) to create new skills
+- Skill scripts and references: use `skill_script_run` / `skill_reference_read` / `skill_asset_copy`
+- Heartbeat (HEARTBEAT.md): use `heartbeat_update`
+
+Attempting to read/write these resources via file tools will fail with a workspace boundary error.

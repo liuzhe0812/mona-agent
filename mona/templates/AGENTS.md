@@ -1,8 +1,12 @@
-﻿# Agent Instructions
+# Agent Instructions
 
 ## Workspace Guidance
 
-Use this file for project-specific preferences, recurring workflow conventions, and instructions you want the agent to remember for this workspace. Keep durable facts about the user in `USER.md`, personality/style guidance in `SOUL.md`, and long-term memory in `memory/MEMORY.md`.
+Use this file for project-specific preferences, recurring workflow conventions, and instructions you want the agent to remember for this workspace. Durable facts about the user, personality/style guidance, and long-term memory are managed via dedicated tools — do not use `read_file`/`write_file`/`edit_file` on them directly:
+
+- `memory_read(file="user"|"soul"|"memory"|"agents")` — read USER.md / SOUL.md / MEMORY.md / AGENTS.md
+- `memory_edit(file=..., content=..., mode="replace"|"append")` — edit them (Dream agent only)
+- `memory_search(query="...", limit=50)` — search past events in history.jsonl
 
 ## Scheduled Reminders
 
@@ -14,10 +18,6 @@ Get USER_ID and CHANNEL from the current session (e.g., `8281248569` and `telegr
 
 ## Heartbeat Tasks
 
-`HEARTBEAT.md` is checked on the configured heartbeat interval. Use file tools to manage periodic tasks.
+`HEARTBEAT.md` is checked on the configured heartbeat interval. Use the `heartbeat_update` tool to manage periodic tasks — do not use `apply_patch`/`edit_file`/`write_file` on HEARTBEAT.md directly.
 
-- Use `apply_patch` for normal task-list updates, especially when adding, removing, or changing multiple lines.
-- Use `edit_file` only for small exact replacements copied from the current `HEARTBEAT.md`.
-- Use `write_file` for first creation or intentional full-file rewrites.
-
-When the user asks for a recurring/periodic task, update `HEARTBEAT.md` instead of creating a one-time cron reminder.
+When the user asks for a recurring/periodic task, use `heartbeat_update` instead of creating a one-time cron reminder.

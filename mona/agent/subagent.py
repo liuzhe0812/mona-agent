@@ -1,4 +1,4 @@
-﻿"""Subagent manager for background task execution."""
+"""Subagent manager for background task execution."""
 
 import asyncio
 import json
@@ -116,7 +116,12 @@ class SubagentManager:
         tools_config: ToolsConfig | None = None,
     ) -> ToolRegistry:
         """Build an isolated subagent tool registry via ToolLoader."""
-        root = self.workspace if workspace is None else workspace
+        # Inherit the calling session's workspace from the contextvar (set by
+        # AgentLoop at turn entry). asyncio.create_task copies the caller's
+        # context, so subagents spawned mid-turn inherit the session workspace.
+        from mona.agent.tools.path_utils import get_current_workspace
+
+        root = workspace if workspace is not None else get_current_workspace(self.workspace)
         registry = ToolRegistry()
         cfg = tools_config if tools_config is not None else self._subagent_tools_config()
         ctx = ToolContext(

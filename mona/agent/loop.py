@@ -25,6 +25,7 @@ from mona.agent.subagent import SubagentManager
 from mona.agent.tools.deliver_file import DELIVER_FILES_PENDING_META
 from mona.agent.tools.file_state import FileStateStore, bind_file_states, reset_file_states
 from mona.agent.tools.message import MessageTool
+from mona.agent.tools.path_utils import reset_current_workspace, set_current_workspace
 from mona.agent.tools.registry import ToolRegistry
 from mona.agent.tools.self import MyTool
 from mona.bus.events import InboundMessage, OutboundMessage
@@ -313,6 +314,10 @@ class AgentLoop:
         if model_preset:
             self.set_model_preset(model_preset, publish_update=False)
         self._register_default_tools()
+        # PPT agent loop (lazy-initialized on first PPT session). Shares this
+        # loop's provider/sessions/bus but has its own tool whitelist and
+        # PPTContextBuilder. See _ensure_ppt_loop().
+        self._ppt_loop: AgentLoop | None = None
         self._runtime_vars: dict[str, Any] = {}
         self._current_iteration: int = 0
         self.commands = CommandRouter()
@@ -450,6 +455,48 @@ class AgentLoop:
         snapshot = self._build_model_preset_snapshot(name)
         self._apply_provider_snapshot(snapshot, publish_update=publish_update, model_preset=name)
         self._active_preset = name
+
+    def _effective_workspace(self, session: Session | None) -> Path:
+        """Compute the effective workspace for a session.
+
+        - Session with ``metadata.workspace`` set to an absolute path: that path (resolved).
+        - Default session or no session: ``self.workspace`` (``config.workspace_path``).
+        """
+        if session is None:
+            return self.workspace
+        ws_override = session.metadata.get("workspace")
+        if isinstance(ws_override, str) and ws_override.strip():
+            return Path(ws_override).expanduser().resolve()
+        return self.workspace
+
+    def _ensure_ppt_loop(self) -> AgentLoop:
+        """Lazily construct the PPT agent loop on first PPT session.
+
+        The PPT loop shares this loop's provider, sessions, bus, and other
+        runtime dependencies, but has its own filtered tool registry and
+        PPTContextBuilder. Raises if construction fails — no fallback path.
+        """
+        if self._ppt_loop is not None:
+            return self._ppt_loop
+        from mona.agent.ppt_loop import PPTAgentLoop
+        self._ppt_loop = PPTAgentLoop(
+            bus=self.bus,
+            provider=self.provider,
+            workspace=self.workspace,
+            model=self.model,
+            context_window_tokens=self.context_window_tokens,
+            max_tool_result_chars=self.max_tool_result_chars,
+            restrict_to_workspace=self.restrict_to_workspace,
+            session_manager=self.sessions,
+            timezone=self.context.timezone,
+            max_messages=self._max_messages,
+            disabled_skills=None,
+            tools_config=self.tools_config,
+            hooks=list(self._extra_hooks) if self._extra_hooks else None,
+            unified_session=self._unified_session,
+        )
+        logger.info("PPTAgentLoop initialized with tool whitelist")
+        return self._ppt_loop
 
     def _register_default_tools(self) -> None:
         """Register the default set of tools via plugin loader."""
@@ -753,6 +800,10 @@ class AgentLoop:
 
         active_session_key = session.key if session else session_key
         file_state_token = bind_file_states(self._file_state_store.for_session(active_session_key))
+        # AgentRunSpec.workspace is read from the contextvar so subagents
+        # spawned via asyncio.create_task inherit the caller's workspace.
+        from mona.agent.tools.path_utils import get_current_workspace
+        effective_ws = get_current_workspace(self.workspace)
         try:
             result = await self.runner.run(AgentRunSpec(
                 initial_messages=initial_messages,
@@ -763,7 +814,7 @@ class AgentLoop:
                 hook=hook,
                 error_message="Sorry, I encountered an error calling the AI model.",
                 concurrent_tools=True,
-                workspace=self.workspace,
+                workspace=effective_ws,
                 session_key=session.key if session else None,
                 context_window_tokens=self.context_window_tokens,
                 context_block_limit=self.context_block_limit,
@@ -1059,25 +1110,29 @@ class AgentLoop:
         history = session.get_history(**_hist_kwargs)
         current_role = "assistant" if is_subagent else "user"
 
-        messages = self.context.build_messages(
-            history=history,
-            current_message="" if is_subagent else msg.content,
-            channel=channel,
-            chat_id=chat_id,
-            current_role=current_role,
-            sender_id=msg.sender_id,
-            session_summary=pending,
-            session_metadata=session.metadata,
-            message_metadata=msg.metadata,
-        )
-        t_wall = time.time()
-        final_content, _, all_msgs, stop_reason, _ = await self._run_agent_loop(
-            messages, session=session, channel=channel, chat_id=chat_id,
-            message_id=msg.metadata.get("message_id"),
-            metadata=msg.metadata,
-            session_key=key,
-            pending_queue=pending_queue,
-        )
+        ws_token = set_current_workspace(self._effective_workspace(session))
+        try:
+            messages = self.context.build_messages(
+                history=history,
+                current_message="" if is_subagent else msg.content,
+                channel=channel,
+                chat_id=chat_id,
+                current_role=current_role,
+                sender_id=msg.sender_id,
+                session_summary=pending,
+                session_metadata=session.metadata,
+                message_metadata=msg.metadata,
+            )
+            t_wall = time.time()
+            final_content, _, all_msgs, stop_reason, _ = await self._run_agent_loop(
+                messages, session=session, channel=channel, chat_id=chat_id,
+                message_id=msg.metadata.get("message_id"),
+                metadata=msg.metadata,
+                session_key=key,
+                pending_queue=pending_queue,
+            )
+        finally:
+            reset_current_workspace(ws_token)
         wall_done = time.time()
         latency_ms = max(0, int((wall_done - t_wall) * 1000))
         self._save_turn(session, all_msgs, 1 + len(history), turn_latency_ms=latency_ms)
@@ -1128,9 +1183,29 @@ class AgentLoop:
             )
 
         key = session_key or msg.session_key
+        # Pre-fetch session so the workspace contextvar can be set for the
+        # entire turn — identity rendering, _FsTool resolution, and AgentRunSpec
+        # all read this contextvar.
+        session = self.sessions.get_or_create(key)
+
+        # PPT agent routing: sessions tagged with agent_kind="ppt" are delegated
+        # to the dedicated PPTAgentLoop (focused tools, ppt_soul.md identity,
+        # no memory/history). The PPT loop shares this loop's provider/sessions
+        # but has its own filtered tool registry and PPTContextBuilder.
+        if session.metadata.get("agent_kind") == "ppt":
+            ppt_loop = self._ensure_ppt_loop()
+            return await ppt_loop._process_message(
+                msg,
+                session_key=key,
+                on_progress=on_progress,
+                on_stream=on_stream,
+                on_stream_end=on_stream_end,
+                pending_queue=pending_queue,
+            )
+
         ctx = TurnContext(
             msg=msg,
-            session=None,
+            session=session,
             session_key=key,
             state=TurnState.RESTORE,
             turn_id=f"{key}:{time.time_ns()}",
@@ -1140,52 +1215,56 @@ class AgentLoop:
             pending_queue=pending_queue,
         )
 
-        while ctx.state is not TurnState.DONE:
-            handler_name = f"_state_{ctx.state.name.lower()}"
-            handler = getattr(self, handler_name, None)
-            if handler is None:
-                raise RuntimeError(f"Missing state handler for {ctx.state}")
+        ws_token = set_current_workspace(self._effective_workspace(session))
+        try:
+            while ctx.state is not TurnState.DONE:
+                handler_name = f"_state_{ctx.state.name.lower()}"
+                handler = getattr(self, handler_name, None)
+                if handler is None:
+                    raise RuntimeError(f"Missing state handler for {ctx.state}")
 
-            t0 = time.perf_counter()
-            try:
-                event = await handler(ctx)
-            except Exception:
+                t0 = time.perf_counter()
+                try:
+                    event = await handler(ctx)
+                except Exception:
+                    duration = (time.perf_counter() - t0) * 1000
+                    ctx.trace.append(
+                        StateTraceEntry(
+                            state=ctx.state,
+                            started_at=t0,
+                            duration_ms=duration,
+                            event="",
+                            error="exception",
+                        )
+                    )
+                    raise
+
                 duration = (time.perf_counter() - t0) * 1000
                 ctx.trace.append(
                     StateTraceEntry(
                         state=ctx.state,
                         started_at=t0,
                         duration_ms=duration,
-                        event="",
-                        error="exception",
+                        event=event,
                     )
                 )
-                raise
-
-            duration = (time.perf_counter() - t0) * 1000
-            ctx.trace.append(
-                StateTraceEntry(
-                    state=ctx.state,
-                    started_at=t0,
-                    duration_ms=duration,
-                    event=event,
+                logger.debug(
+                    "[turn {}] State {} took {:.1f}ms -> event {}",
+                    ctx.turn_id,
+                    ctx.state.name,
+                    duration,
+                    event,
                 )
-            )
-            logger.debug(
-                "[turn {}] State {} took {:.1f}ms -> event {}",
-                ctx.turn_id,
-                ctx.state.name,
-                duration,
-                event,
-            )
 
-            next_state = self._TRANSITIONS.get((ctx.state, event))
-            if next_state is None:
-                raise RuntimeError(
-                    f"[turn {ctx.turn_id}] No transition from {ctx.state} "
-                    f"on event {event!r}"
-                )
-            ctx.state = next_state
+                next_state = self._TRANSITIONS.get((ctx.state, event))
+                if next_state is None:
+                    raise RuntimeError(
+                        f"[turn {ctx.turn_id}] No transition from {ctx.state} "
+                        f"on event {event!r}"
+                    )
+                ctx.state = next_state
+        finally:
+            reset_current_workspace(ws_token)
 
         logger.debug(
             "[turn {}] Turn completed after {} states",

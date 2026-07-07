@@ -1,4 +1,4 @@
-﻿"""Heartbeat service - periodic agent wake-up to check for tasks."""
+"""Heartbeat service - periodic agent wake-up to check for tasks."""
 
 from __future__ import annotations
 
@@ -78,7 +78,9 @@ class HeartbeatService:
 
     @property
     def heartbeat_file(self) -> Path:
-        return self.workspace / "HEARTBEAT.md"
+        # HEARTBEAT.md lives OUTSIDE workspace (~/.mona/HEARTBEAT.md) for hard boundary.
+        from mona.config.paths import get_heartbeat_path
+        return get_heartbeat_path()
 
     def _read_heartbeat_file(self) -> str | None:
         if self.heartbeat_file.exists():

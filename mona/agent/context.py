@@ -79,7 +79,12 @@ class ContextBuilder:
 
     def _get_identity(self, channel: str | None = None) -> str:
         """Get the core identity section."""
-        workspace_path = str(self.workspace.expanduser().resolve())
+        # Read the session-bound workspace from contextvar (set by AgentLoop
+        # at turn entry); fall back to the configured workspace.
+        from mona.agent.tools.path_utils import get_current_workspace
+
+        ws = get_current_workspace(self.workspace)
+        workspace_path = str(ws.expanduser().resolve())
         system = platform.system()
         runtime = f"{'macOS' if system == 'Darwin' else system} {platform.machine()}, Python {platform.python_version()}"
 
@@ -133,11 +138,13 @@ class ContextBuilder:
         return _to_blocks(left) + _to_blocks(right)
 
     def _load_bootstrap_files(self) -> str:
-        """Load all bootstrap files from workspace."""
+        """Load all bootstrap files from global memory dir (~/.mona/memory/)."""
+        from mona.config.paths import get_memory_file
+
         parts = []
 
         for filename in self.BOOTSTRAP_FILES:
-            file_path = self.workspace / filename
+            file_path = get_memory_file(filename)
             if file_path.exists():
                 content = file_path.read_text(encoding="utf-8")
                 parts.append(f"## {filename}\n\n{content}")

@@ -1,4 +1,4 @@
-﻿"""Skills loader for agent capabilities."""
+"""Skills loader for agent capabilities."""
 
 import json
 import os
@@ -27,8 +27,10 @@ class SkillsLoader:
     """
 
     def __init__(self, workspace: Path, builtin_skills_dir: Path | None = None, disabled_skills: set[str] | None = None):
+        from mona.config.paths import get_skills_dir
         self.workspace = workspace
-        self.workspace_skills = workspace / "skills"
+        # User skills live OUTSIDE workspace (~/.mona/skills/) for hard boundary.
+        self.workspace_skills = get_skills_dir()
         self.builtin_skills = builtin_skills_dir or BUILTIN_SKILLS_DIR
         self.disabled_skills = disabled_skills or set()
 
@@ -133,12 +135,14 @@ class SkillsLoader:
             meta = self._get_skill_meta(skill_name)
             available = self._check_requirements(meta)
             desc = self._get_skill_description(skill_name)
+            # Do not emit entry['path'] — skills live outside workspace and
+            # must be accessed via the skill_read tool, not read_file.
             if available:
-                lines.append(f"- **{skill_name}** — {desc}  `{entry['path']}`")
+                lines.append(f"- **{skill_name}** — {desc}")
             else:
                 missing = self._get_missing_requirements(meta)
                 suffix = f" (unavailable: {missing})" if missing else " (unavailable)"
-                lines.append(f"- **{skill_name}** — {desc}{suffix}  `{entry['path']}`")
+                lines.append(f"- **{skill_name}** — {desc}{suffix}")
         return "\n".join(lines)
 
     def _get_missing_requirements(self, skill_meta: dict) -> str:

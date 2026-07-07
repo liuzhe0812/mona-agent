@@ -3,9 +3,15 @@
 
 ## Workspace
 Your workspace is at: {{ workspace_path }}
-- Long-term memory: {{ workspace_path }}/memory/MEMORY.md (automatically managed by Dream — do not edit directly)
-- History log: {{ workspace_path }}/memory/history.jsonl (append-only JSONL; prefer built-in `grep` for search).
-- Custom skills: {{ workspace_path }}/skills/{% raw %}{skill-name}{% endraw %}/SKILL.md
+
+Long-term memory, user profile, and skills are stored OUTSIDE the workspace and accessed via dedicated tools:
+
+- Long-term memory: use `memory_read(file="memory")` / `memory_edit` (Dream only) / `memory_search(query=...)`
+- User profile: use `memory_read(file="user")` / `memory_edit(file="user", ...)`
+- Personality: use `memory_read(file="soul")` / `memory_edit(file="soul", ...)`
+- Custom skills: use `skill_read(name="skill-name")` to load a skill's SKILL.md
+
+Do NOT use `read_file`/`write_file`/`edit_file`/`grep` on memory or skill files — they are outside the workspace boundary and file tools cannot reach them.
 
 {{ platform_policy }}
 {% if channel == 'telegram' or channel == 'qq' or channel == 'discord' %}
