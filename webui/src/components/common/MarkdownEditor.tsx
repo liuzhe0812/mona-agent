@@ -9,9 +9,13 @@ import TaskList from "@tiptap/extension-task-list";
 import { Markdown } from "@tiptap/markdown";
 import { EditorContent, useEditor, type Editor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
+import { TextSelection } from "@tiptap/pm/state";
+
+import { WikiLink } from "./WikiLinkExtension";
 import {
   Bold,
   CheckSquare,
+  ChevronDown,
   Code2,
   Code,
   ClipboardPaste,
@@ -50,6 +54,13 @@ import {
   ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 
 export type EditorMode = "visual" | "markdown";
@@ -64,6 +75,8 @@ export interface MarkdownEditorProps {
     plainText: string;
   }) => void;
   onMoveSelectionToNote?: (selectedText: string) => void;
+  /** Open the note whose title matches the clicked wiki link. */
+  onOpenNoteByTitle?: (title: string) => void;
   placeholder?: string;
   showToolbar?: boolean;
   showStats?: boolean;
@@ -72,6 +85,8 @@ export interface MarkdownEditorProps {
   editorClassName?: string;
   children?: React.ReactNode;
   toolbarExtra?: React.ReactNode;
+  /** Content rendered at the start of the editor toolbar (e.g. history buttons). */
+  toolbarLeadingExtra?: React.ReactNode;
   /** Note titles for `[[wiki link]]` autocomplete in markdown mode. */
   noteTitles?: string[];
 }
@@ -112,6 +127,7 @@ export function MarkdownEditor({
   onModeChange,
   onContentChange,
   onMoveSelectionToNote,
+  onOpenNoteByTitle,
   placeholder = "记录想法、资料、处理过程或 Agent 输出...",
   showToolbar = true,
   showStats = true,
@@ -120,6 +136,7 @@ export function MarkdownEditor({
   editorClassName,
   children,
   toolbarExtra,
+  toolbarLeadingExtra,
   noteTitles,
 }: MarkdownEditorProps) {
   const settingContentRef = useRef(false);
@@ -134,8 +151,20 @@ export function MarkdownEditor({
     open: boolean;
     query: string;
     startPos: number;
+    cursorPos: number;
     selectedIndex: number;
   } | null>(null);
+
+  const modeRef = useRef(mode);
+  const wikiLinkStateRef = useRef(wikiLinkState);
+  const wikiLinkSuggestionsRef = useRef<string[]>([]);
+  const insertWikiLinkRef = useRef<(title: string) => void>(() => {});
+  const onOpenNoteByTitleRef = useRef(onOpenNoteByTitle);
+  onOpenNoteByTitleRef.current = onOpenNoteByTitle;
+  const visualEditorRef = useRef<HTMLDivElement | null>(null);
+  const [visualPopupPos, setVisualPopupPos] = useState<{ top: number; left: number } | null>(
+    null,
+  );
 
   const wikiLinkSuggestions = useMemo(() => {
     if (!wikiLinkState?.open || !noteTitles?.length) return [];
@@ -174,39 +203,129 @@ export function MarkdownEditor({
       open: true,
       query: afterOpen,
       startPos: lastOpen,
+      cursorPos: caret,
       selectedIndex: 0,
     });
   }, []);
 
+  const findWikiLinkOpenPos = useCallback((editor: Editor) => {
+    const { from } = editor.state.selection;
+    for (let pos = from - 2; pos >= 1; pos--) {
+      const text = editor.state.doc.textBetween(pos, pos + 2, "\n");
+      if (text === "[[") return pos;
+    }
+    return null;
+  }, []);
+
+  const detectWikiLinkTriggerVisual = useCallback((editor: Editor) => {
+    const { from } = editor.state.selection;
+    const openPos = findWikiLinkOpenPos(editor);
+    if (openPos === null) {
+      setWikiLinkState(null);
+      return;
+    }
+    const inner = editor.state.doc.textBetween(openPos + 2, from, "\n");
+    if (inner.includes("]]") || inner.includes("\n")) {
+      setWikiLinkState(null);
+      return;
+    }
+    if (openPos > 1) {
+      const charBefore = editor.state.doc.textBetween(openPos - 1, openPos, "\n");
+      if (charBefore === "[") {
+        setWikiLinkState(null);
+        return;
+      }
+    }
+    setWikiLinkState({
+      open: true,
+      query: inner,
+      startPos: openPos,
+      cursorPos: from,
+      selectedIndex: 0,
+    });
+  }, [findWikiLinkOpenPos]);
+
+  const expandWikiLinkAtCursor = useCallback((editor: Editor) => {
+    // When the cursor is placed right after a wiki link, expand the link back
+    // into plain `[[title]]` text so subsequent typing stays outside the link.
+    const { selection, doc, schema } = editor.state;
+    if (!selection.empty) return;
+
+    let targetPos = -1;
+    let targetNode: any = null;
+    doc.descendants((node, pos) => {
+      if (targetPos >= 0 || node.type.name !== "wikiLink") return;
+      const end = pos + node.nodeSize;
+      if (selection.from === end) {
+        targetPos = pos;
+        targetNode = node;
+      }
+    });
+
+    if (targetPos < 0 || !targetNode) return;
+
+    const title = targetNode.attrs?.title || targetNode.textContent || "";
+    const text = `[[${title}]]`;
+    const endPos = targetPos + targetNode.nodeSize;
+
+    const tr = editor.state.tr;
+    tr.replaceWith(targetPos, endPos, schema.text(text));
+    tr.setSelection(TextSelection.create(tr.doc, targetPos + text.length));
+    editor.view.dispatch(tr);
+    editor.view.focus();
+  }, []);
+
   const insertWikiLink = useCallback((title: string) => {
-    const textarea = textareaRef.current;
-    if (!textarea || !wikiLinkState) return;
-    const value = textarea.value;
-    const before = value.slice(0, wikiLinkState.startPos);
-    const after = value.slice(textarea.selectionStart);
-    const inserted = `[[${title}]]`;
-    const next = before + inserted + after;
-    setWikiLinkState(null);
-    // Inline the markdown update to avoid TDZ on `handleMarkdownChange`.
     const ed = editorRef.current;
-    if (ed) {
+    if (!ed || !wikiLinkState) return;
+    setWikiLinkState(null);
+
+    if (modeRef.current === "markdown") {
+      const textarea = textareaRef.current;
+      if (!textarea) return;
+      const value = textarea.value;
+      const before = value.slice(0, wikiLinkState.startPos);
+      const after = value.slice(wikiLinkState.cursorPos);
+      const inserted = `[[${title}]]`;
+      const next = before + inserted + after;
       settingContentRef.current = true;
       ed.commands.setContent(next, { contentType: "markdown" });
       settingContentRef.current = false;
+      lastMarkdownRef.current = next;
+      onContentChangeRef.current({
+        contentMarkdown: next,
+        contentJson: ed.getJSON(),
+        plainText: ed.getText() ?? next,
+      });
+      requestAnimationFrame(() => {
+        const ta = textareaRef.current;
+        if (!ta) return;
+        const pos = before.length + inserted.length;
+        ta.focus();
+        ta.setSelectionRange(pos, pos);
+      });
+    } else {
+      // visual mode: replace the unclosed `[[query` (and trailing `]]`) with a wikiLink node.
+      // The autocomplete leaves `[[]]` in the doc; when the user types a query the
+      // cursor sits between the brackets, so `]]` is right after the cursor.
+      let endPos = wikiLinkState.cursorPos;
+      const afterText = ed.state.doc.textBetween(
+        wikiLinkState.cursorPos,
+        wikiLinkState.cursorPos + 2,
+        "\n",
+      );
+      if (afterText === "]]") {
+        endPos = wikiLinkState.cursorPos + 2;
+      }
+      ed.chain()
+        .focus()
+        .deleteRange({ from: wikiLinkState.startPos, to: endPos })
+        .insertContent({
+          type: "wikiLink",
+          attrs: { title },
+        })
+        .run();
     }
-    lastMarkdownRef.current = next;
-    onContentChangeRef.current({
-      contentMarkdown: next,
-      contentJson: ed?.getJSON(),
-      plainText: ed?.getText() ?? next,
-    });
-    requestAnimationFrame(() => {
-      const ta = textareaRef.current;
-      if (!ta) return;
-      const pos = before.length + inserted.length;
-      ta.focus();
-      ta.setSelectionRange(pos, pos);
-    });
   }, [wikiLinkState]);
 
   const handleTextareaKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -226,6 +345,13 @@ export function MarkdownEditor({
       setWikiLinkState(null);
     }
   }, [wikiLinkState, wikiLinkSuggestions, insertWikiLink]);
+
+  // Keep refs in sync so editor event handlers (created once by Tiptap) can read
+  // the latest state without being recreated.
+  modeRef.current = mode;
+  wikiLinkStateRef.current = wikiLinkState;
+  wikiLinkSuggestionsRef.current = wikiLinkSuggestions;
+  insertWikiLinkRef.current = insertWikiLink;
 
   // Cache: fileName -> asset URL (convertFileSrc result). The URL is stable for
   // a given vault path, so we can safely cache it for the editor's lifetime.
@@ -384,8 +510,13 @@ export function MarkdownEditor({
         heading: { levels: [1, 2, 3, 4] },
       }),
       NoteImage,
-      TaskList,
-      TaskItem.configure({ nested: true }),
+      TaskList.configure({
+        HTMLAttributes: { class: "list-none pl-0 m-0" },
+      }),
+      TaskItem.configure({
+        nested: true,
+        HTMLAttributes: { class: "flex flex-row items-start gap-1.5" },
+      }),
       Link.configure({
         openOnClick: false,
         autolink: true,
@@ -401,6 +532,9 @@ export function MarkdownEditor({
       Markdown.configure({
         indentation: { style: "space", size: 2 },
       }),
+      WikiLink.configure({
+        onOpenNote: (title: string) => onOpenNoteByTitleRef.current?.(title),
+      }),
     ],
     [placeholder],
   );
@@ -412,6 +546,67 @@ export function MarkdownEditor({
     editorProps: {
       attributes: {
         class: "notes-prosemirror",
+      },
+      handleKeyDown: (view, event) => {
+        // Auto-complete: typing a second `[` turns `[[` into `[[]]` with the
+        // cursor placed between the brackets (mirrors Obsidian's behaviour).
+        if (event.key === "[") {
+          const { state } = view;
+          const { from } = state.selection;
+          if (from > 0) {
+            const before = state.doc.textBetween(from - 1, from, "\n");
+            if (before === "[") {
+              // Avoid turning `[[[` into `[[[]]`.
+              if (from > 1 && state.doc.textBetween(from - 2, from - 1, "\n") === "[") {
+                return false;
+              }
+              event.preventDefault();
+              // The second `[` was prevented, so the doc only has one `[`.
+              // Insert `[]]` to produce `[[]]`, cursor at `from + 1` (between
+              // `[[` and `]]` so typing immediately enters the link query).
+              const tr = state.tr.insertText("[]]", from);
+              tr.setSelection(TextSelection.create(tr.doc, from + 1));
+              view.dispatch(tr);
+              return true;
+            }
+          }
+        }
+
+        const state = wikiLinkStateRef.current;
+        const suggestions = wikiLinkSuggestionsRef.current;
+        if (!state?.open || suggestions.length === 0) return false;
+        if (event.key === "ArrowDown") {
+          event.preventDefault();
+          setWikiLinkState((s) =>
+            s ? { ...s, selectedIndex: (s.selectedIndex + 1) % suggestions.length } : s,
+          );
+          return true;
+        }
+        if (event.key === "ArrowUp") {
+          event.preventDefault();
+          setWikiLinkState((s) =>
+            s
+              ? {
+                  ...s,
+                  selectedIndex:
+                    (s.selectedIndex - 1 + suggestions.length) % suggestions.length,
+                }
+              : s,
+          );
+          return true;
+        }
+        if (event.key === "Enter" || event.key === "Tab") {
+          event.preventDefault();
+          const selected = suggestions[state.selectedIndex];
+          if (selected) insertWikiLinkRef.current(selected);
+          return true;
+        }
+        if (event.key === "Escape") {
+          event.preventDefault();
+          setWikiLinkState(null);
+          return true;
+        }
+        return false;
       },
       handlePaste: (view, event) => {
         const items = event.clipboardData?.items;
@@ -445,19 +640,62 @@ export function MarkdownEditor({
     },
     onUpdate: ({ editor }) => {
       if (settingContentRef.current) return;
+      if (modeRef.current === "visual") {
+        detectWikiLinkTriggerVisual(editor);
+      }
       const contentMarkdown = editor.getMarkdown();
       lastMarkdownRef.current = contentMarkdown;
-      onContentChangeRef.current({
+      // Defer the parent setState to a microtask so it never fires
+      // synchronously during React's render phase (avoids the
+      // "Cannot update a component while rendering a different component" warning).
+      const snapshot = {
         contentMarkdown,
         contentJson: editor.getJSON(),
         plainText: editor.getText(),
-      });
+      };
+      queueMicrotask(() => onContentChangeRef.current(snapshot));
+    },
+    onSelectionUpdate: ({ editor }) => {
+      // Wiki-link autocomplete is intentionally triggered only by content
+      // changes (onUpdate), not by selection changes, so clicking into an
+      // existing link does not reopen the popup.
+      // However, when the cursor lands right after a wiki link (e.g. by
+      // clicking the right edge or pressing ArrowRight), expand the link into
+      // plain text so the user can keep typing as normal text.
+      expandWikiLinkAtCursor(editor);
     },
   });
 
   // Keep editorRef in sync so wiki-link callbacks can access the editor
   // without being in its useCallback dependency array (avoids TDZ).
   editorRef.current = editor;
+
+  // Compute visual-mode wiki-link popup position relative to the editor wrapper.
+  useEffect(() => {
+    if (!wikiLinkState?.open || mode !== "visual") {
+      setVisualPopupPos(null);
+      return;
+    }
+    const ed = editorRef.current;
+    const wrapper = visualEditorRef.current;
+    if (!ed || !wrapper) return;
+    const coords = ed.view.coordsAtPos(wikiLinkState.cursorPos);
+    const rect = wrapper.getBoundingClientRect();
+    setVisualPopupPos({
+      top: coords.bottom - rect.top,
+      left: coords.left - rect.left,
+    });
+  }, [wikiLinkState, mode]);
+
+  // Close wiki-link popup when the visual editor loses focus.
+  useEffect(() => {
+    if (!editor) return;
+    const handleBlur = () => setWikiLinkState(null);
+    editor.on("blur", handleBlur);
+    return () => {
+      editor.off("blur", handleBlur);
+    };
+  }, [editor]);
 
   useEffect(() => {
     if (!editor) return;
@@ -493,9 +731,12 @@ export function MarkdownEditor({
   const lineCount = content.split(/\r?\n/).length;
 
   return (
-    <section className={cn("flex min-h-0 min-w-0 flex-1 flex-col bg-background", className)}>
+    <section
+      data-note-editor="true"
+      className={cn("flex min-h-0 min-w-0 flex-1 flex-col bg-background", className)}
+    >
       <div className="flex h-10 shrink-0 items-center justify-between border-b border-border/65 px-3">
-        {showToolbar ? <EditorToolbar editor={editor} /> : <div />}
+        {showToolbar ? <EditorToolbar editor={editor} leadingExtra={toolbarLeadingExtra} /> : <div />}
         {toolbarExtra ?? (onModeChange ? (
           <div className="flex items-center gap-0.5 rounded-lg border border-border/70 bg-muted/30 p-0.5">
             <button
@@ -533,12 +774,43 @@ export function MarkdownEditor({
       {mode === "visual" ? (
         <EditorContextMenu editor={editor} onMoveSelectionToNote={onMoveSelectionToNote}>
           <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin">
-            <div className={cn("mx-auto w-full max-w-[700px] px-5 py-5", editorClassName)}>
+            <div
+              ref={visualEditorRef}
+              className={cn(
+                "relative mx-auto w-full max-w-[700px] px-5 py-5",
+                editorClassName,
+              )}
+            >
               {children}
               <EditorContent
                 editor={editor}
-                className="mt-4 text-[13.5px] leading-6 text-foreground [&_.ProseMirror]:min-h-[380px] [&_.ProseMirror]:outline-none [&_.ProseMirror_blockquote]:border-l-2 [&_.ProseMirror_blockquote]:border-border [&_.ProseMirror_blockquote]:pl-3 [&_.ProseMirror_code]:rounded [&_.ProseMirror_code]:bg-muted [&_.ProseMirror_code]:px-1 [&_.ProseMirror_h1]:mb-2 [&_.ProseMirror_h1]:mt-5 [&_.ProseMirror_h1]:text-[22px] [&_.ProseMirror_h1]:font-bold [&_.ProseMirror_h2]:mb-2 [&_.ProseMirror_h2]:mt-5 [&_.ProseMirror_h2]:text-[18px] [&_.ProseMirror_h2]:font-semibold [&_.ProseMirror_h3]:mb-2 [&_.ProseMirror_h3]:mt-4 [&_.ProseMirror_h3]:text-[15px] [&_.ProseMirror_h3]:font-semibold [&_.ProseMirror_h4]:mb-1.5 [&_.ProseMirror_h4]:mt-3 [&_.ProseMirror_h4]:text-[14px] [&_.ProseMirror_h4]:font-semibold [&_.ProseMirror_img]:max-w-full [&_.ProseMirror_img]:h-auto [&_.ProseMirror_img]:rounded-lg [&_.ProseMirror_img]:my-2 [&_.ProseMirror_li]:my-0.5 [&_.ProseMirror_ol]:ml-5 [&_.ProseMirror_p]:my-1.5 [&_.ProseMirror_pre]:my-2.5 [&_.ProseMirror_pre]:overflow-x-auto [&_.ProseMirror_pre]:rounded-lg [&_.ProseMirror_pre]:border [&_.ProseMirror_pre]:border-border/70 [&_.ProseMirror_pre]:bg-muted/45 [&_.ProseMirror_pre]:p-2.5 [&_.ProseMirror_s]:line-through [&_.ProseMirror_s]:text-muted-foreground [&_.ProseMirror_table]:my-2.5 [&_.ProseMirror_table]:w-full [&_.ProseMirror_table]:border-collapse [&_.ProseMirror_td]:border [&_.ProseMirror_td]:border-border [&_.ProseMirror_td]:px-2 [&_.ProseMirror_td]:py-1.5 [&_.ProseMirror_th]:border [&_.ProseMirror_th]:border-border [&_.ProseMirror_th]:bg-muted/45 [&_.ProseMirror_th]:px-2 [&_.ProseMirror_th]:py-1.5 [&_.ProseMirror_ul]:ml-5"
+                className="mt-4 text-[13.5px] leading-6 text-foreground [&_.ProseMirror]:min-h-[380px] [&_.ProseMirror]:outline-none [&_.ProseMirror]:caret-[--foreground] [&_.ProseMirror_blockquote]:border-l-2 [&_.ProseMirror_blockquote]:border-border [&_.ProseMirror_blockquote]:pl-3 [&_.ProseMirror_code]:rounded [&_.ProseMirror_code]:bg-muted [&_.ProseMirror_code]:px-1 [&_.ProseMirror_h1]:mb-2 [&_.ProseMirror_h1]:mt-5 [&_.ProseMirror_h1]:text-[22px] [&_.ProseMirror_h1]:font-bold [&_.ProseMirror_h2]:mb-2 [&_.ProseMirror_h2]:mt-5 [&_.ProseMirror_h2]:text-[18px] [&_.ProseMirror_h2]:font-semibold [&_.ProseMirror_h3]:mb-2 [&_.ProseMirror_h3]:mt-4 [&_.ProseMirror_h3]:text-[15px] [&_.ProseMirror_h3]:font-semibold [&_.ProseMirror_h4]:mb-1.5 [&_.ProseMirror_h4]:mt-3 [&_.ProseMirror_h4]:text-[14px] [&_.ProseMirror_h4]:font-semibold [&_.ProseMirror_img]:max-w-full [&_.ProseMirror_img]:h-auto [&_.ProseMirror_img]:rounded-lg [&_.ProseMirror_img]:my-2 [&_.ProseMirror_li]:my-0.5 [&_.ProseMirror_ol]:ml-5 [&_.ProseMirror_p]:my-1.5 [&_.ProseMirror_pre]:my-2.5 [&_.ProseMirror_pre]:overflow-x-auto [&_.ProseMirror_pre]:rounded-lg [&_.ProseMirror_pre]:border [&_.ProseMirror_pre]:border-border/70 [&_.ProseMirror_pre]:bg-muted/45 [&_.ProseMirror_pre]:p-2.5 [&_.ProseMirror_s]:line-through [&_.ProseMirror_s]:text-muted-foreground [&_.ProseMirror_table]:my-2.5 [&_.ProseMirror_table]:w-full [&_.ProseMirror_table]:border-collapse [&_.ProseMirror_td]:border [&_.ProseMirror_td]:border-border [&_.ProseMirror_td]:px-2 [&_.ProseMirror_td]:py-1.5 [&_.ProseMirror_th]:border [&_.ProseMirror_th]:border-border [&_.ProseMirror_th]:bg-muted/45 [&_.ProseMirror_th]:px-2 [&_.ProseMirror_th]:py-1.5 [&_.ProseMirror_ul]:ml-5"
               />
+              {wikiLinkState?.open && wikiLinkSuggestions.length > 0 && visualPopupPos && (
+                <div
+                  style={{ top: visualPopupPos.top, left: visualPopupPos.left }}
+                  className="absolute z-50 min-w-[200px] max-w-[320px] rounded-md border border-border/70 bg-popover py-1 shadow-lg"
+                >
+                  {wikiLinkSuggestions.map((title, idx) => (
+                    <button
+                      key={title}
+                      type="button"
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        insertWikiLink(title);
+                      }}
+                      className={cn(
+                        "flex w-full items-center px-2.5 py-1 text-left text-[12px]",
+                        idx === wikiLinkState.selectedIndex
+                          ? "bg-accent text-foreground"
+                          : "text-foreground/85 hover:bg-accent/60",
+                      )}
+                    >
+                      <span className="truncate">{title}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         </EditorContextMenu>
@@ -719,7 +991,7 @@ function EditorContextMenu({ editor, children, onMoveSelectionToNote }: { editor
           </>
         ) : null}
 
-        <ContextMenuSeparator />
+        {hasSelection ? <ContextMenuSeparator /> : null}
         {/* 段落设置 submenu */}
         <ContextMenuSub>
           <ContextMenuSubTrigger className="text-[13px]">
@@ -857,41 +1129,77 @@ function EditorContextMenu({ editor, children, onMoveSelectionToNote }: { editor
   );
 }
 
-function EditorToolbar({ editor }: { editor: Editor | null }) {
+type HeadingLevel = 1 | 2 | 3 | 4;
+
+const HEADING_OPTIONS: { value: "paragraph" | `heading${HeadingLevel}`; label: string }[] = [
+  { value: "paragraph", label: "正文" },
+  { value: "heading1", label: "标题 1" },
+  { value: "heading2", label: "标题 2" },
+  { value: "heading3", label: "标题 3" },
+  { value: "heading4", label: "标题 4" },
+];
+
+function getCurrentStyle(editor: Editor | null): "paragraph" | `heading${HeadingLevel}` {
+  if (!editor) return "paragraph";
+  if (editor.isActive("heading", { level: 1 })) return "heading1";
+  if (editor.isActive("heading", { level: 2 })) return "heading2";
+  if (editor.isActive("heading", { level: 3 })) return "heading3";
+  if (editor.isActive("heading", { level: 4 })) return "heading4";
+  return "paragraph";
+}
+
+function HeadingStyleDropdown({ editor }: { editor: Editor | null }) {
+  const currentStyle = getCurrentStyle(editor);
+  const currentLabel = HEADING_OPTIONS.find((o) => o.value === currentStyle)?.label ?? "正文";
+
+  const handleSelect = (value: string) => {
+    if (!editor) return;
+    if (value === "paragraph") {
+      editor.chain().focus().setParagraph().run();
+      return;
+    }
+    const level = Number(value.replace("heading", "")) as HeadingLevel;
+    editor.chain().focus().toggleHeading({ level }).run();
+  };
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          disabled={!editor}
+          className="h-[26px] gap-1 px-2 text-[12px] text-muted-foreground hover:bg-accent hover:text-foreground"
+        >
+          <span className="min-w-[3.5em] text-left">{currentLabel}</span>
+          <ChevronDown className="h-3 w-3 shrink-0" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-28">
+        <DropdownMenuRadioGroup value={currentStyle} onValueChange={handleSelect}>
+          {HEADING_OPTIONS.map((option) => (
+            <DropdownMenuRadioItem key={option.value} value={option.value} className="text-[13px]">
+              {option.label}
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+function EditorToolbar({
+  editor,
+  leadingExtra,
+}: {
+  editor: Editor | null;
+  leadingExtra?: React.ReactNode;
+}) {
   return (
     <div className="flex min-w-0 items-center gap-1 overflow-x-auto scrollbar-thin">
-      <ToolbarButton
-        label="正文"
-        active={editor?.isActive("paragraph") ?? false}
-        disabled={!editor}
-        onClick={() => editor?.chain().focus().setParagraph().run()}
-      >
-        <Type className="h-3.5 w-3.5" />
-      </ToolbarButton>
-      <ToolbarButton
-        label="标题1"
-        active={editor?.isActive("heading", { level: 1 }) ?? false}
-        disabled={!editor}
-        onClick={() => editor?.chain().focus().toggleHeading({ level: 1 }).run()}
-      >
-        <Heading1 className="h-3.5 w-3.5" />
-      </ToolbarButton>
-      <ToolbarButton
-        label="标题2"
-        active={editor?.isActive("heading", { level: 2 }) ?? false}
-        disabled={!editor}
-        onClick={() => editor?.chain().focus().toggleHeading({ level: 2 }).run()}
-      >
-        <Heading2 className="h-3.5 w-3.5" />
-      </ToolbarButton>
-      <ToolbarButton
-        label="标题3"
-        active={editor?.isActive("heading", { level: 3 }) ?? false}
-        disabled={!editor}
-        onClick={() => editor?.chain().focus().toggleHeading({ level: 3 }).run()}
-      >
-        <Heading3 className="h-3.5 w-3.5" />
-      </ToolbarButton>
+      {leadingExtra ? <>{leadingExtra}</> : null}
+      <HeadingStyleDropdown editor={editor} />
       <ToolbarButton
         label="加粗"
         active={editor?.isActive("bold") ?? false}

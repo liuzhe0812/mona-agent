@@ -137,6 +137,37 @@
     --cjk-line-height: 1.625;
   }
 
+  /* Obsidian-style [[wiki links]]: rendered as blue text by default;
+     show raw `[[title]]` when the cursor touches either boundary. */
+  .wiki-link {
+    color: hsl(var(--theme));
+    cursor: pointer;
+    border-radius: 0.125rem;
+    padding: 0 0.125rem;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    text-decoration-color: hsl(var(--theme) / 0.5);
+  }
+  .wiki-link:hover {
+    text-decoration-color: hsl(var(--theme));
+  }
+  .wiki-link[data-cursor-boundary] {
+    color: hsl(var(--foreground));
+    background-color: hsl(var(--accent));
+    cursor: text;
+    text-decoration: none;
+  }
+  .wiki-link[data-cursor-boundary]::before,
+  .wiki-link[data-cursor-boundary]::after {
+    color: hsl(var(--muted-foreground));
+  }
+  .wiki-link[data-cursor-boundary]::before {
+    content: "[[";
+  }
+  .wiki-link[data-cursor-boundary]::after {
+    content: "]]";
+  }
+
   /* L→R sheen clipped to live activity labels. The highlight lives inside
      the glyphs, not in the row background, so dark mode stays quiet. */
   @keyframes streaming-text-sheen-ltr {
@@ -290,4 +321,75 @@
   .scrollbar-hover:hover::-webkit-scrollbar-thumb:hover {
     background-color: hsl(var(--muted-foreground) / 0.4);
   }
+}
+
+/* Notes editor: list markers + task item layout.
+   Kept OUT of @layer utilities so Tailwind's purge does not strip these
+   complex attribute selectors, and so they outrank the base preflight
+   (`ol, ul { list-style: none }`) without needing `!important`. */
+.notes-prosemirror ul:not([data-type="taskList"]) {
+  list-style-type: disc !important;
+  padding-left: 1.4rem !important;
+}
+.notes-prosemirror ol:not([data-type="taskList"]) {
+  list-style-type: decimal !important;
+  padding-left: 1.4rem !important;
+}
+.notes-prosemirror ul[data-type="taskList"],
+.notes-prosemirror ol[data-type="taskList"] {
+  list-style: none !important;
+  padding-left: 0 !important;
+}
+/* TaskItem: label (checkbox) and content div must stay on one line.
+   The <li> gets display:flex via TipTap HTMLAttributes; here we ensure
+   the children behave as proper flex items. */
+.notes-prosemirror li[data-type="taskItem"] {
+  display: flex !important;
+  flex-direction: row !important;
+  flex-wrap: nowrap !important;
+  align-items: flex-start !important;
+  gap: 0.4rem !important;
+  margin-bottom: 0.2rem !important;
+}
+.notes-prosemirror li[data-type="taskItem"] > label {
+  flex: 0 0 auto !important;
+  flex-shrink: 0 !important;
+  user-select: none !important;
+  /* Fixed height matching the first text line (leading-6 = 1.5rem = 24px).
+     The checkbox is absolutely centered within this box. */
+  position: relative !important;
+  width: 0.95rem !important;
+  height: 1.5rem !important;
+  line-height: 1 !important;
+  display: block !important;
+}
+.notes-prosemirror li[data-type="taskItem"] > label input[type="checkbox"] {
+  position: absolute !important;
+  top: 50% !important;
+  left: 0 !important;
+  transform: translateY(-50%) !important;
+  margin: 0 !important;
+  width: 0.95rem !important;
+  height: 0.95rem !important;
+  cursor: pointer !important;
+  accent-color: hsl(var(--primary)) !important;
+}
+.notes-prosemirror li[data-type="taskItem"] > label span {
+  display: none !important;
+}
+.notes-prosemirror li[data-type="taskItem"] > div {
+  flex: 1 1 0% !important;
+  min-width: 0 !important;
+}
+/* Remove paragraph margins inside task items — they push text down and
+   break checkbox alignment. */
+.notes-prosemirror li[data-type="taskItem"] p {
+  margin-top: 0 !important;
+  margin-bottom: 0 !important;
+}
+.notes-prosemirror li[data-type="taskItem"][data-checked="true"] > div {
+  color: hsl(var(--muted-foreground)) !important;
+}
+.notes-prosemirror li[data-type="taskItem"][data-checked="true"] > div p {
+  text-decoration: line-through !important;
 }

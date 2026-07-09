@@ -4,6 +4,8 @@ import {
   saveDesktopNotesState,
 } from "@/lib/tauri";
 
+import type { WorkspaceState } from "./Workspace";
+import type { RightTab } from "./RightSidebar";
 import type {
   Notebook,
   NoteSourceKind,
@@ -11,6 +13,7 @@ import type {
   OperationNote,
 } from "./notes-data";
 import { nowTimestamp } from "./notes-data";
+import { applyTemplate, type TemplateContext } from "./template-engine";
 
 export interface NotesStorageState {
   notebooks: Notebook[];
@@ -18,6 +21,10 @@ export interface NotesStorageState {
   activeNotebookId: string;
   activeNoteId: string | null;
   transformations: NoteTransformation[];
+  workspace?: WorkspaceState | null;
+  rightSidebarOpen?: boolean;
+  rightSidebarWidth?: number;
+  rightActiveTab?: RightTab;
 }
 
 export async function loadNotesState(): Promise<NotesStorageState> {
@@ -57,6 +64,31 @@ export function createBlankNote(
 
 export function createNoteId(): string {
   return createId("note");
+}
+
+export function createNoteFromTemplate(
+  template: OperationNote,
+  notebookId: string,
+  title: string,
+  notebookName: string,
+): OperationNote {
+  const ctx: TemplateContext = { title, notebookName };
+  const content = applyTemplate(template.contentMarkdown, ctx);
+  const preview = content.replace(/[#*`>\-\[\]]/g, "").trim().slice(0, 46) || "空白笔记";
+  const now = nowTimestamp();
+  return {
+    id: createId("note"),
+    notebookId,
+    title,
+    preview,
+    createdAt: now,
+    updatedAt: now,
+    source: { kind: "manual", label: "从模板创建" },
+    tags: [...template.tags],
+    contentMarkdown: content,
+    appliedAgentMessageIds: [],
+    contextLevel: "full",
+  };
 }
 
 export function createCustomNotebook(name: string): Notebook {

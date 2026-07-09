@@ -15,11 +15,13 @@ import {
   FolderOpen,
   FolderPlus,
   GitFork,
+  ListChecks,
   MoreHorizontal,
   Pencil,
   Plus,
   Printer,
   Search,
+  Star,
   Trash2,
   X,
 } from "lucide-react";
@@ -48,8 +50,11 @@ import {
 import { cn } from "@/lib/utils";
 import {
   getNotesVaultPath,
+  isTauri,
+  openPathWithSystemApp,
   pickNotesVaultDirectory,
   renameSyncWikiLinks,
+  revealItemInDir,
   saveMarkdownFile,
   setNotesVaultPath,
 } from "@/lib/tauri";
@@ -57,16 +62,24 @@ import { useLicense } from "@/hooks/useLicense";
 import { useKbStore } from "@/stores/kb-store";
 
 import { GlobalSearchDialog } from "./GlobalSearchDialog";
-import { ConfirmDialog, PromptDialog } from "./NotesDialogs";
+import { ConfirmDialog, PromptDialog, ReplaceDialog, TemplatePickerDialog } from "./NotesDialogs";
 import { NoteAgentPanel } from "./NoteAgentPanel";
-import { BacklinksPanel } from "./BacklinksPanel";
-import { GraphViewDialog } from "./GraphViewDialog";
-import { RelatedNotesPanel } from "./RelatedNotesPanel";
-import { NoteEditor } from "./NoteEditor";
 import type { EditorMode } from "@/components/common/MarkdownEditor";
-import { NoteList, type SortMode } from "./NoteList";
-import { NoteTabBar } from "./NoteTabBar";
+import { NoteList, NoteRow, sortNotesByMode, type SortMode } from "./NoteList";
+import { RightSidebar, type RightTab } from "./RightSidebar";
+import { RightSidebarToggleIcon } from "./RightSidebarToggleIcon";
+import { TasksPanel } from "./TasksPanel";
+import { toggleTaskInMarkdown } from "./tasks-extract";
 import { deriveNotePreview } from "./notes-ai";
+import {
+  Workspace,
+  createInitialWorkspace,
+  findLeafById,
+  mapNode,
+  sanitizeWorkspaceState,
+  type WorkspaceState,
+  type LeafPane,
+} from "./Workspace";
 import type {
   Notebook,
   NoteContextLevel,
@@ -78,6 +91,7 @@ import { nowTimestamp } from "./notes-data";
 import {
   createBlankNote,
   createCustomNotebook,
+  createNoteFromTemplate,
   createNoteId,
   loadNotesState,
   saveNotesState,
@@ -87,11 +101,16 @@ const AGENT_PANEL_MIN_WIDTH = 240;
 const AGENT_PANEL_MAX_WIDTH = 480;
 const AGENT_PANEL_DEFAULT_WIDTH = 306;
 
+const RIGHT_SIDEBAR_MIN_WIDTH = 200;
+const RIGHT_SIDEBAR_MAX_WIDTH = 420;
+const RIGHT_SIDEBAR_DEFAULT_WIDTH = 260;
+
 interface NotesViewProps {
   onSendToAgent?: (prompt: string) => void | Promise<void>;
+  initialNoteId?: string;
 }
 
-export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
+export function NotesView({ onSendToAgent: _onSendToAgent, initialNoteId }: NotesViewProps) {
   const { licenseActive } = useLicense();
   const [notebooks, setNotebooks] = useState<Notebook[]>([]);
   const [activeNotebookId, setActiveNotebookId] = useState("");
@@ -102,6 +121,7 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [noticeType, setNoticeType] = useState<"info" | "error">("info");
   const [editorMode, setEditorMode] = useState<EditorMode>("visual");
   const [storageReady, setStorageReady] = useState(false);
   const [storageError, setStorageError] = useState<string | null>(null);
@@ -110,10 +130,14 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [agentPanelCollapsed, setAgentPanelCollapsed] = useState(true);
   const [agentPanelWidth, setAgentPanelWidth] = useState(AGENT_PANEL_DEFAULT_WIDTH);
-  const [backlinksCollapsed, setBacklinksCollapsed] = useState(false);
   const [agentStreaming, setAgentStreaming] = useState(false);
-  const [graphViewOpen, setGraphViewOpen] = useState(false);
+  const [workspace, setWorkspace] = useState<WorkspaceState>(() => createInitialWorkspace(null));
+  const [rightSidebarOpen, setRightSidebarOpen] = useState(false);
+  const [rightSidebarWidth, setRightSidebarWidth] = useState(RIGHT_SIDEBAR_DEFAULT_WIDTH);
+  const [rightActiveTab, setRightActiveTab] = useState<RightTab>("outline");
+  const [tasksPanelOpen, setTasksPanelOpen] = useState(false);
   const dragRef = useRef<{ startX: number; startWidth: number } | null>(null);
+  const rightDragRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const lastSavedSnapshotRef = useRef<string | null>(null);
   const latestSnapshotRef = useRef<string | null>(null);
 
@@ -128,9 +152,12 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
     | { kind: "deleteNotes"; noteIds: string[] };
   const [promptState, setPromptState] = useState<PromptState | null>(null);
   const [confirmState, setConfirmState] = useState<ConfirmState | null>(null);
+  const [replaceDialog, setReplaceDialog] = useState<{ noteId: string } | null>(null);
+  const [globalSearchInitialQuery, setGlobalSearchInitialQuery] = useState("");
+  const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
   const [expandedNotebookIds, setExpandedNotebookIds] = useState<Set<string>>(new Set());
   const [sortMode, setSortMode] = useState<SortMode>("updated-desc");
-  const [openTabIds, setOpenTabIds] = useState<string[]>([]);
+  const [viewMode, setViewMode] = useState<"all" | "favorite">("all");
 
   const deleteManyNotes = useCallback(
     (notesToDelete: OperationNote[]) => {
@@ -155,8 +182,26 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
     [activeNoteId, notes],
   );
 
+  const activeLeafGraphOpen = useMemo(
+    () => findLeafById(workspace.root, workspace.activeLeafId)?.graphOpen ?? false,
+    [workspace],
+  );
+
   // All note titles for [[wiki link]] autocomplete in the editor.
   const noteTitles = useMemo(() => notes.map((n) => n.title).filter(Boolean), [notes]);
+
+  const notebookNameById = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const nb of notebooks) {
+      m.set(nb.id, nb.name);
+    }
+    return m;
+  }, [notebooks]);
+
+  const templateNotes = useMemo(
+    () => notes.filter((n) => n.type === "template"),
+    [notes],
+  );
 
   const filterNotesByKeyword = useCallback(
     (list: OperationNote[], keyword: string) => {
@@ -180,77 +225,117 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
     [],
   );
 
-  const selectNote = useCallback(
-    (noteId: string) => {
-      const note = notes.find((n) => n.id === noteId);
-      if (note && note.notebookId !== activeNotebookId) {
-        setActiveNotebookId(note.notebookId);
-        setExpandedNotebookIds((prev) => {
-          const next = new Set(prev);
-          next.add(note.notebookId);
-          return next;
-        });
-      }
-      setActiveNoteId(noteId);
-      setOpenTabIds((prev) => {
-        if (prev.includes(noteId)) return prev;
-        const activeIdx = activeNoteId ? prev.indexOf(activeNoteId) : -1;
-        if (activeIdx >= 0) {
-          const next = [...prev];
-          next[activeIdx] = noteId;
-          return next;
+  const updateLeaf = useCallback(
+    (
+      ws: WorkspaceState,
+      leafId: string,
+      updater: (leaf: LeafPane) => LeafPane,
+    ): WorkspaceState => ({
+      ...ws,
+      root: mapNode(ws.root, (node) => {
+        if (node.type === "leaf" && node.id === leafId) {
+          return updater(node);
         }
-        return [noteId];
-      });
-    },
-    [notes, activeNotebookId, activeNoteId],
-  );
-
-  const openInNewTab = useCallback(
-    (noteId: string) => {
-      const note = notes.find((n) => n.id === noteId);
-      if (note && note.notebookId !== activeNotebookId) {
-        setActiveNotebookId(note.notebookId);
-        setExpandedNotebookIds((prev) => {
-          const next = new Set(prev);
-          next.add(note.notebookId);
-          return next;
-        });
-      }
-      setActiveNoteId(noteId);
-      setOpenTabIds((prev) => (prev.includes(noteId) ? prev : [...prev, noteId]));
-    },
-    [notes, activeNotebookId],
-  );
-
-  const closeTab = useCallback(
-    (noteId: string) => {
-      setOpenTabIds((prev) => {
-        const idx = prev.indexOf(noteId);
-        if (idx === -1) return prev;
-        const next = prev.filter((id) => id !== noteId);
-        if (activeNoteId === noteId) {
-          const nextActive = next[idx] ?? next[idx - 1] ?? next[0] ?? null;
-          setActiveNoteId(nextActive);
-        }
-        return next;
-      });
-    },
-    [activeNoteId],
-  );
-
-  const closeOtherTabs = useCallback(
-    (noteId: string) => {
-      setOpenTabIds([noteId]);
-      setActiveNoteId(noteId);
-    },
+        return node;
+      }),
+    }),
     [],
   );
 
-  const closeAllTabs = useCallback(() => {
-    setOpenTabIds([]);
-    setActiveNoteId(null);
-  }, []);
+  const toggleGraphInActiveLeaf = useCallback(() => {
+    setWorkspace((prev) =>
+      updateLeaf(prev, prev.activeLeafId, (leaf) => ({ ...leaf, graphOpen: !leaf.graphOpen })),
+    );
+  }, [updateLeaf]);
+
+  const selectNoteInWorkspace = useCallback(
+    (noteId: string, leafId?: string) => {
+      const targetLeafId = leafId ?? workspace.activeLeafId;
+      const note = notes.find((n) => n.id === noteId);
+      if (note && note.notebookId !== activeNotebookId) {
+        setActiveNotebookId(note.notebookId);
+        setExpandedNotebookIds((prev) => {
+          const next = new Set(prev);
+          next.add(note.notebookId);
+          return next;
+        });
+      }
+      setActiveNoteId(noteId);
+      setWorkspace((prev) =>
+        updateLeaf(prev, targetLeafId, (leaf) => {
+          if (leaf.tabIds.includes(noteId)) {
+            return { ...leaf, activeTabId: noteId, graphOpen: false };
+          }
+          const activeIdx = leaf.activeTabId ? leaf.tabIds.indexOf(leaf.activeTabId) : -1;
+          if (activeIdx >= 0) {
+            const nextTabIds = [...leaf.tabIds];
+            nextTabIds[activeIdx] = noteId;
+            return { ...leaf, tabIds: nextTabIds, activeTabId: noteId, graphOpen: false };
+          }
+          return {
+            ...leaf,
+            tabIds: [...leaf.tabIds, noteId],
+            activeTabId: noteId,
+            graphOpen: false,
+          };
+        }),
+      );
+    },
+    [notes, activeNotebookId, workspace.activeLeafId, updateLeaf],
+  );
+
+  const selectNote = useCallback(
+    (noteId: string) => {
+      selectNoteInWorkspace(noteId);
+    },
+    [selectNoteInWorkspace],
+  );
+
+  const openNoteByTitle = useCallback(
+    (title: string) => {
+      const normalized = title.trim().toLowerCase();
+      const match = notes.find(
+        (n) => n.title.trim().toLowerCase() === normalized,
+      );
+      if (match) {
+        selectNote(match.id);
+      } else {
+        // Obsidian behaviour: create the note in the vault root if it doesn't exist.
+        const trimmed = title.trim();
+        if (!trimmed) return;
+        const nextNote = createBlankNote("", "manual");
+        nextNote.title = trimmed;
+        nextNote.preview = "";
+        setNotes((current) => [nextNote, ...current]);
+        selectNote(nextNote.id);
+      }
+    },
+    [notes, selectNote],
+  );
+
+  const openInNewTab = useCallback(
+    (noteId: string, leafId?: string) => {
+      const targetLeafId = leafId ?? workspace.activeLeafId;
+      const note = notes.find((n) => n.id === noteId);
+      if (note && note.notebookId !== activeNotebookId) {
+        setActiveNotebookId(note.notebookId);
+        setExpandedNotebookIds((prev) => {
+          const next = new Set(prev);
+          next.add(note.notebookId);
+          return next;
+        });
+      }
+      setActiveNoteId(noteId);
+      setWorkspace((prev) =>
+        updateLeaf(prev, targetLeafId, (leaf) =>
+          leaf.tabIds.includes(noteId)
+            ? { ...leaf, activeTabId: noteId, graphOpen: false }
+            : { ...leaf, tabIds: [...leaf.tabIds, noteId], activeTabId: noteId, graphOpen: false },
+        ),
+      );
+    },
+    [notes, activeNotebookId, workspace.activeLeafId, updateLeaf],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -267,6 +352,12 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
         setTransformations(nextState.transformations ?? []);
         setActiveNotebookId(nextState.activeNotebookId);
         setActiveNoteId(nextState.activeNoteId);
+        const noteIds = new Set(nextState.notes.map((n) => n.id));
+        const restoredWorkspace = sanitizeWorkspaceState(nextState.workspace, noteIds, nextState.activeNoteId);
+        setWorkspace(restoredWorkspace);
+        setRightSidebarOpen(nextState.rightSidebarOpen ?? false);
+        setRightSidebarWidth(clampRightSidebarWidth(nextState.rightSidebarWidth));
+        setRightActiveTab(sanitizeRightActiveTab(nextState.rightActiveTab));
         if (nextState.activeNotebookId) {
           setExpandedNotebookIds((prev) => {
             const next = new Set(prev);
@@ -274,7 +365,38 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
             return next;
           });
         }
-        lastSavedSnapshotRef.current = serializeNotesState(nextState);
+        if (initialNoteId && noteIds.has(initialNoteId)) {
+          const target = nextState.notes.find((n) => n.id === initialNoteId);
+          if (target) {
+            setActiveNoteId(initialNoteId);
+            setActiveNotebookId(target.notebookId);
+            setExpandedNotebookIds((prev) => {
+              const next = new Set(prev);
+              if (target.notebookId) next.add(target.notebookId);
+              return next;
+            });
+            setWorkspace((prev) => {
+              const leafId = prev.activeLeafId;
+              return updateLeaf(prev, leafId, (leaf) =>
+                leaf.tabIds.includes(initialNoteId)
+                  ? { ...leaf, activeTabId: initialNoteId, graphOpen: false }
+                  : {
+                      ...leaf,
+                      tabIds: [...leaf.tabIds, initialNoteId],
+                      activeTabId: initialNoteId,
+                      graphOpen: false,
+                    },
+              );
+            });
+          }
+        }
+        lastSavedSnapshotRef.current = serializeNotesState({
+          ...nextState,
+          workspace: restoredWorkspace,
+          rightSidebarOpen: nextState.rightSidebarOpen ?? false,
+          rightSidebarWidth: clampRightSidebarWidth(nextState.rightSidebarWidth),
+          rightActiveTab: sanitizeRightActiveTab(nextState.rightActiveTab),
+        });
         latestSnapshotRef.current = lastSavedSnapshotRef.current;
         setStorageError(null);
         setSaveStatus("saved");
@@ -290,7 +412,7 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [initialNoteId]);
 
   // Refresh notes state when the window regains focus.
   // This picks up notes created by the agent (via notes_create_from_chat)
@@ -338,6 +460,10 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
       transformations,
       activeNotebookId,
       activeNoteId,
+      workspace,
+      rightSidebarOpen,
+      rightSidebarWidth,
+      rightActiveTab,
     };
     const snapshot = serializeNotesState(state);
     latestSnapshotRef.current = snapshot;
@@ -353,7 +479,7 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
         .catch((error) => {
           if (latestSnapshotRef.current === snapshot) setSaveStatus("error");
           const msg = error instanceof Error ? error.message : String(error);
-          setNotice(`笔记保存失败：${msg}`);
+          notifyError(`笔记保存失败：${msg}`);
         });
     }, 450);
 
@@ -363,16 +489,27 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
     activeNotebookId,
     notebooks,
     notes,
+    rightActiveTab,
+    rightSidebarOpen,
+    rightSidebarWidth,
     storageError,
     storageReady,
     transformations,
+    workspace,
   ]);
 
   useEffect(() => {
     if (!notice) return;
-    const timer = window.setTimeout(() => setNotice(null), 1800);
+    const timer = window.setTimeout(() => setNotice(null), 3000);
     return () => window.clearTimeout(timer);
   }, [notice]);
+
+  const notifyError = useCallback((msg: string) => {
+    setNoticeType("error");
+    setNotice(msg);
+  }, []);
+
+  // Success messages are silent — only errors show a toast.
 
   // Global search shortcut: Ctrl/Cmd + K
   useEffect(() => {
@@ -381,6 +518,7 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
       const k = e.key.toLowerCase();
       if (k === "k") {
         e.preventDefault();
+        setGlobalSearchInitialQuery("");
         setGlobalSearchOpen(true);
       }
     };
@@ -409,21 +547,16 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
   }, [selectedNoteIds, notes, deleteManyNotes]);
 
   const openNoteFromGlobalSearch = useCallback(
-    (noteId: string, notebookId?: string) => {
+    (noteId: string, _notebookId?: string) => {
       const note = notes.find((item) => item.id === noteId);
       if (!note) {
-        setNotice("笔记不存在");
+        notifyError("笔记不存在");
         return;
       }
-      if (notebookId) {
-        setActiveNotebookId(notebookId);
-      } else {
-        setActiveNotebookId(note.notebookId);
-      }
-      setActiveNoteId(note.id);
+      selectNoteInWorkspace(note.id);
       setSearchQuery("");
     },
-    [notes],
+    [notes, selectNoteInWorkspace],
   );
 
   // Sync notebook knowledge bases to kb-store for chat selector
@@ -437,13 +570,21 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
 
   useEffect(() => {
     if (!activeNote && notebookNotes[0]) {
-      setActiveNoteId(notebookNotes[0].id);
+      const nextId = notebookNotes[0].id;
+      setActiveNoteId(nextId);
+      setWorkspace((prev) =>
+        updateLeaf(prev, prev.activeLeafId, (leaf) =>
+          leaf.tabIds.includes(nextId)
+            ? { ...leaf, activeTabId: nextId }
+            : { ...leaf, tabIds: [...leaf.tabIds, nextId], activeTabId: nextId },
+        ),
+      );
       return;
     }
     if (activeNote && activeNote.id !== activeNoteId) {
       setActiveNoteId(activeNote.id);
     }
-  }, [activeNote, activeNoteId, notebookNotes]);
+  }, [activeNote, activeNoteId, notebookNotes, updateLeaf]);
 
   const updateActiveNote = useCallback(
     (patch: Partial<OperationNote>) => {
@@ -471,24 +612,73 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
       try {
         nextNote = createBlankNote(notebookId, sourceKind);
       } catch (error) {
-        setNotice(error instanceof Error ? error.message : "新建笔记失败");
+        notifyError(error instanceof Error ? error.message : "新建笔记失败");
         return;
       }
       setNotes((current) => [nextNote, ...current]);
       setActiveNoteId(nextNote.id);
-      setOpenTabIds((prev) => {
-        const activeIdx = activeNoteId ? prev.indexOf(activeNoteId) : -1;
-        if (activeIdx >= 0) {
-          const next = [...prev];
-          next[activeIdx] = nextNote.id;
-          return next;
-        }
-        return [nextNote.id];
+      setWorkspace((prev) => {
+        const leafId = prev.activeLeafId;
+        return updateLeaf(prev, leafId, (leaf) => {
+          const activeIdx = leaf.activeTabId ? leaf.tabIds.indexOf(leaf.activeTabId) : -1;
+          if (activeIdx >= 0) {
+            const nextTabIds = [...leaf.tabIds];
+            nextTabIds[activeIdx] = nextNote.id;
+            return { ...leaf, tabIds: nextTabIds, activeTabId: nextNote.id, graphOpen: false };
+          }
+          return {
+            ...leaf,
+            tabIds: [...leaf.tabIds, nextNote.id],
+            activeTabId: nextNote.id,
+            graphOpen: false,
+          };
+        });
       });
       setSearchQuery("");
-      setNotice(sourceKind === "ssh" ? "已新建 SSH 记录" : "已新建笔记");
     },
-    [activeNotebook, activeNoteId],
+    [activeNotebook, updateLeaf],
+  );
+
+  const createNoteFromTemplateAction = useCallback(
+    (templateId: string, title: string) => {
+      const template = notes.find((n) => n.id === templateId);
+      if (!template) return;
+      const notebookId = activeNotebook ? activeNotebook.id : "";
+      const notebookName = activeNotebook ? activeNotebook.name : "";
+      let nextNote: OperationNote;
+      try {
+        nextNote = createNoteFromTemplate(template, notebookId, title, notebookName);
+      } catch (error) {
+        notifyError(error instanceof Error ? error.message : "从模板创建失败");
+        return;
+      }
+      setNotes((current) => [nextNote, ...current]);
+      setActiveNoteId(nextNote.id);
+      setWorkspace((prev) => {
+        const leafId = prev.activeLeafId;
+        return updateLeaf(prev, leafId, (leaf) => ({
+          ...leaf,
+          tabIds: [...leaf.tabIds, nextNote.id],
+          activeTabId: nextNote.id,
+          graphOpen: false,
+        }));
+      });
+      setSearchQuery("");
+    },
+    [notes, activeNotebook, updateLeaf],
+  );
+
+  const toggleNoteTemplate = useCallback(
+    (note: OperationNote) => {
+      setNotes((current) =>
+        current.map((n) =>
+          n.id === note.id
+            ? { ...n, type: n.type === "template" ? "note" : "template", updatedAt: nowTimestamp() }
+            : n,
+        ),
+      );
+    },
+    [],
   );
 
   const moveSelectionToNote = useCallback(
@@ -503,7 +693,6 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
       };
       setNotes((current) => [nextNote, ...current]);
       setActiveNoteId(nextNote.id);
-      setNotice("已将所选内容移动到新笔记");
     },
     [activeNotebook],
   );
@@ -517,14 +706,13 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
     try {
       nextNotebook = createCustomNotebook(name);
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "新建笔记本失败");
+        notifyError(error instanceof Error ? error.message : "新建笔记本失败");
       return;
     }
     setNotebooks((current) => [...current, nextNotebook]);
     setActiveNotebookId(nextNotebook.id);
     setActiveNoteId(null);
     setSearchQuery("");
-    setNotice("已新建笔记本");
   }, []);
 
   const renameNotebook = useCallback((notebookId: string) => {
@@ -540,7 +728,6 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
         notebook.id === notebookId ? { ...notebook, name } : notebook,
       ),
     );
-    setNotice("笔记本已重命名");
   }, [notebooks]);
 
   const toggleNotebookKnowledgeBase = useCallback(
@@ -552,14 +739,13 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
             : notebook,
         ),
       );
-      setNotice(knowledgeBaseEnabled ? "已标记为知识库" : "已取消知识库标记");
     },
     [],
   );
 
   const deleteNotebook = useCallback((notebookId: string) => {
     if (notebookId === "") {
-      setNotice("仓库根目录不允许删除");
+      notifyError("仓库根目录不允许删除");
       return;
     }
     setConfirmState({ kind: "deleteNotebook", notebookId });
@@ -582,7 +768,6 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
       next.delete(notebookId);
       return next;
     });
-    setNotice("笔记本已删除");
   }, [notebooks, notes]);
 
   const toggleNotebookExpanded = useCallback((notebookId: string) => {
@@ -623,13 +808,24 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
       setTransformations(nextState.transformations ?? []);
       setActiveNotebookId(nextState.activeNotebookId);
       setActiveNoteId(nextState.activeNoteId);
-      lastSavedSnapshotRef.current = serializeNotesState(nextState);
+      const noteIds = new Set(nextState.notes.map((n) => n.id));
+      const restoredWorkspace = sanitizeWorkspaceState(nextState.workspace, noteIds, nextState.activeNoteId);
+      setWorkspace(restoredWorkspace);
+      setRightSidebarOpen(nextState.rightSidebarOpen ?? true);
+      setRightSidebarWidth(clampRightSidebarWidth(nextState.rightSidebarWidth));
+      setRightActiveTab(sanitizeRightActiveTab(nextState.rightActiveTab));
+      lastSavedSnapshotRef.current = serializeNotesState({
+        ...nextState,
+        workspace: restoredWorkspace,
+        rightSidebarOpen: nextState.rightSidebarOpen ?? true,
+        rightSidebarWidth: clampRightSidebarWidth(nextState.rightSidebarWidth),
+        rightActiveTab: sanitizeRightActiveTab(nextState.rightActiveTab),
+      });
       latestSnapshotRef.current = lastSavedSnapshotRef.current;
       setStorageError(null);
       setSaveStatus("saved");
-      setNotice("已打开笔记仓库");
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "打开仓库失败");
+      notifyError(error instanceof Error ? error.message : "打开仓库失败");
     } finally {
       setVaultBusy(false);
     }
@@ -638,10 +834,9 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
   const exportActiveNote = useCallback(async () => {
     if (!activeNote) return;
     try {
-      const saved = await saveMarkdownFile(activeNote.title, activeNote.contentMarkdown);
-      if (saved) setNotice("已导出 Markdown");
+      await saveMarkdownFile(activeNote.title, activeNote.contentMarkdown);
     } catch {
-      setNotice("导出失败");
+      notifyError("导出失败");
     }
   }, [activeNote]);
 
@@ -687,10 +882,25 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
         ),
       );
       setNotes((current) => current.filter((n) => n.id !== sourceNote.id));
-      setOpenTabIds((prev) => prev.filter((id) => id !== sourceNote.id));
+      setWorkspace((prev) => ({
+        ...prev,
+        root: mapNode(prev.root, (node) => {
+          if (node.type !== "leaf") return node;
+          const tabIds = node.tabIds.filter((id) => id !== sourceNote.id);
+          const activeTabId = node.activeTabId === sourceNote.id
+            ? (tabIds[0] ?? null)
+            : node.activeTabId;
+          return { ...node, tabIds, activeTabId };
+        }),
+      }));
       setActiveNoteId(target.id);
-      setOpenTabIds((prev) => (prev.includes(target.id) ? prev : [...prev, target.id]));
-      setNotice(`已将「${sourceNote.title}」合并到「${target.title}」`);
+      setWorkspace((prev) =>
+        updateLeaf(prev, prev.activeLeafId, (leaf) =>
+          leaf.tabIds.includes(target.id)
+            ? { ...leaf, activeTabId: target.id, graphOpen: false }
+            : { ...leaf, tabIds: [...leaf.tabIds, target.id], activeTabId: target.id, graphOpen: false },
+        ),
+      );
     },
     [notes],
   );
@@ -698,9 +908,8 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
   const copyNoteMarkdown = useCallback(async (note: OperationNote) => {
     try {
       await navigator.clipboard.writeText(note.contentMarkdown);
-      setNotice("Markdown 已复制");
     } catch {
-      setNotice("复制失败");
+      notifyError("复制失败");
     }
   }, []);
 
@@ -709,9 +918,8 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
     const path = notebook ? `${notebook.name}/${note.title || "未命名笔记"}` : note.title || "未命名笔记";
     try {
       await navigator.clipboard.writeText(path);
-      setNotice("路径已复制");
     } catch {
-      setNotice("复制失败");
+      notifyError("复制失败");
     }
   }, [notebooks]);
 
@@ -720,7 +928,7 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
     try {
       nextNoteId = createNoteId();
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "复制笔记失败");
+      notifyError(error instanceof Error ? error.message : "复制笔记失败");
       return;
     }
 
@@ -735,7 +943,6 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
     setNotes((current) => [nextNote, ...current]);
     setActiveNoteId(nextNote.id);
     setSearchQuery("");
-    setNotice("已复制一份笔记");
   }, []);
 
   const editNoteTags = useCallback((note: OperationNote, tags: string[]) => {
@@ -744,7 +951,6 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
         n.id === note.id ? { ...n, tags, updatedAt: "刚刚" } : n,
       ),
     );
-    setNotice("标签已更新");
   }, []);
 
   const renameNote = useCallback((note: OperationNote) => {
@@ -754,8 +960,11 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
   const moveNote = useCallback(
     (note: OperationNote, targetNotebookId: string) => {
       if (targetNotebookId === note.notebookId) return;
-      const targetNotebook = notebooks.find((notebook) => notebook.id === targetNotebookId);
-      if (!targetNotebook) return;
+      // Empty notebookId = vault root, which is always a valid target.
+      if (targetNotebookId !== "") {
+        const targetNotebook = notebooks.find((notebook) => notebook.id === targetNotebookId);
+        if (!targetNotebook) return;
+      }
 
       setNotes((current) =>
         current.map((n) =>
@@ -767,9 +976,199 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
       setActiveNotebookId(targetNotebookId);
       setActiveNoteId(note.id);
       setSearchQuery("");
-      setNotice(`已移动到 ${targetNotebook.name}`);
     },
     [notebooks],
+  );
+
+  const toggleFavorite = useCallback(
+    (note: OperationNote) => {
+      setNotes((current) =>
+        current.map((n) =>
+          n.id === note.id ? { ...n, favorite: !n.favorite } : n,
+        ),
+      );
+    },
+    [],
+  );
+
+  const toggleBookmark = useCallback(
+    (note: OperationNote) => {
+      setNotes((current) =>
+        current.map((n) =>
+          n.id === note.id ? { ...n, bookmarked: !n.bookmarked } : n,
+        ),
+      );
+    },
+    [],
+  );
+
+  const toggleTaskInNote = useCallback(
+    (noteId: string, line: number) => {
+      setNotes((current) =>
+        current.map((n) => {
+          if (n.id !== noteId) return n;
+          const nextMd = toggleTaskInMarkdown(n.contentMarkdown, noteId, line);
+          return {
+            ...n,
+            contentMarkdown: nextMd,
+            updatedAt: nowTimestamp(),
+          };
+        }),
+      );
+    },
+    [],
+  );
+
+  const openNoteInNewWindow = useCallback(async (note: OperationNote) => {
+    if (!isTauri()) {
+      notifyError("仅桌面端支持新窗口打开");
+      return;
+    }
+    try {
+      const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+      const label = `note-${note.id}`;
+      const url = new URL(window.location.href);
+      url.searchParams.set("noteId", note.id);
+      const webview = new WebviewWindow(label, {
+        url: url.toString(),
+        title: note.title || "未命名笔记",
+        width: 1100,
+        height: 720,
+        minWidth: 640,
+        minHeight: 420,
+      });
+      webview.once("tauri://error", (event) => {
+        console.error("[note-window] failed to create:", event);
+        notifyError("无法创建新窗口");
+      });
+    } catch (err) {
+      console.error("[note-window] error:", err);
+      notifyError("无法创建新窗口");
+    }
+  }, []);
+
+  const computeNoteFilePath = useCallback(
+    async (note: OperationNote): Promise<string | null> => {
+      if (!vaultPath) return null;
+      const safeTitle = note.title
+        .replace(/[\\/:*?"<>|]/g, "")
+        .trim()
+        .slice(0, 80) || "untitled";
+      const fileName = `${safeTitle}.md`;
+      const { join } = await import("@tauri-apps/api/path");
+      const notebook = notebooks.find((nb) => nb.id === note.notebookId);
+      if (notebook) {
+        return join(vaultPath, notebook.name, fileName);
+      }
+      return join(vaultPath, fileName);
+    },
+    [vaultPath, notebooks],
+  );
+
+  const openNoteWithDefaultApp = useCallback(
+    async (note: OperationNote) => {
+      const path = await computeNoteFilePath(note);
+      if (!path) {
+        notifyError("未找到笔记仓库路径");
+        return;
+      }
+      void openPathWithSystemApp(path);
+    },
+    [computeNoteFilePath],
+  );
+
+  const revealNoteInExplorer = useCallback(
+    async (note: OperationNote) => {
+      const path = await computeNoteFilePath(note);
+      if (!path) {
+        notifyError("未找到笔记仓库路径");
+        return;
+      }
+      void revealItemInDir(path);
+    },
+    [computeNoteFilePath],
+  );
+
+  const showNoteInFileList = useCallback(
+    (note: OperationNote) => {
+      if (note.notebookId) {
+        setActiveNotebookId(note.notebookId);
+        setExpandedNotebookIds((prev) => {
+          const next = new Set(prev);
+          next.add(note.notebookId);
+          return next;
+        });
+      }
+      if (searchQuery) setSearchQuery("");
+      window.setTimeout(() => {
+        const el = document.querySelector<HTMLElement>(`[data-note-id="${note.id}"]`);
+        el?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      }, 60);
+    },
+    [searchQuery],
+  );
+
+  const findInNote = useCallback((note: OperationNote) => {
+    setGlobalSearchInitialQuery(note.title || "");
+    setGlobalSearchOpen(true);
+  }, []);
+
+  const replaceInNote = useCallback((note: OperationNote) => {
+    setReplaceDialog({ noteId: note.id });
+  }, []);
+
+  const tabMenuCallbacks = useMemo(
+    () => ({
+      onOpenInNewWindow: openNoteInNewWindow,
+      onRename: renameNote,
+      onMoveToNotebook: moveNote,
+      onToggleFavorite: toggleFavorite,
+      onToggleBookmark: toggleBookmark,
+      onMergeNote: mergeNoteInto,
+      onFind: findInNote,
+      onReplace: replaceInNote,
+      onOpenWithDefaultApp: openNoteWithDefaultApp,
+      onRevealInExplorer: revealNoteInExplorer,
+      onShowInFileList: showNoteInFileList,
+    }),
+    [
+      openNoteInNewWindow,
+      renameNote,
+      moveNote,
+      toggleFavorite,
+      toggleBookmark,
+      mergeNoteInto,
+      findInNote,
+      replaceInNote,
+      openNoteWithDefaultApp,
+      revealNoteInExplorer,
+      showNoteInFileList,
+    ],
+  );
+
+  const handleReplaceConfirm = useCallback(
+    (noteId: string, findText: string, replaceText: string) => {
+      if (!findText) return;
+      setNotes((current) => {
+        const note = current.find((n) => n.id === noteId);
+        if (!note) return current;
+        const nextMarkdown = note.contentMarkdown.split(findText).join(replaceText);
+        if (nextMarkdown === note.contentMarkdown) return current;
+        return current.map((n) =>
+          n.id === noteId
+            ? {
+                ...n,
+                contentMarkdown: nextMarkdown,
+                plainText: nextMarkdown.replace(/[#*_`\[\]\(\)]/g, ""),
+                preview: nextMarkdown.slice(0, 46) || "空白笔记",
+                updatedAt: nowTimestamp(),
+              }
+            : n,
+        );
+      });
+      setReplaceDialog(null);
+    },
+    [],
   );
 
   const dropNoteById = useCallback(
@@ -815,18 +1214,33 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
       const idSet = new Set(noteIds);
       setNotes((current) => current.filter((n) => !idSet.has(n.id)));
       setSelectedNoteIds(new Set());
-      setOpenTabIds((prev) => prev.filter((id) => !idSet.has(id)));
+      setWorkspace((prev) => ({
+        ...prev,
+        root: mapNode(prev.root, (node) => {
+          if (node.type !== "leaf") return node;
+          const tabIds = node.tabIds.filter((id) => !idSet.has(id));
+          const activeTabId = node.activeTabId && idSet.has(node.activeTabId)
+            ? (tabIds[0] ?? null)
+            : node.activeTabId;
+          return { ...node, tabIds, activeTabId };
+        }),
+      }));
       if (activeNoteId && idSet.has(activeNoteId)) {
         const remaining = notes.filter((n) => !idSet.has(n.id));
         const nextActive = remaining[0]?.id ?? null;
         setActiveNoteId(nextActive);
         if (nextActive) {
-          setOpenTabIds((prev) => (prev.includes(nextActive) ? prev : [...prev, nextActive]));
+          setWorkspace((prev) =>
+            updateLeaf(prev, prev.activeLeafId, (leaf) =>
+              leaf.tabIds.includes(nextActive)
+                ? { ...leaf, activeTabId: nextActive }
+                : { ...leaf, tabIds: [...leaf.tabIds, nextActive], activeTabId: nextActive },
+            ),
+          );
         }
       }
-      setNotice(`已删除 ${noteIds.length} 条笔记`);
     },
-    [activeNoteId, notes],
+    [activeNoteId, notes, updateLeaf],
   );
 
   const handleDeleteNote = useCallback(
@@ -838,17 +1252,32 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
         (n) => n.notebookId === noteNotebookId && n.id !== noteId,
       );
       setNotes((current) => current.filter((n) => n.id !== noteId));
-      setOpenTabIds((prev) => prev.filter((id) => id !== noteId));
+      setWorkspace((prev) => ({
+        ...prev,
+        root: mapNode(prev.root, (node) => {
+          if (node.type !== "leaf") return node;
+          const tabIds = node.tabIds.filter((id) => id !== noteId);
+          const activeTabId = node.activeTabId === noteId
+            ? (tabIds[0] ?? null)
+            : node.activeTabId;
+          return { ...node, tabIds, activeTabId };
+        }),
+      }));
       if (activeNoteId === noteId) {
         const nextActive = remainingNotes[0]?.id ?? null;
         setActiveNoteId(nextActive);
         if (nextActive) {
-          setOpenTabIds((prev) => (prev.includes(nextActive) ? prev : [...prev, nextActive]));
+          setWorkspace((prev) =>
+            updateLeaf(prev, prev.activeLeafId, (leaf) =>
+              leaf.tabIds.includes(nextActive)
+                ? { ...leaf, activeTabId: nextActive }
+                : { ...leaf, tabIds: [...leaf.tabIds, nextActive], activeTabId: nextActive },
+            ),
+          );
         }
       }
-      setNotice("笔记已删除");
     },
-    [activeNoteId, notes],
+    [activeNoteId, notes, updateLeaf],
   );
 
   const applyAiResult = useCallback(
@@ -867,7 +1296,6 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
         preview: deriveNotePreview(nextMarkdown),
         appliedAgentMessageIds,
       });
-      setNotice(mode === "replace" ? "已替换笔记正文" : "已追加到笔记");
     },
     [activeNote, updateActiveNote],
   );
@@ -875,14 +1303,14 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
   const saveAgentResultAsNote = useCallback(
     (markdown: string, title: string) => {
       if (!activeNotebook) {
-        setNotice("请先创建笔记本");
+        notifyError("请先创建笔记本");
         return;
       }
       let nextNote: OperationNote;
       try {
         nextNote = createBlankNote(activeNotebook.id, "agent");
       } catch (error) {
-        setNotice(error instanceof Error ? error.message : "新建笔记失败");
+        notifyError(error instanceof Error ? error.message : "新建笔记失败");
         return;
       }
       const trimmedMarkdown = markdown.trim();
@@ -898,7 +1326,6 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
       setNotes((current) => [nextNote, ...current]);
       setActiveNoteId(nextNote.id);
       setSearchQuery("");
-      setNotice("已保存为新笔记");
     },
     [activeNotebook],
   );
@@ -925,6 +1352,30 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
       document.addEventListener("mouseup", handleUp);
     },
     [agentPanelWidth],
+  );
+
+  const handleRightDragStart = useCallback(
+    (event: React.MouseEvent) => {
+      event.preventDefault();
+      rightDragRef.current = { startX: event.clientX, startWidth: rightSidebarWidth };
+      const handleMove = (e: MouseEvent) => {
+        if (!rightDragRef.current) return;
+        const delta = e.clientX - rightDragRef.current.startX;
+        const next = Math.min(
+          RIGHT_SIDEBAR_MAX_WIDTH,
+          Math.max(RIGHT_SIDEBAR_MIN_WIDTH, rightDragRef.current.startWidth + delta),
+        );
+        setRightSidebarWidth(next);
+      };
+      const handleUp = () => {
+        rightDragRef.current = null;
+        document.removeEventListener("mousemove", handleMove);
+        document.removeEventListener("mouseup", handleUp);
+      };
+      document.addEventListener("mousemove", handleMove);
+      document.addEventListener("mouseup", handleUp);
+    },
+    [rightSidebarWidth],
   );
 
   // Prompt dialog computed values
@@ -976,12 +1427,10 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
               n.id === note.id ? { ...n, title: newTitle, updatedAt: nowTimestamp() } : n,
             ),
           );
-          setNotice("已重命名");
           // Sync [[wiki links]] across the vault (fire-and-forget).
           renameSyncWikiLinks(oldTitle, newTitle)
             .then((result) => {
               if (result.updatedLinks > 0) {
-                setNotice(`已同步 ${result.updatedLinks} 处双链`);
               }
             })
             .catch((err: unknown) => {
@@ -1033,15 +1482,8 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
   }, [confirmState, handleDeleteNotebook, handleDeleteNote, handleDeleteManyNotes]);
 
   return (
-    <div className="flex h-full min-h-0 bg-background">
+    <div className="relative flex h-full min-h-0 bg-background">
       <section className="flex min-w-0 flex-1 flex-col">
-        {notice ? (
-          <div className="flex h-7 shrink-0 items-center border-b border-border/70 bg-muted/30 px-3">
-            <span className="rounded-full border border-border/70 bg-muted/35 px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
-              {notice}
-            </span>
-          </div>
-        ) : null}
 
         <div className="flex min-h-0 flex-1">
           {storageError ? (
@@ -1060,7 +1502,7 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
           ) : (
             <>
               <aside
-                className="hidden w-[260px] shrink-0 flex-col border-r border-border/70 bg-sidebar/35 md:flex"
+                className="relative hidden w-[260px] shrink-0 flex-col border-r border-border/70 bg-sidebar/35 md:flex"
                 onDragEnter={handleSidebarDragEnter}
                 onDragOver={handleSidebarDragOver}
                 onDragLeave={handleSidebarDragLeave}
@@ -1070,11 +1512,40 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
                   <IconButton label="新建笔记" onClick={() => createNote()}>
                     <Plus className="h-3.5 w-3.5" />
                   </IconButton>
+                  <IconButton
+                    label="从模板创建"
+                    disabled={templateNotes.length === 0}
+                    onClick={() => setTemplatePickerOpen(true)}
+                  >
+                    <FileText className="h-3.5 w-3.5" />
+                  </IconButton>
                   <IconButton label="新建文件夹" onClick={createNotebook}>
                     <FolderPlus className="h-3.5 w-3.5" />
                   </IconButton>
-                  <IconButton label="全局搜索 (Ctrl+K)" onClick={() => setGlobalSearchOpen(true)}>
+                  <IconButton label="全局搜索 (Ctrl+K)" onClick={() => { setGlobalSearchInitialQuery(""); setGlobalSearchOpen(true); }}>
                     <Search className="h-3.5 w-3.5" />
+                  </IconButton>
+                  <IconButton
+                    label={tasksPanelOpen ? "关闭任务面板" : "任务管理"}
+                    onClick={() => setTasksPanelOpen((v) => !v)}
+                  >
+                    <ListChecks
+                      className={cn(
+                        "h-3.5 w-3.5",
+                        tasksPanelOpen && "text-primary",
+                      )}
+                    />
+                  </IconButton>
+                  <IconButton
+                    label={viewMode === "favorite" ? "显示全部笔记" : "显示收藏笔记"}
+                    onClick={() => setViewMode((m) => (m === "favorite" ? "all" : "favorite"))}
+                  >
+                    <Star
+                      className={cn(
+                        "h-3.5 w-3.5",
+                        viewMode === "favorite" && "fill-current text-amber-500",
+                      )}
+                    />
                   </IconButton>
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
@@ -1176,47 +1647,48 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
                         }
                       }}
                     >
+                      {viewMode === "favorite" ? (
+                        <FavoriteNotesList
+                          notes={filterNotesByKeyword(
+                            notes.filter((n) => n.favorite),
+                            searchQuery,
+                          )}
+                          activeNoteId={activeNoteId}
+                          selectedIds={selectedNoteIds}
+                          searchQuery={searchQuery}
+                          sortMode={sortMode}
+                          onSortChange={setSortMode}
+                          onSelectNote={selectNote}
+                          onOpenInNewTab={openInNewTab}
+                          onSelectionChange={setSelectedNoteIds}
+                          onCopyMarkdown={copyNoteMarkdown}
+                          onCopyPath={copyNotePath}
+                          onDuplicate={duplicateNote}
+                          onEditTags={editNoteTags}
+                          onRename={renameNote}
+                          onMoveToNotebook={moveNote}
+                          onMergeNote={mergeNoteInto}
+                          onDelete={deleteNote}
+                          onDeleteMany={deleteManyNotes}
+                          onSetContextLevel={(note, level) => {
+                            setNotes((current) =>
+                              current.map((n) =>
+                                n.id === note.id ? { ...n, contextLevel: level, updatedAt: nowTimestamp() } : n,
+                              ),
+                            );
+                          }}
+                          onToggleFavorite={toggleFavorite}
+                          onCreateNote={createNote}
+                          notebooks={notebooks}
+                          allNotes={notes}
+                        />
+                      ) : (
+                      <>
                       {notebooks.length === 0 && notes.length === 0 ? (
                         <div className="flex h-full items-center justify-center px-6 py-4 text-center text-[12px] leading-5 text-muted-foreground">
                           仓库为空，右键新建文件夹或笔记
                         </div>
                       ) : null}
-                      <RootNotesSection
-                        notes={filterNotesByKeyword(
-                          notes.filter((n) => n.notebookId === ""),
-                          searchQuery,
-                        )}
-                        totalCount={notes.filter((n) => n.notebookId === "").length}
-                        isActive={activeNotebookId === ""}
-                        activeNoteId={activeNoteId}
-                        selectedIds={activeNotebookId === "" ? selectedNoteIds : undefined}
-                        searchQuery={searchQuery}
-                        sortMode={sortMode}
-                        onSortChange={setSortMode}
-                        onSelectNote={selectNote}
-                        onOpenInNewTab={openInNewTab}
-                        onSelectionChange={setSelectedNoteIds}
-                        onCopyMarkdown={copyNoteMarkdown}
-                        onCopyPath={copyNotePath}
-                        onDuplicate={duplicateNote}
-                        onEditTags={editNoteTags}
-                        onRename={renameNote}
-                        onMoveToNotebook={moveNote}
-                        onMergeNote={mergeNoteInto}
-                        onDelete={deleteNote}
-                        onDeleteMany={deleteManyNotes}
-                        onSetContextLevel={(note, level) => {
-                          setNotes((current) =>
-                            current.map((n) =>
-                              n.id === note.id ? { ...n, contextLevel: level, updatedAt: nowTimestamp() } : n,
-                            ),
-                          );
-                          setNotice("知识库上下文已更新");
-                        }}
-                        onCreateNote={createNote}
-                        notebooks={notebooks}
-                        allNotes={notes}
-                      />
                       {notebooks.map((notebook) => {
                         const isActive = notebook.id === activeNotebookId;
                         const isExpanded = expandedNotebookIds.has(notebook.id) || Boolean(searchQuery);
@@ -1226,7 +1698,6 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
                           <NotebookSection
                             key={notebook.id}
                             notebook={notebook}
-                            isActive={isActive}
                             isExpanded={isExpanded}
                             notes={filteredNotes}
                             totalCount={notebookNotesAll.length}
@@ -1256,8 +1727,8 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
                                   n.id === note.id ? { ...n, contextLevel: level, updatedAt: nowTimestamp() } : n,
                                 ),
                               );
-                              setNotice("知识库上下文已更新");
                             }}
+                            onToggleFavorite={toggleFavorite}
                             onCreateNote={createNote}
                             onCreateNotebook={createNotebook}
                             notebooks={notebooks}
@@ -1269,6 +1740,43 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
                           />
                         );
                       })}
+                      <RootNotesList
+                        notes={filterNotesByKeyword(
+                          notes.filter((n) => n.notebookId === ""),
+                          searchQuery,
+                        )}
+                        totalCount={notes.filter((n) => n.notebookId === "").length}
+                        activeNoteId={activeNoteId}
+                        selectedIds={activeNotebookId === "" ? selectedNoteIds : undefined}
+                        searchQuery={searchQuery}
+                        sortMode={sortMode}
+                        onSortChange={setSortMode}
+                        onSelectNote={selectNote}
+                        onOpenInNewTab={openInNewTab}
+                        onSelectionChange={setSelectedNoteIds}
+                        onCopyMarkdown={copyNoteMarkdown}
+                        onCopyPath={copyNotePath}
+                        onDuplicate={duplicateNote}
+                        onEditTags={editNoteTags}
+                        onRename={renameNote}
+                        onMoveToNotebook={moveNote}
+                        onMergeNote={mergeNoteInto}
+                        onDelete={deleteNote}
+                        onDeleteMany={deleteManyNotes}
+                        onSetContextLevel={(note, level) => {
+                          setNotes((current) =>
+                            current.map((n) =>
+                              n.id === note.id ? { ...n, contextLevel: level, updatedAt: nowTimestamp() } : n,
+                            ),
+                          );
+                        }}
+                        onToggleFavorite={toggleFavorite}
+                        onCreateNote={createNote}
+                        notebooks={notebooks}
+                        allNotes={notes}
+                      />
+                      </>
+                      )}
                     </div>
                   </ContextMenuTrigger>
                   <ContextMenuContent className="w-48">
@@ -1299,59 +1807,98 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
                   </button>
                 </div>
               </aside>
-              <div className="relative flex min-w-0 flex-1 flex-col">
-              <div className="flex shrink-0 items-stretch">
-                <NoteTabBar
-                  tabs={openTabIds
-                    .map((id) => notes.find((n) => n.id === id))
-                    .filter((n): n is OperationNote => n !== null)}
-                  activeNoteId={activeNoteId}
-                  onSelect={selectNote}
-                  onClose={closeTab}
-                  onCloseOthers={closeOtherTabs}
-                  onCloseAll={closeAllTabs}
-                />
-                <button
-                  type="button"
-                  title={graphViewOpen ? "返回笔记" : "关系图"}
-                  aria-label={graphViewOpen ? "返回笔记" : "关系图"}
-                  onClick={() => setGraphViewOpen((v) => !v)}
-                  className={cn(
-                    "grid h-8 w-8 shrink-0 place-items-center border-b border-border/55 border-l border-border/40 hover:bg-accent hover:text-foreground",
-                    graphViewOpen ? "bg-accent text-foreground" : "text-muted-foreground",
-                  )}
-                >
-                  <GitFork className="h-3.5 w-3.5" />
-                </button>
-              </div>
-              {graphViewOpen ? (
-                <GraphViewDialog
-                  open={graphViewOpen}
-                  onOpenChange={setGraphViewOpen}
-                  activeNoteId={activeNoteId}
-                  onSelectNote={(noteId) => {
-                    selectNote(noteId);
-                    setGraphViewOpen(false);
+              {tasksPanelOpen ? (
+                <div className="absolute left-[260px] top-0 bottom-0 z-30 w-[300px] border-r border-border/70 bg-background shadow-lg">
+                  <TasksPanel
+                    notes={notes}
+                    notebookNameById={notebookNameById}
+                    onToggleTask={toggleTaskInNote}
+                    onNavigateToNote={(noteId) => {
+                      selectNote(noteId);
+                      setTasksPanelOpen(false);
+                    }}
+                    onClose={() => setTasksPanelOpen(false)}
+                  />
+                </div>
+              ) : null}
+              <div className="relative flex min-w-0 min-h-0 flex-1">
+                <Workspace
+                  workspace={workspace}
+                  onChange={setWorkspace}
+                  notes={notes}
+                  notebooks={notebooks}
+                  editorMode={editorMode}
+                  noteTitles={noteTitles}
+                  saveStatus={saveStatus}
+                  tabMenuCallbacks={tabMenuCallbacks}
+                  onTitleChange={(noteId, title) => {
+                    setNotes((current) =>
+                      current.map((n) =>
+                        n.id === noteId ? { ...n, title, updatedAt: nowTimestamp() } : n,
+                      ),
+                    );
                   }}
-                />
-              ) : activeNote ? (
-                <>
-                  <NoteEditor
-                    note={activeNote}
-                    saveStatus={saveStatus}
-                    mode={editorMode}
-                    noteTitles={noteTitles}
-                    onTitleChange={(title) => updateActiveNote({ title })}
-                    onContentChange={(next) =>
-                      updateActiveNote({
-                        contentMarkdown: next.contentMarkdown,
-                        contentJson: next.contentJson,
-                        plainText: next.plainText,
-                        preview: next.plainText.slice(0, 46) || "空白笔记",
-                      })
-                    }
-                    onMoveSelectionToNote={moveSelectionToNote}
-                    toolbarExtra={
+                  onContentChange={(noteId, next) => {
+                    setNotes((current) =>
+                      current.map((n) =>
+                        n.id === noteId
+                          ? {
+                              ...n,
+                              contentMarkdown: next.contentMarkdown,
+                              contentJson: next.contentJson,
+                              plainText: next.plainText,
+                              preview: next.plainText.slice(0, 46) || "空白笔记",
+                              updatedAt: nowTimestamp(),
+                            }
+                          : n,
+                      ),
+                    );
+                  }}
+                  onMoveSelectionToNote={moveSelectionToNote}
+                  onSelectNote={selectNoteInWorkspace}
+                  onOpenNoteByTitle={openNoteByTitle}
+                  toolbarTrailing={
+                    <>
+                      <button
+                        type="button"
+                        title="关系图"
+                        aria-label="关系图"
+                        onClick={toggleGraphInActiveLeaf}
+                        className={cn(
+                          "grid h-8 w-8 place-items-center hover:bg-accent hover:text-foreground",
+                          activeLeafGraphOpen ? "bg-accent text-foreground" : "text-muted-foreground",
+                        )}
+                      >
+                        <GitFork className="h-4 w-4" />
+                      </button>
+                      {licenseActive ? (
+                        <button
+                          type="button"
+                          title={agentPanelCollapsed ? "展开 Agent 联动" : "收起 Agent 联动"}
+                          aria-label={agentPanelCollapsed ? "展开 Agent 联动" : "收起 Agent 联动"}
+                          onClick={() => setAgentPanelCollapsed((current) => !current)}
+                          className={cn(
+                            "grid h-8 w-8 place-items-center hover:bg-accent hover:text-foreground",
+                            !agentPanelCollapsed ? "bg-accent text-foreground" : "text-muted-foreground",
+                          )}
+                        >
+                          <AgentLogo state={agentStreaming ? "working" : "idle"} className="h-5 w-5" />
+                        </button>
+                      ) : null}
+                      <button
+                        type="button"
+                        title={rightSidebarOpen ? "收起右侧面板" : "展开右侧面板"}
+                        aria-label={rightSidebarOpen ? "收起右侧面板" : "展开右侧面板"}
+                        onClick={() => setRightSidebarOpen((v) => !v)}
+                        className="grid h-8 w-8 place-items-center text-muted-foreground hover:bg-accent hover:text-foreground"
+                      >
+                        <RightSidebarToggleIcon open={rightSidebarOpen} className="h-4 w-4" />
+                      </button>
+                    </>
+                  }
+                  toolbarExtra={(noteId) => {
+                    const note = notes.find((n) => n.id === noteId);
+                    return (
                       <div className="flex items-center gap-1">
                         <button
                           type="button"
@@ -1379,15 +1926,15 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end" className="w-48">
                             <DropdownMenuItem
-                              disabled={!activeNote}
-                              onClick={() => activeNote && renameNote(activeNote)}
+                              disabled={!note}
+                              onClick={() => note && renameNote(note)}
                             >
                               <Pencil className="mr-2 h-3.5 w-3.5" />
                               重命名
                             </DropdownMenuItem>
                             <DropdownMenuSub>
                               <DropdownMenuSubTrigger
-                                disabled={!activeNote || notes.filter((n) => n.id !== activeNote?.id).length === 0}
+                                disabled={!note || notes.filter((n) => n.id !== note.id).length === 0}
                                 className="text-[13px]"
                               >
                                 <FolderInput className="mr-2 h-3.5 w-3.5" />
@@ -1395,11 +1942,11 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
                               </DropdownMenuSubTrigger>
                               <DropdownMenuSubContent className="max-h-[300px] w-56 overflow-y-auto">
                                 {notes
-                                  .filter((n) => n.id !== activeNote?.id)
+                                  .filter((n) => n.id !== note?.id)
                                   .map((targetNote) => (
                                     <DropdownMenuItem
                                       key={targetNote.id}
-                                      onClick={() => activeNote && mergeNoteInto(activeNote, targetNote.id)}
+                                      onClick={() => note && mergeNoteInto(note, targetNote.id)}
                                       className="text-[13px]"
                                     >
                                       <span className="min-w-0 truncate">{targetNote.title || "未命名笔记"}</span>
@@ -1408,32 +1955,39 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
                               </DropdownMenuSubContent>
                             </DropdownMenuSub>
                             <DropdownMenuItem
-                              disabled={!activeNote}
-                              onClick={() => activeNote && copyNoteMarkdown(activeNote)}
+                              disabled={!note}
+                              onClick={() => note && copyNoteMarkdown(note)}
                             >
                               <Copy className="mr-2 h-3.5 w-3.5" />
                               复制 Markdown
                             </DropdownMenuItem>
                             <DropdownMenuSeparator />
                             <DropdownMenuItem
-                              disabled={!activeNote}
-                              onClick={exportActiveNote}
+                              disabled={!note}
+                              onClick={() => note && exportActiveNote()}
                             >
                               <Download className="mr-2 h-3.5 w-3.5" />
                               导出 Markdown
                             </DropdownMenuItem>
                             <DropdownMenuItem
-                              disabled={!activeNote}
-                              onClick={exportActiveNotePdf}
+                              disabled={!note}
+                              onClick={() => note && exportActiveNotePdf()}
                             >
                               <Printer className="mr-2 h-3.5 w-3.5" />
                               导出为 PDF
                             </DropdownMenuItem>
                             <DropdownMenuSeparator />
+                            <DropdownMenuItem
+                              disabled={!note}
+                              onClick={() => note && toggleNoteTemplate(note)}
+                            >
+                              <FileText className="mr-2 h-3.5 w-3.5" />
+                              {note?.type === "template" ? "取消模板标记" : "标记为模板"}
+                            </DropdownMenuItem>
                             <DropdownMenuSeparator />
                             <DropdownMenuItem
-                              disabled={!activeNote}
-                              onClick={() => activeNote && deleteNote(activeNote)}
+                              disabled={!note}
+                              onClick={() => note && deleteNote(note)}
                               className="text-destructive focus:text-destructive"
                             >
                               <Trash2 className="mr-2 h-3.5 w-3.5" />
@@ -1441,52 +1995,27 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
                             </DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
-                        {licenseActive ? (
-                          <IconButton
-                            label={agentPanelCollapsed ? "展开 Agent 联动" : "收起 Agent 联动"}
-                            active={!agentPanelCollapsed}
-                            onClick={() => setAgentPanelCollapsed((current) => !current)}
-                          >
-                            <AgentLogo state={agentStreaming ? "working" : "idle"} className="h-5 w-5" />
-                          </IconButton>
-                        ) : null}
                       </div>
-                    }
-                  />
-                  <div className="shrink-0 border-t border-border/60">
-                    <button
-                      type="button"
-                      onClick={() => setBacklinksCollapsed((c) => !c)}
-                      className="flex w-full items-center gap-1 px-3 py-1 text-[11px] text-muted-foreground hover:bg-accent/60"
-                    >
-                      <ChevronRight
-                        className={cn(
-                          "h-3 w-3 transition-transform",
-                          !backlinksCollapsed && "rotate-90",
-                        )}
-                      />
-                      <span>链接与提及</span>
-                    </button>
-                    {!backlinksCollapsed && (
-                      <div className="max-h-[280px] overflow-y-auto px-2 pb-2">
-                        <BacklinksPanel
-                          noteId={activeNote.id}
-                          onSelectNote={selectNote}
-                        />
-                        <RelatedNotesPanel
-                          noteId={activeNote.id}
-                          onSelectNote={selectNote}
-                          className="mt-2"
-                        />
-                      </div>
-                    )}
-                  </div>
-                </>
-              ) : (
-                <div className="flex flex-1 items-center justify-center text-[13px] text-muted-foreground">
-                  当前笔记本还没有笔记。
-                </div>
-              )}
+                    );
+                  }}
+                />
+                {rightSidebarOpen && (
+                  <>
+                    <div
+                      onMouseDown={handleRightDragStart}
+                      className="w-[1px] shrink-0 cursor-col-resize bg-border"
+                    />
+                    <RightSidebar
+                      width={rightSidebarWidth}
+                      note={activeNote}
+                      activeTab={rightActiveTab}
+                      onTabChange={setRightActiveTab}
+                      onSelectNote={selectNoteInWorkspace}
+                      onOpenNoteByTitle={openNoteByTitle}
+                      allNotes={notes}
+                    />
+                  </>
+                )}
               </div>
             </>
           )}
@@ -1530,11 +2059,41 @@ export function NotesView({ onSendToAgent: _onSendToAgent }: NotesViewProps) {
         onConfirm={handleConfirmAction}
         onOpenChange={(open) => { if (!open) setConfirmState(null); }}
       />
+      <ReplaceDialog
+        open={replaceDialog !== null}
+        noteTitle={replaceDialog ? notes.find((n) => n.id === replaceDialog.noteId)?.title : undefined}
+        onConfirm={(findText, replaceText) => {
+          if (replaceDialog) handleReplaceConfirm(replaceDialog.noteId, findText, replaceText);
+        }}
+        onOpenChange={(open) => { if (!open) setReplaceDialog(null); }}
+      />
+      <TemplatePickerDialog
+        open={templatePickerOpen}
+        templates={templateNotes}
+        onConfirm={(templateId, title) => createNoteFromTemplateAction(templateId, title)}
+        onOpenChange={setTemplatePickerOpen}
+      />
       <GlobalSearchDialog
         open={globalSearchOpen}
         onOpenChange={setGlobalSearchOpen}
         onSelectNote={openNoteFromGlobalSearch}
+        initialQuery={globalSearchInitialQuery}
       />
+      {notice && noticeType === "error" ? (
+        <div className="pointer-events-none absolute bottom-4 right-4 z-50">
+          <div className="pointer-events-auto flex max-w-[320px] items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-[12px] text-destructive shadow-lg backdrop-blur">
+            <span className="min-w-0 flex-1 leading-5">{notice}</span>
+            <button
+              type="button"
+              aria-label="关闭"
+              onClick={() => setNotice(null)}
+              className="shrink-0 text-destructive/70 hover:text-destructive"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1604,10 +2163,9 @@ function IconButton({
   );
 }
 
-interface RootNotesSectionProps {
+interface RootNotesListProps {
   notes: OperationNote[];
-  totalCount: number;
-  isActive: boolean;
+  totalCount?: number;
   activeNoteId: string | null;
   selectedIds?: Set<string>;
   searchQuery: string;
@@ -1626,20 +2184,17 @@ interface RootNotesSectionProps {
   onDelete?: (note: OperationNote) => void;
   onDeleteMany?: (notes: OperationNote[]) => void;
   onSetContextLevel?: (note: OperationNote, level: NoteContextLevel) => void;
+  onToggleFavorite?: (note: OperationNote) => void;
   onCreateNote?: (sourceKind: NoteSourceKind) => void;
   notebooks: Notebook[];
   allNotes?: OperationNote[];
 }
 
-function RootNotesSection({
+function RootNotesList({
   notes,
-  totalCount,
-  isActive,
   activeNoteId,
   selectedIds,
-  searchQuery,
   sortMode,
-  onSortChange,
   onSelectNote,
   onOpenInNewTab,
   onSelectionChange,
@@ -1651,18 +2206,11 @@ function RootNotesSection({
   onMoveToNotebook,
   onMergeNote,
   onDelete,
-  onDeleteMany,
   onSetContextLevel,
-  onCreateNote,
+  onToggleFavorite,
   notebooks,
   allNotes = [],
-}: RootNotesSectionProps) {
-  const [expanded, setExpanded] = useState(true);
-
-  if (totalCount === 0 && !searchQuery) {
-    return null;
-  }
-
+}: RootNotesListProps) {
   const handleRootDragOver = (e: React.DragEvent<HTMLDivElement>) => {
     if (e.dataTransfer.types.includes("application/x-note-id")) {
       e.preventDefault();
@@ -1670,65 +2218,148 @@ function RootNotesSection({
     }
   };
 
+  const handleRootDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    const noteId = e.dataTransfer.getData("application/x-note-id") || e.dataTransfer.getData("text/plain");
+    e.preventDefault();
+    if (noteId && onMoveToNotebook) {
+      const draggedNote = allNotes.find((n) => n.id === noteId);
+      if (draggedNote && draggedNote.notebookId !== "") {
+        onMoveToNotebook(draggedNote, "");
+      }
+    }
+  };
+
+  const sortedNotes = useMemo(() => sortNotesByMode(notes, sortMode), [notes, sortMode]);
+  const selection = selectedIds ?? new Set<string>();
+
+  if (sortedNotes.length === 0) return null;
+
   return (
-    <div className="mb-1" onDragOver={handleRootDragOver}>
-      <button
-        type="button"
-        onClick={() => setExpanded((v) => !v)}
-        className={cn(
-          "group flex h-8 w-full items-center gap-1 rounded-md px-1.5 text-left transition-colors",
-          isActive ? "bg-accent/60 text-foreground" : "text-foreground/85 hover:bg-accent/40",
-        )}
-      >
-        <ChevronRight
-          className={cn(
-            "h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform",
-            expanded && "rotate-90",
-          )}
-        />
-        <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium">笔记</span>
-        <span className="shrink-0 text-[10.5px] tabular-nums text-muted-foreground/70">
-          {totalCount}
-        </span>
-      </button>
-      {expanded ? (
-        <div className="ml-3 border-l border-border/40 pl-1">
-          <NoteList
-            notes={notes}
-            activeNoteId={activeNoteId}
-            selectedIds={selectedIds}
-            onSelectionChange={onSelectionChange}
-            totalCount={totalCount}
-            emptyLabel={searchQuery ? "没有匹配的笔记。" : "还没有笔记。"}
-            knowledgeBaseEnabled={false}
-            showHeader={false}
-            sortMode={sortMode}
-            onSortChange={onSortChange}
-            onSelect={onSelectNote}
-            onOpenInNewTab={onOpenInNewTab}
+    <div className="py-1" onDragOver={handleRootDragOver} onDrop={handleRootDrop}>
+      <div className="space-y-px px-1">
+        {sortedNotes.map((note) => (
+          <NoteRow
+            key={note.id}
+            note={note}
+            active={note.id === activeNoteId}
+            selected={selection.has(note.id)}
+            onSelect={(e) => {
+              if (onSelectionChange && (e.ctrlKey || e.metaKey || e.shiftKey)) {
+                const next = new Set(selection);
+                if (next.has(note.id)) {
+                  next.delete(note.id);
+                } else {
+                  next.add(note.id);
+                }
+                onSelectionChange(next);
+              } else {
+                if (onSelectionChange && selection.size > 0) {
+                  onSelectionChange(new Set());
+                }
+                onSelectNote(note.id);
+              }
+            }}
+            onOpenInNewTab={onOpenInNewTab ? () => onOpenInNewTab(note.id) : undefined}
             onCopyMarkdown={onCopyMarkdown}
             onCopyPath={onCopyPath}
             onDuplicate={onDuplicate}
-            onEditTags={onEditTags}
-            onRename={onRename}
+            onEditTags={onEditTags ? () => onEditTags(note, note.tags) : undefined}
+            onRename={onRename ? () => onRename(note) : undefined}
             onMoveToNotebook={onMoveToNotebook}
             onMergeNote={onMergeNote}
             onDelete={onDelete}
-            onDeleteMany={onDeleteMany}
-            onSetContextLevel={onSetContextLevel}
-            onCreateNote={onCreateNote}
             notebooks={notebooks}
             allNotes={allNotes}
+            knowledgeBaseEnabled={false}
+            onSetContextLevel={onSetContextLevel}
+            onToggleFavorite={onToggleFavorite}
           />
-        </div>
-      ) : null}
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function FavoriteNotesList({
+  notes,
+  activeNoteId,
+  selectedIds,
+  sortMode,
+  onSelectNote,
+  onOpenInNewTab,
+  onSelectionChange,
+  onCopyMarkdown,
+  onCopyPath,
+  onDuplicate,
+  onEditTags,
+  onRename,
+  onMoveToNotebook,
+  onMergeNote,
+  onDelete,
+  onSetContextLevel,
+  onToggleFavorite,
+  notebooks,
+  allNotes = [],
+}: RootNotesListProps) {
+  const sortedNotes = useMemo(() => sortNotesByMode(notes, sortMode), [notes, sortMode]);
+  const selection = selectedIds ?? new Set<string>();
+
+  if (sortedNotes.length === 0) {
+    return (
+      <div className="flex h-full items-center justify-center px-6 py-4 text-center text-[12px] leading-5 text-muted-foreground">
+        没有收藏笔记
+      </div>
+    );
+  }
+
+  return (
+    <div className="py-1">
+      <div className="space-y-px px-1">
+        {sortedNotes.map((note) => (
+          <NoteRow
+            key={note.id}
+            note={note}
+            active={note.id === activeNoteId}
+            selected={selection.has(note.id)}
+            onSelect={(e) => {
+              if (onSelectionChange && (e.ctrlKey || e.metaKey || e.shiftKey)) {
+                const next = new Set(selection);
+                if (next.has(note.id)) {
+                  next.delete(note.id);
+                } else {
+                  next.add(note.id);
+                }
+                onSelectionChange(next);
+              } else {
+                if (onSelectionChange && selection.size > 0) {
+                  onSelectionChange(new Set());
+                }
+                onSelectNote(note.id);
+              }
+            }}
+            onOpenInNewTab={onOpenInNewTab ? () => onOpenInNewTab(note.id) : undefined}
+            onCopyMarkdown={onCopyMarkdown}
+            onCopyPath={onCopyPath}
+            onDuplicate={onDuplicate}
+            onEditTags={onEditTags ? () => onEditTags(note, note.tags) : undefined}
+            onRename={onRename ? () => onRename(note) : undefined}
+            onMoveToNotebook={onMoveToNotebook}
+            onMergeNote={onMergeNote}
+            onDelete={onDelete}
+            notebooks={notebooks}
+            allNotes={allNotes}
+            knowledgeBaseEnabled={false}
+            onSetContextLevel={onSetContextLevel}
+            onToggleFavorite={onToggleFavorite}
+          />
+        ))}
+      </div>
     </div>
   );
 }
 
 interface NotebookSectionProps {
   notebook: Notebook;
-  isActive: boolean;
   isExpanded: boolean;
   notes: OperationNote[];
   totalCount: number;
@@ -1751,6 +2382,7 @@ interface NotebookSectionProps {
   onDelete?: (note: OperationNote) => void;
   onDeleteMany?: (notes: OperationNote[]) => void;
   onSetContextLevel?: (note: OperationNote, level: NoteContextLevel) => void;
+  onToggleFavorite?: (note: OperationNote) => void;
   onCreateNote?: (sourceKind: NoteSourceKind) => void;
   onCreateNotebook?: () => void;
   notebooks: Notebook[];
@@ -1763,7 +2395,6 @@ interface NotebookSectionProps {
 
 function NotebookSection({
   notebook,
-  isActive,
   isExpanded,
   notes,
   totalCount,
@@ -1786,6 +2417,7 @@ function NotebookSection({
   onDelete,
   onDeleteMany,
   onSetContextLevel,
+  onToggleFavorite,
   onCreateNote,
   onCreateNotebook,
   notebooks,
@@ -1827,12 +2459,7 @@ function NotebookSection({
             onClick={onToggle}
             onDragOver={handleDragOver}
             onDrop={handleDrop}
-            className={cn(
-              "group flex h-8 w-full items-center gap-1 rounded-md px-1.5 text-left transition-colors",
-              isActive
-                ? "bg-accent/60 text-foreground"
-                : "text-foreground/85 hover:bg-accent/40",
-            )}
+            className="group flex h-8 w-full items-center gap-1 rounded-md px-1.5 text-left text-foreground/85 transition-colors hover:bg-accent/40"
           >
             <ChevronRight
               className={cn(
@@ -1911,6 +2538,7 @@ function NotebookSection({
             onDelete={onDelete}
             onDeleteMany={onDeleteMany}
             onSetContextLevel={onSetContextLevel}
+            onToggleFavorite={onToggleFavorite}
             onCreateNote={onCreateNote}
             notebooks={notebooks}
             allNotes={allNotes}
@@ -1927,6 +2555,19 @@ function serializeNotesState(state: {
   transformations: NoteTransformation[];
   activeNotebookId: string;
   activeNoteId: string | null;
+  workspace: WorkspaceState;
+  rightSidebarOpen: boolean;
+  rightSidebarWidth: number;
+  rightActiveTab: RightTab;
 }): string {
   return JSON.stringify(state);
+}
+
+function clampRightSidebarWidth(width: unknown): number {
+  const num = typeof width === "number" ? width : RIGHT_SIDEBAR_DEFAULT_WIDTH;
+  return Math.min(Math.max(num, RIGHT_SIDEBAR_MIN_WIDTH), RIGHT_SIDEBAR_MAX_WIDTH);
+}
+
+function sanitizeRightActiveTab(tab: unknown): RightTab {
+  return tab === "links" || tab === "tags" ? tab : "outline";
 }
