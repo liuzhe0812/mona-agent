@@ -101,8 +101,8 @@ export function RadarChart({
             key={ri}
             points={pts}
             fill="none"
-            className="stroke-border/30"
-            strokeWidth={0.5}
+            className="stroke-border"
+            strokeWidth={1}
           />
         );
       })}
@@ -117,8 +117,8 @@ export function RadarChart({
             y1={cy}
             x2={x}
             y2={y}
-            className="stroke-border/30"
-            strokeWidth={0.5}
+            className="stroke-border"
+            strokeWidth={1}
           />
         );
       })}

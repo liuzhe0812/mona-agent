@@ -30,8 +30,7 @@ export function ActivityHeatmap({ data }: HeatmapProps) {
   };
 
   return (
-    <div className="overflow-x-auto">
-      <div className="inline-flex flex-col gap-1">
+    <div className="inline-flex flex-col gap-1 overflow-visible">
         {/* 小时标签 */}
         <div className="flex gap-0.5 pl-10 text-[9px] text-muted-foreground">
           {Array.from({ length: 24 }, (_, h) => (
@@ -48,7 +47,7 @@ export function ActivityHeatmap({ data }: HeatmapProps) {
               {row.map((count, hour) => (
                 <div
                   key={hour}
-                  className="h-4 w-4 rounded transition-all duration-300 hover:scale-125 hover:ring-2 hover:ring-offset-1 hover:ring-offset-background"
+                  className="h-4 w-4 rounded transition-transform duration-300 hover:scale-125"
                   style={{
                     backgroundColor: cellColor(count),
                     boxShadow: count > 0 ? `0 0 4px ${cellColor(count)}40` : "none",
@@ -70,6 +69,5 @@ export function ActivityHeatmap({ data }: HeatmapProps) {
           <span>多</span>
         </div>
       </div>
-    </div>
   );
 }
