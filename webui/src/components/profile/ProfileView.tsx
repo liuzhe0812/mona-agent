@@ -88,13 +88,6 @@ export function ProfileView() {
   }, [load]);
 
   const lastDistilled = data?.last_distilled_at ?? null;
-  const hasProfileData =
-    !!data?.profile && Object.keys(data.profile).length > 1;
-  const hasWorkPatternData =
-    !!data?.work_patterns &&
-    ((data.work_patterns.frequent_tasks?.length ?? 0) > 0 ||
-      (data.work_patterns.preferred_tools?.length ?? 0) > 0 ||
-      !!data.work_patterns.work_focus);
 
   return (
     <Tabs value={tab} onValueChange={setTab} className="flex h-full w-full flex-col bg-background">
@@ -158,8 +151,6 @@ export function ProfileView() {
             data={data?.profile}
             workPatterns={data?.work_patterns}
             loading={loading}
-            hasData={hasProfileData}
-            onReload={load}
           />
         </TabsContent>
         <TabsContent value="trajectory" className="mt-0 h-full overflow-auto p-4">
@@ -172,7 +163,6 @@ export function ProfileView() {
           <WorkPatternTab
             data={data ?? undefined}
             loading={loading}
-            hasData={hasWorkPatternData}
           />
         </TabsContent>
       </div>

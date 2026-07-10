@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 import {
   Award,
   BookOpen,
-  CalendarDays,
   Crown,
   Layers,
   Rocket,
@@ -36,20 +35,15 @@ interface GrowthPoint {
 
 export function TrajectoryTab({ data, loading }: TrajectoryTabProps) {
   const [comparison, setComparison] = useState<GrowthComparison | null>(null);
-  const [compLoading, setCompLoading] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    setCompLoading(true);
     fetchGrowthComparison()
       .then((res) => {
         if (!cancelled) setComparison(res.comparison);
       })
       .catch(() => {
         if (!cancelled) setComparison(null);
-      })
-      .finally(() => {
-        if (!cancelled) setCompLoading(false);
       });
     return () => {
       cancelled = true;
@@ -115,22 +109,8 @@ export function TrajectoryTab({ data, loading }: TrajectoryTabProps) {
   const monthCount = monthKeys.length;
   const snapshotCount = hasComparison ? 2 : 1;
 
-  const sourceNote = hasComparison ? "已对比" : compLoading ? "对比加载中" : "暂无对比数据";
-
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-3">
-      <div className="flex items-center justify-between">
-        <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-1 text-xs text-emerald-700">
-          {sourceNote}
-        </span>
-        <div className="flex items-center gap-2 rounded-lg border bg-background px-2.5 py-1.5 text-xs text-muted-foreground">
-          <CalendarDays className="h-3.5 w-3.5" />
-          {comparison
-            ? `${comparison.previous_snapshot_date ?? "上期"} → ${comparison.current_snapshot_date ?? "本期"}`
-            : "等待首次蒸馏快照"}
-        </div>
-      </div>
-
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
         <MetricCard icon={<TrendingUp className="h-5 w-5" />} label="当前评分" value={`${currentScore} /100`} hint={hasComparison ? `较上期 ${delta >= 0 ? "+" : ""}${delta} 分` : "暂无对比"} color={PROFILE_COLORS.emerald} />
         <MetricCard icon={<Rocket className="h-5 w-5" />} label="本期提升" value={hasComparison ? `${delta >= 0 ? "+" : ""}${delta}` : "—"} hint={hasComparison ? "综合能力变化" : "需两次蒸馏"} color={PROFILE_COLORS.amber} />

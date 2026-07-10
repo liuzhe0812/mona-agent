@@ -1,13 +1,10 @@
 /** 人物画像 Tab：能力总览看板（真实后端数据）。 */
 
-import { useCallback, useState } from "react";
 import {
   AlertTriangle,
   BadgeCheck,
-  Check,
   Clock3,
   Lightbulb,
-  Pencil,
   Sparkles,
   Star,
   Tags,
@@ -15,13 +12,10 @@ import {
   UserRound,
   Users,
   Wrench,
-  X,
 } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
 import {
-  fetchUserMd, updateUserSection, type ProfileData, type WorkPatterns,
+  type ProfileData, type WorkPatterns,
 } from "@/lib/profile-api";
 import { cn } from "@/lib/utils";
 
@@ -37,62 +31,13 @@ interface ProfileTabProps {
   data?: ProfileData;
   workPatterns?: WorkPatterns;
   loading: boolean;
-  hasData: boolean;
-  onReload: () => void;
 }
 
 export function ProfileTab({
   data,
   workPatterns,
   loading,
-  hasData,
-  onReload,
 }: ProfileTabProps) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [editError, setEditError] = useState<string | null>(null);
-
-  const startEdit = useCallback(async () => {
-    setEditing(true);
-    setEditError(null);
-    try {
-      const full = await fetchUserMd();
-      const lines = full.split("\n");
-      let inSection = false;
-      const sectionLines: string[] = [];
-      for (const line of lines) {
-        if (/^##\s+/.test(line)) {
-          if (inSection) break;
-          if (/^##\s+Profile\s*$/.test(line)) inSection = true;
-        } else if (inSection) sectionLines.push(line);
-      }
-      setDraft(sectionLines.join("\n").trim() || full);
-    } catch (e) {
-      setEditError(e instanceof Error ? e.message : String(e));
-    }
-  }, []);
-
-  const cancelEdit = useCallback(() => {
-    setEditing(false);
-    setDraft("");
-    setEditError(null);
-  }, []);
-
-  const saveEdit = useCallback(async () => {
-    setSaving(true);
-    setEditError(null);
-    try {
-      await updateUserSection("Profile", draft);
-      setEditing(false);
-      onReload();
-    } catch (e) {
-      setEditError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setSaving(false);
-    }
-  }, [draft, onReload]);
-
   if (loading) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
@@ -101,7 +46,6 @@ export function ProfileTab({
     );
   }
 
-  const sourceNote = hasData ? "已蒸馏" : "尚未蒸馏";
   const identity = data?.identity ?? {};
   const evidence = data?.evidence ?? {};
   const viz = data?.visualizations ?? {};
@@ -112,8 +56,14 @@ export function ProfileTab({
   const totalNotes = evidence.total_notes ?? 0;
 
   // 人际网络：优先用 top_senders（有 count），否则用 frequent_contacts（无 count）
-  const topSenders = evidence.top_senders ?? [];
-  const frequentContacts = data?.relationships?.frequent_contacts ?? [];
+  // 过滤掉用户自己的邮箱（liuzhe@os-easy.com）
+  const SELF_EMAIL = "liuzhe@os-easy.com";
+  const topSenders = (evidence.top_senders ?? []).filter(
+    (s) => (s.address ?? "").toLowerCase() !== SELF_EMAIL,
+  );
+  const frequentContacts = (data?.relationships?.frequent_contacts ?? []).filter(
+    (name) => name.toLowerCase() !== SELF_EMAIL,
+  );
   const contacts = topSenders.length > 0
     ? topSenders.slice(0, 5).map((s, i) => ({
         name: s.sender ?? s.address ?? `联系人 ${i + 1}`,
@@ -154,28 +104,6 @@ export function ProfileTab({
 
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-3">
-      <div className="flex items-center justify-between">
-        <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-1 text-xs text-emerald-700">
-          {sourceNote}
-        </span>
-        <div className="flex items-center gap-2">
-          {editing ? (
-            <>
-              <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => void cancelEdit()} disabled={saving}>
-                <X className="mr-1 h-3.5 w-3.5" />取消
-              </Button>
-              <Button variant="default" size="sm" className="h-7 text-xs" onClick={() => void saveEdit()} disabled={saving}>
-                <Check className="mr-1 h-3.5 w-3.5" />{saving ? "保存中…" : "保存"}
-              </Button>
-            </>
-          ) : (
-            <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => void startEdit()}>
-              <Pencil className="mr-1 h-3.5 w-3.5" />编辑画像
-            </Button>
-          )}
-        </div>
-      </div>
-
       <Panel className="p-5">
         <div className="grid gap-5 lg:grid-cols-[1fr_260px]">
           <div className="flex min-w-0 items-center gap-5">
@@ -228,20 +156,7 @@ export function ProfileTab({
         </div>
       </Panel>
 
-      {editing && (
-        <Panel className="flex flex-col gap-2 p-4">
-          <p className="text-xs text-muted-foreground">编辑 USER.md 的 Profile 段落（Markdown 格式）</p>
-          {editError && <p className="text-xs text-destructive">{editError}</p>}
-          <Textarea
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            className="min-h-[260px] font-mono text-[13px]"
-            disabled={saving}
-          />
-        </Panel>
-      )}
-
-      <div className={cn("grid grid-cols-1 gap-3 xl:grid-cols-[1.1fr_1.35fr_340px]", editing && "pointer-events-none opacity-40")}>
+      <div className="grid grid-cols-1 gap-3 xl:grid-cols-[1.1fr_1.35fr_340px]">
         <Panel className="p-4">
           <SectionTitle icon={<Star className="h-4 w-4" />} title="能力雷达" hint={radarScores.length > 0 ? "综合能力评估" : "暂无数据"} color={PROFILE_COLORS.emerald} />
           <div className="flex justify-center">

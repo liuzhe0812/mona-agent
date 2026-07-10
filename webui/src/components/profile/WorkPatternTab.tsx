@@ -2,7 +2,6 @@
 
 import {
   Activity,
-  CalendarClock,
   Clock,
   FileText,
   Link2,
@@ -24,13 +23,11 @@ import { CARD_BASE, CARD_HOVER, PROFILE_COLORS, hourlyToHeatmap } from "./profil
 interface WorkPatternTabProps {
   data?: RichProfile;
   loading: boolean;
-  hasData: boolean;
 }
 
 export function WorkPatternTab({
   data,
   loading,
-  hasData,
 }: WorkPatternTabProps) {
   if (loading) {
     return (
@@ -41,7 +38,6 @@ export function WorkPatternTab({
   }
 
   const work = data?.work_patterns;
-  const sourceNote = hasData ? "已蒸馏" : "尚未蒸馏";
 
   const topTools = work?.evidence?.top_tools ?? [];
   const chains = work?.evidence?.tool_chains ?? [];
@@ -69,18 +65,6 @@ export function WorkPatternTab({
 
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-3">
-      <div className="flex items-center justify-between">
-        <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-1 text-xs text-emerald-700">
-          {sourceNote}
-        </span>
-        <div className="flex items-center gap-2 rounded-lg border bg-background px-2.5 py-1.5 text-xs text-muted-foreground">
-          <CalendarClock className="h-3.5 w-3.5" />
-          {data?.last_distilled_at
-            ? `更新于 ${new Date(data.last_distilled_at).toLocaleDateString("zh-CN")}`
-            : "尚未蒸馏"}
-        </div>
-      </div>
-
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
         <MetricCard icon={<Clock className="h-5 w-5" />} label="活跃时段" value={activeHours} hint="日活跃峰值" color={PROFILE_COLORS.emerald} />
         <MetricCard icon={<FileText className="h-5 w-5" />} label="高频任务" value={mainTask} hint={frequentTasks.length > 0 ? `共 ${frequentTasks.length} 类任务` : "暂无"} color={PROFILE_COLORS.amber} />
