@@ -602,6 +602,7 @@ pub fn run() {
             license::auth_reset_password,
             license::get_auth_status,
             license::bind_device,
+            license::upload_image,
             license::list_notifications,
             license::get_unread_notification_count,
             license::mark_notification_read,

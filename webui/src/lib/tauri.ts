@@ -385,6 +385,54 @@ export async function saveMarkdownFile(title: string, content: string): Promise<
   return true;
 }
 
+/** Convert a ``data:`` or ``http(s):`` media URL into a byte buffer. */
+async function mediaUrlToBytes(url: string): Promise<Uint8Array> {
+  if (url.startsWith("data:")) {
+    const commaIdx = url.indexOf(",");
+    if (commaIdx < 0) throw new Error("Invalid data URL");
+    const meta = url.slice(5, commaIdx).toLowerCase();
+    const payload = url.slice(commaIdx + 1);
+    if (meta.includes(";base64")) {
+      const binary = atob(payload);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+      return bytes;
+    }
+    return new TextEncoder().encode(decodeURIComponent(payload));
+  }
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`Failed to fetch media: ${resp.status}`);
+  const buf = await resp.arrayBuffer();
+  return new Uint8Array(buf);
+}
+
+/**
+ * Save a media URL (data: or http(s):) to a local file via a native save
+ * dialog. Returns the saved path, or ``null`` if the user cancelled. In
+ * browser mode falls back to a synthetic ``<a download>`` click.
+ */
+export async function downloadMediaUrl(url: string, filename: string): Promise<string | null> {
+  if (!isTauri()) {
+    const blob = await (await fetch(url)).blob();
+    const blobUrl = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = blobUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(blobUrl);
+    return null;
+  }
+  const { save } = await import("@tauri-apps/plugin-dialog");
+  const { writeFile } = await import("@tauri-apps/plugin-fs");
+  const filePath = await save({ defaultPath: filename });
+  if (!filePath) return null;
+  const bytes = await mediaUrlToBytes(url);
+  await writeFile(filePath, bytes);
+  return filePath;
+}
+
 // ---------------------------------------------------------------------------
 // Updater
 // ---------------------------------------------------------------------------

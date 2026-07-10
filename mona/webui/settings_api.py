@@ -436,6 +436,15 @@ def settings_payload(*, requires_restart: bool = False) -> dict[str, Any]:
         provider_config = getattr(config.providers, spec.name, None)
         if provider_config is None or spec.is_oauth:
             continue
+        # Skip providers whose configured model is an image/video-only model —
+        # they are set up for media generation, not LLM chat completions.
+        cfg_model = provider_config.model or (
+            defaults.model if spec.name == defaults.provider else None
+        )
+        if cfg_model and (
+            cfg_model in spec.image_models or cfg_model in spec.video_models
+        ):
+            continue
         configured = _provider_configured_for_settings(
             spec, provider_config
         ) or not spec.api_key_required
@@ -448,9 +457,7 @@ def settings_payload(*, requires_restart: bool = False) -> dict[str, Any]:
                 "api_key_hint": _mask_secret_hint(provider_config.api_key),
                 "api_base": provider_config.api_base or spec.default_api_base or None,
                 "default_api_base": spec.default_api_base or None,
-                "model": provider_config.model or (
-                    defaults.model if spec.name == defaults.provider else None
-                ),
+                "model": cfg_model,
                 "free_default_model": (
                     spec.free_default_model if spec.free_default_model else None
                 ),

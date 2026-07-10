@@ -753,6 +753,31 @@ async def handle_projects_list(request: web.Request) -> web.Response:
     return web.json_response({"projects": seen})
 
 
+async def handle_project_remove(request: web.Request) -> web.Response:
+    """POST /api/projects/remove
+
+    Clears the workspace binding for all sessions in the given project,
+    effectively removing the project section from the sidebar.
+    """
+    agent_loop = request.app.get("agent_loop")
+    session_manager = getattr(agent_loop, "sessions", None)
+    if session_manager is None:
+        return web.json_response({"ok": False}, status=500)
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"ok": False, "error": "invalid json"}, status=400)
+    workspace = body.get("workspace")
+    if not isinstance(workspace, str) or not workspace.strip():
+        return web.json_response({"ok": False, "error": "workspace required"}, status=400)
+    cleared = 0
+    for s in session_manager.list_sessions():
+        if s.get("workspace") == workspace:
+            _session_set_workspace_impl(session_manager, s["key"], None)
+            cleared += 1
+    return web.json_response({"ok": True, "cleared": cleared})
+
+
 # ---------------------------------------------------------------------------
 # Profile (user distillation) routes
 # ---------------------------------------------------------------------------
@@ -2990,14 +3015,26 @@ def _delete_with_trash_fallback(
     返回实际 MOVE 到的 trash 文件夹名；永久删除时返回 None。
     如果当前文件夹本身就是回收站，直接永久删除。
     """
-    # 如果当前已在回收站文件夹，直接永久删除
-    if current_mailbox in trash_candidates:
+    # 先动态查找服务器上实际的 trash 文件夹（从 LIST 结果匹配 \Trash 标志）
+    actual_trash = _find_trash_folder(mail, trash_candidates)
+
+    # 判断当前文件夹是否是回收站：
+    # 1. 名称匹配候选列表，或 2. IMAP LIST 标记为 \Trash
+    is_trash = current_mailbox in trash_candidates or (
+        actual_trash is not None and current_mailbox == actual_trash
+    )
+
+    if is_trash:
+        # 在回收站里删除 = 永久删除
         mail.uid("STORE", uid, "+FLAGS", "(\\Deleted)")
         mail.expunge()
+        # 验证邮件是否真的被删除了（UID 可能已失效）
+        typ, data = mail.uid("SEARCH", None, uid)
+        if typ == "OK" and data and data[0] and data[0].strip():
+            raise RuntimeError(
+                f"邮件删除失败：UID {uid} 仍存在于服务器（可能 UID 已失效，请先同步文件夹）"
+            )
         return None
-
-    # 先动态查找服务器上实际的 trash 文件夹（从 LIST 结果匹配）
-    actual_trash = _find_trash_folder(mail, trash_candidates)
 
     # 尝试 MOVE 到找到的 trash 文件夹
     if actual_trash:
@@ -4351,6 +4388,7 @@ def create_app(
     app.router.add_post("/api/sessions/{key}/set-workspace", handle_session_set_workspace)
     app.router.add_post("/api/sessions/{key}/clear-workspace", handle_session_clear_workspace)
     app.router.add_get("/api/projects", handle_projects_list)
+    app.router.add_post("/api/projects/remove", handle_project_remove)
 
     # Profile (user distillation) routes
     app.router.add_get("/api/profile", handle_profile_get)

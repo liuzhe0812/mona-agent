@@ -483,7 +483,8 @@
         },
         "refUrlPlaceholder": "参考图片 URL（可选，用于图生视频）",
         "refUrlAria": "参考图片 URL",
-        "refUrlClear": "清除参考图片 URL"
+        "refUrlClear": "清除参考图片 URL",
+        "refUrlUpload": "上传参考图片"
       },
       "workspace": {
         "placeholder": "选择文件夹（可选）",
@@ -590,6 +591,9 @@
     "copiedReply": "已复制回复",
     "saveAsNote": "保存为笔记",
     "savedAsNote": "已保存为笔记",
+    "downloadImage": "下载图片",
+    "openInFolder": "在文件夹中显示",
+    "downloadVideo": "下载视频",
     "turnLatencyTitle": "本轮耗时（端到端）"
   },
   "lightbox": {

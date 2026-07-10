@@ -472,7 +472,8 @@
         },
         "refUrlPlaceholder": "Reference image URL (optional, for image-to-video)",
         "refUrlAria": "Reference image URL",
-        "refUrlClear": "Clear reference image URL"
+        "refUrlClear": "Clear reference image URL",
+        "refUrlUpload": "Upload reference image"
       },
       "workspace": {
         "placeholder": "Select folder (optional)",
@@ -578,6 +579,9 @@
     "copiedReply": "Copied reply",
     "saveAsNote": "Save as note",
     "savedAsNote": "Saved as note",
+    "downloadImage": "Download image",
+    "openInFolder": "Show in folder",
+    "downloadVideo": "Download video",
     "turnLatencyTitle": "Response time (end-to-end)"
   },
   "lightbox": {

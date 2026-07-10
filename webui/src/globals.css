@@ -343,21 +343,16 @@
 /* TaskItem: label (checkbox) and content div must stay on one line.
    The <li> gets display:flex via TipTap HTMLAttributes; here we ensure
    the children behave as proper flex items. */
-/* DEBUG: temporary red outline to verify CSS reaches the app */
 .notes-prosemirror li[data-type="taskItem"] {
   display: flex !important;
   align-items: flex-start !important;
   gap: 0.5rem !important;
   margin-bottom: 0.25rem !important;
-  outline: 2px solid red !important;
 }
 .notes-prosemirror li[data-type="taskItem"] > label {
   flex: 0 0 auto !important;
   margin-right: 0.5rem !important;
   user-select: none !important;
-  display: flex !important;
-  align-items: center !important;
-  height: 1.5rem !important;
 }
 .notes-prosemirror li[data-type="taskItem"] > label input[type="checkbox"] {
   cursor: pointer !important;

@@ -11,19 +11,14 @@ export const NOTE_AI_ACTIONS: Array<{
     description: "提炼重点、结论和下一步",
   },
   {
-    id: "polish",
-    label: "润色优化",
-    description: "优化表达、修正语法、理顺逻辑",
-  },
-  {
     id: "translate",
     label: "翻译",
     description: "中文译英文，其他语言译中文",
   },
   {
-    id: "continue",
-    label: "续写扩展",
-    description: "延续末尾内容和风格继续写",
+    id: "generateTags",
+    label: "生成标签",
+    description: "AI 自动生成 3-5 个标签",
   },
   {
     id: "generateHtml",
@@ -48,35 +43,6 @@ export function buildAgentActionPrompt(
     }
     const context = formatNoteContext(note);
     return `请总结这篇笔记的内容。\n\n${context}\n\n要求：只输出总结内容，不要追问，不要询问更多信息。`;
-  }
-
-  if (actionId === "polish") {
-    if (filePath) {
-      return [
-        "请对这篇笔记进行润色优化。",
-        "",
-        `使用 read_file 工具读取文件 ${filePath}，阅读后输出润色后的全文。`,
-        "要求：",
-        "- 保留原文所有信息和结构，不增删内容",
-        "- 优化语言表达，使文字更通顺、简洁、准确",
-        "- 修正语法错误和标点问题",
-        "- 理顺逻辑衔接，但不改变原有逻辑顺序",
-        "- 只输出润色后的内容，不要追问，不要解释修改了什么",
-      ].join("\n");
-    }
-    const context = formatNoteContext(note);
-    return [
-      "请对这篇笔记进行润色优化。",
-      "",
-      context,
-      "",
-      "要求：",
-      "- 保留原文所有信息和结构，不增删内容",
-      "- 优化语言表达，使文字更通顺、简洁、准确",
-      "- 修正语法错误和标点问题",
-      "- 理顺逻辑衔接，但不改变原有逻辑顺序",
-      "- 只输出润色后的内容，不要追问，不要解释修改了什么",
-    ].join("\n");
   }
 
   if (actionId === "translate") {
@@ -108,30 +74,19 @@ export function buildAgentActionPrompt(
     ].join("\n");
   }
 
-  if (actionId === "continue") {
-    if (filePath) {
-      return [
-        "请续写这篇笔记。",
-        "",
-        `使用 read_file 工具读取文件 ${filePath}，阅读后从笔记末尾自然续写。`,
-        "要求：",
-        "- 延续笔记末尾的主题和写作风格",
-        "- 内容自然衔接，不重复已有内容",
-        "- 续写长度适中，与原文风格一致",
-        "- 只输出续写部分，不要追问，不要解释",
-      ].join("\n");
-    }
+  if (actionId === "generateTags") {
     const context = formatNoteContext(note);
     return [
-      "请续写这篇笔记。",
+      "请为这篇笔记生成 3-5 个标签。",
       "",
       context,
       "",
       "要求：",
-      "- 延续笔记末尾的主题和写作风格",
-      "- 内容自然衔接，不重复已有内容",
-      "- 续写长度适中，与原文风格一致",
-      "- 只输出续写部分，不要追问，不要解释",
+      "- 标签应概括笔记的核心主题、技术领域或关键概念",
+      "- 每个标签 2-6 个字，简洁准确",
+      "- 优先使用通用的技术或领域术语",
+      "- 不要输出 Markdown 格式，不要使用 # 号",
+      "- 只输出标签，每行一个，不要追问，不要解释",
     ].join("\n");
   }
 
@@ -303,9 +258,8 @@ export function buildTransformationPrompt(
 /** Pattern-to-label pairs for inferring displayContent from persisted user messages. */
 const ACTION_PROMPT_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
   { pattern: /^请总结这篇笔记的内容/, label: "总结当前笔记" },
-  { pattern: /^请对这篇笔记进行润色优化/, label: "润色优化" },
   { pattern: /^请翻译这篇笔记/, label: "翻译" },
-  { pattern: /^请续写这篇笔记/, label: "续写扩展" },
+  { pattern: /^请为这篇笔记生成 3-5 个标签/, label: "生成标签" },
   { pattern: /^请基于当前笔记内容，生成一份精美的HTML文档/, label: "生成HTML文档" },
 ];
 
@@ -336,6 +290,30 @@ export function buildAgentResultMarkdown(content: string): string {
   const trimmed = content.trim();
   if (!trimmed) return "";
   return trimmed.startsWith("#") ? `${trimmed}\n` : `## Agent 处理结果\n\n${trimmed}\n`;
+}
+
+/**
+ * 从 AI 生成的标签输出中解析标签数组。
+ * 支持每行一个标签、逗号分隔、# 前缀等格式。
+ */
+export function parseGeneratedTags(content: string): string[] {
+  const lines = content
+    .split(/[\n,，;；]/)
+    .map((line) => line.trim())
+    .map((line) => line.replace(/^#+\s*/, "").replace(/^[·•\-*\[\]]+\s*/, "").trim())
+    .filter((line) => line.length > 0 && line.length <= 20);
+  // 去重，保持顺序
+  const seen = new Set<string>();
+  const tags: string[] = [];
+  for (const line of lines) {
+    const lower = line.toLowerCase();
+    if (!seen.has(lower)) {
+      seen.add(lower);
+      tags.push(line);
+    }
+    if (tags.length >= 5) break;
+  }
+  return tags;
 }
 
 export function deriveNotePreview(markdown: string): string {

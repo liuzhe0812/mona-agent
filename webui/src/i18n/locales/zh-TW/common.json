@@ -399,7 +399,8 @@
         },
         "refUrlPlaceholder": "參考圖片 URL（可選，用於圖生影片）",
         "refUrlAria": "參考圖片 URL",
-        "refUrlClear": "清除參考圖片 URL"
+        "refUrlClear": "清除參考圖片 URL",
+        "refUrlUpload": "上傳參考圖片"
       },
       "workspace": {
         "placeholder": "選擇資料夾（可選）",
@@ -489,6 +490,9 @@
     "imageAttachment": "圖片附件",
     "saveAsNote": "儲存為筆記",
     "savedAsNote": "已儲存為筆記",
+    "downloadImage": "下載圖片",
+    "openInFolder": "在資料夾中顯示",
+    "downloadVideo": "下載影片",
     "turnLatencyTitle": "本輪耗時（端到端）"
   },
   "lightbox": {

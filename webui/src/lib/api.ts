@@ -212,6 +212,23 @@ export async function listProjects(
   return body.projects ?? [];
 }
 
+/** Remove a project by clearing workspace binding for all its sessions. */
+export async function removeProject(
+  workspace: string,
+  token: string,
+  base?: string,
+): Promise<{ ok: boolean; cleared: number }> {
+  const effectiveBase = base ?? (await getGatewayHttpBase());
+  return request<{ ok: boolean; cleared: number }>(
+    `${effectiveBase}/api/projects/remove`,
+    token,
+    {
+      method: "POST",
+      body: JSON.stringify({ workspace }),
+    },
+  );
+}
+
 export async function fetchSettings(
   token: string,
   base?: string,

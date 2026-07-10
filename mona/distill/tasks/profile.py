@@ -11,8 +11,12 @@ from typing import Any
 from loguru import logger
 
 from mona.distill.base import DistillContext, DistillResult, DistillTask
-from mona.distill.collectors import collect_email_stats, collect_notes_stats
-from mona.distill.store import read_rich_profile
+from mona.distill.collectors import (
+    collect_email_stats,
+    collect_notes_stats,
+    collect_session_topics,
+)
+from mona.distill.store import read_rich_profile, read_user_profile
 from mona.utils.prompt_templates import render_template
 
 _TASK_NAME = "profile"
@@ -33,15 +37,21 @@ class ProfileTask(DistillTask):
 
         notes_stats = collect_notes_stats(vault)
         email_stats = collect_email_stats()
+        session_stats = collect_session_topics(ctx.workspace, since=ctx.since)
 
         # Read existing work patterns from rich profile
         rich = read_rich_profile(ctx.memory_dir)
         work_patterns = rich.get("work_patterns", {})
 
+        # 读取 USER.md 作为先验（用户手写的偏好不应被 LLM 覆盖）
+        user_prior = _extract_user_prior(read_user_profile(ctx.memory_dir))
+
         return {
             "notes": notes_stats.to_dict(),
             "email": email_stats.to_dict(),
             "work_patterns": work_patterns,
+            "sessions": session_stats.to_dict(),
+            "user_prior": user_prior,
         }
 
     async def distill(
@@ -50,13 +60,19 @@ class ProfileTask(DistillTask):
         notes = data.get("notes", {})
         email = data.get("email", {})
         work_patterns = data.get("work_patterns", {})
+        sessions = data.get("sessions", {})
+        user_prior = data.get("user_prior", "")
 
         # If no data at all, skip
-        if notes.get("total_notes", 0) == 0 and email.get("total_emails", 0) == 0:
+        if (
+            notes.get("total_notes", 0) == 0
+            and email.get("total_emails", 0) == 0
+            and sessions.get("total_sessions", 0) == 0
+        ):
             return DistillResult(
                 task_name=_TASK_NAME,
                 success=False,
-                error="no notes or email data available",
+                error="no notes, email, or session data available",
             )
 
         try:
@@ -65,6 +81,8 @@ class ProfileTask(DistillTask):
                 notes=notes,
                 email=email,
                 work_patterns=work_patterns,
+                sessions=sessions,
+                user_prior=user_prior,
             )
         except Exception as e:
             return DistillResult(
@@ -131,6 +149,11 @@ class ProfileTask(DistillTask):
                     "top_subjects": email.get("top_subjects", []),
                     "notes_monthly": notes.get("monthly_distribution", {}),
                     "total_notes": notes.get("total_notes", 0),
+                    "session_topics": [
+                        {"title": t.get("title", ""), "tools": t.get("tools_used", [])}
+                        for t in sessions.get("topics", [])[:20]
+                    ],
+                    "total_sessions": sessions.get("total_sessions", 0),
                 },
                 "visualizations": {
                     "radar_scores": radar_scores,
@@ -168,6 +191,40 @@ def _get_notes_vault():
         return _get_vault_path()
     except Exception:
         return None
+
+
+# USER.md 中对画像蒸馏有价值的 section（手写区，作为先验）
+_PRIOR_SECTIONS = {
+    "Basic Information",
+    "Preferences",
+    "Work Context",
+    "Topics of Interest",
+    "Special Instructions",
+}
+
+
+def _extract_user_prior(user_md: str) -> str:
+    """从 USER.md 提取对画像蒸馏有价值的先验段落。
+
+    只保留用户手写的偏好区，distill 写入的 Profile/Work Patterns 区不取。
+    """
+    if not user_md:
+        return ""
+    import re
+
+    # 匹配 ## Title 到下一个 ## 或文件末尾
+    pattern = re.compile(r"^## (.+?)$", re.MULTILINE)
+    matches = list(pattern.finditer(user_md))
+    parts: list[str] = []
+    for i, m in enumerate(matches):
+        section_name = m.group(1).strip()
+        if section_name not in _PRIOR_SECTIONS:
+            continue
+        start = m.start()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(user_md)
+        section_text = user_md[start:end].strip()
+        parts.append(section_text)
+    return "\n\n".join(parts)
 
 
 def _rule_based_profile(data: dict[str, Any]) -> dict[str, Any]:

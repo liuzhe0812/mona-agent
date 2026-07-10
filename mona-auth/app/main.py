@@ -15,6 +15,7 @@ from app.routers.device_router import router as device_router
 from app.routers.notification_router import router as notification_router
 from app.routers.payment_router import router as payment_router
 from app.routers.trial_router import router as license_router
+from app.routers.upload_router import router as upload_router
 
 app = FastAPI(title="Mona Auth Service", version="0.2.0")
 
@@ -38,6 +39,7 @@ app.include_router(payment_router)
 app.include_router(license_router)
 app.include_router(admin_router)
 app.include_router(notification_router)
+app.include_router(upload_router)
 
 # Admin SPA - serve static files
 _admin_dir = Path(__file__).parent / "admin"

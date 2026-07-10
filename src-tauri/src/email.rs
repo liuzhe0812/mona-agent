@@ -4843,6 +4843,10 @@ pub async fn email_apply_rules(
 
     // 收集匹配规则（持有 owned EmailRule，避免跨越 await 持有引用）
     let mut matched: Vec<(String, String, EmailRule)> = Vec::new();
+    let mut inbox_total: u32 = 0;
+    // 诊断信息（matched=0 时返回给前端，帮助定位匹配失败原因）
+    let mut diag_rules: Vec<serde_json::Value> = Vec::new();
+    let mut diag_froms: Vec<String> = Vec::new();
     {
         let conn = state.conn()?;
         let rules = get_enabled_rules(&conn, &account_id)?;
@@ -4852,7 +4856,9 @@ pub async fn email_apply_rules(
 
         let mut stmt = conn
             .prepare(
-                "SELECT uid, folder, subject, from_address, from_name, to_addresses
+                // COALESCE 把可空字段（from_name）的 NULL 转成空串，
+                // 避免 row.get::<_, String>() 遇到 NULL 报错导致整行被 filter_map 丢弃
+                "SELECT uid, folder, subject, from_address, COALESCE(from_name, '') AS from_name, to_addresses
                  FROM messages
                  WHERE account_id = ?1 AND folder = 'INBOX'
                  ORDER BY uid_int DESC",
@@ -4873,6 +4879,7 @@ pub async fn email_apply_rules(
             .filter_map(|r| r.ok())
             .collect();
         drop(stmt);
+        inbox_total = rows.len() as u32;
 
         for (uid, folder, subject, from_address, from_name, to_addresses) in &rows {
             for rule in &rules {
@@ -4882,11 +4889,33 @@ pub async fn email_apply_rules(
                 }
             }
         }
+
+        // 收集诊断信息（在 block 内，rules/rows 仍可用）
+        diag_rules = rules
+            .iter()
+            .map(|r| {
+                serde_json::json!({
+                    "name": r.name,
+                    "conditionField": r.condition_field,
+                    "conditionValue": r.condition_value,
+                    "action": r.action,
+                    "actionTarget": r.action_target,
+                })
+            })
+            .collect();
+        diag_froms = rows.iter().take(5).map(|(_, _, _, from_addr, _, _)| from_addr.clone()).collect();
     }
 
     let total_matched = matched.len() as u32;
     if total_matched == 0 {
-        return Ok(serde_json::json!({ "matched": 0, "success": 0, "failed": 0 }));
+        return Ok(serde_json::json!({
+            "matched": 0,
+            "success": 0,
+            "failed": 0,
+            "inboxTotal": inbox_total,
+            "diagRules": diag_rules,
+            "diagFroms": diag_froms,
+        }));
     }
 
     // 获取账号凭据
@@ -4910,6 +4939,7 @@ pub async fn email_apply_rules(
         "success": success,
         "failed": failed,
         "errors": errors,
+        "inboxTotal": inbox_total,
     }))
 }
 
@@ -5336,23 +5366,8 @@ pub async fn email_delete_message(
             }
         }
         let _ = delete_meta_json(&req.account_id, &req.mailbox, &req.uid);
-
-        // 同步目标文件夹，拉取 MOVE 后新 UID 的邮件
-        if let Some(trash_folder) = target {
-            let sync_req = SyncRequest {
-                account_id: req.account_id.clone(),
-                imap_host: req.imap_host.clone(),
-                imap_port: req.imap_port,
-                imap_username: req.imap_username.clone(),
-                imap_password: req.imap_password.clone(),
-                mailbox: trash_folder.to_string(),
-                use_ssl: req.use_ssl,
-                last_uid: None, // 全量拉取目标文件夹，确保获取 MOVE 后的新 UID
-            };
-            if let Err(e) = sync_folder_internal(&state, &gateway_url, sync_req, false).await {
-                log::warn!("[email-delete] 同步回收站文件夹失败: {}", e);
-            }
-        }
+        // 不立即同步回收站文件夹：后台同步（15分钟）会自动拉取新 UID 的记录。
+        // 立即同步可能与 IMAP MOVE 尚未完全提交产生竞态。
     } else {
         // 永久删除：删除本地缓存 + .eml + .meta.json
         conn.execute(

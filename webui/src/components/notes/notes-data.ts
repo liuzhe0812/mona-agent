@@ -1,7 +1,7 @@
 import type { JSONContent } from "@tiptap/core";
 
 export type NoteSourceKind = "agent" | "manual" | "ssh" | "windows";
-export type NoteAiActionId = "summary" | "freeform" | "polish" | "translate" | "continue" | "generateHtml";
+export type NoteAiActionId = "summary" | "freeform" | "translate" | "generateHtml" | "generateTags";
 
 /** Context level controls how a note participates in knowledge-base retrieval. */
 export type NoteContextLevel = "full" | "summary" | "none";

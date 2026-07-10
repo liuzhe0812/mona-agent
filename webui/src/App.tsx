@@ -16,6 +16,7 @@ import { HistoryPage } from "@/components/browser/HistoryPage";
 import { useBrowserTabs } from "@/hooks/useBrowserTabs";
 import { TerminalView } from "@/components/terminal/TerminalView";
 import { useTerminalStore } from "@/components/terminal/store/terminalStore";
+import { useDbStore } from "@/components/db/store/dbStore";
 
 import { useSessions } from "@/hooks/useSessions";
 import { useDeferredTitleRefresh } from "@/hooks/useDeferredTitleRefresh";
@@ -33,7 +34,7 @@ import {
   resetGatewayBaseUrl,
   saveSecret,
 } from "@/lib/bootstrap";
-import { resetApiBase } from "@/lib/api";
+import { removeProject, resetApiBase } from "@/lib/api";
 import { deriveTitle } from "@/lib/format";
 import { MonaClient } from "@/lib/mona-client";
 import { ClientProvider, useClientOptional, type RuntimeStatus } from "@/providers/ClientProvider";
@@ -470,16 +471,18 @@ function Shell({
   authFailed: boolean;
 }) {
   const { t, i18n } = useTranslation();
-  const { client, runtimeStatus, runtimeError } = useClientOptional();
+  const { client, runtimeStatus, runtimeError, token } = useClientOptional();
   const { theme, toggle } = useTheme();
   useLicense();
   const { sessions, loading, refresh, createChat, deleteChat } = useSessions();
   const { state: sidebarState, update: updateSidebarState } =
     useSidebarState(sessions, !loading);
   const [activeKey, setActiveKey] = useState<string | null>(null);
+  const [createNoteOnOpen, setCreateNoteOnOpen] = useState(false);
   const [view, setView] = useState<ShellView>(
     new URLSearchParams(window.location.search).get("noteId") ? "note" : "chat",
   );
+  const [settingsInitialSection, setSettingsInitialSection] = useState<string | undefined>(undefined);
   const {
     tabs: browserTabs,
     activeTabId: activeBrowserTabId,
@@ -786,6 +789,14 @@ function Shell({
   }, [switchToMonaTab]);
 
   const onOpenNote = useCallback(() => {
+    setCreateNoteOnOpen(false);
+    setView("note");
+    switchToMonaTab();
+    setMobileSidebarOpen(false);
+  }, [switchToMonaTab]);
+
+  const onCreateNote = useCallback(() => {
+    setCreateNoteOnOpen(true);
     setView("note");
     switchToMonaTab();
     setMobileSidebarOpen(false);
@@ -810,6 +821,15 @@ function Shell({
     setView("db");
     switchToMonaTab();
     setMobileSidebarOpen(false);
+  }, [switchToMonaTab]);
+
+  const onOpenDbAndNew = useCallback(() => {
+    setView("db");
+    switchToMonaTab();
+    setMobileSidebarOpen(false);
+    requestAnimationFrame(() => {
+      useDbStore.getState().setNewConnectionDialogOpen(true);
+    });
   }, [switchToMonaTab]);
 
   const onOpenDoc = useCallback(() => {
@@ -986,6 +1006,25 @@ function Shell({
     }));
   }, [updateSidebarState]);
 
+  const onCreateTask = useCallback(
+    (workspace: string) => {
+      void onCreateChat(workspace);
+    },
+    [onCreateChat],
+  );
+
+  const onRemoveProject = useCallback(
+    async (workspace: string) => {
+      try {
+        await removeProject(workspace, token);
+        await refresh();
+      } catch (e) {
+        console.error("Failed to remove project", e);
+      }
+    },
+    [token, refresh],
+  );
+
   const onUpdateSidebarView = useCallback(
     (viewUpdate: Partial<typeof sidebarState.view>) => {
       void updateSidebarState((current) => ({
@@ -1140,8 +1179,9 @@ function Shell({
     [onSelectChat],
   );
 
-  const onOpenSettings = useCallback(() => {
+  const onOpenSettings = useCallback((section?: string) => {
     setSessionSearchOpen(false);
+    setSettingsInitialSection(section);
     setView("settings");
     setMobileSidebarOpen(false);
   }, []);
@@ -1321,6 +1361,8 @@ function Shell({
     viewState: sidebarState.view,
     showArchived: sidebarState.view.show_archived,
     archivedCount: sidebarState.archived_keys.length,
+    onRemoveProject,
+    onCreateTask,
   };
   const showMainSidebar = true;
 
@@ -1420,7 +1462,10 @@ function Shell({
                     title={headerTitle}
                     onToggleSidebar={toggleSidebar}
                     onOpenSSH={onOpenSSHAndNew}
-                    onCreateNote={onOpenNote}
+                    onOpenDb={onOpenDbAndNew}
+                    onCreateNote={onCreateNote}
+                    recentSessions={sessions.filter((session) => !sidebarState.archived_keys.includes(session.key))}
+                    onSelectSession={onSelectChat}
                     onCreateChat={onCreateChat}
                     onTurnEnd={onTurnEnd}
                     queuedPrompt={queuedAgentPrompt}
@@ -1430,6 +1475,7 @@ function Shell({
                     hideSidebarToggleOnDesktop
                     showHeader={false}
                     onModelNameChange={onModelNameChange}
+                    onOpenSettings={onOpenSettings}
                   />
                 ) : (
                   <RuntimePlaceholder
@@ -1445,6 +1491,8 @@ function Shell({
                     <NotesView
                       onSendToAgent={onSendNoteToAgent}
                       initialNoteId={new URLSearchParams(window.location.search).get("noteId") ?? undefined}
+                      createOnOpen={createNoteOnOpen}
+                      onCreateOnOpenHandled={() => setCreateNoteOnOpen(false)}
                     />
                   </Suspense>
                 </div>
@@ -1458,6 +1506,7 @@ function Shell({
                     onModelNameChange={onModelNameChange}
                     onRestart={onRestart}
                     isRestarting={isRestarting}
+                    initialSection={settingsInitialSection}
                   />
                 </div>
               )}

@@ -63,7 +63,7 @@ interface SidebarProps {
   onTogglePin: (key: string) => void;
   onRequestRename: (key: string, label: string) => void;
   onToggleArchive: (key: string) => void;
-  onOpenSettings: () => void;
+  onOpenSettings: (section?: string) => void;
   onOpenLogin?: () => void;
   onOpenSubscribe?: () => void;
   onOpenNote?: () => void;
@@ -90,6 +90,8 @@ interface SidebarProps {
   viewState?: SidebarViewState;
   showArchived?: boolean;
   archivedCount?: number;
+  onRemoveProject?: (workspace: string) => void;
+  onCreateTask?: (workspace: string) => void;
 }
 
 export function Sidebar(props: SidebarProps) {
@@ -224,6 +226,8 @@ export function Sidebar(props: SidebarProps) {
             actionMenuPortalContainer={
               props.containActionMenus ? menuPortalContainer : undefined
             }
+            onRemoveProject={props.onRemoveProject}
+            onCreateTask={props.onCreateTask}
           />
         )}
       </div>

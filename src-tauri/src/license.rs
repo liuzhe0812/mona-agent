@@ -392,6 +392,58 @@ pub async fn bind_device() -> Result<serde_json::Value, String> {
     Err(error.to_string())
 }
 
+// ── Image upload (for video image-to-video reference) ──
+
+#[tauri::command]
+pub async fn upload_image(file_path: String) -> Result<serde_json::Value, String> {
+    let path = std::path::Path::new(&file_path);
+    let file_name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("upload.png")
+        .to_string();
+
+    let bytes = std::fs::read(path).map_err(|e| format!("Failed to read file: {}", e))?;
+
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.to_lowercase())
+        .unwrap_or_else(|| "png".to_string());
+    let mime = match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        "gif" => "image/gif",
+        _ => "application/octet-stream",
+    };
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .map_err(|e| format!("HTTP client error: {}", e))?;
+    let part = reqwest::multipart::Part::bytes(bytes)
+        .file_name(file_name)
+        .mime_str(mime)
+        .map_err(|e| format!("Mime error: {}", e))?;
+    let form = reqwest::multipart::Form::new().part("file", part);
+
+    let resp = client
+        .post(format!("{}/upload/image", AUTH_SERVER_URL))
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("Server error: {}", resp.status()));
+    }
+
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("Parse error: {}", e))
+}
+
 // ── License check ──
 
 #[derive(Debug, Serialize, Deserialize)]

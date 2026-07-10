@@ -513,11 +513,24 @@ export async function deleteRule(ruleId: string): Promise<void> {
 export async function applyRules(
   gatewayUrl: string,
   accountId: string,
-): Promise<{ matched: number; success: number; failed: number; errors: string[] }> {
-  return invoke<{ matched: number; success: number; failed: number; errors: string[] }>(
-    "email_apply_rules",
-    { gatewayUrl, accountId },
-  );
+): Promise<{
+  matched: number;
+  success: number;
+  failed: number;
+  errors: string[];
+  inboxTotal?: number;
+  diagRules?: Array<{ name: string; conditionField: string; conditionValue: string; action: string; actionTarget: string | null }>;
+  diagFroms?: string[];
+}> {
+  return invoke<{
+    matched: number;
+    success: number;
+    failed: number;
+    errors: string[];
+    inboxTotal?: number;
+    diagRules?: Array<{ name: string; conditionField: string; conditionValue: string; action: string; actionTarget: string | null }>;
+    diagFroms?: string[];
+  }>("email_apply_rules", { gatewayUrl, accountId });
 }
 
 // ---------------------------------------------------------------------------

@@ -108,9 +108,16 @@ const RIGHT_SIDEBAR_DEFAULT_WIDTH = 260;
 interface NotesViewProps {
   onSendToAgent?: (prompt: string) => void | Promise<void>;
   initialNoteId?: string;
+  createOnOpen?: boolean;
+  onCreateOnOpenHandled?: () => void;
 }
 
-export function NotesView({ onSendToAgent: _onSendToAgent, initialNoteId }: NotesViewProps) {
+export function NotesView({
+  onSendToAgent: _onSendToAgent,
+  initialNoteId,
+  createOnOpen = false,
+  onCreateOnOpenHandled,
+}: NotesViewProps) {
   const { licenseActive } = useLicense();
   const [notebooks, setNotebooks] = useState<Notebook[]>([]);
   const [activeNotebookId, setActiveNotebookId] = useState("");
@@ -638,6 +645,12 @@ export function NotesView({ onSendToAgent: _onSendToAgent, initialNoteId }: Note
     },
     [activeNotebook, updateLeaf],
   );
+
+  useEffect(() => {
+    if (!createOnOpen || !storageReady) return;
+    createNote();
+    onCreateOnOpenHandled?.();
+  }, [createNote, createOnOpen, onCreateOnOpenHandled, storageReady]);
 
   const createNoteFromTemplateAction = useCallback(
     (templateId: string, title: string) => {
@@ -2037,6 +2050,7 @@ export function NotesView({ onSendToAgent: _onSendToAgent, initialNoteId }: Note
         width={agentPanelWidth}
         onAgentChatIdChange={(agentChatId) => updateActiveNote({ agentChatId })}
         onApplyResult={applyAiResult}
+        onApplyTags={(tags) => activeNote && editNoteTags(activeNote, tags)}
         onSaveAsNote={saveAgentResultAsNote}
         onTransformationsChange={setTransformations}
         onClearChat={() => updateActiveNote({ agentChatId: undefined })}

@@ -225,9 +225,25 @@ export function AccountSettingsDialog({
       const success = result.success ?? 0;
       const failed = result.failed ?? 0;
       const errs = result.errors ?? [];
+      const inboxTotal = result.inboxTotal ?? 0;
       let text = "";
       if (matched === 0) {
-        text = "没有匹配规则的邮件";
+        // 诊断模式：显示规则摘要和前几封邮件的发件人，帮助定位匹配失败原因
+        const diagRules = result.diagRules ?? [];
+        const diagFroms = result.diagFroms ?? [];
+        const rulesDesc = diagRules.length > 0
+          ? diagRules.map(r => `[${r.conditionField}="${r.conditionValue}" → ${r.action}${r.actionTarget ? ":" + r.actionTarget : ""}]`).join(" ")
+          : "";
+        const fromsDesc = diagFroms.length > 0
+          ? diagFroms.map(f => `"${f}"`).join(", ")
+          : "";
+        if (inboxTotal === 0) {
+          text = "收件箱没有邮件";
+        } else if (diagRules.length === 0) {
+          text = `没有启用的规则（收件箱共 ${inboxTotal} 封）`;
+        } else {
+          text = `没有匹配规则的邮件（收件箱共 ${inboxTotal} 封）\n\n规则: ${rulesDesc}\n前 ${diagFroms.length} 封邮件发件人: ${fromsDesc}`;
+        }
       } else if (failed === 0) {
         text = `成功处理 ${success} 封邮件`;
       } else {

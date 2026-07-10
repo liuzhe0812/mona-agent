@@ -26,11 +26,13 @@ import {
   Loader2,
   Plus,
   RotateCw,
+  Settings,
   Sparkles,
   Square,
   SquarePen,
   Target,
   Undo2,
+  Upload,
   Video,
   X,
   type LucideIcon,
@@ -42,6 +44,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -54,6 +57,7 @@ import { useClipboardAndDrop } from "@/hooks/useClipboardAndDrop";
 import type { SendImage, SendOptions } from "@/hooks/useMonaStream";
 import type { PendingMessage } from "@/hooks/usePendingQueue";
 import type { SlashCommand, GoalStateWsPayload } from "@/lib/types";
+import { isTauri } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 import { PendingQueueStrip } from "@/components/thread/PendingQueueStrip";
 
@@ -96,6 +100,7 @@ interface ThreadComposerProps {
   /** Project workspace bound to a new-chat composer. Only shown in hero mode. */
   workspace?: string | null;
   onWorkspaceChange?: (workspace: string | null) => void;
+  onOpenSettings?: (section?: string) => void;
   /** Pending message queue for mid-turn staging. */
   pendingMessages?: PendingMessage[];
   onPendingAppend?: (id: string) => void;
@@ -431,6 +436,7 @@ export function ThreadComposer({
   onKbSelect,
   workspace,
   onWorkspaceChange,
+  onOpenSettings,
 }: ThreadComposerProps) {
   const { t } = useTranslation();
   const [value, setValue] = useState("");
@@ -446,6 +452,7 @@ export function ThreadComposer({
   const [videoAspectMenuOpen, setVideoAspectMenuOpen] = useState(false);
   const [videoDurationMenuOpen, setVideoDurationMenuOpen] = useState(false);
   const [videoRefUrl, setVideoRefUrl] = useState("");
+  const [refUploading, setRefUploading] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const formRef = useRef<HTMLFormElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -454,15 +461,6 @@ export function ThreadComposer({
   const chipRefs = useRef(new Map<string, HTMLButtonElement>());
   const isHero = variant === "hero";
   const imageMode = controlledImageMode ?? uncontrolledImageMode;
-  const setImageMode = useCallback(
-    (enabled: boolean) => {
-      if (controlledImageMode === undefined) {
-        setUncontrolledImageMode(enabled);
-      }
-      onImageModeChange?.(enabled);
-    },
-    [controlledImageMode, onImageModeChange],
-  );
   const videoMode = controlledVideoMode ?? uncontrolledVideoMode;
   const setVideoMode = useCallback(
     (enabled: boolean) => {
@@ -470,12 +468,25 @@ export function ThreadComposer({
         setUncontrolledVideoMode(enabled);
       }
       onVideoModeChange?.(enabled);
-      // 互斥：开启视频模式时关闭图片模式
       if (enabled && imageMode) {
-        setImageMode(false);
+        if (controlledImageMode === undefined) setUncontrolledImageMode(false);
+        onImageModeChange?.(false);
       }
     },
-    [controlledVideoMode, onVideoModeChange, imageMode, setImageMode],
+    [controlledVideoMode, onVideoModeChange, imageMode, controlledImageMode, onImageModeChange],
+  );
+  const setImageMode = useCallback(
+    (enabled: boolean) => {
+      if (controlledImageMode === undefined) {
+        setUncontrolledImageMode(enabled);
+      }
+      onImageModeChange?.(enabled);
+      if (enabled && videoMode) {
+        if (controlledVideoMode === undefined) setUncontrolledVideoMode(false);
+        onVideoModeChange?.(false);
+      }
+    },
+    [controlledImageMode, onImageModeChange, videoMode, controlledVideoMode, onVideoModeChange],
   );
   const resolvedPlaceholder = isStreaming
     ? t("thread.composer.placeholderStreaming")
@@ -517,6 +528,31 @@ export function ThreadComposer({
     onDragLeave,
     onDrop,
   } = useClipboardAndDrop(addFiles);
+
+  const uploadRefImage = useCallback(async () => {
+    if (refUploading) return;
+    if (!isTauri()) return;
+    setRefUploading(true);
+    setInlineError(null);
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const selected = await open({
+        multiple: false,
+        filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "gif"] }],
+      });
+      if (typeof selected !== "string" || !selected.trim()) return;
+      const { invoke } = await import("@tauri-apps/api/core");
+      const result = await invoke<{ url?: string }>("upload_image", { filePath: selected });
+      if (typeof result.url === "string") {
+        setVideoRefUrl(result.url);
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setInlineError(msg);
+    } finally {
+      setRefUploading(false);
+    }
+  }, [refUploading]);
 
   useEffect(() => {
     if (disabled) return;
@@ -929,6 +965,26 @@ export function ThreadComposer({
                 isHero ? "h-8 text-[12px]" : "h-7 text-[11.5px]",
               )}
             />
+            {isTauri() ? (
+              <button
+                type="button"
+                aria-label={t("thread.composer.videoMode.refUrlUpload")}
+                onClick={uploadRefImage}
+                disabled={refUploading}
+                className={cn(
+                  "inline-flex shrink-0 items-center justify-center rounded-full",
+                  "text-muted-foreground hover:text-foreground",
+                  "disabled:opacity-50 disabled:pointer-events-none",
+                  isHero ? "h-7 w-7" : "h-6 w-6",
+                )}
+              >
+                {refUploading ? (
+                  <Loader2 className={cn("animate-spin", isHero ? "h-3.5 w-3.5" : "h-3 w-3")} />
+                ) : (
+                  <Upload className={isHero ? "h-3.5 w-3.5" : "h-3 w-3"} />
+                )}
+              </button>
+            ) : null}
             {videoRefUrl ? (
               <button
                 type="button"
@@ -992,10 +1048,10 @@ export function ThreadComposer({
             {leadingActions ? (
               <div className="flex min-w-0 items-center gap-1">{leadingActions}</div>
             ) : null}
-            {isHero ? (
+            {isHero && onWorkspaceChange ? (
               <WorkspaceSelector
                 workspace={workspace}
-                onChange={onWorkspaceChange ?? (() => {})}
+                onChange={onWorkspaceChange}
                 disabled={disabled}
               />
             ) : null}
@@ -1278,6 +1334,18 @@ export function ThreadComposer({
                         </DropdownMenuItem>
                       );
                     })}
+                    {onOpenSettings ? (
+                      <>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem
+                          className="flex items-center gap-2 text-[13px] text-muted-foreground"
+                          onSelect={() => onOpenSettings("models_providers")}
+                        >
+                          <Settings className="h-3.5 w-3.5" />
+                          <span>{t("thread.composer.addModel", "添加模型")}</span>
+                        </DropdownMenuItem>
+                      </>
+                    ) : null}
                   </DropdownMenuContent>
                 </DropdownMenu>
               ) : (
@@ -1450,8 +1518,7 @@ function ImageAspectMenu({
       role="listbox"
       aria-label={t("thread.composer.imageMode.aspectAria")}
       className={cn(
-        "absolute left-0 z-30 w-44 overflow-hidden rounded-[16px] border",
-        isHero ? "top-full mt-2" : "bottom-full mb-2",
+        "absolute left-0 bottom-full mb-2 z-30 w-44 overflow-hidden rounded-[16px] border",
         "border-border/65 bg-popover p-1.5 text-popover-foreground shadow-[0_16px_45px_rgba(15,23,42,0.16)]",
         "dark:border-white/10 dark:shadow-[0_18px_45px_rgba(0,0,0,0.42)]",
         isHero ? "text-[12px]" : "text-[11.5px]",
@@ -1503,8 +1570,7 @@ function VideoAspectMenu({
       role="listbox"
       aria-label={t("thread.composer.videoMode.aspectAria")}
       className={cn(
-        "absolute left-0 z-30 w-44 overflow-hidden rounded-[16px] border",
-        isHero ? "top-full mt-2" : "bottom-full mb-2",
+        "absolute left-0 bottom-full mb-2 z-30 w-44 overflow-hidden rounded-[16px] border",
         "border-border/65 bg-popover p-1.5 text-popover-foreground shadow-[0_16px_45px_rgba(15,23,42,0.16)]",
         "dark:border-white/10 dark:shadow-[0_18px_45px_rgba(0,0,0,0.42)]",
         isHero ? "text-[12px]" : "text-[11.5px]",
@@ -1556,8 +1622,7 @@ function VideoDurationMenu({
       role="listbox"
       aria-label={t("thread.composer.videoMode.durationAria")}
       className={cn(
-        "absolute left-0 z-30 w-44 overflow-hidden rounded-[16px] border",
-        isHero ? "top-full mt-2" : "bottom-full mb-2",
+        "absolute left-0 bottom-full mb-2 z-30 w-44 overflow-hidden rounded-[16px] border",
         "border-border/65 bg-popover p-1.5 text-popover-foreground shadow-[0_16px_45px_rgba(15,23,42,0.16)]",
         "dark:border-white/10 dark:shadow-[0_18px_45px_rgba(0,0,0,0.42)]",
         isHero ? "text-[12px]" : "text-[11.5px]",

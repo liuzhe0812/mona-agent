@@ -4,6 +4,7 @@ import { DOWNLOAD_URL } from "@/lib/constants";
 
 const links = [
   { label: "快速入门", href: "/manual.html" },
+  { label: "免费模型", href: "/tutorial" },
   { label: "Agent", href: "/#agent" },
   { label: "模块", href: "/#modules" },
   { label: "白盒运维", href: "/#whitebox" },

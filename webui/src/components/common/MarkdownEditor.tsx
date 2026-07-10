@@ -9,7 +9,7 @@ import TaskList from "@tiptap/extension-task-list";
 import { Markdown } from "@tiptap/markdown";
 import { EditorContent, useEditor, type Editor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
-import { TextSelection } from "@tiptap/pm/state";
+import { NodeSelection, TextSelection } from "@tiptap/pm/state";
 
 import { WikiLink } from "./WikiLinkExtension";
 import {
@@ -22,6 +22,7 @@ import {
   Copy,
   ExternalLink,
   FileCode2,
+  FolderOpen,
   Heading1,
   Heading2,
   Heading3,
@@ -39,6 +40,7 @@ import {
   Strikethrough,
   Table2,
   TextSelect,
+  Trash2,
   Type,
   Undo2,
 } from "lucide-react";
@@ -372,7 +374,8 @@ export function MarkdownEditor({
     const dpr = window.devicePixelRatio || 1;
     const tr = editor.state.tr;
     let modified = false;
-    const pending: { pos: number; node: any; fileName: string; url: string }[] = [];
+    // 收集所有需要 DPR 调整的图片（缺 width 且 src 是本地资源）
+    const pending: { pos: number; url: string }[] = [];
 
     editor.state.doc.descendants((node, pos) => {
       if (node.type.name !== "image" || !node.attrs.src) return;
@@ -381,27 +384,32 @@ export function MarkdownEditor({
         src.startsWith("assets/") ||
         (!src.startsWith("http") && !src.startsWith("data:") && !src.includes(":") &&
          !src.startsWith("tauri:") && !src.startsWith("blob:"));
-      if (!isRelativeAsset) return;
 
-      const fileName = src.startsWith("assets/") ? src.slice("assets/".length) : src;
-      let url = assetUrlCacheRef.current.get(fileName);
-      if (!url) {
-        url = convertFileSrc(`${vaultPath}/assets/${fileName}`);
-        assetUrlCacheRef.current.set(fileName, url);
+      // 已有 width 的图片不需要 DPR 调整
+      if (node.attrs.width) return;
+
+      if (isRelativeAsset) {
+        // assets/xxx.png → 转成 asset:// URL
+        const fileName = src.startsWith("assets/") ? src.slice("assets/".length) : src;
+        let url = assetUrlCacheRef.current.get(fileName);
+        if (!url) {
+          url = convertFileSrc(`${vaultPath}/assets/${fileName}`);
+          assetUrlCacheRef.current.set(fileName, url);
+        }
+        if (src !== url) {
+          tr.setNodeMarkup(pos, undefined, {
+            ...node.attrs,
+            src: url,
+            alt: node.attrs.alt || src,
+            title: src,
+          });
+          modified = true;
+        }
+        pending.push({ pos, url });
+      } else if (src.startsWith("http://asset.") || src.startsWith("asset://")) {
+        // 已经是 asset URL（重新载入的情况），只需 DPR 调整
+        pending.push({ pos, url: src });
       }
-
-      // If src is already the asset URL, no rewrite needed.
-      if (src === url) return;
-
-      // Sync rewrite for cached URL (no DPI detection needed — CSS handles it)
-      tr.setNodeMarkup(pos, undefined, {
-        ...node.attrs,
-        src: url,
-        alt: node.attrs.alt || src,
-        title: src,
-      });
-      modified = true;
-      pending.push({ pos, node, fileName, url });
     });
 
     if (modified) {
@@ -410,13 +418,11 @@ export function MarkdownEditor({
       settingContentRef.current = false;
     }
 
-    // Optional: detect natural dimensions for HiDPI scaling. Skipped on dpr<=1
-    // since CSS max-width:100% already constrains the image.
+    // HiDPI: 按系统缩放比缩小显示宽度。每张图片用独立的新鲜事务，
+    // 避免批量事务在 await 期间过期被 ProseMirror 忽略。
     if (dpr <= 1 || pending.length === 0) return;
 
-    const tr2 = editor.state.tr;
-    let modified2 = false;
-    await Promise.all(pending.map(async ({ pos, url }) => {
+    for (const { pos, url } of pending) {
       const displayWidth = await new Promise<number | null>((resolve) => {
         const img = new Image();
         img.onload = () => {
@@ -425,26 +431,28 @@ export function MarkdownEditor({
         img.onerror = () => resolve(null);
         img.src = url;
       });
-      if (displayWidth == null) return;
-      // Re-find the node at pos — it may have moved after the first dispatch.
+      if (displayWidth == null) continue;
+      // 每次都用当前最新 state 创建事务，避免过期
+      const freshTr = editor.state.tr;
       let found = false;
       editor.state.doc.descendants((n, p) => {
         if (found) return false;
         if (p !== pos) return;
         if (n.type.name !== "image") return;
-        tr2.setNodeMarkup(p, undefined, {
+        // 已有 width 则跳过（可能被前一张图片的 dispatch 改变了）
+        if (n.attrs.width) { found = true; return false; }
+        freshTr.setNodeMarkup(p, undefined, {
           ...n.attrs,
           width: displayWidth,
         });
-        modified2 = true;
         found = true;
         return false;
       });
-    }));
-    if (modified2) {
-      settingContentRef.current = true;
-      editor.view.dispatch(tr2);
-      settingContentRef.current = false;
+      if (found && freshTr.steps.length > 0) {
+        settingContentRef.current = true;
+        editor.view.dispatch(freshTr);
+        settingContentRef.current = false;
+      }
     }
   }, []);
 
@@ -515,7 +523,7 @@ export function MarkdownEditor({
       }),
       TaskItem.configure({
         nested: true,
-        HTMLAttributes: {},
+        HTMLAttributes: { "data-type": "taskItem" },
       }),
       Link.configure({
         openOnClick: false,
@@ -633,6 +641,21 @@ export function MarkdownEditor({
           }
         }
         return false;
+      },
+      handleDOMEvents: {
+        contextmenu: (view, event: Event) => {
+          // 右键点击图片时自动选中图片节点，使图片专属右键菜单生效
+          const target = event.target as HTMLElement;
+          if (!target || target.tagName !== "IMG") return false;
+          const pos = view.posAtDOM(target, 0);
+          if (pos == null) return false;
+          try {
+            const tr = view.state.tr;
+            tr.setSelection(NodeSelection.create(view.state.doc, pos));
+            view.dispatch(tr);
+          } catch {}
+          return false;
+        },
       },
     },
     onCreate: async ({ editor }) => {
@@ -774,6 +797,52 @@ export function MarkdownEditor({
       {mode === "visual" ? (
         <EditorContextMenu editor={editor} onMoveSelectionToNote={onMoveSelectionToNote}>
           <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin">
+            <style>{`
+              .ProseMirror li[data-type="taskItem"] {
+                display: flex !important;
+                align-items: center !important;
+                gap: 0.5rem !important;
+                margin-bottom: 0.25rem !important;
+                min-height: 1.5rem !important;
+              }
+              .ProseMirror li[data-type="taskItem"] > label {
+                flex: 0 0 auto !important;
+                margin-right: 0 !important;
+                user-select: none !important;
+                display: inline-flex !important;
+                align-items: center !important;
+                height: 1.5rem !important;
+                line-height: 1.5rem !important;
+              }
+              .ProseMirror li[data-type="taskItem"] > label input[type="checkbox"] {
+                cursor: pointer !important;
+                margin: 0 !important;
+                width: 1rem !important;
+                height: 1rem !important;
+                accent-color: hsl(var(--primary)) !important;
+              }
+              .ProseMirror li[data-type="taskItem"] > label span {
+                display: none !important;
+              }
+              .ProseMirror li[data-type="taskItem"] > div {
+                flex: 1 1 auto !important;
+                min-width: 0 !important;
+                display: flex !important;
+                align-items: center !important;
+                min-height: 1.5rem !important;
+              }
+              .ProseMirror li[data-type="taskItem"] > div > p {
+                margin-top: 0 !important;
+                margin-bottom: 0 !important;
+                line-height: 1.5rem !important;
+              }
+              .ProseMirror li[data-type="taskItem"][data-checked="true"] > div {
+                color: hsl(var(--muted-foreground)) !important;
+              }
+              .ProseMirror li[data-type="taskItem"][data-checked="true"] > div > p {
+                text-decoration: line-through !important;
+              }
+            `}</style>
             <div
               ref={visualEditorRef}
               className={cn(
@@ -874,14 +943,42 @@ export function MarkdownEditor({
 function EditorContextMenu({ editor, children, onMoveSelectionToNote }: { editor: Editor | null; children: React.ReactNode; onMoveSelectionToNote?: (selectedText: string) => void; }) {
   const [hasSelection, setHasSelection] = useState(false);
   const [selectedText, setSelectedText] = useState("");
+  const [isImageSelected, setIsImageSelected] = useState(false);
+  const [imageNodePos, setImageNodePos] = useState<number | null>(null);
+  const [imageFileName, setImageFileName] = useState<string | null>(null);
 
   const updateSelection = () => {
     if (!editor) return;
-    const { from, to } = editor.state.selection;
+    const selection = editor.state.selection;
+    const { from, to } = selection;
     const hasSel = from !== to;
     setHasSelection(hasSel);
     if (hasSel) {
       setSelectedText(editor.state.doc.textBetween(from, to, "\n"));
+    }
+    // 检测是否选中了图片节点
+    const isNodeSel = selection instanceof NodeSelection;
+    const selNode = isNodeSel ? (selection as NodeSelection).node : null;
+    const isImg = !!selNode && selNode.type.name === "image";
+    setIsImageSelected(isImg);
+    if (isImg && selNode) {
+      // 找到图片在文档中的位置
+      let pos: number | null = null;
+      editor.state.doc.descendants((n, p) => {
+        if (pos !== null) return false;
+        if (n === selNode) { pos = p; return false; }
+        return;
+      });
+      setImageNodePos(pos);
+      // title 存的是 assets/xxx.png
+      const title = selNode.attrs.title as string | undefined;
+      const alt = selNode.attrs.alt as string | undefined;
+      const rawRef = title || alt || "";
+      const fileName = rawRef.startsWith("assets/") ? rawRef.slice("assets/".length) : rawRef;
+      setImageFileName(fileName || null);
+    } else {
+      setImageNodePos(null);
+      setImageFileName(null);
     }
   };
 
@@ -961,12 +1058,111 @@ function EditorContextMenu({ editor, children, onMoveSelectionToNote }: { editor
     editor.chain().focus().deleteSelection().run();
   };
 
+  // —— 图片专属操作 ——
+
+  const handleCopyImage = async () => {
+    if (!editor || imageNodePos === null) return;
+    const node = editor.state.doc.nodeAt(imageNodePos);
+    if (!node) return;
+    const src = node.attrs.src as string;
+    if (!src) return;
+    try {
+      // 通过 fetch 读取图片字节并写入剪贴板
+      const res = await fetch(src);
+      const blob = await res.blob();
+      await navigator.clipboard.write([
+        new ClipboardItem({ [blob.type]: blob }),
+      ]);
+    } catch (err) {
+      // 降级：复制图片 URL
+      try { await navigator.clipboard.writeText(src); } catch {}
+    }
+  };
+
+  const handleCopyImagePath = async () => {
+    if (!editor || imageNodePos === null) return;
+    const node = editor.state.doc.nodeAt(imageNodePos);
+    if (!node) return;
+    // title 存的是 assets/xxx.png（Markdown 源路径）
+    const path = (node.attrs.title as string) || (node.attrs.alt as string) || "";
+    if (path) {
+      try { await navigator.clipboard.writeText(path); } catch {}
+    }
+  };
+
+  const handleOpenWithDefaultApp = async () => {
+    if (!editor || imageNodePos === null || !imageFileName) return;
+    try {
+      const { getNotesVaultPath, openPathWithSystemApp } = await import("@/lib/tauri");
+      const vaultPath = await getNotesVaultPath();
+      if (!vaultPath) return;
+      const absPath = `${vaultPath}/assets/${imageFileName}`;
+      await openPathWithSystemApp(absPath);
+    } catch {}
+  };
+
+  const handleRevealInExplorer = async () => {
+    if (!editor || imageNodePos === null || !imageFileName) return;
+    try {
+      const { getNotesVaultPath, revealItemInDir } = await import("@/lib/tauri");
+      const vaultPath = await getNotesVaultPath();
+      if (!vaultPath) return;
+      const absPath = `${vaultPath}/assets/${imageFileName}`;
+      await revealItemInDir(absPath);
+    } catch {}
+  };
+
+  const handleDeleteImage = async () => {
+    if (!editor || imageNodePos === null) return;
+    const pos = imageNodePos;
+    // 先从文档删除节点
+    editor.chain().focus().deleteRange({ from: pos, to: pos + 1 }).run();
+    // 再尝试删除磁盘文件
+    if (imageFileName) {
+      try {
+        const { getNotesVaultPath } = await import("@/lib/tauri");
+        const { remove } = await import("@tauri-apps/plugin-fs");
+        const vaultPath = await getNotesVaultPath();
+        if (vaultPath) {
+          await remove(`${vaultPath}/assets/${imageFileName}`);
+        }
+      } catch {}
+    }
+  };
+
   return (
     <ContextMenu onOpenChange={updateSelection}>
       <ContextMenuTrigger asChild>
         {children}
       </ContextMenuTrigger>
       <ContextMenuContent className="w-52">
+        {isImageSelected ? (
+          <>
+            <ContextMenuItem onSelect={handleCopyImage}>
+              <ImageIcon className="mr-2 h-3.5 w-3.5" />
+              复制图片
+            </ContextMenuItem>
+            <ContextMenuItem onSelect={handleCopyImagePath}>
+              <Copy className="mr-2 h-3.5 w-3.5" />
+              复制路径
+            </ContextMenuItem>
+            <ContextMenuSeparator />
+            <ContextMenuItem onSelect={handleOpenWithDefaultApp}>
+              <ExternalLink className="mr-2 h-3.5 w-3.5" />
+              使用默认应用打开
+            </ContextMenuItem>
+            <ContextMenuItem onSelect={handleRevealInExplorer}>
+              <FolderOpen className="mr-2 h-3.5 w-3.5" />
+              在资源管理器中显示
+            </ContextMenuItem>
+            <ContextMenuSeparator />
+            <ContextMenuItem onSelect={handleDeleteImage} className="text-destructive focus:text-destructive">
+              <Trash2 className="mr-2 h-3.5 w-3.5" />
+              删除图片
+            </ContextMenuItem>
+          </>
+        ) : (
+          <>
         {hasSelection ? (
           <>
             <ContextMenuItem onSelect={handleAddInternalLink}>
@@ -1124,6 +1320,8 @@ function EditorContextMenu({ editor, children, onMoveSelectionToNote }: { editor
           <TextSelect className="mr-2 h-3.5 w-3.5" />
           全选
         </ContextMenuItem>
+          </>
+        )}
       </ContextMenuContent>
     </ContextMenu>
   );

@@ -8,12 +8,13 @@ import {
 import {
   Archive,
   ArchiveRestore,
-  ChevronDown,
-  ChevronRight,
   Folder,
+  FolderOpen,
+  MoreHorizontal,
   Pencil,
   Pin,
   PinOff,
+  Plus,
   Trash2,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -24,6 +25,12 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { deriveTitle, relativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { ChatSummary, SidebarDensity, SidebarSortMode } from "@/lib/types";
@@ -66,6 +73,8 @@ interface ChatListProps {
   onOpenProjectFolder?: (workspace: string) => void;
   /** Called when the user removes a project from the sidebar. */
   onRemoveProject?: (workspace: string) => void;
+  /** Called when the user creates a new task/chat in a project. */
+  onCreateTask?: (workspace: string) => void;
 }
 
 export const ChatList = memo(function ChatList({
@@ -89,7 +98,8 @@ export const ChatList = memo(function ChatList({
   emptyLabel,
   defaultProjectExpanded = true,
   onOpenProjectFolder: _onOpenProjectFolder,
-  onRemoveProject: _onRemoveProject,
+  onRemoveProject,
+  onCreateTask,
 }: ChatListProps) {
   const [visibleLimit, setVisibleLimit] = useState(INITIAL_VISIBLE_SESSIONS);
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(() =>
@@ -121,7 +131,7 @@ export const ChatList = memo(function ChatList({
     ],
   );
   const groups = useMemo(
-    () => [pinnedGroup, defaultGroup, ...projectGroups, archivedGroup].filter((g): g is ChatSection => !!g),
+    () => [pinnedGroup, ...projectGroups, defaultGroup, archivedGroup].filter((g): g is ChatSection => !!g),
     [defaultGroup, projectGroups, pinnedGroup, archivedGroup],
   );
   const limitedGroups = useMemo(
@@ -186,9 +196,11 @@ export const ChatList = memo(function ChatList({
           const expanded = isProject ? expandedProjects.has(group.workspace!) : true;
           return (
           <section key={group.label} aria-label={group.label}>
+            <ContextMenu>
+              <ContextMenuTrigger asChild>
             <div
               className={cn(
-                "flex items-center gap-1 px-2 pb-1 text-[12px] font-medium text-muted-foreground/65",
+                "group/header flex items-center gap-1 px-2 pb-1 text-[12px] font-medium text-muted-foreground/65",
                 isProject && "cursor-pointer select-none hover:text-muted-foreground",
               )}
               onClick={() => isProject && group.workspace && toggleProject(group.workspace)}
@@ -198,16 +210,57 @@ export const ChatList = memo(function ChatList({
             >
               {isProject ? (
                 expanded ? (
-                  <ChevronDown className="h-3.5 w-3.5 shrink-0" />
+                  <FolderOpen className="mr-1 h-3.5 w-3.5 shrink-0" />
                 ) : (
-                  <ChevronRight className="h-3.5 w-3.5 shrink-0" />
+                  <Folder className="mr-1 h-3.5 w-3.5 shrink-0" />
                 )
               ) : null}
-              {isProject ? (
-                <Folder className="mr-1 h-3.5 w-3.5 shrink-0" />
+              <span className="min-w-0 flex-1 truncate">{group.label}</span>
+              {isProject && group.workspace ? (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      type="button"
+                      onClick={(e) => e.stopPropagation()}
+                      className="ml-auto flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground/60 opacity-0 transition-opacity hover:bg-sidebar-accent/60 hover:text-sidebar-foreground group-hover/header:opacity-100"
+                      aria-label={t("common.more", "更多")}
+                    >
+                      <MoreHorizontal className="h-3.5 w-3.5" />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" onCloseAutoFocus={(e) => e.preventDefault()}>
+                    <DropdownMenuItem onSelect={() => onCreateTask?.(group.workspace!)}>
+                      <Plus className="mr-2 h-4 w-4" />
+                      {t("chat.newTask", "创建新任务")}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onSelect={() => onRemoveProject?.(group.workspace!)}
+                      className="text-destructive focus:text-destructive"
+                    >
+                      <Trash2 className="mr-2 h-4 w-4" />
+                      {t("common.delete", "删除")}
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
               ) : null}
-              <span className="truncate">{group.label}</span>
             </div>
+              </ContextMenuTrigger>
+              {isProject && group.workspace ? (
+                <ContextMenuContent onCloseAutoFocus={(e) => e.preventDefault()}>
+                  <ContextMenuItem onSelect={() => onCreateTask?.(group.workspace!)}>
+                    <Plus className="mr-2 h-4 w-4" />
+                    {t("chat.newTask", "创建新任务")}
+                  </ContextMenuItem>
+                  <ContextMenuItem
+                    onSelect={() => onRemoveProject?.(group.workspace!)}
+                    className="text-destructive focus:text-destructive"
+                  >
+                    <Trash2 className="mr-2 h-4 w-4" />
+                    {t("common.delete", "删除")}
+                  </ContextMenuItem>
+                </ContextMenuContent>
+              ) : null}
+            </ContextMenu>
             {expanded ? (
             <ul className="space-y-0.5">
               {group.sessions.map((s) => {

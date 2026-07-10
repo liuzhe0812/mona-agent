@@ -53,7 +53,7 @@ export function createBlankNote(
     source: isSsh
       ? { kind: "ssh", label: "SSH 记录" }
       : { kind: "manual", label: "手动记录" },
-    tags: isSsh ? ["SSH", "草稿"] : ["草稿"],
+    tags: isSsh ? ["SSH"] : [],
     contentMarkdown: isSsh
       ? "## SSH 会话记录\n\n```bash\n# 在这里粘贴命令和输出\n```\n\n## 判断\n\n"
       : "",

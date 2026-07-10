@@ -102,6 +102,15 @@ export function MailView() {
     setImageContextMenu({ src, x, y });
   }, []);
 
+  // 点击链接：用系统默认应用打开 URL（默认浏览器）
+  const handleLinkClick = useCallback((url: string) => {
+    if (!isTauri()) {
+      window.open(url, "_blank", "noopener,noreferrer");
+      return;
+    }
+    void openPathWithSystemApp(url);
+  }, []);
+
   // 附件列表变化时，异步加载系统文件类型图标（已缓存的同步显示，未缓存的加载后显示）
   useEffect(() => {
     if (!selectedMessage?.attachments) return;
@@ -628,6 +637,7 @@ export function MailView() {
             html={m.bodyHtml}
             onImageOpen={handleImageOpen}
             onImageMenu={handleImageMenu}
+            onLinkClick={handleLinkClick}
           />
         ) : (
           <pre className="whitespace-pre-wrap break-words font-sans text-[13px] leading-relaxed text-foreground">
@@ -874,6 +884,8 @@ interface SafeHtmlFrameProps {
   onImageOpen?: (src: string) => void;
   /** 右键点击图片时触发（显示自定义菜单） */
   onImageMenu?: (src: string, x: number, y: number) => void;
+  /** 点击链接时触发（用系统默认应用打开 URL） */
+  onLinkClick?: (url: string) => void;
 }
 
 /**
@@ -881,7 +893,7 @@ interface SafeHtmlFrameProps {
  * allow-same-origin 让父页面可读取 contentDocument 调整高度（不带 allow-scripts，脚本仍不能跑）。
  * 通过父窗口访问 contentDocument 拦截 IMG 的 click/contextmenu，替换 WebView2 原生菜单。
  */
-function SafeHtmlFrame({ html, onImageOpen, onImageMenu }: SafeHtmlFrameProps) {
+function SafeHtmlFrame({ html, onImageOpen, onImageMenu, onLinkClick }: SafeHtmlFrameProps) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [height, setHeight] = useState<number>(400);
   // 保存当前事件监听的解绑函数，用于 onLoad 时重新挂载前清理
@@ -892,6 +904,8 @@ function SafeHtmlFrame({ html, onImageOpen, onImageMenu }: SafeHtmlFrameProps) {
   onImageOpenRef.current = onImageOpen;
   const onImageMenuRef = useRef(onImageMenu);
   onImageMenuRef.current = onImageMenu;
+  const onLinkClickRef = useRef(onLinkClick);
+  onLinkClickRef.current = onLinkClick;
 
   // 注入 CSS：默认自动换行防止溢出，但允许固定宽度内容横向滚动
   // img cursor: zoom-in 提示可点击放大
@@ -903,6 +917,7 @@ function SafeHtmlFrame({ html, onImageOpen, onImageMenu }: SafeHtmlFrameProps) {
       pre, code { white-space: pre-wrap !important; word-wrap: break-word !important; overflow-wrap: break-word !important; }
       table { table-layout: auto !important; word-break: break-word !important; }
       img { max-width: 100% !important; height: auto !important; cursor: zoom-in; }
+      a { cursor: pointer; }
       div, p, span, td, th { word-wrap: break-word !important; overflow-wrap: break-word !important; }
     </style>`;
     const referrerMeta = `<meta name="referrer" content="no-referrer">`;
@@ -917,10 +932,26 @@ function SafeHtmlFrame({ html, onImageOpen, onImageMenu }: SafeHtmlFrameProps) {
 
   // 在 iframe contentDocument 上挂载图片事件监听
   const attachListeners = (doc: Document) => {
-    // 左键点击图片：直接打开预览（替代 WebView2 默认行为）
+    // 左键点击：先检测链接，再检测图片
+    // 链接点击：阻止 iframe 内导航，交给父组件用系统默认应用打开 URL
+    // 图片点击：直接打开预览（替代 WebView2 默认行为）
     const handleClick = (e: MouseEvent) => {
       const target = e.target as Element | null;
-      if (target && target.tagName === "IMG") {
+      if (!target) return;
+      // 优先检测链接：向上查找最近的 A 标签（链接可能包裹在 span/em 等内联元素里）
+      const anchor = target.closest("a") as HTMLAnchorElement | null;
+      if (anchor) {
+        // 取原始 href 属性，避免 srcDoc 的 baseURI 把相对路径解析成 about:srcdoc/...
+        const rawHref = anchor.getAttribute("href") || "";
+        // 仅处理 http/https/mailto/tel 等外部链接，忽略锚点（#xxx）和 javascript:
+        if (/^(https?:|mailto:|tel:)/i.test(rawHref)) {
+          e.preventDefault();
+          e.stopPropagation();
+          onLinkClickRef.current?.(rawHref);
+          return;
+        }
+      }
+      if (target.tagName === "IMG") {
         const src = (target as HTMLImageElement).src;
         if (src) {
           e.preventDefault();

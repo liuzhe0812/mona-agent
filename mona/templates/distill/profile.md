@@ -1,6 +1,29 @@
 你是一位用户画像分析师。基于以下来自多个数据源的聚合数据，
 构建用户的综合画像。
 
+## 用户已知偏好（先验，请勿矛盾）
+
+以下是用户在 USER.md 中手写的偏好和背景，作为分析先验。
+你的输出应与这些信息一致，不要产生矛盾结论。若对话数据与之冲突，以先验为准。
+
+{{ user_prior }}
+
+## Agent 对话主题（最近 {{ sessions.total_sessions }} 个会话）
+
+{% for topic in sessions.topics %}
+### 会话 {{ loop.index }}：{{ topic.title }}
+- 时间：{{ topic.updated_at }}
+- 涉及工具：{{ topic.tools_used }}
+- 用户消息：
+{{ topic.user_messages }}
+
+{% if topic.reasoning %}
+- AI 推理过程：
+{{ topic.reasoning }}
+{% endif %}
+
+{% endfor %}
+
 ## 笔记统计
 
 - 笔记总数：{{ notes.total_notes }}
@@ -35,6 +58,11 @@
 分析以上数据，输出用户画像的 JSON 对象。
 要求基于数据、具体明确——只包含有数据支撑的内容。所有文本值用中文。
 
+分析重点：
+1. **从对话内容提炼用户真正关心的问题、反复纠结的决策、遇到的痛点**——这是最重要的信号
+2. 从笔记和邮件补充技术栈、兴趣领域、协作关系
+3. 先验区已声明的偏好直接采纳，不要重复推导
+
 只输出合法 JSON（不要 markdown 代码块，不要解释），schema 如下：
 
 {
@@ -46,10 +74,10 @@
   "tech_stack": [
     {"area": "如 '编程语言'", "items": ["Python", "Rust", "TypeScript"]}
   ],
-  "interests": ["3-7 个从笔记/邮件可见的兴趣领域"],
+  "interests": ["3-7 个从对话/笔记/邮件可见的兴趣领域，要具体不要泛泛"],
   "knowledge_structure": {
-    "deep_areas": ["笔记数量多、深度知识领域"],
-    "exploring_areas": ["笔记少但在增长的探索领域"]
+    "deep_areas": ["笔记数量多、对话中反复深入讨论的领域"],
+    "exploring_areas": ["笔记少但在对话中可见正在探索的领域"]
   },
   "relationships": {
     "frequent_contacts": ["前 3-5 位邮件联系人"],
@@ -63,6 +91,6 @@
 }
 
 置信度参考标准：
-- 0.8+：50+ 笔记，20+ 邮件，模式清晰
+- 0.8+：50+ 笔记，20+ 邮件，20+ 会话，模式清晰
 - 0.5-0.8：有部分数据但存在缺口
 - 0.0-0.5：数据稀疏，低置信度

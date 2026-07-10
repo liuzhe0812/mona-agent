@@ -1,8 +1,4 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import {
-  FileText,
-  Terminal,
-} from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { AgentLogo } from "@/components/AgentLogo";
@@ -10,6 +6,7 @@ import { ThreadComposer } from "@/components/thread/ThreadComposer";
 import { ThreadHeader } from "@/components/thread/ThreadHeader";
 import { StreamErrorNotice } from "@/components/thread/StreamErrorNotice";
 import { ThreadViewport } from "@/components/thread/ThreadViewport";
+import { NewChatDashboard } from "@/components/thread/NewChatDashboard";
 import { SplitPane } from "@/components/deliver/SplitPane";
 import { FilePreviewPanel } from "@/components/deliver/FilePreviewPanel";
 import { useFilePreviewStore } from "@/components/deliver/filePreviewStore";
@@ -24,6 +21,9 @@ import { scrubSubagentUiMessages } from "@/lib/subagent-channel-display";
 import { useClient } from "@/providers/ClientProvider";
 import { useKbStore } from "@/stores/kb-store";
 import { retrieveKbContext, buildKbSystemPrompt } from "@/lib/kb-rag";
+import { useScheduleStore } from "@/components/schedule/scheduleStore";
+import { useEmailStore } from "@/components/email/store/emailStore";
+import { deriveTitle } from "@/lib/format";
 
 function projectWebuiThreadMessages(messages: UIMessage[]): UIMessage[] {
   return scrubSubagentUiMessages(normalizeLegacyLongTaskMessages(messages));
@@ -61,7 +61,10 @@ interface ThreadShellProps {
   onToggleSidebar: () => void;
   onGoHome?: () => void;
   onOpenSSH?: () => void;
+  onOpenDb?: () => void;
   onCreateNote?: () => void;
+  recentSessions?: ChatSummary[];
+  onSelectSession?: (key: string) => void;
   onCreateChat?: (workspace?: string | null) => Promise<string | null>;
   onTurnEnd?: () => void;
   queuedPrompt?: QueuedPrompt | null;
@@ -71,6 +74,7 @@ interface ThreadShellProps {
   hideSidebarToggleOnDesktop?: boolean;
   showHeader?: boolean;
   onModelNameChange?: (modelName: string | null) => void;
+  onOpenSettings?: (section?: string) => void;
 }
 
 function toModelBadgeLabel(modelName: string | null): string | null {
@@ -97,7 +101,10 @@ export function ThreadShell({
   title,
   onToggleSidebar,
   onOpenSSH,
+  onOpenDb,
   onCreateNote,
+  recentSessions = [],
+  onSelectSession,
   onCreateChat,
   onTurnEnd,
   queuedPrompt,
@@ -107,11 +114,17 @@ export function ThreadShell({
   hideSidebarToggleOnDesktop = false,
   showHeader = true,
   onModelNameChange,
+  onOpenSettings,
 }: ThreadShellProps) {
   const { t } = useTranslation();
   const chatId = session?.chatId ?? null;
   const historyKey = session?.key ?? null;
-  const [selectedWorkspace, setSelectedWorkspace] = useState<string | null>(null);
+  const [selectedWorkspace, setSelectedWorkspace] = useState<string | null>(
+    session?.workspace ?? null,
+  );
+  useEffect(() => {
+    setSelectedWorkspace(session?.workspace ?? null);
+  }, [session?.key]);
   const {
     messages: historical,
     loading,
@@ -151,9 +164,6 @@ export function ThreadShell({
   const [providerOptions, setProviderOptions] = useState<
     Array<{ name: string; label: string; free_default_model?: string | null; model?: string | null }>
   >([]);
-  const [imageGenConfig, setImageGenConfig] = useState<{ provider: string; model: string } | null>(null);
-  const preImageModeRef = useRef<{ provider: string; model: string } | null>(null);
-  const activeModelRef = useRef<{ provider: string; model: string } | null>(null);
   const [zenFreeModels, setZenFreeModels] = useState<string[]>([]);
   const [scrollToBottomSignal, setScrollToBottomSignal] = useState(0);
   const pendingFirstRef = useRef<PendingFirstMessage | null>(null);
@@ -189,6 +199,8 @@ export function ThreadShell({
 
   const pendingQueue = usePendingQueue();
 
+  const activeModelOptions = useMemo(() => providerOptions, [providerOptions]);
+
   useEffect(() => {
     if (chatId && historyKey) sessionKeyByChatIdRef.current.set(chatId, historyKey);
   }, [chatId, historyKey]);
@@ -196,6 +208,19 @@ export function ThreadShell({
   const displayMessages = useMemo(() => projectWebuiThreadMessages(messages), [messages]);
 
   const showHeroComposer = messages.length === 0 && !loading;
+  const scheduleItems = useScheduleStore((s) => s.items);
+  const loadScheduleItems = useScheduleStore((s) => s.loadItems);
+  const emailUnreadCount = useEmailStore((s) => s.totalUnreadCount);
+  const recentSession = useMemo(() => {
+    return [...recentSessions]
+      .sort((a, b) => Date.parse(b.updatedAt ?? b.createdAt ?? "") - Date.parse(a.updatedAt ?? a.createdAt ?? ""))
+      .find((candidate) => (candidate.title?.trim() || deriveTitle(candidate.preview, "")).trim())
+      ?? null;
+  }, [recentSessions]);
+
+  useEffect(() => {
+    if (showHeroComposer) void loadScheduleItems();
+  }, [loadScheduleItems, showHeroComposer]);
 
   useEffect(() => {
     if (!chatId || loading) return;
@@ -329,18 +354,6 @@ export function ThreadShell({
               model: p.model,
             }));
           setProviderOptions(options);
-          if (settings.image_generation?.provider && settings.image_generation?.model) {
-            setImageGenConfig({
-              provider: settings.image_generation.provider,
-              model: settings.image_generation.model,
-            });
-          }
-          if (settings.agent?.provider && settings.agent?.model) {
-            activeModelRef.current = {
-              provider: settings.agent.provider,
-              model: settings.agent.model,
-            };
-          }
           if (settings.runtime?.workspace_path) {
             setWorkspacePath(settings.runtime.workspace_path);
           }
@@ -381,13 +394,6 @@ export function ThreadShell({
         });
         const newModel = payload.agent.model || null;
         onModelNameChange?.(newModel);
-        // Track the active provider+model for image mode auto-switch
-        if (payload.agent?.provider && payload.agent?.model) {
-          activeModelRef.current = {
-            provider: payload.agent.provider,
-            model: payload.agent.model,
-          };
-        }
         // Refresh provider options from the updated settings so the dropdown
         // stays in sync (e.g. the previously-active provider now shows its
         // stored model instead of the old active-model fallback).
@@ -408,25 +414,6 @@ export function ThreadShell({
     },
     [token, onModelNameChange],
   );
-
-  // Auto-switch model when image mode toggles
-  useEffect(() => {
-    if (!imageGenConfig) return;
-    if (imageMode) {
-      // Save current active provider+model before switching to image model
-      if (activeModelRef.current && !preImageModeRef.current) {
-        preImageModeRef.current = { ...activeModelRef.current };
-      }
-      handleModelSwitch(imageGenConfig.provider, imageGenConfig.model);
-    } else {
-      // Switch back to the previous default model
-      const prev = preImageModeRef.current;
-      if (prev) {
-        handleModelSwitch(prev.provider, prev.model);
-        preImageModeRef.current = null;
-      }
-    }
-  }, [imageMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const injectKbContext = useCallback(
     async (content: string): Promise<string> => {
@@ -504,29 +491,6 @@ export function ThreadShell({
     onQueuedPromptConsumed?.(queuedPrompt.id);
   }, [booting, chatId, isStreaming, onQueuedPromptConsumed, queuedPrompt, send]);
 
-  const quickEntries = showHeroComposer ? (
-    <div className="flex items-center justify-center gap-2 pb-3">
-      <button
-        type="button"
-        onClick={onOpenSSH}
-        disabled={booting || isStreaming}
-        className="inline-flex h-9 items-center gap-2 rounded-full border border-border/70 bg-card px-3 text-[12.5px] font-medium text-foreground/82 shadow-[0_5px_14px_rgba(15,23,42,0.045)] transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-55"
-      >
-        <Terminal className="h-4 w-4 text-[#4f9de8]" />
-        新建SSH会话
-      </button>
-      <button
-        type="button"
-        onClick={onCreateNote}
-        disabled={booting || isStreaming}
-        className="inline-flex h-9 items-center gap-2 rounded-full border border-border/70 bg-card px-3 text-[12.5px] font-medium text-foreground/82 shadow-[0_5px_14px_rgba(15,23,42,0.045)] transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-55"
-      >
-        <FileText className="h-4 w-4 text-[#eba45d]" />
-        新建笔记
-      </button>
-    </div>
-  ) : null;
-
   const composerPlaceholder = showHeroComposer
     ? "问任何问题、运行终端、查笔记、维护 Windows..."
     : t("thread.composer.placeholderThread");
@@ -537,7 +501,6 @@ export function ThreadShell({
 
   const composer = (
     <>
-      {quickEntries}
       {streamError ? (
         <StreamErrorNotice
           error={streamError}
@@ -551,7 +514,7 @@ export function ThreadShell({
           isStreaming={isStreaming}
           placeholder={composerPlaceholder}
           modelLabel={toModelBadgeLabel(modelName)}
-          modelOptions={providerOptions}
+          modelOptions={activeModelOptions}
           zenFreeModels={zenFreeModels}
           onModelSwitch={handleModelSwitch}
           variant={showHeroComposer ? "hero" : "thread"}
@@ -572,6 +535,7 @@ export function ThreadShell({
           kbProjectName={selectedKbProjectName}
           kbProjects={kbProjects.length > 0 ? kbProjects : undefined}
           onKbSelect={setSelectedKbForChat}
+          onOpenSettings={onOpenSettings}
         />
       ) : (
         <ThreadComposer
@@ -580,7 +544,7 @@ export function ThreadShell({
           isStreaming={isStreaming}
           placeholder={openingPlaceholder}
           modelLabel={toModelBadgeLabel(modelName)}
-          modelOptions={providerOptions}
+          modelOptions={activeModelOptions}
           zenFreeModels={zenFreeModels}
           onModelSwitch={handleModelSwitch}
           variant="hero"
@@ -602,6 +566,7 @@ export function ThreadShell({
           onKbSelect={setSelectedKbForChat}
           workspace={selectedWorkspace}
           onWorkspaceChange={setSelectedWorkspace}
+          onOpenSettings={onOpenSettings}
         />
       )}
     </>
@@ -617,6 +582,16 @@ export function ThreadShell({
       <h1 className="text-balance text-[40px] font-normal leading-tight tracking-[-0.045em] text-foreground sm:text-[48px]">
         {t("thread.empty.greeting")}
       </h1>
+      <NewChatDashboard
+        scheduleItems={scheduleItems}
+        unreadCount={emailUnreadCount}
+        recentSession={recentSession}
+        disabled={booting || isStreaming}
+        onContinue={onSelectSession}
+        onConnectHost={onOpenSSH}
+        onConnectDatabase={onOpenDb}
+        onCreateNote={onCreateNote}
+      />
     </div>
   );
 

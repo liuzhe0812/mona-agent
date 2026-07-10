@@ -77,6 +77,10 @@ _TECH_KEYWORDS = {
 }
 
 
+# 状态性标签：无兴趣分类意义，统计时忽略
+_IGNORED_TAGS = {"草稿", "draft", "Draft", "DRAFT"}
+
+
 def _extract_keywords(title: str) -> list[str]:
     """Extract technical keywords from a note title (case-insensitive).
 
@@ -93,7 +97,10 @@ def _extract_keywords(title: str) -> list[str]:
 
 
 def _parse_frontmatter(content: str) -> dict[str, Any]:
-    """Parse YAML frontmatter from markdown content."""
+    """Parse YAML frontmatter from markdown content.
+
+    Supports simple key: value pairs and YAML block lists (``- item``).
+    """
     if not content.startswith("---"):
         return {}
     parts = content.split("---", 2)
@@ -101,15 +108,31 @@ def _parse_frontmatter(content: str) -> dict[str, Any]:
         return {}
     fm_text = parts[1].strip()
     result: dict[str, Any] = {}
+    last_key: str | None = None
     for line in fm_text.splitlines():
-        line = line.strip()
-        if ":" not in line:
+        stripped = line.strip()
+        if not stripped:
             continue
-        key, _, val = line.partition(":")
+        # YAML list item: "- value"
+        if stripped.startswith("- ") and last_key:
+            item = stripped[2:].strip().strip('"').strip("'")
+            if isinstance(result.get(last_key), list):
+                result[last_key].append(item)
+            else:
+                result[last_key] = [item]
+            continue
+        if ":" not in stripped:
+            continue
+        key, _, val = stripped.partition(":")
         key = key.strip()
         val = val.strip().strip('"').strip("'")
         if val:
             result[key] = val
+            last_key = key
+        else:
+            # key with empty value — might be a block list header
+            result[key] = []
+            last_key = key
     return result
 
 
@@ -161,12 +184,18 @@ def collect_notes_stats(vault: Path | None, top_n: int = 15) -> NotesStats:
         notebook_counter[notebook] += 1
         total_notes += 1
 
-        # Parse tags (comma or space separated)
-        if tags_raw:
-            for tag in str(tags_raw).replace(",", " ").split():
-                tag = tag.strip().strip('"').strip("'")
-                if tag:
-                    tag_counter[tag] += 1
+        # Normalize tags to list[str]
+        tag_list: list[str] = []
+        if isinstance(tags_raw, list):
+            tag_list = [str(t).strip() for t in tags_raw if str(t).strip()]
+        elif tags_raw:
+            tag_list = [t.strip() for t in str(tags_raw).replace(",", " ").split() if t.strip()]
+
+        for tag in tag_list:
+            # 过滤状态性标签（无兴趣分类意义）
+            if tag in _IGNORED_TAGS:
+                continue
+            tag_counter[tag] += 1
 
         # Extract technical keywords from title
         note_kws: list[str] = []
@@ -175,12 +204,11 @@ def collect_notes_stats(vault: Path | None, top_n: int = 15) -> NotesStats:
             note_kws.append(kw)
 
         # Also extract keywords from tags
-        if tags_raw:
-            for tag in str(tags_raw).replace(",", " ").split():
-                for kw in _extract_keywords(tag):
-                    keyword_counter[kw] += 1
-                    if kw not in note_kws:
-                        note_kws.append(kw)
+        for tag in tag_list:
+            for kw in _extract_keywords(tag):
+                keyword_counter[kw] += 1
+                if kw not in note_kws:
+                    note_kws.append(kw)
 
         if note_kws:
             note_keyword_records.append({"title": title, "keywords": note_kws})

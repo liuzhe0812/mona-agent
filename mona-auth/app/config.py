@@ -31,6 +31,9 @@ class Settings(BaseSettings):
 
     cors_origins: list[str] = []
 
+    upload_dir: str = "/var/www/mona/uploads"
+    upload_url_base: str = "https://mona.lzfun.vip/uploads"
+
     @property
     def license_private_key(self) -> str:
         return Path(self.license_private_key_path).read_text()

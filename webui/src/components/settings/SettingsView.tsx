@@ -23,6 +23,7 @@ import {
   Download,
   Eye,
   EyeOff,
+  ExternalLink,
   FolderOpen,
   Gem,
   Globe2,
@@ -194,6 +195,7 @@ interface SettingsViewProps {
   onModelNameChange: (modelName: string | null) => void;
   onRestart?: () => void;
   isRestarting?: boolean;
+  initialSection?: string;
 }
 
 function readLocalPreferences(): LocalPreferences {
@@ -231,6 +233,7 @@ export function SettingsView({
   onModelNameChange,
   onRestart,
   isRestarting = false,
+  initialSection,
 }: SettingsViewProps) {
   const { t } = useTranslation();
   const { token } = useClientOptional();
@@ -246,7 +249,9 @@ export function SettingsView({
   const [videoApiKeyDraft, setVideoApiKeyDraft] = useState("");
   const [videoKeyVisible, setVideoKeyVisible] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [activeSection, setActiveSection] = useState<SettingsSectionKey>("overview");
+  const [activeSection, setActiveSection] = useState<SettingsSectionKey>(
+    (initialSection as SettingsSectionKey | undefined) ?? "overview",
+  );
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
   const [providerQuery, setProviderQuery] = useState("");
   const [providerForms, setProviderForms] = useState<Record<string, { apiKey: string; apiBase: string; model: string }>>({});
@@ -1438,6 +1443,24 @@ function AiModelsSettings({
         <TabsTrigger value="video">{tx("settings.aiModels.video", "视频模型")}</TabsTrigger>
         <TabsTrigger value="embedding">{tx("settings.aiModels.embedding", "嵌入模型")}</TabsTrigger>
       </TabsList>
+
+      <a
+        href="https://mona.lzfun.vip/tutorial"
+        target="_blank"
+        rel="noopener noreferrer"
+        className="mb-5 flex items-center gap-3 rounded-lg border border-emerald-200/60 bg-emerald-50/60 px-4 py-3 transition-colors hover:border-emerald-300 hover:bg-emerald-50 dark:border-emerald-900/40 dark:bg-emerald-950/20 dark:hover:bg-emerald-950/30"
+      >
+        <Sparkles className="h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+        <div className="flex-1 text-[13px] leading-5">
+          <div className="font-medium text-emerald-700 dark:text-emerald-300">
+            还没有 API Key？免费获取 LLM / 图像 / 视频模型
+          </div>
+          <div className="text-emerald-700/60 dark:text-emerald-400/60">
+            点此查看图文教程，3 步拿到免费 Key 并配置到 Mona
+          </div>
+        </div>
+        <ExternalLink className="h-3.5 w-3.5 shrink-0 text-emerald-500 dark:text-emerald-400/70" />
+      </a>
 
       <TabsContent value="chat">
         <ModelsProvidersSettings

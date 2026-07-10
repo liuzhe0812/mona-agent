@@ -16,7 +16,7 @@ interface AppTitleBarProps {
   onTabClick: (id: string) => void;
   onTabClose: (id: string) => void;
   onNewTab: () => void;
-  onOpenSettings?: () => void;
+  onOpenSettings?: (section?: string) => void;
   onOpenSubscribe?: () => void;
   /** When true, renders a pulsing badge on the settings button (e.g. update available). */
   settingsBadge?: boolean;

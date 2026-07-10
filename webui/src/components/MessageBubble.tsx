@@ -5,16 +5,54 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { Check, ChevronRight, Copy, CornerDownLeft, FileIcon, ImageIcon, PlaySquare, Sparkles, Wrench, BookmarkCheck, Bookmark } from "lucide-react";
+import { Check, ChevronRight, Copy, CornerDownLeft, Download, FileIcon, FolderOpen, ImageIcon, PlaySquare, Sparkles, Wrench, BookmarkCheck, Bookmark } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { ImageLightbox } from "@/components/ImageLightbox";
 import { MarkdownText, preloadMarkdownText } from "@/components/MarkdownText";
 import { DeliveredFileCardList } from "@/components/deliver/DeliveredFileCard";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { cn } from "@/lib/utils";
 import { formatTurnLatency } from "@/lib/format";
-import { createNoteFromChat, isTauri } from "@/lib/tauri";
+import { createNoteFromChat, downloadMediaUrl, isTauri, revealItemInDir } from "@/lib/tauri";
 import type { UIImage, UIMediaAttachment, UIMessage } from "@/lib/types";
+
+const MIME_TO_EXT: Record<string, string> = {
+  "image/png": "png",
+  "image/jpeg": "jpg",
+  "image/gif": "gif",
+  "image/webp": "webp",
+  "image/bmp": "bmp",
+  "image/svg+xml": "svg",
+  "video/mp4": "mp4",
+  "video/webm": "webm",
+  "video/quicktime": "mov",
+};
+
+/** Suggest a filename (with extension) from a media URL and optional name. */
+function suggestMediaFilename(
+  url: string,
+  name: string | undefined,
+  fallbackBase: string,
+): string {
+  if (name && /\.[a-zA-Z0-9]{2,5}$/.test(name)) return name;
+  try {
+    const seg = new URL(url).pathname.split("/").pop();
+    if (seg && /\.[a-zA-Z0-9]{2,5}$/.test(seg)) return decodeURIComponent(seg);
+  } catch {
+    // not an http URL
+  }
+  if (url.startsWith("data:")) {
+    const m = /^data:([^;,]+)/.exec(url);
+    if (m && MIME_TO_EXT[m[1].toLowerCase()]) return `${fallbackBase}.${MIME_TO_EXT[m[1]]}`;
+  }
+  return fallbackBase;
+}
 
 interface MessageBubbleProps {
   message: UIMessage;
@@ -262,10 +300,20 @@ function MessageMedia({
 function MediaCell({ media }: { media: UIMediaAttachment }) {
   const { t } = useTranslation();
   const hasUrl = typeof media.url === "string" && media.url.length > 0;
+  const [downloading, setDownloading] = useState(false);
+
+  const handleDownload = useCallback(() => {
+    if (!hasUrl || downloading) return;
+    setDownloading(true);
+    const filename = suggestMediaFilename(media.url!, media.name, "video.mp4");
+    downloadMediaUrl(media.url!, filename)
+      .catch((err) => console.error("[MessageBubble] video download failed:", err))
+      .finally(() => setDownloading(false));
+  }, [downloading, hasUrl, media.name, media.url]);
 
   if (media.kind === "video" && hasUrl) {
     return (
-      <figure className="max-w-[min(100%,32rem)] overflow-hidden rounded-[14px] border border-border/60 bg-muted/40">
+      <figure className="relative max-w-[min(100%,32rem)] overflow-hidden rounded-[14px] border border-border/60 bg-muted/40">
         <video
           src={media.url}
           controls
@@ -273,6 +321,22 @@ function MediaCell({ media }: { media: UIMediaAttachment }) {
           className="block max-h-[26rem] w-full bg-black"
           aria-label={media.name ? `${t("message.videoAttachment", { defaultValue: "Video attachment" })}: ${media.name}` : t("message.videoAttachment", { defaultValue: "Video attachment" })}
         />
+        <button
+          type="button"
+          onClick={handleDownload}
+          disabled={downloading}
+          aria-label={t("message.downloadVideo", { defaultValue: "Download video" })}
+          title={t("message.downloadVideo", { defaultValue: "Download video" })}
+          className={cn(
+            "absolute right-2 top-2 grid h-8 w-8 place-items-center rounded-full",
+            "bg-black/55 text-white/90 hover:bg-black/70 hover:text-white",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70",
+            "transition-colors motion-reduce:transition-none",
+            downloading && "pointer-events-none opacity-60",
+          )}
+        >
+          <Download className="h-4 w-4" aria-hidden />
+        </button>
         {media.name ? (
           <figcaption className="truncate px-3 py-1.5 text-[11.5px] text-muted-foreground">
             {media.name}
@@ -406,7 +470,9 @@ function UserImageCell({
   openLabel: string;
   onOpen?: () => void;
 }) {
+  const { t } = useTranslation();
   const hasUrl = typeof image.url === "string" && image.url.length > 0;
+  const [busy, setBusy] = useState(false);
   const tileClasses = cn(
     "relative overflow-hidden border border-border/60 bg-muted/40",
     size === "large"
@@ -415,33 +481,66 @@ function UserImageCell({
     "shadow-[0_6px_18px_-14px_rgba(0,0,0,0.45)]",
   );
 
+  const handleSave = useCallback(
+    (reveal: boolean) => {
+      if (!image.url || busy) return;
+      setBusy(true);
+      const filename = suggestMediaFilename(image.url, image.name, "image");
+      downloadMediaUrl(image.url, filename)
+        .then((saved) => (reveal && saved ? revealItemInDir(saved) : Promise.resolve()))
+        .catch((err) => console.error("[MessageBubble] image save failed:", err))
+        .finally(() => setBusy(false));
+    },
+    [busy, image.name, image.url],
+  );
+
   if (hasUrl && onOpen) {
     return (
-      <button
-        type="button"
-        onClick={onOpen}
-        aria-label={image.name ? `${openLabel}: ${image.name}` : openLabel}
-        className={cn(
-          tileClasses,
-          "block cursor-zoom-in p-0 transition-transform duration-150 motion-reduce:transition-none",
-          "hover:scale-[1.01] hover:ring-2 hover:ring-primary/25",
-          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50",
-        )}
-      >
-        <img
-          src={image.url}
-          alt={image.name ?? ""}
-          loading="lazy"
-          decoding="async"
-          draggable={false}
-          className={cn(
-            "block",
-            size === "large"
-              ? "h-auto max-h-[36rem] w-full rounded-[inherit] object-contain"
-              : "h-full w-full object-cover",
-          )}
-        />
-      </button>
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <button
+            type="button"
+            onClick={onOpen}
+            aria-label={image.name ? `${openLabel}: ${image.name}` : openLabel}
+            className={cn(
+              tileClasses,
+              "block cursor-zoom-in p-0 transition-transform duration-150 motion-reduce:transition-none",
+              "hover:scale-[1.01] hover:ring-2 hover:ring-primary/25",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50",
+            )}
+          >
+            <img
+              src={image.url}
+              alt={image.name ?? ""}
+              loading="lazy"
+              decoding="async"
+              draggable={false}
+              className={cn(
+                "block",
+                size === "large"
+                  ? "h-auto max-h-[36rem] w-full rounded-[inherit] object-contain"
+                  : "h-full w-full object-cover",
+              )}
+            />
+          </button>
+        </ContextMenuTrigger>
+        <ContextMenuContent>
+          <ContextMenuItem
+            disabled={busy}
+            onSelect={() => handleSave(false)}
+          >
+            <Download className="h-4 w-4" aria-hidden />
+            {t("message.downloadImage", { defaultValue: "Download image" })}
+          </ContextMenuItem>
+          <ContextMenuItem
+            disabled={busy}
+            onSelect={() => handleSave(true)}
+          >
+            <FolderOpen className="h-4 w-4" aria-hidden />
+            {t("message.openInFolder", { defaultValue: "Show in folder" })}
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
     );
   }
 
