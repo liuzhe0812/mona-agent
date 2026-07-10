@@ -2,6 +2,7 @@
 
 import {
   Activity,
+  CalendarDays,
   Clock,
   FileText,
   Link2,
@@ -58,10 +59,19 @@ export function WorkPatternTab({
 
   // 效率洞察：数据驱动生成
   const hourly = work?.evidence?.hourly_distribution ?? {};
+  const daily = work?.evidence?.daily_distribution ?? {};
   const peakHour = findPeakHour(hourly);
   const topChain = chains[0];
   const outputStyle = work?.output_style ?? "未知";
   const workFocus = work?.work_focus ?? "";
+
+  // 工作日 vs 周末强度
+  const weekdaySum = ["1", "2", "3", "4", "5"]
+    .reduce((sum, d) => sum + (daily[d] ?? 0), 0);
+  const weekendSum = ["0", "6"]
+    .reduce((sum, d) => sum + (daily[d] ?? 0), 0);
+  const totalDaily = weekdaySum + weekendSum;
+  const weekdayRatio = totalDaily > 0 ? Math.round((weekdaySum / totalDaily) * 100) : null;
 
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-3">
@@ -76,16 +86,18 @@ export function WorkPatternTab({
         <div className="grid gap-3">
           <Panel className="p-4">
             <SectionTitle icon={<Activity className="h-4 w-4" />} title="活动热力" hint="按小时 × 星期" color={PROFILE_COLORS.emerald} />
-            <div className="overflow-hidden">
+            <div className="flex justify-center overflow-hidden">
               <ActivityHeatmap data={heatmap} />
             </div>
           </Panel>
 
           <Panel className="p-4">
             <SectionTitle icon={<Link2 className="h-4 w-4" />} title="工具使用链路" hint={chains.length > 0 ? "基于工具链证据" : "暂无数据"} color={PROFILE_COLORS.cyan} />
-            {chains.length > 0
-              ? <SankeyChart chains={chains} height={160} />
-              : <div className="flex h-[160px] items-center justify-center text-xs text-muted-foreground">暂无工具链数据</div>}
+            <div className="flex justify-center">
+              {chains.length > 0
+                ? <SankeyChart chains={chains} height={200} />
+                : <div className="flex h-[200px] items-center justify-center text-xs text-muted-foreground">暂无工具链数据</div>}
+            </div>
           </Panel>
         </div>
 
@@ -119,6 +131,15 @@ export function WorkPatternTab({
               body={outputStyle !== "未知" ? `输出风格：${outputStyle}，偏好结构化表达。` : "暂无输出风格数据。"}
               evidence="来自 output_style"
               color={PROFILE_COLORS.coral}
+            />
+            <InsightItem
+              icon={<CalendarDays className="h-4 w-4" />}
+              title="工作日强度"
+              body={weekdayRatio !== null
+                ? `工作日活跃度占 ${weekdayRatio}%，${weekdayRatio >= 80 ? "高度集中在工作日。" : weekdayRatio >= 60 ? "以工作日为主，偶有周末活动。" : "工作日与周末分布较均衡。"}`
+                : "暂无每日分布数据。"}
+              evidence="来自 daily_distribution"
+              color={PROFILE_COLORS.amberSoft}
             />
           </div>
         </Panel>
