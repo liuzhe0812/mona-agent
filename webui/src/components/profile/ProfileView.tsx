@@ -149,7 +149,6 @@ export function ProfileView() {
         <TabsContent value="profile" className="mt-0 h-full overflow-auto p-4">
           <ProfileTab
             data={data?.profile}
-            workPatterns={data?.work_patterns}
             loading={loading}
           />
         </TabsContent>

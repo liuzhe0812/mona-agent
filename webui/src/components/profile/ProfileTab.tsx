@@ -3,7 +3,6 @@
 import {
   AlertTriangle,
   BadgeCheck,
-  Clock3,
   Lightbulb,
   Sparkles,
   Star,
@@ -11,31 +10,27 @@ import {
   TrendingUp,
   UserRound,
   Users,
-  Wrench,
 } from "lucide-react";
 
 import {
-  type ProfileData, type WorkPatterns,
+  type ProfileData,
 } from "@/lib/profile-api";
 import { cn } from "@/lib/utils";
 
-import { ActivityHeatmap } from "./charts/Heatmap";
 import { KnowledgeStarGraph } from "./charts/KnowledgeStarGraph";
 import { RadarChart } from "./charts/RadarChart";
 import { SkillMatrix } from "./charts/SkillMatrix";
 import {
-  CARD_BASE, CARD_HOVER, PROFILE_COLORS, hourlyToHeatmap, scoreLevel,
+  CARD_BASE, CARD_HOVER, PROFILE_COLORS, scoreLevel,
 } from "./profile-theme";
 
 interface ProfileTabProps {
   data?: ProfileData;
-  workPatterns?: WorkPatterns;
   loading: boolean;
 }
 
 export function ProfileTab({
   data,
-  workPatterns,
   loading,
 }: ProfileTabProps) {
   if (loading) {
@@ -79,13 +74,6 @@ export function ProfileTab({
     : 0;
   const { label: scoreLabel, color: scoreColor } = scoreLevel(avgScore);
 
-  // 常用工具 / 高频任务
-  const tools = workPatterns?.preferred_tools ?? [];
-  const tasks = workPatterns?.frequent_tasks ?? [];
-
-  // 活动热力图
-  const heatmap = hourlyToHeatmap(workPatterns?.evidence?.hourly_distribution);
-
   // 关键洞察：数据驱动生成
   const sortedRadar = [...radarScores].sort((a, b) => b.value - a.value);
   const strongest = sortedRadar[0];
@@ -99,8 +87,6 @@ export function ProfileTab({
   const lastCount = lastMonth ? monthly[lastMonth] : 0;
   const prevCount = prevMonth ? monthly[prevMonth] : 0;
   const monthDelta = lastCount - prevCount;
-
-  const workFocus = workPatterns?.work_focus ?? data?.relationships?.collaboration_pattern ?? "";
 
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-3">
@@ -135,7 +121,7 @@ export function ProfileTab({
                 <MetricPill label="笔记总数" value={`${totalNotes} 篇`} color={PROFILE_COLORS.cyan} />
               </div>
               <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
-                {workFocus || "暂无画像摘要，点击「编辑画像」或蒸馏后生成。"}
+                {data?.relationships?.collaboration_pattern || "暂无画像摘要，蒸馏后生成。"}
               </p>
             </div>
           </div>
@@ -193,15 +179,6 @@ export function ProfileTab({
               color={PROFILE_COLORS.amber}
             />
             <InsightItem
-              icon={<Clock3 className="h-4 w-4" />}
-              title="工作习惯"
-              body={data?.work_rhythm?.active_hours
-                ? `活跃时段：${data.work_rhythm.active_hours}，强度：${data.work_rhythm.intensity ?? "未知"}。`
-                : "暂无工作节奏数据。"}
-              evidence="证据：工作节奏"
-              color={PROFILE_COLORS.cyan}
-            />
-            <InsightItem
               icon={<AlertTriangle className="h-4 w-4" />}
               title="建议关注"
               body={weakest ? `${weakest.axis} 评分 ${weakest.value}，有提升空间。` : "暂无数据，蒸馏后生成。"}
@@ -212,7 +189,7 @@ export function ProfileTab({
         </Panel>
       </div>
 
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
         <Panel className="p-4">
           <SectionTitle icon={<BadgeCheck className="h-4 w-4" />} title="技能矩阵" hint={skillMatrix.length > 0 ? "Top 技能" : "暂无数据"} color={PROFILE_COLORS.emerald} />
           <SkillMatrix skills={skillMatrix} />
@@ -235,12 +212,6 @@ export function ProfileTab({
           </div>
         </Panel>
         <Panel className="p-4">
-          <SectionTitle icon={<Clock3 className="h-4 w-4" />} title="工作节奏" hint="近 4 周" color={PROFILE_COLORS.cyan} />
-          <div className="scale-[0.82] origin-top-left">
-            <ActivityHeatmap data={heatmap} />
-          </div>
-        </Panel>
-        <Panel className="p-4">
           <SectionTitle icon={<Users className="h-4 w-4" />} title="人际网络" hint={contacts.length > 0 ? "Top 协作" : "暂无数据"} color={PROFILE_COLORS.coral} />
           <div className="flex flex-col gap-2">
             {contacts.length > 0 ? contacts.map((contact) => (
@@ -249,31 +220,6 @@ export function ProfileTab({
           </div>
         </Panel>
       </div>
-
-      <Panel className="grid grid-cols-1 gap-4 p-4 lg:grid-cols-[1fr_1fr_260px]">
-        <div className="flex min-w-0 items-center gap-3">
-          <Wrench className="h-4 w-4 text-muted-foreground" />
-          <span className="shrink-0 text-sm font-medium">常用工具</span>
-          <div className="flex min-w-0 flex-wrap gap-2">
-            {tools.length > 0 ? tools.map((tool) => (
-              <span key={tool} className="rounded-md border bg-background px-2 py-1 text-xs text-muted-foreground">{tool}</span>
-            )) : <span className="text-xs text-muted-foreground">暂无</span>}
-          </div>
-        </div>
-        <div className="flex min-w-0 items-center gap-3">
-          <Sparkles className="h-4 w-4 text-muted-foreground" />
-          <span className="shrink-0 text-sm font-medium">高频任务</span>
-          <div className="flex min-w-0 flex-wrap gap-2">
-            {tasks.length > 0 ? tasks.map((task) => (
-              <span key={task} className="rounded-md border bg-background px-2 py-1 text-xs text-muted-foreground">{task}</span>
-            )) : <span className="text-xs text-muted-foreground">暂无</span>}
-          </div>
-        </div>
-        <div className="border-t pt-3 text-sm lg:border-l lg:border-t-0 lg:pl-4 lg:pt-0">
-          <span className="text-muted-foreground">本月工作聚焦</span>
-          <p className="mt-1 font-medium">{workFocus || "暂无"}</p>
-        </div>
-      </Panel>
     </div>
   );
 }
