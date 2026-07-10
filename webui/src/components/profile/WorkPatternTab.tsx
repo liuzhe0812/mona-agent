@@ -72,20 +72,22 @@ export function WorkPatternTab({
         <MetricCard icon={<Activity className="h-5 w-5" />} label="完成质量" value={completionQuality > 0 ? `${completionQuality}%` : "暂无"} hint="基于蒸馏置信度" color={PROFILE_COLORS.emerald} />
       </div>
 
-      <div className="grid grid-cols-1 gap-3 xl:grid-cols-[1.05fr_1.1fr_340px]">
-        <Panel className="p-4">
-          <SectionTitle icon={<Activity className="h-4 w-4" />} title="活动热力" hint="按小时 × 星期" color={PROFILE_COLORS.emerald} />
-          <div className="overflow-hidden">
-            <ActivityHeatmap data={heatmap} />
-          </div>
-        </Panel>
+      <div className="grid grid-cols-1 gap-3 xl:grid-cols-[1fr_340px]">
+        <div className="grid gap-3">
+          <Panel className="p-4">
+            <SectionTitle icon={<Activity className="h-4 w-4" />} title="活动热力" hint="按小时 × 星期" color={PROFILE_COLORS.emerald} />
+            <div className="overflow-hidden">
+              <ActivityHeatmap data={heatmap} />
+            </div>
+          </Panel>
 
-        <Panel className="p-4">
-          <SectionTitle icon={<Link2 className="h-4 w-4" />} title="工具使用链路" hint={chains.length > 0 ? "基于工具链证据" : "暂无数据"} color={PROFILE_COLORS.cyan} />
-          {chains.length > 0
-            ? <SankeyChart chains={chains} height={300} />
-            : <div className="flex h-[300px] items-center justify-center text-xs text-muted-foreground">暂无工具链数据</div>}
-        </Panel>
+          <Panel className="p-4">
+            <SectionTitle icon={<Link2 className="h-4 w-4" />} title="工具使用链路" hint={chains.length > 0 ? "基于工具链证据" : "暂无数据"} color={PROFILE_COLORS.cyan} />
+            {chains.length > 0
+              ? <SankeyChart chains={chains} height={300} />
+              : <div className="flex h-[300px] items-center justify-center text-xs text-muted-foreground">暂无工具链数据</div>}
+          </Panel>
+        </div>
 
         <Panel className="p-4">
           <SectionTitle icon={<Zap className="h-4 w-4" />} title="效率洞察" color={PROFILE_COLORS.emerald} />
