@@ -145,7 +145,12 @@ def collect_notes_stats(vault: Path | None, top_n: int = 15) -> NotesStats:
 
         frontmatter = _parse_frontmatter(content)
         title = frontmatter.get("title", md_file.stem)
-        notebook = frontmatter.get("notebook", "默认分类")
+        # notebook：优先用 vault 下第一级文件夹名，回退到 frontmatter notebookId
+        rel_parts = md_file.relative_to(vault).parts
+        if len(rel_parts) > 1:
+            notebook = rel_parts[0]
+        else:
+            notebook = frontmatter.get("notebook") or frontmatter.get("notebookId") or "默认分类"
         tags_raw = frontmatter.get("tags", "")
         created = frontmatter.get("createdAt") or frontmatter.get("created_at") or frontmatter.get("updated", "")
 
