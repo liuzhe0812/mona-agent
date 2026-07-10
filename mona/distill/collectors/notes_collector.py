@@ -30,6 +30,8 @@ class NotesStats:
     monthly_distribution: dict[str, int] = field(default_factory=dict)
     # Recent note titles (for LLM context)
     recent_titles: list[str] = field(default_factory=list)
+    # Per-note keyword lists for co-occurrence: [{title, keywords: [...]}]
+    note_keywords: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -40,6 +42,7 @@ class NotesStats:
             "title_keywords": self.title_keywords,
             "monthly_distribution": self.monthly_distribution,
             "recent_titles": self.recent_titles,
+            "note_keywords": self.note_keywords,
         }
 
 
@@ -128,6 +131,7 @@ def collect_notes_stats(vault: Path | None, top_n: int = 15) -> NotesStats:
     keyword_counter: Counter[str] = Counter()
     monthly: Counter[str] = Counter()
     recent_titles: list[str] = []
+    note_keyword_records: list[dict[str, Any]] = []
     total_notes = 0
 
     # Scan markdown files
@@ -165,14 +169,21 @@ def collect_notes_stats(vault: Path | None, top_n: int = 15) -> NotesStats:
                     tag_counter[tag] += 1
 
         # Extract technical keywords from title
+        note_kws: list[str] = []
         for kw in _extract_keywords(title):
             keyword_counter[kw] += 1
+            note_kws.append(kw)
 
         # Also extract keywords from tags
         if tags_raw:
             for tag in str(tags_raw).replace(",", " ").split():
                 for kw in _extract_keywords(tag):
                     keyword_counter[kw] += 1
+                    if kw not in note_kws:
+                        note_kws.append(kw)
+
+        if note_kws:
+            note_keyword_records.append({"title": title, "keywords": note_kws})
 
         # Monthly distribution
         if created:
@@ -201,6 +212,7 @@ def collect_notes_stats(vault: Path | None, top_n: int = 15) -> NotesStats:
     ]
     stats.monthly_distribution = dict(sorted(monthly.items()))
     stats.recent_titles = recent_titles
+    stats.note_keywords = note_keyword_records
 
     logger.info(
         f"[notes_collector] scanned {total_notes} notes, "

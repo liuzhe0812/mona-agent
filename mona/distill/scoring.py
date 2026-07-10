@@ -234,43 +234,37 @@ def _area_label(dim: str) -> str:
 def build_knowledge_graph(
     notes_stats: dict[str, Any],
 ) -> dict[str, Any]:
-    """Build knowledge star graph (force-directed nodes + links).
+    """Build knowledge star graph (keyword co-occurrence network).
+
+    Nodes: user (center) + keywords (outer ring).
+    Links: user → keywords (radial), keyword ↔ keyword (co-occurrence in same note).
 
     Returns {"nodes": [...], "links": [...]}
     """
     keywords = notes_stats.get("title_keywords", [])
-    notebook_dist = notes_stats.get("notebook_distribution", [])
+    note_keywords = notes_stats.get("note_keywords", [])
 
     nodes: list[dict[str, Any]] = [{"id": "user", "label": "我", "group": 0, "size": 30}]
 
-    # Add notebook nodes
-    for nb in notebook_dist[:8]:
-        name = nb.get("notebook", "")
-        count = nb.get("count", 1)
-        if not name:
-            continue
-        nodes.append({
-            "id": f"nb:{name}",
-            "label": name,
-            "group": 1,
-            "size": min(25, 8 + count * 2),
-        })
-
-    # Add keyword nodes
+    # Add keyword nodes only (no notebook — categories are subjective)
+    kw_ids: list[str] = []
     for kw_item in keywords[:15]:
         kw = kw_item.get("keyword", "")
         count = kw_item.get("count", 1)
         if not kw:
             continue
+        node_id = f"kw:{kw}"
+        kw_ids.append(node_id)
         nodes.append({
-            "id": f"kw:{kw}",
+            "id": node_id,
             "label": kw,
-            "group": 2,
+            "group": 1,
             "size": min(20, 6 + count * 2),
         })
 
-    # Links: user → notebooks, user → keywords
-    links = []
+    links: list[dict[str, Any]] = []
+
+    # Radial links: user → each keyword
     for node in nodes[1:]:
         links.append({
             "source": "user",
@@ -278,17 +272,22 @@ def build_knowledge_graph(
             "weight": max(1, (node.get("size") or 10) // 5),
         })
 
-    # Co-occurrence links between keywords in same notebook (simplified)
-    nb_nodes = [n for n in nodes if n["group"] == 1]
-    kw_nodes = [n for n in nodes if n["group"] == 2]
-    # Link keywords to notebooks (random heuristic: keyword → first notebook)
-    for kw_node in kw_nodes[:8]:
-        if nb_nodes:
-            links.append({
-                "source": nb_nodes[0]["id"],
-                "target": kw_node["id"],
-                "weight": 1,
-            })
+    # Co-occurrence links: keywords appearing in the same note are connected
+    kw_id_set = set(kw_ids)
+    co_occurrence: Counter[tuple[str, str]] = Counter()
+    for record in note_keywords:
+        kws = record.get("keywords", [])
+        # Normalize to kw IDs, keep only top-15 keywords
+        ids = [f"kw:{kw}" for kw in kws if f"kw:{kw}" in kw_id_set]
+        # All unique pairs
+        for i, a in enumerate(ids):
+            for b in ids[i + 1 :]:
+                pair = tuple(sorted([a, b]))
+                co_occurrence[pair] += 1
+
+    # Add co-occurrence links (top 20 to avoid clutter)
+    for (a, b), count in co_occurrence.most_common(20):
+        links.append({"source": a, "target": b, "weight": count})
 
     return {"nodes": nodes, "links": links}
 
