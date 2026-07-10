@@ -130,3 +130,24 @@ export function scoreLevel(score: number): { label: string; color: string; level
   if (score >= 10) return { label: "入门", color: "#374151", level: 1 };
   return { label: "未涉", color: "#1f2937", level: 0 };
 }
+
+/** 把 work_patterns.evidence.hourly_distribution（{ "9": 12, ... }）转成 7×24 热力图网格。
+ *  若无数据返回全 0 网格。 */
+export function hourlyToHeatmap(
+  hourly: Record<string, number> | undefined | null,
+): number[][] {
+  const grid: number[][] = Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => 0));
+  if (!hourly) return grid;
+  const max = Math.max(1, ...Object.values(hourly));
+  for (const [hStr, count] of Object.entries(hourly)) {
+    const h = Number(hStr);
+    if (!Number.isInteger(h) || h < 0 || h > 23) continue;
+    // 工作日（0-4）给满权重，周末给 0.4
+    for (let day = 0; day < 7; day++) {
+      const factor = day < 5 ? 1 : 0.4;
+      grid[day][h] = Math.round((count / max) * 10 * factor);
+    }
+  }
+  return grid;
+}
+

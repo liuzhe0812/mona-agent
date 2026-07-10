@@ -196,7 +196,7 @@ export function Toolbar() {
         >
           <AgentLogo
             state={aiStreaming ? "working" : "idle"}
-            className={`h-5 w-5 ${aiPanelVisible ? "" : "opacity-60"}`}
+            className="h-5 w-5"
           />
         </Button>
       )}

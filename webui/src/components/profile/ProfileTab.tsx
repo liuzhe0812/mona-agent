@@ -1,4 +1,4 @@
-/** 人物画像 Tab：mock 总览看板。 */
+/** 人物画像 Tab：能力总览看板（真实后端数据）。 */
 
 import { useCallback, useState } from "react";
 import {
@@ -21,7 +21,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import {
-  fetchUserMd, updateUserSection, type ProfileData,
+  fetchUserMd, updateUserSection, type ProfileData, type WorkPatterns,
 } from "@/lib/profile-api";
 import { cn } from "@/lib/utils";
 
@@ -30,132 +30,20 @@ import { KnowledgeStarGraph } from "./charts/KnowledgeStarGraph";
 import { RadarChart } from "./charts/RadarChart";
 import { SkillMatrix } from "./charts/SkillMatrix";
 import {
-  CARD_BASE, CARD_HOVER, PROFILE_COLORS, scoreLevel,
+  CARD_BASE, CARD_HOVER, PROFILE_COLORS, hourlyToHeatmap, scoreLevel,
 } from "./profile-theme";
 
 interface ProfileTabProps {
   data?: ProfileData;
+  workPatterns?: WorkPatterns;
   loading: boolean;
   hasData: boolean;
   onReload: () => void;
 }
 
-const MOCK_PROFILE: ProfileData = {
-  identity: {
-    primary_role: "产品经理",
-    secondary_roles: ["产品运营", "数据分析师", "项目负责人"],
-    timezone_hint: "Asia/Shanghai",
-  },
-  relationships: {
-    frequent_contacts: ["Leo（设计）", "Sunny（运营）", "Wayne（开发）", "Yolanda（数据）", "Kevin（市场）"],
-    collaboration_pattern: "跨团队推进，偏好用数据验证方案。",
-  },
-  work_rhythm: {
-    active_hours: "09:00 - 12:00",
-    intensity: "heavy",
-  },
-  confidence: 0.92,
-  evidence: {
-    note_distribution: [
-      { notebook: "产品策略", count: 88 },
-      { notebook: "用户研究", count: 85 },
-      { notebook: "数据分析", count: 84 },
-      { notebook: "项目管理", count: 83 },
-      { notebook: "团队协作", count: 90 },
-    ],
-    tag_distribution: [
-      { tag: "用户体验", count: 42 },
-      { tag: "数据驱动", count: 36 },
-      { tag: "产品设计", count: 32 },
-      { tag: "增长", count: 24 },
-      { tag: "AI 工具", count: 22 },
-      { tag: "效率提升", count: 18 },
-      { tag: "SaaS", count: 16 },
-      { tag: "团队协作", count: 14 },
-    ],
-    top_senders: [
-      { sender: "Leo", count: 28 },
-      { sender: "Sunny", count: 24 },
-      { sender: "Wayne", count: 19 },
-      { sender: "Yolanda", count: 16 },
-    ],
-  },
-  visualizations: {
-    radar_scores: [
-      { axis: "产品策略", key: "strategy", value: 88 },
-      { axis: "用户洞察", key: "user", value: 85 },
-      { axis: "数据分析", key: "data", value: 84 },
-      { axis: "项目管理", key: "pm", value: 83 },
-      { axis: "跨团队协作", key: "collab", value: 90 },
-      { axis: "沟通表达", key: "comm", value: 86 },
-      { axis: "问题解决", key: "solve", value: 89 },
-      { axis: "创新思维", key: "creative", value: 81 },
-    ],
-    skill_matrix: [
-      { area: "产品策略", level: 4, score: 88, note_count: 48 },
-      { area: "用户研究", level: 4, score: 85, note_count: 42 },
-      { area: "数据分析", level: 4, score: 84, note_count: 39 },
-      { area: "项目管理", level: 4, score: 83, note_count: 35 },
-      { area: "跨团队协作", level: 5, score: 90, note_count: 51 },
-    ],
-    knowledge_graph: {
-      nodes: [
-        { id: "user", label: "产品设计", group: 0, size: 34 },
-        { id: "need", label: "需求分析", group: 1, size: 24 },
-        { id: "data", label: "数据分析", group: 1, size: 20 },
-        { id: "collab", label: "团队协作", group: 1, size: 20 },
-        { id: "growth", label: "增长黑客", group: 1, size: 18 },
-        { id: "research", label: "用户研究", group: 2, size: 16 },
-        { id: "plan", label: "产品规划", group: 2, size: 16 },
-        { id: "proto", label: "原型设计", group: 2, size: 16 },
-        { id: "market", label: "市场洞察", group: 2, size: 16 },
-        { id: "operation", label: "运营策略", group: 2, size: 16 },
-      ],
-      links: [
-        { source: "user", target: "need", weight: 3 },
-        { source: "user", target: "data", weight: 2 },
-        { source: "user", target: "collab", weight: 2 },
-        { source: "user", target: "growth", weight: 1 },
-        { source: "need", target: "research", weight: 1 },
-        { source: "need", target: "plan", weight: 1 },
-        { source: "data", target: "market", weight: 1 },
-        { source: "collab", target: "operation", weight: 1 },
-        { source: "growth", target: "proto", weight: 1 },
-      ],
-    },
-    tag_cloud: [
-      { tag: "用户体验", count: 42 },
-      { tag: "数据驱动", count: 36 },
-      { tag: "产品设计", count: 32 },
-      { tag: "增长", count: 24 },
-      { tag: "AI 工具", count: 22 },
-      { tag: "效率提升", count: 18 },
-      { tag: "SaaS", count: 16 },
-      { tag: "团队协作", count: 14 },
-    ],
-    knowledge_structure_bar: [
-      { notebook: "产品策略", count: 88 },
-      { notebook: "用户研究", count: 85 },
-      { notebook: "数据分析", count: 84 },
-      { notebook: "项目管理", count: 83 },
-      { notebook: "团队协作", count: 90 },
-    ],
-  },
-};
-
-const MOCK_TOOLS = ["文档", "表格", "PPT", "Figma", "Notion", "流程图"];
-const MOCK_TASKS = ["需求分析", "方案撰写", "数据分析", "产品规划", "项目跟进"];
-const MOCK_HEATMAP = Array.from({ length: 7 }, (_, day) =>
-  Array.from({ length: 24 }, (_, hour) => {
-    const morning = hour >= 9 && hour <= 12 ? 8 : 0;
-    const afternoon = hour >= 14 && hour <= 17 ? 5 : 0;
-    const weekday = day < 5 ? 1 : 0.35;
-    return Math.round((morning + afternoon + ((day + hour) % 3)) * weekday);
-  }),
-);
-
 export function ProfileTab({
   data,
+  workPatterns,
   loading,
   hasData,
   onReload,
@@ -213,22 +101,56 @@ export function ProfileTab({
     );
   }
 
-  const viewData = MOCK_PROFILE;
-  const sourceNote = hasData && data ? "Mock 预览 - 已保留真实数据入口" : "Mock 数据";
-  const identity = viewData.identity ?? {};
-  const evidence = viewData.evidence ?? {};
-  const viz = viewData.visualizations ?? {};
+  const sourceNote = hasData ? "已蒸馏" : "尚未蒸馏";
+  const identity = data?.identity ?? {};
+  const evidence = data?.evidence ?? {};
+  const viz = data?.visualizations ?? {};
   const radarScores = viz.radar_scores ?? [];
   const skillMatrix = viz.skill_matrix ?? [];
   const knowledgeGraph = viz.knowledge_graph;
   const tagCloud = viz.tag_cloud ?? evidence.tag_distribution ?? [];
-  const contacts = (viewData.relationships?.frequent_contacts ?? [])
-    .map((name, index) => ({ name, score: 92 - index * 6 }))
-    .slice(0, 5);
-  const avgScore = Math.round(
-    radarScores.reduce((sum, item) => sum + item.value, 0) / radarScores.length,
-  );
+  const totalNotes = evidence.total_notes ?? 0;
+
+  // 人际网络：优先用 top_senders（有 count），否则用 frequent_contacts（无 count）
+  const topSenders = evidence.top_senders ?? [];
+  const frequentContacts = data?.relationships?.frequent_contacts ?? [];
+  const contacts = topSenders.length > 0
+    ? topSenders.slice(0, 5).map((s, i) => ({
+        name: s.sender ?? s.address ?? `联系人 ${i + 1}`,
+        score: Math.max(30, 92 - i * 6),
+      }))
+    : frequentContacts.slice(0, 5).map((name, i) => ({
+        name,
+        score: 92 - i * 6,
+      }));
+
+  const avgScore = radarScores.length > 0
+    ? Math.round(radarScores.reduce((sum, item) => sum + item.value, 0) / radarScores.length)
+    : 0;
   const { label: scoreLabel, color: scoreColor } = scoreLevel(avgScore);
+
+  // 常用工具 / 高频任务
+  const tools = workPatterns?.preferred_tools ?? [];
+  const tasks = workPatterns?.frequent_tasks ?? [];
+
+  // 活动热力图
+  const heatmap = hourlyToHeatmap(workPatterns?.evidence?.hourly_distribution);
+
+  // 关键洞察：数据驱动生成
+  const sortedRadar = [...radarScores].sort((a, b) => b.value - a.value);
+  const strongest = sortedRadar[0];
+  const weakest = sortedRadar[sortedRadar.length - 1];
+
+  // 笔记月度趋势（最近两个月对比）
+  const monthly = evidence.notes_monthly ?? {};
+  const monthKeys = Object.keys(monthly).sort();
+  const lastMonth = monthKeys[monthKeys.length - 1];
+  const prevMonth = monthKeys[monthKeys.length - 2];
+  const lastCount = lastMonth ? monthly[lastMonth] : 0;
+  const prevCount = prevMonth ? monthly[prevMonth] : 0;
+  const monthDelta = lastCount - prevCount;
+
+  const workFocus = workPatterns?.work_focus ?? data?.relationships?.collaboration_pattern ?? "";
 
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-3">
@@ -267,7 +189,7 @@ export function ProfileTab({
             <div className="min-w-0">
               <div className="mb-2 flex flex-wrap items-center gap-2">
                 <h2 className="truncate text-2xl font-bold tracking-tight">
-                  {identity.primary_role}
+                  {identity.primary_role || "尚未确定角色"}
                 </h2>
                 <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-700">
                   主角色
@@ -281,11 +203,11 @@ export function ProfileTab({
                 ))}
               </div>
               <div className="mb-3 flex flex-wrap gap-2">
-                <MetricPill label="置信度" value={`${Math.round((viewData.confidence ?? 0) * 100)}%`} color={PROFILE_COLORS.emerald} />
-                <MetricPill label="新鲜度" value="2 小时前更新" color={PROFILE_COLORS.cyan} />
+                <MetricPill label="置信度" value={`${Math.round((data?.confidence ?? 0) * 100)}%`} color={PROFILE_COLORS.emerald} />
+                <MetricPill label="笔记总数" value={`${totalNotes} 篇`} color={PROFILE_COLORS.cyan} />
               </div>
               <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
-                你擅长复杂问题结构化，推动跨团队协作与落地，并持续通过数据验证优化产品体验。
+                {workFocus || "暂无画像摘要，点击「编辑画像」或蒸馏后生成。"}
               </p>
             </div>
           </div>
@@ -301,7 +223,7 @@ export function ProfileTab({
             <div className="mt-3 h-2 overflow-hidden rounded-full bg-muted">
               <div className="h-full rounded-full" style={{ width: `${avgScore}%`, background: scoreColor }} />
             </div>
-            <span className="mt-2 text-xs text-muted-foreground">{scoreLabel} · 超过 86% 的同类用户</span>
+            <span className="mt-2 text-xs text-muted-foreground">{scoreLabel}{radarScores.length > 0 ? ` · 基于 ${radarScores.length} 维能力评估` : ""}</span>
           </div>
         </div>
       </Panel>
@@ -321,7 +243,7 @@ export function ProfileTab({
 
       <div className={cn("grid grid-cols-1 gap-3 xl:grid-cols-[1.1fr_1.35fr_340px]", editing && "pointer-events-none opacity-40")}>
         <Panel className="p-4">
-          <SectionTitle icon={<Star className="h-4 w-4" />} title="能力雷达" hint="你的能力 vs 同岗均值" color={PROFILE_COLORS.emerald} />
+          <SectionTitle icon={<Star className="h-4 w-4" />} title="能力雷达" hint={radarScores.length > 0 ? "综合能力评估" : "暂无数据"} color={PROFILE_COLORS.emerald} />
           <div className="flex justify-center">
             <RadarChart current={radarScores} size={330} />
           </div>
@@ -342,29 +264,33 @@ export function ProfileTab({
             <InsightItem
               icon={<Star className="h-4 w-4" />}
               title="优势"
-              body="结构化思维与跨团队协作是核心优势，能高效推动复杂项目落地。"
-              evidence="证据：能力雷达、任务完成质量"
+              body={strongest ? `${strongest.axis} 是核心优势，评分 ${strongest.value}。` : "暂无数据，蒸馏后生成。"}
+              evidence="证据：能力雷达"
               color={PROFILE_COLORS.emerald}
             />
             <InsightItem
               icon={<TrendingUp className="h-4 w-4" />}
               title="最近变化"
-              body="数据分析和商业分析活跃度提升明显，知识结构更均衡。"
-              evidence="证据：技能矩阵、知识结构"
+              body={lastMonth && prevMonth
+                ? `${lastMonth} 笔记 ${lastCount} 篇，较上月 ${monthDelta >= 0 ? "增加" : "减少"} ${Math.abs(monthDelta)} 篇。`
+                : "暂无月度对比数据。"}
+              evidence="证据：笔记月度分布"
               color={PROFILE_COLORS.amber}
             />
             <InsightItem
               icon={<Clock3 className="h-4 w-4" />}
               title="工作习惯"
-              body="上午专注度最高，偏好深度工作，周三输出最多。"
-              evidence="证据：工作节奏、任务分布"
+              body={data?.work_rhythm?.active_hours
+                ? `活跃时段：${data.work_rhythm.active_hours}，强度：${data.work_rhythm.intensity ?? "未知"}。`
+                : "暂无工作节奏数据。"}
+              evidence="证据：工作节奏"
               color={PROFILE_COLORS.cyan}
             />
             <InsightItem
               icon={<AlertTriangle className="h-4 w-4" />}
               title="建议关注"
-              body="原型设计与用户洞察仍有提升空间，建议加强用户访谈与验证。"
-              evidence="证据：能力雷达、笔记记录"
+              body={weakest ? `${weakest.axis} 评分 ${weakest.value}，有提升空间。` : "暂无数据，蒸馏后生成。"}
+              evidence="证据：能力雷达"
               color={PROFILE_COLORS.coral}
             />
           </div>
@@ -373,13 +299,13 @@ export function ProfileTab({
 
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
         <Panel className="p-4">
-          <SectionTitle icon={<BadgeCheck className="h-4 w-4" />} title="技能矩阵" hint="Top 技能" color={PROFILE_COLORS.emerald} />
+          <SectionTitle icon={<BadgeCheck className="h-4 w-4" />} title="技能矩阵" hint={skillMatrix.length > 0 ? "Top 技能" : "暂无数据"} color={PROFILE_COLORS.emerald} />
           <SkillMatrix skills={skillMatrix} />
         </Panel>
         <Panel className="p-4">
-          <SectionTitle icon={<Tags className="h-4 w-4" />} title="兴趣标签" hint="Top 标签" color={PROFILE_COLORS.amber} />
+          <SectionTitle icon={<Tags className="h-4 w-4" />} title="兴趣标签" hint={tagCloud.length > 0 ? "Top 标签" : "暂无数据"} color={PROFILE_COLORS.amber} />
           <div className="flex flex-wrap gap-2">
-            {tagCloud.map((tag, index) => (
+            {tagCloud.length > 0 ? tagCloud.map((tag, index) => (
               <span
                 key={tag.tag}
                 className="rounded-full border px-2.5 py-1 text-xs font-medium"
@@ -390,21 +316,21 @@ export function ProfileTab({
               >
                 {tag.tag}
               </span>
-            ))}
+            )) : <span className="text-xs text-muted-foreground">暂无标签</span>}
           </div>
         </Panel>
         <Panel className="p-4">
           <SectionTitle icon={<Clock3 className="h-4 w-4" />} title="工作节奏" hint="近 4 周" color={PROFILE_COLORS.cyan} />
           <div className="scale-[0.82] origin-top-left">
-            <ActivityHeatmap data={MOCK_HEATMAP} />
+            <ActivityHeatmap data={heatmap} />
           </div>
         </Panel>
         <Panel className="p-4">
-          <SectionTitle icon={<Users className="h-4 w-4" />} title="人际网络" hint="Top 协作" color={PROFILE_COLORS.coral} />
+          <SectionTitle icon={<Users className="h-4 w-4" />} title="人际网络" hint={contacts.length > 0 ? "Top 协作" : "暂无数据"} color={PROFILE_COLORS.coral} />
           <div className="flex flex-col gap-2">
-            {contacts.map((contact) => (
+            {contacts.length > 0 ? contacts.map((contact) => (
               <BarRow key={contact.name} label={contact.name} value={contact.score} suffix="%" color={PROFILE_COLORS.emerald} />
-            ))}
+            )) : <span className="text-xs text-muted-foreground">暂无联系人数据</span>}
           </div>
         </Panel>
       </div>
@@ -414,23 +340,23 @@ export function ProfileTab({
           <Wrench className="h-4 w-4 text-muted-foreground" />
           <span className="shrink-0 text-sm font-medium">常用工具</span>
           <div className="flex min-w-0 flex-wrap gap-2">
-            {MOCK_TOOLS.map((tool) => (
+            {tools.length > 0 ? tools.map((tool) => (
               <span key={tool} className="rounded-md border bg-background px-2 py-1 text-xs text-muted-foreground">{tool}</span>
-            ))}
+            )) : <span className="text-xs text-muted-foreground">暂无</span>}
           </div>
         </div>
         <div className="flex min-w-0 items-center gap-3">
           <Sparkles className="h-4 w-4 text-muted-foreground" />
           <span className="shrink-0 text-sm font-medium">高频任务</span>
           <div className="flex min-w-0 flex-wrap gap-2">
-            {MOCK_TASKS.map((task) => (
+            {tasks.length > 0 ? tasks.map((task) => (
               <span key={task} className="rounded-md border bg-background px-2 py-1 text-xs text-muted-foreground">{task}</span>
-            ))}
+            )) : <span className="text-xs text-muted-foreground">暂无</span>}
           </div>
         </div>
         <div className="border-t pt-3 text-sm lg:border-l lg:border-t-0 lg:pl-4 lg:pt-0">
           <span className="text-muted-foreground">本月工作聚焦</span>
-          <p className="mt-1 font-medium">用户增长 · 数据验证 · 产品迭代</p>
+          <p className="mt-1 font-medium">{workFocus || "暂无"}</p>
         </div>
       </Panel>
     </div>

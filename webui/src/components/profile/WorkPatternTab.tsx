@@ -1,4 +1,4 @@
-/** 工作模式 Tab：mock 行为证据看板。 */
+/** 工作模式 Tab：真实行为证据看板。 */
 
 import {
   Activity,
@@ -14,70 +14,18 @@ import {
   Zap,
 } from "lucide-react";
 
-import type { RichProfile, WorkPatterns } from "@/lib/profile-api";
+import type { RichProfile } from "@/lib/profile-api";
 import { cn } from "@/lib/utils";
 
 import { ActivityHeatmap } from "./charts/Heatmap";
 import { SankeyChart } from "./charts/SankeyChart";
-import { CARD_BASE, CARD_HOVER, PROFILE_COLORS } from "./profile-theme";
+import { CARD_BASE, CARD_HOVER, PROFILE_COLORS, hourlyToHeatmap } from "./profile-theme";
 
 interface WorkPatternTabProps {
   data?: RichProfile;
   loading: boolean;
   hasData: boolean;
 }
-
-const MOCK_WORK = {
-  frequent_tasks: ["写作 & 文档处理", "数据分析", "研究收集", "会议沟通", "项目管理"],
-  preferred_tools: ["Mona 对话", "知识库", "表格分析", "文档编辑", "笔记", "代码/脚本", "任务管理", "思维导图"],
-  tool_chains: [
-    "文档→Mona 对话→文档",
-    "数据表→表格分析→数据表",
-    "想法/笔记→知识库→文档",
-  ],
-  active_hours: "09:00 - 12:00",
-  output_style: "structured",
-  work_focus: "偏好结构化写作、数据验证和跨团队沟通，上午是最稳定的深度工作时段。",
-  confidence: 0.89,
-  evidence: {
-    top_tools: [
-      { tool: "Mona 对话", count: 36 },
-      { tool: "知识库", count: 22 },
-      { tool: "表格分析", count: 16 },
-      { tool: "文档编辑", count: 14 },
-      { tool: "笔记", count: 9 },
-    ],
-    tool_chains: [
-      { chain: "文档→Mona 对话→文档", count: 36 },
-      { chain: "数据表→表格分析→数据表", count: 18 },
-      { chain: "想法/笔记→知识库→文档", count: 12 },
-      { chain: "会议记录→Mona 对话→任务清单", count: 10 },
-      { chain: "网页→知识库→报告", count: 8 },
-    ],
-    hourly_distribution: {},
-    daily_distribution: {},
-  },
-} satisfies WorkPatterns;
-
-const MOCK_HEATMAP = Array.from({ length: 7 }, (_, day) =>
-  Array.from({ length: 24 }, (_, hour) => {
-    const morning = hour >= 9 && hour <= 12 ? 10 : 0;
-    const afternoon = hour >= 13 && hour <= 17 ? 7 : 0;
-    const evening = hour >= 20 && hour <= 22 ? 2 : 0;
-    const weekdayFactor = day < 5 ? 1 : 0.45;
-    const wave = (day + hour) % 4;
-    return Math.round((morning + afternoon + evening + wave) * weekdayFactor);
-  }),
-);
-
-const TASK_DISTRIBUTION = [
-  { label: "写作 & 文档处理", value: 42, color: PROFILE_COLORS.amber },
-  { label: "数据分析", value: 18, color: PROFILE_COLORS.emerald },
-  { label: "研究收集", value: 15, color: PROFILE_COLORS.cyan },
-  { label: "会议沟通", value: 10, color: PROFILE_COLORS.emeraldSoft },
-  { label: "项目管理", value: 8, color: PROFILE_COLORS.coral },
-  { label: "其他", value: 7, color: "#94a3b8" },
-];
 
 export function WorkPatternTab({
   data,
@@ -92,12 +40,32 @@ export function WorkPatternTab({
     );
   }
 
-  const sourceNote = hasData && data ? "Mock 预览 - 已保留真实数据入口" : "Mock 数据";
-  const topTools = MOCK_WORK.evidence.top_tools ?? [];
-  const chains = MOCK_WORK.evidence.tool_chains ?? [];
-  const mainTask = MOCK_WORK.frequent_tasks?.[0] ?? "暂无";
-  const mainTool = MOCK_WORK.preferred_tools?.[0] ?? "暂无";
-  const completionQuality = 87;
+  const work = data?.work_patterns;
+  const sourceNote = hasData ? "已蒸馏" : "尚未蒸馏";
+
+  const topTools = work?.evidence?.top_tools ?? [];
+  const chains = work?.evidence?.tool_chains ?? [];
+  const frequentTasks = work?.frequent_tasks ?? [];
+  const preferredTools = work?.preferred_tools ?? [];
+  const mainTask = frequentTasks[0] ?? "暂无";
+  const mainTool = preferredTools[0] ?? "暂无";
+  const completionQuality = Math.round((work?.confidence ?? 0) * 100);
+
+  // 活动热力图
+  const heatmap = hourlyToHeatmap(work?.evidence?.hourly_distribution);
+
+  // 任务分布：从 frequent_tasks 生成等分
+  const taskDistribution = generateTaskDistribution(frequentTasks);
+
+  // 活跃时段
+  const activeHours = work?.active_hours ?? "暂无";
+
+  // 效率洞察：数据驱动生成
+  const hourly = work?.evidence?.hourly_distribution ?? {};
+  const peakHour = findPeakHour(hourly);
+  const topChain = chains[0];
+  const outputStyle = work?.output_style ?? "未知";
+  const workFocus = work?.work_focus ?? "";
 
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-3">
@@ -107,28 +75,32 @@ export function WorkPatternTab({
         </span>
         <div className="flex items-center gap-2 rounded-lg border bg-background px-2.5 py-1.5 text-xs text-muted-foreground">
           <CalendarClock className="h-3.5 w-3.5" />
-          近 30 天（5.12 - 6.10）
+          {data?.last_distilled_at
+            ? `更新于 ${new Date(data.last_distilled_at).toLocaleDateString("zh-CN")}`
+            : "尚未蒸馏"}
         </div>
       </div>
 
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
-        <MetricCard icon={<Clock className="h-5 w-5" />} label="活跃时段" value={MOCK_WORK.active_hours ?? "暂无"} hint="日活跃峰值" color={PROFILE_COLORS.emerald} />
-        <MetricCard icon={<FileText className="h-5 w-5" />} label="高频任务" value={mainTask} hint="占全部任务 42%" color={PROFILE_COLORS.amber} />
-        <MetricCard icon={<Wrench className="h-5 w-5" />} label="常用工具" value={mainTool} hint="使用时长占比 36%" color={PROFILE_COLORS.cyan} />
-        <MetricCard icon={<Activity className="h-5 w-5" />} label="完成质量" value={`${completionQuality}%`} hint="基于可用工具统计" color={PROFILE_COLORS.emerald} />
+        <MetricCard icon={<Clock className="h-5 w-5" />} label="活跃时段" value={activeHours} hint="日活跃峰值" color={PROFILE_COLORS.emerald} />
+        <MetricCard icon={<FileText className="h-5 w-5" />} label="高频任务" value={mainTask} hint={frequentTasks.length > 0 ? `共 ${frequentTasks.length} 类任务` : "暂无"} color={PROFILE_COLORS.amber} />
+        <MetricCard icon={<Wrench className="h-5 w-5" />} label="常用工具" value={mainTool} hint={preferredTools.length > 0 ? `共 ${preferredTools.length} 种工具` : "暂无"} color={PROFILE_COLORS.cyan} />
+        <MetricCard icon={<Activity className="h-5 w-5" />} label="完成质量" value={completionQuality > 0 ? `${completionQuality}%` : "暂无"} hint="基于蒸馏置信度" color={PROFILE_COLORS.emerald} />
       </div>
 
       <div className="grid grid-cols-1 gap-3 xl:grid-cols-[1.05fr_1.1fr_340px]">
         <Panel className="p-4">
           <SectionTitle icon={<Activity className="h-4 w-4" />} title="活动热力" hint="按小时 × 星期" color={PROFILE_COLORS.emerald} />
           <div className="overflow-hidden">
-            <ActivityHeatmap data={MOCK_HEATMAP} />
+            <ActivityHeatmap data={heatmap} />
           </div>
         </Panel>
 
         <Panel className="p-4">
-          <SectionTitle icon={<Link2 className="h-4 w-4" />} title="工具使用链路" hint="基于工具链证据" color={PROFILE_COLORS.cyan} />
-          <SankeyChart chains={chains} height={300} />
+          <SectionTitle icon={<Link2 className="h-4 w-4" />} title="工具使用链路" hint={chains.length > 0 ? "基于工具链证据" : "暂无数据"} color={PROFILE_COLORS.cyan} />
+          {chains.length > 0
+            ? <SankeyChart chains={chains} height={300} />
+            : <div className="flex h-[300px] items-center justify-center text-xs text-muted-foreground">暂无工具链数据</div>}
         </Panel>
 
         <Panel className="p-4">
@@ -137,28 +109,28 @@ export function WorkPatternTab({
             <InsightItem
               icon={<Clock className="h-4 w-4" />}
               title="专注黄金段"
-              body="09:00-12:00 活跃度最高，期间完成的任务占全天 38%。"
+              body={peakHour ? `${peakHour}:00 时段活跃度最高，是深度工作的最佳时段。` : "暂无小时分布数据，蒸馏后生成。"}
               evidence="来自 hourly_distribution"
               color={PROFILE_COLORS.emerald}
             />
             <InsightItem
               icon={<MessageSquare className="h-4 w-4" />}
-              title="会议 / 切换成本"
-              body="13:00-15:00 会议占比 27%，同时工具切换频次上升。"
-              evidence="来自 hourly_distribution / tool_chains"
+              title="工具切换"
+              body={chains.length > 0 ? `共记录 ${chains.length} 条工具链，最常见链路使用 ${topChain?.count ?? 0} 次。` : "暂无工具链数据。"}
+              evidence="来自 tool_chains"
               color={PROFILE_COLORS.amber}
             />
             <InsightItem
               icon={<Link2 className="h-4 w-4" />}
               title="工具链偏好"
-              body="最常见链路是：文档 → Mona 对话 → 文档，占全部链路的 36%。"
+              body={topChain ? `最常见链路：${topChain.chain}，占全部链路的 ${topChain.count} 次。` : "暂无链路数据。"}
               evidence="来自 tool_chains"
               color={PROFILE_COLORS.cyan}
             />
             <InsightItem
               icon={<FileText className="h-4 w-4" />}
               title="输出风格"
-              body="文档输出占比高，结构化表达为主，偏好清单与分步说明。"
+              body={outputStyle !== "未知" ? `输出风格：${outputStyle}，偏好结构化表达。` : "暂无输出风格数据。"}
               evidence="来自 output_style"
               color={PROFILE_COLORS.coral}
             />
@@ -168,25 +140,27 @@ export function WorkPatternTab({
 
       <div className="grid grid-cols-1 gap-3 xl:grid-cols-[0.8fr_1fr_1fr]">
         <Panel className="p-4">
-          <SectionTitle icon={<Target className="h-4 w-4" />} title="任务分布" hint="基于 frequent_tasks" color={PROFILE_COLORS.amber} />
-          <TaskDistribution />
+          <SectionTitle icon={<Target className="h-4 w-4" />} title="任务分布" hint={frequentTasks.length > 0 ? "基于 frequent_tasks" : "暂无数据"} color={PROFILE_COLORS.amber} />
+          {taskDistribution.length > 0 ? <TaskDistribution items={taskDistribution} total={frequentTasks.length} /> : <span className="text-xs text-muted-foreground">暂无任务数据</span>}
         </Panel>
 
         <Panel className="p-4">
-          <SectionTitle icon={<Repeat2 className="h-4 w-4" />} title="典型工作流" hint="高频路径" color={PROFILE_COLORS.emerald} />
+          <SectionTitle icon={<Repeat2 className="h-4 w-4" />} title="典型工作流" hint={chains.length > 0 ? "高频路径" : "暂无数据"} color={PROFILE_COLORS.emerald} />
           <div className="flex flex-col gap-3">
-            {chains.slice(0, 3).map((chain, index) => (
+            {chains.length > 0 ? chains.slice(0, 3).map((chain, index) => (
               <WorkflowRow key={chain.chain} index={index + 1} chain={chain.chain} count={chain.count} />
-            ))}
+            )) : <span className="text-xs text-muted-foreground">暂无工作流数据</span>}
           </div>
         </Panel>
 
         <Panel className="p-4">
-          <SectionTitle icon={<Wrench className="h-4 w-4" />} title="常用工具 Top 5" hint="使用时长占比" color={PROFILE_COLORS.cyan} />
+          <SectionTitle icon={<Wrench className="h-4 w-4" />} title="常用工具 Top 5" hint={topTools.length > 0 ? "使用次数" : "暂无数据"} color={PROFILE_COLORS.cyan} />
           <div className="flex flex-col gap-2">
-            {topTools.map((tool, index) => (
-              <ToolRow key={tool.tool} rank={index + 1} label={tool.tool} value={tool.count} />
-            ))}
+            {topTools.length > 0 ? topTools.slice(0, 5).map((tool, index) => (
+              <ToolRow key={tool.tool} rank={index + 1} label={tool.tool} value={tool.count} max={topTools[0]?.count ?? 1} />
+            )) : preferredTools.length > 0 ? preferredTools.slice(0, 5).map((tool, index) => (
+              <ToolRow key={tool} rank={index + 1} label={tool} value={5 - index} max={5} />
+            )) : <span className="text-xs text-muted-foreground">暂无工具数据</span>}
           </div>
         </Panel>
       </div>
@@ -195,18 +169,41 @@ export function WorkPatternTab({
         <div>
           <SectionTitle icon={<ListChecks className="h-4 w-4" />} title="输出风格" color={PROFILE_COLORS.coral} />
           <div className="grid grid-cols-3 gap-3 text-center text-xs">
-            <OutputMetric label="平均字数" value="1,286 字" />
-            <OutputMetric label="平均段落" value="12 段" />
-            <OutputMetric label="逻辑层级" value="12 段" />
+            <OutputMetric label="输出风格" value={outputStyle} />
+            <OutputMetric label="工具数" value={`${preferredTools.length} 种`} />
+            <OutputMetric label="任务类" value={`${frequentTasks.length} 类`} />
           </div>
         </div>
         <div>
           <SectionTitle icon={<SparklineIcon />} title="本期工作聚焦" color={PROFILE_COLORS.emerald} />
-          <p className="text-sm leading-6 text-muted-foreground">{MOCK_WORK.work_focus}</p>
+          <p className="text-sm leading-6 text-muted-foreground">{workFocus || "暂无工作聚焦数据，蒸馏后生成。"}</p>
         </div>
       </Panel>
     </div>
   );
+}
+
+/** 从 frequent_tasks 生成等分任务分布数据 */
+function generateTaskDistribution(
+  tasks: string[],
+): { label: string; value: number; color: string }[] {
+  if (tasks.length === 0) return [];
+  const colors = [PROFILE_COLORS.amber, PROFILE_COLORS.emerald, PROFILE_COLORS.cyan, PROFILE_COLORS.emeraldSoft, PROFILE_COLORS.coral, "#94a3b8"];
+  const baseShare = Math.floor(100 / tasks.length);
+  return tasks.map((task, index) => ({
+    label: task,
+    value: index === 0 ? baseShare + (100 - baseShare * tasks.length) : baseShare,
+    color: colors[index % colors.length],
+  }));
+}
+
+/** 从 hourly_distribution 找活跃度最高的小时 */
+function findPeakHour(hourly: Record<string, number>): number | null {
+  const entries = Object.entries(hourly);
+  if (entries.length === 0) return null;
+  const peak = entries.reduce((max, [h, count]) => (count > max[1] ? [h, count] : max), entries[0]);
+  const hour = Number(peak[0]);
+  return Number.isInteger(hour) ? hour : null;
 }
 
 function Panel({
@@ -301,9 +298,15 @@ function InsightItem({
   );
 }
 
-function TaskDistribution() {
-  const gradient = `conic-gradient(${TASK_DISTRIBUTION.map((item, index) => {
-    const start = TASK_DISTRIBUTION.slice(0, index).reduce((sum, entry) => sum + entry.value, 0);
+function TaskDistribution({
+  items,
+  total,
+}: {
+  items: { label: string; value: number; color: string }[];
+  total: number;
+}) {
+  const gradient = `conic-gradient(${items.map((item, index) => {
+    const start = items.slice(0, index).reduce((sum, entry) => sum + entry.value, 0);
     const end = start + item.value;
     return `${item.color} ${start}% ${end}%`;
   }).join(", ")})`;
@@ -312,12 +315,12 @@ function TaskDistribution() {
     <div className="grid grid-cols-[120px_1fr] items-center gap-5">
       <div className="relative h-28 w-28 rounded-full" style={{ background: gradient }}>
         <div className="absolute inset-8 flex flex-col items-center justify-center rounded-full bg-card text-center">
-          <span className="text-[10px] text-muted-foreground">总任务</span>
-          <span className="text-sm font-bold tabular-nums">1,248</span>
+          <span className="text-[10px] text-muted-foreground">任务类</span>
+          <span className="text-sm font-bold tabular-nums">{total}</span>
         </div>
       </div>
       <div className="space-y-1.5">
-        {TASK_DISTRIBUTION.map((item) => (
+        {items.map((item) => (
           <div key={item.label} className="flex items-center gap-2 text-xs">
             <span className="h-2.5 w-2.5 rounded-full" style={{ background: item.color }} />
             <span className="flex-1 truncate text-muted-foreground">{item.label}</span>
@@ -351,7 +354,7 @@ function WorkflowRow({
           </span>
         ))}
       </div>
-      <span className="text-right tabular-nums text-muted-foreground">{count}%</span>
+      <span className="text-right tabular-nums text-muted-foreground">{count} 次</span>
     </div>
   );
 }
@@ -360,19 +363,22 @@ function ToolRow({
   rank,
   label,
   value,
+  max,
 }: {
   rank: number;
   label: string;
   value: number;
+  max: number;
 }) {
+  const ratio = max > 0 ? (value / max) * 100 : 0;
   return (
     <div className="grid grid-cols-[18px_90px_1fr_34px] items-center gap-2 text-xs">
       <span className="text-muted-foreground">{rank}</span>
       <span className="truncate">{label}</span>
       <div className="h-1.5 overflow-hidden rounded-full bg-muted">
-        <div className="h-full rounded-full bg-emerald-500" style={{ width: `${Math.min(value * 2.2, 100)}%` }} />
+        <div className="h-full rounded-full bg-emerald-500" style={{ width: `${Math.min(ratio, 100)}%` }} />
       </div>
-      <span className="text-right tabular-nums text-muted-foreground">{value}%</span>
+      <span className="text-right tabular-nums text-muted-foreground">{value}</span>
     </div>
   );
 }

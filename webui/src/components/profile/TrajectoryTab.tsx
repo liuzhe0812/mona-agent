@@ -1,5 +1,6 @@
-/** 成长轨迹 Tab：mock 时间变化看板。 */
+/** 成长轨迹 Tab：真实成长对比看板。 */
 
+import { useEffect, useState } from "react";
 import {
   Award,
   BookOpen,
@@ -12,7 +13,9 @@ import {
   TriangleAlert,
 } from "lucide-react";
 
-import type { GrowthComparison, RichProfile } from "@/lib/profile-api";
+import {
+  fetchGrowthComparison, type GrowthComparison, type RichProfile,
+} from "@/lib/profile-api";
 import { cn } from "@/lib/utils";
 
 import { RadarChart } from "./charts/RadarChart";
@@ -25,67 +28,34 @@ interface TrajectoryTabProps {
   loading: boolean;
 }
 
-const MOCK_COMPARISON: GrowthComparison = {
-  current_radar: [
-    { axis: "产品策略", key: "strategy", value: 88 },
-    { axis: "用户洞察", key: "user", value: 85 },
-    { axis: "数据分析", key: "data", value: 84 },
-    { axis: "项目管理", key: "pm", value: 83 },
-    { axis: "团队协作", key: "collab", value: 90 },
-    { axis: "沟通表达", key: "comm", value: 86 },
-    { axis: "问题解决", key: "solve", value: 89 },
-    { axis: "创新思维", key: "creative", value: 81 },
-  ],
-  previous_radar: [
-    { axis: "产品策略", key: "strategy", value: 72 },
-    { axis: "用户洞察", key: "user", value: 73 },
-    { axis: "数据分析", key: "data", value: 70 },
-    { axis: "项目管理", key: "pm", value: 80 },
-    { axis: "团队协作", key: "collab", value: 72 },
-    { axis: "沟通表达", key: "comm", value: 83 },
-    { axis: "问题解决", key: "solve", value: 78 },
-    { axis: "创新思维", key: "creative", value: 75 },
-  ],
-  new_skills: ["数据洞察", "用户访谈", "增长实验", "需求拆解", "PRD 结构化", "方案复盘", "竞品分析"],
-  skill_progression: [
-    { skill: "团队协作", before: 72, after: 90, delta: 18 },
-    { skill: "产品策略", before: 71, after: 88, delta: 17 },
-    { skill: "数据分析", before: 70, after: 84, delta: 14 },
-    { skill: "用户洞察", before: 73, after: 85, delta: 12 },
-    { skill: "问题解决", before: 78, after: 89, delta: 11 },
-    { skill: "创新思维", before: 75, after: 81, delta: 6 },
-    { skill: "沟通表达", before: 83, after: 86, delta: 3 },
-    { skill: "项目管理", before: 80, after: 83, delta: 3 },
-  ],
-  current_snapshot_date: "2026-06-10",
-  previous_snapshot_date: "2026-05-11",
-};
-
-const GROWTH_POINTS = [
-  { label: "5.12", value: 60, previous: 52 },
-  { label: "5.16", value: 65, previous: 56 },
-  { label: "5.20", value: 70, previous: 61 },
-  { label: "5.24", value: 76, previous: 66 },
-  { label: "5.28", value: 79, previous: 68 },
-  { label: "6.01", value: 82, previous: 72 },
-  { label: "6.05", value: 84, previous: 73 },
-  { label: "6.10", value: 86, previous: 78 },
-];
-
-const MILESTONES = [
-  { date: "5.18", title: "完成数据分析项目", type: "项目", body: "输出用户行为分析模型，推动洞察报告落地。" },
-  { date: "5.29", title: "主导产品方案落地", type: "产品", body: "方案正式上线，获得用户正反馈。" },
-  { date: "6.07", title: "知识库贡献突破", type: "知识", body: "知识库累计贡献内容突破 100 篇。" },
-];
-
-const FIELD_MATRIX = [
-  { title: "新兴领域", items: ["用户洞察", "数据分析", "团队协作"], color: PROFILE_COLORS.emerald },
-  { title: "稳定优势", items: ["产品策略", "问题解决"], color: PROFILE_COLORS.amber },
-  { title: "稳步发展", items: ["项目管理", "沟通表达"], color: PROFILE_COLORS.cyan },
-  { title: "放缓领域", items: ["创新思维"], color: PROFILE_COLORS.coral },
-];
+interface GrowthPoint {
+  label: string;
+  value: number;
+  previous: number;
+}
 
 export function TrajectoryTab({ data, loading }: TrajectoryTabProps) {
+  const [comparison, setComparison] = useState<GrowthComparison | null>(null);
+  const [compLoading, setCompLoading] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setCompLoading(true);
+    fetchGrowthComparison()
+      .then((res) => {
+        if (!cancelled) setComparison(res.comparison);
+      })
+      .catch(() => {
+        if (!cancelled) setComparison(null);
+      })
+      .finally(() => {
+        if (!cancelled) setCompLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [data?.last_distilled_at]);
+
   if (loading) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
@@ -94,16 +64,58 @@ export function TrajectoryTab({ data, loading }: TrajectoryTabProps) {
     );
   }
 
-  const sourceNote = data ? "Mock 预览 - 已保留真实数据入口" : "Mock 数据";
-  const currentScore = Math.round(
-    MOCK_COMPARISON.current_radar.reduce((sum, item) => sum + item.value, 0) / MOCK_COMPARISON.current_radar.length,
-  );
-  const previousScore = Math.round(
-    MOCK_COMPARISON.previous_radar.reduce((sum, item) => sum + item.value, 0) / MOCK_COMPARISON.previous_radar.length,
-  );
+  // 里程碑：从 profile.visualizations.milestones 取
+  const milestones = (data?.profile?.visualizations?.milestones ?? []).slice(0, 3);
+  const milestoneCount = (data?.profile?.visualizations?.milestones ?? []).length;
+
+  // 能力对比数据
+  const currentRadar = comparison?.current_radar ?? data?.profile?.visualizations?.radar_scores ?? [];
+  const previousRadar = comparison?.previous_radar ?? [];
+  const newSkills = comparison?.new_skills ?? [];
+  const skillProgression = comparison?.skill_progression ?? [];
+
+  const hasComparison = !!comparison;
+
+  // 综合评分
+  const currentScore = currentRadar.length > 0
+    ? Math.round(currentRadar.reduce((sum, item) => sum + item.value, 0) / currentRadar.length)
+    : 0;
+  const previousScore = previousRadar.length > 0
+    ? Math.round(previousRadar.reduce((sum, item) => sum + item.value, 0) / previousRadar.length)
+    : 0;
   const delta = currentScore - previousScore;
-  const fastest = [...MOCK_COMPARISON.skill_progression].sort((a, b) => b.delta - a.delta).slice(0, 3);
-  const slowest = [...MOCK_COMPARISON.skill_progression].sort((a, b) => a.delta - b.delta).slice(0, 3);
+
+  // 成长曲线：从 notes_monthly 推导累计笔记数
+  const monthly = data?.profile?.evidence?.notes_monthly ?? {};
+  const monthKeys = Object.keys(monthly).sort();
+  let cumulative = 0;
+  const growthPoints: GrowthPoint[] = monthKeys.map((month) => {
+    cumulative += monthly[month];
+    return { label: month.slice(5), value: cumulative, previous: 0 };
+  });
+  // previous 用 previousRadar 的均分作为参考线（若没有快照，用 currentScore - delta 近似）
+  const refScore = previousScore || Math.max(0, currentScore - 10);
+  const growthPointsWithPrev = growthPoints.map((p) => ({
+    ...p,
+    previous: refScore,
+  }));
+
+  // 增长最快 / 需要补强
+  const sortedByDelta = [...skillProgression].sort((a, b) => b.delta - a.delta);
+  const fastest = sortedByDelta.slice(0, 3);
+  const slowest = sortedByDelta.slice(-3).reverse();
+
+  // 领域变化矩阵：从 skill_progression 推导
+  const fieldMatrix = buildFieldMatrix(skillProgression, currentRadar);
+
+  // 底部证据统计
+  const totalNotes = data?.profile?.evidence?.total_notes ?? 0;
+  const keywordCount = (data?.profile?.evidence?.title_keywords ?? []).length;
+  const radarDimCount = currentRadar.length;
+  const monthCount = monthKeys.length;
+  const snapshotCount = hasComparison ? 2 : 1;
+
+  const sourceNote = hasComparison ? "已对比" : compLoading ? "对比加载中" : "暂无对比数据";
 
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-3">
@@ -113,99 +125,111 @@ export function TrajectoryTab({ data, loading }: TrajectoryTabProps) {
         </span>
         <div className="flex items-center gap-2 rounded-lg border bg-background px-2.5 py-1.5 text-xs text-muted-foreground">
           <CalendarDays className="h-3.5 w-3.5" />
-          近 30 天（5.12 - 6.10） · 对比上期
+          {comparison
+            ? `${comparison.previous_snapshot_date ?? "上期"} → ${comparison.current_snapshot_date ?? "本期"}`
+            : "等待首次蒸馏快照"}
         </div>
       </div>
 
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
-        <MetricCard icon={<TrendingUp className="h-5 w-5" />} label="当前评分" value={`${currentScore} /100`} hint={`较上期 +${delta} 分`} color={PROFILE_COLORS.emerald} />
-        <MetricCard icon={<Rocket className="h-5 w-5" />} label="本期提升" value={`+${delta}`} hint="较上期增长 16.3%" color={PROFILE_COLORS.amber} />
-        <MetricCard icon={<Sparkles className="h-5 w-5" />} label="新增技能" value={MOCK_COMPARISON.new_skills.length} hint="本期新增掌握的技能点" color={PROFILE_COLORS.cyan} />
-        <MetricCard icon={<Crown className="h-5 w-5" />} label="里程碑" value={MILESTONES.length} hint="达成重要里程碑" color={PROFILE_COLORS.amber} />
+        <MetricCard icon={<TrendingUp className="h-5 w-5" />} label="当前评分" value={`${currentScore} /100`} hint={hasComparison ? `较上期 ${delta >= 0 ? "+" : ""}${delta} 分` : "暂无对比"} color={PROFILE_COLORS.emerald} />
+        <MetricCard icon={<Rocket className="h-5 w-5" />} label="本期提升" value={hasComparison ? `${delta >= 0 ? "+" : ""}${delta}` : "—"} hint={hasComparison ? "综合能力变化" : "需两次蒸馏"} color={PROFILE_COLORS.amber} />
+        <MetricCard icon={<Sparkles className="h-5 w-5" />} label="新增技能" value={newSkills.length} hint="本期新增掌握的技能点" color={PROFILE_COLORS.cyan} />
+        <MetricCard icon={<Crown className="h-5 w-5" />} label="里程碑" value={milestoneCount} hint="达成重要里程碑" color={PROFILE_COLORS.amber} />
       </div>
 
       <div className="grid grid-cols-1 gap-3 xl:grid-cols-[1fr_1.25fr_320px]">
         <Panel className="p-4">
-          <SectionTitle icon={<Sparkles className="h-4 w-4" />} title="能力对比" hint="本期 vs 上期" color={PROFILE_COLORS.emerald} />
+          <SectionTitle icon={<Sparkles className="h-4 w-4" />} title="能力对比" hint={hasComparison ? "本期 vs 上期" : "仅本期"} color={PROFILE_COLORS.emerald} />
           <div className="flex justify-center">
-            <RadarChart current={MOCK_COMPARISON.current_radar} previous={MOCK_COMPARISON.previous_radar} size={330} />
+            <RadarChart current={currentRadar} previous={previousRadar.length > 0 ? previousRadar : undefined} size={330} />
           </div>
           <p className="mt-2 text-center text-xs text-muted-foreground">
-            多个维度提升，尤其在 <span className="text-emerald-600">团队协作</span>、<span className="text-emerald-600">产品策略</span> 方面进步明显
+            {hasComparison && fastest.length > 0
+              ? <>多个维度提升，尤其在 <span className="text-emerald-600">{fastest[0].skill}</span> 方面进步明显</>
+              : "蒸馏两次后可查看能力对比"}
           </p>
         </Panel>
 
         <Panel className="p-4">
-          <SectionTitle icon={<TrendingUp className="h-4 w-4" />} title="成长曲线" hint="综合评分" color={PROFILE_COLORS.emerald} />
-          <GrowthLineChart points={GROWTH_POINTS} />
+          <SectionTitle icon={<TrendingUp className="h-4 w-4" />} title="成长曲线" hint={growthPointsWithPrev.length > 0 ? "累计笔记数" : "暂无数据"} color={PROFILE_COLORS.emerald} />
+          {growthPointsWithPrev.length > 0
+            ? <GrowthLineChart points={growthPointsWithPrev} />
+            : <div className="flex h-[250px] items-center justify-center text-xs text-muted-foreground">暂无月度数据</div>}
           <p className="mt-2 text-center text-xs text-muted-foreground">
-            本期整体趋势上升，有 <span className="text-emerald-600">3</span> 个关键里程碑推动成长
+            {milestoneCount > 0
+              ? <>本期有 <span className="text-emerald-600">{milestoneCount}</span> 个里程碑推动成长</>
+              : "暂无里程碑记录"}
           </p>
         </Panel>
 
         <div className="grid gap-3">
           <Panel className="p-4">
             <SectionTitle icon={<BookOpen className="h-4 w-4" />} title="本期变化" color={PROFILE_COLORS.emerald} />
-            <SummaryRow label="综合评分提升" value={`+${delta} 分`} />
-            <SummaryRow label="活跃天数" value="26 天" />
-            <SummaryRow label="新增技能点" value={`${MOCK_COMPARISON.new_skills.length} 个`} />
-            <SummaryRow label="新增笔记" value="48 篇" />
+            <SummaryRow label="综合评分变化" value={hasComparison ? `${delta >= 0 ? "+" : ""}${delta} 分` : "—"} />
+            <SummaryRow label="月度记录" value={`${monthCount} 个月`} />
+            <SummaryRow label="新增技能点" value={`${newSkills.length} 个`} />
+            <SummaryRow label="累计笔记" value={`${totalNotes} 篇`} />
           </Panel>
           <Panel className="p-4">
             <SectionTitle icon={<TrendingUp className="h-4 w-4" />} title="增长最快 Top 3" color={PROFILE_COLORS.emerald} />
-            {fastest.map((item, index) => (
+            {fastest.length > 0 ? fastest.map((item, index) => (
               <BarRow key={item.skill} rank={index + 1} label={item.skill} value={item.delta} color={PROFILE_COLORS.emerald} sign="+" />
-            ))}
+            )) : <span className="text-xs text-muted-foreground">需两次蒸馏对比</span>}
           </Panel>
           <Panel className="p-4">
             <SectionTitle icon={<TriangleAlert className="h-4 w-4" />} title="需要补强 Top 3" color={PROFILE_COLORS.coral} />
-            {slowest.map((item, index) => (
+            {slowest.length > 0 ? slowest.map((item, index) => (
               <BarRow key={item.skill} rank={index + 1} label={item.skill} value={Math.max(8 - item.delta, 2)} color={PROFILE_COLORS.coral} sign="-" />
-            ))}
+            )) : <span className="text-xs text-muted-foreground">需两次蒸馏对比</span>}
           </Panel>
         </div>
       </div>
 
       <div className="grid grid-cols-1 gap-3 xl:grid-cols-[1fr_0.9fr_1.1fr]">
         <Panel className="p-4">
-          <SectionTitle icon={<Layers className="h-4 w-4" />} title="技能提升" hint="按提升幅度" color={PROFILE_COLORS.emerald} />
+          <SectionTitle icon={<Layers className="h-4 w-4" />} title="技能提升" hint={skillProgression.length > 0 ? "按提升幅度" : "暂无对比"} color={PROFILE_COLORS.emerald} />
           <div className="flex flex-col gap-2">
-            {MOCK_COMPARISON.skill_progression.map((item) => (
+            {skillProgression.length > 0 ? skillProgression.map((item) => (
               <ProgressRow key={item.skill} label={item.skill} before={item.before} after={item.after} delta={item.delta} />
-            ))}
+            )) : <span className="text-xs text-muted-foreground">蒸馏两次后显示技能提升对比</span>}
           </div>
         </Panel>
 
         <Panel className="p-4">
           <SectionTitle icon={<Award className="h-4 w-4" />} title="里程碑时间线" color={PROFILE_COLORS.amber} />
-          <div className="relative flex flex-col gap-4 pl-5">
-            <div className="absolute bottom-2 left-[7px] top-2 w-px bg-border" />
-            {MILESTONES.map((milestone, index) => (
-              <div key={milestone.title} className="relative">
-                <span
-                  className="absolute -left-5 top-1 flex h-3.5 w-3.5 items-center justify-center rounded-full ring-2 ring-background"
-                  style={{ background: [PROFILE_COLORS.emerald, PROFILE_COLORS.amber, PROFILE_COLORS.cyan][index] }}
-                />
-                <div className="flex items-baseline gap-2">
-                  <span className="text-sm font-semibold">{milestone.date}</span>
-                  <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">{milestone.type}</span>
+          {milestones.length > 0 ? (
+            <div className="relative flex flex-col gap-4 pl-5">
+              <div className="absolute bottom-2 left-[7px] top-2 w-px bg-border" />
+              {milestones.map((milestone, index) => (
+                <div key={`${milestone.title}-${index}`} className="relative">
+                  <span
+                    className="absolute -left-5 top-1 flex h-3.5 w-3.5 items-center justify-center rounded-full ring-2 ring-background"
+                    style={{ background: [PROFILE_COLORS.emerald, PROFILE_COLORS.amber, PROFILE_COLORS.cyan][index % 3] }}
+                  />
+                  <div className="flex items-baseline gap-2">
+                    <span className="text-sm font-semibold">{milestone.date || milestone.type}</span>
+                    <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">{milestone.icon}</span>
+                  </div>
+                  <p className="mt-1 text-xs font-medium">{milestone.title}</p>
+                  <p className="mt-1 text-[11px] leading-5 text-muted-foreground">{milestone.description}</p>
                 </div>
-                <p className="mt-1 text-xs font-medium">{milestone.title}</p>
-                <p className="mt-1 text-[11px] leading-5 text-muted-foreground">{milestone.body}</p>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          ) : <span className="text-xs text-muted-foreground">暂无里程碑</span>}
         </Panel>
 
         <Panel className="p-4">
           <SectionTitle icon={<Layers className="h-4 w-4" />} title="领域变化矩阵" hint="提升幅度 × 稳定性" color={PROFILE_COLORS.cyan} />
           <div className="grid grid-cols-2 gap-2">
-            {FIELD_MATRIX.map((field) => (
+            {fieldMatrix.map((field) => (
               <div key={field.title} className="rounded-lg border p-3" style={{ background: `${field.color}10`, borderColor: `${field.color}24` }}>
                 <p className="mb-2 text-sm font-semibold" style={{ color: field.color }}>{field.title}</p>
-                <ul className="space-y-1 text-xs text-muted-foreground">
-                  {field.items.map((item) => <li key={item}>· {item}</li>)}
-                </ul>
+                {field.items.length > 0 ? (
+                  <ul className="space-y-1 text-xs text-muted-foreground">
+                    {field.items.map((item) => <li key={item}>· {item}</li>)}
+                  </ul>
+                ) : <p className="text-xs text-muted-foreground">暂无</p>}
               </div>
             ))}
           </div>
@@ -213,14 +237,52 @@ export function TrajectoryTab({ data, loading }: TrajectoryTabProps) {
       </div>
 
       <Panel className="grid grid-cols-1 gap-3 p-4 text-xs text-muted-foreground md:grid-cols-5">
-        <EvidenceItem label="数据快照" value="31 条" />
-        <EvidenceItem label="技能进度记录" value="8 个维度" />
-        <EvidenceItem label="月度记录" value="2 个月" />
-        <EvidenceItem label="总笔记" value="248 篇" />
-        <EvidenceItem label="关键词" value="36 个" />
+        <EvidenceItem label="数据快照" value={`${snapshotCount} 份`} />
+        <EvidenceItem label="技能维度" value={`${radarDimCount} 个`} />
+        <EvidenceItem label="月度记录" value={`${monthCount} 个月`} />
+        <EvidenceItem label="累计笔记" value={`${totalNotes} 篇`} />
+        <EvidenceItem label="关键词" value={`${keywordCount} 个`} />
       </Panel>
     </div>
   );
+}
+
+/** 从 skill_progression + radar_scores 推导领域变化矩阵 */
+function buildFieldMatrix(
+  progression: GrowthComparison["skill_progression"],
+  radar: GrowthComparison["current_radar"],
+): { title: string; items: string[]; color: string }[] {
+  if (progression.length === 0 && radar.length === 0) {
+    return [
+      { title: "新兴领域", items: [], color: PROFILE_COLORS.emerald },
+      { title: "稳定优势", items: [], color: PROFILE_COLORS.amber },
+      { title: "稳步发展", items: [], color: PROFILE_COLORS.cyan },
+      { title: "放缓领域", items: [], color: PROFILE_COLORS.coral },
+    ];
+  }
+
+  if (progression.length > 0) {
+    const sorted = [...progression].sort((a, b) => b.delta - a.delta);
+    const emerging = sorted.slice(0, 3).map((s) => s.skill);
+    const stable = sorted.filter((s) => s.after >= 70 && s.delta >= 5).slice(0, 3).map((s) => s.skill);
+    const steady = sorted.filter((s) => s.delta >= 2 && s.delta < 8).slice(0, 3).map((s) => s.skill);
+    const slowing = sorted.slice(-3).reverse().filter((s) => s.delta < 3).slice(0, 3).map((s) => s.skill);
+    return [
+      { title: "新兴领域", items: emerging, color: PROFILE_COLORS.emerald },
+      { title: "稳定优势", items: stable, color: PROFILE_COLORS.amber },
+      { title: "稳步发展", items: steady, color: PROFILE_COLORS.cyan },
+      { title: "放缓领域", items: slowing, color: PROFILE_COLORS.coral },
+    ];
+  }
+
+  // 无 progression 时从 radar 取
+  const sorted = [...radar].sort((a, b) => b.value - a.value);
+  return [
+    { title: "新兴领域", items: sorted.slice(-3).map((s) => s.axis), color: PROFILE_COLORS.emerald },
+    { title: "稳定优势", items: sorted.slice(0, 3).map((s) => s.axis), color: PROFILE_COLORS.amber },
+    { title: "稳步发展", items: sorted.slice(3, 6).map((s) => s.axis), color: PROFILE_COLORS.cyan },
+    { title: "放缓领域", items: [], color: PROFILE_COLORS.coral },
+  ];
 }
 
 function Panel({
@@ -289,19 +351,19 @@ function MetricCard({
 function GrowthLineChart({
   points,
 }: {
-  points: typeof GROWTH_POINTS;
+  points: GrowthPoint[];
 }) {
   const w = 680;
   const h = 250;
   const pad = { top: 20, right: 24, bottom: 34, left: 36 };
   const innerW = w - pad.left - pad.right;
   const innerH = h - pad.top - pad.bottom;
-  const max = 100;
-  const xs = points.map((_, index) => pad.left + (index / (points.length - 1)) * innerW);
+  const max = Math.max(100, ...points.map((p) => p.value), ...points.map((p) => p.previous));
+  const xs = points.map((_, index) => pad.left + (points.length <= 1 ? innerW / 2 : (index / (points.length - 1)) * innerW));
   const yFor = (value: number) => pad.top + innerH - (value / max) * innerH;
   const currentPath = points.map((point, index) => `${index === 0 ? "M" : "L"}${xs[index]},${yFor(point.value)}`).join(" ");
   const previousPath = points.map((point, index) => `${index === 0 ? "M" : "L"}${xs[index]},${yFor(point.previous)}`).join(" ");
-  const markerIndexes = [1, 3, 6];
+  const markerIndexes = points.length > 6 ? [1, 3, 6] : points.length > 3 ? [1, 2, 3] : [];
 
   return (
     <svg viewBox={`0 0 ${w} ${h}`} className="h-auto w-full">
@@ -320,22 +382,31 @@ function GrowthLineChart({
           </g>
         );
       })}
-      <path d={`${currentPath} L${xs[xs.length - 1]},${yFor(0)} L${xs[0]},${yFor(0)} Z`} fill="url(#growth-fill)" />
-      <path d={previousPath} fill="none" stroke="#94a3b8" strokeWidth="2" strokeDasharray="5 5" />
-      <path d={currentPath} fill="none" stroke={PROFILE_COLORS.emerald} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+      {points.length > 1 && (
+        <path d={`${currentPath} L${xs[xs.length - 1]},${yFor(0)} L${xs[0]},${yFor(0)} Z`} fill="url(#growth-fill)" />
+      )}
+      {points.length > 1 && (
+        <path d={previousPath} fill="none" stroke="#94a3b8" strokeWidth="2" strokeDasharray="5 5" />
+      )}
+      {points.length > 1 && (
+        <path d={currentPath} fill="none" stroke={PROFILE_COLORS.emerald} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+      )}
       {points.map((point, index) => (
         <g key={point.label}>
           <circle cx={xs[index]} cy={yFor(point.value)} r="4" fill="white" stroke={PROFILE_COLORS.emerald} strokeWidth="2" />
           <text x={xs[index]} y={h - 10} textAnchor="middle" className="fill-muted-foreground text-[10px]">{point.label}</text>
         </g>
       ))}
-      {markerIndexes.map((index, markerIndex) => (
-        <g key={index}>
-          <line x1={xs[index]} y1={yFor(GROWTH_POINTS[index].value) + 10} x2={xs[index]} y2={h - pad.bottom - 2} stroke={PROFILE_COLORS.amber} strokeDasharray="3 3" />
-          <circle cx={xs[index]} cy={yFor(GROWTH_POINTS[index].value) + 22} r="10" fill={[PROFILE_COLORS.emerald, PROFILE_COLORS.amber, PROFILE_COLORS.cyan][markerIndex]} />
-          <text x={xs[index]} y={yFor(GROWTH_POINTS[index].value) + 26} textAnchor="middle" className="fill-white text-[10px] font-bold">{markerIndex + 1}</text>
-        </g>
-      ))}
+      {markerIndexes.map((index, markerIndex) => {
+        if (index >= points.length) return null;
+        return (
+          <g key={index}>
+            <line x1={xs[index]} y1={yFor(points[index].value) + 10} x2={xs[index]} y2={h - pad.bottom - 2} stroke={PROFILE_COLORS.amber} strokeDasharray="3 3" />
+            <circle cx={xs[index]} cy={yFor(points[index].value) + 22} r="10" fill={[PROFILE_COLORS.emerald, PROFILE_COLORS.amber, PROFILE_COLORS.cyan][markerIndex]} />
+            <text x={xs[index]} y={yFor(points[index].value) + 26} textAnchor="middle" className="fill-white text-[10px] font-bold">{markerIndex + 1}</text>
+          </g>
+        );
+      })}
     </svg>
   );
 }
