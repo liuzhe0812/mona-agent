@@ -24,7 +24,7 @@ import {
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import { useEmailStore } from "./store/emailStore";
-import { sendEmail, saveDraft, type EmailAttachmentInput } from "./lib/emailApi";
+import { sendEmail, saveDraft, fetchEmailBody, type EmailAttachmentInput } from "./lib/emailApi";
 import { EmailRichEditor, type EmailRichEditorHandle } from "./EmailRichEditor";
 import { ContactPicker } from "./contacts/ContactPicker";
 import type { EmailAccount, EmailMessage, EmailSignature } from "./lib/types";
@@ -41,24 +41,73 @@ interface MailComposerProps {
   standalone?: boolean;
 }
 
-function formatReplyHeader(message: EmailMessage): string {
-  const date = new Date(message.date).toLocaleString("zh-CN");
-  const sender = message.fromName
-    ? `${message.fromName} <${message.fromAddress}>`
-    : message.fromAddress;
-  // RFC 3676 风格引用：每行以 "> " 前缀
-  const quotedBody = message.bodyText
-    .slice(0, 2000)
-    .split("\n")
-    .map((line) => `> ${line}`)
-    .join("\n");
-  return `\n\n在 ${date}，${sender} 写道：\n\n${quotedBody}`;
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
-/** 校验邮箱地址格式 */
+function textToHtmlParagraphs(text: string): string {
+  return escapeHtml(text)
+    .split("\n")
+    .map((line) => (line.trim() === "" ? "<br>" : line))
+    .join("<br>");
+}
+
+/** Foxmail 风格回复/转发：顶部空段落（光标位置）+ 分隔线 + 原文引用 */
+function formatReplyHeaderHtml(message: EmailMessage): string {
+  const date = new Date(message.date).toLocaleString("zh-CN");
+  const sender = message.fromName
+    ? `${message.fromName} &lt;${message.fromAddress}&gt;`
+    : message.fromAddress;
+  const to = message.toAddresses || "";
+  const cc = message.ccAddresses || "";
+  const subject = message.subject || "";
+
+  // 优先用 HTML 正文，否则用纯文本转换
+  let quotedBody = "";
+  if (message.bodyHtml) {
+    // 去掉 HTML 的 html/head/body 包裹，只保留内容
+    quotedBody = message.bodyHtml
+      .replace(/<!DOCTYPE[^>]*>/gi, "")
+      .replace(/<html[^>]*>/gi, "")
+      .replace(/<\/html>/gi, "")
+      .replace(/<head[^>]*>[\s\S]*?<\/head>/gi, "")
+      .replace(/<body[^>]*>/gi, "")
+      .replace(/<\/body>/gi, "")
+      .trim();
+  } else if (message.bodyText) {
+    quotedBody = textToHtmlParagraphs(message.bodyText.slice(0, 50000));
+  }
+
+  const headerLines: string[] = [
+    `----- 原始邮件 -----`,
+    `发件人：${sender}`,
+  ];
+  if (to) headerLines.push(`收件人：${escapeHtml(to)}`);
+  if (cc) headerLines.push(`抄送：${escapeHtml(cc)}`);
+  headerLines.push(`主题：${escapeHtml(subject)}`);
+  headerLines.push(`日期：${escapeHtml(date)}`);
+
+  const headerHtml = headerLines
+    .map((line) => `<div style="color:#666;font-size:12px;">${line}</div>`)
+    .join("\n");
+
+  // 顶部一个空段落作为用户输入区，下方是分隔线 + 原文引用
+  return `<p></p><div style="border-top:1px solid #ccc;padding-top:8px;margin-top:8px;">${headerHtml}</div><div style="margin-top:8px;">${quotedBody}</div>`;
+}
+
+/** 校验邮箱地址格式（支持 "Name <email>" 和纯 email 两种格式） */
 function isValidEmail(addr: string): boolean {
+  const s = addr.trim();
+  // 从 "Name <email>" 中提取尖括号内的 email
+  const match = s.match(/<([^>]+)>$/);
+  const email = match ? match[1].trim() : s;
   // 简单 RFC 5322 校验：local@domain
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(addr.trim());
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
 /** 校验逗号分隔的地址列表，返回第一个无效地址或 null */
@@ -152,13 +201,12 @@ export function MailComposer({
     const ccList = parseAddressList(baseMessage.ccAddresses ?? "");
     const self = account?.fromAddress;
 
-    const replyBody = formatReplyHeader(baseMessage);
+    // 设置收件人/主题等字段
     if (mode === "reply") {
       setToAddresses(from);
       setCcAddresses("");
       setBccAddresses("");
       setSubject(buildInitialSubject("reply", baseMessage.subject));
-      setBodyText(replyBody);
       setShowCc(false);
       setShowBcc(false);
     } else if (mode === "replyAll") {
@@ -170,7 +218,6 @@ export function MailComposer({
       setCcAddresses(ccRecipients.join(", "));
       setBccAddresses("");
       setSubject(buildInitialSubject("replyAll", baseMessage.subject));
-      setBodyText(replyBody);
       setShowCc(ccRecipients.length > 0);
       setShowBcc(false);
     } else if (mode === "forward") {
@@ -178,11 +225,49 @@ export function MailComposer({
       setCcAddresses("");
       setBccAddresses("");
       setSubject(buildInitialSubject("forward", baseMessage.subject));
-      setBodyText(replyBody);
       setShowCc(false);
       setShowBcc(false);
     }
-  }, [open, mode, baseMessage, account?.fromAddress]);
+
+    // 设置引用正文：优先用已有的 bodyHtml/bodyText，没有则异步拉取
+    const hasBody = baseMessage.bodyHtml || baseMessage.bodyText;
+    if (mode === "reply" || mode === "replyAll" || mode === "forward") {
+      if (hasBody) {
+        const replyHtml = formatReplyHeaderHtml(baseMessage);
+        setBodyHtml(replyHtml);
+        setBodyText("");
+        // initialHtml 只在首次挂载生效，需额外调 setHtml 确保内容更新
+        editorRef.current?.setHtml(replyHtml);
+      } else if (gatewayUrl) {
+        // 原邮件正文未加载（用户未点开过），异步拉取后再格式化
+        const loadingHtml = '<div style="color:#999;">正在加载原邮件...</div>';
+        setBodyHtml(loadingHtml);
+        setBodyText("");
+        (async () => {
+          try {
+            const result = await fetchEmailBody(
+              gatewayUrl,
+              baseMessage.accountId,
+              baseMessage.uid,
+              baseMessage.folder,
+            );
+            const enriched: EmailMessage = {
+              ...baseMessage,
+              bodyText: result.bodyText,
+              bodyHtml: result.bodyHtml,
+            };
+            const html = formatReplyHeaderHtml(enriched);
+            setBodyHtml(html);
+            editorRef.current?.setHtml(html);
+          } catch (e) {
+            const errHtml = `<div style="color:#999;">原邮件加载失败：${escapeHtml(String(e))}</div>`;
+            setBodyHtml(errHtml);
+            editorRef.current?.setHtml(errHtml);
+          }
+        })();
+      }
+    }
+  }, [open, mode, baseMessage, account?.fromAddress, gatewayUrl]);
 
   if (!open) return null;
 
@@ -599,7 +684,7 @@ export function MailComposer({
     <EmailRichEditor
       key={`${mode}-${baseMessage?.uid ?? "new"}`}
       ref={editorRef}
-      initialValue={bodyText}
+      initialHtml={bodyHtml || undefined}
       onChange={({ html, text }) => {
         setBodyText(text);
         setBodyHtml(html);

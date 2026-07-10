@@ -107,9 +107,16 @@
       "models": "模型",
       "providers": "提供商",
       "image": "图片",
+      "models_providers": "模型设置",
       "web": "网页",
       "runtime": "运行时",
       "advanced": "高级"
+    },
+    "aiModels": {
+      "tabsAria": "模型设置类型",
+      "chat": "聊天模型",
+      "image": "图片模型",
+      "embedding": "嵌入模型"
     },
     "sections": {
       "interface": "界面",
@@ -169,6 +176,12 @@
       "ssrfWhitelist": "SSRF 白名单",
       "mcpServers": "MCP 服务器",
       "pathAppend": "PATH 追加",
+      "embeddingEnabled": "嵌入模型",
+      "embeddingEndpoint": "接入点",
+      "embeddingApiKey": "API 密钥",
+      "embeddingModel": "模型名称",
+      "embeddingDimensionality": "输出维度",
+      "embeddingSave": "保存嵌入设置",
       "configurationDocs": "配置文档"
     },
     "help": {
@@ -188,7 +201,7 @@
       "imageGeneration": "当已配置图片服务商时，在对话中开放 generate_image。",
       "imageProvider": "选择 generate_image 使用的服务商。",
       "imageProviderStatus": "图片生成复用服务商页里的凭证配置。",
-      "imageModel": "发送给所选图片服务商的模型名称。",
+      "imageModel": "图片生成使用专用图片模型（与聊天模型不同），复用所选服务商的凭证。",
       "defaultAspectRatio": "当提示词没有选择比例时使用。",
       "defaultImageSize": "发送给支持该能力的服务商的尺寸提示。",
       "maxImagesPerTurn": "单次 generate_image 请求允许的图片上限。",
@@ -196,6 +209,12 @@
       "botIcon": "显示在 bot 名称旁的短 emoji 或文本。",
       "timezone": "运行时上下文和计划任务使用的 IANA 时区。",
       "toolHintMaxLength": "工具进度提示显示的最大字符数。",
+      "embeddingEnabled": "启用全局嵌入模型，用于 KB / notes-kb 向量索引。",
+      "embeddingEndpoint": "OpenAI 兼容的 embeddings 接入点，例如 https://api.openai.com/v1 或 https://dashscope.aliyuncs.com/compatible-mode/v1。",
+      "embeddingApiKey": "嵌入接口的 API 密钥，仅本地保存。",
+      "embeddingModel": "嵌入模型名称，例如 text-embedding-3-small、bge-m3。",
+      "embeddingDimensionality": "可选输出维度，留空使用模型默认值。",
+      "embeddingSave": "对新嵌入请求生效；per-vault 配置文件仍会覆盖此全局默认值。",
       "advancedReadOnly": "高级安全控制在 WebUI 中只读；需要时请谨慎编辑 config.json。"
     },
     "values": {
@@ -291,6 +310,10 @@
       "selectProvider": "选择服务商",
       "selectAspect": "选择比例",
       "selectSize": "选择尺寸",
+      "selectModel": "选择图片模型",
+      "modelPlaceholder": "例如 gpt-image-1、wan2.2-t2i-plus",
+      "noModelMatch": "无匹配候选，可继续输入或直接使用当前值",
+      "addModel": "添加模型",
       "configureProvider": "配置服务商",
       "missingCredential": "启用图片生成前，请先配置这个服务商。"
     }
@@ -437,6 +460,30 @@
           "4_3": "横版 4:3",
           "16_9": "宽屏 16:9"
         }
+      },
+      "videoMode": {
+        "label": "视频生成",
+        "toggle": "切换视频生成模式",
+        "placeholder": "描述要生成的视频…",
+        "aspectAria": "视频画幅",
+        "aspectLabel": "视频画幅",
+        "aspect": {
+          "auto": "自动",
+          "1_1": "方形 1:1",
+          "3_4": "竖版 3:4",
+          "9_16": "故事版 9:16",
+          "4_3": "横版 4:3",
+          "16_9": "宽屏 16:9"
+        },
+        "durationAria": "视频时长",
+        "durationLabel": "视频时长",
+        "duration": {
+          "auto": "自动",
+          "s": "{{seconds}}秒"
+        },
+        "refUrlPlaceholder": "参考图片 URL（可选，用于图生视频）",
+        "refUrlAria": "参考图片 URL",
+        "refUrlClear": "清除参考图片 URL"
       },
       "workspace": {
         "placeholder": "选择文件夹（可选）",

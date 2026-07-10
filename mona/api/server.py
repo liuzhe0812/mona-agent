@@ -27,13 +27,17 @@ from typing import Any, Callable, TypeVar
 from aiohttp import web
 from loguru import logger
 
+from mona.api.hoard_handlers import (
+    handle_hoard_add,
+    handle_hoard_delete_by_url,
+)
 from mona.api.notes_kb_handlers import (
     handle_notes_kb_embed,
     handle_notes_kb_embed_status,
     handle_notes_kb_related,
     handle_notes_kb_search,
 )
-from mona.config.paths import get_media_dir
+from mona.config.paths import get_media_dir, get_workspace_path
 from mona.email.imap_pool import imap_pool_manager
 from mona.kb.api import (
     handle_kb_create_project,
@@ -202,6 +206,7 @@ class _IdleWorker:
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._idle_tag: bytes | None = None
+        self._client: imaplib.IMAP4 | None = None
 
     def start(self) -> None:
         self._thread = threading.Thread(
@@ -748,6 +753,161 @@ async def handle_projects_list(request: web.Request) -> web.Response:
     return web.json_response({"projects": seen})
 
 
+# ---------------------------------------------------------------------------
+# Profile (user distillation) routes
+# ---------------------------------------------------------------------------
+
+
+def _get_memory_dir_for_profile() -> Any:
+    from mona.config.paths import get_memory_dir
+    return get_memory_dir()
+
+
+async def handle_profile_get(request: web.Request) -> web.Response:
+    """GET /api/profile — return profile.rich.json content."""
+    from mona.distill.store import read_rich_profile
+
+    memory_dir = _get_memory_dir_for_profile()
+    data = read_rich_profile(memory_dir)
+    return web.json_response(data)
+
+
+async def handle_profile_user_get(request: web.Request) -> web.Response:
+    """GET /api/profile/user — return USER.md content."""
+    from mona.distill.store import read_user_profile
+
+    memory_dir = _get_memory_dir_for_profile()
+    content = read_user_profile(memory_dir)
+    return web.json_response({"content": content})
+
+
+async def handle_profile_user_update(request: web.Request) -> web.Response:
+    """PATCH /api/profile/user — update USER.md section or full content."""
+    from mona.distill.store import update_user_section
+
+    try:
+        body = await request.json()
+    except Exception:
+        return _error_json(400, "Invalid JSON body")
+
+    section = body.get("section")
+    content = body.get("content")
+    full = body.get("full")
+
+    memory_dir = _get_memory_dir_for_profile()
+    user_path = memory_dir / "USER.md"
+
+    if isinstance(full, str):
+        user_path.write_text(full, encoding="utf-8")
+        return web.json_response({"ok": True, "mode": "full"})
+
+    if not isinstance(section, str) or not section.strip():
+        return _error_json(400, "section is required (or provide full content)")
+    if not isinstance(content, str):
+        return _error_json(400, "content is required")
+
+    update_user_section(user_path, section, content)
+    return web.json_response({"ok": True, "mode": "section", "section": section})
+
+
+async def handle_profile_distill(request: web.Request) -> web.Response:
+    """POST /api/profile/distill — trigger distillation manually.
+
+    Body: {"task": "work-pattern" | "profile" | "all"} (default: "all")
+    """
+    from mona.distill.service import (
+        run_all_distill,
+        run_profile_distill,
+        run_work_pattern_distill,
+    )
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    task = body.get("task", "all") if isinstance(body, dict) else "all"
+
+    # 从 gateway app 获取已初始化的 agent_loop（含 provider）
+    agent_loop = request.app.get("agent_loop")
+
+    if task == "work-pattern":
+        result = await run_work_pattern_distill(agent_loop)
+    elif task == "profile":
+        result = await run_profile_distill(agent_loop)
+    else:
+        results = await run_all_distill(agent_loop)
+        return web.json_response({
+            "ok": True,
+            "results": [
+                {
+                    "task": r.task_name,
+                    "success": r.success,
+                    "confidence": r.confidence,
+                    "error": r.error,
+                }
+                for r in results
+            ],
+        })
+
+    return web.json_response({
+        "ok": result.success,
+        "task": result.task_name,
+        "confidence": result.confidence,
+        "error": result.error,
+    })
+
+
+async def handle_profile_snapshots(request: web.Request) -> web.Response:
+    """GET /api/profile/snapshots — list all historical snapshots."""
+    from mona.distill.scoring import load_snapshots
+    from mona.config.paths import get_memory_dir
+
+    snapshots = load_snapshots(get_memory_dir())
+    return web.json_response({"snapshots": snapshots})
+
+
+async def handle_profile_comparison(request: web.Request) -> web.Response:
+    """GET /api/profile/comparison?date=YYYY-MM-DD — get current vs previous snapshot."""
+    from mona.distill.scoring import load_snapshots, compute_growth_comparison
+    from mona.config.paths import get_memory_dir
+
+    current_date = request.query.get("date")
+    snapshots = load_snapshots(get_memory_dir())
+    if not snapshots:
+        return web.json_response({"comparison": None, "snapshots": []})
+
+    if current_date:
+        current = next((s for s in snapshots if s.get("date") == current_date), None)
+        if current is None and snapshots:
+            current = snapshots[-1]
+    else:
+        current = snapshots[-1]
+
+    previous = None
+    if current:
+        current_date_str = current.get("date", "")
+        prev_list = [s for s in snapshots if s.get("date", "") < current_date_str]
+        previous = prev_list[-1] if prev_list else None
+
+    comparison = compute_growth_comparison(
+        {
+            "radar_scores": current.get("radar_scores", []) if current else [],
+            "keywords": current.get("keywords", []) if current else [],
+            "snapshot_date": current.get("date") if current else None,
+        },
+        {
+            "radar_scores": previous.get("radar_scores", []) if previous else [],
+            "keywords": previous.get("keywords", []) if previous else [],
+            "snapshot_date": previous.get("date") if previous else None,
+        } if previous else None,
+    )
+
+    return web.json_response({
+        "comparison": comparison,
+        "snapshots": [{"date": s.get("date"), "keywords_count": len(s.get("keywords", []))} for s in snapshots],
+    })
+
+
 async def handle_chat_completions(request: web.Request) -> web.Response:
     """POST /v1/chat/completions — supports JSON and multipart/form-data."""
     content_type = request.content_type or ""
@@ -1079,8 +1239,6 @@ async def handle_tauri_invoke(request: web.Request) -> web.Response:
         )
 
     try:
-        import subprocess
-
         tauri_args = ["mona-desktop", cmd]
         for key, value in args.items():
             tauri_args.append(f"--{key}")
@@ -1187,26 +1345,54 @@ def _email_extract_flag(fetched: list[Any], flag: str) -> bool:
     return False
 
 
+# 把 MIME encoded-word 中的 gb2312/gbk charset 归一化为 gb18030（超集），
+# 避免 policy.default 解码时因 gb2312 缺少"喆"等扩展字符而产生 \ufffd
+_GB_CHARSET_PATTERN = re.compile(rb'=\?(gb2312|gbk|gb_2312)\?', re.IGNORECASE)
+
+
+def _normalize_mime_charset(raw_bytes: bytes) -> bytes:
+    return _GB_CHARSET_PATTERN.sub(b'=?gb18030?', raw_bytes)
+
+
 def _email_decode_header_value(value: str) -> str:
     """解码邮件头字段（处理 MIME 编码 + 非编码的 raw 字节）。
 
     policy.default 下 parsed.get() 可能已自动解码 MIME encoded-word，
     此时 value 是纯 Unicode 字符串，不应再调用 decode_header（会重复编解码，
     对某些字符产生 \ufffd 替换字符）。仅当 value 仍含 =?...?= 标记时才解码。
+    gb2312/gbk 统一用 gb18030（超集）解码，避免"喆"等扩展字符丢失。
     """
     if not value:
         return ""
-    # 含 MIME encoded-word 标记：用 decode_header 解码
+    # 含 MIME encoded-word 标记：手动解码，gb2312/gbk 用 gb18030 作为超集
     if "=?" in value and "?=" in value:
         try:
-            return str(make_header(decode_header(value)))
+            parts = decode_header(value)
+            result = []
+            for text, charset in parts:
+                if isinstance(text, bytes):
+                    cs = (charset or "").lower()
+                    # gb2312/gbk 用 gb18030 超集解码，避免生僻字（如"喆"）丢失
+                    if cs in ("gb2312", "gbk", "gb_2312", "gb18030", "csiso58gb231280"):
+                        try:
+                            result.append(text.decode("gb18030"))
+                        except UnicodeDecodeError:
+                            result.append(text.decode("utf-8", errors="replace"))
+                    else:
+                        try:
+                            result.append(text.decode(cs or "utf-8"))
+                        except (LookupError, UnicodeDecodeError):
+                            result.append(text.decode("utf-8", errors="replace"))
+                else:
+                    result.append(text)
+            return "".join(result)
         except Exception:
             return value
     # 检测 surrogate（policy.default 对 raw 字节用 surrogateescape 处理）
     if any(0xDC80 <= ord(c) <= 0xDCFF for c in value):
         try:
             raw_bytes = value.encode("latin-1", errors="surrogateescape")
-            for charset in ("utf-8", "gbk", "gb18030", "big5"):
+            for charset in ("utf-8", "gb18030", "gbk", "big5"):
                 try:
                     return raw_bytes.decode(charset)
                 except UnicodeDecodeError:
@@ -1505,10 +1691,10 @@ def _imap_fetch_recent(body: dict[str, Any]) -> list[dict[str, Any]]:
 
         messages: list[dict[str, Any]] = []
         for uid in uids:
-            # Foxmail 风格：同步时只拉 HEADER（BODY.PEEK[HEADER]），正文按需拉取。
-            # 用户点击邮件时 email_fetch_body 走 IMAP BODY.PEEK[] 拉完整 RFC822 并落盘 .eml
+            # Foxmail 风格：同步时拉完整 RFC822（BODY.PEEK[]），落盘 .eml。
+            # 点击邮件时 Rust 本地 mailparse 解析，毫秒级，无需走 IMAP。
             status, fetched = client.uid(
-                "FETCH", uid, "(BODY.PEEK[HEADER] UID FLAGS)"
+                "FETCH", uid, "(BODY.PEEK[] UID FLAGS)"
             )
             if status != "OK" or not fetched:
                 continue
@@ -1521,7 +1707,7 @@ def _imap_fetch_recent(body: dict[str, Any]) -> list[dict[str, Any]]:
             if not uid_str:
                 uid_str = uid.decode("utf-8", errors="ignore")
 
-            parsed = BytesParser(policy=policy.default).parsebytes(raw_bytes)
+            parsed = BytesParser(policy=policy.default).parsebytes(_normalize_mime_charset(raw_bytes))
 
             subject = _email_decode_header_value(parsed.get("Subject", ""))
             from_name, from_addr = parseaddr(
@@ -1555,6 +1741,9 @@ def _imap_fetch_recent(body: dict[str, Any]) -> list[dict[str, Any]]:
                     "isStarred": _email_extract_flagged_flag(fetched),
                     "messageId": message_id,
                     "attachments": _email_extract_attachments(parsed),
+                    # Foxmail 风格：返回完整 RFC822 字节（base64），供 Rust 侧落盘为 .eml
+                    # 点击邮件时 Rust 本地 mailparse 解析 .eml，毫秒级
+                    "rawBytes": base64.b64encode(raw_bytes).decode("ascii"),
                 }
             )
 
@@ -1714,30 +1903,14 @@ def _imap_list_folders(body: dict[str, Any]) -> list[dict[str, Any]]:
                 )
             flags = line.split(")")[0].lstrip("(").lower() if "(" in line else ""
 
-            # 用 STATUS 命令获取未读数（UNSEEN）
-            unread_count = 0
-            try:
-                # _imap_quote_mailbox 内部会做 UTF-7 编码
-                st, sd = client.status(_imap_quote_mailbox(name), "(UNSEEN)")
-                if st == "OK" and sd and sd[0]:
-                    status_line = (
-                        sd[0].decode("utf-8", errors="replace")
-                        if isinstance(sd[0], bytes)
-                        else str(sd[0])
-                    )
-                    m_unseen = re.search(r"UNSEEN\s+(\d+)", status_line)
-                    if m_unseen:
-                        unread_count = int(m_unseen.group(1))
-            except Exception:
-                # 某些文件夹可能不支持 STATUS，忽略
-                pass
-
+            # 不再用 STATUS UNSEEN 逐文件夹查询（N 次 IMAP 往返，是文件夹列表慢的根因）
+            # 未读数由前端从本地 SQLite 统一查询（email_unread_counts），IMAP 仅返回结构
             folders.append({
                 "name": name,
                 "delimiter": delimiter,
                 "hasChildren": "\\haschildren" in flags.lower(),
                 "flags": flags,
-                "unreadCount": unread_count,
+                "unreadCount": 0,
             })
         return folders
 
@@ -1945,8 +2118,16 @@ async def handle_email_sync(request: web.Request) -> web.Response:
         result = await _run_imap_locked(body, _imap_fetch_recent)
         return web.json_response(result)
     except Exception as e:
+        err_msg = str(e)
+        # IMAP SELECT 失败（如企业邮箱限制非 INBOX 文件夹访问），返回 422 而非 500
+        if "select" in err_msg.lower() and "failed" in err_msg.lower():
+            logger.warning("Email sync rejected (folder not accessible): %s", err_msg)
+            return web.json_response(
+                {"error": f"该文件夹不支持同步: {err_msg}"},
+                status=422,
+            )
         logger.exception("Email sync failed")
-        return web.json_response({"error": str(e)}, status=500)
+        return web.json_response({"error": err_msg}, status=500)
 
 
 async def handle_email_list_uids(request: web.Request) -> web.Response:
@@ -2781,7 +2962,10 @@ def _imap_delete_message(body: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("uid is required")
 
     # 常见回收站文件夹名（按优先级匹配）
-    trash_candidates = ["Trash", "Deleted Messages", "已删除", "Deleted", "垃圾邮件"]
+    trash_candidates = [
+        "Trash", "Deleted Messages", "已删除", "Deleted", "垃圾邮件",
+        "Deleted Items", "Junk", "已删除邮件", "废纸篓",
+    ]
 
     result = {"action": "deleted", "target": None}
 
@@ -2973,8 +3157,11 @@ def _imap_mark_all_read(body: dict[str, Any]) -> int:
         if typ != "OK" or not data or not data[0]:
             return 0
         uids = data[0].split()
-        for uid in uids:
-            client.uid("STORE", uid.decode(), "+FLAGS", "(\\Seen)")
+        if not uids:
+            return 0
+        # 批量标记已读：UID STORE uid1,uid2,... +FLAGS (\Seen)
+        uid_set = b",".join(uids).decode()
+        client.uid("STORE", uid_set, "+FLAGS", "(\\Seen)")
         return len(uids)
 
     return imap_pool_manager.run(body, op)
@@ -3168,7 +3355,7 @@ def _imap_fetch_attachment(body: dict[str, Any]) -> dict[str, Any]:
         if raw_bytes is None:
             raise RuntimeError("无法获取邮件内容")
 
-        parsed = BytesParser(policy=policy.default).parsebytes(raw_bytes)
+        parsed = BytesParser(policy=policy.default).parsebytes(_normalize_mime_charset(raw_bytes))
 
         # 按 filename 查找附件 part
         for part in parsed.walk():
@@ -3243,7 +3430,7 @@ def _imap_fetch_body(body: dict[str, Any]) -> dict[str, Any]:
         if raw_bytes is None:
             raise RuntimeError("Failed to extract message bytes")
 
-        parsed = BytesParser(policy=policy.default).parsebytes(raw_bytes)
+        parsed = BytesParser(policy=policy.default).parsebytes(_normalize_mime_charset(raw_bytes))
         body_text, body_html = _email_extract_bodies(parsed)
         # body_text 截断到 50000 字符，与同步逻辑保持一致
         if body_text:
@@ -3302,7 +3489,7 @@ async def handle_email_parse_body(request: web.Request) -> web.Response:
             return web.json_response({"error": "rawBytes is required"}, status=400)
 
         raw_bytes = base64.b64decode(raw_b64)
-        parsed = BytesParser(policy=policy.default).parsebytes(raw_bytes)
+        parsed = BytesParser(policy=policy.default).parsebytes(_normalize_mime_charset(raw_bytes))
         body_text, body_html = _email_extract_bodies(parsed)
         if body_text:
             body_text = body_text[:50000]
@@ -3341,7 +3528,7 @@ async def handle_email_parse_attachment(request: web.Request) -> web.Response:
             return web.json_response({"error": "filename is required"}, status=400)
 
         raw_bytes = base64.b64decode(raw_b64)
-        parsed = BytesParser(policy=policy.default).parsebytes(raw_bytes)
+        parsed = BytesParser(policy=policy.default).parsebytes(_normalize_mime_charset(raw_bytes))
 
         for part in parsed.walk():
             if part.is_multipart():
@@ -3538,16 +3725,6 @@ async def handle_schedule_remove(request: web.Request) -> web.Response:
     return web.json_response({"ok": True})
 
 
-async def handle_schedule_complete(request: web.Request) -> web.Response:
-    """POST /api/schedule/items/{id}/complete - mark a personal item done."""
-    svc = _require_schedule_service(request)
-    item_id = request.match_info["id"]
-    ok = await svc.complete_item(item_id)
-    if not ok:
-        return web.json_response({"error": "not found"}, status=404)
-    return web.json_response({"ok": True})
-
-
 async def handle_schedule_toggle(request: web.Request) -> web.Response:
     """POST /api/schedule/items/{id}/toggle - pause/resume (AI task) or enable/disable."""
     svc = _require_schedule_service(request)
@@ -3573,6 +3750,474 @@ async def handle_schedule_notifications(request: web.Request) -> web.Response:
     svc = _require_schedule_service(request)
     pending = svc.pop_pending_notifications()
     return web.json_response({"notifications": pending})
+
+
+# ---------------------------------------------------------------------------
+# Video project routes (/api/video/*)
+# ---------------------------------------------------------------------------
+
+
+def _video_projects_dir() -> Path:
+    return get_workspace_path() / "video_projects"
+
+
+def _get_video_project_status(project_dir: Path) -> dict:
+    """Inspect a video project directory and return its status."""
+    generating_marker = project_dir / ".generating"
+    output_mp4 = project_dir / "renders" / "output.mp4"
+    storyboard = project_dir / "storyboard.md"
+    index_html = project_dir / "index.html"
+    scenes_dir = project_dir / "scenes"
+    scene_count = (
+        len(list(scenes_dir.glob("scene_*.html"))) if scenes_dir.is_dir() else 0
+    )
+    has_render = output_mp4.is_file()
+    if has_render:
+        status = "done"
+    elif generating_marker.exists():
+        status = "generating"
+    elif index_html.exists() or scene_count > 0:
+        status = "generating"
+    elif storyboard.exists():
+        status = "planning"
+    else:
+        status = "init"
+    return {
+        "status": status,
+        "hasRender": has_render,
+        "sceneCount": scene_count,
+        "hasStoryboard": storyboard.exists(),
+        "hasIndex": index_html.exists(),
+    }
+
+
+async def handle_video_runtime_check(request: web.Request) -> web.Response:
+    """GET /api/video/runtime-check - detect Node/FFmpeg/Chrome availability."""
+    try:
+        from mona.api.video_runtime import VideoRuntime
+
+        result = VideoRuntime().check_all()
+        return web.json_response(result)
+    except Exception as e:
+        logger.exception("video runtime-check error")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_video_runtime_download(request: web.Request) -> web.Response:
+    """POST /api/video/runtime-download  body: {"component": "node|ffmpeg|chrome"}."""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+    try:
+        from mona.api.video_runtime import VideoRuntime
+
+        component = str(body.get("component", "") or "").strip()
+        if component not in {"node", "ffmpeg", "chrome"}:
+            return web.json_response(
+                {"error": "component must be node, ffmpeg or chrome"}, status=400
+            )
+        result = await VideoRuntime().ensure_runtime(component)
+        return web.json_response(result)
+    except Exception as e:
+        logger.exception("video runtime-download error")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_video_projects(request: web.Request) -> web.Response:
+    """GET /api/video/projects - list all video projects."""
+    try:
+        projects_dir = _video_projects_dir()
+        if not projects_dir.exists():
+            return web.json_response({"projects": []})
+        projects = []
+        for d in sorted(projects_dir.iterdir()):
+            if not d.is_dir() or d.name.startswith("_"):
+                continue
+            status_info = _get_video_project_status(d)
+            stat = d.stat()
+            chat_id_file = d / ".chat_id"
+            chat_id = (
+                chat_id_file.read_text(encoding="utf-8").strip()
+                if chat_id_file.exists()
+                else None
+            )
+            projects.append({
+                "name": d.name,
+                "createdAt": stat.st_ctime,
+                "chatId": chat_id,
+                **status_info,
+            })
+        return web.json_response({"projects": projects})
+    except Exception as e:
+        logger.exception("video projects error")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_video_project_create(request: web.Request) -> web.Response:
+    """POST /api/video/project/create  body: {"name", "resolution", "fps", "quality"}."""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+    try:
+        name = str(body.get("name", "") or "").strip()
+        if not name or "/" in name or "\\" in name or ".." in name:
+            return web.json_response({"error": "invalid project name"}, status=400)
+        resolution = str(body.get("resolution", "landscape") or "landscape")
+        fps = int(body.get("fps", 30) or 30)
+        quality = str(body.get("quality", "standard") or "standard")
+
+        project_dir = _video_projects_dir() / name
+        if project_dir.exists():
+            return web.json_response(
+                {"error": "project already exists"}, status=409
+            )
+        # Pre-build the standard directory layout.
+        for sub in ("scenes", "compositions", "assets", "renders", "output/preview"):
+            (project_dir / sub).mkdir(parents=True, exist_ok=True)
+        (project_dir / ".generating").write_text("1", encoding="utf-8")
+        meta = {
+            "name": name,
+            "resolution": resolution,
+            "fps": fps,
+            "quality": quality,
+        }
+        (project_dir / "meta.json").write_text(
+            _json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        return web.json_response({"ok": True, "name": name})
+    except Exception as e:
+        logger.exception("video project create error")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_video_project(request: web.Request) -> web.Response:
+    """GET /api/video/project?name=<n> - get a single project's status."""
+    try:
+        name = request.query.get("name") or ""
+        if not name or "/" in name or "\\" in name or ".." in name:
+            return web.json_response({"error": "invalid project name"}, status=400)
+        project_dir = _video_projects_dir() / name
+        if not project_dir.is_dir():
+            return web.json_response({"status": "not_found"}, status=404)
+        status_info = _get_video_project_status(project_dir)
+        chat_id_file = project_dir / ".chat_id"
+        chat_id = (
+            chat_id_file.read_text(encoding="utf-8").strip()
+            if chat_id_file.exists()
+            else None
+        )
+        meta_file = project_dir / "meta.json"
+        meta = (
+            _json.loads(meta_file.read_text(encoding="utf-8"))
+            if meta_file.is_file()
+            else {}
+        )
+        return web.json_response({
+            "name": name,
+            "chatId": chat_id,
+            "meta": meta,
+            **status_info,
+        })
+    except Exception as e:
+        logger.exception("video project error")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+_VIDEO_FILE_CONTENT_TYPES: dict[str, str] = {
+    ".html": "text/html",
+    ".js": "application/javascript",
+    ".css": "text/css",
+    ".json": "application/json",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".svg": "image/svg+xml",
+    ".mp4": "video/mp4",
+    ".webm": "video/webm",
+    ".mp3": "audio/mpeg",
+    ".wav": "audio/wav",
+    ".md": "text/markdown",
+    ".txt": "text/plain",
+}
+
+
+async def handle_video_project_file(request: web.Request) -> web.Response:
+    """GET /api/video/project-file?name=<n>&path=<p> - read a file from a project."""
+    try:
+        name = request.query.get("name") or ""
+        file_path = request.query.get("path") or ""
+        if not name or "/" in name or "\\" in name or ".." in name:
+            return web.json_response({"error": "invalid project name"}, status=400)
+        if not file_path or ".." in file_path:
+            return web.json_response({"error": "invalid file path"}, status=400)
+        project_dir = _video_projects_dir() / name
+        resolved = (project_dir / file_path).resolve()
+        if not str(resolved).startswith(str(project_dir.resolve())):
+            return web.json_response(
+                {"error": "path outside project"}, status=403
+            )
+        if not resolved.is_file():
+            return web.json_response({"error": "file not found"}, status=404)
+        content = resolved.read_bytes()
+        content_type = _VIDEO_FILE_CONTENT_TYPES.get(
+            resolved.suffix.lower(), "application/octet-stream"
+        )
+        return web.Response(body=content, content_type=content_type)
+    except Exception as e:
+        logger.exception("video project file error")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_video_project_save_chat_id(request: web.Request) -> web.Response:
+    """POST /api/video/project-save-chat-id  body: {"name", "chatId"}."""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+    try:
+        name = str(body.get("name", "") or "").strip()
+        if not name or "/" in name or "\\" in name or ".." in name:
+            return web.json_response({"error": "invalid project name"}, status=400)
+        project_dir = _video_projects_dir() / name
+        if not project_dir.is_dir():
+            return web.json_response({"error": "project not found"}, status=404)
+        chat_id = str(body.get("chatId", "") or "")
+        (project_dir / ".chat_id").write_text(chat_id, encoding="utf-8")
+        return web.json_response({"ok": True})
+    except Exception as e:
+        logger.exception("video save chat id error")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+# ---------------------------------------------------------------------------
+# Flowchart project routes (/api/flowchart/*)
+# ---------------------------------------------------------------------------
+
+
+def _flowchart_projects_dir() -> Path:
+    return get_workspace_path() / "flowchart_projects"
+
+
+def _get_flowchart_project_status(project_dir: Path) -> dict:
+    """Inspect a flowchart project directory and return its status."""
+    generating_marker = project_dir / ".generating"
+    diagram = project_dir / "diagram.drawio"
+    graph_json = project_dir / "graph.json"
+    output_dir = project_dir / "output"
+    has_svg = (output_dir / "diagram.svg").is_file()
+    has_png = (output_dir / "diagram.png").is_file()
+    has_export = has_svg or has_png
+    if has_export:
+        status = "done"
+    elif generating_marker.exists() and not diagram.exists():
+        status = "generating"
+    elif diagram.exists():
+        status = "done"
+    elif graph_json.exists():
+        status = "generating"
+    else:
+        status = "init"
+    return {
+        "status": status,
+        "hasDiagram": diagram.exists(),
+        "hasGraph": graph_json.exists(),
+        "hasExport": has_export,
+        "hasSvg": has_svg,
+        "hasPng": has_png,
+    }
+
+
+async def handle_flowchart_projects(request: web.Request) -> web.Response:
+    """GET /api/flowchart/projects - list all flowchart projects."""
+    try:
+        projects_dir = _flowchart_projects_dir()
+        if not projects_dir.exists():
+            return web.json_response({"projects": []})
+        projects = []
+        for d in sorted(projects_dir.iterdir()):
+            if not d.is_dir() or d.name.startswith("_"):
+                continue
+            status_info = _get_flowchart_project_status(d)
+            stat = d.stat()
+            chat_id_file = d / ".chat_id"
+            chat_id = (
+                chat_id_file.read_text(encoding="utf-8").strip()
+                if chat_id_file.exists()
+                else None
+            )
+            projects.append({
+                "name": d.name,
+                "createdAt": stat.st_ctime,
+                "chatId": chat_id,
+                **status_info,
+            })
+        return web.json_response({"projects": projects})
+    except Exception as e:
+        logger.exception("flowchart projects error")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_flowchart_project_create(request: web.Request) -> web.Response:
+    """POST /api/flowchart/project/create  body: {"name"}."""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+    try:
+        name = str(body.get("name", "") or "").strip()
+        if not name or "/" in name or "\\" in name or ".." in name:
+            return web.json_response({"error": "invalid project name"}, status=400)
+        project_dir = _flowchart_projects_dir() / name
+        if project_dir.exists():
+            return web.json_response(
+                {"error": "project already exists"}, status=409
+            )
+        (project_dir / "output").mkdir(parents=True, exist_ok=True)
+        (project_dir / ".generating").write_text("1", encoding="utf-8")
+        return web.json_response({"ok": True, "name": name})
+    except Exception as e:
+        logger.exception("flowchart project create error")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_flowchart_project(request: web.Request) -> web.Response:
+    """GET /api/flowchart/project?name=<n> - get a single project's status."""
+    try:
+        name = request.query.get("name") or ""
+        if not name or "/" in name or "\\" in name or ".." in name:
+            return web.json_response({"error": "invalid project name"}, status=400)
+        project_dir = _flowchart_projects_dir() / name
+        if not project_dir.is_dir():
+            return web.json_response({"status": "not_found"}, status=404)
+        status_info = _get_flowchart_project_status(project_dir)
+        chat_id_file = project_dir / ".chat_id"
+        chat_id = (
+            chat_id_file.read_text(encoding="utf-8").strip()
+            if chat_id_file.exists()
+            else None
+        )
+        return web.json_response({"name": name, "chatId": chat_id, **status_info})
+    except Exception as e:
+        logger.exception("flowchart project error")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_flowchart_project_xml(request: web.Request) -> web.Response:
+    """GET /api/flowchart/project-xml?name=<n> - read diagram.drawio content."""
+    try:
+        name = request.query.get("name") or ""
+        if not name or "/" in name or "\\" in name or ".." in name:
+            return web.json_response({"error": "invalid project name"}, status=400)
+        project_dir = _flowchart_projects_dir() / name
+        diagram = project_dir / "diagram.drawio"
+        if not diagram.is_file():
+            return web.json_response({"error": "diagram not found"}, status=404)
+        xml = diagram.read_text(encoding="utf-8")
+        return web.json_response({"name": name, "xml": xml})
+    except Exception as e:
+        logger.exception("flowchart project xml error")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_flowchart_project_save(request: web.Request) -> web.Response:
+    """POST /api/flowchart/project-save  body: {"name", "xml"}."""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+    try:
+        name = str(body.get("name", "") or "").strip()
+        if not name or "/" in name or "\\" in name or ".." in name:
+            return web.json_response({"error": "invalid project name"}, status=400)
+        project_dir = _flowchart_projects_dir() / name
+        if not project_dir.is_dir():
+            return web.json_response({"error": "project not found"}, status=404)
+        xml = str(body.get("xml", "") or "")
+        (project_dir / "diagram.drawio").write_text(xml, encoding="utf-8")
+        # Saving user edits means generation is complete.
+        (project_dir / ".generating").unlink(missing_ok=True)
+        return web.json_response({"ok": True})
+    except Exception as e:
+        logger.exception("flowchart project save error")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_flowchart_project_export(request: web.Request) -> web.Response:
+    """GET /api/flowchart/project-export?name=<n>&format=<svg|png>."""
+    try:
+        name = request.query.get("name") or ""
+        fmt = (request.query.get("format") or "svg").lower()
+        if not name or "/" in name or "\\" in name or ".." in name:
+            return web.json_response({"error": "invalid project name"}, status=400)
+        if fmt not in {"svg", "png"}:
+            return web.json_response(
+                {"error": "format must be svg or png"}, status=400
+            )
+        project_dir = _flowchart_projects_dir() / name
+        export_file = project_dir / "output" / f"diagram.{fmt}"
+        if not export_file.is_file():
+            return web.json_response(
+                {"error": "export file not found"}, status=404
+            )
+        content = export_file.read_bytes()
+        content_type = (
+            "image/svg+xml" if fmt == "svg" else "image/png"
+        )
+        return web.Response(body=content, content_type=content_type)
+    except Exception as e:
+        logger.exception("flowchart project export error")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_flowchart_project_save_chat_id(
+    request: web.Request,
+) -> web.Response:
+    """POST /api/flowchart/project-save-chat-id  body: {"name", "chatId"}."""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+    try:
+        name = str(body.get("name", "") or "").strip()
+        if not name or "/" in name or "\\" in name or ".." in name:
+            return web.json_response({"error": "invalid project name"}, status=400)
+        project_dir = _flowchart_projects_dir() / name
+        if not project_dir.is_dir():
+            return web.json_response({"error": "project not found"}, status=404)
+        chat_id = str(body.get("chatId", "") or "")
+        (project_dir / ".chat_id").write_text(chat_id, encoding="utf-8")
+        return web.json_response({"ok": True})
+    except Exception as e:
+        logger.exception("flowchart save chat id error")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_flowchart_runtime_check(request: web.Request) -> web.Response:
+    """GET /api/flowchart/runtime-check - detect draw.io webapp availability."""
+    try:
+        from mona.api.flowchart_runtime import get_flowchart_runtime
+
+        result = get_flowchart_runtime().check()
+        return web.json_response(result)
+    except Exception as e:
+        logger.exception("flowchart runtime-check error")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_flowchart_runtime_download(request: web.Request) -> web.Response:
+    """POST /api/flowchart/runtime-download - download draw.io webapp."""
+    try:
+        from mona.api.flowchart_runtime import get_flowchart_runtime
+
+        result = await get_flowchart_runtime().ensure_runtime()
+        return web.json_response(result)
+    except Exception as e:
+        logger.exception("flowchart runtime-download error")
+        return web.json_response({"error": str(e)}, status=500)
 
 
 # ---------------------------------------------------------------------------
@@ -3650,6 +4295,10 @@ def create_app(
     app.router.add_post("/api/notes-kb/search", handle_notes_kb_search)
     app.router.add_get("/api/notes-kb/related/{note_id}", handle_notes_kb_related)
 
+    # Hoard routes (Agent URL memory: browser star sync)
+    app.router.add_post("/api/hoard", handle_hoard_add)
+    app.router.add_delete("/api/hoard-by-url", handle_hoard_delete_by_url)
+
     # Email routes
     app.router.add_post("/email/folders", handle_email_folders)
     app.router.add_post("/email/create_folder", handle_email_create_folder)
@@ -3695,7 +4344,6 @@ def create_app(
     app.router.add_post("/api/schedule/items", handle_schedule_create)
     app.router.add_post("/api/schedule/items/{id}/update", handle_schedule_update)
     app.router.add_post("/api/schedule/items/{id}/remove", handle_schedule_remove)
-    app.router.add_post("/api/schedule/items/{id}/complete", handle_schedule_complete)
     app.router.add_post("/api/schedule/items/{id}/toggle", handle_schedule_toggle)
     app.router.add_get("/api/schedule/notifications", handle_schedule_notifications)
 
@@ -3703,6 +4351,53 @@ def create_app(
     app.router.add_post("/api/sessions/{key}/set-workspace", handle_session_set_workspace)
     app.router.add_post("/api/sessions/{key}/clear-workspace", handle_session_clear_workspace)
     app.router.add_get("/api/projects", handle_projects_list)
+
+    # Profile (user distillation) routes
+    app.router.add_get("/api/profile", handle_profile_get)
+    app.router.add_get("/api/profile/user", handle_profile_user_get)
+    app.router.add_patch("/api/profile/user", handle_profile_user_update)
+    app.router.add_post("/api/profile/distill", handle_profile_distill)
+    app.router.add_get("/api/profile/snapshots", handle_profile_snapshots)
+    app.router.add_get("/api/profile/comparison", handle_profile_comparison)
+
+    # Video project routes
+    app.router.add_get("/api/video/runtime-check", handle_video_runtime_check)
+    app.router.add_post("/api/video/runtime-download", handle_video_runtime_download)
+    app.router.add_get("/api/video/projects", handle_video_projects)
+    app.router.add_post("/api/video/project/create", handle_video_project_create)
+    app.router.add_get("/api/video/project", handle_video_project)
+    app.router.add_get("/api/video/project-file", handle_video_project_file)
+    app.router.add_post(
+        "/api/video/project-save-chat-id", handle_video_project_save_chat_id
+    )
+
+    # Flowchart project routes
+    app.router.add_get("/api/flowchart/projects", handle_flowchart_projects)
+    app.router.add_post("/api/flowchart/project/create", handle_flowchart_project_create)
+    app.router.add_get("/api/flowchart/project", handle_flowchart_project)
+    app.router.add_get("/api/flowchart/project-xml", handle_flowchart_project_xml)
+    app.router.add_post("/api/flowchart/project-save", handle_flowchart_project_save)
+    app.router.add_get(
+        "/api/flowchart/project-export", handle_flowchart_project_export
+    )
+    app.router.add_post(
+        "/api/flowchart/project-save-chat-id",
+        handle_flowchart_project_save_chat_id,
+    )
+    app.router.add_get(
+        "/api/flowchart/runtime-check", handle_flowchart_runtime_check
+    )
+    app.router.add_post(
+        "/api/flowchart/runtime-download", handle_flowchart_runtime_download
+    )
+
+    # draw.io webapp static files (served at /drawio/*)
+    # 优先使用用户下载的 ~/.mona/runtime/drawio/,回退打包的 mona/static/drawio/
+    from mona.api.flowchart_runtime import get_flowchart_runtime
+
+    _drawio_dir = get_flowchart_runtime().get_drawio_path()
+    if _drawio_dir and _drawio_dir.is_dir():
+        app.router.add_static("/drawio", str(_drawio_dir), show_index=True)
 
     # 设置 IDLE 管理器的事件循环
     _idle_manager.set_loop(asyncio.get_event_loop())

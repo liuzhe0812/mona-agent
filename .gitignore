@@ -105,3 +105,16 @@ tmp/
 temp/
 *.tmp
 exp/
+
+# CodeGraph runtime
+.codegraph/daemon.pid
+
+# Webui debug snapshots & scripts
+webui/align-test.png
+webui/debug-task.cjs
+webui/step1.png
+webui/step1-nav.png
+webui/step2.png
+webui/step3.png
+webui/task-align-debug.png
+webui/task-test.png

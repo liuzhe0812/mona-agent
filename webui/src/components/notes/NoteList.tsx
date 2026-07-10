@@ -7,11 +7,13 @@ import {
   Copy,
   FilePlus2,
   FolderInput,
+  FolderOpen,
   GitMerge,
   Pencil,
   Plus,
   PlusSquare,
   Server,
+  Star,
   Tags,
   Trash2,
   X,
@@ -81,6 +83,7 @@ interface NoteListProps {
   onDelete?: (note: OperationNote) => void;
   onDeleteMany?: (notes: OperationNote[]) => void;
   onSetContextLevel?: (note: OperationNote, level: NoteContextLevel) => void;
+  onToggleFavorite?: (note: OperationNote) => void;
   onCreateNote?: (sourceKind: NoteSourceKind) => void;
   notebooks?: Notebook[];
   allNotes?: OperationNote[];
@@ -96,6 +99,45 @@ const SORT_LABELS: Record<SortMode, string> = {
   "created-desc": "创建时间（从新到旧）",
   "created-asc": "创建时间（从旧到新）",
 };
+
+export function sortNotesByMode(notes: OperationNote[], sortMode: SortMode): OperationNote[] {
+  const list = [...notes];
+  if (sortMode === "title-asc") {
+    list.sort((a, b) =>
+      (a.title || "未命名笔记").localeCompare(b.title || "未命名笔记", "zh-Hans-CN"),
+    );
+  } else if (sortMode === "title-desc") {
+    list.sort((a, b) =>
+      (b.title || "未命名笔记").localeCompare(a.title || "未命名笔记", "zh-Hans-CN"),
+    );
+  } else if (sortMode === "updated-asc") {
+    list.sort((a, b) => {
+      const ta = new Date(a.updatedAt).getTime() || 0;
+      const tb = new Date(b.updatedAt).getTime() || 0;
+      return ta - tb;
+    });
+  } else if (sortMode === "updated-desc") {
+    list.sort((a, b) => {
+      const ta = new Date(a.updatedAt).getTime() || 0;
+      const tb = new Date(b.updatedAt).getTime() || 0;
+      return tb - ta;
+    });
+  } else if (sortMode === "created-asc") {
+    list.sort((a, b) => {
+      const ta = new Date(a.createdAt).getTime() || 0;
+      const tb = new Date(b.createdAt).getTime() || 0;
+      return ta - tb;
+    });
+  } else {
+    // created-desc
+    list.sort((a, b) => {
+      const ta = new Date(a.createdAt).getTime() || 0;
+      const tb = new Date(b.createdAt).getTime() || 0;
+      return tb - ta;
+    });
+  }
+  return list;
+}
 
 export function NoteList({
   notes,
@@ -120,6 +162,7 @@ export function NoteList({
   onDelete,
   onDeleteMany,
   onSetContextLevel,
+  onToggleFavorite,
   onCreateNote,
   notebooks = [],
   allNotes = [],
@@ -130,44 +173,7 @@ export function NoteList({
   const handleSortChange = onSortChange ?? setInternalSortMode;
   const selection = selectedIds ?? new Set<string>();
 
-  const sortedNotes = useMemo(() => {
-    const list = [...notes];
-    if (sortMode === "title-asc") {
-      list.sort((a, b) =>
-        (a.title || "未命名笔记").localeCompare(b.title || "未命名笔记", "zh-Hans-CN"),
-      );
-    } else if (sortMode === "title-desc") {
-      list.sort((a, b) =>
-        (b.title || "未命名笔记").localeCompare(a.title || "未命名笔记", "zh-Hans-CN"),
-      );
-    } else if (sortMode === "updated-asc") {
-      list.sort((a, b) => {
-        const ta = new Date(a.updatedAt).getTime() || 0;
-        const tb = new Date(b.updatedAt).getTime() || 0;
-        return ta - tb;
-      });
-    } else if (sortMode === "updated-desc") {
-      list.sort((a, b) => {
-        const ta = new Date(a.updatedAt).getTime() || 0;
-        const tb = new Date(b.updatedAt).getTime() || 0;
-        return tb - ta;
-      });
-    } else if (sortMode === "created-asc") {
-      list.sort((a, b) => {
-        const ta = new Date(a.createdAt).getTime() || 0;
-        const tb = new Date(b.createdAt).getTime() || 0;
-        return ta - tb;
-      });
-    } else {
-      // created-desc
-      list.sort((a, b) => {
-        const ta = new Date(a.createdAt).getTime() || 0;
-        const tb = new Date(b.createdAt).getTime() || 0;
-        return tb - ta;
-      });
-    }
-    return list;
-  }, [notes, sortMode]);
+  const sortedNotes = useMemo(() => sortNotesByMode(notes, sortMode), [notes, sortMode]);
 
   const handleSaveTags = (tags: string[]) => {
     if (!editingNote || !onEditTags) return;
@@ -266,6 +272,7 @@ export function NoteList({
                   allNotes={allNotes}
                   knowledgeBaseEnabled={knowledgeBaseEnabled}
                   onSetContextLevel={onSetContextLevel}
+                  onToggleFavorite={onToggleFavorite}
                 />
               ))}
             </div>
@@ -397,7 +404,7 @@ function ListHeader({
   );
 }
 
-function NoteRow({
+export function NoteRow({
   note,
   active,
   selected,
@@ -415,6 +422,7 @@ function NoteRow({
   allNotes = [],
   knowledgeBaseEnabled,
   onSetContextLevel,
+  onToggleFavorite,
 }: {
   note: OperationNote;
   active: boolean;
@@ -433,6 +441,7 @@ function NoteRow({
   allNotes?: OperationNote[];
   knowledgeBaseEnabled: boolean;
   onSetContextLevel?: (note: OperationNote, level: NoteContextLevel) => void;
+  onToggleFavorite?: (note: OperationNote) => void;
 }) {
   const currentLevel: NoteContextLevel = note.contextLevel ?? "full";
 
@@ -453,15 +462,18 @@ function NoteRow({
           className={cn(
             "group flex h-[30px] w-full items-center gap-1.5 rounded-md px-2 text-left transition-colors",
             active
-              ? "bg-[#6aa7ff]/12 text-foreground"
+              ? "bg-primary/15 text-foreground"
               : selected
-                ? "bg-[#6aa7ff]/6 text-foreground"
+                ? "bg-primary/8 text-foreground"
                 : "text-foreground/85 hover:bg-accent/60",
           )}
         >
           <span className="min-w-0 flex-1 truncate text-[12.5px] leading-none">
             {note.title || "未命名笔记"}
           </span>
+          {note.favorite ? (
+            <Star className="shrink-0 h-3 w-3 fill-current text-amber-500" />
+          ) : null}
           <span className="shrink-0 text-[10.5px] tabular-nums text-muted-foreground/70">
             {formatRelativeTime(note.updatedAt)}
           </span>
@@ -488,6 +500,18 @@ function NoteRow({
             将文件移动到...
           </ContextMenuSubTrigger>
           <ContextMenuSubContent className="w-44">
+            {note.notebookId !== "" ? (
+              <ContextMenuItem
+                onSelect={() => onMoveToNotebook?.(note, "")}
+                className="text-[13px]"
+              >
+                <FolderOpen className="mr-2 h-3.5 w-3.5" />
+                根目录
+              </ContextMenuItem>
+            ) : null}
+            {note.notebookId !== "" && notebooks.length > 0 ? (
+              <ContextMenuSeparator />
+            ) : null}
             {notebooks
               .filter((notebook) => notebook.id !== note.notebookId)
               .map((notebook) => (
@@ -529,6 +553,12 @@ function NoteRow({
           <Tags className="mr-2 h-3.5 w-3.5" />
           编辑标签
         </ContextMenuItem>
+        {onToggleFavorite ? (
+          <ContextMenuItem onSelect={() => onToggleFavorite(note)}>
+            <Star className={cn("mr-2 h-3.5 w-3.5", note.favorite && "fill-current text-amber-500")} />
+            {note.favorite ? "取消收藏" : "收藏"}
+          </ContextMenuItem>
+        ) : null}
         <ContextMenuSeparator />
         <ContextMenuItem onSelect={() => onCopyMarkdown?.(note)}>
           <Copy className="mr-2 h-3.5 w-3.5" />

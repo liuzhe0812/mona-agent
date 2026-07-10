@@ -1,29 +1,49 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   Archive,
+  ArchiveRestore,
   ChevronDown,
   ChevronUp,
   LogIn,
   Menu,
+  MoreHorizontal,
+  Pencil,
+  Pin,
+  PinOff,
   Search,
+  Trash2,
   User,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { AgentLogo } from "@/components/AgentLogo";
 import { ChatList } from "@/components/ChatList";
+import { useEmailStore } from "@/components/email/store/emailStore";
 
-import sidebarMonaIcon from "@/assets/icons/sidebar-mona.jpg";
-import sidebarNoteIcon from "@/assets/icons/sidebar-note.jpg";
-import sidebarTerminalIcon from "@/assets/icons/sidebar-terminal.jpg";
-import sidebarDatabaseIcon from "@/assets/icons/sidebar-database.jpg";
-import sidebarKnowledgeIcon from "@/assets/icons/sidebar-knowledge.jpg";
-import sidebarPptIcon from "@/assets/icons/sidebar-ppt.jpg";
-import sidebarEmailIcon from "@/assets/icons/sidebar-email.jpg";
-import sidebarScheduleIcon from "@/assets/icons/sidebar-schedule.jpg";
+import sidebarMonaIcon from "@/assets/icons/sidebar-mona.png";
+import sidebarNoteIcon from "@/assets/icons/sidebar-note.png";
+import sidebarTerminalIcon from "@/assets/icons/sidebar-terminal.png";
+import sidebarDatabaseIcon from "@/assets/icons/sidebar-database.png";
+import sidebarKnowledgeIcon from "@/assets/icons/sidebar-knowledge.png";
+import sidebarDocIcon from "@/assets/icons/sidebar-doc.png";
+import sidebarEmailIcon from "@/assets/icons/sidebar-email.png";
+import sidebarScheduleIcon from "@/assets/icons/sidebar-schedule.png";
+import sidebarProfileIcon from "@/assets/icons/sidebar-profile.png";
 
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Separator } from "@/components/ui/separator";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useLicense } from "@/hooks/useLicense";
 import { deriveTitle } from "@/lib/format";
@@ -47,12 +67,13 @@ interface SidebarProps {
   onOpenLogin?: () => void;
   onOpenSubscribe?: () => void;
   onOpenNote?: () => void;
-  onOpenPpt?: () => void;
+  onOpenDoc?: () => void;
   onOpenSSH?: () => void;
   onOpenDb?: () => void;
   onOpenKb?: () => void;
   onOpenEmail?: () => void;
   onOpenSchedule?: () => void;
+  onOpenProfile?: () => void;
   onOpenSearch: () => void;
   onToggleArchived: () => void;
   onUpdateView: (view: Partial<SidebarViewState>) => void;
@@ -80,6 +101,8 @@ export function Sidebar(props: SidebarProps) {
   const collapsed = Boolean(props.collapsed);
   const toggleLabel = t("thread.header.toggleSidebar");
   const agentLogoState = props.runningChatIds?.length ? "working" : "idle";
+  // 订阅邮件总未读数，用于邮件图标角标（全局初始化时已从 SQLite 加载）
+  const emailUnreadCount = useEmailStore((s) => s.totalUnreadCount);
 
   return (
     <nav
@@ -126,13 +149,15 @@ export function Sidebar(props: SidebarProps) {
         collapsed={collapsed}
         onNewChat={props.onNewChat}
         onOpenNote={props.onOpenNote ?? (() => {})}
-        onOpenPpt={props.onOpenPpt ?? (() => {})}
+        onOpenDoc={props.onOpenDoc ?? (() => {})}
         onOpenSSH={props.onOpenSSH ?? (() => {})}
         onOpenDb={props.onOpenDb ?? (() => {})}
         onOpenKb={props.onOpenKb ?? (() => {})}
         onOpenEmail={props.onOpenEmail ?? (() => {})}
         onOpenSchedule={props.onOpenSchedule ?? (() => {})}
+        onOpenProfile={props.onOpenProfile ?? (() => {})}
         onGoHome={props.onGoHome ?? (() => {})}
+        emailUnreadCount={emailUnreadCount}
       />
       <Separator className="mx-2 mb-2 bg-sidebar-border/50" />
 
@@ -168,6 +193,12 @@ export function Sidebar(props: SidebarProps) {
             activeKey={props.activeKey}
             onSelect={props.onSelect}
             titleOverrides={props.titleOverrides ?? {}}
+            pinnedKeys={props.pinnedKeys ?? []}
+            archivedKeys={props.archivedKeys ?? []}
+            onRequestDelete={props.onRequestDelete}
+            onTogglePin={props.onTogglePin}
+            onRequestRename={props.onRequestRename}
+            onToggleArchive={props.onToggleArchive}
           />
         ) : (
           <ChatList
@@ -266,48 +297,98 @@ export function Sidebar(props: SidebarProps) {
   );
 }
 
-const TOOLBOX_ITEMS: Array<{
+type ToolboxItem = {
   label: string;
   icon: ReactNode;
-}> = [
-  { label: "Mona", icon: <img src={sidebarMonaIcon} className="h-4 w-4 rounded-md object-cover" alt="" draggable={false} /> },
-  { label: "笔记", icon: <img src={sidebarNoteIcon} className="h-4 w-4 rounded-md object-cover" alt="" draggable={false} /> },
-  { label: "终端", icon: <img src={sidebarTerminalIcon} className="h-4 w-4 rounded-md object-cover" alt="" draggable={false} /> },
-  { label: "数据库", icon: <img src={sidebarDatabaseIcon} className="h-4 w-4 rounded-md object-cover" alt="" draggable={false} /> },
-  { label: "知识库", icon: <img src={sidebarKnowledgeIcon} className="h-4 w-4 rounded-md object-cover" alt="" draggable={false} /> },
-  { label: "PPT制作", icon: <img src={sidebarPptIcon} className="h-4 w-4 rounded-md object-cover" alt="" draggable={false} /> },
-  { label: "邮件", icon: <img src={sidebarEmailIcon} className="h-4 w-4 rounded-md object-cover" alt="" draggable={false} /> },
-  { label: "日程", icon: <img src={sidebarScheduleIcon} className="h-4 w-4 rounded-md object-cover" alt="" draggable={false} /> },
+};
+
+// 一级主入口（始终展示在侧边栏）
+const PRIMARY_ITEMS: ToolboxItem[] = [
+  { label: "Mona", icon: <img src={sidebarMonaIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
+  { label: "笔记", icon: <img src={sidebarNoteIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
+  { label: "终端", icon: <img src={sidebarTerminalIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
+  { label: "邮件", icon: <img src={sidebarEmailIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
+  { label: "日程", icon: <img src={sidebarScheduleIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
 ];
 
-function ToolboxNavigation({
-  collapsed,
-  onNewChat,
-  onOpenNote,
-  onOpenPpt,
-  onOpenSSH,
-  onOpenDb,
-  onOpenKb,
-  onOpenEmail,
-  onOpenSchedule,
-  onGoHome,
-}: {
-  collapsed: boolean;
+// 二级入口（收纳在"更多"菜单中）
+const SECONDARY_ITEMS: ToolboxItem[] = [
+  { label: "数据库", icon: <img src={sidebarDatabaseIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
+  { label: "知识库", icon: <img src={sidebarKnowledgeIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
+  { label: "AI文档", icon: <img src={sidebarDocIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
+  { label: "画像", icon: <img src={sidebarProfileIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
+];
+
+function getToolboxHandler(label: string, handlers: {
   onNewChat: () => void;
   onOpenNote: () => void;
-  onOpenPpt: () => void;
+  onOpenDoc: () => void;
   onOpenSSH: () => void;
   onOpenDb: () => void;
   onOpenKb: () => void;
   onOpenEmail: () => void;
   onOpenSchedule: () => void;
+  onOpenProfile: () => void;
   onGoHome: () => void;
+}): () => void {
+  switch (label) {
+    case "Mona": return handlers.onNewChat;
+    case "笔记": return handlers.onOpenNote;
+    case "AI文档": return handlers.onOpenDoc;
+    case "终端": return handlers.onOpenSSH;
+    case "数据库": return handlers.onOpenDb;
+    case "知识库": return handlers.onOpenKb;
+    case "邮件": return handlers.onOpenEmail;
+    case "日程": return handlers.onOpenSchedule;
+    case "画像": return handlers.onOpenProfile;
+    default: return handlers.onGoHome;
+  }
+}
+
+function ToolboxNavigation({
+  collapsed,
+  onNewChat,
+  onOpenNote,
+  onOpenDoc,
+  onOpenSSH,
+  onOpenDb,
+  onOpenKb,
+  onOpenEmail,
+  onOpenSchedule,
+  onOpenProfile,
+  onGoHome,
+  emailUnreadCount,
+}: {
+  collapsed: boolean;
+  onNewChat: () => void;
+  onOpenNote: () => void;
+  onOpenDoc: () => void;
+  onOpenSSH: () => void;
+  onOpenDb: () => void;
+  onOpenKb: () => void;
+  onOpenEmail: () => void;
+  onOpenSchedule: () => void;
+  onOpenProfile: () => void;
+  onGoHome: () => void;
+  emailUnreadCount: number;
 }) {
   const { licenseActive } = useLicense();
-  const LICENSE_REQUIRED = new Set(["知识库", "PPT制作", "邮件"]);
-  const visibleItems = licenseActive
-    ? TOOLBOX_ITEMS
-    : TOOLBOX_ITEMS.filter((item) => !LICENSE_REQUIRED.has(item.label));
+  const LICENSE_REQUIRED = new Set(["知识库", "AI文档", "邮件"]);
+  const handlers = {
+    onNewChat,
+    onOpenNote,
+    onOpenDoc,
+    onOpenSSH,
+    onOpenDb,
+    onOpenKb,
+    onOpenEmail,
+    onOpenSchedule,
+    onOpenProfile,
+    onGoHome,
+  };
+  const visibleSecondary = licenseActive
+    ? SECONDARY_ITEMS
+    : SECONDARY_ITEMS.filter((item) => !LICENSE_REQUIRED.has(item.label));
 
   return (
     <div
@@ -316,24 +397,10 @@ function ToolboxNavigation({
         collapsed && "flex w-14 flex-col items-center px-0",
       )}
     >
-      {visibleItems.map((item) => {
-        const onClick = item.label === "Mona"
-          ? onNewChat
-          : item.label === "笔记"
-            ? onOpenNote
-          : item.label === "PPT制作"
-            ? onOpenPpt
-          : item.label === "终端"
-            ? onOpenSSH
-          : item.label === "数据库"
-            ? onOpenDb
-          : item.label === "知识库"
-            ? onOpenKb
-          : item.label === "邮件"
-            ? onOpenEmail
-          : item.label === "日程"
-            ? onOpenSchedule
-          : onGoHome;
+      {PRIMARY_ITEMS.map((item) => {
+        const onClick = getToolboxHandler(item.label, handlers);
+        // 邮件图标显示未读数角标
+        const badge = item.label === "邮件" && emailUnreadCount > 0 ? emailUnreadCount : undefined;
         return (
           <SidebarActionButton
             key={item.label}
@@ -341,9 +408,60 @@ function ToolboxNavigation({
             label={item.label}
             onClick={onClick}
             icon={item.icon}
+            badge={badge}
           />
         );
       })}
+      {visibleSecondary.length > 0 && (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              aria-label="更多"
+              title={collapsed ? "更多" : undefined}
+              className={cn(
+                "group relative h-8 min-w-0 gap-2 overflow-hidden rounded-full font-medium text-sidebar-foreground/85 hover:bg-sidebar-accent/75 hover:text-sidebar-foreground",
+                "transition-[width,padding,border-radius,color,background-color] duration-300 ease-out",
+                collapsed
+                  ? "w-9 justify-center gap-0 rounded-xl px-0"
+                  : "w-full justify-start gap-2 px-3 text-[12.5px]",
+              )}
+            >
+              <span className="flex shrink-0 items-center justify-center" aria-hidden>
+                <MoreHorizontal className="h-5 w-5" />
+              </span>
+              <span
+                className={cn(
+                  "min-w-0 overflow-hidden truncate whitespace-nowrap transition-[max-width,opacity,transform] duration-200 ease-out",
+                  collapsed
+                    ? "max-w-0 -translate-x-1 opacity-0"
+                    : "max-w-[12rem] translate-x-0 opacity-100",
+                )}
+              >
+                更多
+              </span>
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            side={collapsed ? "right" : "right"}
+            align={collapsed ? "center" : "start"}
+            sideOffset={8}
+            className="min-w-[160px]"
+          >
+            {visibleSecondary.map((item) => (
+              <DropdownMenuItem
+                key={item.label}
+                className="gap-2 px-2.5 py-1.5 text-[13px]"
+                onSelect={() => getToolboxHandler(item.label, handlers)()}
+              >
+                {item.icon}
+                <span>{item.label}</span>
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
     </div>
   );
 }
@@ -355,6 +473,7 @@ function SidebarActionButton({
   onClick,
   className,
   active = false,
+  badge,
 }: {
   collapsed: boolean;
   label: string;
@@ -362,7 +481,10 @@ function SidebarActionButton({
   onClick: () => void;
   className?: string;
   active?: boolean;
+  /** 未读数角标（>0 时显示，>99 显示 99+） */
+  badge?: number;
 }) {
+  const badgeText = badge != null && badge > 0 ? (badge > 99 ? "99+" : String(badge)) : null;
   return (
     <Button
       type="button"
@@ -371,7 +493,7 @@ function SidebarActionButton({
       title={collapsed ? label : undefined}
       onClick={onClick}
       className={cn(
-        "group h-8 min-w-0 gap-2 overflow-hidden rounded-full font-medium text-sidebar-foreground/85 hover:bg-sidebar-accent/75 hover:text-sidebar-foreground",
+        "group relative h-8 min-w-0 gap-2 overflow-hidden rounded-full font-medium text-sidebar-foreground/85 hover:bg-sidebar-accent/75 hover:text-sidebar-foreground",
         "transition-[width,padding,border-radius,color,background-color] duration-300 ease-out",
         active &&
           "bg-sidebar-accent/80 text-sidebar-foreground shadow-[inset_0_0_0_1px_hsl(var(--sidebar-border)/0.35)]",
@@ -402,6 +524,19 @@ function SidebarActionButton({
       >
         {label}
       </span>
+      {badgeText && (
+        <span
+          className={cn(
+            "pointer-events-none absolute flex items-center justify-center bg-red-500 font-medium text-white",
+            collapsed
+              ? "right-0.5 top-0.5 min-w-[16px] h-[16px] rounded-full px-1 text-[9px] leading-none"
+              : "right-1.5 top-1/2 -translate-y-1/2 min-w-[18px] h-[18px] rounded-full px-1 text-[10px] leading-none",
+          )}
+          aria-hidden
+        >
+          {badgeText}
+        </span>
+      )}
     </Button>
   );
 }
@@ -411,16 +546,31 @@ function CollapsedChatList({
   activeKey,
   onSelect,
   titleOverrides,
+  pinnedKeys,
+  archivedKeys,
+  onRequestDelete,
+  onTogglePin,
+  onRequestRename,
+  onToggleArchive,
 }: {
   sessions: ChatSummary[];
   activeKey: string | null;
   onSelect: (key: string) => void;
   titleOverrides: Record<string, string>;
+  pinnedKeys: string[];
+  archivedKeys: string[];
+  onRequestDelete: (key: string, label: string) => void;
+  onTogglePin: (key: string) => void;
+  onRequestRename: (key: string, label: string) => void;
+  onToggleArchive: (key: string) => void;
 }) {
   const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
   const [canScrollUp, setCanScrollUp] = useState(false);
   const [canScrollDown, setCanScrollDown] = useState(false);
+
+  const pinned = new Set(pinnedKeys);
+  const archived = new Set(archivedKeys);
 
   const sorted = [...sessions].sort((a, b) => {
     const at = Date.parse(a.updatedAt ?? a.createdAt ?? "");
@@ -473,26 +623,55 @@ function CollapsedChatList({
               s.title?.trim() ||
               deriveTitle(s.preview, t("chat.newChat"));
             const initial = title.charAt(0).toUpperCase() || "?";
+            const isPinned = pinned.has(s.key);
+            const isArchived = archived.has(s.key);
             return (
-              <Tooltip key={s.key}>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    onClick={() => onSelect(s.key)}
-                    className={cn(
-                      "flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[13px] font-medium transition-colors",
-                      active
-                        ? "bg-sidebar-accent/80 text-sidebar-foreground shadow-[inset_0_0_0_1px_hsl(var(--sidebar-border)/0.35)]"
-                        : "text-muted-foreground/70 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground",
-                    )}
+              <ContextMenu key={s.key}>
+                <ContextMenuTrigger asChild>
+                  <div>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          type="button"
+                          onClick={() => onSelect(s.key)}
+                          className={cn(
+                            "flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[13px] font-medium transition-colors",
+                            active
+                              ? "bg-sidebar-accent/80 text-sidebar-foreground shadow-[inset_0_0_0_1px_hsl(var(--sidebar-border)/0.35)]"
+                              : "text-muted-foreground/70 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground",
+                          )}
+                        >
+                          {initial}
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="right" className="max-w-[200px] truncate">
+                        {title}
+                      </TooltipContent>
+                    </Tooltip>
+                  </div>
+                </ContextMenuTrigger>
+                <ContextMenuContent onCloseAutoFocus={(e) => e.preventDefault()}>
+                  <ContextMenuItem onSelect={() => onTogglePin(s.key)}>
+                    {isPinned ? <PinOff className="mr-2 h-4 w-4" /> : <Pin className="mr-2 h-4 w-4" />}
+                    {isPinned ? t("chat.unpin") : t("chat.pin")}
+                  </ContextMenuItem>
+                  <ContextMenuItem onSelect={() => onRequestRename(s.key, title)}>
+                    <Pencil className="mr-2 h-4 w-4" />
+                    {t("chat.rename")}
+                  </ContextMenuItem>
+                  <ContextMenuItem onSelect={() => onToggleArchive(s.key)}>
+                    {isArchived ? <ArchiveRestore className="mr-2 h-4 w-4" /> : <Archive className="mr-2 h-4 w-4" />}
+                    {isArchived ? t("chat.unarchive") : t("chat.archive")}
+                  </ContextMenuItem>
+                  <ContextMenuItem
+                    onSelect={() => window.setTimeout(() => onRequestDelete(s.key, title), 0)}
+                    className="text-destructive focus:text-destructive"
                   >
-                    {initial}
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="right" className="max-w-[200px] truncate">
-                  {title}
-                </TooltipContent>
-              </Tooltip>
+                    <Trash2 className="mr-2 h-4 w-4" />
+                    {t("chat.delete")}
+                  </ContextMenuItem>
+                </ContextMenuContent>
+              </ContextMenu>
             );
           })}
         </div>

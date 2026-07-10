@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 from typing import Any
 
@@ -13,40 +12,11 @@ from mona.kb.embedding import EmbeddingConfig, fetch_embedding
 from mona.kb.ingest import parse_frontmatter
 
 RRF_K = 60.0
-FILENAME_EXACT_BONUS = 200.0
-PHRASE_IN_TITLE_BONUS = 50.0
-PHRASE_IN_CONTENT_PER_OCC = 20.0
-MAX_PHRASE_OCC_COUNTED = 10
-TITLE_TOKEN_WEIGHT = 5.0
-CONTENT_TOKEN_WEIGHT = 1.0
-
-STOP_WORDS = frozenset({
-    "的", "是", "了", "什么", "在", "有", "和", "与", "对", "从",
-    "the", "is", "a", "an", "what", "how", "are", "was", "were",
-    "do", "does", "did", "be", "been", "being", "have", "has", "had",
-    "it", "its", "in", "on", "at", "to", "for", "of", "with", "by",
-    "this", "that", "these", "those",
-})
 
 
 def _tokenize_query(query: str) -> list[str]:
-    raw = re.split(r"[\s,，。！？、；：\u201c\u201d\u2018\u2019\uff08\uff09()\\-_/\\\\\u00b7\u3007\uff5e\u2026]+", query.lower())
-    tokens = [t for t in raw if len(t) > 1 and t not in STOP_WORDS]
-
-    out: list[str] = []
-    for token in tokens:
-        has_cjk = any("\u4e00" <= c <= "\u9fff" or "\u3400" <= c <= "\u4dbf" for c in token)
-        if has_cjk and len(token) > 2:
-            chars = list(token)
-            for i in range(len(chars) - 1):
-                out.append(chars[i] + chars[i + 1])
-            for ch in chars:
-                if ch not in STOP_WORDS:
-                    out.append(ch)
-            out.append(token)
-        else:
-            out.append(token)
-    return list(dict.fromkeys(out))
+    """Split query on whitespace into lowercased tokens (non-empty)."""
+    return [t.lower() for t in query.split() if t.strip()]
 
 
 def _extract_snippet(body: str, terms: list[str], max_chars: int = 300) -> str:
@@ -88,7 +58,11 @@ def search_wiki(
     count: int = 10,
     markdown_dir: Path | str | None = None,
 ) -> list[dict[str, Any]]:
-    """Full-text keyword search wiki pages (backward compatible).
+    """Multi-token LIKE substring search over wiki pages with additive scoring.
+
+    Query is split on whitespace into tokens; each token independently
+    matches (title +3, content +1). Total score is summed across tokens.
+    Chinese-friendly: no tokenization beyond whitespace splitting.
 
     Pass `markdown_dir` to search a non-default directory (e.g. a notes vault).
     """
@@ -96,26 +70,33 @@ def search_wiki(
     if not md_dir.exists():
         return []
 
-    terms = query.split()
-    if not terms:
+    tokens = _tokenize_query(query)
+    if not tokens:
         return []
 
     results: list[dict[str, Any]] = []
     for md_file in md_dir.rglob("*.md"):
         content = md_file.read_text(encoding="utf-8")
         frontmatter, body = parse_frontmatter(content)
-        lower_content = content.lower()
-        score = sum(1 for term in terms if term.lower() in lower_content)
+        rel_path = str(md_file.relative_to(md_dir)).replace("\\", "/")
+        title = frontmatter.get("title", rel_path)
+        title_lower = title.lower()
+        content_lower = content.lower()
+
+        score = 0
+        for tok in tokens:
+            if tok in title_lower:
+                score += 3
+            if tok in content_lower:
+                score += 1
         if score == 0:
             continue
 
-        rel_path = str(md_file.relative_to(md_dir)).replace("\\", "/")
-        title = frontmatter.get("title", rel_path)
         page_type = frontmatter.get("type", "")
         tags = frontmatter.get("tags", [])
         if isinstance(tags, str):
             tags = [tags]
-        snippet = _extract_snippet(body, terms)
+        snippet = _extract_snippet(body, tokens)
         results.append({
             "path": rel_path, "title": title, "type": page_type,
             "tags": tags, "snippet": snippet, "score": score,
@@ -146,10 +127,10 @@ async def search_wiki_hybrid(
         return {"mode": "keyword", "results": []}
 
     tokens = _tokenize_query(query)
-    effective_tokens = tokens if tokens else [query.strip().lower()]
-    query_phrase = query.strip().lower()
+    if not tokens:
+        return {"mode": "keyword", "results": []}
 
-    # -- Phase 1: Keyword search --
+    # -- Phase 1: Multi-token LIKE search with additive scoring --
     slug_to_path: dict[str, str] = {}
     keyword_results: list[dict[str, Any]] = []
 
@@ -161,31 +142,22 @@ async def search_wiki_hybrid(
         content = md_file.read_text(encoding="utf-8")
         fm, body = parse_frontmatter(content)
         title = fm.get("title", rel)
-        title_text = f"{title} {md_file.stem}"
-        title_lower = title_text.lower()
+        title_lower = title.lower()
         content_lower = content.lower()
 
-        filename_exact = stem == query_phrase
-        title_has_phrase = query_phrase in title_lower
-        content_phrase_occ = min(content_lower.count(query_phrase), MAX_PHRASE_OCC_COUNTED) if query_phrase else 0
-        title_token_score = sum(1 for t in effective_tokens if t in title_lower)
-        content_token_score = sum(1 for t in effective_tokens if t in content_lower)
-
-        if not filename_exact and not title_has_phrase and content_phrase_occ == 0 and title_token_score == 0 and content_token_score == 0:
+        score = 0
+        for tok in tokens:
+            if tok in title_lower:
+                score += 3
+            if tok in content_lower:
+                score += 1
+        if score == 0:
             continue
-
-        score = (
-            (FILENAME_EXACT_BONUS if filename_exact else 0)
-            + (PHRASE_IN_TITLE_BONUS if title_has_phrase else 0)
-            + content_phrase_occ * PHRASE_IN_CONTENT_PER_OCC
-            + title_token_score * TITLE_TOKEN_WEIGHT
-            + content_token_score * CONTENT_TOKEN_WEIGHT
-        )
 
         tags = fm.get("tags", [])
         if isinstance(tags, str):
             tags = [tags]
-        snippet = _extract_snippet(body, effective_tokens)
+        snippet = _extract_snippet(body, tokens)
 
         keyword_results.append({
             "path": rel, "title": title, "type": fm.get("type", ""),

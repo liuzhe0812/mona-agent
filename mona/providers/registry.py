@@ -84,6 +84,17 @@ class ProviderSpec:
     # whose API returns the actual answer in "reasoning" instead of "content".
     reasoning_as_content: bool = False
 
+    # Image generation models supported by this provider. The first entry is
+    # used as the default when the user has not set an explicit image model.
+    # Empty means the provider has no curated image model list; users must
+    # type one manually.
+    image_models: tuple[str, ...] = ()
+
+    # Video generation models supported by this provider. The first entry is
+    # used as the default when the user has not set an explicit video model.
+    # Empty means the provider has no curated video model list.
+    video_models: tuple[str, ...] = ()
+
     @property
     def label(self) -> str:
         return self.display_name or self.name.title()
@@ -189,6 +200,12 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         detect_by_base_keyword="aihubmix",
         default_api_base="https://aihubmix.com/v1",
         strip_model_prefix=True,
+        image_models=(
+            "gpt-image-1",
+            "dall-e-3",
+            "gemini-2.5-flash-image",
+            "kwai-kolors/kolors",
+        ),
     ),
     # SiliconFlow (硅基流动): OpenAI-compatible gateway, model names keep org prefix
     ProviderSpec(
@@ -200,6 +217,11 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         is_gateway=True,
         detect_by_base_keyword="siliconflow",
         default_api_base="https://api.siliconflow.cn/v1",
+        image_models=(
+            "Kwai-Kolors/Kolors",
+            "stabilityai/stable-diffusion-3.5-large",
+            "black-forest-labs/FLUX.1-schnell",
+        ),
     ),
     # Agnes AI: OpenAI-compatible gateway
     ProviderSpec(
@@ -212,6 +234,8 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         detect_by_base_keyword="agnes-ai",
         default_api_base="https://apihub.agnes-ai.com/v1",
         strip_model_prefix=True,
+        image_models=("agnes-image-2.1-flash",),
+        video_models=("agnes-video-v2.0",),
     ),
 
     # Novita AI: OpenAI-compatible gateway for hosted model APIs.
@@ -238,6 +262,10 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         default_api_base="https://ark.cn-beijing.volces.com/api/v3",
         thinking_style="thinking_type",
         supports_max_completion_tokens=True,
+        image_models=(
+            "doubao-seedream-3-0-t2i-250415",
+            "doubao-seedream-3-0-i2i-250415",
+        ),
     ),
 
     # VolcEngine Coding Plan (火山引擎 Coding Plan): same key as volcengine
@@ -300,6 +328,10 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         display_name="OpenAI",
         backend="openai_compat",
         supports_max_completion_tokens=True,
+        image_models=(
+            "gpt-image-1",
+            "dall-e-3",
+        ),
     ),
     # OpenAI Codex: OAuth-based, dedicated provider
     ProviderSpec(
@@ -342,6 +374,10 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         display_name="Gemini",
         backend="openai_compat",
         default_api_base="https://generativelanguage.googleapis.com/v1beta/openai/",
+        image_models=(
+            "gemini-2.5-flash-image",
+            "gemini-2.0-flash-exp-image",
+        ),
     ),
     # Zhipu (智谱): OpenAI-compatible at open.bigmodel.cn
     ProviderSpec(
@@ -362,6 +398,11 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         backend="openai_compat",
         default_api_base="https://dashscope.aliyuncs.com/compatible-mode/v1",
         thinking_style="enable_thinking",
+        image_models=(
+            "wan2.2-t2i-plus",
+            "wan2.2-t2i-flash",
+            "flux-dev",
+        ),
     ),
     # DashScope Coding Plan (百炼 Coding Plan): same key as dashscope
     ProviderSpec(
@@ -397,6 +438,10 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         backend="openai_compat",
         default_api_base="https://api.minimax.io/v1",
         thinking_style="reasoning_split",
+        image_models=(
+            "image-01",
+            "image-01-flash",
+        ),
     ),
     # MiniMax Anthropic-compatible endpoint: supports thinking mode
     ProviderSpec(
@@ -425,6 +470,10 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         backend="openai_compat",
         default_api_base="https://api.stepfun.com/v1",
         reasoning_as_content=True,
+        image_models=(
+            "step-image-edit-2",
+            "step-1x-medium",
+        ),
     ),
     # Xiaomi MIMO (小米): OpenAI-compatible API
     # Hosted API (api.xiaomimimo.com) accepts {"thinking": {"type": "enabled"|"disabled"}}

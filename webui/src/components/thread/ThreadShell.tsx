@@ -147,6 +147,7 @@ export function ThreadShell({
   const [booting, setBooting] = useState(false);
   const [slashCommands, setSlashCommands] = useState<SlashCommand[]>([]);
   const [imageMode, setImageMode] = useState(false);
+  const [videoMode, setVideoMode] = useState(false);
   const [providerOptions, setProviderOptions] = useState<
     Array<{ name: string; label: string; free_default_model?: string | null; model?: string | null }>
   >([]);
@@ -557,6 +558,8 @@ export function ThreadShell({
           slashCommands={slashCommands}
           imageMode={imageMode}
           onImageModeChange={setImageMode}
+          videoMode={videoMode}
+          onVideoModeChange={setVideoMode}
           onStop={stop}
           runStartedAt={runStartedAt}
           goalState={goalState}
@@ -584,6 +587,8 @@ export function ThreadShell({
           slashCommands={slashCommands}
           imageMode={imageMode}
           onImageModeChange={setImageMode}
+          videoMode={videoMode}
+          onVideoModeChange={setVideoMode}
           runStartedAt={runStartedAt}
           goalState={goalState}
           pendingMessages={pendingQueue.messages}

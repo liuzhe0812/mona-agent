@@ -30,8 +30,10 @@ import {
   deriveWsUrl,
   fetchBootstrap,
   loadSavedSecret,
+  resetGatewayBaseUrl,
   saveSecret,
 } from "@/lib/bootstrap";
+import { resetApiBase } from "@/lib/api";
 import { deriveTitle } from "@/lib/format";
 import { MonaClient } from "@/lib/mona-client";
 import { ClientProvider, useClientOptional, type RuntimeStatus } from "@/providers/ClientProvider";
@@ -59,7 +61,7 @@ const SIDEBAR_WIDTH = 220;
 const SIDEBAR_RAIL_WIDTH = 56;
 const TOKEN_REFRESH_MARGIN_MS = 30_000;
 const TOKEN_REFRESH_MIN_DELAY_MS = 5_000;
-type ShellView = "chat" | "settings" | "note" | "ssh" | "db" | "kb" | "ppt" | "email" | "schedule";
+type ShellView = "chat" | "settings" | "note" | "ssh" | "db" | "kb" | "doc" | "email" | "schedule" | "profile";
 
 interface QueuedAgentPrompt {
   id: string;
@@ -78,9 +80,9 @@ const DbClientView = lazy(() =>
   })),
 );
 
-const PptMakerView = lazy(() =>
-  import("@/components/ppt/PptMakerView").then((module) => ({
-    default: module.PptMakerView,
+const DocMakerView = lazy(() =>
+  import("@/components/doc/DocMakerView").then((module) => ({
+    default: module.DocMakerView,
   })),
 );
 
@@ -105,6 +107,12 @@ const EmailClientView = lazy(() =>
 const ScheduleView = lazy(() =>
   import("@/components/schedule/ScheduleView").then((module) => ({
     default: module.ScheduleView,
+  })),
+);
+
+const ProfileView = lazy(() =>
+  import("@/components/profile/ProfileView").then((module) => ({
+    default: module.ProfileView,
   })),
 );
 
@@ -311,7 +319,7 @@ export default function App() {
           });
         } catch (e) {
           if (cancelled) return;
-          const msg = (e as Error).message;
+          const msg = e instanceof Error ? e.message : String(e ?? "");
           if (msg.includes("HTTP 401") || msg.includes("HTTP 403")) {
             setState({ status: "auth", failed: true });
           } else {
@@ -360,6 +368,12 @@ export default function App() {
       const saved = loadSavedSecret();
       return bootstrapWithSecret(saved);
     }
+
+    // Clear cached API base URLs so we re-resolve the gateway port fresh.
+    // This prevents stale caches from causing silent request failures
+    // after a gateway restart with a potentially different port.
+    resetApiBase();
+    resetGatewayBaseUrl();
 
     let cancelled = false;
     (async () => {
@@ -463,7 +477,9 @@ function Shell({
   const { state: sidebarState, update: updateSidebarState } =
     useSidebarState(sessions, !loading);
   const [activeKey, setActiveKey] = useState<string | null>(null);
-  const [view, setView] = useState<ShellView>("chat");
+  const [view, setView] = useState<ShellView>(
+    new URLSearchParams(window.location.search).get("noteId") ? "note" : "chat",
+  );
   const {
     tabs: browserTabs,
     activeTabId: activeBrowserTabId,
@@ -594,10 +610,8 @@ function Shell({
         if (cancelled || !gatewayUrl) return;
         await loadAccounts();
         if (cancelled) return;
-        // 首次启动时静默同步，避免把历史未读全部弹 toast
-        await syncAllAccounts(gatewayUrl, true);
-        if (cancelled) return;
         // 启动 IMAP IDLE 实时监听（秒级推送）
+        // bg sync 会在启动 30s 后自动全量同步 INBOX + 其他文件夹，无需此处冗余 syncAllAccounts
         await startAllIdle(gatewayUrl);
         // 连接 WebSocket 接收 IDLE 事件
         connectIdleWs(gatewayUrl);
@@ -798,8 +812,8 @@ function Shell({
     setMobileSidebarOpen(false);
   }, [switchToMonaTab]);
 
-  const onOpenPpt = useCallback(() => {
-    setView("ppt");
+  const onOpenDoc = useCallback(() => {
+    setView("doc");
     switchToMonaTab();
     setMobileSidebarOpen(false);
   }, [switchToMonaTab]);
@@ -818,6 +832,12 @@ function Shell({
 
   const onOpenSchedule = useCallback(() => {
     setView("schedule");
+    switchToMonaTab();
+    setMobileSidebarOpen(false);
+  }, [switchToMonaTab]);
+
+  const onOpenProfile = useCallback(() => {
+    setView("profile");
     switchToMonaTab();
     setMobileSidebarOpen(false);
   }, [switchToMonaTab]);
@@ -1016,7 +1036,7 @@ function Shell({
       [sidebarShortcutsRef.current.ssh]: onOpenSSH,
       [sidebarShortcutsRef.current.db]: onOpenDb,
       [sidebarShortcutsRef.current.kb]: onOpenKb,
-      [sidebarShortcutsRef.current.ppt]: onOpenPpt,
+      [sidebarShortcutsRef.current.ppt]: onOpenDoc,
     };
     const handleKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.defaultPrevented) return;
@@ -1029,7 +1049,7 @@ function Shell({
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [onNewChat, onOpenNote, onOpenSSH, onOpenDb, onOpenKb, onOpenPpt]);
+  }, [onNewChat, onOpenNote, onOpenSSH, onOpenDb, onOpenKb, onOpenDoc]);
 
   useEffect(() => {
     if (!isTauri()) return;
@@ -1284,12 +1304,13 @@ function Shell({
     onOpenSearch: onOpenSessionSearch,
     onGoHome,
     onOpenNote,
-    onOpenPpt,
+    onOpenDoc,
     onOpenSSH,
     onOpenDb,
     onOpenKb,
     onOpenEmail,
     onOpenSchedule,
+    onOpenProfile,
     onToggleArchived,
     onUpdateView: onUpdateSidebarView,
     pinnedKeys: sidebarState.pinned_keys,
@@ -1389,7 +1410,7 @@ function Shell({
               <div
                 className={cn(
                   "absolute inset-0 flex flex-col",
-                  (view === "settings" || view === "note" || view === "ssh" || view === "db" || view === "kb" || view === "ppt" || view === "email" || view === "schedule" || activeBrowserTab.type !== "mona") &&
+                  (view === "settings" || view === "note" || view === "ssh" || view === "db" || view === "kb" || view === "doc" || view === "email" || view === "schedule" || view === "profile" || activeBrowserTab.type !== "mona") &&
                     "invisible pointer-events-none",
                 )}
               >
@@ -1421,7 +1442,10 @@ function Shell({
               {view === "note" ? (
                 <div className={cn("absolute inset-0 flex flex-col", isBrowserTabActive && "hidden")}>
                   <Suspense fallback={<ModuleLoading title="正在打开笔记" />}>
-                    <NotesView onSendToAgent={onSendNoteToAgent} />
+                    <NotesView
+                      onSendToAgent={onSendNoteToAgent}
+                      initialNoteId={new URLSearchParams(window.location.search).get("noteId") ?? undefined}
+                    />
                   </Suspense>
                 </div>
               ) : null}
@@ -1505,10 +1529,17 @@ function Shell({
                   )}
                 </div>
               )}
+              {view === "profile" && (
+                <div className={cn("absolute inset-0 flex flex-col", isBrowserTabActive && "hidden")}>
+                  <Suspense fallback={<ModuleLoading title="正在打开用户画像" />}>
+                    <ProfileView />
+                  </Suspense>
+                </div>
+              )}
               {client ? (
-                <div className={cn("absolute inset-0 flex flex-col", (view !== "ppt" || isBrowserTabActive) && "hidden")}>
-                  <Suspense fallback={<ModuleLoading title="正在打开 PPT 制作" />}>
-                    <PptMakerView onBack={onBackToChat} />
+                <div className={cn("absolute inset-0 flex flex-col", (view !== "doc" || isBrowserTabActive) && "hidden")}>
+                  <Suspense fallback={<ModuleLoading title="正在打开 AI 文档" />}>
+                    <DocMakerView onBack={onBackToChat} />
                   </Suspense>
                 </div>
               ) : null}

@@ -1,18 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import {
-  Calendar,
-  CheckCircle2,
-  Info,
-  Mail,
-  Sparkles,
-  TriangleAlert,
-  X,
-  XCircle,
-} from "lucide-react";
+import { X } from "lucide-react";
 
-import monaLogo from "@/assets/icons/sidebar-mona.jpg";
+import { AgentLogo } from "@/components/AgentLogo";
 import { Button } from "@/components/ui/button";
 import { useTheme } from "@/hooks/useTheme";
 import { cn } from "@/lib/utils";
@@ -33,25 +24,19 @@ interface NotificationPayload {
   clickAction?: string;
 }
 
-const ICON_CONFIG: Record<
-  string,
-  { Icon: typeof Mail; bg: string; fg: string }
-> = {
-  mail: { Icon: Mail, bg: "bg-blue-500", fg: "text-white" },
-  schedule: { Icon: Calendar, bg: "bg-violet-500", fg: "text-white" },
-  update: { Icon: Sparkles, bg: "bg-emerald-500", fg: "text-white" },
-  success: { Icon: CheckCircle2, bg: "bg-emerald-500", fg: "text-white" },
-  warning: { Icon: TriangleAlert, bg: "bg-amber-500", fg: "text-white" },
-  error: { Icon: XCircle, bg: "bg-destructive", fg: "text-white" },
-  info: { Icon: Info, bg: "bg-sky-500", fg: "text-white" },
-};
-
 function decodePayload(): NotificationPayload | null {
   try {
     const hash = window.location.hash;
     const match = hash.match(/[?&]data=([^&]+)/);
     if (!match) return null;
-    const json = atob(match[1]);
+    // Rust encodes with URL-safe base64 (no padding): uses - and _ instead of
+    // + and /. Convert back to standard base64 for atob().
+    const standard = match[1].replace(/-/g, "+").replace(/_/g, "/");
+    // atob() returns a Latin-1 string; decode bytes as UTF-8 so Chinese
+    // characters in title/body are preserved.
+    const binary = atob(standard);
+    const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
+    const json = new TextDecoder("utf-8").decode(bytes);
     const parsed = JSON.parse(json) as NotificationPayload;
     return parsed;
   } catch {
@@ -105,6 +90,13 @@ export function NotificationWindow() {
     };
   }, [startCloseTimer]);
 
+  // payload 设置后窗口内容已渲染，此时再显示窗口避免白屏闪烁
+  useEffect(() => {
+    if (!payload) return;
+    const label = getCurrentWindow().label;
+    void invoke("show_notification_window", { label }).catch(() => {});
+  }, [payload]);
+
   // 出场动画结束后真正关闭窗口
   useEffect(() => {
     if (!closing) return;
@@ -149,14 +141,12 @@ export function NotificationWindow() {
 
   if (!payload) return null;
 
-  const iconCfg = ICON_CONFIG[payload.icon] ?? ICON_CONFIG.info;
-  const { Icon } = iconCfg;
   const visibleActions = payload.actions.slice(0, 2);
 
   return (
     <div
       className={cn(
-        "h-full w-full select-none p-0",
+        "h-full w-full select-none overflow-hidden rounded-2xl",
         closing
           ? "animate-out fade-out-0 slide-out-to-right-full duration-300"
           : "animate-in fade-in-0 slide-in-from-right-full duration-300",
@@ -172,23 +162,9 @@ export function NotificationWindow() {
         onClick={handleCardClick}
       >
         <div className="flex items-start gap-3">
-          {/* 应用 logo + 类型图标角标 */}
-          <div className="relative shrink-0">
-            <img
-              src={monaLogo}
-              alt="Mona"
-              className="h-10 w-10 rounded-xl object-cover ring-1 ring-border/40"
-              draggable={false}
-            />
-            <span
-              className={cn(
-                "absolute -bottom-1 -right-1 grid h-5 w-5 place-items-center rounded-full ring-2 ring-popover",
-                iconCfg.bg,
-                iconCfg.fg,
-              )}
-            >
-              <Icon className="h-3 w-3" aria-hidden />
-            </span>
+          {/* 应用 logo */}
+          <div className="shrink-0">
+            <AgentLogo state="welcome" className="h-10 w-10" />
           </div>
           <div className="min-w-0 flex-1 pr-5">
             <p className="text-[13px] font-semibold leading-5 text-foreground">

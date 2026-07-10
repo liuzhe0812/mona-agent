@@ -2,7 +2,7 @@ import { Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useEmailStore } from "./store/emailStore";
-import sidebarEmailIcon from "@/assets/icons/sidebar-email.jpg";
+import sidebarEmailIcon from "@/assets/icons/sidebar-email.png";
 
 interface AccountSidebarProps {
   onAddAccount: () => void;
@@ -33,7 +33,7 @@ export function AccountSidebar({ onAddAccount }: AccountSidebarProps) {
       <div className="min-h-0 flex-1 overflow-y-auto p-1.5">
         {accounts.length === 0 ? (
           <div className="flex flex-col items-center justify-center gap-2 px-3 py-8 text-center">
-            <img src={sidebarEmailIcon} className="h-6 w-6 rounded-md object-cover opacity-50" alt="" draggable={false} />
+            <img src={sidebarEmailIcon} className="h-6 w-6 object-contain opacity-50" alt="" draggable={false} />
             <p className="text-[12px] text-muted-foreground">还没有账号</p>
             <Button
               type="button"
@@ -59,7 +59,7 @@ export function AccountSidebar({ onAddAccount }: AccountSidebarProps) {
                 )}
                 onClick={() => selectAccount(account.id)}
               >
-                <img src={sidebarEmailIcon} className="h-3.5 w-3.5 shrink-0 rounded-sm object-cover" alt="" draggable={false} />
+                <img src={sidebarEmailIcon} className="h-3.5 w-3.5 shrink-0 object-contain" alt="" draggable={false} />
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-[12px] font-medium">
                     {account.displayName}

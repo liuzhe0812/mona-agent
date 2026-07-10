@@ -52,8 +52,10 @@ from mona.webui.settings_api import (
     settings_payload,
     update_agent_settings,
     update_channel_settings,
+    update_embedding_settings,
     update_image_generation_settings,
     update_provider_settings,
+    update_video_generation_settings,
     update_web_search_settings,
 )
 from mona.webui.sidebar_state import (
@@ -777,6 +779,12 @@ class WebSocketChannel(BaseChannel):
         if got == "/api/settings/image-generation/update":
             return self._handle_settings_image_generation_update(request)
 
+        if got == "/api/settings/video-generation/update":
+            return self._handle_settings_video_generation_update(request)
+
+        if got == "/api/settings/embedding/update":
+            return self._handle_settings_embedding_update(request)
+
         if got == "/api/settings/channels/update":
             return self._handle_settings_channels_update(request)
 
@@ -1146,6 +1154,26 @@ class WebSocketChannel(BaseChannel):
         except WebUISettingsError as e:
             return _http_error(e.status, e.message)
         return _http_json_response(self._with_settings_restart_state(payload, section="image"))
+
+    def _handle_settings_video_generation_update(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        query = _parse_query(request.path)
+        try:
+            payload = update_video_generation_settings(query)
+        except WebUISettingsError as e:
+            return _http_error(e.status, e.message)
+        return _http_json_response(self._with_settings_restart_state(payload, section="image"))
+
+    def _handle_settings_embedding_update(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        query = _parse_query(request.path)
+        try:
+            payload = update_embedding_settings(query)
+        except WebUISettingsError as e:
+            return _http_error(e.status, e.message)
+        return _http_json_response(payload)
 
     def _handle_settings_channels_update(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):
@@ -3570,14 +3598,14 @@ class WebSocketChannel(BaseChannel):
                 workspace = None
             if isinstance(workspace, str):
                 workspace = workspace.strip() or None
-            # ``agent_kind`` marks the session for a dedicated agent loop.
-            # Currently only ``"ppt"`` is supported — routes to PPTAgentLoop
-            # (tool whitelist + ppt_soul.md + no memory).
+            # ``agent_kind`` marks the session for a dedicated document agent loop.
+            # Supported kinds: ppt / video / flowchart — each routes to a
+            # DocumentAgentLoop with its own tool whitelist + soul prompt.
             agent_kind = envelope.get("agent_kind")
             if not isinstance(agent_kind, str):
                 agent_kind = None
             agent_kind = agent_kind.strip() if agent_kind else None
-            if agent_kind not in ("ppt", None):
+            if agent_kind not in ("ppt", "video", "flowchart", None):
                 agent_kind = None
             if (workspace is not None or agent_kind is not None) and self._session_manager is not None:
                 session = self._session_manager.get_or_create(f"websocket:{new_id}")
@@ -3677,6 +3705,19 @@ class WebSocketChannel(BaseChannel):
                 metadata["image_generation"] = {
                     "enabled": True,
                     "aspect_ratio": aspect_ratio if isinstance(aspect_ratio, str) else None,
+                }
+            video_generation = envelope.get("video_generation")
+            if isinstance(video_generation, dict) and video_generation.get("enabled") is True:
+                v_aspect = video_generation.get("aspect_ratio")
+                v_duration = video_generation.get("duration")
+                v_ref_url = video_generation.get("reference_image_url")
+                metadata["video_generation"] = {
+                    "enabled": True,
+                    "aspect_ratio": v_aspect if isinstance(v_aspect, str) and v_aspect else None,
+                    "duration": v_duration if isinstance(v_duration, int) and v_duration > 0 else None,
+                    "reference_image_url": (
+                        v_ref_url if isinstance(v_ref_url, str) and v_ref_url.strip() else None
+                    ),
                 }
             await self._handle_message(
                 sender_id=client_id,

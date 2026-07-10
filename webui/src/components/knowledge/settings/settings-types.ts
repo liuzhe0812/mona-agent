@@ -20,20 +20,6 @@ export interface SettingsDraft {
   apiMode: CustomApiMode | undefined
   reasoning: ReasoningConfig | undefined
 
-  // Embedding
-  embeddingEnabled: boolean
-  embeddingEndpoint: string
-  embeddingApiKey: string
-  embeddingModel: string
-  /** Optional Gemini native output_dimensionality. Empty = provider default. */
-  embeddingOutputDimensionality: number | undefined
-  /** Target characters per chunk. Empty = use chunker default (1000). */
-  embeddingMaxChunkChars: number | undefined
-  /** Overlap characters between adjacent chunks. Empty = default (200). */
-  embeddingOverlapChunkChars: number | undefined
-  /** Extra HTTP headers to send on every embedding request. Empty = none. */
-  embeddingExtraHeaders: Record<string, string>
-
   // Multimodal (image captioning at ingest time)
   multimodalEnabled: boolean
   multimodalUseMainLlm: boolean

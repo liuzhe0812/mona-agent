@@ -1,5 +1,6 @@
 import {
   memo,
+  useCallback,
   useEffect,
   useMemo,
   useState,
@@ -7,6 +8,9 @@ import {
 import {
   Archive,
   ArchiveRestore,
+  ChevronDown,
+  ChevronRight,
+  Folder,
   Pencil,
   Pin,
   PinOff,
@@ -23,6 +27,14 @@ import {
 import { deriveTitle, relativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { ChatSummary, SidebarDensity, SidebarSortMode } from "@/lib/types";
+
+interface ChatSection {
+  label: string;
+  sessions: ChatSummary[];
+  isDefault?: boolean;
+  isProject?: boolean;
+  workspace?: string;
+}
 
 const INITIAL_VISIBLE_SESSIONS = 160;
 const VISIBLE_SESSIONS_INCREMENT = 160;
@@ -48,6 +60,12 @@ interface ChatListProps {
   actionMenuPortalContainer?: HTMLElement | null;
   loading?: boolean;
   emptyLabel?: string;
+  /** Controls whether project sections default to expanded. */
+  defaultProjectExpanded?: boolean;
+  /** Called when the user opens a project folder from the context menu. */
+  onOpenProjectFolder?: (workspace: string) => void;
+  /** Called when the user removes a project from the sidebar. */
+  onRemoveProject?: (workspace: string) => void;
 }
 
 export const ChatList = memo(function ChatList({
@@ -69,19 +87,22 @@ export const ChatList = memo(function ChatList({
   showArchived = false,
   loading,
   emptyLabel,
+  defaultProjectExpanded = true,
+  onOpenProjectFolder: _onOpenProjectFolder,
+  onRemoveProject: _onRemoveProject,
 }: ChatListProps) {
-  const { t } = useTranslation();
   const [visibleLimit, setVisibleLimit] = useState(INITIAL_VISIBLE_SESSIONS);
+  const [expandedProjects, setExpandedProjects] = useState<Set<string>>(() =>
+    new Set(defaultProjectExpanded ? ["__all__"] : [])
+  );
+  const { t } = useTranslation();
   const labels = useMemo(() => ({
     pinned: t("chat.groups.pinned"),
-    conversations: t("chat.groups.conversations", "会话"),
-    today: t("chat.groups.today"),
-    yesterday: t("chat.groups.yesterday"),
-    earlier: t("chat.groups.earlier"),
+    conversations: t("chat.groups.conversations"),
     archived: t("chat.groups.archived"),
     fallbackTitle: t("chat.newChat"),
   }), [t]);
-  const groups = useMemo(
+  const { defaultGroup, projectGroups, archivedGroup, pinnedGroup } = useMemo(
     () => groupSessions(sessions, labels, {
       pinnedKeys,
       archivedKeys,
@@ -99,13 +120,31 @@ export const ChatList = memo(function ChatList({
       titleOverrides,
     ],
   );
+  const groups = useMemo(
+    () => [pinnedGroup, defaultGroup, ...projectGroups, archivedGroup].filter((g): g is ChatSection => !!g),
+    [defaultGroup, projectGroups, pinnedGroup, archivedGroup],
+  );
   const limitedGroups = useMemo(
     () => limitGroups(groups, visibleLimit, activeKey),
     [activeKey, groups, visibleLimit],
   );
+
+  const toggleProject = useCallback((workspace: string) => {
+    setExpandedProjects((prev) => {
+      const next = new Set(prev);
+      if (next.has(workspace)) {
+        next.delete(workspace);
+      } else {
+        next.add(workspace);
+      }
+      return next;
+    });
+  }, []);
   const totalSessionCount = useMemo(
-    () => groups.reduce((total, group) => total + group.sessions.length, 0),
-    [groups],
+    () => [defaultGroup, ...projectGroups, pinnedGroup, archivedGroup]
+      .filter(Boolean)
+      .reduce((total, group) => total + (group?.sessions.length ?? 0), 0),
+    [defaultGroup, projectGroups, pinnedGroup, archivedGroup],
   );
   const visibleSessionCount = useMemo(
     () => limitedGroups.reduce((total, group) => total + group.sessions.length, 0),
@@ -140,13 +179,36 @@ export const ChatList = memo(function ChatList({
   const compact = density === "compact";
 
   return (
-    <div className="h-full min-h-0 min-w-0 overflow-x-hidden overflow-y-auto overscroll-contain">
+    <div className="scrollbar-hover h-full min-h-0 min-w-0 overflow-x-hidden overflow-y-auto overscroll-contain">
       <div className="min-w-0 space-y-3 px-2 py-1.5">
-        {limitedGroups.map((group) => (
+        {limitedGroups.map((group) => {
+          const isProject = group.isProject && group.workspace;
+          const expanded = isProject ? expandedProjects.has(group.workspace!) : true;
+          return (
           <section key={group.label} aria-label={group.label}>
-            <div className="px-2 pb-1 text-[12px] font-medium text-muted-foreground/65">
-              {group.label}
+            <div
+              className={cn(
+                "flex items-center gap-1 px-2 pb-1 text-[12px] font-medium text-muted-foreground/65",
+                isProject && "cursor-pointer select-none hover:text-muted-foreground",
+              )}
+              onClick={() => isProject && group.workspace && toggleProject(group.workspace)}
+              role={isProject ? "button" : undefined}
+              tabIndex={isProject ? 0 : undefined}
+              aria-expanded={isProject ? expanded : undefined}
+            >
+              {isProject ? (
+                expanded ? (
+                  <ChevronDown className="h-3.5 w-3.5 shrink-0" />
+                ) : (
+                  <ChevronRight className="h-3.5 w-3.5 shrink-0" />
+                )
+              ) : null}
+              {isProject ? (
+                <Folder className="mr-1 h-3.5 w-3.5 shrink-0" />
+              ) : null}
+              <span className="truncate">{group.label}</span>
             </div>
+            {expanded ? (
             <ul className="space-y-0.5">
               {group.sessions.map((s) => {
                 const active = s.key === activeKey;
@@ -250,8 +312,10 @@ export const ChatList = memo(function ChatList({
                 );
               })}
             </ul>
+            ) : null}
           </section>
-        ))}
+        );
+        })}
         {hiddenSessionCount > 0 ? (
           <div className="px-2 pb-2 pt-1">
             <button
@@ -308,14 +372,18 @@ function SessionActivityIndicator({
   return <span className="h-4 w-4 shrink-0" aria-hidden="true" />;
 }
 
+interface GroupSessionsResult {
+  defaultGroup: ChatSection;
+  projectGroups: ChatSection[];
+  archivedGroup: ChatSection | null;
+  pinnedGroup: ChatSection | null;
+}
+
 function groupSessions(
   sessions: ChatSummary[],
   labels: {
     pinned: string;
     conversations: string;
-    today: string;
-    yesterday: string;
-    earlier: string;
     archived: string;
     fallbackTitle: string;
   },
@@ -326,10 +394,7 @@ function groupSessions(
     showArchived: boolean;
     sort: SidebarSortMode;
   },
-): Array<{ label: string; sessions: ChatSummary[] }> {
-  const now = new Date();
-  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-  const startOfYesterday = startOfToday - 24 * 60 * 60 * 1000;
+): GroupSessionsResult {
   const pinned = new Set(options.pinnedKeys);
   const archived = new Set(options.archivedKeys);
 
@@ -367,75 +432,42 @@ function groupSessions(
     workspaceBuckets.get(bucketKey)!.push(session);
   }
 
-  // Ensure the default "会话" section always renders first, even when empty,
-  // so users have a stable anchor for the "new chat" affordance.
+  // Ensure the default "会话" section always exists.
   ensureBucket(DEFAULT_KEY);
 
-  const groups: Array<{ label: string; sessions: ChatSummary[] }> = [];
-
-  // Time-bucket a list of sessions into today/yesterday/earlier sub-groups.
-  const timeBucketed = (list: ChatSummary[]) => {
-    if (options.sort === "title_asc") {
-      return [{ label: labels.today, sessions: sortSessions(list, options.sort, options.titleOverrides) }]
-        .filter((g) => g.sessions.length > 0);
-    }
-    const buckets = new Map<string, ChatSummary[]>();
-    for (const session of list) {
-      const ts = Date.parse(session.updatedAt ?? session.createdAt ?? "");
-      const label = Number.isFinite(ts) && ts >= startOfToday
-        ? labels.today
-        : Number.isFinite(ts) && ts >= startOfYesterday
-          ? labels.yesterday
-          : labels.earlier;
-      const bucket = buckets.get(label) ?? [];
-      bucket.push(session);
-      buckets.set(label, bucket);
-    }
-    return [labels.today, labels.yesterday, labels.earlier]
-      .map((label) => ({
-        label,
-        sessions: sortSessions(buckets.get(label) ?? [], options.sort, options.titleOverrides),
-      }))
-      .filter((g) => g.sessions.length > 0);
+  const defaultGroup: ChatSection = {
+    label: labels.conversations,
+    isDefault: true,
+    sessions: sortSessions(workspaceBuckets.get(DEFAULT_KEY) ?? [], options.sort, options.titleOverrides),
   };
 
+  const projectGroups: ChatSection[] = [];
   for (const bucketKey of workspaceOrder) {
+    if (bucketKey === DEFAULT_KEY) continue;
     const list = workspaceBuckets.get(bucketKey) ?? [];
-    if (bucketKey === DEFAULT_KEY) {
-      // Default "会话" section: keep time-based sub-grouping for browsability.
-      const subGroups = timeBucketed(list);
-      if (subGroups.length === 0) {
-        // Still emit the header so the section is visible even when empty.
-        groups.push({ label: labels.conversations, sessions: [] });
-      } else {
-        for (const sub of subGroups) {
-          groups.push({ label: `${labels.conversations} · ${sub.label}`, sessions: sub.sessions });
-        }
-      }
-    } else {
-      // Project section: flat list under "{basename} · {fullpath}".
-      // Use full path as label; basename is computed for display only when needed.
-      groups.push({
-        label: workspaceLabel(bucketKey),
-        sessions: sortSessions(list, options.sort, options.titleOverrides),
-      });
-    }
+    projectGroups.push({
+      label: workspaceLabel(bucketKey),
+      isProject: true,
+      workspace: bucketKey,
+      sessions: sortSessions(list, options.sort, options.titleOverrides),
+    });
   }
 
-  if (pinnedSessions.length) {
-    groups.unshift({
-      label: labels.pinned,
-      sessions: sortSessions(pinnedSessions, options.sort, options.titleOverrides),
-    });
-  }
-  if (archivedSessions.length) {
-    groups.push({
-      label: labels.archived,
-      sessions: sortSessions(archivedSessions, options.sort, options.titleOverrides),
-    });
-  }
-  // Drop empty groups except the default "会话" anchor (handled above).
-  return groups.filter((g) => g.sessions.length > 0 || g.label === labels.conversations);
+  const pinnedGroup: ChatSection | null = pinnedSessions.length
+    ? {
+        label: labels.pinned,
+        sessions: sortSessions(pinnedSessions, options.sort, options.titleOverrides),
+      }
+    : null;
+
+  const archivedGroup: ChatSection | null = archivedSessions.length
+    ? {
+        label: labels.archived,
+        sessions: sortSessions(archivedSessions, options.sort, options.titleOverrides),
+      }
+    : null;
+
+  return { defaultGroup, projectGroups, archivedGroup, pinnedGroup };
 }
 
 /** Render a workspace path as ``{basename} · {fullpath}`` for the section header. */
@@ -443,18 +475,17 @@ function workspaceLabel(workspacePath: string): string {
   // Normalize Windows backslashes.
   const normalized = workspacePath.replace(/\\/g, "/");
   const parts = normalized.split("/").filter(Boolean);
-  const basename = parts[parts.length - 1] ?? workspacePath;
-  return `${basename} · ${workspacePath}`;
+  return parts[parts.length - 1] ?? workspacePath;
 }
 
 function limitGroups(
-  groups: Array<{ label: string; sessions: ChatSummary[] }>,
+  groups: ChatSection[],
   limit: number,
   activeKey: string | null,
-): Array<{ label: string; sessions: ChatSummary[] }> {
+): ChatSection[] {
   let remaining = Math.max(0, limit);
   let activeVisible = !activeKey;
-  const out: Array<{ label: string; sessions: ChatSummary[] }> = [];
+  const out: ChatSection[] = [];
 
   for (const group of groups) {
     const visible = remaining > 0
@@ -465,7 +496,7 @@ function limitGroups(
       activeVisible = true;
     }
     if (visible.length > 0) {
-      out.push({ label: group.label, sessions: visible });
+      out.push({ ...group, sessions: visible });
     }
   }
 
@@ -478,7 +509,7 @@ function limitGroups(
     if (existing) {
       existing.sessions = [...existing.sessions, active];
     } else {
-      out.push({ label: group.label, sessions: [active] });
+      out.push({ ...group, sessions: [active] });
     }
     return out;
   }

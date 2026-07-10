@@ -24,7 +24,11 @@ function parseComposePayload(): ComposePayload | null {
     while (b64.length % 4 !== 0) {
       b64 += "=";
     }
-    const json = atob(b64);
+    // atob 返回 Latin-1 字符串，UTF-8 中文会乱码。
+    // 先 atob 得到二进制字符串，再用 TextDecoder 按 UTF-8 解码。
+    const binary = atob(b64);
+    const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
+    const json = new TextDecoder("utf-8").decode(bytes);
     const parsed = JSON.parse(json) as ComposePayload;
     return parsed;
   } catch {

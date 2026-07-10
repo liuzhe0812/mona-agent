@@ -49,6 +49,7 @@ from mona.utils.helpers import truncate_text as truncate_text_fn
 from mona.utils.image_generation_intent import image_generation_prompt
 from mona.utils.llm_runtime import LLMRuntime
 from mona.utils.runtime import EMPTY_FINAL_RESPONSE_MESSAGE
+from mona.utils.video_generation_intent import video_generation_prompt
 
 if TYPE_CHECKING:
     from mona.config.schema import (
@@ -188,6 +189,7 @@ class AgentLoop:
         tools_config: ToolsConfig | None = None,
         image_generation_provider_config: ProviderConfig | None = None,
         image_generation_provider_configs: dict[str, ProviderConfig] | None = None,
+        video_generation_provider_configs: dict[str, ProviderConfig] | None = None,
         provider_snapshot_loader: Callable[..., ProviderSnapshot] | None = None,
         provider_signature: tuple[object, ...] | None = None,
         model_presets: dict[str, ModelPresetConfig] | None = None,
@@ -237,6 +239,7 @@ class AgentLoop:
             and "openrouter" not in self._image_generation_provider_configs
         ):
             self._image_generation_provider_configs["openrouter"] = image_generation_provider_config
+        self._video_generation_provider_configs = dict(video_generation_provider_configs or {})
         self.cron_service = cron_service
         self.schedule_service = schedule_service
         self.restrict_to_workspace = restrict_to_workspace
@@ -314,10 +317,10 @@ class AgentLoop:
         if model_preset:
             self.set_model_preset(model_preset, publish_update=False)
         self._register_default_tools()
-        # PPT agent loop (lazy-initialized on first PPT session). Shares this
-        # loop's provider/sessions/bus but has its own tool whitelist and
-        # PPTContextBuilder. See _ensure_ppt_loop().
-        self._ppt_loop: AgentLoop | None = None
+        # Document agent loops (lazy-initialized on first session of each kind).
+        # Shares this loop's provider/sessions/bus but has its own tool whitelist
+        # and DocumentContextBuilder. See _ensure_document_loop().
+        self._doc_loops: dict[str, AgentLoop] = {}
         self._runtime_vars: dict[str, Any] = {}
         self._current_iteration: int = 0
         self.commands = CommandRouter()
@@ -469,17 +472,19 @@ class AgentLoop:
             return Path(ws_override).expanduser().resolve()
         return self.workspace
 
-    def _ensure_ppt_loop(self) -> AgentLoop:
-        """Lazily construct the PPT agent loop on first PPT session.
+    def _ensure_document_loop(self, agent_kind: str) -> AgentLoop:
+        """Lazily construct a document agent loop for the given kind.
 
-        The PPT loop shares this loop's provider, sessions, bus, and other
-        runtime dependencies, but has its own filtered tool registry and
-        PPTContextBuilder. Raises if construction fails — no fallback path.
+        Document loops (PPT / video / flowchart) share this loop's provider,
+        sessions, bus, and other runtime dependencies, but each has its own
+        filtered tool registry and DocumentContextBuilder driven by the
+        matching DocumentProfile. Raises if construction fails — no fallback.
         """
-        if self._ppt_loop is not None:
-            return self._ppt_loop
-        from mona.agent.ppt_loop import PPTAgentLoop
-        self._ppt_loop = PPTAgentLoop(
+        cached = self._doc_loops.get(agent_kind)
+        if cached is not None:
+            return cached
+        from mona.agent.document_loop import DocumentAgentLoop
+        loop = DocumentAgentLoop(
             bus=self.bus,
             provider=self.provider,
             workspace=self.workspace,
@@ -494,9 +499,11 @@ class AgentLoop:
             tools_config=self.tools_config,
             hooks=list(self._extra_hooks) if self._extra_hooks else None,
             unified_session=self._unified_session,
+            agent_kind=agent_kind,
         )
-        logger.info("PPTAgentLoop initialized with tool whitelist")
-        return self._ppt_loop
+        self._doc_loops[agent_kind] = loop
+        logger.info("DocumentAgentLoop({}) initialized with tool whitelist", agent_kind)
+        return loop
 
     def _register_default_tools(self) -> None:
         """Register the default set of tools via plugin loader."""
@@ -513,6 +520,7 @@ class AgentLoop:
             sessions=self.sessions,
             provider_snapshot_loader=self._provider_snapshot_loader,
             image_generation_provider_configs=self._image_generation_provider_configs,
+            video_generation_provider_configs=self._video_generation_provider_configs,
             timezone=self.context.timezone or "UTC",
         )
         loader = ToolLoader()
@@ -642,7 +650,10 @@ class AgentLoop:
         """Build the initial message list for the LLM turn."""
         return self.context.build_messages(
             history=history,
-            current_message=image_generation_prompt(msg.content, msg.metadata),
+            current_message=video_generation_prompt(
+                image_generation_prompt(msg.content, msg.metadata),
+                msg.metadata,
+            ),
             media=msg.media if msg.media else None,
             channel=msg.channel,
             chat_id=self._runtime_chat_id(msg),
@@ -1188,13 +1199,16 @@ class AgentLoop:
         # all read this contextvar.
         session = self.sessions.get_or_create(key)
 
-        # PPT agent routing: sessions tagged with agent_kind="ppt" are delegated
-        # to the dedicated PPTAgentLoop (focused tools, ppt_soul.md identity,
-        # no memory/history). The PPT loop shares this loop's provider/sessions
-        # but has its own filtered tool registry and PPTContextBuilder.
-        if session.metadata.get("agent_kind") == "ppt":
-            ppt_loop = self._ensure_ppt_loop()
-            return await ppt_loop._process_message(
+        # Document agent routing: sessions tagged with agent_kind in
+        # DOCUMENT_PROFILES are delegated to DocumentAgentLoop (focused tools,
+        # profile-driven soul identity, no memory/history). The document loop
+        # shares this loop's provider/sessions but has its own filtered tool
+        # registry and DocumentContextBuilder.
+        from mona.agent.document_loop import DOCUMENT_PROFILES
+        agent_kind = session.metadata.get("agent_kind")
+        if agent_kind and agent_kind in DOCUMENT_PROFILES:
+            doc_loop = self._ensure_document_loop(agent_kind)
+            return await doc_loop._process_message(
                 msg,
                 session_key=key,
                 on_progress=on_progress,

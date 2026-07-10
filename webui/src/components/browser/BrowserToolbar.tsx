@@ -258,9 +258,30 @@ export function BrowserToolbar({
       if (isBookmarked) {
         await browserRemoveBookmark(url);
         setIsBookmarked(false);
+        // 同步删除 hoard 记忆（非阻塞，失败不影响书签删除）
+        try {
+          const { hoardDeleteByUrl } = await import("@/lib/hoard-api");
+          await hoardDeleteByUrl(url);
+          window.dispatchEvent(new Event("hoard-changed"));
+        } catch (hoardErr) {
+          console.error("[BrowserToolbar] delete from hoard failed:", hoardErr);
+        }
       } else {
         await browserAddBookmark(url, title || url);
         setIsBookmarked(true);
+        // 同步到收藏记忆（非阻塞，失败不影响书签添加）
+        try {
+          const { hoardAdd } = await import("@/lib/hoard-api");
+          await hoardAdd({
+            title: title || url,
+            url,
+            source: "browser",
+            sourceRef: url,
+          });
+          window.dispatchEvent(new Event("hoard-changed"));
+        } catch (hoardErr) {
+          console.error("[BrowserToolbar] sync to hoard failed:", hoardErr);
+        }
       }
       window.dispatchEvent(new Event("bookmark-changed"));
     } catch (e) {

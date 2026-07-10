@@ -170,12 +170,12 @@ class ScheduleService:
             fire_at_ms = next_ms
 
         delay_s = max(0.1, (fire_at_ms - _now_ms()) / 1000)
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         handle = loop.call_later(
             delay_s, lambda: asyncio.create_task(self._fire_personal(item.id))
         )
         self._timers[item.id] = handle
-        logger.debug("Armed personal reminder '{}' at {}", item.title, fire_at_ms)
+        logger.info("Armed personal reminder '{}' at +{:.1f}s", item.title, delay_s)
 
     async def _fire_personal(self, item_id: str) -> None:
         """Fire a personal reminder: invoke notify callback and update state."""
@@ -190,7 +190,7 @@ class ScheduleService:
         # when the app window is minimized to the tray.
         body = item.description or item.title
         self._pending_notifications.append(
-            {"title": item.title, "body": body, "item_id": item.id}
+            {"title": f"日程提醒 · {item.title}", "body": body, "item_id": item.id}
         )
 
         if self._notify_callback:
@@ -286,6 +286,15 @@ class ScheduleService:
             item.created_at_ms = _now_ms()
         item.updated_at_ms = _now_ms()
         self._save_item_sync(item)
+        # Done/disabled items: cancel any active timer/cron job and skip arming.
+        if item.done or not item.enabled:
+            handle = self._timers.pop(item.id, None)
+            if handle:
+                handle.cancel()
+            job_id = self._cron_job_ids.pop(item.id, None)
+            if job_id and self._cron:
+                self._cron.remove_job(job_id)
+            return item
         if item.kind == "personal":
             self._arm_personal_timer(item)
         elif item.kind == "ai_task":
@@ -303,21 +312,6 @@ class ScheduleService:
         if job_id and self._cron:
             self._cron.remove_job(job_id)
         return self._delete_item_sync(item_id)
-
-    async def complete_item(self, item_id: str) -> bool:
-        item = self._get_item_sync(item_id)
-        if not item:
-            return False
-        item.done = True
-        item.updated_at_ms = _now_ms()
-        self._save_item_sync(item)
-        handle = self._timers.pop(item_id, None)
-        if handle:
-            handle.cancel()
-        job_id = self._cron_job_ids.pop(item_id, None)
-        if job_id and self._cron:
-            self._cron.remove_job(job_id)
-        return True
 
     async def toggle_item(self, item_id: str, enabled: bool) -> bool:
         item = self._get_item_sync(item_id)

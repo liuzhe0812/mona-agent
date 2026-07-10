@@ -91,10 +91,14 @@ export interface EmailRichEditorHandle {
   insertImage: () => void;
   /** 直接从 data URL 插入图片（用于截屏/粘贴） */
   insertImageFromDataUrl: (dataUrl: string) => void;
+  /** 动态设置编辑器 HTML 内容（用于异步加载后替换内容） */
+  setHtml: (html: string) => void;
 }
 
 export interface EmailRichEditorProps {
   initialValue?: string;
+  /** 直接用 HTML 初始化内容，优先于 initialValue */
+  initialHtml?: string;
   onChange: (value: { html: string; text: string }) => void;
   placeholder?: string;
   className?: string;
@@ -178,7 +182,7 @@ function computeDisplayWidth(dataUrl: string): Promise<number | null> {
 
 export const EmailRichEditor = forwardRef<EmailRichEditorHandle, EmailRichEditorProps>(
   function EmailRichEditor(
-    { initialValue = "", onChange, placeholder = "邮件正文...", className },
+    { initialValue = "", initialHtml, onChange, placeholder = "邮件正文...", className },
     ref,
   ) {
     // 用 ref 保存最新的 onChange 和 editor，避免闭包陷阱和频繁 setOptions
@@ -262,15 +266,23 @@ export const EmailRichEditor = forwardRef<EmailRichEditorHandle, EmailRichEditor
 
     const editor = useEditor({
       extensions,
-      content: initialValue ? textToHtml(initialValue) : "",
+      content: initialHtml ?? (initialValue ? textToHtml(initialValue) : ""),
       editorProps,
       onUpdate: handleUpdate,
     });
 
-    // 同步 editor 到 ref
     useEffect(() => {
       editorRef.current = editor;
     }, [editor]);
+
+    // 当 initialHtml 变化时（如回复邮件异步加载原邮件后），重新设置编辑器内容
+    // 并把光标定位到文档开头（Foxmail 风格：顶部输入回复内容）
+    useEffect(() => {
+      if (editor && initialHtml !== undefined) {
+        editor.commands.setContent(initialHtml);
+        editor.chain().focus().setTextSelection(0).run();
+      }
+    }, [editor, initialHtml]);
 
     const insertImageFromDataUrl = async (dataUrl: string) => {
       if (!editor) return;
@@ -310,6 +322,9 @@ export const EmailRichEditor = forwardRef<EmailRichEditorHandle, EmailRichEditor
       () => ({
         insertImage,
         insertImageFromDataUrl,
+        setHtml: (html: string) => {
+          editor?.chain().focus().setContent(html).setTextSelection(0).run();
+        },
       }),
       [editor],
     );

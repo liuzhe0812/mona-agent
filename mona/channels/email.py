@@ -377,7 +377,9 @@ class EmailChannel(BaseChannel):
                 if dedupe and uid and uid in self._processed_uids:
                     continue
 
-                parsed = BytesParser(policy=policy.default).parsebytes(raw_bytes)
+                # gb2312/gbk charset 归一化为 gb18030（超集），避免"喆"等扩展字符丢失
+                normalized = re.sub(rb'=\?(gb2312|gbk|gb_2312)\?', b'=?gb18030?', raw_bytes, flags=re.IGNORECASE)
+                parsed = BytesParser(policy=policy.default).parsebytes(normalized)
                 sender = parseaddr(parsed.get("From", ""))[1].strip().lower()
                 if not sender:
                     continue
@@ -551,17 +553,35 @@ class EmailChannel(BaseChannel):
     def _decode_header_value(value: str) -> str:
         if not value:
             return ""
-        # 含 MIME encoded-word 标记：用 decode_header 解码
+        # 含 MIME encoded-word 标记：手动解码，gb2312/gbk 用 gb18030 超集
         if "=?" in value and "?=" in value:
             try:
-                return str(make_header(decode_header(value)))
+                parts = decode_header(value)
+                result = []
+                for text, charset in parts:
+                    if isinstance(text, bytes):
+                        cs = (charset or "").lower()
+                        # gb2312/gbk 用 gb18030 超集解码，避免生僻字（如"喆"）丢失
+                        if cs in ("gb2312", "gbk", "gb_2312", "gb18030", "csiso58gb231280"):
+                            try:
+                                result.append(text.decode("gb18030"))
+                            except UnicodeDecodeError:
+                                result.append(text.decode("utf-8", errors="replace"))
+                        else:
+                            try:
+                                result.append(text.decode(cs or "utf-8"))
+                            except (LookupError, UnicodeDecodeError):
+                                result.append(text.decode("utf-8", errors="replace"))
+                    else:
+                        result.append(text)
+                return "".join(result)
             except Exception:
                 return value
         # 检测 surrogate（policy.default 对 raw 字节用 surrogateescape 处理）
         if any(0xDC80 <= ord(c) <= 0xDCFF for c in value):
             try:
                 raw_bytes = value.encode("latin-1", errors="surrogateescape")
-                for charset in ("utf-8", "gbk", "gb18030", "big5"):
+                for charset in ("utf-8", "gb18030", "gbk", "big5"):
                     try:
                         return raw_bytes.decode(charset)
                     except UnicodeDecodeError:

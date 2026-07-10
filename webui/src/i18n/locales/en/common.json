@@ -95,9 +95,16 @@
       "models": "Models",
       "providers": "Providers",
       "image": "Image",
+      "models_providers": "Model Settings",
       "web": "Web",
       "runtime": "Runtime",
       "advanced": "Advanced"
+    },
+    "aiModels": {
+      "tabsAria": "Model settings type",
+      "chat": "Chat models",
+      "image": "Image models",
+      "embedding": "Embedding models"
     },
     "sections": {
       "interface": "Interface",
@@ -157,6 +164,12 @@
       "ssrfWhitelist": "SSRF whitelist",
       "mcpServers": "MCP servers",
       "pathAppend": "PATH append",
+      "embeddingEnabled": "Embedding model",
+      "embeddingEndpoint": "Endpoint",
+      "embeddingApiKey": "API key",
+      "embeddingModel": "Model name",
+      "embeddingDimensionality": "Output dimensionality",
+      "embeddingSave": "Save embedding settings",
       "configurationDocs": "Configuration docs"
     },
     "help": {
@@ -176,7 +189,7 @@
       "imageGeneration": "Expose generate_image in chats when a configured image provider is available.",
       "imageProvider": "Choose the registry provider used by generate_image.",
       "imageProviderStatus": "Image generation reuses provider credentials from Providers.",
-      "imageModel": "Model name sent to the selected image provider.",
+      "imageModel": "Image generation uses a dedicated image model (different from the chat model). It reuses the credentials of the selected provider.",
       "defaultAspectRatio": "Used when the prompt does not choose an aspect ratio.",
       "defaultImageSize": "Size hint sent to providers that support it.",
       "maxImagesPerTurn": "Upper bound for one generate_image request.",
@@ -184,6 +197,12 @@
       "botIcon": "Short emoji or text shown beside the bot name.",
       "timezone": "IANA timezone used by runtime context and schedules.",
       "toolHintMaxLength": "Maximum characters shown in tool progress hints.",
+      "embeddingEnabled": "Enable the global embedding model used by KB / notes-kb vector indexing.",
+      "embeddingEndpoint": "OpenAI-compatible embeddings endpoint, e.g. https://api.openai.com/v1 or https://dashscope.aliyuncs.com/compatible-mode/v1.",
+      "embeddingApiKey": "API key for the embeddings endpoint. Saved locally only.",
+      "embeddingModel": "Embedding model name, e.g. text-embedding-3-small, bge-m3.",
+      "embeddingDimensionality": "Optional output dimensionality. Leave empty to use the model default.",
+      "embeddingSave": "Applies to new embedding requests. Per-vault files still override this global default.",
       "advancedReadOnly": "Advanced safety controls are read-only in WebUI. Edit config.json intentionally when needed."
     },
     "values": {
@@ -279,6 +298,10 @@
       "selectProvider": "Select provider",
       "selectAspect": "Select aspect",
       "selectSize": "Select size",
+      "selectModel": "Select image model",
+      "modelPlaceholder": "e.g. gpt-image-1, wan2.2-t2i-plus",
+      "noModelMatch": "No match, keep typing or use this value",
+      "addModel": "Add model",
       "configureProvider": "Configure provider",
       "missingCredential": "Configure this provider before enabling image generation."
     }
@@ -426,6 +449,30 @@
           "4_3": "Landscape 4:3",
           "16_9": "Wide 16:9"
         }
+      },
+      "videoMode": {
+        "label": "Video Generation",
+        "toggle": "Toggle video generation mode",
+        "placeholder": "Describe a video to generate…",
+        "aspectAria": "Video aspect ratio",
+        "aspectLabel": "Video aspect",
+        "aspect": {
+          "auto": "Auto",
+          "1_1": "Square 1:1",
+          "3_4": "Portrait 3:4",
+          "9_16": "Story 9:16",
+          "4_3": "Landscape 4:3",
+          "16_9": "Wide 16:9"
+        },
+        "durationAria": "Video duration",
+        "durationLabel": "Video duration",
+        "duration": {
+          "auto": "Auto",
+          "s": "{{seconds}}s"
+        },
+        "refUrlPlaceholder": "Reference image URL (optional, for image-to-video)",
+        "refUrlAria": "Reference image URL",
+        "refUrlClear": "Clear reference image URL"
       },
       "workspace": {
         "placeholder": "Select folder (optional)",

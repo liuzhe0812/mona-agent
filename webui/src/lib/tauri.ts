@@ -103,6 +103,22 @@ async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T
   return tauriInvoke<T>(cmd, args);
 }
 
+async function invokeWithTimeout<T>(
+  cmd: string,
+  args: Record<string, unknown>,
+  ms: number,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`Command '${cmd}' timed out after ${ms}ms`)), ms);
+  });
+  try {
+    return await Promise.race([invoke<T>(cmd, args), timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export interface GatewayStatus {
   running: boolean;
   port: number | null;
@@ -276,12 +292,12 @@ export async function getNotesLinkGraph(): Promise<LinkGraph | null> {
 
 export async function getNoteBacklinks(noteId: string): Promise<unknown[]> {
   if (!isTauri()) return [];
-  return invoke<unknown[]>("notes_links_get_backlinks", { noteId });
+  return invokeWithTimeout<unknown[]>("notes_links_get_backlinks", { noteId }, 15000);
 }
 
 export async function getNoteMentions(noteId: string): Promise<unknown[]> {
   if (!isTauri()) return [];
-  return invoke<unknown[]>("notes_links_get_mentions", { noteId });
+  return invokeWithTimeout<unknown[]>("notes_links_get_mentions", { noteId }, 15000);
 }
 
 export async function renameSyncWikiLinks(oldTitle: string, newTitle: string): Promise<{

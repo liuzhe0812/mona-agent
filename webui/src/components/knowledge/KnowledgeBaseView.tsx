@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react"
-import { FolderPlus, FileText, Network, Database, Search, Play, Loader2, Upload, ArrowLeft, X, ClipboardCheck, ShieldCheck, Pencil, Check, Settings2 } from "lucide-react"
+import { FolderPlus, FileText, Network, Database, Search, Play, Loader2, Upload, ArrowLeft, X, ClipboardCheck, ShieldCheck, Pencil, Check } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { useKbStore } from "@/stores/kb-store"
@@ -10,8 +10,6 @@ import { WikiViewer } from "./wiki-viewer"
 import { GraphView } from "./graph-view"
 import { ReviewView } from "./review-view"
 import { LintView } from "./lint-view"
-import { EmbedSettingsCard } from "./settings/settings-view"
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { searchKb, setKbToken, type SearchResult } from "@/lib/kb-api"
 import { useClient } from "@/providers/ClientProvider"
 
@@ -35,7 +33,6 @@ export function KnowledgeBaseView() {
   const [showNewProject, setShowNewProject] = useState(false)
   const [editingName, setEditingName] = useState(false)
   const [editNameValue, setEditNameValue] = useState("")
-  const [showEmbedSettings, setShowEmbedSettings] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => { setKbToken(token) }, [token])
@@ -43,12 +40,7 @@ export function KnowledgeBaseView() {
 
   const handleSearch = async () => {
     if (!currentProject || !searchQuery.trim()) return
-    const embedDraft = useKbStore.getState().embedDraft
-    const embeddingConfig =
-      embedDraft.enabled && embedDraft.endpoint && embedDraft.model
-        ? { enabled: true, endpoint: embedDraft.endpoint, apiKey: embedDraft.apiKey, model: embedDraft.model }
-        : undefined
-    const { mode, results } = await searchKb(currentProject.id, searchQuery, 10, embeddingConfig)
+    const { mode, results } = await searchKb(currentProject.id, searchQuery, 10)
     setSearchResults(results)
     setSearchMode(mode)
   }
@@ -132,23 +124,8 @@ export function KnowledgeBaseView() {
               <FolderPlus className="mr-2 h-4 w-4" />
               新建知识库
             </Button>
-            <Button variant="outline" onClick={() => setShowEmbedSettings(true)}>
-              <Settings2 className="mr-2 h-4 w-4" />
-              Embedding 设置
-            </Button>
           </div>
         )}
-
-        <Sheet open={showEmbedSettings} onOpenChange={setShowEmbedSettings}>
-          <SheetContent side="right" className="w-[380px] sm:max-w-[380px] overflow-y-auto p-0">
-            <SheetHeader className="border-b px-4 py-3">
-              <SheetTitle className="text-sm">Embedding 模型设置</SheetTitle>
-            </SheetHeader>
-            <div className="p-4">
-              <EmbedSettingsCard />
-            </div>
-          </SheetContent>
-        </Sheet>
       </div>
     )
   }

@@ -15,8 +15,12 @@ pub const NOTIFICATION_LABEL_PREFIX: &str = "notification-";
 const WIN_WIDTH: f64 = 360.0;
 /// 通知窗口固定高度（逻辑像素）
 const WIN_HEIGHT: f64 = 96.0;
-/// 窗口与屏幕边缘的间距
-const MARGIN: f64 = 20.0;
+/// 窗口与屏幕右边缘的间距
+const MARGIN_X: f64 = 20.0;
+/// 窗口与屏幕底部的间距（不含任务栏预留）
+const MARGIN_BOTTOM: f64 = 20.0;
+/// 任务栏预留高度（逻辑像素）。Windows 任务栏通常 40-48px，取保守值。
+const TASKBAR_RESERVE: f64 = 48.0;
 /// 多条通知之间的垂直间距
 const STACK_GAP: f64 = 10.0;
 
@@ -122,8 +126,17 @@ pub fn show_notification_inner(app: &AppHandle, payload: NotificationPayload) ->
         .lock()
         .map(|mut active| active.push(label.clone()));
 
-    window.show().map_err(|e| e.to_string())?;
+    // 窗口保持不可见，由前端渲染完成后调用 show_notification_window 显示。
+    // 这样避免窗口先显示白屏再渲染内容的闪烁。
+    Ok(())
+}
 
+/// 前端渲染完成后调用，显示通知窗口。
+#[tauri::command]
+pub fn show_notification_window(app: AppHandle, label: String) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window(&label) {
+        window.show().map_err(|e| e.to_string())?;
+    }
     Ok(())
 }
 
@@ -138,15 +151,18 @@ pub async fn show_notification(
 
 /// 计算窗口在右下角的位置，考虑多通知堆叠。
 ///
-/// 位置基于当前活跃通知数量：第 N 条（从 0 开始）的 y 偏移为
-/// `屏幕底部 - MARGIN - (N+1) * (WIN_HEIGHT + STACK_GAP)`。
+/// 位置基于主窗口所在显示器（通知跟随主窗口），第 N 条（从 0 开始）
+/// 的 y 偏移为 `屏幕底部 - MARGIN - (N+1) * (WIN_HEIGHT + STACK_GAP)`。
 fn place_notification_window(
     app: &AppHandle,
     window: &WebviewWindow,
 ) -> Result<(), String> {
-    let monitor = window
-        .current_monitor()
-        .map_err(|e| e.to_string())?
+    // 用主窗口所在显示器，而非新建窗口的 current_monitor()。
+    // 新窗口创建时位置未定，current_monitor() 可能返回错误的显示器。
+    let monitor = app
+        .get_webview_window("main")
+        .and_then(|w| w.current_monitor().ok().flatten())
+        .or_else(|| window.current_monitor().ok().flatten())
         .ok_or_else(|| "no monitor available".to_string())?;
     let scale = monitor.scale_factor();
     let monitor_size = monitor.size();
@@ -166,9 +182,10 @@ fn place_notification_window(
     let monitor_x_logical = monitor_pos.x as f64 / scale;
     let monitor_y_logical = monitor_pos.y as f64 / scale;
 
-    let x = monitor_x_logical + monitor_width_logical - WIN_WIDTH - MARGIN;
+    let x = monitor_x_logical + monitor_width_logical - WIN_WIDTH - MARGIN_X;
     let y = monitor_y_logical + monitor_height_logical
-        - MARGIN
+        - TASKBAR_RESERVE
+        - MARGIN_BOTTOM
         - (stack_index + 1.0) * WIN_HEIGHT
         - stack_index * STACK_GAP;
 
@@ -214,16 +231,15 @@ fn close_and_relayout(app: &AppHandle, label: &str) {
     // 重新布局剩余窗口（按剩余顺序从下往上堆叠）
     // remaining[0] 是最早创建的（最底层），remaining[N-1] 是最新创建的（最顶层）
     // 但视觉上最新创建的在最上方，所以索引 0 对应最底层（y 最大）
-    let monitor = match app.get_webview_window(label) {
-        Some(w) => w.current_monitor().ok().flatten(),
-        None => None,
-    };
-    // 窗口已关闭，无法用它取 monitor；改用主窗口或第一个剩余窗口
-    let monitor = monitor.or_else(|| {
-        remaining
-            .iter()
-            .find_map(|l| app.get_webview_window(l)?.current_monitor().ok().flatten())
-    });
+    // 用主窗口所在显示器，避免依赖已关闭的窗口
+    let monitor = app
+        .get_webview_window("main")
+        .and_then(|w| w.current_monitor().ok().flatten())
+        .or_else(|| {
+            remaining
+                .iter()
+                .find_map(|l| app.get_webview_window(l)?.current_monitor().ok().flatten())
+        });
 
     let Some(monitor) = monitor else { return };
     let scale = monitor.scale_factor();
@@ -240,9 +256,10 @@ fn close_and_relayout(app: &AppHandle, label: &str) {
             continue;
         };
         let stack_index = i as f64;
-        let x = monitor_x_logical + monitor_width_logical - WIN_WIDTH - MARGIN;
+        let x = monitor_x_logical + monitor_width_logical - WIN_WIDTH - MARGIN_X;
         let y = monitor_y_logical + monitor_height_logical
-            - MARGIN
+            - TASKBAR_RESERVE
+            - MARGIN_BOTTOM
             - (stack_index + 1.0) * WIN_HEIGHT
             - stack_index * STACK_GAP;
         let _ = window.set_position(PhysicalPosition::new(

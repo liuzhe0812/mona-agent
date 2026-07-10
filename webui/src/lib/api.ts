@@ -1,5 +1,6 @@
 import type {
   ChatSummary,
+  EmbeddingSettingsUpdate,
   ImageGenerationSettingsUpdate,
   PptProject,
   PptTemplatesResponse,
@@ -8,6 +9,7 @@ import type {
   SettingsUpdate,
   SidebarStatePayload,
   SlashCommand,
+  VideoGenerationSettingsUpdate,
   WebSearchSettingsUpdate,
   WeixinLoginStatus,
   WebuiThreadPersistedPayload,
@@ -47,7 +49,16 @@ export async function getApiBase(): Promise<string> {
 export async function getGatewayHttpBase(): Promise<string> {
   if (_gatewayHttpBase) return _gatewayHttpBase;
   if (isTauri()) {
-    const status = await getGatewayStatus();
+    let status = await getGatewayStatus();
+    if (!status.running) {
+      try {
+        const { startGateway } = await import("./tauri");
+        await startGateway();
+        status = await getGatewayStatus();
+      } catch {
+        // fall through — return empty if gateway cannot be started
+      }
+    }
     if (status.port) {
       _gatewayHttpBase = `http://127.0.0.1:${status.port}`;
       return _gatewayHttpBase;
@@ -343,12 +354,51 @@ export async function updateImageGenerationSettings(
   );
 }
 
+export async function updateVideoGenerationSettings(
+  token: string,
+  update: VideoGenerationSettingsUpdate,
+  base?: string,
+): Promise<SettingsPayload> {
+  const effectiveBase = base ?? (await getApiBase());
+  const query = new URLSearchParams();
+  query.set("enabled", String(update.enabled));
+  query.set("provider", update.provider);
+  query.set("model", update.model);
+  query.set("default_aspect_ratio", update.defaultAspectRatio);
+  query.set("default_duration", String(update.defaultDuration));
+  return request<SettingsPayload>(
+    `${effectiveBase}/api/settings/video-generation/update?${query}`,
+    token,
+  );
+}
+
+export async function updateEmbeddingSettings(
+  token: string,
+  update: EmbeddingSettingsUpdate,
+  base?: string,
+): Promise<SettingsPayload> {
+  const effectiveBase = base ?? (await getApiBase());
+  const query = new URLSearchParams();
+  if (update.enabled !== undefined) query.set("enabled", String(update.enabled));
+  if (update.endpoint !== undefined) query.set("endpoint", update.endpoint);
+  if (update.apiKey !== undefined) query.set("api_key", update.apiKey);
+  if (update.model !== undefined) query.set("model", update.model);
+  if (update.outputDimensionality !== undefined) {
+    query.set("output_dimensionality", String(update.outputDimensionality ?? ""));
+  }
+  return request<SettingsPayload>(
+    `${effectiveBase}/api/settings/embedding/update?${query}`,
+    token,
+  );
+}
+
 export async function updateChannelSettings(
   token: string,
   channel: string,
   enabled: boolean,
   allowFrom?: string[],
   base?: string,
+  extra?: { botId?: string; appId?: string; secret?: string; appSecret?: string },
 ): Promise<SettingsPayload> {
   const effectiveBase = base ?? (await getApiBase());
   const query = new URLSearchParams();
@@ -356,6 +406,18 @@ export async function updateChannelSettings(
   query.set("enabled", String(enabled));
   if (allowFrom) {
     query.set("allowFrom", allowFrom.join(","));
+  }
+  if (extra?.botId !== undefined) {
+    query.set("botId", extra.botId);
+  }
+  if (extra?.appId !== undefined) {
+    query.set("appId", extra.appId);
+  }
+  if (extra?.secret !== undefined) {
+    query.set("secret", extra.secret);
+  }
+  if (extra?.appSecret !== undefined) {
+    query.set("appSecret", extra.appSecret);
   }
   return request<SettingsPayload>(
     `${effectiveBase}/api/settings/channels/update?${query}`,
@@ -581,4 +643,269 @@ export async function generatePptPreview(
   const query = new URLSearchParams();
   query.set("project", project);
   return request(`${effectiveBase}/api/ppt/generate-preview?${query}`, token);
+}
+
+// ---------------------------------------------------------------------------
+// Video APIs
+// ---------------------------------------------------------------------------
+
+export interface VideoRuntimeItem {
+  ok: boolean;
+  version?: string;
+  path?: string;
+}
+
+export interface VideoRuntimeStatus {
+  node: VideoRuntimeItem;
+  ffmpeg: VideoRuntimeItem;
+  chrome: VideoRuntimeItem;
+}
+
+export interface VideoProject {
+  name: string;
+  createdAt: number;
+  resolution: string;
+  status: "init" | "generating" | "done" | "error";
+  hasVideo: boolean;
+  chatId: string | null;
+}
+
+export async function fetchVideoRuntimeCheck(
+  token: string,
+  base?: string,
+): Promise<VideoRuntimeStatus> {
+  const effectiveBase = base ?? (await getGatewayHttpBase());
+  return request<VideoRuntimeStatus>(
+    `${effectiveBase}/api/video/runtime-check`,
+    token,
+  );
+}
+
+export async function downloadVideoRuntime(
+  token: string,
+  component: string,
+  base?: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const effectiveBase = base ?? (await getGatewayHttpBase());
+  return request<{ ok: boolean; error?: string }>(
+    `${effectiveBase}/api/video/runtime-download`,
+    token,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ component }),
+    },
+  );
+}
+
+export async function fetchVideoProjects(
+  token: string,
+  base?: string,
+): Promise<{ projects: VideoProject[] }> {
+  const effectiveBase = base ?? (await getGatewayHttpBase());
+  return request(`${effectiveBase}/api/video/projects`, token);
+}
+
+export async function createVideoProject(
+  token: string,
+  name: string,
+  resolution: string,
+  base?: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const effectiveBase = base ?? (await getGatewayHttpBase());
+  return request<{ ok: boolean; error?: string }>(
+    `${effectiveBase}/api/video/project/create`,
+    token,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, resolution }),
+    },
+  );
+}
+
+export async function fetchVideoProject(
+  token: string,
+  name: string,
+  base?: string,
+): Promise<VideoProject & { previewPort?: number | null; videoUrl?: string | null }> {
+  const effectiveBase = base ?? (await getGatewayHttpBase());
+  const query = new URLSearchParams();
+  query.set("name", name);
+  return request(`${effectiveBase}/api/video/project?${query}`, token);
+}
+
+export async function fetchVideoProjectFile(
+  token: string,
+  name: string,
+  path: string,
+  base?: string,
+): Promise<{ ok: boolean; content?: string; error?: string }> {
+  const effectiveBase = base ?? (await getGatewayHttpBase());
+  const query = new URLSearchParams();
+  query.set("name", name);
+  query.set("path", path);
+  return request(`${effectiveBase}/api/video/project-file?${query}`, token);
+}
+
+export async function saveVideoChatId(
+  token: string,
+  name: string,
+  chatId: string,
+  base?: string,
+): Promise<{ ok: boolean }> {
+  const effectiveBase = base ?? (await getGatewayHttpBase());
+  return request<{ ok: boolean }>(
+    `${effectiveBase}/api/video/project-save-chat-id`,
+    token,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, chatId }),
+    },
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Flowchart APIs
+// ---------------------------------------------------------------------------
+
+export interface FlowchartProject {
+  name: string;
+  createdAt: number;
+  status: "init" | "generating" | "done";
+  hasDiagram: boolean;
+  chatId: string | null;
+}
+
+export async function fetchFlowchartProjects(
+  token: string,
+  base?: string,
+): Promise<{ projects: FlowchartProject[] }> {
+  const effectiveBase = base ?? (await getGatewayHttpBase());
+  return request(`${effectiveBase}/api/flowchart/projects`, token);
+}
+
+export async function createFlowchartProject(
+  token: string,
+  name: string,
+  base?: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const effectiveBase = base ?? (await getGatewayHttpBase());
+  return request<{ ok: boolean; error?: string }>(
+    `${effectiveBase}/api/flowchart/project/create`,
+    token,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    },
+  );
+}
+
+export async function fetchFlowchartProject(
+  token: string,
+  name: string,
+  base?: string,
+): Promise<FlowchartProject> {
+  const effectiveBase = base ?? (await getGatewayHttpBase());
+  const query = new URLSearchParams();
+  query.set("name", name);
+  return request(`${effectiveBase}/api/flowchart/project?${query}`, token);
+}
+
+export async function fetchFlowchartProjectXml(
+  token: string,
+  name: string,
+  base?: string,
+): Promise<{ ok: boolean; xml?: string; error?: string }> {
+  const effectiveBase = base ?? (await getGatewayHttpBase());
+  const query = new URLSearchParams();
+  query.set("name", name);
+  return request(`${effectiveBase}/api/flowchart/project-xml?${query}`, token);
+}
+
+export async function saveFlowchartProject(
+  token: string,
+  name: string,
+  xml: string,
+  base?: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const effectiveBase = base ?? (await getGatewayHttpBase());
+  return request<{ ok: boolean; error?: string }>(
+    `${effectiveBase}/api/flowchart/project-save`,
+    token,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, xml }),
+    },
+  );
+}
+
+export async function exportFlowchartProject(
+  token: string,
+  name: string,
+  format: string,
+  base?: string,
+): Promise<{ ok: boolean; url?: string; data?: string; error?: string }> {
+  const effectiveBase = base ?? (await getGatewayHttpBase());
+  const query = new URLSearchParams();
+  query.set("name", name);
+  query.set("format", format);
+  return request(`${effectiveBase}/api/flowchart/project-export?${query}`, token);
+}
+
+export async function saveFlowchartChatId(
+  token: string,
+  name: string,
+  chatId: string,
+  base?: string,
+): Promise<{ ok: boolean }> {
+  const effectiveBase = base ?? (await getGatewayHttpBase());
+  return request<{ ok: boolean }>(
+    `${effectiveBase}/api/flowchart/project-save-chat-id`,
+    token,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, chatId }),
+    },
+  );
+}
+
+export interface FlowchartRuntimeItem {
+  ok: boolean;
+  version?: string;
+  path?: string;
+}
+
+export interface FlowchartRuntimeStatus {
+  drawio: FlowchartRuntimeItem;
+}
+
+export async function fetchFlowchartRuntimeCheck(
+  token: string,
+  base?: string,
+): Promise<FlowchartRuntimeStatus> {
+  const effectiveBase = base ?? (await getGatewayHttpBase());
+  return request<FlowchartRuntimeStatus>(
+    `${effectiveBase}/api/flowchart/runtime-check`,
+    token,
+  );
+}
+
+export async function downloadFlowchartRuntime(
+  token: string,
+  base?: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const effectiveBase = base ?? (await getGatewayHttpBase());
+  return request<{ ok: boolean; error?: string }>(
+    `${effectiveBase}/api/flowchart/runtime-download`,
+    token,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    },
+  );
 }

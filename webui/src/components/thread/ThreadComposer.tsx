@@ -22,6 +22,7 @@ import {
   Folder,
   History,
   ImageIcon,
+  Link2,
   Loader2,
   Plus,
   RotateCw,
@@ -30,6 +31,7 @@ import {
   SquarePen,
   Target,
   Undo2,
+  Video,
   X,
   type LucideIcon,
 } from "lucide-react";
@@ -78,6 +80,8 @@ interface ThreadComposerProps {
   slashCommands?: SlashCommand[];
   imageMode?: boolean;
   onImageModeChange?: (enabled: boolean) => void;
+  videoMode?: boolean;
+  onVideoModeChange?: (enabled: boolean) => void;
   onStop?: () => void;
   /** Unix seconds from server; turn elapsed timer above input while set. */
   runStartedAt?: number | null;
@@ -115,6 +119,12 @@ const COMMAND_ICONS: Record<string, LucideIcon> = {
 type ImageAspectRatio = "auto" | "1:1" | "3:4" | "9:16" | "4:3" | "16:9";
 
 const IMAGE_ASPECT_RATIOS: ImageAspectRatio[] = ["auto", "1:1", "3:4", "9:16", "4:3", "16:9"];
+
+type VideoAspectRatio = "auto" | "1:1" | "3:4" | "9:16" | "4:3" | "16:9";
+type VideoDuration = 0 | 3 | 5 | 10 | 18;
+
+const VIDEO_ASPECT_RATIOS: VideoAspectRatio[] = ["auto", "1:1", "3:4", "9:16", "4:3", "16:9"];
+const VIDEO_DURATIONS: VideoDuration[] = [0, 3, 5, 10, 18];
 const SLASH_PALETTE_GAP_PX = 8;
 const SLASH_PALETTE_MAX_HEIGHT_PX = 288;
 const SLASH_PALETTE_MIN_HEIGHT_PX = 144;
@@ -405,6 +415,8 @@ export function ThreadComposer({
   slashCommands = [],
   imageMode: controlledImageMode,
   onImageModeChange,
+  videoMode: controlledVideoMode,
+  onVideoModeChange,
   onStop,
   runStartedAt = null,
   goalState,
@@ -428,10 +440,17 @@ export function ThreadComposer({
   const [uncontrolledImageMode, setUncontrolledImageMode] = useState(false);
   const [imageAspectRatio, setImageAspectRatio] = useState<ImageAspectRatio>("auto");
   const [aspectMenuOpen, setAspectMenuOpen] = useState(false);
+  const [uncontrolledVideoMode, setUncontrolledVideoMode] = useState(false);
+  const [videoAspectRatio, setVideoAspectRatio] = useState<VideoAspectRatio>("auto");
+  const [videoDuration, setVideoDuration] = useState<VideoDuration>(0);
+  const [videoAspectMenuOpen, setVideoAspectMenuOpen] = useState(false);
+  const [videoDurationMenuOpen, setVideoDurationMenuOpen] = useState(false);
+  const [videoRefUrl, setVideoRefUrl] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const formRef = useRef<HTMLFormElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const aspectControlRef = useRef<HTMLDivElement>(null);
+  const videoAspectControlRef = useRef<HTMLDivElement>(null);
   const chipRefs = useRef(new Map<string, HTMLButtonElement>());
   const isHero = variant === "hero";
   const imageMode = controlledImageMode ?? uncontrolledImageMode;
@@ -444,11 +463,27 @@ export function ThreadComposer({
     },
     [controlledImageMode, onImageModeChange],
   );
+  const videoMode = controlledVideoMode ?? uncontrolledVideoMode;
+  const setVideoMode = useCallback(
+    (enabled: boolean) => {
+      if (controlledVideoMode === undefined) {
+        setUncontrolledVideoMode(enabled);
+      }
+      onVideoModeChange?.(enabled);
+      // 互斥：开启视频模式时关闭图片模式
+      if (enabled && imageMode) {
+        setImageMode(false);
+      }
+    },
+    [controlledVideoMode, onVideoModeChange, imageMode, setImageMode],
+  );
   const resolvedPlaceholder = isStreaming
     ? t("thread.composer.placeholderStreaming")
-    : imageMode
-      ? t("thread.composer.imageMode.placeholder")
-      : placeholder ?? t("thread.composer.placeholderThread");
+    : videoMode
+      ? t("thread.composer.videoMode.placeholder")
+      : imageMode
+        ? t("thread.composer.imageMode.placeholder")
+        : placeholder ?? t("thread.composer.placeholderThread");
 
   const { images, enqueue, remove, clear, encoding, full } =
     useAttachedImages();
@@ -668,14 +703,23 @@ export function ThreadComposer({
             preview: { url: img.dataUrl, name: img.file.name },
           }))
         : undefined;
-    const options: SendOptions | undefined = imageMode
+    const options: SendOptions | undefined = videoMode
       ? {
-          imageGeneration: {
+          videoGeneration: {
             enabled: true,
-            aspect_ratio: imageAspectRatio === "auto" ? null : imageAspectRatio,
+            aspect_ratio: videoAspectRatio === "auto" ? null : videoAspectRatio,
+            duration: videoDuration === 0 ? null : videoDuration,
+            reference_image_url: videoRefUrl.trim() ? videoRefUrl.trim() : null,
           },
         }
-      : undefined;
+      : imageMode
+        ? {
+            imageGeneration: {
+              enabled: true,
+              aspect_ratio: imageAspectRatio === "auto" ? null : imageAspectRatio,
+            },
+          }
+        : undefined;
     onSend(trimmed, payload, options);
     setValue("");
     setInlineError(null);
@@ -684,7 +728,7 @@ export function ThreadComposer({
     clear();
     setSlashMenuDismissed(false);
     resizeTextarea();
-  }, [canSend, clear, imageAspectRatio, imageMode, onSend, readyImages, resizeTextarea, value]);
+  }, [canSend, clear, imageAspectRatio, imageMode, onSend, readyImages, resizeTextarea, value, videoAspectRatio, videoDuration, videoMode, videoRefUrl]);
 
   const onKeyDown = (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     if (showSlashMenu) {
@@ -869,6 +913,40 @@ export function ThreadComposer({
             "disabled:cursor-not-allowed",
           )}
         />
+        {videoMode ? (
+          <div className={cn("flex items-center gap-1.5", isHero ? "mx-5 mb-2" : "mx-4 mb-1.5")}>
+            <Link2 className={cn("shrink-0 text-muted-foreground", isHero ? "h-4 w-4" : "h-3.5 w-3.5")} />
+            <input
+              type="url"
+              value={videoRefUrl}
+              onChange={(e) => setVideoRefUrl(e.target.value)}
+              placeholder={t("thread.composer.videoMode.refUrlPlaceholder")}
+              aria-label={t("thread.composer.videoMode.refUrlAria")}
+              className={cn(
+                "min-w-0 flex-1 rounded-full border border-border/55 bg-card px-3 text-foreground/80",
+                "placeholder:text-muted-foreground/60",
+                "focus:outline-none focus-visible:outline-none",
+                isHero ? "h-8 text-[12px]" : "h-7 text-[11.5px]",
+              )}
+            />
+            {videoRefUrl ? (
+              <button
+                type="button"
+                aria-label={t("thread.composer.videoMode.refUrlClear")}
+                onClick={() => {
+                  setVideoRefUrl("");
+                  textareaRef.current?.focus();
+                }}
+                className={cn(
+                  "inline-flex shrink-0 items-center justify-center rounded-full text-muted-foreground hover:text-foreground",
+                  isHero ? "h-6 w-6" : "h-5 w-5",
+                )}
+              >
+                <X className={isHero ? "h-3.5 w-3.5" : "h-3 w-3"} />
+              </button>
+            ) : null}
+          </div>
+        ) : null}
         {inlineError ? (
           <div
             role="alert"
@@ -969,6 +1047,95 @@ export function ThreadComposer({
                   onSelect={(ratio) => {
                     setImageAspectRatio(ratio);
                     setAspectMenuOpen(false);
+                    textareaRef.current?.focus();
+                  }}
+                />
+              ) : null}
+            </div>
+            <div ref={videoAspectControlRef} className="relative flex items-center gap-1">
+              <Button
+                type="button"
+                variant="ghost"
+                disabled={disabled}
+                aria-pressed={videoMode}
+                aria-label={t("thread.composer.videoMode.toggle")}
+                onClick={() => {
+                  setVideoMode(!videoMode);
+                  setVideoAspectMenuOpen(false);
+                  setVideoDurationMenuOpen(false);
+                  textareaRef.current?.focus();
+                }}
+                className={cn(
+                  "rounded-full border border-border/55 px-2.5 font-medium shadow-[0_2px_8px_rgba(15,23,42,0.04)]",
+                  isHero ? "h-9 text-[12px]" : "h-7.5 text-[10.5px]",
+                  videoMode
+                    ? "border-primary/30 bg-primary/10 text-primary hover:bg-primary/12"
+                    : "bg-card text-muted-foreground hover:bg-card hover:text-foreground",
+                )}
+              >
+                <Video className={cn("mr-1.5", isHero ? "h-4 w-4" : "h-3.5 w-3.5")} />
+                {t("thread.composer.videoMode.label")}
+              </Button>
+              {videoMode ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  disabled={disabled}
+                  aria-haspopup="listbox"
+                  aria-expanded={videoAspectMenuOpen}
+                  aria-label={t("thread.composer.videoMode.aspectAria")}
+                  onClick={() => {
+                    setVideoAspectMenuOpen((open) => !open);
+                    setVideoDurationMenuOpen(false);
+                  }}
+                  className={cn(
+                    "rounded-full border border-border/55 bg-card px-2.5 font-medium text-foreground/80 shadow-[0_2px_8px_rgba(15,23,42,0.04)] hover:bg-card",
+                    isHero ? "h-9 text-[12px]" : "h-7.5 text-[10.5px]",
+                  )}
+                >
+                  <span>{t(`thread.composer.videoMode.aspect.${videoAspectRatio.replace(":", "_")}`)}</span>
+                  <ChevronDown className={cn("ml-1.5", isHero ? "h-3.5 w-3.5" : "h-3 w-3")} />
+                </Button>
+              ) : null}
+              {videoMode ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  disabled={disabled}
+                  aria-haspopup="listbox"
+                  aria-expanded={videoDurationMenuOpen}
+                  aria-label={t("thread.composer.videoMode.durationAria")}
+                  onClick={() => {
+                    setVideoDurationMenuOpen((open) => !open);
+                    setVideoAspectMenuOpen(false);
+                  }}
+                  className={cn(
+                    "rounded-full border border-border/55 bg-card px-2.5 font-medium text-foreground/80 shadow-[0_2px_8px_rgba(15,23,42,0.04)] hover:bg-card",
+                    isHero ? "h-9 text-[12px]" : "h-7.5 text-[10.5px]",
+                  )}
+                >
+                  <span>{videoDuration === 0 ? t("thread.composer.videoMode.duration.auto") : `${videoDuration}s`}</span>
+                  <ChevronDown className={cn("ml-1.5", isHero ? "h-3.5 w-3.5" : "h-3 w-3")} />
+                </Button>
+              ) : null}
+              {videoMode && videoAspectMenuOpen ? (
+                <VideoAspectMenu
+                  selected={videoAspectRatio}
+                  isHero={isHero}
+                  onSelect={(ratio) => {
+                    setVideoAspectRatio(ratio);
+                    setVideoAspectMenuOpen(false);
+                    textareaRef.current?.focus();
+                  }}
+                />
+              ) : null}
+              {videoMode && videoDurationMenuOpen ? (
+                <VideoDurationMenu
+                  selected={videoDuration}
+                  isHero={isHero}
+                  onSelect={(dur) => {
+                    setVideoDuration(dur);
+                    setVideoDurationMenuOpen(false);
                     textareaRef.current?.focus();
                   }}
                 />
@@ -1314,6 +1481,115 @@ function ImageAspectMenu({
           >
             <span>{label}</span>
             {selected === ratio ? <Check className="h-3.5 w-3.5 text-primary" /> : null}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function VideoAspectMenu({
+  selected,
+  isHero,
+  onSelect,
+}: {
+  selected: VideoAspectRatio;
+  isHero: boolean;
+  onSelect: (ratio: VideoAspectRatio) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div
+      role="listbox"
+      aria-label={t("thread.composer.videoMode.aspectAria")}
+      className={cn(
+        "absolute left-0 z-30 w-44 overflow-hidden rounded-[16px] border",
+        isHero ? "top-full mt-2" : "bottom-full mb-2",
+        "border-border/65 bg-popover p-1.5 text-popover-foreground shadow-[0_16px_45px_rgba(15,23,42,0.16)]",
+        "dark:border-white/10 dark:shadow-[0_18px_45px_rgba(0,0,0,0.42)]",
+        isHero ? "text-[12px]" : "text-[11.5px]",
+      )}
+    >
+      <div className="px-2 pb-1 pt-1 font-medium text-muted-foreground/70">
+        {t("thread.composer.videoMode.aspectLabel")}
+      </div>
+      {VIDEO_ASPECT_RATIOS.map((ratio) => {
+        const label = t(`thread.composer.videoMode.aspect.${ratio.replace(":", "_")}`);
+        return (
+          <button
+            key={ratio}
+            type="button"
+            role="option"
+            aria-selected={selected === ratio}
+            onMouseDown={(e) => {
+              e.preventDefault();
+              onSelect(ratio);
+            }}
+            className={cn(
+              "flex w-full items-center justify-between rounded-[11px] px-2.5 py-2 text-left transition-colors",
+              selected === ratio
+                ? "bg-primary/10 text-foreground"
+                : "text-foreground/86 hover:bg-accent/55",
+            )}
+          >
+            <span>{label}</span>
+            {selected === ratio ? <Check className="h-3.5 w-3.5 text-primary" /> : null}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function VideoDurationMenu({
+  selected,
+  isHero,
+  onSelect,
+}: {
+  selected: VideoDuration;
+  isHero: boolean;
+  onSelect: (duration: VideoDuration) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div
+      role="listbox"
+      aria-label={t("thread.composer.videoMode.durationAria")}
+      className={cn(
+        "absolute left-0 z-30 w-44 overflow-hidden rounded-[16px] border",
+        isHero ? "top-full mt-2" : "bottom-full mb-2",
+        "border-border/65 bg-popover p-1.5 text-popover-foreground shadow-[0_16px_45px_rgba(15,23,42,0.16)]",
+        "dark:border-white/10 dark:shadow-[0_18px_45px_rgba(0,0,0,0.42)]",
+        isHero ? "text-[12px]" : "text-[11.5px]",
+      )}
+    >
+      <div className="px-2 pb-1 pt-1 font-medium text-muted-foreground/70">
+        {t("thread.composer.videoMode.durationLabel")}
+      </div>
+      {VIDEO_DURATIONS.map((dur) => {
+        const label =
+          dur === 0
+            ? t("thread.composer.videoMode.duration.auto")
+            : t("thread.composer.videoMode.duration.s", { seconds: dur });
+        return (
+          <button
+            key={dur}
+            type="button"
+            role="option"
+            aria-selected={selected === dur}
+            onMouseDown={(e) => {
+              e.preventDefault();
+              onSelect(dur);
+            }}
+            className={cn(
+              "flex w-full items-center justify-between rounded-[11px] px-2.5 py-2 text-left transition-colors",
+              selected === dur
+                ? "bg-primary/10 text-foreground"
+                : "text-foreground/86 hover:bg-accent/55",
+            )}
+          >
+            <span>{label}</span>
+            {selected === dur ? <Check className="h-3.5 w-3.5 text-primary" /> : null}
           </button>
         );
       })}

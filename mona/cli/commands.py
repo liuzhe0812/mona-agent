@@ -622,6 +622,7 @@ def serve(
     from mona.api.server import create_app
     from mona.bus.queue import MessageBus
     from mona.providers.image_generation import image_gen_provider_configs
+    from mona.providers.video_generation import video_gen_provider_configs
     from mona.session.manager import SessionManager
 
     if verbose:
@@ -642,6 +643,7 @@ def serve(
             runtime_config, bus,
             session_manager=session_manager,
             image_generation_provider_configs=image_gen_provider_configs(runtime_config),
+            video_generation_provider_configs=video_gen_provider_configs(runtime_config),
         )
     except ValueError as exc:
         console.print(f"[red]Error: {exc}[/red]")
@@ -677,85 +679,6 @@ def serve(
 # ============================================================================
 # Gateway / Server
 # ============================================================================
-
-
-async def _ensure_email_report_schedules(schedule_service: Any, config: Any) -> None:
-    """启动时确保邮件日报/周报的定时日程项存在。
-
-    仅当 emailIntel.enabled 且 allow_report 为 True 时创建。
-    用 source_module="email_report" 标记，避免重复创建。
-    """
-    email_config = getattr(config, "email_intel", None)
-    if not email_config or not email_config.enabled:
-        return
-    if not getattr(email_config, "allow_report", True):
-        return
-
-    from datetime import datetime, timedelta
-
-    from mona.schedule import ScheduleItem, create_schedule_item_id
-
-    existing = await schedule_service.list_items()
-    has_daily = any(
-        it.source_module == "email_report" and "日报" in it.title
-        for it in existing
-    )
-    has_weekly = any(
-        it.source_module == "email_report" and "周报" in it.title
-        for it in existing
-    )
-
-    tz = getattr(config, "agents", None)
-    tz = getattr(tz, "defaults", None) if tz else None
-    tz = getattr(tz, "timezone", "UTC") if tz else "UTC"
-
-    now = datetime.now()
-
-    if not has_daily:
-        # 每天早上 8:00
-        daily_time = now.replace(hour=8, minute=0, second=0, microsecond=0)
-        if daily_time <= now:
-            daily_time += timedelta(days=1)
-        daily_ms = int(daily_time.timestamp() * 1000)
-
-        daily_item = ScheduleItem(
-            id=create_schedule_item_id(),
-            title="邮件日报",
-            start_at_ms=daily_ms,
-            recurrence="daily",
-            tz=tz,
-            kind="ai_task",
-            ai_message="请使用 email_report 工具生成昨天的邮件日报，并将结果展示给用户。",
-            ai_deliver=True,
-            source_module="email_report",
-            color="blue",
-        )
-        await schedule_service.add_item(daily_item)
-        logger.info("Created daily email report schedule")
-
-    if not has_weekly:
-        # 每周一早上 9:00
-        days_until_monday = (7 - now.weekday()) % 7
-        if days_until_monday == 0 and now.hour >= 9:
-            days_until_monday = 7
-        monday = now + timedelta(days=days_until_monday)
-        monday_time = monday.replace(hour=9, minute=0, second=0, microsecond=0)
-        weekly_ms = int(monday_time.timestamp() * 1000)
-
-        weekly_item = ScheduleItem(
-            id=create_schedule_item_id(),
-            title="邮件周报",
-            start_at_ms=weekly_ms,
-            recurrence="weekly",
-            tz=tz,
-            kind="ai_task",
-            ai_message="请使用 email_report 工具生成本周的邮件周报，并将结果展示给用户。",
-            ai_deliver=True,
-            source_module="email_report",
-            color="blue",
-        )
-        await schedule_service.add_item(weekly_item)
-        logger.info("Created weekly email report schedule")
 
 
 @app.command()
@@ -801,6 +724,7 @@ def _run_gateway(
     from mona.heartbeat.service import HeartbeatService
     from mona.providers.factory import build_provider_snapshot, load_provider_snapshot
     from mona.providers.image_generation import image_gen_provider_configs
+    from mona.providers.video_generation import video_gen_provider_configs
     from mona.session.manager import SessionManager
 
     port = port if port is not None else config.gateway.port
@@ -862,6 +786,7 @@ def _run_gateway(
         schedule_service=schedule_service,
         session_manager=session_manager,
         image_generation_provider_configs=image_gen_provider_configs(config),
+        video_generation_provider_configs=video_gen_provider_configs(config),
         provider_snapshot_loader=load_provider_snapshot,
         runtime_model_publisher=lambda model, preset: publish_runtime_model_update(
             bus,
@@ -927,6 +852,17 @@ def _run_gateway(
                 logger.info("Dream cron job completed")
             except Exception:
                 logger.exception("Dream cron job failed")
+            return None
+
+        # Distillation jobs — run directly without agent loop
+        if job.payload.kind == "system_event" and job.payload.message.startswith("distill"):
+            from mona.distill.service import DistillService
+
+            svc = DistillService()
+            try:
+                await svc.handle_system_event(job.payload.message)
+            except Exception:
+                logger.exception("Distill cron job '{}' failed", job.name)
             return None
 
         from mona.utils.evaluator import evaluate_response
@@ -1115,7 +1051,6 @@ def _run_gateway(
         async def on_startup(_app):
             await agent._connect_mcp()
             await schedule_service.start()
-            await _ensure_email_report_schedules(schedule_service, config)
 
         async def on_cleanup(_app):
             schedule_service.stop()
@@ -1149,6 +1084,11 @@ def _run_gateway(
         payload=CronPayload(kind="system_event"),
     ))
     console.print(f"[green]✓[/green] Dream: {dream_cfg.describe_schedule()}")
+
+    # Register distillation system jobs (weekly, Sunday 03:00 local time)
+    from mona.distill.service import register_distill_jobs
+    register_distill_jobs(cron, timezone=config.agents.defaults.timezone or "Asia/Shanghai")
+    console.print("[green]✓[/green] Distillation: weekly (Sunday 03:00)")
 
     async def _open_browser_when_ready() -> None:
         """Wait for the gateway to bind, then point the user's browser at the webui."""
@@ -1228,6 +1168,7 @@ def agent(
     from mona.bus.queue import MessageBus
     from mona.cron.service import CronService
     from mona.providers.image_generation import image_gen_provider_configs
+    from mona.providers.video_generation import video_gen_provider_configs
 
     config = _load_runtime_config(config, workspace)
     sync_workspace_templates(config.workspace_path)
@@ -1252,6 +1193,7 @@ def agent(
             config, bus,
             cron_service=cron,
             image_generation_provider_configs=image_gen_provider_configs(config),
+            video_generation_provider_configs=video_gen_provider_configs(config),
         )
     except ValueError as exc:
         console.print(f"[red]Error: {exc}[/red]")

@@ -5,12 +5,10 @@ import {
   Reply,
   ReplyAll,
   Forward,
-  Trash2,
-  Sparkles,
   Loader2,
-  WifiOff,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { AgentLogo } from "@/components/AgentLogo";
 import { cn } from "@/lib/utils";
 import { getGatewayHttpBase } from "@/lib/api";
 import { useEmailStore } from "./store/emailStore";
@@ -40,15 +38,14 @@ export function EmailClientView() {
   const syncMail = useEmailStore((s) => s.syncMail);
   const syncAllAccounts = useEmailStore((s) => s.syncAllAccounts);
   const isUnifiedInbox = useEmailStore((s) => s.isUnifiedInbox);
-  const deleteMessage = useEmailStore((s) => s.deleteMessage);
   const syncing = useEmailStore((s) => s.syncing);
   const backgroundSyncing = useEmailStore((s) => s.backgroundSyncing);
   const isOnline = useEmailStore((s) => s.isOnline);
   const checkGatewayHealth = useEmailStore((s) => s.checkGatewayHealth);
   const setStoreGatewayUrl = useEmailStore((s) => s.setGatewayUrl);
+  const loadContacts = useEmailStore((s) => s.loadContacts);
   const [gatewayUrl, setGatewayUrl] = useState("");
   const [agentPanelVisible, setAgentPanelVisible] = useState(false);
-  const [deleting, setDeleting] = useState(false);
   const [view, setView] = useState<"mail" | "contacts">("mail");
   const [listWidth, setListWidth] = useState(() => {
     try {
@@ -63,11 +60,12 @@ export function EmailClientView() {
 
   useEffect(() => {
     void loadAccounts();
+    void loadContacts();
     void getGatewayHttpBase().then((url) => {
       setGatewayUrl(url);
       setStoreGatewayUrl(url);
     });
-  }, [loadAccounts]);
+  }, [loadAccounts, loadContacts]);
 
   // 离线模式：定期检测 gateway 健康状态（每 30 秒）
   useEffect(() => {
@@ -153,16 +151,6 @@ export function EmailClientView() {
     void openComposeWindow({ mode: "forward", accountId: account.id, baseMessage: message });
   };
 
-  const handleDelete = async () => {
-    if (!selectedMessage || !gatewayUrl) return;
-    setDeleting(true);
-    try {
-      await deleteMessage(gatewayUrl, selectedMessage);
-    } finally {
-      setDeleting(false);
-    }
-  };
-
   // 键盘快捷键
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -198,12 +186,6 @@ export function EmailClientView() {
       if ((e.ctrlKey || e.metaKey) && e.key === "f") {
         e.preventDefault();
         if (selectedMessage) openForward(selectedMessage);
-        return;
-      }
-      // Delete: 删除选中邮件
-      if (e.key === "Delete") {
-        e.preventDefault();
-        void handleDelete();
         return;
       }
       // J / ↓: 下一封
@@ -293,21 +275,7 @@ export function EmailClientView() {
           disabled={!hasSelection}
           onClick={() => selectedMessage && openForward(selectedMessage)}
         />
-        <ToolbarDivider />
-        <ToolbarButton
-          icon={Trash2}
-          label="删除"
-          disabled={!hasSelection || deleting}
-          onClick={handleDelete}
-          loading={deleting}
-        />
         <div className="flex-1" />
-        {!isOnline && (
-          <div className="flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] text-amber-600 dark:text-amber-400">
-            <WifiOff className="h-3 w-3" />
-            离线模式
-          </div>
-        )}
         <Button
           type="button"
           variant="ghost"
@@ -320,7 +288,7 @@ export function EmailClientView() {
           aria-label={agentPanelVisible ? "隐藏 AI 面板" : "显示 AI 面板"}
           title={agentPanelVisible ? "隐藏 AI 面板" : "显示 AI 面板"}
         >
-          <Sparkles className={cn("h-3.5 w-3.5", !agentPanelVisible && "opacity-60")} />
+          <AgentLogo state="idle" className="h-5 w-5" />
         </Button>
       </div>
 

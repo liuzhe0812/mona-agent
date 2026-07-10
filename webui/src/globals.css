@@ -343,46 +343,34 @@
 /* TaskItem: label (checkbox) and content div must stay on one line.
    The <li> gets display:flex via TipTap HTMLAttributes; here we ensure
    the children behave as proper flex items. */
+/* DEBUG: temporary red outline to verify CSS reaches the app */
 .notes-prosemirror li[data-type="taskItem"] {
   display: flex !important;
-  flex-direction: row !important;
-  flex-wrap: nowrap !important;
   align-items: flex-start !important;
-  gap: 0.4rem !important;
-  margin-bottom: 0.2rem !important;
+  gap: 0.5rem !important;
+  margin-bottom: 0.25rem !important;
+  outline: 2px solid red !important;
 }
 .notes-prosemirror li[data-type="taskItem"] > label {
   flex: 0 0 auto !important;
-  flex-shrink: 0 !important;
+  margin-right: 0.5rem !important;
   user-select: none !important;
-  /* Fixed height matching the first text line (leading-6 = 1.5rem = 24px).
-     The checkbox is absolutely centered within this box. */
-  position: relative !important;
-  width: 0.95rem !important;
+  display: flex !important;
+  align-items: center !important;
   height: 1.5rem !important;
-  line-height: 1 !important;
-  display: block !important;
 }
 .notes-prosemirror li[data-type="taskItem"] > label input[type="checkbox"] {
-  position: absolute !important;
-  top: 50% !important;
-  left: 0 !important;
-  transform: translateY(-50%) !important;
-  margin: 0 !important;
-  width: 0.95rem !important;
-  height: 0.95rem !important;
   cursor: pointer !important;
+  margin: 0 !important;
   accent-color: hsl(var(--primary)) !important;
 }
 .notes-prosemirror li[data-type="taskItem"] > label span {
   display: none !important;
 }
 .notes-prosemirror li[data-type="taskItem"] > div {
-  flex: 1 1 0% !important;
+  flex: 1 1 auto !important;
   min-width: 0 !important;
 }
-/* Remove paragraph margins inside task items — they push text down and
-   break checkbox alignment. */
 .notes-prosemirror li[data-type="taskItem"] p {
   margin-top: 0 !important;
   margin-bottom: 0 !important;

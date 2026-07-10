@@ -78,6 +78,11 @@ impl GatewayManager {
             cmd.env("PYTHONUNBUFFERED", "1");
             cmd.env("PYTHONUTF8", "1");
 
+            // 把 Rust 侧 app_data_dir 传给 Python，用于定位 email.sqlite3 等
+            // Rust 写在 app_data_dir()、Python 默认在 ~/.mona 找，路径不一致会导致
+            // email_intel.db 抛 "邮件数据库不存在"。
+            cmd.env("MONA_APP_DATA_DIR", settings::app_data_dir());
+
             // Set PYTHONPATH if source tree exists.
             // Dev exe lives at <repo>/src-tauri/target/debug/mona.exe, so we
             // walk up from exe_dir until we find a sibling `mona/` package dir.
@@ -122,6 +127,9 @@ impl GatewayManager {
             cmd.env("PYTHONIOENCODING", "utf-8");
             cmd.env("PYTHONNOUSERSITE", "1");
             cmd.env("NO_COLOR", "1");
+
+            // 同 dev 模式：把 Rust 侧 app_data_dir 传给 Python
+            cmd.env("MONA_APP_DATA_DIR", settings::app_data_dir());
         }
 
         #[cfg(windows)]

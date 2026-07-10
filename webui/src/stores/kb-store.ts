@@ -18,42 +18,6 @@ import type {
 } from "@/lib/kb-api"
 import { triggerEmbed, getEmbedStatus } from "@/lib/kb-api"
 
-export interface EmbedDraft {
-  enabled: boolean
-  endpoint: string
-  apiKey: string
-  model: string
-  outputDimensionality: string
-  maxChunkChars: string
-  overlapChunkChars: string
-}
-
-const DEFAULT_EMBED_DRAFT: EmbedDraft = {
-  enabled: false,
-  endpoint: "",
-  apiKey: "",
-  model: "",
-  outputDimensionality: "",
-  maxChunkChars: "1000",
-  overlapChunkChars: "200",
-}
-
-const EMBED_DRAFT_STORAGE_KEY = "mona-kb-embed-draft"
-
-function loadPersistedEmbedDraft(): EmbedDraft {
-  try {
-    const stored = localStorage.getItem(EMBED_DRAFT_STORAGE_KEY)
-    if (stored) return { ...DEFAULT_EMBED_DRAFT, ...JSON.parse(stored) }
-  } catch { /* ignore */ }
-  return { ...DEFAULT_EMBED_DRAFT }
-}
-
-function persistEmbedDraft(draft: EmbedDraft) {
-  try {
-    localStorage.setItem(EMBED_DRAFT_STORAGE_KEY, JSON.stringify(draft))
-  } catch { /* ignore */ }
-}
-
 interface KbState {
   // Projects
   projects: KbProject[]
@@ -88,7 +52,6 @@ interface KbState {
   // Embedding
   embedStatus: EmbedStatus | null
   embedding: boolean
-  embedDraft: EmbedDraft
 
   // Actions
   loadProjects: () => Promise<void>
@@ -109,8 +72,7 @@ interface KbState {
   dismissGroup: (group: DuplicateGroup) => void
   persistReviews: () => Promise<void>
   loadEmbedStatus: () => Promise<void>
-  triggerEmbed: (config: any) => Promise<{ indexed: number; failed: number } | undefined>
-  setEmbedDraft: (draft: EmbedDraft) => void
+  triggerEmbed: () => Promise<{ indexed: number; failed: number } | undefined>
 }
 
 export const useKbStore = create<KbState>()((set, get) => ({
@@ -130,7 +92,6 @@ export const useKbStore = create<KbState>()((set, get) => ({
   dedupGroups: [],
   embedStatus: null,
   embedding: false,
-  embedDraft: loadPersistedEmbedDraft(),
 
   loadProjects: async () => {
     set({ loading: true })
@@ -261,24 +222,9 @@ export const useKbStore = create<KbState>()((set, get) => ({
       ])
       set({ wikiPages, graphData })
 
-      // Auto-embed after ingest if embedding is configured
+      // Auto-embed after ingest using global embedding config
       try {
-        const draft = get().embedDraft
-        if (draft.enabled && draft.endpoint && draft.model) {
-          await get().triggerEmbed({
-            enabled: true,
-            endpoint: draft.endpoint,
-            apiKey: draft.apiKey || "",
-            model: draft.model,
-            outputDimensionality: draft.outputDimensionality
-              ? Number(draft.outputDimensionality)
-              : undefined,
-            maxChunkChars: draft.maxChunkChars ? Number(draft.maxChunkChars) : undefined,
-            overlapChunkChars: draft.overlapChunkChars
-              ? Number(draft.overlapChunkChars)
-              : undefined,
-          })
-        }
+        await get().triggerEmbed()
       } catch (err) {
         console.warn("[kb] Auto-embed after ingest failed:", err)
       }
@@ -443,12 +389,12 @@ export const useKbStore = create<KbState>()((set, get) => ({
     }
   },
 
-  triggerEmbed: async (config: any) => {
+  triggerEmbed: async () => {
     const project = get().currentProject
     if (!project) return
     set({ embedding: true })
     try {
-      const result = await triggerEmbed(project.id, config)
+      const result = await triggerEmbed(project.id)
       const status = await getEmbedStatus(project.id)
       set({ embedStatus: status, embedding: false })
       return result
@@ -456,10 +402,5 @@ export const useKbStore = create<KbState>()((set, get) => ({
       set({ embedding: false })
       throw err
     }
-  },
-
-  setEmbedDraft: (draft: EmbedDraft) => {
-    persistEmbedDraft(draft)
-    set({ embedDraft: draft })
   },
 }))

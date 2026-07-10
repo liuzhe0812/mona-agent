@@ -377,6 +377,30 @@
           "16_9": "寬螢幕 16:9"
         }
       },
+      "videoMode": {
+        "label": "影片生成",
+        "toggle": "切換影片生成模式",
+        "placeholder": "描述要生成的影片…",
+        "aspectAria": "影片畫幅",
+        "aspectLabel": "影片畫幅",
+        "aspect": {
+          "auto": "自動",
+          "1_1": "方形 1:1",
+          "3_4": "直式 3:4",
+          "9_16": "故事版 9:16",
+          "4_3": "橫式 4:3",
+          "16_9": "寬螢幕 16:9"
+        },
+        "durationAria": "影片時長",
+        "durationLabel": "影片時長",
+        "duration": {
+          "auto": "自動",
+          "s": "{{seconds}}秒"
+        },
+        "refUrlPlaceholder": "參考圖片 URL（可選，用於圖生影片）",
+        "refUrlAria": "參考圖片 URL",
+        "refUrlClear": "清除參考圖片 URL"
+      },
       "workspace": {
         "placeholder": "選擇資料夾（可選）",
         "clear": "清除資料夾選擇"

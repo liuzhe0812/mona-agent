@@ -25,6 +25,7 @@ import {
   browserUpdateBookmark,
   type Bookmark,
 } from "@/lib/browser-ipc";
+import { cn } from "@/lib/utils";
 
 interface BookmarkBarProps {
   onNavigate: (url: string) => void;
@@ -50,6 +51,7 @@ export function BookmarkBar({ onNavigate, visible, onDropdownOpenChange }: Bookm
   const [editFolderName, setEditFolderName] = useState("");
   const [editTitle, setEditTitle] = useState("");
   const [editFolder, setEditFolder] = useState("");
+  const [rootDragOver, setRootDragOver] = useState(false);
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout>>();
 
   const refresh = useCallback(() => {
@@ -112,6 +114,21 @@ export function BookmarkBar({ onNavigate, visible, onDropdownOpenChange }: Bookm
     [bookmarks, refresh],
   );
 
+  const handleMoveBookmark = useCallback(
+    async (url: string, targetFolder: string) => {
+      const b = bookmarks.find((x) => x.url === url);
+      if (!b || b.folder === targetFolder) return;
+      try {
+        await browserUpdateBookmark(url, undefined, targetFolder);
+        refresh();
+        window.dispatchEvent(new Event("bookmark-changed"));
+      } catch (e) {
+        console.error("[BookmarkBar] move bookmark failed:", e);
+      }
+    },
+    [bookmarks, refresh],
+  );
+
   const handleEdit = useCallback((bookmark: Bookmark) => {
     setEditTarget(bookmark);
     setEditTitle(bookmark.title);
@@ -152,7 +169,30 @@ export function BookmarkBar({ onNavigate, visible, onDropdownOpenChange }: Bookm
 
   return (
     <>
-      <div className="flex h-6 items-center gap-0.5 overflow-x-auto border-b border-border/40 bg-muted/30 px-2 scrollbar-none">
+      <div
+        className={cn(
+          "flex h-6 items-center gap-0.5 overflow-x-auto border-b border-border/40 bg-muted/30 px-2 scrollbar-none transition-colors",
+          rootDragOver && "ring-1 ring-inset ring-primary/50 bg-accent/40",
+        )}
+        onDragOver={(e) => {
+          if (e.dataTransfer.types.includes("text/bookmark-url")) {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = "move";
+            if (!rootDragOver) setRootDragOver(true);
+          }
+        }}
+        onDragLeave={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+            setRootDragOver(false);
+          }
+        }}
+        onDrop={(e) => {
+          e.preventDefault();
+          setRootDragOver(false);
+          const url = e.dataTransfer.getData("text/bookmark-url");
+          if (url) handleMoveBookmark(url, "");
+        }}
+      >
         {rootItems.map((b) => (
           <BookmarkItem
             key={b.url}
@@ -161,6 +201,8 @@ export function BookmarkBar({ onNavigate, visible, onDropdownOpenChange }: Bookm
             onDelete={handleDelete}
             onEdit={handleEdit}
             folderNames={allFolderNames}
+            onDropdownOpenChange={onDropdownOpenChange}
+            onMoveBookmark={handleMoveBookmark}
           />
         ))}
         {folderGroups.map((g) => (
@@ -178,6 +220,7 @@ export function BookmarkBar({ onNavigate, visible, onDropdownOpenChange }: Bookm
             }}
             folderNames={allFolderNames}
             onDropdownOpenChange={onDropdownOpenChange}
+            onMoveBookmark={handleMoveBookmark}
           />
         ))}
         {bookmarks.length === 0 && (
@@ -259,19 +302,28 @@ function BookmarkItem({
   onDelete,
   onEdit,
   folderNames,
+  onDropdownOpenChange,
+  onMoveBookmark: _onMoveBookmark,
 }: {
   bookmark: Bookmark;
   onNavigate: (url: string) => void;
   onDelete: (url: string) => void;
   onEdit: (b: Bookmark) => void;
   folderNames: string[];
+  onDropdownOpenChange?: (open: boolean) => void;
+  onMoveBookmark: (url: string, targetFolder: string) => void;
 }) {
   return (
-    <ContextMenu>
+    <ContextMenu onOpenChange={onDropdownOpenChange}>
       <ContextMenuTrigger asChild>
         <button
           type="button"
-          className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[11px] hover:bg-accent transition-colors max-w-[140px]"
+          draggable
+          onDragStart={(e) => {
+            e.dataTransfer.setData("text/bookmark-url", bookmark.url);
+            e.dataTransfer.effectAllowed = "move";
+          }}
+          className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[11px] hover:bg-accent transition-colors max-w-[140px] cursor-grab active:cursor-grabbing"
           onClick={() => onNavigate(bookmark.url)}
           title={bookmark.url}
         >
@@ -302,6 +354,7 @@ function FolderItem({
   onRenameFolder,
   folderNames,
   onDropdownOpenChange,
+  onMoveBookmark,
 }: {
   folder: string;
   items: Bookmark[];
@@ -312,10 +365,13 @@ function FolderItem({
   onRenameFolder: (name: string) => void;
   folderNames: string[];
   onDropdownOpenChange?: (open: boolean) => void;
+  onMoveBookmark: (url: string, targetFolder: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const [dropdownPos, setDropdownPos] = useState({ left: 0, top: 0 });
+  const contextMenuOpenRef = useRef(false);
+  const [dragOver, setDragOver] = useState(false);
 
   const handleToggle = () => {
     const nextOpen = !open;
@@ -324,17 +380,43 @@ function FolderItem({
       setDropdownPos({ left: rect.left, top: rect.bottom + 2 });
     }
     setOpen(nextOpen);
-    onDropdownOpenChange?.(nextOpen);
+    onDropdownOpenChange?.(nextOpen || contextMenuOpenRef.current);
   };
 
   return (
-    <ContextMenu>
+    <ContextMenu onOpenChange={(ctxOpen) => {
+      contextMenuOpenRef.current = ctxOpen;
+      onDropdownOpenChange?.(ctxOpen || open);
+    }}>
       <ContextMenuTrigger asChild>
         <button
           ref={triggerRef}
           type="button"
-          className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[11px] hover:bg-accent transition-colors"
+          className={cn(
+            "flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[11px] transition-colors",
+            dragOver
+              ? "bg-accent ring-1 ring-primary/50"
+              : "hover:bg-accent",
+          )}
           onClick={handleToggle}
+          onDragOver={(e) => {
+            if (e.dataTransfer.types.includes("text/bookmark-url")) {
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "move";
+              if (!dragOver) setDragOver(true);
+            }
+          }}
+          onDragLeave={(e) => {
+            if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+              setDragOver(false);
+            }
+          }}
+          onDrop={(e) => {
+            e.preventDefault();
+            setDragOver(false);
+            const url = e.dataTransfer.getData("text/bookmark-url");
+            if (url) onMoveBookmark(url, folder);
+          }}
         >
           <Folder className="h-3 w-3 shrink-0 text-muted-foreground" />
           <span className="truncate">{folder}</span>
@@ -352,11 +434,11 @@ function FolderItem({
             className="fixed inset-0 z-[9998]"
             onClick={() => {
               setOpen(false);
-              onDropdownOpenChange?.(false);
+              onDropdownOpenChange?.(false || contextMenuOpenRef.current);
             }}
             onKeyDown={() => {
               setOpen(false);
-              onDropdownOpenChange?.(false);
+              onDropdownOpenChange?.(false || contextMenuOpenRef.current);
             }}
           />
           {/* Dropdown menu */}
@@ -414,7 +496,12 @@ function DropdownBookmarkItem({
       <ContextMenuTrigger asChild>
         <button
           type="button"
-          className="flex w-full items-center gap-1.5 px-2.5 py-1 text-[11px] hover:bg-accent transition-colors text-left"
+          draggable
+          onDragStart={(e) => {
+            e.dataTransfer.setData("text/bookmark-url", bookmark.url);
+            e.dataTransfer.effectAllowed = "move";
+          }}
+          className="flex w-full items-center gap-1.5 px-2.5 py-1 text-[11px] hover:bg-accent transition-colors text-left cursor-grab active:cursor-grabbing"
           onClick={() => onNavigate(bookmark.url)}
           title={bookmark.url}
         >

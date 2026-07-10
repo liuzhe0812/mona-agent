@@ -437,22 +437,10 @@ async def handle_kb_search(req: web.Request) -> web.Response:
 
     count = int(req.query.get("count", "10"))
 
-    from mona.kb.embedding import EmbeddingConfig
+    from mona.kb.embedding import load_global_embedding_config
     from mona.kb.search import search_wiki_hybrid
 
-    emb_enabled = req.query.get("embeddingEnabled", "").lower() == "true"
-    emb_endpoint = req.query.get("embeddingEndpoint", "")
-    emb_api_key = req.query.get("embeddingApiKey", "")
-    emb_model = req.query.get("embeddingModel", "")
-
-    cfg = None
-    if emb_enabled and emb_endpoint and emb_model:
-        cfg = EmbeddingConfig(
-            enabled=True,
-            endpoint=emb_endpoint,
-            api_key=emb_api_key,
-            model=emb_model,
-        )
+    cfg = load_global_embedding_config()
 
     result = await search_wiki_hybrid(project_path, query, cfg, count)
     return web.json_response(result)
@@ -502,22 +490,15 @@ async def handle_kb_embed(req: web.Request) -> web.Response:
     try:
         body = await req.json()
     except Exception:
-        return web.json_response({"error": "Invalid JSON body"}, status=400)
+        body = {}
 
     from mona.kb import vectorstore
     from mona.kb.chunker import ChunkingOptions, chunk_markdown
-    from mona.kb.embedding import EmbeddingConfig, fetch_embedding
+    from mona.kb.embedding import fetch_embedding, load_global_embedding_config
 
-    cfg = EmbeddingConfig(
-        enabled=body.get("enabled", False),
-        endpoint=body.get("endpoint", ""),
-        api_key=body.get("apiKey", ""),
-        model=body.get("model", ""),
-        output_dimensionality=body.get("outputDimensionality"),
-        extra_headers=body.get("extraHeaders", {}),
-    )
+    cfg = load_global_embedding_config()
 
-    if not cfg.enabled or not cfg.endpoint or not cfg.model:
+    if cfg is None or not cfg.enabled or not cfg.endpoint or not cfg.model:
         return web.json_response({"error": "Embedding not configured"}, status=400)
 
     chunk_opts = ChunkingOptions(

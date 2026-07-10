@@ -45,7 +45,7 @@ pub struct LinkEdge {
 pub struct LinkGraph {
     pub nodes: Vec<LinkNode>,
     pub edges: Vec<LinkEdge>,
-    pub last_scan_at: String,
+    pub last_scan_at: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -95,10 +95,10 @@ struct CachedGraph {
     version: u32,
     nodes: Vec<LinkNode>,
     edges: Vec<LinkEdge>,
-    last_scan_at: String,
+    last_scan_at: i64,
 }
 
-const CACHE_VERSION: u32 = 1;
+const CACHE_VERSION: u32 = 2;
 
 fn links_cache_path(vault: &Path) -> PathBuf {
     vault.join(".mona").join("links.json")
@@ -127,21 +127,8 @@ fn scan_vault_links(vault: &Path) -> Vec<ScannedNote> {
                 .unwrap_or(path)
                 .to_string_lossy()
                 .replace('\\', "/");
-            // Re-read body (parse_note_file doesn't expose it directly).
-            let body = fs::read_to_string(path)
-                .map(|c| {
-                    // Strip frontmatter if present.
-                    if c.starts_with("---\n") || c.starts_with("---\r\n") {
-                        if let Some(end) = c[4..].find("\n---\n").or_else(|| c[4..].find("\r\n---\r\n")) {
-                            c[4 + end + 5..].to_string()
-                        } else {
-                            c
-                        }
-                    } else {
-                        c
-                    }
-                })
-                .unwrap_or_default();
+            // parse_note_file already returns body without frontmatter.
+            let body = note.content_markdown.clone();
             out.push(ScannedNote {
                 note,
                 relative_path: relative,
@@ -205,46 +192,45 @@ struct WikiLinkRef {
 /// Skips fenced code blocks (``` ... ```).
 fn extract_wiki_links(content: &str) -> Vec<WikiLinkRef> {
     let mut links = Vec::new();
-    let bytes = content.as_bytes();
-    let mut i = 0;
     let mut in_fence = false;
+    let mut byte_offset = 0usize;
 
-    while i < bytes.len() {
+    // Use split_inclusive to preserve exact byte lengths (handles \r\n on Windows).
+    for line_with_sep in content.split_inclusive('\n') {
+        let line_with_sep_len = line_with_sep.len();
+        let line = line_with_sep.trim_end_matches(['\n', '\r']);
+
         // Detect fenced code block toggles at line start.
-        if i == 0 || bytes[i - 1] == b'\n' {
-            if content[i..].starts_with("```") {
-                in_fence = !in_fence;
-                // Skip the rest of the fence line.
-                while i < bytes.len() && bytes[i] != b'\n' {
-                    i += 1;
-                }
-                continue;
-            }
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("```") {
+            in_fence = !in_fence;
+            byte_offset += line_with_sep_len;
+            continue;
         }
         if in_fence {
-            i += 1;
+            byte_offset += line_with_sep_len;
             continue;
         }
 
-        // Match `![[` (embed) or `[[` (link).
-        let (is_embed, inner_start) = if content[i..].starts_with("![[") {
-            (true, i + 3)
-        } else if content[i..].starts_with("[[") {
-            (false, i + 2)
-        } else {
-            i += 1;
-            continue;
-        };
+        let mut rest = line;
+        let mut rest_offset = byte_offset;
+        while let Some(open_pos) = rest.find("[[") {
+            let before = &rest[..open_pos];
+            let is_embed = before.ends_with('!');
+            let marker_len = if is_embed { 3 } else { 2 };
+            let marker_start = rest_offset + open_pos + (if is_embed { 1 } else { 0 });
+            let inner = &rest[open_pos + (if is_embed { 1 } else { 0 }) + 2..];
 
-        // Find closing `]]`.
-        let close = content[inner_start..].find("]]");
-        if let Some(rel_close) = close {
-            let raw = &content[inner_start..inner_start + rel_close];
+            let close_pos = match inner.find("]]") {
+                Some(p) => p,
+                None => break,
+            };
+
+            let raw = &inner[..close_pos];
             let (target_with_alias, anchor) = match raw.find('#') {
                 Some(pos) => (&raw[..pos], Some(raw[pos + 1..].to_string())),
                 None => (raw, None),
             };
-            // Strip alias `|display`.
             let target = match target_with_alias.find('|') {
                 Some(pos) => target_with_alias[..pos].trim().to_string(),
                 None => target_with_alias.trim().to_string(),
@@ -254,14 +240,14 @@ fn extract_wiki_links(content: &str) -> Vec<WikiLinkRef> {
                     target,
                     anchor,
                     is_embed,
-                    start_byte: i,
+                    start_byte: marker_start,
                 });
             }
-            i = inner_start + rel_close + 2;
-        } else {
-            // No closing `]]`; advance past the opening marker to avoid infinite loop.
-            i = inner_start + 1;
+            let consumed = open_pos + marker_len + close_pos + 2;
+            rest = &rest[consumed..];
+            rest_offset += consumed;
         }
+        byte_offset += line_with_sep_len;
     }
 
     links
@@ -269,7 +255,8 @@ fn extract_wiki_links(content: &str) -> Vec<WikiLinkRef> {
 
 /// Compute 1-based line number for a byte offset in `content`.
 fn line_number(content: &str, byte_offset: usize) -> usize {
-    let prefix = &content[..byte_offset.min(content.len())];
+    let byte_offset = floor_char_boundary(content, byte_offset.min(content.len()));
+    let prefix = &content[..byte_offset];
     prefix.matches('\n').count() + 1
 }
 
@@ -337,6 +324,13 @@ fn build_title_index(scanned: &[ScannedNote]) -> HashMap<String, String> {
 // Build graph
 // ---------------------------------------------------------------------------
 
+fn now_unix() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
 fn build_graph(vault: &Path) -> LinkGraph {
     let t0 = std::time::Instant::now();
     let scanned = scan_vault_links(vault);
@@ -372,7 +366,7 @@ fn build_graph(vault: &Path) -> LinkGraph {
     LinkGraph {
         nodes,
         edges,
-        last_scan_at: chrono::Utc::now().to_rfc3339(),
+        last_scan_at: now_unix(),
     }
 }
 
@@ -403,22 +397,81 @@ fn save_cached_graph(vault: &Path, graph: &LinkGraph) -> Result<(), String> {
         edges: graph.edges.clone(),
         last_scan_at: graph.last_scan_at.clone(),
     };
-    let json = serde_json::to_string_pretty(&cached)
+    let json = serde_json::to_string(&cached)
         .map_err(|e| format!("Failed to serialize links.json: {}", e))?;
     fs::write(links_cache_path(vault), json)
         .map_err(|e| format!("Failed to write links.json: {}", e))
 }
 
-/// Get the current graph, rebuilding from disk if no cache exists.
+fn file_mtime(path: &Path) -> Option<i64> {
+    fs::metadata(path)
+        .ok()?
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|d| d.as_secs() as i64)
+}
+
+fn vault_mtime_newer_than(vault: &Path, threshold: i64) -> bool {
+    let mut check = |path: &Path| {
+        if let Some(mtime) = file_mtime(path) {
+            if mtime > threshold {
+                return Some(true);
+            }
+        }
+        None
+    };
+
+    if let Ok(entries) = fs::read_dir(vault) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.extension().and_then(|e| e.to_str()) == Some("md") {
+                if check(&p).is_some() {
+                    return true;
+                }
+            }
+            if !p.is_dir() {
+                continue;
+            }
+            let name = match p.file_name().and_then(|n| n.to_str()) {
+                Some(n) => n,
+                None => continue,
+            };
+            if !notes::is_notebook_folder(name) {
+                continue;
+            }
+            if let Ok(md_entries) = fs::read_dir(&p) {
+                for md_entry in md_entries.flatten() {
+                    let md_path = md_entry.path();
+                    if md_path.extension().and_then(|e| e.to_str()) == Some("md") {
+                        if check(&md_path).is_some() {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Get the current graph, rebuilding from disk if no cache exists or cache is stale.
 fn current_graph() -> Result<LinkGraph, String> {
     let start = std::time::Instant::now();
     let vault = notes::read_vault_path().ok_or_else(|| "No vault configured".to_string())?;
     log::info!("[graph] current_graph start, vault={:?}", vault);
     if let Some(cached) = load_cached_graph(&vault) {
-        log::info!("[graph] loaded from cache, {} nodes, elapsed {:?}", cached.nodes.len(), start.elapsed());
-        return Ok(cached);
+        let stale = vault_mtime_newer_than(&vault, cached.last_scan_at);
+        log::info!("[graph] cache stale={} threshold={}", stale, cached.last_scan_at);
+        if !stale {
+            log::info!("[graph] loaded from cache, {} nodes, elapsed {:?}", cached.nodes.len(), start.elapsed());
+            return Ok(cached);
+        }
+        log::info!("[graph] cache stale, rebuilding...");
+    } else {
+        log::info!("[graph] no cache, building...");
     }
-    log::info!("[graph] no cache, building...");
     let graph = build_graph(&vault);
     log::info!("[graph] built {} nodes {} edges, elapsed {:?}", graph.nodes.len(), graph.edges.len(), start.elapsed());
     save_cached_graph(&vault, &graph)?;
@@ -445,14 +498,16 @@ fn find_plain_mentions(
         if sn.note.id == exclude_id {
             continue;
         }
+        // to_lowercase may change byte length for some Unicode chars, so all
+        // byte-offset operations below must use body_lc, never sn.body.
         let body_lc = sn.body.to_lowercase();
         let mut from = 0;
         while let Some(pos) = body_lc[from..].find(&q_lc) {
             let abs_pos = from + pos;
             // Skip if inside `[[...]]` or `![[...]]`.
-            if !is_inside_wiki_link(&sn.body, abs_pos) {
-                let line = line_number(&sn.body, abs_pos);
-                let snippet = snippet_around(&sn.body, abs_pos, q.len());
+            if !is_inside_wiki_link(&body_lc, abs_pos) {
+                let line = line_number(&body_lc, abs_pos);
+                let snippet = snippet_around(&body_lc, abs_pos, q_lc.len());
                 out.push(MentionItem {
                     note_id: sn.note.id.clone(),
                     title: sn.note.title.clone(),
@@ -460,7 +515,6 @@ fn find_plain_mentions(
                     snippet,
                     line,
                 });
-                // Avoid duplicate hits at same position; advance past this match.
             }
             from = abs_pos + q_lc.len();
         }
@@ -471,26 +525,32 @@ fn find_plain_mentions(
 /// Return true if the byte at `offset` is inside a `[[...]]` or `![[...]]`
 /// region. Uses a simple forward scan from line start.
 fn is_inside_wiki_link(content: &str, offset: usize) -> bool {
+    let offset = floor_char_boundary(content, offset.min(content.len()));
     // Walk backwards to find the most recent unclosed `[[` on the same line.
     let line_start = content[..offset].rfind('\n').map(|p| p + 1).unwrap_or(0);
     let line_prefix = &content[line_start..offset];
     let mut depth = 0i32;
-    let mut i = 0;
-    let bytes = line_prefix.as_bytes();
-    while i < bytes.len() {
-        if line_prefix[i..].starts_with("![[") {
+    let mut rest = line_prefix;
+    while !rest.is_empty() {
+        if rest.starts_with("![[") {
             depth += 1;
-            i += 3;
-        } else if line_prefix[i..].starts_with("[[") {
+            rest = &rest[3..];
+        } else if rest.starts_with("[[") {
             depth += 1;
-            i += 2;
-        } else if line_prefix[i..].starts_with("]]") {
+            rest = &rest[2..];
+        } else if rest.starts_with("]]") {
             if depth > 0 {
                 depth -= 1;
             }
-            i += 2;
+            rest = &rest[2..];
         } else {
-            i += 1;
+            // Advance one character (not one byte) to stay on char boundary.
+            let step = rest
+                .char_indices()
+                .nth(1)
+                .map(|(i, _)| i)
+                .unwrap_or(rest.len());
+            rest = &rest[step..];
         }
     }
     depth > 0
@@ -617,66 +677,95 @@ fn next_char_boundary(s: &str, idx: usize) -> usize {
 
 #[tauri::command]
 pub async fn notes_links_get_graph() -> Result<LinkGraph, String> {
-    current_graph()
+    log::info!("[graph] notes_links_get_graph invoked");
+    let result = tauri::async_runtime::spawn_blocking(current_graph).await;
+    match result {
+        Ok(Ok(graph)) => {
+            log::info!("[graph] notes_links_get_graph success: {} nodes", graph.nodes.len());
+            Ok(graph)
+        }
+        Ok(Err(e)) => {
+            log::error!("[graph] notes_links_get_graph error: {}", e);
+            Err(e)
+        }
+        Err(e) => {
+            log::error!("[graph] notes_links_get_graph join error: {}", e);
+            Err(format!("Graph build task failed: {}", e))
+        }
+    }
 }
 
 #[tauri::command]
 pub async fn notes_links_get_backlinks(note_id: String) -> Result<Vec<BacklinkItem>, String> {
-    let vault = notes::read_vault_path().ok_or_else(|| "No vault configured".to_string())?;
-    let scanned = scan_vault_links(&vault);
-    let mut out = Vec::new();
-    for sn in &scanned {
-        if sn.note.id == note_id {
-            continue;
-        }
-        let refs = extract_wiki_links(&sn.body);
-        for r in refs {
-            // A backlink exists if this note links to `note_id`. We resolve by
-            // title/alias match against the target note.
-            let target_note = scanned.iter().find(|s| s.note.id == note_id);
-            if let Some(target) = target_note {
-                let is_match = r.target.eq_ignore_ascii_case(&target.note.title)
-                    || target
-                        .note
-                        .aliases
-                        .iter()
-                        .any(|a| a.eq_ignore_ascii_case(&r.target));
-                if is_match {
-                    let line = line_number(&sn.body, r.start_byte);
-                    let snippet = snippet_around(&sn.body, r.start_byte, r.target.len() + 4);
-                    out.push(BacklinkItem {
-                        note_id: sn.note.id.clone(),
-                        title: sn.note.title.clone(),
-                        path: sn.relative_path.clone(),
-                        snippet,
-                        line,
-                    });
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let vault = notes::read_vault_path().ok_or_else(|| "No vault configured".to_string())?;
+        let scanned = scan_vault_links(&vault);
+        let mut out = Vec::new();
+        for sn in &scanned {
+            if sn.note.id == note_id {
+                continue;
+            }
+            let refs = extract_wiki_links(&sn.body);
+            for r in refs {
+                // A backlink exists if this note links to `note_id`. We resolve by
+                // title/alias match against the target note.
+                let target_note = scanned.iter().find(|s| s.note.id == note_id);
+                if let Some(target) = target_note {
+                    let is_match = r.target.eq_ignore_ascii_case(&target.note.title)
+                        || target
+                            .note
+                            .aliases
+                            .iter()
+                            .any(|a| a.eq_ignore_ascii_case(&r.target));
+                    if is_match {
+                        let line = line_number(&sn.body, r.start_byte);
+                        let snippet = snippet_around(&sn.body, r.start_byte, r.target.len() + 4);
+                        out.push(BacklinkItem {
+                            note_id: sn.note.id.clone(),
+                            title: sn.note.title.clone(),
+                            path: sn.relative_path.clone(),
+                            snippet,
+                            line,
+                        });
+                    }
                 }
             }
         }
+        Ok(out)
+    })
+    .await;
+    match result {
+        Ok(inner) => inner,
+        Err(e) => Err(format!("Backlinks scan task failed: {}", e)),
     }
-    Ok(out)
 }
 
 #[tauri::command]
 pub async fn notes_links_get_mentions(note_id: String) -> Result<Vec<MentionItem>, String> {
-    let vault = notes::read_vault_path().ok_or_else(|| "No vault configured".to_string())?;
-    let scanned = scan_vault_links(&vault);
-    let target = scanned.iter().find(|s| s.note.id == note_id).cloned();
-    let target = match target {
-        Some(t) => t,
-        None => return Ok(Vec::new()),
-    };
-    let mut mentions = find_plain_mentions(&scanned, &target.note.title, &target.note.id);
-    // Also search each alias.
-    for alias in &target.note.aliases {
-        let mut more = find_plain_mentions(&scanned, alias, &target.note.id);
-        mentions.append(&mut more);
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let vault = notes::read_vault_path().ok_or_else(|| "No vault configured".to_string())?;
+        let scanned = scan_vault_links(&vault);
+        let target = scanned.iter().find(|s| s.note.id == note_id).cloned();
+        let target = match target {
+            Some(t) => t,
+            None => return Ok(Vec::new()),
+        };
+        let mut mentions = find_plain_mentions(&scanned, &target.note.title, &target.note.id);
+        // Also search each alias.
+        for alias in &target.note.aliases {
+            let mut more = find_plain_mentions(&scanned, alias, &target.note.id);
+            mentions.append(&mut more);
+        }
+        // Deduplicate by note_id + line.
+        let mut seen: std::collections::HashSet<(String, usize)> = Default::default();
+        mentions.retain(|m| seen.insert((m.note_id.clone(), m.line)));
+        Ok(mentions)
+    })
+    .await;
+    match result {
+        Ok(inner) => inner,
+        Err(e) => Err(format!("Mentions scan task failed: {}", e)),
     }
-    // Deduplicate by note_id + line.
-    let mut seen: std::collections::HashSet<(String, usize)> = Default::default();
-    mentions.retain(|m| seen.insert((m.note_id.clone(), m.line)));
-    Ok(mentions)
 }
 
 #[tauri::command]

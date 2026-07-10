@@ -23,7 +23,7 @@ from mona.agent.tools.schema import (
 _SCHEDULE_PARAMETERS = tool_parameters_schema(
     action=StringSchema(
         "Action to perform",
-        enum=["add", "list", "update", "remove", "complete"],
+        enum=["add", "list", "update", "remove"],
     ),
     title=StringSchema(
         "Schedule item title (required for add/update). A short human-readable summary."
@@ -59,8 +59,11 @@ _SCHEDULE_PARAMETERS = tool_parameters_schema(
     ),
     description=StringSchema("Optional longer description / notes."),
     color=StringSchema("Optional color label (e.g. 'blue', 'green', 'purple')."),
+    done=BooleanSchema(
+        description="For update: mark the item as completed (cancels any active timer/cron job)."
+    ),
     item_id=StringSchema(
-        "Schedule item ID. Required for update/remove/complete; obtained via action='list'."
+        "Schedule item ID. Required for update/remove; obtained via action='list'."
     ),
     required=["action"],
 )
@@ -98,7 +101,7 @@ class ScheduleTool(Tool, ContextAware):
     def description(self) -> str:
         return (
             "Manage user schedule (calendar) items: personal reminders and AI automated tasks. "
-            "Actions: add, list, update, remove, complete. "
+            "Actions: add, list, update, remove. "
             f"Naive ISO times default to {self._default_timezone}."
         )
 
@@ -118,7 +121,7 @@ class ScheduleTool(Tool, ContextAware):
                 params.get("cron_expr") or ""
             ).strip():
                 errors.append("cron_expr is required when recurrence='cron_expr'")
-        elif action in ("update", "remove", "complete"):
+        elif action in ("update", "remove"):
             if not str(params.get("item_id") or "").strip():
                 errors.append(f"item_id is required when action='{action}'")
         return errors
@@ -138,6 +141,7 @@ class ScheduleTool(Tool, ContextAware):
         ai_deliver: bool = True,
         description: str = "",
         color: str | None = None,
+        done: bool | None = None,
         item_id: str | None = None,
         **kwargs: Any,
     ) -> str:
@@ -151,12 +155,10 @@ class ScheduleTool(Tool, ContextAware):
         elif action == "update":
             return await self._update(
                 item_id, title, start_at, end_at, all_day, recurrence, cron_expr,
-                tz, kind, ai_message, ai_deliver, description, color,
+                tz, kind, ai_message, ai_deliver, description, color, done,
             )
         elif action == "remove":
             return await self._remove(item_id)
-        elif action == "complete":
-            return await self._complete(item_id)
         return f"Unknown action: {action}"
 
     def _parse_iso_to_ms(self, iso_str: str | None, tz: str | None) -> tuple[int | None, str | None]:
@@ -217,7 +219,7 @@ class ScheduleTool(Tool, ContextAware):
 
     async def _update(
         self, item_id, title, start_at, end_at, all_day, recurrence, cron_expr,
-        tz, kind, ai_message, ai_deliver, description, color,
+        tz, kind, ai_message, ai_deliver, description, color, done,
     ) -> str:
         if not item_id:
             return "Error: item_id is required for update"
@@ -244,9 +246,14 @@ class ScheduleTool(Tool, ContextAware):
         existing.ai_deliver = ai_deliver if ai_deliver is not None else existing.ai_deliver
         existing.description = description if description is not None else existing.description
         existing.color = color if color is not None else existing.color
+        if done is not None:
+            existing.done = done
 
         saved = await self._svc.update_item(existing)
-        return f"Updated schedule item '{saved.title}' (id: {saved.id})"
+        result = f"Updated schedule item '{saved.title}' (id: {saved.id})"
+        if done:
+            result += " [done]"
+        return result
 
     async def _list(self) -> str:
         items = await self._svc.list_items()
@@ -274,11 +281,3 @@ class ScheduleTool(Tool, ContextAware):
         if not ok:
             return f"Error: schedule item {item_id} not found"
         return f"Removed schedule item {item_id}"
-
-    async def _complete(self, item_id: str | None) -> str:
-        if not item_id:
-            return "Error: item_id is required for complete"
-        ok = await self._svc.complete_item(item_id)
-        if not ok:
-            return f"Error: schedule item {item_id} not found"
-        return f"Marked schedule item {item_id} as done"

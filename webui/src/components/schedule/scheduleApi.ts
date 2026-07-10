@@ -9,7 +9,18 @@ async function _jsonRequest<T>(
   init: RequestInit,
 ): Promise<T> {
   const base = await getGatewayHttpBase();
-  const res = await httpFetch(`${base}${path}`, init);
+  if (!base) {
+    throw new Error("Gateway 未就绪，请稍后重试");
+  }
+  const url = `${base}${path}`;
+  let res: Response;
+  try {
+    res = await httpFetch(url, init);
+  } catch (err) {
+    throw new Error(
+      `请求失败: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
   if (!res.ok) {
     let msg = `HTTP ${res.status}`;
     try {
@@ -19,6 +30,10 @@ async function _jsonRequest<T>(
       // ignore
     }
     throw new Error(msg);
+  }
+  const contentType = res.headers.get("content-type") ?? "";
+  if (!contentType.includes("application/json")) {
+    throw new Error(`Gateway 返回了非 JSON 响应 (${contentType})`);
   }
   return (await res.json()) as T;
 }
@@ -70,12 +85,6 @@ export async function updateScheduleItem(
 
 export async function removeScheduleItem(id: string): Promise<void> {
   await _jsonRequest<{ ok: boolean }>(`/api/schedule/items/${id}/remove`, {
-    method: "POST",
-  });
-}
-
-export async function completeScheduleItem(id: string): Promise<void> {
-  await _jsonRequest<{ ok: boolean }>(`/api/schedule/items/${id}/complete`, {
     method: "POST",
   });
 }

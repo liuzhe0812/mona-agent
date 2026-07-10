@@ -176,23 +176,11 @@ export const searchKb = async (
   id: string,
   query: string,
   count = 10,
-  embeddingConfig?: {
-    enabled: boolean
-    endpoint: string
-    apiKey: string
-    model: string
-  },
 ): Promise<{ mode: string; results: SearchResult[] }> => {
   const params = new URLSearchParams({
     q: query,
     count: String(count),
   })
-  if (embeddingConfig?.enabled && embeddingConfig.endpoint && embeddingConfig.model) {
-    params.set("embeddingEnabled", "true")
-    params.set("embeddingEndpoint", embeddingConfig.endpoint)
-    params.set("embeddingApiKey", embeddingConfig.apiKey)
-    params.set("embeddingModel", embeddingConfig.model)
-  }
   const data = await fetchJSON<{ mode: string; results: SearchResult[] }>(
     `/api/kb/${encodeURIComponent(id)}/search?${params}`,
   )
@@ -246,22 +234,10 @@ export interface EmbedStatus {
   lastError: string | null
 }
 
-export const triggerEmbed = async (
-  id: string,
-  config: {
-    enabled: boolean
-    endpoint: string
-    apiKey: string
-    model: string
-    outputDimensionality?: number
-    maxChunkChars?: number
-    overlapChunkChars?: number
-    extraHeaders?: Record<string, string>
-  },
-) =>
+export const triggerEmbed = async (id: string) =>
   fetchJSON<{ indexed: number; failed: number }>(
     `/api/kb/${encodeURIComponent(id)}/embed`,
-    { method: "POST", body: JSON.stringify(config) },
+    { method: "POST", body: JSON.stringify({}) },
   )
 
 export const getEmbedStatus = async (id: string): Promise<EmbedStatus> =>

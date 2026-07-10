@@ -3,6 +3,7 @@ mod contacts;
 mod db;
 mod email;
 mod gateway;
+mod hoard;
 mod ipc_bridge;
 mod license;
 mod notes;
@@ -394,6 +395,7 @@ pub fn run() {
         .manage(browser::BrowserState::new())
         .manage(PendingMdFiles::default())
         .manage(tray::PendingMailNavigation::default())
+        .manage(notification_window::NotificationWindowState::new())
         .invoke_handler(tauri::generate_handler![
             get_settings,
             update_settings,
@@ -430,6 +432,15 @@ pub fn run() {
             notes_links::notes_links_rename_sync,
             notes_links::notes_links_search_mentions,
             notes_links::notes_moc_list,
+            hoard::hoard_add,
+            hoard::hoard_update,
+            hoard::hoard_delete,
+            hoard::hoard_get,
+            hoard::hoard_list,
+            hoard::hoard_search,
+            hoard::hoard_count,
+            hoard::hoard_add_relation,
+            hoard::hoard_get_relations,
             terminal::commands::ssh_connect,
             terminal::commands::ssh_connect_with_id,
             terminal::commands::ssh_disconnect,
@@ -524,6 +535,7 @@ pub fn run() {
             email::email_update_account_settings,
             email::email_delete_account,
             email::email_get_messages,
+            email::email_parse_local_body,
             email::email_get_unified_inbox,
             email::email_mark_read,
             email::email_toggle_starred,
@@ -531,6 +543,7 @@ pub fn run() {
             email::email_fetch_attachment,
             email::email_fetch_body,
             email::email_fetch_raw,
+            email::email_rebuild_index,
             email::email_list_rules,
             email::email_save_rule,
             email::email_delete_rule,
@@ -644,6 +657,7 @@ pub fn run() {
             tray::send_mail_notification,
             tray::check_and_clear_pending_mail,
             notification_window::show_notification,
+            notification_window::show_notification_window,
             notification_window::close_notification_window,
             notification_window::emit_notification_action,
         ])
@@ -654,6 +668,18 @@ pub fn run() {
             }
 
             tray::setup_tray(app)?;
+
+            // 启动后台线程执行邮件索引一致性校验（不阻塞 UI）
+            // 扫描 mail 目录与 SQLite 索引对比，修复差异（.eml 有索引无 → 重建；索引有 .eml 无 → 删孤儿）
+            {
+                let email_state = app
+                    .state::<email::EmailState>()
+                    .inner()
+                    .clone();
+                std::thread::spawn(move || {
+                    email::verify_consistency_on_startup(&email_state);
+                });
+            }
 
             // Register the existing notes vault's assets directory with the
             // asset protocol scope so images can be rendered via convertFileSrc.

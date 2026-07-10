@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
+import QRCode from "qrcode";
 import { Share2, Copy, Check, ExternalLink } from "lucide-react";
 import {
   Dialog,
@@ -23,6 +24,7 @@ interface ShareDialogProps {
 export function ShareDialog({ open, onOpenChange, tabId, url, title }: ShareDialogProps) {
   const [pageInfo, setPageInfo] = useState<PageInfo | null>(null);
   const [copied, setCopied] = useState(false);
+  const [qrSvg, setQrSvg] = useState<string>("");
 
   const loadPageInfo = useCallback(async () => {
     if (!tabId || !isTauri()) {
@@ -61,6 +63,29 @@ export function ShareDialog({ open, onOpenChange, tabId, url, title }: ShareDial
     }
   }, [open, loadPageInfo]);
 
+  // 本地生成二维码 SVG，无需外部 API，不依赖 Canvas
+  useEffect(() => {
+    const target = pageInfo?.url || url;
+    if (!open || !target) {
+      setQrSvg("");
+      return;
+    }
+    QRCode.toString(target, {
+      type: "svg",
+      width: 200,
+      margin: 1,
+      color: { dark: "#000000", light: "#ffffff" },
+      errorCorrectionLevel: "M",
+    })
+      .then((svg) => {
+        setQrSvg(svg.replace(/<svg/, '<svg class="h-48 w-48"'));
+      })
+      .catch((e) => {
+        console.error("[ShareDialog] generate QR failed:", e);
+        setQrSvg("");
+      });
+  }, [open, pageInfo, url]);
+
   const handleCopy = useCallback(async () => {
     const shareUrl = pageInfo?.url || url;
     try {
@@ -84,7 +109,6 @@ export function ShareDialog({ open, onOpenChange, tabId, url, title }: ShareDial
 
   const shareUrl = pageInfo?.url || url;
   const shareTitle = pageInfo?.title || title;
-  const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(shareUrl)}`;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -96,16 +120,13 @@ export function ShareDialog({ open, onOpenChange, tabId, url, title }: ShareDial
           </DialogTitle>
         </DialogHeader>
         <div className="flex flex-col items-center gap-4">
-          {/* 二维码 */}
-          <div className="rounded-lg border p-3 bg-white">
-            <img
-              src={qrCodeUrl}
-              alt="QR Code"
-              className="h-48 w-48"
-              onError={(e) => {
-                e.currentTarget.style.display = "none";
-              }}
-            />
+          {/* 二维码（本地生成） */}
+          <div className="rounded-lg border p-3 bg-white h-48 w-48 flex items-center justify-center">
+            {qrSvg ? (
+              <div dangerouslySetInnerHTML={{ __html: qrSvg }} />
+            ) : (
+              <span className="text-xs text-muted-foreground">生成二维码...</span>
+            )}
           </div>
           <p className="text-xs text-muted-foreground text-center">
             扫描二维码访问此页面

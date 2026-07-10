@@ -26,13 +26,13 @@ interface SimEdge {
   kind: "link" | "embed";
 }
 
-const NODE_RADIUS = 6;
-const REPULSION = 1200;
-const SPRING_LENGTH = 80;
-const SPRING_K = 0.04;
-const CENTERING_K = 0.005;
+const NODE_RADIUS = 5;
+const REPULSION = 800;
+const SPRING_LENGTH = 70;
+const SPRING_K = 0.03;
+const CENTERING_K = 0.004;
 const DAMPING = 0.82;
-const MAX_VELOCITY = 12;
+const MAX_VELOCITY = 10;
 
 export function GraphViewDialog({
   open,
@@ -49,15 +49,17 @@ export function GraphViewDialog({
   const edgesRef = useRef<SimEdge[]>([]);
   const offsetRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const scaleRef = useRef<number>(1);
-  const dragRef = useRef<{ nodeId: string | null; lastX: number; lastY: number; panning: boolean }>({
+  const dragRef = useRef<{ nodeId: string | null; lastX: number; lastY: number; panning: boolean; moved: boolean }>({
     nodeId: null,
     lastX: 0,
     lastY: 0,
     panning: false,
+    moved: false,
   });
   const animationRef = useRef<number>(0);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [dimensions, setDimensions] = useState({ w: 800, h: 600 });
+  const [retryCount, setRetryCount] = useState(0);
 
   // Load graph data once per open.
   useEffect(() => {
@@ -70,7 +72,7 @@ export function GraphViewDialog({
       if (cancelled) return;
       setError("加载关系图超时，请检查 vault 配置后重试");
       setLoading(false);
-    }, 8000);
+    }, 15000);
 
     getNotesLinkGraph()
       .then((data) => {
@@ -96,7 +98,7 @@ export function GraphViewDialog({
         const cy = (rect?.height ?? dimensions.h) / 2;
         nodesRef.current = data.nodes.map((n, i) => {
           const angle = (i / Math.max(data.nodes.length, 1)) * Math.PI * 2;
-          const r = 120;
+          const r = 100;
           return {
             ...n,
             x: cx + Math.cos(angle) * r + (Math.random() - 0.5) * 20,
@@ -121,7 +123,7 @@ export function GraphViewDialog({
       cancelled = true;
       window.clearTimeout(timeoutId);
     };
-  }, [open]);
+  }, [open, retryCount]);
 
   // Track container size.
   useEffect(() => {
@@ -136,13 +138,24 @@ export function GraphViewDialog({
     return () => observer.disconnect();
   }, [open]);
 
-  // Force simulation loop.
+  // Sync canvas backing buffer to physical pixels for crisp rendering.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.round(dimensions.w * dpr);
+    canvas.height = Math.round(dimensions.h * dpr);
+  }, [dimensions, graph]);
+
+  // Force simulation + render loop.
   useEffect(() => {
     if (!open) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
+
+    const dpr = window.devicePixelRatio || 1;
 
     const tick = () => {
       const nodes = nodesRef.current;
@@ -195,7 +208,6 @@ export function GraphViewDialog({
         n.vy += (cy - n.y) * CENTERING_K;
         n.vx *= DAMPING;
         n.vy *= DAMPING;
-        // Cap velocity.
         const v = Math.sqrt(n.vx * n.vx + n.vy * n.vy);
         if (v > MAX_VELOCITY) {
           n.vx = (n.vx / v) * MAX_VELOCITY;
@@ -205,19 +217,37 @@ export function GraphViewDialog({
         n.y += n.vy;
       }
 
-      // Render.
+      // Compute connected set when hovering.
+      let connectedSet: Set<string> | null = null;
+      if (hoveredId) {
+        connectedSet = new Set<string>([hoveredId]);
+        for (const e of edges) {
+          if (e.source === hoveredId) connectedSet.add(e.target);
+          if (e.target === hoveredId) connectedSet.add(e.source);
+        }
+      }
+
+      // Render with DPR scaling for crisp output.
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, dimensions.w, dimensions.h);
       ctx.save();
       ctx.translate(ox, oy);
       ctx.scale(scale, scale);
 
       // Draw edges.
-      ctx.strokeStyle = "rgba(120, 120, 140, 0.25)";
-      ctx.lineWidth = 1 / scale;
       for (const e of edges) {
         const a = nodeMap.get(e.source);
         const b = nodeMap.get(e.target);
         if (!a || !b) continue;
+        const isHighlighted = hoveredId && (e.source === hoveredId || e.target === hoveredId);
+        if (hoveredId && !isHighlighted) {
+          ctx.strokeStyle = "rgba(100, 100, 120, 0.06)";
+        } else if (isHighlighted) {
+          ctx.strokeStyle = "rgba(140, 160, 255, 0.5)";
+        } else {
+          ctx.strokeStyle = "rgba(120, 120, 140, 0.2)";
+        }
+        ctx.lineWidth = (isHighlighted ? 1.5 : 1) / scale;
         ctx.beginPath();
         ctx.moveTo(a.x, a.y);
         ctx.lineTo(b.x, b.y);
@@ -232,48 +262,63 @@ export function GraphViewDialog({
 
       // Draw nodes.
       for (const n of nodes) {
-        const r = NODE_RADIUS + Math.min(n.degree * 1.5, 8);
         const isActive = n.id === activeNoteId;
         const isHovered = n.id === hoveredId;
+        const baseR = NODE_RADIUS + Math.min(n.degree * 1.2, 6);
+        const r = isHovered ? baseR * 1.6 : baseR;
+
+        const isConnected = hoveredId ? connectedSet?.has(n.id) : false;
+        const isDimmed = hoveredId && !isConnected;
+
         if (isActive) {
-          ctx.fillStyle = "#3b82f6";
+          ctx.fillStyle = isDimmed ? "rgba(59, 130, 246, 0.2)" : "#3b82f6";
         } else if (n.noteType === "template") {
-          ctx.fillStyle = "#a855f7";
+          ctx.fillStyle = isDimmed ? "rgba(168, 85, 247, 0.2)" : "#a855f7";
         } else if (n.noteType === "moc") {
-          ctx.fillStyle = "#f59e0b";
+          ctx.fillStyle = isDimmed ? "rgba(245, 158, 11, 0.2)" : "#f59e0b";
+        } else if (isHovered) {
+          ctx.fillStyle = "#60a5fa";
         } else {
-          ctx.fillStyle = "#6b7280";
+          ctx.fillStyle = isDimmed ? "rgba(107, 114, 128, 0.2)" : "#6b7280";
         }
         ctx.beginPath();
         ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
         ctx.fill();
+
         if (isHovered) {
-          ctx.strokeStyle = "#ffffff";
+          ctx.strokeStyle = "rgba(255, 255, 255, 0.6)";
           ctx.lineWidth = 2 / scale;
           ctx.stroke();
         }
       }
 
-      // Draw labels (only when zoomed in or hovered).
-      const showLabels = scale > 0.7;
-      if (showLabels) {
-        ctx.fillStyle = "#d1d5db";
-        ctx.font = `${10 / scale}px sans-serif`;
+      // Draw labels.
+      const showAllLabels = scale > 0.8 && !hoveredId;
+      const showSomeLabels = scale > 0.5 || hoveredId;
+      if (showSomeLabels) {
         ctx.textAlign = "center";
+        ctx.textBaseline = "bottom";
         for (const n of nodes) {
-          if (n.degree === 0 && n.id !== hoveredId && n.id !== activeNoteId) continue;
-          ctx.fillText(n.title.slice(0, 24), n.x, n.y - NODE_RADIUS - 4 / scale);
-        }
-      }
+          const isHovered = n.id === hoveredId;
+          const isActive = n.id === activeNoteId;
+          const isConnected = hoveredId ? connectedSet?.has(n.id) : false;
+          const shouldShow = isHovered || isActive || (showAllLabels && n.degree > 0) || (hoveredId && isConnected);
+          if (!shouldShow) continue;
 
-      // Draw hovered label prominently.
-      if (hoveredId) {
-        const n = nodes.find((x) => x.id === hoveredId);
-        if (n) {
-          ctx.fillStyle = "#ffffff";
-          ctx.font = "12px sans-serif";
-          ctx.textAlign = "center";
-          ctx.fillText(n.title, n.x, n.y - NODE_RADIUS - 8);
+          if (isHovered) {
+            ctx.fillStyle = "#1a1a1a";
+            ctx.font = `600 ${12 / scale}px sans-serif`;
+          } else if (isDimmedCheck(hoveredId, isConnected)) {
+            ctx.fillStyle = "rgba(0, 0, 0, 0.25)";
+            ctx.font = `${10 / scale}px sans-serif`;
+          } else {
+            ctx.fillStyle = "rgba(0, 0, 0, 0.8)";
+            ctx.font = `${10 / scale}px sans-serif`;
+          }
+          const label = n.title.length > 20 ? n.title.slice(0, 20) + "…" : n.title;
+          const baseR = NODE_RADIUS + Math.min(n.degree * 1.2, 6);
+          const labelR = isHovered ? baseR * 1.6 : baseR;
+          ctx.fillText(label, n.x, n.y - labelR - 3 / scale);
         }
       }
 
@@ -293,13 +338,15 @@ export function GraphViewDialog({
     const x = (e.clientX - rect.left - offsetRef.current.x) / scaleRef.current;
     const y = (e.clientY - rect.top - offsetRef.current.y) / scaleRef.current;
     const node = nodesRef.current.find(
-      (n) => Math.sqrt((n.x - x) ** 2 + (n.y - y) ** 2) < NODE_RADIUS + 4,
+      (n) => Math.sqrt((n.x - x) ** 2 + (n.y - y) ** 2) < NODE_RADIUS + 6,
     );
-    if (node) {
-      dragRef.current = { nodeId: node.id, lastX: e.clientX, lastY: e.clientY, panning: false };
-    } else {
-      dragRef.current = { nodeId: null, lastX: e.clientX, lastY: e.clientY, panning: true };
-    }
+    dragRef.current = {
+      nodeId: node?.id ?? null,
+      lastX: e.clientX,
+      lastY: e.clientY,
+      panning: !node,
+      moved: false,
+    };
   }, []);
 
   const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -309,7 +356,7 @@ export function GraphViewDialog({
     const x = (e.clientX - rect.left - offsetRef.current.x) / scaleRef.current;
     const y = (e.clientY - rect.top - offsetRef.current.y) / scaleRef.current;
     const node = nodesRef.current.find(
-      (n) => Math.sqrt((n.x - x) ** 2 + (n.y - y) ** 2) < NODE_RADIUS + 4,
+      (n) => Math.sqrt((n.x - x) ** 2 + (n.y - y) ** 2) < NODE_RADIUS + 6,
     );
     setHoveredId(node?.id ?? null);
     canvas.style.cursor = node ? "pointer" : dragRef.current.panning ? "grabbing" : "grab";
@@ -317,6 +364,7 @@ export function GraphViewDialog({
     const drag = dragRef.current;
     const dx = e.clientX - drag.lastX;
     const dy = e.clientY - drag.lastY;
+    if (Math.abs(dx) > 2 || Math.abs(dy) > 2) drag.moved = true;
     drag.lastX = e.clientX;
     drag.lastY = e.clientY;
 
@@ -335,19 +383,19 @@ export function GraphViewDialog({
   }, []);
 
   const handleMouseUp = useCallback(() => {
-    dragRef.current = { nodeId: null, lastX: 0, lastY: 0, panning: false };
+    dragRef.current = { nodeId: null, lastX: 0, lastY: 0, panning: false, moved: false };
   }, []);
 
   const handleClick = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
-      // Only navigate if the click didn't come from a drag.
+      if (dragRef.current.moved) return;
       const canvas = canvasRef.current;
       if (!canvas) return;
       const rect = canvas.getBoundingClientRect();
       const x = (e.clientX - rect.left - offsetRef.current.x) / scaleRef.current;
       const y = (e.clientY - rect.top - offsetRef.current.y) / scaleRef.current;
       const node = nodesRef.current.find(
-        (n) => Math.sqrt((n.x - x) ** 2 + (n.y - y) ** 2) < NODE_RADIUS + 4,
+        (n) => Math.sqrt((n.x - x) ** 2 + (n.y - y) ** 2) < NODE_RADIUS + 6,
       );
       if (node && onSelectNote) {
         onSelectNote(node.id);
@@ -356,18 +404,53 @@ export function GraphViewDialog({
     [onSelectNote],
   );
 
-  const handleWheel = useCallback((e: React.WheelEvent<HTMLCanvasElement>) => {
-    e.preventDefault();
-    const delta = -Math.sign(e.deltaY) * 0.15;
-    scaleRef.current = Math.max(0.2, Math.min(3, scaleRef.current * (1 + delta)));
-  }, []);
+  // Native non-passive wheel listener so we can call preventDefault.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const handler = (e: WheelEvent) => {
+      e.preventDefault();
+      const rect = canvas.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+
+      const delta = -Math.sign(e.deltaY) * 0.15;
+      const oldScale = scaleRef.current;
+      const newScale = Math.max(0.2, Math.min(3, oldScale * (1 + delta)));
+      if (newScale === oldScale) return;
+
+      const worldX = (mouseX - offsetRef.current.x) / oldScale;
+      const worldY = (mouseY - offsetRef.current.y) / oldScale;
+      offsetRef.current.x = mouseX - worldX * newScale;
+      offsetRef.current.y = mouseY - worldY * newScale;
+      scaleRef.current = newScale;
+    };
+    canvas.addEventListener("wheel", handler, { passive: false });
+    return () => canvas.removeEventListener("wheel", handler);
+  }, [open, graph]);
 
   const zoomIn = useCallback(() => {
-    scaleRef.current = Math.min(3, scaleRef.current * 1.2);
-  }, []);
+    const cx = dimensions.w / 2;
+    const cy = dimensions.h / 2;
+    const oldScale = scaleRef.current;
+    const newScale = Math.min(3, oldScale * 1.2);
+    const worldX = (cx - offsetRef.current.x) / oldScale;
+    const worldY = (cy - offsetRef.current.y) / oldScale;
+    offsetRef.current.x = cx - worldX * newScale;
+    offsetRef.current.y = cy - worldY * newScale;
+    scaleRef.current = newScale;
+  }, [dimensions]);
   const zoomOut = useCallback(() => {
-    scaleRef.current = Math.max(0.2, scaleRef.current / 1.2);
-  }, []);
+    const cx = dimensions.w / 2;
+    const cy = dimensions.h / 2;
+    const oldScale = scaleRef.current;
+    const newScale = Math.max(0.2, oldScale / 1.2);
+    const worldX = (cx - offsetRef.current.x) / oldScale;
+    const worldY = (cy - offsetRef.current.y) / oldScale;
+    offsetRef.current.x = cx - worldX * newScale;
+    offsetRef.current.y = cy - worldY * newScale;
+    scaleRef.current = newScale;
+  }, [dimensions]);
   const resetView = useCallback(() => {
     scaleRef.current = 1;
     offsetRef.current = { x: 0, y: 0 };
@@ -426,8 +509,20 @@ export function GraphViewDialog({
           </div>
         )}
         {error && (
-          <div className="absolute inset-0 flex items-center justify-center text-[13px] text-destructive">
-            {error}
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-[13px] text-destructive">
+            <span>{error}</span>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 px-3 text-[12px]"
+              onClick={() => {
+                setError(null);
+                setGraph(null);
+                setRetryCount((c) => c + 1);
+              }}
+            >
+              重试
+            </Button>
           </div>
         )}
         {!loading && !error && graph && graph.nodes.length === 0 && (
@@ -441,19 +536,16 @@ export function GraphViewDialog({
         {!loading && !error && graph && graph.nodes.length > 0 && (
           <canvas
             ref={canvasRef}
-            width={dimensions.w}
-            height={dimensions.h}
             className="absolute inset-0 h-full w-full"
             onMouseDown={handleMouseDown}
             onMouseMove={handleMouseMove}
             onMouseUp={handleMouseUp}
             onMouseLeave={handleMouseUp}
             onClick={handleClick}
-            onWheel={handleWheel}
           />
         )}
         {graph && graph.nodes.length > 0 && (
-          <div className="absolute bottom-2 left-2 flex flex-col gap-0.5 rounded-md border border-border/60 bg-background/80 px-2 py-1 text-[10px] backdrop-blur-sm">
+          <div className="absolute bottom-2 left-2 flex flex-col gap-0.5 rounded-md border border-border/60 bg-background px-2 py-1 text-[10px]">
             <div className="flex items-center gap-1.5">
               <span className="h-2 w-2 rounded-full bg-blue-500" />
               <span>当前笔记</span>
@@ -475,4 +567,8 @@ export function GraphViewDialog({
       </div>
     </div>
   );
+}
+
+function isDimmedCheck(hoveredId: string | null, isConnected: boolean | undefined): boolean {
+  return !!hoveredId && !isConnected;
 }

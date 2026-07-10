@@ -2,7 +2,6 @@
 
 import { create } from "zustand";
 import {
-  completeScheduleItem,
   createScheduleItem,
   listScheduleItems,
   removeScheduleItem,
@@ -39,10 +38,18 @@ export const useScheduleStore = create<ScheduleState>((set, get) => ({
       items.sort((a, b) => a.startAtMs - b.startAtMs);
       set({ items, loading: false });
     } catch (err) {
-      set({
-        loading: false,
-        error: err instanceof Error ? err.message : String(err),
-      });
+      // Gateway may still be starting up — retry once after a short delay.
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        const items = await listScheduleItems();
+        items.sort((a, b) => a.startAtMs - b.startAtMs);
+        set({ items, loading: false });
+      } catch (retryErr) {
+        set({
+          loading: false,
+          error: retryErr instanceof Error ? retryErr.message : String(retryErr),
+        });
+      }
     }
   },
 
@@ -70,11 +77,13 @@ export const useScheduleStore = create<ScheduleState>((set, get) => ({
   },
 
   completeItem: async (id) => {
-    await completeScheduleItem(id);
+    const existing = get().items.find((it) => it.id === id);
+    if (!existing) return;
+    const saved = await updateScheduleItem(id, { ...existing, done: true });
     set({
-      items: get().items.map((it) =>
-        it.id === id ? { ...it, done: true } : it,
-      ),
+      items: get()
+        .items.map((it) => (it.id === id ? saved : it))
+        .sort((a, b) => a.startAtMs - b.startAtMs),
     });
   },
 

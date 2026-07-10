@@ -8,6 +8,7 @@ import type {
   InboundEvent,
   OutboundImageGeneration,
   OutboundMedia,
+  OutboundVideoGeneration,
   GoalStateWsPayload,
   DeliveredFile,
   UIImage,
@@ -343,6 +344,7 @@ export interface SendImage {
 
 export interface SendOptions {
   imageGeneration?: OutboundImageGeneration;
+  videoGeneration?: OutboundVideoGeneration;
   displayContent?: string;
   terminalSessionId?: string;
   terminalExecMode?: string;
@@ -989,6 +991,7 @@ export function useMonaStream(
       if (options) {
         client.sendMessage(chatId, content, wireMedia, {
           imageGeneration: options.imageGeneration,
+          videoGeneration: options.videoGeneration,
           // IMPORTANT: displayContent is persisted to the server so that
           // history replay also shows the short label. DO NOT remove.
           displayContent: options.displayContent,

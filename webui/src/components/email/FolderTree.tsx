@@ -41,7 +41,7 @@ import {
 } from "./lib/emailApi";
 import type { EmailAccount } from "./lib/types";
 
-import sidebarEmailIcon from "@/assets/icons/sidebar-email.jpg";
+import sidebarEmailIcon from "@/assets/icons/sidebar-email.png";
 
 interface FolderTreeProps {
   gatewayUrl: string;
@@ -177,8 +177,8 @@ export function FolderTree({ gatewayUrl, view = "mail", onViewChange }: FolderTr
       selectAccount(accountId);
     }
     selectFolder(folderName);
-    // 显式传入 folder，避免 selectFolder 的 set 与 loadMessages 读 state 之间的竞态
-    void loadMessages(accountId, folderName);
+    // loadMessages 由 EmailClientView 的 useEffect 监听 selectedFolder 变化统一触发，
+    // 这里不再手动调用，避免双重 loadMessages 导致空文件夹触发两次 syncEmail 争抢锁
   };
 
   const handleMarkAllRead = async (folderName: string) => {
@@ -338,7 +338,7 @@ export function FolderTree({ gatewayUrl, view = "mail", onViewChange }: FolderTr
                         onClick={() => handleAccountClick(account.id)}
                       >
                         <Chevron className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                        <img src={sidebarEmailIcon} className="h-3.5 w-3.5 shrink-0 rounded-sm object-cover" alt="" draggable={false} />
+                        <img src={sidebarEmailIcon} className="h-3.5 w-3.5 shrink-0 object-contain" alt="" draggable={false} />
                         <div className="min-w-0 flex-1">
                           <div className="truncate text-[12px] font-medium">
                             {account.displayName}

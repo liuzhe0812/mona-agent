@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   MailOpen,
   Star,
@@ -17,13 +17,33 @@ import {
   Eye,
   X,
   FileDown,
+  FolderArchive,
+  Copy,
+  Trash2,
+  ExternalLink,
+  Share2,
+  ImageDown,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { useEmailStore } from "./store/emailStore";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
+import { useEmailStore, resolveAddressDisplay, resolveSenderDisplay } from "./store/emailStore";
 import type { EmailAnalysis, EmailAttachment, EmailKeyInfo, EmailMessage } from "./lib/types";
 import * as emailApi from "./lib/emailApi";
-import { save } from "@tauri-apps/plugin-dialog";
+import { save, open as openDialog } from "@tauri-apps/plugin-dialog";
 import { writeFile } from "@tauri-apps/plugin-fs";
+import { tempDir, join } from "@tauri-apps/api/path";
+import {
+  getIcon,
+  extractExtension,
+  getCachedIcon,
+} from "../terminal/FileManager/iconCache";
+import { openPathWithSystemApp, isTauri } from "@/lib/tauri";
 
 export function MailView() {
   const selectedMessage = useEmailStore((s) => s.selectedMessage);
@@ -38,11 +58,79 @@ export function MailView() {
   const runAnalysis = useEmailStore((s) => s.runAnalysis);
   const fetchBody = useEmailStore((s) => s.fetchBody);
   const isOnline = useEmailStore((s) => s.isOnline);
+  const contactsByEmail = useEmailStore((s) => s.contactsByEmail);
+  const loadContacts = useEmailStore((s) => s.loadContacts);
+
+  // 首次渲染时加载通讯录，建立 email→name 映射（仅一次）
+  useEffect(() => {
+    void loadContacts();
+  }, [loadContacts]);
   const [downloading, setDownloading] = useState<string | null>(null);
   const [analysisCollapsed, setAnalysisCollapsed] = useState(false);
   const [previewing, setPreviewing] = useState<{ filename: string; dataUrl: string; contentType: string } | null>(null);
-  const [loadingPreview, setLoadingPreview] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
+  // 附件系统图标缓存：key = filename，value = dataUrl（系统默认应用图标）
+  const [attIcons, setAttIcons] = useState<Record<string, string>>({});
+  // 邮件正文图片：左键点击直接打开预览
+  const [imagePreviewSrc, setImagePreviewSrc] = useState<string | null>(null);
+  // 邮件正文图片：右键自定义菜单（替代 WebView2 原生菜单）
+  const [imageContextMenu, setImageContextMenu] = useState<{ src: string; x: number; y: number } | null>(null);
+  const [imageActionLoading, setImageActionLoading] = useState(false);
+
+  // 将图片 src（http/data URL）转为 Blob，用于复制到剪贴板和另存为
+  // 必须放在条件 return 之前，保证 hooks 调用顺序稳定
+  const fetchImageBlob = useCallback(async (src: string): Promise<Blob | null> => {
+    try {
+      if (src.startsWith("data:")) {
+        const resp = await fetch(src);
+        return await resp.blob();
+      }
+      const resp = await fetch(src, { mode: "cors" });
+      return await resp.blob();
+    } catch {
+      return null;
+    }
+  }, []);
+
+  // 左键点击图片：直接打开预览
+  const handleImageOpen = useCallback((src: string) => {
+    setImagePreviewSrc(src);
+  }, []);
+
+  // 右键点击图片：显示自定义菜单
+  const handleImageMenu = useCallback((src: string, x: number, y: number) => {
+    setImageContextMenu({ src, x, y });
+  }, []);
+
+  // 附件列表变化时，异步加载系统文件类型图标（已缓存的同步显示，未缓存的加载后显示）
+  useEffect(() => {
+    if (!selectedMessage?.attachments) return;
+    const atts = selectedMessage.attachments;
+    let cancelled = false;
+    void (async () => {
+      const updates: Record<string, string> = {};
+      for (const att of atts) {
+        const ext = extractExtension(att.filename);
+        const cached = getCachedIcon(ext, false);
+        if (cached) {
+          updates[att.filename] = cached;
+        } else if (ext) {
+          try {
+            const icon = await getIcon(ext, false);
+            if (icon && !cancelled) updates[att.filename] = icon;
+          } catch {
+            // 获取图标失败时静默忽略，用回退图标
+          }
+        }
+      }
+      if (!cancelled && Object.keys(updates).length > 0) {
+        setAttIcons((prev) => ({ ...prev, ...updates }));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedMessage?.attachments]);
 
   // 选中邮件时，若未读则自动标记为已读（仅在线时）
   useEffect(() => {
@@ -59,19 +147,21 @@ export function MailView() {
     }
   }, [selectedMessage, loadAnalysis]);
 
-  // 按需拉取正文：选中邮件且正文未拉取时，调用 fetchBody 加载完整正文（仅在线时）
+  // 按需拉取正文：选中邮件且正文未拉取时，调用 fetchBody 加载完整正文
   // 兼容旧数据：bodyFetched=true 但 bodyText/bodyHtml 都空（Foxmail 模式 SQLite 不存正文），也需要拉取
+  // 有附件但未加载附件列表时也需要拉取（fetchBody 会顺带返回附件元信息）
+  // Rust 侧 email_fetch_body 会先读本地 .eml 文件，读不到才走 gateway IMAP，无需检查 isOnline
   useEffect(() => {
     if (
       selectedMessage &&
       gatewayUrl &&
-      isOnline &&
       (!selectedMessage.bodyFetched ||
-        (!selectedMessage.bodyText && !selectedMessage.bodyHtml && !selectedMessage.bodyError))
+        (!selectedMessage.bodyText && !selectedMessage.bodyHtml && !selectedMessage.bodyError) ||
+        (selectedMessage.hasAttachments && !selectedMessage.attachments))
     ) {
       void fetchBody(gatewayUrl, selectedMessage);
     }
-  }, [selectedMessage, gatewayUrl, fetchBody, isOnline]);
+  }, [selectedMessage, gatewayUrl, fetchBody]);
 
   const analysisKey = selectedMessage
     ? `${selectedMessage.uid}:${selectedMessage.accountId}:${selectedMessage.folder}`
@@ -125,31 +215,83 @@ export function MailView() {
     }
   };
 
-  const handlePreviewAttachment = async (att: EmailAttachment) => {
-    if (!gatewayUrl) return;
+  // 打开附件：下载到临时目录后用系统默认应用打开
+  const handleOpenAttachment = async (att: EmailAttachment) => {
+    if (!gatewayUrl || !isTauri()) return;
     const account = accounts.find((a) => a.id === m.accountId);
     if (!account) return;
-    setLoadingPreview(att.filename);
+    setDownloading(att.filename);
     try {
-      const resp = await emailApi.fetchAttachment(
+      const tmp = await tempDir();
+      // 避免文件名冲突：用 uid 作为前缀
+      const safeName = att.filename.replace(/[<>:"/\\|?*]/g, "_");
+      const filePath = await join(tmp, `mona-${m.uid}-${safeName}`);
+      await emailApi.downloadAttachmentToFile(
         gatewayUrl,
         account,
         m.folder,
         m.uid,
         att.filename,
+        filePath,
       );
-      const dataUrl = `data:${att.contentType || "application/octet-stream"};base64,${resp.data}`;
-      setPreviewing({ filename: att.filename, dataUrl, contentType: att.contentType });
+      await openPathWithSystemApp(filePath);
     } catch (e) {
-      console.error("预览附件失败:", e);
+      console.error("打开附件失败:", e);
     } finally {
-      setLoadingPreview(null);
+      setDownloading(null);
     }
   };
 
-  const isPreviewable = (att: EmailAttachment): boolean => {
-    const ct = att.contentType.toLowerCase();
-    return ct.startsWith("image/") || ct === "application/pdf";
+  // 保存全部附件：选择目录后批量下载
+  const handleSaveAllAttachments = async () => {
+    if (!gatewayUrl || !m.attachments) return;
+    const account = accounts.find((a) => a.id === m.accountId);
+    if (!account) return;
+    const dir = await openDialog({ directory: true, multiple: false });
+    if (!dir || typeof dir !== "string") return;
+    setDownloading("__all__");
+    try {
+      for (const att of m.attachments) {
+        const safeName = att.filename.replace(/[<>:"/\\|?*]/g, "_");
+        const filePath = await join(dir, safeName);
+        await emailApi.downloadAttachmentToFile(
+          gatewayUrl,
+          account,
+          m.folder,
+          m.uid,
+          att.filename,
+          filePath,
+        );
+      }
+    } catch (e) {
+      console.error("保存全部附件失败:", e);
+    } finally {
+      setDownloading(null);
+    }
+  };
+
+  // 复制附件到剪贴板：下载到临时文件后用 Rust 命令复制文件到剪贴板
+  const handleCopyAttachment = async (att: EmailAttachment) => {
+    if (!gatewayUrl || !isTauri()) return;
+    const account = accounts.find((a) => a.id === m.accountId);
+    if (!account) return;
+    try {
+      const tmp = await tempDir();
+      const safeName = att.filename.replace(/[<>:"/\\|?*]/g, "_");
+      const filePath = await join(tmp, `mona-${m.uid}-${safeName}`);
+      await emailApi.downloadAttachmentToFile(
+        gatewayUrl,
+        account,
+        m.folder,
+        m.uid,
+        att.filename,
+        filePath,
+      );
+      // 复制文件路径文本到剪贴板（Tauri clipboard-manager 仅支持文本，文件剪贴板需 OS 级 API）
+      await navigator.clipboard.writeText(filePath);
+    } catch (e) {
+      console.error("复制附件失败:", e);
+    }
   };
 
   const handleExportEml = async () => {
@@ -171,6 +313,131 @@ export function MailView() {
       console.error("导出 .eml 失败:", e);
     } finally {
       setExporting(false);
+    }
+  };
+
+  // 从 src 推断图片扩展名
+  const inferImageExt = (src: string): string => {
+    if (src.startsWith("data:")) {
+      const m = src.match(/^data:image\/([a-zA-Z0-9.+-]+)/);
+      if (m) {
+        const sub = m[1].toLowerCase();
+        if (sub === "jpeg") return "jpg";
+        if (sub === "svg+xml") return "svg";
+        return sub;
+      }
+      return "png";
+    }
+    try {
+      const url = new URL(src);
+      const last = url.pathname.split("/").pop() || "";
+      const dot = last.lastIndexOf(".");
+      if (dot > 0) {
+        const ext = last.slice(dot + 1).toLowerCase();
+        if (/^[a-z0-9]+$/.test(ext) && ext.length <= 5) return ext;
+      }
+    } catch {
+      // ignore
+    }
+    return "png";
+  };
+
+  // 复制图片到剪贴板
+  const handleCopyImage = async (src: string) => {
+    setImageActionLoading(true);
+    try {
+      const blob = await fetchImageBlob(src);
+      if (!blob) {
+        window.alert("复制图片失败：无法获取图片数据");
+        return;
+      }
+      try {
+        // ClipboardItem 支持 PNG/JPEG 等，SVG 需转 PNG
+        let pngBlob = blob;
+        if (blob.type === "image/svg+xml") {
+          const img = new Image();
+          img.crossOrigin = "anonymous";
+          const url = URL.createObjectURL(blob);
+          await new Promise<void>((resolve, reject) => {
+            img.onload = () => resolve();
+            img.onerror = () => reject(new Error("svg load failed"));
+            img.src = url;
+          });
+          const canvas = document.createElement("canvas");
+          canvas.width = img.naturalWidth || 800;
+          canvas.height = img.naturalHeight || 600;
+          const ctx = canvas.getContext("2d");
+          if (ctx) {
+            ctx.drawImage(img, 0, 0);
+            pngBlob = await new Promise<Blob>((resolve) =>
+              canvas.toBlob((b) => resolve(b ?? blob), "image/png"),
+            );
+          }
+          URL.revokeObjectURL(url);
+        }
+        await navigator.clipboard.write([
+          new ClipboardItem({ [pngBlob.type.startsWith("image/") ? pngBlob.type : "image/png"]: pngBlob }),
+        ]);
+      } catch {
+        // ClipboardItem 不支持时，回退写入图片 URL 文本
+        await navigator.clipboard.writeText(src);
+        window.alert("已复制图片地址（当前环境不支持直接复制图片）");
+      }
+    } finally {
+      setImageActionLoading(false);
+      setImageContextMenu(null);
+    }
+  };
+
+  // 图片另存为：下载到用户选择的路径
+  const handleSaveImage = async (src: string) => {
+    setImageActionLoading(true);
+    try {
+      const blob = await fetchImageBlob(src);
+      if (!blob) {
+        window.alert("保存图片失败：无法获取图片数据");
+        return;
+      }
+      const ext = inferImageExt(src);
+      const defaultName = `image_${Date.now()}.${ext}`;
+      const savePath = await save({ defaultPath: defaultName });
+      if (!savePath) return;
+      const buf = new Uint8Array(await blob.arrayBuffer());
+      await writeFile(savePath, buf);
+    } catch (e) {
+      console.error("保存图片失败:", e);
+    } finally {
+      setImageActionLoading(false);
+      setImageContextMenu(null);
+    }
+  };
+
+  // 共享图片：调用系统共享（WebView2 支持 navigator.share 时）
+  const handleShareImage = async (src: string) => {
+    setImageActionLoading(true);
+    try {
+      const blob = await fetchImageBlob(src);
+      if (!blob) {
+        window.alert("共享失败：无法获取图片数据");
+        return;
+      }
+      const ext = inferImageExt(src);
+      const file = new File([blob], `image.${ext}`, { type: blob.type || "image/png" });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: "共享图片" });
+      } else if (navigator.share) {
+        await navigator.share({ title: "共享图片", url: src.startsWith("data:") ? undefined : src });
+      } else {
+        window.alert("当前环境不支持系统共享");
+      }
+    } catch (e) {
+      // 用户取消共享时也会抛 AbortError，静默忽略
+      if ((e as Error)?.name !== "AbortError") {
+        console.error("共享图片失败:", e);
+      }
+    } finally {
+      setImageActionLoading(false);
+      setImageContextMenu(null);
     }
   };
 
@@ -231,18 +498,22 @@ export function MailView() {
         <div className="mt-2 flex flex-col gap-0.5 text-[12px] text-muted-foreground">
           <div className="flex gap-2">
             <span className="shrink-0 text-muted-foreground/70">发件人</span>
-            <span className="min-w-0 truncate text-foreground">
-              {formatSender(m.fromName, m.fromAddress)}
+            <span className="min-w-0 truncate text-foreground" title={formatSender(m.fromName, m.fromAddress)}>
+              {resolveSenderDisplay(m.fromName, m.fromAddress, contactsByEmail)}
             </span>
           </div>
           <div className="flex gap-2">
             <span className="shrink-0 text-muted-foreground/70">收件人</span>
-            <span className="min-w-0 truncate text-foreground">{m.toAddresses}</span>
+            <span className="min-w-0 truncate text-foreground" title={m.toAddresses}>
+              {resolveAddressDisplay(m.toAddresses, contactsByEmail)}
+            </span>
           </div>
           {m.ccAddresses && (
             <div className="flex gap-2">
               <span className="shrink-0 text-muted-foreground/70">抄送</span>
-              <span className="min-w-0 truncate text-foreground">{m.ccAddresses}</span>
+              <span className="min-w-0 truncate text-foreground" title={m.ccAddresses}>
+                {resolveAddressDisplay(m.ccAddresses, contactsByEmail)}
+              </span>
             </div>
           )}
           <div className="flex gap-2">
@@ -250,59 +521,71 @@ export function MailView() {
             <span className="text-foreground">{formatFullDate(m.date)}</span>
           </div>
           {m.hasAttachments && m.attachments && m.attachments.length > 0 && (
-            <div className="mt-1 flex flex-col gap-1">
+            <div className="mt-1 flex flex-wrap gap-1">
               {m.attachments.map((att, idx) => (
-                <div
-                  key={idx}
-                  className="flex items-center gap-2 rounded border border-border/50 bg-muted/30 px-2 py-1"
-                >
-                  <Paperclip className="h-3 w-3 shrink-0 text-muted-foreground" />
-                  <span className="min-w-0 flex-1 truncate text-[12px] text-foreground">
-                    {att.filename}
-                  </span>
-                  <span className="shrink-0 text-[11px] text-muted-foreground">
-                    {formatSize(att.size)}
-                  </span>
-                  {isPreviewable(att) && (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      className="h-6 w-6 shrink-0"
-                      disabled={loadingPreview === att.filename}
-                      onClick={() => void handlePreviewAttachment(att)}
-                      title="预览"
+                <ContextMenu key={idx}>
+                  <ContextMenuTrigger asChild>
+                    <div
+                      className="group flex w-[220px] cursor-pointer items-center gap-2 rounded px-2 py-1 transition-colors hover:bg-muted/60"
+                      onDoubleClick={() => void handleOpenAttachment(att)}
+                      title="双击打开"
                     >
-                      {loadingPreview === att.filename ? (
-                        <Loader2 className="h-3 w-3 animate-spin" />
+                      {downloading === att.filename ? (
+                        <Loader2 className="h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
+                      ) : attIcons[att.filename] ? (
+                        <img
+                          src={attIcons[att.filename]}
+                          alt=""
+                          className="h-4 w-4 shrink-0 object-contain"
+                          draggable={false}
+                        />
                       ) : (
-                        <Eye className="h-3 w-3" />
+                        <Paperclip className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                       )}
-                    </Button>
-                  )}
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    className="h-6 w-6 shrink-0"
-                    disabled={downloading === att.filename}
-                    onClick={() => void handleDownloadAttachment(att.filename)}
-                    title="下载附件"
-                  >
-                    {downloading === att.filename ? (
-                      <Loader2 className="h-3 w-3 animate-spin" />
-                    ) : (
-                      <Download className="h-3 w-3" />
+                      <span className="min-w-0 flex-1 truncate text-[12px] text-foreground" title={att.filename}>
+                        {att.filename}
+                      </span>
+                      <span className="shrink-0 text-[11px] text-muted-foreground">
+                        {formatSize(att.size)}
+                      </span>
+                    </div>
+                  </ContextMenuTrigger>
+                  <ContextMenuContent className="min-w-[160px]">
+                    <ContextMenuItem onClick={() => void handleOpenAttachment(att)}>
+                      <ExternalLink className="mr-2 h-3.5 w-3.5" />
+                      打开
+                    </ContextMenuItem>
+                    <ContextMenuItem onClick={() => void handleDownloadAttachment(att.filename)}>
+                      <Download className="mr-2 h-3.5 w-3.5" />
+                      另存为...
+                    </ContextMenuItem>
+                    {m.attachments && m.attachments.length > 1 && (
+                      <ContextMenuItem onClick={() => void handleSaveAllAttachments()}>
+                        <FolderArchive className="mr-2 h-3.5 w-3.5" />
+                        保存全部附件
+                      </ContextMenuItem>
                     )}
-                  </Button>
-                </div>
+                    <ContextMenuItem onClick={() => void handleCopyAttachment(att)}>
+                      <Copy className="mr-2 h-3.5 w-3.5" />
+                      复制
+                    </ContextMenuItem>
+                    <ContextMenuSeparator />
+                    <ContextMenuItem
+                      className="text-destructive focus:text-destructive"
+                      onClick={() => window.alert("删除附件需要重写邮件内容，暂不支持。请通过另存为导出后转发处理。")}
+                    >
+                      <Trash2 className="mr-2 h-3.5 w-3.5" />
+                      删除
+                    </ContextMenuItem>
+                  </ContextMenuContent>
+                </ContextMenu>
               ))}
             </div>
           )}
         </div>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3 scrollbar-hover">
-        {!m.bodyFetched || (!m.bodyText && !m.bodyHtml) ? (
+        {!m.bodyFetched ? (
           <div className="flex h-full min-h-[200px] flex-col items-center justify-center gap-2 text-muted-foreground">
             {m.bodyError ? (
               <>
@@ -313,7 +596,7 @@ export function MailView() {
                   size="sm"
                   className="mt-2 h-7 text-[12px]"
                   onClick={() => {
-                    if (gatewayUrl && isOnline) {
+                    if (gatewayUrl) {
                       // 清除错误状态后重试
                       useEmailStore.setState((state) => ({
                         messages: state.messages.map((mm) =>
@@ -333,17 +616,19 @@ export function MailView() {
                   重试
                 </Button>
               </>
-            ) : isOnline ? (
+            ) : (
               <>
                 <Loader2 className="h-4 w-4 animate-spin" />
                 <span className="ml-2 text-[13px]">正在加载正文...</span>
               </>
-            ) : (
-              <span className="text-[13px]">离线模式 — 正文未缓存，连接恢复后可加载</span>
             )}
           </div>
         ) : m.bodyHtml ? (
-          <SafeHtmlFrame html={m.bodyHtml} />
+          <SafeHtmlFrame
+            html={m.bodyHtml}
+            onImageOpen={handleImageOpen}
+            onImageMenu={handleImageMenu}
+          />
         ) : (
           <pre className="whitespace-pre-wrap break-words font-sans text-[13px] leading-relaxed text-foreground">
             {m.bodyText || "(无正文)"}
@@ -366,6 +651,21 @@ export function MailView() {
           dataUrl={previewing.dataUrl}
           contentType={previewing.contentType}
           onClose={() => setPreviewing(null)}
+        />
+      )}
+      {imagePreviewSrc && (
+        <BodyImagePreviewModal src={imagePreviewSrc} onClose={() => setImagePreviewSrc(null)} />
+      )}
+      {imageContextMenu && (
+        <BodyImageContextMenu
+          src={imageContextMenu.src}
+          x={imageContextMenu.x}
+          y={imageContextMenu.y}
+          loading={imageActionLoading}
+          onCopy={() => void handleCopyImage(imageContextMenu.src)}
+          onSave={() => void handleSaveImage(imageContextMenu.src)}
+          onShare={() => void handleShareImage(imageContextMenu.src)}
+          onClose={() => setImageContextMenu(null)}
         />
       )}
     </div>
@@ -438,24 +738,173 @@ function AttachmentPreviewModal({
 }
 
 /**
+ * 邮件正文图片预览：左键点击图片后弹出，点击空白处或按 Esc 关闭。
+ * 支持任意 src（http URL 或 data URL），放大显示并可滚动查看。
+ */
+function BodyImagePreviewModal({ src, onClose }: { src: string; onClose: () => void }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="relative flex max-h-full max-w-full items-center justify-center overflow-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <img
+          src={src}
+          alt="邮件图片预览"
+          className="max-h-[90vh] max-w-[90vw] object-contain"
+        />
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="absolute right-2 top-2 h-8 w-8 bg-black/40 text-white hover:bg-black/60 hover:text-white"
+          onClick={onClose}
+          aria-label="关闭"
+        >
+          <X className="h-4 w-4" />
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+interface BodyImageContextMenuProps {
+  src: string;
+  x: number;
+  y: number;
+  loading: boolean;
+  onCopy: () => void;
+  onSave: () => void;
+  onShare: () => void;
+  onClose: () => void;
+}
+
+/**
+ * 邮件正文图片右键自定义菜单。
+ * 替代 WebView2 原生菜单，仅保留：复制图片、图片另存为、共享（一级菜单，无"更多工具"）。
+ */
+function BodyImageContextMenu({
+  x,
+  y,
+  loading,
+  onCopy,
+  onSave,
+  onShare,
+  onClose,
+}: BodyImageContextMenuProps) {
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  // 点击菜单外部或按 Esc 关闭
+  useEffect(() => {
+    const handleClick = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        onClose();
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    // 延迟绑定，避免触发菜单的同一次 mousedown 立即关闭
+    const timer = window.setTimeout(() => {
+      window.addEventListener("mousedown", handleClick, true);
+      window.addEventListener("contextmenu", handleClick, true);
+      window.addEventListener("keydown", onKey, true);
+    }, 0);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("mousedown", handleClick, true);
+      window.removeEventListener("contextmenu", handleClick, true);
+      window.removeEventListener("keydown", onKey, true);
+    };
+  }, [onClose]);
+
+  // 计算菜单位置，避免超出视口
+  const menuWidth = 180;
+  const menuHeight = 156;
+  const left = Math.min(x, window.innerWidth - menuWidth - 8);
+  const top = Math.min(y, window.innerHeight - menuHeight - 8);
+
+  const items: { icon: typeof Copy; label: string; action: () => void }[] = [
+    { icon: Copy, label: "复制图片", action: onCopy },
+    { icon: ImageDown, label: "图片另存为", action: onSave },
+    { icon: Share2, label: "共享", action: onShare },
+  ];
+
+  return (
+    <div
+      ref={menuRef}
+      className="fixed z-50 min-w-[180px] rounded-md border border-border bg-popover p-1 shadow-md"
+      style={{ left, top }}
+      onContextMenu={(e) => e.preventDefault()}
+    >
+      {items.map((item, idx) => (
+        <button
+          key={idx}
+          type="button"
+          disabled={loading}
+          onClick={item.action}
+          className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-[13px] text-foreground transition-colors hover:bg-accent hover:text-accent-foreground disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {loading ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <item.icon className="h-3.5 w-3.5" />
+          )}
+          <span>{item.label}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+interface SafeHtmlFrameProps {
+  html: string;
+  /** 左键点击图片时触发（直接打开预览） */
+  onImageOpen?: (src: string) => void;
+  /** 右键点击图片时触发（显示自定义菜单） */
+  onImageMenu?: (src: string, x: number, y: number) => void;
+}
+
+/**
  * 用 sandbox iframe 渲染邮件 HTML，脚本完全隔离无法执行。
  * allow-same-origin 让父页面可读取 contentDocument 调整高度（不带 allow-scripts，脚本仍不能跑）。
+ * 通过父窗口访问 contentDocument 拦截 IMG 的 click/contextmenu，替换 WebView2 原生菜单。
  */
-function SafeHtmlFrame({ html }: { html: string }) {
+function SafeHtmlFrame({ html, onImageOpen, onImageMenu }: SafeHtmlFrameProps) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [height, setHeight] = useState<number>(400);
+  // 保存当前事件监听的解绑函数，用于 onLoad 时重新挂载前清理
+  const detachListenersRef = useRef<(() => void) | null>(null);
 
-  // 注入 CSS 强制自动换行，防止邮件 HTML 中 nowrap/pre 导致横向溢出
+  // 用 ref 保存最新回调，避免依赖变化时反复解绑/绑定事件监听
+  const onImageOpenRef = useRef(onImageOpen);
+  onImageOpenRef.current = onImageOpen;
+  const onImageMenuRef = useRef(onImageMenu);
+  onImageMenuRef.current = onImageMenu;
+
+  // 注入 CSS：默认自动换行防止溢出，但允许固定宽度内容横向滚动
+  // img cursor: zoom-in 提示可点击放大
   const wrappedHtml = useMemo(() => {
     const wrapCss = `<style>
       html, body { margin: 0 !important; padding: 0 !important; }
-      body { word-wrap: break-word !important; overflow-wrap: break-word !important; white-space: normal !important; }
+      html { overflow-x: auto !important; overflow-y: hidden !important; }
+      body { word-wrap: break-word !important; overflow-wrap: break-word !important; white-space: normal !important; min-width: 0 !important; overflow: hidden !important; }
       pre, code { white-space: pre-wrap !important; word-wrap: break-word !important; overflow-wrap: break-word !important; }
       table { table-layout: auto !important; word-break: break-word !important; }
-      img { max-width: 100% !important; height: auto !important; }
+      img { max-width: 100% !important; height: auto !important; cursor: zoom-in; }
       div, p, span, td, th { word-wrap: break-word !important; overflow-wrap: break-word !important; }
     </style>`;
-    // referrer policy：加载网络图片时不带 Referer，避免部分图床防盗链 403
     const referrerMeta = `<meta name="referrer" content="no-referrer">`;
     if (html.includes("</head>")) {
       return html.replace("</head>", `${referrerMeta}${wrapCss}</head>`);
@@ -465,6 +914,55 @@ function SafeHtmlFrame({ html }: { html: string }) {
     }
     return `${referrerMeta}${wrapCss}${html}`;
   }, [html]);
+
+  // 在 iframe contentDocument 上挂载图片事件监听
+  const attachListeners = (doc: Document) => {
+    // 左键点击图片：直接打开预览（替代 WebView2 默认行为）
+    const handleClick = (e: MouseEvent) => {
+      const target = e.target as Element | null;
+      if (target && target.tagName === "IMG") {
+        const src = (target as HTMLImageElement).src;
+        if (src) {
+          e.preventDefault();
+          e.stopPropagation();
+          onImageOpenRef.current?.(src);
+        }
+      }
+    };
+    // 右键菜单：阻止 WebView2 原生菜单，显示自定义菜单
+    const handleContextMenu = (e: MouseEvent) => {
+      const target = e.target as Element | null;
+      if (target && target.tagName === "IMG") {
+        const src = (target as HTMLImageElement).src;
+        if (src) {
+          e.preventDefault();
+          e.stopPropagation();
+          // iframe 内的 clientX/Y 是相对于 iframe 视口的坐标，
+          // 需要加上 iframe 在父窗口中的偏移量，才能正确定位 fixed 菜单
+          const iframe = iframeRef.current;
+          const rect = iframe?.getBoundingClientRect();
+          const offsetX = rect?.left ?? 0;
+          const offsetY = rect?.top ?? 0;
+          onImageMenuRef.current?.(src, e.clientX + offsetX, e.clientY + offsetY);
+        }
+      }
+    };
+    // 拖拽图片也阻止，避免 WebView2 触发图片拖放行为
+    const handleDragStart = (e: Event) => {
+      const target = e.target as Element | null;
+      if (target && target.tagName === "IMG") {
+        e.preventDefault();
+      }
+    };
+    doc.addEventListener("click", handleClick, true);
+    doc.addEventListener("contextmenu", handleContextMenu, true);
+    doc.addEventListener("dragstart", handleDragStart, true);
+    return () => {
+      doc.removeEventListener("click", handleClick, true);
+      doc.removeEventListener("contextmenu", handleContextMenu, true);
+      doc.removeEventListener("dragstart", handleDragStart, true);
+    };
+  };
 
   useEffect(() => {
     const iframe = iframeRef.current;
@@ -492,6 +990,8 @@ function SafeHtmlFrame({ html }: { html: string }) {
     try {
       const doc = iframe.contentDocument;
       if (doc) {
+        detachListenersRef.current?.();
+        detachListenersRef.current = attachListeners(doc);
         observer = new MutationObserver(() => adjustHeight());
         observer.observe(doc.body ?? doc.documentElement, {
           childList: true,
@@ -511,26 +1011,40 @@ function SafeHtmlFrame({ html }: { html: string }) {
     };
   }, [wrappedHtml]);
 
+  // 卸载时清理监听
+  useEffect(() => {
+    return () => {
+      detachListenersRef.current?.();
+      detachListenersRef.current = null;
+    };
+  }, []);
+
+  // onLoad 时重新挂载监听器：srcDoc 变化后 iframe 会重新加载，contentDocument 被替换
+  const handleLoad = () => {
+    const iframe = iframeRef.current;
+    if (!iframe) return;
+    try {
+      const doc = iframe.contentDocument;
+      if (!doc) return;
+      const h = doc.body?.scrollHeight ?? doc.documentElement?.scrollHeight ?? 400;
+      setHeight(Math.max(h, 100));
+      // 重新挂载事件监听（新的 contentDocument 上）
+      detachListenersRef.current?.();
+      detachListenersRef.current = attachListeners(doc);
+    } catch {
+      // ignore
+    }
+  };
+
   return (
     <iframe
       ref={iframeRef}
       sandbox="allow-same-origin"
       srcDoc={wrappedHtml}
-      scrolling="no"
-      onLoad={() => {
-        const iframe = iframeRef.current;
-        if (!iframe) return;
-        try {
-          const doc = iframe.contentDocument;
-          if (!doc) return;
-          const h = doc.body?.scrollHeight ?? doc.documentElement?.scrollHeight ?? 400;
-          setHeight(Math.max(h, 100));
-        } catch {
-          // ignore
-        }
-      }}
+      scrolling="auto"
+      onLoad={handleLoad}
       className="w-full border-0"
-      style={{ height: `${height}px`, minHeight: "200px", overflow: "hidden" }}
+      style={{ height: `${height}px`, minHeight: "200px", overflowX: "auto", overflowY: "hidden" }}
       title="邮件正文"
     />
   );

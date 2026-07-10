@@ -1,4 +1,4 @@
-﻿"""Cron tool for scheduling reminders and tasks."""
+"""Cron tool for scheduling reminders and tasks."""
 
 from __future__ import annotations
 
@@ -69,7 +69,12 @@ class CronTool(Tool, ContextAware):
 
     @classmethod
     def enabled(cls, ctx: Any) -> bool:
-        return ctx.cron_service is not None
+        # Superseded by the `schedule` tool, which covers the same scheduling
+        # capabilities (one-shot, recurring, cron expression) AND surfaces the
+        # items in the calendar UI. Disable direct cron tool exposure to keep
+        # AI-created tasks visible in the schedule view. CronService is still
+        # used internally by ScheduleService for ai_task dispatch.
+        return False
 
     @classmethod
     def create(cls, ctx: Any) -> Tool:

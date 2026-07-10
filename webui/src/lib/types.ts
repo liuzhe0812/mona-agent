@@ -243,7 +243,35 @@ export interface SettingsPayload {
       api_key_hint?: string | null;
       api_base?: string | null;
       default_api_base?: string | null;
+      image_models?: string[];
+      default_image_model?: string | null;
     }>;
+  };
+  video_generation: {
+    enabled: boolean;
+    provider: string;
+    provider_configured: boolean;
+    model: string;
+    default_aspect_ratio: string;
+    default_duration: number;
+    save_dir: string;
+    providers: Array<{
+      name: string;
+      label: string;
+      configured: boolean;
+      api_key_hint?: string | null;
+      api_base?: string | null;
+      default_api_base?: string | null;
+      video_models?: string[];
+      default_video_model?: string | null;
+    }>;
+  };
+  embedding: {
+    enabled: boolean;
+    endpoint: string;
+    api_key_hint: string | null;
+    model: string;
+    output_dimensionality: number | null;
   };
   runtime: {
     config_path: string;
@@ -285,6 +313,12 @@ export interface ChannelInfo {
   supports_login: boolean;
   logged_in?: boolean;
   allow_from?: string[];
+  /** WeCom: bot_id; QQ/Feishu: app_id. */
+  bot_id?: string;
+  app_id?: string;
+  /** "true" if a secret/app_secret is set, "" otherwise (never echoes the value). */
+  secret?: string;
+  app_secret?: string;
 }
 
 export type WeixinLoginState =
@@ -338,6 +372,22 @@ export interface ImageGenerationSettingsUpdate {
   defaultAspectRatio: string;
   defaultImageSize: string;
   maxImagesPerTurn: number;
+}
+
+export interface VideoGenerationSettingsUpdate {
+  enabled: boolean;
+  provider: string;
+  model: string;
+  defaultAspectRatio: string;
+  defaultDuration: number;
+}
+
+export interface EmbeddingSettingsUpdate {
+  enabled?: boolean;
+  endpoint?: string;
+  apiKey?: string;
+  model?: string;
+  outputDimensionality?: number | null;
 }
 
 export interface SlashCommand {
@@ -491,6 +541,13 @@ export interface OutboundImageGeneration {
   aspect_ratio?: string | null;
 }
 
+export interface OutboundVideoGeneration {
+  enabled: true;
+  aspect_ratio?: string | null;
+  duration?: number | null;
+  reference_image_url?: string | null;
+}
+
 /** Response shape for ``GET .../webui-thread`` (server-built transcript replay). */
 export interface WebuiThreadPersistedPayload {
   schemaVersion: number;
@@ -508,6 +565,7 @@ export type Outbound =
       content: string;
       media?: OutboundMedia[];
       image_generation?: OutboundImageGeneration;
+      video_generation?: OutboundVideoGeneration;
       webui?: true;
       /** IMPORTANT: Short display text for the user message bubble (e.g. action label).
        *  When set, the frontend renders this instead of the full `content`.

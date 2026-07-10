@@ -35,7 +35,7 @@ import {
   ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { useEmailStore } from "./store/emailStore";
+import { useEmailStore, resolveSenderDisplay } from "./store/emailStore";
 import { getFolderDisplayName, sortFolders } from "./lib/folderUtils";
 import { moveMessage, getAccountColor } from "./lib/emailApi";
 import type { EmailMessage } from "./lib/types";
@@ -69,7 +69,6 @@ export function MailListView({ onReply, onReplyAll, onForward }: MailListViewPro
   const selectedMessage = useEmailStore((s) => s.selectedMessage);
   const selectMessage = useEmailStore((s) => s.selectMessage);
   const loading = useEmailStore((s) => s.loading);
-  const syncing = useEmailStore((s) => s.syncing);
   const error = useEmailStore((s) => s.error);
   const selectedAccountId = useEmailStore((s) => s.selectedAccountId);
   const selectedFolder = useEmailStore((s) => s.selectedFolder);
@@ -293,11 +292,6 @@ export function MailListView({ onReply, onReplyAll, onForward }: MailListViewPro
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto scrollbar-hover">
         {!selectedAccountId ? (
           <EmptyHint text="请先选择账号" />
-        ) : syncing && messages.length === 0 ? (
-          <div className="flex items-center justify-center gap-2 py-12 text-[12px] text-muted-foreground">
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            正在收取邮件...
-          </div>
         ) : loading ? (
           <div className="flex items-center justify-center gap-2 py-12 text-[12px] text-muted-foreground">
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -411,6 +405,7 @@ function MailListItem({
   const moveTargets = sortFolders(
     folders.filter((f) => f.name !== message.folder),
   );
+  const contactsByEmail = useEmailStore((s) => s.contactsByEmail);
 
   return (
     <ContextMenu>
@@ -445,7 +440,7 @@ function MailListItem({
                   : "font-semibold text-foreground",
               )}
             >
-              {message.fromName || message.fromAddress}
+              {resolveSenderDisplay(message.fromName, message.fromAddress, contactsByEmail)}
             </span>
             {message.isStarred && (
               <Star className="h-3 w-3 shrink-0 fill-amber-400 text-amber-400" />

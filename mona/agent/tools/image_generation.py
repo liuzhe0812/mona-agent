@@ -187,9 +187,10 @@ class ImageGenerationTool(Tool):
         try:
             refs = self._resolve_reference_images(reference_images)
             # Use the image-specific model from image_generation config.
-            # Fall back to the provider's stored model if image model is not set.
-            provider_cfg = self._provider_config()
-            model = self.config.model or (provider_cfg.model if provider_cfg and provider_cfg.model else None)
+            # Do not fall back to the provider's chat model — image generation
+            # needs a dedicated image model, and chat models cannot generate
+            # images. The image model is selected in Image settings.
+            model = self.config.model
             if not model:
                 return "Error: no image model configured. Set the image model in Image settings."
             artifacts: list[dict[str, Any]] = []

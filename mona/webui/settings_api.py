@@ -15,11 +15,9 @@ import httpx
 from loguru import logger
 
 from mona.config.loader import get_config_path, load_config, save_config
-from mona.providers.image_generation import (
-    get_image_gen_provider,
-    image_gen_provider_names,
-)
+from mona.providers.image_generation import get_image_gen_provider
 from mona.providers.registry import PROVIDERS, find_by_name
+from mona.providers.video_generation import get_video_gen_provider
 
 QueryParams = dict[str, list[str]]
 
@@ -46,6 +44,9 @@ _IMAGE_GENERATION_ASPECT_RATIOS = {
     "2:3",
     "21:9",
 }
+
+_VIDEO_GENERATION_ASPECT_RATIOS = {"1:1", "3:4", "9:16", "4:3", "16:9"}
+_VIDEO_DURATION_OPTIONS = (3, 5, 10, 18)
 
 
 class WebUISettingsError(ValueError):
@@ -170,54 +171,73 @@ def _migrate_workspace_data(old_ws: Path, new_ws: Path) -> None:
 
 
 def _image_generation_provider_rows(config: Any) -> list[dict[str, Any]]:
+    """Provider rows for the image generation settings section.
+
+    Lists all non-OAuth providers so the user can pick any one and configure
+    credentials + model ID inline.  Providers with a dedicated image-gen
+    client or declared ``image_models`` surface those as quick-pick candidates;
+    others fall back to the OpenAI-compatible ``/images/generations`` endpoint.
+    """
     rows: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    # First, add providers with dedicated image generation implementations.
-    for name in image_gen_provider_names():
-        if name == "openai_compat":
-            continue  # internal fallback, not shown as a standalone option
-        seen.add(name)
-        spec = find_by_name(name)
-        provider_config = getattr(config.providers, name, None)
-        configured = (
-            _provider_configured_for_settings(spec, provider_config)
-            if spec is not None and provider_config is not None
-            else bool(getattr(provider_config, "api_key", None))
-        )
-        rows.append(
-            {
-                "name": name,
-                "label": spec.label if spec is not None else name,
-                "configured": configured,
-                "api_key_hint": _mask_secret_hint(
-                    getattr(provider_config, "api_key", None)
-                ),
-                "api_base": getattr(provider_config, "api_base", None),
-                "default_api_base": (
-                    spec.default_api_base if spec and spec.default_api_base else None
-                ),
-            }
-        )
-    # Then, add any other configured provider that has credentials.
-    # These will use the OpenAI-compatible image generation fallback.
     for spec in PROVIDERS:
-        if spec.name in seen or spec.is_oauth:
+        if spec.is_oauth or spec.is_local:
             continue
         provider_config = getattr(config.providers, spec.name, None)
-        if provider_config is None:
-            continue
-        configured = _provider_configured_for_settings(spec, provider_config)
-        if not configured and not provider_config.api_key and not provider_config.api_base:
-            continue
-        seen.add(spec.name)
+        configured = (
+            _provider_configured_for_settings(spec, provider_config)
+            if provider_config is not None
+            else False
+        )
+        image_models = list(spec.image_models) if spec.image_models else []
         rows.append(
             {
                 "name": spec.name,
                 "label": spec.label,
                 "configured": configured,
-                "api_key_hint": _mask_secret_hint(provider_config.api_key),
-                "api_base": provider_config.api_base or spec.default_api_base or None,
+                "api_key_hint": _mask_secret_hint(
+                    getattr(provider_config, "api_key", None)
+                    if provider_config is not None
+                    else None
+                ),
+                "api_base": getattr(provider_config, "api_base", None) if provider_config else None,
                 "default_api_base": spec.default_api_base or None,
+                "image_models": image_models,
+                "default_image_model": image_models[0] if image_models else None,
+            }
+        )
+    return rows
+
+
+def _video_generation_provider_rows(config: Any) -> list[dict[str, Any]]:
+    """Provider rows for the video generation settings section.
+
+    Lists all non-OAuth providers so the user can pick any one and configure
+    credentials + model ID inline.  Providers that declare ``video_models``
+    in their registry spec surface those as quick-pick candidates.
+    """
+    rows: list[dict[str, Any]] = []
+    for spec in PROVIDERS:
+        if spec.is_oauth or spec.is_local:
+            continue
+        provider_config = getattr(config.providers, spec.name, None)
+        configured = (
+            _provider_configured_for_settings(spec, provider_config)
+            if provider_config is not None
+            else False
+        )
+        video_models = list(spec.video_models) if spec.video_models else []
+        rows.append(
+            {
+                "name": spec.name,
+                "label": spec.label,
+                "configured": configured,
+                "api_key_hint": _mask_secret_hint(
+                    getattr(provider_config, "api_key", None)
+                ),
+                "api_base": getattr(provider_config, "api_base", None) if provider_config else None,
+                "default_api_base": spec.default_api_base or None,
+                "video_models": video_models,
+                "default_video_model": video_models[0] if video_models else None,
             }
         )
     return rows
@@ -239,8 +259,14 @@ def _channels_payload(config: Any) -> dict[str, Any]:
     except Exception:
         all_channels = {}
 
-    # Only weixin is exposed in the WebUI for the first iteration.
-    exposed = ("weixin",)
+    # Channels exposed in the WebUI settings page.
+    # Maps channel name → (id_field, secret_field) for credential-based channels.
+    _credential_channels = {
+        "wecom": ("bot_id", "secret"),
+        "qq": ("app_id", "secret"),
+        "feishu": ("app_id", "app_secret"),
+    }
+    exposed = ("weixin", "wecom", "qq", "feishu")
     for name in exposed:
         cls = all_channels.get(name)
         if cls is None:
@@ -267,6 +293,20 @@ def _channels_payload(config: Any) -> dict[str, Any]:
                 entry["allow_from"] = getattr(section, "allow_from", None) or []
             else:
                 entry["allow_from"] = []
+        elif name in _credential_channels:
+            id_field, secret_field = _credential_channels[name]
+            if isinstance(section, dict):
+                entry[id_field] = section.get(id_field) or ""
+                entry[secret_field] = "true" if section.get(secret_field) else ""
+                entry["allow_from"] = section.get("allow_from") or section.get("allowFrom") or []
+            elif section is not None:
+                entry[id_field] = getattr(section, id_field, "") or ""
+                entry[secret_field] = "true" if getattr(section, secret_field, "") else ""
+                entry["allow_from"] = getattr(section, "allow_from", None) or []
+            else:
+                entry[id_field] = ""
+                entry[secret_field] = ""
+                entry["allow_from"] = []
         available.append(entry)
 
     return {"available": available}
@@ -287,14 +327,20 @@ def _parse_allow_from(value: str | None) -> list[str]:
 def update_channel_settings(query: QueryParams) -> dict[str, Any]:
     """Mutate a channel's WebUI-exposed settings.
 
-    Only channels exposed in the WebUI (currently ``weixin``) can be
-    mutated here. Enabling/disabling a channel requires a gateway restart.
+    Only channels exposed in the WebUI can be mutated here.
+    Enabling/disabling a channel requires a gateway restart.
     """
+    # Maps channel name → (id_field, id_query_alias, secret_field, secret_query_alias)
+    _credential_channels = {
+        "wecom": ("bot_id", "botId", "secret", "secret"),
+        "qq": ("app_id", "appId", "secret", "secret"),
+        "feishu": ("app_id", "appId", "app_secret", "appSecret"),
+    }
+
     channel_name = (_query_first(query, "channel") or "").strip()
     if not channel_name:
         raise WebUISettingsError("channel is required")
-    if channel_name != "weixin":
-        # First iteration only supports weixin.
+    if channel_name not in ("weixin",) and channel_name not in _credential_channels:
         raise WebUISettingsError(f"channel '{channel_name}' is not configurable in the WebUI")
 
     config = load_config()
@@ -331,6 +377,34 @@ def update_channel_settings(query: QueryParams) -> dict[str, Any]:
             if existing != allow_from:
                 setattr(section, "allow_from", allow_from)
                 changed = True
+
+    # Credential-based channels: save id + secret fields.
+    if channel_name in _credential_channels:
+        id_field, id_alias, secret_field, secret_alias = _credential_channels[channel_name]
+
+        id_raw = _query_first_alias(query, id_field, id_alias)
+        if id_raw is not None:
+            id_val = id_raw.strip()
+            if isinstance(section, dict):
+                if section.get(id_field) != id_val:
+                    section[id_field] = id_val
+                    changed = True
+            else:
+                if getattr(section, id_field, "") != id_val:
+                    setattr(section, id_field, id_val)
+                    changed = True
+
+        secret_raw = _query_first_alias(query, secret_field, secret_alias)
+        if secret_raw is not None:
+            secret_val = secret_raw.strip()
+            if isinstance(section, dict):
+                if section.get(secret_field) != secret_val:
+                    section[secret_field] = secret_val
+                    changed = True
+            else:
+                if getattr(section, secret_field, "") != secret_val:
+                    setattr(section, secret_field, secret_val)
+                    changed = True
 
     if changed:
         save_config(config)
@@ -385,6 +459,8 @@ def settings_payload(*, requires_restart: bool = False) -> dict[str, Any]:
 
     search_config = config.tools.web.search
     image_config = config.tools.image_generation
+    video_config = config.tools.video_generation
+    embedding_config = config.tools.embedding
     search_provider = (
         search_config.provider
         if search_config.provider in _WEB_SEARCH_PROVIDER_BY_NAME
@@ -396,6 +472,15 @@ def settings_payload(*, requires_restart: bool = False) -> dict[str, Any]:
             provider
             for provider in image_providers
             if provider["name"] == image_config.provider
+        ),
+        None,
+    )
+    video_providers = _video_generation_provider_rows(config)
+    selected_video_provider = next(
+        (
+            provider
+            for provider in video_providers
+            if provider["name"] == video_config.provider
         ),
         None,
     )
@@ -480,6 +565,25 @@ def settings_payload(*, requires_restart: bool = False) -> dict[str, Any]:
             "max_images_per_turn": image_config.max_images_per_turn,
             "save_dir": image_config.save_dir,
             "providers": image_providers,
+        },
+        "video_generation": {
+            "enabled": video_config.enabled,
+            "provider": video_config.provider,
+            "provider_configured": bool(
+                selected_video_provider and selected_video_provider["configured"]
+            ),
+            "model": video_config.model,
+            "default_aspect_ratio": video_config.default_aspect_ratio,
+            "default_duration": video_config.default_duration,
+            "save_dir": video_config.save_dir,
+            "providers": video_providers,
+        },
+        "embedding": {
+            "enabled": embedding_config.enabled,
+            "endpoint": embedding_config.endpoint,
+            "api_key_hint": _mask_secret_hint(embedding_config.api_key),
+            "model": embedding_config.model,
+            "output_dimensionality": embedding_config.output_dimensionality,
         },
         "runtime": {
             "config_path": str(get_config_path().expanduser()),
@@ -880,6 +984,149 @@ def update_image_generation_settings(query: QueryParams) -> dict[str, Any]:
     if changed:
         save_config(config)
     return settings_payload(requires_restart=changed)
+
+
+def update_video_generation_settings(query: QueryParams) -> dict[str, Any]:
+    config = load_config()
+    video_config = config.tools.video_generation
+    changed = False
+
+    provider_name = _query_first(query, "provider")
+    if provider_name is not None:
+        provider_name = provider_name.strip().lower()
+        if not provider_name:
+            raise WebUISettingsError("video generation provider is required")
+        if get_video_gen_provider(provider_name) is None:
+            raise WebUISettingsError("unknown video generation provider")
+        if getattr(config.providers, provider_name, None) is None:
+            raise WebUISettingsError("provider is not available in configuration")
+        if video_config.provider != provider_name:
+            video_config.provider = provider_name
+            changed = True
+
+    enabled = _query_first(query, "enabled")
+    if enabled is not None:
+        parsed_enabled = _parse_bool(enabled, "enabled")
+        if video_config.enabled != parsed_enabled:
+            video_config.enabled = parsed_enabled
+            changed = True
+
+    model = _query_first(query, "model")
+    if model is not None:
+        model = model.strip()
+        if not model:
+            raise WebUISettingsError("video generation model is required")
+        if len(model) > 200:
+            raise WebUISettingsError("video generation model is too long")
+        if video_config.model != model:
+            video_config.model = model
+            changed = True
+
+    default_aspect_ratio = _query_first_alias(
+        query, "default_aspect_ratio", "defaultAspectRatio",
+    )
+    if default_aspect_ratio is not None:
+        default_aspect_ratio = default_aspect_ratio.strip()
+        if default_aspect_ratio not in _VIDEO_GENERATION_ASPECT_RATIOS:
+            raise WebUISettingsError("unsupported video generation aspect ratio")
+        if video_config.default_aspect_ratio != default_aspect_ratio:
+            video_config.default_aspect_ratio = default_aspect_ratio
+            changed = True
+
+    default_duration = _query_first_alias(query, "default_duration", "defaultDuration")
+    if default_duration is not None:
+        try:
+            parsed_duration = int(default_duration)
+        except ValueError:
+            raise WebUISettingsError("default_duration must be an integer") from None
+        if parsed_duration not in _VIDEO_DURATION_OPTIONS:
+            raise WebUISettingsError(
+                f"default_duration must be one of {list(_VIDEO_DURATION_OPTIONS)}"
+            )
+        if video_config.default_duration != parsed_duration:
+            video_config.default_duration = parsed_duration
+            changed = True
+
+    if video_config.enabled:
+        selected_provider = next(
+            (
+                provider
+                for provider in _video_generation_provider_rows(config)
+                if provider["name"] == video_config.provider
+            ),
+            None,
+        )
+        if not selected_provider or not selected_provider["configured"]:
+            raise WebUISettingsError("video generation provider is not configured")
+
+    if changed:
+        save_config(config)
+    return settings_payload(requires_restart=changed)
+
+
+def update_embedding_settings(query: QueryParams) -> dict[str, Any]:
+    config = load_config()
+    embedding_config = config.tools.embedding
+    changed = False
+
+    enabled = _query_first(query, "enabled")
+    if enabled is not None:
+        parsed_enabled = _parse_bool(enabled, "enabled")
+        if embedding_config.enabled != parsed_enabled:
+            embedding_config.enabled = parsed_enabled
+            changed = True
+
+    endpoint = _query_first(query, "endpoint")
+    if endpoint is not None:
+        endpoint = endpoint.strip()
+        if len(endpoint) > 500:
+            raise WebUISettingsError("embedding endpoint is too long")
+        if embedding_config.endpoint != endpoint:
+            embedding_config.endpoint = endpoint
+            changed = True
+
+    api_key = _query_first(query, "api_key")
+    if api_key is not None:
+        api_key = api_key.strip()
+        if len(api_key) > 500:
+            raise WebUISettingsError("embedding api key is too long")
+        # Empty value clears the key; otherwise update.
+        if embedding_config.api_key != api_key:
+            embedding_config.api_key = api_key
+            changed = True
+
+    model = _query_first(query, "model")
+    if model is not None:
+        model = model.strip()
+        if len(model) > 200:
+            raise WebUISettingsError("embedding model is too long")
+        if embedding_config.model != model:
+            embedding_config.model = model
+            changed = True
+
+    output_dimensionality = _query_first_alias(
+        query,
+        "output_dimensionality",
+        "outputDimensionality",
+    )
+    if output_dimensionality is not None:
+        output_dimensionality = output_dimensionality.strip()
+        if not output_dimensionality:
+            parsed_dim: int | None = None
+        else:
+            try:
+                parsed_dim = int(output_dimensionality)
+            except ValueError:
+                raise WebUISettingsError("output_dimensionality must be an integer") from None
+            if parsed_dim < 1 or parsed_dim > 8192:
+                raise WebUISettingsError("output_dimensionality must be between 1 and 8192")
+        if embedding_config.output_dimensionality != parsed_dim:
+            embedding_config.output_dimensionality = parsed_dim
+            changed = True
+
+    if changed:
+        save_config(config)
+    return settings_payload(requires_restart=False)
 
 
 _ZEN_MODELS_URL = "https://opencode.ai/zen/v1/models"

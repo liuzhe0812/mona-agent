@@ -18,7 +18,9 @@ interface NoteEditorProps {
     plainText: string;
   }) => void;
   onMoveSelectionToNote?: (selectedText: string) => void;
+  onOpenNoteByTitle?: (title: string) => void;
   toolbarExtra?: ReactNode;
+  toolbarLeadingExtra?: ReactNode;
 }
 
 export function NoteEditor({
@@ -30,7 +32,9 @@ export function NoteEditor({
   onTitleChange,
   onContentChange,
   onMoveSelectionToNote,
+  onOpenNoteByTitle,
   toolbarExtra,
+  toolbarLeadingExtra,
 }: NoteEditorProps) {
   const saveLabel =
     saveStatus === "saving"
@@ -46,7 +50,9 @@ export function NoteEditor({
       noteTitles={noteTitles}
       onContentChange={onContentChange}
       onMoveSelectionToNote={onMoveSelectionToNote}
+      onOpenNoteByTitle={onOpenNoteByTitle}
       toolbarExtra={toolbarExtra}
+      toolbarLeadingExtra={toolbarLeadingExtra}
       statsExtra={
         <span className={saveStatus === "error" ? "text-destructive" : undefined}>
           {saveLabel}

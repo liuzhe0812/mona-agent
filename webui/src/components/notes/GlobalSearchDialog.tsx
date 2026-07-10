@@ -13,12 +13,14 @@ interface GlobalSearchDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSelectNote: (noteId: string, notebookId?: string) => void;
+  initialQuery?: string;
 }
 
 export function GlobalSearchDialog({
   open,
   onOpenChange,
   onSelectNote,
+  initialQuery = "",
 }: GlobalSearchDialogProps) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<NoteSearchResult[]>([]);
@@ -31,14 +33,14 @@ export function GlobalSearchDialog({
   // Reset state when dialog opens
   useEffect(() => {
     if (open) {
-      setQuery("");
+      setQuery(initialQuery);
       setResults([]);
       setActiveIndex(0);
       setLoading(false);
       // Focus input after dialog animation
       window.setTimeout(() => inputRef.current?.focus(), 50);
     }
-  }, [open]);
+  }, [open, initialQuery]);
 
   // Debounced search
   useEffect(() => {

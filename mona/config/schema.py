@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from mona.agent.tools.image_generation import ImageGenerationToolConfig
     from mona.agent.tools.self import MyToolConfig
     from mona.agent.tools.shell import ExecToolConfig
+    from mona.agent.tools.video_generation import VideoGenerationToolConfig
     from mona.agent.tools.web import WebToolsConfig
     from mona.email_intel.config import EmailIntelConfig
 
@@ -308,6 +309,16 @@ class NotesToolsConfig(Base):
     allow_create: bool = True  # controls notes_create and notes_save_image
 
 
+class EmbeddingToolConfig(Base):
+    """Global embedding model configuration for KB / notes-kb vector indexing."""
+
+    enabled: bool = False
+    endpoint: str = ""
+    api_key: str = ""
+    model: str = ""
+    output_dimensionality: int | None = None
+
+
 class TerminalToolConfig(Base):
     enable: bool = True
     exec_mode: TerminalExecMode = TerminalExecMode.AUTO
@@ -371,6 +382,9 @@ class ToolsConfig(Base):
     image_generation: ImageGenerationToolConfig = Field(
         default_factory=lambda: _lazy_default("mona.agent.tools.image_generation", "ImageGenerationToolConfig"),
     )
+    video_generation: VideoGenerationToolConfig = Field(
+        default_factory=lambda: _lazy_default("mona.agent.tools.video_generation", "VideoGenerationToolConfig"),
+    )
     document: DocumentToolConfig = Field(
         default_factory=lambda: _lazy_default("mona.agent.tools.document", "DocumentToolConfig"),
     )
@@ -390,6 +404,7 @@ class ToolsConfig(Base):
         default_factory=lambda: _lazy_default("mona.email_intel.config", "EmailIntelConfig"),
     )
     notes_tools: NotesToolsConfig = Field(default_factory=NotesToolsConfig)
+    embedding: EmbeddingToolConfig = Field(default_factory=EmbeddingToolConfig)
     restrict_to_workspace: bool = False  # restrict all tool access to workspace directory
     mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
     ssrf_whitelist: list[str] = Field(default_factory=list)  # CIDR ranges to exempt from SSRF blocking (e.g. ["100.64.0.0/10"] for Tailscale)
@@ -590,6 +605,7 @@ def _resolve_tool_config_refs() -> None:
     from mona.agent.tools.image_generation import ImageGenerationToolConfig
     from mona.agent.tools.self import MyToolConfig
     from mona.agent.tools.shell import ExecToolConfig
+    from mona.agent.tools.video_generation import VideoGenerationToolConfig
     from mona.agent.tools.web import WebFetchConfig, WebSearchConfig, WebToolsConfig
     from mona.email_intel.config import EmailIntelConfig
 
@@ -601,6 +617,7 @@ def _resolve_tool_config_refs() -> None:
     mod.WebFetchConfig = WebFetchConfig  # type: ignore[attr-defined]
     mod.MyToolConfig = MyToolConfig  # type: ignore[attr-defined]
     mod.ImageGenerationToolConfig = ImageGenerationToolConfig  # type: ignore[attr-defined]
+    mod.VideoGenerationToolConfig = VideoGenerationToolConfig  # type: ignore[attr-defined]
     mod.DocumentToolConfig = DocumentToolConfig  # type: ignore[attr-defined]
     mod.HttpToolConfig = HttpToolConfig  # type: ignore[attr-defined]
     mod.DataframeToolConfig = DataframeToolConfig  # type: ignore[attr-defined]

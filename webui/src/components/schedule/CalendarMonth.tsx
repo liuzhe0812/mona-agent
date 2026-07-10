@@ -64,27 +64,27 @@ export function CalendarMonth({
   return (
     <div className="flex flex-col h-full">
       {/* Toolbar */}
-      <div className="flex items-center justify-between px-4 py-3 border-b">
-        <div className="flex items-center gap-2">
-          <Button variant="ghost" size="icon" onClick={goPrev} className="h-8 w-8">
-            <ChevronLeft className="h-4 w-4" />
+      <div className="flex items-center justify-between px-3 py-1.5 border-b">
+        <div className="flex items-center gap-1">
+          <Button variant="ghost" size="icon" onClick={goPrev} className="h-6 w-6">
+            <ChevronLeft className="h-3.5 w-3.5" />
           </Button>
-          <span className="text-base font-semibold min-w-[120px] text-center">
+          <span className="text-sm font-semibold min-w-[100px] text-center">
             {monthLabel}
           </span>
-          <Button variant="ghost" size="icon" onClick={goNext} className="h-8 w-8">
-            <ChevronRight className="h-4 w-4" />
+          <Button variant="ghost" size="icon" onClick={goNext} className="h-6 w-6">
+            <ChevronRight className="h-3.5 w-3.5" />
           </Button>
-          <Button variant="outline" size="sm" onClick={goToday} className="h-8 ml-2">
+          <Button variant="outline" size="sm" onClick={goToday} className="h-6 ml-1 text-xs px-2">
             今天
           </Button>
         </div>
         <Button
           size="sm"
-          className="h-8 rounded-full"
+          className="h-6 rounded-full text-xs px-2"
           onClick={() => onCreateAt(new Date())}
         >
-          <Plus className="h-4 w-4 mr-1" />
+          <Plus className="h-3 w-3 mr-0.5" />
           新建
         </Button>
       </div>
@@ -92,7 +92,7 @@ export function CalendarMonth({
       {/* Weekday header */}
       <div className="grid grid-cols-7 border-b text-xs text-muted-foreground">
         {WEEKDAY_HEADERS.map((d) => (
-          <div key={d} className="py-2 text-center font-medium">
+          <div key={d} className="py-1.5 text-center font-medium">
             {d}
           </div>
         ))}

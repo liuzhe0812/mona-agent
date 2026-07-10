@@ -83,7 +83,19 @@ export function useBrowserTabs() {
         await new Promise((resolve) => setTimeout(resolve, SESSION_RESTORE_DELAY));
         if (cancelled) return;
 
-        for (const savedTab of session.tabs.slice(0, 10)) {
+        // 如果 Rust 侧已有标签（前端重载但 Rust 进程未退出的场景），
+        // 路径 B 已从 Rust 侧同步了标签，跳过 localStorage 恢复避免重复
+        if (tabsRef.current.some((t) => t.type === "browser")) return;
+
+        // 按 URL 去重，清理 localStorage 中可能已被污染的重复数据
+        const seenUrls = new Set<string>();
+        const uniqueTabs = session.tabs.filter((t) => {
+          if (!t.url || seenUrls.has(t.url)) return false;
+          seenUrls.add(t.url);
+          return true;
+        });
+
+        for (const savedTab of uniqueTabs.slice(0, 10)) {
           // 限制最多恢复 10 个标签
           if (cancelled) return;
           _tabCounter++;
@@ -125,8 +137,15 @@ export function useBrowserTabs() {
     if (!isTauri()) return;
     const saveSession = () => {
       try {
+        const seenUrls = new Set<string>();
         const browserTabsList = tabs
           .filter((t) => t.type === "browser" && t.url && t.webviewCreated && !t.isIncognito)
+          .filter((t) => {
+            // 按 URL 去重，避免 localStorage 被污染后每次恢复都重复
+            if (seenUrls.has(t.url!)) return false;
+            seenUrls.add(t.url!);
+            return true;
+          })
           .map((t) => ({ url: t.url!, title: t.title }));
         const session = { tabs: browserTabsList, savedAt: Date.now() };
         localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));

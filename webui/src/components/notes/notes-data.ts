@@ -106,6 +106,10 @@ export interface OperationNote {
   type?: NoteType;
   /** Aliases used for [[wiki link]] matching besides the title. */
   aliases?: string[];
+  /** Whether the note is starred/favorited by the user. */
+  favorite?: boolean;
+  /** Whether the note is bookmarked by the user. */
+  bookmarked?: boolean;
 }
 
 // ---------------------------------------------------------------------------

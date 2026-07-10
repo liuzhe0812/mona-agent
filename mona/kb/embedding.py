@@ -35,6 +35,29 @@ class EmbeddingConfig:
     extra_headers: dict[str, str] = field(default_factory=dict)
 
 
+def load_global_embedding_config() -> EmbeddingConfig | None:
+    """Read embedding config from the global settings (config.tools.embedding).
+
+    Returns None if global embedding is not configured.
+    """
+    try:
+        from mona.config.loader import load_config
+
+        cfg = load_config().tools.embedding
+        if not (cfg.enabled and cfg.endpoint and cfg.model):
+            return None
+        return EmbeddingConfig(
+            enabled=cfg.enabled,
+            endpoint=cfg.endpoint,
+            api_key=cfg.api_key,
+            model=cfg.model,
+            output_dimensionality=cfg.output_dimensionality,
+        )
+    except Exception as e:
+        logger.warning(f"failed to load global embedding config: {e}")
+        return None
+
+
 def _is_google_config(cfg: EmbeddingConfig) -> bool:
     lower = cfg.endpoint.lower()
     return "generativelanguage.googleapis.com" in lower or ":embedcontent" in lower

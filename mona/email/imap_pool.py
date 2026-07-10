@@ -53,6 +53,7 @@ def _is_retryable(e: Exception) -> bool:
         "timeout", "timed out", "connection reset", "broken pipe",
         "eof", "connection closed", "connection aborted",
         "socket", "connection refused",
+        "illegal in state", "logout",
     )
     return any(m in msg for m in markers)
 

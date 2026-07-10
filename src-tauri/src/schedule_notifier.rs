@@ -1,10 +1,11 @@
 //! Schedule reminder notifier.
 //!
 //! Polls the Python gateway's ``/api/schedule/notifications`` endpoint on a
-//! background tokio task and fires custom notification windows for each
-//! pending reminder. This works independently of the webview state — even
-//! when the window is minimized to the tray, the Rust side keeps polling
-//! and showing notifications.
+//! background tokio task and fires the same in-app notification windows used
+//! by mail notifications. These are independent Tauri windows (borderless,
+//! always-on-top, skip taskbar) so they pop up even when the main window is
+//! minimized to the tray, and they render the Mona logo and custom styling
+//! via the ``#/notification`` route.
 
 use std::time::Duration;
 
@@ -26,8 +27,8 @@ struct NotificationEntry {
     item_id: Option<String>,
 }
 
-/// Start a background polling task that fires custom notification windows
-/// for schedule reminders. Should be called once after the gateway is ready.
+/// Start a background polling task that fires notification windows for
+/// schedule reminders. Should be called once after the gateway is ready.
 pub fn start_polling(app: tauri::AppHandle, port: u16) {
     let url = format!("http://127.0.0.1:{}/api/schedule/notifications", port);
     tauri::async_runtime::spawn(async move {

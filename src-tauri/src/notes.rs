@@ -82,6 +82,9 @@ pub struct OperationNote {
     /// Aliases used for [[wiki link]] matching besides the title.
     #[serde(default)]
     pub aliases: Vec<String>,
+    /// Whether the note is starred/favorited by the user.
+    #[serde(default)]
+    pub favorite: bool,
 }
 
 fn default_context_level() -> String {
@@ -406,6 +409,7 @@ fn migrate_legacy_sqlite_to_vault(vault: &Path) -> Result<Option<usize>, String>
                 },
                 note_type: default_note_type(),
                 aliases: Vec::new(),
+                favorite: false,
             };
 
             let mut file_name = format!("{}.md", sanitize_filename(&title));
@@ -555,6 +559,8 @@ struct ParsedFrontmatter {
     note_type: Option<String>,
     /// Aliases used for [[wiki link]] matching besides the title.
     aliases: Vec<String>,
+    /// Whether the note is starred/favorited by the user.
+    favorite: Option<bool>,
 }
 
 /// Split a markdown file into (frontmatter lines, body). If the file does not
@@ -721,6 +727,10 @@ fn parse_frontmatter_lines(lines: &[String]) -> ParsedFrontmatter {
                 continue;
             }
             "type" => fm.note_type = Some(yaml_value(value)),
+            "favorite" => {
+                let v = yaml_value(value).to_lowercase();
+                fm.favorite = Some(v == "true" || v == "yes" || v == "1");
+            }
             _ => {}
         }
         i += 1;
@@ -800,6 +810,9 @@ fn serialize_frontmatter(note: &OperationNote) -> String {
     // Only write `type:` when non-default, to keep legacy files minimal.
     if !note.note_type.is_empty() && note.note_type != "note" {
         out.push_str(&format!("type: {}\n", yaml_scalar(&note.note_type)));
+    }
+    if note.favorite {
+        out.push_str("favorite: true\n");
     }
     out.push_str("---\n");
     out
@@ -974,6 +987,7 @@ pub(crate) fn parse_note_file(path: &Path, notebook_name: &str) -> Result<Operat
         context_level,
         note_type: fm.note_type.unwrap_or_else(default_note_type),
         aliases: fm.aliases,
+        favorite: fm.favorite.unwrap_or(false),
     })
 }
 
@@ -1417,6 +1431,7 @@ pub async fn notes_create_from_chat(
         context_level: "full".to_string(),
         note_type: default_note_type(),
         aliases: Vec::new(),
+        favorite: false,
     };
 
     let base = sanitize_filename(&title);
@@ -1517,8 +1532,14 @@ fn search_notes_in_memory(
     query: &str,
     limit: usize,
 ) -> Vec<NoteSearchResult> {
-    let q = query.to_lowercase();
-    if q.is_empty() {
+    // Multi-token LIKE search: split query on whitespace into tokens,
+    // each token independently matches (title +3, tags +2, content +1).
+    // Total score is summed across tokens.
+    let tokens: Vec<String> = query
+        .split_whitespace()
+        .map(|t| t.to_lowercase())
+        .collect();
+    if tokens.is_empty() {
         return Vec::new();
     }
     let mut results = Vec::new();
@@ -1531,18 +1552,31 @@ fn search_notes_in_memory(
         let title_l = note.title.to_lowercase();
         let content_l = note.content_markdown.to_lowercase();
         let tags_l = note.tags.join(" ").to_lowercase();
-        if title_l.contains(&q) || content_l.contains(&q) || tags_l.contains(&q) {
+        let mut score = 0.0;
+        for tok in &tokens {
+            if title_l.contains(tok) {
+                score += 3.0;
+            }
+            if tags_l.contains(tok) {
+                score += 2.0;
+            }
+            if content_l.contains(tok) {
+                score += 1.0;
+            }
+        }
+        if score > 0.0 {
             results.push(NoteSearchResult {
                 note_id: note.id.clone(),
                 title: note.title.clone(),
                 snippet: make_snippet(&note.content_markdown, query),
-                rank: 0.0,
+                rank: score,
                 notebook_id: Some(note.notebook_id.clone()),
                 notebook_name: Some(note.notebook_id.clone()),
             });
         }
     }
 
+    results.sort_by(|a, b| b.rank.partial_cmp(&a.rank).unwrap_or(std::cmp::Ordering::Equal));
     results = apply_context_levels_mem(results, notes);
     results.truncate(limit);
     results

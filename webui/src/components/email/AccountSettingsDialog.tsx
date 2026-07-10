@@ -13,6 +13,16 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogFooter,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogAction,
+  AlertDialogCancel,
+} from "@/components/ui/alert-dialog";
+import {
   Tabs,
   TabsContent,
   TabsList,
@@ -63,6 +73,9 @@ export function AccountSettingsDialog({
   const [applyingRules, setApplyingRules] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [applyConfirmOpen, setApplyConfirmOpen] = useState(false);
+  const [applyResultOpen, setApplyResultOpen] = useState(false);
+  const [applyResultText, setApplyResultText] = useState("");
 
   useEffect(() => {
     if (!open || !account) return;
@@ -192,15 +205,18 @@ export function AccountSettingsDialog({
     }
   };
 
-  const handleApplyRules = async () => {
+  const handleApplyRules = () => {
     if (!account || !gatewayUrl) return;
     if (rules.filter((r) => r.enabled).length === 0) {
       setError("没有启用的规则");
       return;
     }
-    if (!window.confirm(`将对账号 ${account.displayName} 下 INBOX 中已缓存的邮件应用规则，可能需要一些时间。继续？`)) {
-      return;
-    }
+    setApplyConfirmOpen(true);
+  };
+
+  const runApplyRules = async () => {
+    setApplyConfirmOpen(false);
+    if (!account || !gatewayUrl) return;
     setApplyingRules(true);
     setError(null);
     try {
@@ -209,16 +225,17 @@ export function AccountSettingsDialog({
       const success = result.success ?? 0;
       const failed = result.failed ?? 0;
       const errs = result.errors ?? [];
+      let text = "";
       if (matched === 0) {
-        window.alert("没有匹配规则的邮件");
+        text = "没有匹配规则的邮件";
       } else if (failed === 0) {
-        window.alert(`成功处理 ${success} 封邮件`);
+        text = `成功处理 ${success} 封邮件`;
       } else {
         const errDetail = errs.slice(0, 3).join("\n");
-        window.alert(
-          `匹配 ${matched} 封，成功 ${success} 封，失败 ${failed} 封\n\n失败原因（前 3 条）：\n${errDetail}`,
-        );
+        text = `匹配 ${matched} 封，成功 ${success} 封，失败 ${failed} 封\n\n失败原因（前 3 条）：\n${errDetail}`;
       }
+      setApplyResultText(text);
+      setApplyResultOpen(true);
     } catch (e) {
       setError(`应用规则失败: ${e}`);
     } finally {
@@ -751,6 +768,46 @@ export function AccountSettingsDialog({
           </DialogFooter>
         </form>
       </DialogContent>
+
+      {/* 对已有邮件运行 - 确认弹窗 */}
+      <AlertDialog open={applyConfirmOpen} onOpenChange={setApplyConfirmOpen}>
+        <AlertDialogContent className="max-w-md">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-base">应用规则到已有邮件</AlertDialogTitle>
+            <AlertDialogDescription className="text-[13px]">
+              将对账号「{account.displayName}」下 INBOX 中已缓存的邮件应用规则，可能需要一些时间。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="h-8 text-[12px]">取消</AlertDialogCancel>
+            <AlertDialogAction
+              className="h-8 text-[12px]"
+              onClick={() => void runApplyRules()}
+              disabled={applyingRules}
+            >
+              {applyingRules ? (
+                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              ) : null}
+              继续
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* 对已有邮件运行 - 结果弹窗 */}
+      <AlertDialog open={applyResultOpen} onOpenChange={setApplyResultOpen}>
+        <AlertDialogContent className="max-w-md">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-base">应用完成</AlertDialogTitle>
+            <AlertDialogDescription className="whitespace-pre-line text-[13px]">
+              {applyResultText}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogAction className="h-8 text-[12px]">知道了</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Dialog>
   );
 }

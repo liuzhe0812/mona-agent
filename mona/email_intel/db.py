@@ -3,11 +3,14 @@
 直接读取 Rust 侧的 email.sqlite3，提供搜索和读取能力。
 只读，不写入。所有写操作通过 Rust 命令（前端调用）完成。
 
-数据库路径：get_data_dir() / "email.sqlite3"
+数据库路径优先级：
+1. MONA_APP_DATA_DIR 环境变量（由 Rust gateway 启动时注入，与 Rust app_data_dir 一致）
+2. get_data_dir() / "email.sqlite3"（默认 ~/.mona/email.sqlite3）
 """
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -20,7 +23,15 @@ _EMAIL_DB_FILE = "email.sqlite3"
 
 
 def _get_db_path() -> Path:
-    """获取 email.sqlite3 路径。"""
+    """获取 email.sqlite3 路径。
+
+    优先用 MONA_APP_DATA_DIR（Rust 注入），回退到 get_data_dir()。
+    Rust 把 email.sqlite3 写在 app_data_dir()（Windows 上是 AppData\\Roaming\\mona），
+    Python 默认在 ~/.mona 找，路径不一致会导致 "邮件数据库不存在" 错误。
+    """
+    app_data_dir = os.environ.get("MONA_APP_DATA_DIR")
+    if app_data_dir:
+        return Path(app_data_dir) / _EMAIL_DB_FILE
     return get_data_dir() / _EMAIL_DB_FILE
 
 
@@ -118,9 +129,16 @@ def search_messages(
         conditions.append("folder = ?")
         params.append(folder)
     if keyword:
-        conditions.append("(subject LIKE ? OR body_text LIKE ?)")
-        kw = f"%{keyword}%"
-        params.extend([kw, kw])
+        # 多 token LIKE：query 按空格切分，每个 token 独立匹配 subject/body_text。
+        # WHERE 子句用 AND 连接（所有 token 都需命中），保证结果相关性。
+        tokens = [t for t in keyword.split() if t.strip()]
+        if tokens:
+            token_clauses = []
+            for tok in tokens:
+                pat = f"%{tok}%"
+                token_clauses.append("(subject LIKE ? OR body_text LIKE ?)")
+                params.extend([pat, pat])
+            conditions.append(f"({' AND '.join(token_clauses)})")
     if from_address:
         conditions.append("from_address LIKE ?")
         params.append(f"%{from_address}%")
@@ -250,261 +268,6 @@ def list_accounts() -> list[dict[str, Any]]:
         rows = conn.execute(sql).fetchall()
 
     return [{"accountId": row["account_id"]} for row in rows]
-
-
-def get_daily_stats(date_str: str) -> dict[str, Any]:
-    """获取某天的邮件统计，用于日报。
-
-    Args:
-        date_str: 日期字符串，ISO 格式如 "2026-06-20"
-
-    Returns:
-        dict: received_count, unread_count, needs_action_count, top_senders, important_subjects
-    """
-    date_prefix = date_str[:10]  # 取 YYYY-MM-DD
-    like_pattern = f"{date_prefix}%"
-
-    with _connect() as conn:
-        # 收到的邮件数（INBOX 及其他收件文件夹）
-        received_rows = conn.execute(
-            """SELECT COUNT(*) as cnt FROM messages
-               WHERE date LIKE ? AND folder NOT IN ('Sent', 'Drafts', 'Trash', 'Junk')""",
-            [like_pattern],
-        ).fetchone()
-        received_count = received_rows["cnt"] if received_rows else 0
-
-        # 未读数
-        unread_rows = conn.execute(
-            """SELECT COUNT(*) as cnt FROM messages
-               WHERE date LIKE ? AND is_read = 0
-               AND folder NOT IN ('Sent', 'Drafts', 'Trash', 'Junk')""",
-            [like_pattern],
-        ).fetchone()
-        unread_count = unread_rows["cnt"] if unread_rows else 0
-
-        # 需要处理的邮件（有 AI 分析且 intent 为 needs_reply 或 needs_action）
-        needs_action_rows = conn.execute(
-            """SELECT COUNT(*) as cnt FROM messages m
-               JOIN email_ai_analysis a
-                 ON m.uid = a.uid AND m.account_id = a.account_id AND m.folder = a.folder
-               WHERE m.date LIKE ?
-               AND a.intent IN ('needs_reply', 'needs_action', 'needs_approval')""",
-            [like_pattern],
-        ).fetchone()
-        needs_action_count = needs_action_rows["cnt"] if needs_action_rows else 0
-
-        # Top 发件人
-        sender_rows = conn.execute(
-            """SELECT from_name, from_address, COUNT(*) as cnt FROM messages
-               WHERE date LIKE ? AND folder NOT IN ('Sent', 'Drafts', 'Trash', 'Junk')
-               GROUP BY from_address ORDER BY cnt DESC LIMIT 5""",
-            [like_pattern],
-        ).fetchall()
-        top_senders = [
-            {"name": r["from_name"] or r["from_address"], "address": r["from_address"], "count": r["cnt"]}
-            for r in sender_rows
-        ]
-
-        # 重要邮件（高紧急度或需要回复）
-        important_rows = conn.execute(
-            """SELECT m.subject, m.from_name, m.from_address, m.date, m.uid, m.account_id, m.folder
-               FROM messages m
-               JOIN email_ai_analysis a
-                 ON m.uid = a.uid AND m.account_id = a.account_id AND m.folder = a.folder
-               WHERE m.date LIKE ?
-               AND (a.urgency = 'high' OR a.intent IN ('needs_reply', 'needs_approval'))
-               ORDER BY m.date DESC LIMIT 5""",
-            [like_pattern],
-        ).fetchall()
-        important_emails = [
-            {
-                "subject": r["subject"],
-                "fromName": r["from_name"],
-                "fromAddress": r["from_address"],
-                "date": r["date"],
-                "uid": r["uid"],
-                "accountId": r["account_id"],
-                "folder": r["folder"],
-            }
-            for r in important_rows
-        ]
-
-    return {
-        "date": date_prefix,
-        "receivedCount": received_count,
-        "unreadCount": unread_count,
-        "needsActionCount": needs_action_count,
-        "topSenders": top_senders,
-        "importantEmails": important_emails,
-    }
-
-
-def get_weekly_stats(date_from: str, date_to: str) -> dict[str, Any]:
-    """获取一周的邮件统计，用于周报。
-
-    Args:
-        date_from: 起始日期 ISO 格式 "2026-06-16"
-        date_to: 结束日期 ISO 格式 "2026-06-22"
-
-    Returns:
-        dict: received_count, sent_count, unread_count, needs_action_count,
-              top_senders, unreplied_count, important_emails
-    """
-    with _connect() as conn:
-        # 收到和发送的邮件数
-        received_row = conn.execute(
-            """SELECT COUNT(*) as cnt FROM messages
-               WHERE date >= ? AND date <= ?
-               AND folder NOT IN ('Sent', 'Drafts', 'Trash', 'Junk')""",
-            [date_from, date_to + " 23:59:59"],
-        ).fetchone()
-        received_count = received_row["cnt"] if received_row else 0
-
-        sent_row = conn.execute(
-            """SELECT COUNT(*) as cnt FROM messages
-               WHERE date >= ? AND date <= ? AND folder IN ('Sent', 'Sent Items')""",
-            [date_from, date_to + " 23:59:59"],
-        ).fetchone()
-        sent_count = sent_row["cnt"] if sent_row else 0
-
-        # 未读数
-        unread_row = conn.execute(
-            """SELECT COUNT(*) as cnt FROM messages
-               WHERE date >= ? AND date <= ? AND is_read = 0
-               AND folder NOT IN ('Sent', 'Drafts', 'Trash', 'Junk')""",
-            [date_from, date_to + " 23:59:59"],
-        ).fetchone()
-        unread_count = unread_row["cnt"] if unread_row else 0
-
-        # 需要处理但未回复的邮件数
-        unreplied_row = conn.execute(
-            """SELECT COUNT(*) as cnt FROM messages m
-               JOIN email_ai_analysis a
-                 ON m.uid = a.uid AND m.account_id = a.account_id AND m.folder = a.folder
-               WHERE m.date >= ? AND m.date <= ?
-               AND a.intent IN ('needs_reply', 'needs_action', 'needs_approval')
-               AND m.is_read = 0""",
-            [date_from, date_to + " 23:59:59"],
-        ).fetchone()
-        unreplied_count = unreplied_row["cnt"] if unreplied_row else 0
-
-        # Top 发件人
-        sender_rows = conn.execute(
-            """SELECT from_name, from_address, COUNT(*) as cnt FROM messages
-               WHERE date >= ? AND date <= ?
-               AND folder NOT IN ('Sent', 'Drafts', 'Trash', 'Junk')
-               GROUP BY from_address ORDER BY cnt DESC LIMIT 5""",
-            [date_from, date_to + " 23:59:59"],
-        ).fetchall()
-        top_senders = [
-            {"name": r["from_name"] or r["from_address"], "address": r["from_address"], "count": r["cnt"]}
-            for r in sender_rows
-        ]
-
-        # 重要邮件
-        important_rows = conn.execute(
-            """SELECT m.subject, m.from_name, m.from_address, m.date, m.uid, m.account_id, m.folder,
-                      a.summary, a.urgency, a.intent
-               FROM messages m
-               JOIN email_ai_analysis a
-                 ON m.uid = a.uid AND m.account_id = a.account_id AND m.folder = a.folder
-               WHERE m.date >= ? AND m.date <= ?
-               AND (a.urgency = 'high' OR a.intent IN ('needs_reply', 'needs_approval'))
-               ORDER BY m.date DESC LIMIT 10""",
-            [date_from, date_to + " 23:59:59"],
-        ).fetchall()
-        important_emails = [
-            {
-                "subject": r["subject"],
-                "fromName": r["from_name"],
-                "fromAddress": r["from_address"],
-                "date": r["date"],
-                "summary": r["summary"],
-                "urgency": r["urgency"],
-                "intent": r["intent"],
-            }
-            for r in important_rows
-        ]
-
-    return {
-        "dateFrom": date_from[:10],
-        "dateTo": date_to[:10],
-        "receivedCount": received_count,
-        "sentCount": sent_count,
-        "unreadCount": unread_count,
-        "unrepliedCount": unreplied_count,
-        "topSenders": top_senders,
-        "importantEmails": important_emails,
-    }
-
-
-def get_emails_with_deadlines(
-    *,
-    account_id: str | None = None,
-    limit: int = 50,
-) -> list[dict[str, Any]]:
-    """获取有截止日期的已分析邮件，用于任务提取。
-
-    Args:
-        account_id: 限定账号（可选）
-        limit: 返回上限
-
-    Returns:
-        list[dict]: 每项含 uid, accountId, folder, subject, fromName, fromAddress,
-                    date, summary, intent, urgency, keyInfo (parsed dict)
-    """
-    conditions = ["a.key_info LIKE '%deadlines%'"]
-    params: list[Any] = []
-
-    if account_id:
-        conditions.append("a.account_id = ?")
-        params.append(account_id)
-
-    where_clause = " AND ".join(conditions)
-
-    sql = f"""
-        SELECT m.uid, m.account_id, m.folder, m.subject, m.from_name, m.from_address,
-               m.date, a.summary, a.intent, a.urgency, a.key_info
-        FROM messages m
-        JOIN email_ai_analysis a
-          ON m.uid = a.uid AND m.account_id = a.account_id AND m.folder = a.folder
-        WHERE {where_clause}
-        ORDER BY m.date DESC
-        LIMIT ?
-    """
-    params.append(limit)
-
-    import json as _json
-
-    with _connect() as conn:
-        rows = conn.execute(sql, params).fetchall()
-
-    results = []
-    for row in rows:
-        try:
-            key_info = _json.loads(row["key_info"]) if row["key_info"] else {}
-        except (_json.JSONDecodeError, TypeError):
-            key_info = {}
-
-        deadlines = key_info.get("deadlines") or []
-        if not deadlines:
-            continue
-
-        results.append({
-            "uid": row["uid"],
-            "accountId": row["account_id"],
-            "folder": row["folder"],
-            "subject": row["subject"],
-            "fromName": row["from_name"],
-            "fromAddress": row["from_address"],
-            "date": row["date"],
-            "summary": row["summary"],
-            "intent": row["intent"],
-            "urgency": row["urgency"],
-            "deadlines": deadlines,
-        })
-
-    return results
 
 
 def list_folders(account_id: str) -> list[dict[str, Any]]:

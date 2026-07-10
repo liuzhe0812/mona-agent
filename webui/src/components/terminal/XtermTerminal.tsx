@@ -90,6 +90,7 @@ export function XtermTerminal({ sessionId }: Props) {
 
     const fitAndResize = (force = false) => {
       if (!fitAddonRef.current || !terminalRef.current) return;
+      if (!containerRef.current || containerRef.current.clientWidth === 0 || containerRef.current.clientHeight === 0) return;
       // Don't resize backend during connecting state
       const currentStatus = useTerminalStore
         .getState()
@@ -125,8 +126,6 @@ export function XtermTerminal({ sessionId }: Props) {
             sshIntercepted = true;
             writeFn(sessionId, "\x03").catch(() => {});
             setTimeout(() => {
-              terminal.write("\r\x1b[2K\x1b[33m→ 拦截 ssh 命令，正在通过内置 SSH 连接...\x1b[0m\r\n");
-
               const { host, port, username } = parsed;
 
               useTerminalStore.getState().showSshPasswordDialog({
@@ -258,6 +257,21 @@ export function XtermTerminal({ sessionId }: Props) {
     terminal.options.scrollback = settings.scrollback;
     terminal.options.cursorStyle = settings.cursorStyle;
   }, [settings]);
+
+  const isActive = useTerminalStore((s) => s.activeSessionId === sessionId);
+
+  useEffect(() => {
+    if (!isActive) return;
+    const terminal = terminalRef.current;
+    const fitAddon = fitAddonRef.current;
+    if (!terminal || !fitAddon) return;
+    requestAnimationFrame(() => {
+      if (!containerRef.current || containerRef.current.clientWidth === 0) return;
+      fitAddon.fit();
+      terminal.refresh(0, terminal.rows - 1);
+      terminal.focus();
+    });
+  }, [isActive]);
 
   const handleContextMenu = useCallback(
     async (e: React.MouseEvent) => {

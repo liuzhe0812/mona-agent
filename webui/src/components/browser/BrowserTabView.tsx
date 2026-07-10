@@ -83,10 +83,10 @@ export function BrowserTabView({
 
       const isAiActive = tab.isAiControlled || !!tab.aiStatus;
 
-      // When a dropdown is open (address bar suggestions, bookmark folder),
-      // hide the native WebView so the HTML dropdown can appear on top.
-      // The container div will show a white background as placeholder.
-      if (dropdownOpen) {
+      // When a dropdown or share dialog is open, hide the native WebView
+      // so the HTML overlay can appear on top. The container div will show
+      // a white background as placeholder.
+      if (dropdownOpen || shareDialogOpen) {
         await webview.hide();
         return;
       }
@@ -117,13 +117,13 @@ export function BrowserTabView({
     } catch (e) {
       console.debug("[BrowserTabView] updateWebviewBounds error:", e);
     }
-  }, [tab.id, tab.webviewCreated, tab.isAiControlled, tab.aiStatus, isVisible, dropdownOpen]);
+  }, [tab.id, tab.webviewCreated, tab.isAiControlled, tab.aiStatus, isVisible, dropdownOpen, shareDialogOpen]);
 
-  // 下拉菜单开关时立即更新 WebView 位置（无延迟）
+  // 下拉菜单或分享弹窗开关时立即更新 WebView 位置（无延迟）
   useEffect(() => {
     if (!tab.webviewCreated) return;
     updateWebviewBounds();
-  }, [dropdownOpen, tab.webviewCreated, updateWebviewBounds]);
+  }, [dropdownOpen, shareDialogOpen, tab.webviewCreated, updateWebviewBounds]);
 
   // 当 WebView 创建后或可见性变化时，更新位置
   useEffect(() => {

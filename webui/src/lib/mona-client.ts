@@ -4,6 +4,7 @@ import type {
   Outbound,
   OutboundImageGeneration,
   OutboundMedia,
+  OutboundVideoGeneration,
   GoalStateWsPayload,
 } from "./types";
 
@@ -367,8 +368,9 @@ export class MonaClient {
    *  ``workspace`` binds the session to a project working directory. Pass
    *  ``null`` or omit for the default "会话" section.
    *
-   *  ``agentKind`` routes the session to a dedicated agent loop. Currently
-   *  only ``"ppt"`` is supported (PPTAgentLoop with tool whitelist + ppt_soul.md). */
+   *  ``agentKind`` routes the session to a dedicated document agent loop.
+   *  Supported: ``"ppt"`` / ``"video"`` / ``"flowchart"`` — each routes to a
+   *  DocumentAgentLoop with its own tool whitelist + soul prompt. */
   newChat(
     timeoutMs: number = 5_000,
     ephemeral = false,
@@ -414,6 +416,7 @@ export class MonaClient {
     media?: OutboundMedia[],
     options?: {
       imageGeneration?: OutboundImageGeneration;
+      videoGeneration?: OutboundVideoGeneration;
       /** IMPORTANT: Short display text persisted to server for history replay.
        *  DO NOT remove — keeps user messages showing original input, not enriched prompts. */
       displayContent?: string;
@@ -433,6 +436,7 @@ export class MonaClient {
       content,
       ...(media && media.length > 0 ? { media } : {}),
       ...(options?.imageGeneration ? { image_generation: options.imageGeneration } : {}),
+      ...(options?.videoGeneration ? { video_generation: options.videoGeneration } : {}),
       ...(options?.displayContent ? { display_content: options.displayContent } : {}),
       ...(options?.terminalSessionId ? { terminal_session_id: options.terminalSessionId } : {}),
       ...(options?.terminalExecMode ? { terminal_exec_mode: options.terminalExecMode } : {}),

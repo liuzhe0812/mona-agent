@@ -41,6 +41,7 @@ import {
   Orbit,
   Palette,
   Pencil,
+  Plus,
   QrCode,
   Radio,
   RefreshCw,
@@ -53,6 +54,7 @@ import {
   Star,
   Triangle,
   Trash2,
+  Video,
   Waves,
   Zap,
   type LucideIcon,
@@ -73,6 +75,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
@@ -90,9 +93,11 @@ import {
   logoutWeixin,
   startWeixinLogin,
   updateChannelSettings,
+  updateEmbeddingSettings,
   updateImageGenerationSettings,
   updateProviderSettings,
   updateSettings,
+  updateVideoGenerationSettings,
   updateWebSearchSettings,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -110,11 +115,15 @@ import {
 } from "@/lib/tauri";
 import { useClientOptional } from "@/providers/ClientProvider";
 import type {
+  ChannelInfo,
+  EmbeddingSettingsUpdate,
   ImageGenerationSettingsUpdate,
   SettingsPayload,
+  VideoGenerationSettingsUpdate,
   WebSearchSettingsUpdate,
   WeixinLoginStatus,
 } from "@/lib/types";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 type SettingsSectionKey =
   | "overview"
@@ -169,6 +178,8 @@ const LOCAL_UNCONFIGURED_PROVIDER_ORDER = new Map(
 
 const IMAGE_ASPECT_RATIO_OPTIONS = ["1:1", "3:4", "9:16", "4:3", "16:9", "3:2", "2:3", "21:9"];
 const IMAGE_SIZE_OPTIONS = ["1K", "2K", "4K", "1024x1024", "1536x1024", "1024x1536"];
+const VIDEO_ASPECT_RATIO_OPTIONS = ["16:9", "9:16", "1:1", "4:3", "3:4"];
+const VIDEO_DURATION_OPTIONS = [3, 5, 10, 18];
 const EMPTY_PENDING_RESTART_SECTIONS: PendingRestartSections = {
   runtime: false,
   web: false,
@@ -229,6 +240,11 @@ export function SettingsView({
   const [providerSaving, setProviderSaving] = useState<string | null>(null);
   const [webSearchSaving, setWebSearchSaving] = useState(false);
   const [imageGenerationSaving, setImageGenerationSaving] = useState(false);
+  const [videoGenerationSaving, setVideoGenerationSaving] = useState(false);
+  const [imageApiKeyDraft, setImageApiKeyDraft] = useState("");
+  const [imageKeyVisible, setImageKeyVisible] = useState(false);
+  const [videoApiKeyDraft, setVideoApiKeyDraft] = useState("");
+  const [videoKeyVisible, setVideoKeyVisible] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeSection, setActiveSection] = useState<SettingsSectionKey>("overview");
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
@@ -257,6 +273,22 @@ export function SettingsView({
     defaultImageSize: "1K",
     maxImagesPerTurn: 4,
   });
+  const [videoGenerationForm, setVideoGenerationForm] = useState<VideoGenerationSettingsUpdate>({
+    enabled: false,
+    provider: "agnes",
+    model: "agnes-video-v2.0",
+    defaultAspectRatio: "16:9",
+    defaultDuration: 5,
+  });
+  const [embeddingForm, setEmbeddingForm] = useState<EmbeddingSettingsUpdate>({
+    enabled: false,
+    endpoint: "",
+    apiKey: "",
+    model: "",
+    outputDimensionality: null,
+  });
+  const [embeddingKeyVisible, setEmbeddingKeyVisible] = useState(false);
+  const [embeddingSaving, setEmbeddingSaving] = useState(false);
   const [webSearchKeyVisible, setWebSearchKeyVisible] = useState(false);
   const [webSearchKeyEditing, setWebSearchKeyEditing] = useState(false);
   const [form, setForm] = useState<AgentSettingsDraft>({
@@ -304,6 +336,22 @@ export function SettingsView({
       defaultAspectRatio: payload.image_generation.default_aspect_ratio,
       defaultImageSize: payload.image_generation.default_image_size,
       maxImagesPerTurn: payload.image_generation.max_images_per_turn,
+    });
+    setVideoGenerationForm({
+      enabled: payload.video_generation.enabled,
+      provider: payload.video_generation.provider,
+      model: payload.video_generation.model,
+      defaultAspectRatio: payload.video_generation.default_aspect_ratio,
+      defaultDuration: payload.video_generation.default_duration,
+    });
+    setImageApiKeyDraft("");
+    setVideoApiKeyDraft("");
+    setEmbeddingForm({
+      enabled: payload.embedding.enabled,
+      endpoint: payload.embedding.endpoint,
+      apiKey: "",
+      model: payload.embedding.model,
+      outputDimensionality: payload.embedding.output_dimensionality,
     });
     if (payload.restart_required_sections) {
       setPendingRestartSections({
@@ -372,15 +420,38 @@ export function SettingsView({
 
   const imageGenerationDirty = useMemo(() => {
     if (!settings) return false;
-    return (
+    const formDirty =
       imageGenerationForm.enabled !== settings.image_generation.enabled ||
       imageGenerationForm.provider !== settings.image_generation.provider ||
       imageGenerationForm.model !== settings.image_generation.model ||
       imageGenerationForm.defaultAspectRatio !== settings.image_generation.default_aspect_ratio ||
       imageGenerationForm.defaultImageSize !== settings.image_generation.default_image_size ||
-      imageGenerationForm.maxImagesPerTurn !== settings.image_generation.max_images_per_turn
+      imageGenerationForm.maxImagesPerTurn !== settings.image_generation.max_images_per_turn;
+    return formDirty || imageApiKeyDraft.trim().length > 0;
+  }, [imageGenerationForm, settings, imageApiKeyDraft]);
+
+  const videoGenerationDirty = useMemo(() => {
+    if (!settings) return false;
+    const formDirty =
+      videoGenerationForm.enabled !== settings.video_generation.enabled ||
+      videoGenerationForm.provider !== settings.video_generation.provider ||
+      videoGenerationForm.model !== settings.video_generation.model ||
+      videoGenerationForm.defaultAspectRatio !== settings.video_generation.default_aspect_ratio ||
+      videoGenerationForm.defaultDuration !== settings.video_generation.default_duration;
+    return formDirty || videoApiKeyDraft.trim().length > 0;
+  }, [videoGenerationForm, settings, videoApiKeyDraft]);
+
+  const embeddingDirty = useMemo(() => {
+    if (!settings) return false;
+    return (
+      embeddingForm.enabled !== settings.embedding.enabled ||
+      embeddingForm.endpoint !== settings.embedding.endpoint ||
+      embeddingForm.model !== settings.embedding.model ||
+      embeddingForm.outputDimensionality !== settings.embedding.output_dimensionality ||
+      // apiKey is never echoed back, so a non-empty draft means the user typed a new key
+      (embeddingForm.apiKey ?? "") !== ""
     );
-  }, [imageGenerationForm, settings]);
+  }, [embeddingForm, settings]);
 
   const hasPendingRestart = useMemo(
     () =>
@@ -419,6 +490,14 @@ export function SettingsView({
     if (!settings || !imageGenerationDirty || imageGenerationSaving) return;
     setImageGenerationSaving(true);
     try {
+      const keyDraft = imageApiKeyDraft.trim();
+      if (keyDraft) {
+        const providerPayload = await updateProviderSettings(token, {
+          provider: imageGenerationForm.provider,
+          apiKey: keyDraft,
+        });
+        applyPayload(providerPayload);
+      }
       const payload = await updateImageGenerationSettings(token, imageGenerationForm);
       applyPayload(payload);
       if (payload.requires_restart) {
@@ -429,6 +508,56 @@ export function SettingsView({
       setError((err as Error).message);
     } finally {
       setImageGenerationSaving(false);
+    }
+  };
+
+  const saveVideoGenerationSettings = async () => {
+    if (!settings || !videoGenerationDirty || videoGenerationSaving) return;
+    setVideoGenerationSaving(true);
+    try {
+      const keyDraft = videoApiKeyDraft.trim();
+      if (keyDraft) {
+        const providerPayload = await updateProviderSettings(token, {
+          provider: videoGenerationForm.provider,
+          apiKey: keyDraft,
+        });
+        applyPayload(providerPayload);
+      }
+      const payload = await updateVideoGenerationSettings(token, videoGenerationForm);
+      applyPayload(payload);
+      if (payload.requires_restart) {
+        setPendingRestartSections((prev) => ({ ...prev, image: true }));
+      }
+      setError(null);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setVideoGenerationSaving(false);
+    }
+  };
+
+  const saveEmbeddingSettings = async () => {
+    if (!settings || !embeddingDirty || embeddingSaving) return;
+    setEmbeddingSaving(true);
+    try {
+      const update: EmbeddingSettingsUpdate = {
+        enabled: embeddingForm.enabled,
+        endpoint: embeddingForm.endpoint,
+        model: embeddingForm.model,
+        outputDimensionality: embeddingForm.outputDimensionality,
+      };
+      // Only send apiKey when the user typed a new one (never echoed back).
+      if ((embeddingForm.apiKey ?? "") !== "") {
+        update.apiKey = embeddingForm.apiKey;
+      }
+      const payload = await updateEmbeddingSettings(token, update);
+      applyPayload(payload);
+      setEmbeddingForm((prev) => ({ ...prev, apiKey: "" }));
+      setError(null);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setEmbeddingSaving(false);
     }
   };
 
@@ -675,15 +804,16 @@ export function SettingsView({
         );
       case "models_providers":
         return (
-          <ModelsProvidersSettings
+          <AiModelsSettings
             settings={settings}
+            // chat tab props
             expandedProvider={expandedProvider}
             providerForms={providerForms}
             visibleProviderKeys={visibleProviderKeys}
             editingProviderKeys={editingProviderKeys}
             providerSaving={providerSaving}
-            query={providerQuery}
-            onQueryChange={setProviderQuery}
+            providerQuery={providerQuery}
+            onProviderQueryChange={setProviderQuery}
             onToggleProvider={handleToggleProvider}
             onToggleProviderKey={toggleProviderKeyVisibility}
             onToggleProviderKeyEditing={toggleProviderKeyEditing}
@@ -702,29 +832,40 @@ export function SettingsView({
             onDeleteProvider={deleteProvider}
             onResetProviderDraft={resetProviderDraft}
             onSetDefaultProvider={setDefaultProvider}
-            imageProviderRestartPending={pendingRestartSections.image}
-            onRestart={onRestart}
-            isRestarting={isRestarting}
             highlightProvider={highlightProvider}
             onHighlightConsumed={() => setHighlightProvider(null)}
-          />
-        );
-      case "image":
-        return (
-          <ImageGenerationSettings
-            settings={settings}
-            form={imageGenerationForm}
-            dirty={imageGenerationDirty}
-            saving={imageGenerationSaving}
-            onChangeForm={setImageGenerationForm}
-            onSave={saveImageGenerationSettings}
-            onOpenProviders={(provider) => {
-              setHighlightProvider(provider ?? null);
-              setActiveSection("models_providers");
-            }}
+            onSetHighlightProvider={setHighlightProvider}
+            // image tab props
+            imageForm={imageGenerationForm}
+            imageDirty={imageGenerationDirty}
+            imageSaving={imageGenerationSaving}
+            onImageFormChange={setImageGenerationForm}
+            onImageSave={saveImageGenerationSettings}
+            imageProviderRestartPending={pendingRestartSections.image}
+            imageApiKeyDraft={imageApiKeyDraft}
+            onImageApiKeyDraftChange={setImageApiKeyDraft}
+            imageKeyVisible={imageKeyVisible}
+            onToggleImageKeyVisible={() => setImageKeyVisible((v) => !v)}
+            // video tab props
+            videoForm={videoGenerationForm}
+            videoDirty={videoGenerationDirty}
+            videoSaving={videoGenerationSaving}
+            onVideoFormChange={setVideoGenerationForm}
+            onVideoSave={saveVideoGenerationSettings}
+            videoApiKeyDraft={videoApiKeyDraft}
+            onVideoApiKeyDraftChange={setVideoApiKeyDraft}
+            videoKeyVisible={videoKeyVisible}
+            onToggleVideoKeyVisible={() => setVideoKeyVisible((v) => !v)}
+            // embedding tab props
+            embeddingForm={embeddingForm}
+            embeddingDirty={embeddingDirty}
+            embeddingSaving={embeddingSaving}
+            embeddingKeyVisible={embeddingKeyVisible}
+            onEmbeddingFormChange={setEmbeddingForm}
+            onEmbeddingSave={saveEmbeddingSettings}
+            onToggleEmbeddingKeyVisible={() => setEmbeddingKeyVisible((v) => !v)}
             onRestart={onRestart}
             isRestarting={isRestarting}
-            requiresRestartPending={pendingRestartSections.image}
           />
         );
       case "web":
@@ -842,8 +983,7 @@ export function SettingsView({
 const SETTINGS_NAV_ITEMS: Array<{ key: SettingsSectionKey; icon: LucideIcon; fallback: string; desktopOnly?: boolean }> = [
   { key: "overview", icon: Activity, fallback: "Overview" },
   { key: "appearance", icon: Palette, fallback: "Appearance" },
-  { key: "models_providers", icon: SlidersHorizontal, fallback: "模型供应商" },
-  { key: "image", icon: ImageIcon, fallback: "Image" },
+  { key: "models_providers", icon: SlidersHorizontal, fallback: "模型设置" },
   { key: "web", icon: Globe2, fallback: "Web" },
   { key: "channels", icon: Radio, fallback: "频道" },
   { key: "runtime", icon: Server, fallback: "Runtime" },
@@ -941,6 +1081,14 @@ function OverviewSettings({
       ? tx("settings.values.configured", "Configured")
       : tx("settings.values.notConfigured", "Not configured")
   }`;
+  const videoStatus = settings.video_generation.enabled
+    ? tx("settings.values.enabled", "Enabled")
+    : tx("settings.values.disabled", "Disabled");
+  const videoCaption = `${providerLabel(settings.video_generation.providers, settings.video_generation.provider)} · ${
+    settings.video_generation.provider_configured
+      ? tx("settings.values.configured", "Configured")
+      : tx("settings.values.notConfigured", "Not configured")
+  }`;
   return (
     <div className="space-y-7">
       <section>
@@ -1028,6 +1176,13 @@ function OverviewSettings({
             title={tx("settings.overview.imageGeneration", "Image generation")}
             value={imageStatus}
             caption={imageCaption}
+            onClick={() => onSelectSection("image")}
+          />
+          <OverviewListRow
+            icon={Video}
+            title={tx("settings.overview.videoGeneration", "Video generation")}
+            value={videoStatus}
+            caption={videoCaption}
             onClick={() => onSelectSection("image")}
           />
         </SettingsGroup>
@@ -1161,6 +1316,353 @@ function AppearanceSettings({
         </SettingsGroup>
       </section>
     </div>
+  );
+}
+
+function AiModelsSettings({
+  settings,
+  // chat tab
+  expandedProvider,
+  providerForms,
+  visibleProviderKeys,
+  editingProviderKeys,
+  providerSaving,
+  providerQuery,
+  onProviderQueryChange,
+  onToggleProvider,
+  onToggleProviderKey,
+  onToggleProviderKeyEditing,
+  onChangeProviderForm,
+  onSaveProvider,
+  onDeleteProvider,
+  onResetProviderDraft,
+  onSetDefaultProvider,
+  highlightProvider,
+  onHighlightConsumed,
+  onSetHighlightProvider,
+  // image tab
+  imageForm,
+  imageDirty,
+  imageSaving,
+  onImageFormChange,
+  onImageSave,
+  imageProviderRestartPending,
+  imageApiKeyDraft,
+  onImageApiKeyDraftChange,
+  imageKeyVisible,
+  onToggleImageKeyVisible,
+  // video tab
+  videoForm,
+  videoDirty,
+  videoSaving,
+  onVideoFormChange,
+  onVideoSave,
+  videoApiKeyDraft,
+  onVideoApiKeyDraftChange,
+  videoKeyVisible,
+  onToggleVideoKeyVisible,
+  // embedding tab
+  embeddingForm,
+  embeddingDirty,
+  embeddingSaving,
+  embeddingKeyVisible,
+  onEmbeddingFormChange,
+  onEmbeddingSave,
+  onToggleEmbeddingKeyVisible,
+  // shared
+  onRestart,
+  isRestarting,
+}: {
+  settings: SettingsPayload;
+  // chat tab
+  expandedProvider: string | null;
+  providerForms: Record<string, { apiKey: string; apiBase: string; model: string }>;
+  visibleProviderKeys: Record<string, boolean>;
+  editingProviderKeys: Record<string, boolean>;
+  providerSaving: string | null;
+  providerQuery: string;
+  onProviderQueryChange: (query: string) => void;
+  onToggleProvider: (provider: string) => void;
+  onToggleProviderKey: (provider: string) => void;
+  onToggleProviderKeyEditing: (provider: string) => void;
+  onChangeProviderForm: (provider: string, value: Partial<{ apiKey: string; apiBase: string; model: string }>) => void;
+  onSaveProvider: (provider: string) => void;
+  onDeleteProvider: (provider: string) => void;
+  onResetProviderDraft: (provider: string) => void;
+  onSetDefaultProvider: (provider: string) => void;
+  highlightProvider?: string | null;
+  onHighlightConsumed?: () => void;
+  onSetHighlightProvider?: (provider: string | null) => void;
+  // image tab
+  imageForm: ImageGenerationSettingsUpdate;
+  imageDirty: boolean;
+  imageSaving: boolean;
+  onImageFormChange: Dispatch<SetStateAction<ImageGenerationSettingsUpdate>>;
+  onImageSave: () => void;
+  imageProviderRestartPending: boolean;
+  imageApiKeyDraft: string;
+  onImageApiKeyDraftChange: Dispatch<SetStateAction<string>>;
+  imageKeyVisible: boolean;
+  onToggleImageKeyVisible: () => void;
+  // video tab
+  videoForm: VideoGenerationSettingsUpdate;
+  videoDirty: boolean;
+  videoSaving: boolean;
+  onVideoFormChange: Dispatch<SetStateAction<VideoGenerationSettingsUpdate>>;
+  onVideoSave: () => void;
+  videoApiKeyDraft: string;
+  onVideoApiKeyDraftChange: Dispatch<SetStateAction<string>>;
+  videoKeyVisible: boolean;
+  onToggleVideoKeyVisible: () => void;
+  // embedding tab
+  embeddingForm: EmbeddingSettingsUpdate;
+  embeddingDirty: boolean;
+  embeddingSaving: boolean;
+  embeddingKeyVisible: boolean;
+  onEmbeddingFormChange: Dispatch<SetStateAction<EmbeddingSettingsUpdate>>;
+  onEmbeddingSave: () => void;
+  onToggleEmbeddingKeyVisible: () => void;
+  // shared
+  onRestart?: () => void;
+  isRestarting?: boolean;
+}) {
+  const { t } = useTranslation();
+  const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
+  const [activeTab, setActiveTab] = useState("chat");
+
+  return (
+    <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+      <TabsList aria-label={tx("settings.aiModels.tabsAria", "模型设置类型")} className="mb-4">
+        <TabsTrigger value="chat">{tx("settings.aiModels.chat", "聊天模型")}</TabsTrigger>
+        <TabsTrigger value="image">{tx("settings.aiModels.image", "图片模型")}</TabsTrigger>
+        <TabsTrigger value="video">{tx("settings.aiModels.video", "视频模型")}</TabsTrigger>
+        <TabsTrigger value="embedding">{tx("settings.aiModels.embedding", "嵌入模型")}</TabsTrigger>
+      </TabsList>
+
+      <TabsContent value="chat">
+        <ModelsProvidersSettings
+          settings={settings}
+          expandedProvider={expandedProvider}
+          providerForms={providerForms}
+          visibleProviderKeys={visibleProviderKeys}
+          editingProviderKeys={editingProviderKeys}
+          providerSaving={providerSaving}
+          query={providerQuery}
+          onQueryChange={onProviderQueryChange}
+          onToggleProvider={onToggleProvider}
+          onToggleProviderKey={onToggleProviderKey}
+          onToggleProviderKeyEditing={onToggleProviderKeyEditing}
+          onChangeProviderForm={onChangeProviderForm}
+          onSaveProvider={onSaveProvider}
+          onDeleteProvider={onDeleteProvider}
+          onResetProviderDraft={onResetProviderDraft}
+          onSetDefaultProvider={onSetDefaultProvider}
+          imageProviderRestartPending={imageProviderRestartPending}
+          onRestart={onRestart}
+          isRestarting={isRestarting}
+          highlightProvider={highlightProvider}
+          onHighlightConsumed={onHighlightConsumed}
+        />
+      </TabsContent>
+
+      <TabsContent value="image">
+        <ImageGenerationSettings
+          settings={settings}
+          form={imageForm}
+          dirty={imageDirty}
+          saving={imageSaving}
+          onChangeForm={onImageFormChange}
+          onSave={onImageSave}
+          onOpenProviders={(provider) => {
+            onSetHighlightProvider?.(provider ?? null);
+            setActiveTab("chat");
+          }}
+          onRestart={onRestart}
+          isRestarting={isRestarting}
+          requiresRestartPending={imageProviderRestartPending}
+          apiKeyDraft={imageApiKeyDraft}
+          onApiKeyDraftChange={onImageApiKeyDraftChange}
+          keyVisible={imageKeyVisible}
+          onToggleKeyVisible={onToggleImageKeyVisible}
+        />
+      </TabsContent>
+
+      <TabsContent value="video">
+        <VideoGenerationSettings
+          settings={settings}
+          form={videoForm}
+          dirty={videoDirty}
+          saving={videoSaving}
+          onChangeForm={onVideoFormChange}
+          onSave={onVideoSave}
+          onOpenProviders={(provider) => {
+            onSetHighlightProvider?.(provider ?? null);
+            setActiveTab("chat");
+          }}
+          onRestart={onRestart}
+          isRestarting={isRestarting}
+          requiresRestartPending={imageProviderRestartPending}
+          apiKeyDraft={videoApiKeyDraft}
+          onApiKeyDraftChange={onVideoApiKeyDraftChange}
+          keyVisible={videoKeyVisible}
+          onToggleKeyVisible={onToggleVideoKeyVisible}
+        />
+      </TabsContent>
+
+      <TabsContent value="embedding">
+        <EmbeddingSettings
+          settings={settings}
+          form={embeddingForm}
+          dirty={embeddingDirty}
+          saving={embeddingSaving}
+          keyVisible={embeddingKeyVisible}
+          onChangeForm={onEmbeddingFormChange}
+          onSave={onEmbeddingSave}
+          onToggleKeyVisible={onToggleEmbeddingKeyVisible}
+        />
+      </TabsContent>
+    </Tabs>
+  );
+}
+
+function EmbeddingSettings({
+  settings,
+  form,
+  dirty,
+  saving,
+  keyVisible,
+  onChangeForm,
+  onSave,
+  onToggleKeyVisible,
+}: {
+  settings: SettingsPayload;
+  form: EmbeddingSettingsUpdate;
+  dirty: boolean;
+  saving: boolean;
+  keyVisible: boolean;
+  onChangeForm: Dispatch<SetStateAction<EmbeddingSettingsUpdate>>;
+  onSave: () => void;
+  onToggleKeyVisible: () => void;
+}) {
+  const { t } = useTranslation();
+  const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
+  const apiKeyHint = settings.embedding.api_key_hint;
+  const apiKeyConfigured = !!apiKeyHint && apiKeyHint !== "—";
+
+  return (
+    <SettingsGroup>
+      <SettingsRow
+        title={tx("settings.rows.embeddingEnabled", "启用嵌入模型")}
+        description={tx(
+          "settings.help.embeddingEnabled",
+          "为知识库和笔记向量索引提供嵌入能力。关闭后相关功能会降级为关键词检索。",
+        )}
+      >
+        <ToggleSwitch
+          checked={form.enabled ?? false}
+          onChange={(checked) => onChangeForm((prev) => ({ ...prev, enabled: checked }))}
+        />
+      </SettingsRow>
+
+      <SettingsRow
+        title={tx("settings.rows.embeddingEndpoint", "Endpoint")}
+        description={tx(
+          "settings.help.embeddingEndpoint",
+          "OpenAI 兼容的嵌入接口地址，或 Gemini / Ollama 的嵌入端点。",
+        )}
+      >
+        <Input
+          value={form.endpoint}
+          onChange={(event) => onChangeForm((prev) => ({ ...prev, endpoint: event.target.value }))}
+          placeholder={tx("settings.image.embeddingEndpointPlaceholder", "例如 https://api.siliconflow.cn/v1/embeddings")}
+          className="h-8 w-[min(420px,80vw)] rounded-full text-[13px]"
+        />
+      </SettingsRow>
+
+      <SettingsRow
+        title={tx("settings.rows.embeddingApiKey", "API Key")}
+        description={tx(
+          "settings.help.embeddingApiKey",
+          "嵌入服务的密钥。本地 Ollama 可留空。保存后不再回显。",
+        )}
+      >
+        <div className="flex items-center gap-2">
+          <Input
+            type={keyVisible ? "text" : "password"}
+            value={form.apiKey ?? ""}
+            onChange={(event) => onChangeForm((prev) => ({ ...prev, apiKey: event.target.value }))}
+            placeholder={apiKeyConfigured ? apiKeyHint : tx("settings.image.embeddingApiKeyPlaceholder", "输入 API Key")}
+            className="h-8 w-[min(300px,70vw)] rounded-full text-[13px]"
+          />
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={onToggleKeyVisible}
+            className="rounded-full"
+          >
+            {keyVisible ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+          </Button>
+        </div>
+      </SettingsRow>
+
+      <SettingsRow
+        title={tx("settings.rows.embeddingModel", "模型")}
+        description={tx(
+          "settings.help.embeddingModel",
+          "嵌入模型 ID，如 BAAI/bge-m3、text-embedding-3-small 等。",
+        )}
+      >
+        <Input
+          value={form.model}
+          onChange={(event) => onChangeForm((prev) => ({ ...prev, model: event.target.value }))}
+          placeholder={tx("settings.image.embeddingModelPlaceholder", "例如 BAAI/bge-m3")}
+          className="h-8 w-[min(300px,70vw)] rounded-full text-[13px]"
+        />
+      </SettingsRow>
+
+      <SettingsRow
+        title={tx("settings.rows.embeddingDimensionality", "输出维度")}
+        description={tx(
+          "settings.help.embeddingDimensionality",
+          "可选。指定嵌入向量维度，留空则使用模型默认值。仅部分模型支持。",
+        )}
+      >
+        <Input
+          type="number"
+          value={form.outputDimensionality ?? ""}
+          onChange={(event) => {
+            const v = event.target.value.trim();
+            onChangeForm((prev) => ({
+              ...prev,
+              outputDimensionality: v === "" ? null : Number(v),
+            }));
+          }}
+          placeholder={tx("settings.image.embeddingDimPlaceholder", "留空使用默认")}
+          className="h-8 w-[min(160px,40vw)] rounded-full text-[13px]"
+        />
+      </SettingsRow>
+
+      <SettingsRow
+        title={tx("settings.rows.embeddingSave", "保存")}
+        description={tx(
+          "settings.help.embeddingSave",
+          "保存后立即生效，无需重启。嵌入配置全局共享，笔记仓库会自动回退到此配置。",
+        )}
+      >
+        <Button
+          type="button"
+          size="sm"
+          variant={dirty ? "default" : "outline"}
+          disabled={!dirty || saving}
+          onClick={onSave}
+          className="rounded-full"
+        >
+          {saving ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
+          {saving ? tx("settings.status.saving", "保存中…") : tx("settings.status.save", "保存")}
+        </Button>
+      </SettingsRow>
+    </SettingsGroup>
   );
 }
 
@@ -1524,6 +2026,10 @@ function ImageGenerationSettings({
   onRestart,
   isRestarting,
   requiresRestartPending,
+  apiKeyDraft,
+  onApiKeyDraftChange,
+  keyVisible,
+  onToggleKeyVisible,
 }: {
   settings: SettingsPayload;
   form: ImageGenerationSettingsUpdate;
@@ -1535,6 +2041,10 @@ function ImageGenerationSettings({
   onRestart?: () => void;
   isRestarting?: boolean;
   requiresRestartPending: boolean;
+  apiKeyDraft: string;
+  onApiKeyDraftChange: Dispatch<SetStateAction<string>>;
+  keyVisible: boolean;
+  onToggleKeyVisible: () => void;
 }) {
   const { t } = useTranslation();
   const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
@@ -1542,7 +2052,9 @@ function ImageGenerationSettings({
     settings.image_generation.providers.find((provider) => provider.name === form.provider) ??
     settings.image_generation.providers[0];
   const providerConfigured = !!selectedProvider?.configured;
-  const missingCredential = form.enabled && !providerConfigured;
+  const hasApiKeyDraft = apiKeyDraft.trim().length > 0;
+  const missingCredential = form.enabled && !providerConfigured && !hasApiKeyDraft;
+  const imageModelOptions = selectedProvider?.image_models ?? [];
   const aspectOptions = optionRowsWithCurrent(
     IMAGE_ASPECT_RATIO_OPTIONS.map((value) => ({ name: value, label: value })),
     form.defaultAspectRatio,
@@ -1575,26 +2087,73 @@ function ImageGenerationSettings({
               providers={settings.image_generation.providers}
               value={form.provider}
               emptyLabel={tx("settings.image.selectProvider", "Select provider")}
-              onChange={(provider) => onChangeForm((prev) => ({ ...prev, provider }))}
+              onChange={(provider) => {
+                const newInfo = settings.image_generation.providers.find((p) => p.name === provider);
+                const newCandidates = newInfo?.image_models ?? [];
+                const newDefault = newInfo?.default_image_model ?? null;
+                onChangeForm((prev) => {
+                  const wasCandidate =
+                    !prev.model ||
+                    imageModelOptions.includes(prev.model) ||
+                    (selectedProvider?.image_models ?? []).includes(prev.model);
+                  const shouldReplace = wasCandidate && newCandidates.length > 0;
+                  return {
+                    ...prev,
+                    provider,
+                    model: shouldReplace && newDefault ? newDefault : prev.model,
+                  };
+                });
+                onApiKeyDraftChange("");
+              }}
             />
           </SettingsRow>
-          <SettingsRow
-            title={tx("settings.rows.imageProviderStatus", "Provider status")}
-            description={tx("settings.help.imageProviderStatus", "Image generation reuses provider credentials from Providers.")}
-          >
-            <div className="flex flex-wrap items-center justify-end gap-2">
-              <StatusPill tone={providerConfigured ? "success" : "neutral"}>
-                {providerConfigured
-                  ? tx("settings.values.configured", "Configured")
-                  : tx("settings.values.notConfigured", "Not configured")}
-              </StatusPill>
-              {!providerConfigured ? (
-                <Button size="sm" variant="outline" onClick={() => onOpenProviders(form.provider)} className="rounded-full">
-                  {tx("settings.image.configureProvider", "Configure provider")}
+          {providerConfigured && !hasApiKeyDraft ? (
+            <SettingsRow
+              title={tx("settings.rows.imageProviderStatus", "Provider credentials")}
+              description={tx("settings.help.imageProviderStatus", "Image generation reuses provider credentials from Providers.")}
+            >
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <StatusPill tone="success">
+                  {tx("settings.values.configured", "Configured")}
+                </StatusPill>
+                {selectedProvider?.api_key_hint ? (
+                  <span className="text-[13px] text-muted-foreground">{selectedProvider.api_key_hint}</span>
+                ) : null}
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => onApiKeyDraftChange(" ")}
+                  className="rounded-full text-[13px] text-muted-foreground"
+                >
+                  {tx("settings.image.changeKey", "Change")}
                 </Button>
-              ) : null}
-            </div>
-          </SettingsRow>
+              </div>
+            </SettingsRow>
+          ) : (
+            <SettingsRow
+              title={tx("settings.rows.imageApiKey", "API Key")}
+              description={tx("settings.help.imageApiKey", "Enter the API key for the selected provider. Saved directly to provider credentials.")}
+            >
+              <div className="flex items-center gap-2">
+                <Input
+                  type={keyVisible ? "text" : "password"}
+                  value={apiKeyDraft}
+                  onChange={(event) => onApiKeyDraftChange(event.target.value)}
+                  placeholder={selectedProvider?.api_key_hint ?? tx("settings.image.apiKeyPlaceholder", "输入 API Key")}
+                  className="h-8 w-[min(300px,70vw)] rounded-full text-[13px]"
+                />
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={onToggleKeyVisible}
+                  className="rounded-full"
+                >
+                  {keyVisible ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                </Button>
+              </div>
+            </SettingsRow>
+          )}
           <SettingsRow title={tx("settings.rows.imageProviderBase", "Provider base")}>
             <span className="max-w-[320px] truncate text-right text-[13px] text-muted-foreground">
               {selectedProvider?.api_base || selectedProvider?.default_api_base || selectedProvider?.name || tx("settings.values.notAvailable", "Not available")}
@@ -1607,14 +2166,21 @@ function ImageGenerationSettings({
         <SettingsSectionTitle>{tx("settings.sections.imageDefaults", "Defaults")}</SettingsSectionTitle>
         <SettingsGroup>
           <SettingsRow
-            title="图片模型"
-            description="图片生成使用的模型 ID，与聊天模型不同"
+            title={tx("settings.rows.imageModel", "Image model")}
+            description={tx(
+              "settings.help.imageModel",
+              "Image generation uses a dedicated image model (different from the chat model). It reuses the credentials of the selected provider.",
+            )}
           >
-            <Input
+            <ImageModelInput
               value={form.model}
-              onChange={(event) => onChangeForm((prev) => ({ ...prev, model: event.target.value }))}
-              placeholder="例如 agnes-image-21-flash, gpt-image-1"
-              className="h-8 w-[min(300px,70vw)] rounded-full text-[13px]"
+              onChange={(model) => onChangeForm((prev) => ({ ...prev, model }))}
+              options={imageModelOptions}
+              placeholder={tx("settings.image.modelPlaceholder", "e.g. gpt-image-1, wan2.2-t2i-plus")}
+              selectLabel={tx("settings.image.selectModel", "Select image model")}
+              noMatchLabel={tx("settings.image.noModelMatch", "No match, keep typing or use this value")}
+              addModelLabel={tx("settings.image.addModel", "Add model")}
+              onAddModel={() => onOpenProviders(form.provider)}
             />
           </SettingsRow>
           <SettingsRow
@@ -1669,6 +2235,226 @@ function ImageGenerationSettings({
             }
             dirtyMessage={tx("settings.status.restartAfterSaving", "Save changes, then restart when ready.")}
             pendingMessage={tx("settings.status.savedRestartApply", "Saved. Restart when ready.")}
+            onSave={onSave}
+            onRestart={onRestart}
+            isRestarting={isRestarting}
+          />
+        </SettingsGroup>
+      </section>
+    </div>
+  );
+}
+
+function VideoGenerationSettings({
+  settings,
+  form,
+  dirty,
+  saving,
+  onChangeForm,
+  onSave,
+  onOpenProviders,
+  onRestart,
+  isRestarting,
+  requiresRestartPending,
+  apiKeyDraft,
+  onApiKeyDraftChange,
+  keyVisible,
+  onToggleKeyVisible,
+}: {
+  settings: SettingsPayload;
+  form: VideoGenerationSettingsUpdate;
+  dirty: boolean;
+  saving: boolean;
+  onChangeForm: Dispatch<SetStateAction<VideoGenerationSettingsUpdate>>;
+  onSave: () => void;
+  onOpenProviders: (provider?: string) => void;
+  onRestart?: () => void;
+  isRestarting?: boolean;
+  requiresRestartPending: boolean;
+  apiKeyDraft: string;
+  onApiKeyDraftChange: Dispatch<SetStateAction<string>>;
+  keyVisible: boolean;
+  onToggleKeyVisible: () => void;
+}) {
+  const { t } = useTranslation();
+  const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
+  const selectedProvider =
+    settings.video_generation.providers.find((provider) => provider.name === form.provider) ??
+    settings.video_generation.providers[0];
+  const providerConfigured = !!selectedProvider?.configured;
+  const hasApiKeyDraft = apiKeyDraft.trim().length > 0;
+  const missingCredential = form.enabled && !providerConfigured && !hasApiKeyDraft;
+  const videoModelOptions = selectedProvider?.video_models ?? [];
+  const aspectOptions = optionRowsWithCurrent(
+    VIDEO_ASPECT_RATIO_OPTIONS.map((value) => ({ name: value, label: value })),
+    form.defaultAspectRatio,
+  );
+  const durationOptions = optionRowsWithCurrent(
+    VIDEO_DURATION_OPTIONS.map((value) => ({ name: String(value), label: `${value}s` })),
+    String(form.defaultDuration),
+  );
+
+  return (
+    <div className="space-y-7">
+      <section>
+        <SettingsSectionTitle>{tx("settings.sections.videoGeneration", "视频生成")}</SettingsSectionTitle>
+        <SettingsGroup>
+          <SettingsRow
+            title={tx("settings.rows.videoGeneration", "视频生成")}
+            description={tx("settings.help.videoGeneration", "当配置了可用的视频供应商时，在聊天中启用 generate_video 工具。")}
+          >
+            <ToggleButton
+              checked={form.enabled}
+              onChange={(enabled) => onChangeForm((prev) => ({ ...prev, enabled }))}
+              label={form.enabled ? tx("settings.values.on", "开启") : tx("settings.values.off", "关闭")}
+            />
+          </SettingsRow>
+          <SettingsRow
+            title={tx("settings.rows.videoProvider", "视频供应商")}
+            description={tx("settings.help.videoProvider", "选择 generate_video 使用的供应商。")}
+          >
+            <ProviderPicker
+              providers={settings.video_generation.providers}
+              value={form.provider}
+              emptyLabel={tx("settings.video.selectProvider", "选择供应商")}
+              onChange={(provider) => {
+                const newInfo = settings.video_generation.providers.find((p) => p.name === provider);
+                const newCandidates = newInfo?.video_models ?? [];
+                const newDefault = newInfo?.default_video_model ?? null;
+                onChangeForm((prev) => {
+                  const wasCandidate =
+                    !prev.model ||
+                    videoModelOptions.includes(prev.model) ||
+                    (selectedProvider?.video_models ?? []).includes(prev.model);
+                  const shouldReplace = wasCandidate && newCandidates.length > 0;
+                  return {
+                    ...prev,
+                    provider,
+                    model: shouldReplace && newDefault ? newDefault : prev.model,
+                  };
+                });
+                onApiKeyDraftChange("");
+              }}
+            />
+          </SettingsRow>
+          {providerConfigured && !hasApiKeyDraft ? (
+            <SettingsRow
+              title={tx("settings.rows.videoProviderStatus", "供应商凭据")}
+              description={tx("settings.help.videoProviderStatus", "视频生成复用供应商的凭据配置。")}
+            >
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <StatusPill tone="success">
+                  {tx("settings.values.configured", "已配置")}
+                </StatusPill>
+                {selectedProvider?.api_key_hint ? (
+                  <span className="text-[13px] text-muted-foreground">{selectedProvider.api_key_hint}</span>
+                ) : null}
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => onApiKeyDraftChange(" ")}
+                  className="rounded-full text-[13px] text-muted-foreground"
+                >
+                  {tx("settings.video.changeKey", "修改")}
+                </Button>
+              </div>
+            </SettingsRow>
+          ) : (
+            <SettingsRow
+              title={tx("settings.rows.videoApiKey", "API 密钥")}
+              description={tx("settings.help.videoApiKey", "输入所选供应商的 API 密钥，将直接保存到供应商凭据。")}
+            >
+              <div className="flex items-center gap-2">
+                <Input
+                  type={keyVisible ? "text" : "password"}
+                  value={apiKeyDraft}
+                  onChange={(event) => onApiKeyDraftChange(event.target.value)}
+                  placeholder={selectedProvider?.api_key_hint ?? tx("settings.video.apiKeyPlaceholder", "输入 API Key")}
+                  className="h-8 w-[min(300px,70vw)] rounded-full text-[13px]"
+                />
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={onToggleKeyVisible}
+                  className="rounded-full"
+                >
+                  {keyVisible ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                </Button>
+              </div>
+            </SettingsRow>
+          )}
+          <SettingsRow title={tx("settings.rows.videoProviderBase", "供应商地址")}>
+            <span className="max-w-[320px] truncate text-right text-[13px] text-muted-foreground">
+              {selectedProvider?.api_base || selectedProvider?.default_api_base || selectedProvider?.name || tx("settings.values.notAvailable", "不可用")}
+            </span>
+          </SettingsRow>
+        </SettingsGroup>
+      </section>
+
+      <section>
+        <SettingsSectionTitle>{tx("settings.sections.videoDefaults", "默认设置")}</SettingsSectionTitle>
+        <SettingsGroup>
+          <SettingsRow
+            title={tx("settings.rows.videoModel", "视频模型")}
+            description={tx(
+              "settings.help.videoModel",
+              "视频生成使用专用视频模型（与聊天模型不同），复用所选供应商的凭据。",
+            )}
+          >
+            <ImageModelInput
+              value={form.model}
+              onChange={(model) => onChangeForm((prev) => ({ ...prev, model }))}
+              options={videoModelOptions}
+              placeholder={tx("settings.video.modelPlaceholder", "例如 agnes-video-v2.0")}
+              selectLabel={tx("settings.video.selectModel", "选择视频模型")}
+              noMatchLabel={tx("settings.video.noModelMatch", "无匹配项，可继续输入或使用当前值")}
+              addModelLabel={tx("settings.video.addModel", "添加模型")}
+              onAddModel={() => onOpenProviders(form.provider)}
+            />
+          </SettingsRow>
+          <SettingsRow
+            title={tx("settings.rows.defaultVideoAspect", "默认宽高比")}
+            description={tx("settings.help.defaultVideoAspect", "当提示词未指定宽高比时使用。")}
+          >
+            <ProviderPicker
+              providers={aspectOptions}
+              value={form.defaultAspectRatio}
+              emptyLabel={tx("settings.video.selectAspect", "选择宽高比")}
+              onChange={(defaultAspectRatio) =>
+                onChangeForm((prev) => ({ ...prev, defaultAspectRatio }))
+              }
+            />
+          </SettingsRow>
+          <SettingsRow
+            title={tx("settings.rows.defaultVideoDuration", "默认时长")}
+            description={tx("settings.help.defaultVideoDuration", "目标视频时长（秒）。实际时长为 num_frames / frame_rate。")}
+          >
+            <ProviderPicker
+              providers={durationOptions}
+              value={String(form.defaultDuration)}
+              emptyLabel={tx("settings.video.selectDuration", "选择时长")}
+              onChange={(value) => {
+                const parsed = Number.parseInt(value, 10);
+                if (!Number.isNaN(parsed)) {
+                  onChangeForm((prev) => ({ ...prev, defaultDuration: parsed }));
+                }
+              }}
+            />
+          </SettingsRow>
+          <ReadOnlyRow title={tx("settings.rows.videoSaveDir", "保存目录")} value={settings.video_generation.save_dir} />
+          <RestartSettingsFooter
+            dirty={dirty}
+            saving={saving}
+            pendingRestart={requiresRestartPending}
+            disabled={missingCredential}
+            message={
+              missingCredential
+                ? tx("settings.video.missingCredential", "启用视频生成前请先配置该供应商。")
+                : undefined
+            }
+            dirtyMessage={tx("settings.status.restartAfterSaving", "保存修改后，准备好时重启。")}
+            pendingMessage={tx("settings.status.savedRestartApply", "已保存，准备好时重启。")}
             onSave={onSave}
             onRestart={onRestart}
             isRestarting={isRestarting}
@@ -1904,6 +2690,239 @@ function WebSettings({
   );
 }
 
+/** Reusable card for credential-based channels (WeCom, QQ, Feishu).
+ *
+ * Encapsulates the common pattern: toggle + credential inputs (ID + secret)
+ * + allow_from editor.  Secret values are never echoed back from the server;
+ * we only know whether one is set.
+ */
+function CredentialChannelCard({
+  channel,
+  token,
+  onSettingsChanged,
+  description,
+  i18nPrefix,
+  idFieldKey,
+  idQueryKey,
+  idLabel,
+  idPlaceholder,
+  secretFieldKey,
+  secretQueryKey,
+  secretLabel,
+  toggleLabel,
+}: {
+  channel: ChannelInfo;
+  token: string;
+  onSettingsChanged: (payload: SettingsPayload) => void;
+  description: string;
+  i18nPrefix: string;
+  idFieldKey: "bot_id" | "app_id";
+  idQueryKey: "botId" | "appId";
+  idLabel: string;
+  idPlaceholder: string;
+  secretFieldKey: "secret" | "app_secret";
+  secretQueryKey: "secret" | "appSecret";
+  secretLabel: string;
+  toggleLabel: string;
+}) {
+  const { t } = useTranslation();
+  const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
+
+  const [toggling, setToggling] = useState(false);
+  const [idValue, setIdValue] = useState("");
+  const [secretValue, setSecretValue] = useState("");
+  const [secretDirty, setSecretDirty] = useState(false);
+  const [allowFrom, setAllowFrom] = useState("");
+  const [allowAll, setAllowAll] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setIdValue((channel as unknown as Record<string, string>)[idFieldKey] ?? "");
+    setSecretValue("");
+    setSecretDirty(false);
+    const list = channel.allow_from ?? [];
+    const all = list.includes("*");
+    setAllowAll(all);
+    setAllowFrom(all ? "" : list.join("\n"));
+    setError(null);
+  }, [channel, idFieldKey]);
+
+  const handleToggle = useCallback(async (enabled: boolean) => {
+    if (!token) return;
+    setToggling(true);
+    setError(null);
+    try {
+      const payload = await updateChannelSettings(token, channel.name, enabled);
+      onSettingsChanged(payload);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setToggling(false);
+    }
+  }, [token, channel.name, onSettingsChanged]);
+
+  const handleSave = useCallback(async () => {
+    if (!token) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const list = allowAll
+        ? ["*"]
+        : allowFrom
+            .split(/[\n,]+/)
+            .map((s) => s.trim())
+            .filter(Boolean);
+      const extra: { botId?: string; appId?: string; secret?: string; appSecret?: string } = {};
+      if (idQueryKey === "botId") extra.botId = idValue;
+      else extra.appId = idValue;
+      if (secretDirty) {
+        if (secretQueryKey === "secret") extra.secret = secretValue;
+        else extra.appSecret = secretValue;
+      }
+      const payload = await updateChannelSettings(
+        token,
+        channel.name,
+        channel.enabled,
+        list,
+        undefined,
+        extra,
+      );
+      onSettingsChanged(payload);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  }, [token, channel, allowAll, allowFrom, idValue, secretValue, secretDirty, idQueryKey, secretQueryKey, onSettingsChanged]);
+
+  const secretIsSet = (channel as unknown as Record<string, string>)[secretFieldKey] === "true";
+
+  return (
+    <>
+      <SettingsRow title={channel.display_name} description={description}>
+        <div className="flex items-center gap-2">
+          {channel.enabled ? (
+            <StatusPill tone="success">
+              {tx(`${i18nPrefix}.status.enabled`, "已启用")}
+            </StatusPill>
+          ) : (
+            <StatusPill tone="neutral">
+              {tx(`${i18nPrefix}.status.disabled`, "已禁用")}
+            </StatusPill>
+          )}
+          <ToggleSwitch
+            checked={channel.enabled}
+            disabled={toggling}
+            onChange={handleToggle}
+            aria-label={toggleLabel}
+          />
+        </div>
+      </SettingsRow>
+
+      {channel.enabled ? (
+        <SettingsRow
+          title={tx(`${i18nPrefix}.credentials`, "凭据配置")}
+          description={tx(
+            `${i18nPrefix}.credentialsHelp`,
+            "填入凭据后保存。Secret 保存后不会再次显示。",
+          )}
+        >
+          <div className="flex w-full min-w-[200px] flex-col items-stretch gap-3 sm:w-[300px]">
+            <div className="flex items-center gap-2">
+              <span className="w-16 shrink-0 text-[13px] text-muted-foreground">
+                {idLabel}
+              </span>
+              <Input
+                value={idValue}
+                onChange={(e) => setIdValue(e.target.value)}
+                placeholder={idPlaceholder}
+                className="h-8 rounded-full text-[13px]"
+                disabled={saving}
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="w-16 shrink-0 text-[13px] text-muted-foreground">
+                {secretLabel}
+              </span>
+              <Input
+                type="password"
+                value={secretValue}
+                onChange={(e) => {
+                  setSecretValue(e.target.value);
+                  setSecretDirty(true);
+                }}
+                placeholder={
+                  secretIsSet
+                    ? tx(`${i18nPrefix}.secretSet`, "已设置，输入新值覆盖")
+                    : tx(`${i18nPrefix}.secretPlaceholder`, "输入 Secret")
+                }
+                className="h-8 rounded-full text-[13px]"
+                disabled={saving}
+              />
+            </div>
+            {error ? (
+              <span className="text-[12px] text-destructive">{error}</span>
+            ) : null}
+          </div>
+        </SettingsRow>
+      ) : null}
+
+      {channel.enabled ? (
+        <SettingsRow
+          title={tx(`${i18nPrefix}.allowFrom`, "允许的用户")}
+          description={tx(
+            `${i18nPrefix}.allowFromHelp`,
+            "设置可给 Mona 发消息的用户 ID。开启「允许所有人」则接收任意用户消息。",
+          )}
+        >
+          <div className="flex w-full min-w-[200px] flex-col items-stretch gap-3 sm:w-[260px]">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[13px] text-muted-foreground">
+                {tx(`${i18nPrefix}.allowAll`, "允许所有人")}
+              </span>
+              <ToggleSwitch
+                checked={allowAll}
+                disabled={saving}
+                onChange={(checked) => {
+                  setAllowAll(checked);
+                  if (checked) setAllowFrom("");
+                }}
+                aria-label={tx(`${i18nPrefix}.allowAll`, "允许所有人")}
+              />
+            </div>
+            {!allowAll ? (
+              <Textarea
+                value={allowFrom}
+                onChange={(e) => setAllowFrom(e.target.value)}
+                placeholder={tx(
+                  `${i18nPrefix}.allowFromPlaceholder`,
+                  "每行一个用户 ID，或用逗号分隔",
+                )}
+                className="min-h-[80px] resize-none rounded-lg text-[13px]"
+                disabled={saving}
+              />
+            ) : null}
+            <div className="flex items-center justify-end gap-2">
+              <Button
+                size="sm"
+                onClick={handleSave}
+                disabled={saving}
+                className="rounded-full"
+              >
+                {saving ? (
+                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden />
+                ) : null}
+                {tx(`${i18nPrefix}.save`, "保存")}
+              </Button>
+            </div>
+          </div>
+        </SettingsRow>
+      ) : null}
+    </>
+  );
+}
+
 function ChannelsSettings({
   settings,
   token,
@@ -1923,6 +2942,9 @@ function ChannelsSettings({
   const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
   const channels = settings.channels?.available ?? [];
   const weixin = channels.find((c) => c.name === "weixin");
+  const wecom = channels.find((c) => c.name === "wecom");
+  const qq = channels.find((c) => c.name === "qq");
+  const feishu = channels.find((c) => c.name === "feishu");
 
   const [toggling, setToggling] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false);
@@ -2213,7 +3235,72 @@ function ChannelsSettings({
                 </SettingsRow>
               ) : null}
             </>
-          ) : (
+          ) : null}
+
+          {wecom ? (
+            <CredentialChannelCard
+              channel={wecom}
+              token={token}
+              onSettingsChanged={onSettingsChanged}
+              description={tx(
+                "settings.channels.wecom.description",
+                "企业微信 AI 机器人。需在企业微信 AI Bot 平台获取 Bot ID 和 Secret。",
+              )}
+              i18nPrefix="settings.channels.wecom"
+              idFieldKey="bot_id"
+              idQueryKey="botId"
+              idLabel={tx("settings.channels.wecom.botId", "Bot ID")}
+              idPlaceholder="bot_xxx"
+              secretFieldKey="secret"
+              secretQueryKey="secret"
+              secretLabel={tx("settings.channels.wecom.secret", "Secret")}
+              toggleLabel={tx("settings.channels.wecom.toggle", "启用企业微信")}
+            />
+          ) : null}
+
+          {qq ? (
+            <CredentialChannelCard
+              channel={qq}
+              token={token}
+              onSettingsChanged={onSettingsChanged}
+              description={tx(
+                "settings.channels.qq.description",
+                "QQ 机器人。在 QQ 开放平台创建机器人后获取 App ID 和 Secret。",
+              )}
+              i18nPrefix="settings.channels.qq"
+              idFieldKey="app_id"
+              idQueryKey="appId"
+              idLabel={tx("settings.channels.qq.appId", "App ID")}
+              idPlaceholder="10xxxxxx"
+              secretFieldKey="secret"
+              secretQueryKey="secret"
+              secretLabel={tx("settings.channels.qq.secret", "Secret")}
+              toggleLabel={tx("settings.channels.qq.toggle", "启用 QQ")}
+            />
+          ) : null}
+
+          {feishu ? (
+            <CredentialChannelCard
+              channel={feishu}
+              token={token}
+              onSettingsChanged={onSettingsChanged}
+              description={tx(
+                "settings.channels.feishu.description",
+                "飞书/Lark 机器人。在飞书开放平台创建应用后获取 App ID 和 App Secret。",
+              )}
+              i18nPrefix="settings.channels.feishu"
+              idFieldKey="app_id"
+              idQueryKey="appId"
+              idLabel={tx("settings.channels.feishu.appId", "App ID")}
+              idPlaceholder="cli_xxx"
+              secretFieldKey="app_secret"
+              secretQueryKey="appSecret"
+              secretLabel={tx("settings.channels.feishu.appSecret", "App Secret")}
+              toggleLabel={tx("settings.channels.feishu.toggle", "启用飞书")}
+            />
+          ) : null}
+
+          {!weixin && !wecom && !qq && !feishu ? (
             <SettingsRow
               title={tx("settings.channels.empty", "暂无可配置的频道")}
               description={tx(
@@ -2223,7 +3310,7 @@ function ChannelsSettings({
             >
               <StatusPill tone="neutral">{tx("settings.channels.none", "无")}</StatusPill>
             </SettingsRow>
-          )}
+          ) : null}
         </SettingsGroup>
 
         {error ? (
@@ -2935,6 +4022,107 @@ function ProviderPicker({
   );
 }
 
+function ImageModelInput({
+  value,
+  onChange,
+  options,
+  placeholder,
+  selectLabel,
+  noMatchLabel,
+  addModelLabel,
+  onAddModel,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  options: string[];
+  placeholder?: string;
+  selectLabel: string;
+  noMatchLabel: string;
+  addModelLabel: string;
+  onAddModel?: () => void;
+}) {
+  const filtered = useMemo(() => {
+    if (!options.length) return [];
+    const v = value.trim().toLowerCase();
+    if (!v) return options;
+    return options.filter((o) => o.toLowerCase().includes(v));
+  }, [options, value]);
+
+  if (!options.length) {
+    return (
+      <Input
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
+        className="h-8 w-[min(300px,70vw)] rounded-full text-[13px]"
+      />
+    );
+  }
+
+  return (
+    <div className="relative flex items-center">
+      <Input
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
+        className="h-8 w-[min(300px,70vw)] rounded-full pr-9 text-[13px]"
+      />
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            aria-label={selectLabel}
+            className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-full"
+          >
+            <ChevronDown className="h-3.5 w-3.5" aria-hidden />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent
+          align="end"
+          className="max-h-[18rem] w-[min(300px,70vw)] overflow-y-auto rounded-[18px] border-border/65 bg-popover p-1.5 text-popover-foreground shadow-[0_18px_55px_rgba(15,23,42,0.18)] dark:border-white/10 dark:shadow-[0_22px_55px_rgba(0,0,0,0.45)]"
+        >
+          {filtered.length === 0 ? (
+            <div className="px-3 py-2 text-[13px] text-muted-foreground">{noMatchLabel}</div>
+          ) : (
+            filtered.map((model) => {
+              const selected = model === value;
+              return (
+                <DropdownMenuItem
+                  key={model}
+                  onSelect={() => onChange(model)}
+                  className={cn(
+                    "flex cursor-default items-center justify-between gap-2 rounded-[12px] px-3 py-2 text-[13px]",
+                    "focus:bg-muted focus:text-foreground",
+                    selected && "bg-primary/10 text-primary focus:bg-primary/12 focus:text-primary",
+                  )}
+                >
+                  <span className="truncate font-mono">{model}</span>
+                  {selected ? <Check className="h-3.5 w-3.5 shrink-0" aria-hidden /> : null}
+                </DropdownMenuItem>
+              );
+            })
+          )}
+          {onAddModel ? (
+            <>
+              <DropdownMenuSeparator className="my-1 h-px bg-border/60" />
+              <DropdownMenuItem
+                onSelect={onAddModel}
+                className={cn(
+                  "flex cursor-default items-center gap-2 rounded-[12px] px-3 py-2 text-[13px]",
+                  "focus:bg-muted focus:text-foreground text-primary",
+                )}
+              >
+                <Plus className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                <span className="truncate">{addModelLabel}</span>
+              </DropdownMenuItem>
+            </>
+          ) : null}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  );
+}
+
 function ProviderSection({
   title,
   count,
@@ -3539,7 +4727,7 @@ const SIDEBAR_SHORTCUT_ITEMS: Array<{ key: keyof SidebarShortcuts; label: string
   { key: "ssh", label: "终端" },
   { key: "db", label: "数据库" },
   { key: "kb", label: "知识库" },
-  { key: "ppt", label: "PPT制作" },
+  { key: "ppt", label: "AI文档" },
 ];
 
 const DEFAULT_SIDEBAR_SHORTCUTS: SidebarShortcuts = {

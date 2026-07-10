@@ -55,23 +55,39 @@ def load_embedding_config(vault: Path) -> EmbeddingConfig | None:
     """Read persisted embedding config from <vault>/.mona/embedding.json.
 
     Returns None if the file does not exist or is invalid.
+    Falls back to global config (config.tools.embedding) when the vault file
+    is absent, so users only need to configure embedding once in settings.
     """
     cfg_file = _embedding_config_path(vault)
-    if not cfg_file.exists():
-        return None
+    if cfg_file.exists():
+        try:
+            data = json.loads(cfg_file.read_text(encoding="utf-8"))
+            return EmbeddingConfig(
+                enabled=bool(data.get("enabled", False)),
+                endpoint=str(data.get("endpoint", "")),
+                api_key=str(data.get("apiKey", "")),
+                model=str(data.get("model", "")),
+                output_dimensionality=data.get("outputDimensionality"),
+                extra_headers=data.get("extraHeaders", {}) or {},
+            )
+        except Exception as e:
+            logger.warning(f"[notes_kb] failed to load embedding config: {e}")
+    # Fallback: read from global config so the setting page is the single source.
     try:
-        data = json.loads(cfg_file.read_text(encoding="utf-8"))
-        return EmbeddingConfig(
-            enabled=bool(data.get("enabled", False)),
-            endpoint=str(data.get("endpoint", "")),
-            api_key=str(data.get("apiKey", "")),
-            model=str(data.get("model", "")),
-            output_dimensionality=data.get("outputDimensionality"),
-            extra_headers=data.get("extraHeaders", {}) or {},
-        )
+        from mona.config.loader import load_config
+
+        cfg = load_config().tools.embedding
+        if cfg.enabled or cfg.endpoint or cfg.model:
+            return EmbeddingConfig(
+                enabled=cfg.enabled,
+                endpoint=cfg.endpoint,
+                api_key=cfg.api_key,
+                model=cfg.model,
+                output_dimensionality=cfg.output_dimensionality,
+            )
     except Exception as e:
-        logger.warning(f"[notes_kb] failed to load embedding config: {e}")
-        return None
+        logger.warning(f"[notes_kb] failed to load global embedding config: {e}")
+    return None
 
 
 def _embedding_config_from_body(body: dict[str, Any]) -> EmbeddingConfig:

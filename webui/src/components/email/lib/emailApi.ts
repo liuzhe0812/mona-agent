@@ -4,6 +4,7 @@ import type {
   BatchActionResponse,
   EmailAccount,
   EmailAnalysis,
+  EmailAttachment,
   EmailFolder,
   EmailMessage,
   EmailRule,
@@ -462,8 +463,8 @@ export async function fetchEmailBody(
   accountId: string,
   uid: string,
   mailbox: string,
-): Promise<{ bodyText: string; bodyHtml: string | null }> {
-  return invoke<{ bodyText: string; bodyHtml: string | null }>("email_fetch_body", {
+): Promise<{ bodyText: string; bodyHtml: string | null; attachments?: EmailAttachment[] }> {
+  return invoke<{ bodyText: string; bodyHtml: string | null; attachments?: EmailAttachment[] }>("email_fetch_body", {
     gatewayUrl,
     accountId,
     uid,
@@ -484,6 +485,12 @@ export async function fetchRawEmail(
     uid,
     mailbox,
   });
+}
+
+/// 全量重建邮件索引（从本地 .eml 文件重新解析 header）
+/// 用于修复旧数据中邮件头乱码（to/cc/from/subject 未解码 MIME encoded-word）
+export async function rebuildEmailIndex(): Promise<{ count: number }> {
+  return invoke<{ count: number }>("email_rebuild_index");
 }
 
 // ---------------------------------------------------------------------------

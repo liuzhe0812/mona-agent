@@ -10,6 +10,7 @@ import {
   updateImageGenerationSettings,
   updateProviderSettings,
   updateSettings,
+  updateVideoGenerationSettings,
   updateWebSearchSettings,
 } from "@/lib/api";
 
@@ -109,6 +110,23 @@ describe("webui API helpers", () => {
 
     expect(fetch).toHaveBeenCalledWith(
       "/api/settings/image-generation/update?enabled=true&provider=openrouter&model=openai%2Fgpt-5.4-image-2&default_aspect_ratio=16%3A9&default_image_size=2K&max_images_per_turn=3",
+      expect.objectContaining({
+        headers: { Authorization: "Bearer tok" },
+      }),
+    );
+  });
+
+  it("serializes video generation settings updates", async () => {
+    await updateVideoGenerationSettings("tok", {
+      enabled: true,
+      provider: "agnes",
+      model: "agnes-video-v2.0",
+      defaultAspectRatio: "16:9",
+      defaultDuration: 5,
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/settings/video-generation/update?enabled=true&provider=agnes&model=agnes-video-v2.0&default_aspect_ratio=16%3A9&default_duration=5",
       expect.objectContaining({
         headers: { Authorization: "Bearer tok" },
       }),

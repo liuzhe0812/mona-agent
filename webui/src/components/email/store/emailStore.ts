@@ -1,9 +1,12 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
-import type { EmailAccount, EmailAnalysis, EmailFolder, EmailMessage } from "../lib/types";
+import type { EmailAccount, EmailAnalysis, EmailAttachment, EmailFolder, EmailMessage } from "../lib/types";
 import * as api from "../lib/emailApi";
 import { sortFolders } from "../lib/folderUtils";
 import { showNotification } from "@/lib/tauri";
+
+// 正在进行的 fetchBody 请求去重，避免 useEffect + selectMessage 预取重复触发 IPC
+const inflightBodyLoads = new Set<string>();
 
 function calcTotalUnread(foldersByAccount: Record<string, EmailFolder[]>): number {
   let total = 0;
@@ -66,6 +69,9 @@ interface EmailState {
   gatewayUrl: string;
   // AI 分析结果缓存：key = `${uid}:${accountId}:${folder}`
   analysisCache: Record<string, EmailAnalysis>;
+  // 正文缓存：key = `${uid}:${accountId}:${folder}`，value = { bodyText, bodyHtml, attachments }
+  // 避免切换邮件/刷新列表时重复调 gateway 解析 .eml（SQLite 不存正文，每次 reload 都是空）
+  bodyCache: Record<string, { bodyText: string; bodyHtml: string | null; attachments?: EmailAttachment[] }>;
   analysisLoading: boolean;
   analysisError: string | null;
   // AI 对话会话 ID（email agent panel 的对话模式）
@@ -80,12 +86,17 @@ interface EmailState {
   loadingMore: boolean;
   // 是否处于统一收件箱模式（聚合所有账号 INBOX）
   isUnifiedInbox: boolean;
+  // 联系人邮箱→名称映射（小写 email → displayName），用于地址显示解析
+  contactsByEmail: Record<string, string>;
+  contactsLoaded: boolean;
 
   loadAccounts: () => Promise<void>;
   addAccount: (account: EmailAccount) => Promise<void>;
   updateAccount: (account: EmailAccount, newPassword?: string | null) => Promise<void>;
   removeAccount: (accountId: string) => Promise<void>;
   selectAccount: (accountId: string) => void;
+  // 加载所有联系人，建立 email→name 映射
+  loadContacts: () => Promise<void>;
   loadFolders: (gatewayUrl: string, accountId: string, localOnly?: boolean) => Promise<void>;
   selectFolder: (folder: string) => void;
   loadMessages: (accountId: string, folder?: string) => Promise<void>;
@@ -110,8 +121,10 @@ interface EmailState {
   emptyFolder: (gatewayUrl: string, accountId: string, mailbox: string) => Promise<void>;
   setGatewayUrl: (url: string) => void;
   refreshUnreadCounts: (accountId: string) => Promise<void>;
-  // 重新计算所有账号总未读数
+  // 重新计算所有账号总未读数（基于 foldersByAccount）
   recalcTotalUnread: () => Promise<void>;
+  // 直接从 SQLite 查询所有账号总未读数（不依赖 foldersByAccount，用于全局初始化）
+  loadTotalUnreadFromDb: () => Promise<void>;
   // AI 分析：从本地缓存加载（无则返回 null）
   loadAnalysis: (message: EmailMessage) => Promise<EmailAnalysis | null>;
   // AI 分析：调用 LLM 生成分析并存储
@@ -138,6 +151,7 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   error: null,
   gatewayUrl: "",
   analysisCache: {},
+  bodyCache: {},
   analysisLoading: false,
   analysisError: null,
   agentChatId: null,
@@ -146,10 +160,34 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   hasMore: false,
   loadingMore: false,
   isUnifiedInbox: false,
+  contactsByEmail: {},
+  contactsLoaded: false,
 
   setGatewayUrl: (url) => set({ gatewayUrl: url }),
 
   setAgentChatId: (chatId) => set({ agentChatId: chatId }),
+
+  loadContacts: async () => {
+    if (get().contactsLoaded) return;
+    try {
+      const { listContacts } = await import("../contacts/lib/contactsApi");
+      const { getAllEmails } = await import("../contacts/lib/types");
+      const contacts = await listContacts();
+      const map: Record<string, string> = {};
+      for (const c of contacts) {
+        const name = (c.displayName || "").trim();
+        if (!name) continue;
+        for (const email of getAllEmails(c)) {
+          const key = email.toLowerCase().trim();
+          if (key && !map[key]) map[key] = name;
+        }
+      }
+      set({ contactsByEmail: map, contactsLoaded: true });
+    } catch (e) {
+      console.warn("loadContacts failed:", e);
+      set({ contactsLoaded: true });
+    }
+  },
 
   loadAccounts: async () => {
     set({ loading: true, error: null });
@@ -161,7 +199,8 @@ export const useEmailStore = create<EmailState>((set, get) => ({
         set({ selectedAccountId: accounts[0].id });
       }
       // 加载账号后刷新总未读数并同步托盘图标
-      await get().recalcTotalUnread();
+      // foldersByAccount 可能为空（未打开邮件模块），直接从 SQLite 查询
+      await get().loadTotalUnreadFromDb();
       await setTrayUnreadCount(get().totalUnreadCount);
     } catch (e) {
       set({ loading: false, error: String(e) });
@@ -223,11 +262,12 @@ export const useEmailStore = create<EmailState>((set, get) => ({
 
   selectAccount: (accountId) => {
     const cached = get().foldersByAccount[accountId] ?? [];
+    // 不清空 messages，避免切换账号时列表瞬间空白闪烁
+    // loadMessages 会无缝替换为新账号 INBOX 的内容
     set({
       selectedAccountId: accountId,
       folders: cached,
       selectedFolder: "INBOX",
-      messages: [],
       selectedMessage: null,
       hasMore: false,
       isUnifiedInbox: false,
@@ -281,47 +321,51 @@ export const useEmailStore = create<EmailState>((set, get) => ({
       }
     }
 
-    // 2. 后台连接 IMAP 同步最新文件夹列表，静默更新缓存
+    // 2. 后台连接 IMAP 同步最新文件夹列表，fire-and-forget 不阻塞首屏
+    //    本地 SQLite 结果已在 step 1 立即渲染，IMAP 同步完成后静默更新缓存
     //    localOnly 模式跳过 IMAP 同步，仅用本地缓存（用于新建文件夹后避免锁竞争）
     if (!gatewayUrl || localOnly) return;
-    try {
-      const synced = await api.syncFolders(gatewayUrl, account);
-      const localCounts = await (async () => {
-        try {
-          return await api.getUnreadCounts(accountId);
-        } catch {
-          return {} as Record<string, number>;
-        }
-      })();
-      const merged = sortFolders(
-        synced.map((f) => ({
-          ...f,
-          unreadCount: localCounts[f.name] ?? 0,
-        })),
-      );
-      set((state) => {
-        const cached = state.foldersByAccount[accountId] ?? [];
-        // 防御：若 IMAP 返回空但本地有缓存，保留缓存避免文件夹树被清空
-        const effective =
-          merged.length === 0 && cached.length > 0 ? cached : merged;
-        const nextFoldersByAccount = {
-          ...state.foldersByAccount,
-          [accountId]: effective,
-        };
-        return {
-          folders:
-            state.selectedAccountId === accountId ? effective : state.folders,
-          foldersByAccount: nextFoldersByAccount,
-          foldersLoading: false,
-          foldersError: null,
-          totalUnreadCount: calcTotalUnread(nextFoldersByAccount),
-        };
-      });
-      await setTrayUnreadCount(get().totalUnreadCount);
-    } catch (e) {
-      // eslint-disable-next-line no-console
-      console.error("[email] syncFolders failed", e);
-    }
+    // 不 await：让 IMAP LIST 在后台执行，不阻塞当前调用
+    void (async () => {
+      try {
+        const synced = await api.syncFolders(gatewayUrl, account);
+        const localCounts = await (async () => {
+          try {
+            return await api.getUnreadCounts(accountId);
+          } catch {
+            return {} as Record<string, number>;
+          }
+        })();
+        const merged = sortFolders(
+          synced.map((f) => ({
+            ...f,
+            unreadCount: localCounts[f.name] ?? 0,
+          })),
+        );
+        set((state) => {
+          const cached = state.foldersByAccount[accountId] ?? [];
+          // 防御：若 IMAP 返回空但本地有缓存，保留缓存避免文件夹树被清空
+          const effective =
+            merged.length === 0 && cached.length > 0 ? cached : merged;
+          const nextFoldersByAccount = {
+            ...state.foldersByAccount,
+            [accountId]: effective,
+          };
+          return {
+            folders:
+              state.selectedAccountId === accountId ? effective : state.folders,
+            foldersByAccount: nextFoldersByAccount,
+            foldersLoading: false,
+            foldersError: null,
+            totalUnreadCount: calcTotalUnread(nextFoldersByAccount),
+          };
+        });
+        await setTrayUnreadCount(get().totalUnreadCount);
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.error("[email] syncFolders failed", e);
+      }
+    })();
   },
 
   refreshUnreadCounts: async (accountId) => {
@@ -366,6 +410,26 @@ export const useEmailStore = create<EmailState>((set, get) => ({
     set((state) => ({ totalUnreadCount: calcTotalUnread(state.foldersByAccount) }));
   },
 
+  loadTotalUnreadFromDb: async () => {
+    const accounts = get().accounts;
+    if (accounts.length === 0) {
+      set({ totalUnreadCount: 0 });
+      return;
+    }
+    let total = 0;
+    for (const account of accounts) {
+      try {
+        const counts = await api.getUnreadCounts(account.id);
+        for (const cnt of Object.values(counts)) {
+          total += cnt;
+        }
+      } catch {
+        // 单个账号查询失败时跳过，不影响其他账号
+      }
+    }
+    set({ totalUnreadCount: total });
+  },
+
   selectFolder: (folder) => {
     // 不清空 messages，避免切换文件夹时列表瞬间空白闪烁
     // loadMessages 会无缝替换为新文件夹的内容
@@ -380,14 +444,28 @@ export const useEmailStore = create<EmailState>((set, get) => ({
     try {
       const PAGE_SIZE = 50;
       const messages = await api.getMessages(accountId, folder, null, PAGE_SIZE);
+      // 从内存缓存恢复正文（SQLite 不存正文，但 bodyCache 有已解析过的）
+      const bodyCache = get().bodyCache;
+      const messagesWithBody = messages.map((m) => {
+        const key = `${m.uid}:${m.accountId}:${m.folder}`;
+        const cached = bodyCache[key];
+        if (cached && (cached.bodyText || cached.bodyHtml)) {
+          return { ...m, bodyText: cached.bodyText, bodyHtml: cached.bodyHtml, bodyFetched: true };
+        }
+        return m;
+      });
       // 仅在用户仍停留在同一账号同一文件夹时才更新（避免异步竞态：用户已切换走）
       if (get().selectedAccountId === accountId && get().selectedFolder === folder) {
         set({
-          messages,
+          messages: messagesWithBody,
           loading: false,
           error: null,
-          hasMore: messages.length === PAGE_SIZE,
+          hasMore: messagesWithBody.length === PAGE_SIZE,
         });
+        // 不在点击空文件夹时触发同步：
+        // 后台定时同步（5分钟）+ IMAP IDLE 会自动覆盖所有文件夹，
+        // 用户需要立即同步时点工具栏「收取」按钮。
+        // 之前点击空文件夹触发同步会显示"正在后台同步..."且争抢 IMAP 锁。
       }
     } catch (e) {
       set({ loading: false, error: String(e) });
@@ -510,7 +588,13 @@ export const useEmailStore = create<EmailState>((set, get) => ({
         await get().loadMessages(account.id, targetMailbox);
       }
     } catch (e) {
-      set({ syncing: false, error: String(e) });
+      const errMsg = e instanceof Error ? e.message : String(e);
+      // 422 = 文件夹不支持同步（企业邮箱限制），静默处理不弹报错
+      if (errMsg.includes("422") || errMsg.includes("不支持同步")) {
+        set({ syncing: false, error: null });
+      } else {
+        set({ syncing: false, error: errMsg });
+      }
     }
   },
 
@@ -562,7 +646,8 @@ export const useEmailStore = create<EmailState>((set, get) => ({
       }),
     );
     // 全部同步后刷新一次总未读数并同步托盘
-    await get().recalcTotalUnread();
+    // 用 DB 查询而非 foldersByAccount 计算，确保邮件模块未打开时也能正确更新
+    await get().loadTotalUnreadFromDb();
     await setTrayUnreadCount(get().totalUnreadCount);
     set({ backgroundSyncing: false });
     // 统一收件箱模式：同步后重新加载聚合列表以显示新邮件
@@ -598,12 +683,91 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   },
 
   selectMessage: (message) => {
+    if (!message) {
+      set({ selectedMessage: null });
+      return;
+    }
+    // 命中内存缓存时直接带正文，MailView 首次渲染即显示（零加载）
+    const cacheKey = `${message.uid}:${message.accountId}:${message.folder}`;
+    const cached = get().bodyCache[cacheKey];
+    if (cached && (cached.bodyText || cached.bodyHtml)) {
+      set({
+        selectedMessage: {
+          ...message,
+          bodyText: cached.bodyText,
+          bodyHtml: cached.bodyHtml,
+          bodyFetched: true,
+          bodyError: null,
+          attachments: cached.attachments ?? message.attachments,
+        },
+      });
+      return;
+    }
     set({ selectedMessage: message });
+    // 预取正文：不等 MailView 的 useEffect，省一个渲染周期
+    const gw = get().gatewayUrl;
+    if (gw && !message.bodyFetched) {
+      void get().fetchBody(gw, message);
+    }
   },
 
   fetchBody: async (gatewayUrl, message) => {
-    // 已缓存且有内容才跳过（兼容旧数据 body_fetched 默认 1 但正文为空的情况）
-    if (message.bodyFetched && (message.bodyText || message.bodyHtml)) return;
+    const cacheKey = `${message.uid}:${message.accountId}:${message.folder}`;
+    // 1. 先查内存缓存（SQLite 不存正文，但解析过的正文缓存在 store 中）
+    const cached = get().bodyCache[cacheKey];
+    if (cached && (cached.bodyText || cached.bodyHtml)) {
+      set((state) => ({
+        messages: state.messages.map((m) =>
+          m.uid === message.uid && m.accountId === message.accountId
+            ? {
+                ...m,
+                bodyText: cached.bodyText,
+                bodyHtml: cached.bodyHtml,
+                bodyFetched: true,
+                bodyError: null,
+                attachments: cached.attachments ?? m.attachments,
+              }
+            : m,
+        ),
+        selectedMessage:
+          state.selectedMessage?.uid === message.uid
+            ? {
+                ...state.selectedMessage,
+                bodyText: cached.bodyText,
+                bodyHtml: cached.bodyHtml,
+                bodyFetched: true,
+                bodyError: null,
+                attachments: cached.attachments ?? state.selectedMessage.attachments,
+              }
+            : state.selectedMessage,
+      }));
+      return;
+    }
+    // 2. 已缓存且有内容才跳过（兼容旧数据 body_fetched 默认 1 但正文为空的情况）
+    //    但有附件未加载时不跳过，需要拉取附件列表
+    if (
+      message.bodyFetched &&
+      (message.bodyText || message.bodyHtml) &&
+      (!message.hasAttachments || (message.attachments && message.attachments.length > 0))
+    ) {
+      return;
+    }
+    // 3. in-flight 去重：selectMessage 预取和 useEffect 可能同时触发，避免重复 IPC
+    if (inflightBodyLoads.has(cacheKey)) return;
+    inflightBodyLoads.add(cacheKey);
+    // 4. 标记为正在加载：把 bodyFetched 置 false，触发 UI 显示 spinner
+    //    避免 bodyFetched=true 但正文为空时显示"(无正文)"的闪烁
+    set((state) => ({
+      messages: state.messages.map((m) =>
+        m.uid === message.uid && m.accountId === message.accountId
+          ? { ...m, bodyFetched: false, bodyError: null }
+          : m,
+      ),
+      selectedMessage:
+        state.selectedMessage?.uid === message.uid
+          ? { ...state.selectedMessage, bodyFetched: false, bodyError: null }
+          : state.selectedMessage,
+    }));
     try {
       const result = await api.fetchEmailBody(
         gatewayUrl,
@@ -611,11 +775,22 @@ export const useEmailStore = create<EmailState>((set, get) => ({
         message.uid,
         message.folder,
       );
-      // 更新本地消息对象（messages 列表 + selectedMessage）
+      // 写入内存缓存 + 更新本地消息对象
       set((state) => ({
+        bodyCache: {
+          ...state.bodyCache,
+          [cacheKey]: { bodyText: result.bodyText, bodyHtml: result.bodyHtml, attachments: result.attachments },
+        },
         messages: state.messages.map((m) =>
           m.uid === message.uid && m.accountId === message.accountId
-            ? { ...m, bodyText: result.bodyText, bodyHtml: result.bodyHtml, bodyFetched: true, bodyError: null }
+            ? {
+                ...m,
+                bodyText: result.bodyText,
+                bodyHtml: result.bodyHtml,
+                bodyFetched: true,
+                bodyError: null,
+                attachments: result.attachments ?? m.attachments,
+              }
             : m,
         ),
         selectedMessage:
@@ -626,6 +801,7 @@ export const useEmailStore = create<EmailState>((set, get) => ({
                 bodyHtml: result.bodyHtml,
                 bodyFetched: true,
                 bodyError: null,
+                attachments: result.attachments ?? state.selectedMessage.attachments,
               }
             : state.selectedMessage,
       }));
@@ -645,6 +821,8 @@ export const useEmailStore = create<EmailState>((set, get) => ({
             : state.selectedMessage,
       }));
       throw e;
+    } finally {
+      inflightBodyLoads.delete(cacheKey);
     }
   },
 
@@ -858,3 +1036,68 @@ export const useEmailStore = create<EmailState>((set, get) => ({
     }
   },
 }));
+
+/**
+ * 解析地址字符串，用通讯录名称替换邮箱显示。
+ * 支持 "Name <email>" 和纯 email 两种格式，逗号分隔多个地址。
+ * 有名称（含通讯录）时只显示名称，否则显示邮箱。
+ */
+export function resolveAddressDisplay(
+  raw: string | null | undefined,
+  contactsByEmail: Record<string, string>,
+): string {
+  if (!raw) return "";
+  // 按逗号分割，但不分割尖括号内的逗号
+  const parts: string[] = [];
+  let current = "";
+  let inAngle = false;
+  for (const ch of raw) {
+    if (ch === "<") inAngle = true;
+    else if (ch === ">") inAngle = false;
+    if (ch === "," && !inAngle) {
+      if (current.trim()) parts.push(current.trim());
+      current = "";
+    } else {
+      current += ch;
+    }
+  }
+  if (current.trim()) parts.push(current.trim());
+
+  const resolved = parts.map((part) => {
+    // 提取 Name <email> 格式
+    const match = part.match(/^([^<]*?)\s*<([^>]+)>$/);
+    if (match) {
+      const name = match[1].trim().replace(/^["']|["']$/g, "");
+      if (name) return name;
+      const email = match[2].trim();
+      const contactName = contactsByEmail[email.toLowerCase()];
+      if (contactName) return contactName;
+      return email;
+    }
+    // 纯 email
+    const email = part.trim();
+    if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      const contactName = contactsByEmail[email.toLowerCase()];
+      if (contactName) return contactName;
+      return email;
+    }
+    return part;
+  });
+
+  return resolved.join(", ");
+}
+
+/** 解析单个地址，返回显示名（优先 fromName，其次通讯录，最后 email） */
+export function resolveSenderDisplay(
+  fromName: string | null | undefined,
+  fromAddress: string,
+  contactsByEmail: Record<string, string>,
+): string {
+  const name = (fromName || "").trim();
+  if (name) return name;
+  const addr = (fromAddress || "").trim();
+  if (!addr) return "(未知发件人)";
+  const contactName = contactsByEmail[addr.toLowerCase()];
+  if (contactName) return contactName;
+  return addr;
+}

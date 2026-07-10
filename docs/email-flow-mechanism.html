@@ -1,0 +1,847 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mona 邮件流程机制说明</title>
+<style>
+  :root {
+    --bg: #fafafa;
+    --card: #ffffff;
+    --border: #e5e7eb;
+    --text: #1f2937;
+    --muted: #6b7280;
+    --primary: #2563eb;
+    --primary-bg: #eff6ff;
+    --success: #16a34a;
+    --success-bg: #f0fdf4;
+    --warn: #d97706;
+    --warn-bg: #fffbeb;
+    --danger: #dc2626;
+    --danger-bg: #fef2f2;
+    --accent: #7c3aed;
+    --accent-bg: #f5f3ff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    margin: 0;
+    padding: 0;
+    line-height: 1.7;
+    font-size: 14px;
+  }
+  .container {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 40px 24px 80px;
+  }
+  header {
+    text-align: center;
+    padding: 40px 0 30px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 40px;
+  }
+  header h1 {
+    font-size: 28px;
+    margin: 0 0 8px;
+    letter-spacing: 0.5px;
+  }
+  header p {
+    color: var(--muted);
+    margin: 0;
+    font-size: 14px;
+  }
+  .toc {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px 24px;
+    margin-bottom: 40px;
+  }
+  .toc h2 {
+    margin: 0 0 12px;
+    font-size: 15px;
+    color: var(--muted);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  .toc ol {
+    margin: 0;
+    padding-left: 20px;
+    columns: 2;
+    column-gap: 40px;
+  }
+  .toc li {
+    margin-bottom: 6px;
+    break-inside: avoid;
+  }
+  .toc a {
+    color: var(--primary);
+    text-decoration: none;
+  }
+  .toc a:hover { text-decoration: underline; }
+
+  section {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 28px 32px;
+    margin-bottom: 28px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.03);
+  }
+  section h2 {
+    font-size: 22px;
+    margin: 0 0 6px;
+    padding-bottom: 12px;
+    border-bottom: 2px solid var(--primary);
+    display: inline-block;
+  }
+  section h2 .num {
+    display: inline-block;
+    width: 32px;
+    height: 32px;
+    line-height: 32px;
+    text-align: center;
+    background: var(--primary);
+    color: white;
+    border-radius: 50%;
+    font-size: 15px;
+    margin-right: 10px;
+  }
+  section h3 {
+    font-size: 16px;
+    margin: 24px 0 12px;
+    color: var(--text);
+  }
+  section > p {
+    color: var(--muted);
+    margin: 0 0 20px;
+  }
+
+  .flow {
+    background: linear-gradient(135deg, #f9fafb 0%, #f3f4f6 100%);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 24px;
+    margin: 16px 0;
+  }
+  .flow-title {
+    font-size: 12px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    margin-bottom: 16px;
+    font-weight: 600;
+  }
+  .steps {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .step {
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+    background: white;
+    padding: 12px 16px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+  }
+  .step-num {
+    flex-shrink: 0;
+    width: 26px;
+    height: 26px;
+    line-height: 26px;
+    text-align: center;
+    background: var(--primary);
+    color: white;
+    border-radius: 50%;
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .step-body {
+    flex: 1;
+  }
+  .step-body strong {
+    display: block;
+    margin-bottom: 2px;
+  }
+  .step-body span {
+    color: var(--muted);
+    font-size: 13px;
+  }
+  .arrow {
+    text-align: center;
+    color: var(--primary);
+    font-size: 18px;
+    line-height: 1;
+    margin: -4px 0;
+  }
+
+  .layer-diagram {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 14px;
+    margin: 16px 0;
+  }
+  .layer {
+    background: white;
+    border: 2px solid;
+    border-radius: 10px;
+    padding: 16px;
+    text-align: center;
+  }
+  .layer.eml { border-color: var(--success); background: var(--success-bg); }
+  .layer.meta { border-color: var(--warn); background: var(--warn-bg); }
+  .layer.db { border-color: var(--primary); background: var(--primary-bg); }
+  .layer h4 {
+    margin: 0 0 6px;
+    font-size: 14px;
+  }
+  .layer p {
+    margin: 0;
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .callout {
+    border-left: 4px solid;
+    padding: 12px 16px;
+    margin: 14px 0;
+    border-radius: 0 8px 8px 0;
+    font-size: 13px;
+  }
+  .callout.info { border-color: var(--primary); background: var(--primary-bg); }
+  .callout.warn { border-color: var(--warn); background: var(--warn-bg); }
+  .callout.success { border-color: var(--success); background: var(--success-bg); }
+  .callout.danger { border-color: var(--danger); background: var(--danger-bg); }
+  .callout strong {
+    display: block;
+    margin-bottom: 4px;
+  }
+
+  .role-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 12px;
+    margin: 16px 0;
+  }
+  .role-card {
+    background: white;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px;
+  }
+  .role-card h4 {
+    margin: 0 0 6px;
+    font-size: 13px;
+    color: var(--primary);
+  }
+  .role-card p {
+    margin: 0;
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 14px 0;
+    font-size: 13px;
+  }
+  th, td {
+    text-align: left;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+  }
+  th {
+    background: #f9fafb;
+    font-weight: 600;
+    color: var(--text);
+  }
+  td:first-child { font-weight: 500; }
+
+  .tag {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    margin-right: 4px;
+  }
+  .tag.fast { background: var(--success-bg); color: var(--success); }
+  .tag.slow { background: var(--warn-bg); color: var(--warn); }
+  .tag.local { background: var(--primary-bg); color: var(--primary); }
+  .tag.remote { background: var(--accent-bg); color: var(--accent); }
+
+  ul.clean {
+    padding-left: 18px;
+    margin: 10px 0;
+  }
+  ul.clean li {
+    margin-bottom: 6px;
+  }
+
+  footer {
+    text-align: center;
+    color: var(--muted);
+    padding: 30px 0 0;
+    border-top: 1px solid var(--border);
+    font-size: 12px;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+<header>
+  <h1>Mona 邮件流程机制说明</h1>
+  <p>邮件收取 · 保存 · 列表加载 · 正文加载 · 已读状态变更</p>
+</header>
+
+<div class="toc">
+  <h2>目录</h2>
+  <ol>
+    <li><a href="#architecture">整体架构与角色分工</a></li>
+    <li><a href="#storage">存储分层模型</a></li>
+    <li><a href="#sync">邮件收取流程</a></li>
+    <li><a href="#persist">邮件保存流程</a></li>
+    <li><a href="#list">邮件列表加载流程</a></li>
+    <li><a href="#body">正文加载流程</a></li>
+    <li><a href="#read">已读状态变更流程</a></li>
+    <li><a href="#summary">性能与一致性要点</a></li>
+  </ol>
+</div>
+
+<!-- ==================== 1. 架构 ==================== -->
+<section id="architecture">
+  <h2><span class="num">1</span>整体架构与角色分工</h2>
+  <p>邮件功能由三层协作完成，每层职责清晰、相互独立。</p>
+
+  <div class="role-grid">
+    <div class="role-card">
+      <h4>前端（React + Zustand）</h4>
+      <p>管理 UI 状态与用户交互。所有读操作优先走本地，写操作采用"本地优先 + 异步同步"策略，确保 UI 即时响应。</p>
+    </div>
+    <div class="role-card">
+      <h4>Rust 侧（Tauri 命令）</h4>
+      <p>负责本地数据管理：SQLite 索引读写、.eml 文件落盘、.meta.json 维护、本地正文解析（mailparse）。所有 IMAP 网络请求也由 Rust 发起。</p>
+    </div>
+    <div class="role-card">
+      <h4>Python Gateway</h4>
+      <p>仅负责 IMAP 协议交互：连接邮箱、FETCH 邮件头/正文、STORE 标志、MOVE 邮件。通过 asyncio.Lock 保证同账号 IMAP 操作串行，避免连接配额耗尽。</p>
+    </div>
+  </div>
+
+  <div class="callout info">
+    <strong>核心设计原则：本地优先（Local-First）</strong>
+    所有读操作走 SQLite 索引（毫秒级），所有写操作先落本地再异步同步 IMAP。参考 Foxmail / Mailspring 的设计：IMAP 同步在后台进行，永不阻塞 UI。
+  </div>
+</section>
+
+<!-- ==================== 2. 存储分层 ==================== -->
+<section id="storage">
+  <h2><span class="num">2</span>存储分层模型</h2>
+  <p>每封邮件在本地有三份存储，各司其职，构成 Foxmail 风格的文件 + 索引架构。</p>
+
+  <div class="layer-diagram">
+    <div class="layer eml">
+      <h4>.eml 文件</h4>
+      <p>邮件原始 RFC822 字节，是<strong>唯一真相源</strong>。包含完整头部、正文、附件。可被任何邮件客户端打开。</p>
+    </div>
+    <div class="meta">
+      <h4 style="color: var(--warn);">.meta.json</h4>
+      <p>侧车文件，存储 RFC822 不含的状态：已读、星标、正文是否已拉取。保证 .eml 文件本身不被修改。</p>
+    </div>
+    <div class="layer db">
+      <h4>SQLite 索引</h4>
+      <p>可重建的缓存索引。存储邮件头字段（主题、发件人、日期等）+ eml_path 指针。支持复合索引实现秒级查询。</p>
+    </div>
+  </div>
+
+  <div class="callout success">
+    <strong>为什么分三层？</strong>
+    <ul class="clean" style="margin: 6px 0 0;">
+      <li>.eml 是标准格式，可脱离应用独立打开，避免数据锁定</li>
+      <li>.meta.json 把用户状态与邮件原文分离，IMAP 重新同步不会覆盖本地状态</li>
+      <li>SQLite 仅做索引，体积小、查询快，损坏后可从 .eml 文件完全重建</li>
+    </ul>
+  </div>
+
+  <h3>SQLite 关键索引</h3>
+  <table>
+    <tr><th>索引</th><th>用途</th><th>查询场景</th></tr>
+    <tr><td>(account_id, folder, uid_int DESC)</td><td>复合主索引</td><td>列表分页、游标加载</td></tr>
+    <tr><td>(account_id, folder, uid)</td><td>唯一约束</td><td>UPSERT 去重</td></tr>
+    <tr><td>(account_id, folder, message_id)</td><td>消息 ID 查找</td><td>同步去重（发送副本 vs IMAP 版本）</td></tr>
+  </table>
+</section>
+
+<!-- ==================== 3. 邮件收取 ==================== -->
+<section id="sync">
+  <h2><span class="num">3</span>邮件收取流程</h2>
+  <p>邮件收取分三种触发场景，底层共用同一个同步管道，但 UI 表现不同。</p>
+
+  <h3>触发场景</h3>
+  <table>
+    <tr><th>场景</th><th>UI 状态</th><th>说明</th></tr>
+    <tr>
+      <td>用户点击「收取」按钮</td>
+      <td><span class="tag slow">syncing</span> 全屏同步指示</td>
+      <td>主动同步当前文件夹，显示加载状态，禁用按钮</td>
+    </tr>
+    <tr>
+      <td>点击空文件夹（本地无邮件）</td>
+      <td><span class="tag local">backgroundSyncing</span> 后台 spinner</td>
+      <td>列表立即显示空状态 + 小 spinner，同步完成后邮件 prepend，不阻塞</td>
+    </tr>
+    <tr>
+      <td>后台定时同步 / IMAP IDLE 推送</td>
+      <td><span class="tag local">backgroundSyncing</span> 静默</td>
+      <td>每 30 秒轮询 + IDLE 实时监听，新邮件自动入库并 prepend 到列表</td>
+    </tr>
+  </table>
+
+  <h3>同步管道（sync_folder_internal）</h3>
+  <div class="flow">
+    <div class="flow-title">从前端点击到邮件落盘的完整链路</div>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <strong>前端发起同步请求</strong>
+          <span>携带账号信息、文件夹名、lastUid（本地已同步的最大 UID）。点击空文件夹时用 backgroundSyncing 标记，不设 syncing。</span>
+        </div>
+      </div>
+      <div class="arrow">↓</div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <strong>Rust 调用 Gateway /email/sync</strong>
+          <span>POST 请求到 Python Gateway，Gateway 通过 asyncio.Lock 串行化同账号 IMAP 操作，避免连接配额问题。</span>
+        </div>
+      </div>
+      <div class="arrow">↓</div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <strong>Gateway 连接 IMAP 增量拉取</strong>
+          <span>UID SEARCH lastUid+1:* 获取新邮件 UID 列表。首次同步取最近 20 封，增量同步单次最多 50 封。仅拉取 BODY.PEEK[HEADER] + FLAGS，不下载正文。</span>
+        </div>
+      </div>
+      <div class="arrow">↓</div>
+      <div class="step">
+        <div class="step-num">4</div>
+        <div class="step-body">
+          <strong>Gateway 返回邮件头 JSON</strong>
+          <span>每封邮件包含 uid、subject、from、date、isRead、isStarred、rawBytes（HEADER 原始字节 base64 编码）。返回给 Rust。</span>
+        </div>
+      </div>
+      <div class="arrow">↓</div>
+      <div class="step">
+        <div class="step-num">5</div>
+        <div class="step-body">
+          <strong>Rust 落盘 + 索引写入</strong>
+          <span>对每封邮件：① base64 解码 rawBytes 写入 .eml 文件；② 写 .meta.json 侧车（isRead/isStarred/bodyFetched=false）；③ UPSERT 到 SQLite 索引表，保留用户已有的 isRead/isStarred 状态。</span>
+        </div>
+      </div>
+      <div class="arrow">↓</div>
+      <div class="step">
+        <div class="step-num">6</div>
+        <div class="step-body">
+          <strong>去重处理</strong>
+          <span>若本地存在相同 message_id 但不同 uid 的记录（如本地发送的 "L" 副本 vs IMAP 同步版本），删除旧版本及其 .eml/.meta.json，避免重复。</span>
+        </div>
+      </div>
+      <div class="arrow">↓</div>
+      <div class="step">
+        <div class="step-num">7</div>
+        <div class="step-body">
+          <strong>更新 last_synced_uid</strong>
+          <span>取本次同步中最大的 UID 写入 accounts 表，作为下次增量同步的起点。</span>
+        </div>
+      </div>
+      <div class="arrow">↓</div>
+      <div class="step">
+        <div class="step-num">8</div>
+        <div class="step-body">
+          <strong>应用邮件规则（仅新邮件）</strong>
+          <span>对本次新增的邮件匹配规则：标记已读/星标（本地+IMAP）、移动/删除（调 Gateway）。规则 MOVE 后不会递归触发规则。</span>
+        </div>
+      </div>
+      <div class="arrow">↓</div>
+      <div class="step">
+        <div class="step-num">9</div>
+        <div class="step-body">
+          <strong>返回新邮件列表给前端</strong>
+          <span>从 SQLite 查询仍留在当前文件夹的新邮件（规则可能 MOVE 走了部分），返回完整 EmailMessage 对象。</span>
+        </div>
+      </div>
+      <div class="arrow">↓</div>
+      <div class="step">
+        <div class="step-num">10</div>
+        <div class="step-body">
+          <strong>前端增量 prepend + 通知</strong>
+          <span>过滤掉已存在的 UID，将新邮件插入列表头部。非首次同步且检测到新邮件时弹右下角通知。刷新未读数。</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="callout warn">
+    <strong>422 错误的友好处理</strong>
+    企业邮箱（如腾讯企业邮）可能拒绝 SELECT 非收件箱文件夹，Gateway 捕获 "Mailbox select failed" 返回 422。前端识别 422 静默处理，不弹错误，仅显示空列表。
+  </div>
+</section>
+
+<!-- ==================== 4. 邮件保存 ==================== -->
+<section id="persist">
+  <h2><span class="num">4</span>邮件保存流程</h2>
+  <p>邮件保存指将 IMAP 拉取的邮件落盘为本地文件并建立索引。所有写操作遵循固定顺序，保证一致性。</p>
+
+  <h3>三层写入顺序（不可颠倒）</h3>
+  <div class="flow">
+    <div class="flow-title">写操作的事务性顺序</div>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <strong>写 .eml 文件（真相源）</strong>
+          <span>base64 解码 IMAP 返回的 rawBytes，写入 &lt;app_data&gt;/email/&lt;account_id&gt;/&lt;folder&gt;/&lt;uid&gt;.eml。同步时写 HEADER-only，fetch_body 时覆盖为完整 RFC822。</span>
+        </div>
+      </div>
+      <div class="arrow">↓</div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <strong>写 .meta.json（侧车状态）</strong>
+          <span>与 .eml 同目录，文件名 &lt;uid&gt;.meta.json。记录 isRead、isStarred、bodyFetched、messageId、emlMtime。用户状态变更时同步更新此文件。</span>
+        </div>
+      </div>
+      <div class="arrow">↓</div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <strong>UPSERT SQLite 索引（可重建缓存）</strong>
+          <span>INSERT ... ON CONFLICT DO UPDATE。更新邮件头字段，但保留用户已设置的 isRead/isStarred（CASE WHEN 已为 1 则不覆盖）。eml_path 指向 .eml 文件相对路径。</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="callout danger">
+    <strong>为什么这个顺序？</strong>
+    若先写 SQLite 再写 .eml，进程在中间崩溃会导致索引指向不存在的文件。先写 .eml 保证即使 SQLite 写失败，邮件数据仍在磁盘上，下次同步或重建索引时可恢复。
+  </div>
+
+  <h3>同步时的 UPSERT 策略</h3>
+  <table>
+    <tr><th>字段</th><th>策略</th><th>原因</th></tr>
+    <tr><td>subject / from / date 等头部</td><td>始终覆盖</td><td>IMAP 是权威源</td></tr>
+    <tr><td>is_read / is_starred</td><td>本地为 1 则保留</td><td>用户本地操作不应被 IMAP 状态覆盖</td></tr>
+    <tr><td>body_fetched</td><td>本地为 1 则保留</td><td>已拉取的正文不应回退</td></tr>
+    <tr><td>eml_path</td><td>新值非空才覆盖</td><td>避免空值清掉已有路径</td></tr>
+  </table>
+</section>
+
+<!-- ==================== 5. 列表加载 ==================== -->
+<section id="list">
+  <h2><span class="num">5</span>邮件列表加载流程</h2>
+  <p>点击文件夹或切换账号时加载邮件列表。核心目标：秒级响应，无空白闪烁。</p>
+
+  <h3>触发入口</h3>
+  <p>统一由 EmailClientView 的 useEffect 监听 selectedAccountId + selectedFolder 变化触发 loadMessages，避免多处手动调用导致重复请求。</p>
+
+  <div class="flow">
+    <div class="flow-title">loadMessages 完整流程</div>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <strong>不设 loading: true</strong>
+          <span>本地 SQLite 查询通常 &lt;10ms，设置 loading 会引起"加载中"闪烁。保留旧列表内容直到新数据就绪，实现无缝替换。</span>
+        </div>
+      </div>
+      <div class="arrow">↓</div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <strong>SQLite 游标分页查询</strong>
+          <span>SELECT ... ORDER BY uid_int DESC LIMIT 50。before_uid 为空时拉最新一页，非空时拉 uid_int &lt; before_uid 的下一页。使用 uid_int 列（整数）替代 CAST(uid AS INTEGER)，走索引。</span>
+        </div>
+      </div>
+      <div class="arrow">↓</div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <strong>从内存缓存恢复正文</strong>
+          <span>SQLite 不存正文，但 bodyCache（Zustand store）有已解析过的正文。对每封邮件检查缓存 key，命中则填充 bodyText/bodyHtml，避免重新解析。</span>
+        </div>
+      </div>
+      <div class="arrow">↓</div>
+      <div class="step">
+        <div class="step-num">4</div>
+        <div class="step-body">
+          <strong>防竞态检查</strong>
+          <span>仅当当前 selectedAccountId 和 selectedFolder 仍与查询时一致才更新 state。避免用户快速切换文件夹时旧请求覆盖新结果。</span>
+        </div>
+      </div>
+      <div class="arrow">↓</div>
+      <div class="step">
+        <div class="step-num">5</div>
+        <div class="step-body">
+          <strong>无缝替换列表</strong>
+          <span>set messages + hasMore（等于 PAGE_SIZE 表示可能有更多）。UI 立即渲染新列表，无闪烁。</span>
+        </div>
+      </div>
+      <div class="arrow">↓</div>
+      <div class="step">
+        <div class="step-num">6</div>
+        <div class="step-body">
+          <strong>空文件夹触发后台同步（仅本地为空时）</strong>
+          <span>设置 backgroundSyncing: true，调 syncEmail 拉取邮件。仅当拉到新邮件时才重新 loadMessages（避免空文件夹无限递归）。同步完成或失败都置 backgroundSyncing: false。</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="callout success">
+    <strong>性能数据</strong>
+    <ul class="clean" style="margin: 6px 0 0;">
+      <li>本地有邮件的文件夹：&lt;10ms 显示列表 <span class="tag fast">秒开</span></li>
+      <li>本地为空的文件夹：立即显示空状态 + 后台 spinner，同步完成后邮件自动出现</li>
+      <li>滚动到底部自动加载下一页：游标分页，避免 OFFSET 越翻越慢</li>
+    </ul>
+  </div>
+
+  <h3>虚拟滚动</h3>
+  <p>列表使用 @tanstack/react-virtual 虚拟滚动，仅渲染可见区域的邮件行（约 15-20 行），无论列表多少封邮件都保持流畅。每行高度 56px，overscan 8 行预渲染。</p>
+</section>
+
+<!-- ==================== 6. 正文加载 ==================== -->
+<section id="body">
+  <h2><span class="num">6</span>正文加载流程</h2>
+  <p>同步时只拉 HEADER，正文在用户点击邮件时按需加载。三层缓存策略保证秒级打开。</p>
+
+  <h3>缓存层级</h3>
+  <table>
+    <tr><th>层级</th><th>位置</th><th>命中速度</th><th>说明</th></tr>
+    <tr><td>L1 内存缓存</td><td>Zustand bodyCache</td><td><span class="tag fast">&lt;1ms</span></td><td>会话内有效，切换邮件/刷新列表时复用</td></tr>
+    <tr><td>L2 本地 .eml</td><td>磁盘文件</td><td><span class="tag local">1-5ms</span></td><td>Rust mailparse 本地解析，毫秒级</td></tr>
+    <tr><td>L3 IMAP 远程</td><td>Gateway /email/fetch_body</td><td><span class="tag slow">200-2000ms</span></td><td>网络请求，拉完整 RFC822 并落盘</td></tr>
+  </table>
+
+  <div class="flow">
+    <div class="flow-title">fetchBody 完整流程</div>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <strong>检查 L1 内存缓存</strong>
+          <span>key = uid:accountId:folder。命中且有内容则直接更新 messages/selectedMessage，立即返回。避免切换邮件时重复解析。</span>
+        </div>
+      </div>
+      <div class="arrow">↓ 未命中</div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <strong>检查 bodyFetched 标志</strong>
+          <span>若邮件对象已有 bodyFetched=true 且 bodyText 非空，直接返回（兼容旧数据）。</span>
+        </div>
+      </div>
+      <div class="arrow">↓ 需要拉取</div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <strong>调用 Rust email_fetch_body 命令</strong>
+          <span>前端调 Tauri invoke，传入 gatewayUrl、accountId、uid、mailbox。</span>
+        </div>
+      </div>
+      <div class="arrow">↓</div>
+      <div class="step">
+        <div class="step-num">4</div>
+        <div class="step-body">
+          <strong>查 SQLite 获取 eml_path</strong>
+          <span>Rust 先从 SQLite 查询该邮件的 eml_path 字段，判断本地是否有 .eml 文件。</span>
+        </div>
+      </div>
+      <div class="arrow">↓</div>
+      <div class="step">
+        <div class="step-num">5</div>
+        <div class="step-body">
+          <strong>本地有 .eml：Rust mailparse 解析（快路径）</strong>
+          <span>读取 .eml 字节，用 mailparse crate 递归提取 text/plain 和 text/html。自动处理 MIME 多部分结构、字符集解码。纯本地操作，毫秒级，不走 Gateway HTTP。</span>
+        </div>
+      </div>
+      <div class="arrow">↓ .eml 不存在或解析失败</div>
+      <div class="step">
+        <div class="step-num">6</div>
+        <div class="step-body">
+          <strong>本地无 .eml：调 Gateway IMAP FETCH（慢路径）</strong>
+          <span>POST /email/fetch_body，Gateway 连接 IMAP，UID FETCH BODY.PEEK[] 拉完整 RFC822。返回 rawBytes（base64）+ 解析后的 bodyText/bodyHtml。</span>
+        </div>
+      </div>
+      <div class="arrow">↓</div>
+      <div class="step">
+        <div class="step-num">7</div>
+        <div class="step-body">
+          <strong>落盘 .eml + 更新索引</strong>
+          <span>若 Gateway 返回 rawBytes，base64 解码后写入 .eml 文件。更新 SQLite：eml_path + body_fetched=1。更新 .meta.json：body_fetched=true。下次再点击此邮件即走快路径。</span>
+        </div>
+      </div>
+      <div class="arrow">↓</div>
+      <div class="step">
+        <div class="step-num">8</div>
+        <div class="step-body">
+          <strong>写入 L1 缓存 + 更新 UI</strong>
+          <span>前端将 bodyText/bodyHtml 写入 bodyCache，更新 messages 和 selectedMessage。正文截断到 50000 字符防止超大邮件卡死渲染。</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="callout info">
+    <strong>为什么同步时不拉正文？</strong>
+    <ul class="clean" style="margin: 6px 0 0;">
+      <li>一封邮件正文可能几 MB，50 封同步会拉上百 MB，同步超时严重</li>
+      <li>大部分邮件用户不会点开，按需拉取节省带宽和存储</li>
+      <li>点开过的邮件落盘 .eml，二次打开纯本地毫秒级</li>
+    </ul>
+  </div>
+
+  <div class="callout warn">
+    <strong>失败处理</strong>
+    fetchBody 失败时记录 bodyError 到邮件对象，UI 显示错误提示而非永远 loading。用户可重新点击邮件触发重试。
+  </div>
+</section>
+
+<!-- ==================== 7. 已读状态变更 ==================== -->
+<section id="read">
+  <h2><span class="num">7</span>已读状态变更流程</h2>
+  <p>已读/星标状态变更采用"本地优先 + 异步同步"模式，确保 UI 即时响应且状态不丢失。</p>
+
+  <h3>设计背景</h3>
+  <p>早期版本直接调 IMAP STORE 设置标志，存在两个问题：① 网络延迟导致 UI 卡顿；② 企业邮箱拒绝非 INBOX 文件夹的 STORE 操作，导致已读状态下次打开又变回未读。本地优先模式彻底解决这两个问题。</p>
+
+  <div class="flow">
+    <div class="flow-title">toggleRead 完整流程</div>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <strong>乐观更新 UI（立即）</strong>
+          <span>前端立即反转 messages 和 selectedMessage 中的 isRead 字段，UI 瞬间响应，无任何等待。未读数同步更新。</span>
+        </div>
+      </div>
+      <div class="arrow">↓</div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <strong>调用 Rust email_mark_read</strong>
+          <span>前端调 Tauri invoke，传入 account_id、uid、mailbox、add（true=标记已读，false=标记未读）。</span>
+        </div>
+      </div>
+      <div class="arrow">↓</div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <strong>本地优先：更新 SQLite（立即持久化）</strong>
+          <span>UPDATE messages SET is_read = ? WHERE uid=? AND account_id=? AND folder=?。即使 IMAP 同步失败，本地状态也已持久化，下次打开仍是已读。</span>
+        </div>
+      </div>
+      <div class="arrow">↓</div>
+      <div class="step">
+        <div class="step-num">4</div>
+        <div class="step-body">
+          <strong>同步更新 .meta.json</strong>
+          <span>读取侧车文件，更新 is_read 字段，写回磁盘。保证 .eml 重建索引时状态不丢失。</span>
+        </div>
+      </div>
+      <div class="arrow">↓</div>
+      <div class="step">
+        <div class="step-num">5</div>
+        <div class="step-body">
+          <strong>异步同步 IMAP（失败不影响本地）</strong>
+          <span>POST /email/set_flag 到 Gateway，Gateway 调 IMAP UID STORE +FLAGS/-FLAGS \Seen。10 秒超时。失败仅记日志，不返回错误，不回滚本地状态。</span>
+        </div>
+      </div>
+      <div class="arrow">↓</div>
+      <div class="step">
+        <div class="step-num">6</div>
+        <div class="step-body">
+          <strong>刷新未读数</strong>
+          <span>从本地 SQLite 重新统计各文件夹未读数，更新文件夹树和托盘图标。</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="callout success">
+    <strong>解决了什么问题</strong>
+    <ul class="clean" style="margin: 6px 0 0;">
+      <li>UI 即时响应：乐观更新，不等任何网络请求</li>
+      <li>状态不丢失：SQLite + .meta.json 双写，即使 IMAP 失败也持久</li>
+      <li>企业邮箱兼容：IMAP STORE 失败不报错，本地状态独立于服务器</li>
+      <li>最终一致：下次 IMAP 同步时，服务器已读状态会自然对齐（或保持差异，不影响使用）</li>
+    </ul>
+  </div>
+
+  <h3>星标状态（toggleStarred）</h3>
+  <p>星标状态变更与已读完全相同的流程，仅 SQLite 字段从 is_read 改为 is_starred，IMAP 标志从 \Seen 改为 \Flagged。同样采用本地优先 + 异步同步模式。</p>
+
+  <h3>失败回滚策略</h3>
+  <table>
+    <tr><th>阶段</th><th>失败处理</th></tr>
+    <tr><td>乐观更新后、Rust 调用失败</td><td>回滚 UI 状态，恢复原 isRead 值，显示错误</td></tr>
+    <tr><td>SQLite 写入失败</td><td>返回错误，前端回滚 UI</td></tr>
+    <tr><td>IMAP 同步失败</td><td>仅记日志，不回滚，本地状态保持。下次同步自然对齐</td></tr>
+  </table>
+</section>
+
+<!-- ==================== 8. 性能要点 ==================== -->
+<section id="summary">
+  <h2><span class="num">8</span>性能与一致性要点</h2>
+
+  <h3>关键性能优化</h3>
+  <table>
+    <tr><th>优化点</th><th>措施</th><th>效果</th></tr>
+    <tr><td>EmailState conn() 初始化</td><td>AtomicBool 控制 schema 只初始化一次</td><td>每次连接从 50-200ms 降至 1-5ms</td></tr>
+    <tr><td>uid_int 整数列 + 复合索引</td><td>替代 CAST(uid AS INTEGER)</td><td>分页查询走索引，避免全表扫描</td></tr>
+    <tr><td>正文本地解析</td><td>Rust mailparse 直接读 .eml</td><td>避开 Gateway HTTP 往返，毫秒级</td></tr>
+    <tr><td>同步仅拉 HEADER</td><td>BODY.PEEK[HEADER]</td><td>同步 50 封 &lt;2 秒，正文按需拉取</td></tr>
+    <tr><td>虚拟滚动</td><td>@tanstack/react-virtual</td><td>万封邮件列表流畅滚动</td></tr>
+    <tr><td>游标分页</td><td>uid_int &lt; before_uid 替代 OFFSET</td><td>翻页性能恒定，不随页数增加变慢</td></tr>
+    <tr><td>乐观更新</td><td>UI 先反转，后端异步处理</td><td>已读/星标切换零延迟</td></tr>
+  </table>
+
+  <h3>一致性保障</h3>
+  <ul class="clean">
+    <li><strong>写顺序固定</strong>：.eml → .meta.json → SQLite，崩溃可恢复</li>
+    <li><strong>UPSERT 保留用户状态</strong>：同步不覆盖本地 isRead/isStarred/bodyFetched</li>
+    <li><strong>防竞态检查</strong>：异步操作完成后校验 selectedAccountId/selectedFolder 是否仍一致</li>
+    <li><strong>message_id 去重</strong>：发送副本与 IMAP 版本按 message_id 合并，避免重复</li>
+    <li><strong>422 友好处理</strong>：企业邮箱文件夹限制静默处理，不弹错误</li>
+  </ul>
+
+  <h3>已知限制</h3>
+  <div class="callout warn">
+    <strong>当前限制与权衡</strong>
+    <ul class="clean" style="margin: 6px 0 0;">
+      <li>非 INBOX 文件夹首次访问需后台同步，空文件夹显示 spinner（已优化为不阻塞）</li>
+      <li>已读状态在离线时仅保存在本地，联网后异步同步，短期内服务器状态可能不一致</li>
+      <li>.eml 文件 HEADER-only 状态下无法解析正文，需 fetch_body 拉完整 RFC822 覆盖</li>
+      <li>多账号并行同步受 IMAP 连接配额限制，默认串行化同账号操作</li>
+    </ul>
+  </div>
+</section>
+
+<footer>
+  Mona 邮件流程机制说明 · 本地优先架构 · 参考 Foxmail / Mailspring / Meli 设计
+</footer>
+
+</div>
+</body>
+</html>

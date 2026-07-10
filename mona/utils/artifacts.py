@@ -1,4 +1,4 @@
-﻿"""Artifact persistence helpers for generated media."""
+"""Artifact persistence helpers for generated media."""
 
 from __future__ import annotations
 
@@ -115,6 +115,75 @@ def generated_image_tool_result(artifacts: list[dict[str, Any]]) -> str:
                 "Use these artifact paths as reference_images for follow-up edits. "
                 "Call the message tool with the artifact paths in the media parameter "
                 "to deliver the images to the user. Keep raw paths internal unless the "
+                "user asks for debug details."
+            ),
+        },
+        ensure_ascii=False,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Video artifacts
+# ---------------------------------------------------------------------------
+
+_VIDEO_MIME_EXTENSIONS = {
+    "video/mp4": ".mp4",
+    "video/webm": ".webm",
+}
+
+
+def store_generated_video_artifact(
+    raw: bytes,
+    *,
+    prompt: str,
+    model: str,
+    provider: str,
+    video_url: str = "",
+    source_images: list[str] | None = None,
+    save_dir: str = "generated",
+    mime: str = "video/mp4",
+    duration: str | None = None,
+    size: str | None = None,
+    created_at: datetime | None = None,
+) -> dict[str, Any]:
+    """Persist a generated video and sidecar metadata under the media root."""
+    ext = _VIDEO_MIME_EXTENSIONS.get(mime, ".mp4")
+
+    now = created_at or datetime.now().astimezone()
+    day_dir = ensure_dir(_artifact_root(save_dir) / now.strftime("%Y-%m-%d"))
+    artifact_id = f"vid_{uuid.uuid4().hex[:12]}"
+    video_path = day_dir / f"{artifact_id}{ext}"
+    metadata_path = day_dir / f"{artifact_id}.json"
+
+    video_path.write_bytes(raw)
+    metadata: dict[str, Any] = {
+        "id": artifact_id,
+        "path": str(video_path),
+        "mime": mime,
+        "prompt": prompt,
+        "model": model,
+        "provider": provider,
+        "video_url": video_url,
+        "source_images": list(source_images or []),
+        "duration": duration,
+        "size": size,
+        "created_at": now.isoformat(),
+    }
+    metadata_path.write_text(
+        json.dumps(metadata, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return metadata
+
+
+def generated_video_tool_result(artifacts: list[dict[str, Any]]) -> str:
+    """Return the compact structured result exposed to the LLM."""
+    return json.dumps(
+        {
+            "artifacts": artifacts,
+            "next_step": (
+                "Call the message tool with the artifact paths in the media parameter "
+                "to deliver the videos to the user. Keep raw paths internal unless the "
                 "user asks for debug details."
             ),
         },
