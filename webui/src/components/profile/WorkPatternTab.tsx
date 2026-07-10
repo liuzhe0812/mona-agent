@@ -84,8 +84,8 @@ export function WorkPatternTab({
           <Panel className="p-4">
             <SectionTitle icon={<Link2 className="h-4 w-4" />} title="工具使用链路" hint={chains.length > 0 ? "基于工具链证据" : "暂无数据"} color={PROFILE_COLORS.cyan} />
             {chains.length > 0
-              ? <SankeyChart chains={chains} height={300} />
-              : <div className="flex h-[300px] items-center justify-center text-xs text-muted-foreground">暂无工具链数据</div>}
+              ? <SankeyChart chains={chains} height={200} />
+              : <div className="flex h-[200px] items-center justify-center text-xs text-muted-foreground">暂无工具链数据</div>}
           </Panel>
         </div>
 
