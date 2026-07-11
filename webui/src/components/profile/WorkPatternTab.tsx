@@ -46,13 +46,23 @@ export function WorkPatternTab({
   const preferredTools = work?.preferred_tools ?? [];
   const mainTask = frequentTasks[0] ?? "暂无";
   const mainTool = preferredTools[0] ?? "暂无";
-  const completionQuality = Math.round((work?.confidence ?? 0) * 100);
+
+  // 完成质量：从 tool_success 计算真实成功率
+  const toolSuccess = work?.evidence?.tool_success ?? {};
+  const successEntries = Object.values(toolSuccess);
+  const totalSuccess = successEntries.reduce((sum, s) => sum + (s.success ?? 0), 0);
+  const totalCalls = successEntries.reduce((sum, s) => sum + (s.total ?? 0), 0);
+  const completionQuality = totalCalls > 0 ? Math.round((totalSuccess / totalCalls) * 100) : null;
 
   // 活动热力图
   const heatmap = hourlyToHeatmap(work?.evidence?.hourly_distribution);
 
-  // 任务分布：从 frequent_tasks 生成等分
-  const taskDistribution = generateTaskDistribution(frequentTasks);
+  // 工具使用分布：从 top_tools 真实计数生成
+  const toolDistribution = topTools.slice(0, 6).map((t, i) => ({
+    label: t.tool,
+    value: t.count,
+    color: [PROFILE_COLORS.amber, PROFILE_COLORS.emerald, PROFILE_COLORS.cyan, PROFILE_COLORS.emeraldSoft, PROFILE_COLORS.coral, "#94a3b8"][i % 6],
+  }));
 
   // 活跃时段
   const activeHours = work?.active_hours ?? "暂无";
@@ -79,7 +89,7 @@ export function WorkPatternTab({
         <MetricCard icon={<Clock className="h-5 w-5" />} label="活跃时段" value={activeHours} hint="日活跃峰值" color={PROFILE_COLORS.emerald} />
         <MetricCard icon={<FileText className="h-5 w-5" />} label="高频任务" value={mainTask} hint={frequentTasks.length > 0 ? `共 ${frequentTasks.length} 类任务` : "暂无"} color={PROFILE_COLORS.amber} />
         <MetricCard icon={<Wrench className="h-5 w-5" />} label="常用工具" value={mainTool} hint={preferredTools.length > 0 ? `共 ${preferredTools.length} 种工具` : "暂无"} color={PROFILE_COLORS.cyan} />
-        <MetricCard icon={<Activity className="h-5 w-5" />} label="完成质量" value={completionQuality > 0 ? `${completionQuality}%` : "暂无"} hint="基于蒸馏置信度" color={PROFILE_COLORS.emerald} />
+        <MetricCard icon={<Activity className="h-5 w-5" />} label="完成质量" value={completionQuality !== null ? `${completionQuality}%` : "暂无"} hint="工具调用成功率" color={PROFILE_COLORS.emerald} />
       </div>
 
       <div className="grid grid-cols-1 gap-3 xl:grid-cols-[1fr_340px]">
@@ -147,8 +157,8 @@ export function WorkPatternTab({
 
       <div className="grid grid-cols-1 gap-3 xl:grid-cols-[0.8fr_1fr_1fr]">
         <Panel className="p-4">
-          <SectionTitle icon={<Target className="h-4 w-4" />} title="任务分布" hint={frequentTasks.length > 0 ? "基于 frequent_tasks" : "暂无数据"} color={PROFILE_COLORS.amber} />
-          {taskDistribution.length > 0 ? <TaskDistribution items={taskDistribution} total={frequentTasks.length} /> : <span className="text-xs text-muted-foreground">暂无任务数据</span>}
+          <SectionTitle icon={<Target className="h-4 w-4" />} title="工具使用分布" hint={toolDistribution.length > 0 ? "基于真实调用次数" : "暂无数据"} color={PROFILE_COLORS.amber} />
+          {toolDistribution.length > 0 ? <TaskDistribution items={toolDistribution} total={topTools.reduce((sum, t) => sum + t.count, 0)} /> : <span className="text-xs text-muted-foreground">暂无工具数据</span>}
         </Panel>
 
         <Panel className="p-4">
@@ -188,20 +198,6 @@ export function WorkPatternTab({
       </Panel>
     </div>
   );
-}
-
-/** 从 frequent_tasks 生成等分任务分布数据 */
-function generateTaskDistribution(
-  tasks: string[],
-): { label: string; value: number; color: string }[] {
-  if (tasks.length === 0) return [];
-  const colors = [PROFILE_COLORS.amber, PROFILE_COLORS.emerald, PROFILE_COLORS.cyan, PROFILE_COLORS.emeraldSoft, PROFILE_COLORS.coral, "#94a3b8"];
-  const baseShare = Math.floor(100 / tasks.length);
-  return tasks.map((task, index) => ({
-    label: task,
-    value: index === 0 ? baseShare + (100 - baseShare * tasks.length) : baseShare,
-    color: colors[index % colors.length],
-  }));
 }
 
 /** 从 hourly_distribution 找活跃度最高的小时 */
@@ -312,9 +308,16 @@ function TaskDistribution({
   items: { label: string; value: number; color: string }[];
   total: number;
 }) {
-  const gradient = `conic-gradient(${items.map((item, index) => {
-    const start = items.slice(0, index).reduce((sum, entry) => sum + entry.value, 0);
-    const end = start + item.value;
+  // value 是原始计数，转为百分比用于饼图和展示
+  const totalSum = items.reduce((sum, item) => sum + item.value, 0) || 1;
+  const percentItems = items.map((item) => ({
+    ...item,
+    percent: Math.round((item.value / totalSum) * 100),
+  }));
+
+  const gradient = `conic-gradient(${percentItems.map((item, index) => {
+    const start = percentItems.slice(0, index).reduce((sum, entry) => sum + entry.percent, 0);
+    const end = start + item.percent;
     return `${item.color} ${start}% ${end}%`;
   }).join(", ")})`;
 
@@ -322,16 +325,17 @@ function TaskDistribution({
     <div className="grid grid-cols-[120px_1fr] items-center gap-5">
       <div className="relative h-28 w-28 rounded-full" style={{ background: gradient }}>
         <div className="absolute inset-8 flex flex-col items-center justify-center rounded-full bg-card text-center">
-          <span className="text-[10px] text-muted-foreground">任务类</span>
+          <span className="text-[10px] text-muted-foreground">总调用</span>
           <span className="text-sm font-bold tabular-nums">{total}</span>
         </div>
       </div>
       <div className="space-y-1.5">
-        {items.map((item) => (
+        {percentItems.map((item) => (
           <div key={item.label} className="flex items-center gap-2 text-xs">
             <span className="h-2.5 w-2.5 rounded-full" style={{ background: item.color }} />
             <span className="flex-1 truncate text-muted-foreground">{item.label}</span>
-            <span className="tabular-nums">{item.value}%</span>
+            <span className="tabular-nums">{item.value} 次</span>
+            <span className="tabular-nums text-muted-foreground">({item.percent}%)</span>
           </div>
         ))}
       </div>

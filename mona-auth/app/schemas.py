@@ -7,6 +7,7 @@ class RegisterRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8, max_length=128)
     code: str = Field(min_length=6, max_length=6)
+    account: str = Field(min_length=2, max_length=32, pattern=r"^[\u4e00-\u9fa5a-zA-Z0-9_]+$")
 
 
 class SendRegisterCodeRequest(BaseModel):
@@ -14,7 +15,7 @@ class SendRegisterCodeRequest(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    email: EmailStr
+    account: str  # Can be account name or email
     password: str
 
 
@@ -71,6 +72,7 @@ class LicenseCheckResponse(BaseModel):
     expires_at: str | None = None
     trial: bool = False
     email: str | None = None
+    account: str | None = None
 
 
 class CreatePaymentRequest(BaseModel):
@@ -111,6 +113,7 @@ class SubscriptionInfo(BaseModel):
 class AdminUserInfo(BaseModel):
     id: int
     email: str
+    account: str | None = None
     is_admin: bool
     trial_started_at: datetime | None
     trial_expires_at: datetime | None
@@ -128,6 +131,10 @@ class AdminUserListResponse(BaseModel):
 
 class AdminTrialUpdateRequest(BaseModel):
     trial_expires_at: datetime
+
+
+class AdminAccountUpdateRequest(BaseModel):
+    account: str = Field(min_length=2, max_length=32, pattern=r"^[\u4e00-\u9fa5a-zA-Z0-9_]+$")
 
 
 class ErrorResponse(BaseModel):

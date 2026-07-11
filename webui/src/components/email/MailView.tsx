@@ -57,7 +57,6 @@ export function MailView() {
   const loadAnalysis = useEmailStore((s) => s.loadAnalysis);
   const runAnalysis = useEmailStore((s) => s.runAnalysis);
   const fetchBody = useEmailStore((s) => s.fetchBody);
-  const isOnline = useEmailStore((s) => s.isOnline);
   const contactsByEmail = useEmailStore((s) => s.contactsByEmail);
   const loadContacts = useEmailStore((s) => s.loadContacts);
 
@@ -141,12 +140,13 @@ export function MailView() {
     };
   }, [selectedMessage?.attachments]);
 
-  // 选中邮件时，若未读则自动标记为已读（仅在线时）
+  // 选中邮件时，若未读则自动标记为已读
+  // 本地优先：即使 gateway 离线，Rust 侧也会先更新 SQLite，gateway 失败不报错
   useEffect(() => {
-    if (selectedMessage && !selectedMessage.isRead && gatewayUrl && isOnline) {
+    if (selectedMessage && !selectedMessage.isRead && gatewayUrl) {
       void toggleRead(gatewayUrl, selectedMessage);
     }
-  }, [selectedMessage, gatewayUrl, toggleRead, isOnline]);
+  }, [selectedMessage, gatewayUrl, toggleRead]);
 
   // 选中邮件时，从本地缓存加载 AI 分析结果（不自动调用 LLM）
   useEffect(() => {

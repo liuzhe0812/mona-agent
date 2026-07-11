@@ -131,7 +131,7 @@
                 </div>
                 <table>
                     <thead>
-                        <tr><th>ID</th><th>邮箱</th><th>角色</th><th>试用</th><th>订阅</th><th>注册时间</th><th>操作</th></tr>
+                        <tr><th>ID</th><th>账号</th><th>邮箱</th><th>角色</th><th>试用到期</th><th>订阅状态</th><th>订阅到期</th><th>注册时间</th><th>操作</th></tr>
                     </thead>
                     <tbody id="userTable"></tbody>
                 </table>
@@ -270,6 +270,18 @@
         </div>
     </div>
 
+    <div id="accountModal" class="modal-overlay">
+        <div class="modal">
+            <h3>修改账号</h3>
+            <label>账号（支持中文、字母、数字、下划线，2-32字符）</label>
+            <input type="text" id="accountInput" maxlength="32">
+            <div class="modal-btns">
+                <button onclick="closeAccountModal()">取消</button>
+                <button class="primary" onclick="saveAccount()">保存</button>
+            </div>
+        </div>
+    </div>
+
     <div id="notifModal" class="modal-overlay">
         <div class="modal" style="width:500px">
             <h3>新建通知</h3>
@@ -373,25 +385,34 @@
                 const data = await res.json();
                 const tbody = document.getElementById('userTable');
                 if (data.users.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#999;padding:32px">暂无数据</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:#999;padding:32px">暂无数据</td></tr>';
                 } else {
                     tbody.innerHTML = data.users.map(u => {
                         const roleBadge = u.is_admin
                             ? '<span class="badge badge-admin">管理员</span>'
                             : '<span class="badge" style="background:#f3f4f6;color:#555">用户</span>';
+                        const accountCell = u.account
+                            ? `<span style="cursor:pointer;color:#4f46e5" onclick="openAccountModal(${u.id},'${(u.account||'').replace(/'/g,"\\'")}')">${u.account}</span>`
+                            : '<span style="color:#9ca3af" onclick="openAccountModal(' + u.id + ',\'\')">-</span>';
                         const trialBadge = u.trial_expires_at
                             ? (new Date(u.trial_expires_at) > new Date()
                                 ? `<span class="badge badge-trial">试用中 - ${u.trial_expires_at.slice(0,10)}</span>`
                                 : `<span class="badge badge-expired">已过期 - ${u.trial_expires_at.slice(0,10)}</span>`)
-                            : '<span class="badge" style="background:#f3f4f6;color:#999">无试用</span>';
-                        const subBadge = u.subscription_status === 'active'
-                            ? `<span class="badge badge-active">有效 - ${(u.subscription_end||'').slice(0,10)}</span>`
                             : '<span class="badge" style="background:#f3f4f6;color:#999">无</span>';
+                        const subStatusBadge = u.subscription_status === 'active'
+                            ? '<span class="badge badge-active">有效</span>'
+                            : (u.subscription_status ? '<span class="badge badge-expired">过期</span>' : '<span class="badge" style="background:#f3f4f6;color:#999">无</span>');
+                        const subEndBadge = u.subscription_end
+                            ? (new Date(u.subscription_end) > new Date()
+                                ? `<span class="badge badge-active">${u.subscription_end.slice(0,10)}</span>`
+                                : `<span class="badge badge-expired">${u.subscription_end.slice(0,10)}</span>`)
+                            : '<span class="badge" style="background:#f3f4f6;color:#999">-</span>';
                         const deleteBtn = u.is_admin ? '' : `<button class="btn-danger" onclick="openDeleteModal(${u.id},'${u.email}')">删除</button>`;
                         return `<tr>
-                            <td>${u.id}</td><td>${u.email}</td><td>${roleBadge}</td><td>${trialBadge}</td><td>${subBadge}</td>
+                            <td>${u.id}</td><td>${accountCell}</td><td>${u.email}</td><td>${roleBadge}</td><td>${trialBadge}</td><td>${subStatusBadge}</td><td>${subEndBadge}</td>
                             <td>${u.created_at.slice(0,10)}</td>
                             <td class="actions">
+                                <button onclick="openAccountModal(${u.id},'${(u.account||'').replace(/'/g,"\\'")}')">账号</button>
                                 <button onclick="openTrialModal(${u.id},'${u.trial_expires_at||''}')">试用</button>
                                 <button onclick="openSubModal(${u.id},'${u.subscription_status||'expired'}','${u.subscription_end||''}')">订阅</button>
                                 ${deleteBtn}
@@ -472,6 +493,31 @@
             closeDeleteModal();
             loadUsers(currentPage);
             loadStats();
+        }
+
+        let editingAccountId = null;
+        function openAccountModal(userId, account) {
+            editingAccountId = userId;
+            document.getElementById('accountInput').value = account || '';
+            document.getElementById('accountModal').style.display = 'flex';
+        }
+        function closeAccountModal() { document.getElementById('accountModal').style.display = 'none'; }
+
+        async function saveAccount() {
+            const account = document.getElementById('accountInput').value.trim();
+            if (account.length < 2) { showToast('账号至少 2 个字符'); return; }
+            try {
+                const res = await fetch(`${API}/admin/users/${editingAccountId}/account`, {
+                    method: 'PUT',
+                    headers: { ...headers(), 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ account })
+                });
+                const data = await res.json();
+                if (!res.ok) { showToast(data.detail || data.error || '保存失败'); return; }
+                closeAccountModal();
+                loadUsers(currentPage);
+                showToast('账号已更新');
+            } catch (e) { showToast('保存失败'); }
         }
 
         let currentTab = 'users';

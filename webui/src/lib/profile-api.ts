@@ -30,6 +30,7 @@ export interface WorkPatterns {
     tool_chains?: { chain: string; count: number }[];
     hourly_distribution?: Record<string, number>;
     daily_distribution?: Record<string, number>;
+    tool_success?: Record<string, { success: number; total: number }>;
   };
   visualizations?: {
     top_tools_chart?: { tool: string; count: number }[];
@@ -66,6 +67,9 @@ export interface ProfileData {
     top_senders?: { sender: string; address?: string; count: number }[];
     notes_monthly?: Record<string, number>;
     total_notes?: number;
+    keyword_first_seen?: Record<string, string>;
+    session_topics?: { title: string; tools: string[] }[];
+    total_sessions?: number;
   };
   visualizations?: {
     radar_scores?: RadarScore[];

@@ -149,6 +149,7 @@ class ProfileTask(DistillTask):
                     "top_subjects": email.get("top_subjects", []),
                     "notes_monthly": notes.get("monthly_distribution", {}),
                     "total_notes": notes.get("total_notes", 0),
+                    "keyword_first_seen": notes.get("keyword_first_seen", {}),
                     "session_topics": [
                         {"title": t.get("title", ""), "tools": t.get("tools_used", [])}
                         for t in sessions.get("topics", [])[:20]

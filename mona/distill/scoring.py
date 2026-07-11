@@ -296,22 +296,20 @@ def detect_milestones(
     notes_stats: dict[str, Any],
     history: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    """Detect growth milestones from notes history.
+    """Detect growth milestones from real events.
 
-    Returns [{"type": "first_skill", "title": "首次掌握 Rust",
-              "date": "2026-05", "icon": "trophy"}]
+    Uses keyword_first_seen to track when each skill first appeared,
+    and monthly_distribution for activity milestones.
     """
     milestones: list[dict[str, Any]] = []
 
-    # Monthly keyword appearance
     monthly = notes_stats.get("monthly_distribution", {})
     keywords = notes_stats.get("title_keywords", [])
+    keyword_first_seen: dict[str, str] = notes_stats.get("keyword_first_seen", {})
 
-    # Track first appearance of each keyword (based on notes history if available)
-    # Simplified: use monthly distribution to find growth points
+    # 首次记录里程碑
     sorted_months = sorted(monthly.keys()) if monthly else []
-    if len(sorted_months) >= 2:
-        # First month with notes
+    if sorted_months:
         milestones.append({
             "type": "first_note",
             "title": "开始记录",
@@ -320,9 +318,24 @@ def detect_milestones(
             "description": f"在 {sorted_months[0]} 写下第一篇笔记",
         })
 
-        # Peak month
+    # 技能首次出现里程碑（基于真实首次出现时间）
+    # 按时间排序，取前 8 个
+    seen_kws = sorted(keyword_first_seen.items(), key=lambda x: x[1])
+    kw_count_map = {k.get("keyword"): k.get("count", 0) for k in keywords}
+    for kw, month in seen_kws[:8]:
+        count = kw_count_map.get(kw, 0)
+        milestones.append({
+            "type": "first_skill",
+            "title": f"接触 {kw}",
+            "date": month,
+            "icon": "book",
+            "description": f"{month} 首次在笔记中出现「{kw}」" + (f"，累计 {count} 篇" if count >= 2 else ""),
+        })
+
+    # 产出高峰（真实月度笔记数，阈值降低到 3）
+    if len(sorted_months) >= 2:
         peak_month = max(monthly.items(), key=lambda x: x[1])
-        if peak_month[1] >= 5:
+        if peak_month[1] >= 3:
             milestones.append({
                 "type": "peak",
                 "title": "高产时刻",
@@ -330,44 +343,6 @@ def detect_milestones(
                 "icon": "fire",
                 "description": f"{peak_month[0]} 写了 {peak_month[1]} 篇笔记",
             })
-
-    # Skill milestones (based on keyword counts)
-    for kw_item in keywords[:10]:
-        kw = kw_item.get("keyword", "")
-        count = kw_item.get("count", 0)
-        if count >= 10:
-            milestones.append({
-                "type": "mastery",
-                "title": f"深耕 {kw}",
-                "date": "",
-                "icon": "medal",
-                "description": f"{kw} 相关笔记达 {count} 篇",
-            })
-        elif count >= 3:
-            milestones.append({
-                "type": "learning",
-                "title": f"学习 {kw}",
-                "date": "",
-                "icon": "book",
-                "description": f"{kw} 相关笔记 {count} 篇",
-            })
-
-    # Tech stack diversity
-    unique_areas = set()
-    for kw_item in keywords:
-        kw = (kw_item.get("keyword") or "").lower()
-        for tech_key, _ in _TECH_AREA_MAP.items():
-            if tech_key in kw:
-                unique_areas.add(_area_label(_TECH_AREA_MAP[tech_key]))
-                break
-    if len(unique_areas) >= 3:
-        milestones.append({
-            "type": "diversity",
-            "title": "多元发展",
-            "date": "",
-            "icon": "layers",
-            "description": f"技术栈覆盖 {len(unique_areas)} 个领域",
-        })
 
     return milestones
 

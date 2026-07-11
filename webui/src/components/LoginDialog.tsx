@@ -24,6 +24,7 @@ export function LoginDialog({
   const { login, register, sendRegisterCode, forgotPassword, resetPassword, loggedIn, logout, licenseInfo, localTrial, localTrialExpired, remainingDays, pricingConfig, fetchPricing } = useLicense();
   const [view, setView] = useState<LoginView>(initialView);
   const [email, setEmail] = useState("");
+  const [accountInput, setAccountInput] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [registerCode, setRegisterCode] = useState("");
@@ -76,7 +77,7 @@ export function LoginDialog({
     setError("");
     setLoading(true);
     try {
-      await login(email, password);
+      await login(accountInput, password);
       handleClose(false);
     } catch (err) {
       setError(String(err).replace(/^Error:\s*/, ""));
@@ -115,6 +116,10 @@ export function LoginDialog({
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
+    if (accountInput.trim().length < 2) {
+      setError("账号至少 2 位");
+      return;
+    }
     if (password.length < 8) {
       setError("密码至少 8 位");
       return;
@@ -129,7 +134,7 @@ export function LoginDialog({
     }
     setLoading(true);
     try {
-      await register(email, password, registerCode);
+      await register(email, password, registerCode, accountInput.trim());
       handleClose(false);
     } catch (err) {
       setError(String(err).replace(/^Error:\s*/, ""));
@@ -198,7 +203,7 @@ export function LoginDialog({
 
         {isSubscribeView && (
           <SubscribeView
-            userEmail={licenseInfo?.email || email}
+            userEmail={licenseInfo?.account || licenseInfo?.email || email}
             onBackToLogin={() => setView(loggedIn ? "login" : "login")}
             embed
             loading={subscribeLoading}
@@ -207,6 +212,12 @@ export function LoginDialog({
 
         {showAccountInfo && (
           <div className="flex flex-col gap-3 text-sm">
+            {licenseInfo?.account && (
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">账号</span>
+                <span>{licenseInfo.account}</span>
+              </div>
+            )}
             <div className="flex justify-between">
               <span className="text-muted-foreground">邮箱</span>
               <span>{licenseInfo?.email}</span>
@@ -253,9 +264,9 @@ export function LoginDialog({
 
             {view === "login" && (
               <form onSubmit={handleLogin} className="flex flex-col gap-3">
-                <Input type="email" placeholder="邮箱" value={email} onChange={(e) => setEmail(e.target.value)} disabled={loading} autoFocus />
+                <Input type="text" placeholder="账号或邮箱" value={accountInput} onChange={(e) => setAccountInput(e.target.value)} disabled={loading} autoFocus />
                 <Input type="password" placeholder="密码" value={password} onChange={(e) => setPassword(e.target.value)} disabled={loading} />
-                <Button type="submit" disabled={!email || !password || loading}>
+                <Button type="submit" disabled={!accountInput || !password || loading}>
                   {loading ? "登录中..." : "登录"}
                 </Button>
                 <div className="flex justify-between text-xs text-muted-foreground">
@@ -278,7 +289,8 @@ export function LoginDialog({
 
             {view === "register" && (
               <form onSubmit={handleRegister} className="flex flex-col gap-3">
-                <Input type="email" placeholder="邮箱" value={email} onChange={(e) => setEmail(e.target.value)} disabled={loading} autoFocus />
+                <Input type="text" placeholder="账号（支持中文，2-32字符）" value={accountInput} onChange={(e) => setAccountInput(e.target.value)} disabled={loading} autoFocus />
+                <Input type="email" placeholder="邮箱" value={email} onChange={(e) => setEmail(e.target.value)} disabled={loading} />
                 <div className="flex gap-2">
                   <Input type="text" placeholder="6 位验证码" value={registerCode} onChange={(e) => setRegisterCode(e.target.value)} disabled={loading} maxLength={6} className="flex-1" />
                   <Button type="button" variant="outline" onClick={handleSendCode} disabled={!email || codeCooldown > 0 || loading} className="shrink-0 whitespace-nowrap">
@@ -287,7 +299,7 @@ export function LoginDialog({
                 </div>
                 <Input type="password" placeholder="密码（至少 8 位）" value={password} onChange={(e) => setPassword(e.target.value)} disabled={loading} />
                 <Input type="password" placeholder="确认密码" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} disabled={loading} className={passwordMismatch ? "ring-1 ring-destructive" : ""} />
-                <Button type="submit" disabled={!email || !registerCode || !password || !confirmPassword || passwordMismatch || loading}>
+                <Button type="submit" disabled={!accountInput || !email || !registerCode || !password || !confirmPassword || passwordMismatch || loading}>
                   {loading ? "注册中..." : "注册"}
                 </Button>
                 <button type="button" className="text-center text-xs text-muted-foreground hover:underline" onClick={() => { setView("login"); setError(""); setSuccess(""); }}>

@@ -22,6 +22,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
 
   const [view, setView] = useState<AuthView>("idle");
   const [email, setEmail] = useState("");
+  const [accountInput, setAccountInput] = useState("");
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -78,13 +79,16 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
 
   // Logged in but expired
   if (loggedIn && licenseInfo?.status === "expired") {
+    const isTrial = licenseInfo.trial;
     return (
       <div className="flex h-full w-full items-center justify-center bg-background">
         <div className="flex w-full max-w-sm flex-col gap-4 px-6 text-center">
           <div className="text-4xl">⏰</div>
-          <p className="text-lg font-semibold">试用已到期</p>
+          <p className="text-lg font-semibold">{isTrial ? "试用已到期" : "订阅已到期"}</p>
           <p className="text-sm text-muted-foreground">
-            您的试用期已于 {licenseInfo.expires_at} 到期，请订阅以继续使用 AI 功能。
+            {isTrial
+              ? `您的试用期已于 ${licenseInfo.expires_at} 到期，请订阅以继续使用 AI 功能。`
+              : `您的订阅已于 ${licenseInfo.expires_at} 到期，请续订以继续使用 AI 功能。`}
           </p>
           <Button onClick={() => window.open("https://mona.ai/pricing", "_blank")}>
             查看订阅方案
@@ -121,7 +125,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     setError("");
     setLoading(true);
     try {
-      await login(email, password);
+      await login(accountInput, password);
     } catch (err) {
       setError(String(err).replace(/^Error:\s*/, ""));
     } finally {
@@ -132,13 +136,17 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
+    if (accountInput.trim().length < 2) {
+      setError("账号至少 2 位");
+      return;
+    }
     if (password.length < 8) {
       setError("密码至少 8 位");
       return;
     }
     setLoading(true);
     try {
-      await register(email, password, code);
+      await register(email, password, code, accountInput.trim());
     } catch (err) {
       setError(String(err).replace(/^Error:\s*/, ""));
     } finally {
@@ -219,9 +227,9 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
 
         {view === "login" && (
           <form onSubmit={handleLogin} className="flex flex-col gap-3">
-            <Input type="email" placeholder="邮箱" value={email} onChange={(e) => setEmail(e.target.value)} disabled={loading} autoFocus />
+            <Input type="text" placeholder="账号或邮箱" value={accountInput} onChange={(e) => setAccountInput(e.target.value)} disabled={loading} autoFocus />
             <Input type="password" placeholder="密码" value={password} onChange={(e) => setPassword(e.target.value)} disabled={loading} />
-            <Button type="submit" className="w-full" disabled={!email || !password || loading}>
+            <Button type="submit" className="w-full" disabled={!accountInput || !password || loading}>
               {loading ? "登录中..." : "登录"}
             </Button>
             <div className="flex justify-between text-xs text-muted-foreground">
@@ -237,9 +245,10 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
 
         {view === "register" && (
           <form onSubmit={handleRegister} className="flex flex-col gap-3">
-            <Input type="email" placeholder="邮箱" value={email} onChange={(e) => setEmail(e.target.value)} disabled={loading} autoFocus />
+            <Input type="text" placeholder="账号（支持中文，2-32字符）" value={accountInput} onChange={(e) => setAccountInput(e.target.value)} disabled={loading} autoFocus />
+            <Input type="email" placeholder="邮箱" value={email} onChange={(e) => setEmail(e.target.value)} disabled={loading} />
             <Input type="password" placeholder="密码（至少 8 位）" value={password} onChange={(e) => setPassword(e.target.value)} disabled={loading} />
-            <Button type="submit" className="w-full" disabled={!email || !password || loading}>
+            <Button type="submit" className="w-full" disabled={!accountInput || !email || !password || loading}>
               {loading ? "注册中..." : "注册"}
             </Button>
             <button type="button" className="text-center text-xs text-muted-foreground hover:underline" onClick={() => { setView("login"); setError(""); setSuccess(""); }}>

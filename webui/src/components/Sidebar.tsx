@@ -242,7 +242,7 @@ export function Sidebar(props: SidebarProps) {
           <div className={cn("flex items-center gap-1", collapsed ? "w-14 flex-col px-0" : "w-full")}>
             <SidebarActionButton
               collapsed={collapsed}
-              label={licenseInfo?.email ?? t("sidebar.settings")}
+              label={licenseInfo?.account ?? licenseInfo?.email ?? t("sidebar.settings")}
               onClick={props.onOpenLogin ?? (() => {})}
               className={collapsed ? undefined : "flex-1"}
               icon={<User className="h-4 w-4" />}
@@ -285,15 +285,6 @@ export function Sidebar(props: SidebarProps) {
               className={collapsed ? undefined : "flex-1"}
               icon={<LogIn className="h-4 w-4" />}
             />
-            {!collapsed && (
-              <Button
-                size="sm"
-                onClick={props.onOpenSubscribe ?? props.onOpenLogin}
-                className="h-5 shrink-0 rounded-full bg-blue-500/15 px-1.5 text-[10px] font-medium text-blue-600 hover:bg-blue-500/25 dark:text-blue-400"
-              >
-                购买订阅
-              </Button>
-            )}
           </div>
         )}
       </div>

@@ -77,7 +77,8 @@ fn check_local_trial() -> Result<serde_json::Value, String> {
             "trial": true,
             "local_trial": true,
             "remaining_days": remaining.max(0),
-            "email": null
+            "email": null,
+            "account": null
         }))
     } else {
         Ok(serde_json::json!({
@@ -86,7 +87,8 @@ fn check_local_trial() -> Result<serde_json::Value, String> {
             "trial": true,
             "local_trial": true,
             "remaining_days": 0,
-            "email": null
+            "email": null,
+            "account": null
         }))
     }
 }
@@ -124,6 +126,7 @@ struct LicenseCache {
     expires_at: Option<String>,
     trial: bool,
     email: Option<String>,
+    account: Option<String>,
 }
 
 fn save_license_cache(cache: &LicenseCache) {
@@ -159,7 +162,7 @@ fn get_machine_fingerprint() -> String {
 
 fn build_client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(30))
         .build()
         .map_err(|e| format!("HTTP client error: {}", e))
 }
@@ -251,7 +254,10 @@ pub async fn send_register_code(email: String) -> Result<serde_json::Value, Stri
         .await
         .map_err(|e| format!("Request failed: {}", e))?;
 
-    let body: serde_json::Value = resp.json().await.map_err(|e| format!("Parse error: {}", e))?;
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    let body: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|_| format!("Server returned status {} with non-JSON response", status))?;
 
     if body.get("message").is_some() {
         return Ok(serde_json::json!({ "success": true, "message": body["message"] }));
@@ -262,12 +268,12 @@ pub async fn send_register_code(email: String) -> Result<serde_json::Value, Stri
 }
 
 #[tauri::command]
-pub async fn auth_register(email: String, password: String, code: String) -> Result<serde_json::Value, String> {
+pub async fn auth_register(email: String, password: String, code: String, account: String) -> Result<serde_json::Value, String> {
     let machine_fp = get_machine_fingerprint();
     let client = build_client()?;
     let resp = client
         .post(format!("{}/auth/register?device_fingerprint={}", AUTH_SERVER_URL, machine_fp))
-        .json(&serde_json::json!({ "email": email, "password": password, "code": code }))
+        .json(&serde_json::json!({ "email": email, "password": password, "code": code, "account": account }))
         .send()
         .await
         .map_err(|e| format!("Request failed: {}", e))?;
@@ -284,11 +290,11 @@ pub async fn auth_register(email: String, password: String, code: String) -> Res
 }
 
 #[tauri::command]
-pub async fn auth_login(email: String, password: String) -> Result<serde_json::Value, String> {
+pub async fn auth_login(account: String, password: String) -> Result<serde_json::Value, String> {
     let client = build_client()?;
     let resp = client
         .post(format!("{}/auth/login", AUTH_SERVER_URL))
-        .json(&serde_json::json!({ "email": email, "password": password }))
+        .json(&serde_json::json!({ "account": account, "password": password }))
         .send()
         .await
         .map_err(|e| format!("Request failed: {}", e))?;
@@ -326,7 +332,10 @@ pub async fn auth_forgot_password(email: String) -> Result<serde_json::Value, St
         .await
         .map_err(|e| format!("Request failed: {}", e))?;
 
-    let body: serde_json::Value = resp.json().await.map_err(|e| format!("Parse error: {}", e))?;
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    let body: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|_| format!("Server returned status {} with non-JSON response", status))?;
 
     if body.get("message").is_some() {
         return Ok(serde_json::json!({ "success": true, "message": body["message"] }));
@@ -350,7 +359,10 @@ pub async fn auth_reset_password(
         .await
         .map_err(|e| format!("Request failed: {}", e))?;
 
-    let body: serde_json::Value = resp.json().await.map_err(|e| format!("Parse error: {}", e))?;
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    let body: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|_| format!("Server returned status {} with non-JSON response", status))?;
 
     if body.get("message").is_some() {
         return Ok(serde_json::json!({ "success": true, "message": body["message"] }));
@@ -466,7 +478,20 @@ pub async fn check_license() -> Result<serde_json::Value, String> {
     // 1. If there's a license.jwt file, verify locally (paid license)
     let path = license_path()?;
     if path.exists() {
-        return check_paid_license(&path);
+        match check_paid_license(&path) {
+            Ok(result) => {
+                // Only return immediately if the license is still valid
+                let status = result.get("status").and_then(|v| v.as_str()).unwrap_or("");
+                if status == "valid" || status == "machine_mismatch" {
+                    return Ok(result);
+                }
+                // License expired or invalid — fall through to server check
+                // so admin changes (extended trial, new subscription) can take effect
+            }
+            Err(_) => {
+                // Failed to read license file — fall through to server check
+            }
+        }
     }
 
     // 2. If logged in, check via server
@@ -518,6 +543,7 @@ async fn check_license_server(token: &str) -> Result<LicenseCache, String> {
         expires_at: body.get("expires_at").and_then(|v| v.as_str()).map(|s| s.to_string()),
         trial: body.get("trial").and_then(|v| v.as_bool()).unwrap_or(false),
         email: body.get("email").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        account: body.get("account").and_then(|v| v.as_str()).map(|s| s.to_string()),
     })
 }
 

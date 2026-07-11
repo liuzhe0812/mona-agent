@@ -1,7 +1,7 @@
 import random
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Request
 from sqlalchemy.orm import Session
 
 from app.auth import create_access_token, hash_password, verify_password
@@ -67,6 +67,7 @@ def _get_active_promo_trial_days(db: Session) -> int | None:
 def send_register_code(
     request: Request,
     body: SendRegisterCodeRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
     existing = db.query(User).filter(User.email == body.email).first()
@@ -84,11 +85,7 @@ def send_register_code(
     db.add(record)
     db.commit()
 
-    try:
-        send_register_code_email(body.email, code)
-    except Exception:
-        raise AuthError("email_send_failed", "Failed to send email, please try later", status_code=500)
-
+    background_tasks.add_task(send_register_code_email, body.email, code)
     return {"message": "If the email is available, a verification code has been sent"}
 
 
@@ -120,6 +117,10 @@ def register(
     if existing:
         raise AuthError("email_exists", "This email is already registered", status_code=409)
 
+    existing_account = db.query(User).filter(User.account == body.account).first()
+    if existing_account:
+        raise AuthError("account_exists", "This account name is already taken", status_code=409)
+
     # Mark code as used
     verify_code.used = True
 
@@ -139,6 +140,7 @@ def register(
         # Device already used trial — no trial period
         user = User(
             email=body.email,
+            account=body.account,
             password_hash=hash_password(body.password),
             bound_device_fingerprint=device_fingerprint or None,
         )
@@ -148,6 +150,7 @@ def register(
         trial_days = promo_days if promo_days else settings.trial_days
         user = User(
             email=body.email,
+            account=body.account,
             password_hash=hash_password(body.password),
             trial_started_at=now,
             trial_expires_at=now + timedelta(days=trial_days),
@@ -174,9 +177,14 @@ def register(
 @router.post("/login", response_model=TokenResponse)
 @limiter.limit("10/minute")
 def login(request: Request, body: LoginRequest, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.email == body.email).first()
+    # Support login by account name or email
+    user = (
+        db.query(User)
+        .filter((User.email == body.account) | (User.account == body.account))
+        .first()
+    )
     if not user or not verify_password(body.password, user.password_hash):
-        raise AuthError("invalid_credentials", "Invalid email or password", status_code=401)
+        raise AuthError("invalid_credentials", "Invalid account or password", status_code=401)
 
     token, expires_in = create_access_token(user.id)
     return TokenResponse(access_token=token, expires_in=expires_in)
@@ -184,7 +192,12 @@ def login(request: Request, body: LoginRequest, db: Session = Depends(get_db)):
 
 @router.post("/forgot-password")
 @limiter.limit("3/minute")
-def forgot_password(request: Request, body: ForgotPasswordRequest, db: Session = Depends(get_db)):
+def forgot_password(
+    request: Request,
+    body: ForgotPasswordRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
     user = db.query(User).filter(User.email == body.email).first()
     if not user:
         # Don't reveal whether email exists
@@ -200,11 +213,7 @@ def forgot_password(request: Request, body: ForgotPasswordRequest, db: Session =
     db.add(reset)
     db.commit()
 
-    try:
-        send_reset_code_email(body.email, code)
-    except Exception:
-        raise AuthError("email_send_failed", "Failed to send email, please try later", status_code=500)
-
+    background_tasks.add_task(send_reset_code_email, body.email, code)
     return {"message": "If the email exists, a verification code has been sent"}
 
 

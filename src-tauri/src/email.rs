@@ -2863,23 +2863,29 @@ pub async fn email_mark_read(
         let url = format!("{}/email/set_flag", gateway_url.trim_end_matches('/'));
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(10))
-            .build()
-            .map_err(|e| format!("构建 HTTP 客户端失败: {e}"))?;
-        let resp = client
-            .post(&url)
-            .json(&req)
-            .send()
-            .await
-            .map_err(|e| format!("IMAP 同步已读状态失败（本地已更新）: {e}"))?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            log::warn!(
-                "[email-mark-read] IMAP set_flag 失败（本地已更新）: {} {}",
-                status,
-                text
-            );
-            // 不返回错误：本地已更新，IMAP 失败不影响用户体验
+            .build();
+        if let Ok(client) = client {
+            match client.post(&url).json(&req).send().await {
+                Ok(resp) if resp.status().is_success() => {
+                    // IMAP 同步成功
+                }
+                Ok(resp) => {
+                    let status = resp.status();
+                    let text = resp.text().await.unwrap_or_default();
+                    log::warn!(
+                        "[email-mark-read] IMAP set_flag 失败（本地已更新）: {} {}",
+                        status,
+                        text
+                    );
+                }
+                Err(e) => {
+                    // 请求发送失败（gateway 离线/网络错误）：不返回错误，本地已更新
+                    log::warn!(
+                        "[email-mark-read] 请求 gateway 失败（本地已更新）: {}",
+                        e
+                    );
+                }
+            }
         }
     }
     Ok(())
@@ -2911,22 +2917,29 @@ pub async fn email_toggle_starred(
         let url = format!("{}/email/set_flag", gateway_url.trim_end_matches('/'));
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(10))
-            .build()
-            .map_err(|e| format!("构建 HTTP 客户端失败: {e}"))?;
-        let resp = client
-            .post(&url)
-            .json(&req)
-            .send()
-            .await
-            .map_err(|e| format!("IMAP 同步星标状态失败（本地已更新）: {e}"))?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            log::warn!(
-                "[email-toggle-starred] IMAP set_flag 失败（本地已更新）: {} {}",
-                status,
-                text
-            );
+            .build();
+        if let Ok(client) = client {
+            match client.post(&url).json(&req).send().await {
+                Ok(resp) if resp.status().is_success() => {
+                    // IMAP 同步成功
+                }
+                Ok(resp) => {
+                    let status = resp.status();
+                    let text = resp.text().await.unwrap_or_default();
+                    log::warn!(
+                        "[email-toggle-starred] IMAP set_flag 失败（本地已更新）: {} {}",
+                        status,
+                        text
+                    );
+                }
+                Err(e) => {
+                    // 请求发送失败（gateway 离线/网络错误）：不返回错误，本地已更新
+                    log::warn!(
+                        "[email-toggle-starred] 请求 gateway 失败（本地已更新）: {}",
+                        e
+                    );
+                }
+            }
         }
     }
     Ok(())

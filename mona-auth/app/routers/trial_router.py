@@ -29,12 +29,16 @@ def _has_active_subscription(user: User, db: Session) -> tuple[bool, datetime | 
         )
         .first()
     )
-    if sub and sub.current_period_end:
-        end = sub.current_period_end
-        if end.tzinfo is None:
-            end = end.replace(tzinfo=timezone.utc)
-        if end > now:
-            return True, end
+    if not sub:
+        return False, None
+    # Active subscription with no expiry — treat as unlimited (admin-manual)
+    if sub.current_period_end is None:
+        return True, None
+    end = sub.current_period_end
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=timezone.utc)
+    if end > now:
+        return True, end
     return False, None
 
 
@@ -48,7 +52,7 @@ def check_license_status(
 
     # Check active subscription first (paid users: unlimited device changes)
     has_sub, sub_end = _has_active_subscription(user, db)
-    if has_sub and sub_end:
+    if has_sub:
         # Auto-bind device if not bound or changed (paid users have no limit)
         if device_fingerprint and user.bound_device_fingerprint != device_fingerprint:
             user.bound_device_fingerprint = device_fingerprint
@@ -56,9 +60,10 @@ def check_license_status(
 
         return LicenseCheckResponse(
             status="valid",
-            expires_at=sub_end.strftime("%Y-%m-%d"),
+            expires_at=sub_end.strftime("%Y-%m-%d") if sub_end else None,
             trial=False,
             email=user.email,
+            account=user.account,
         )
 
     # Check device binding for trial users
@@ -69,6 +74,7 @@ def check_license_status(
                 expires_at=None,
                 trial=True,
                 email=user.email,
+                account=user.account,
             )
 
     # Check trial
@@ -87,12 +93,14 @@ def check_license_status(
                 expires_at=trial_end.strftime("%Y-%m-%d"),
                 trial=True,
                 email=user.email,
+                account=user.account,
             )
         return LicenseCheckResponse(
             status="expired",
             expires_at=trial_end.strftime("%Y-%m-%d"),
             trial=True,
             email=user.email,
+            account=user.account,
         )
 
     return LicenseCheckResponse(
@@ -100,6 +108,7 @@ def check_license_status(
         expires_at=None,
         trial=False,
         email=user.email,
+        account=user.account,
     )
 
 

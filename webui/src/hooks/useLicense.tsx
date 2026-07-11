@@ -8,6 +8,7 @@ interface LicenseInfo {
   local_trial?: boolean;
   remaining_days?: number;
   email: string | null;
+  account: string | null;
 }
 
 interface PricingPlan {
@@ -38,8 +39,8 @@ interface LicenseContextValue {
   pricingConfig: PricingConfig | null;
   pricingError: string | null;
   fetchPricing: () => Promise<void>;
-  login: (email: string, password: string) => Promise<void>;
-  register: (email: string, password: string, code: string) => Promise<void>;
+  login: (account: string, password: string) => Promise<void>;
+  register: (email: string, password: string, code: string, account: string) => Promise<void>;
   sendRegisterCode: (email: string) => Promise<string>;
   logout: () => Promise<void>;
   forgotPassword: (email: string) => Promise<string>;
@@ -148,16 +149,16 @@ export function LicenseProvider({ children }: { children: React.ReactNode }) {
     }
   }, [invokeTauri]);
 
-  const login = useCallback(async (email: string, password: string) => {
-    const result = await invokeTauri<{ success: boolean }>("auth_login", { email, password });
+  const login = useCallback(async (account: string, password: string) => {
+    const result = await invokeTauri<{ success: boolean }>("auth_login", { account, password });
     if (result.success) {
       setLoggedIn(true);
       await checkLicense();
     }
   }, [invokeTauri, checkLicense]);
 
-  const register = useCallback(async (email: string, password: string, code: string) => {
-    const result = await invokeTauri<{ success: boolean }>("auth_register", { email, password, code });
+  const register = useCallback(async (email: string, password: string, code: string, account: string) => {
+    const result = await invokeTauri<{ success: boolean }>("auth_register", { email, password, code, account });
     if (result.success) {
       setLoggedIn(true);
       await checkLicense();

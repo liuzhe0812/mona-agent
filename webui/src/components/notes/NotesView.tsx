@@ -612,9 +612,10 @@ export function NotesView({
   );
 
   const createNote = useCallback(
-    (sourceKind: NoteSourceKind = "manual") => {
+    (sourceKind: NoteSourceKind = "manual", overrideNotebookId?: string) => {
       // activeNotebook may be null (vault root) — that's allowed.
-      const notebookId = activeNotebook ? activeNotebook.id : "";
+      const notebookId =
+        overrideNotebookId !== undefined ? overrideNotebookId : activeNotebook ? activeNotebook.id : "";
       let nextNote: OperationNote;
       try {
         nextNote = createBlankNote(notebookId, sourceKind);
@@ -648,9 +649,11 @@ export function NotesView({
 
   useEffect(() => {
     if (!createOnOpen || !storageReady) return;
-    createNote();
+    setActiveNotebookId("");
+    createNote("manual", "");
     onCreateOnOpenHandled?.();
-  }, [createNote, createOnOpen, onCreateOnOpenHandled, storageReady]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [createOnOpen, storageReady]);
 
   const createNoteFromTemplateAction = useCallback(
     (templateId: string, title: string) => {

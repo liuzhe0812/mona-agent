@@ -79,15 +79,21 @@ export function TrajectoryTab({ data, loading }: TrajectoryTabProps) {
     : 0;
   const delta = currentScore - previousScore;
 
-  // 成长曲线：从 notes_monthly 推导累计笔记数
-  const monthly = data?.profile?.evidence?.notes_monthly ?? {};
-  const monthKeys = Object.keys(monthly).sort();
+  // 成长曲线：技能积累时间线（基于 keyword_first_seen 真实数据）
+  const keywordFirstSeen = data?.profile?.evidence?.keyword_first_seen ?? {};
+  const skillTimeline = Object.entries(keywordFirstSeen)
+    .sort(([, a], [, b]) => a.localeCompare(b));
+  // 按月累计技能数
+  const monthSkillCount: Record<string, number> = {};
   let cumulative = 0;
-  const growthPoints: GrowthPoint[] = monthKeys.map((month) => {
-    cumulative += monthly[month];
-    return { label: month.slice(5), value: cumulative, previous: 0 };
-  });
-  // previous 用 previousRadar 的均分作为参考线（若没有快照，用 currentScore - delta 近似）
+  for (const [, month] of skillTimeline) {
+    cumulative += 1;
+    monthSkillCount[month] = cumulative;
+  }
+  const growthPoints: GrowthPoint[] = Object.entries(monthSkillCount)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([month, count]) => ({ label: month.slice(5), value: count, previous: 0 }));
+  // 参考线：上期技能数（若有对比）
   const refScore = previousScore || Math.max(0, currentScore - 10);
   const growthPointsWithPrev = growthPoints.map((p) => ({
     ...p,
@@ -106,7 +112,7 @@ export function TrajectoryTab({ data, loading }: TrajectoryTabProps) {
   const totalNotes = data?.profile?.evidence?.total_notes ?? 0;
   const keywordCount = (data?.profile?.evidence?.title_keywords ?? []).length;
   const radarDimCount = currentRadar.length;
-  const monthCount = monthKeys.length;
+  const monthCount = Object.keys(monthSkillCount).length;
   const snapshotCount = hasComparison ? 2 : 1;
 
   return (
@@ -132,7 +138,7 @@ export function TrajectoryTab({ data, loading }: TrajectoryTabProps) {
         </Panel>
 
         <Panel className="p-4">
-          <SectionTitle icon={<TrendingUp className="h-4 w-4" />} title="成长曲线" hint={growthPointsWithPrev.length > 0 ? "累计笔记数" : "暂无数据"} color={PROFILE_COLORS.emerald} />
+          <SectionTitle icon={<TrendingUp className="h-4 w-4" />} title="技能积累" hint={growthPointsWithPrev.length > 0 ? "累计掌握技能数" : "暂无数据"} color={PROFILE_COLORS.emerald} />
           {growthPointsWithPrev.length > 0
             ? <GrowthLineChart points={growthPointsWithPrev} />
             : <div className="flex h-[250px] items-center justify-center text-xs text-muted-foreground">暂无月度数据</div>}
@@ -338,7 +344,7 @@ function GrowthLineChart({
   const pad = { top: 20, right: 24, bottom: 34, left: 36 };
   const innerW = w - pad.left - pad.right;
   const innerH = h - pad.top - pad.bottom;
-  const max = Math.max(100, ...points.map((p) => p.value), ...points.map((p) => p.previous));
+  const max = Math.max(10, ...points.map((p) => p.value), ...points.map((p) => p.previous));
   const xs = points.map((_, index) => pad.left + (points.length <= 1 ? innerW / 2 : (index / (points.length - 1)) * innerW));
   const yFor = (value: number) => pad.top + innerH - (value / max) * innerH;
   const currentPath = points.map((point, index) => `${index === 0 ? "M" : "L"}${xs[index]},${yFor(point.value)}`).join(" ");
@@ -353,7 +359,7 @@ function GrowthLineChart({
           <stop offset="100%" stopColor={PROFILE_COLORS.emerald} stopOpacity="0.02" />
         </linearGradient>
       </defs>
-      {[0, 25, 50, 75, 100].map((tick) => {
+      {[0, Math.ceil(max * 0.25), Math.ceil(max * 0.5), Math.ceil(max * 0.75), max].map((tick) => {
         const y = yFor(tick);
         return (
           <g key={tick}>

@@ -10,6 +10,7 @@ export function AuthPage() {
   const { login, register, forgotPassword, resetPassword, licenseInfo, loggedIn, deviceMismatch, bindDevice, logout } = useLicense();
   const [view, setView] = useState<AuthView>("login");
   const [email, setEmail] = useState("");
+  const [accountInput, setAccountInput] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [code, setCode] = useState("");
@@ -23,7 +24,7 @@ export function AuthPage() {
     setError("");
     setLoading(true);
     try {
-      await login(email, password);
+      await login(accountInput, password);
     } catch (err) {
       setError(String(err).replace(/^Error:\s*/, ""));
     } finally {
@@ -36,6 +37,10 @@ export function AuthPage() {
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
+    if (accountInput.trim().length < 2) {
+      setError("账号至少需要2个字符");
+      return;
+    }
     if (password.length < 8) {
       setError("密码至少需要8个字符");
       return;
@@ -46,7 +51,7 @@ export function AuthPage() {
     }
     setLoading(true);
     try {
-      await register(email, password, code);
+      await register(email, password, code, accountInput.trim());
     } catch (err) {
       setError(String(err).replace(/^Error:\s*/, ""));
     } finally {
@@ -155,17 +160,17 @@ export function AuthPage() {
 
         {view === "login" && (
           <form onSubmit={handleLogin} className="flex flex-col gap-3">
-            <Input type="email" placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} disabled={loading} autoFocus />
-            <Input type="password" placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} disabled={loading} />
-            <Button type="submit" className="w-full" disabled={!email || !password || loading}>
-              {loading ? "Signing in..." : "Sign In"}
+            <Input type="text" placeholder="账号或邮箱" value={accountInput} onChange={(e) => setAccountInput(e.target.value)} disabled={loading} autoFocus />
+            <Input type="password" placeholder="密码" value={password} onChange={(e) => setPassword(e.target.value)} disabled={loading} />
+            <Button type="submit" className="w-full" disabled={!accountInput || !password || loading}>
+              {loading ? "登录中..." : "登录"}
             </Button>
             <div className="flex justify-between text-xs text-muted-foreground">
               <button type="button" className="hover:underline" onClick={() => { setView("forgot"); setError(""); setSuccess(""); }}>
-                Forgot password?
+                忘记密码？
               </button>
               <button type="button" className="hover:underline" onClick={() => { setView("register"); setError(""); setSuccess(""); }}>
-                Create account
+                注册账号
               </button>
             </div>
             <button
@@ -180,7 +185,8 @@ export function AuthPage() {
 
         {view === "register" && (
           <form onSubmit={handleRegister} className="flex flex-col gap-3">
-            <Input type="email" placeholder="邮箱" value={email} onChange={(e) => setEmail(e.target.value)} disabled={loading} autoFocus />
+            <Input type="text" placeholder="账号（支持中文，2-32字符）" value={accountInput} onChange={(e) => setAccountInput(e.target.value)} disabled={loading} autoFocus />
+            <Input type="email" placeholder="邮箱" value={email} onChange={(e) => setEmail(e.target.value)} disabled={loading} />
             <Input type="password" placeholder="设置密码（至少8位）" value={password} onChange={(e) => setPassword(e.target.value)} disabled={loading} />
             <div className="flex flex-col gap-1">
               <Input
@@ -195,11 +201,11 @@ export function AuthPage() {
                 <p className="text-xs text-destructive">两次输入的密码不一致</p>
               )}
             </div>
-            <Button type="submit" className="w-full" disabled={!email || !password || !confirmPassword || passwordMismatch || loading}>
+            <Button type="submit" className="w-full" disabled={!accountInput || !email || !password || !confirmPassword || passwordMismatch || loading}>
               {loading ? "创建中..." : "创建账号"}
             </Button>
             <button type="button" className="text-center text-xs text-muted-foreground hover:underline" onClick={() => { setView("login"); setError(""); setSuccess(""); }}>
-              Already have an account? Sign in
+              已有账号？登录
             </button>
             <button
               type="button"

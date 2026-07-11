@@ -32,6 +32,8 @@ class NotesStats:
     recent_titles: list[str] = field(default_factory=list)
     # Per-note keyword lists for co-occurrence: [{title, keywords: [...]}]
     note_keywords: list[dict[str, Any]] = field(default_factory=list)
+    # Keyword first appearance: {keyword: "YYYY-MM"}
+    keyword_first_seen: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -43,6 +45,7 @@ class NotesStats:
             "monthly_distribution": self.monthly_distribution,
             "recent_titles": self.recent_titles,
             "note_keywords": self.note_keywords,
+            "keyword_first_seen": self.keyword_first_seen,
         }
 
 
@@ -155,6 +158,7 @@ def collect_notes_stats(vault: Path | None, top_n: int = 15) -> NotesStats:
     monthly: Counter[str] = Counter()
     recent_titles: list[str] = []
     note_keyword_records: list[dict[str, Any]] = []
+    keyword_first_seen: dict[str, str] = {}
     total_notes = 0
 
     # Scan markdown files
@@ -210,6 +214,14 @@ def collect_notes_stats(vault: Path | None, top_n: int = 15) -> NotesStats:
                 if kw not in note_kws:
                     note_kws.append(kw)
 
+        # Track first appearance month of each keyword
+        if note_kws and created:
+            created_month = str(created)[:7]
+            if len(created_month) == 7 and created_month[4] == "-":
+                for kw in note_kws:
+                    if kw not in keyword_first_seen or created_month < keyword_first_seen[kw]:
+                        keyword_first_seen[kw] = created_month
+
         if note_kws:
             note_keyword_records.append({"title": title, "keywords": note_kws})
 
@@ -241,6 +253,7 @@ def collect_notes_stats(vault: Path | None, top_n: int = 15) -> NotesStats:
     stats.monthly_distribution = dict(sorted(monthly.items()))
     stats.recent_titles = recent_titles
     stats.note_keywords = note_keyword_records
+    stats.keyword_first_seen = dict(sorted(keyword_first_seen.items(), key=lambda x: x[1]))
 
     logger.info(
         f"[notes_collector] scanned {total_notes} notes, "

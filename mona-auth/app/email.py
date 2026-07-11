@@ -14,9 +14,9 @@ def send_email(to: str, subject: str, body: str) -> None:
     msg["To"] = to
 
     if settings.smtp_port == 465:
-        server = smtplib.SMTP_SSL(settings.smtp_host, settings.smtp_port)
+        server = smtplib.SMTP_SSL(settings.smtp_host, settings.smtp_port, timeout=30)
     else:
-        server = smtplib.SMTP(settings.smtp_host, settings.smtp_port)
+        server = smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=30)
         server.starttls()
 
     try:

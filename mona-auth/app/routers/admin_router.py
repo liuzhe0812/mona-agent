@@ -15,7 +15,7 @@ from app.models import (
     SubscriptionStatus,
     User,
 )
-from app.schemas import AdminTrialUpdateRequest, AdminUserInfo, AdminUserListResponse
+from app.schemas import AdminAccountUpdateRequest, AdminTrialUpdateRequest, AdminUserInfo, AdminUserListResponse
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -52,6 +52,7 @@ def list_users(
             AdminUserInfo(
                 id=u.id,
                 email=u.email,
+                account=u.account,
                 is_admin=u.is_admin,
                 trial_started_at=u.trial_started_at,
                 trial_expires_at=u.trial_expires_at,
@@ -105,6 +106,32 @@ def update_subscription(
     db.commit()
 
     return {"message": "Subscription updated"}
+
+
+@router.put("/users/{user_id}/account")
+def update_account(
+    user_id: int,
+    body: AdminAccountUpdateRequest,
+    _admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise AuthError("user_not_found", "User not found", status_code=404)
+
+    # Check uniqueness (excluding current user)
+    existing = (
+        db.query(User)
+        .filter(User.account == body.account, User.id != user_id)
+        .first()
+    )
+    if existing:
+        raise AuthError("account_exists", "This account name is already taken", status_code=409)
+
+    user.account = body.account
+    db.commit()
+
+    return {"message": "Account updated", "account": user.account}
 
 
 @router.delete("/users/{user_id}")
