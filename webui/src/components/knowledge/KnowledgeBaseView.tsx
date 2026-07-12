@@ -28,7 +28,6 @@ export function KnowledgeBaseView() {
   const [tab, setTab] = useState<Tab>("files")
   const [searchQuery, setSearchQuery] = useState("")
   const [searchResults, setSearchResults] = useState<SearchResult[] | null>(null)
-  const [searchMode, setSearchMode] = useState<string | null>(null)
   const [newProjectName, setNewProjectName] = useState("")
   const [showNewProject, setShowNewProject] = useState(false)
   const [editingName, setEditingName] = useState(false)
@@ -40,9 +39,8 @@ export function KnowledgeBaseView() {
 
   const handleSearch = async () => {
     if (!currentProject || !searchQuery.trim()) return
-    const { mode, results } = await searchKb(currentProject.id, searchQuery, 10)
+    const { results } = await searchKb(currentProject.id, searchQuery, 10)
     setSearchResults(results)
-    setSearchMode(mode)
   }
 
   const handleCreate = async () => {
@@ -284,9 +282,8 @@ export function KnowledgeBaseView() {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <span className="text-sm font-medium">搜索结果 ({searchResults.length})</span>
-              {searchMode && <SearchModeBadge mode={searchMode} />}
             </div>
-            <Button variant="ghost" size="sm" onClick={() => { setSearchResults(null); setSearchMode(null) }}>关闭</Button>
+            <Button variant="ghost" size="sm" onClick={() => { setSearchResults(null) }}>关闭</Button>
           </div>
           <div className="mt-2 flex flex-col gap-2">
             {searchResults.map((r, i) => (
@@ -296,7 +293,6 @@ export function KnowledgeBaseView() {
                   useKbStore.getState().loadWikiPage(r.path)
                   setTab("wiki")
                   setSearchResults(null)
-                  setSearchMode(null)
                 }}
                 className="rounded border px-3 py-2 text-left text-sm transition-colors hover:bg-accent"
               >
@@ -381,33 +377,5 @@ export function KnowledgeBaseView() {
         )}
       </div>
     </div>
-  )
-}
-
-function SearchModeBadge({ mode }: { mode: string }) {
-  const config: Record<string, { label: string; className: string }> = {
-    keyword: {
-      label: "关键词",
-      className: "bg-muted text-muted-foreground",
-    },
-    vector: {
-      label: "语义",
-      className: "bg-blue-500/10 text-blue-700 dark:text-blue-300",
-    },
-    hybrid: {
-      label: "混合",
-      className: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
-    },
-  }
-  const { label, className } = config[mode] ?? {
-    label: mode,
-    className: "bg-muted text-muted-foreground",
-  }
-  return (
-    <span
-      className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium ${className}`}
-    >
-      {label}
-    </span>
   )
 }

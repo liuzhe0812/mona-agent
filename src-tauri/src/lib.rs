@@ -20,9 +20,8 @@ mod updater;
 use gateway::GatewayManager;
 use settings::AppSettings;
 use std::sync::{Arc, Mutex};
-use tauri::Emitter;
-use tauri::Listener;
-use tauri::Manager;
+use tauri::webview::{DownloadEvent, WebviewWindowBuilder};
+use tauri::{Emitter, Listener, Manager, WebviewUrl};
 use tauri_plugin_global_shortcut::ShortcutState;
 
 const GATEWAY_START_TIMEOUT_SECS: u64 = 90;
@@ -306,6 +305,18 @@ async fn write_mona_model_config(
     settings::write_mona_model_config(&model, &provider)
 }
 
+#[tauri::command]
+async fn read_email_schedule_config() -> Result<serde_json::Value, String> {
+    Ok(settings::read_email_schedule_config())
+}
+
+#[tauri::command]
+async fn write_email_schedule_config(
+    schedule: serde_json::Value,
+) -> Result<(), String> {
+    settings::write_email_schedule_config(&schedule)
+}
+
 fn emit_md_file_open(app_handle: &tauri::AppHandle, file_path: &str) {
     // 存入 pending 列表，供前端首次加载时拉取
     if let Some(pending) = app_handle.try_state::<PendingMdFiles>() {
@@ -408,6 +419,8 @@ pub fn run() {
             mona_config_status,
             write_mona_provider_config,
             write_mona_model_config,
+            read_email_schedule_config,
+            write_email_schedule_config,
             get_pending_md_files,
             quick_ask::quick_ask_hide,
             quick_ask::quick_ask_show,
@@ -665,6 +678,61 @@ pub fn run() {
             notification_window::emit_notification_action,
         ])
         .setup(move |app| {
+            // 创建主窗口（在 builder 上注册 on_download，让 video 原生下载按钮生效）
+            let _main_window = WebviewWindowBuilder::new(
+                app,
+                "main",
+                WebviewUrl::App("index.html".into()),
+            )
+            .title("Mona")
+            .inner_size(1200.0, 800.0)
+            .min_inner_size(800.0, 600.0)
+            .center()
+            .decorations(false)
+            .disable_drag_drop_handler()
+            .on_download(|webview, event| {
+                match event {
+                    DownloadEvent::Requested { url, destination } => {
+                        let path_seg = url
+                            .path_segments()
+                            .and_then(|mut segs| segs.next_back())
+                            .filter(|s| !s.is_empty())
+                            .unwrap_or("download");
+                        let filename = if std::path::Path::new(path_seg).extension().is_none() {
+                            format!("{}.mp4", path_seg)
+                        } else {
+                            path_seg.to_string()
+                        };
+                        if let Ok(mut dir) = webview.path().download_dir() {
+                            let mut name = filename.clone();
+                            let stem = std::path::Path::new(&filename)
+                                .file_stem()
+                                .and_then(|s| s.to_str())
+                                .unwrap_or("download")
+                                .to_string();
+                            let ext = std::path::Path::new(&filename)
+                                .extension()
+                                .and_then(|s| s.to_str())
+                                .unwrap_or("mp4")
+                                .to_string();
+                            let mut i = 1;
+                            while dir.join(&name).exists() {
+                                name = format!("{} ({}).{}", stem, i, ext);
+                                i += 1;
+                            }
+                            dir.push(&name);
+                            *destination = dir;
+                        }
+                    }
+                    DownloadEvent::Finished { path, success, .. } => {
+                        log::info!("[download] finished: {:?} success={}", path, success);
+                    }
+                    _ => {}
+                }
+                true
+            })
+            .build()?;
+
             // 设置高分辨率窗口图标，确保任务栏在高 DPI 下清晰
             if let Some(win) = app.get_webview_window("main") {
                 let _ = win.set_icon(tray::load_icon());

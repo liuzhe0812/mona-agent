@@ -121,6 +121,7 @@ import {
 } from "@/lib/tauri";
 import { listAccounts, getFolders } from "@/components/email/lib/emailApi";
 import type { EmailAccount, EmailFolder } from "@/components/email/lib/types";
+import { getFolderDisplayName } from "@/components/email/lib/folderUtils";
 import { useClientOptional } from "@/providers/ClientProvider";
 import type {
   ChannelInfo,
@@ -3977,8 +3978,6 @@ function AboutSettings() {
 // Agent 搜索范围设置
 // ---------------------------------------------------------------------------
 
-const DEFAULT_EXCLUDED_EMAIL_FOLDERS = ["Junk", "Trash", "Drafts"];
-
 interface NotebookListItem {
   id: string;
   name: string;
@@ -4006,16 +4005,24 @@ function AgentScopeSettings() {
     (async () => {
       try {
         const loadedScope = await getAgentSearchScope();
-        // 若 scope 文件不存在（全空默认），按用户预期把常见垃圾文件夹排除掉
+        // 归一化 mode：空串视为 "all"
+        const notesMode = loadedScope.notes.mode || "all";
+        const emailMode = loadedScope.email.mode || "all";
+        // 若 scope 文件不存在（全空默认），默认 notes/email 均为 all
         const isEmpty =
-          loadedScope.notes.excludedNotebookIds.length === 0 &&
-          loadedScope.email.excludedFolders.length === 0;
+          !loadedScope.notes.mode &&
+          loadedScope.notes.allowedNotebookIds.length === 0 &&
+          !loadedScope.email.mode &&
+          loadedScope.email.allowedFolders.length === 0;
         const nextScope: AgentSearchScope = isEmpty
           ? {
-              notes: { excludedNotebookIds: [] },
-              email: { excludedFolders: [...DEFAULT_EXCLUDED_EMAIL_FOLDERS] },
+              notes: { mode: "all", allowedNotebookIds: [] },
+              email: { mode: "all", allowedFolders: [] },
             }
-          : loadedScope;
+          : {
+              notes: { mode: notesMode, allowedNotebookIds: loadedScope.notes.allowedNotebookIds ?? [] },
+              email: { mode: emailMode, allowedFolders: loadedScope.email.allowedFolders ?? [] },
+            };
         if (cancelled) return;
         setScope(nextScope);
         if (isEmpty) {
@@ -4024,7 +4031,10 @@ function AgentScopeSettings() {
         }
       } catch {
         if (!cancelled) {
-          setScope({ notes: { excludedNotebookIds: [] }, email: { excludedFolders: [] } });
+          setScope({
+            notes: { mode: "all", allowedNotebookIds: [] },
+            email: { mode: "all", allowedFolders: [] },
+          });
         }
       }
 
@@ -4068,18 +4078,7 @@ function AgentScopeSettings() {
     };
   }, []);
 
-  const toggleNotebook = async (notebookId: string) => {
-    if (!scope) return;
-    const excluded = new Set(scope.notes.excludedNotebookIds);
-    if (excluded.has(notebookId)) {
-      excluded.delete(notebookId);
-    } else {
-      excluded.add(notebookId);
-    }
-    const nextScope: AgentSearchScope = {
-      ...scope,
-      notes: { excludedNotebookIds: Array.from(excluded) },
-    };
+  const persist = async (nextScope: AgentSearchScope) => {
     setScope(nextScope);
     setSaving(true);
     try {
@@ -4089,25 +4088,42 @@ function AgentScopeSettings() {
     }
   };
 
+  const setNotesMode = async (mode: string) => {
+    if (!scope) return;
+    await persist({ ...scope, notes: { mode, allowedNotebookIds: scope.notes.allowedNotebookIds } });
+  };
+
+  const toggleNotebook = async (notebookId: string) => {
+    if (!scope) return;
+    const allowed = new Set(scope.notes.allowedNotebookIds);
+    if (allowed.has(notebookId)) {
+      allowed.delete(notebookId);
+    } else {
+      allowed.add(notebookId);
+    }
+    await persist({
+      ...scope,
+      notes: { mode: "specific", allowedNotebookIds: Array.from(allowed) },
+    });
+  };
+
   const toggleEmailFolder = async (folder: string) => {
     if (!scope) return;
-    const excluded = new Set(scope.email.excludedFolders);
-    if (excluded.has(folder)) {
-      excluded.delete(folder);
+    const allowed = new Set(scope.email.allowedFolders);
+    if (allowed.has(folder)) {
+      allowed.delete(folder);
     } else {
-      excluded.add(folder);
+      allowed.add(folder);
     }
-    const nextScope: AgentSearchScope = {
+    await persist({
       ...scope,
-      email: { excludedFolders: Array.from(excluded) },
-    };
-    setScope(nextScope);
-    setSaving(true);
-    try {
-      await setAgentSearchScope(nextScope);
-    } finally {
-      setSaving(false);
-    }
+      email: { mode: "specific", allowedFolders: Array.from(allowed) },
+    });
+  };
+
+  const setEmailMode = async (mode: string) => {
+    if (!scope) return;
+    await persist({ ...scope, email: { mode, allowedFolders: scope.email.allowedFolders } });
   };
 
   if (!loaded || !scope) {
@@ -4119,8 +4135,22 @@ function AgentScopeSettings() {
     );
   }
 
-  const notebookExcluded = new Set(scope.notes.excludedNotebookIds);
-  const folderExcluded = new Set(scope.email.excludedFolders);
+  const notesMode = scope.notes.mode || "all";
+  const allowedSet = new Set(scope.notes.allowedNotebookIds);
+  const emailMode = scope.email.mode || "all";
+  const emailAllowed = new Set(scope.email.allowedFolders);
+
+  const notesModeOptions: { value: string; label: string; desc: string }[] = [
+    { value: "all", label: "全部允许", desc: "所有笔记（含根目录与全部文件夹）均可被 Agent 检索。" },
+    { value: "none", label: "全部不允许", desc: "Agent 无法检索任何笔记。" },
+    { value: "specific", label: "指定文件夹允许", desc: "仅勾选的文件夹（含根目录）参与检索，新增文件夹默认不参与。" },
+  ];
+
+  const emailModeOptions: { value: string; label: string; desc: string }[] = [
+    { value: "all", label: "全部允许", desc: "所有邮件文件夹均可被 Agent 检索。" },
+    { value: "none", label: "全部不允许", desc: "Agent 无法检索任何邮件。" },
+    { value: "specific", label: "指定文件夹允许", desc: "仅勾选的文件夹参与检索，新增文件夹默认不参与。" },
+  ];
 
   return (
     <div className="space-y-7">
@@ -4129,37 +4159,63 @@ function AgentScopeSettings() {
         <SettingsGroup>
           {vaultReady ? (
             <>
-              <SettingsRow
-                title="根文件夹（未分类笔记）"
-                description="放在根目录的笔记，默认参与 Agent 检索。"
-              >
-                <div className="flex items-center gap-2">
-                  <Checkbox
-                    checked={!notebookExcluded.has("")}
-                    onCheckedChange={() => toggleNotebook("")}
-                  />
-                  <span className="text-[13px] text-muted-foreground">
-                    {notebookExcluded.has("") ? "已排除" : "允许检索"}
-                  </span>
-                </div>
-              </SettingsRow>
-              {notebooks.map((nb) => (
-                <SettingsRow
-                  key={nb.id}
-                  title={nb.name}
-                  description="笔记本下的所有笔记将受此设置控制。"
-                >
-                  <div className="flex items-center gap-2">
-                    <Checkbox
-                      checked={!notebookExcluded.has(nb.id)}
-                      onCheckedChange={() => toggleNotebook(nb.id)}
-                    />
-                    <span className="text-[13px] text-muted-foreground">
-                      {notebookExcluded.has(nb.id) ? "已排除" : "允许检索"}
+              {notesModeOptions.map((opt) => {
+                const selected = notesMode === opt.value;
+                return (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => void setNotesMode(opt.value)}
+                    className="flex w-full min-h-[62px] items-center gap-3 px-4 py-3.5 text-left transition-colors hover:bg-muted/35 sm:px-5"
+                  >
+                    <span
+                      className={cn(
+                        "mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border",
+                        selected
+                          ? "border-foreground bg-foreground"
+                          : "border-muted-foreground/45 bg-transparent",
+                      )}
+                    >
+                      {selected ? <span className="h-1.5 w-1.5 rounded-full bg-background" /> : null}
                     </span>
+                    <div className="min-w-0">
+                      <div className="text-[14px] font-medium leading-5 text-foreground">{opt.label}</div>
+                      <div className="mt-0.5 max-w-[28rem] text-[12px] leading-5 text-muted-foreground">
+                        {opt.desc}
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+
+              {notesMode === "specific" ? (
+                <>
+                  <div className="bg-muted/25 px-4 py-2 sm:px-5">
+                    <div className="text-[12px] font-medium text-muted-foreground">
+                      勾选允许检索的文件夹
+                    </div>
                   </div>
-                </SettingsRow>
-              ))}
+                  <label className="flex cursor-pointer select-none items-center gap-2.5 px-4 py-2.5 text-[13px] text-foreground/85 hover:bg-muted/35 sm:px-5">
+                    <Checkbox
+                      checked={allowedSet.has("")}
+                      onCheckedChange={() => void toggleNotebook("")}
+                    />
+                    <span>根目录（未分类笔记）</span>
+                  </label>
+                  {notebooks.map((nb) => (
+                    <label
+                      key={nb.id}
+                      className="flex cursor-pointer select-none items-center gap-2.5 px-4 py-2.5 text-[13px] text-foreground/85 hover:bg-muted/35 sm:px-5"
+                    >
+                      <Checkbox
+                        checked={allowedSet.has(nb.id)}
+                        onCheckedChange={() => void toggleNotebook(nb.id)}
+                      />
+                      <span className="truncate">{nb.name}</span>
+                    </label>
+                  ))}
+                </>
+              ) : null}
             </>
           ) : (
             <SettingsRow
@@ -4179,37 +4235,74 @@ function AgentScopeSettings() {
               description="请先在邮件模块中添加账号后再管理搜索范围。"
             />
           ) : (
-            accounts.map((account) => {
-              const folders = foldersByAccount[account.id] ?? [];
-              return (
-                <div key={account.id} className="px-4 py-3.5 sm:px-5">
-                  <div className="mb-2 text-[13px] font-medium text-foreground">
-                    {account.displayName || account.fromAddress || account.imapUsername}
+            <>
+              {emailModeOptions.map((opt) => {
+                const selected = emailMode === opt.value;
+                return (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => void setEmailMode(opt.value)}
+                    className="flex w-full min-h-[62px] items-center gap-3 px-4 py-3.5 text-left transition-colors hover:bg-muted/35 sm:px-5"
+                  >
+                    <span
+                      className={cn(
+                        "mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border",
+                        selected
+                          ? "border-foreground bg-foreground"
+                          : "border-muted-foreground/45 bg-transparent",
+                      )}
+                    >
+                      {selected ? <span className="h-1.5 w-1.5 rounded-full bg-background" /> : null}
+                    </span>
+                    <div className="min-w-0">
+                      <div className="text-[14px] font-medium leading-5 text-foreground">{opt.label}</div>
+                      <div className="mt-0.5 max-w-[28rem] text-[12px] leading-5 text-muted-foreground">
+                        {opt.desc}
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+
+              {emailMode === "specific" ? (
+                <>
+                  <div className="bg-muted/25 px-4 py-2 sm:px-5">
+                    <div className="text-[12px] font-medium text-muted-foreground">
+                      勾选允许检索的文件夹
+                    </div>
                   </div>
-                  <div className="grid gap-1.5 pl-1">
-                    {folders.length === 0 ? (
-                      <div className="text-[12px] text-muted-foreground">暂无文件夹缓存</div>
-                    ) : (
-                      folders.map((folder) => {
-                        const checked = !folderExcluded.has(folder.name);
-                        return (
-                          <label
-                            key={folder.name}
-                            className="flex cursor-pointer select-none items-center gap-2.5 rounded-md px-2 py-1 text-[13px] text-foreground/85 hover:bg-muted/45"
-                          >
-                            <Checkbox
-                              checked={checked}
-                              onCheckedChange={() => toggleEmailFolder(folder.name)}
-                            />
-                            <span className="truncate">{folder.name}</span>
-                          </label>
-                        );
-                      })
-                    )}
-                  </div>
-                </div>
-              );
-            })
+                  {accounts.map((account) => {
+                    const folders = foldersByAccount[account.id] ?? [];
+                    return (
+                      <div key={account.id} className="px-4 py-3 sm:px-5">
+                        <div className="mb-1.5 text-[13px] font-medium text-foreground">
+                          {account.displayName || account.fromAddress || account.imapUsername}
+                        </div>
+                        <div className="grid gap-1 pl-1">
+                          {folders.length === 0 ? (
+                            <div className="text-[12px] text-muted-foreground">暂无文件夹缓存</div>
+                          ) : (
+                            folders.map((folder) => (
+                              <label
+                                key={folder.name}
+                                className="flex cursor-pointer select-none items-center gap-2.5 rounded-md px-2 py-1 text-[13px] text-foreground/85 hover:bg-muted/45"
+                              >
+                                <Checkbox
+                                  checked={emailAllowed.has(folder.name)}
+                                  onCheckedChange={() => void toggleEmailFolder(folder.name)}
+                                />
+                                <span className="truncate">{getFolderDisplayName(folder.name)}</span>
+                              </label>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </>
+              ) : null}
+            </>
           )}
         </SettingsGroup>
       </section>
@@ -5007,18 +5100,18 @@ const SIDEBAR_SHORTCUT_ITEMS: Array<{ key: keyof SidebarShortcuts; label: string
   { key: "mona", label: "Mona" },
   { key: "note", label: "笔记" },
   { key: "ssh", label: "终端" },
+  { key: "email", label: "邮件" },
+  { key: "schedule", label: "日程" },
   { key: "db", label: "数据库" },
-  { key: "kb", label: "知识库" },
-  { key: "ppt", label: "AI文档" },
 ];
 
 const DEFAULT_SIDEBAR_SHORTCUTS: SidebarShortcuts = {
   mona: "Alt+1",
   note: "Alt+2",
   ssh: "Alt+3",
-  db: "Alt+4",
-  kb: "Alt+5",
-  ppt: "Alt+6",
+  email: "Alt+4",
+  schedule: "Alt+5",
+  db: "Alt+6",
 };
 
 function ShortcutsSettings() {

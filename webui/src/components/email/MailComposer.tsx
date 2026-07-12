@@ -185,8 +185,8 @@ export function MailComposer({
     if (!open) return;
     setError(null);
     setAttachments([]);
-    // 默认选中默认签名（仅 compose 模式自动追加）
-    setSelectedSignatureId(defaultSignature?.id ?? null);
+    // 仅新邮件自动选中默认签名，回复/转发默认不带签名
+    setSelectedSignatureId(mode === "compose" ? (defaultSignature?.id ?? null) : null);
     if (mode === "compose" || !baseMessage) {
       setToAddresses(presetTo ?? "");
       setCcAddresses("");
@@ -694,6 +694,7 @@ export function MailComposer({
       }}
       placeholder="邮件正文..."
       className="min-h-0 flex-1"
+      signatureHtml={signatures.find((s) => s.id === selectedSignatureId)?.content ?? null}
     />
   );
 

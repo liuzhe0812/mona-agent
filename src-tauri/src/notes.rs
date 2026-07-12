@@ -131,17 +131,23 @@ pub struct AgentSearchScope {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NotesSearchScope {
-    /// Notebook IDs excluded from Agent notes_search. Root notebook is "".
+    /// "all" (default, empty string treated as "all") | "none" | "specific".
     #[serde(default)]
-    pub excluded_notebook_ids: Vec<String>,
+    pub mode: String,
+    /// Notebook IDs allowed when mode == "specific". Root notebook is "".
+    #[serde(default)]
+    pub allowed_notebook_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EmailSearchScope {
-    /// Mailbox folder names excluded from Agent search_emails (e.g. "Junk", "Trash").
+    /// "all" (default, empty string treated as "all") | "none" | "specific".
     #[serde(default)]
-    pub excluded_folders: Vec<String>,
+    pub mode: String,
+    /// Folder names allowed when mode == "specific".
+    #[serde(default)]
+    pub allowed_folders: Vec<String>,
 }
 
 fn agent_scope_path() -> PathBuf {
@@ -166,24 +172,51 @@ fn write_agent_search_scope(scope: &AgentSearchScope) -> Result<(), String> {
 }
 
 /// Return the set of notebook IDs the Agent is allowed to search.
-/// Returns None when no exclusions are configured (meaning all notebooks allowed).
+/// Returns None when mode is "all" (meaning all notebooks allowed).
+/// Returns Some(empty) when mode is "none".
+/// Returns Some(allowed set) when mode is "specific".
 pub fn agent_allowed_notebook_ids() -> Option<std::collections::HashSet<String>> {
     let scope = read_agent_search_scope();
-    if scope.notes.excluded_notebook_ids.is_empty() {
+    let mode = scope.notes.mode.as_str();
+    if mode.is_empty() || mode == "all" {
         return None;
     }
-    // Read all notebooks from the vault and subtract excluded ones.
-    let vault = read_vault_path()?;
-    let meta = read_vault_meta(&vault).unwrap_or_default();
-    let (notebooks, _notes) = scan_vault(&vault, &meta).ok()?;
-    let excluded: std::collections::HashSet<String> =
-        scope.notes.excluded_notebook_ids.iter().cloned().collect();
-    let allowed: std::collections::HashSet<String> = notebooks
-        .iter()
-        .map(|n| n.id.clone())
-        .filter(|id| !excluded.contains(id))
-        .collect();
-    Some(allowed)
+    if mode == "none" {
+        return Some(std::collections::HashSet::new());
+    }
+    // mode == "specific"
+    Some(
+        scope
+            .notes
+            .allowed_notebook_ids
+            .iter()
+            .cloned()
+            .collect(),
+    )
+}
+
+/// Return the set of email folder names the Agent is allowed to search.
+/// Returns None when mode is "all" (meaning all folders allowed).
+/// Returns Some(empty) when mode is "none".
+/// Returns Some(allowed set) when mode is "specific".
+pub fn agent_allowed_email_folders() -> Option<std::collections::HashSet<String>> {
+    let scope = read_agent_search_scope();
+    let mode = scope.email.mode.as_str();
+    if mode.is_empty() || mode == "all" {
+        return None;
+    }
+    if mode == "none" {
+        return Some(std::collections::HashSet::new());
+    }
+    // mode == "specific"
+    Some(
+        scope
+            .email
+            .allowed_folders
+            .iter()
+            .cloned()
+            .collect(),
+    )
 }
 
 #[tauri::command]

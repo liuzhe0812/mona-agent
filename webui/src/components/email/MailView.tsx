@@ -23,6 +23,7 @@ import {
   ExternalLink,
   Share2,
   ImageDown,
+  CalendarPlus,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -32,7 +33,7 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { useEmailStore, resolveAddressDisplay, resolveSenderDisplay } from "./store/emailStore";
+import { useEmailStore, resolveSenderDisplay } from "./store/emailStore";
 import type { EmailAnalysis, EmailAttachment, EmailKeyInfo, EmailMessage } from "./lib/types";
 import * as emailApi from "./lib/emailApi";
 import { save, open as openDialog } from "@tauri-apps/plugin-dialog";
@@ -43,7 +44,8 @@ import {
   extractExtension,
   getCachedIcon,
 } from "../terminal/FileManager/iconCache";
-import { openPathWithSystemApp, isTauri } from "@/lib/tauri";
+import { openPathWithSystemApp, isTauri, httpFetch } from "@/lib/tauri";
+import { getGatewayHttpBase } from "@/lib/api";
 import { SenderPopover } from "./SenderPopover";
 
 interface ParsedAddress {
@@ -125,6 +127,8 @@ export function MailView() {
   const [analysisCollapsed, setAnalysisCollapsed] = useState(false);
   const [previewing, setPreviewing] = useState<{ filename: string; dataUrl: string; contentType: string } | null>(null);
   const [exporting, setExporting] = useState(false);
+  // 提取日程中（手动触发单封邮件 AI 日程提取）
+  const [extractingSchedule, setExtractingSchedule] = useState(false);
   // 附件系统图标缓存：key = filename，value = dataUrl（系统默认应用图标）
   const [attIcons, setAttIcons] = useState<Record<string, string>>({});
   // 邮件正文图片：左键点击直接打开预览
@@ -382,6 +386,56 @@ export function MailView() {
     }
   };
 
+  // 手动触发 AI 日程提取
+  const handleExtractSchedule = async () => {
+    setExtractingSchedule(true);
+    try {
+      const base = await getGatewayHttpBase();
+      if (!base) {
+        window.alert("Gateway 未就绪，请稍后重试");
+        return;
+      }
+      const url = `${base}/email/schedule/extract-manual`;
+      const resp = await httpFetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          accountId: m.accountId,
+          uid: m.uid,
+          folder: m.folder,
+        }),
+      });
+      if (!resp.ok) {
+        let msg = `HTTP ${resp.status}`;
+        try {
+          const body = await resp.json();
+          if (body?.error) msg = body.error;
+        } catch {
+          // ignore
+        }
+        window.alert(`提取失败：${msg}`);
+        return;
+      }
+      const data = (await resp.json()) as { result: string };
+      const result = data.result;
+      const message =
+        result === "created"
+          ? "已创建日程"
+          : result === "pending"
+            ? "已加入待确认"
+            : result === "skipped"
+              ? "未识别到日程"
+              : "提取失败";
+      window.alert(message);
+    } catch (e) {
+      window.alert(
+        `提取失败：${e instanceof Error ? e.message : String(e)}`,
+      );
+    } finally {
+      setExtractingSchedule(false);
+    }
+  };
+
   // 从 src 推断图片扩展名
   const inferImageExt = (src: string): string => {
     if (src.startsWith("data:")) {
@@ -557,6 +611,22 @@ export function MailView() {
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
               ) : (
                 <FileDown className="h-3.5 w-3.5" />
+              )}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 text-muted-foreground hover:text-foreground"
+              disabled={extractingSchedule}
+              onClick={() => void handleExtractSchedule()}
+              aria-label="提取日程"
+              title="提取日程"
+            >
+              {extractingSchedule ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <CalendarPlus className="h-3.5 w-3.5" />
               )}
             </Button>
           </div>

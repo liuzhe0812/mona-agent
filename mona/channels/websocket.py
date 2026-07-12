@@ -36,7 +36,7 @@ from mona.bus.events import OUTBOUND_META_AGENT_UI, OutboundMessage
 from mona.bus.queue import MessageBus
 from mona.channels.base import BaseChannel
 from mona.command.builtin import builtin_command_palette
-from mona.config.paths import get_media_dir
+from mona.config.paths import get_data_dir, get_media_dir
 from mona.config.schema import Base
 from mona.session.goal_state import goal_state_ws_blob
 from mona.session.webui_turns import websocket_turn_wall_started_at
@@ -457,6 +457,33 @@ _MEDIA_ALLOWED_MIMES: frozenset[str] = frozenset({
     "video/quicktime",
 })
 
+_MEDIA_SECRET_FILE = "media_secret.key"
+_MEDIA_SECRET_SIZE = 32
+
+
+def _load_or_create_media_secret() -> bytes:
+    """Load the persisted HMAC media secret, creating it on first run.
+
+    The secret is stored as raw bytes in ``<data_dir>/media_secret.key`` so
+    signed media URLs remain valid across gateway restarts. On any read
+    error a fresh random secret is returned (and written) so the gateway
+    can still start — old URLs simply become invalid, same as before.
+    """
+    try:
+        path = get_data_dir() / _MEDIA_SECRET_FILE
+        existing = path.read_bytes()
+        if len(existing) == _MEDIA_SECRET_SIZE:
+            return existing
+    except OSError:
+        pass
+    secret = secrets.token_bytes(_MEDIA_SECRET_SIZE)
+    try:
+        path = get_data_dir() / _MEDIA_SECRET_FILE
+        path.write_bytes(secret)
+    except OSError as exc:
+        logger.warning("failed to persist media secret: {}", exc)
+    return secret
+
 
 def _issue_route_secret_matches(headers: Any, configured_secret: str) -> bool:
     """Return True if the token-issue HTTP request carries credentials matching ``token_issue_secret``."""
@@ -593,11 +620,10 @@ class WebSocketChannel(BaseChannel):
         self._settings_restart_sections: set[str] = set()
         # Process-local WeChat QR login session (single-use, replaced on each start).
         self._weixin_login_session: Any = None
-        # Process-local secret used to HMAC-sign media URLs. The signed URL is
-        # the capability — anyone who holds a valid URL can fetch that one
-        # file, nothing else. The secret regenerates on restart so links
-        # become self-expiring (callers just refresh the session list).
-        self._media_secret: bytes = secrets.token_bytes(32)
+        # HMAC secret for signing media URLs. Persisted to disk so signed
+        # URLs survive gateway restarts (historical session media stays
+        # accessible). Falls back to a fresh random secret on any read error.
+        self._media_secret: bytes = _load_or_create_media_secret()
 
     # -- Subscription bookkeeping -------------------------------------------
 
@@ -889,12 +915,6 @@ class WebSocketChannel(BaseChannel):
         m = re.match(r"^/api/kb/([^/]+)/search$", got)
         if m:
             return self._handle_kb_search(request, m.group(1))
-        m = re.match(r"^/api/kb/([^/]+)/embed$", got)
-        if m:
-            return await self._handle_kb_embed(request, m.group(1))
-        m = re.match(r"^/api/kb/([^/]+)/embed/status$", got)
-        if m:
-            return await self._handle_kb_embed_status(request, m.group(1))
         m = re.match(r"^/api/kb/([^/]+)/reviews$", got)
         if m:
             return self._handle_kb_get_reviews(request, m.group(1))
@@ -2827,109 +2847,6 @@ class WebSocketChannel(BaseChannel):
                 return _http_error(404, f"Project '{project_id}' not found")
             results = search_wiki(project_path, q, count=count)
             return _http_json_response({"results": results})
-        except Exception as e:
-            return _http_error(500, str(e))
-
-    async def _handle_kb_embed(self, request: WsRequest, project_id: str) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        try:
-            from mona.kb import vectorstore
-            from mona.kb.api import KB_ROOT
-            from mona.kb.chunker import ChunkingOptions, chunk_markdown
-            from mona.kb.embedding import EmbeddingConfig, fetch_embedding
-            from mona.kb.ingest import parse_frontmatter
-
-            project_path = KB_ROOT / project_id
-            if not project_path.exists():
-                return _http_error(404, f"Project '{project_id}' not found")
-
-            body = request.body.decode("utf-8") if request.body else "{}"
-            try:
-                data = json.loads(body)
-            except Exception:
-                return _http_error(400, "Invalid JSON body")
-
-            cfg = EmbeddingConfig(
-                enabled=data.get("enabled", False),
-                endpoint=data.get("endpoint", ""),
-                api_key=data.get("apiKey", ""),
-                model=data.get("model", ""),
-                output_dimensionality=data.get("outputDimensionality"),
-                extra_headers=data.get("extraHeaders", {}),
-            )
-
-            if not cfg.enabled or not cfg.endpoint or not cfg.model:
-                return _http_error(400, "Embedding not configured")
-
-            chunk_opts = ChunkingOptions(
-                target_chars=data.get("maxChunkChars", 1000),
-                overlap_chars=data.get("overlapChunkChars", 200),
-            )
-
-            wiki_dir = project_path / "wiki"
-            if not wiki_dir.exists():
-                return _http_json_response({"indexed": 0, "failed": 0})
-
-            indexed = 0
-            failed = 0
-            for md_file in sorted(wiki_dir.rglob("*.md")):
-                rel = str(md_file.relative_to(wiki_dir)).replace("\\", "/")
-                stem = rel.replace(".md", "").split("/")[-1]
-                if stem in ("index", "log", "overview", "purpose", "schema"):
-                    continue
-
-                content = md_file.read_text(encoding="utf-8")
-                fm, _ = parse_frontmatter(content)
-                title = fm.get("title", stem)
-
-                chunks = chunk_markdown(content, chunk_opts)
-                if not chunks:
-                    continue
-
-                rows: list[dict] = []
-                for chunk in chunks:
-                    embed_text = (
-                        f"{title}\n\n{chunk.heading_path}\n\n{chunk.text}"
-                        if chunk.heading_path
-                        else f"{title}\n\n{chunk.text}"
-                    )
-                    vec = await fetch_embedding(embed_text, cfg)
-                    if vec:
-                        rows.append({
-                            "chunk_index": chunk.index,
-                            "chunk_text": chunk.text,
-                            "heading_path": chunk.heading_path,
-                            "embedding": vec,
-                        })
-                    else:
-                        failed += 1
-
-                if rows:
-                    await vectorstore.upsert_chunks(project_path, stem, rows)
-                    indexed += 1
-
-            return _http_json_response({"indexed": indexed, "failed": failed})
-        except Exception as e:
-            return _http_error(500, str(e))
-
-    async def _handle_kb_embed_status(self, request: WsRequest, project_id: str) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        try:
-            from mona.kb import vectorstore
-            from mona.kb.api import KB_ROOT
-            from mona.kb.embedding import get_last_embedding_error
-
-            project_path = KB_ROOT / project_id
-            if not project_path.exists():
-                return _http_error(404, f"Project '{project_id}' not found")
-
-            count = await vectorstore.count_chunks(project_path)
-            return _http_json_response({
-                "chunkCount": count,
-                "lastError": get_last_embedding_error(),
-            })
         except Exception as e:
             return _http_error(500, str(e))
 

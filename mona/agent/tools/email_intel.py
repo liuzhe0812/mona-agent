@@ -43,10 +43,12 @@ class _EmailToolBase(Tool):
         return cls()
 
 
-def _read_excluded_email_folders() -> set[str]:
-    """读取全局 Agent 搜索范围配置中排除的邮件文件夹集合。
+def _read_email_scope() -> tuple[set[str], bool]:
+    """读取全局 Agent 搜索范围中邮件的配置。
 
-    通过 Tauri IPC 调用 Rust 命令读取配置；调用失败时返回空集（默认全开放）。
+    返回 (allowed_folders, is_all)：
+    - is_all=True 表示全部允许，allowed_folders 为空集（调用方应跳过过滤）。
+    - is_all=False 时 allowed_folders 为允许集合（可能为空，表示全部不允许）。
     """
     try:
         from mona.agent.tools.tauri_ipc import tauri_invoke
@@ -54,11 +56,17 @@ def _read_excluded_email_folders() -> set[str]:
         scope = tauri_invoke("get_agent_search_scope")
         if isinstance(scope, dict):
             email_scope = scope.get("email") or {}
-            folders = email_scope.get("excludedFolders") or []
-            return {str(f) for f in folders}
+            mode = str(email_scope.get("mode") or "all").lower()
+            folders = email_scope.get("allowedFolders") or []
+            if mode == "all":
+                return set(), True
+            if mode == "none":
+                return set(), False
+            # specific
+            return {str(f) for f in folders}, False
     except Exception as e:
-        logger.debug(f"[email_search] could not load excluded folders: {e}")
-    return set()
+        logger.debug(f"[email_search] could not load email scope: {e}")
+    return set(), True
 
 
 @tool_parameters(
@@ -136,13 +144,13 @@ class EmailSearchTool(_EmailToolBase):
             logger.exception("email_search failed")
             return f"Error: 搜索邮件失败 - {e}"
 
-        # Apply Agent search scope exclusion.
+        # Apply Agent search scope.
         # If the user explicitly specified a folder, respect that choice (even if
-        # the folder is in the exclusion list). Otherwise, filter out excluded folders.
+        # the folder is not in the allowed list). Otherwise, filter to allowed folders.
         if not folder:
-            excluded = _read_excluded_email_folders()
-            if excluded:
-                results = [m for m in results if m.get("folder") not in excluded]
+            allowed, is_all = _read_email_scope()
+            if not is_all:
+                results = [m for m in results if m.get("folder") in allowed]
 
         if not results:
             return "未找到匹配的邮件。"

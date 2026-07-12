@@ -1,7 +1,7 @@
 """Embedding API client with auto-halve retry.
 
 Supports OpenAI-compatible, Google Gemini native, and Ollama endpoints.
-Ported from llm_wiki_tmp/src/lib/embedding.ts.
+Shared by KB (removed) and Hoard modules.
 """
 
 from __future__ import annotations
@@ -18,12 +18,6 @@ RESERVED_HEADER_NAMES = frozenset({
 })
 _HEADER_NAME_RE = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
 
-_last_embedding_error: str | None = None
-
-
-def get_last_embedding_error() -> str | None:
-    return _last_embedding_error
-
 
 @dataclass
 class EmbeddingConfig:
@@ -33,29 +27,6 @@ class EmbeddingConfig:
     model: str = ""
     output_dimensionality: int | None = None
     extra_headers: dict[str, str] = field(default_factory=dict)
-
-
-def load_global_embedding_config() -> EmbeddingConfig | None:
-    """Read embedding config from the global settings (config.tools.embedding).
-
-    Returns None if global embedding is not configured.
-    """
-    try:
-        from mona.config.loader import load_config
-
-        cfg = load_config().tools.embedding
-        if not (cfg.enabled and cfg.endpoint and cfg.model):
-            return None
-        return EmbeddingConfig(
-            enabled=cfg.enabled,
-            endpoint=cfg.endpoint,
-            api_key=cfg.api_key,
-            model=cfg.model,
-            output_dimensionality=cfg.output_dimensionality,
-        )
-    except Exception as e:
-        logger.warning(f"failed to load global embedding config: {e}")
-        return None
 
 
 def _is_google_config(cfg: EmbeddingConfig) -> bool:
@@ -124,8 +95,6 @@ async def fetch_embedding(
     max_retries: int = 3,
 ) -> list[float] | None:
     """Fetch embedding vector for text. Returns None on failure."""
-    global _last_embedding_error
-
     if not cfg.endpoint:
         return None
 
@@ -150,8 +119,7 @@ async def fetch_embedding(
         from mona.security.network import validate_url_target
         validate_url_target(endpoint)
     except Exception as e:
-        _last_embedding_error = f"Endpoint blocked by security policy: {e}"
-        logger.warning(f"[Embedding] {_last_embedding_error}")
+        logger.warning(f"[Embedding] Endpoint blocked by security policy: {e}")
         return None
 
     current = text
@@ -180,11 +148,9 @@ async def fetch_embedding(
                     and len(embedding) > 0
                     and all(isinstance(v, (int, float)) for v in embedding)
                 ):
-                    _last_embedding_error = None
                     return [float(v) for v in embedding]
                 expected = "embedding.values" if is_google else "data[0].embedding"
-                _last_embedding_error = f"Response missing {expected}"
-                logger.warning(f"[Embedding] {_last_embedding_error}")
+                logger.warning(f"[Embedding] Response missing {expected}")
                 return None
 
             body_text = resp.text[:500]
@@ -196,21 +162,18 @@ async def fetch_embedding(
                         f"[Embedding] auto-halving after HTTP {resp.status_code}: {prev} -> {len(current)} chars"
                     )
                     continue
-                _last_embedding_error = f"Endpoint rejected input even at {len(current)} chars"
+                logger.warning(f"[Embedding] Endpoint rejected input even at {len(current)} chars")
                 return None
 
-            _last_embedding_error = f"API {resp.status_code}: {body_text[:200]}"
-            logger.warning(f"[Embedding] {_last_embedding_error}")
+            logger.warning(f"[Embedding] API {resp.status_code}: {body_text[:200]}")
             return None
 
         except httpx.RequestError as e:
-            _last_embedding_error = f"Network error: {e}"
-            logger.warning(f"[Embedding] {_last_embedding_error}")
+            logger.warning(f"[Embedding] Network error: {e}")
             return None
         except Exception as e:
-            _last_embedding_error = str(e)
-            logger.warning(f"[Embedding] {_last_embedding_error}")
+            logger.warning(f"[Embedding] {e}")
             return None
 
-    _last_embedding_error = f"Exhausted retries at {len(current)} chars"
+    logger.warning(f"[Embedding] Exhausted retries at {len(current)} chars")
     return None

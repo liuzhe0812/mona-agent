@@ -135,9 +135,9 @@ export interface SidebarShortcuts {
   mona: string;
   note: string;
   ssh: string;
+  email: string;
+  schedule: string;
   db: string;
-  kb: string;
-  ppt: string;
 }
 
 export interface DesktopAppSettings {
@@ -191,6 +191,29 @@ export async function writeMonaModelConfig(
   provider: string,
 ): Promise<void> {
   return invoke<void>("write_mona_model_config", { model, provider });
+}
+
+// ---------------------------------------------------------------------------
+// 邮件 AI 日程提取配置（config.json 中 tools.emailIntel.schedule 字段）
+// ---------------------------------------------------------------------------
+
+export interface EmailScheduleConfig {
+  enabled: boolean;
+  folders: string[];
+  createMode: "auto" | "confirm";
+  leadMinutes: number;
+  skipSenders: string[];
+  parseTimeoutSeconds: number;
+}
+
+export async function readEmailScheduleConfig(): Promise<EmailScheduleConfig> {
+  return invoke<EmailScheduleConfig>("read_email_schedule_config");
+}
+
+export async function writeEmailScheduleConfig(
+  config: EmailScheduleConfig,
+): Promise<void> {
+  return invoke<void>("write_email_schedule_config", { schedule: config });
 }
 
 export async function loadDesktopNotesState(): Promise<unknown | null> {
@@ -286,8 +309,8 @@ export async function pickNotesVaultDirectory(): Promise<string | null> {
 // ---------------------------------------------------------------------------
 
 export interface AgentSearchScope {
-  notes: { excludedNotebookIds: string[] };
-  email: { excludedFolders: string[] };
+  notes: { mode: string; allowedNotebookIds: string[] };
+  email: { mode: string; allowedFolders: string[] };
 }
 
 export async function getAgentSearchScope(): Promise<AgentSearchScope> {

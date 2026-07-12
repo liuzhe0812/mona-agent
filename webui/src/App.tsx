@@ -551,9 +551,9 @@ function Shell({
     mona: "Alt+1",
     note: "Alt+2",
     ssh: "Alt+3",
-    db: "Alt+4",
-    kb: "Alt+5",
-    ppt: "Alt+6",
+    email: "Alt+4",
+    schedule: "Alt+5",
+    db: "Alt+6",
   });
 
   useEffect(() => {
@@ -1088,9 +1088,9 @@ function Shell({
       [sidebarShortcutsRef.current.mona]: onNewChat,
       [sidebarShortcutsRef.current.note]: onOpenNote,
       [sidebarShortcutsRef.current.ssh]: onOpenSSH,
+      [sidebarShortcutsRef.current.email]: onOpenEmail,
+      [sidebarShortcutsRef.current.schedule]: onOpenSchedule,
       [sidebarShortcutsRef.current.db]: onOpenDb,
-      [sidebarShortcutsRef.current.kb]: onOpenKb,
-      [sidebarShortcutsRef.current.ppt]: onOpenDoc,
     };
     const handleKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.defaultPrevented) return;
@@ -1103,7 +1103,7 @@ function Shell({
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [onNewChat, onOpenNote, onOpenSSH, onOpenDb, onOpenKb, onOpenDoc]);
+  }, [onNewChat, onOpenNote, onOpenSSH, onOpenEmail, onOpenSchedule, onOpenDb]);
 
   useEffect(() => {
     if (!isTauri()) return;

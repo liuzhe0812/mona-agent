@@ -14,9 +14,7 @@ import type {
   WikiPage,
   WikiPageContent,
   GraphData,
-  EmbedStatus,
 } from "@/lib/kb-api"
-import { triggerEmbed, getEmbedStatus } from "@/lib/kb-api"
 
 interface KbState {
   // Projects
@@ -46,10 +44,6 @@ interface KbState {
   // Dedup
   dedupGroups: DuplicateGroup[]
 
-  // Embedding
-  embedStatus: EmbedStatus | null
-  embedding: boolean
-
   // Actions
   loadProjects: () => Promise<void>
   selectProject: (id: string) => Promise<void>
@@ -67,8 +61,6 @@ interface KbState {
   mergeGroup: (group: DuplicateGroup) => Promise<void>
   dismissGroup: (group: DuplicateGroup) => void
   persistReviews: () => Promise<void>
-  loadEmbedStatus: () => Promise<void>
-  triggerEmbed: () => Promise<{ indexed: number; failed: number } | undefined>
 }
 
 export const useKbStore = create<KbState>()((set, get) => ({
@@ -85,8 +77,6 @@ export const useKbStore = create<KbState>()((set, get) => ({
   ingestAbortController: null,
   selectedKbForChat: null,
   dedupGroups: [],
-  embedStatus: null,
-  embedding: false,
 
   loadProjects: async () => {
     set({ loading: true })
@@ -216,13 +206,6 @@ export const useKbStore = create<KbState>()((set, get) => ({
         api.getGraph(project.id).catch(() => null),
       ])
       set({ wikiPages, graphData })
-
-      // Auto-embed after ingest using global embedding config
-      try {
-        await get().triggerEmbed()
-      } catch (err) {
-        console.warn("[kb] Auto-embed after ingest failed:", err)
-      }
     } finally {
       set({ ingesting: false, ingestProgress: null, ingestAbortController: null })
     }
@@ -368,32 +351,6 @@ export const useKbStore = create<KbState>()((set, get) => ({
       await saveReviews(project.id, items as any)
     } catch (err) {
       console.warn("[kb-store] Failed to persist reviews:", err)
-    }
-  },
-
-  loadEmbedStatus: async () => {
-    const project = get().currentProject
-    if (!project) return
-    try {
-      const status = await getEmbedStatus(project.id)
-      set({ embedStatus: status })
-    } catch {
-      // ignore
-    }
-  },
-
-  triggerEmbed: async () => {
-    const project = get().currentProject
-    if (!project) return
-    set({ embedding: true })
-    try {
-      const result = await triggerEmbed(project.id)
-      const status = await getEmbedStatus(project.id)
-      set({ embedStatus: status, embedding: false })
-      return result
-    } catch (err) {
-      set({ embedding: false })
-      throw err
     }
   },
 }))

@@ -21,6 +21,7 @@ import { scrubSubagentUiMessages } from "@/lib/subagent-channel-display";
 import { useClient } from "@/providers/ClientProvider";
 import { useKbStore } from "@/stores/kb-store";
 import { retrieveKbContext, buildKbSystemPrompt } from "@/lib/kb-rag";
+import { setKbToken } from "@/lib/kb-api";
 import { useScheduleStore } from "@/components/schedule/scheduleStore";
 import { useEmailStore } from "@/components/email/store/emailStore";
 import { deriveTitle } from "@/lib/format";
@@ -134,6 +135,11 @@ export function ThreadShell({
   } = useSessionHistory(historyKey);
   const { client, modelName, token } = useClient();
   const kbProjectsRaw = useKbStore((s) => s.projects);
+  const loadKbProjects = useKbStore((s) => s.loadProjects);
+  useEffect(() => {
+    setKbToken(token);
+    void loadKbProjects();
+  }, [loadKbProjects, token]);
   const kbProjects = useMemo(
     () => kbProjectsRaw.map((p) => ({ id: p.id, name: p.name })),
     [kbProjectsRaw],

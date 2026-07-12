@@ -99,3 +99,54 @@ export async function toggleScheduleItem(
     body: JSON.stringify({ enabled }),
   });
 }
+
+// ---------------------------------------------------------------------------
+// 邮件 AI 日程提取 - 待确认列表
+// ---------------------------------------------------------------------------
+
+/** 待确认的邮件提取日程项（来自 gateway /api/email/schedule/pending） */
+export interface PendingScheduleItem {
+  id: string;
+  item: ScheduleItem;
+  emailSubject: string;
+  emailFrom: string;
+  emailUid: string;
+  emailAccountId: string;
+  emailFolder: string;
+  createdAtMs: number;
+}
+
+export interface PendingScheduleListResponse {
+  items: PendingScheduleItem[];
+}
+
+/** 获取待确认的邮件提取日程列表。 */
+export async function listPendingSchedules(): Promise<PendingScheduleItem[]> {
+  const data = await _jsonRequest<PendingScheduleListResponse>(
+    `/api/email/schedule/pending`,
+    { method: "GET" },
+  );
+  return data.items;
+}
+
+/** 确认创建待确认的日程。返回确认后的日程项（已写入 schedule store）。 */
+export async function confirmPendingSchedule(
+  id: string,
+): Promise<{ ok: boolean }> {
+  return _jsonRequest<{ ok: boolean }>(`/api/email/schedule/confirm`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id }),
+  });
+}
+
+/** 丢弃待确认的日程。 */
+export async function discardPendingSchedule(
+  id: string,
+): Promise<{ ok: boolean }> {
+  return _jsonRequest<{ ok: boolean }>(`/api/email/schedule/discard`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id }),
+  });
+}

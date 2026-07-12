@@ -300,20 +300,10 @@ function MessageMedia({
 function MediaCell({ media }: { media: UIMediaAttachment }) {
   const { t } = useTranslation();
   const hasUrl = typeof media.url === "string" && media.url.length > 0;
-  const [downloading, setDownloading] = useState(false);
-
-  const handleDownload = useCallback(() => {
-    if (!hasUrl || downloading) return;
-    setDownloading(true);
-    const filename = suggestMediaFilename(media.url!, media.name, "video.mp4");
-    downloadMediaUrl(media.url!, filename)
-      .catch((err) => console.error("[MessageBubble] video download failed:", err))
-      .finally(() => setDownloading(false));
-  }, [downloading, hasUrl, media.name, media.url]);
 
   if (media.kind === "video" && hasUrl) {
     return (
-      <figure className="relative max-w-[min(100%,32rem)] overflow-hidden rounded-[14px] border border-border/60 bg-muted/40">
+      <figure className="max-w-[min(100%,32rem)] overflow-hidden rounded-[14px] border border-border/60 bg-muted/40">
         <video
           src={media.url}
           controls
@@ -321,22 +311,6 @@ function MediaCell({ media }: { media: UIMediaAttachment }) {
           className="block max-h-[26rem] w-full bg-black"
           aria-label={media.name ? `${t("message.videoAttachment", { defaultValue: "Video attachment" })}: ${media.name}` : t("message.videoAttachment", { defaultValue: "Video attachment" })}
         />
-        <button
-          type="button"
-          onClick={handleDownload}
-          disabled={downloading}
-          aria-label={t("message.downloadVideo", { defaultValue: "Download video" })}
-          title={t("message.downloadVideo", { defaultValue: "Download video" })}
-          className={cn(
-            "absolute right-2 top-2 grid h-8 w-8 place-items-center rounded-full",
-            "bg-black/55 text-white/90 hover:bg-black/70 hover:text-white",
-            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70",
-            "transition-colors motion-reduce:transition-none",
-            downloading && "pointer-events-none opacity-60",
-          )}
-        >
-          <Download className="h-4 w-4" aria-hidden />
-        </button>
         {media.name ? (
           <figcaption className="truncate px-3 py-1.5 text-[11.5px] text-muted-foreground">
             {media.name}

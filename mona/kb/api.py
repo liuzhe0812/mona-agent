@@ -384,18 +384,6 @@ async def handle_kb_delete_source_cascade(
         for f in pages_to_delete:
             f.unlink()
 
-    # Clean up vector embeddings for deleted pages
-    try:
-        from mona.kb import vectorstore
-        for page_rel in deleted_pages:
-            stem = page_rel.replace(".md", "").split("/")[-1]
-            try:
-                await vectorstore.delete_page(project_path, stem)
-            except Exception:
-                pass  # non-critical
-    except ImportError:
-        pass  # vectorstore not available
-
     return web.json_response({
         "deletedSource": source_rel,
         "deletedPages": deleted_pages,
@@ -427,7 +415,7 @@ async def handle_kb_graph(req: web.Request) -> web.Response:
 
 
 async def handle_kb_search(req: web.Request) -> web.Response:
-    """GET /api/kb/{id}/search -- hybrid search wiki pages."""
+    """GET /api/kb/{id}/search -- keyword search wiki pages."""
     project_id = req.match_info["id"]
     project_path = _ensure_project(project_id)
 
@@ -437,12 +425,9 @@ async def handle_kb_search(req: web.Request) -> web.Response:
 
     count = int(req.query.get("count", "10"))
 
-    from mona.kb.embedding import load_global_embedding_config
     from mona.kb.search import search_wiki_hybrid
 
-    cfg = load_global_embedding_config()
-
-    result = await search_wiki_hybrid(project_path, query, cfg, count)
+    result = await search_wiki_hybrid(project_path, query, count=count)
     return web.json_response(result)
 
 
@@ -481,85 +466,3 @@ async def handle_kb_save_reviews(req: web.Request) -> web.Response:
     return web.json_response({"success": True})
 
 
-async def handle_kb_embed(req: web.Request) -> web.Response:
-    """POST /api/kb/{id}/embed -- trigger embedding for all wiki pages."""
-    project_id = req.match_info["id"]
-    project_path = _ensure_project(project_id)
-    wiki_dir = project_path / "wiki"
-
-    try:
-        body = await req.json()
-    except Exception:
-        body = {}
-
-    from mona.kb import vectorstore
-    from mona.kb.chunker import ChunkingOptions, chunk_markdown
-    from mona.kb.embedding import fetch_embedding, load_global_embedding_config
-
-    cfg = load_global_embedding_config()
-
-    if cfg is None or not cfg.enabled or not cfg.endpoint or not cfg.model:
-        return web.json_response({"error": "Embedding not configured"}, status=400)
-
-    chunk_opts = ChunkingOptions(
-        target_chars=body.get("maxChunkChars", 1000),
-        overlap_chars=body.get("overlapChunkChars", 200),
-    )
-
-    if not wiki_dir.exists():
-        return web.json_response({"indexed": 0, "failed": 0})
-
-    indexed = 0
-    failed = 0
-    for md_file in sorted(wiki_dir.rglob("*.md")):
-        rel = str(md_file.relative_to(wiki_dir)).replace("\\", "/")
-        stem = rel.replace(".md", "").split("/")[-1]
-        if stem in ("index", "log", "overview", "purpose", "schema"):
-            continue
-
-        content = md_file.read_text(encoding="utf-8")
-        fm, _ = parse_frontmatter(content)
-        title = fm.get("title", stem)
-
-        chunks = chunk_markdown(content, chunk_opts)
-        if not chunks:
-            continue
-
-        rows: list[dict] = []
-        for chunk in chunks:
-            embed_text = (
-                f"{title}\n\n{chunk.heading_path}\n\n{chunk.text}"
-                if chunk.heading_path
-                else f"{title}\n\n{chunk.text}"
-            )
-            vec = await fetch_embedding(embed_text, cfg)
-            if vec:
-                rows.append({
-                    "chunk_index": chunk.index,
-                    "chunk_text": chunk.text,
-                    "heading_path": chunk.heading_path,
-                    "embedding": vec,
-                })
-            else:
-                failed += 1
-
-        if rows:
-            await vectorstore.upsert_chunks(project_path, stem, rows)
-            indexed += 1
-
-    return web.json_response({"indexed": indexed, "failed": failed})
-
-
-async def handle_kb_embed_status(req: web.Request) -> web.Response:
-    """GET /api/kb/{id}/embed/status -- get embedding status."""
-    project_id = req.match_info["id"]
-    project_path = _ensure_project(project_id)
-
-    from mona.kb import vectorstore
-    from mona.kb.embedding import get_last_embedding_error
-
-    count = await vectorstore.count_chunks(project_path)
-    return web.json_response({
-        "chunkCount": count,
-        "lastError": get_last_embedding_error(),
-    })

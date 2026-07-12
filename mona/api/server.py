@@ -36,8 +36,6 @@ from mona.email.imap_pool import imap_pool_manager
 from mona.kb.api import (
     handle_kb_create_project,
     handle_kb_delete_file,
-    handle_kb_embed,
-    handle_kb_embed_status,
     handle_kb_get_reviews,
     handle_kb_get_wiki_page,
     handle_kb_graph,
@@ -3352,6 +3350,204 @@ async def handle_email_analyze(request: web.Request) -> web.Response:
         return web.json_response({"error": str(e)}, status=500)
 
 
+async def handle_email_schedule_extract(request: web.Request) -> web.Response:
+    """POST /email/schedule/extract - Rust sync hook 触发的批量日程提取。
+
+    接收新邮件 UID 列表，逐封读取正文、调 LLM 提取日程、按配置 auto/confirm 创建。
+    由 sync_folder_internal 异步调用，不阻塞同步流程。
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+
+    account_id = str(body.get("accountId", "") or "")
+    folder = str(body.get("folder", "") or "")
+    uids = body.get("uids") or []
+    if not isinstance(uids, list):
+        uids = []
+    if not account_id or not folder or not uids:
+        return web.json_response({"error": "accountId/folder/uids 不能为空"}, status=400)
+
+    svc = request.app.get("schedule_service")
+    if svc is None:
+        return web.json_response({"error": "Schedule service not available"}, status=503)
+
+    agent_loop = request.app["agent_loop"]
+    provider = getattr(agent_loop, "provider", None)
+    if provider is None:
+        return web.json_response({"error": "LLM provider 不可用"}, status=503)
+
+    # 从 agent_loop 的 config 取 tools.email_intel.schedule 配置
+    config = getattr(agent_loop, "config", None)
+    schedule_config = None
+    if config is not None:
+        tools = getattr(config, "tools", None)
+        if tools is not None:
+            email_intel = getattr(tools, "email_intel", None)
+            if email_intel is not None:
+                schedule_config = getattr(email_intel, "schedule", None)
+
+    if schedule_config is None or not schedule_config.enabled:
+        return web.json_response({"processed": 0, "skipped": "disabled"})
+
+    # 检查文件夹是否在配置列表中
+    folder_key = f"{account_id}:{folder}"
+    if folder_key not in schedule_config.folders:
+        return web.json_response({"processed": 0, "skipped": "folder_not_configured"})
+
+    from datetime import datetime
+
+    from mona.email_intel.db import get_message
+    from mona.email_intel.schedule_extract import process_email_for_schedule
+
+    tz = getattr(config, "timezone", None) or "Asia/Shanghai"
+    now_iso = datetime.now().isoformat()
+    model = getattr(config, "model", None) or getattr(agent_loop, "model_name", None)
+
+    results: dict[str, int] = {"created": 0, "pending": 0, "skipped": 0, "error": 0}
+    for uid in uids:
+        uid_str = str(uid)
+        try:
+            msg = get_message(uid_str, account_id, folder)
+            if not msg:
+                results["skipped"] += 1
+                continue
+
+            result = await process_email_for_schedule(
+                provider,
+                svc,
+                schedule_config,
+                account_id=account_id,
+                uid=uid_str,
+                folder=folder,
+                subject=msg.get("subject") or "",
+                from_address=msg.get("fromAddress") or "",
+                from_name=msg.get("fromName"),
+                date=msg.get("date") or "",
+                body_text=msg.get("bodyText") or "",
+                body_html=msg.get("bodyHtml"),
+                now_iso=now_iso,
+                tz=tz,
+                model=model,
+            )
+            if result in results:
+                results[result] += 1
+            else:
+                results["skipped"] += 1
+        except Exception:
+            logger.exception("Schedule extract failed: uid={}", uid_str)
+            results["error"] += 1
+
+    return web.json_response({"processed": len(uids), **results})
+
+
+async def handle_email_schedule_pending(request: web.Request) -> web.Response:
+    """GET /api/email/schedule/pending - 获取待确认的日程列表（前端轮询）。"""
+    from mona.email_intel.schedule_extract import list_pending_confirmations
+
+    return web.json_response({"items": list_pending_confirmations()})
+
+
+async def handle_email_schedule_confirm(request: web.Request) -> web.Response:
+    """POST /api/email/schedule/confirm - 确认创建待确认的日程。"""
+    svc = _require_schedule_service(request)
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+
+    confirmation_id = str(body.get("id", "") or "")
+    if not confirmation_id:
+        return web.json_response({"error": "id 不能为空"}, status=400)
+
+    from mona.email_intel.schedule_extract import confirm_pending_confirmation
+
+    ok = await confirm_pending_confirmation(svc, confirmation_id)
+    return web.json_response({"ok": ok})
+
+
+async def handle_email_schedule_discard(request: web.Request) -> web.Response:
+    """POST /api/email/schedule/discard - 丢弃待确认的日程。"""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+
+    confirmation_id = str(body.get("id", "") or "")
+    if not confirmation_id:
+        return web.json_response({"error": "id 不能为空"}, status=400)
+
+    from mona.email_intel.schedule_extract import discard_pending_confirmation
+
+    ok = discard_pending_confirmation(confirmation_id)
+    return web.json_response({"ok": ok})
+
+
+async def handle_email_schedule_extract_manual(request: web.Request) -> web.Response:
+    """POST /email/schedule/extract-manual - MailView 手动触发单封邮件的日程提取。"""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+
+    account_id = str(body.get("accountId", "") or "")
+    uid = str(body.get("uid", "") or "")
+    folder = str(body.get("folder", "") or "")
+    if not account_id or not uid or not folder:
+        return web.json_response({"error": "accountId/uid/folder 不能为空"}, status=400)
+
+    svc = request.app.get("schedule_service")
+    if svc is None:
+        return web.json_response({"error": "Schedule service not available"}, status=503)
+
+    agent_loop = request.app["agent_loop"]
+    provider = getattr(agent_loop, "provider", None)
+    if provider is None:
+        return web.json_response({"error": "LLM provider 不可用"}, status=503)
+
+    config = getattr(agent_loop, "config", None)
+    tz = "Asia/Shanghai"
+    model = getattr(agent_loop, "model_name", None)
+    if config is not None:
+        tz = getattr(config, "timezone", None) or tz
+        model = getattr(config, "model", None) or model
+
+    # 手动触发时使用默认配置（confirm 模式），不走 folders 过滤
+    from datetime import datetime
+
+    from mona.email_intel.config import EmailScheduleConfig
+    from mona.email_intel.db import get_message
+    from mona.email_intel.schedule_extract import process_email_for_schedule
+
+    msg = get_message(uid, account_id, folder)
+    if not msg:
+        return web.json_response({"error": "邮件不存在"}, status=404)
+
+    # 手动触发：临时配置，confirm 模式，不跳过发件人
+    manual_config = EmailScheduleConfig(enabled=True, folders=[], create_mode="confirm")
+
+    result = await process_email_for_schedule(
+        provider,
+        svc,
+        manual_config,
+        account_id=account_id,
+        uid=uid,
+        folder=folder,
+        subject=msg.get("subject") or "",
+        from_address=msg.get("fromAddress") or "",
+        from_name=msg.get("fromName"),
+        date=msg.get("date") or "",
+        body_text=msg.get("bodyText") or "",
+        body_html=msg.get("bodyHtml"),
+        now_iso=datetime.now().isoformat(),
+        tz=tz,
+        model=model,
+    )
+
+    return web.json_response({"result": result})
+
+
 def _imap_fetch_attachment(body: dict[str, Any]) -> dict[str, Any]:
     """连接 IMAP，FETCH 完整邮件，按 filename 提取附件并返回 base64 编码。复用持久连接池。"""
     import base64
@@ -4314,8 +4510,6 @@ def create_app(
     app.router.add_post("/api/kb/{id}/wiki/update/{path:.*}", handle_kb_update_wiki_page)
     app.router.add_get("/api/kb/{id}/graph", handle_kb_graph)
     app.router.add_get("/api/kb/{id}/search", handle_kb_search)
-    app.router.add_post("/api/kb/{id}/embed", handle_kb_embed)
-    app.router.add_get("/api/kb/{id}/embed/status", handle_kb_embed_status)
     app.router.add_get("/api/kb/{id}/reviews", handle_kb_get_reviews)
     app.router.add_post("/api/kb/{id}/reviews", handle_kb_save_reviews)
     app.router.add_get("/api/kb/{id}/lint", handle_kb_lint)
@@ -4347,6 +4541,13 @@ def create_app(
     app.router.add_post("/email/test_connection", handle_email_test_connection)
     app.router.add_post("/email/reset_pool", handle_email_reset_pool)
     app.router.add_get("/email/pool_status", handle_email_pool_status)
+
+    # Email schedule AI extract routes
+    app.router.add_post("/email/schedule/extract", handle_email_schedule_extract)
+    app.router.add_post("/email/schedule/extract-manual", handle_email_schedule_extract_manual)
+    app.router.add_get("/api/email/schedule/pending", handle_email_schedule_pending)
+    app.router.add_post("/api/email/schedule/confirm", handle_email_schedule_confirm)
+    app.router.add_post("/api/email/schedule/discard", handle_email_schedule_discard)
 
     # Contacts (CardDAV) routes
     app.router.add_post("/contacts/sync", handle_contacts_sync)

@@ -102,6 +102,8 @@ export interface EmailRichEditorProps {
   onChange: (value: { html: string; text: string }) => void;
   placeholder?: string;
   className?: string;
+  /** 签名 HTML（在编辑器底部预览，发送时由调用方拼接到正文末尾） */
+  signatureHtml?: string | null;
 }
 
 function textToHtml(text: string): string {
@@ -182,7 +184,7 @@ function computeDisplayWidth(dataUrl: string): Promise<number | null> {
 
 export const EmailRichEditor = forwardRef<EmailRichEditorHandle, EmailRichEditorProps>(
   function EmailRichEditor(
-    { initialValue = "", initialHtml, onChange, placeholder = "邮件正文...", className },
+    { initialValue = "", initialHtml, onChange, placeholder = "邮件正文...", className, signatureHtml },
     ref,
   ) {
     // 用 ref 保存最新的 onChange 和 editor，避免闭包陷阱和频繁 setOptions
@@ -337,6 +339,13 @@ export const EmailRichEditor = forwardRef<EmailRichEditorHandle, EmailRichEditor
             editor={editor}
             className="h-full text-[14px] leading-[1.7] text-foreground [&_.ProseMirror]:h-full [&_.ProseMirror]:min-h-full [&_.ProseMirror_p]:my-1.5 [&_.ProseMirror_ul]:ml-5 [&_.ProseMirror_ul]:list-disc [&_.ProseMirror_ol]:ml-5 [&_.ProseMirror_ol]:list-decimal [&_.ProseMirror_li]:my-0.5 [&_.ProseMirror_img]:max-w-full [&_.ProseMirror_img]:h-auto [&_.ProseMirror_img]:rounded [&_.ProseMirror_a]:text-[#2f7fca] [&_.ProseMirror_a]:underline"
           />
+          {signatureHtml && (
+            <div
+              className="mt-4 border-t border-gray-200 pt-3 text-[14px] leading-[1.7] text-gray-600 [&_a]:text-[#2f7fca] [&_a]:underline [&_img]:max-w-full"
+              contentEditable={false}
+              dangerouslySetInnerHTML={{ __html: `<br/>${signatureHtml}` }}
+            />
+          )}
         </div>
       </div>
     );

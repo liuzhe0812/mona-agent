@@ -227,18 +227,3 @@ export const saveReviews = async (id: string, items: ReviewItemData[]) =>
     `/api/kb/${encodeURIComponent(id)}/reviews/save`,
     { method: "POST", body: JSON.stringify({ items }) },
   )
-
-// Embedding
-export interface EmbedStatus {
-  chunkCount: number
-  lastError: string | null
-}
-
-export const triggerEmbed = async (id: string) =>
-  fetchJSON<{ indexed: number; failed: number }>(
-    `/api/kb/${encodeURIComponent(id)}/embed`,
-    { method: "POST", body: JSON.stringify({}) },
-  )
-
-export const getEmbedStatus = async (id: string): Promise<EmbedStatus> =>
-  fetchJSON<EmbedStatus>(`/api/kb/${encodeURIComponent(id)}/embed/status`)

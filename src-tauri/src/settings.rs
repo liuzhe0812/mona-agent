@@ -12,20 +12,20 @@ pub struct SidebarShortcuts {
     pub note: String,
     #[serde(default = "default_shortcut_ssh")]
     pub ssh: String,
+    #[serde(default = "default_shortcut_email")]
+    pub email: String,
+    #[serde(default = "default_shortcut_schedule")]
+    pub schedule: String,
     #[serde(default = "default_shortcut_db")]
     pub db: String,
-    #[serde(default = "default_shortcut_kb")]
-    pub kb: String,
-    #[serde(default = "default_shortcut_ppt")]
-    pub ppt: String,
 }
 
 fn default_shortcut_mona() -> String { "Alt+1".to_string() }
 fn default_shortcut_note() -> String { "Alt+2".to_string() }
 fn default_shortcut_ssh() -> String { "Alt+3".to_string() }
-fn default_shortcut_db() -> String { "Alt+4".to_string() }
-fn default_shortcut_kb() -> String { "Alt+5".to_string() }
-fn default_shortcut_ppt() -> String { "Alt+6".to_string() }
+fn default_shortcut_email() -> String { "Alt+4".to_string() }
+fn default_shortcut_schedule() -> String { "Alt+5".to_string() }
+fn default_shortcut_db() -> String { "Alt+6".to_string() }
 
 impl Default for SidebarShortcuts {
     fn default() -> Self {
@@ -33,9 +33,9 @@ impl Default for SidebarShortcuts {
             mona: default_shortcut_mona(),
             note: default_shortcut_note(),
             ssh: default_shortcut_ssh(),
+            email: default_shortcut_email(),
+            schedule: default_shortcut_schedule(),
             db: default_shortcut_db(),
-            kb: default_shortcut_kb(),
-            ppt: default_shortcut_ppt(),
         }
     }
 }
@@ -315,6 +315,73 @@ pub fn write_mona_model_config(model: &str, provider: &str) -> Result<(), String
     fs::write(&config_path, content).map_err(|e| format!("Failed to write config: {}", e))?;
 
     log::info!("Wrote model config: {} (provider: {})", model, provider);
+    Ok(())
+}
+
+/// 读取 config.json 中 tools.emailIntel.schedule 字段。
+/// 返回完整的 schedule 配置对象（camelCase 键），不存在时返回默认值。
+pub fn read_email_schedule_config() -> serde_json::Value {
+    let config_path = mona_config_path();
+    let default = serde_json::json!({
+        "enabled": false,
+        "folders": [],
+        "createMode": "confirm",
+        "leadMinutes": 15,
+        "skipSenders": [],
+        "parseTimeoutSeconds": 30,
+    });
+    if !config_path.exists() {
+        return default;
+    }
+    let content = match fs::read_to_string(&config_path) {
+        Ok(c) => c,
+        Err(_) => return default,
+    };
+    let config: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(v) => v,
+        Err(_) => return default,
+    };
+    config
+        .get("tools")
+        .and_then(|t| t.get("emailIntel"))
+        .and_then(|e| e.get("schedule"))
+        .cloned()
+        .unwrap_or(default)
+}
+
+/// 写入 config.json 中 tools.emailIntel.schedule 字段。
+/// 接收完整的 schedule 配置对象（camelCase 键），合并写入现有 config.json。
+pub fn write_email_schedule_config(schedule: &serde_json::Value) -> Result<(), String> {
+    let config_path = mona_config_path();
+    let parent = config_path.parent().ok_or("Invalid config path")?;
+    fs::create_dir_all(parent).map_err(|e| format!("Failed to create config dir: {}", e))?;
+
+    let mut config: serde_json::Value = if config_path.exists() {
+        let content = fs::read_to_string(&config_path)
+            .map_err(|e| format!("Failed to read config: {}", e))?;
+        serde_json::from_str(&content).unwrap_or(serde_json::json!({}))
+    } else {
+        serde_json::json!({})
+    };
+
+    let root = config.as_object_mut().ok_or("Config is not an object")?;
+    let tools = root
+        .entry("tools".to_string())
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .ok_or("tools is not an object")?;
+    let email_intel = tools
+        .entry("emailIntel".to_string())
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .ok_or("emailIntel is not an object")?;
+    email_intel.insert("schedule".to_string(), schedule.clone());
+
+    let content = serde_json::to_string_pretty(&config)
+        .map_err(|e| format!("Failed to serialize config: {}", e))?;
+    fs::write(&config_path, content).map_err(|e| format!("Failed to write config: {}", e))?;
+
+    log::info!("Wrote email schedule config");
     Ok(())
 }
 

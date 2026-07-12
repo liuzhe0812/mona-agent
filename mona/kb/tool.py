@@ -5,11 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from loguru import logger
-
 from mona.agent.tools.base import Tool, tool_parameters
 from mona.agent.tools.schema import IntegerSchema, StringSchema, tool_parameters_schema
-from mona.kb.embedding import EmbeddingConfig
 from mona.kb.search import search_wiki_hybrid
 
 
@@ -37,8 +34,7 @@ class KbSearchTool(Tool):
         if project_path is None:
             return "No knowledge base project found. Please create a project first."
 
-        embedding_config = self._load_embedding_config()
-        result = await search_wiki_hybrid(project_path, query, embedding_config, count=count)
+        result = await search_wiki_hybrid(project_path, query, count=count)
 
         results = result.get("results", [])
         if not results:
@@ -68,24 +64,4 @@ class KbSearchTool(Tool):
             if child.is_dir() and (child / "wiki").exists():
                 return child
 
-        return None
-
-    @staticmethod
-    def _load_embedding_config() -> EmbeddingConfig | None:
-        """Load global embedding config from tools.embedding."""
-        try:
-            from mona.config.loader import load_config
-
-            cfg = load_config()
-            emb = cfg.tools.embedding
-            if emb.enabled and emb.endpoint and emb.model:
-                return EmbeddingConfig(
-                    enabled=True,
-                    endpoint=emb.endpoint,
-                    api_key=emb.api_key,
-                    model=emb.model,
-                    output_dimensionality=emb.output_dimensionality,
-                )
-        except Exception as e:
-            logger.debug(f"[kb_search] could not load embedding config: {e}")
         return None

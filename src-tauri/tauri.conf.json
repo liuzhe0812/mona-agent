@@ -23,18 +23,7 @@
         "scope": []
       }
     },
-    "windows": [
-      {
-        "title": "Mona",
-        "width": 1200,
-        "height": 800,
-        "minWidth": 800,
-        "minHeight": 600,
-        "center": true,
-        "decorations": false,
-        "dragDropEnabled": false
-      }
-    ]
+    "windows": []
   },
   "bundle": {
     "active": true,

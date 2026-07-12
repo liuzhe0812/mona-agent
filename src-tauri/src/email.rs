@@ -3929,10 +3929,57 @@ async fn sync_folder_internal(
         new_count,
         new_messages_in_folder.len()
     );
+
+    // 异步触发 AI 日程提取（不阻塞 sync 返回）
+    // 仅当有新邮件、gateway_url 非空时触发
+    // gateway 侧会检查配置（enabled + folders），未配置则立即返回
+    if !new_uids.is_empty() && !gateway_url.is_empty() {
+        let account_id = req.account_id.clone();
+        let mailbox = req.mailbox.clone();
+        let uids = new_uids.clone();
+        let gw = gateway_url.to_string();
+        tokio::spawn(async move {
+            trigger_schedule_extract(&gw, &account_id, &mailbox, &uids).await;
+        });
+    }
+
     Ok(SyncResult {
         new_count,
         new_messages: new_messages_in_folder,
     })
+}
+
+/// 异步调用 gateway /email/schedule/extract，触发 AI 日程提取。
+/// 失败静默记录日志，不影响 sync 流程。
+async fn trigger_schedule_extract(gateway_url: &str, account_id: &str, folder: &str, uids: &[String]) {
+    let url = format!("{}/email/schedule/extract", gateway_url.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
+    let body = serde_json::json!({
+        "accountId": account_id,
+        "folder": folder,
+        "uids": uids,
+    });
+    match client.post(&url).json(&body).send().await {
+        Ok(resp) => {
+            if resp.status().is_success() {
+                log::info!(
+                    "[schedule-extract] triggered: account={} folder={} uids={}",
+                    account_id, folder, uids.len()
+                );
+            } else {
+                log::warn!(
+                    "[schedule-extract] gateway returned {}: account={} folder={}",
+                    resp.status(), account_id, folder
+                );
+            }
+        }
+        Err(e) => {
+            log::warn!("[schedule-extract] request failed: {}", e);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
