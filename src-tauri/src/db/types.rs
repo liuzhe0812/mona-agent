@@ -1,13 +1,20 @@
 use serde::{Deserialize, Serialize};
 
+/// Database type. Only `Sqlite` and `Mysql` are currently implemented; the
+/// remaining variants are reserved for future support and are retained for
+/// frontend select options and `connections.json` serde compatibility.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DatabaseType {
     Mysql,
+    #[allow(dead_code)]
     PostgreSQL,
     Sqlite,
+    #[allow(dead_code)]
     SqlServer,
+    #[allow(dead_code)]
     Oracle,
+    #[allow(dead_code)]
     Mongodb,
 }
 
@@ -169,19 +176,6 @@ impl<'de> serde::Deserialize<'de> for CellValue {
     }
 }
 
-impl CellValue {
-    pub fn display(&self) -> String {
-        match self {
-            CellValue::Null => "NULL".to_string(),
-            CellValue::Integer(i) => i.to_string(),
-            CellValue::Float(f) => f.to_string(),
-            CellValue::Text(s) => s.clone(),
-            CellValue::Blob(hex) => format!("0x{}", hex),
-            CellValue::Bool(b) => b.to_string(),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DatabaseObject {
     pub name: String,
@@ -190,19 +184,32 @@ pub struct DatabaseObject {
     pub children: Vec<DatabaseObject>,
 }
 
+/// Database object type. Only `Table` and `View` are currently constructed by
+/// the backend; the remaining variants are reserved for future support and
+/// are retained because the frontend `dbStore.ts` hardcodes `"database"` and
+/// `"folder"` strings when building the connection tree.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DatabaseObjectType {
+    #[allow(dead_code)]
     Server,
+    #[allow(dead_code)]
     Database,
     Table,
     View,
+    #[allow(dead_code)]
     Procedure,
+    #[allow(dead_code)]
     Function,
+    #[allow(dead_code)]
     Index,
+    #[allow(dead_code)]
     Trigger,
+    #[allow(dead_code)]
     Event,
+    #[allow(dead_code)]
     Column,
+    #[allow(dead_code)]
     Folder,
 }
 
