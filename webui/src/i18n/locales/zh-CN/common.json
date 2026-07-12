@@ -1,11 +1,8 @@
 {
   "app": {
     "brand": "mona",
-    "title": "知识库",
-    "subtitle": "将文档编译为可搜索、可浏览的 Wiki 知识图谱",
     "loading": {
-      "connecting": "正在连接 mona…",
-      "boot": "正在加载 mona…"
+      "connecting": "正在连接 mona…"
     },
     "error": {
       "title": "无法连接到 mona",

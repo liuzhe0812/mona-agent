@@ -1,11 +1,8 @@
 {
   "app": {
     "brand": "mona",
-    "title": "知識庫",
-    "subtitle": "將文件編譯為可搜尋、可瀏覽的 Wiki 知識圖譜",
     "loading": {
-      "connecting": "正在連線到 mona…",
-      "boot": "正在載入 mona…"
+      "connecting": "正在連線到 mona…"
     },
     "error": {
       "title": "無法連線到 mona",

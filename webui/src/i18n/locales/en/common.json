@@ -1,11 +1,8 @@
 {
   "app": {
     "brand": "mona",
-    "title": "Knowledge Base",
-    "subtitle": "Compile documents into a searchable, browsable Wiki knowledge graph",
     "loading": {
-      "connecting": "Connecting to mona…",
-      "boot": "Loading mona…"
+      "connecting": "Connecting to mona…"
     },
     "error": {
       "title": "Couldn't reach mona",
