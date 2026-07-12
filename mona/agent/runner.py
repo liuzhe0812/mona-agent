@@ -1,4 +1,4 @@
-﻿"""Shared execution loop for tool-using agents."""
+"""Shared execution loop for tool-using agents."""
 
 from __future__ import annotations
 
@@ -16,12 +16,11 @@ from mona.agent.hook import AgentHook, AgentHookContext
 from mona.agent.tools.registry import ToolRegistry
 from mona.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from mona.utils.file_edit_events import (
+    StreamingFileEditTracker,
     build_file_edit_end_event,
     build_file_edit_error_event,
     build_file_edit_start_event,
-    prepare_file_edit_tracker as _prepare_file_edit_tracker,
     prepare_file_edit_trackers,
-    StreamingFileEditTracker,
 )
 from mona.utils.helpers import (
     IncrementalThinkExtractor,
@@ -63,10 +62,6 @@ _COMPACTABLE_TOOLS = frozenset({
     "web_search", "web_fetch", "list_dir", "list_exec_sessions",
 })
 _BACKFILL_CONTENT = "[Tool result unavailable — call was interrupted or lost]"
-
-# Backward-compatible module attribute for tests/extensions that monkeypatch
-# the former single-file tracker hook. Runtime uses prepare_file_edit_trackers.
-prepare_file_edit_tracker = _prepare_file_edit_tracker
 
 
 @dataclass(slots=True)

@@ -1,4 +1,4 @@
-﻿"""Tests for structured tool-event progress metadata emitted by AgentLoop."""
+"""Tests for structured tool-event progress metadata emitted by AgentLoop."""
 
 import asyncio
 from pathlib import Path
@@ -174,7 +174,7 @@ class TestToolEventProgress:
 
         loop.tools.execute = AsyncMock(side_effect=execute)
         prepare_tracker = MagicMock(side_effect=AssertionError("unexpected file snapshot"))
-        monkeypatch.setattr(runner_module, "prepare_file_edit_tracker", prepare_tracker)
+        monkeypatch.setattr(runner_module, "prepare_file_edit_trackers", prepare_tracker)
 
         async def on_progress(
             content: str,
