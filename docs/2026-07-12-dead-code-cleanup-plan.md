@@ -264,23 +264,22 @@
 
 **Commit**：`refactor(agent): 移除单数兼容参数 image_generation_provider_config`
 
-### T3.8 删除 `mona/contacts/wbxml.py` 的 12 个未使用 WBXML 常量
+### T3.8 删除 `mona/contacts/wbxml.py` 的 13 个未使用 WBXML 常量
 
 **TDD 循环**：
 1. Red: 对每个常量名执行 grep 确认仅定义处命中。
-2. Green: 删除 wbxml.py L27-42 中的 12 个未使用常量（保留 `STR_T`，被自身 L357 引用）。
+2. Green: 删除 wbxml.py 中的 13 个未使用常量。**必须保留 `STR_T`（被自身 L357 引用）和 `OPAQUE`（被 L339 引用）**。实际删除的 13 个常量为：`LITERAL_A`、`LITERAL_C`、`LITERAL_AC`、`EXT_I_0`、`EXT_I_1`、`EXT_I_2`、`PI`、`EXT_T_0`、`EXT_T_1`、`EXT_T_2`、`EXT_0`、`EXT_1`、`EXT_2`。
 3. Verify: `ruff check mona/contacts/wbxml.py` + `pytest tests/` 中涉及 contacts 的测试通过。
 
-**Commit**：`refactor(contacts): 删除 12 个未使用的 WBXML 协议常量`
+**Commit**：`refactor(contacts): 删除 13 个未使用的 WBXML 协议常量`
 
-### T3.9 删除 `mona/email/imap_pool.py` 的未使用方法 `keepalive`、`status`
+### ~~T3.9 删除 `mona/email/imap_pool.py` 的未使用方法 `keepalive`、`status`~~（已撤销 — 有生产调用）
 
-**TDD 循环**：
-1. Red: `grep -rn "\.keepalive(\|\.status("` 确认零外部调用。
-2. Green: 删除 `imap_pool.py` L312-351 的 `keepalive` 和 `status` 方法。
-3. Verify: `ruff check mona/email/imap_pool.py` + `pytest tests/channels/test_email_channel.py -x`。
+**调研结论**：`keepalive` 和 `status` 并非死代码，在 `mona/api/server.py` 中有明确的生产调用：
+- `status()` 在 `server.py:2690` 的 `handle_email_pool_status` HTTP handler 中被调用
+- `keepalive` 在 `server.py:4639` 作为 `threading.Thread` 的 `target` 参数被引用（注意：作为 callable 引用传递，不带括号，所以 `grep '\.keepalive\('` 会产生假阴性）
 
-**Commit**：`refactor(email): 删除 ImapPoolManager 未使用的 keepalive/status 方法`
+**决策**：撤销，保留原样，不处理。
 
 ### T3.10 删除 `mona/hoard/vectorstore.py` 的未使用函数 `delete_vector`、`count_vectors`
 
@@ -595,6 +594,7 @@ git log --all -p -- 'tmp_deploy_*.py' '_tmp_*.py' 'deploy_auth.py' 'start_gatewa
 | T2.5 browser/get_page_source | **删除命令** | 前端零调用方，stub 始终返回空字符串 |
 | T2.6 SSH 连接池 | **删除死代码** | 从未接入，启用需 1-2 天重构，无性能瓶颈反馈 |
 | T2.7 DB 枚举变体 | **保留+显式标注** | 删除会破坏前端选项和 connections.json 兼容性，风险收益比不划算 |
+| T3.9 imap_pool keepalive/status | **撤销，保留原样** | 有生产调用：status() 在 server.py:2690，keepalive 在 server.py:4639 |
 | T6.5 ESP32 资源 | **移到 hardware/esp32/** | 与 Mona 零交叉引用，保留历史但清理根目录 |
 
 ---

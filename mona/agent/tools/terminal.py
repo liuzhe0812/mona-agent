@@ -30,16 +30,6 @@ def _read_ipc_port() -> int:
     return _FALLBACK_IPC_PORT
 
 
-def _gateway_port() -> int:
-    try:
-        import mona.config as _cfg
-
-        cfg = _cfg.load_config()
-        return getattr(cfg, "gateway_port", 7860)
-    except Exception:
-        return 7860
-
-
 def _tauri_invoke(cmd: str, args: dict[str, Any] | None = None) -> Any:
     port = _read_ipc_port()
     payload = json.dumps({"cmd": cmd, "args": args or {}}).encode()
