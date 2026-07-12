@@ -235,11 +235,6 @@ export async function browserPrintPage(id: string): Promise<void> {
   return invoke<void>("browser_print_page", { id });
 }
 
-/** 获取页面源码 */
-export async function browserGetPageSource(id: string): Promise<string> {
-  return invoke<string>("browser_get_page_source", { id });
-}
-
 /** 在 WebView 中执行 JS 代码 */
 export async function browserEvalScript(id: string, script: string): Promise<void> {
   return invoke<void>("browser_eval_script", { id, script });

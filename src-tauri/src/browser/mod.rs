@@ -870,32 +870,6 @@ impl BrowserState {
             .map_err(|e| format!("Print failed: {}", e))
     }
 
-    /// 获取页面源码（通过 JS）
-    pub fn get_page_source(&self, app: &AppHandle, id: &str) -> Result<String, String> {
-        let tab = self
-            .tabs
-            .get(id)
-            .ok_or_else(|| format!("Tab {} not found", id))?;
-        let webview = app
-            .get_webview(&tab.webview_label)
-            .ok_or_else(|| format!("WebView {} not found", tab.webview_label))?;
-        // 使用 JS 获取页面源码（包含序列化后的 HTML）
-        let js = r#"
-            (function() {
-                var doctype = document.doctype ? '<!DOCTYPE ' + document.doctype.name + '>' : '';
-                return doctype + '\n' + document.documentElement.outerHTML;
-            })()
-        "#;
-        // Note: eval is async in Tauri 2, but we need the result synchronously
-        // For now, use eval which returns immediately (fire and forget)
-        // A proper implementation would use CDP Runtime.evaluate
-        webview
-            .eval(&format!("window.__mona_page_source = (function(){{var d=document.doctype?'<!DOCTYPE '+document.doctype.name+'>':'';return d+'\\n'+document.documentElement.outerHTML;}})();"))
-            .map_err(|e| format!("Get source failed: {}", e))?;
-        // Return empty string - actual source retrieval will be done via CDP in a future enhancement
-        Ok(String::new())
-    }
-
     /// 在指定标签的 WebView 中执行 JS 代码
     pub fn eval_script(&self, app: &AppHandle, id: &str, script: &str) -> Result<(), String> {
         let tab = self

@@ -634,7 +634,6 @@ pub fn run() {
             browser::commands::browser_set_zoom,
             browser::commands::browser_get_zoom,
             browser::commands::browser_print_page,
-            browser::commands::browser_get_page_source,
             browser::commands::browser_eval_script,
             browser::commands::browser_get_cookies,
             browser::commands::browser_clear_cookies,

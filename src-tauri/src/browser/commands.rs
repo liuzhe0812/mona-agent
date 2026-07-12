@@ -277,16 +277,6 @@ pub async fn browser_print_page(
     state.print_page(&app, &id)
 }
 
-/// 获取页面源码
-#[tauri::command]
-pub async fn browser_get_page_source(
-    app: tauri::AppHandle,
-    id: String,
-) -> Result<String, String> {
-    let state = app.state::<BrowserState>();
-    state.get_page_source(&app, &id)
-}
-
 /// 在 WebView 中执行 JS 代码
 #[tauri::command]
 pub async fn browser_eval_script(
