@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Mail, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { openComposeWindow } from "./lib/emailApi";
@@ -19,6 +20,7 @@ interface SenderPopoverProps {
 /**
  * 发件人/收件人名称点击弹窗。
  * 仅当 inContacts 为 true 时可点击，弹窗显示姓名、邮箱地址、写邮件按钮。
+ * 弹窗用 Portal + fixed 定位渲染到 body，避免被父容器 overflow 裁剪。
  */
 export function SenderPopover({
   displayName,
@@ -28,15 +30,36 @@ export function SenderPopover({
   children,
 }: SenderPopoverProps) {
   const [open, setOpen] = useState(false);
-  const containerRef = useRef<HTMLSpanElement>(null);
+  const triggerRef = useRef<HTMLSpanElement>(null);
+  const [popupStyle, setPopupStyle] = useState<React.CSSProperties>({});
+
+  // 计算弹窗位置
+  useLayoutEffect(() => {
+    if (!open || !triggerRef.current) return;
+    const rect = triggerRef.current.getBoundingClientRect();
+    const style: React.CSSProperties = {
+      position: "fixed",
+      left: rect.left,
+      top: rect.bottom + 4,
+      zIndex: 9999,
+    };
+    // 防止溢出右边
+    const popupWidth = 260;
+    if (rect.left + popupWidth > window.innerWidth) {
+      style.left = window.innerWidth - popupWidth - 8;
+    }
+    setPopupStyle(style);
+  }, [open]);
 
   // 点击外部关闭
   useEffect(() => {
     if (!open) return;
     const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as Node;
       if (
-        containerRef.current &&
-        !containerRef.current.contains(e.target as Node)
+        triggerRef.current &&
+        !triggerRef.current.contains(target) &&
+        !(target as HTMLElement).closest("[data-sender-popup]")
       ) {
         setOpen(false);
       }
@@ -67,67 +90,71 @@ export function SenderPopover({
   };
 
   if (!inContacts || !email) {
-    // 不在通讯录中或无邮箱：不可点击，直接显示
     return <span className="text-foreground">{children ?? displayName}</span>;
   }
 
   return (
-    <span ref={containerRef} className="relative inline-block">
+    <>
       <span
+        ref={triggerRef}
         role="button"
         tabIndex={0}
-        onClick={() => setOpen((v) => !v)}
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((v) => !v);
+        }}
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
+            e.stopPropagation();
             setOpen((v) => !v);
           }
         }}
-        className="cursor-pointer text-primary underline-offset-2 hover:underline"
+        className="cursor-pointer text-primary"
         title="点击查看联系人信息"
       >
         {children ?? displayName}
       </span>
-      {open && (
-        <div
-          className="absolute left-0 top-full z-50 mt-1 w-[260px] rounded-lg border border-border bg-popover p-3 shadow-md"
-          style={{ minWidth: "220px" }}
-        >
-          {/* 关闭按钮 */}
-          <button
-            type="button"
-            onClick={() => setOpen(false)}
-            className="absolute right-2 top-2 text-muted-foreground transition-colors hover:text-foreground"
-            aria-label="关闭"
+      {open &&
+        createPortal(
+          <div
+            data-sender-popup
+            style={popupStyle}
+            className="w-[260px] rounded-lg border border-border bg-popover p-3 shadow-md"
           >
-            <X className="h-3.5 w-3.5" />
-          </button>
-
-          {/* 姓名 */}
-          <div className="pr-6">
-            <div className="truncate text-sm font-medium text-foreground">
-              {displayName || "(未知姓名)"}
-            </div>
-            <div className="mt-0.5 truncate text-xs text-muted-foreground">
-              {email}
-            </div>
-          </div>
-
-          {/* 写邮件按钮 */}
-          <div className="mt-3 flex justify-end">
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-7 gap-1.5 px-2 text-xs"
-              onClick={handleWriteMail}
-              disabled={!accountId}
+            <button
+              type="button"
+              onClick={() => setOpen(false)}
+              className="absolute right-2 top-2 text-muted-foreground transition-colors hover:text-foreground"
+              aria-label="关闭"
             >
-              <Mail className="h-3.5 w-3.5" />
-              写邮件
-            </Button>
-          </div>
-        </div>
-      )}
-    </span>
+              <X className="h-3.5 w-3.5" />
+            </button>
+
+            <div className="pr-6">
+              <div className="truncate text-sm font-medium text-foreground">
+                {displayName || "(未知姓名)"}
+              </div>
+              <div className="mt-0.5 truncate text-xs text-muted-foreground">
+                {email}
+              </div>
+            </div>
+
+            <div className="mt-3 flex justify-end">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 gap-1.5 px-2 text-xs"
+                onClick={handleWriteMail}
+                disabled={!accountId}
+              >
+                <Mail className="h-3.5 w-3.5" />
+                写邮件
+              </Button>
+            </div>
+          </div>,
+          document.body,
+        )}
+    </>
   );
 }
