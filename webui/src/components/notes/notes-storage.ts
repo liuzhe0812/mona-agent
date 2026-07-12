@@ -95,7 +95,6 @@ export function createCustomNotebook(name: string): Notebook {
   return {
     id: createId("notebook"),
     name,
-    knowledgeBaseEnabled: false,
   };
 }
 

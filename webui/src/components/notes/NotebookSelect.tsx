@@ -1,9 +1,8 @@
-import { BookOpen, Check, ChevronDown, Database, Pencil, Plus, Trash2 } from "lucide-react";
+import { BookOpen, Check, ChevronDown, Pencil, Plus, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
-  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
@@ -20,7 +19,6 @@ interface NotebookSelectProps {
   onSelect: (id: string) => void;
   onCreateNotebook?: () => void;
   onRenameNotebook?: () => void;
-  onToggleKnowledgeBase?: (enabled: boolean) => void;
   onDeleteNotebook?: () => void;
 }
 
@@ -30,7 +28,6 @@ export function NotebookSelect({
   onSelect,
   onCreateNotebook,
   onRenameNotebook,
-  onToggleKnowledgeBase,
   onDeleteNotebook,
 }: NotebookSelectProps) {
   return (
@@ -70,9 +67,6 @@ export function NotebookSelect({
             <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium text-foreground">
               {notebook.name}
             </span>
-            {notebook.knowledgeBaseEnabled ? (
-              <Database className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-            ) : null}
           </DropdownMenuItem>
         ))}
         {onCreateNotebook ? (
@@ -83,15 +77,6 @@ export function NotebookSelect({
                 <Pencil className="h-3.5 w-3.5 text-muted-foreground" />
                 <span className="text-[12.5px] font-medium text-foreground/88">重命名当前笔记本</span>
               </DropdownMenuItem>
-            ) : null}
-            {onToggleKnowledgeBase ? (
-              <DropdownMenuCheckboxItem
-                checked={activeNotebook.knowledgeBaseEnabled}
-                onCheckedChange={(checked) => onToggleKnowledgeBase(Boolean(checked))}
-                className="py-2 text-[12.5px] font-medium text-foreground/88"
-              >
-                建为知识库
-              </DropdownMenuCheckboxItem>
             ) : null}
             {onDeleteNotebook ? (
               <DropdownMenuItem

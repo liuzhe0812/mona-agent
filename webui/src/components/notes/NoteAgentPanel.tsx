@@ -231,21 +231,7 @@ export function NoteAgentPanel({
         return false;
       }
 
-      // Inject knowledge base context if enabled
-      let finalPrompt = trimmed;
-      if (notebook?.knowledgeBaseEnabled && isTauri()) {
-        try {
-          const { searchNotebookNotes } = await import("@/lib/tauri");
-          const { formatNotebookBaseContext } = await import("./notes-ai");
-          const results = await searchNotebookNotes(notebook.id, trimmed);
-          const kbContext = formatNotebookBaseContext(results);
-          if (kbContext) {
-            finalPrompt = `${kbContext}\n\n---\n\n${trimmed}`;
-          }
-        } catch {
-          // Search failed, proceed without context
-        }
-      }
+      const finalPrompt = trimmed;
 
       if (chatId) {
         send(finalPrompt, undefined, displayContent ? { displayContent } : undefined);

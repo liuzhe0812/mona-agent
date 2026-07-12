@@ -80,7 +80,6 @@ export function nowTimestamp(): string {
 export interface Notebook {
   id: string;
   name: string;
-  knowledgeBaseEnabled: boolean;
 }
 
 export interface OperationNote {

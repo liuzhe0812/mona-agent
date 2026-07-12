@@ -4,7 +4,6 @@ import { List, Link2, Tag } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 import { BacklinksPanel } from "./BacklinksPanel";
-import { RelatedNotesPanel } from "./RelatedNotesPanel";
 import type { OperationNote } from "./notes-data";
 
 export type RightTab = "outline" | "links" | "tags";
@@ -242,7 +241,6 @@ export function RightSidebar({
             </div>
 
             <BacklinksPanel noteId={note.id} onSelectNote={onSelectNote} />
-            <RelatedNotesPanel noteId={note.id} onSelectNote={onSelectNote} />
           </div>
         )}
 

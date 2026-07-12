@@ -18,7 +18,6 @@ import {
   ChevronDown,
   ChevronUp,
   CircleHelp,
-  Database,
   Folder,
   History,
   ImageIcon,
@@ -95,7 +94,7 @@ interface ThreadComposerProps {
   /** KB RAG: selected knowledge base project for chat context */
   kbProjectId?: string | null;
   kbProjectName?: string | null;
-  kbProjects?: Array<{ id: string; name: string; isNotebook?: boolean }>;
+  kbProjects?: Array<{ id: string; name: string }>;
   onKbSelect?: (id: string | null) => void;
   /** Project workspace bound to a new-chat composer. Only shown in hero mode. */
   workspace?: string | null;
@@ -1221,9 +1220,6 @@ export function ThreadComposer({
                     />
                     <BookOpen className={cn("flex-none", isHero ? "h-3 w-3" : "h-2.5 w-2.5")} />
                     <span className="truncate">{kbProjectName ?? "知识库"}</span>
-                    {kbProjectId?.startsWith("notebook:") && (
-                      <span className="text-[9px] text-muted-foreground">笔记</span>
-                    )}
                     <ChevronDown className={cn("flex-none opacity-50", isHero ? "h-3 w-3" : "h-2.5 w-2.5")} />
                   </button>
                 </DropdownMenuTrigger>
@@ -1250,15 +1246,8 @@ export function ThreadComposer({
                           p.id === kbProjectId ? "bg-purple-500/80" : "bg-foreground/20",
                         )}
                       />
-                      {p.isNotebook ? (
-                        <Database className="h-3 w-3 flex-none text-muted-foreground" />
-                      ) : (
-                        <BookOpen className="h-3 w-3 flex-none text-muted-foreground" />
-                      )}
+                      <BookOpen className="h-3 w-3 flex-none text-muted-foreground" />
                       <span className="truncate">{p.name}</span>
-                      {p.isNotebook && (
-                        <span className="ml-0.5 text-[10px] text-muted-foreground">笔记</span>
-                      )}
                       {p.id === kbProjectId && (
                         <Check className="ml-auto h-3 w-3 text-muted-foreground" />
                       )}

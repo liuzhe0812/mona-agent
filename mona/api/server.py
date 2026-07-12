@@ -31,12 +31,6 @@ from mona.api.hoard_handlers import (
     handle_hoard_add,
     handle_hoard_delete_by_url,
 )
-from mona.api.notes_kb_handlers import (
-    handle_notes_kb_embed,
-    handle_notes_kb_embed_status,
-    handle_notes_kb_related,
-    handle_notes_kb_search,
-)
 from mona.config.paths import get_media_dir, get_workspace_path
 from mona.email.imap_pool import imap_pool_manager
 from mona.kb.api import (
@@ -4325,12 +4319,6 @@ def create_app(
     app.router.add_get("/api/kb/{id}/reviews", handle_kb_get_reviews)
     app.router.add_post("/api/kb/{id}/reviews", handle_kb_save_reviews)
     app.router.add_get("/api/kb/{id}/lint", handle_kb_lint)
-
-    # Notes KB routes (vector index + hybrid search for notes vault)
-    app.router.add_post("/api/notes-kb/embed", handle_notes_kb_embed)
-    app.router.add_get("/api/notes-kb/embed/status", handle_notes_kb_embed_status)
-    app.router.add_post("/api/notes-kb/search", handle_notes_kb_search)
-    app.router.add_get("/api/notes-kb/related/{note_id}", handle_notes_kb_related)
 
     # Hoard routes (Agent URL memory: browser star sync)
     app.router.add_post("/api/hoard", handle_hoard_add)

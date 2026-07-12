@@ -43,9 +43,6 @@ interface KbState {
   // Chat with Wiki
   selectedKbForChat: string | null
 
-  // Notebook knowledge bases (notebooks marked as knowledge base)
-  notebookKbList: Array<{ id: string; name: string }>
-
   // Dedup
   dedupGroups: DuplicateGroup[]
 
@@ -65,7 +62,6 @@ interface KbState {
   loadWikiPage: (path: string) => Promise<void>
   loadGraph: () => Promise<void>
   setSelectedKbForChat: (id: string | null) => void
-  setNotebookKbList: (list: Array<{ id: string; name: string }>) => void
   runLint: () => Promise<void>
   runDedup: () => Promise<void>
   mergeGroup: (group: DuplicateGroup) => Promise<void>
@@ -88,7 +84,6 @@ export const useKbStore = create<KbState>()((set, get) => ({
   ingestProgress: null,
   ingestAbortController: null,
   selectedKbForChat: null,
-  notebookKbList: [],
   dedupGroups: [],
   embedStatus: null,
   embedding: false,
@@ -252,9 +247,7 @@ export const useKbStore = create<KbState>()((set, get) => ({
     set({ graphData })
   },
 
-  setSelectedKbForChat: (id: string | null) => set({ selectedKbForChat: id }),
-
-  setNotebookKbList: (list) => set({ notebookKbList: list }),
+  setSelectedKbForChat: (id) => set({ selectedKbForChat: id }),
 
   runLint: async () => {
     const project = get().currentProject

@@ -81,6 +81,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Tooltip,
   TooltipContent,
@@ -109,11 +110,17 @@ import {
   getGatewayStatus,
   checkForUpdates,
   performUpdate,
+  getAgentSearchScope,
+  setAgentSearchScope,
+  loadDesktopNotesState,
   type UpdateCheckResult,
   type UpdateProgress,
   type DesktopAppSettings,
   type SidebarShortcuts,
+  type AgentSearchScope,
 } from "@/lib/tauri";
+import { listAccounts, getFolders } from "@/components/email/lib/emailApi";
+import type { EmailAccount, EmailFolder } from "@/components/email/lib/types";
 import { useClientOptional } from "@/providers/ClientProvider";
 import type {
   ChannelInfo,
@@ -136,6 +143,7 @@ type SettingsSectionKey =
   | "runtime"
   | "desktop"
   | "shortcuts"
+  | "agent_scope"
   | "advanced"
   | "about";
 
@@ -930,6 +938,8 @@ export function SettingsView({
         return <DesktopSettings />;
       case "shortcuts":
         return <ShortcutsSettings />;
+      case "agent_scope":
+        return <AgentScopeSettings />;
       case "advanced":
         return <AdvancedSettings settings={settings} />;
       case "about":
@@ -994,6 +1004,7 @@ const SETTINGS_NAV_ITEMS: Array<{ key: SettingsSectionKey; icon: LucideIcon; fal
   { key: "runtime", icon: Server, fallback: "Runtime" },
   { key: "desktop", icon: Monitor, fallback: "桌面", desktopOnly: true },
   { key: "shortcuts", icon: Keyboard, fallback: "快捷键", desktopOnly: true },
+  { key: "agent_scope", icon: Search, fallback: "Agent 搜索范围", desktopOnly: true },
   { key: "advanced", icon: ShieldCheck, fallback: "Advanced" },
   { key: "about", icon: Info, fallback: "关于" },
 ];
@@ -1588,16 +1599,16 @@ function EmbeddingSettings({
       </SettingsRow>
 
       <SettingsRow
-        title={tx("settings.rows.embeddingEndpoint", "Endpoint")}
+        title={tx("settings.rows.embeddingEndpoint", "服务商地址")}
         description={tx(
           "settings.help.embeddingEndpoint",
-          "OpenAI 兼容的嵌入接口地址，或 Gemini / Ollama 的嵌入端点。",
+          "OpenAI 兼容的 embeddings 接入点，例如 `https://api.openai.com/v1`",
         )}
       >
         <Input
           value={form.endpoint}
           onChange={(event) => onChangeForm((prev) => ({ ...prev, endpoint: event.target.value }))}
-          placeholder={tx("settings.image.embeddingEndpointPlaceholder", "例如 https://api.siliconflow.cn/v1/embeddings")}
+          placeholder={tx("settings.image.embeddingEndpointPlaceholder", "https://api.openai.com/v1")}
           className="h-8 w-[min(420px,80vw)] rounded-full text-[13px]"
         />
       </SettingsRow>
@@ -3958,6 +3969,254 @@ function AboutSettings() {
           <ReadOnlyRow title={tx("settings.about.knowledgeBaseAI", "知识库 AI")} value={licenseStatus === "active" ? tx("settings.values.enabled", "已启用") : tx("settings.values.disabled", "未启用")} />
         </SettingsGroup>
       </section>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Agent 搜索范围设置
+// ---------------------------------------------------------------------------
+
+const DEFAULT_EXCLUDED_EMAIL_FOLDERS = ["Junk", "Trash", "Drafts"];
+
+interface NotebookListItem {
+  id: string;
+  name: string;
+}
+
+interface NotesStateLike {
+  notebooks: NotebookListItem[];
+}
+
+function AgentScopeSettings() {
+  const { t } = useTranslation();
+  const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
+
+  const [scope, setScope] = useState<AgentSearchScope | null>(null);
+  const [notebooks, setNotebooks] = useState<NotebookListItem[]>([]);
+  const [vaultReady, setVaultReady] = useState<boolean>(false);
+  const [accounts, setAccounts] = useState<EmailAccount[]>([]);
+  const [foldersByAccount, setFoldersByAccount] = useState<Record<string, EmailFolder[]>>({});
+  const [saving, setSaving] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+
+  // 初次加载：读取配置 + 笔记本 + 邮件账号/文件夹
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const loadedScope = await getAgentSearchScope();
+        // 若 scope 文件不存在（全空默认），按用户预期把常见垃圾文件夹排除掉
+        const isEmpty =
+          loadedScope.notes.excludedNotebookIds.length === 0 &&
+          loadedScope.email.excludedFolders.length === 0;
+        const nextScope: AgentSearchScope = isEmpty
+          ? {
+              notes: { excludedNotebookIds: [] },
+              email: { excludedFolders: [...DEFAULT_EXCLUDED_EMAIL_FOLDERS] },
+            }
+          : loadedScope;
+        if (cancelled) return;
+        setScope(nextScope);
+        if (isEmpty) {
+          // 立即持久化，避免下次再触发默认初始化
+          void setAgentSearchScope(nextScope).catch(() => {});
+        }
+      } catch {
+        if (!cancelled) {
+          setScope({ notes: { excludedNotebookIds: [] }, email: { excludedFolders: [] } });
+        }
+      }
+
+      try {
+        const state = (await loadDesktopNotesState()) as NotesStateLike | null;
+        if (cancelled) return;
+        if (state && Array.isArray(state.notebooks)) {
+          setNotebooks(state.notebooks);
+          setVaultReady(true);
+        } else {
+          setVaultReady(false);
+        }
+      } catch {
+        if (!cancelled) setVaultReady(false);
+      }
+
+      try {
+        const accs = await listAccounts();
+        if (cancelled) return;
+        setAccounts(accs);
+        const foldersMap: Record<string, EmailFolder[]> = {};
+        await Promise.all(
+          accs.map(async (a) => {
+            try {
+              const folders = await getFolders(a.id);
+              foldersMap[a.id] = folders ?? [];
+            } catch {
+              foldersMap[a.id] = [];
+            }
+          }),
+        );
+        if (!cancelled) setFoldersByAccount(foldersMap);
+      } catch {
+        // 邮件模块可能未初始化
+      } finally {
+        if (!cancelled) setLoaded(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const toggleNotebook = async (notebookId: string) => {
+    if (!scope) return;
+    const excluded = new Set(scope.notes.excludedNotebookIds);
+    if (excluded.has(notebookId)) {
+      excluded.delete(notebookId);
+    } else {
+      excluded.add(notebookId);
+    }
+    const nextScope: AgentSearchScope = {
+      ...scope,
+      notes: { excludedNotebookIds: Array.from(excluded) },
+    };
+    setScope(nextScope);
+    setSaving(true);
+    try {
+      await setAgentSearchScope(nextScope);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const toggleEmailFolder = async (folder: string) => {
+    if (!scope) return;
+    const excluded = new Set(scope.email.excludedFolders);
+    if (excluded.has(folder)) {
+      excluded.delete(folder);
+    } else {
+      excluded.add(folder);
+    }
+    const nextScope: AgentSearchScope = {
+      ...scope,
+      email: { excludedFolders: Array.from(excluded) },
+    };
+    setScope(nextScope);
+    setSaving(true);
+    try {
+      await setAgentSearchScope(nextScope);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!loaded || !scope) {
+    return (
+      <div className="flex h-48 items-center justify-center rounded-[24px] border border-border/50 bg-card/75 text-sm text-muted-foreground shadow-[0_20px_70px_rgba(15,23,42,0.07)]">
+        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+        {tx("settings.status.loading", "Loading…")}
+      </div>
+    );
+  }
+
+  const notebookExcluded = new Set(scope.notes.excludedNotebookIds);
+  const folderExcluded = new Set(scope.email.excludedFolders);
+
+  return (
+    <div className="space-y-7">
+      <section>
+        <SettingsSectionTitle>笔记搜索范围</SettingsSectionTitle>
+        <SettingsGroup>
+          {vaultReady ? (
+            <>
+              <SettingsRow
+                title="根文件夹（未分类笔记）"
+                description="放在根目录的笔记，默认参与 Agent 检索。"
+              >
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    checked={!notebookExcluded.has("")}
+                    onCheckedChange={() => toggleNotebook("")}
+                  />
+                  <span className="text-[13px] text-muted-foreground">
+                    {notebookExcluded.has("") ? "已排除" : "允许检索"}
+                  </span>
+                </div>
+              </SettingsRow>
+              {notebooks.map((nb) => (
+                <SettingsRow
+                  key={nb.id}
+                  title={nb.name}
+                  description="笔记本下的所有笔记将受此设置控制。"
+                >
+                  <div className="flex items-center gap-2">
+                    <Checkbox
+                      checked={!notebookExcluded.has(nb.id)}
+                      onCheckedChange={() => toggleNotebook(nb.id)}
+                    />
+                    <span className="text-[13px] text-muted-foreground">
+                      {notebookExcluded.has(nb.id) ? "已排除" : "允许检索"}
+                    </span>
+                  </div>
+                </SettingsRow>
+              ))}
+            </>
+          ) : (
+            <SettingsRow
+              title="未配置笔记仓库"
+              description="请先在笔记模块中设置仓库路径后再管理搜索范围。"
+            />
+          )}
+        </SettingsGroup>
+      </section>
+
+      <section>
+        <SettingsSectionTitle>邮件搜索范围</SettingsSectionTitle>
+        <SettingsGroup>
+          {accounts.length === 0 ? (
+            <SettingsRow
+              title="未配置邮件账号"
+              description="请先在邮件模块中添加账号后再管理搜索范围。"
+            />
+          ) : (
+            accounts.map((account) => {
+              const folders = foldersByAccount[account.id] ?? [];
+              return (
+                <div key={account.id} className="px-4 py-3.5 sm:px-5">
+                  <div className="mb-2 text-[13px] font-medium text-foreground">
+                    {account.displayName || account.fromAddress || account.imapUsername}
+                  </div>
+                  <div className="grid gap-1.5 pl-1">
+                    {folders.length === 0 ? (
+                      <div className="text-[12px] text-muted-foreground">暂无文件夹缓存</div>
+                    ) : (
+                      folders.map((folder) => {
+                        const checked = !folderExcluded.has(folder.name);
+                        return (
+                          <label
+                            key={folder.name}
+                            className="flex cursor-pointer select-none items-center gap-2.5 rounded-md px-2 py-1 text-[13px] text-foreground/85 hover:bg-muted/45"
+                          >
+                            <Checkbox
+                              checked={checked}
+                              onCheckedChange={() => toggleEmailFolder(folder.name)}
+                            />
+                            <span className="truncate">{folder.name}</span>
+                          </label>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </SettingsGroup>
+      </section>
+
+      {saving ? (
+        <div className="text-[12px] text-muted-foreground">正在保存…</div>
+      ) : null}
     </div>
   );
 }

@@ -47,7 +47,6 @@ pub struct Notebook {
     pub name: String,
     #[serde(default)]
     pub description: String,
-    pub knowledge_base_enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -109,8 +108,6 @@ pub struct NoteSource {
 #[serde(rename_all = "camelCase")]
 struct VaultMeta {
     #[serde(default)]
-    notebooks: HashMap<String, VaultNotebookMeta>,
-    #[serde(default)]
     active_notebook_id: String,
     #[serde(default)]
     active_note_id: Option<String>,
@@ -118,11 +115,85 @@ struct VaultMeta {
     transformations: Vec<NoteTransformation>,
 }
 
+// ---------------------------------------------------------------------------
+// Agent search scope (exclusion lists for notes / email)
+// ---------------------------------------------------------------------------
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct VaultNotebookMeta {
+pub struct AgentSearchScope {
     #[serde(default)]
-    knowledge_base_enabled: bool,
+    pub notes: NotesSearchScope,
+    #[serde(default)]
+    pub email: EmailSearchScope,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotesSearchScope {
+    /// Notebook IDs excluded from Agent notes_search. Root notebook is "".
+    #[serde(default)]
+    pub excluded_notebook_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmailSearchScope {
+    /// Mailbox folder names excluded from Agent search_emails (e.g. "Junk", "Trash").
+    #[serde(default)]
+    pub excluded_folders: Vec<String>,
+}
+
+fn agent_scope_path() -> PathBuf {
+    app_data_dir().join("agent_search_scope.json")
+}
+
+fn read_agent_search_scope() -> AgentSearchScope {
+    let path = agent_scope_path();
+    match fs::read_to_string(&path) {
+        Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
+        Err(_) => AgentSearchScope::default(),
+    }
+}
+
+fn write_agent_search_scope(scope: &AgentSearchScope) -> Result<(), String> {
+    let path = agent_scope_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let json = serde_json::to_string_pretty(scope).map_err(|e| e.to_string())?;
+    fs::write(&path, json).map_err(|e| e.to_string())
+}
+
+/// Return the set of notebook IDs the Agent is allowed to search.
+/// Returns None when no exclusions are configured (meaning all notebooks allowed).
+pub fn agent_allowed_notebook_ids() -> Option<std::collections::HashSet<String>> {
+    let scope = read_agent_search_scope();
+    if scope.notes.excluded_notebook_ids.is_empty() {
+        return None;
+    }
+    // Read all notebooks from the vault and subtract excluded ones.
+    let vault = read_vault_path()?;
+    let meta = read_vault_meta(&vault).unwrap_or_default();
+    let (notebooks, _notes) = scan_vault(&vault, &meta).ok()?;
+    let excluded: std::collections::HashSet<String> =
+        scope.notes.excluded_notebook_ids.iter().cloned().collect();
+    let allowed: std::collections::HashSet<String> = notebooks
+        .iter()
+        .map(|n| n.id.clone())
+        .filter(|id| !excluded.contains(id))
+        .collect();
+    Some(allowed)
+}
+
+#[tauri::command]
+pub async fn get_agent_search_scope() -> Result<AgentSearchScope, String> {
+    Ok(read_agent_search_scope())
+}
+
+#[tauri::command]
+pub async fn set_agent_search_scope(scope: AgentSearchScope) -> Result<(), String> {
+    write_agent_search_scope(&scope)
 }
 
 // ---------------------------------------------------------------------------
@@ -453,10 +524,6 @@ fn migrate_legacy_sqlite_to_vault(vault: &Path) -> Result<Option<usize>, String>
     // Write vault.json with the migrated active pointers + transformations,
     // so the UI restores the user's last selection.
     let vault_meta = VaultMeta {
-        notebooks: notebook_names
-            .values()
-            .map(|name| (name.clone(), VaultNotebookMeta { knowledge_base_enabled: false }))
-            .collect(),
         active_notebook_id,
         active_note_id,
         transformations: transformations_raw
@@ -998,7 +1065,7 @@ pub(crate) fn parse_note_file(path: &Path, notebook_name: &str) -> Result<Operat
 /// notebook_id = "". Subdirectories become regular notebooks.
 fn scan_vault(
     vault: &Path,
-    meta: &VaultMeta,
+    _meta: &VaultMeta,
 ) -> Result<(Vec<Notebook>, Vec<OperationNote>), String> {
     let mut notebooks = Vec::new();
     let mut notes = Vec::new();
@@ -1033,16 +1100,10 @@ fn scan_vault(
             continue;
         }
 
-        let knowledge_base_enabled = meta
-            .notebooks
-            .get(&name)
-            .map(|m| m.knowledge_base_enabled)
-            .unwrap_or(false);
         notebooks.push(Notebook {
             id: name.clone(),
             name: name.clone(),
             description: String::new(),
-            knowledge_base_enabled,
         });
 
         if let Ok(md_entries) = fs::read_dir(&path) {
@@ -1316,18 +1377,6 @@ pub async fn notes_save_state(state: NotesState) -> Result<(), String> {
 
     // Persist vault metadata.
     let meta = VaultMeta {
-        notebooks: state
-            .notebooks
-            .iter()
-            .map(|n| {
-                (
-                    n.name.clone(),
-                    VaultNotebookMeta {
-                        knowledge_base_enabled: n.knowledge_base_enabled,
-                    },
-                )
-            })
-            .collect(),
         active_notebook_id: state.active_notebook_id.clone(),
         active_note_id: state.active_note_id.clone(),
         transformations: state.transformations.clone(),
@@ -1637,8 +1686,16 @@ pub async fn notes_search_all(
         None => return Ok(Vec::new()),
     };
     let notes = scan_vault_notes(&vault)?;
+    // Apply Agent search scope exclusion (None = no exclusions = all allowed).
+    let filtered: Vec<OperationNote> = match agent_allowed_notebook_ids() {
+        None => notes,
+        Some(allowed) => notes
+            .into_iter()
+            .filter(|n| allowed.contains(&n.notebook_id))
+            .collect(),
+    };
     Ok(search_notes_in_memory(
-        &notes,
+        &filtered,
         None,
         &query,
         limit.unwrap_or(20),

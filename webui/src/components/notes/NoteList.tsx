@@ -64,7 +64,6 @@ interface NoteListProps {
   selectedIds?: Set<string>;
   totalCount?: number;
   emptyLabel?: string;
-  knowledgeBaseEnabled?: boolean;
   /** Show the embedded toolbar header (sort + new note). Default true. */
   showHeader?: boolean;
   /** Controlled sort mode. If provided, overrides internal state. */
@@ -145,7 +144,6 @@ export function NoteList({
   selectedIds,
   totalCount = notes.length,
   emptyLabel = "当前笔记本还没有笔记。",
-  knowledgeBaseEnabled = false,
   showHeader = true,
   sortMode: controlledSortMode,
   onSortChange,
@@ -270,7 +268,6 @@ export function NoteList({
                   onDelete={onDelete}
                   notebooks={notebooks}
                   allNotes={allNotes}
-                  knowledgeBaseEnabled={knowledgeBaseEnabled}
                   onSetContextLevel={onSetContextLevel}
                   onToggleFavorite={onToggleFavorite}
                 />
@@ -420,7 +417,6 @@ export function NoteRow({
   onDelete,
   notebooks,
   allNotes = [],
-  knowledgeBaseEnabled,
   onSetContextLevel,
   onToggleFavorite,
 }: {
@@ -439,7 +435,6 @@ export function NoteRow({
   onDelete?: (note: OperationNote) => void;
   notebooks: Notebook[];
   allNotes?: OperationNote[];
-  knowledgeBaseEnabled: boolean;
   onSetContextLevel?: (note: OperationNote, level: NoteContextLevel) => void;
   onToggleFavorite?: (note: OperationNote) => void;
 }) {
@@ -570,13 +565,13 @@ export function NoteRow({
             复制路径
           </ContextMenuItem>
         ) : null}
-        {knowledgeBaseEnabled && onSetContextLevel ? (
+        {onSetContextLevel ? (
           <>
             <ContextMenuSeparator />
             <ContextMenuSub>
               <ContextMenuSubTrigger className="text-[13px]">
                 <BookOpen className="mr-2 h-3.5 w-3.5" />
-                知识库上下文
+                AI 上下文级别
               </ContextMenuSubTrigger>
               <ContextMenuSubContent className="w-44">
                 {CONTEXT_LEVEL_ORDER.map((level) => (

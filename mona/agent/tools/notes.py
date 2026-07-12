@@ -9,9 +9,7 @@ Design notes:
   existing ones (avoids accidental data loss and concurrent-edit races).
 - Image saving reuses the existing `notes_save_image` Tauri command so that
   vault/assets layout and orphan cleanup stay consistent.
-- notes_search tries hybrid (keyword + vector) retrieval first when an embedding
-  config is persisted in the vault, and gracefully falls back to the Rust-side
-  substring search otherwise.
+- notes_search uses Rust-side substring search via Tauri IPC.
 """
 
 from __future__ import annotations
@@ -55,17 +53,6 @@ def _get_vault_path() -> Path | None:
 def _vault_ready() -> bool:
     """Check whether the notes vault is configured."""
     return _get_vault_path() is not None
-
-
-def _load_vault_embedding_config(vault: Path) -> Any | None:
-    """Load persisted embedding config from <vault>/.mona/embedding.json."""
-    try:
-        from mona.api.notes_kb_handlers import load_embedding_config
-
-        return load_embedding_config(vault)
-    except Exception as e:
-        logger.debug(f"[notes_search] could not load embedding config: {e}")
-        return None
 
 
 # ---------------------------------------------------------------------------
@@ -178,9 +165,7 @@ class NotesSearchTool(Tool):
         return (
             "Search all notes in the vault by keyword. Returns matching notes with "
             "id, title, snippet, and notebook name. Use this to find existing notes "
-            "before reading their full content with notes_read. When the vault has "
-            "vector embeddings configured, this automatically uses hybrid "
-            "(keyword + vector) retrieval for better semantic matches."
+            "before reading their full content with notes_read."
         )
 
     async def execute(self, **kwargs: Any) -> Any:
@@ -189,8 +174,7 @@ class NotesSearchTool(Tool):
             return "Error: query is required."
         limit = kwargs.get("limit")
 
-        vault = _get_vault_path()
-        if vault is None:
+        if not _vault_ready():
             return "Error: Notes vault is not configured."
 
         limit_int = 10
@@ -200,20 +184,7 @@ class NotesSearchTool(Tool):
             except (TypeError, ValueError):
                 pass
 
-        # Try hybrid search first when an embedding config is persisted.
-        cfg = _load_vault_embedding_config(vault)
-        if cfg is not None and cfg.enabled and cfg.endpoint and cfg.model:
-            try:
-                from mona.notes_kb.search import search_notes_hybrid
-
-                hybrid = await search_notes_hybrid(vault, query, cfg, count=limit_int)
-                results = hybrid.get("results", [])
-                if results:
-                    return self._format_hybrid_results(query, results, hybrid.get("mode", "hybrid"))
-            except Exception as e:
-                logger.debug(f"[notes_search] hybrid search failed, falling back: {e}")
-
-        # Fallback: Rust-side substring search via Tauri IPC.
+        # Rust-side substring search via Tauri IPC.
         args: dict[str, Any] = {"query": query}
         if limit is not None:
             args["limit"] = limit_int
@@ -237,23 +208,6 @@ class NotesSearchTool(Tool):
             lines.append(f"\n{i}. [{note_id}] {title}" + (f" ({notebook})" if notebook else ""))
             if snippet:
                 lines.append(f"   {snippet}")
-        return "\n".join(lines)
-
-    @staticmethod
-    def _format_hybrid_results(query: str, results: list, mode: str) -> str:
-        """Format hybrid search results for the agent."""
-        lines = [f"Found {len(results)} note(s) matching '{query}' ({mode} search):"]
-        for i, item in enumerate(results, 1):
-            if not isinstance(item, dict):
-                continue
-            path = item.get("path", "")
-            note_id = path.replace(".md", "").split("/")[-1] if path else "?"
-            title = item.get("title", "(untitled)")
-            snippet = item.get("snippet", "")
-            score = item.get("score", 0.0)
-            lines.append(f"\n{i}. [{note_id}] {title} (score={score:.3f})")
-            if snippet:
-                lines.append(f"   {snippet[:200]}")
         return "\n".join(lines)
 
 

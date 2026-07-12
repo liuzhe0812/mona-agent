@@ -134,13 +134,9 @@ export function ThreadShell({
   } = useSessionHistory(historyKey);
   const { client, modelName, token } = useClient();
   const kbProjectsRaw = useKbStore((s) => s.projects);
-  const notebookKbList = useKbStore((s) => s.notebookKbList);
   const kbProjects = useMemo(
-    () => [
-      ...kbProjectsRaw.map((p) => ({ id: p.id, name: p.name, isNotebook: false })),
-      ...notebookKbList.map((n) => ({ id: `notebook:${n.id}`, name: n.name, isNotebook: true })),
-    ],
-    [kbProjectsRaw, notebookKbList],
+    () => kbProjectsRaw.map((p) => ({ id: p.id, name: p.name })),
+    [kbProjectsRaw],
   );
   const selectedKbForChat = useKbStore((s) => s.selectedKbForChat);
   const setSelectedKbForChat = useKbStore((s) => s.setSelectedKbForChat);
@@ -148,12 +144,6 @@ export function ThreadShell({
     (s) => {
       const p = s.projects.find((p) => p.id === s.selectedKbForChat);
       if (p) return p.name;
-      // Check notebook knowledge bases
-      if (s.selectedKbForChat?.startsWith("notebook:")) {
-        const nbId = s.selectedKbForChat.slice("notebook:".length);
-        const nb = s.notebookKbList.find((n) => n.id === nbId);
-        if (nb) return nb.name;
-      }
       return null;
     },
   );
@@ -419,19 +409,10 @@ export function ThreadShell({
     async (content: string): Promise<string> => {
       if (!selectedKbForChat) return content;
       try {
-        if (selectedKbForChat.startsWith("notebook:")) {
-          const notebookId = selectedKbForChat.slice("notebook:".length);
-          const { searchNotebookNotes } = await import("@/lib/tauri");
-          const { formatNotebookBaseContext } = await import("@/components/notes/notes-ai");
-          const results = await searchNotebookNotes(notebookId, content);
-          const kbContext = formatNotebookBaseContext(results);
-          if (kbContext) return `${kbContext}\n\n---\n\n${content}`;
-        } else {
-          const ragContext = await retrieveKbContext(selectedKbForChat, content);
-          if (ragContext) {
-            const systemPrompt = buildKbSystemPrompt(ragContext);
-            return `${systemPrompt}\n\n---\n\n${content}`;
-          }
+        const ragContext = await retrieveKbContext(selectedKbForChat, content);
+        if (ragContext) {
+          const systemPrompt = buildKbSystemPrompt(ragContext);
+          return `${systemPrompt}\n\n---\n\n${content}`;
         }
       } catch (err) {
         console.warn("[ThreadShell] KB RAG retrieval failed:", err);

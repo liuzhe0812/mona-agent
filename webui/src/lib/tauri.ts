@@ -282,6 +282,23 @@ export async function pickNotesVaultDirectory(): Promise<string | null> {
 }
 
 // ---------------------------------------------------------------------------
+// Agent search scope (notes / email exclusion lists)
+// ---------------------------------------------------------------------------
+
+export interface AgentSearchScope {
+  notes: { excludedNotebookIds: string[] };
+  email: { excludedFolders: string[] };
+}
+
+export async function getAgentSearchScope(): Promise<AgentSearchScope> {
+  return invoke<AgentSearchScope>("get_agent_search_scope");
+}
+
+export async function setAgentSearchScope(scope: AgentSearchScope): Promise<void> {
+  return invoke<void>("set_agent_search_scope", { scope });
+}
+
+// ---------------------------------------------------------------------------
 // Notes bidirectional links (Obsidian-style [[wiki links]])
 // ---------------------------------------------------------------------------
 

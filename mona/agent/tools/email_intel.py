@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 from typing import Any
+from urllib.parse import quote
 
 from loguru import logger
 
@@ -42,6 +43,24 @@ class _EmailToolBase(Tool):
         return cls()
 
 
+def _read_excluded_email_folders() -> set[str]:
+    """读取全局 Agent 搜索范围配置中排除的邮件文件夹集合。
+
+    通过 Tauri IPC 调用 Rust 命令读取配置；调用失败时返回空集（默认全开放）。
+    """
+    try:
+        from mona.agent.tools.tauri_ipc import tauri_invoke
+
+        scope = tauri_invoke("get_agent_search_scope")
+        if isinstance(scope, dict):
+            email_scope = scope.get("email") or {}
+            folders = email_scope.get("excludedFolders") or []
+            return {str(f) for f in folders}
+    except Exception as e:
+        logger.debug(f"[email_search] could not load excluded folders: {e}")
+    return set()
+
+
 @tool_parameters(
     tool_parameters_schema(
         account_id=StringSchema("限定账号 ID（可选，不填则搜索所有账号）"),
@@ -69,8 +88,11 @@ class EmailSearchTool(_EmailToolBase):
     def description(self) -> str:
         return (
             "搜索本地邮件数据库。支持按关键词、发件人、日期范围、文件夹、"
-            "已读/星标状态等条件筛选。返回邮件列表（不含正文，节省 token）。"
-            "用 email_read 读取具体邮件全文。"
+            "已读/星标状态等条件筛选。返回邮件列表（不含正文，节省 token），"
+            "每封邮件附带一个 #mona-email: 链接。"
+            "重要：在回复中引用邮件时，必须用 [显示文字](链接) 格式的 markdown 链接，"
+            "链接直接使用工具返回的 #mona-email:... 格式，"
+            "用户点击后会在新窗口预览邮件内容。不要只输出 UID 或纯文本。"
         )
 
     @property
@@ -114,6 +136,14 @@ class EmailSearchTool(_EmailToolBase):
             logger.exception("email_search failed")
             return f"Error: 搜索邮件失败 - {e}"
 
+        # Apply Agent search scope exclusion.
+        # If the user explicitly specified a folder, respect that choice (even if
+        # the folder is in the exclusion list). Otherwise, filter out excluded folders.
+        if not folder:
+            excluded = _read_excluded_email_folders()
+            if excluded:
+                results = [m for m in results if m.get("folder") not in excluded]
+
         if not results:
             return "未找到匹配的邮件。"
 
@@ -123,13 +153,26 @@ class EmailSearchTool(_EmailToolBase):
             read_mark = " " if msg["isRead"] else "●"
             star = "★" if msg["isStarred"] else " "
             attach = "📎" if msg["hasAttachments"] else " "
+            # 生成可点击的邮件链接，用 hash 锚点格式（sanitize 不会剥离）
+            # 参数需 URL 编码，避免中文 folder 导致 markdown 解析失败
+            link = (
+                f"#mona-email:accountId={quote(msg['accountId'], safe='')}"
+                f"&uid={quote(str(msg['uid']), safe='')}"
+                f"&folder={quote(msg['folder'], safe='')}"
+            )
             lines.append(
                 f"{i}. [{read_mark}{star}{attach}] {msg['subject']}\n"
                 f"   发件人: {msg.get('fromName') or msg['fromAddress']} <{msg['fromAddress']}>\n"
                 f"   日期: {msg['date']}\n"
                 f"   文件夹: {msg['folder']}\n"
-                f"   UID: {msg['uid']} | 账号: {msg['accountId']}"
+                f"   UID: {msg['uid']} | 账号: {msg['accountId']}\n"
+                f"   链接: {link}"
             )
+        lines.append(
+            "\n提示：在回复中引用邮件时，用 [显示文字](链接) 格式的 markdown 链接，"
+            "链接直接使用上面的 #mona-email:... 格式，"
+            "用户点击后会在新窗口预览邮件内容。"
+        )
         return "\n".join(lines)
 
 
@@ -153,9 +196,12 @@ class EmailReadTool(_EmailToolBase):
     @property
     def description(self) -> str:
         return (
-            "读取单封邮件的完整内容（主题、发件人、正文等）。"
+            "读取单封邮件的完整内容（主题、发件人、正文等），末尾返回一个 #mona-email: 链接。"
             "如果邮件已被 AI 分析过，同时返回分析结果（摘要、分类、意图等）。"
             "先用 email_search 找到邮件，再用本工具读取全文。"
+            "重要：回复用户时，必须用 [显示文字](链接) 格式输出邮件链接，"
+            "链接直接使用工具返回的 #mona-email:... 格式，"
+            "让用户点击后在新窗口预览。不要只复述正文内容。"
         )
 
     @property
@@ -215,6 +261,17 @@ class EmailReadTool(_EmailToolBase):
                     f"情绪: {analysis['sentiment']}",
                 ])
 
+        link = (
+            f"#mona-email:accountId={quote(account_id, safe='')}"
+            f"&uid={quote(uid, safe='')}"
+            f"&folder={quote(folder, safe='')}"
+        )
+        lines.extend([
+            "",
+            "--- 邮件链接 ---",
+            link,
+            "提示：回复用户时，用 [显示文字](链接) 格式引用此邮件，链接直接使用上面的 #mona-email:... 格式，用户点击后会在新窗口预览。必须输出链接，不要只复述正文。",
+        ])
         return "\n".join(lines)
 
 

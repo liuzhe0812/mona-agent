@@ -7,7 +7,6 @@ import {
   ChevronRight,
   Copy,
   Crosshair,
-  Database,
   Download,
   FileCode2,
   FileText,
@@ -59,7 +58,6 @@ import {
   setNotesVaultPath,
 } from "@/lib/tauri";
 import { useLicense } from "@/hooks/useLicense";
-import { useKbStore } from "@/stores/kb-store";
 
 import { GlobalSearchDialog } from "./GlobalSearchDialog";
 import { ConfirmDialog, PromptDialog, ReplaceDialog, TemplatePickerDialog } from "./NotesDialogs";
@@ -566,14 +564,6 @@ export function NotesView({
     [notes, selectNoteInWorkspace],
   );
 
-  // Sync notebook knowledge bases to kb-store for chat selector
-  const setNotebookKbList = useKbStore((s) => s.setNotebookKbList);
-  useEffect(() => {
-    const kbNotebooks = notebooks
-      .filter((n) => n.knowledgeBaseEnabled)
-      .map((n) => ({ id: n.id, name: n.name }));
-    setNotebookKbList(kbNotebooks);
-  }, [notebooks, setNotebookKbList]);
 
   useEffect(() => {
     if (!activeNote && notebookNotes[0]) {
@@ -745,19 +735,6 @@ export function NotesView({
       ),
     );
   }, [notebooks]);
-
-  const toggleNotebookKnowledgeBase = useCallback(
-    (notebookId: string, knowledgeBaseEnabled: boolean) => {
-      setNotebooks((current) =>
-        current.map((notebook) =>
-          notebook.id === notebookId
-            ? { ...notebook, knowledgeBaseEnabled }
-            : notebook,
-        ),
-      );
-    },
-    [],
-  );
 
   const deleteNotebook = useCallback((notebookId: string) => {
     if (notebookId === "") {
@@ -1751,7 +1728,6 @@ export function NotesView({
                             allNotes={notes}
                             onDropNote={dropNoteById}
                             onRenameNotebook={renameNotebook}
-                            onToggleKnowledgeBase={toggleNotebookKnowledgeBase}
                             onDeleteNotebook={deleteNotebook}
                           />
                         );
@@ -2287,7 +2263,6 @@ function RootNotesList({
             onDelete={onDelete}
             notebooks={notebooks}
             allNotes={allNotes}
-            knowledgeBaseEnabled={false}
             onSetContextLevel={onSetContextLevel}
             onToggleFavorite={onToggleFavorite}
           />
@@ -2365,7 +2340,6 @@ function FavoriteNotesList({
             onDelete={onDelete}
             notebooks={notebooks}
             allNotes={allNotes}
-            knowledgeBaseEnabled={false}
             onSetContextLevel={onSetContextLevel}
             onToggleFavorite={onToggleFavorite}
           />
@@ -2406,7 +2380,6 @@ interface NotebookSectionProps {
   allNotes?: OperationNote[];
   onDropNote?: (noteId: string, notebookId: string) => void;
   onRenameNotebook: (notebookId: string) => void;
-  onToggleKnowledgeBase: (notebookId: string, enabled: boolean) => void;
   onDeleteNotebook: (notebookId: string) => void;
 }
 
@@ -2441,7 +2414,6 @@ function NotebookSection({
   allNotes = [],
   onDropNote,
   onRenameNotebook,
-  onToggleKnowledgeBase,
   onDeleteNotebook,
 }: NotebookSectionProps) {
   const handleDragOver = (e: React.DragEvent<HTMLButtonElement>) => {
@@ -2487,9 +2459,6 @@ function NotebookSection({
             <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium">
               {notebook.name}
             </span>
-            {notebook.knowledgeBaseEnabled ? (
-              <Database className="h-3 w-3 shrink-0 text-muted-foreground/70" />
-            ) : null}
             <span className="shrink-0 text-[10.5px] tabular-nums text-muted-foreground/70">
               {totalCount}
             </span>
@@ -2513,12 +2482,6 @@ function NotebookSection({
             <Pencil className="mr-2 h-3.5 w-3.5" />
             重命名
           </ContextMenuItem>
-          <ContextMenuItem
-            onSelect={() => onToggleKnowledgeBase(notebook.id, !notebook.knowledgeBaseEnabled)}
-          >
-            <Database className="mr-2 h-3.5 w-3.5" />
-            {notebook.knowledgeBaseEnabled ? "取消知识库" : "建为知识库"}
-          </ContextMenuItem>
           <ContextMenuSeparator />
           <ContextMenuItem
             onSelect={() => onDeleteNotebook(notebook.id)}
@@ -2539,7 +2502,6 @@ function NotebookSection({
             onSelectionChange={onSelectionChange}
             totalCount={totalCount}
             emptyLabel={searchQuery ? "没有匹配的笔记。" : "还没有笔记。"}
-            knowledgeBaseEnabled={notebook.knowledgeBaseEnabled}
             showHeader={false}
             sortMode={sortMode}
             onSortChange={onSortChange}
