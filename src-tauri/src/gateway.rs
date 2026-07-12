@@ -251,11 +251,6 @@ impl GatewayManager {
         }
     }
 
-    #[allow(dead_code)]
-    pub fn port(&self) -> Option<u16> {
-        let guard = self.process.lock().ok()?;
-        guard.as_ref().map(|p| p.port)
-    }
 }
 
 fn gateway_log_path() -> std::path::PathBuf {

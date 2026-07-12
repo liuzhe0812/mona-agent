@@ -41,10 +41,6 @@ impl ConnectionManager {
         }
     }
 
-    pub fn connections(&self) -> &HashMap<String, ManagedConnection> {
-        &self.connections
-    }
-
     pub fn contains_connection(&self, id: &str) -> bool {
         self.connections.contains_key(id)
     }

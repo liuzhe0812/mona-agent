@@ -22,9 +22,6 @@ struct NotificationsResponse {
 struct NotificationEntry {
     title: String,
     body: String,
-    #[serde(rename = "item_id")]
-    #[allow(dead_code)]
-    item_id: Option<String>,
 }
 
 /// Start a background polling task that fires notification windows for

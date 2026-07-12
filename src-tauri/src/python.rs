@@ -22,11 +22,6 @@ pub fn gateway_exe_path() -> PathBuf {
     gateway_deploy_dir().join(GATEWAY_DIR_NAME).join(GATEWAY_EXE_NAME)
 }
 
-/// Check if gateway has been deployed
-pub fn is_gateway_deployed() -> bool {
-    gateway_exe_path().exists()
-}
-
 /// Deploy the mona-gateway directory from bundled resources to app data dir.
 /// This copies the entire directory (exe + _internal/) from the Tauri resource
 /// directory to a stable location. Re-deploys if the bundled version differs

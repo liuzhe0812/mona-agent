@@ -703,12 +703,10 @@ pub fn run() {
                 }
             });
 
-            let mut _has_md_file = false;
             for arg in std::env::args().skip(1) {
                 let lower = arg.to_lowercase();
                 if lower.ends_with(".md") || lower.ends_with(".markdown") {
                     emit_md_file_open(app.handle(), &arg);
-                    _has_md_file = true;
                 }
             }
 
