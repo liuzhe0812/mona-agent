@@ -1,4 +1,4 @@
-﻿# mona Skills
+# mona Skills
 
 This directory contains built-in skills that extend mona's capabilities.
 
@@ -21,12 +21,28 @@ The skill format and metadata structure follow OpenClaw's conventions to maintai
 
 ## Available Skills
 
+<!-- NOTE: This list is manually maintained. When adding a new skill directory
+     with a SKILL.md file, add a corresponding row here. A test in
+     tests/agent/test_skills_readme.py verifies this list stays in sync. -->
+
 | Skill | Description |
 |-------|-------------|
-| `github` | Interact with GitHub using the `gh` CLI |
-| `weather` | Get weather info using wttr.in and Open-Meteo |
-| `summarize` | Summarize URLs, files, and YouTube videos |
-| `tmux` | Remote-control tmux sessions |
-| `clawhub` | Search and install skills from ClawHub registry |
-| `skill-creator` | Create new skills |
-| `long-goal` | Sustained objectives: `long_task`, `complete_goal`, idempotent goals, modular project work, early research |
+| `clawhub` | Search and install agent skills from ClawHub, the public skill registry. |
+| `cron` | Schedule reminders and recurring tasks. |
+| `doc-writing-guide` | Primary skill for document and content writing (PRD, product requirements, MVP spec, research report, etc.). |
+| `docx` | Comprehensive document creation, editing, and analysis with tracked changes, comments, and formatting preservation. |
+| `github` | Interact with GitHub using the `gh` CLI. |
+| `html-report` | Create self-contained HTML deliverables — research reports, whitepapers, PRDs, dashboards, portfolios, etc. |
+| `image-generation` | Generate images and iteratively edit saved image artifacts. |
+| `long-goal` | Sustained objectives: `long_task`, `complete_goal`, idempotent goals, modular project work, early research. |
+| `memory` | Two-layer memory system with Dream-managed knowledge files. |
+| `mona-flowchart` | AI-driven flowchart generation using draw.io. Converts text descriptions into structured flowcharts. |
+| `mona-ppt` | AI-driven multi-format SVG content generation system. Exports to PPTX through multi-role collaboration. |
+| `mona-video` | AI-driven video generation system using Hyperframes. Renders HTML+GSAP animation compositions to MP4. |
+| `my` | Check and set the agent's own runtime state (model, iterations, context window, token usage, web config). |
+| `pdf` | Comprehensive PDF manipulation toolkit for extracting text/tables, creating, merging, and splitting PDFs. |
+| `skill-creator` | Create or update AgentSkills. |
+| `summarize` | Summarize or extract text/transcripts from URLs, podcasts, and local files (YouTube/video transcription fallback). |
+| `tmux` | Remote-control tmux sessions for interactive CLIs. |
+| `update-setup` | One-time setup wizard for the mona upgrade skill. |
+| `weather` | Get current weather and forecasts (no API key required). |
