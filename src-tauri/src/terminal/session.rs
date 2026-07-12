@@ -1,8 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
-use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
@@ -76,113 +74,9 @@ impl SessionHandle {
     }
 }
 
-pub struct SharedSshConnection {
-    pub handle: Arc<tokio::sync::Mutex<Option<russh::client::Handle<crate::terminal::ssh::client::SshClientHandler>>>>,
-    pub ref_count: Arc<AtomicUsize>,
-    pub host: String,
-    pub port: u16,
-    pub username: String,
-}
-
-impl SharedSshConnection {
-    pub fn new(
-        handle: russh::client::Handle<crate::terminal::ssh::client::SshClientHandler>,
-        host: String,
-        port: u16,
-        username: String,
-    ) -> Self {
-        Self {
-            handle: Arc::new(tokio::sync::Mutex::new(Some(handle))),
-            ref_count: Arc::new(AtomicUsize::new(1)),
-            host,
-            port,
-            username,
-        }
-    }
-
-    pub fn inc_ref(&self) {
-        self.ref_count.fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub fn dec_ref(&self) -> usize {
-        self.ref_count.fetch_sub(1, Ordering::SeqCst)
-    }
-
-    pub fn ref_count(&self) -> usize {
-        self.ref_count.load(Ordering::Relaxed)
-    }
-}
-
-fn connection_key(host: &str, port: u16, username: &str) -> String {
-    format!("{}@{}:{}", username, host, port)
-}
-
-pub struct ConnectionPool {
-    connections: DashMap<String, Arc<SharedSshConnection>>,
-}
-
-impl ConnectionPool {
-    pub fn new() -> Self {
-        Self {
-            connections: DashMap::new(),
-        }
-    }
-
-    pub fn get_or_create(
-        &self,
-        host: &str,
-        port: u16,
-        username: &str,
-        handle: russh::client::Handle<crate::terminal::ssh::client::SshClientHandler>,
-    ) -> Arc<SharedSshConnection> {
-        let key = connection_key(host, port, username);
-        self.connections
-            .entry(key)
-            .or_insert_with(|| {
-                Arc::new(SharedSshConnection::new(
-                    handle,
-                    host.to_string(),
-                    port,
-                    username.to_string(),
-                ))
-            })
-            .value()
-            .clone()
-    }
-
-    pub fn get(
-        &self,
-        host: &str,
-        port: u16,
-        username: &str,
-    ) -> Option<Arc<SharedSshConnection>> {
-        let key = connection_key(host, port, username);
-        self.connections.get(&key).map(|r| r.value().clone())
-    }
-
-    pub fn release(&self, host: &str, port: u16, username: &str) -> bool {
-        let key = connection_key(host, port, username);
-        if let Some(conn) = self.connections.get(&key) {
-            let remaining = conn.dec_ref();
-            if remaining == 0 {
-                drop(conn);
-                self.connections.remove(&key);
-                return true;
-            }
-        }
-        false
-    }
-
-    pub fn contains(&self, host: &str, port: u16, username: &str) -> bool {
-        let key = connection_key(host, port, username);
-        self.connections.contains_key(&key)
-    }
-}
-
 struct SessionManagerInner {
     sessions: RwLock<HashMap<String, Session>>,
     handles: RwLock<HashMap<String, SessionHandle>>,
-    connection_pool: ConnectionPool,
     max_sessions: usize,
 }
 
@@ -197,7 +91,6 @@ impl SessionManager {
             inner: Arc::new(SessionManagerInner {
                 sessions: RwLock::new(HashMap::new()),
                 handles: RwLock::new(HashMap::new()),
-                connection_pool: ConnectionPool::new(),
                 max_sessions,
             }),
         }
@@ -259,9 +152,5 @@ impl SessionManager {
     pub async fn list_sessions(&self) -> Vec<Session> {
         let sessions = self.inner.sessions.read().await;
         sessions.values().cloned().collect()
-    }
-
-    pub fn pool(&self) -> &ConnectionPool {
-        &self.inner.connection_pool
     }
 }
