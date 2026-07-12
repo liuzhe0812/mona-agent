@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
@@ -67,7 +67,7 @@ async def test_outbound_no_longer_carries_generated_media(
         tools_config=ToolsConfig(
             image_generation=ImageGenerationToolConfig(enabled=True),
         ),
-        image_generation_provider_config=ProviderConfig(api_key="sk-or-test"),
+        image_generation_provider_configs={"openrouter": ProviderConfig(api_key="sk-or-test")},
     )
     loop.consolidator.maybe_consolidate_by_tokens = AsyncMock(return_value=False)  # type: ignore[method-assign]
 
