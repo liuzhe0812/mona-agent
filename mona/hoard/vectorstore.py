@@ -140,31 +140,3 @@ async def search_vectors(
     except Exception as e:
         logger.debug(f"[hoard-vector] search failed: {e}")
         return []
-
-
-def delete_vector(hoard_id: str, *, db_path: Path | str | None = None) -> None:
-    """Delete a hoard item's vector."""
-    path = _resolve_db_path(db_path)
-    try:
-        conn = sqlite3.connect(str(path))
-        try:
-            conn.execute(f"DELETE FROM {TABLE} WHERE hoard_id = ?", (hoard_id,))
-            conn.commit()
-        finally:
-            conn.close()
-    except Exception as e:
-        logger.debug(f"[hoard-vector] delete failed for {hoard_id}: {e}")
-
-
-def count_vectors(*, db_path: Path | str | None = None) -> int:
-    """Return the number of vectors in the store."""
-    path = _resolve_db_path(db_path)
-    try:
-        conn = sqlite3.connect(str(path))
-        try:
-            row = conn.execute(f"SELECT COUNT(*) FROM {TABLE}").fetchone()
-            return row[0] if row else 0
-        finally:
-            conn.close()
-    except Exception:
-        return 0

@@ -7,32 +7,7 @@ the backend API handlers.
 
 from __future__ import annotations
 
-import re
 from typing import Any
-
-
-def parse_file_blocks(text: str) -> list[tuple[str, str]]:
-    """Parse ---FILE: path--- ... ---ENDFILE--- blocks from LLM output.
-
-    Tolerant of CRLF, extra whitespace, and case variations.
-    Returns list of (path, content) tuples.
-    """
-    text = text.replace("\r\n", "\n")
-    results: list[tuple[str, str]] = []
-
-    opener = re.compile(r"^---\s*FILE:\s*(.+?)\s*---\s*$", re.MULTILINE | re.IGNORECASE)
-    closer = re.compile(r"^---\s*END\s*FILE\s*---\s*$", re.MULTILINE | re.IGNORECASE)
-
-    for match in opener.finditer(text):
-        path = match.group(1).strip()
-        start = match.end()
-        close_match = closer.search(text, start)
-        if not close_match:
-            continue
-        content = text[start:close_match.start()].strip()
-        results.append((path, content))
-
-    return results
 
 
 def parse_frontmatter(content: str) -> tuple[dict[str, Any], str]:
