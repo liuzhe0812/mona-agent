@@ -106,6 +106,13 @@ temp/
 *.tmp
 exp/
 
+# 临时调试/部署脚本（禁止进入版本库，避免明文凭据泄露）
+tmp_*.py
+_tmp_*.py
+_tmp_*.ps1
+deploy_auth.py
+start_gateway_stt.py
+
 # CodeGraph runtime
 .codegraph/daemon.pid
 
