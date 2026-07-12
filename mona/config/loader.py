@@ -1,4 +1,4 @@
-﻿"""Configuration loading utilities."""
+"""Configuration loading utilities."""
 
 import json
 import os
@@ -123,17 +123,6 @@ def _resolve_in_place(obj: Any) -> Any:
     if isinstance(obj, list):
         resolved = [_resolve_in_place(v) for v in obj]
         return resolved if any(nv is not ov for nv, ov in zip(resolved, obj)) else obj
-    return obj
-
-
-def _resolve_env_vars(obj: object) -> object:
-    """Recursively resolve ``${VAR}`` patterns in plain strings/dicts/lists."""
-    if isinstance(obj, str):
-        return _ENV_REF_PATTERN.sub(_env_replace, obj)
-    if isinstance(obj, dict):
-        return {k: _resolve_env_vars(v) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [_resolve_env_vars(v) for v in obj]
     return obj
 
 
