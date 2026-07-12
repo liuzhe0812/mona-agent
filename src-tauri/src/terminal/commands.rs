@@ -40,7 +40,7 @@ pub async fn ssh_connect(
     let session_type = match config.protocol {
         Protocol::Ssh => SessionType::Ssh,
         Protocol::Sftp => SessionType::Sftp,
-        _ => SessionType::Ssh,
+        Protocol::Ftp | Protocol::Local | Protocol::Vnc => SessionType::Ssh,
     };
 
     if session_type == SessionType::Sftp {
@@ -188,7 +188,7 @@ async fn ssh_connect_with_id_inner(
     let session_type = match config.protocol {
         Protocol::Ssh => SessionType::Ssh,
         Protocol::Sftp => SessionType::Sftp,
-        _ => SessionType::Ssh,
+        Protocol::Ftp | Protocol::Local | Protocol::Vnc => SessionType::Ssh,
     };
 
     if session_type == SessionType::Sftp {
@@ -382,7 +382,7 @@ pub async fn ssh_reconnect(
     let session_type = match config.protocol {
         Protocol::Ssh => SessionType::Ssh,
         Protocol::Sftp => SessionType::Sftp,
-        _ => SessionType::Ssh,
+        Protocol::Ftp | Protocol::Local | Protocol::Vnc => SessionType::Ssh,
     };
 
     let client = SshClient::connect(
