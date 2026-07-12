@@ -82,11 +82,7 @@ export const DEFAULT_CONFIG: PptConfig = {
   mergeParagraphs: false,
 };
 
-interface PptMakerViewProps {
-  onBack: () => void;
-}
-
-export function PptMakerView({ onBack: _onBack }: PptMakerViewProps) {
+export function PptMakerView() {
   const { client, token } = useClient();
   const [phase, setPhase] = useState<PptPhase>("config");
   const [config, setConfig] = useState<PptConfig>(DEFAULT_CONFIG);

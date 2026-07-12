@@ -46,11 +46,7 @@ const DIAGRAM_TYPE_LABEL: Record<DiagramType, string> = {
   mindmap: "思维导图",
 };
 
-interface FlowchartMakerViewProps {
-  onBack: () => void;
-}
-
-export function FlowchartMakerView(_: FlowchartMakerViewProps) {
+export function FlowchartMakerView() {
   const { client, token } = useClient();
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>("config");
   const [description, setDescription] = useState("");
@@ -478,5 +474,3 @@ function baseString(data: string): string {
   const idx = data.indexOf(",");
   return idx >= 0 ? data.slice(idx + 1) : data;
 }
-
-export type { FlowchartMakerViewProps };

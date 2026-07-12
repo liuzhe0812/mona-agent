@@ -46,18 +46,93 @@ def _connect() -> sqlite3.Connection:
     return conn
 
 
-def _row_to_message(row: sqlite3.Row) -> dict[str, Any]:
-    """将数据库行转换为邮件 dict（字段名与 EmailMessage 一致，camelCase）。"""
-    import json
+def _mail_root() -> Path:
+    """获取 mail 目录路径（与 Rust mail_root 一致）。"""
+    app_data_dir = os.environ.get("MONA_APP_DATA_DIR")
+    if app_data_dir:
+        return Path(app_data_dir) / "mail"
+    return get_data_dir() / "mail"
 
-    attachments_json = row["attachments_json"] if "attachments_json" in row.keys() else None
-    attachments = []
-    if attachments_json:
+
+def _read_eml_body(eml_path: str) -> tuple[str, str | None]:
+    """读取 .eml 文件并解析正文。
+
+    与 Rust 侧 extract_bodies 对齐：优先取 text/plain，其次 text/html。
+    处理 GBK/GB18030 编码的邮件（charset 声明为 gb2312 但含"喆"等扩展字符时回退 gb18030）。
+
+    Returns:
+        (body_text, body_html) — body_html 可能为 None
+    """
+    if not eml_path:
+        return ("", None)
+
+    abs_path = _mail_root() / eml_path
+    if not abs_path.exists():
+        return ("", None)
+
+    try:
+        raw = abs_path.read_bytes()
+    except OSError as e:
+        logger.warning("读取 .eml 失败: {} {}", abs_path, e)
+        return ("", None)
+
+    import email
+    from email import policy
+
+    try:
+        msg = email.message_from_bytes(raw, policy=policy.default)
+    except Exception as e:
+        logger.warning("解析 .eml 失败: {} {}", abs_path, e)
+        return ("", None)
+
+    body_text = ""
+    body_html: str | None = None
+
+    # 遍历 multipart，提取 text/plain 和 text/html
+    for part in msg.walk():
+        content_type = part.get_content_type()
+        if content_type not in ("text/plain", "text/html"):
+            continue
+        if part.is_multipart():
+            continue
         try:
-            attachments = json.loads(attachments_json)
-        except (json.JSONDecodeError, TypeError):
-            attachments = []
+            payload = part.get_payload(decode=True)
+        except Exception:
+            continue
+        if payload is None:
+            continue
 
+        # 尝试按声明的 charset 解码，gb2312/gbk 统一回退 gb18030（含"喆"等扩展字符）
+        charset = part.get_content_charset() or "utf-8"
+        text: str
+        try:
+            if charset.lower() in ("gb2312", "gbk", "gb18030"):
+                text = payload.decode("gb18030", errors="replace")
+            else:
+                text = payload.decode(charset, errors="replace")
+        except (LookupError, UnicodeDecodeError):
+            try:
+                text = payload.decode("utf-8", errors="replace")
+            except Exception:
+                text = payload.decode("gb18030", errors="replace")
+
+        if content_type == "text/plain" and not body_text:
+            body_text = text
+        elif content_type == "text/html" and body_html is None:
+            body_html = text
+
+    if len(body_text) > 50000:
+        body_text = body_text[:50000]
+    return (body_text, body_html)
+
+
+def _row_to_message(row: sqlite3.Row) -> dict[str, Any]:
+    """将数据库行转换为邮件 dict（字段名与 EmailMessage 一致，camelCase）。
+
+    messages 表已移除 body_text/body_html/attachments_json 列（Foxmail 模式：正文存 .eml 文件）。
+    bodyText/bodyHtml 置空，需要正文时通过 email_fetch_body 命令读取 .eml。
+    attachments 置空，需要附件信息时同样走 fetch_body。
+    """
     return {
         "uid": row["uid"],
         "accountId": row["account_id"],
@@ -68,14 +143,14 @@ def _row_to_message(row: sqlite3.Row) -> dict[str, Any]:
         "toAddresses": row["to_addresses"],
         "ccAddresses": row["cc_addresses"],
         "date": row["date"],
-        "bodyText": row["body_text"],
-        "bodyHtml": row["body_html"],
+        "bodyText": "",
+        "bodyHtml": None,
         "hasAttachments": bool(row["has_attachments"]),
         "isRead": bool(row["is_read"]),
         "isStarred": bool(row["is_starred"]),
         "rawSize": row["raw_size"],
         "messageId": row["message_id"] if "message_id" in row.keys() else None,
-        "attachments": attachments,
+        "attachments": [],
     }
 
 
@@ -96,13 +171,13 @@ def search_messages(
 ) -> list[dict[str, Any]]:
     """搜索邮件，返回匹配的邮件列表（不含正文，节省内存）。
 
-    所有筛选条件为可选，None 表示不筛选。keyword 在 subject 和 body_text 上做 LIKE。
+    所有筛选条件为可选，None 表示不筛选。keyword 在 subject 上做 LIKE。
     返回结果按 date DESC 排序。
 
     Args:
         account_id: 限定账号
         folder: 限定文件夹
-        keyword: 关键词（subject + body_text LIKE）
+        keyword: 关键词（subject LIKE）
         from_address: 发件人邮箱（LIKE）
         from_name: 发件人名称（LIKE）
         date_from: 起始日期（ISO 格式，>=）
@@ -129,15 +204,16 @@ def search_messages(
         conditions.append("folder = ?")
         params.append(folder)
     if keyword:
-        # 多 token LIKE：query 按空格切分，每个 token 独立匹配 subject/body_text。
+        # 多 token LIKE：query 按空格切分，每个 token 独立匹配 subject。
         # WHERE 子句用 AND 连接（所有 token 都需命中），保证结果相关性。
+        # body_text 列已移除（Foxmail 模式正文存 .eml），关键词仅在 subject 上匹配。
         tokens = [t for t in keyword.split() if t.strip()]
         if tokens:
             token_clauses = []
             for tok in tokens:
                 pat = f"%{tok}%"
-                token_clauses.append("(subject LIKE ? OR body_text LIKE ?)")
-                params.extend([pat, pat])
+                token_clauses.append("subject LIKE ?")
+                params.append(pat)
             conditions.append(f"({' AND '.join(token_clauses)})")
     if from_address:
         conditions.append("from_address LIKE ?")
@@ -166,7 +242,7 @@ def search_messages(
     sql = f"""
         SELECT uid, account_id, folder, subject, from_address, from_name,
                to_addresses, cc_addresses, date, has_attachments, is_read,
-               is_starred, raw_size, message_id, attachments_json
+               is_starred, raw_size, message_id
         FROM messages
         {where_clause}
         ORDER BY date DESC
@@ -196,7 +272,7 @@ def get_message(
     account_id: str,
     folder: str,
 ) -> dict[str, Any] | None:
-    """读取单封邮件全文（含 bodyText）。
+    """读取单封邮件全文（含正文，从 .eml 文件解析）。
 
     Args:
         uid: 邮件 UID
@@ -204,13 +280,12 @@ def get_message(
         folder: 文件夹
 
     Returns:
-        邮件 dict（含 bodyText），不存在返回 None
+        邮件 dict（含 bodyText/bodyHtml），不存在返回 None
     """
     sql = """
         SELECT uid, account_id, folder, subject, from_address, from_name,
-               to_addresses, cc_addresses, date, body_text, body_html,
-               has_attachments, is_read, is_starred, raw_size, message_id,
-               attachments_json
+               to_addresses, cc_addresses, date, has_attachments, is_read,
+               is_starred, raw_size, message_id, eml_path
         FROM messages
         WHERE uid = ? AND account_id = ? AND folder = ?
     """
@@ -220,7 +295,13 @@ def get_message(
 
     if row is None:
         return None
-    return _row_to_message(row)
+
+    msg = _row_to_message(row)
+    eml_path = row["eml_path"] if "eml_path" in row.keys() else ""
+    body_text, body_html = _read_eml_body(eml_path)
+    msg["bodyText"] = body_text
+    msg["bodyHtml"] = body_html
+    return msg
 
 
 def get_analysis(

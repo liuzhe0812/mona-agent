@@ -826,6 +826,8 @@ export interface OpenComposeWindowRequest {
   mode: "compose" | "reply" | "replyAll" | "forward";
   accountId: string;
   baseMessage?: EmailMessage | null;
+  /** 预设收件人（点击发件人名称写邮件时使用） */
+  presetTo?: string | null;
 }
 
 export async function openComposeWindow(

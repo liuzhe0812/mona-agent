@@ -9,6 +9,7 @@ interface ComposePayload {
   mode: ComposerMode;
   accountId: string;
   baseMessage?: EmailMessage | null;
+  presetTo?: string | null;
 }
 
 function parseComposePayload(): ComposePayload | null {
@@ -107,6 +108,7 @@ export function ComposeWindow() {
       baseMessage={payload?.baseMessage ?? null}
       account={account}
       standalone
+      presetTo={payload?.presetTo ?? null}
     />
   );
 }

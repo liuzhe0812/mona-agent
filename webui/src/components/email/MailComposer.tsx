@@ -39,6 +39,8 @@ interface MailComposerProps {
   baseMessage?: EmailMessage | null;
   account?: EmailAccount | null;
   standalone?: boolean;
+  /** 预设收件人（点击发件人名称写邮件时使用） */
+  presetTo?: string | null;
 }
 
 function escapeHtml(text: string): string {
@@ -154,6 +156,7 @@ export function MailComposer({
   baseMessage = null,
   account: accountProp,
   standalone = false,
+  presetTo = null,
 }: MailComposerProps) {
   const accounts = useEmailStore((s) => s.accounts);
   const selectedAccountId = useEmailStore((s) => s.selectedAccountId);
@@ -185,7 +188,7 @@ export function MailComposer({
     // 默认选中默认签名（仅 compose 模式自动追加）
     setSelectedSignatureId(defaultSignature?.id ?? null);
     if (mode === "compose" || !baseMessage) {
-      setToAddresses("");
+      setToAddresses(presetTo ?? "");
       setCcAddresses("");
       setBccAddresses("");
       setSubject("");

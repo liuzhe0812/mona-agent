@@ -37,6 +37,11 @@ const sanitizeSchema = {
     mark: [],
     sub: [],
     sup: [],
+    a: [...(defaultSchema.attributes?.a ?? []), "href"],
+  },
+  protocols: {
+    ...defaultSchema.protocols,
+    href: [...(defaultSchema.protocols?.href ?? []), "mona"],
   },
 } as typeof defaultSchema;
 
@@ -127,6 +132,11 @@ export default function MarkdownTextRenderer({
             <FileLink href={href}>{markdownChildren}</FileLink>
           );
         }
+        if (href && (href.startsWith("mona:email?") || href.startsWith("#mona-email:"))) {
+          return (
+            <MonaEmailLink href={href}>{markdownChildren}</MonaEmailLink>
+          );
+        }
         return (
           <a
             href={href}
@@ -194,6 +204,47 @@ function FileLink({ href, children }: { href: string; children: React.ReactNode 
       onContextMenu={handleContextMenu}
       className="cursor-pointer text-primary underline underline-offset-2 hover:opacity-80"
       title={isTauri() ? `${absPath} · 点击打开，右键在文件夹中显示` : absPath}
+    >
+      {children}
+    </span>
+  );
+}
+
+function MonaEmailLink({ href, children }: { href: string; children: React.ReactNode }) {
+  const handleClick = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!isTauri()) return;
+    // 支持两种格式：mona:email?... 和 #mona-email:...
+    let queryStr: string;
+    if (href.startsWith("#mona-email:")) {
+      queryStr = href.slice("#mona-email:".length);
+    } else if (href.startsWith("mona:email?")) {
+      queryStr = href.slice("mona:email?".length);
+    } else {
+      return;
+    }
+    const params = new URLSearchParams(queryStr);
+    const accountId = params.get("accountId");
+    const uid = params.get("uid");
+    const folder = params.get("folder");
+    if (!accountId || !uid || !folder) return;
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("email_open_view_window", {
+        payload: { accountId, uid, folder },
+      });
+    } catch (err) {
+      console.error("[MonaEmailLink] 打开邮件预览窗口失败:", err);
+    }
+  };
+  return (
+    <span
+      role="button"
+      tabIndex={0}
+      onClick={handleClick}
+      className="cursor-pointer text-primary underline underline-offset-2 hover:opacity-80"
+      title="点击在新窗口预览邮件"
     >
       {children}
     </span>

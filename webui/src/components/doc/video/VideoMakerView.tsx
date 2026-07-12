@@ -59,11 +59,7 @@ const DEFAULT_RUNTIME_STATUS: VideoRuntimeStatus = {
   chrome: { ok: false },
 };
 
-interface VideoMakerViewProps {
-  onBack: () => void;
-}
-
-export function VideoMakerView(_: VideoMakerViewProps) {
+export function VideoMakerView() {
   const { client, token } = useClient();
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>("config");
   const [topic, setTopic] = useState("");
@@ -512,5 +508,3 @@ function buildVideoPrompt(opts: {
   parts.push("完成后将最终视频文件输出到项目目录。");
   return parts.join("\n");
 }
-
-export type { VideoMakerViewProps };

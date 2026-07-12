@@ -95,7 +95,7 @@ export function AppTitleBar({
       <div className="ml-auto flex h-full items-center">
         <ConnectionBadge />
         {onOpenSettings && (
-          <TitleBarButton label="设置" onClick={onOpenSettings} badge={settingsBadge}>
+          <TitleBarButton label="设置" onClick={() => onOpenSettings()} badge={settingsBadge}>
             <Settings className="h-3.5 w-3.5" />
           </TitleBarButton>
         )}

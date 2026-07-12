@@ -3599,31 +3599,53 @@ async fn sync_folder_internal(
         }
         let message_id_str = msg.get("messageId").and_then(|v| v.as_str()).unwrap_or("");
 
-        // 去重：如果本地存在相同 message_id 但不同 uid 的记录（本地发送版本 "L" 或 MOVE 后的旧 uid），
-        // 删除旧版本（IMAP 新 uid 版本替换）
-        // 场景1：email_send 已落盘 "L" uid 版本，IMAP 同步拉到 IMAP uid 版本
-        // 场景2：MOVE 邮件后本地保留旧 uid，IMAP 同步拉到新 uid 版本（IMAP MOVE 会改变 uid）
+        // 去重：如果本地存在相同 message_id 的记录，分三种情况处理：
+        // 1. 同文件夹内不同 uid（本地发送版本 "L" 或 MOVE 后的旧 uid）：删除旧版本，INSERT 新 uid 版本
+        //    场景a: email_send 已落盘 "L" uid 版本，IMAP 同步拉到 IMAP uid 版本
+        //    场景b: MOVE 邮件后本地保留旧 uid，IMAP 同步拉到新 uid 版本（IMAP MOVE 会改变 uid）
+        // 2. 跨文件夹相同 message_id（uid 可能相同也可能不同）：规则 move 后 IMAP 服务器未真正删除
+        //    源文件夹邮件（某些企业邮箱 MOVE 行为异常），下次同步源文件夹又拉到同一封邮件。
+        //    此时邮件已在目标文件夹，源文件夹的副本是 stale 的，跳过 INSERT 避免重复显示。
+        // 3. 同文件夹同 uid：已存在的记录，跳过去重逻辑，交给后面的 UPSERT 处理
         // 继承旧记录的 is_read/is_starred：MOVE 后 IMAP 服务器可能丢失 \Seen 标志，
         // 不能让新 UID 记录的 is_read 回退为 IMAP 返回值（可能 false），否则已读邮件变未读
         let mut inherited_is_read: Option<bool> = None;
         let mut inherited_is_starred: Option<bool> = None;
+        let mut skip_insert_cross_folder = false;
         if !message_id_str.is_empty() {
-            let local_records: Vec<(String, String, i32, i32)> = match conn.prepare(
-                "SELECT uid, eml_path, is_read, is_starred FROM messages
-                 WHERE account_id = ?1 AND folder = ?2
-                 AND uid != ?3 AND message_id = ?4",
+            // 查询所有文件夹中相同 message_id 的记录（不限 folder，不限 uid）
+            let local_records: Vec<(String, String, String, i32, i32)> = match conn.prepare(
+                "SELECT uid, folder, eml_path, is_read, is_starred FROM messages
+                 WHERE account_id = ?1 AND message_id = ?2",
             ) {
                 Ok(mut stmt) => match stmt.query_map(
-                    params![&req.account_id, &req.mailbox, &uid, message_id_str],
-                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, i32>(2)?, row.get::<_, i32>(3)?)),
+                    params![&req.account_id, message_id_str],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, i32>(3)?, row.get::<_, i32>(4)?)),
                 ) {
                     Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
                     Err(_) => Vec::new(),
                 },
                 Err(_) => Vec::new(),
             };
-            for (local_uid, local_eml_path, local_is_read, local_is_starred) in &local_records {
-                // 继承旧记录的已读/星标状态（本地优先：is_read=1 优先）
+            for (local_uid, local_folder, local_eml_path, local_is_read, local_is_starred) in &local_records {
+                if local_folder != &req.mailbox {
+                    // 跨文件夹重复：邮件已被规则移动到其他文件夹，当前文件夹的副本是 stale 的
+                    // 跳过 INSERT，避免同一封邮件在多个文件夹显示
+                    log::info!(
+                        "[email-sync] 跨文件夹去重: 跳过 uid={} message_id={} (已存在于文件夹 {}，当前同步 {})",
+                        uid,
+                        message_id_str,
+                        local_folder,
+                        req.mailbox
+                    );
+                    skip_insert_cross_folder = true;
+                    break;
+                }
+                // 同文件夹内：只有 uid 不同时才删除旧记录（同 uid 是已存在记录，交给 UPSERT）
+                if local_uid == &uid {
+                    continue;
+                }
+                // 同文件夹内不同 uid：删除旧记录，继承 is_read/is_starred（IMAP 新 uid 替换旧 uid）
                 if *local_is_read == 1 {
                     inherited_is_read = Some(true);
                 }
@@ -3647,6 +3669,10 @@ async fn sync_folder_internal(
                     local_is_starred
                 );
             }
+        }
+        // 跨文件夹重复：跳过本封邮件的 INSERT，处理下一条
+        if skip_insert_cross_folder {
+            continue;
         }
 
         // 检查该邮件是否已存在（用于统计真正的新增数）
@@ -5549,6 +5575,9 @@ pub struct OpenComposeWindowPayload {
     pub account_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_message: Option<serde_json::Value>,
+    /// 预设收件人（点击发件人名称写邮件时使用）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preset_to: Option<String>,
 }
 
 /// 打开独立的邮件撰写窗口（Foxmail 风格新窗口）
@@ -5586,6 +5615,47 @@ pub async fn email_open_compose_window(
 #[tauri::command]
 pub async fn email_close_compose_window(window: WebviewWindow) -> Result<(), String> {
     window.close().map_err(|e| e.to_string())
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenMailViewWindowPayload {
+    pub account_id: String,
+    pub uid: String,
+    pub folder: String,
+    /// 窗口标题（通常是邮件主题），可选
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject: Option<String>,
+}
+
+/// 打开独立的邮件预览窗口（只读，Agent 回复中的 mona:email 链接点击后触发）
+#[tauri::command]
+pub async fn email_open_view_window(
+    app: AppHandle,
+    payload: OpenMailViewWindowPayload,
+) -> Result<String, String> {
+    let label = format!("mailview-{}", uuid::Uuid::new_v4());
+    let title = payload.subject.clone().unwrap_or_else(|| "邮件预览".into());
+    // 用 query string 传参（不敏感，无需 base64）
+    let url = format!(
+        "#/mailview?accountId={}&uid={}&folder={}",
+        urlencoding::encode(&payload.account_id),
+        urlencoding::encode(&payload.uid),
+        urlencoding::encode(&payload.folder),
+    );
+
+    let window = WebviewWindowBuilder::new(&app, &label, WebviewUrl::App(url.into()))
+        .title(title)
+        .inner_size(900.0, 680.0)
+        .min_inner_size(640.0, 480.0)
+        .decorations(true)
+        .visible(false)
+        .build()
+        .map_err(|e| e.to_string())?;
+    let _ = window.show();
+    let _ = window.set_focus();
+
+    Ok(label)
 }
 
 // ---------------------------------------------------------------------------

@@ -123,6 +123,12 @@ const ComposeWindow = lazy(() =>
   })),
 );
 
+const MailPreviewWindow = lazy(() =>
+  import("@/components/email/MailPreviewWindow").then((module) => ({
+    default: module.MailPreviewWindow,
+  })),
+);
+
 const NotificationWindow = lazy(() =>
   import("@/components/notification/NotificationWindow").then((module) => ({
     default: module.NotificationWindow,
@@ -148,6 +154,10 @@ function isQuickAskRoute(): boolean {
 
 function isComposeRoute(): boolean {
   return typeof window !== "undefined" && window.location.hash.startsWith("#/compose");
+}
+
+function isMailPreviewRoute(): boolean {
+  return typeof window !== "undefined" && window.location.hash.startsWith("#/mailview");
 }
 
 function isNotificationRoute(): boolean {
@@ -425,6 +435,7 @@ export default function App() {
 
   const quickAskRoute = isQuickAskRoute();
   const composeRoute = isComposeRoute();
+  const mailPreviewRoute = isMailPreviewRoute();
   const notificationRoute = isNotificationRoute();
 
   return (
@@ -442,6 +453,10 @@ export default function App() {
       ) : composeRoute ? (
         <Suspense fallback={<ModuleLoading title="正在打开写邮件" />}>
           <ComposeWindow />
+        </Suspense>
+      ) : mailPreviewRoute ? (
+        <Suspense fallback={<ModuleLoading title="正在打开邮件" />}>
+          <MailPreviewWindow />
         </Suspense>
       ) : quickAskRoute ? (
         client ? <QuickAskWindow /> : null
@@ -1588,7 +1603,7 @@ function Shell({
               {client ? (
                 <div className={cn("absolute inset-0 flex flex-col", (view !== "doc" || isBrowserTabActive) && "hidden")}>
                   <Suspense fallback={<ModuleLoading title="正在打开 AI 文档" />}>
-                    <DocMakerView onBack={onBackToChat} />
+                    <DocMakerView />
                   </Suspense>
                 </div>
               ) : null}

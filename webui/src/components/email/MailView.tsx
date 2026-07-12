@@ -44,6 +44,62 @@ import {
   getCachedIcon,
 } from "../terminal/FileManager/iconCache";
 import { openPathWithSystemApp, isTauri } from "@/lib/tauri";
+import { SenderPopover } from "./SenderPopover";
+
+interface ParsedAddress {
+  name: string;
+  email: string;
+  inContacts: boolean;
+}
+
+/**
+ * 解析地址字符串（支持 "Name <email>" 和纯 email，逗号分隔多个）。
+ * 返回每个地址的 name、email、是否在通讯录中。
+ */
+function parseAddressListWithContacts(
+  raw: string | null | undefined,
+  contactsByEmail: Record<string, string>,
+): ParsedAddress[] {
+  if (!raw) return [];
+  const parts: string[] = [];
+  let current = "";
+  let inAngle = false;
+  for (const ch of raw) {
+    if (ch === "<") inAngle = true;
+    else if (ch === ">") inAngle = false;
+    if (ch === "," && !inAngle) {
+      if (current.trim()) parts.push(current.trim());
+      current = "";
+    } else {
+      current += ch;
+    }
+  }
+  if (current.trim()) parts.push(current.trim());
+
+  return parts.map((part) => {
+    const match = part.match(/^([^<]*?)\s*<([^>]+)>$/);
+    if (match) {
+      const name = match[1].trim().replace(/^["']|["']$/g, "");
+      const email = match[2].trim();
+      const contactName = contactsByEmail[email.toLowerCase()];
+      return {
+        name: contactName || name || email,
+        email,
+        inContacts: Boolean(contactName),
+      };
+    }
+    const email = part.trim();
+    if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      const contactName = contactsByEmail[email.toLowerCase()];
+      return {
+        name: contactName || email,
+        email,
+        inContacts: Boolean(contactName),
+      };
+    }
+    return { name: part, email: "", inContacts: false };
+  });
+}
 
 export function MailView() {
   const selectedMessage = useEmailStore((s) => s.selectedMessage);
@@ -59,6 +115,7 @@ export function MailView() {
   const fetchBody = useEmailStore((s) => s.fetchBody);
   const contactsByEmail = useEmailStore((s) => s.contactsByEmail);
   const loadContacts = useEmailStore((s) => s.loadContacts);
+  const selectedAccountId = useEmailStore((s) => s.selectedAccountId);
 
   // 首次渲染时加载通讯录，建立 email→name 映射（仅一次）
   useEffect(() => {
@@ -507,21 +564,46 @@ export function MailView() {
         <div className="mt-2 flex flex-col gap-0.5 text-[12px] text-muted-foreground">
           <div className="flex gap-2">
             <span className="shrink-0 text-muted-foreground/70">发件人</span>
-            <span className="min-w-0 truncate text-foreground" title={formatSender(m.fromName, m.fromAddress)}>
-              {resolveSenderDisplay(m.fromName, m.fromAddress, contactsByEmail)}
+            <span className="min-w-0 truncate" title={formatSender(m.fromName, m.fromAddress)}>
+              <SenderPopover
+                displayName={resolveSenderDisplay(m.fromName, m.fromAddress, contactsByEmail)}
+                email={m.fromAddress}
+                accountId={selectedAccountId}
+                inContacts={Boolean(contactsByEmail[m.fromAddress?.toLowerCase()])}
+              />
             </span>
           </div>
           <div className="flex gap-2">
             <span className="shrink-0 text-muted-foreground/70">收件人</span>
-            <span className="min-w-0 truncate text-foreground" title={m.toAddresses}>
-              {resolveAddressDisplay(m.toAddresses, contactsByEmail)}
+            <span className="min-w-0 truncate" title={m.toAddresses}>
+              {parseAddressListWithContacts(m.toAddresses, contactsByEmail).map((addr, idx) => (
+                <span key={idx}>
+                  {idx > 0 && ", "}
+                  <SenderPopover
+                    displayName={addr.name}
+                    email={addr.email}
+                    accountId={selectedAccountId}
+                    inContacts={addr.inContacts}
+                  />
+                </span>
+              ))}
             </span>
           </div>
           {m.ccAddresses && (
             <div className="flex gap-2">
               <span className="shrink-0 text-muted-foreground/70">抄送</span>
-              <span className="min-w-0 truncate text-foreground" title={m.ccAddresses}>
-                {resolveAddressDisplay(m.ccAddresses, contactsByEmail)}
+              <span className="min-w-0 truncate" title={m.ccAddresses}>
+                {parseAddressListWithContacts(m.ccAddresses, contactsByEmail).map((addr, idx) => (
+                  <span key={idx}>
+                    {idx > 0 && ", "}
+                    <SenderPopover
+                      displayName={addr.name}
+                      email={addr.email}
+                      accountId={selectedAccountId}
+                      inContacts={addr.inContacts}
+                    />
+                  </span>
+                ))}
               </span>
             </div>
           )}
@@ -893,7 +975,7 @@ interface SafeHtmlFrameProps {
  * allow-same-origin 让父页面可读取 contentDocument 调整高度（不带 allow-scripts，脚本仍不能跑）。
  * 通过父窗口访问 contentDocument 拦截 IMG 的 click/contextmenu，替换 WebView2 原生菜单。
  */
-function SafeHtmlFrame({ html, onImageOpen, onImageMenu, onLinkClick }: SafeHtmlFrameProps) {
+export function SafeHtmlFrame({ html, onImageOpen, onImageMenu, onLinkClick }: SafeHtmlFrameProps) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [height, setHeight] = useState<number>(400);
   // 保存当前事件监听的解绑函数，用于 onLoad 时重新挂载前清理
