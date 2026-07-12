@@ -48,7 +48,6 @@ documents the general tool contract and non-obvious usage patterns.
 - Call `terminal_output` (without session_id) to read the current terminal buffer and see command results.
 - Commands are risk-classified: dangerous commands (e.g. `rm -rf /`, `mkfs`, `dd`) always require user approval; safe commands (e.g. `ls`, `cat`, `df`) may execute directly depending on configuration; unknown commands default to requiring approval.
 - Commands execute in the user's visible terminal, so the user can see AI actions in real time.
-- Do NOT use `ssh_exec` (deprecated) — always prefer `terminal_exec` which reuses existing sessions.
 - `terminal_exec` operates on already-connected sessions; it does not create new SSH connections. The user must have an active terminal session open.
 
 ## Web and External Information

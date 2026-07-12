@@ -14,7 +14,7 @@ from mona.agent.tools.registry import ToolRegistry
 _SKIP_MODULES = frozenset({
     "base", "schema", "registry", "context", "loader", "config",
     "file_state", "sandbox", "mcp", "__init__", "runtime_state",
-    "sftp", "tauri_ipc", "path_utils",
+    "ssh", "tauri_ipc", "path_utils",
 })
 
 
