@@ -1,7 +1,6 @@
-﻿from pathlib import Path
+from pathlib import Path
 
 from mona.config.paths import (
-    get_bridge_install_dir,
     get_cli_history_path,
     get_cron_dir,
     get_data_dir,
@@ -34,7 +33,6 @@ def test_media_dir_supports_channel_namespace(monkeypatch, tmp_path: Path) -> No
 
 def test_shared_and_legacy_paths_remain_global() -> None:
     assert get_cli_history_path() == Path.home() / ".mona" / "history" / "cli_history"
-    assert get_bridge_install_dir() == Path.home() / ".mona" / "bridge"
     assert get_legacy_sessions_dir() == Path.home() / ".mona" / "sessions"
 
 
