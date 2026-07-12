@@ -137,8 +137,10 @@ class EmailScheduleConfig(Base):
     # 总开关
     enabled: bool = False
 
-    # 启用 AI 提取的文件夹列表（IMAP 文件夹名，如 ["INBOX", "会议预约"]）
+    # 启用 AI 提取的文件夹列表，格式为 "{accountId}:{folderName}"
+    # 如 ["37bd0f8c-...:INBOX", "37bd0f8c-...:会议预约"]
     # 空列表表示不启用任何文件夹（即使 enabled=True 也不触发）
+    # 颗粒度到每个邮箱账号的每个文件夹，支持多账号多文件夹独立勾选
     folders: list[str] = []
 
     # 创建模式：
@@ -176,7 +178,7 @@ class EmailIntelConfig(Base):
     "searchLimit": 50,
     "schedule": {
       "enabled": true,
-      "folders": ["INBOX", "会议预约"],
+      "folders": ["37bd0f8c-...:INBOX", "37bd0f8c-...:会议预约"],
       "createMode": "confirm",
       "leadMinutes": 15,
       "skipSenders": ["noreply.github.com"],
