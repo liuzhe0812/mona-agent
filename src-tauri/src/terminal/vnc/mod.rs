@@ -2,7 +2,6 @@ pub mod bridge;
 pub mod commands;
 
 use std::collections::HashMap;
-use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 
@@ -28,10 +27,6 @@ impl VncState {
         Self {
             sessions: RwLock::new(HashMap::new()),
         }
-    }
-
-    pub fn shared() -> Arc<Self> {
-        Arc::new(Self::new())
     }
 
     /// Shut down all active VNC sessions (called on app exit).

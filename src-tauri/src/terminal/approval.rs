@@ -78,14 +78,6 @@ impl ApprovalManager {
         pending.values().map(|e| e.command.clone()).collect()
     }
 
-    pub async fn cancel_all(&self) {
-        let mut pending = self.pending.lock().await;
-        for (_, entry) in pending.drain() {
-            let _ = entry.tx.send(ApprovalVerdict::Rejected {
-                reason: "Cancelled".into(),
-            });
-        }
-    }
 }
 
 #[derive(Clone)]

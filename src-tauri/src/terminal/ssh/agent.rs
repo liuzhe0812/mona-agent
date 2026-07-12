@@ -128,20 +128,3 @@ impl SshAgentClient {
         )))
     }
 }
-
-pub fn is_agent_available() -> bool {
-    #[cfg(unix)]
-    {
-        std::env::var("SSH_AUTH_SOCK").is_ok()
-    }
-
-    #[cfg(windows)]
-    {
-        true
-    }
-
-    #[cfg(not(any(unix, windows)))]
-    {
-        false
-    }
-}

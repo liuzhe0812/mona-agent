@@ -23,7 +23,6 @@ pub enum SessionStatus {
     Disconnected,
     Connecting,
     Connected,
-    Disconnecting,
     Error(String),
 }
 
@@ -34,10 +33,8 @@ impl SessionStatus {
             (SessionStatus::Connecting, SessionStatus::Connected) => true,
             (SessionStatus::Connecting, SessionStatus::Error(_)) => true,
             (SessionStatus::Connecting, SessionStatus::Disconnected) => true,
-            (SessionStatus::Connected, SessionStatus::Disconnecting) => true,
             (SessionStatus::Connected, SessionStatus::Disconnected) => true,
             (SessionStatus::Connected, SessionStatus::Error(_)) => true,
-            (SessionStatus::Disconnecting, SessionStatus::Disconnected) => true,
             (SessionStatus::Error(_), SessionStatus::Connecting) => true,
             (SessionStatus::Error(_), SessionStatus::Disconnected) => true,
             _ => false,
@@ -142,11 +139,6 @@ impl SessionManager {
             }
             None => Err(TerminalError::SessionNotFound(id.to_string())),
         }
-    }
-
-    pub async fn get_session(&self, id: &str) -> Option<Session> {
-        let sessions = self.inner.sessions.read().await;
-        sessions.get(id).cloned()
     }
 
     pub async fn list_sessions(&self) -> Vec<Session> {

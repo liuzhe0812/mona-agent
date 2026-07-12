@@ -282,14 +282,3 @@ pub fn restore_credential(
         AuthConfig::Agent => Ok(AuthConfig::Agent),
     }
 }
-
-pub fn delete_credential(host: &str, port: u16, username: &str) {
-    let mut vault = load_vault();
-    for field in &["password", "passphrase"] {
-        let key = vault_key(host, port, username, field);
-        vault.entries.remove(&key);
-    }
-    if let Err(e) = save_vault(&vault) {
-        warn!("Failed to save vault after deletion: {}", e);
-    }
-}

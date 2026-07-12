@@ -1129,7 +1129,6 @@ pub async fn terminal_list_sessions(
                 SessionStatus::Disconnected => "disconnected".to_string(),
                 SessionStatus::Connecting => "connecting".to_string(),
                 SessionStatus::Connected => "connected".to_string(),
-                SessionStatus::Disconnecting => "disconnecting".to_string(),
                 SessionStatus::Error(e) => format!("error:{}", e),
             },
             created_at: s.created_at.to_rfc3339(),

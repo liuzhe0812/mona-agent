@@ -9,7 +9,6 @@ use tokio_util::sync::CancellationToken;
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum BatchTransferStatus {
-    Pending,
     Connecting,
     Transferring,
     Completed,
@@ -39,37 +38,6 @@ pub struct BatchTransferProgress {
     pub error: Option<String>,
     pub speed: Option<u64>,
     pub eta_seconds: Option<u64>,
-}
-
-#[derive(Debug, Clone)]
-pub struct BatchTransferTask {
-    pub session_id: String,
-    pub host: String,
-    pub port: u16,
-    pub username: String,
-    pub files: Vec<String>,
-    pub remote_paths: Option<Vec<String>>,
-}
-
-#[derive(Debug, Clone)]
-pub struct BatchTransferConfig {
-    pub max_concurrent: usize,
-    pub target_directory: String,
-    pub overwrite: bool,
-    pub retry_count: u32,
-    pub retry_delay_ms: u64,
-}
-
-impl Default for BatchTransferConfig {
-    fn default() -> Self {
-        Self {
-            max_concurrent: 3,
-            target_directory: "/tmp".to_string(),
-            overwrite: false,
-            retry_count: 2,
-            retry_delay_ms: 1000,
-        }
-    }
 }
 
 pub struct BatchTransferControl {
@@ -114,10 +82,6 @@ impl BatchTransferManager {
         Ok(())
     }
 
-    pub async fn is_active(&self, batch_id: &str) -> bool {
-        let transfers = self.active_transfers.read().await;
-        transfers.contains_key(batch_id)
-    }
 }
 
 impl Clone for BatchTransferManager {

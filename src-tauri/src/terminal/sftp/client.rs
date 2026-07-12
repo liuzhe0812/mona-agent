@@ -210,16 +210,6 @@ impl SftpClient {
         }
     }
 
-    pub async fn rmdir(&self, path: &str) -> Result<(), TerminalError> {
-        let guard = self.session.lock().await;
-        let session = guard.as_ref().ok_or_else(|| {
-            TerminalError::SftpOperation("SFTP session not connected".into())
-        })?;
-        session.remove_dir(path).await.map_err(|e| {
-            TerminalError::SftpOperation(format!("rmdir failed: {}", e))
-        })
-    }
-
     pub async fn remove_dir_recursive(
         &self,
         sftp: &russh_sftp::client::SftpSession,
@@ -334,73 +324,6 @@ impl SftpClient {
         file.write_all(&data).await.map_err(|e| {
             TerminalError::SftpOperation(format!("write failed: {}", e))
         })?;
-        file.shutdown().await.map_err(|e| {
-            TerminalError::SftpOperation(format!("close failed: {}", e))
-        })
-    }
-
-    pub async fn upload_with_progress(
-        &self,
-        app_handle: AppHandle,
-        session_id: String,
-        task_id: String,
-        remote_path: &str,
-        data: Vec<u8>,
-    ) -> Result<(), TerminalError> {
-        let guard = self.session.lock().await;
-        let sftp = guard.as_ref().ok_or_else(|| {
-            TerminalError::SftpOperation("SFTP session not connected".into())
-        })?;
-
-        let mut file = sftp.create(remote_path).await.map_err(|e| {
-            TerminalError::SftpOperation(format!("create failed: {}", e))
-        })?;
-
-        let total = data.len() as u64;
-        let chunk_size: usize = 32768;
-        let mut offset: usize = 0;
-        let mut last_emit_time = std::time::Instant::now();
-        let mut last_emit_bytes: u64 = 0;
-
-        while offset < data.len() {
-            let end = std::cmp::min(offset + chunk_size, data.len());
-            file.write_all(&data[offset..end]).await.map_err(|e| {
-                TerminalError::SftpOperation(format!("write failed: {}", e))
-            })?;
-            offset = end;
-
-            let now = std::time::Instant::now();
-            let elapsed = now.duration_since(last_emit_time);
-            if elapsed >= Duration::from_millis(200) || offset == data.len() {
-                let speed = if elapsed.as_secs_f64() > 0.0 {
-                    ((offset as u64 - last_emit_bytes) as f64 / elapsed.as_secs_f64()) as u64
-                } else {
-                    0
-                };
-                let percentage = if total > 0 {
-                    (offset as u64 * 100 / total) as u32
-                } else {
-                    100
-                };
-                let event_name = format!("sftp:transfer:{}:{}", session_id, task_id);
-                let _ = app_handle.emit(
-                    &event_name,
-                    serde_json::json!({
-                        "taskId": task_id,
-                        "sessionId": session_id,
-                        "type": "upload",
-                        "path": remote_path,
-                        "bytesTransferred": offset as u64,
-                        "totalBytes": total,
-                        "percentage": percentage,
-                        "speed": speed,
-                    }),
-                );
-                last_emit_time = now;
-                last_emit_bytes = offset as u64;
-            }
-        }
-
         file.shutdown().await.map_err(|e| {
             TerminalError::SftpOperation(format!("close failed: {}", e))
         })

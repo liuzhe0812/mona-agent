@@ -48,7 +48,4 @@ impl TerminalState {
         }
     }
 
-    pub fn shared() -> Arc<Self> {
-        Arc::new(Self::new())
     }
-}
