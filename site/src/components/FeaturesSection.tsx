@@ -7,25 +7,25 @@ const steps = [
     icon: ListTree,
     title: "先拆任务",
     desc: "Mona 先把一句话拆成可确认的步骤，不急着执行。",
-    code: "plan: check load -> disk -> logs -> risk summary",
+    code: "plan: read mail -> draft reply -> attach note -> send",
   },
   {
     icon: ShieldAlert,
     title: "再看风险",
-    desc: "涉及写入、删除、重启这类动作，会把意图说清楚再让你确认。",
+    desc: "涉及写入、删除、重启、发送这类动作，会把意图说清楚再让你确认。",
     code: "guard: destructive action requires approval",
   },
   {
     icon: Play,
     title: "透明执行",
-    desc: "命令、SQL、输出、失败重试都会展开，不靠一句完成了糊弄。",
-    code: "$ journalctl -u nginx --since '15 minutes ago'",
+    desc: "命令、SQL、邮件、文档的执行过程都展开，不靠一句完成了糊弄。",
+    code: "$ db.query 'SELECT count(*) FROM orders WHERE status=...'",
   },
   {
     icon: FileClock,
     title: "自动留痕",
-    desc: "会话可以变成 Markdown 笔记、知识点和复盘材料，后续能再次调用。",
-    code: "note: incident/prod-api-nginx-spike.md",
+    desc: "会话自动变成 Markdown 笔记、知识点和复盘材料，后续能再次调用。",
+    code: "note: weekly/report-2026-07-11.md · auto-tagged",
   },
 ];
 
@@ -40,7 +40,7 @@ export default function FeaturesSection() {
                 Whitebox Ops
               </p>
               <h2 className="text-4xl font-semibold leading-tight md:text-5xl">
-                AI 运维全程摊开看。
+                看得见，才敢交给 AI 做。
               </h2>
             </div>
             <p className="max-w-2xl text-base leading-7 text-black/[0.62] md:text-lg">
@@ -74,9 +74,9 @@ export default function FeaturesSection() {
                 <Eye className="h-5 w-5" />
               </div>
               <div>
-                <h3 className="text-lg font-semibold">看得见，才敢交给 AI 做。</h3>
+                <h3 className="text-lg font-semibold">每个动作都有据可查。</h3>
                 <p className="mt-1 text-sm text-black/[0.52]">
-                  批量 SSH、数据库查询、笔记生成都会保留上下文和操作记录。
+                  邮件起草、文档生成、批量运维、数据库查询都会保留上下文和操作记录。
                 </p>
               </div>
             </div>

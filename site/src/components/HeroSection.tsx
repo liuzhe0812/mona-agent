@@ -8,7 +8,7 @@ import PageTurnButton from "@/components/PageTurnButton";
 import ParticleNetwork from "@/components/ParticleNetwork";
 import { DOWNLOAD_URL } from "@/lib/constants";
 
-const tags = ["极简 Agent", "白盒 SSH", "自然语言 SQL", "知识库闭环"];
+const tags = ["AI 贯穿", "统一桌面", "知识沉淀", "越用越懂你"];
 
 export default function HeroSection() {
   const [logoState, setLogoState] = useState<"welcome" | "working">("welcome");
@@ -48,7 +48,7 @@ export default function HeroSection() {
             transition={{ duration: 0.55, delay: 0.08, ease: "easeOut" }}
           >
             <ShieldCheck className="h-4 w-4 text-black" />
-            AI Agent 原生运维工具
+            AI Agent 原生工作台
           </motion.div>
 
           <motion.h1
@@ -66,7 +66,7 @@ export default function HeroSection() {
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.65, delay: 0.22, ease: "easeOut" }}
           >
-            不写工程级提示词，不把运维藏进黑盒。你说人话，Mona 规划、执行、展示每一步，把 SSH、数据库、笔记和 PPT 串成一条能复盘的工作流。
+            邮件、日程、笔记、浏览器、终端、数据库，全在一个桌面。AI 贯穿每个动作，工作自动沉淀为知识，越用越懂你。
           </motion.p>
 
           <motion.div

@@ -114,10 +114,10 @@ export default function DesktopSection() {
           <ScrollReveal>
             <p className="mb-3 font-mono text-sm uppercase text-black/[0.42]">Desktop Mode</p>
             <h2 className="text-4xl font-semibold leading-tight md:text-5xl">
-              不只会聊，还能进现场。
+              一个桌面收住所有工作。
             </h2>
             <p className="mt-5 text-base leading-7 text-black/[0.62] md:text-lg">
-              Mona 的桌面端把终端、SSH、SFTP、快捷操作和 AI 面板放在一起。该自动时自动，该你确认时确认，该人工接管时也不用换工具。
+              Mona 的桌面端把邮件、日程、笔记、浏览器、终端、数据库和 AI 面板放在一起。该自动时自动，该你确认时确认，该人工接管时也不用换工具。
             </p>
           </ScrollReveal>
           <div className="mt-8 grid gap-3 sm:grid-cols-2">
