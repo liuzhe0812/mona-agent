@@ -1,8 +1,13 @@
-﻿"""Tool registry for dynamic tool management."""
+"""Tool registry for dynamic tool management."""
 
 from typing import Any
 
 from mona.agent.tools.base import Tool
+
+# Stable error identifier returned when a subscription-gated tool is invoked
+# without an active subscription or trial. The model and UI can match on this
+# prefix to surface an upgrade prompt instead of a generic failure.
+MEMBERSHIP_REQUIRED_ERROR = "membership_required"
 
 
 class ToolRegistry:
@@ -15,6 +20,8 @@ class ToolRegistry:
     def __init__(self):
         self._tools: dict[str, Tool] = {}
         self._cached_definitions: list[dict[str, Any]] | None = None
+        # Fail closed until the AgentLoop refreshes the trusted license state.
+        self._has_subscription_access: bool = False
 
     def register(self, tool: Tool) -> None:
         """Register a tool."""
@@ -34,6 +41,32 @@ class ToolRegistry:
         """Check if a tool is registered."""
         return name in self._tools
 
+    def set_subscription_access(self, has_access: bool) -> None:
+        """Update the subscription access flag.
+
+        When set to False, tools marked ``subscription_required`` are hidden
+        from the model (excluded from ``get_definitions``) and rejected at
+        execution time (``prepare_call`` returns a ``membership_required``
+        error). When set to True, all registered tools are available.
+        """
+        changed = self._has_subscription_access != has_access
+        self._has_subscription_access = has_access
+        if changed:
+            self._cached_definitions = None
+
+    @property
+    def has_subscription_access(self) -> bool:
+        return self._has_subscription_access
+
+    def is_subscription_blocked(self, name: str) -> bool:
+        """Check if a tool is currently blocked by subscription gating."""
+        if self._has_subscription_access:
+            return False
+        tool = self._tools.get(name)
+        if tool is None:
+            return False
+        return getattr(tool, "subscription_required", False)
+
     @staticmethod
     def _schema_name(schema: dict[str, Any]) -> str:
         """Extract a normalized tool name from either OpenAI or flat schemas."""
@@ -50,12 +83,24 @@ class ToolRegistry:
 
         Built-in tools are sorted first as a stable prefix, then MCP tools are
         sorted and appended.  The result is cached until the next
-        register/unregister call.
+        register/unregister call or subscription access change.
+
+        Subscription-gated tools are excluded when the user has no active
+        subscription or trial, so the model never sees them and cannot call
+        them.
         """
         if self._cached_definitions is not None:
             return self._cached_definitions
 
-        definitions = [tool.to_schema() for tool in self._tools.values()]
+        definitions: list[dict[str, Any]] = []
+        for tool in self._tools.values():
+            if (
+                not self._has_subscription_access
+                and getattr(tool, "subscription_required", False)
+            ):
+                continue
+            definitions.append(tool.to_schema())
+
         builtins: list[dict[str, Any]] = []
         mcp_tools: list[dict[str, Any]] = []
         for schema in definitions:
@@ -87,6 +132,18 @@ class ToolRegistry:
         if not tool:
             return None, params, (
                 f"Error: Tool '{name}' not found. Available: {', '.join(self.tool_names)}"
+            )
+
+        # Defense-in-depth: even if the model somehow emits a call to a
+        # subscription-gated tool (e.g. from historical context or a replayed
+        # tool call), reject it here with a stable error identifier.
+        if self.is_subscription_blocked(name):
+            return tool, params, (
+                f"{MEMBERSHIP_REQUIRED_ERROR}: Tool '{name}' requires an active "
+                "subscription or trial. The user's subscription has expired or is "
+                "not active. Do not claim to have searched notes or emails. Tell "
+                "the user they can subscribe to unlock Agent access to existing "
+                "notes and emails."
             )
 
         cast_params = tool.cast_params(params)

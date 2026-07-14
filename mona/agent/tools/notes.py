@@ -150,6 +150,7 @@ class NotesSearchTool(Tool):
     _scopes = {"core"}
     _plugin_discoverable = True
     read_only = True
+    subscription_required = True
 
     @classmethod
     def enabled(cls, ctx: Any) -> bool:
@@ -228,6 +229,7 @@ class NotesReadTool(Tool):
     _scopes = {"core"}
     _plugin_discoverable = True
     read_only = True
+    subscription_required = True
 
     @classmethod
     def enabled(cls, ctx: Any) -> bool:

@@ -50,6 +50,7 @@ from mona.kb.api import (
     handle_kb_update_wiki_page,
 )
 from mona.security.network import validate_host
+from mona.system_agent import handle_system_plan
 from mona.utils.helpers import safe_filename
 from mona.utils.media_decode import (
     MAX_FILE_SIZE,
@@ -137,6 +138,9 @@ def _is_retryable_error(e: Exception) -> bool:
         "timeout", "timed out", "connection reset", "broken pipe",
         "eof", "connection closed", "connection aborted", "temporarily unavailable",
         "socket", "network is unreachable", "connection refused",
+        # 连接池中残留的 LOGOUT 状态连接被复用时，服务器返回此错误。
+        # 内层 imap_pool.run 已会重试一次，外层兜底再重试一次以确保恢复。
+        "illegal in state", "logout",
     )
     return any(m in msg for m in retryable_markers)
 
@@ -4497,6 +4501,7 @@ def create_app(
     app.router.add_get("/health", handle_health)
     app.router.add_post("/shutdown", handle_shutdown)
     app.router.add_post("/api/tauri/invoke", handle_tauri_invoke)
+    app.router.add_post("/api/system/plan", handle_system_plan)
 
     # KB routes
     app.router.add_get("/api/kb/projects", handle_kb_list_projects)

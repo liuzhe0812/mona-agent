@@ -266,13 +266,6 @@ export interface SettingsPayload {
       default_video_model?: string | null;
     }>;
   };
-  embedding: {
-    enabled: boolean;
-    endpoint: string;
-    api_key_hint: string | null;
-    model: string;
-    output_dimensionality: number | null;
-  };
   runtime: {
     config_path: string;
     workspace_path: string;
@@ -380,14 +373,6 @@ export interface VideoGenerationSettingsUpdate {
   model: string;
   defaultAspectRatio: string;
   defaultDuration: number;
-}
-
-export interface EmbeddingSettingsUpdate {
-  enabled?: boolean;
-  endpoint?: string;
-  apiKey?: string;
-  model?: string;
-  outputDimensionality?: number | null;
 }
 
 export interface SlashCommand {

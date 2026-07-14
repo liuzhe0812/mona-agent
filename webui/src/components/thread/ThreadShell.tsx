@@ -63,6 +63,7 @@ interface ThreadShellProps {
   onGoHome?: () => void;
   onOpenSSH?: () => void;
   onOpenDb?: () => void;
+  onOpenEmail?: () => void;
   onCreateNote?: () => void;
   recentSessions?: ChatSummary[];
   onSelectSession?: (key: string) => void;
@@ -103,6 +104,7 @@ export function ThreadShell({
   onToggleSidebar,
   onOpenSSH,
   onOpenDb,
+  onOpenEmail,
   onCreateNote,
   recentSessions = [],
   onSelectSession,
@@ -578,6 +580,7 @@ export function ThreadShell({
         onConnectHost={onOpenSSH}
         onConnectDatabase={onOpenDb}
         onCreateNote={onCreateNote}
+        onOpenEmail={onOpenEmail}
       />
     </div>
   );

@@ -81,13 +81,19 @@ async def create_payment(
 
     trade_order_id = f"mona_{user.id}_{uuid.uuid4().hex[:12]}"
     amount = _get_price(db, body.duration_months)
+    # 反查 plan_code
+    plan = db.query(PricingPlan).filter(PricingPlan.duration_months == body.duration_months).first()
+    plan_code = plan.id if plan else None
 
     payment = Payment(
         user_id=user.id,
         trade_order_id=trade_order_id,
         amount=amount,
         duration_months=body.duration_months,
+        plan_code=plan_code,
         status=PaymentStatus.PENDING,
+        payment_channel="xhp",
+        payment_type="page",
     )
     db.add(payment)
     db.commit()
@@ -168,10 +174,22 @@ async def payment_notify(request: Request, db: Session = Depends(get_db)):
 
 @router.get("/subscription", response_model=SubscriptionInfo)
 def get_subscription(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    sub = db.query(Subscription).filter(Subscription.user_id == user.id).first()
+    sub = (
+        db.query(Subscription)
+        .filter(Subscription.user_id == user.id, Subscription.status == SubscriptionStatus.ACTIVE)
+        .order_by(Subscription.created_at.desc())
+        .first()
+    )
     if not sub:
         return SubscriptionInfo(status="expired", current_period_end=None)
-    return SubscriptionInfo(status=sub.status.value, current_period_end=sub.current_period_end)
+    return SubscriptionInfo(
+        status=sub.status.value,
+        current_period_end=sub.current_period_end,
+        plan_code=sub.plan_code,
+        auto_renew=sub.auto_renew,
+        agreement_status=sub.agreement.status.value if sub.agreement else None,
+        cancelled_at=sub.cancelled_at,
+    )
 
 
 @router.get("/list", response_model=PaymentListResponse)

@@ -62,6 +62,31 @@ if TYPE_CHECKING:
 
 UNIFIED_SESSION_KEY = "unified:default"
 
+# Appended to the system prompt when the user has no active subscription or
+# trial, so the model knows which capabilities are unavailable and does not
+# hallucinate having searched notes or emails.
+_FREE_TIER_CAPABILITY_NOTE = (
+    "\n\n---\n\n"
+    "# Subscription Status\n\n"
+    "The user does not have an active subscription or trial. The following "
+    "capabilities are **unavailable** to you right now:\n"
+    "- Searching or reading existing notes (notes_search, notes_read)\n"
+    "- Searching, reading, or operating on emails (email_search, email_read, "
+    "email_action)\n"
+    "- Searching the unified memory (hoard_search) for note or email sources\n\n"
+    "You **may still**:\n"
+    "- Create new notes (notes_create) and save images to the vault "
+    "(notes_save_image)\n"
+    "- Search the unified memory (hoard_search) for browser and chat sources\n"
+    "- Use all other tools normally\n\n"
+    "Rules:\n"
+    "- Do NOT claim or imply that you have searched notes or emails.\n"
+    "- If the user asks you to find something in their notes or emails, explain "
+    "that an active subscription or trial is required and they can subscribe to "
+    "unlock this capability.\n"
+    "- You can still create new notes at the user's request."
+)
+
 
 class TurnState(Enum):
     RESTORE = auto()
@@ -1379,6 +1404,12 @@ class AgentLoop:
             replay_max_messages=self._max_messages,
         )
         ctx.msg.metadata[DELIVER_FILES_PENDING_META] = ctx.delivered_files
+
+        # Refresh subscription access flag before building tool context so
+        # that subscription-gated tools are hidden from the model this turn.
+        # Fail-closed: any IPC error means no access to personal data.
+        await self._refresh_subscription_access()
+
         self._set_tool_context(
             ctx.msg.channel,
             ctx.msg.chat_id,
@@ -1405,6 +1436,15 @@ class AgentLoop:
         ctx.initial_messages = self._build_initial_messages(
             ctx.msg, ctx.session, ctx.history, ctx.pending_summary
         )
+
+        # When the user has no active subscription/trial, append a capability
+        # note to the system prompt so the model knows notes/email search is
+        # unavailable and does not hallucinate having queried them.
+        if not self.tools.has_subscription_access:
+            ctx.initial_messages = self._inject_capability_note(
+                ctx.initial_messages
+            )
+
         ctx.user_persisted_early = self._persist_user_message_early(
             ctx.msg, ctx.session
         )
@@ -1415,6 +1455,52 @@ class AgentLoop:
             ctx.on_retry_wait = await self._build_retry_wait_callback(ctx.msg)
 
         return "ok"
+
+    async def _refresh_subscription_access(self) -> None:
+        """Read the local license state and update the ToolRegistry.
+
+        Called once at the start of each turn (in ``_state_build``). Uses
+        ``asyncio.to_thread`` because ``tauri_invoke`` is a blocking HTTP
+        call to the IPC bridge. Fail-closed: any error means no access.
+
+        ``check_subscription_access`` caches its result with a short TTL, so
+        mid-turn tool-level checks (e.g. hoard_search) reuse the same value
+        without another IPC round-trip.
+        """
+        try:
+            from mona.agent.tools.tauri_ipc import (
+                check_subscription_access,
+                invalidate_subscription_access_cache,
+            )
+
+            invalidate_subscription_access_cache()
+            has_access = await asyncio.to_thread(check_subscription_access)
+        except Exception as e:
+            logger.debug("subscription access check failed, failing closed: {}", e)
+            has_access = False
+
+        self.tools.set_subscription_access(has_access)
+
+    @staticmethod
+    def _inject_capability_note(
+        messages: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Append the free-tier capability note to the system prompt."""
+        if not messages:
+            return messages
+        result = list(messages)
+        first = result[0]
+        if first.get("role") == "system":
+            content = first.get("content", "")
+            result[0] = {
+                **first,
+                "content": (
+                    content + _FREE_TIER_CAPABILITY_NOTE
+                    if isinstance(content, str)
+                    else content
+                ),
+            }
+        return result
 
     async def _state_run(self, ctx: TurnContext) -> str:
         await self._webui_turns.publish_run_status(ctx.msg, "running")

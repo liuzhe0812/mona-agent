@@ -95,7 +95,6 @@ import {
   logoutWeixin,
   startWeixinLogin,
   updateChannelSettings,
-  updateEmbeddingSettings,
   updateImageGenerationSettings,
   updateProviderSettings,
   updateSettings,
@@ -125,7 +124,6 @@ import { getFolderDisplayName } from "@/components/email/lib/folderUtils";
 import { useClientOptional } from "@/providers/ClientProvider";
 import type {
   ChannelInfo,
-  EmbeddingSettingsUpdate,
   ImageGenerationSettingsUpdate,
   SettingsPayload,
   VideoGenerationSettingsUpdate,
@@ -294,15 +292,6 @@ export function SettingsView({
     defaultAspectRatio: "16:9",
     defaultDuration: 5,
   });
-  const [embeddingForm, setEmbeddingForm] = useState<EmbeddingSettingsUpdate>({
-    enabled: false,
-    endpoint: "",
-    apiKey: "",
-    model: "",
-    outputDimensionality: null,
-  });
-  const [embeddingKeyVisible, setEmbeddingKeyVisible] = useState(false);
-  const [embeddingSaving, setEmbeddingSaving] = useState(false);
   const [webSearchKeyVisible, setWebSearchKeyVisible] = useState(false);
   const [webSearchKeyEditing, setWebSearchKeyEditing] = useState(false);
   const [form, setForm] = useState<AgentSettingsDraft>({
@@ -360,13 +349,6 @@ export function SettingsView({
     });
     setImageApiKeyDraft("");
     setVideoApiKeyDraft("");
-    setEmbeddingForm({
-      enabled: payload.embedding.enabled,
-      endpoint: payload.embedding.endpoint,
-      apiKey: "",
-      model: payload.embedding.model,
-      outputDimensionality: payload.embedding.output_dimensionality,
-    });
     if (payload.restart_required_sections) {
       setPendingRestartSections({
         runtime: payload.restart_required_sections.includes("runtime"),
@@ -455,18 +437,6 @@ export function SettingsView({
     return formDirty || videoApiKeyDraft.trim().length > 0;
   }, [videoGenerationForm, settings, videoApiKeyDraft]);
 
-  const embeddingDirty = useMemo(() => {
-    if (!settings) return false;
-    return (
-      embeddingForm.enabled !== settings.embedding.enabled ||
-      embeddingForm.endpoint !== settings.embedding.endpoint ||
-      embeddingForm.model !== settings.embedding.model ||
-      embeddingForm.outputDimensionality !== settings.embedding.output_dimensionality ||
-      // apiKey is never echoed back, so a non-empty draft means the user typed a new key
-      (embeddingForm.apiKey ?? "") !== ""
-    );
-  }, [embeddingForm, settings]);
-
   const hasPendingRestart = useMemo(
     () =>
       !!settings?.requires_restart ||
@@ -547,31 +517,6 @@ export function SettingsView({
       setError((err as Error).message);
     } finally {
       setVideoGenerationSaving(false);
-    }
-  };
-
-  const saveEmbeddingSettings = async () => {
-    if (!settings || !embeddingDirty || embeddingSaving) return;
-    setEmbeddingSaving(true);
-    try {
-      const update: EmbeddingSettingsUpdate = {
-        enabled: embeddingForm.enabled,
-        endpoint: embeddingForm.endpoint,
-        model: embeddingForm.model,
-        outputDimensionality: embeddingForm.outputDimensionality,
-      };
-      // Only send apiKey when the user typed a new one (never echoed back).
-      if ((embeddingForm.apiKey ?? "") !== "") {
-        update.apiKey = embeddingForm.apiKey;
-      }
-      const payload = await updateEmbeddingSettings(token, update);
-      applyPayload(payload);
-      setEmbeddingForm((prev) => ({ ...prev, apiKey: "" }));
-      setError(null);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setEmbeddingSaving(false);
     }
   };
 
@@ -870,14 +815,6 @@ export function SettingsView({
             onVideoApiKeyDraftChange={setVideoApiKeyDraft}
             videoKeyVisible={videoKeyVisible}
             onToggleVideoKeyVisible={() => setVideoKeyVisible((v) => !v)}
-            // embedding tab props
-            embeddingForm={embeddingForm}
-            embeddingDirty={embeddingDirty}
-            embeddingSaving={embeddingSaving}
-            embeddingKeyVisible={embeddingKeyVisible}
-            onEmbeddingFormChange={setEmbeddingForm}
-            onEmbeddingSave={saveEmbeddingSettings}
-            onToggleEmbeddingKeyVisible={() => setEmbeddingKeyVisible((v) => !v)}
             onRestart={onRestart}
             isRestarting={isRestarting}
           />
@@ -1378,14 +1315,6 @@ function AiModelsSettings({
   onVideoApiKeyDraftChange,
   videoKeyVisible,
   onToggleVideoKeyVisible,
-  // embedding tab
-  embeddingForm,
-  embeddingDirty,
-  embeddingSaving,
-  embeddingKeyVisible,
-  onEmbeddingFormChange,
-  onEmbeddingSave,
-  onToggleEmbeddingKeyVisible,
   // shared
   onRestart,
   isRestarting,
@@ -1431,14 +1360,6 @@ function AiModelsSettings({
   onVideoApiKeyDraftChange: Dispatch<SetStateAction<string>>;
   videoKeyVisible: boolean;
   onToggleVideoKeyVisible: () => void;
-  // embedding tab
-  embeddingForm: EmbeddingSettingsUpdate;
-  embeddingDirty: boolean;
-  embeddingSaving: boolean;
-  embeddingKeyVisible: boolean;
-  onEmbeddingFormChange: Dispatch<SetStateAction<EmbeddingSettingsUpdate>>;
-  onEmbeddingSave: () => void;
-  onToggleEmbeddingKeyVisible: () => void;
   // shared
   onRestart?: () => void;
   isRestarting?: boolean;
@@ -1453,7 +1374,6 @@ function AiModelsSettings({
         <TabsTrigger value="chat">{tx("settings.aiModels.chat", "聊天模型")}</TabsTrigger>
         <TabsTrigger value="image">{tx("settings.aiModels.image", "图片模型")}</TabsTrigger>
         <TabsTrigger value="video">{tx("settings.aiModels.video", "视频模型")}</TabsTrigger>
-        <TabsTrigger value="embedding">{tx("settings.aiModels.embedding", "嵌入模型")}</TabsTrigger>
       </TabsList>
 
       <a
@@ -1543,161 +1463,7 @@ function AiModelsSettings({
           onToggleKeyVisible={onToggleVideoKeyVisible}
         />
       </TabsContent>
-
-      <TabsContent value="embedding">
-        <EmbeddingSettings
-          settings={settings}
-          form={embeddingForm}
-          dirty={embeddingDirty}
-          saving={embeddingSaving}
-          keyVisible={embeddingKeyVisible}
-          onChangeForm={onEmbeddingFormChange}
-          onSave={onEmbeddingSave}
-          onToggleKeyVisible={onToggleEmbeddingKeyVisible}
-        />
-      </TabsContent>
     </Tabs>
-  );
-}
-
-function EmbeddingSettings({
-  settings,
-  form,
-  dirty,
-  saving,
-  keyVisible,
-  onChangeForm,
-  onSave,
-  onToggleKeyVisible,
-}: {
-  settings: SettingsPayload;
-  form: EmbeddingSettingsUpdate;
-  dirty: boolean;
-  saving: boolean;
-  keyVisible: boolean;
-  onChangeForm: Dispatch<SetStateAction<EmbeddingSettingsUpdate>>;
-  onSave: () => void;
-  onToggleKeyVisible: () => void;
-}) {
-  const { t } = useTranslation();
-  const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
-  const apiKeyHint = settings.embedding.api_key_hint;
-  const apiKeyConfigured = !!apiKeyHint && apiKeyHint !== "—";
-
-  return (
-    <SettingsGroup>
-      <SettingsRow
-        title={tx("settings.rows.embeddingEnabled", "启用嵌入模型")}
-        description={tx(
-          "settings.help.embeddingEnabled",
-          "为知识库和笔记向量索引提供嵌入能力。关闭后相关功能会降级为关键词检索。",
-        )}
-      >
-        <ToggleSwitch
-          checked={form.enabled ?? false}
-          onChange={(checked) => onChangeForm((prev) => ({ ...prev, enabled: checked }))}
-        />
-      </SettingsRow>
-
-      <SettingsRow
-        title={tx("settings.rows.embeddingEndpoint", "服务商地址")}
-        description={tx(
-          "settings.help.embeddingEndpoint",
-          "OpenAI 兼容的 embeddings 接入点，例如 `https://api.openai.com/v1`",
-        )}
-      >
-        <Input
-          value={form.endpoint}
-          onChange={(event) => onChangeForm((prev) => ({ ...prev, endpoint: event.target.value }))}
-          placeholder={tx("settings.image.embeddingEndpointPlaceholder", "https://api.openai.com/v1")}
-          className="h-8 w-[min(420px,80vw)] rounded-full text-[13px]"
-        />
-      </SettingsRow>
-
-      <SettingsRow
-        title={tx("settings.rows.embeddingApiKey", "API Key")}
-        description={tx(
-          "settings.help.embeddingApiKey",
-          "嵌入服务的密钥。本地 Ollama 可留空。保存后不再回显。",
-        )}
-      >
-        <div className="flex items-center gap-2">
-          <Input
-            type={keyVisible ? "text" : "password"}
-            value={form.apiKey ?? ""}
-            onChange={(event) => onChangeForm((prev) => ({ ...prev, apiKey: event.target.value }))}
-            placeholder={apiKeyConfigured ? apiKeyHint : tx("settings.image.embeddingApiKeyPlaceholder", "输入 API Key")}
-            className="h-8 w-[min(300px,70vw)] rounded-full text-[13px]"
-          />
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            onClick={onToggleKeyVisible}
-            className="rounded-full"
-          >
-            {keyVisible ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-          </Button>
-        </div>
-      </SettingsRow>
-
-      <SettingsRow
-        title={tx("settings.rows.embeddingModel", "模型")}
-        description={tx(
-          "settings.help.embeddingModel",
-          "嵌入模型 ID，如 BAAI/bge-m3、text-embedding-3-small 等。",
-        )}
-      >
-        <Input
-          value={form.model}
-          onChange={(event) => onChangeForm((prev) => ({ ...prev, model: event.target.value }))}
-          placeholder={tx("settings.image.embeddingModelPlaceholder", "例如 BAAI/bge-m3")}
-          className="h-8 w-[min(300px,70vw)] rounded-full text-[13px]"
-        />
-      </SettingsRow>
-
-      <SettingsRow
-        title={tx("settings.rows.embeddingDimensionality", "输出维度")}
-        description={tx(
-          "settings.help.embeddingDimensionality",
-          "可选。指定嵌入向量维度，留空则使用模型默认值。仅部分模型支持。",
-        )}
-      >
-        <Input
-          type="number"
-          value={form.outputDimensionality ?? ""}
-          onChange={(event) => {
-            const v = event.target.value.trim();
-            onChangeForm((prev) => ({
-              ...prev,
-              outputDimensionality: v === "" ? null : Number(v),
-            }));
-          }}
-          placeholder={tx("settings.image.embeddingDimPlaceholder", "留空使用默认")}
-          className="h-8 w-[min(160px,40vw)] rounded-full text-[13px]"
-        />
-      </SettingsRow>
-
-      <SettingsRow
-        title={tx("settings.rows.embeddingSave", "保存")}
-        description={tx(
-          "settings.help.embeddingSave",
-          "保存后立即生效，无需重启。嵌入配置全局共享，笔记仓库会自动回退到此配置。",
-        )}
-      >
-        <Button
-          type="button"
-          size="sm"
-          variant={dirty ? "default" : "outline"}
-          disabled={!dirty || saving}
-          onClick={onSave}
-          className="rounded-full"
-        >
-          {saving ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
-          {saving ? tx("settings.status.saving", "保存中…") : tx("settings.status.save", "保存")}
-        </Button>
-      </SettingsRow>
-    </SettingsGroup>
   );
 }
 

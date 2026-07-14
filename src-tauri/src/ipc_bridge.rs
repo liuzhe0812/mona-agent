@@ -552,6 +552,10 @@ impl IpcBridge {
                     crate::notes::notes_save_image(file_path, file_name).await?;
                 Ok(Value::String(saved_path))
             }
+            "license_has_access" => {
+                let has_access = crate::license::check_license_access();
+                Ok(Value::Bool(has_access))
+            }
             _ => Err(format!("Unknown command: {}", cmd)),
         }
     }

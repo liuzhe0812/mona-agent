@@ -1,6 +1,5 @@
 import type {
   ChatSummary,
-  EmbeddingSettingsUpdate,
   ImageGenerationSettingsUpdate,
   PptProject,
   PptTemplatesResponse,
@@ -385,26 +384,6 @@ export async function updateVideoGenerationSettings(
   query.set("default_duration", String(update.defaultDuration));
   return request<SettingsPayload>(
     `${effectiveBase}/api/settings/video-generation/update?${query}`,
-    token,
-  );
-}
-
-export async function updateEmbeddingSettings(
-  token: string,
-  update: EmbeddingSettingsUpdate,
-  base?: string,
-): Promise<SettingsPayload> {
-  const effectiveBase = base ?? (await getApiBase());
-  const query = new URLSearchParams();
-  if (update.enabled !== undefined) query.set("enabled", String(update.enabled));
-  if (update.endpoint !== undefined) query.set("endpoint", update.endpoint);
-  if (update.apiKey !== undefined) query.set("api_key", update.apiKey);
-  if (update.model !== undefined) query.set("model", update.model);
-  if (update.outputDimensionality !== undefined) {
-    query.set("output_dimensionality", String(update.outputDimensionality ?? ""));
-  }
-  return request<SettingsPayload>(
-    `${effectiveBase}/api/settings/embedding/update?${query}`,
     token,
   );
 }

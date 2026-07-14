@@ -7,11 +7,17 @@ from app.database import get_db
 from app.deps import get_current_user
 from app.errors import AuthError
 from app.models import (
+    AgreementStatus,
     AppConfig,
     Notification,
     NotificationRead,
+    Payment,
+    PaymentAgreement,
+    PaymentStatus,
     PricingPlan,
+    RenewalStatus,
     Subscription,
+    SubscriptionRenewal,
     SubscriptionStatus,
     User,
 )
@@ -356,3 +362,142 @@ def update_promo_trial(
     _set_app_config(db, "promo_trial_end_at", body.get("end_at") or "")
     db.commit()
     return {"message": "Promo trial config updated"}
+
+
+# ── 订单管理 ──
+
+@router.get("/orders")
+def list_admin_orders(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    status: str | None = Query(default=None, pattern=r"^(pending|paid|failed)$"),
+    channel: str | None = Query(default=None, pattern=r"^(alipay|xhp)$"),
+    _admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    query = db.query(Payment).order_by(Payment.created_at.desc())
+    if status:
+        query = query.filter(Payment.status == PaymentStatus(status))
+    if channel:
+        query = query.filter(Payment.payment_channel == channel)
+    total = query.count()
+    offset = (page - 1) * page_size
+    orders = query.offset(offset).limit(page_size).all()
+    return {
+        "orders": [
+            {
+                "id": o.id,
+                "user_id": o.user_id,
+                "trade_order_id": o.trade_order_id,
+                "amount": float(o.amount),
+                "plan_code": o.plan_code,
+                "duration_months": o.duration_months,
+                "status": o.status.value,
+                "payment_channel": o.payment_channel,
+                "payment_type": o.payment_type,
+                "alipay_trade_no": o.alipay_trade_no,
+                "paid_at": o.paid_at.isoformat() if o.paid_at else None,
+                "created_at": o.created_at.isoformat(),
+            }
+            for o in orders
+        ],
+        "total": total,
+    }
+
+
+@router.get("/renewals")
+def list_admin_renewals(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    status: str | None = Query(default=None, pattern=r"^(pending|success|failed|retrying)$"),
+    _admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    query = db.query(SubscriptionRenewal).order_by(SubscriptionRenewal.created_at.desc())
+    if status:
+        query = query.filter(SubscriptionRenewal.status == RenewalStatus(status))
+    total = query.count()
+    offset = (page - 1) * page_size
+    renewals = query.offset(offset).limit(page_size).all()
+    return {
+        "renewals": [
+            {
+                "id": r.id,
+                "subscription_id": r.subscription_id,
+                "agreement_no": r.agreement_no,
+                "out_trade_no": r.out_trade_no,
+                "amount": float(r.amount),
+                "period_days": r.period_days,
+                "status": r.status.value,
+                "retry_count": r.retry_count,
+                "next_retry_at": r.next_retry_at.isoformat() if r.next_retry_at else None,
+                "paid_at": r.paid_at.isoformat() if r.paid_at else None,
+                "failure_reason": r.failure_reason,
+                "created_at": r.created_at.isoformat(),
+            }
+            for r in renewals
+        ],
+        "total": total,
+    }
+
+
+@router.get("/agreements")
+def list_admin_agreements(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    status: str | None = Query(default=None, pattern=r"^(active|cancelled|expired)$"),
+    _admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    query = db.query(PaymentAgreement).order_by(PaymentAgreement.signed_at.desc())
+    if status:
+        query = query.filter(PaymentAgreement.status == AgreementStatus(status))
+    total = query.count()
+    offset = (page - 1) * page_size
+    agreements = query.offset(offset).limit(page_size).all()
+    return {
+        "agreements": [
+            {
+                "id": a.id,
+                "user_id": a.user_id,
+                "agreement_no": a.agreement_no,
+                "alipay_user_id": a.alipay_user_id,
+                "status": a.status.value,
+                "external_sign_no": a.external_sign_no,
+                "signed_at": a.signed_at.isoformat(),
+                "cancelled_at": a.cancelled_at.isoformat() if a.cancelled_at else None,
+                "cancel_reason": a.cancel_reason,
+            }
+            for a in agreements
+        ],
+        "total": total,
+    }
+
+
+@router.post("/agreements/{agreement_id}/unsign")
+def admin_unsign_agreement(
+    agreement_id: int,
+    _admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """管理员手动解约某个协议（异常处理）"""
+    from app.alipay import alipay_service
+
+    agreement = db.query(PaymentAgreement).filter(PaymentAgreement.id == agreement_id).first()
+    if not agreement:
+        raise AuthError("agreement_not_found", "Agreement not found", status_code=404)
+    if agreement.status != AgreementStatus.ACTIVE:
+        return {"message": "Agreement is not active"}
+
+    result = alipay_service.unsign(agreement.agreement_no)
+    agreement.status = AgreementStatus.CANCELLED
+    agreement.cancelled_at = datetime.now(timezone.utc)
+    agreement.cancel_reason = f"Admin manual unsign: {result.error or 'OK'}"
+    # 同步关闭订阅的 auto_renew
+    subs = db.query(Subscription).filter(Subscription.agreement_id == agreement.id).all()
+    for sub in subs:
+        sub.auto_renew = False
+        if not sub.cancelled_at:
+            sub.cancelled_at = datetime.now(timezone.utc)
+    db.commit()
+    return {"message": "Agreement unsigned", "alipay_result": result.success}

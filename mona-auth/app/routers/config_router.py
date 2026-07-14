@@ -29,6 +29,8 @@ def get_pricing_config(db: Session = Depends(get_db)):
                 name=p.name,
                 price=float(p.price),
                 duration_months=p.duration_months,
+                period_days=p.period_days,
+                auto_renewable=p.auto_renewable,
                 original_price=float(p.original_price) if p.original_price else None,
                 badge=p.badge,
             )

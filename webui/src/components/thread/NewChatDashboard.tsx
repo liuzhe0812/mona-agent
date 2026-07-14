@@ -22,6 +22,7 @@ interface NewChatDashboardProps {
   onConnectHost?: () => void;
   onConnectDatabase?: () => void;
   onCreateNote?: () => void;
+  onOpenEmail?: () => void;
 }
 
 function isSameDay(timestamp: number, day: Date): boolean {
@@ -77,6 +78,7 @@ export function NewChatDashboard({
   onConnectHost,
   onConnectDatabase,
   onCreateNote,
+  onOpenEmail,
 }: NewChatDashboardProps) {
   const focusItems = selectTodayFocus(scheduleItems, now);
   const nextItem = focusItems.find((item) => !item.done && item.startAtMs >= now.getTime())
@@ -162,13 +164,25 @@ export function NewChatDashboard({
 
           <section className="flex min-h-[112px] flex-col justify-between rounded-lg border border-border/80 bg-card px-4 py-3.5 shadow-[0_8px_22px_rgba(15,23,42,0.035)]">
             <h2 className="text-[14px] font-semibold text-foreground">待处理邮件</h2>
-            <div className="flex items-center gap-3">
-              <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#eba45d]/15 text-[#d8852d]">
-                <Mail className="h-5 w-5" />
-              </span>
-              <p className="text-[14px] font-medium text-foreground">
-                {unreadCount > 0 ? <><span className="mr-1 text-[26px] leading-none text-[#d8852d]">{unreadCount}</span> 封未读</> : "收件箱已清空"}
-              </p>
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#eba45d]/15 text-[#d8852d]">
+                  <Mail className="h-5 w-5" />
+                </span>
+                <p className="text-[14px] font-medium text-foreground">
+                  {unreadCount > 0 ? <><span className="mr-1 text-[26px] leading-none text-[#d8852d]">{unreadCount}</span> 封未读</> : "收件箱已清空"}
+                </p>
+              </div>
+              {unreadCount > 0 && onOpenEmail ? (
+                <button
+                  type="button"
+                  onClick={onOpenEmail}
+                  disabled={disabled}
+                  className="h-7 shrink-0 rounded-md border border-[#eba45d]/35 bg-[#eba45d]/[0.07] px-2 text-[12px] font-medium text-[#d8852d] transition-colors hover:bg-[#eba45d]/[0.13] disabled:pointer-events-none disabled:opacity-50"
+                >
+                  查看
+                </button>
+              ) : null}
             </div>
           </section>
         </div>

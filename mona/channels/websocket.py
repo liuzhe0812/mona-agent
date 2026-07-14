@@ -52,7 +52,6 @@ from mona.webui.settings_api import (
     settings_payload,
     update_agent_settings,
     update_channel_settings,
-    update_embedding_settings,
     update_image_generation_settings,
     update_provider_settings,
     update_video_generation_settings,
@@ -808,9 +807,6 @@ class WebSocketChannel(BaseChannel):
         if got == "/api/settings/video-generation/update":
             return self._handle_settings_video_generation_update(request)
 
-        if got == "/api/settings/embedding/update":
-            return self._handle_settings_embedding_update(request)
-
         if got == "/api/settings/channels/update":
             return self._handle_settings_channels_update(request)
 
@@ -1184,16 +1180,6 @@ class WebSocketChannel(BaseChannel):
         except WebUISettingsError as e:
             return _http_error(e.status, e.message)
         return _http_json_response(self._with_settings_restart_state(payload, section="image"))
-
-    def _handle_settings_embedding_update(self, request: WsRequest) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        query = _parse_query(request.path)
-        try:
-            payload = update_embedding_settings(query)
-        except WebUISettingsError as e:
-            return _http_error(e.status, e.message)
-        return _http_json_response(payload)
 
     def _handle_settings_channels_update(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):
@@ -2846,7 +2832,7 @@ class WebSocketChannel(BaseChannel):
             if not project_path.exists():
                 return _http_error(404, f"Project '{project_id}' not found")
             results = search_wiki(project_path, q, count=count)
-            return _http_json_response({"results": results})
+            return _http_json_response({"mode": "keyword", "results": results})
         except Exception as e:
             return _http_error(500, str(e))
 

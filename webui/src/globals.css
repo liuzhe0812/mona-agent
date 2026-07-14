@@ -65,6 +65,24 @@
 @layer base {
   * {
     @apply border-border;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  /* Allow text selection in elements where it makes sense */
+  input,
+  textarea,
+  [contenteditable="true"],
+  .select-text,
+  .select-text *,
+  .prose,
+  .prose *,
+  pre,
+  code,
+  .markdown-body,
+  .markdown-body * {
+    -webkit-user-select: text;
+    user-select: text;
   }
 
   *:focus {
@@ -267,18 +285,34 @@
     }
   }
 
-  /* Subtle scrollbar that doesn't fight the dark background. */
+  /* Subtle scrollbar that doesn't fight the dark background.
+     Lighter color + hover-reveal: thumb is hidden until the container is hovered,
+     keeping the UI calm by default. See frontend spec skill for the full rule. */
   .scrollbar-thin {
     scrollbar-width: thin;
-    scrollbar-color: hsl(var(--muted-foreground) / 0.4) transparent;
+    scrollbar-color: transparent transparent;
+    transition: scrollbar-color 0.2s ease;
+  }
+  .scrollbar-thin:hover {
+    scrollbar-color: hsl(var(--muted-foreground) / 0.2) transparent;
   }
   .scrollbar-thin::-webkit-scrollbar {
     width: 6px;
     height: 6px;
   }
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
   .scrollbar-thin::-webkit-scrollbar-thumb {
-    background-color: hsl(var(--muted-foreground) / 0.4);
+    background-color: transparent;
     border-radius: 9999px;
+    transition: background-color 0.2s ease;
+  }
+  .scrollbar-thin:hover::-webkit-scrollbar-thumb {
+    background-color: hsl(var(--muted-foreground) / 0.2);
+  }
+  .scrollbar-thin:hover::-webkit-scrollbar-thumb:hover {
+    background-color: hsl(var(--muted-foreground) / 0.32);
   }
   .scrollbar-none {
     scrollbar-width: none;
@@ -299,7 +333,7 @@
     transition: scrollbar-color 0.2s ease;
   }
   .scrollbar-hover:hover {
-    scrollbar-color: hsl(var(--muted-foreground) / 0.25) transparent;
+    scrollbar-color: hsl(var(--muted-foreground) / 0.15) transparent;
   }
   .scrollbar-hover::-webkit-scrollbar {
     width: 8px;
@@ -316,11 +350,30 @@
     transition: background-color 0.2s ease;
   }
   .scrollbar-hover:hover::-webkit-scrollbar-thumb {
-    background-color: hsl(var(--muted-foreground) / 0.25);
+    background-color: hsl(var(--muted-foreground) / 0.15);
   }
   .scrollbar-hover:hover::-webkit-scrollbar-thumb:hover {
-    background-color: hsl(var(--muted-foreground) / 0.4);
+    background-color: hsl(var(--muted-foreground) / 0.28);
   }
+}
+
+/* xterm 终端滚动条：细窄、深色、hover 才显示 thumb */
+.xterm-viewport::-webkit-scrollbar {
+  width: 6px;
+}
+.xterm-viewport::-webkit-scrollbar-track {
+  background: transparent;
+}
+.xterm-viewport::-webkit-scrollbar-thumb {
+  background-color: transparent;
+  border-radius: 9999px;
+  transition: background-color 0.2s ease;
+}
+.xterm-viewport:hover::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.18);
+}
+.xterm-viewport:hover::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(255, 255, 255, 0.32);
 }
 
 /* Notes editor: list markers + task item layout.

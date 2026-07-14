@@ -144,29 +144,28 @@
     <a class="nav-item" href="#session-search">搜索会话</a>
     <a class="nav-item" href="#session-view">视图选项</a>
     <div class="nav-sec">功能模块</div>
+    <a class="nav-item" href="#chat">Mona 对话</a>
     <a class="nav-item" href="#notes">笔记</a>
+    <a class="nav-item" href="#terminal">终端</a>
     <a class="nav-item" href="#mail">邮件</a>
     <a class="nav-item" href="#calendar">日程</a>
-    <a class="nav-item" href="#browser">浏览器</a>
-    <a class="nav-item" href="#terminal">终端</a>
+    <a class="nav-item" href="#system">系统</a>
     <a class="nav-item" href="#database">数据库</a>
     <a class="nav-item" href="#knowledge">知识库</a>
     <a class="nav-item" href="#ai-docs">AI 文档</a>
-    <a class="nav-item" href="#ai-video">AI 视频</a>
-    <a class="nav-item" href="#ai-flowchart">AI 流程图</a>
-    <a class="nav-item" href="#ppt">PPT 制作</a>
-    <a class="nav-item" href="#profile">用户画像</a>
-    <a class="nav-item" href="#vnc">VNC 远程桌面</a>
-    <a class="nav-item" href="#ssh-monitor">SSH 监控</a>
-    <a class="nav-item" href="#wechat">微信渠道</a>
-    <a class="nav-item" href="#notify">桌面通知</a>
+    <a class="nav-item" href="#profile">画像</a>
     <div class="nav-sec">设置</div>
-    <a class="nav-item" href="#settings-overview">设置总览</a>
-    <a class="nav-item" href="#settings-model">模型与供应商</a>
-    <a class="nav-item" href="#settings-image">图片生成</a>
-    <a class="nav-item" href="#settings-web">网页搜索</a>
+    <a class="nav-item" href="#settings-overview">概览</a>
+    <a class="nav-item" href="#settings-appearance">外观</a>
+    <a class="nav-item" href="#settings-models">模型设置</a>
+    <a class="nav-item" href="#settings-web">网络搜索</a>
+    <a class="nav-item" href="#settings-channels">频道</a>
     <a class="nav-item" href="#settings-runtime">运行时</a>
-    <a class="nav-item" href="#settings-advanced">高级设置</a>
+    <a class="nav-item" href="#settings-desktop">桌面</a>
+    <a class="nav-item" href="#settings-shortcuts">快捷键</a>
+    <a class="nav-item" href="#settings-agent-scope">Agent 搜索范围</a>
+    <a class="nav-item" href="#settings-advanced">高级</a>
+    <a class="nav-item" href="#settings-about">关于</a>
     <div class="nav-sec">其他</div>
     <a class="nav-item" href="#quick-ask">快捷提问</a>
     <a class="nav-item" href="#shortcuts">键盘快捷键</a>
@@ -226,7 +225,7 @@
     <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 授权与账号</h2>
 
     <h3>免费试用</h3>
-    <p>安装 Mona 后自动获得 <strong>31 天免费试用</strong>，无需注册账号即可使用全部功能，包括 AI 对话、笔记、终端、数据库、知识库和 PPT 制作。</p>
+    <p>安装 Mona 后自动获得 <strong>31 天免费试用</strong>，无需注册账号即可使用全部功能，包括 AI 对话、笔记、终端、邮件、日程、数据库、知识库和 AI 文档。</p>
     <p>侧边栏底部会显示试用剩余天数，例如「试用剩余 28 天」。</p>
 
     <h3>注册账号</h3>
@@ -295,9 +294,13 @@
                     <div>🤖 Mona</div>
                     <div>📝 笔记</div>
                     <div>💻 终端</div>
+                    <div>✉️ 邮件</div>
+                    <div>📅 日程</div>
+                    <div>⚙️ 系统</div>
                     <div>🗄️ 数据库</div>
                     <div>📚 知识库</div>
-                    <div>📊 PPT</div>
+                    <div>📄 AI 文档</div>
+                    <div>👤 画像</div>
                     <div style="margin-top:8px; border-top:1px solid hsl(0 0% 89.8%); padding-top:6px; color:hsl(0 0% 45%);">会话列表...</div>
                     <div style="margin-top:auto; color:hsl(0 0% 45%);">👤 登录</div>
                 </div>
@@ -313,7 +316,7 @@
         <tbody>
             <tr><td>侧边栏（左）</td><td>工具箱导航 + 会话列表 + 登录/账号入口</td></tr>
             <tr><td>标题栏（上）</td><td>应用标题 + 设置按钮 + 主题切换</td></tr>
-            <tr><td>主内容区（中）</td><td>根据当前视图显示对话/笔记/终端/数据库/知识库/PPT</td></tr>
+            <tr><td>主内容区（中）</td><td>根据当前视图显示对话/笔记/终端/邮件/日程/系统/数据库/知识库/AI 文档/画像</td></tr>
         </tbody>
     </table>
 </div>
@@ -394,15 +397,15 @@
             <div class="card-d">导入文档，构建可搜索的 Wiki 知识图谱</div>
         </div>
         <div class="card">
-            <div class="card-ic">📊</div>
-            <div class="card-t">PPT 制作</div>
-            <div class="card-d">AI 驱动的 PPT 创建与编辑</div>
+            <div class="card-ic">📄</div>
+            <div class="card-t">AI 文档</div>
+            <div class="card-d">AI 生成 PPT、视频、流程图等专业内容</div>
         </div>
     </div>
 
     <div class="tip">
         <strong>快捷键</strong>
-        桌面客户端支持快捷键切换模块：<kbd class="kbd">Alt</kbd>+<kbd class="kbd">1</kbd> Mona、<kbd class="kbd">Alt</kbd>+<kbd class="kbd">2</kbd> 笔记、<kbd class="kbd">Alt</kbd>+<kbd class="kbd">3</kbd> 终端、<kbd class="kbd">Alt</kbd>+<kbd class="kbd">4</kbd> 数据库、<kbd class="kbd">Alt</kbd>+<kbd class="kbd">5</kbd> 知识库、<kbd class="kbd">Alt</kbd>+<kbd class="kbd">6</kbd> PPT。
+        桌面客户端支持快捷键切换模块：<kbd class="kbd">Alt</kbd>+<kbd class="kbd">1</kbd> Mona、<kbd class="kbd">Alt</kbd>+<kbd class="kbd">2</kbd> 笔记、<kbd class="kbd">Alt</kbd>+<kbd class="kbd">3</kbd> 终端、<kbd class="kbd">Alt</kbd>+<kbd class="kbd">4</kbd> 数据库、<kbd class="kbd">Alt</kbd>+<kbd class="kbd">5</kbd> 知识库、<kbd class="kbd">Alt</kbd>+<kbd class="kbd">6</kbd> AI 文档。
     </div>
 </div>
 
@@ -725,10 +728,70 @@
     </ul>
 </div>
 
+<!-- 终端 -->
+<div class="sec" id="terminal">
+    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 终端</h2>
+    <p>终端模块提供 SSH 远程连接和本地命令执行功能。</p>
+
+    <h3>新建连接</h3>
+    <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+            <div class="step-title">点击侧边栏「终端」按钮</div>
+            <div class="step-desc">进入终端模块</div>
+        </div>
+    </div>
+    <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+            <div class="step-title">点击「新建连接」</div>
+            <div class="step-desc">弹出新建连接对话框，可选择 SSH、SFTP、local、VNC 等连接类型</div>
+        </div>
+    </div>
+    <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+            <div class="step-title">填写连接信息</div>
+            <div class="step-desc">输入主机地址、端口、用户名，选择认证方式（密码/密钥）</div>
+        </div>
+    </div>
+    <div class="step">
+        <div class="step-num">4</div>
+        <div class="step-body">
+            <div class="step-title">连接</div>
+            <div class="step-desc">点击连接，首次连接需确认主机密钥</div>
+        </div>
+    </div>
+
+    <h3>终端功能</h3>
+    <ul>
+        <li><strong>多标签</strong>：支持同时打开多个终端标签</li>
+        <li><strong>SSH 密码输入</strong>：连接时弹出密码输入对话框</li>
+        <li><strong>主机密钥确认</strong>：首次连接时确认服务器指纹</li>
+        <li><strong>命令审批</strong>：AI 执行命令时弹出审批对话框，可允许或拒绝</li>
+        <li><strong>端口转发</strong>：配置 SSH 端口转发</li>
+        <li><strong>文件管理器</strong>：双栏文件管理，支持上传/下载/重命名/删除</li>
+        <li><strong>AI 面板</strong>：终端右侧的 AI 助手面板，可快速执行常用操作</li>
+        <li><strong>批量模式</strong>：在多台服务器上批量执行命令</li>
+        <li><strong>会话管理</strong>：保存和管理 SSH 连接配置</li>
+        <li><strong>桌面模式</strong>：类似远程桌面的多窗口体验</li>
+        <li><strong>VNC 远程桌面</strong>：作为终端连接类型之一，在新建连接对话框中选择 VNC 协议，连接成功后即可在标签页内操控远程桌面</li>
+        <li><strong>系统监控面板</strong>：SSH 连接成功后，可进入系统监控子面板查看 CPU、内存、磁盘、网络等实时指标</li>
+    </ul>
+
+    <h3>AI 辅助终端操作</h3>
+    <p>终端内置 AI 面板，提供：</p>
+    <ul>
+        <li><strong>快速操作</strong>：一键执行常用命令（查看系统信息、磁盘使用等）</li>
+        <li><strong>AI 对话</strong>：用自然语言描述需求，AI 生成并执行命令</li>
+        <li><strong>操作配置</strong>：自定义 AI 可执行的操作范围</li>
+    </ul>
+</div>
+
 <!-- 邮件 -->
 <div class="sec" id="mail">
     <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 邮件</h2>
-    <p>Mona 邮件是 Foxmail 风格的桌面客户端，支持多账户同时收发、AI 起草回复、附件直接进笔记或知识库。</p>
+    <p>Mona 邮件是 Foxmail 风格的桌面客户端，支持多账户同时收发、AI 起草回复、附件直接进笔记或知识库。<span class="tag tag-p">需授权</span></p>
 
     <h3>添加账户</h3>
     <div class="step">
@@ -810,7 +873,7 @@
     <h3>日程功能</h3>
     <ul>
         <li><strong>日历视图</strong>：月、周、日三种视图自由切换</li>
-        <li><strong>定时提醒</strong>：桌面通知和系统通知双通道提醒</li>
+        <li><strong>定时提醒</strong>：应用内通知和系统通知双通道提醒</li>
         <li><strong>任务列表</strong>：待办事项与日程联动管理</li>
         <li><strong>重复规则</strong>：每天、每周、每月或自定义周期</li>
         <li><strong>日程分类</strong>：工作、个人、重要等颜色标签</li>
@@ -818,84 +881,42 @@
     </ul>
 </div>
 
-<!-- 浏览器 -->
-<div class="sec" id="browser">
-    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 浏览器</h2>
-    <p>Mona 内置浏览器，让你不离开主窗口就能查阅资料、收藏网页。</p>
+<!-- 系统 -->
+<div class="sec" id="system">
+    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 系统</h2>
+    <p>系统模块提供本机硬件、软件、启动项和维护工具的可视化管理，帮助你了解电脑状态并安全维护。</p>
 
-    <h3>浏览器功能</h3>
-    <ul>
-        <li><strong>多标签管理</strong>：同时打开多个标签页浏览</li>
-        <li><strong>地址栏</strong>：输入 URL 或关键词搜索</li>
-        <li><strong>收藏夹</strong>：导入 Chrome/Edge 书签</li>
-        <li><strong>下载栏</strong>：管理下载文件</li>
-        <li><strong>页内搜索</strong>：Ctrl+F 查找文字</li>
-        <li><strong>Cookie 管理</strong>：查看、编辑、清除 Cookie</li>
-        <li><strong>历史记录</strong>：按时间浏览访问历史</li>
-        <li><strong>AI 读页</strong>：右键页面 → 让 AI 总结、提取要点、翻译</li>
-        <li><strong>截图</strong>：截取整页或可视区域</li>
-    </ul>
-
-    <h3>与知识库联动</h3>
-    <p>右键网页 → 保存到知识库，AI 自动提取正文，将网页内容沉淀到知识库中。</p>
-</div>
-
-<!-- 终端 -->
-<div class="sec" id="terminal">
-    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 终端</h2>
-    <p>终端模块提供 SSH 远程连接和本地命令执行功能。</p>
-
-    <h3>新建连接</h3>
-    <div class="step">
-        <div class="step-num">1</div>
-        <div class="step-body">
-            <div class="step-title">点击侧边栏「终端」按钮</div>
-            <div class="step-desc">进入终端模块</div>
+    <h3>五个子面板</h3>
+    <div class="card-grid">
+        <div class="card">
+            <div class="card-t">概览</div>
+            <div class="card-d">查看 CPU、内存、磁盘、网络等核心指标的实时状态和性能趋势</div>
         </div>
-    </div>
-    <div class="step">
-        <div class="step-num">2</div>
-        <div class="step-body">
-            <div class="step-title">点击「新建连接」</div>
-            <div class="step-desc">弹出新建连接对话框</div>
+        <div class="card">
+            <div class="card-t">存储空间</div>
+            <div class="card-d">查看磁盘分区、容量和占用情况，了解空间分布</div>
         </div>
-    </div>
-    <div class="step">
-        <div class="step-num">3</div>
-        <div class="step-body">
-            <div class="step-title">填写连接信息</div>
-            <div class="step-desc">输入主机地址、端口、用户名，选择认证方式（密码/密钥）</div>
+        <div class="card">
+            <div class="card-t">软件管理</div>
+            <div class="card-d">查看已安装软件列表和可用更新，支持批量更新</div>
         </div>
-    </div>
-    <div class="step">
-        <div class="step-num">4</div>
-        <div class="step-body">
-            <div class="step-title">连接</div>
-            <div class="step-desc">点击连接，首次连接需确认主机密钥</div>
+        <div class="card">
+            <div class="card-t">启动项</div>
+            <div class="card-d">查看开机自启动项，可启用或禁用</div>
+        </div>
+        <div class="card">
+            <div class="card-t">维护记录</div>
+            <div class="card-d">系统维护时间线，记录历次维护操作和扫描结果</div>
         </div>
     </div>
 
-    <h3>终端功能</h3>
-    <ul>
-        <li><strong>多标签</strong>：支持同时打开多个终端标签</li>
-        <li><strong>SSH 密码输入</strong>：连接时弹出密码输入对话框</li>
-        <li><strong>主机密钥确认</strong>：首次连接时确认服务器指纹</li>
-        <li><strong>命令审批</strong>：AI 执行命令时弹出审批对话框，可允许或拒绝</li>
-        <li><strong>端口转发</strong>：配置 SSH 端口转发</li>
-        <li><strong>文件管理器</strong>：双栏文件管理，支持上传/下载/重命名/删除</li>
-        <li><strong>AI 面板</strong>：终端右侧的 AI 助手面板，可快速执行常用操作</li>
-        <li><strong>批量模式</strong>：在多台服务器上批量执行命令</li>
-        <li><strong>会话管理</strong>：保存和管理 SSH 连接配置</li>
-        <li><strong>桌面模式</strong>：类似远程桌面的多窗口体验</li>
-    </ul>
+    <h3>进入方式</h3>
+    <p>点击侧边栏「系统」按钮即可进入系统模块，顶部 Tab 栏可切换五个子面板。</p>
 
-    <h3>AI 辅助终端操作</h3>
-    <p>终端内置 AI 面板，提供：</p>
-    <ul>
-        <li><strong>快速操作</strong>：一键执行常用命令（查看系统信息、磁盘使用等）</li>
-        <li><strong>AI 对话</strong>：用自然语言描述需求，AI 生成并执行命令</li>
-        <li><strong>操作配置</strong>：自定义 AI 可执行的操作范围</li>
-    </ul>
+    <div class="tip">
+        <strong>让 Mona 检查</strong>
+        每个子面板右侧都有「让 Mona 检查」按钮，点击后 AI 会根据当前面板数据给出优化建议。
+    </div>
 </div>
 
 <!-- 数据库 -->
@@ -996,164 +1017,51 @@
 <!-- AI 文档 -->
 <div class="sec" id="ai-docs">
     <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> AI 文档</h2>
-    <p>AI 文档模块让 AI 帮你生成专业文档。</p>
-
-    <h3>支持的文档类型</h3>
-    <ul>
-        <li>技术文档</li>
-        <li>产品方案</li>
-        <li>周报月报</li>
-        <li>会议纪要</li>
-        <li>用户手册</li>
-        <li>营销文案</li>
-    </ul>
-
-    <h3>使用步骤</h3>
-    <div class="step">
-        <div class="step-num">1</div>
-        <div class="step-body">
-            <div class="step-title">进入文档模块</div>
-            <div class="step-desc">点击侧边栏「AI 文档」按钮</div>
-        </div>
-    </div>
-    <div class="step">
-        <div class="step-num">2</div>
-        <div class="step-body">
-            <div class="step-title">填写需求</div>
-            <div class="step-desc">选择文档类型，填写主题和要点</div>
-        </div>
-    </div>
-    <div class="step">
-        <div class="step-num">3</div>
-        <div class="step-body">
-            <div class="step-title">生成并导出</div>
-            <div class="step-desc">AI 生成文档并预览，确认后可导出为 .md 或 .docx</div>
-        </div>
-    </div>
-</div>
-
-<!-- AI 视频 -->
-<div class="sec" id="ai-video">
-    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> AI 视频</h2>
-    <p>AI 视频模块让 AI 生成短视频内容。</p>
-
-    <h3>使用步骤</h3>
-    <div class="step">
-        <div class="step-num">1</div>
-        <div class="step-body">
-            <div class="step-title">进入视频模块</div>
-            <div class="step-desc">点击侧边栏「AI 视频」按钮</div>
-        </div>
-    </div>
-    <div class="step">
-        <div class="step-num">2</div>
-        <div class="step-body">
-            <div class="step-title">描述需求</div>
-            <div class="step-desc">描述视频主题、时长和风格</div>
-        </div>
-    </div>
-    <div class="step">
-        <div class="step-num">3</div>
-        <div class="step-body">
-            <div class="step-title">生成视频</div>
-            <div class="step-desc">AI 调用视频生成 API 产出视频</div>
-        </div>
-    </div>
-
-    <div class="tip">
-        <strong>配置说明</strong>
-        需在「设置 → 模型与供应商 → 视频」中配置视频生成供应商和模型，详见 <code>https://mona.lzfun.vip/tutorial</code> 教程。
-    </div>
-
-    <div class="tip warn">
-        <strong>注意</strong>
-        视频生成消耗较多 Token，建议先用文字描述明确需求，再调用视频生成。
-    </div>
-</div>
-
-<!-- AI 流程图 -->
-<div class="sec" id="ai-flowchart">
-    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> AI 流程图</h2>
-    <p>AI 流程图模块根据自然语言描述生成流程图。</p>
-
-    <h3>使用步骤</h3>
-    <div class="step">
-        <div class="step-num">1</div>
-        <div class="step-body">
-            <div class="step-title">描述流程</div>
-            <div class="step-desc">用自然语言描述流程，如「用户下单 → 支付 → 发货 → 收货」</div>
-        </div>
-    </div>
-    <div class="step">
-        <div class="step-num">2</div>
-        <div class="step-body">
-            <div class="step-title">生成流程图</div>
-            <div class="step-desc">AI 自动生成 Mermaid 流程图</div>
-        </div>
-    </div>
-
-    <h3>支持的图表类型</h3>
-    <ul>
-        <li>流程图</li>
-        <li>时序图</li>
-        <li>关系图</li>
-        <li>思维导图</li>
-    </ul>
-
-    <h3>导出</h3>
-    <p>生成的流程图可导出为 SVG 或 PNG 格式。</p>
-</div>
-
-<!-- PPT 制作 -->
-<div class="sec" id="ppt">
-    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> PPT 制作</h2>
-    <p>PPT 制作模块是 AI 驱动的演示文稿创建工具。<span class="tag tag-p">需授权</span></p>
+    <p>AI 文档模块让 AI 帮你生成专业内容，包含 PPT、视频、流程图三种类型。<span class="tag tag-p">需授权</span></p>
 
     <div class="tip warn">
         <strong>授权要求</strong>
-        PPT 制作功能需要有效授权（试用期内或已登录账号）。未授权时侧边栏不显示 PPT 入口。
+        AI 文档模块需要有效授权（试用期内或已登录账号）。未授权时侧边栏不显示 AI 文档入口。
     </div>
 
-    <h3>创建 PPT</h3>
+    <h3>三个子 Tab</h3>
+    <div class="card-grid">
+        <div class="card">
+            <div class="card-t">PPT</div>
+            <div class="card-d">输入主题和要点，AI 生成演示文稿，可导出 PPTX。支持配置主题、页数、格式，内置模板库和自定义模板导入</div>
+        </div>
+        <div class="card">
+            <div class="card-t">视频</div>
+            <div class="card-d">描述视频主题、时长和风格，AI 调用视频生成 API 产出视频。需在「设置 → 模型设置 → 视频模型」中配置视频生成供应商和模型</div>
+        </div>
+        <div class="card">
+            <div class="card-t">流程图</div>
+            <div class="card-d">用自然语言描述流程，AI 生成 Mermaid 流程图、时序图、关系图、思维导图，可导出 SVG 或 PNG</div>
+        </div>
+    </div>
+
+    <h3>使用步骤</h3>
     <div class="step">
         <div class="step-num">1</div>
         <div class="step-body">
-            <div class="step-title">点击侧边栏「PPT 制作」按钮</div>
-            <div class="step-desc">进入 PPT 制作模块</div>
+            <div class="step-title">进入 AI 文档模块</div>
+            <div class="step-desc">点击侧边栏「AI 文档」按钮，进入文档模块</div>
         </div>
     </div>
     <div class="step">
         <div class="step-num">2</div>
         <div class="step-body">
-            <div class="step-title">配置参数</div>
-            <div class="step-desc">在配置面板中设置主题、页数、格式等参数</div>
+            <div class="step-title">选择子 Tab</div>
+            <div class="step-desc">在顶部切换到 PPT、视频或流程图子 Tab</div>
         </div>
     </div>
     <div class="step">
         <div class="step-num">3</div>
         <div class="step-body">
-            <div class="step-title">描述需求</div>
-            <div class="step-desc">在聊天面板中描述你想要的 PPT 内容</div>
+            <div class="step-title">描述需求并生成</div>
+            <div class="step-desc">在配置面板中设置参数，在聊天面板中描述需求，AI 生成后预览并导出</div>
         </div>
     </div>
-    <div class="step">
-        <div class="step-num">4</div>
-        <div class="step-body">
-            <div class="step-title">预览与导出</div>
-            <div class="step-desc">AI 生成后可在预览面板查看，确认后导出为 PPTX 文件</div>
-        </div>
-    </div>
-
-    <h3>PPT 功能</h3>
-    <ul>
-        <li><strong>配置面板</strong>：设置 PPT 主题、格式、页数等参数</li>
-        <li><strong>聊天面板</strong>：与 AI 对话描述 PPT 需求</li>
-        <li><strong>实时预览</strong>：SVG 格式的幻灯片实时预览</li>
-        <li><strong>模板选择</strong>：从内置模板库选择设计风格</li>
-        <li><strong>自定义模板导入</strong>：导入 PPTX 模板作为底图</li>
-        <li><strong>历史记录</strong>：查看和管理 PPT 生成历史</li>
-        <li><strong>PPTX 导出</strong>：一键导出为 PowerPoint 文件</li>
-    </ul>
 </div>
 
 <!-- 用户画像 -->
@@ -1198,152 +1106,28 @@
     </div>
 </div>
 
-<!-- VNC 远程桌面 -->
-<div class="sec" id="vnc">
-    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> VNC 远程桌面</h2>
-    <p>VNC 远程桌面模块让你在 Mona 内直接连接并操控远程计算机桌面，无需安装独立的 VNC 客户端。<span class="tag tag-g">1.1.0 新增</span></p>
-
-    <h3>新建连接</h3>
-    <div class="step">
-        <div class="step-num">1</div>
-        <div class="step-body">
-            <div class="step-title">填写主机信息</div>
-            <div class="step-desc">输入远程主机 IP、端口（默认 5900）和密码</div>
-        </div>
-    </div>
-    <div class="step">
-        <div class="step-num">2</div>
-        <div class="step-body">
-            <div class="step-title">选择编码与色彩</div>
-            <div class="step-desc">根据网络情况选择 Tight、Raw 等编码及色彩深度</div>
-        </div>
-    </div>
-    <div class="step">
-        <div class="step-num">3</div>
-        <div class="step-body">
-            <div class="step-title">连接并操控</div>
-            <div class="step-desc">点击连接后，远程桌面嵌入到 Mona 标签页中，支持鼠标和键盘操作</div>
-        </div>
-    </div>
-
-    <h3>功能特性</h3>
-    <ul>
-        <li><strong>多连接管理</strong>：以标签页方式同时管理多个 VNC 会话</li>
-        <li><strong>剪贴板同步</strong>：本地与远程主机之间双向同步剪贴板内容</li>
-        <li><strong>全屏模式</strong>：一键切换到全屏沉浸式操作</li>
-        <li><strong>缩放适配</strong>：远程画面自动缩放以适应当前窗口</li>
-        <li><strong>连接历史</strong>：保存最近连接记录，一键快速重连</li>
-    </ul>
-</div>
-
-<!-- SSH 监控 -->
-<div class="sec" id="ssh-monitor">
-    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> SSH 监控</h2>
-    <p>SSH 监控模块提供基于 SSH 的远程系统监控面板，实时查看远程服务器的资源占用、进程状态和日志输出。<span class="tag tag-g">1.1.0 新增</span></p>
-
-    <h3>连接远程主机</h3>
-    <p>在新建连接对话框中填入主机 IP、SSH 端口（默认 22）、用户名和认证方式（密码或私钥），连接成功后即可查看监控面板。</p>
-
-    <h3>监控指标</h3>
-    <ul>
-        <li><strong>CPU 使用率</strong>：实时折线图显示 CPU 整体和各核心占用</li>
-        <li><strong>内存与交换</strong>：内存占用、缓存和 Swap 使用情况</li>
-        <li><strong>磁盘 I/O</strong>：读写速率和磁盘空间占用</li>
-        <li><strong>网络流量</strong>：上下行带宽实时曲线</li>
-        <li><strong>进程列表</strong>：按 CPU 或内存排序的 Top 进程</li>
-        <li><strong>系统日志</strong>：实时滚动显示 systemd journal 日志</li>
-    </ul>
-
-    <div class="tip">
-        <strong>多主机管理</strong>
-        可同时连接多台远程主机，每个连接以独立标签页展示，便于横向对比不同服务器的负载状况。
-    </div>
-</div>
-
-<!-- 微信渠道 -->
-<div class="sec" id="wechat">
-    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 微信渠道</h2>
-    <p>微信渠道模块让 Mona 接入微信，你可以在微信中和 AI 对话，把微信作为 Mona 的远程入口。<span class="tag tag-g">1.1.0 新增</span></p>
-
-    <h3>配置步骤</h3>
-    <div class="step">
-        <div class="step-num">1</div>
-        <div class="step-body">
-            <div class="step-title">登录微信</div>
-            <div class="step-desc">在微信渠道页面扫码登录个人微信账号</div>
-        </div>
-    </div>
-    <div class="step">
-        <div class="step-num">2</div>
-        <div class="step-body">
-            <div class="step-title">设置接收规则</div>
-            <div class="step-desc">配置哪些联系人或群组的消息需要 AI 回复</div>
-        </div>
-    </div>
-    <div class="step">
-        <div class="step-num">3</div>
-        <div class="step-body">
-            <div class="step-title">启用渠道</div>
-            <div class="step-desc">开启渠道开关后，命中的消息会自动转发给 AI 处理并回复</div>
-        </div>
-    </div>
-
-    <h3>功能特性</h3>
-    <ul>
-        <li><strong>多会话支持</strong>：同时响应多个联系人和群组的消息</li>
-        <li><strong>白名单过滤</strong>：仅响应指定联系人或群组</li>
-        <li><strong>关键词触发</strong>：通过 @ 提及或关键词命中触发 AI 回复</li>
-        <li><strong>消息转发</strong>：将图片、文件等附件转发给 AI 处理</li>
-    </ul>
-
-    <div class="tip warn">
-        <strong>合规提示</strong>
-        微信渠道基于个人微信接入，请遵守微信用户协议，避免用于营销或高频自动化场景，以免账号被限制。
-    </div>
-</div>
-
-<!-- 桌面通知 -->
-<div class="sec" id="notify">
-    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 桌面通知</h2>
-    <p>桌面通知模块负责在 AI 完成长时间任务或收到新消息时，于系统桌面右下角弹出通知窗口提醒你。<span class="tag tag-g">1.1.0 新增</span></p>
-
-    <h3>通知场景</h3>
-    <ul>
-        <li><strong>任务完成</strong>：Agent 完成长耗时任务（如代码生成、PPT 制作、视频渲染）时弹出</li>
-        <li><strong>新消息</strong>：收到微信、邮件等渠道的新消息时提醒</li>
-        <li><strong>更新提醒</strong>：检测到新版本可用时提示更新</li>
-        <li><strong>错误告警</strong>：Gateway 异常或配置出错时弹出错误通知</li>
-    </ul>
-
-    <h3>通知样式</h3>
-    <p>通知窗口使用 Mona 自定义风格（非系统原生），包含猫头鹰 LOGO 图标、标题、内容预览和操作按钮，位于主窗口所在显示器的右下角，底部预留 48px 任务栏高度。</p>
-
-    <div class="tip">
-        <strong>免打扰</strong>
-        在「设置 → 高级」中可关闭桌面通知，或设置免打扰时段，避免在休息时间被打扰。
-    </div>
-</div>
-
 <div class="divider"></div>
 
-<!-- 设置总览 -->
+<!-- 设置 - 概览 -->
 <div class="sec" id="settings-overview">
-    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 设置</h2>
-    <p>点击标题栏右侧的「设置」按钮（齿轮图标）进入设置页面。设置页面左侧为分区导航，右侧为配置内容。</p>
+    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 设置 - 概览</h2>
+    <p>点击标题栏右侧的「设置」按钮（齿轮图标）进入设置页面。设置页面左侧为分区导航，右侧为配置内容，共 11 个分区。</p>
 
     <h3>设置分区</h3>
     <table>
-        <thead><tr><th>分区</th><th>说明</th></tr></thead>
+        <thead><tr><th>分区</th><th>说明</th><th>可用性</th></tr></thead>
         <tbody>
-            <tr><td>概览</td><td>当前配置状态总览，显示模型、供应商、工作区等关键信息</td></tr>
-            <tr><td>外观</td><td>主题、语言、界面密度、活动细节模式、代码换行</td></tr>
-            <tr><td>模型</td><td>当前模型选择和模型预设管理</td></tr>
-            <tr><td>供应商</td><td>所有 LLM 供应商的 API 密钥和地址配置</td></tr>
-            <tr><td>图片</td><td>图像生成功能开关和参数配置</td></tr>
-            <tr><td>网页</td><td>Web 搜索功能配置</td></tr>
-            <tr><td>运行时</td><td>Bot 名称、图标、时区、工作区路径等</td></tr>
-            <tr><td>高级</td><td>高级配置选项</td></tr>
-            <tr><td>关于</td><td>版本信息和系统状态</td></tr>
+            <tr><td>概览</td><td>当前配置状态总览：已配置供应商数量、当前模型预设、Web 搜索、图像/视频生成状态等</td><td>全部</td></tr>
+            <tr><td>外观</td><td>主题、界面语言、界面密度、活动细节模式、代码换行等本地偏好</td><td>全部</td></tr>
+            <tr><td>模型设置</td><td>对话、图像、视频、嵌入四类模型的供应商与 API 密钥配置，模型预设管理</td><td>全部</td></tr>
+            <tr><td>网络搜索</td><td>Web 搜索供应商、API 密钥、最大结果数、超时、Jina Reader 等</td><td>全部</td></tr>
+            <tr><td>频道</td><td>外部通讯平台接入配置，让 Mona 通过这些平台收发消息</td><td>全部</td></tr>
+            <tr><td>运行时</td><td>Bot 名称、图标、时区、工作区路径、工具提示长度等</td><td>全部</td></tr>
+            <tr><td>桌面</td><td>桌面客户端独有设置，桌面模式与网关状态</td><td><span class="tag tag-b">仅桌面</span></td></tr>
+            <tr><td>快捷键</td><td>快捷提问快捷键、侧边栏模块切换快捷键</td><td><span class="tag tag-b">仅桌面</span></td></tr>
+            <tr><td>Agent 搜索范围</td><td>限定 Agent 检索笔记和邮件时的范围</td><td><span class="tag tag-b">仅桌面</span></td></tr>
+            <tr><td>高级</td><td>配置路径、网关状态、重启状态等高级选项</td><td>全部</td></tr>
+            <tr><td>关于</td><td>版本信息、许可证状态、机器码、检查更新</td><td>全部</td></tr>
         </tbody>
     </table>
 
@@ -1351,57 +1135,90 @@
         <strong>返回对话</strong>
         设置页面左上角有「返回对话」按钮，点击可回到聊天界面。
     </div>
-</div>
-
-<!-- 模型与供应商 -->
-<div class="sec" id="settings-model">
-    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 模型与供应商设置</h2>
-
-    <h3>模型设置</h3>
-    <ul>
-        <li><strong>当前模型</strong>：显示和修改正在使用的模型名称</li>
-        <li><strong>当前供应商</strong>：显示模型对应的供应商</li>
-        <li><strong>模型预设</strong>：创建和管理模型预设，快速切换不同模型配置</li>
-    </ul>
-
-    <h3>供应商配置</h3>
-    <p>在「供应商」分区中，可以配置所有支持的 LLM 供应商：</p>
-    <ul>
-        <li>点击供应商名称展开配置面板</li>
-        <li>输入 API 密钥（点击眼睛图标显示/隐藏密钥）</li>
-        <li>输入 API 地址（如使用自定义端点）</li>
-        <li>修改后点击保存</li>
-        <li>支持搜索过滤供应商列表</li>
-    </ul>
 
     <div class="tip warn">
-        <strong>注意</strong>
-        修改运行时配置后，可能需要重启 Mona 才能生效。页面会提示「待处理更改」，点击「重启 Mona」按钮即可。
+        <strong>待处理更改</strong>
+        修改运行时、网络搜索、图像或频道配置后需要重启 Mona 才能生效。概览页顶部会显示「待处理更改」提示，点击「重启 Mona」按钮即可。
     </div>
 </div>
 
-<!-- 图片生成设置 -->
-<div class="sec" id="settings-image">
-    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 图片生成设置</h2>
-    <p>在「图片」分区中配置图像生成功能：</p>
+<!-- 设置 - 外观 -->
+<div class="sec" id="settings-appearance">
+    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 设置 - 外观</h2>
+    <p>在「外观」分区中调整界面呈现的本地偏好，所有改动即时生效，无需重启。</p>
 
     <table>
         <thead><tr><th>配置项</th><th>说明</th></tr></thead>
         <tbody>
-            <tr><td>启用图片生成</td><td>开关，控制是否启用图像生成功能</td></tr>
-            <tr><td>图片服务商</td><td>选择图像生成供应商（OpenRouter、AiHubMix、Gemini 等）</td></tr>
-            <tr><td>模型</td><td>图像生成使用的模型名称</td></tr>
-            <tr><td>默认宽高比</td><td>1:1、3:4、9:16、4:3、16:9 等</td></tr>
-            <tr><td>默认尺寸</td><td>1K、2K、4K 或具体像素值</td></tr>
-            <tr><td>每轮最大图片数</td><td>单次生成最多图片数量（1-8）</td></tr>
+            <tr><td>主题</td><td>浅色 / 深色切换</td></tr>
+            <tr><td>界面语言</td><td>界面显示语言</td></tr>
+            <tr><td>界面密度</td><td>紧凑 / 舒适等间距模式</td></tr>
+            <tr><td>活动细节模式</td><td>控制代理活动追踪的展示详细程度</td></tr>
+            <tr><td>代码换行</td><td>消息中的代码块是否自动换行</td></tr>
         </tbody>
     </table>
 </div>
 
-<!-- 网页搜索设置 -->
+<!-- 设置 - 模型设置 -->
+<div class="sec" id="settings-models">
+    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 设置 - 模型设置</h2>
+    <p>「模型设置」分区统一管理对话、图像、视频、嵌入四类模型的供应商与 API 凭据，分为 4 个子 Tab。</p>
+
+    <div class="card-grid">
+        <div class="card">
+            <div class="card-t">对话模型</div>
+            <div class="card-d">配置文本对话使用的 LLM 供应商与 API 密钥，管理模型预设，切换当前对话模型。</div>
+        </div>
+        <div class="card">
+            <div class="card-t">图像模型</div>
+            <div class="card-d">配置图像生成供应商（OpenRouter、AiHubMix、Gemini 等）、模型名称、默认宽高比与尺寸、每轮最大图片数。</div>
+        </div>
+        <div class="card">
+            <div class="card-t">视频模型</div>
+            <div class="card-d">配置视频生成供应商与模型，控制视频生成功能的启用与参数。</div>
+        </div>
+        <div class="card">
+            <div class="card-t">嵌入模型</div>
+            <div class="card-d">配置向量化嵌入供应商与模型，用于知识库检索与语义搜索。</div>
+        </div>
+    </div>
+
+    <h3>供应商配置通用流程</h3>
+    <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+            <div class="step-title">展开供应商</div>
+            <div class="step-desc">点击供应商名称展开配置面板，支持搜索过滤。</div>
+        </div>
+    </div>
+    <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+            <div class="step-title">填写凭据</div>
+            <div class="step-desc">输入 API 密钥（点击眼睛图标显示/隐藏）和 API 地址（如使用自定义端点）。</div>
+        </div>
+    </div>
+    <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+            <div class="step-title">保存</div>
+            <div class="step-desc">修改后点击保存。涉及运行时的更改需重启 Mona 生效。</div>
+        </div>
+    </div>
+
+    <h3>模型预设</h3>
+    <p>在对话模型 Tab 中可以创建和管理模型预设，将一组模型配置保存为预设，方便快速切换不同场景的模型组合。</p>
+
+    <div class="tip warn">
+        <strong>注意</strong>
+        修改模型或图像配置后，可能需要重启 Mona 才能生效。页面顶部会提示「待处理更改」。
+    </div>
+</div>
+
+<!-- 设置 - 网络搜索 -->
 <div class="sec" id="settings-web">
-    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 网页搜索设置</h2>
-    <p>在「网页」分区中配置 Web 搜索功能：</p>
+    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 设置 - 网络搜索</h2>
+    <p>在「网络搜索」分区中配置 Web 搜索功能，控制 Agent 联网检索时的行为：</p>
 
     <table>
         <thead><tr><th>配置项</th><th>说明</th></tr></thead>
@@ -1414,36 +1231,147 @@
             <tr><td>Jina Reader</td><td>是否使用 Jina Reader 提取网页纯文本</td></tr>
         </tbody>
     </table>
+
+    <div class="tip warn">
+        <strong>需要重启</strong>
+        修改网络搜索配置后需要重启 Mona 才能生效。
+    </div>
 </div>
 
-<!-- 运行时设置 -->
+<!-- 设置 - 频道 -->
+<div class="sec" id="settings-channels">
+    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 设置 - 频道</h2>
+    <p>「频道」分区用于配置外部通讯平台接入，让 Mona 通过这些平台收发消息。每个频道独立配置，可按需启用。</p>
+
+    <h3>通用配置流程</h3>
+    <ul>
+        <li>选择要接入的频道类型</li>
+        <li>按照页面提示完成登录或填入凭据（如扫码授权、API 密钥等）</li>
+        <li>保存后即可在该平台与 Mona 对话</li>
+        <li>每个频道支持单独启用/禁用</li>
+    </ul>
+
+    <div class="tip warn">
+        <strong>需要重启</strong>
+        修改频道配置后需要重启 Mona 才能生效。
+    </div>
+</div>
+
+<!-- 设置 - 运行时 -->
 <div class="sec" id="settings-runtime">
-    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 运行时设置</h2>
+    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 设置 - 运行时</h2>
     <p>在「运行时」分区中配置代理运行时参数：</p>
 
     <table>
         <thead><tr><th>配置项</th><th>说明</th></tr></thead>
         <tbody>
             <tr><td>Bot 名称</td><td>代理显示名称（默认 mona）</td></tr>
-            <tr><td>Bot 图标</td><td>代理图标 emoji（默认 🐈）</td></tr>
+            <tr><td>Bot 图标</td><td>代理图标，可输入 emoji 自定义</td></tr>
             <tr><td>时区</td><td>IANA 时区标识符（如 Asia/Shanghai）</td></tr>
             <tr><td>工作区路径</td><td>Mona 工作区目录路径</td></tr>
             <tr><td>工具提示最大长度</td><td>工具调用提示的显示字符上限</td></tr>
         </tbody>
     </table>
+
+    <div class="tip warn">
+        <strong>需要重启</strong>
+        修改运行时配置后需要重启 Mona 才能生效。
+    </div>
 </div>
 
-<!-- 高级设置 -->
+<!-- 设置 - 桌面 -->
+<div class="sec" id="settings-desktop">
+    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 设置 - 桌面 <span class="tag tag-b">仅桌面</span></h2>
+    <p>「桌面」分区仅在桌面客户端中显示，用于配置桌面模式相关选项，并展示当前网关（Gateway）运行状态与端口。</p>
+
+    <ul>
+        <li><strong>桌面模式</strong>：控制桌面客户端的窗口与启动行为</li>
+        <li><strong>网关状态</strong>：显示 Gateway 是否运行、监听端口</li>
+        <li><strong>开机自启</strong>：是否随系统启动</li>
+        <li><strong>关闭行为</strong>：关闭窗口时是最小化到托盘还是退出</li>
+    </ul>
+</div>
+
+<!-- 设置 - 快捷键 -->
+<div class="sec" id="settings-shortcuts">
+    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 设置 - 快捷键 <span class="tag tag-b">仅桌面</span></h2>
+    <p>「快捷键」分区仅在桌面客户端中显示，可自定义快捷提问窗口和侧边栏模块切换的全局快捷键。</p>
+
+    <table>
+        <thead><tr><th>配置项</th><th>说明</th></tr></thead>
+        <tbody>
+            <tr><td>快捷提问快捷键</td><td>呼出快捷提问窗口的全局快捷键（默认 <span class="kbd">Ctrl</span>+<span class="kbd">Alt</span>+<span class="kbd">M</span>）</td></tr>
+            <tr><td>快捷提问模式</td><td>快捷提问窗口的展示模式（如紧凑模式）</td></tr>
+            <tr><td>侧边栏模块快捷键</td><td>切换到对话、笔记、终端、邮件、日程、系统等模块的快捷键</td></tr>
+        </tbody>
+    </table>
+
+    <div class="tip">
+        <strong>修改方式</strong>
+        点击输入框后按下新的组合键即可完成自定义，保存后立即生效。
+    </div>
+</div>
+
+<!-- 设置 - Agent 搜索范围 -->
+<div class="sec" id="settings-agent-scope">
+    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 设置 - Agent 搜索范围 <span class="tag tag-b">仅桌面</span></h2>
+    <p>「Agent 搜索范围」分区仅在桌面客户端中显示，用于限定 Agent 在检索笔记和邮件时的访问范围，保护隐私。</p>
+
+    <h3>笔记搜索范围</h3>
+    <ul>
+        <li><strong>全部笔记本</strong>：Agent 可检索所有笔记本中的笔记</li>
+        <li><strong>指定笔记本</strong>：仅允许 Agent 检索选中的笔记本</li>
+    </ul>
+
+    <h3>邮件搜索范围</h3>
+    <ul>
+        <li><strong>全部文件夹</strong>：Agent 可检索所有邮件账号的所有文件夹</li>
+        <li><strong>指定文件夹</strong>：仅允许 Agent 检索选中的邮件文件夹</li>
+    </ul>
+
+    <div class="tip">
+        <strong>用途</strong>
+        适合在工作区中混合了私人内容的场景，通过白名单方式避免 Agent 读取敏感笔记或邮件。
+    </div>
+</div>
+
+<!-- 设置 - 高级 -->
 <div class="sec" id="settings-advanced">
-    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 高级设置</h2>
-    <p>高级设置提供更深层的配置选项：</p>
+    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 设置 - 高级</h2>
+    <p>「高级」分区提供更深层的配置选项和诊断信息：</p>
     <ul>
         <li><strong>配置路径</strong>：显示 config.json 的文件路径</li>
         <li><strong>网关状态</strong>：显示 Gateway 运行状态</li>
         <li><strong>重启状态</strong>：显示是否有待生效的配置更改</li>
-        <li><strong>快捷键配置</strong>（桌面客户端）：自定义模块切换快捷键</li>
-        <li><strong>桌面设置</strong>（桌面客户端）：桌面模式相关配置</li>
     </ul>
+
+    <div class="tip warn">
+        <strong>谨慎修改</strong>
+        高级选项通常不需要手动调整。如非必要，请保持默认值。
+    </div>
+</div>
+
+<!-- 设置 - 关于 -->
+<div class="sec" id="settings-about">
+    <h2><span class="ic"><svg class="mona-icon" viewBox="0 0 128 128" fill="none"><path d="M17 52C18 36 23 17 29 4c13 5 25 17 36 35L42 59C34 55 26 53 17 52z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M111 52c-1-16-6-35-12-48-13 5-25 17-36 35l23 20c8-4 16-6 25-7z" fill="#101010" stroke="#050505" stroke-width="2.1" stroke-linejoin="round"/><path d="M31 14c8 4 15 12 22 23l-7 2 3 5-7-1-4 9-5-11-5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M97 14c-8 4-15 12-22 23l7 2-3 5 7-1 4 9 5-11 5 2z" fill="#f7f7f5" stroke="#050505" stroke-width="1.1" stroke-linejoin="round"/><path d="M17 49c0-22 16-35 47-35s47 13 47 35c0 27-17 43-47 43S17 76 17 49z" fill="#101010" stroke="#050505" stroke-width="1.4"/><path d="M18 58c13 5 29 7 46 7s33-2 46-7c-3 20-21 34-46 34S21 78 18 58z" fill="#f7f7f5"/><ellipse cx="42" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="42" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="43.6" cy="43" rx="2" ry="9.3" fill="#050505"/><ellipse cx="86" cy="43" rx="13.2" ry="24" fill="#fff" stroke="#050505" stroke-width="1.2"/><ellipse cx="86" cy="43" rx="8.9" ry="17.2" fill="#333" stroke="#050505" stroke-width="1.1"/><ellipse cx="87.6" cy="43" rx="2" ry="9.3" fill="#050505"/><path d="M53 75c3.3 5 8.1 5.3 11 0 2.9 5.3 7.7 5 11 0" fill="none" stroke="#101010" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></span> 设置 - 关于</h2>
+    <p>「关于」分区显示版本信息、许可证状态和更新检查。</p>
+
+    <h3>版本与许可证</h3>
+    <ul>
+        <li><strong>应用版本</strong>：当前 Mona 客户端的版本号</li>
+        <li><strong>许可证状态</strong>：显示当前授权状态（检查中 / 已激活 / 试用中 / 已过期 / 未导入）</li>
+        <li><strong>到期时间</strong>：如已激活或试用中，显示到期日期</li>
+        <li><strong>机器码</strong>：本机唯一标识，可复制后用于申请许可证</li>
+        <li><strong>导入许可证</strong>：粘贴许可证密钥完成激活</li>
+    </ul>
+
+    <h3>检查更新</h3>
+    <p>点击「检查更新」按钮查询是否有新版本。如有新版本，可下载并安装更新，下载进度会在页面上显示。</p>
+
+    <div class="tip">
+        <strong>自动检查</strong>
+        桌面客户端在启动后会自动检查更新，有新版本时会弹出提示。
+    </div>
 </div>
 
 <div class="divider"></div>
@@ -1480,7 +1408,7 @@
             <tr><td><kbd class="kbd">Alt</kbd>+<kbd class="kbd">3</kbd></td><td>切换到终端</td><td>桌面客户端</td></tr>
             <tr><td><kbd class="kbd">Alt</kbd>+<kbd class="kbd">4</kbd></td><td>切换到数据库</td><td>桌面客户端</td></tr>
             <tr><td><kbd class="kbd">Alt</kbd>+<kbd class="kbd">5</kbd></td><td>切换到知识库</td><td>桌面客户端</td></tr>
-            <tr><td><kbd class="kbd">Alt</kbd>+<kbd class="kbd">6</kbd></td><td>切换到 PPT</td><td>桌面客户端</td></tr>
+            <tr><td><kbd class="kbd">Alt</kbd>+<kbd class="kbd">6</kbd></td><td>切换到 AI 文档</td><td>桌面客户端</td></tr>
             <tr><td><kbd class="kbd">Esc</kbd></td><td>关闭快捷提问 / 关闭弹窗</td><td>全局</td></tr>
         </tbody>
     </table>
@@ -1592,10 +1520,10 @@
         <li>输入框中的 ✨ 图像模式开关需要打开</li>
     </ul>
 
-    <h3>PPT 制作功能不可见</h3>
+    <h3>AI 文档功能不可见</h3>
     <ul>
-        <li>PPT 制作需要有效授权（试用期内或已登录账号）</li>
-        <li>未授权时侧边栏不显示 PPT 入口</li>
+        <li>AI 文档需要有效授权（试用期内或已登录账号）</li>
+        <li>未授权时侧边栏不显示 AI 文档入口</li>
     </ul>
 
     <h3>修改配置后未生效</h3>

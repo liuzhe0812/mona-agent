@@ -112,8 +112,7 @@
     "aiModels": {
       "tabsAria": "模型设置类型",
       "chat": "聊天模型",
-      "image": "图片模型",
-      "embedding": "嵌入模型"
+      "image": "图片模型"
     },
     "sections": {
       "interface": "界面",
@@ -173,12 +172,6 @@
       "ssrfWhitelist": "SSRF 白名单",
       "mcpServers": "MCP 服务器",
       "pathAppend": "PATH 追加",
-      "embeddingEnabled": "嵌入模型",
-      "embeddingEndpoint": "接入点",
-      "embeddingApiKey": "API 密钥",
-      "embeddingModel": "模型名称",
-      "embeddingDimensionality": "输出维度",
-      "embeddingSave": "保存嵌入设置",
       "configurationDocs": "配置文档"
     },
     "help": {
@@ -206,12 +199,6 @@
       "botIcon": "显示在 bot 名称旁的短 emoji 或文本。",
       "timezone": "运行时上下文和计划任务使用的 IANA 时区。",
       "toolHintMaxLength": "工具进度提示显示的最大字符数。",
-      "embeddingEnabled": "启用全局嵌入模型，用于 KB / notes-kb 向量索引。",
-      "embeddingEndpoint": "OpenAI 兼容的 embeddings 接入点，例如 https://api.openai.com/v1 或 https://dashscope.aliyuncs.com/compatible-mode/v1。",
-      "embeddingApiKey": "嵌入接口的 API 密钥，仅本地保存。",
-      "embeddingModel": "嵌入模型名称，例如 text-embedding-3-small、bge-m3。",
-      "embeddingDimensionality": "可选输出维度，留空使用模型默认值。",
-      "embeddingSave": "对新嵌入请求生效；per-vault 配置文件仍会覆盖此全局默认值。",
       "advancedReadOnly": "高级安全控制在 WebUI 中只读；需要时请谨慎编辑 config.json。"
     },
     "values": {
