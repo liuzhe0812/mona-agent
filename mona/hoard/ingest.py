@@ -1,4 +1,4 @@
-"""Hoard ingestion pipeline: fetch metadata → LLM summary → LLM tags → embedding → cross-source relations."""
+"""Hoard ingestion pipeline: fetch metadata → LLM summary → LLM tags → cross-source relations."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ async def ingest_hoard(
     fetch_content: bool = True,
     generate_summary: bool = True,
     generate_tags: bool = True,
-    generate_embedding: bool = True,
+    generate_embedding: bool = False,
     embedding_config: Any | None = None,
 ) -> None:
     """Run async ingestion pipeline for a hoard item.
@@ -31,8 +31,7 @@ async def ingest_hoard(
     1. Fetch URL content (if applicable) via HTTP
     2. Generate LLM summary
     3. Generate LLM tags
-    4. Generate embedding vector (if config available)
-    5. Build cross-source relations (URL match + semantic match)
+    4. Build cross-source relations (URL match)
 
     Failures are non-fatal — partial data is stored.
     """
@@ -64,17 +63,9 @@ async def ingest_hoard(
             manager.update(hoard_id, tags=tags)
             item.tags = tags
 
-    # Step 4: Generate embedding (if config available)
-    if generate_embedding and embedding_config is not None:
-        await _generate_and_store_embedding(hoard_id, item, embedding_config)
-
-    # Step 5: Cross-source relations
+    # Step 4: Cross-source relations
     if item.url:
         _build_relations(manager, hoard_id, item.url)
-
-    # Semantic relations (if embeddings exist)
-    if generate_embedding and embedding_config is not None:
-        await _build_semantic_relations(manager, hoard_id, embedding_config)
 
     logger.info(f"[hoard] ingest complete for {hoard_id}")
 
@@ -193,141 +184,3 @@ def _build_relations(manager: HoardManager, hoard_id: str, url: str) -> None:
             )
     except Exception as e:
         logger.debug(f"[hoard] build_relations failed: {e}")
-
-
-async def _generate_and_store_embedding(
-    hoard_id: str,
-    item: Any,
-    embedding_config: Any,
-) -> None:
-    """Generate embedding for a hoard item and store it in the vector table.
-
-    Embeds the concatenation of title + summary + tags + content (truncated).
-    Skips silently if embedding fails — keyword search still works.
-    """
-    try:
-        from mona.hoard.vectorstore import upsert_vector
-        from mona.kb.embedding import fetch_embedding
-
-        # Build text to embed: title + tags + summary + content
-        parts = [item.title]
-        if item.tags:
-            parts.append(" ".join(item.tags))
-        if item.summary:
-            parts.append(item.summary)
-        if item.content:
-            parts.append(item.content[:1000])
-        text = " ".join(p for p in parts if p).strip()
-
-        if not text:
-            return
-
-        vector = await fetch_embedding(text, embedding_config)
-        if vector:
-            await upsert_vector(hoard_id, vector)
-    except Exception as e:
-        logger.debug(f"[hoard] embedding generation failed for {hoard_id}: {e}")
-
-
-async def _build_semantic_relations(
-    manager: HoardManager,
-    hoard_id: str,
-    embedding_config: Any,
-) -> None:
-    """Build semantic relations by vector similarity.
-
-    Finds top-K most similar hoard items and creates relations if similarity > threshold.
-    Threshold: 0.75 (cosine similarity).
-    """
-    try:
-        from mona.hoard.vectorstore import search_vectors
-
-        # Get the item's own vector and search for similar items
-        item = manager.get(hoard_id)
-        if item is None:
-            return
-
-        # Re-embed the query to search
-        from mona.kb.embedding import fetch_embedding
-
-        parts = [item.title]
-        if item.tags:
-            parts.append(" ".join(item.tags))
-        if item.summary:
-            parts.append(item.summary)
-        if item.content:
-            parts.append(item.content[:1000])
-        text = " ".join(p for p in parts if p).strip()
-
-        if not text:
-            return
-
-        query_vector = await fetch_embedding(text, embedding_config)
-        if not query_vector:
-            return
-
-        # Search for similar items (top 5)
-        similar = await search_vectors(query_vector, limit=6)
-        for hit in similar:
-            other_id = hit["hoard_id"]
-            score = hit["score"]
-            if other_id == hoard_id or score < 0.75:
-                continue
-
-            other = manager.get(other_id)
-            if other is None:
-                continue
-
-            # Avoid duplicating URL-match relations
-            existing_rels = manager.get_relations(hoard_id)
-            already_linked = any(
-                r["related_id"] == other_id and r["type"] == "semantic"
-                for r in existing_rels
-            )
-            if already_linked:
-                continue
-
-            manager.add_relation(
-                hoard_id,
-                related_type="semantic",
-                related_id=other_id,
-                related_meta={
-                    "title": other.title,
-                    "score": round(score, 3),
-                },
-            )
-            manager.add_relation(
-                other_id,
-                related_type="semantic",
-                related_id=hoard_id,
-                related_meta={
-                    "title": item.title,
-                    "score": round(score, 3),
-                },
-            )
-    except Exception as e:
-        logger.debug(f"[hoard] semantic relations failed for {hoard_id}: {e}")
-
-
-def _load_embedding_config() -> Any | None:
-    """Load global embedding config from tools.embedding.
-
-    Returns EmbeddingConfig if configured and enabled, None otherwise.
-    """
-    try:
-        from mona.config.loader import load_config
-        from mona.kb.embedding import EmbeddingConfig
-
-        cfg = load_config()
-        emb = cfg.tools.embedding
-        if emb.enabled and emb.endpoint and emb.model:
-            return EmbeddingConfig(
-                enabled=True,
-                endpoint=emb.endpoint,
-                api_key=emb.api_key,
-                model=emb.model,
-                output_dimensionality=emb.output_dimensionality,
-            )
-    except Exception as e:
-        logger.debug(f"[hoard] could not load embedding config: {e}")
-    return None

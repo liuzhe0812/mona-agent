@@ -10,6 +10,10 @@ from mona.kb.ingest import parse_frontmatter
 
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]+")
 
+# 页面解析缓存：(mtime, frontmatter, body, content_lower)
+# mtime 变化时自动失效，避免每次搜索都 read_text + parse_frontmatter + lower
+_PAGE_CACHE: dict[Path, tuple[float, dict[str, Any], str, str]] = {}
+
 
 def _tokenize_query(query: str) -> list[str]:
     """Tokenize query: whitespace split for latin, 2-gram for CJK runs.
@@ -36,6 +40,35 @@ def _tokenize_query(query: str) -> list[str]:
         else:
             tokens.append(raw.lower())
     return tokens
+
+
+def _load_page_cached(md_file: Path) -> tuple[dict[str, Any], str, str]:
+    """加载并解析 wiki 页面，带 mtime 缓存。
+
+    返回 (frontmatter, body, content_lower)。
+    mtime 未变时直接复用缓存，避免重复 read_text + parse_frontmatter + lower。
+    """
+    mtime = md_file.stat().st_mtime
+    cached = _PAGE_CACHE.get(md_file)
+    if cached is not None and cached[0] == mtime:
+        return cached[1], cached[2], cached[3]
+
+    content = md_file.read_text(encoding="utf-8")
+    frontmatter, body = parse_frontmatter(content)
+    content_lower = content.lower()
+    _PAGE_CACHE[md_file] = (mtime, frontmatter, body, content_lower)
+    return frontmatter, body, content_lower
+
+
+def _score_page(tokens: list[str], title_lower: str, content_lower: str) -> int:
+    """计算 token 匹配得分：title +3, content +1。"""
+    score = 0
+    for tok in tokens:
+        if tok in title_lower:
+            score += 3
+        if tok in content_lower:
+            score += 1
+    return score
 
 
 def _extract_snippet(body: str, terms: list[str], max_chars: int = 300) -> str:
@@ -94,19 +127,12 @@ def search_wiki(
 
     results: list[dict[str, Any]] = []
     for md_file in md_dir.rglob("*.md"):
-        content = md_file.read_text(encoding="utf-8")
-        frontmatter, body = parse_frontmatter(content)
+        frontmatter, body, content_lower = _load_page_cached(md_file)
         rel_path = str(md_file.relative_to(md_dir)).replace("\\", "/")
         title = frontmatter.get("title", rel_path)
         title_lower = title.lower()
-        content_lower = content.lower()
 
-        score = 0
-        for tok in tokens:
-            if tok in title_lower:
-                score += 3
-            if tok in content_lower:
-                score += 1
+        score = _score_page(tokens, title_lower, content_lower)
         if score == 0:
             continue
 
@@ -127,51 +153,12 @@ def search_wiki(
 async def search_wiki_hybrid(
     project_path: Path,
     query: str,
-    embedding_config: Any = None,
     count: int = 10,
     markdown_dir: Path | str | None = None,
-    vectorstore_db: Path | str | None = None,
 ) -> dict[str, Any]:
     """Keyword search over wiki pages. Returns {"mode": "keyword", "results": [...]}.
 
-    The embedding_config / vectorstore_db params are kept for call-site
-    compatibility but no longer used — vector retrieval was removed.
+    委托给 search_wiki 的同步实现，保持单一数据源。
     """
-    md_dir = Path(markdown_dir) if markdown_dir is not None else project_path / "wiki"
-    if not md_dir.exists():
-        return {"mode": "keyword", "results": []}
-
-    tokens = _tokenize_query(query)
-    if not tokens:
-        return {"mode": "keyword", "results": []}
-
-    results: list[dict[str, Any]] = []
-    for md_file in sorted(md_dir.rglob("*.md")):
-        rel = str(md_file.relative_to(md_dir)).replace("\\", "/")
-        content = md_file.read_text(encoding="utf-8")
-        fm, body = parse_frontmatter(content)
-        title = fm.get("title", rel)
-        title_lower = title.lower()
-        content_lower = content.lower()
-
-        score = 0
-        for tok in tokens:
-            if tok in title_lower:
-                score += 3
-            if tok in content_lower:
-                score += 1
-        if score == 0:
-            continue
-
-        tags = fm.get("tags", [])
-        if isinstance(tags, str):
-            tags = [tags]
-        snippet = _extract_snippet(body, tokens)
-
-        results.append({
-            "path": rel, "title": title, "type": fm.get("type", ""),
-            "tags": tags, "snippet": snippet, "score": score,
-        })
-
-    results.sort(key=lambda r: r["score"], reverse=True)
-    return {"mode": "keyword", "results": results[:count]}
+    results = search_wiki(project_path, query, count=count, markdown_dir=markdown_dir)
+    return {"mode": "keyword", "results": results}

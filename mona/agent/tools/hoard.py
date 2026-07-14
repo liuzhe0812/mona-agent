@@ -56,16 +56,33 @@ class HoardSearchTool(Tool):
         source = kwargs.get("source")
         count = kwargs.get("count", 5)
 
+        # Subscription gate: free-tier users cannot search note/email sources.
+        # If the user explicitly requests those sources, return a clear prompt
+        # instead of silently empty results. Otherwise, exclude those sources
+        # at the DB query level so no personal data is returned.
+        from mona.agent.tools.tauri_ipc import check_subscription_access
+
+        has_access = check_subscription_access()
+        excluded: list[str] | None = None
+        gated_sources = {"note", "email"}
+        if not has_access:
+            if source in gated_sources:
+                return (
+                    "membership_required: Searching unified memory for "
+                    f"'{source}' sources requires an active subscription or "
+                    "trial. The user can subscribe to unlock Agent access to "
+                    "notes and emails."
+                )
+            excluded = ["note", "email"]
+
         try:
-            from mona.hoard.ingest import _load_embedding_config
             from mona.hoard.search import search_hoard_hybrid
 
-            embedding_config = _load_embedding_config()
             result = await search_hoard_hybrid(
                 query,
                 source=source,
                 limit=count,
-                embedding_config=embedding_config,
+                exclude_sources=excluded,
             )
             results = result.get("results", [])
             mode = result.get("mode", "keyword")
@@ -148,7 +165,7 @@ class HoardCaptureTool(Tool):
         source_ref = kwargs.get("source_ref")
 
         try:
-            from mona.hoard.ingest import _load_embedding_config, ingest_hoard
+            from mona.hoard.ingest import ingest_hoard
             from mona.hoard.models import HoardManager
 
             manager = HoardManager()
@@ -161,9 +178,6 @@ class HoardCaptureTool(Tool):
                 source_strength=0.8,
             )
 
-            # Load embedding config (None if not configured — keyword-only mode)
-            embedding_config = _load_embedding_config()
-
             # Run ingestion pipeline asynchronously (don't block the conversation)
             import asyncio
 
@@ -174,8 +188,6 @@ class HoardCaptureTool(Tool):
                     fetch_content=bool(url),
                     generate_summary=True,
                     generate_tags=True,
-                    generate_embedding=embedding_config is not None,
-                    embedding_config=embedding_config,
                 )
             )
         except Exception as e:

@@ -61,11 +61,8 @@ async def handle_hoard_add(req: web.Request) -> web.Response:
         logger.warning(f"[hoard] add failed: {e}")
         return web.json_response({"error": str(e)}, status=500)
 
-    # Trigger async ingestion (fetch + summary + tags + embedding + relations).
+    # Trigger async ingestion (fetch + summary + tags + relations).
     try:
-        from mona.hoard.ingest import _load_embedding_config
-
-        embedding_config = _load_embedding_config()
         asyncio.create_task(
             ingest_hoard(
                 mgr,
@@ -73,8 +70,6 @@ async def handle_hoard_add(req: web.Request) -> web.Response:
                 fetch_content=bool(url),
                 generate_summary=True,
                 generate_tags=True,
-                generate_embedding=embedding_config is not None,
-                embedding_config=embedding_config,
             )
         )
     except Exception as e:
