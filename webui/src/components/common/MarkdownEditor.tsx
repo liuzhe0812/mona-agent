@@ -89,6 +89,8 @@ export interface MarkdownEditorProps {
   toolbarExtra?: React.ReactNode;
   /** Content rendered at the start of the editor toolbar (e.g. history buttons). */
   toolbarLeadingExtra?: React.ReactNode;
+  /** Content rendered after the mode switch buttons in the toolbar. */
+  toolbarTrailingExtra?: React.ReactNode;
   /** Note titles for `[[wiki link]]` autocomplete in markdown mode. */
   noteTitles?: string[];
 }
@@ -139,6 +141,7 @@ export function MarkdownEditor({
   children,
   toolbarExtra,
   toolbarLeadingExtra,
+  toolbarTrailingExtra,
   noteTitles,
 }: MarkdownEditorProps) {
   const settingContentRef = useRef(false);
@@ -760,38 +763,43 @@ export function MarkdownEditor({
     >
       <div className="flex h-10 shrink-0 items-center justify-between border-b border-border/65 px-3">
         {showToolbar ? <EditorToolbar editor={editor} leadingExtra={toolbarLeadingExtra} /> : <div />}
-        {toolbarExtra ?? (onModeChange ? (
-          <div className="flex items-center gap-0.5 rounded-lg border border-border/70 bg-muted/30 p-0.5">
-            <button
-              type="button"
-              title="可视化编辑"
-              aria-label="可视化编辑"
-              onClick={() => onModeChange("visual")}
-              className={cn(
-                "grid h-6 w-6 place-items-center rounded-md transition-colors",
-                mode === "visual"
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              <Type className="h-3.5 w-3.5" />
-            </button>
-            <button
-              type="button"
-              title="MD 源码"
-              aria-label="MD 源码"
-              onClick={() => onModeChange("markdown")}
-              className={cn(
-                "grid h-6 w-6 place-items-center rounded-md transition-colors",
-                mode === "markdown"
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              <FileCode2 className="h-3.5 w-3.5" />
-            </button>
+        {toolbarExtra ?? (
+          <div className="flex items-center gap-1.5">
+            {onModeChange ? (
+              <div className="flex items-center gap-0.5 rounded-lg border border-border/70 bg-muted/30 p-0.5">
+                <button
+                  type="button"
+                  title="可视化编辑"
+                  aria-label="可视化编辑"
+                  onClick={() => onModeChange("visual")}
+                  className={cn(
+                    "grid h-6 w-6 place-items-center rounded-md transition-colors",
+                    mode === "visual"
+                      ? "bg-background text-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  <Type className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  type="button"
+                  title="MD 源码"
+                  aria-label="MD 源码"
+                  onClick={() => onModeChange("markdown")}
+                  className={cn(
+                    "grid h-6 w-6 place-items-center rounded-md transition-colors",
+                    mode === "markdown"
+                      ? "bg-background text-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  <FileCode2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ) : null}
+            {toolbarTrailingExtra}
           </div>
-        ) : null)}
+        )}
       </div>
 
       {mode === "visual" ? (
@@ -1131,7 +1139,7 @@ function EditorContextMenu({ editor, children, onMoveSelectionToNote }: { editor
   };
 
   return (
-    <ContextMenu onOpenChange={updateSelection}>
+    <ContextMenu onOpenChange={(open) => { if (open) updateSelection(); }}>
       <ContextMenuTrigger asChild>
         {children}
       </ContextMenuTrigger>

@@ -1235,16 +1235,14 @@ pub async fn notes_load_state() -> Result<NotesState, String> {
         None => (Vec::new(), Vec::new()),
     };
 
-    let default_notebook_id = notebooks
-        .first()
-        .map(|n| n.id.clone())
-        .unwrap_or_default();
+    // 默认使用根目录（id="")，而非第一个笔记本：避免新建笔记时误落到第一个文件夹。
+    // 仅当 vault_meta 显式记录过且对应笔记本仍存在时，才沿用其值。
     let active_notebook_id = if vault_meta.active_notebook_id.is_empty() {
-        default_notebook_id
+        String::new()
     } else if notebooks.iter().any(|n| n.id == vault_meta.active_notebook_id) {
         vault_meta.active_notebook_id.clone()
     } else {
-        default_notebook_id
+        String::new()
     };
     let active_note_id = vault_meta
         .active_note_id
