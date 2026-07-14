@@ -18,6 +18,19 @@ class PaymentStatus(str, enum.Enum):
     FAILED = "failed"
 
 
+class AgreementStatus(str, enum.Enum):
+    ACTIVE = "active"
+    CANCELLED = "cancelled"
+    EXPIRED = "expired"
+
+
+class RenewalStatus(str, enum.Enum):
+    PENDING = "pending"
+    SUCCESS = "success"
+    FAILED = "failed"
+    RETRYING = "retrying"
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -41,6 +54,9 @@ class User(Base):
     payments: Mapped[list["Payment"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
+    agreements: Mapped[list["PaymentAgreement"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
 
 
 class Subscription(Base):
@@ -54,12 +70,23 @@ class Subscription(Base):
         Enum(SubscriptionStatus), nullable=False, default=SubscriptionStatus.EXPIRED
     )
     current_period_end: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # 支付宝订阅扩展字段
+    plan_code: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    auto_renew: Mapped[bool] = mapped_column(default=False)
+    agreement_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("payment_agreements.id", ondelete="SET NULL"), nullable=True
+    )
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()
     )
 
     user: Mapped["User"] = relationship(back_populates="subscriptions")
+    agreement: Mapped["PaymentAgreement | None"] = relationship()
+    renewals: Mapped[list["SubscriptionRenewal"]] = relationship(
+        back_populates="subscription", cascade="all, delete-orphan"
+    )
 
 
 class Device(Base):
@@ -112,7 +139,8 @@ class Payment(Base):
     trade_order_id: Mapped[str] = mapped_column(String(128), unique=True, nullable=False, index=True)
     xhp_order_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     amount: Mapped[float] = mapped_column(nullable=False)
-    duration_months: Mapped[int] = mapped_column(default=1)
+    duration_months: Mapped[int | None] = mapped_column(nullable=True)
+    plan_code: Mapped[str | None] = mapped_column(String(32), nullable=True)
     status: Mapped[PaymentStatus] = mapped_column(
         Enum(PaymentStatus), nullable=False, default=PaymentStatus.PENDING
     )
@@ -120,7 +148,58 @@ class Payment(Base):
     paid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
+    # 支付宝扩展字段
+    payment_channel: Mapped[str] = mapped_column(String(16), default="xhp")  # alipay / xhp
+    payment_type: Mapped[str] = mapped_column(String(32), default="page")  # page / periodic_sign / periodic_deduct
+    alipay_trade_no: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    agreement_no: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    external_sign_no: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+
     user: Mapped["User"] = relationship(back_populates="payments")
+
+
+class PaymentAgreement(Base):
+    __tablename__ = "payment_agreements"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    agreement_no: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    alipay_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    status: Mapped[AgreementStatus] = mapped_column(
+        Enum(AgreementStatus), nullable=False, default=AgreementStatus.ACTIVE
+    )
+    external_sign_no: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    signed_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    cancel_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    user: Mapped["User"] = relationship(back_populates="agreements")
+
+
+class SubscriptionRenewal(Base):
+    __tablename__ = "subscription_renewals"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    subscription_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("subscriptions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    agreement_no: Mapped[str] = mapped_column(String(64), nullable=False)
+    out_trade_no: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    alipay_trade_no: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    amount: Mapped[float] = mapped_column(nullable=False)
+    period_days: Mapped[int] = mapped_column(nullable=False)
+    status: Mapped[RenewalStatus] = mapped_column(
+        Enum(RenewalStatus), nullable=False, default=RenewalStatus.PENDING
+    )
+    retry_count: Mapped[int] = mapped_column(default=0)
+    next_retry_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    failure_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    subscription: Mapped["Subscription"] = relationship(back_populates="renewals")
 
 
 class PricingPlan(Base):
@@ -130,7 +209,9 @@ class PricingPlan(Base):
     name: Mapped[str] = mapped_column(String(64), nullable=False)
     price: Mapped[float] = mapped_column(nullable=False)
     original_price: Mapped[float | None] = mapped_column(nullable=True)
-    duration_months: Mapped[int] = mapped_column(nullable=False)
+    duration_months: Mapped[int | None] = mapped_column(nullable=True)
+    period_days: Mapped[int | None] = mapped_column(nullable=True)
+    auto_renewable: Mapped[bool] = mapped_column(default=True)
     badge: Mapped[str | None] = mapped_column(String(32), nullable=True)
     sort_order: Mapped[int] = mapped_column(default=0)
     enabled: Mapped[bool] = mapped_column(default=True)

@@ -14,6 +14,7 @@ from app.routers.config_router import router as config_router
 from app.routers.device_router import router as device_router
 from app.routers.notification_router import router as notification_router
 from app.routers.payment_router import router as payment_router
+from app.routers.subscribe_router import router as subscribe_router
 from app.routers.trial_router import router as license_router
 from app.routers.upload_router import router as upload_router
 
@@ -36,10 +37,16 @@ app.include_router(auth_router)
 app.include_router(config_router)
 app.include_router(device_router)
 app.include_router(payment_router)
+app.include_router(subscribe_router)
 app.include_router(license_router)
 app.include_router(admin_router)
 app.include_router(notification_router)
 app.include_router(upload_router)
+
+# 启动时初始化自动续费定时任务
+from app.scheduler import start_scheduler  # noqa: E402
+
+start_scheduler()
 
 # Admin SPA - serve static files
 _admin_dir = Path(__file__).parent / "admin"

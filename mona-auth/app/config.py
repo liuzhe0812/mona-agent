@@ -29,6 +29,18 @@ class Settings(BaseSettings):
     xhp_notify_url: str = ""
     xhp_base_url: str = "https://api.xunhupay.com/payment/do.html"
 
+    # 支付宝官方支付配置
+    alipay_app_id: str = ""
+    alipay_app_private_key: str = ""  # PEM 格式（可从文件加载或直接配置）
+    alipay_app_private_key_path: str = ""  # 若上面为空，从此文件加载
+    alipay_public_key: str = ""  # PEM 格式
+    alipay_public_key_path: str = ""
+    alipay_notify_url: str = "https://mona.lzfun.vip/payment/alipay/notify"
+    alipay_return_url: str = "https://mona.lzfun.vip/payment/return"
+    alipay_sandbox: bool = False
+    # 周期扣款签约时使用的签约协议号前缀（用于在支付宝后台对账）
+    alipay_sign_scene: str = "INDUSTRY|MEMBERSHIP"
+
     cors_origins: list[str] = []
 
     upload_dir: str = "/var/www/mona/uploads"
@@ -41,6 +53,22 @@ class Settings(BaseSettings):
     @property
     def license_public_key(self) -> str:
         return Path(self.license_public_key_path).read_text()
+
+    @property
+    def alipay_app_private_key_pem(self) -> str:
+        if self.alipay_app_private_key:
+            return self.alipay_app_private_key
+        if self.alipay_app_private_key_path:
+            return Path(self.alipay_app_private_key_path).read_text()
+        return ""
+
+    @property
+    def alipay_public_key_pem(self) -> str:
+        if self.alipay_public_key:
+            return self.alipay_public_key
+        if self.alipay_public_key_path:
+            return Path(self.alipay_public_key_path).read_text()
+        return ""
 
     model_config = {"env_file": ".env", "env_prefix": "MONA_AUTH_"}
 
