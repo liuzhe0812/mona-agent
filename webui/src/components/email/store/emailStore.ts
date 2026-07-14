@@ -398,6 +398,8 @@ export const useEmailStore = create<EmailState>((set, get) => ({
           totalUnreadCount: total,
         };
       });
+      // 同步托盘图标（refreshUnreadCounts 是未读数变化的统一出口）
+      await setTrayUnreadCount(get().totalUnreadCount);
       if (shouldLoadMessages) {
         await get().loadMessages(accountId, selectedFolder);
       }
@@ -776,6 +778,7 @@ export const useEmailStore = create<EmailState>((set, get) => ({
         message.folder,
       );
       // 写入内存缓存 + 更新本地消息对象
+      const header = result.header;
       set((state) => ({
         bodyCache: {
           ...state.bodyCache,
@@ -790,6 +793,16 @@ export const useEmailStore = create<EmailState>((set, get) => ({
                 bodyFetched: true,
                 bodyError: null,
                 attachments: result.attachments ?? m.attachments,
+                // 用重新解析的 header 修复旧数据中可能的乱码（gb2312→gb18030 修复前）
+                ...(header
+                  ? {
+                      subject: header.subject,
+                      fromAddress: header.fromAddress,
+                      fromName: header.fromName,
+                      toAddresses: header.toAddresses,
+                      ccAddresses: header.ccAddresses,
+                    }
+                  : {}),
               }
             : m,
         ),
@@ -802,6 +815,15 @@ export const useEmailStore = create<EmailState>((set, get) => ({
                 bodyFetched: true,
                 bodyError: null,
                 attachments: result.attachments ?? state.selectedMessage.attachments,
+                ...(header
+                  ? {
+                      subject: header.subject,
+                      fromAddress: header.fromAddress,
+                      fromName: header.fromName,
+                      toAddresses: header.toAddresses,
+                      ccAddresses: header.ccAddresses,
+                    }
+                  : {}),
               }
             : state.selectedMessage,
       }));

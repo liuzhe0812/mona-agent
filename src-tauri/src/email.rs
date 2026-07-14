@@ -289,6 +289,61 @@ fn parse_eml_header(eml_bytes: &[u8]) -> (String, String, String, String, String
     )
 }
 
+/// 重新解析 .eml header 并修复 SQLite 中含 U+FFFD 替换字符的乱码字段。
+///
+/// 背景：早期版本 Rust 用 `String::from_utf8_lossy` 解码邮件头，GBK 编码的
+/// 扩展字符（如"喆"）会被替换为 U+FFFD，写入 SQLite 后永久乱码。
+/// 修复为 gb18030 解码后只对新 sync 的邮件生效，旧数据仍是乱码。
+///
+/// 此函数在 fetchBody 时用最新解码逻辑重新解析 header，若 SQLite 当前值
+/// 含 U+FFFD 则更新。同时返回 header JSON 供前端立即更新 selectedMessage，
+/// 无需刷新列表。
+fn reparse_header_and_fix_db(
+    state: &EmailState,
+    eml_bytes: &[u8],
+    uid: &str,
+    account_id: &str,
+    mailbox: &str,
+) -> serde_json::Value {
+    let (hdr_subject, hdr_from_addr, hdr_from_name, hdr_to, hdr_cc, _hdr_date, _hdr_msg_id, _hdr_has_att) =
+        parse_eml_header(eml_bytes);
+
+    // 只在 SQLite 当前值含 U+FFFD（乱码标志）时才更新，避免无意义 FTS 重建
+    if let Ok(conn) = state.conn() {
+        let current: (String, String) = conn
+            .query_row(
+                "SELECT to_addresses, COALESCE(cc_addresses, '') \
+                 FROM messages WHERE uid=?1 AND account_id=?2 AND folder=?3",
+                params![uid, account_id, mailbox],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap_or_default();
+        if current.0.contains('\u{FFFD}') || current.1.contains('\u{FFFD}') {
+            let _ = conn.execute(
+                "UPDATE messages SET subject=?1, from_address=?2, from_name=?3, \
+                 to_addresses=?4, cc_addresses=?5 \
+                 WHERE uid=?6 AND account_id=?7 AND folder=?8",
+                params![
+                    &hdr_subject, &hdr_from_addr, &hdr_from_name, &hdr_to, &hdr_cc,
+                    uid, account_id, mailbox,
+                ],
+            );
+            log::info!(
+                "[email-header-fix] 修复乱码 header uid={} account={} folder={} to={:?}",
+                uid, account_id, mailbox, &hdr_to
+            );
+        }
+    }
+
+    serde_json::json!({
+        "subject": hdr_subject,
+        "fromAddress": hdr_from_addr,
+        "fromName": hdr_from_name,
+        "toAddresses": hdr_to,
+        "ccAddresses": hdr_cc,
+    })
+}
+
 /// 解码邮件头字段（原始字节）：
 /// 1. 若包含 =? 标记，走 MIME encoded-word 解码（=?charset?B/Q?encoded?=）
 /// 2. 否则尝试 UTF-8 严格解码
@@ -2858,35 +2913,36 @@ pub async fn email_mark_read(
         }
     }
 
-    // 异步同步到 IMAP 服务器（失败不影响本地状态，下次同步时 IMAP 状态会自然对齐）
+    // 后台同步到 IMAP 服务器（fire-and-forget，不阻塞前端）
+    // Foxmail 风格：本地已读状态秒级生效，IMAP 同步在后台进行，失败不影响本地
     if !gateway_url.is_empty() {
         let url = format!("{}/email/set_flag", gateway_url.trim_end_matches('/'));
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(10))
-            .build();
-        if let Ok(client) = client {
-            match client.post(&url).json(&req).send().await {
-                Ok(resp) if resp.status().is_success() => {
-                    // IMAP 同步成功
-                }
-                Ok(resp) => {
-                    let status = resp.status();
-                    let text = resp.text().await.unwrap_or_default();
-                    log::warn!(
-                        "[email-mark-read] IMAP set_flag 失败（本地已更新）: {} {}",
-                        status,
-                        text
-                    );
-                }
-                Err(e) => {
-                    // 请求发送失败（gateway 离线/网络错误）：不返回错误，本地已更新
-                    log::warn!(
-                        "[email-mark-read] 请求 gateway 失败（本地已更新）: {}",
-                        e
-                    );
+        let req_clone = req.clone();
+        tokio::spawn(async move {
+            let client = reqwest::Client::builder()
+                .timeout(Duration::from_secs(10))
+                .build();
+            if let Ok(client) = client {
+                match client.post(&url).json(&req_clone).send().await {
+                    Ok(resp) if resp.status().is_success() => {}
+                    Ok(resp) => {
+                        let status = resp.status();
+                        let text = resp.text().await.unwrap_or_default();
+                        log::warn!(
+                            "[email-mark-read] IMAP set_flag 失败（本地已更新）: {} {}",
+                            status,
+                            text
+                        );
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "[email-mark-read] 请求 gateway 失败（本地已更新）: {}",
+                            e
+                        );
+                    }
                 }
             }
-        }
+        });
     }
     Ok(())
 }
@@ -2912,35 +2968,35 @@ pub async fn email_toggle_starred(
         }
     }
 
-    // 异步同步到 IMAP（失败不影响本地）
+    // 后台同步到 IMAP（fire-and-forget，失败不影响本地）
     if !gateway_url.is_empty() {
         let url = format!("{}/email/set_flag", gateway_url.trim_end_matches('/'));
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(10))
-            .build();
-        if let Ok(client) = client {
-            match client.post(&url).json(&req).send().await {
-                Ok(resp) if resp.status().is_success() => {
-                    // IMAP 同步成功
-                }
-                Ok(resp) => {
-                    let status = resp.status();
-                    let text = resp.text().await.unwrap_or_default();
-                    log::warn!(
-                        "[email-toggle-starred] IMAP set_flag 失败（本地已更新）: {} {}",
-                        status,
-                        text
-                    );
-                }
-                Err(e) => {
-                    // 请求发送失败（gateway 离线/网络错误）：不返回错误，本地已更新
-                    log::warn!(
-                        "[email-toggle-starred] 请求 gateway 失败（本地已更新）: {}",
-                        e
-                    );
+        let req_clone = req.clone();
+        tokio::spawn(async move {
+            let client = reqwest::Client::builder()
+                .timeout(Duration::from_secs(10))
+                .build();
+            if let Ok(client) = client {
+                match client.post(&url).json(&req_clone).send().await {
+                    Ok(resp) if resp.status().is_success() => {}
+                    Ok(resp) => {
+                        let status = resp.status();
+                        let text = resp.text().await.unwrap_or_default();
+                        log::warn!(
+                            "[email-toggle-starred] IMAP set_flag 失败（本地已更新）: {} {}",
+                            status,
+                            text
+                        );
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "[email-toggle-starred] 请求 gateway 失败（本地已更新）: {}",
+                            e
+                        );
+                    }
                 }
             }
-        }
+        });
     }
     Ok(())
 }
@@ -3592,6 +3648,10 @@ async fn sync_folder_internal(
     let mut new_count = 0u32;
     // 记录真正新增的 UID（规则应用前在当前文件夹中的新邮件）
     let mut new_uids: Vec<String> = Vec::new();
+    // 收集重新解析的正确 header，供 auto_collect_contacts 使用
+    // gateway 返回的 fromName/to/cc 可能含乱码（Python 侧解码问题），
+    // Rust 侧用 parse_eml_header 重新解析后才是正确的
+    let mut corrected_messages: Vec<Value> = Vec::new();
     for msg in &new_messages {
         let uid = msg["uid"].as_str().unwrap_or("").to_string();
         if uid.is_empty() {
@@ -3746,6 +3806,14 @@ async fn sync_folder_internal(
                     msg["hasAttachments"].as_bool().unwrap_or(false),
                 )
             };
+        // 收集正确的 header（用重新解析的值，而非 gateway 返回的可能含乱码的 JSON 字段）
+        corrected_messages.push(serde_json::json!({
+            "uid": uid,
+            "from": hdr_from_addr,
+            "fromName": hdr_from_name,
+            "to": hdr_to,
+            "cc": hdr_cc,
+        }));
         // sync 写的是 HEADER-only .eml，body_fetched 始终为 0（fetch_body 拉完整 RFC822 后才置 1）
         let body_fetched_value: i32 = 0;
         // UPSERT：更新邮件内容但保留用户已设置的 is_read/is_starred 和 body_fetched
@@ -3801,7 +3869,8 @@ async fn sync_folder_internal(
     }
 
     // 自动从新邮件收集联系人（发件人 + 收件人 + 抄送）
-    auto_collect_contacts(&conn, &req.account_id, &new_messages);
+    // 使用重新解析的正确 header，避免 gateway 返回的乱码字段污染通讯录
+    auto_collect_contacts(&conn, &req.account_id, &corrected_messages);
     // 更新 last_synced_uid（取本次同步中最大的 UID）
     if let Some(max_uid) = new_messages
         .iter()
@@ -6517,10 +6586,19 @@ pub async fn email_fetch_body(
                         if !body_text.is_empty() || body_html.is_some() {
                             let mut attachments: Vec<serde_json::Value> = Vec::new();
                             extract_attachments(&parsed, &mut attachments);
+                            // 重新解析 header，修复旧数据中可能的乱码（gb2312→gb18030 修复前的旧邮件）
+                            let header = reparse_header_and_fix_db(
+                                state.inner(),
+                                &eml_bytes,
+                                &uid,
+                                &account_id,
+                                &mailbox,
+                            );
                             return Ok(serde_json::json!({
                                 "bodyText": body_text,
                                 "bodyHtml": body_html,
                                 "attachments": attachments,
+                                "header": header,
                             }));
                         }
                         log::warn!("[email-fetch-body] 本地 .eml 未包含正文，回退到 IMAP 拉取完整 RFC822");
@@ -6633,10 +6711,19 @@ pub async fn email_fetch_body(
                 if !body_text.is_empty() || body_html.is_some() {
                     let mut attachments: Vec<serde_json::Value> = Vec::new();
                     extract_attachments(&parsed, &mut attachments);
+                    // 重新解析 header，修复旧数据中可能的乱码（gb2312→gb18030 修复前的旧邮件）
+                    let header = reparse_header_and_fix_db(
+                        state.inner(),
+                        &eml_bytes,
+                        &uid,
+                        &account_id,
+                        &mailbox,
+                    );
                     return Ok(serde_json::json!({
                         "bodyText": body_text,
                         "bodyHtml": body_html,
                         "attachments": attachments,
+                        "header": header,
                     }));
                 }
             }

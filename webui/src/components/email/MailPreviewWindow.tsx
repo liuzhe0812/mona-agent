@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import { tempDir, join } from "@tauri-apps/api/path";
-import { ArrowLeft, Loader2, Paperclip, Download, ExternalLink } from "lucide-react";
+import { Loader2, Paperclip, Download, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   ContextMenu,
@@ -245,15 +245,6 @@ export function MailPreviewWindow() {
       {/* 顶部信息栏 */}
       <div className="shrink-0 border-b border-border px-6 py-4">
         <div className="flex items-start gap-3">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="mt-0.5 h-7 w-7"
-            onClick={handleClose}
-            title="关闭"
-          >
-            <ArrowLeft className="h-4 w-4" />
-          </Button>
           <div className="min-w-0 flex-1">
             <h1 className="truncate text-base font-semibold">
               {message.subject || "(无主题)"}
