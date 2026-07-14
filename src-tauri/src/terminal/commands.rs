@@ -588,12 +588,21 @@ pub async fn shell_get_buffer(
     }
 }
 
-fn get_sftp_client(
+/// 获取 SFTP 客户端，支持 SFTP 会话和 SSH 会话（批量模式）。
+/// 对于 SSH 会话，临时打开一个 SFTP channel。
+async fn get_sftp_client_async(
     handle: &SessionHandle,
 ) -> Result<Arc<SftpClient>, String> {
     match handle {
         SessionHandle::Sftp(client) => Ok(Arc::clone(client)),
-        _ => Err("Not an SFTP session".into()),
+        SessionHandle::Ssh(ssh_client) => {
+            let sftp_session = ssh_client
+                .open_sftp()
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok(Arc::new(SftpClient::from_session(sftp_session, Arc::clone(ssh_client))))
+        }
+        _ => Err("Not an SFTP or SSH session".into()),
     }
 }
 
@@ -659,7 +668,7 @@ pub async fn sftp_mkdir(
         .get_handle(&session_id)
         .await
         .ok_or_else(|| TerminalError::SessionNotFound(session_id).to_string())?;
-    let client = get_sftp_client(&handle)?;
+    let client = get_sftp_client_async(&handle).await?;
     client.mkdir(&path).await.map_err(|e| e.to_string())
 }
 
@@ -675,7 +684,7 @@ pub async fn sftp_remove(
         .get_handle(&session_id)
         .await
         .ok_or_else(|| TerminalError::SessionNotFound(session_id).to_string())?;
-    let client = get_sftp_client(&handle)?;
+    let client = get_sftp_client_async(&handle).await?;
     if is_dir {
         if let Some(ssh) = client.ssh_client() {
             let result = ssh
@@ -707,11 +716,53 @@ pub async fn sftp_rename(
         .get_handle(&session_id)
         .await
         .ok_or_else(|| TerminalError::SessionNotFound(session_id).to_string())?;
-    let client = get_sftp_client(&handle)?;
+    let client = get_sftp_client_async(&handle).await?;
     client
         .rename(&old_path, &new_path)
         .await
         .map_err(|e| e.to_string())
+}
+
+/// 粘贴剪贴板内容到目标目录。
+/// action="copy" 使用 `cp -r`，action="cut" 使用 `mv`。
+/// 仅在 SSH 会话上可用（批量模式）；纯 SFTP 会话返回错误。
+#[tauri::command]
+pub async fn sftp_paste(
+    state: State<'_, TerminalState>,
+    session_id: String,
+    src_paths: Vec<String>,
+    target_dir: String,
+    action: String,
+) -> Result<(), String> {
+    let handle = state
+        .manager
+        .get_handle(&session_id)
+        .await
+        .ok_or_else(|| TerminalError::SessionNotFound(session_id).to_string())?;
+    let client = get_sftp_client_async(&handle).await?;
+    let ssh = client.ssh_client().ok_or_else(|| "Paste requires SSH session".to_string())?;
+
+    let target_dir = target_dir.trim_end_matches('/').to_string();
+    for src in &src_paths {
+        let basename = std::path::Path::new(src)
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        if basename.is_empty() {
+            continue;
+        }
+        let dest = format!("{}/{}", target_dir, basename);
+        let cmd = if action == "cut" {
+            format!("mv -f -- {:?} {:?}", src, dest)
+        } else {
+            format!("cp -rf -- {:?} {:?}", src, dest)
+        };
+        let result = ssh.exec_command(&cmd).await.map_err(|e| e.to_string())?;
+        if !result.stderr.is_empty() {
+            return Err(result.stderr);
+        }
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -725,7 +776,7 @@ pub async fn sftp_stat(
         .get_handle(&session_id)
         .await
         .ok_or_else(|| TerminalError::SessionNotFound(session_id).to_string())?;
-    let client = get_sftp_client(&handle)?;
+    let client = get_sftp_client_async(&handle).await?;
     client.stat(&path).await.map_err(|e| e.to_string())
 }
 
@@ -740,7 +791,7 @@ pub async fn sftp_canonicalize(
         .get_handle(&session_id)
         .await
         .ok_or_else(|| TerminalError::SessionNotFound(session_id).to_string())?;
-    let client = get_sftp_client(&handle)?;
+    let client = get_sftp_client_async(&handle).await?;
     client
         .canonicalize(&path)
         .await
@@ -758,7 +809,7 @@ pub async fn sftp_download(
         .get_handle(&session_id)
         .await
         .ok_or_else(|| TerminalError::SessionNotFound(session_id).to_string())?;
-    let client = get_sftp_client(&handle)?;
+    let client = get_sftp_client_async(&handle).await?;
     client
         .download(&remote_path)
         .await
@@ -779,7 +830,7 @@ pub async fn sftp_upload(
         .get_handle(&session_id)
         .await
         .ok_or_else(|| TerminalError::SessionNotFound(session_id.clone()).to_string())?;
-    let client = get_sftp_client(&handle)?;
+    let client = get_sftp_client_async(&handle).await?;
     if let Some(tid) = task_id {
         let sftp = client.create_sftp_channel().await.map_err(|e| e.to_string())?;
 
@@ -875,7 +926,7 @@ pub async fn sftp_upload_file(
         .get_handle(&session_id)
         .await
         .ok_or_else(|| TerminalError::SessionNotFound(session_id.clone()).to_string())?;
-    let client = get_sftp_client(&handle)?;
+    let client = get_sftp_client_async(&handle).await?;
 
     let sftp = client.create_sftp_channel().await.map_err(|e| e.to_string())?;
 
@@ -966,7 +1017,7 @@ pub async fn sftp_download_file(
         .get_handle(&session_id)
         .await
         .ok_or_else(|| TerminalError::SessionNotFound(session_id.clone()).to_string())?;
-    let client = get_sftp_client(&handle)?;
+    let client = get_sftp_client_async(&handle).await?;
 
     let sftp = client.create_sftp_channel().await.map_err(|e| e.to_string())?;
 
@@ -1573,6 +1624,109 @@ pub struct BatchUploadRequest {
     pub max_concurrent: Option<usize>,
 }
 
+/// 递归展开文件/文件夹混合列表，返回 (本地路径, 相对父目录路径) 的列表。
+/// 相对父目录路径用于在远端保持目录结构，例如文件夹 "docs" 内的 "a.txt"
+/// 返回 ("C:/.../docs/a.txt", "docs")。
+async fn expand_upload_paths(
+    files: &[String],
+) -> Vec<(String, String)> {
+    let mut result: Vec<(String, String)> = Vec::new();
+
+    async fn walk(
+        local_path: &str,
+        rel_prefix: &str,
+        result: &mut Vec<(String, String)>,
+    ) {
+        let metadata = match tokio::fs::metadata(local_path).await {
+            Ok(m) => m,
+            Err(_) => return,
+        };
+
+        if metadata.is_dir() {
+            let mut read_dir = match tokio::fs::read_dir(local_path).await {
+                Ok(rd) => rd,
+                Err(_) => return,
+            };
+            while let Ok(Some(entry)) = read_dir.next_entry().await {
+                let name = entry.file_name().to_string_lossy().to_string();
+                let entry_path = entry.path().to_string_lossy().to_string();
+                let new_rel = if rel_prefix.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{}/{}", rel_prefix, name)
+                };
+                Box::pin(walk(&entry_path, &new_rel, result)).await;
+            }
+        } else {
+            result.push((local_path.to_string(), rel_prefix.to_string()));
+        }
+    }
+
+    for file_path in files {
+        // 获取文件/文件夹名作为相对路径前缀
+        let base_name = std::path::Path::new(file_path)
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        let metadata = match tokio::fs::metadata(file_path).await {
+            Ok(m) => m,
+            Err(_) => {
+                // 文件不存在，仍然加入列表（后续上传会报错）
+                result.push((file_path.clone(), String::new()));
+                continue;
+            }
+        };
+
+        if metadata.is_dir() {
+            // 文件夹：递归展开，以文件夹名为相对路径前缀
+            walk(file_path, &base_name, &mut result).await;
+        } else {
+            // 普通文件：相对路径为空
+            result.push((file_path.clone(), String::new()));
+        }
+    }
+
+    result
+}
+
+/// Tauri 命令：展开文件/文件夹混合列表，返回展示用文件列表（含相对路径）。
+/// 前端在上传前调用此命令获取展开后的文件列表，用于在传输列表中展示。
+#[tauri::command]
+pub async fn expand_upload_paths_command(
+    files: Vec<String>,
+) -> Result<Vec<ExpandedFileEntry>, String> {
+    let expanded = expand_upload_paths(&files).await;
+    Ok(expanded
+        .into_iter()
+        .map(|(path, rel_prefix)| {
+            let basename = std::path::Path::new(&path)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let display_name = if rel_prefix.is_empty() {
+                basename
+            } else {
+                format!("{}/{}", rel_prefix, basename)
+            };
+            ExpandedFileEntry {
+                local_path: path,
+                rel_prefix,
+                display_name,
+            }
+        })
+        .collect())
+}
+
+/// 展开后的文件条目
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExpandedFileEntry {
+    pub local_path: String,
+    pub rel_prefix: String,
+    pub display_name: String,
+}
+
 #[tauri::command]
 pub async fn sftp_batch_upload(
     app_handle: tauri::AppHandle,
@@ -1691,8 +1845,12 @@ pub async fn sftp_batch_upload(
                 let upload_errors: Arc<tokio::sync::RwLock<Vec<String>>> =
                     Arc::new(tokio::sync::RwLock::new(Vec::new()));
 
+                // 递归展开文件+文件夹混合列表
+                let expanded_files = expand_upload_paths(&files).await;
+                let files_total = expanded_files.len();
+
                 let mut total_bytes_all_files: u64 = 0;
-                for local_path in &files {
+                for (local_path, _) in &expanded_files {
                     if let Ok(metadata) = tokio::fs::metadata(local_path).await {
                         total_bytes_all_files += metadata.len();
                     }
@@ -1701,7 +1859,7 @@ pub async fn sftp_batch_upload(
                 let file_semaphore = Arc::new(Semaphore::new(file_max_concurrent));
                 let mut file_handles = Vec::new();
 
-                for local_path in &files {
+                for (local_path, rel_prefix) in &expanded_files {
                     if cancel_token.is_cancelled() {
                         break;
                     }
@@ -1710,11 +1868,28 @@ pub async fn sftp_batch_upload(
                         .rsplit(|c| c == '\\' || c == '/')
                         .next()
                         .unwrap_or("file");
-                    let remote_path = format!(
-                        "{}/{}",
-                        target_dir.trim_end_matches('/'),
-                        filename
-                    );
+                    // 显示名（含相对路径前缀），用于进度事件中唯一标识文件
+                    let display_name = if rel_prefix.is_empty() {
+                        filename.to_string()
+                    } else {
+                        format!("{}/{}", rel_prefix, filename)
+                    };
+                    // 计算远端路径，保持目录结构
+                    let remote_path = if rel_prefix.is_empty() {
+                        format!("{}/{}", target_dir.trim_end_matches('/'), filename)
+                    } else {
+                        format!("{}/{}/{}", target_dir.trim_end_matches('/'), rel_prefix, filename)
+                    };
+                    // 远端子目录路径分段（用于上传前逐级创建目录）
+                    let subdir_parts: Vec<String> = if rel_prefix.is_empty() {
+                        Vec::new()
+                    } else {
+                        rel_prefix
+                            .split('/')
+                            .filter(|s| !s.is_empty())
+                            .map(|s| s.to_string())
+                            .collect()
+                    };
 
                     let file_permit = match file_semaphore.clone().acquire_owned().await {
                         Ok(p) => p,
@@ -1726,7 +1901,7 @@ pub async fn sftp_batch_upload(
                     let batch_id_clone = batch_id.clone();
                     let session_id_clone = session_id.clone();
                     let host_clone = host.clone();
-                    let filename_clone = filename.to_string();
+                    let filename_clone = display_name.clone();
                     let local_path_clone = local_path.clone();
                     let cancel_token_clone = cancel_token.clone();
                     let is_paused_clone = is_paused.clone();
@@ -1734,7 +1909,8 @@ pub async fn sftp_batch_upload(
                     let files_completed_clone = files_completed.clone();
                     let bytes_transferred_clone = bytes_transferred.clone();
                     let upload_errors_clone = upload_errors.clone();
-                    let files_total = files.len();
+                    let files_total = files_total;
+                    let target_dir_clone = target_dir.clone();
 
                     let file_handle = tokio::spawn(async move {
                         let _permit = file_permit;
@@ -1771,6 +1947,15 @@ pub async fn sftp_batch_upload(
 
                             match ssh_client_clone.open_sftp().await {
                                 Ok(channel) => {
+                                    // 如果有相对目录前缀，逐级创建远端目录
+                                    if !subdir_parts.is_empty() {
+                                        let base = target_dir_clone.trim_end_matches('/');
+                                        let mut current = base.to_string();
+                                        for part in &subdir_parts {
+                                            current = format!("{}/{}", current, part);
+                                            let _ = channel.create_dir(&current).await;
+                                        }
+                                    }
                                     let (progress_tx, progress_rx) =
                                         tokio::sync::mpsc::channel::<crate::terminal::sftp::batch::FileTransferProgress>(100);
 
@@ -1941,9 +2126,9 @@ pub async fn sftp_batch_upload(
                         status: final_status,
                         current_file: None,
                         files_completed: final_files_completed,
-                        files_total: files.len(),
+                        files_total,
                         bytes_transferred: final_bytes,
-                        bytes_total: final_bytes,
+                        bytes_total: total_bytes_all_files,
                         error: error_summary,
                         speed: None,
                         eta_seconds: None,
@@ -2014,7 +2199,7 @@ pub async fn sftp_touch(
         .get_handle(&session_id)
         .await
         .ok_or_else(|| TerminalError::SessionNotFound(session_id).to_string())?;
-    let client = get_sftp_client(&handle)?;
+    let client = get_sftp_client_async(&handle).await?;
     client.touch(&path).await.map_err(|e| e.to_string())
 }
 
@@ -2030,7 +2215,7 @@ pub async fn sftp_chmod(
         .get_handle(&session_id)
         .await
         .ok_or_else(|| TerminalError::SessionNotFound(session_id).to_string())?;
-    let client = get_sftp_client(&handle)?;
+    let client = get_sftp_client_async(&handle).await?;
     client
         .set_permissions(&path, mode)
         .await
@@ -2097,7 +2282,7 @@ pub async fn sftp_stat_detail(
         .get_handle(&session_id)
         .await
         .ok_or_else(|| TerminalError::SessionNotFound(session_id).to_string())?;
-    let client = get_sftp_client(&handle)?;
+    let client = get_sftp_client_async(&handle).await?;
     let info = client.stat(&path).await.map_err(|e| e.to_string())?;
     let permissions = info.permissions.unwrap_or(0);
     Ok(FileStatDetail {
@@ -2128,7 +2313,7 @@ pub async fn sftp_download_dir(
         .get_handle(&session_id)
         .await
         .ok_or_else(|| TerminalError::SessionNotFound(session_id.clone()).to_string())?;
-    let client = get_sftp_client(&handle)?;
+    let client = get_sftp_client_async(&handle).await?;
 
     tokio::fs::create_dir_all(&local_path)
         .await
@@ -2416,7 +2601,7 @@ pub async fn sftp_upload_dir(
         .get_handle(&session_id)
         .await
         .ok_or_else(|| TerminalError::SessionNotFound(session_id.clone()).to_string())?;
-    let client = get_sftp_client(&handle)?;
+    let client = get_sftp_client_async(&handle).await?;
 
     if let Some(tid) = &task_id {
         let sftp = client.create_sftp_channel().await.map_err(|e| e.to_string())?;

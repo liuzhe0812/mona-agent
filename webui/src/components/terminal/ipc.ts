@@ -5,6 +5,7 @@ import type {
   AuthConfig,
   FileInfo,
   BatchUploadRequest,
+  ExpandedFileEntry,
   BatchTransferProgress,
   ProjectInfo,
   FileCheckResult,
@@ -26,6 +27,12 @@ export async function sftpBatchUpload(
   request: BatchUploadRequest,
 ): Promise<string> {
   return invoke<string>("sftp_batch_upload", { request });
+}
+
+export async function expandUploadPaths(
+  files: string[],
+): Promise<ExpandedFileEntry[]> {
+  return invoke<ExpandedFileEntry[]>("expand_upload_paths_command", { files });
 }
 
 export async function sftpBatchCancel(batchId: string): Promise<void> {
@@ -244,6 +251,15 @@ export async function sftpRename(
   newPath: string,
 ): Promise<void> {
   return invoke("sftp_rename", { sessionId, oldPath, newPath });
+}
+
+export async function sftpPaste(
+  sessionId: string,
+  srcPaths: string[],
+  targetDir: string,
+  action: "copy" | "cut",
+): Promise<void> {
+  return invoke("sftp_paste", { sessionId, srcPaths, targetDir, action });
 }
 
 export async function sftpStat(sessionId: string, path: string): Promise<FileInfo> {

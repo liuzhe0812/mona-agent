@@ -42,6 +42,43 @@ export interface UnifiedFileItem {
   _rawFile?: File;
 }
 
+async function readDirEntries(
+  entry: FileSystemDirectoryEntry,
+  prefix: string,
+): Promise<{ file: File; relativePath: string }[]> {
+  return new Promise((resolve, reject) => {
+    const reader = entry.createReader();
+    const allEntries: FileSystemEntry[] = [];
+    const readBatch = () => {
+      reader.readEntries(async (batch) => {
+        if (batch.length === 0) {
+          const results: { file: File; relativePath: string }[] = [];
+          for (const e of allEntries) {
+            if (e.isFile) {
+              const fileEntry = e as FileSystemFileEntry;
+              const file = await new Promise<File>((res, rej) =>
+                fileEntry.file(res, rej),
+              );
+              results.push({ file, relativePath: `${prefix}${e.name}` });
+            } else if (e.isDirectory) {
+              const sub = await readDirEntries(
+                e as FileSystemDirectoryEntry,
+                `${prefix}${e.name}/`,
+              );
+              results.push(...sub);
+            }
+          }
+          resolve(results);
+        } else {
+          allEntries.push(...batch);
+          readBatch();
+        }
+      }, reject);
+    };
+    readBatch();
+  });
+}
+
 interface Props {
   label: string;
   currentPath: string;
@@ -266,7 +303,7 @@ export function FilePane({
   }, []);
 
   const handleDrop = useCallback(
-    (e: React.DragEvent) => {
+    async (e: React.DragEvent) => {
       e.preventDefault();
       dragCounterRef.current = 0;
       setIsDragOver(false);
@@ -281,35 +318,67 @@ export function FilePane({
         }
         return;
       }
-      // Use items API to detect directories via webkitGetAsEntry
       const items = e.dataTransfer.items;
       const files: UnifiedFileItem[] = [];
+      const pendingDirs: {
+        entry: FileSystemDirectoryEntry;
+        name: string;
+      }[] = [];
 
       if (items && items.length > 0) {
         for (let i = 0; i < items.length; i++) {
           const item = items[i];
           let isDir = false;
+          let dirEntry: FileSystemDirectoryEntry | null = null;
 
-          // Try to detect directory via webkitGetAsEntry
           try {
             const entry = item.webkitGetAsEntry?.();
             if (entry?.isDirectory) {
               isDir = true;
+              dirEntry = entry as FileSystemDirectoryEntry;
             }
           } catch {}
 
           const f = item.getAsFile();
-          if (f) {
-            const filePath = (f as File & { path?: string }).path;
+          const filePath = f
+            ? (f as File & { path?: string }).path
+            : undefined;
+          const hasValidPath = !!(filePath && filePath.includes(":"));
+
+          if (isDir && dirEntry && !hasValidPath) {
+            pendingDirs.push({
+              entry: dirEntry,
+              name: f?.name ?? dirEntry.name,
+            });
+          } else if (f) {
             files.push({
               name: f.name,
-              path: filePath && filePath.includes(":") ? filePath : f.name,
+              path: hasValidPath ? filePath! : f.name,
               isDir,
               size: f.size,
               modified: null,
               permissions: null,
-              _rawFile: filePath ? undefined : f,
+              _rawFile: hasValidPath ? undefined : f,
             });
+          }
+        }
+
+        for (const { entry, name } of pendingDirs) {
+          try {
+            const subFiles = await readDirEntries(entry, "");
+            for (const { file, relativePath } of subFiles) {
+              files.push({
+                name: `${name}/${relativePath}`,
+                path: "",
+                isDir: false,
+                size: file.size,
+                modified: null,
+                permissions: null,
+                _rawFile: file,
+              });
+            }
+          } catch (err) {
+            console.error("[FilePane] failed to read directory:", err);
           }
         }
       } else if (e.dataTransfer.files.length > 0) {

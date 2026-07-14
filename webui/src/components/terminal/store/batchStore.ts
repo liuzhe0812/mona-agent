@@ -25,7 +25,7 @@ export interface TransferFileNode {
 export interface TransferSessionNode {
   id: string;
   host: string;
-  status: "waiting" | "transferring" | "completed" | "error" | "paused";
+  status: "waiting" | "transferring" | "completed" | "error" | "paused" | "cancelled";
   expanded: boolean;
   files: TransferFileNode[];
   progress: number;
@@ -225,12 +225,12 @@ export const useBatchStore = create<BatchState>()(
         const { sessionId, status, currentFile, filesCompleted, filesTotal, bytesTransferred, bytesTotal, speed, etaSeconds, error } = progress;
 
         const statusMap: Record<string, TransferSessionNode["status"]> = {
-          Pending: "waiting",
-          Connecting: "waiting",
-          Transferring: "transferring",
-          Completed: "completed",
-          Error: "error",
-          Cancelled: "completed",
+          pending: "waiting",
+          connecting: "waiting",
+          transferring: "transferring",
+          completed: "completed",
+          error: "error",
+          cancelled: "cancelled",
         };
 
         let sessionProgress = 0;
@@ -240,33 +240,86 @@ export const useBatchStore = create<BatchState>()(
           sessionProgress = Math.round((filesCompleted / filesTotal) * 100);
         }
 
-        const fileStatus = status === "Completed" ? "completed" : status === "Error" ? "error" : "transferring";
+        const fileStatus =
+          status === "completed" ? "completed"
+          : status === "error" ? "error"
+          : status === "cancelled" ? "cancelled"
+          : "transferring";
 
-        set((state) => ({
-          transferSessions: state.transferSessions.map((s) =>
-            s.id === sessionId
-              ? {
-                  ...s,
-                  status: statusMap[status] || "waiting",
-                  progress: sessionProgress,
-                  completedCount: filesCompleted,
-                  totalCount: filesTotal,
-                  transferredBytes: bytesTransferred,
-                  totalBytes: bytesTotal,
-                  speed: formatSpeed(speed),
-                  eta: formatEta(etaSeconds),
-                  error: error || undefined,
-                  files: currentFile
-                    ? s.files.map((f) =>
-                        f.filename === currentFile
-                          ? { ...f, status: fileStatus, speed: formatSpeed(speed), eta: formatEta(etaSeconds) }
-                          : f,
-                      )
-                    : s.files.map((f) => ({ ...f, status: fileStatus })),
-                }
-              : s,
-          ),
-        }));
+        const formattedSpeed = formatSpeed(speed);
+        const formattedEta = formatEta(etaSeconds);
+
+        set((state) => {
+          const sessionIdx = state.transferSessions.findIndex((s) => s.id === sessionId);
+          if (sessionIdx === -1) return state;
+
+          const session = state.transferSessions[sessionIdx];
+          const isFinalEvent = currentFile === null || currentFile === undefined;
+
+          let nextFiles = session.files;
+          if (isFinalEvent) {
+            nextFiles = session.files.map((f) => ({ ...f, status: fileStatus as TransferFileNode["status"] }));
+          } else {
+            const fileIdx = session.files.findIndex((f) => f.filename === currentFile);
+            if (fileIdx !== -1) {
+              const file = session.files[fileIdx];
+              if (
+                file.status === fileStatus &&
+                file.speed === formattedSpeed &&
+                file.eta === formattedEta
+              ) {
+                nextFiles = session.files;
+              } else {
+                nextFiles = session.files.slice();
+                nextFiles[fileIdx] = {
+                  ...file,
+                  status: fileStatus as TransferFileNode["status"],
+                  speed: formattedSpeed,
+                  eta: formattedEta,
+                };
+              }
+            }
+          }
+
+          const allFilesDone = nextFiles.every(
+            (f) => f.status === "completed" || f.status === "error" || f.status === "cancelled",
+          );
+          const sessionStatus: TransferSessionNode["status"] = isFinalEvent
+            ? (statusMap[status] || "waiting")
+            : allFilesDone && status === "completed" ? "completed" : session.status;
+
+          if (
+            session.status === sessionStatus &&
+            session.progress === sessionProgress &&
+            session.completedCount === filesCompleted &&
+            session.totalCount === filesTotal &&
+            session.transferredBytes === bytesTransferred &&
+            session.totalBytes === bytesTotal &&
+            session.speed === formattedSpeed &&
+            session.eta === formattedEta &&
+            session.error === (error || undefined) &&
+            nextFiles === session.files
+          ) {
+            return state;
+          }
+
+          const nextSessions = state.transferSessions.slice();
+          nextSessions[sessionIdx] = {
+            ...session,
+            status: sessionStatus,
+            progress: sessionProgress,
+            completedCount: filesCompleted,
+            totalCount: filesTotal,
+            transferredBytes: bytesTransferred,
+            totalBytes: bytesTotal,
+            speed: formattedSpeed,
+            eta: formattedEta,
+            error: error || undefined,
+            files: nextFiles,
+          };
+
+          return { transferSessions: nextSessions };
+        });
       },
     }),
     {

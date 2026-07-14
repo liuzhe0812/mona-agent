@@ -13,6 +13,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
@@ -30,6 +31,8 @@ import {
   sftpRename,
   sftpMkdir,
   sftpDownload,
+  sftpPaste,
+  expandUploadPaths,
   onBatchTransferProgress,
 } from "../ipc";
 import type { BatchTransferProgress, FileInfo } from "../types/terminal";
@@ -68,6 +71,25 @@ import {
   ClipboardPaste,
 } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
+import { memo } from "react";
+
+const TransferFileItem = memo(function TransferFileItem({
+  status,
+  filename,
+  speed,
+}: {
+  status: string;
+  filename: string;
+  speed: string;
+}) {
+  return (
+    <div className="flex items-center gap-2 text-xs text-muted-foreground w-full min-w-0">
+      {getStatusIcon(status)}
+      <span className="truncate flex-1 min-w-0">{filename}</span>
+      <span className="shrink-0">{speed}</span>
+    </div>
+  );
+});
 
 function generateIps(start: string, count: number): string[] {
   const ips: string[] = [];
@@ -93,6 +115,7 @@ function getStatusIcon(status: string) {
   switch (status) {
     case "completed": return <CheckCircle className="h-3.5 w-3.5 text-emerald-500" />;
     case "error": return <XCircle className="h-3.5 w-3.5 text-red-500" />;
+    case "cancelled": return <XCircle className="h-3.5 w-3.5 text-gray-400" />;
     case "transferring": return <Loader2 className="h-3.5 w-3.5 text-blue-500 animate-spin" />;
     case "paused": return <Pause className="h-3.5 w-3.5 text-amber-500" />;
     default: return <Clock className="h-3.5 w-3.5 text-gray-400" />;
@@ -126,6 +149,7 @@ export function BatchModeView() {
     clearFileSelection,
     clipboard,
     setClipboard,
+    clearClipboard,
   } = store;
 
   const [collapsedTransfer, setCollapsedTransfer] = useState<Set<string>>(new Set());
@@ -133,6 +157,11 @@ export function BatchModeView() {
   const [renameValue, setRenameValue] = useState("");
   const [mkdirEditing, setMkdirEditing] = useState(false);
   const [mkdirValue, setMkdirValue] = useState("");
+  const [isDragOver, setIsDragOver] = useState(false);
+  const sftpAreaRef = useRef<HTMLDivElement>(null);
+  const uploadLockRef = useRef(false);
+  const progressQueueRef = useRef<BatchTransferProgress[]>([]);
+  const rafRef = useRef<number | null>(null);
 
   const terminalStoreActiveId = useTerminalStore((s) => s.activeSessionId);
   const terminalStoreSessions = useTerminalStore((s) => s.sessions);
@@ -509,13 +538,18 @@ export function BatchModeView() {
     }
   };
 
+  const getActiveSession = () =>
+    activeSessionId
+      ? sessions.find((s) => s.id === activeSessionId)
+      : sessions.find((s) => s.status === "connected");
+
   const loadRemoteFiles = async (path: string) => {
-    const connectedSession = sessions.find((s) => s.status === "connected");
-    if (!connectedSession) return;
+    const session = getActiveSession();
+    if (!session) return;
     setLoadingFiles(true);
     clearFileSelection();
     try {
-      const files = await sftpList(connectedSession.id, path);
+      const files = await sftpList(session.id, path);
       setRemoteFiles(files);
       setRemotePath(path);
     } catch (err) {
@@ -526,6 +560,7 @@ export function BatchModeView() {
   };
 
   const handleFileClick = (file: FileInfo, _index: number, e: React.MouseEvent) => {
+    e.stopPropagation();
     if (e.ctrlKey || e.metaKey) {
       e.preventDefault();
       selectFile(file.path, true);
@@ -533,33 +568,59 @@ export function BatchModeView() {
       e.preventDefault();
       selectFile(file.path, false, true, remoteFiles);
     } else {
+      selectFile(file.path);
       if (file.isDir) {
         loadRemoteFiles(file.path);
-      } else {
-        selectFile(file.path);
       }
     }
   };
 
   const handleDeleteFile = async (file: FileInfo) => {
-    if (!activeSession) return;
+    const session = getActiveSession();
+    if (!session) return;
+    const targets = getSelectedFiles(file);
     try {
-      await sftpRemove(activeSession.id, file.path, file.isDir);
+      for (const f of targets) {
+        await sftpRemove(session.id, f.path, f.isDir);
+      }
+      clearFileSelection();
       await loadRemoteFiles(remotePath);
     } catch (err) {
       console.error("删除失败:", err);
+      await loadRemoteFiles(remotePath);
+    }
+  };
+
+  const handleBatchDownload = async (file: FileInfo) => {
+    const session = getActiveSession();
+    const targets = getSelectedFiles(file).filter((f) => !f.isDir);
+    if (targets.length === 0 || !session) return;
+    for (const f of targets) {
+      try {
+        const data = await sftpDownload(session.id, f.path);
+        const blob = new Blob([new Uint8Array(data)]);
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = f.name;
+        a.click();
+        URL.revokeObjectURL(url);
+      } catch (err) {
+        console.error(`下载 ${f.name} 失败:`, err);
+      }
     }
   };
 
   const handleRenameFile = async () => {
-    if (!activeSession || !renameTarget || !renameValue.trim()) {
+    const session = getActiveSession();
+    if (!session || !renameTarget || !renameValue.trim()) {
       setRenameTarget(null);
       return;
     }
     const parent = renameTarget.filePath.substring(0, renameTarget.filePath.lastIndexOf("/")) || "/";
     const newPath = parent + "/" + renameValue.trim();
     try {
-      await sftpRename(activeSession.id, renameTarget.filePath, newPath);
+      await sftpRename(session.id, renameTarget.filePath, newPath);
       await loadRemoteFiles(remotePath);
     } catch (err) {
       console.error("重命名失败:", err);
@@ -575,9 +636,10 @@ export function BatchModeView() {
   };
 
   const handleDownloadFile = async (file: FileInfo) => {
-    if (!activeSession || file.isDir) return;
+    const session = getActiveSession();
+    if (!session || file.isDir) return;
     try {
-      const data = await sftpDownload(activeSession.id, file.path);
+      const data = await sftpDownload(session.id, file.path);
       const blob = new Blob([new Uint8Array(data)]);
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -591,14 +653,15 @@ export function BatchModeView() {
   };
 
   const handleMkdir = async () => {
-    if (!activeSession || !mkdirValue.trim()) {
+    const session = getActiveSession();
+    if (!session || !mkdirValue.trim()) {
       setMkdirEditing(false);
       setMkdirValue("");
       return;
     }
     const path = remotePath.endsWith("/") ? remotePath + mkdirValue.trim() : remotePath + "/" + mkdirValue.trim();
     try {
-      await sftpMkdir(activeSession.id, path);
+      await sftpMkdir(session.id, path);
       await loadRemoteFiles(remotePath);
     } catch (err) {
       console.error("创建文件夹失败:", err);
@@ -616,6 +679,21 @@ export function BatchModeView() {
     setClipboard(files.map((f) => ({ path: f.path, isDir: f.isDir, action: "cut" as const })));
   };
 
+  const handlePasteFiles = async () => {
+    const session = getActiveSession();
+    if (!session || clipboard.length === 0) return;
+    const srcPaths = clipboard.map((c) => c.path);
+    const action = clipboard[0].action;
+    try {
+      await sftpPaste(session.id, srcPaths, remotePath, action);
+      clearClipboard();
+      clearFileSelection();
+      await loadRemoteFiles(remotePath);
+    } catch (err) {
+      console.error("粘贴失败:", err);
+    }
+  };
+
   const getSelectedFiles = (clickedFile: FileInfo): FileInfo[] => {
     if (selectedFilePaths.has(clickedFile.path)) {
       return remoteFiles.filter((f) => selectedFilePaths.has(f.path));
@@ -623,15 +701,23 @@ export function BatchModeView() {
     return [clickedFile];
   };
 
-  const handleUpload = async () => {
+  const startUpload = async (files: string[]) => {
     const selectedSessions = sessions.filter(
       (s) => s.selected && s.status === "connected",
     );
-    if (selectedSessions.length === 0) return;
+    if (selectedSessions.length === 0 || files.length === 0) return;
 
-    const selected = await open({ multiple: true, directory: false });
-    if (!selected || (Array.isArray(selected) && selected.length === 0)) return;
-    const files = Array.isArray(selected) ? selected : [selected];
+    // 调用后端展开文件夹，获取完整文件列表用于展示
+    let expandedEntries: { localPath: string; relPrefix: string; displayName: string }[] = [];
+    try {
+      expandedEntries = await expandUploadPaths(files);
+    } catch (err) {
+      console.error("展开文件列表失败:", err);
+      expandedEntries = files.map((p) => {
+        const name = p.split(/[\\/]/).pop() || "";
+        return { localPath: p, relPrefix: "", displayName: name };
+      });
+    }
 
     const newTransferSessions: TransferSessionNode[] = selectedSessions.map(
       (session) => ({
@@ -639,19 +725,16 @@ export function BatchModeView() {
         host: session.host,
         status: "transferring",
         expanded: true,
-        files: files.map((filePath) => {
-          const fileName = filePath.split(/[\\/]/).pop() || "";
-          return {
-            id: `upload-${session.id}-${fileName}`,
-            filename: fileName,
-            status: "waiting",
-            speed: "0 B/s",
-            eta: "等待中...",
-          };
-        }),
+        files: expandedEntries.map((entry) => ({
+          id: `upload-${session.id}-${entry.displayName}`,
+          filename: entry.displayName,
+          status: "waiting",
+          speed: "0 B/s",
+          eta: "等待中...",
+        })),
         progress: 0,
         completedCount: 0,
-        totalCount: files.length,
+        totalCount: expandedEntries.length,
         totalBytes: 0,
         transferredBytes: 0,
         speed: "0 B/s",
@@ -670,7 +753,7 @@ export function BatchModeView() {
     try {
       const batchId = await sftpBatchUpload({
         sessions: batchSessionInfos,
-        files: files,
+        files,
         targetDirectory: remotePath,
         maxConcurrent,
       });
@@ -680,15 +763,119 @@ export function BatchModeView() {
     }
   };
 
+  const handleUpload = async () => {
+    if (uploadLockRef.current) return;
+    uploadLockRef.current = true;
+    try {
+      const selected = await open({ multiple: true, directory: false });
+      if (!selected || (Array.isArray(selected) && selected.length === 0)) return;
+      const files = Array.isArray(selected) ? selected : [selected];
+      await startUpload(files);
+    } finally {
+      uploadLockRef.current = false;
+    }
+  };
+
+  const handleDragEnter = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
   useEffect(() => {
     let unlisten: (() => void) | null = null;
+
+    const isInsideSftpArea = (pos: { x: number; y: number }) => {
+      const el = sftpAreaRef.current;
+      if (!el) return false;
+      const rect = el.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      return (
+        pos.x / dpr >= rect.left &&
+        pos.x / dpr <= rect.right &&
+        pos.y / dpr >= rect.top &&
+        pos.y / dpr <= rect.bottom
+      );
+    };
+
+    getCurrentWebview().onDragDropEvent((event) => {
+      if (activeTab !== "sftp") return;
+
+      switch (event.payload.type) {
+        case "enter":
+        case "over":
+          if ("position" in event.payload) {
+            setIsDragOver(isInsideSftpArea(event.payload.position));
+          }
+          break;
+        case "drop":
+          setIsDragOver(false);
+          if (!("paths" in event.payload) || !("position" in event.payload)) return;
+          if (!isInsideSftpArea(event.payload.position)) return;
+          if (!event.payload.paths || event.payload.paths.length === 0) return;
+          {
+            const selectedSessions = sessions.filter(
+              (s) => s.selected && s.status === "connected",
+            );
+            if (selectedSessions.length === 0) return;
+            startUpload(event.payload.paths);
+          }
+          break;
+        case "leave":
+          setIsDragOver(false);
+          break;
+      }
+    }).then((fn) => {
+      unlisten = fn;
+    });
+
+    return () => {
+      unlisten?.();
+    };
+  }, [activeTab, sessions, startUpload]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+
+    const flushProgress = () => {
+      const queue = progressQueueRef.current;
+      if (queue.length === 0) {
+        rafRef.current = null;
+        return;
+      }
+      const latestBySession = new Map<string, BatchTransferProgress>();
+      for (const p of queue) {
+        latestBySession.set(p.sessionId, p);
+      }
+      progressQueueRef.current = [];
+      for (const p of latestBySession.values()) {
+        handleBatchProgress(p);
+      }
+      rafRef.current = null;
+    };
+
+    const enqueueProgress = (progress: BatchTransferProgress) => {
+      progressQueueRef.current.push(progress);
+      if (rafRef.current === null) {
+        rafRef.current = requestAnimationFrame(flushProgress);
+      }
+    };
+
     onBatchTransferProgress((progress: BatchTransferProgress) => {
-      handleBatchProgress(progress);
+      enqueueProgress(progress);
     }).then((fn) => {
       unlisten = fn;
     });
     return () => {
       unlisten?.();
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
     };
   }, [handleBatchProgress]);
 
@@ -973,7 +1160,20 @@ export function BatchModeView() {
           >
             {connectedCount > 0 ? (
               <div className="flex flex-1 min-h-0">
-                <div className="flex flex-col flex-1 min-w-0 min-h-0">
+                <div
+                  ref={sftpAreaRef}
+                  className="relative flex flex-col flex-1 min-w-0 min-h-0"
+                  onDragEnter={handleDragEnter}
+                  onDragOver={handleDragOver}
+                >
+                  {isDragOver && (
+                    <div className="absolute inset-0 z-50 flex items-center justify-center bg-primary/10 border-2 border-dashed border-primary/60 rounded pointer-events-none">
+                      <div className="flex flex-col items-center gap-2 text-primary">
+                        <Upload className="h-8 w-8" />
+                        <span className="text-sm font-medium">松开以上传到 {remotePath}</span>
+                      </div>
+                    </div>
+                  )}
                   <div className="flex items-center gap-2 px-3 py-1.5 border-b">
                     <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => { const parent = remotePath.substring(0, remotePath.lastIndexOf("/")) || "/"; loadRemoteFiles(parent); }} disabled={remotePath === "/"}>
                       <ChevronLeft className="h-3 w-3" />
@@ -988,9 +1188,9 @@ export function BatchModeView() {
                     <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => loadRemoteFiles(remotePath)} disabled={loadingFiles}>
                       <RefreshCw className={cn("h-3 w-3", loadingFiles && "animate-spin")} />
                     </Button>
-                    <div className="border-l pl-2">
+                    <div className="border-l pl-2 flex gap-1">
                       <Button variant="outline" size="sm" className="h-6 text-xs gap-1" onClick={handleUpload} disabled={sessions.filter((s) => s.selected).length === 0}>
-                        <Upload className="h-3 w-3" /> 批量上传
+                        <Upload className="h-3 w-3" /> 上传
                       </Button>
                     </div>
                   </div>
@@ -1038,8 +1238,8 @@ export function BatchModeView() {
                               <ContextMenuTrigger asChild>
                                 <div
                                   className={cn(
-                                    "flex items-center text-xs cursor-pointer hover:bg-accent/20",
-                                    selectedFilePaths.has(file.path) && "bg-accent/60",
+                                    "flex items-center text-xs cursor-pointer hover:bg-blue-500/10",
+                                    selectedFilePaths.has(file.path) && "bg-blue-500/20 hover:bg-blue-500/20",
                                   )}
                                   style={{ height: 26 }}
                                   onClick={(e) => handleFileClick(file, index, e)}
@@ -1076,35 +1276,69 @@ export function BatchModeView() {
                                 </div>
                               </ContextMenuTrigger>
                               <ContextMenuContent className="w-48">
-                                {file.isDir && (
-                                  <ContextMenuItem onClick={() => loadRemoteFiles(file.path)}>
-                                    <FolderOpen className="mr-2 h-3.5 w-3.5" /> 打开
-                                  </ContextMenuItem>
-                                )}
-                                {!file.isDir && (
-                                  <ContextMenuItem onClick={() => handleDownloadFile(file)}>
-                                    <Download className="mr-2 h-3.5 w-3.5" /> 下载
-                                  </ContextMenuItem>
-                                )}
-                                <ContextMenuSeparator />
-                                <ContextMenuItem onClick={() => handleCopyFiles(getSelectedFiles(file))}>
-                                  <Copy className="mr-2 h-3.5 w-3.5" /> 复制
-                                </ContextMenuItem>
-                                <ContextMenuItem onClick={() => handleCutFiles(getSelectedFiles(file))}>
-                                  <Scissors className="mr-2 h-3.5 w-3.5" /> 剪切
-                                </ContextMenuItem>
-                                {clipboard.length > 0 && (
-                                  <ContextMenuItem onClick={() => { /* TODO: paste */ }}>
-                                    <ClipboardPaste className="mr-2 h-3.5 w-3.5" /> 粘贴
-                                  </ContextMenuItem>
-                                )}
-                                <ContextMenuSeparator />
-                                <ContextMenuItem onClick={() => startRename(file.path, file.name)}>
-                                  <Pencil className="mr-2 h-3.5 w-3.5" /> 重命名
-                                </ContextMenuItem>
-                                <ContextMenuItem onClick={() => handleDeleteFile(file)} className="text-red-600">
-                                  <Trash2 className="mr-2 h-3.5 w-3.5" /> 删除
-                                </ContextMenuItem>
+                                {(() => {
+                                  const selectedCount = getSelectedFiles(file).length;
+                                  const isMulti = selectedCount > 1;
+                                  return (
+                                    <>
+                                      {isMulti ? (
+                                        <>
+                                          <ContextMenuItem onClick={() => handleBatchDownload(file)}>
+                                            <Download className="mr-2 h-3.5 w-3.5" /> 下载 ({selectedCount}项)
+                                          </ContextMenuItem>
+                                          <ContextMenuSeparator />
+                                          <ContextMenuItem onClick={() => handleCopyFiles(getSelectedFiles(file))}>
+                                            <Copy className="mr-2 h-3.5 w-3.5" /> 复制 ({selectedCount}项)
+                                          </ContextMenuItem>
+                                          <ContextMenuItem onClick={() => handleCutFiles(getSelectedFiles(file))}>
+                                            <Scissors className="mr-2 h-3.5 w-3.5" /> 剪切 ({selectedCount}项)
+                                          </ContextMenuItem>
+                                          {clipboard.length > 0 && (
+                                            <ContextMenuItem onClick={() => handlePasteFiles()}>
+                                              <ClipboardPaste className="mr-2 h-3.5 w-3.5" /> 粘贴
+                                            </ContextMenuItem>
+                                          )}
+                                          <ContextMenuSeparator />
+                                          <ContextMenuItem onClick={() => handleDeleteFile(file)} className="text-red-600">
+                                            <Trash2 className="mr-2 h-3.5 w-3.5" /> 删除 ({selectedCount}项)
+                                          </ContextMenuItem>
+                                        </>
+                                      ) : (
+                                        <>
+                                          {file.isDir && (
+                                            <ContextMenuItem onClick={() => loadRemoteFiles(file.path)}>
+                                              <FolderOpen className="mr-2 h-3.5 w-3.5" /> 打开
+                                            </ContextMenuItem>
+                                          )}
+                                          {!file.isDir && (
+                                            <ContextMenuItem onClick={() => handleDownloadFile(file)}>
+                                              <Download className="mr-2 h-3.5 w-3.5" /> 下载
+                                            </ContextMenuItem>
+                                          )}
+                                          <ContextMenuSeparator />
+                                          <ContextMenuItem onClick={() => handleCopyFiles(getSelectedFiles(file))}>
+                                            <Copy className="mr-2 h-3.5 w-3.5" /> 复制
+                                          </ContextMenuItem>
+                                          <ContextMenuItem onClick={() => handleCutFiles(getSelectedFiles(file))}>
+                                            <Scissors className="mr-2 h-3.5 w-3.5" /> 剪切
+                                          </ContextMenuItem>
+                                          {clipboard.length > 0 && (
+                                            <ContextMenuItem onClick={() => handlePasteFiles()}>
+                                              <ClipboardPaste className="mr-2 h-3.5 w-3.5" /> 粘贴
+                                            </ContextMenuItem>
+                                          )}
+                                          <ContextMenuSeparator />
+                                          <ContextMenuItem onClick={() => startRename(file.path, file.name)}>
+                                            <Pencil className="mr-2 h-3.5 w-3.5" /> 重命名
+                                          </ContextMenuItem>
+                                          <ContextMenuItem onClick={() => handleDeleteFile(file)} className="text-red-600">
+                                            <Trash2 className="mr-2 h-3.5 w-3.5" /> 删除
+                                          </ContextMenuItem>
+                                        </>
+                                      )}
+                                    </>
+                                  );
+                                })()}
                               </ContextMenuContent>
                             </ContextMenu>
                           ))}
@@ -1118,10 +1352,10 @@ export function BatchModeView() {
                           <FolderPlus className="mr-2 h-3.5 w-3.5" /> 新建文件夹
                         </ContextMenuItem>
                         <ContextMenuItem onClick={() => handleUpload()}>
-                          <Upload className="mr-2 h-3.5 w-3.5" /> 上传文件
+                          <Upload className="mr-2 h-3.5 w-3.5" /> 上传
                         </ContextMenuItem>
                         {clipboard.length > 0 && (
-                          <ContextMenuItem onClick={() => { /* TODO: paste */ }}>
+                          <ContextMenuItem onClick={() => handlePasteFiles()}>
                             <ClipboardPaste className="mr-2 h-3.5 w-3.5" /> 粘贴
                           </ContextMenuItem>
                         )}
@@ -1166,11 +1400,12 @@ export function BatchModeView() {
                                 <Progress value={session.progress} className={cn("h-1 mb-1 max-w-full", session.status === "completed" ? "[&>div]:bg-emerald-500" : "[&>div]:bg-blue-500")} />
                                 <div className="space-y-0.5 w-full min-w-0">
                                   {session.files.map((file) => (
-                                    <div key={file.id} className="flex items-center gap-2 text-xs text-muted-foreground w-full min-w-0">
-                                      {getStatusIcon(file.status)}
-                                      <span className="truncate flex-1 min-w-0">{file.filename}</span>
-                                      <span className="shrink-0">{file.speed}</span>
-                                    </div>
+                                    <TransferFileItem
+                                      key={file.id}
+                                      status={file.status}
+                                      filename={file.filename}
+                                      speed={file.speed}
+                                    />
                                   ))}
                                 </div>
                               </div>

@@ -1,6 +1,7 @@
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
+import { WebglAddon } from "@xterm/addon-webgl";
 import { useCallback, useEffect, useRef, useState } from "react";
 import "@xterm/xterm/css/xterm.css";
 import {
@@ -87,6 +88,12 @@ export function XtermTerminal({ sessionId }: Props) {
     terminal.loadAddon(fitAddon);
     terminal.loadAddon(webLinksAddon);
     terminal.open(containerRef.current);
+
+    try {
+      terminal.loadAddon(new WebglAddon());
+    } catch {
+      // WebGL 不可用时回退到默认 DOM 渲染器
+    }
 
     const fitAndResize = (force = false) => {
       if (!fitAddonRef.current || !terminalRef.current) return;
