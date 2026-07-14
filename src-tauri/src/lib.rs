@@ -13,6 +13,7 @@ mod python;
 mod quick_ask;
 mod schedule_notifier;
 mod settings;
+mod system;
 mod terminal;
 mod tray;
 mod updater;
@@ -407,6 +408,7 @@ pub fn run() {
         .manage(PendingMdFiles::default())
         .manage(tray::PendingMailNavigation::default())
         .manage(notification_window::NotificationWindowState::new())
+        .manage(system::SystemState::new())
         .invoke_handler(tauri::generate_handler![
             get_settings,
             update_settings,
@@ -472,6 +474,7 @@ pub fn run() {
             terminal::commands::sftp_mkdir,
             terminal::commands::sftp_remove,
             terminal::commands::sftp_rename,
+            terminal::commands::sftp_paste,
             terminal::commands::sftp_stat,
             terminal::commands::sftp_canonicalize,
             terminal::commands::sftp_download,
@@ -492,6 +495,7 @@ pub fn run() {
             terminal::commands::local_home_dir,
             terminal::commands::local_desktop_dir,
             terminal::commands::sftp_batch_upload,
+            terminal::commands::expand_upload_paths_command,
             terminal::commands::sftp_batch_cancel,
             terminal::commands::sftp_batch_pause,
             terminal::commands::sftp_batch_resume,
@@ -608,6 +612,7 @@ pub fn run() {
             contacts::contact_test_eas,
             license::get_machine_id,
             license::check_license,
+            license::license_has_access,
             license::import_license,
             license::get_pricing,
             license::auth_register,
@@ -622,6 +627,12 @@ pub fn run() {
             license::list_notifications,
             license::get_unread_notification_count,
             license::mark_notification_read,
+            license::create_subscription,
+            license::poll_payment_status,
+            license::get_subscription_info,
+            license::cancel_auto_renew,
+            license::list_renewals,
+            license::open_external_url,
             updater::check_for_updates,
             updater::perform_update,
             updater::get_current_version,
@@ -676,6 +687,21 @@ pub fn run() {
             notification_window::show_notification_window,
             notification_window::close_notification_window,
             notification_window::emit_notification_action,
+            system::system_get_overview,
+            system::system_get_history,
+            system::scan_storage,
+            system::clean_storage,
+            system::software::system_winget_status,
+            system::software::system_list_software,
+            system::software::system_check_updates,
+            system::software::system_upgrade_software,
+            system::software::system_uninstall_software,
+            system::startup::system_list_startup_items,
+            system::startup::system_toggle_startup_item,
+            system::startup::system_batch_toggle_startup_items,
+            system::startup::system_get_boot_history,
+            system::startup::system_get_startup_changes,
+            system::maintenance::system_get_maintenance_history,
         ])
         .setup(move |app| {
             // 创建主窗口（在 builder 上注册 on_download，让 video 原生下载按钮生效）
@@ -689,7 +715,6 @@ pub fn run() {
             .min_inner_size(800.0, 600.0)
             .center()
             .decorations(false)
-            .disable_drag_drop_handler()
             .on_download(|webview, event| {
                 match event {
                     DownloadEvent::Requested { url, destination } => {
@@ -750,6 +775,12 @@ pub fn run() {
                 std::thread::spawn(move || {
                     email::verify_consistency_on_startup(&email_state);
                 });
+            }
+
+            // 启动系统采样后台线程：每 10 秒写入 CPU/内存/网络指标到 SQLite，60 分钟窗口环形置换
+            {
+                let system_state = app.state::<system::SystemState>().inner().clone();
+                system::start_background_sampler(system_state.0);
             }
 
             // Register the existing notes vault's assets directory with the
