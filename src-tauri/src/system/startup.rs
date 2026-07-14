@@ -501,15 +501,115 @@ fn write_startup_approved(item: &StartupItem, enabled: bool) -> Result<(), Strin
         CURRENT_USER.create(&approved_path)
     } else {
         LOCAL_MACHINE.create(&approved_path)
-    }
-    .map_err(|e| format!("打开 StartupApproved 失败：{}", e))?;
+    };
 
     // 12 字节项，首字节标识状态：0x02=启用，0x00=禁用
     let mut data = vec![0u8; 12];
     data[0] = if enabled { 0x02 } else { 0x00 };
-    key.set_bytes(&value_name, Type::Bytes, &data)
-        .map_err(|e| format!("写入 StartupApproved 失败：{}", e))?;
-    Ok(())
+
+    match key {
+        Ok(key) => {
+            match key.set_bytes(&value_name, Type::Bytes, &data) {
+                Ok(()) => Ok(()),
+                Err(e) => {
+                    // set_bytes 失败，HKLM 项走提权
+                    if root == "machine" || root == "HKLM" {
+                        write_startup_approved_elevated(&approved_path, &value_name, &data)
+                    } else {
+                        Err(format!("写入 StartupApproved 失败：{}", e))
+                    }
+                }
+            }
+        }
+        Err(e) => {
+            // create 失败，HKLM 项走提权
+            if root == "machine" || root == "HKLM" {
+                write_startup_approved_elevated(&approved_path, &value_name, &data)
+            } else {
+                Err(format!("打开 StartupApproved 失败：{}", e))
+            }
+        }
+    }
+}
+
+/// 通过 ShellExecuteExW + runas 弹出 UAC 提权写入 HKLM 注册表。
+/// 通过临时文件捕获 PowerShell 执行结果，确保不会静默失败。
+#[cfg(windows)]
+fn write_startup_approved_elevated(
+    approved_path: &str,
+    value_name: &str,
+    data: &[u8],
+) -> Result<(), String> {
+    use windows::core::{HSTRING, PCWSTR};
+    use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
+    use windows::Win32::System::Threading::{GetExitCodeProcess, WaitForSingleObject};
+    use windows::Win32::UI::Shell::{
+        SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, ShellExecuteExW,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::SW_HIDE;
+
+    let byte_array = data
+        .iter()
+        .map(|b| format!("0x{:02X}", b))
+        .collect::<Vec<_>>()
+        .join(",");
+    let ps_path = format!("HKLM:\\{}", approved_path);
+
+    // 临时文件用于捕获执行结果
+    let temp_dir = std::env::temp_dir();
+    let result_file = temp_dir.join(format!("mona_startup_{}.txt", std::process::id()));
+    let result_path = result_file.to_string_lossy().replace('\'', "''");
+
+    // PowerShell 脚本：try/catch 捕获错误写入临时文件
+    let script = format!(
+        "try {{ New-Item -Path '{}' -Force | Out-Null; Set-ItemProperty -Path '{}' -Name '{}' -Value ([byte[]]({})) -Type Binary -ErrorAction Stop; 'OK' | Out-File -FilePath '{}' -Encoding UTF8 }} catch {{ $_.Exception.Message | Out-File -FilePath '{}' -Encoding UTF8 }}",
+        ps_path, ps_path, value_name.replace('\'', "''"), byte_array, result_path, result_path
+    );
+
+    let params = HSTRING::from(format!("-NoProfile -NonInteractive -Command \"{}\"", script));
+    let mut info = SHELLEXECUTEINFOW::default();
+    info.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
+    info.fMask = SEE_MASK_NOCLOSEPROCESS;
+    info.lpVerb = windows::core::w!("runas");
+    info.lpFile = windows::core::w!("powershell.exe");
+    info.lpParameters = PCWSTR(params.as_ptr());
+    info.nShow = SW_HIDE.0 as i32;
+
+    unsafe {
+        match ShellExecuteExW(&mut info) {
+            Ok(()) => {
+                let handle: HANDLE = info.hProcess;
+                if !handle.is_invalid() {
+                    let wait_result = WaitForSingleObject(handle, 60_000);
+                    let mut exit_code: u32 = 0;
+                    let _ = GetExitCodeProcess(handle, &mut exit_code);
+                    let _ = CloseHandle(handle);
+                    if wait_result != WAIT_OBJECT_0 {
+                        let _ = std::fs::remove_file(&result_file);
+                        return Err("UAC 提权进程等待超时".to_string());
+                    }
+                    // 读取结果文件
+                    let result = std::fs::read_to_string(&result_file)
+                        .unwrap_or_default()
+                        .trim()
+                        .to_string();
+                    let _ = std::fs::remove_file(&result_file);
+                    if result == "OK" {
+                        return Ok(());
+                    }
+                    if result.is_empty() {
+                        return Err("UAC 提权执行完成但无结果返回（退出码可能非零）".to_string());
+                    }
+                    return Err(format!("提权写入失败：{}", result));
+                }
+                Ok(())
+            }
+            Err(e) => {
+                let _ = std::fs::remove_file(&result_file);
+                Err(format!("UAC 提权被拒绝或失败：{}", e))
+            }
+        }
+    }
 }
 
 #[cfg(windows)]

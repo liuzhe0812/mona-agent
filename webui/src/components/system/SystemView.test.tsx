@@ -122,7 +122,7 @@ describe("SystemView", () => {
     expect((headerIcon as HTMLImageElement).src).toContain("sidebar-system");
 
     fireEvent.click(screen.getByRole("tab", { name: "存储空间" }));
-    expect(screen.getByText("扫描磁盘空间占用")).toBeTruthy();
+    expect(screen.getByText(/尚未扫描/)).toBeTruthy();
 
     fireEvent.click(screen.getByRole("tab", { name: "软件管理" }));
     expect(screen.getByRole("heading", { name: "可用更新" })).toBeTruthy();
@@ -140,8 +140,9 @@ describe("SystemView", () => {
     expect(await screen.findByRole("button", { name: "10 分钟" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Mona 系统管家" })).toBeTruthy();
     expect(screen.getByText("告诉 Mona 你想改善什么")).toBeTruthy();
+    expect(screen.getByText("仅发送必要摘要")).toBeTruthy();
     expect(screen.getByTestId("system-layout").className).toContain(
-      "min-[1440px]:grid-cols-[minmax(0,1fr)_360px]",
+      "xl:grid-cols-[minmax(0,1fr)_360px]",
     );
   });
 
@@ -224,7 +225,7 @@ describe("SystemView", () => {
     const wechatSwitch = await screen.findByRole("switch", { name: "切换 WeChat 启动状态" });
     fireEvent.click(wechatSwitch);
 
-    expect(screen.getByText("WeChat 已禁用，可随时恢复")).toBeTruthy();
+    expect(await screen.findByText("WeChat 已禁用，可随时恢复")).toBeTruthy();
     expect(screen.getByRole("switch", { name: "切换 OneDrive 启动状态" }).getAttribute("aria-checked")).toBe("true");
   });
 
@@ -267,11 +268,11 @@ describe("SystemView", () => {
     render(<SystemView initialTab="storage" />);
 
     fireEvent.click(screen.getByRole("button", { name: "开始扫描" }));
-    expect(screen.getByText("正在扫描磁盘...")).toBeTruthy();
+    expect(screen.getAllByText("正在扫描磁盘...").length).toBeGreaterThan(0);
 
     fireEvent.click(screen.getByRole("tab", { name: "软件管理" }));
     fireEvent.click(screen.getByRole("tab", { name: "存储空间" }));
-    expect(screen.getByText("正在扫描磁盘...")).toBeTruthy();
+    expect(screen.getAllByText("正在扫描磁盘...").length).toBeGreaterThan(0);
 
     fireEvent.click(screen.getByRole("tab", { name: "软件管理" }));
     await act(async () => resolveScan({
@@ -318,7 +319,7 @@ describe("SystemView", () => {
   it("keeps a real Agent plan across tabs and opens its evidence source", async () => {
     render(<SystemView initialTab="software" />);
 
-    fireEvent.click(screen.getByRole("button", { name: "让 Mona 检查" }));
+    fireEvent.click(screen.getByRole("button", { name: /Mona 协助/ }));
     expect(screen.getByText("正在整理系统证据")).toBeTruthy();
 
     expect(await screen.findByText("已发现 1 项可更新软件")).toBeTruthy();
@@ -336,7 +337,7 @@ describe("SystemView", () => {
   it("executes only the selected real Agent actions and reports verification", async () => {
     render(<SystemView initialTab="software" />);
 
-    fireEvent.click(screen.getByRole("button", { name: "让 Mona 检查" }));
+    fireEvent.click(screen.getByRole("button", { name: /Mona 协助/ }));
     await screen.findByText("更新 Google Chrome");
     fireEvent.click(screen.getByRole("button", { name: "确认并执行" }));
 

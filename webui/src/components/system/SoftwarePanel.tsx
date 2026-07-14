@@ -1,5 +1,5 @@
 import { AlertTriangle, Boxes, RefreshCw, ShieldCheck } from "lucide-react";
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 
 import { MetricCard, PanelCard, StatusPill, primaryButtonClass, secondaryButtonClass } from "./SystemUi";
 import { useMaintenanceHistory, useSoftwareManagement } from "./useSystemData";
@@ -42,7 +42,7 @@ function formatRecordTime(timestamp: number): string {
 }
 
 export function SoftwarePanel() {
-  const { data, loading, error, workingIds, lastAction, lastUninstall, refresh, upgrade, uninstall } = useSoftwareManagement();
+  const { data, loading, error, workingIds, lastAction, lastUninstall, progressMap, refresh, upgrade, uninstall } = useSoftwareManagement();
   const maintenance = useMaintenanceHistory();
   const [activeSection, setActiveSection] = useState<SoftwareSection>("updates");
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -190,28 +190,42 @@ export function SoftwarePanel() {
                   </tr>
                 </thead>
                 <tbody>
-                  {updates.map((software) => (
-                    <tr key={software.id} className="border-t border-border/50">
-                      <td className="py-2.5">
-                        <input
-                          aria-label={`选择 ${software.name}`}
-                          type="checkbox"
-                          checked={selected.has(software.id)}
-                          onChange={() => toggle(software.id)}
-                          disabled={workingIds.has(software.id)}
-                        />
-                      </td>
-                      <td className="font-medium">{software.name}</td>
-                      <td>{software.currentVersion || "—"}</td>
-                      <td>{software.nextVersion || "—"}</td>
-                      <td><StatusPill tone="blue">{software.status || "—"}</StatusPill></td>
-                      <td className="text-right">
-                        <button className={secondaryButtonClass} onClick={() => upgrade([software])} disabled={busy}>
-                          {workingIds.has(software.id) ? "更新中" : "更新"}
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
+                  {updates.map((software) => {
+                    const isWorking = workingIds.has(software.id);
+                    const lines = progressMap[software.id] ?? [];
+                    const latest = lines[lines.length - 1];
+                    return (
+                      <Fragment key={software.id}>
+                        <tr className="border-t border-border/50">
+                          <td className="py-2.5">
+                            <input
+                              aria-label={`选择 ${software.name}`}
+                              type="checkbox"
+                              checked={selected.has(software.id)}
+                              onChange={() => toggle(software.id)}
+                              disabled={isWorking}
+                            />
+                          </td>
+                          <td className="font-medium">{software.name}</td>
+                          <td>{software.currentVersion || "—"}</td>
+                          <td>{software.nextVersion || "—"}</td>
+                          <td><StatusPill tone={isWorking ? "orange" : "blue"}>{isWorking ? "更新中" : (software.status || "—")}</StatusPill></td>
+                          <td className="text-right">
+                            <button className={secondaryButtonClass} onClick={() => upgrade([software])} disabled={busy}>
+                              {isWorking ? "更新中" : "更新"}
+                            </button>
+                          </td>
+                        </tr>
+                        {isWorking && latest && (
+                          <tr>
+                            <td colSpan={6} className="px-4 pb-2.5 pt-0">
+                              <p className="truncate text-[11px] text-muted-foreground" title={latest}>{latest}</p>
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
+                    );
+                  })}
                 </tbody>
               </table>
               {!loading && updates.length === 0 && <p className="py-8 text-center text-xs text-muted-foreground">当前没有可用更新</p>}

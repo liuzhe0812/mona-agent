@@ -58,7 +58,7 @@ export function MaintenancePanel() {
         <input aria-label="搜索维护记录" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索维护记录" className="h-8 w-48 rounded-lg border bg-background px-3 text-xs" />
       </div>
 
-      <div className="grid gap-3 min-[1280px]:grid-cols-[minmax(0,1.35fr)_minmax(280px,0.8fr)]">
+      <div className="grid gap-3 lg:grid-cols-[minmax(0,1.35fr)_minmax(280px,0.8fr)]">
         <PanelCard title="维护时间线" className="h-full">
           {loading ? (
             <div className="flex h-48 items-center justify-center text-xs text-muted-foreground">正在读取维护记录...</div>

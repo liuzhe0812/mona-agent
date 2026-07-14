@@ -61,7 +61,7 @@ export async function collectSystemEvidence(storage: StorageScanResult | null): 
     software: { updates: software.updates.slice(0, 40), wingetAvailable: software.wingetAvailable, failedCount: software.failedCount },
     startup: {
       ...startup,
-      items: startup.items.slice(0, 80).map(({ id, name, publisher, source, scope, command, targetPath, added, enabled, signed, firstSeenAt }) => ({ id, name, publisher, source, scope, command, targetPath, added, enabled, signed, firstSeenAt })),
+      items: startup.items.slice(0, 80).map(({ id, name, publisher, source, scope, added, enabled, signed, firstSeenAt }) => ({ id, name, publisher, source, scope, added, enabled, signed, firstSeenAt })),
     },
     storage: {
       cleanupItems: storage?.cleanupItems

@@ -49,6 +49,29 @@ function formatBytesPerSecond(value: number): string {
   return `${value.toFixed(0)} B/s`;
 }
 
+function buildTimeLabels(points: SamplePoint[], rangeSeconds: number): string[] {
+  if (points.length === 0) {
+    const now = Date.now();
+    const start = now - rangeSeconds * 1000;
+    return Array.from({ length: 5 }, (_, i) => {
+      const t = start + (rangeSeconds * 1000 * i) / 4;
+      return formatClock(new Date(t));
+    });
+  }
+  const last = points[points.length - 1].ts;
+  const start = last - rangeSeconds * 1000;
+  return Array.from({ length: 5 }, (_, i) => {
+    const t = start + (rangeSeconds * 1000 * i) / 4;
+    return formatClock(new Date(t));
+  });
+}
+
+function formatClock(date: Date): string {
+  const h = date.getHours().toString().padStart(2, "0");
+  const m = date.getMinutes().toString().padStart(2, "0");
+  return `${h}:${m}`;
+}
+
 interface Issue {
   title: string;
   detail: string;
@@ -125,7 +148,7 @@ export function OverviewPanel() {
     return (
       <div className="space-y-3">
         <h2 className="sr-only">电脑状态概览</h2>
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        <div className="grid gap-3 md:grid-cols-3">
           {[0, 1, 2].map((index) => <div key={index} className="h-[118px] animate-pulse rounded-xl border border-border/70 bg-card" />)}
         </div>
         <div className="h-64 animate-pulse rounded-xl border border-border/70 bg-card" />
@@ -141,6 +164,7 @@ export function OverviewPanel() {
   const memoryMiniPolyline = buildPolyline(history, (point) => point.memUsage, 120, 48);
   const networkMiniPolyline = buildPolyline(history, (point) => Math.min(point.netTotalMbps, 100), 120, 48);
   const historyReady = history.length >= 2;
+  const timeLabels = buildTimeLabels(history, timeRange.seconds);
   const issueTone = {
     red: "border-red-200/80 bg-red-500/[0.025]",
     orange: "border-orange-200/90 bg-orange-500/[0.025]",
@@ -162,13 +186,13 @@ export function OverviewPanel() {
     <div className="space-y-3">
       <h2 className="sr-only">电脑状态概览</h2>
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+      <div className="grid gap-3 md:grid-cols-3">
         <OverviewMetric label="CPU" value={formatPercent(data.cpu.usagePercent)} detail={`${data.cpu.frequencyGhz.toFixed(1)} GHz`} points={cpuMiniPolyline} color="#2f80ff" />
         <OverviewMetric label="内存" value={formatPercent(data.memory.usagePercent)} detail={`${formatGb(data.memory.usedGb)} / ${formatGb(data.memory.totalGb)} GB`} points={memoryMiniPolyline} color="#9367ff" />
         <OverviewMetric label="网络" value={formatMbps(data.network.totalMbps)} detail={`↑ ${formatMbps(data.network.uploadMbps)}　↓ ${formatMbps(data.network.downloadMbps)}`} points={networkMiniPolyline} color="#4caf72" />
       </div>
 
-      <div className="grid gap-3 xl:grid-cols-[minmax(0,1.7fr)_minmax(280px,0.8fr)]">
+      <div className="grid gap-3 lg:grid-cols-[minmax(0,1.7fr)_minmax(280px,0.8fr)]">
         <PanelCard
           title="性能趋势"
           action={
@@ -201,7 +225,7 @@ export function OverviewPanel() {
                   </svg>
                 ) : <div className="flex h-full items-center justify-center text-xs text-muted-foreground">正在采集趋势数据</div>}
               </div>
-              <div className="mt-1 flex justify-between text-[10px] text-muted-foreground"><span>09:30</span><span>09:45</span><span>10:00</span><span>10:15</span><span>10:30</span></div>
+              <div className="mt-1 flex justify-between text-[10px] text-muted-foreground">{timeLabels.map((label) => <span key={label}>{label}</span>)}</div>
             </div>
           </div>
         </PanelCard>
@@ -223,7 +247,7 @@ export function OverviewPanel() {
       </div>
 
       <PanelCard title="当前主要问题">
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        <div className="grid gap-3 md:grid-cols-3">
           {issues.map((issue) => (
             <div key={issue.title} className={`rounded-lg border p-3 ${issueTone[issue.tone]}`}>
               <div className="flex items-center gap-2"><TriangleAlert className={`h-4 w-4 ${issue.tone === "red" ? "text-red-500" : issue.tone === "orange" ? "text-orange-500" : "text-violet-500"}`} /><strong className="text-sm">{issue.title}</strong></div>

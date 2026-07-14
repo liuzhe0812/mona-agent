@@ -4,6 +4,7 @@ import {
   CircleAlert,
   Database,
   Loader2,
+  PanelRightClose,
   PanelRightOpen,
   Send,
   ShieldCheck,
@@ -64,9 +65,11 @@ interface SystemAssistantProps {
   requestId: number;
   storage: { result: StorageScanResult | null; clean: (ids: string[]) => Promise<StorageCleanupResult> };
   onNavigate: (tab: SystemTab) => void;
+  collapsed: boolean;
+  onToggleCollapse: () => void;
 }
 
-export function SystemAssistant({ tab, requestId, storage, onNavigate }: SystemAssistantProps) {
+export function SystemAssistant({ tab, requestId, storage, onNavigate, collapsed, onToggleCollapse }: SystemAssistantProps) {
   const [stage, setStage] = useState<AgentStage>("idle");
   const [goal, setGoal] = useState("");
   const [input, setInput] = useState("");
@@ -104,7 +107,10 @@ export function SystemAssistant({ tab, requestId, storage, onNavigate }: SystemA
   };
 
   useEffect(() => {
-    if (requestId > 0) void startGoal(DEFAULT_GOAL);
+    if (requestId > 0) {
+      setDrawerOpen(true);
+      void startGoal(DEFAULT_GOAL);
+    }
   }, [requestId]);
 
   const navigateTo = (nextTab: SystemTab) => {
@@ -155,32 +161,38 @@ export function SystemAssistant({ tab, requestId, storage, onNavigate }: SystemA
 
   return (
     <>
-      <button
-        type="button"
-        aria-label="打开 Mona 系统管家"
-        onClick={() => setDrawerOpen(true)}
-        className="absolute bottom-4 right-4 z-30 flex h-11 w-11 items-center justify-center rounded-full bg-blue-600 text-white shadow-lg transition hover:bg-blue-700 min-[1440px]:hidden"
-      >
-        <PanelRightOpen className="h-5 w-5" />
-      </button>
+      {/* 宽屏收起后的展开按钮：固定在右侧空列边缘 */}
+      {collapsed && (
+        <button
+          type="button"
+          aria-label="展开 Mona 系统管家"
+          onClick={onToggleCollapse}
+          className="absolute right-[360px] top-1/2 z-30 hidden h-16 w-7 -translate-y-1/2 items-center justify-center rounded-r-lg border border-l-0 border-border/70 bg-card shadow-md transition hover:bg-accent xl:flex"
+        >
+          <PanelRightOpen className="h-4 w-4" />
+        </button>
+      )}
 
-      {drawerOpen && <button type="button" aria-label="关闭 Mona 系统管家" onClick={() => setDrawerOpen(false)} className="absolute inset-0 z-40 bg-slate-950/20 backdrop-blur-[1px] min-[1440px]:hidden" />}
+      {drawerOpen && <button type="button" aria-label="关闭 Mona 系统管家" onClick={() => setDrawerOpen(false)} className="absolute inset-0 z-40 bg-slate-950/20 backdrop-blur-[1px] xl:hidden" />}
 
       <aside
         aria-label="Mona 系统管家"
-        className={`absolute inset-y-0 right-0 z-50 flex w-full flex-col border-l border-border/70 bg-card shadow-2xl transition-transform duration-200 sm:w-[360px] min-[1440px]:static min-[1440px]:z-auto min-[1440px]:w-auto min-[1440px]:translate-x-0 min-[1440px]:shadow-none ${drawerOpen ? "translate-x-0" : "translate-x-full"}`}
+        aria-hidden={collapsed}
+        className={`absolute inset-y-0 right-0 z-50 flex w-full flex-col border-l border-border/70 bg-card shadow-2xl transition-transform duration-200 sm:w-[360px] xl:static xl:z-auto xl:w-auto xl:translate-x-0 xl:shadow-none xl:border-l-0 ${collapsed ? "xl:pointer-events-none xl:bg-transparent" : "xl:border-l xl:border-border/70 xl:bg-card"} ${drawerOpen ? "translate-x-0" : "translate-x-full xl:translate-x-0"}`}
       >
+        <div className={`flex min-h-0 flex-1 flex-col ${collapsed ? "xl:hidden" : ""}`}>
         <header className="flex h-16 shrink-0 items-center gap-3 border-b border-border/70 px-4">
           <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-500/10 text-blue-600 dark:text-blue-400"><Sparkles className="h-4 w-4" /></span>
           <div className="min-w-0"><h2 className="truncate text-sm font-semibold">Mona 系统管家</h2><p className="mt-0.5 text-[10px] text-muted-foreground">跨模块诊断与受控处置</p></div>
           <span className="ml-auto rounded-md bg-violet-500/10 px-2 py-1 text-[10px] font-medium text-violet-600 dark:text-violet-400">需确认</span>
-          <button type="button" aria-label="关闭 Mona 系统管家" onClick={() => setDrawerOpen(false)} className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground min-[1440px]:hidden"><X className="h-4 w-4" /></button>
+          <button type="button" aria-label="关闭 Mona 系统管家" onClick={() => setDrawerOpen(false)} className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground xl:hidden"><X className="h-4 w-4" /></button>
+          <button type="button" aria-label="收起 Mona 系统管家" onClick={onToggleCollapse} className="hidden h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground xl:flex"><PanelRightClose className="h-4 w-4" /></button>
         </header>
 
         <div className="flex min-h-0 flex-1 flex-col">
           <div className="flex items-center justify-between border-b border-border/60 px-4 py-2.5 text-[11px] text-muted-foreground">
             <span>当前查看：{tabLabels[tab]}</span>
-            <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400"><span className="h-1.5 w-1.5 rounded-full bg-current" />本地受控</span>
+            <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400" title="仅将生成方案所需的系统摘要交给 AI；执行始终在本机且需确认"><span className="h-1.5 w-1.5 rounded-full bg-current" />仅发送必要摘要</span>
           </div>
 
           <div aria-live="polite" className="min-h-0 flex-1 overflow-y-auto p-4 scrollbar-hover">
@@ -230,6 +242,7 @@ export function SystemAssistant({ tab, requestId, storage, onNavigate }: SystemA
             <div className="flex items-center gap-2 rounded-xl border border-border/80 bg-background p-2 shadow-sm"><input value={input} onChange={(event) => setInput(event.target.value)} placeholder={`问 Mona，当前查看：${tabLabels[tab]}`} className="min-w-0 flex-1 bg-transparent px-1 text-xs outline-none" /><button type="submit" aria-label="发送给 Mona" disabled={!input.trim()} className="flex h-7 w-7 items-center justify-center rounded-lg bg-blue-600 text-white transition hover:bg-blue-700 disabled:opacity-40"><Send className="h-3.5 w-3.5" /></button></div>
             <p className="mt-2 flex items-center gap-1 text-[10px] text-muted-foreground"><CircleAlert className="h-3 w-3" />AI 仅基于当前系统证据规划；系统改动需确认。</p>
           </form>
+        </div>
         </div>
       </aside>
     </>

@@ -9,8 +9,6 @@ vi.mock("@/hooks/useLicense", () => ({
     loggedIn: false,
     licenseInfo: null,
     licenseActive: true,
-    localTrial: false,
-    localTrialExpired: false,
     serverTrial: false,
     remainingDays: 0,
   }),

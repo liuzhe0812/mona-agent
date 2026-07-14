@@ -105,10 +105,10 @@ export function StartupPanel() {
     });
   }, [items, sort]);
 
-  const toggleItem = (item: StartupItem) => {
+  const toggleItem = async (item: StartupItem) => {
     const newEnabled = !item.enabled;
+    await toggle(item.id, newEnabled);
     setNotice(`${item.name} ${newEnabled ? "已恢复" : "已禁用，可随时恢复"}`);
-    toggle(item.id, newEnabled);
   };
 
   const toggleSort = (key: StartupSortKey) => {
@@ -136,7 +136,7 @@ export function StartupPanel() {
         <MetricCard label="最近启动" value={bootHistory?.lastDurationMs ? formatDuration(bootHistory.lastDurationMs) : "—"} detail={bootHistory?.lastDeltaMs !== null ? formatDelta(bootHistory?.lastDeltaMs ?? null) : "暂无记录"} icon={<Clock3 className="h-4 w-4" />} accent="green" />
       </div>
 
-      <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_260px]">
+      <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_260px]">
         <PanelCard title="启动耗时趋势（最近 7 次启动）">
           {bootHistory && bootHistory.points.length > 0 ? (
             <div className="h-28">
@@ -177,7 +177,7 @@ export function StartupPanel() {
           <div className="flex h-40 items-center justify-center text-xs text-muted-foreground">未发现启动项</div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[720px] table-fixed text-left text-xs">
+            <table className="w-full min-w-[640px] table-fixed text-left text-xs">
               <colgroup>
                 <col className="w-[210px]" />
                 <col className="w-[140px]" />

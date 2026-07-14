@@ -60,14 +60,14 @@ describe("executeSystemAction", () => {
 });
 
 describe("collectSystemEvidence", () => {
-  it("preserves the startup fields required by the evidence contract", async () => {
+  it("keeps only the startup fields required for planning", async () => {
     const evidence = await collectSystemEvidence(null);
 
     expect(evidence.startup.items[0]).toMatchObject({
-      command: "C:\\WeChat\\WeChat.exe",
-      targetPath: "C:\\WeChat\\WeChat.exe",
       added: "2024/05/12",
       firstSeenAt: 1715472000,
     });
+    expect(evidence.startup.items[0]).not.toHaveProperty("command");
+    expect(evidence.startup.items[0]).not.toHaveProperty("targetPath");
   });
 });

@@ -13,27 +13,32 @@ import {
   type FileTypeSize,
   type ScanProgress,
   type StorageDiskInfo,
+  type StorageScanResult,
 } from "./useSystemData";
 
 function formatStorage(gb: number): string {
   return gb >= 1024 ? `${(gb / 1024).toFixed(1)} TB` : `${formatGb(gb)} GB`;
 }
 
+function formatRelativeTime(ts: number | null): string {
+  if (!ts) return "尚未扫描";
+  const diff = Date.now() - ts;
+  if (diff < 60_000) return "刚刚";
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`;
+  return `${Math.floor(diff / 86_400_000)} 天前`;
+}
+
 function AnalysisPlaceholder({
   status,
   progress,
   error,
-  onScan,
-  primary = false,
 }: {
   status: string;
   progress: ScanProgress | null;
   error: string | null;
-  onScan: () => void;
-  primary?: boolean;
 }) {
   if (status === "scanning") {
-    if (!primary) return <div className="flex h-[154px] items-center justify-center text-xs text-muted-foreground">正在分析...</div>;
     return (
       <div className="flex h-[154px] flex-col items-center justify-center gap-2 text-center">
         <Loader2 className="h-6 w-6 animate-spin text-blue-600" />
@@ -46,22 +51,78 @@ function AnalysisPlaceholder({
     );
   }
   if (status === "error") {
-    if (!primary) return <div className="flex h-[154px] items-center justify-center text-xs text-muted-foreground">分析暂不可用</div>;
     return (
-      <div className="flex h-[154px] flex-col items-center justify-center gap-3 text-center">
+      <div className="flex h-[154px] flex-col items-center justify-center gap-2 text-center">
         <p className="text-xs text-red-600">扫描失败：{error}</p>
-        {primary && <button className={secondaryButtonClass} onClick={onScan}>重试</button>}
+        <p className="text-[10px] text-muted-foreground">点击顶部"重新扫描"重试</p>
       </div>
     );
   }
   return (
-    <div className="flex h-[154px] flex-col items-center justify-center gap-3 text-center">
+    <div className="flex h-[154px] flex-col items-center justify-center gap-2 text-center">
       <FolderSearch className="h-7 w-7 text-blue-600" />
       <div>
-        <p className="text-xs font-medium">{primary ? "扫描磁盘空间占用" : "等待深度空间分析"}</p>
-        <p className="mt-1 text-[10px] text-muted-foreground">扫描后显示真实目录与文件类型占用</p>
+        <p className="text-xs font-medium">等待深度空间分析</p>
+        <p className="mt-1 text-[10px] text-muted-foreground">点击顶部"开始扫描"显示真实占用</p>
       </div>
-      {primary && <button className={primaryButtonClass} onClick={onScan}><FolderSearch className="mr-1.5 h-3.5 w-3.5" />开始扫描</button>}
+    </div>
+  );
+}
+
+function ScanStatusBar({
+  status,
+  result,
+  lastScanAt,
+  progress,
+  error,
+  onScan,
+}: {
+  status: string;
+  result: StorageScanResult | null;
+  lastScanAt: number | null;
+  progress: ScanProgress | null;
+  error: string | null;
+  onScan: () => void;
+}) {
+  const scanning = status === "scanning";
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border/70 bg-card px-4 py-2 text-xs">
+      <div className="flex min-w-0 items-center gap-2 text-muted-foreground">
+        {scanning ? (
+          <>
+            <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-blue-600" />
+            <span className="truncate">
+              正在扫描{progress ? ` · 已处理 ${progress.scannedDirs} 个区域 · ${progress.elapsedSecs.toFixed(0)} 秒` : ""}
+            </span>
+          </>
+        ) : status === "error" ? (
+          <>
+            <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-red-500" />
+            <span className="truncate">扫描失败：{error ?? "未知错误"}</span>
+          </>
+        ) : result ? (
+          <>
+            <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
+            <span className="truncate">
+              上次扫描：{formatRelativeTime(lastScanAt)} · {result.directories.length} 个区域 · {formatStorage(result.totalScannedGb)}
+            </span>
+          </>
+        ) : (
+          <>
+            <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-muted-foreground/40" />
+            <span>尚未扫描，点击右侧按钮开始分析磁盘占用</span>
+          </>
+        )}
+      </div>
+      <button
+        type="button"
+        className={`${secondaryButtonClass} shrink-0`}
+        onClick={onScan}
+        disabled={scanning}
+      >
+        <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${scanning ? "animate-spin" : ""}`} />
+        {result ? "重新扫描" : "开始扫描"}
+      </button>
     </div>
   );
 }
@@ -103,18 +164,16 @@ function SpaceDistribution({
   status,
   progress,
   error,
-  onScan,
 }: {
   directories: DirectorySize[];
   status: string;
   progress: ScanProgress | null;
   error: string | null;
-  onScan: () => void;
 }) {
   return (
     <PanelCard title="空间分布（扫描区域）" className="h-full">
       {directories.length === 0 ? (
-        <AnalysisPlaceholder status={status} progress={progress} error={error} onScan={onScan} primary />
+        <AnalysisPlaceholder status={status} progress={progress} error={error} />
       ) : (
         <div className="grid h-[184px] grid-cols-2 grid-rows-3 gap-1 overflow-hidden rounded-lg text-white">
           {directories.slice(0, 4).map((directory, index) => (
@@ -138,20 +197,18 @@ function FileTypePanel({
   status,
   progress,
   error,
-  onScan,
 }: {
   items: FileTypeSize[];
   status: string;
   progress: ScanProgress | null;
   error: string | null;
-  onScan: () => void;
 }) {
   const max = Math.max(...items.map((item) => item.sizeGb), 0);
   const colors = ["bg-blue-500", "bg-violet-500", "bg-emerald-500", "bg-amber-500", "bg-slate-500", "bg-slate-400"];
   return (
     <PanelCard title="文件类型（扫描区域）" className="h-full">
       {items.length === 0 ? (
-        <AnalysisPlaceholder status={status} progress={progress} error={error} onScan={onScan} />
+        <AnalysisPlaceholder status={status} progress={progress} error={error} />
       ) : (
         <div className="space-y-3 text-xs">
           {items.map((item, index) => (
@@ -172,22 +229,20 @@ function DirectoryTable({
   status,
   progress,
   error,
-  onScan,
 }: {
   directories: DirectorySize[];
   status: string;
   progress: ScanProgress | null;
   error: string | null;
-  onScan: () => void;
 }) {
   return (
     <PanelCard title="占用最大的目录（扫描区域）" className="h-full">
       {directories.length === 0 ? (
-        <AnalysisPlaceholder status={status} progress={progress} error={error} onScan={onScan} />
+        <AnalysisPlaceholder status={status} progress={progress} error={error} />
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[500px] table-fixed text-left text-[11px]">
-            <colgroup><col /><col className="w-20" /><col className="w-20" /><col className="w-14" /></colgroup>
+        <div className="overflow-x-hidden">
+          <table className="w-full table-fixed text-left text-[11px]">
+            <colgroup><col /><col className="w-16" /><col className="w-16" /><col className="w-12" /></colgroup>
             <thead className="text-muted-foreground"><tr><th className="pb-2 font-medium">路径</th><th>大小</th><th>文件数</th><th>操作</th></tr></thead>
             <tbody>
               {directories.slice(0, 8).map((directory) => (
@@ -211,7 +266,6 @@ function CleanupPanel({
   status,
   progress,
   error,
-  onScan,
   onClean,
   cleaning,
 }: {
@@ -219,7 +273,6 @@ function CleanupPanel({
   status: string;
   progress: ScanProgress | null;
   error: string | null;
-  onScan: () => void;
   onClean: ReturnType<typeof useStorageScan>["clean"];
   cleaning: boolean;
 }) {
@@ -250,12 +303,12 @@ function CleanupPanel({
   return (
     <PanelCard title="安全清理" className="h-full">
       {items.length === 0 ? (
-        <AnalysisPlaceholder status={status} progress={progress} error={error} onScan={onScan} />
+        <AnalysisPlaceholder status={status} progress={progress} error={error} />
       ) : (
         <>
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[440px] table-fixed text-left text-[11px]">
-              <colgroup><col className="w-8" /><col /><col className="w-24" /><col className="w-28" /></colgroup>
+          <div className="overflow-x-hidden">
+            <table className="w-full table-fixed text-left text-[11px]">
+              <colgroup><col className="w-8" /><col /><col className="w-20" /><col className="w-24" /></colgroup>
               <thead className="text-muted-foreground"><tr><th /><th className="pb-2 font-medium">项目</th><th>扫描结果</th><th>处理方式</th></tr></thead>
               <tbody>
                 {items.map((item) => (
@@ -291,7 +344,7 @@ function CleanupPanel({
 }
 
 export function StoragePanel({ scan }: { scan: ReturnType<typeof useStorageScan> }) {
-  const { status, result, progress, error, cleaning, start, clean } = scan;
+  const { status, result, lastScanAt, progress, error, cleaning, start, clean } = scan;
   const { data: overview, error: overviewError } = useSystemOverview();
   const disks = result?.disks ?? overview?.disks ?? [];
   const directories = result?.directories ?? [];
@@ -305,6 +358,8 @@ export function StoragePanel({ scan }: { scan: ReturnType<typeof useStorageScan>
 
   return (
     <div className="space-y-3">
+      <ScanStatusBar status={status} result={result} lastScanAt={lastScanAt} progress={progress} error={error} onScan={start} />
+
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <MetricCard label="总容量" value={disks.length ? formatStorage(totalCapacity) : "—"} detail={disks.length ? `${disks.length} 个本地磁盘` : "正在读取实时信息"} icon={<HardDrive className="h-4 w-4" />} />
         <MetricCard label="已使用" value={disks.length ? formatStorage(totalUsed) : "—"} detail={disks.length ? formatPercent(usedPercent) : "实时磁盘数据"} icon={<PieChart className="h-4 w-4" />} accent="violet" />
@@ -314,23 +369,16 @@ export function StoragePanel({ scan }: { scan: ReturnType<typeof useStorageScan>
 
       {overviewError && <p role="alert" className="rounded-lg border border-orange-500/30 bg-orange-500/5 p-3 text-xs text-orange-700">实时磁盘信息读取失败：{overviewError}</p>}
 
-      <div className="grid gap-3 min-[1280px]:grid-cols-[0.72fr_1.08fr_1.05fr]">
+      <div className="grid gap-3 lg:grid-cols-[0.72fr_1.08fr_1.05fr]">
         <DiskPartitionList disks={disks} />
-        <SpaceDistribution directories={directories} status={status} progress={progress} error={error} onScan={start} />
-        <FileTypePanel items={fileTypes} status={status} progress={progress} error={error} onScan={start} />
+        <SpaceDistribution directories={directories} status={status} progress={progress} error={error} />
+        <FileTypePanel items={fileTypes} status={status} progress={progress} error={error} />
       </div>
 
-      <div className="grid gap-3 min-[1280px]:grid-cols-[1.08fr_1fr]">
-        <DirectoryTable directories={directories} status={status} progress={progress} error={error} onScan={start} />
-        <CleanupPanel items={cleanupItems} status={status} progress={progress} error={error} onScan={start} onClean={clean} cleaning={cleaning} />
+      <div className="grid gap-3 lg:grid-cols-[1.08fr_1fr]">
+        <DirectoryTable directories={directories} status={status} progress={progress} error={error} />
+        <CleanupPanel items={cleanupItems} status={status} progress={progress} error={error} onClean={clean} cleaning={cleaning} />
       </div>
-
-      {result && (
-        <div className="flex items-center justify-between rounded-xl border border-border/70 bg-card px-4 py-2.5 text-[11px] text-muted-foreground">
-          <span>已扫描 {result.directories.length} 个区域 · {formatStorage(result.totalScannedGb)}</span>
-          <button className={secondaryButtonClass} onClick={start}><RefreshCw className="mr-1.5 h-3.5 w-3.5" />重新扫描</button>
-        </div>
-      )}
     </div>
   );
 }

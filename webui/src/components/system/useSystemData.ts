@@ -188,6 +188,12 @@ export interface SoftwareFailure {
   message: string;
 }
 
+export interface UpgradeProgressEvent {
+  id: string;
+  line: string;
+  status: string;
+}
+
 export function useSoftwareManagement() {
   const [data, setData] = useState<SoftwareCheckResult | null>(null);
   const [loading, setLoading] = useState(true);
@@ -195,6 +201,7 @@ export function useSoftwareManagement() {
   const [workingIds, setWorkingIds] = useState<Set<string>>(new Set());
   const [lastAction, setLastAction] = useState("");
   const [lastUninstall, setLastUninstall] = useState<SoftwareActionResult | null>(null);
+  const [progressMap, setProgressMap] = useState<Record<string, string[]>>({});
 
   const refresh = async () => {
     setLoading(true);
@@ -212,6 +219,7 @@ export function useSoftwareManagement() {
     if (updates.length === 0) return;
     setWorkingIds(new Set(updates.map((update) => update.id)));
     setLastAction("");
+    setProgressMap({});
     let completed = 0;
     let failed = 0;
     for (const update of updates) {
@@ -227,6 +235,7 @@ export function useSoftwareManagement() {
       }
     }
     setWorkingIds(new Set());
+    setProgressMap({});
     setLastAction(failed === 0 ? `${completed} 项更新完成` : `${completed} 项完成，${failed} 项失败`);
     await refresh();
   };
@@ -258,10 +267,28 @@ export function useSoftwareManagement() {
   };
 
   useEffect(() => {
+    let active = true;
+    let unlisten: UnlistenFn | undefined;
+    listen<UpgradeProgressEvent>("software-upgrade-progress", (event) => {
+      if (!active) return;
+      const { id, line, status } = event.payload;
+      setProgressMap((current) => {
+        const existing = current[id] ?? [];
+        const next = status === "running" ? [...existing, line].slice(-50) : existing;
+        return { ...current, [id]: next };
+      });
+    }).then((fn) => { unlisten = fn; });
+    return () => {
+      active = false;
+      if (unlisten) unlisten();
+    };
+  }, []);
+
+  useEffect(() => {
     refresh();
   }, []);
 
-  return { data, loading, error, workingIds, lastAction, lastUninstall, refresh, upgrade, uninstall };
+  return { data, loading, error, workingIds, lastAction, lastUninstall, progressMap, refresh, upgrade, uninstall };
 }
 
 // ===== 存储空间扫描 =====
@@ -317,9 +344,38 @@ export interface ScanProgress {
 
 export type ScanStatus = "idle" | "scanning" | "done" | "error";
 
+const STORAGE_CACHE_KEY = "system.storageScan";
+
+interface StorageCache {
+  result: StorageScanResult;
+  lastScanAt: number;
+}
+
+function loadStorageCache(): StorageCache | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as StorageCache;
+    if (!parsed.result || typeof parsed.lastScanAt !== "number") return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function saveStorageCache(cache: StorageCache) {
+  try {
+    localStorage.setItem(STORAGE_CACHE_KEY, JSON.stringify(cache));
+  } catch {
+    // 配额不足或序列化失败时静默跳过，不影响功能
+  }
+}
+
 export function useStorageScan() {
-  const [status, setStatus] = useState<ScanStatus>("idle");
-  const [result, setResult] = useState<StorageScanResult | null>(null);
+  const initial = loadStorageCache();
+  const [status, setStatus] = useState<ScanStatus>(initial ? "done" : "idle");
+  const [result, setResult] = useState<StorageScanResult | null>(initial?.result ?? null);
+  const [lastScanAt, setLastScanAt] = useState<number | null>(initial?.lastScanAt ?? null);
   const [progress, setProgress] = useState<ScanProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [cleaning, setCleaning] = useState(false);
@@ -330,9 +386,12 @@ export function useStorageScan() {
     setError(null);
     try {
       const res = await invoke<StorageScanResult>("scan_storage");
+      const now = Date.now();
       setResult(res);
+      setLastScanAt(now);
       setStatus("done");
       setProgress(null);
+      saveStorageCache({ result: res, lastScanAt: now });
     } catch (e) {
       setError(String(e));
       setStatus("error");
@@ -343,12 +402,17 @@ export function useStorageScan() {
     setCleaning(true);
     try {
       const cleanup = await invoke<StorageCleanupResult>("clean_storage", { ids });
-      setResult((current) => current ? {
-        ...current,
-        cleanupItems: current.cleanupItems.map((item) =>
-          cleanup.cleanedIds.includes(item.id) ? { ...item, sizeGb: 0 } : item,
-        ),
-      } : current);
+      setResult((current) => {
+        if (!current) return current;
+        const next: StorageScanResult = {
+          ...current,
+          cleanupItems: current.cleanupItems.map((item) =>
+            cleanup.cleanedIds.includes(item.id) ? { ...item, sizeGb: 0 } : item,
+          ),
+        };
+        saveStorageCache({ result: next, lastScanAt: lastScanAt ?? Date.now() });
+        return next;
+      });
       return cleanup;
     } finally {
       setCleaning(false);
@@ -369,7 +433,7 @@ export function useStorageScan() {
     };
   }, []);
 
-  return { status, result, progress, error, cleaning, start, clean };
+  return { status, result, lastScanAt, progress, error, cleaning, start, clean };
 }
 
 // ===== 启动项管理 =====
@@ -413,6 +477,15 @@ export interface StartupChangeRecord {
   action: string;
 }
 
+function extractErrorMessage(e: unknown): string {
+  if (typeof e === "string") return e;
+  if (e && typeof e === "object") {
+    const obj = e as Record<string, unknown>;
+    if (typeof obj.message === "string") return obj.message;
+  }
+  return String(e);
+}
+
 export function useStartupItems() {
   const [data, setData] = useState<StartupListResult | null>(null);
   const [loading, setLoading] = useState(true);
@@ -434,11 +507,12 @@ export function useStartupItems() {
 
   const toggle = async (id: string, enabled: boolean) => {
     setToggling(true);
+    setError(null);
     try {
       await invoke("system_toggle_startup_item", { id, enabled });
       await refresh();
     } catch (e) {
-      setError(String(e));
+      setError(extractErrorMessage(e));
     } finally {
       setToggling(false);
     }
@@ -446,11 +520,12 @@ export function useStartupItems() {
 
   const batchToggle = async (ids: string[], enabled: boolean) => {
     setToggling(true);
+    setError(null);
     try {
       await invoke<number>("system_batch_toggle_startup_items", { ids, enabled });
       await refresh();
     } catch (e) {
-      setError(String(e));
+      setError(extractErrorMessage(e));
     } finally {
       setToggling(false);
     }
