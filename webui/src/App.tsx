@@ -62,7 +62,7 @@ const SIDEBAR_WIDTH = 220;
 const SIDEBAR_RAIL_WIDTH = 56;
 const TOKEN_REFRESH_MARGIN_MS = 30_000;
 const TOKEN_REFRESH_MIN_DELAY_MS = 5_000;
-type ShellView = "chat" | "settings" | "note" | "ssh" | "db" | "kb" | "doc" | "email" | "schedule" | "profile";
+type ShellView = "chat" | "settings" | "note" | "ssh" | "db" | "kb" | "doc" | "email" | "schedule" | "system" | "profile";
 
 interface QueuedAgentPrompt {
   id: string;
@@ -114,6 +114,12 @@ const ScheduleView = lazy(() =>
 const ProfileView = lazy(() =>
   import("@/components/profile/ProfileView").then((module) => ({
     default: module.ProfileView,
+  })),
+);
+
+const SystemView = lazy(() =>
+  import("@/components/system/SystemView").then((module) => ({
+    default: module.SystemView,
   })),
 );
 
@@ -488,7 +494,7 @@ function Shell({
   const { t, i18n } = useTranslation();
   const { client, runtimeStatus, runtimeError, token } = useClientOptional();
   const { theme, toggle } = useTheme();
-  useLicense();
+  const { loggedIn } = useLicense();
   const { sessions, loading, refresh, createChat, deleteChat } = useSessions();
   const { state: sidebarState, update: updateSidebarState } =
     useSidebarState(sessions, !loading);
@@ -545,6 +551,7 @@ function Shell({
   const [queuedAgentPrompt, setQueuedAgentPrompt] = useState<QueuedAgentPrompt | null>(null);
   const [loginDialogOpen, setLoginDialogOpen] = useState(false);
   const [loginDialogInitialView, setLoginDialogInitialView] = useState<"login" | "subscribe">("login");
+  const [loginDialogSubscribeIntent, setLoginDialogSubscribeIntent] = useState(false);
   const [updateAvailable, setUpdateAvailable] = useState<UpdateCheckResult | null>(null);
   const runningChatIdsRef = useRef<Set<string>>(new Set());
   const sidebarShortcutsRef = useRef<SidebarShortcuts>({
@@ -867,6 +874,12 @@ function Shell({
 
   const onOpenSchedule = useCallback(() => {
     setView("schedule");
+    switchToMonaTab();
+    setMobileSidebarOpen(false);
+  }, [switchToMonaTab]);
+
+  const onOpenSystem = useCallback(() => {
+    setView("system");
     switchToMonaTab();
     setMobileSidebarOpen(false);
   }, [switchToMonaTab]);
@@ -1203,15 +1216,18 @@ function Shell({
 
   const onOpenLogin = useCallback(() => {
     setLoginDialogInitialView("login");
+    setLoginDialogSubscribeIntent(false);
     setLoginDialogOpen(true);
     setMobileSidebarOpen(false);
   }, []);
 
   const onOpenSubscribe = useCallback(() => {
-    setLoginDialogInitialView("subscribe");
+    // 未登录时先显示登录视图，登录成功后由 LoginDialog 自动跳转到订阅视图
+    setLoginDialogInitialView(loggedIn ? "subscribe" : "login");
+    setLoginDialogSubscribeIntent(!loggedIn);
     setLoginDialogOpen(true);
     setMobileSidebarOpen(false);
-  }, []);
+  }, [loggedIn]);
 
   const onBackToChat = useCallback(() => {
     setView("chat");
@@ -1365,6 +1381,7 @@ function Shell({
     onOpenKb,
     onOpenEmail,
     onOpenSchedule,
+    onOpenSystem,
     onOpenProfile,
     onToggleArchived,
     onUpdateView: onUpdateSidebarView,
@@ -1467,7 +1484,7 @@ function Shell({
               <div
                 className={cn(
                   "absolute inset-0 flex flex-col",
-                  (view === "settings" || view === "note" || view === "ssh" || view === "db" || view === "kb" || view === "doc" || view === "email" || view === "schedule" || view === "profile" || activeBrowserTab.type !== "mona") &&
+                  (view === "settings" || view === "note" || view === "ssh" || view === "db" || view === "kb" || view === "doc" || view === "email" || view === "schedule" || view === "system" || view === "profile" || activeBrowserTab.type !== "mona") &&
                     "invisible pointer-events-none",
                 )}
               >
@@ -1478,6 +1495,7 @@ function Shell({
                     onToggleSidebar={toggleSidebar}
                     onOpenSSH={onOpenSSHAndNew}
                     onOpenDb={onOpenDbAndNew}
+                    onOpenEmail={onOpenEmail}
                     onCreateNote={onCreateNote}
                     recentSessions={sessions.filter((session) => !sidebarState.archived_keys.includes(session.key))}
                     onSelectSession={onSelectChat}
@@ -1600,6 +1618,13 @@ function Shell({
                   </Suspense>
                 </div>
               )}
+              {view === "system" && (
+                <div className={cn("absolute inset-0 flex flex-col", isBrowserTabActive && "hidden")}>
+                  <Suspense fallback={<ModuleLoading title="正在打开系统" />}>
+                    <SystemView />
+                  </Suspense>
+                </div>
+              )}
               {client ? (
                 <div className={cn("absolute inset-0 flex flex-col", (view !== "doc" || isBrowserTabActive) && "hidden")}>
                   <Suspense fallback={<ModuleLoading title="正在打开 AI 文档" />}>
@@ -1690,6 +1715,7 @@ function Shell({
           open={loginDialogOpen}
           onOpenChange={setLoginDialogOpen}
           initialView={loginDialogInitialView}
+          autoSubscribeAfterLogin={loginDialogSubscribeIntent}
         />
 
         <UpdateNotification onUpdateAvailable={setUpdateAvailable} />

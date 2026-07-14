@@ -28,6 +28,7 @@ import sidebarKnowledgeIcon from "@/assets/icons/sidebar-knowledge.png";
 import sidebarDocIcon from "@/assets/icons/sidebar-doc.png";
 import sidebarEmailIcon from "@/assets/icons/sidebar-email.png";
 import sidebarScheduleIcon from "@/assets/icons/sidebar-schedule.png";
+import sidebarSystemIcon from "@/assets/icons/sidebar-system.png";
 import sidebarProfileIcon from "@/assets/icons/sidebar-profile.png";
 
 import { Button } from "@/components/ui/button";
@@ -73,6 +74,7 @@ interface SidebarProps {
   onOpenKb?: () => void;
   onOpenEmail?: () => void;
   onOpenSchedule?: () => void;
+  onOpenSystem?: () => void;
   onOpenProfile?: () => void;
   onOpenSearch: () => void;
   onToggleArchived: () => void;
@@ -157,6 +159,7 @@ export function Sidebar(props: SidebarProps) {
         onOpenKb={props.onOpenKb ?? (() => {})}
         onOpenEmail={props.onOpenEmail ?? (() => {})}
         onOpenSchedule={props.onOpenSchedule ?? (() => {})}
+        onOpenSystem={props.onOpenSystem ?? (() => {})}
         onOpenProfile={props.onOpenProfile ?? (() => {})}
         onGoHome={props.onGoHome ?? (() => {})}
         emailUnreadCount={emailUnreadCount}
@@ -242,7 +245,7 @@ export function Sidebar(props: SidebarProps) {
           <div className={cn("flex items-center gap-1", collapsed ? "w-14 flex-col px-0" : "w-full")}>
             <SidebarActionButton
               collapsed={collapsed}
-              label={licenseInfo?.account ?? licenseInfo?.email ?? t("sidebar.settings")}
+              label={licenseInfo?.account ?? licenseInfo?.email ?? t("sidebar.account", "账号")}
               onClick={props.onOpenLogin ?? (() => {})}
               className={collapsed ? undefined : "flex-1"}
               icon={<User className="h-4 w-4" />}
@@ -304,6 +307,7 @@ const PRIMARY_ITEMS: ToolboxItem[] = [
   { label: "终端", icon: <img src={sidebarTerminalIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
   { label: "邮件", icon: <img src={sidebarEmailIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
   { label: "日程", icon: <img src={sidebarScheduleIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
+  { label: "系统", icon: <img src={sidebarSystemIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
 ];
 
 // 二级入口（收纳在"更多"菜单中）
@@ -323,6 +327,7 @@ function getToolboxHandler(label: string, handlers: {
   onOpenKb: () => void;
   onOpenEmail: () => void;
   onOpenSchedule: () => void;
+  onOpenSystem: () => void;
   onOpenProfile: () => void;
   onGoHome: () => void;
 }): () => void {
@@ -335,6 +340,7 @@ function getToolboxHandler(label: string, handlers: {
     case "知识库": return handlers.onOpenKb;
     case "邮件": return handlers.onOpenEmail;
     case "日程": return handlers.onOpenSchedule;
+    case "系统": return handlers.onOpenSystem;
     case "画像": return handlers.onOpenProfile;
     default: return handlers.onGoHome;
   }
@@ -350,6 +356,7 @@ function ToolboxNavigation({
   onOpenKb,
   onOpenEmail,
   onOpenSchedule,
+  onOpenSystem,
   onOpenProfile,
   onGoHome,
   emailUnreadCount,
@@ -363,6 +370,7 @@ function ToolboxNavigation({
   onOpenKb: () => void;
   onOpenEmail: () => void;
   onOpenSchedule: () => void;
+  onOpenSystem: () => void;
   onOpenProfile: () => void;
   onGoHome: () => void;
   emailUnreadCount: number;
@@ -378,6 +386,7 @@ function ToolboxNavigation({
     onOpenKb,
     onOpenEmail,
     onOpenSchedule,
+    onOpenSystem,
     onOpenProfile,
     onGoHome,
   };

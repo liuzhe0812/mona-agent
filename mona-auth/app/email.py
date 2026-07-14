@@ -23,7 +23,10 @@ def send_email(to: str, subject: str, body: str) -> None:
         server.login(settings.smtp_user, settings.smtp_password)
         server.sendmail(msg["From"], [to], msg.as_string())
     finally:
-        server.quit()
+        try:
+            server.quit()
+        except Exception:
+            pass
 
 
 def send_reset_code_email(to: str, code: str) -> None:

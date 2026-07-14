@@ -3,6 +3,7 @@ import { useLicense } from "@/hooks/useLicense";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SubscribeView } from "./SubscribeView";
+import { ManageSubscription } from "./ManageSubscription";
 import {
   Dialog,
   DialogContent,
@@ -10,16 +11,18 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
-type LoginView = "login" | "register" | "forgot" | "reset" | "subscribe";
+type LoginView = "login" | "register" | "forgot" | "reset" | "subscribe" | "manage";
 
 export function LoginDialog({
   open,
   onOpenChange,
   initialView = "login",
+  autoSubscribeAfterLogin = false,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   initialView?: LoginView;
+  autoSubscribeAfterLogin?: boolean;
 }) {
   const { login, register, sendRegisterCode, forgotPassword, resetPassword, loggedIn, logout, licenseInfo, localTrial, localTrialExpired, remainingDays, pricingConfig, fetchPricing } = useLicense();
   const [view, setView] = useState<LoginView>(initialView);
@@ -36,13 +39,15 @@ export function LoginDialog({
   const [codeSent, setCodeSent] = useState(false);
   const [codeCooldown, setCodeCooldown] = useState(0);
   const [subscribeLoading, setSubscribeLoading] = useState(false);
+  const [pendingSubscribe, setPendingSubscribe] = useState(false);
 
   useEffect(() => {
     if (open) {
       setView(initialView);
+      setPendingSubscribe(autoSubscribeAfterLogin && initialView !== "subscribe");
       setSubscribeLoading(initialView === "subscribe" && !pricingConfig);
     }
-  }, [open, initialView, pricingConfig]);
+  }, [open, initialView, pricingConfig, autoSubscribeAfterLogin]);
 
   useEffect(() => {
     if (open && view === "subscribe") {
@@ -78,7 +83,12 @@ export function LoginDialog({
     setLoading(true);
     try {
       await login(accountInput, password);
-      handleClose(false);
+      if (pendingSubscribe) {
+        setPendingSubscribe(false);
+        setView("subscribe");
+      } else {
+        handleClose(false);
+      }
     } catch (err) {
       setError(String(err).replace(/^Error:\s*/, ""));
     } finally {
@@ -89,13 +99,17 @@ export function LoginDialog({
   const passwordMismatch = confirmPassword.length > 0 && password !== confirmPassword;
 
   const handleSendCode = async () => {
+    if (!accountInput.trim()) {
+      setError("请先输入账号");
+      return;
+    }
     if (!email) {
       setError("请先输入邮箱");
       return;
     }
     setError("");
     try {
-      await sendRegisterCode(email);
+      await sendRegisterCode(email, accountInput.trim());
       setCodeSent(true);
       setSuccess("验证码已发送");
       setCodeCooldown(60);
@@ -135,7 +149,12 @@ export function LoginDialog({
     setLoading(true);
     try {
       await register(email, password, registerCode, accountInput.trim());
-      handleClose(false);
+      if (pendingSubscribe) {
+        setPendingSubscribe(false);
+        setView("subscribe");
+      } else {
+        handleClose(false);
+      }
     } catch (err) {
       setError(String(err).replace(/^Error:\s*/, ""));
     } finally {
@@ -180,22 +199,25 @@ export function LoginDialog({
   };
 
   const isSubscribeView = view === "subscribe";
+  const isManageView = view === "manage";
   const showAccountInfo = loggedIn && view === "login";
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className={isSubscribeView ? "sm:max-w-lg" : "sm:max-w-sm"}>
+      <DialogContent className={isSubscribeView || isManageView ? "sm:max-w-lg" : "sm:max-w-sm"}>
         <DialogHeader>
           <DialogTitle>
             {isSubscribeView
               ? "购买订阅"
-              : showAccountInfo
-                ? "账号信息"
-                : view === "login"
-                  ? "登录"
-                  : view === "register"
-                    ? "注册"
-                    : view === "forgot"
+              : isManageView
+                ? "订阅管理"
+                : showAccountInfo
+                  ? "账号信息"
+                  : view === "login"
+                    ? "登录"
+                    : view === "register"
+                      ? "注册"
+                      : view === "forgot"
                       ? "找回密码"
                       : "重置密码"}
           </DialogTitle>
@@ -207,7 +229,12 @@ export function LoginDialog({
             onBackToLogin={() => setView(loggedIn ? "login" : "login")}
             embed
             loading={subscribeLoading}
+            onManageSubscription={() => setView("manage")}
           />
+        )}
+
+        {isManageView && (
+          <ManageSubscription onBack={() => setView("subscribe")} />
         )}
 
         {showAccountInfo && (
@@ -277,13 +304,6 @@ export function LoginDialog({
                     注册新账号
                   </button>
                 </div>
-                <button
-                  type="button"
-                  className="text-center text-xs text-primary hover:underline"
-                  onClick={() => { setView("subscribe"); setError(""); setSuccess(""); }}
-                >
-                  购买订阅
-                </button>
               </form>
             )}
 
@@ -293,7 +313,7 @@ export function LoginDialog({
                 <Input type="email" placeholder="邮箱" value={email} onChange={(e) => setEmail(e.target.value)} disabled={loading} />
                 <div className="flex gap-2">
                   <Input type="text" placeholder="6 位验证码" value={registerCode} onChange={(e) => setRegisterCode(e.target.value)} disabled={loading} maxLength={6} className="flex-1" />
-                  <Button type="button" variant="outline" onClick={handleSendCode} disabled={!email || codeCooldown > 0 || loading} className="shrink-0 whitespace-nowrap">
+                  <Button type="button" variant="outline" onClick={handleSendCode} disabled={!accountInput.trim() || !email || codeCooldown > 0 || loading} className="shrink-0 whitespace-nowrap">
                     {codeCooldown > 0 ? `${codeCooldown}s` : codeSent ? "重新发送" : "获取验证码"}
                   </Button>
                 </div>
@@ -304,13 +324,6 @@ export function LoginDialog({
                 </Button>
                 <button type="button" className="text-center text-xs text-muted-foreground hover:underline" onClick={() => { setView("login"); setError(""); setSuccess(""); }}>
                   已有账号？登录
-                </button>
-                <button
-                  type="button"
-                  className="text-center text-xs text-primary hover:underline"
-                  onClick={() => { setView("subscribe"); setError(""); setSuccess(""); }}
-                >
-                  购买订阅
                 </button>
               </form>
             )}

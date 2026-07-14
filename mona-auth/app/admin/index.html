@@ -313,14 +313,14 @@
         }
 
         async function doLogin() {
-            const email = document.getElementById('loginEmail').value;
+            const account = document.getElementById('loginEmail').value;
             const password = document.getElementById('loginPassword').value;
             const errEl = document.getElementById('loginError');
             try {
                 const res = await fetch(`${API}/auth/login`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ email, password })
+                    body: JSON.stringify({ account, password })
                 });
                 const data = await res.json();
                 if (data.access_token) {

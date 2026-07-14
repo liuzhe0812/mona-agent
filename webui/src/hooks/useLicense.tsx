@@ -15,7 +15,9 @@ interface PricingPlan {
   id: string;
   name: string;
   price: number;
-  durationMonths: number;
+  durationMonths?: number;
+  periodDays?: number;
+  autoRenewable?: boolean;
   originalPrice?: number;
   badge?: string;
 }
@@ -41,7 +43,7 @@ interface LicenseContextValue {
   fetchPricing: () => Promise<void>;
   login: (account: string, password: string) => Promise<void>;
   register: (email: string, password: string, code: string, account: string) => Promise<void>;
-  sendRegisterCode: (email: string) => Promise<string>;
+  sendRegisterCode: (email: string, account: string) => Promise<string>;
   logout: () => Promise<void>;
   forgotPassword: (email: string) => Promise<string>;
   resetPassword: (email: string, code: string, newPassword: string) => Promise<string>;
@@ -100,7 +102,9 @@ export function LicenseProvider({ children }: { children: React.ReactNode }) {
       const result = await invokeTauri<LicenseInfo>("check_license");
       setLicenseInfo(result);
       setLicenseActive(result.status === "valid");
-      setLoggedIn(result.status !== "not_logged_in");
+      // 登录状态基于是否有账号信息，而非 status（本地试用也会返回 valid/expired 但无账号）
+      const hasAccount = !!(result.email || result.account);
+      setLoggedIn(hasAccount);
       setLocalTrial(!!result.local_trial && result.status === "valid");
       setLocalTrialExpired(!!result.local_trial && result.status === "expired");
       setServerTrial(!!result.trial && result.status === "valid" && !result.local_trial);
@@ -131,7 +135,9 @@ export function LicenseProvider({ children }: { children: React.ReactNode }) {
           id: String(p.id ?? ""),
           name: String(p.name ?? ""),
           price: Number(p.price ?? 0),
-          durationMonths: Number(p.duration_months ?? p.durationMonths ?? 1),
+          durationMonths: p.duration_months != null ? Number(p.duration_months) : undefined,
+          periodDays: p.period_days != null ? Number(p.period_days) : undefined,
+          autoRenewable: p.auto_renewable != null ? Boolean(p.auto_renewable) : undefined,
           originalPrice: p.original_price != null ? Number(p.original_price) : undefined,
           badge: p.badge ? String(p.badge) : undefined,
         })),
@@ -165,8 +171,8 @@ export function LicenseProvider({ children }: { children: React.ReactNode }) {
     }
   }, [invokeTauri, checkLicense]);
 
-  const sendRegisterCode = useCallback(async (email: string): Promise<string> => {
-    const result = await invokeTauri<{ success: boolean; message?: string }>("send_register_code", { email });
+  const sendRegisterCode = useCallback(async (email: string, account: string): Promise<string> => {
+    const result = await invokeTauri<{ success: boolean; message?: string }>("send_register_code", { email, account });
     return result.message || "";
   }, [invokeTauri]);
 

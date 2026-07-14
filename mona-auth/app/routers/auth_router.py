@@ -67,9 +67,13 @@ def _get_active_promo_trial_days(db: Session) -> int | None:
 def send_register_code(
     request: Request,
     body: SendRegisterCodeRequest,
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
+    # 校验账号是否已存在（不隐藏错误，让用户知道账号被占用）
+    existing_account = db.query(User).filter(User.account == body.account).first()
+    if existing_account:
+        raise AuthError("account_exists", "该账号已被注册，请更换", status_code=409)
+
     existing = db.query(User).filter(User.email == body.email).first()
     if existing:
         # Don't reveal whether email is already registered
@@ -85,8 +89,13 @@ def send_register_code(
     db.add(record)
     db.commit()
 
-    background_tasks.add_task(send_register_code_email, body.email, code)
-    return {"message": "If the email is available, a verification code has been sent"}
+    # 同步发送邮件，失败则报错让前端感知
+    try:
+        send_register_code_email(body.email, code)
+    except Exception as e:
+        raise AuthError("email_send_failed", f"验证码发送失败：{e}", status_code=502)
+
+    return {"message": "验证码已发送"}
 
 
 @router.post("/register", response_model=TokenResponse)

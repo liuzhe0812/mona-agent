@@ -244,12 +244,37 @@ struct TokenResponse {
     expires_in: i64,
 }
 
+/// 将后端返回的错误码翻译为用户可读的中文提示
+fn translate_error(error: &str) -> String {
+    let detail = match error {
+        "invalid_code" => "验证码错误或已过期，请重新获取",
+        "email_exists" => "该邮箱已注册，请直接登录",
+        "account_exists" => "该账号已被注册，请更换",
+        "invalid_credentials" => "账号或密码错误",
+        "user_not_found" => "用户不存在",
+        "email_send_failed" => "验证码邮件发送失败，请稍后重试",
+        "device_limit_exceeded" => "设备绑定数量已达上限",
+        "device_mismatch" => "设备不匹配，请先绑定当前设备",
+        "rate_limit_exceeded" => "操作过于频繁，请稍后再试",
+        "subscription_expired" => "订阅已过期",
+        "subscription_not_found" => "未找到有效订阅",
+        "alipay_disabled" => "支付服务未配置，请联系客服",
+        "already_subscribed" => "您已有有效订阅，无需重复购买",
+        "plan_not_found" => "套餐不存在",
+        "plan_not_renewable" => "该套餐不支持自动续费",
+        "order_not_found" => "订单不存在",
+        "agreement_not_found" => "未找到签约协议",
+        _ => return error.to_string(),
+    };
+    detail.to_string()
+}
+
 #[tauri::command]
-pub async fn send_register_code(email: String) -> Result<serde_json::Value, String> {
+pub async fn send_register_code(email: String, account: String) -> Result<serde_json::Value, String> {
     let client = build_client()?;
     let resp = client
         .post(format!("{}/auth/send-register-code", AUTH_SERVER_URL))
-        .json(&serde_json::json!({ "email": email }))
+        .json(&serde_json::json!({ "email": email, "account": account }))
         .send()
         .await
         .map_err(|e| format!("Request failed: {}", e))?;
@@ -264,7 +289,7 @@ pub async fn send_register_code(email: String) -> Result<serde_json::Value, Stri
     }
 
     let error = body.get("error").and_then(|v| v.as_str()).unwrap_or("Unknown error");
-    Err(error.to_string())
+    Err(translate_error(error))
 }
 
 #[tauri::command]
@@ -286,7 +311,7 @@ pub async fn auth_register(email: String, password: String, code: String, accoun
     }
 
     let error = body.get("error").and_then(|v| v.as_str()).unwrap_or("Unknown error");
-    Err(error.to_string())
+    Err(translate_error(error))
 }
 
 #[tauri::command]
@@ -307,7 +332,7 @@ pub async fn auth_login(account: String, password: String) -> Result<serde_json:
     }
 
     let error = body.get("error").and_then(|v| v.as_str()).unwrap_or("Unknown error");
-    Err(error.to_string())
+    Err(translate_error(error))
 }
 
 #[tauri::command]
@@ -342,7 +367,7 @@ pub async fn auth_forgot_password(email: String) -> Result<serde_json::Value, St
     }
 
     let error = body.get("error").and_then(|v| v.as_str()).unwrap_or("Unknown error");
-    Err(error.to_string())
+    Err(translate_error(error))
 }
 
 #[tauri::command]
@@ -369,7 +394,7 @@ pub async fn auth_reset_password(
     }
 
     let error = body.get("error").and_then(|v| v.as_str()).unwrap_or("Unknown error");
-    Err(error.to_string())
+    Err(translate_error(error))
 }
 
 #[tauri::command]
@@ -473,6 +498,158 @@ pub async fn get_machine_id() -> Result<String, String> {
     Ok(get_machine_fingerprint())
 }
 
+// ── 支付宝订阅相关命令 ──
+
+#[tauri::command]
+pub async fn create_subscription(plan_code: String, payment_method: String) -> Result<serde_json::Value, String> {
+    let token = match load_auth_token() {
+        Some(t) => t,
+        None => return Err("Not logged in".to_string()),
+    };
+    let client = build_client()?;
+    let resp = client
+        .post(format!("{}/payment/subscribe", AUTH_SERVER_URL))
+        .header("Authorization", format!("Bearer {}", token))
+        .json(&serde_json::json!({
+            "plan_code": plan_code,
+            "payment_method": payment_method,
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    let body: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|_| format!("Server returned status {} with non-JSON response", status))?;
+
+    if body.get("payment_url").is_some() {
+        return Ok(body);
+    }
+
+    let error = body.get("error").and_then(|v| v.as_str()).unwrap_or("Subscribe failed");
+    Err(error.to_string())
+}
+
+#[tauri::command]
+pub async fn poll_payment_status(order_id: i64) -> Result<serde_json::Value, String> {
+    let token = match load_auth_token() {
+        Some(t) => t,
+        None => return Err("Not logged in".to_string()),
+    };
+    let client = build_client()?;
+    let resp = client
+        .get(format!("{}/payment/orders/{}", AUTH_SERVER_URL, order_id))
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("Server error: {}", resp.status()));
+    }
+
+    resp.json::<serde_json::Value>().await.map_err(|e| format!("Parse error: {}", e))
+}
+
+#[tauri::command]
+pub async fn get_subscription_info() -> Result<serde_json::Value, String> {
+    let token = match load_auth_token() {
+        Some(t) => t,
+        None => return Err("Not logged in".to_string()),
+    };
+    let client = build_client()?;
+    let resp = client
+        .get(format!("{}/payment/subscription", AUTH_SERVER_URL))
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("Server error: {}", resp.status()));
+    }
+
+    resp.json::<serde_json::Value>().await.map_err(|e| format!("Parse error: {}", e))
+}
+
+#[tauri::command]
+pub async fn cancel_auto_renew(reason: Option<String>) -> Result<serde_json::Value, String> {
+    let token = match load_auth_token() {
+        Some(t) => t,
+        None => return Err("Not logged in".to_string()),
+    };
+    let client = build_client()?;
+    let resp = client
+        .post(format!("{}/payment/cancel-auto-renew", AUTH_SERVER_URL))
+        .header("Authorization", format!("Bearer {}", token))
+        .json(&serde_json::json!({ "reason": reason.unwrap_or_default() }))
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    let body: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|_| format!("Server returned status {} with non-JSON response", status))?;
+
+    if body.get("cancelled_at").is_some() {
+        return Ok(body);
+    }
+
+    let error = body.get("error").and_then(|v| v.as_str()).unwrap_or("Cancel failed");
+    Err(error.to_string())
+}
+
+#[tauri::command]
+pub async fn list_renewals() -> Result<serde_json::Value, String> {
+    let token = match load_auth_token() {
+        Some(t) => t,
+        None => return Err("Not logged in".to_string()),
+    };
+    let client = build_client()?;
+    let resp = client
+        .get(format!("{}/payment/renewals", AUTH_SERVER_URL))
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("Server error: {}", resp.status()));
+    }
+
+    resp.json::<serde_json::Value>().await.map_err(|e| format!("Parse error: {}", e))
+}
+
+#[tauri::command]
+pub async fn open_external_url(url: String) -> Result<(), String> {
+    // 使用系统默认浏览器打开支付 URL
+    #[cfg(windows)]
+    {
+        std::process::Command::new("cmd")
+            .args(["/c", "start", "", &url])
+            .creation_flags(0x08000000)
+            .spawn()
+            .map_err(|e| format!("Failed to open URL: {}", e))?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&url)
+            .spawn()
+            .map_err(|e| format!("Failed to open URL: {}", e))?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&url)
+            .spawn()
+            .map_err(|e| format!("Failed to open URL: {}", e))?;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn check_license() -> Result<serde_json::Value, String> {
     // 1. If there's a license.jwt file, verify locally (paid license)
@@ -514,6 +691,82 @@ pub async fn check_license() -> Result<serde_json::Value, String> {
 
     // 3. Not logged in — check local trial
     check_local_trial()
+}
+
+/// Read-only local license state check for Agent subscription gating.
+///
+/// Returns `true` only when one of the following local, trusted sources is
+/// valid: imported `license.jwt`, cached server result (`license_cache.json`),
+/// or an unexpired local trial. No network requests are made — this is safe
+/// to call on every Agent turn. Fail-closed: any read/parse error returns
+/// `false` so that personal data is never leaked to an unverified state.
+#[tauri::command]
+pub async fn license_has_access() -> Result<bool, String> {
+    Ok(check_license_access())
+}
+
+/// Synchronous core logic for `license_has_access`. Also called directly by
+/// the IPC bridge so Python Agent tools can invoke it via `tauri_invoke`.
+pub fn check_license_access() -> bool {
+    // 1. Imported paid license (JWT verified locally, machine fingerprint match)
+    if let Ok(path) = license_path() {
+        if path.exists() {
+            if let Ok(result) = check_paid_license(&path) {
+                let status = result.get("status").and_then(|v| v.as_str()).unwrap_or("");
+                if status == "valid" {
+                    return true;
+                }
+                // machine_mismatch / expired / invalid → fall through to other sources
+            }
+        }
+    }
+
+    // 2. Cached server license result (offline fallback, no network)
+    if let Some(cache) = load_license_cache() {
+        if cache.status == "valid" {
+            if let Some(ref exp_str) = cache.expires_at {
+                if !is_expired(exp_str) {
+                    return true;
+                }
+            } else {
+                // No expiry recorded — trust the cached "valid" status
+                return true;
+            }
+        }
+    }
+
+    // 3. Local trial (31-day window from first launch, no login required)
+    if let Ok(result) = check_local_trial() {
+        let status = result.get("status").and_then(|v| v.as_str()).unwrap_or("");
+        if status == "valid" {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Returns true if the given date string is in the past.
+/// Accepts both `YYYY-MM-DD` and full RFC3339 timestamps.
+fn is_expired(expires_at: &str) -> bool {
+    let trimmed = expires_at.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+    // Try full RFC3339 first, then fall back to date-only parsing
+    let parsed = chrono::DateTime::parse_from_rfc3339(trimmed)
+        .map(|dt| dt.with_timezone(&chrono::Utc))
+        .or_else(|_| {
+            chrono::NaiveDate::parse_from_str(trimmed, "%Y-%m-%d")
+                .map(|d| chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(
+                    d.and_hms_opt(23, 59, 59).expect("valid end-of-day time"),
+                    chrono::Utc,
+                ))
+        });
+    match parsed {
+        Ok(exp) => chrono::Utc::now() >= exp,
+        Err(_) => true,
+    }
 }
 
 async fn check_license_server(token: &str) -> Result<LicenseCache, String> {
@@ -660,6 +913,17 @@ fn extract_exp_fallback(token: &str) -> Option<String> {
                 .map(|dt| dt.format("%Y-%m-%d").to_string())
                 .unwrap_or_default()
         })
+}
+
+#[cfg(test)]
+mod subscription_access_tests {
+    use super::is_expired;
+
+    #[test]
+    fn invalid_cached_expiry_is_rejected() {
+        assert!(is_expired("not-a-date"));
+        assert!(is_expired(""));
+    }
 }
 
 fn format_exp(exp: usize) -> String {
