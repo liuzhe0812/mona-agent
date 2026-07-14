@@ -17,7 +17,7 @@ export interface PaymentDialogProps {
   onOpenChange: (open: boolean) => void;
   orderId: number | null;
   paymentUrl: string;
-  paymentMethod: "alipay_periodic" | "alipay_page";
+  paymentMethod: "alipay_page";
   onSuccess: () => void;
   onCancel: () => void;
 }
@@ -133,14 +133,8 @@ export function PaymentDialog({
     <Dialog open={open} onOpenChange={(v) => !v && onCancel()}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>
-            {paymentMethod === "alipay_periodic" ? "支付宝自动续费订阅" : "支付宝支付"}
-          </DialogTitle>
-          <DialogDescription>
-            {paymentMethod === "alipay_periodic"
-              ? "使用支付宝扫码签约并完成首期扣款"
-              : "使用支付宝扫码完成支付"}
-          </DialogDescription>
+          <DialogTitle>支付宝支付</DialogTitle>
+          <DialogDescription>使用支付宝扫码完成支付</DialogDescription>
         </DialogHeader>
 
         <div className="flex flex-col items-center gap-4 py-2">
@@ -162,7 +156,6 @@ export function PaymentDialog({
               </div>
               <p className="text-xs text-muted-foreground text-center">
                 请使用支付宝 App 扫描二维码完成支付
-                {paymentMethod === "alipay_periodic" && "并签约自动续费"}
               </p>
             </>
           )}
@@ -188,7 +181,7 @@ export function PaymentDialog({
           {status === "pending" && (
             <Button variant="outline" className="w-full" onClick={handleOpenInBrowser}>
               <ExternalLink className="mr-2 h-4 w-4" />
-              在浏览器中打开
+              在浏览器中付款
             </Button>
           )}
           {(status === "failed" || status === "timeout") && (
@@ -201,12 +194,6 @@ export function PaymentDialog({
             {status === "paid" ? "关闭" : "取消支付"}
           </Button>
         </DialogFooter>
-
-        {paymentMethod === "alipay_periodic" && status === "pending" && (
-          <p className="text-center text-xs text-muted-foreground">
-            签约后系统将在每月/每年到期前自动扣款，可随时在订阅管理中关闭
-          </p>
-        )}
       </DialogContent>
     </Dialog>
   );

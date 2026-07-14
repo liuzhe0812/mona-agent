@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { useLicense } from "@/hooks/useLicense";
 import { PaymentDialog } from "@/components/PaymentDialog";
-import { Check, Copy, Loader2, Mail, MessageCircle, RotateCcw, ShieldCheck, Sparkles, Zap } from "lucide-react";
+import { Check, Copy, Loader2, Mail, RotateCcw, Zap } from "lucide-react";
 import { isTauri } from "@/lib/tauri";
 
 interface SubscribeViewProps {
@@ -18,7 +18,7 @@ interface SubscribeOrder {
   orderId: number;
   tradeOrderId: string;
   paymentUrl: string;
-  paymentMethod: "alipay_periodic" | "alipay_page";
+  paymentMethod: "alipay_page";
 }
 
 export function SubscribeView({
@@ -36,11 +36,13 @@ export function SubscribeView({
   const [dialogOpen, setDialogOpen] = useState(false);
   const [currentOrder, setCurrentOrder] = useState<SubscribeOrder | null>(null);
   const [errorMsg, setErrorMsg] = useState<string>("");
+  const defaultPlanApplied = useRef(false);
 
   useEffect(() => {
-    if (!pricingConfig) return;
+    if (!pricingConfig || defaultPlanApplied.current) return;
     const defaultPlan = pricingConfig.plans.find((p) => p.badge) ?? pricingConfig.plans[0];
     if (defaultPlan) setSelectedPlanId(defaultPlan.id);
+    defaultPlanApplied.current = true;
   }, [pricingConfig]);
 
   const selectedPlan = useMemo(
@@ -63,7 +65,7 @@ export function SubscribeView({
   };
 
   // 发起订阅
-  const handleSubscribe = async (paymentMethod: "alipay_periodic" | "alipay_page") => {
+  const handleSubscribe = async (paymentMethod: "alipay_page") => {
     if (!selectedPlan) return;
     if (!userEmail) {
       setErrorMsg("请先登录后再订阅");
@@ -99,8 +101,6 @@ export function SubscribeView({
         setErrorMsg("您已有有效订阅，无需重复购买");
       } else if (msg.includes("alipay_disabled")) {
         setErrorMsg("支付宝支付暂未开启，请使用联系作者方式开通");
-      } else if (msg.includes("plan_not_renewable")) {
-        setErrorMsg("该套餐不支持自动续费，请选择其他方式");
       } else {
         setErrorMsg(msg);
       }
@@ -164,8 +164,6 @@ export function SubscribeView({
         {pricingConfig.plans.map((plan) => {
           const period = plan.durationMonths ?? 0;
           const unitLabel = period === 0 ? "永久" : `${period}个月`;
-          const isLifetime = plan.id === "lifetime" || period === 0;
-          const supportsAutoRenew = plan.autoRenewable !== false && !isLifetime;
           return (
             <button
               key={plan.id}
@@ -199,12 +197,6 @@ export function SubscribeView({
                 />
                 选择
               </div>
-              {supportsAutoRenew && (
-                <span className="mt-1 inline-flex items-center gap-0.5 text-[10px] text-emerald-600">
-                  <ShieldCheck className="h-3 w-3" />
-                  支持自动续费
-                </span>
-              )}
             </button>
           );
         })}
@@ -213,25 +205,7 @@ export function SubscribeView({
       {/* 订阅按钮区 */}
       {selectedPlan && (
         <div className="flex flex-col gap-2">
-          {/* 自动续费（非终身版） */}
-          {selectedPlan.id !== "lifetime" && selectedPlan.autoRenewable !== false && (
-            <Button
-              onClick={() => handleSubscribe("alipay_periodic")}
-              disabled={subscribing || !userEmail}
-              className="w-full"
-            >
-              {subscribing ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <Sparkles className="mr-2 h-4 w-4" />
-              )}
-              扫码开通并自动续费
-            </Button>
-          )}
-
-          {/* 一次性支付 */}
           <Button
-            variant="outline"
             onClick={() => handleSubscribe("alipay_page")}
             disabled={subscribing || !userEmail}
             className="w-full"
@@ -241,7 +215,7 @@ export function SubscribeView({
             ) : (
               <Zap className="mr-2 h-4 w-4" />
             )}
-            一次性购买（不自动续费）
+            立即购买
           </Button>
 
           {!userEmail && (
@@ -253,22 +227,12 @@ export function SubscribeView({
         </div>
       )}
 
-      {/* 规则提示 */}
-      <div className="rounded-lg border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
-        <p className="mb-1 font-medium text-foreground">订阅说明</p>
-        <ul className="space-y-0.5 pl-4">
-          <li>• 自动续费将在到期前 3 天自动扣款，可随时取消</li>
-          <li>• 取消自动续费后，当前订阅期内功能仍可正常使用</li>
-          <li>• 支付宝订阅支持在 Mona 客户端或支付宝 App 中退订</li>
-          <li>• 如遇支付问题，可联系开发者协助处理</li>
-        </ul>
-      </div>
-
       {/* 联系方式 */}
       <div className="space-y-2 rounded-lg border border-border p-3 text-sm">
+        <p className="font-medium text-foreground">联系开发者</p>
         <div className="flex items-center gap-2">
           <Mail className="h-4 w-4 text-muted-foreground" />
-          <span className="text-muted-foreground">邮箱：{contact.email}</span>
+          <span className="text-muted-foreground">{contact.email}</span>
           <button
             type="button"
             onClick={() => handleCopy(contact.email, "email")}
@@ -276,22 +240,6 @@ export function SubscribeView({
             title="复制邮箱"
           >
             {copied === "email" ? (
-              <Check className="h-3.5 w-3.5 text-green-600" />
-            ) : (
-              <Copy className="h-3.5 w-3.5" />
-            )}
-          </button>
-        </div>
-        <div className="flex items-center gap-2">
-          <MessageCircle className="h-4 w-4 text-muted-foreground" />
-          <span className="text-muted-foreground">微信号：{contact.wechat}</span>
-          <button
-            type="button"
-            onClick={() => handleCopy(contact.wechat, "wechat")}
-            className="ml-auto inline-flex items-center justify-center rounded-md p-1 text-muted-foreground hover:bg-muted"
-            title="复制微信号"
-          >
-            {copied === "wechat" ? (
               <Check className="h-3.5 w-3.5 text-green-600" />
             ) : (
               <Copy className="h-3.5 w-3.5" />

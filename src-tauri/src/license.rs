@@ -627,8 +627,10 @@ pub async fn open_external_url(url: String) -> Result<(), String> {
     // 使用系统默认浏览器打开支付 URL
     #[cfg(windows)]
     {
+        // raw_arg 避免对 URL 中的 & " 等特殊字符二次转义
+        // 构造命令行: cmd /c start "" "https://..."
         std::process::Command::new("cmd")
-            .args(["/c", "start", "", &url])
+            .raw_arg(format!("/c start \"\" \"{}\"", url))
             .creation_flags(0x08000000)
             .spawn()
             .map_err(|e| format!("Failed to open URL: {}", e))?;
