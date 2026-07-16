@@ -26,11 +26,11 @@ import {
   type Bookmark,
 } from "@/lib/browser-ipc";
 import { cn } from "@/lib/utils";
+import { isTauri } from "@/lib/tauri";
 
 interface BookmarkBarProps {
   onNavigate: (url: string) => void;
   visible: boolean;
-  onDropdownOpenChange?: (open: boolean) => void;
 }
 
 /** Group bookmarks by folder, preserving insertion order. */
@@ -44,7 +44,109 @@ function groupByFolder(bookmarks: Bookmark[]): { folder: string; items: Bookmark
   return Array.from(map.entries()).map(([folder, items]) => ({ folder, items }));
 }
 
-export function BookmarkBar({ onNavigate, visible, onDropdownOpenChange }: BookmarkBarProps) {
+async function showNativeBookmarkMenu(
+  bookmark: Bookmark,
+  onDelete: (url: string) => void,
+  onEdit: (bookmark: Bookmark) => void,
+  folderNames: string[],
+  includeOpen?: () => void,
+) {
+  const { Menu } = await import("@tauri-apps/api/menu");
+  const moveItems = [
+    {
+      text: "根目录",
+      action: () => {
+        void browserUpdateBookmark(bookmark.url, undefined, "").then(() => window.dispatchEvent(new Event("bookmark-changed")));
+      },
+    },
+    ...folderNames
+      .filter((folder) => folder !== bookmark.folder)
+      .map((folder) => ({
+        text: folder,
+        action: () => {
+          void browserUpdateBookmark(bookmark.url, undefined, folder).then(() => window.dispatchEvent(new Event("bookmark-changed")));
+        },
+      })),
+  ];
+  const menu = await Menu.new({
+    items: [
+      ...(includeOpen ? [{ text: "打开", action: includeOpen }] : []),
+      { text: "编辑", action: () => onEdit(bookmark) },
+      ...(moveItems.length > 1 ? [{ text: "移动到文件夹", items: moveItems }] : []),
+      { item: "Separator" },
+      { text: "删除", action: () => onDelete(bookmark.url) },
+    ],
+  });
+  try {
+    await menu.popup();
+  } finally {
+    await menu.close();
+  }
+}
+
+async function showNativeFolderMenu(
+  items: Bookmark[],
+  onNavigate: (url: string) => void,
+  onDelete: (url: string) => void,
+  onEdit: (bookmark: Bookmark) => void,
+  folderNames: string[],
+) {
+  const { Menu } = await import("@tauri-apps/api/menu");
+  const menu = await Menu.new({
+    items: items.map((bookmark) => ({
+      text: bookmark.title || bookmark.url,
+      items: [
+        ...(folderNames.length > 0
+          ? [{
+              text: "移动到文件夹",
+              items: [
+                {
+                  text: "根目录",
+                  action: () => {
+                    void browserUpdateBookmark(bookmark.url, undefined, "").then(() => window.dispatchEvent(new Event("bookmark-changed")));
+                  },
+                },
+                ...folderNames
+                  .filter((folder) => folder !== bookmark.folder)
+                  .map((folder) => ({
+                    text: folder,
+                    action: () => {
+                      void browserUpdateBookmark(bookmark.url, undefined, folder).then(() => window.dispatchEvent(new Event("bookmark-changed")));
+                    },
+                  })),
+              ],
+            }]
+          : []),
+        { text: "打开", action: () => onNavigate(bookmark.url) },
+        { text: "编辑", action: () => onEdit(bookmark) },
+        { text: "删除", action: () => onDelete(bookmark.url) },
+      ],
+    })),
+  });
+  try {
+    await menu.popup();
+  } finally {
+    await menu.close();
+  }
+}
+
+async function showNativeFolderContextMenu(onRename: () => void, onDelete: () => void) {
+  const { Menu } = await import("@tauri-apps/api/menu");
+  const menu = await Menu.new({
+    items: [
+      { text: "重命名", action: onRename },
+      { item: "Separator" },
+      { text: "删除文件夹", action: onDelete },
+    ],
+  });
+  try {
+    await menu.popup();
+  } finally {
+    await menu.close();
+  }
+}
+
+export function BookmarkBar({ onNavigate, visible }: BookmarkBarProps) {
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
   const [editTarget, setEditTarget] = useState<Bookmark | null>(null);
   const [editFolderTarget, setEditFolderTarget] = useState<string | null>(null);
@@ -201,7 +303,6 @@ export function BookmarkBar({ onNavigate, visible, onDropdownOpenChange }: Bookm
             onDelete={handleDelete}
             onEdit={handleEdit}
             folderNames={allFolderNames}
-            onDropdownOpenChange={onDropdownOpenChange}
             onMoveBookmark={handleMoveBookmark}
           />
         ))}
@@ -219,7 +320,6 @@ export function BookmarkBar({ onNavigate, visible, onDropdownOpenChange }: Bookm
               setEditFolderName(name);
             }}
             folderNames={allFolderNames}
-            onDropdownOpenChange={onDropdownOpenChange}
             onMoveBookmark={handleMoveBookmark}
           />
         ))}
@@ -302,7 +402,6 @@ function BookmarkItem({
   onDelete,
   onEdit,
   folderNames,
-  onDropdownOpenChange,
   onMoveBookmark: _onMoveBookmark,
 }: {
   bookmark: Bookmark;
@@ -310,11 +409,33 @@ function BookmarkItem({
   onDelete: (url: string) => void;
   onEdit: (b: Bookmark) => void;
   folderNames: string[];
-  onDropdownOpenChange?: (open: boolean) => void;
   onMoveBookmark: (url: string, targetFolder: string) => void;
 }) {
+  if (isTauri()) {
+    return (
+      <button
+        type="button"
+        draggable
+        onDragStart={(e) => {
+          e.dataTransfer.setData("text/bookmark-url", bookmark.url);
+          e.dataTransfer.effectAllowed = "move";
+        }}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          void showNativeBookmarkMenu(bookmark, onDelete, onEdit, folderNames);
+        }}
+        className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[11px] hover:bg-accent transition-colors max-w-[140px] cursor-grab active:cursor-grabbing"
+        onClick={() => onNavigate(bookmark.url)}
+        title={bookmark.url}
+      >
+        <Globe className="h-3 w-3 shrink-0 text-muted-foreground" />
+        <span className="truncate">{bookmark.title || bookmark.url}</span>
+      </button>
+    );
+  }
+
   return (
-    <ContextMenu onOpenChange={onDropdownOpenChange}>
+    <ContextMenu>
       <ContextMenuTrigger asChild>
         <button
           type="button"
@@ -353,7 +474,6 @@ function FolderItem({
   onEdit,
   onRenameFolder,
   folderNames,
-  onDropdownOpenChange,
   onMoveBookmark,
 }: {
   folder: string;
@@ -364,13 +484,11 @@ function FolderItem({
   onEdit: (b: Bookmark) => void;
   onRenameFolder: (name: string) => void;
   folderNames: string[];
-  onDropdownOpenChange?: (open: boolean) => void;
   onMoveBookmark: (url: string, targetFolder: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const [dropdownPos, setDropdownPos] = useState({ left: 0, top: 0 });
-  const contextMenuOpenRef = useRef(false);
   const [dragOver, setDragOver] = useState(false);
 
   const handleToggle = () => {
@@ -380,14 +498,50 @@ function FolderItem({
       setDropdownPos({ left: rect.left, top: rect.bottom + 2 });
     }
     setOpen(nextOpen);
-    onDropdownOpenChange?.(nextOpen || contextMenuOpenRef.current);
   };
 
+  if (isTauri()) {
+    return (
+      <button
+        ref={triggerRef}
+        type="button"
+        className={cn(
+          "flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[11px] transition-colors",
+          dragOver ? "bg-accent ring-1 ring-primary/50" : "hover:bg-accent",
+        )}
+        onClick={() => void showNativeFolderMenu(items, onNavigate, onDelete, onEdit, folderNames)}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          void showNativeFolderContextMenu(
+            () => onRenameFolder(folder),
+            () => onDeleteFolder(folder),
+          );
+        }}
+        onDragOver={(e) => {
+          if (e.dataTransfer.types.includes("text/bookmark-url")) {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = "move";
+            if (!dragOver) setDragOver(true);
+          }
+        }}
+        onDragLeave={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOver(false);
+        }}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragOver(false);
+          const url = e.dataTransfer.getData("text/bookmark-url");
+          if (url) onMoveBookmark(url, folder);
+        }}
+      >
+        <Folder className="h-3 w-3 shrink-0 text-muted-foreground" />
+        <span className="truncate">{folder}</span>
+      </button>
+    );
+  }
+
   return (
-    <ContextMenu onOpenChange={(ctxOpen) => {
-      contextMenuOpenRef.current = ctxOpen;
-      onDropdownOpenChange?.(ctxOpen || open);
-    }}>
+    <ContextMenu>
       <ContextMenuTrigger asChild>
         <button
           ref={triggerRef}
@@ -432,18 +586,12 @@ function FolderItem({
           {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions */}
           <div
             className="fixed inset-0 z-[9998]"
-            onClick={() => {
-              setOpen(false);
-              onDropdownOpenChange?.(false || contextMenuOpenRef.current);
-            }}
-            onKeyDown={() => {
-              setOpen(false);
-              onDropdownOpenChange?.(false || contextMenuOpenRef.current);
-            }}
+            onClick={() => setOpen(false)}
+            onKeyDown={() => setOpen(false)}
           />
           {/* Dropdown menu */}
           <div
-            className="fixed z-[9999] min-w-[180px] max-h-[320px] overflow-y-auto rounded-md border border-border bg-popover shadow-md py-0.5"
+            className="fixed z-[9999] min-w-[180px] max-h-[320px] overflow-y-auto scrollbar-thin rounded-md border border-border bg-popover shadow-md py-0.5"
             style={{ left: dropdownPos.left, top: dropdownPos.top }}
           >
             {items.map((b) => (
@@ -453,17 +601,14 @@ function FolderItem({
                 onNavigate={(url) => {
                   onNavigate(url);
                   setOpen(false);
-                  onDropdownOpenChange?.(false);
                 }}
                 onDelete={(url) => {
                   onDelete(url);
                   setOpen(false);
-                  onDropdownOpenChange?.(false);
                 }}
                 onEdit={(bm) => {
                   onEdit(bm);
                   setOpen(false);
-                  onDropdownOpenChange?.(false);
                 }}
                 folderNames={folderNames}
               />

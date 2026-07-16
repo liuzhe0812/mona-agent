@@ -79,6 +79,29 @@ pub async fn browser_set_ai_status(
 
 /// 导航标签到指定 URL（用于地址栏输入、target="_blank" 等场景）
 #[tauri::command]
+pub async fn browser_set_tab_bounds(
+    app: tauri::AppHandle,
+    id: String,
+    left: f64,
+    top: f64,
+    width: f64,
+    height: f64,
+    visible: bool,
+) -> Result<(), String> {
+    let state = app.state::<BrowserState>();
+    state.set_tab_bounds(&app, &id, left, top, width, height, visible)
+}
+
+#[tauri::command]
+pub async fn browser_hide_tabs_except(
+    app: tauri::AppHandle,
+    active_id: Option<String>,
+) -> Result<(), String> {
+    let state = app.state::<BrowserState>();
+    state.hide_tabs_except(&app, active_id.as_deref())
+}
+
+#[tauri::command]
 pub async fn browser_navigate_tab(
     app: tauri::AppHandle,
     id: String,
@@ -286,6 +309,16 @@ pub async fn browser_eval_script(
 ) -> Result<(), String> {
     let state = app.state::<BrowserState>();
     state.eval_script(&app, &id, &script)
+}
+
+#[tauri::command]
+pub async fn browser_eval_script_result(
+    app: tauri::AppHandle,
+    id: String,
+    script: String,
+) -> Result<serde_json::Value, String> {
+    let state = app.state::<BrowserState>();
+    state.eval_script_result(&app, &id, &script).await
 }
 
 // ── 隐私安全命令 ──

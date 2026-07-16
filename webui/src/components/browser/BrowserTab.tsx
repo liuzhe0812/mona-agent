@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { FileText, X, Pin, PinOff, Copy, CopyX, ArrowRightToLine, Clock, VolumeX, Volume2, Eye, Moon } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { isTauri } from "@/lib/tauri";
+import type { MenuOptions } from "@tauri-apps/api/menu";
 import type { Tab } from "@/hooks/useBrowserTabs";
 import {
   ContextMenu,
@@ -9,6 +11,49 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+
+interface TabMenuHandlers {
+  onPinToggle?: () => void;
+  onDuplicate?: () => void;
+  onClose?: () => void;
+  onCloseOthers?: () => void;
+  onCloseRight?: () => void;
+  onToggleMute?: () => void;
+}
+
+async function showNativeTabMenu(tab: Tab, handlers: TabMenuHandlers) {
+  const { Menu } = await import("@tauri-apps/api/menu");
+  const { onPinToggle, onDuplicate, onClose, onCloseOthers, onCloseRight, onToggleMute } = handlers;
+  const isPinned = tab.isPinned;
+  const items: NonNullable<MenuOptions["items"]> = [];
+  if (onPinToggle) {
+    items.push({ text: isPinned ? "取消固定" : "固定标签", action: onPinToggle });
+  }
+  if (onDuplicate) {
+    items.push({ text: "复制标签", action: onDuplicate });
+  }
+  if (onToggleMute) {
+    items.push({ text: tab.isMuted ? "取消静音" : "静音标签", action: onToggleMute });
+  }
+  if (onClose || onCloseOthers || onCloseRight) {
+    items.push({ item: "Separator" });
+  }
+  if (onClose) {
+    items.push({ text: "关闭", action: onClose });
+  }
+  if (onCloseOthers) {
+    items.push({ text: "关闭其他", action: onCloseOthers });
+  }
+  if (onCloseRight) {
+    items.push({ text: "关闭右侧标签", action: onCloseRight });
+  }
+  const menu = await Menu.new({ items });
+  try {
+    await menu.popup();
+  } finally {
+    await menu.close();
+  }
+}
 
 function getFaviconUrl(url: string): string | null {
   try {
@@ -140,12 +185,26 @@ export function BrowserTabItem({
     return tabContent;
   }
 
+  // Tauri 环境下用 OS 原生菜单，避免被原生子 WebView 遮挡
+  if (isTauri()) {
+    return (
+      <div
+        onContextMenu={(e) => {
+          e.preventDefault();
+          void showNativeTabMenu(tab, { onPinToggle, onDuplicate, onClose, onCloseOthers, onCloseRight, onToggleMute });
+        }}
+      >
+        {tabContent}
+      </div>
+    );
+  }
+
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
         {tabContent}
       </ContextMenuTrigger>
-      <ContextMenuContent className="w-48">
+      <ContextMenuContent className="w-48 z-[9999]">
         <ContextMenuItem onClick={onPinToggle}>
           {isPinned ? (
             <>

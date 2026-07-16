@@ -3,7 +3,7 @@ import { X, ChevronUp, ChevronDown, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { isTauri } from "@/lib/tauri";
-import { browserEvalScript } from "@/lib/browser-ipc";
+import { browserEvalScript, browserEvalScriptResult } from "@/lib/browser-ipc";
 
 interface FindBarProps {
   tabId: string;
@@ -136,6 +136,10 @@ export function FindBar({ tabId, visible, onClose }: FindBarProps) {
     void inject();
   }, [tabId, visible]);
 
+  useEffect(() => {
+    scriptInjectedRef.current = false;
+  }, [tabId]);
+
   // 聚焦输入框
   useEffect(() => {
     if (visible) {
@@ -158,58 +162,33 @@ export function FindBar({ tabId, visible, onClose }: FindBarProps) {
     }
     try {
       // 执行查找并通过 Tauri event 回传结果
-      await browserEvalScript(
+      const result = await browserEvalScriptResult<{ count: number; current: number }>(
         tabId,
-        `window.__monaFindResult = window.__monaFindInPage(${JSON.stringify(q)}); if (window.__monaFindResult) { window.__TAURI__.event.emit('mona-find-result', { count: window.__monaFindResult.count, current: window.__monaFindResult.current }); }`
+        `JSON.stringify((function() { window.__monaFindResult = window.__monaFindInPage(${JSON.stringify(q)}); return { count: window.__monaFindResult.count, current: window.__monaFindResult.current }; })())`
       );
+      setMatchCount(result.count);
+      setCurrentMatch(result.current);
     } catch (e) {
       console.debug("[FindBar] find failed:", e);
     }
   }, [tabId]);
 
   // 监听查找结果
-  useEffect(() => {
-    if (!isTauri()) return;
-    let unlisten: (() => void) | undefined;
-    (async () => {
-      const { listen } = await import("@tauri-apps/api/event");
-      unlisten = await listen<{ count: number; current: number }>(
-        "mona-find-result",
-        (event) => {
-          setMatchCount(event.payload.count);
-          setCurrentMatch(event.payload.current);
-        }
-      );
-    })();
-    return () => { unlisten?.(); };
-  }, []);
-
   // 导航到下一个/上一个
   const navigate = useCallback(async (direction: "next" | "prev") => {
     if (!isTauri() || matchCount === 0) return;
     try {
-      await browserEvalScript(
+      const result = await browserEvalScriptResult<{ current: number }>(
         tabId,
-        `if (window.__monaFindResult && window.__monaFindNavigate) { var idx = window.__monaFindNavigate(${JSON.stringify(direction)}, window.__monaFindResult.matches); window.__TAURI__.event.emit('mona-find-navigated', { current: idx }); }`
+        `JSON.stringify((function() { var idx = window.__monaFindResult && window.__monaFindNavigate ? window.__monaFindNavigate(${JSON.stringify(direction)}, window.__monaFindResult.matches) : 0; return { current: idx }; })())`
       );
+      setCurrentMatch(result.current);
     } catch (e) {
       console.debug("[FindBar] navigate failed:", e);
     }
   }, [tabId, matchCount]);
 
   // 监听导航结果
-  useEffect(() => {
-    if (!isTauri()) return;
-    let unlisten: (() => void) | undefined;
-    (async () => {
-      const { listen } = await import("@tauri-apps/api/event");
-      unlisten = await listen<{ current: number }>("mona-find-navigated", (event) => {
-        setCurrentMatch(event.payload.current);
-      });
-    })();
-    return () => { unlisten?.(); };
-  }, []);
-
   // 键盘快捷键
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Escape") {

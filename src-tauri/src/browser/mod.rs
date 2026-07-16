@@ -1,139 +1,77 @@
 pub mod commands;
+pub mod downloads;
+pub mod suggestions;
 pub mod storage;
 pub mod tab;
 
 use dashmap::DashMap;
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::sync::mpsc::channel;
 use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tab::{BrowserTab, CreateTabResult};
-use tauri::{AppHandle, Emitter, Manager, WebviewBuilder, WebviewUrl};
+use tauri::{AppHandle, Emitter, Manager};
 use url::Url;
+#[cfg(target_os = "windows")]
+use wry::WebViewExtWindows;
 
 const CDP_PORT_START: u16 = 9300;
 
-/// 注入 tab ID 标记和页面事件监听的初始化脚本
-/// target="_blank" 链接和 window.open 由 WebView2 的 NewWindowRequested 事件处理
-const TAB_INIT_SCRIPT: &str = r#"
-(function() {
-  if (window.__mona_tab_events_injected) return;
-  window.__mona_tab_events_injected = true;
+thread_local! {
+    static NATIVE_BROWSER_WEBVIEWS: RefCell<HashMap<String, wry::WebView>> = RefCell::new(HashMap::new());
+}
 
-  var tabId = window.__mona_tab_id;
+fn on_main_thread<T: Send + 'static>(
+    app: &AppHandle,
+    task: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    let window = app
+        .get_window("main")
+        .ok_or_else(|| "Main window not found".to_string())?;
+    let (tx, rx) = channel();
+    window
+        .run_on_main_thread(move || {
+            let _ = tx.send(task());
+        })
+        .map_err(|error| error.to_string())?;
+    rx.recv()
+        .map_err(|_| "Main window thread stopped before completing browser action".to_string())?
+}
 
-  function emit(event, data) {
-    if (window.__TAURI__ && window.__TAURI__.event) {
-      try { window.__TAURI__.event.emit(event, Object.assign({ id: tabId }, data || {})); } catch(e) {}
-    }
-  }
+fn with_native_webview<T: Send + 'static>(
+    app: &AppHandle,
+    id: &str,
+    action: impl FnOnce(&wry::WebView) -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    let id = id.to_string();
+    on_main_thread(app, move || {
+        NATIVE_BROWSER_WEBVIEWS.with(|webviews| {
+            let webviews = webviews.borrow();
+            let webview = webviews
+                .get(&id)
+                .ok_or_else(|| format!("Native WebView2 tab {} not found", id))?;
+            action(webview)
+        })
+    })
+}
 
-  // 全屏按键透传
-  document.addEventListener('keydown', function(e) {
-    if (e.key !== 'Escape' && e.key !== 'F11') return;
-    emit('browser-fullscreen-key', { key: e.key });
-  }, true);
+fn remove_native_webview(app: &AppHandle, id: &str) -> Result<(), String> {
+    let id = id.to_string();
+    on_main_thread(app, move || {
+        NATIVE_BROWSER_WEBVIEWS.with(|webviews| {
+            webviews.borrow_mut().remove(&id);
+        });
+        Ok(())
+    })
+}
 
-  // 标题变化
-  function emitTitle() {
-    if (document.title) {
-      emit('browser-tab-title-changed', { title: document.title });
-    }
-  }
-
-  // Favicon 提取
-  function emitFavicon() {
-    var link = document.querySelector('link[rel~="icon"]') ||
-               document.querySelector('link[rel="shortcut icon"]') ||
-               document.querySelector('link[rel="apple-touch-icon"]');
-    if (link && link.href) {
-      emit('browser-favicon-changed', { favicon: link.href });
-    }
-  }
-
-  // 页面加载完成
-  function onLoaded() {
-    emit('browser-nav-completed', { success: true, url: location.href });
-    emitTitle();
-    emitFavicon();
-  }
-
-  if (document.readyState === 'complete') {
-    onLoaded();
-  } else {
-    window.addEventListener('load', onLoaded);
-    document.addEventListener('DOMContentLoaded', function() {
-      emitTitle();
-      emitFavicon();
-    });
-  }
-
-  // 监听 title 变化
-  var titleObserver = new MutationObserver(emitTitle);
-  function startTitleObserver() {
-    var titleEl = document.querySelector('title');
-    if (titleEl) {
-      titleObserver.observe(titleEl, { childList: true, characterData: true, subtree: true });
-    }
-    emitTitle();
-  }
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', startTitleObserver);
-  } else {
-    startTitleObserver();
-  }
-
-  // 监听 favicon 变化
-  var headObserver = new MutationObserver(emitFavicon);
-  function startHeadObserver() {
-    var head = document.querySelector('head');
-    if (head) {
-      headObserver.observe(head, { childList: true, subtree: true });
-    }
-    emitFavicon();
-  }
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', startHeadObserver);
-  } else {
-    startHeadObserver();
-  }
-
-  // 链接预览：鼠标悬停在链接上时显示 URL 提示框
-  var linkTooltip = document.createElement('div');
-  linkTooltip.id = 'mona-link-tooltip';
-  linkTooltip.style.cssText = 'position:fixed;z-index:999999;background:#1a1a1a;color:#fff;padding:4px 8px;border-radius:4px;font-size:12px;font-family:sans-serif;max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;pointer-events:none;display:none;box-shadow:0 2px 8px rgba(0,0,0,0.3);';
-  (document.body || document.documentElement).appendChild(linkTooltip);
-
-  document.addEventListener('mouseover', function(e) {
-    var link = e.target.closest && e.target.closest('a[href]');
-    if (link && link.href) {
-      linkTooltip.textContent = link.href;
-      linkTooltip.style.display = 'block';
-    }
-  }, true);
-
-  document.addEventListener('mouseout', function(e) {
-    var link = e.target.closest && e.target.closest('a[href]');
-    if (link) {
-      linkTooltip.style.display = 'none';
-    }
-  }, true);
-
-  document.addEventListener('mousemove', function(e) {
-    if (linkTooltip.style.display === 'block') {
-      var x = e.clientX + 10;
-      var y = e.clientY + 20;
-      // 避免超出视口
-      if (x + linkTooltip.offsetWidth > window.innerWidth) {
-        x = window.innerWidth - linkTooltip.offsetWidth - 10;
-      }
-      if (y + linkTooltip.offsetHeight > window.innerHeight) {
-        y = e.clientY - linkTooltip.offsetHeight - 10;
-      }
-      linkTooltip.style.left = x + 'px';
-      linkTooltip.style.top = y + 'px';
-    }
-  }, true);
-})();
-"#;
+fn decode_script_json(result: &str) -> Option<serde_json::Value> {
+    serde_json::from_str::<String>(result)
+        .ok()
+        .and_then(|json| serde_json::from_str(&json).ok())
+        .or_else(|| serde_json::from_str(result).ok())
+}
 
 /// 广告拦截脚本：注入 CSS 隐藏常见广告元素，并拦截已知广告域名的请求
 const AD_BLOCK_SCRIPT: &str = r#"
@@ -235,6 +173,17 @@ pub struct DownloadInfo {
     pub save_path: String,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::decode_script_json;
+
+    #[test]
+    fn script_result_decodes_json_string_values() {
+        let result = decode_script_json(r#""[{\"name\":\"session\"}]""#).unwrap();
+        assert_eq!(result[0]["name"], "session");
+    }
+}
+
 /// 存储下载操作 COM 接口（用于 cancel/pause/resume）
 /// WebView2 COM 接口是 MTA 兼容的，可以安全跨线程访问
 #[cfg(target_os = "windows")]
@@ -282,14 +231,30 @@ impl BrowserState {
         let cdp_port = self.next_cdp_port.fetch_add(1, Ordering::SeqCst);
         let webview_label = format!("browser-{}", id);
 
+        // HMR 重载可能导致前端状态重置、重复调用 create_tab
+        // 先清理同 label 的旧 webview 和 tab 记录，避免 add_child 冲突
+        remove_native_webview(app, id)?;
+        self.tabs.remove(id);
+
         let parsed_url: Url = url
             .parse()
             .map_err(|e| format!("Invalid URL: {}", e))?;
 
+        // 导航事件可能在首次 load_url 后立即抵达；先登记元数据，确保事件能更新正确的标签。
+        let tab = BrowserTab {
+            id: id.to_string(),
+            title: "New Tab".to_string(),
+            url: url.to_string(),
+            cdp_port,
+            webview_label,
+            is_ai_controlled: false,
+            zoom_factor: 1.0,
+            is_incognito,
+            is_muted: false,
+        };
+        self.tabs.insert(id.to_string(), tab);
+
         // 获取主窗口
-        let window = app
-            .get_window("main")
-            .ok_or_else(|| "Main window not found".to_string())?;
 
         // 为 on_navigation 闭包克隆所需变量
         let tabs = self.tabs.clone();
@@ -300,54 +265,54 @@ impl BrowserState {
         let downloads = self.downloads.clone();
         let next_download_id = self.next_download_id.clone();
 
-        // 注入 tab ID 标记和页面事件监听脚本
-        let mut init_script = format!(
-            "window.__mona_tab_id = '{}';\n{}",
-            id, TAB_INIT_SCRIPT
-        );
-        // 如果启用广告拦截，追加广告拦截脚本
-        if ad_block_enabled {
-            init_script.push('\n');
-            init_script.push_str(AD_BLOCK_SCRIPT);
-        }
+        // 仅在需要时注入广告拦截脚本；浏览器页面不注入应用桥接代码。
+        let init_script = ad_block_enabled.then_some(AD_BLOCK_SCRIPT);
+        let native_app = app.clone();
+        let native_tab_id = id.to_string();
+        let native_url = parsed_url.to_string();
+        if let Err(error) = on_main_thread(app, move || {
+            let window = native_app
+                .get_window("main")
+                .ok_or_else(|| "Main window not found".to_string())?;
+        // 如果启用广告拦截，添加初始化脚本。
 
-        let webview_builder = WebviewBuilder::new(&webview_label, WebviewUrl::External(parsed_url))
-            .on_navigation(move |url| {
-                let scheme = url.scheme();
-                let allowed = scheme == "https" || scheme == "http";
+        let webview_builder = wry::WebViewBuilder::new()
+            .with_url("about:blank")
+            .with_incognito(is_incognito)
+            .with_visible(false)
+            .with_navigation_handler(move |url| {
+                let scheme = Url::parse(&url).ok().map(|value| value.scheme().to_string());
+                let allowed = matches!(scheme.as_deref(), Some("https" | "http")) || url == "about:blank";
                 if allowed {
                     // 更新 DashMap 中的 tab URL
                     if let Some(mut tab) = tabs.get_mut(&tab_id) {
-                        tab.url = url.to_string();
+                        tab.url = url.clone();
                     }
                     // 通知前端 URL 变化
                     let _ = app_handle.emit(
                         "browser-url-changed",
-                        serde_json::json!({ "id": tab_id, "url": url.to_string() }),
+                        serde_json::json!({ "id": tab_id, "url": url.clone() }),
                     );
                     // 通知前端导航开始
-                    let _ = app_handle.emit(
-                        "browser-nav-started",
-                        serde_json::json!({ "id": tab_id, "url": url.to_string() }),
-                    );
                 }
                 allowed
-            })
-            .initialization_script(init_script);
+            });
+
+        let webview_builder = match init_script {
+            Some(script) => webview_builder.with_initialization_script(script),
+            None => webview_builder,
+        };
 
         // 初始位置放在屏幕外，避免 WebView 覆盖工具栏
         // updateWebviewBounds 会在前端将其移到正确位置
-        let child_webview = window
-            .add_child(
-                webview_builder,
-                tauri::LogicalPosition::new(-9999, -9999),
-                tauri::LogicalSize::new(1, 1),
-            )
-            .map_err(|e| format!("Failed to create webview: {}", e))?;
+        let child_webview = webview_builder
+            .build_as_child(&window)
+            .map_err(|e| format!("Failed to create native WebView2 browser tab: {}", e))?;
 
         // 注册 WebView2 事件处理器
         let emit_handle = app_handle2.clone();
-        child_webview.with_webview(move |wv| {
+        let wv = &child_webview;
+        {
             #[cfg(target_os = "windows")]
             {
                 use webview2_com::Microsoft::Web::WebView2::Win32::{
@@ -666,21 +631,19 @@ impl BrowserState {
             {
                 let _ = wv;
             }
-        }).map_err(|e| format!("Failed to register WebView event handlers: {}", e))?;
+        }
 
-        let tab = BrowserTab {
-            id: id.to_string(),
-            title: "New Tab".to_string(),
-            url: url.to_string(),
-            cdp_port,
-            webview_label,
-            is_ai_controlled: false,
-            zoom_factor: 1.0,
-            is_incognito,
-            is_muted: false,
-        };
-
-        self.tabs.insert(id.to_string(), tab);
+        child_webview
+            .load_url(&native_url)
+            .map_err(|e| format!("Failed to navigate browser tab: {}", e))?;
+        NATIVE_BROWSER_WEBVIEWS.with(|webviews| {
+            webviews.borrow_mut().insert(native_tab_id, child_webview);
+        });
+        Ok(())
+        }) {
+            self.tabs.remove(id);
+            return Err(error);
+        }
 
         // 通知前端新标签已创建（AI 通过 IPC 创建时前端不知道）
         let _ = app.emit(
@@ -701,11 +664,9 @@ impl BrowserState {
 
     /// 关闭标签
     pub fn close_tab(&self, app: &AppHandle, id: &str) -> Result<(), String> {
-        if let Some((_, tab)) = self.tabs.remove(id) {
+        if self.tabs.remove(id).is_some() {
             // 通过 label 获取子 WebView 并关闭
-            if let Some(webview) = app.get_webview(&tab.webview_label) {
-                let _ = webview.close();
-            }
+            remove_native_webview(app, id)?;
             let _ = app.emit("browser-tab-closed", id);
             Ok(())
         } else {
@@ -754,93 +715,99 @@ impl BrowserState {
     }
 
     /// 导航标签到指定 URL（用于 target="_blank" 新窗口请求等场景）
-    pub fn navigate_tab(&self, app: &AppHandle, id: &str, url: &str) -> Result<(), String> {
-        let tab = self
+    pub fn set_tab_bounds(
+        &self,
+        app: &AppHandle,
+        id: &str,
+        left: f64,
+        top: f64,
+        width: f64,
+        height: f64,
+        visible: bool,
+    ) -> Result<(), String> {
+        if !self.tabs.contains_key(id) {
+            return Err(format!("Tab {} not found", id));
+        }
+        with_native_webview(app, id, move |webview| {
+            webview.set_visible(false).map_err(|error| error.to_string())?;
+            webview
+                .set_bounds(wry::Rect {
+                    position: wry::dpi::LogicalPosition::new(left, top).into(),
+                    size: wry::dpi::LogicalSize::new(width.max(1.0), height.max(1.0)).into(),
+                })
+                .map_err(|error| error.to_string())?;
+            if visible {
+                webview.set_visible(true).map_err(|error| error.to_string())?;
+            }
+            Ok(())
+        })
+    }
+
+    /// 隐藏除当前活动标签外的所有原生浏览器子 WebView。
+    pub fn hide_tabs_except(&self, app: &AppHandle, active_id: Option<&str>) -> Result<(), String> {
+        let ids = self
             .tabs
-            .get(id)
-            .ok_or_else(|| format!("Tab {} not found", id))?;
-        let webview = app
-            .get_webview(&tab.webview_label)
-            .ok_or_else(|| format!("WebView {} not found", tab.webview_label))?;
-        let parsed_url: Url = url
-            .parse()
-            .map_err(|e| format!("Invalid URL: {}", e))?;
-        webview
-            .navigate(parsed_url)
-            .map_err(|e| format!("Navigate failed: {}", e))?;
-        drop(tab); // 释放 DashMap 引用后再修改
+            .iter()
+            .filter(|tab| Some(tab.key().as_str()) != active_id)
+            .map(|tab| tab.key().clone())
+            .collect::<Vec<_>>();
+
+        for id in ids {
+            with_native_webview(app, &id, |webview| {
+                webview.set_visible(false).map_err(|error| error.to_string())
+            })?;
+        }
+        Ok(())
+    }
+
+    pub fn navigate_tab(&self, app: &AppHandle, id: &str, url: &str) -> Result<(), String> {
+        Url::parse(url).map_err(|e| format!("Invalid URL: {}", e))?;
+        let url = url.to_string();
+        let navigation_url = url.clone();
+        with_native_webview(app, id, move |webview| {
+            webview
+                .load_url(&navigation_url)
+                .map_err(|error| format!("Navigate failed: {}", error))
+        })?;
         if let Some(mut tab) = self.tabs.get_mut(id) {
-            tab.url = url.to_string();
+            tab.url = url;
         }
         Ok(())
     }
 
     /// 后退（通过 JS history.back()）
     pub fn go_back(&self, app: &AppHandle, id: &str) -> Result<(), String> {
-        let tab = self
-            .tabs
-            .get(id)
-            .ok_or_else(|| format!("Tab {} not found", id))?;
-        let webview = app
-            .get_webview(&tab.webview_label)
-            .ok_or_else(|| format!("WebView {} not found", tab.webview_label))?;
-        webview
-            .eval("if(window.history.length>1) window.history.back();")
-            .map_err(|e| format!("Go back failed: {}", e))
+        with_native_webview(app, id, |webview| {
+            webview
+                .evaluate_script("if(window.history.length>1) window.history.back();")
+                .map_err(|error| format!("Go back failed: {}", error))
+        })
     }
 
     /// 前进（通过 JS history.forward()）
     pub fn go_forward(&self, app: &AppHandle, id: &str) -> Result<(), String> {
-        let tab = self
-            .tabs
-            .get(id)
-            .ok_or_else(|| format!("Tab {} not found", id))?;
-        let webview = app
-            .get_webview(&tab.webview_label)
-            .ok_or_else(|| format!("WebView {} not found", tab.webview_label))?;
-        webview
-            .eval("window.history.forward();")
-            .map_err(|e| format!("Go forward failed: {}", e))
+        with_native_webview(app, id, |webview| {
+            webview
+                .evaluate_script("window.history.forward();")
+                .map_err(|error| format!("Go forward failed: {}", error))
+        })
     }
 
     /// 刷新（通过 JS location.reload()）
     pub fn reload(&self, app: &AppHandle, id: &str) -> Result<(), String> {
-        let tab = self
-            .tabs
-            .get(id)
-            .ok_or_else(|| format!("Tab {} not found", id))?;
-        let webview = app
-            .get_webview(&tab.webview_label)
-            .ok_or_else(|| format!("WebView {} not found", tab.webview_label))?;
-        webview
-            .eval("window.location.reload();")
-            .map_err(|e| format!("Reload failed: {}", e))
+        with_native_webview(app, id, |webview| {
+            webview.reload().map_err(|error| format!("Reload failed: {}", error))
+        })
     }
 
     /// 设置页面缩放（0.25 ~ 5.0）
     pub fn set_zoom(&self, app: &AppHandle, id: &str, zoom_factor: f64) -> Result<(), String> {
-        let tab = self
-            .tabs
-            .get(id)
-            .ok_or_else(|| format!("Tab {} not found", id))?;
-        let webview = app
-            .get_webview(&tab.webview_label)
-            .ok_or_else(|| format!("WebView {} not found", tab.webview_label))?;
         let clamped = zoom_factor.clamp(0.25, 5.0);
-        webview.with_webview(move |wv| {
-            #[cfg(target_os = "windows")]
-            {
-                let controller = wv.controller();
-                unsafe {
-                    let _ = controller.SetZoomFactor(clamped);
-                }
-            }
-            #[cfg(not(target_os = "windows"))]
-            {
-                let _ = wv;
-                let _ = clamped;
-            }
-        }).map_err(|e| format!("Set zoom failed: {}", e))?;
+        with_native_webview(app, id, move |webview| {
+            webview
+                .zoom(clamped)
+                .map_err(|error| format!("Set zoom failed: {}", error))
+        })?;
         if let Some(mut tab) = self.tabs.get_mut(id) {
             tab.zoom_factor = clamped;
         }
@@ -858,33 +825,79 @@ impl BrowserState {
 
     /// 打印当前页面
     pub fn print_page(&self, app: &AppHandle, id: &str) -> Result<(), String> {
-        let tab = self
-            .tabs
-            .get(id)
-            .ok_or_else(|| format!("Tab {} not found", id))?;
-        let webview = app
-            .get_webview(&tab.webview_label)
-            .ok_or_else(|| format!("WebView {} not found", tab.webview_label))?;
-        webview
-            .eval("window.print();")
-            .map_err(|e| format!("Print failed: {}", e))
+        with_native_webview(app, id, |webview| {
+            webview.print().map_err(|error| format!("Print failed: {}", error))
+        })
     }
 
     /// 在指定标签的 WebView 中执行 JS 代码
     pub fn eval_script(&self, app: &AppHandle, id: &str, script: &str) -> Result<(), String> {
-        let tab = self
-            .tabs
-            .get(id)
-            .ok_or_else(|| format!("Tab {} not found", id))?;
-        let webview = app
-            .get_webview(&tab.webview_label)
-            .ok_or_else(|| format!("WebView {} not found", tab.webview_label))?;
-        webview
-            .eval(script)
-            .map_err(|e| format!("Eval failed: {}", e))
+        let script = script.to_string();
+        with_native_webview(app, id, move |webview| {
+            webview
+                .evaluate_script(&script)
+                .map_err(|error| format!("Eval failed: {}", error))
+        })
     }
 
     /// WebView 内部 URL 变化回调
+    pub fn clear_cache(&self, app: &AppHandle) -> Result<(), String> {
+        let id = self
+            .tabs
+            .iter()
+            .next()
+            .map(|tab| tab.key().clone())
+            .ok_or_else(|| "No browser tab found".to_string())?;
+
+        with_native_webview(app, &id, |webview| {
+            #[cfg(target_os = "windows")]
+            {
+                use webview2_com::CallDevToolsProtocolMethodCompletedHandler;
+                use windows::core::HSTRING;
+
+                let core_webview = webview.webview();
+                let handler = CallDevToolsProtocolMethodCompletedHandler::create(
+                    Box::new(|_result: windows::core::Result<()>, _json: String| Ok(())),
+                );
+                unsafe {
+                    let _ = core_webview.CallDevToolsProtocolMethod(
+                        &HSTRING::from("Network.clearBrowserCache"),
+                        &HSTRING::from("{}"),
+                        &handler,
+                    );
+                }
+            }
+            Ok(())
+        })
+    }
+
+    pub async fn eval_script_result(
+        &self,
+        app: &AppHandle,
+        id: &str,
+        script: &str,
+    ) -> Result<serde_json::Value, String> {
+        let script = script.to_string();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let tx = Arc::new(Mutex::new(Some(tx)));
+        with_native_webview(app, id, move |webview| {
+            let tx = tx.clone();
+            webview
+                .evaluate_script_with_callback(&script, move |result| {
+                    if let Some(tx) = tx.lock().ok().and_then(|mut sender| sender.take()) {
+                        let _ = tx.send(result);
+                    }
+                })
+                .map_err(|error| format!("Eval failed: {}", error))
+        })?;
+
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), rx)
+            .await
+            .map_err(|_| "Timed out waiting for browser script result".to_string())?
+            .map_err(|_| "Browser script result channel closed".to_string())?;
+        decode_script_json(&result).ok_or_else(|| "Browser script returned invalid JSON".to_string())
+    }
+
     pub fn on_url_changed(&self, app: &AppHandle, id: &str, url: &str) -> Result<(), String> {
         if let Some(mut tab) = self.tabs.get_mut(id) {
             tab.url = url.to_string();
@@ -958,51 +971,33 @@ impl BrowserState {
     /// 获取当前页面的 Cookie（通过 JS document.cookie，仅返回非 HttpOnly 的 cookie）
     /// 结果通过 Tauri event "browser-cookies-result" 回传
     pub fn get_cookies(&self, app: &AppHandle, id: &str) -> Result<(), String> {
-        let tab = self
-            .tabs
-            .get(id)
-            .ok_or_else(|| format!("Tab {} not found", id))?;
-        let webview = app
-            .get_webview(&tab.webview_label)
-            .ok_or_else(|| format!("WebView {} not found", tab.webview_label))?;
         let tab_id = id.to_string();
         let emit_handle = app.clone();
-        let js = format!(
-            r#"
-            (function() {{
-                var cookies = [];
-                var cookieStr = document.cookie || '';
-                cookieStr.split(';').forEach(function(pair) {{
-                    var idx = pair.indexOf('=');
-                    if (idx > 0) {{
-                        var name = pair.substring(0, idx).trim();
-                        var value = pair.substring(idx + 1).trim();
-                        cookies.push({{ name: name, value: value, domain: location.hostname, path: '/' }});
-                    }}
-                }});
-                if (window.__TAURI__ && window.__TAURI__.event) {{
-                    try {{ window.__TAURI__.event.emit('browser-cookies-result', {{ id: '{}', cookies: cookies }}); }} catch(e) {{}}
-                }}
-            }})();
-            "#,
-            tab_id
-        );
+        let js = r#"
+            (function() {
+                return JSON.stringify((document.cookie || '').split(';').filter(Boolean).map(function(pair) {
+                    var index = pair.indexOf('=');
+                    return { name: pair.slice(0, index).trim(), value: pair.slice(index + 1).trim(), domain: location.hostname, path: '/' };
+                }));
+            })()
+        "#.to_string();
         // 闭包需要 'static，使用 emit_handle 而非 app
-        let _ = emit_handle;
-        webview
-            .eval(&js)
-            .map_err(|e| format!("Get cookies failed: {}", e))
+        with_native_webview(app, id, move |webview| {
+            webview
+                .evaluate_script_with_callback(&js, move |result| {
+                    let cookies = decode_script_json(&result)
+                        .unwrap_or_else(|| serde_json::json!([]));
+                    let _ = emit_handle.emit(
+                        "browser-cookies-result",
+                        serde_json::json!({ "id": tab_id, "cookies": cookies }),
+                    );
+                })
+                .map_err(|error| format!("Get cookies failed: {}", error))
+        })
     }
 
     /// 清除当前页面的 Cookie（通过 JS 设置过期）
     pub fn clear_cookies(&self, app: &AppHandle, id: &str) -> Result<(), String> {
-        let tab = self
-            .tabs
-            .get(id)
-            .ok_or_else(|| format!("Tab {} not found", id))?;
-        let webview = app
-            .get_webview(&tab.webview_label)
-            .ok_or_else(|| format!("WebView {} not found", tab.webview_label))?;
         let js = r#"
             (function() {
                 var cookies = document.cookie.split(';');
@@ -1018,24 +1013,24 @@ impl BrowserState {
                 });
             })();
         "#;
-        webview
-            .eval(js)
-            .map_err(|e| format!("Clear cookies failed: {}", e))
+        let js = js.to_string();
+        with_native_webview(app, id, move |webview| {
+            webview
+                .evaluate_script(&js)
+                .map_err(|error| format!("Clear cookies failed: {}", error))
+        })
     }
 
     /// 切换广告拦截状态（运行时注入或移除广告拦截脚本）
     pub fn set_ad_block_enabled(&self, app: &AppHandle, id: &str, enabled: bool) -> Result<(), String> {
-        let tab = self
-            .tabs
-            .get(id)
-            .ok_or_else(|| format!("Tab {} not found", id))?;
-        let webview = app
-            .get_webview(&tab.webview_label)
-            .ok_or_else(|| format!("WebView {} not found", tab.webview_label))?;
         if enabled {
             // 注入广告拦截脚本
             let js = AD_BLOCK_SCRIPT;
-            webview.eval(js).map_err(|e| format!("Enable ad block failed: {}", e))?;
+            with_native_webview(app, id, move |webview| {
+                webview
+                    .evaluate_script(js)
+                    .map_err(|error| format!("Enable ad block failed: {}", error))
+            })?;
         } else {
             // 移除广告拦截样式
             let js = r#"
@@ -1045,25 +1040,22 @@ impl BrowserState {
                     window.__mona_ad_block_injected = false;
                 })();
             "#;
-            webview.eval(js).map_err(|e| format!("Disable ad block failed: {}", e))?;
+            let js = js.to_string();
+            with_native_webview(app, id, move |webview| {
+                webview
+                    .evaluate_script(&js)
+                    .map_err(|error| format!("Disable ad block failed: {}", error))
+            })?;
         }
         Ok(())
     }
 
     /// 切换标签静音状态（通过 WebView2 的 IsMuted 属性）
     pub fn set_muted(&self, app: &AppHandle, id: &str, muted: bool) -> Result<(), String> {
-        let tab = self
-            .tabs
-            .get(id)
-            .ok_or_else(|| format!("Tab {} not found", id))?;
-        let webview = app
-            .get_webview(&tab.webview_label)
-            .ok_or_else(|| format!("WebView {} not found", tab.webview_label))?;
-        drop(tab);
         if let Some(mut tab) = self.tabs.get_mut(id) {
             tab.is_muted = muted;
         }
-        webview.with_webview(move |wv| {
+        with_native_webview(app, id, move |wv| {
             #[cfg(target_os = "windows")]
             {
                 use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2_8;
@@ -1080,7 +1072,8 @@ impl BrowserState {
                 let _ = wv;
                 let _ = muted;
             }
-        }).map_err(|e| format!("Set muted failed: {}", e))?;
+            Ok(())
+        })?;
         Ok(())
     }
 
@@ -1104,17 +1097,9 @@ impl BrowserState {
 
     /// 打开开发者工具
     pub fn open_devtools(&self, app: &AppHandle, id: &str) -> Result<(), String> {
-        let tab = self
-            .tabs
-            .get(id)
-            .ok_or_else(|| format!("Tab {} not found", id))?;
-        let webview = app
-            .get_webview(&tab.webview_label)
-            .ok_or_else(|| format!("WebView {} not found", tab.webview_label))?;
-        webview.with_webview(move |wv| {
+        with_native_webview(app, id, move |wv| {
             #[cfg(target_os = "windows")]
             {
-                use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2;
                 let controller = wv.controller();
                 let core_webview = unsafe { controller.CoreWebView2().unwrap() };
                 unsafe { let _ = core_webview.OpenDevToolsWindow(); }
@@ -1123,19 +1108,13 @@ impl BrowserState {
             {
                 let _ = wv;
             }
-        }).map_err(|e| format!("Open DevTools failed: {}", e))?;
+            Ok(())
+        })?;
         Ok(())
     }
 
     /// 切换暗色模式（注入或移除暗色模式 CSS）
     pub fn set_dark_mode(&self, app: &AppHandle, id: &str, enabled: bool) -> Result<(), String> {
-        let tab = self
-            .tabs
-            .get(id)
-            .ok_or_else(|| format!("Tab {} not found", id))?;
-        let webview = app
-            .get_webview(&tab.webview_label)
-            .ok_or_else(|| format!("WebView {} not found", tab.webview_label))?;
         if enabled {
             // 注入暗色模式 CSS（反转颜色，但保留图片/视频）
             let js = r#"
@@ -1151,7 +1130,12 @@ impl BrowserState {
                     (document.head || document.documentElement).appendChild(style);
                 })();
             "#;
-            webview.eval(js).map_err(|e| format!("Enable dark mode failed: {}", e))?;
+            let js = js.to_string();
+            with_native_webview(app, id, move |webview| {
+                webview
+                    .evaluate_script(&js)
+                    .map_err(|error| format!("Enable dark mode failed: {}", error))
+            })?;
         } else {
             // 移除暗色模式样式
             let js = r#"
@@ -1160,43 +1144,43 @@ impl BrowserState {
                     if (style) style.parentNode.removeChild(style);
                 })();
             "#;
-            webview.eval(js).map_err(|e| format!("Disable dark mode failed: {}", e))?;
+            let js = js.to_string();
+            with_native_webview(app, id, move |webview| {
+                webview
+                    .evaluate_script(&js)
+                    .map_err(|error| format!("Disable dark mode failed: {}", error))
+            })?;
         }
         Ok(())
     }
 
     /// 获取页面元信息（用于分享/二维码）
     pub fn get_page_info(&self, app: &AppHandle, id: &str) -> Result<(), String> {
-        let tab = self
-            .tabs
-            .get(id)
-            .ok_or_else(|| format!("Tab {} not found", id))?;
-        let webview = app
-            .get_webview(&tab.webview_label)
-            .ok_or_else(|| format!("WebView {} not found", tab.webview_label))?;
         let tab_id = id.to_string();
-        let js = format!(
-            r#"
-            (function() {{
-                var info = {{
+        let emit_handle = app.clone();
+        let js = r#"
+            (function() {
+                var description = document.querySelector('meta[name="description"]');
+                var ogImage = document.querySelector('meta[property="og:image"]');
+                return JSON.stringify({
                     url: location.href,
                     title: document.title || '',
-                    description: '',
-                    ogImage: ''
-                }};
-                var desc = document.querySelector('meta[name="description"]');
-                if (desc) info.description = desc.getAttribute('content') || '';
-                var ogImg = document.querySelector('meta[property="og:image"]');
-                if (ogImg) info.ogImage = ogImg.getAttribute('content') || '';
-                if (window.__TAURI__ && window.__TAURI__.event) {{
-                    try {{ window.__TAURI__.event.emit('browser-page-info-result', {{ id: '{}', info: info }}); }} catch(e) {{}}
-                }}
-            }})();
-            "#,
-            tab_id
-        );
-        webview
-            .eval(&js)
-            .map_err(|e| format!("Get page info failed: {}", e))
+                    description: description ? description.getAttribute('content') || '' : '',
+                    ogImage: ogImage ? ogImage.getAttribute('content') || '' : ''
+                });
+            })()
+        "#.to_string();
+        with_native_webview(app, id, move |webview| {
+            webview
+                .evaluate_script_with_callback(&js, move |result| {
+                    let info = decode_script_json(&result)
+                        .unwrap_or_else(|| serde_json::json!({}));
+                    let _ = emit_handle.emit(
+                        "browser-page-info-result",
+                        serde_json::json!({ "id": tab_id, "info": info }),
+                    );
+                })
+                .map_err(|error| format!("Get page info failed: {}", error))
+        })
     }
 }

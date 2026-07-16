@@ -10,6 +10,7 @@ import {
   browserGoForward as goForwardIpc,
   browserReload as reloadIpc,
   browserRecordVisit,
+  type BrowserTabInfo,
 } from "@/lib/browser-ipc";
 import { isTauri } from "@/lib/tauri";
 
@@ -48,7 +49,47 @@ const MONA_TAB: Tab = {
   webviewCreated: false,
 };
 
+function tabFromServer(tab: BrowserTabInfo): Tab {
+  return {
+    id: tab.id,
+    type: "browser",
+    title: tab.title,
+    url: tab.url,
+    isAiControlled: tab.is_ai_controlled,
+    webviewCreated: true,
+  };
+}
+
+// The first Rust-side list can race with local session restoration or a newly
+// created tab. Merge it instead of replacing local state so its native WebView
+// never becomes orphaned from the UI state.
+export function mergeServerTabs(currentTabs: Tab[], serverTabs: BrowserTabInfo[]): Tab[] {
+  const serverById = new Map(serverTabs.map((tab) => [tab.id, tab]));
+  const mergedTabs = currentTabs.map((tab) => {
+    if (tab.type !== "browser") return tab;
+    const serverTab = serverById.get(tab.id);
+    return serverTab ? { ...tab, ...tabFromServer(serverTab) } : tab;
+  });
+  const currentIds = new Set(currentTabs.map((tab) => tab.id));
+
+  return [
+    ...mergedTabs,
+    ...serverTabs.filter((tab) => !currentIds.has(tab.id)).map(tabFromServer),
+  ];
+}
+
 let _tabCounter = 0;
+
+// 关闭标签后选择下一个激活标签：优先左侧相邻标签，避免直接跳回 mona
+function pickNextActiveAfterClose(tabsList: Tab[], closedId: string): string {
+  const idx = tabsList.findIndex((t) => t.id === closedId);
+  if (idx === -1) return "mona";
+  for (let i = idx - 1; i >= 0; i--) {
+    if (tabsList[i].id !== "mona") return tabsList[i].id;
+  }
+  if (idx + 1 < tabsList.length) return tabsList[idx + 1].id;
+  return "mona";
+}
 
 export function useBrowserTabs() {
   const [tabs, setTabs] = useState<Tab[]>([MONA_TAB]);
@@ -265,15 +306,7 @@ export function useBrowserTabs() {
     // 同步已有的 Rust 侧标签
     browserListTabs().then((serverTabs) => {
       if (cancelled) return;
-      const browserTabs: Tab[] = serverTabs.map((t) => ({
-        id: t.id,
-        type: "browser" as const,
-        title: t.title,
-        url: t.url,
-        isAiControlled: t.is_ai_controlled,
-        webviewCreated: true,
-      }));
-      setTabs([MONA_TAB, ...browserTabs]);
+      setTabs((currentTabs) => mergeServerTabs(currentTabs, serverTabs));
     }).catch(() => {});
 
     // 监听 AI 通过 IPC 创建的标签
@@ -313,8 +346,9 @@ export function useBrowserTabs() {
 
       unlistenClosed = await listen<string>("browser-tab-closed", (event) => {
         const id = event.payload;
+        const nextActive = pickNextActiveAfterClose(tabsRef.current, id);
         setTabs((prev) => prev.filter((t) => t.id !== id));
-        setActiveTabId((current) => (current === id ? "mona" : current));
+        setActiveTabId((current) => (current === id ? nextActive : current));
       });
 
       unlistenUrlChanged = await listen<{ id: string; url: string }>(
@@ -534,7 +568,7 @@ export function useBrowserTabs() {
     }
 
     setTabs((prev) => prev.filter((t) => t.id !== id));
-    setActiveTabId((current) => (current === id ? "mona" : current));
+    setActiveTabId((current) => (current === id ? pickNextActiveAfterClose(tabs, id) : current));
   }, [tabs]);
 
   const switchTab = useCallback((id: string) => {

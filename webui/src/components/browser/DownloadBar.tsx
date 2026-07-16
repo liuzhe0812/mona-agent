@@ -231,10 +231,10 @@ export function DownloadBar({ open, onOpenChange }: DownloadBarProps) {
 
   const completedCount = downloads.filter((d) => d.state === "completed").length;
 
-  if (downloads.length === 0) return null;
+  if (downloads.length === 0 && !open) return null;
 
   return (
-    <div className="border-t border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+    <div className="h-full overflow-hidden rounded-lg border border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
       {/* 头部：标题 + 操作 */}
       <div className="flex items-center justify-between px-3 py-1.5">
         <button
@@ -243,7 +243,7 @@ export function DownloadBar({ open, onOpenChange }: DownloadBarProps) {
           className="flex items-center gap-2 text-[12px] font-medium hover:opacity-80 transition-opacity"
         >
           <Download className="h-3.5 w-3.5" />
-          <span>下载</span>
+          <span>下载记录</span>
           {activeCount > 0 && (
             <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-blue-500 px-1 text-[10px] font-medium text-white">
               {activeCount}
@@ -287,22 +287,28 @@ export function DownloadBar({ open, onOpenChange }: DownloadBarProps) {
       {/* 下载列表（展开时显示） */}
       {open && (
         <div className="max-h-64 border-t border-border">
-          <ScrollArea className="h-full max-h-64">
-            <div className="divide-y divide-border/50">
-              {downloads.map((d) => (
-                <DownloadItem
-                  key={d.id}
-                  download={d}
-                  onCancel={cancelDownload}
-                  onPause={pauseDownload}
-                  onResume={resumeDownload}
-                  onOpen={openDownload}
-                  onReveal={revealDownload}
-                  onRemove={removeDownload}
-                />
-              ))}
+          {downloads.length === 0 ? (
+            <div className="px-3 py-6 text-center text-[12px] text-muted-foreground">
+              暂无下载记录
             </div>
-          </ScrollArea>
+          ) : (
+            <ScrollArea className="h-full max-h-64">
+              <div className="divide-y divide-border/50">
+                {downloads.map((d) => (
+                  <DownloadItem
+                    key={d.id}
+                    download={d}
+                    onCancel={cancelDownload}
+                    onPause={pauseDownload}
+                    onResume={resumeDownload}
+                    onOpen={openDownload}
+                    onReveal={revealDownload}
+                    onRemove={removeDownload}
+                  />
+                ))}
+              </div>
+            </ScrollArea>
+          )}
         </div>
       )}
 

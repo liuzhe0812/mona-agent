@@ -27,6 +27,41 @@ use tauri_plugin_global_shortcut::ShortcutState;
 
 const GATEWAY_START_TIMEOUT_SECS: u64 = 90;
 
+#[cfg(test)]
+mod browser_ipc_tests {
+    #[test]
+    fn browser_uses_a_raw_webview2_content_runtime() {
+        let browser = include_str!("browser/mod.rs");
+        let runtime = include_str!("lib.rs");
+
+        assert!(browser.contains("wry::WebViewBuilder"));
+        assert!(!browser.contains("tauri::WebviewBuilder"));
+        assert!(!runtime.contains(&[".invoke", "_system("].concat()));
+    }
+
+    #[test]
+    fn browser_popups_are_owned_by_the_main_window() {
+        for popup in [
+            include_str!("browser/downloads.rs"),
+            include_str!("browser/suggestions.rs"),
+        ] {
+            assert!(popup.contains(".parent(&main)"));
+            assert!(!popup.contains(".always_on_top(true)"));
+        }
+    }
+
+    #[test]
+    fn browser_popups_are_shown_when_first_created() {
+        for popup in [
+            include_str!("browser/downloads.rs"),
+            include_str!("browser/suggestions.rs"),
+        ] {
+            assert!(popup.contains(".visible(false)"));
+            assert!(popup.contains("window.show()"));
+        }
+    }
+}
+
 /// 存储首次启动时待打开的 md 文件路径（前端就绪后拉取）
 #[derive(Default)]
 struct PendingMdFiles(Mutex<Vec<String>>);
@@ -329,6 +364,7 @@ fn emit_md_file_open(app_handle: &tauri::AppHandle, file_path: &str) {
     let _ = app_handle.emit_to("main", "md-file-open", file_path);
     if let Some(main_window) = app_handle.get_webview_window("main") {
         let _ = main_window.show();
+        let _ = main_window.unminimize();
         let _ = main_window.set_focus();
     }
 }
@@ -344,15 +380,6 @@ fn get_pending_md_files(state: tauri::State<PendingMdFiles>) -> Vec<String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // 在 WebView2 启动前设置 CDP 调试端口（全局，所有 WebView 共享）
-    #[cfg(windows)]
-    {
-        std::env::set_var(
-            "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
-            "--remote-debugging-port=9300",
-        );
-    }
-
     let gateway_state = GatewayState::new();
     let terminal_state = terminal::TerminalState::new();
     let db_state = db::DbState::new();
@@ -405,6 +432,7 @@ pub fn run() {
         .manage(contacts_state)
         .manage(quick_ask::QuickAskShortcutState::default())
         .manage(browser::BrowserState::new())
+        .manage(browser::suggestions::AddressSuggestionWindowState::new())
         .manage(PendingMdFiles::default())
         .manage(tray::PendingMailNavigation::default())
         .manage(notification_window::NotificationWindowState::new())
@@ -643,6 +671,8 @@ pub fn run() {
             browser::commands::browser_list_tabs,
             browser::commands::browser_get_cdp_port,
             browser::commands::browser_set_ai_status,
+            browser::commands::browser_set_tab_bounds,
+            browser::commands::browser_hide_tabs_except,
             browser::commands::browser_navigate_tab,
             browser::commands::browser_go_back,
             browser::commands::browser_go_forward,
@@ -659,6 +689,7 @@ pub fn run() {
             browser::commands::browser_get_zoom,
             browser::commands::browser_print_page,
             browser::commands::browser_eval_script,
+            browser::commands::browser_eval_script_result,
             browser::commands::browser_get_cookies,
             browser::commands::browser_clear_cookies,
             browser::commands::browser_set_ad_block,
@@ -668,6 +699,13 @@ pub fn run() {
             browser::commands::browser_open_devtools,
             browser::commands::browser_set_dark_mode,
             browser::commands::browser_get_page_info,
+            browser::suggestions::browser_show_address_suggestions,
+            browser::suggestions::show_browser_address_suggestions_window,
+            browser::suggestions::browser_hide_address_suggestions,
+            browser::suggestions::browser_select_address_suggestion,
+            browser::downloads::browser_show_downloads,
+            browser::downloads::show_browser_downloads_window,
+            browser::downloads::browser_hide_downloads,
             browser::storage::browser_add_bookmark,
             browser::storage::browser_remove_bookmark,
             browser::storage::browser_update_bookmark,

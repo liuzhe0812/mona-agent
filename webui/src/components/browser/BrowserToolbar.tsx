@@ -1,4 +1,4 @@
-import { ArrowLeft, ArrowRight, RotateCw, Star, Lock, Globe, Search, Maximize, Minimize, Settings2, Trash2, HardDrive, BookmarkPlus, Upload, ZoomIn, ZoomOut, Printer, Code, Search as FindIcon, Clock, Cookie, Volume2, VolumeX, Shield, ShieldOff, Eye, Terminal, Moon, Sun, Share2 } from "lucide-react";
+import { ArrowLeft, ArrowRight, RotateCw, Star, Lock, Globe, Search, Maximize, Minimize, Settings2, Trash2, HardDrive, Download, BookmarkPlus, Upload, ZoomIn, ZoomOut, Printer, Code, Search as FindIcon, Clock, Cookie, Volume2, VolumeX, Shield, ShieldOff, Eye, Terminal, Moon, Sun, Share2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { AgentLogo } from "@/components/AgentLogo";
@@ -19,9 +19,14 @@ import {
   browserClearHistory,
   browserClearCache,
   browserImportBookmarks,
+  browserShowAddressSuggestions,
+  browserHideAddressSuggestions,
+  browserListenAddressSuggestionSelected,
+  browserShowDownloads,
   type AddressBarSuggestion,
   type ImportBookmarkItem,
 } from "@/lib/browser-ipc";
+import { isTauri } from "@/lib/tauri";
 
 interface ChromeBookmarkNode {
   type?: string;
@@ -59,6 +64,7 @@ function normalizeUrlOrSearch(input: string): string {
 }
 
 interface BrowserToolbarProps {
+  tabId?: string;
   url: string;
   title: string;
   isAiControlled: boolean;
@@ -77,7 +83,6 @@ interface BrowserToolbarProps {
   onToggleBookmarkBar: () => void;
   onToggleFullscreen?: () => void;
   onExitFullscreen?: () => void;
-  onDropdownOpenChange?: (open: boolean) => void;
   onFind?: () => void;
   onPrint?: () => void;
   onViewSource?: () => void;
@@ -91,9 +96,11 @@ interface BrowserToolbarProps {
   onToggleDarkMode?: () => void;
   onOpenDevtools?: () => void;
   onShare?: () => void;
+  onCreateNote?: () => void;
 }
 
 export function BrowserToolbar({
+  tabId,
   url,
   title,
   isAiControlled,
@@ -112,7 +119,6 @@ export function BrowserToolbar({
   onToggleBookmarkBar,
   onToggleFullscreen,
   onExitFullscreen,
-  onDropdownOpenChange,
   onFind,
   onPrint,
   onViewSource,
@@ -126,6 +132,7 @@ export function BrowserToolbar({
   onToggleDarkMode,
   onOpenDevtools,
   onShare,
+  onCreateNote,
 }: BrowserToolbarProps) {
   const [inputUrl, setInputUrl] = useState(url);
   const [isFocused, setIsFocused] = useState(false);
@@ -136,6 +143,7 @@ export function BrowserToolbar({
   const suggestionsRef = useRef<HTMLDivElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>();
   const inputRef = useRef<HTMLInputElement>(null);
+  const downloadButtonRef = useRef<HTMLButtonElement>(null);
 
   // 监听 Ctrl+L 聚焦地址栏事件
   useEffect(() => {
@@ -169,18 +177,35 @@ export function BrowserToolbar({
   // 点击外部关闭下拉
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
+      if (isTauri()) {
+        if (!inputRef.current?.contains(e.target as Node)) {
+          setShowSuggestions(false);
+          if (tabId) void browserHideAddressSuggestions(tabId);
+        }
+        return;
+      }
       if (suggestionsRef.current && !suggestionsRef.current.contains(e.target as Node)) {
         setShowSuggestions(false);
       }
     };
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
+  }, [tabId]);
 
-  // Notify parent when dropdown opens/closes (to hide native WebView)
   useEffect(() => {
-    onDropdownOpenChange?.(showSuggestions);
-  }, [showSuggestions, onDropdownOpenChange]);
+    if (!isTauri() || !tabId) return;
+    let unlisten: (() => void) | undefined;
+    void browserListenAddressSuggestionSelected(({ tabId: selectedTabId, url: selectedUrl }) => {
+      if (selectedTabId !== tabId) return;
+      setInputUrl(selectedUrl);
+      setShowSuggestions(false);
+      onNavigate(selectedUrl);
+    }).then((dispose) => { unlisten = dispose; });
+    return () => {
+      unlisten?.();
+      void browserHideAddressSuggestions(tabId);
+    };
+  }, [onNavigate, tabId]);
 
   // 搜索建议（防抖）
   const fetchSuggestions = useCallback((query: string) => {
@@ -188,6 +213,7 @@ export function BrowserToolbar({
     if (!query.trim()) {
       setSuggestions([]);
       setShowSuggestions(false);
+      if (isTauri() && tabId) void browserHideAddressSuggestions(tabId);
       return;
     }
     debounceRef.current = setTimeout(async () => {
@@ -196,12 +222,25 @@ export function BrowserToolbar({
         setSuggestions(results);
         setShowSuggestions(results.length > 0);
         setSelectedIdx(-1);
+        if (isTauri() && tabId && inputRef.current && results.length > 0) {
+          const rect = inputRef.current.getBoundingClientRect();
+          void browserShowAddressSuggestions({
+            tabId,
+            left: rect.left,
+            top: rect.bottom + 4,
+            width: rect.width,
+            suggestions: results,
+          });
+        } else if (isTauri() && tabId) {
+          void browserHideAddressSuggestions(tabId);
+        }
       } catch {
         setSuggestions([]);
         setShowSuggestions(false);
+        if (isTauri() && tabId) void browserHideAddressSuggestions(tabId);
       }
     }, 150);
-  }, []);
+  }, [tabId]);
 
   const handleFocus = () => {
     setIsFocused(true);
@@ -214,6 +253,7 @@ export function BrowserToolbar({
     setTimeout(() => {
       setIsFocused(false);
       setShowSuggestions(false);
+      if (isTauri() && tabId) void browserHideAddressSuggestions(tabId);
     }, 200);
   };
 
@@ -229,12 +269,14 @@ export function BrowserToolbar({
     const finalUrl = normalizeUrlOrSearch(trimmed);
     onNavigate(finalUrl);
     setShowSuggestions(false);
+    if (isTauri() && tabId) void browserHideAddressSuggestions(tabId);
   };
 
   const handleSelectSuggestion = (suggestion: AddressBarSuggestion) => {
     setInputUrl(suggestion.url);
     onNavigate(suggestion.url);
     setShowSuggestions(false);
+    if (isTauri() && tabId) void browserHideAddressSuggestions(tabId);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -250,6 +292,7 @@ export function BrowserToolbar({
       handleSelectSuggestion(suggestions[selectedIdx]);
     } else if (e.key === "Escape") {
       setShowSuggestions(false);
+      if (isTauri() && tabId) void browserHideAddressSuggestions(tabId);
     }
   };
 
@@ -365,6 +408,59 @@ export function BrowserToolbar({
     }
   };
 
+  const handleOpenDownloads = () => {
+    const rect = downloadButtonRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    void browserShowDownloads({
+      left: Math.max(8, rect.right - 360),
+      top: rect.bottom + 6,
+    });
+  };
+
+  const handleOpenOptions = async () => {
+    try {
+      const { Menu } = await import("@tauri-apps/api/menu");
+      const menu = await Menu.new({
+        items: [
+          { text: "书签栏", checked: bookmarkBarVisible, action: onToggleBookmarkBar },
+          { item: "Separator" },
+          ...(onFind ? [{ text: "查找 (Ctrl+F)", action: onFind }] : []),
+          ...(onPrint ? [{ text: "打印", action: onPrint }] : []),
+          ...(onViewSource ? [{ text: "查看源码", action: onViewSource }] : []),
+          ...((onZoomIn || onZoomOut || onZoomReset) ? [
+            { item: "Separator" as const },
+            ...(onZoomIn ? [{ text: "放大", action: onZoomIn }] : []),
+            ...(onZoomOut ? [{ text: "缩小", action: onZoomOut }] : []),
+            ...(onZoomReset ? [{ text: "重置缩放", action: onZoomReset }] : []),
+          ] : []),
+          { item: "Separator" },
+          { text: "清理历史记录", action: handleClearHistory },
+          ...(onOpenHistory ? [{ text: "历史记录", action: onOpenHistory }] : []),
+          { text: "下载记录", action: handleOpenDownloads },
+          { text: "清理缓存", action: handleClearCache },
+          { item: "Separator" },
+          ...(onToggleMute ? [{ text: isMuted ? "取消静音" : "静音标签", action: onToggleMute }] : []),
+          ...(onToggleAdBlock ? [{ text: adBlockEnabled ? "关闭广告拦截" : "开启广告拦截", action: onToggleAdBlock }] : []),
+          ...(onOpenCookieManager ? [{ text: "Cookie 管理器", action: onOpenCookieManager }] : []),
+          ...(onToggleDarkMode ? [{ text: isDarkMode ? "关闭暗色模式" : "开启暗色模式", action: onToggleDarkMode }] : []),
+          ...(onShare ? [{ text: "分享 / 二维码", action: onShare }] : []),
+          ...(onCreateNote ? [{ text: "生成 Markdown 笔记", action: onCreateNote }] : []),
+          { item: "Separator" },
+          ...(onOpenDevtools ? [{ text: "开发者工具", action: onOpenDevtools }] : []),
+          { item: "Separator" },
+          { text: "导入 Chrome 书签", action: handleImportChromeBookmarks },
+        ],
+      });
+      try {
+        await menu.popup();
+      } finally {
+        await menu.close();
+      }
+    } catch (e) {
+      console.error("[BrowserToolbar] open options menu failed:", e);
+    }
+  };
+
   return (
     <div className="flex h-8 items-center gap-1.5 border-b border-border/50 bg-background/95 px-2">
       <Button variant="ghost" size="icon" className="h-6 w-6" title="后退" onClick={onGoBack}>
@@ -376,7 +472,6 @@ export function BrowserToolbar({
       <Button variant="ghost" size="icon" className="h-6 w-6" title="刷新" onClick={onReload}>
         <RotateCw className="h-3 w-3" />
       </Button>
-
       <form onSubmit={handleSubmit} className="flex-1 relative">
         <div className="flex items-center gap-1.5">
           {url.startsWith("https://") ? (
@@ -397,7 +492,7 @@ export function BrowserToolbar({
         </div>
 
         {/* 地址栏下拉建议 */}
-        {showSuggestions && suggestions.length > 0 && (
+        {!isTauri() && showSuggestions && suggestions.length > 0 && (
           <div
             ref={suggestionsRef}
             className="absolute left-0 right-0 top-full z-50 mt-1 overflow-hidden rounded-lg border border-border bg-popover shadow-md"
@@ -439,6 +534,17 @@ export function BrowserToolbar({
         />
       </Button>
 
+      <Button
+        ref={downloadButtonRef}
+        variant="ghost"
+        size="icon"
+        className="h-6 w-6"
+        title="下载"
+        onClick={handleOpenDownloads}
+      >
+        <Download className="h-3 w-3" />
+      </Button>
+
       {/* 全屏按钮 - AI 按钮左边 */}
       {onToggleFullscreen && (
         <Button
@@ -457,7 +563,12 @@ export function BrowserToolbar({
       )}
 
       {/* 选项按钮 - 下拉菜单 */}
-      <DropdownMenu onOpenChange={(open) => onDropdownOpenChange?.(open)}>
+      {isTauri() ? (
+        <Button variant="ghost" size="icon" className="h-6 w-6" title="选项" onClick={handleOpenOptions}>
+          <Settings2 className="h-3 w-3" />
+        </Button>
+      ) : (
+      <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button variant="ghost" size="icon" className="h-6 w-6" title="选项">
             <Settings2 className="h-3 w-3" />
@@ -524,6 +635,10 @@ export function BrowserToolbar({
               历史记录
             </DropdownMenuItem>
           )}
+          <DropdownMenuItem onClick={handleOpenDownloads}>
+            <Download className="mr-2 h-3.5 w-3.5" />
+            下载记录
+          </DropdownMenuItem>
           <DropdownMenuItem onClick={handleClearCache}>
             <HardDrive className="mr-2 h-3.5 w-3.5" />
             清理缓存
@@ -586,6 +701,7 @@ export function BrowserToolbar({
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+      )}
 
       {/* 无痕模式指示器 */}
       {isIncognito && (

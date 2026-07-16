@@ -1,7 +1,7 @@
 {
   "identifier": "default",
-  "description": "Capability for the main window",
-  "windows": ["main", "quick-ask", "md-reader-*", "browser-*", "compose-*", "notification-*"],
+  "description": "Capability for trusted application webviews",
+  "webviews": ["main", "quick-ask", "md-reader-*", "compose-*", "notification-*", "browser-downloads", "browser-suggestions"],
   "permissions": [
     "core:default",
     "core:window:default",

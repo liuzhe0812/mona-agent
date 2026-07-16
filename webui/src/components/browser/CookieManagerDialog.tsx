@@ -9,7 +9,6 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { isTauri } from "@/lib/tauri";
 import { browserGetCookies, browserClearCookies, type CookieInfo } from "@/lib/browser-ipc";
 
@@ -119,7 +118,7 @@ export function CookieManagerDialog({ open, onOpenChange, tabId }: CookieManager
             清除全部
           </Button>
         </div>
-        <ScrollArea className="h-[400px] rounded-md border">
+        <div className="h-[400px] overflow-y-auto scrollbar-thin rounded-md border">
           {filteredCookies.length === 0 ? (
             <div className="flex h-full flex-col items-center justify-center gap-2 p-8 text-muted-foreground">
               <Shield className="h-8 w-8 opacity-50" />
@@ -144,7 +143,7 @@ export function CookieManagerDialog({ open, onOpenChange, tabId }: CookieManager
               ))}
             </div>
           )}
-        </ScrollArea>
+        </div>
         <p className="text-xs text-muted-foreground">
           注：仅显示非 HttpOnly 的 Cookie。HttpOnly Cookie 无法通过 JS 访问。
         </p>

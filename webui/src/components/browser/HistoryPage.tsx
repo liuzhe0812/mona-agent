@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import { Search, Trash2, Clock, Globe, X, ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   browserListHistory,
   browserDeleteHistory,
@@ -168,7 +167,7 @@ export function HistoryPage({ onNavigate, onBack }: HistoryPageProps) {
       </div>
 
       {/* 历史记录列表 */}
-      <ScrollArea className="flex-1">
+      <div className="flex-1 min-h-0 overflow-y-auto scrollbar-hover">
         <div className="mx-auto max-w-3xl px-4 py-4">
           {loading ? (
             <div className="flex h-32 items-center justify-center text-muted-foreground text-[13px]">
@@ -239,7 +238,7 @@ export function HistoryPage({ onNavigate, onBack }: HistoryPageProps) {
             ))
           )}
         </div>
-      </ScrollArea>
+      </div>
     </div>
   );
 }

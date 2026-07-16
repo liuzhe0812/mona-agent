@@ -336,47 +336,10 @@ pub async fn browser_clear_cache(
     use tauri::Manager;
 
     let state = app.state::<crate::browser::BrowserState>();
-    let tabs = state.list_tabs();
-
-    if tabs.is_empty() {
+    if state.list_tabs().is_empty() {
         return Ok(());
     }
-
-    let first_label = format!("browser-{}", tabs[0].id);
-    let webview = app
-        .get_webview(&first_label)
-        .ok_or_else(|| "No browser webview found".to_string())?;
-
-    webview
-        .with_webview(|wv| {
-            #[cfg(target_os = "windows")]
-            {
-                use webview2_com::CallDevToolsProtocolMethodCompletedHandler;
-                use windows::core::HSTRING;
-
-                let controller = wv.controller();
-                let core_webview = unsafe { controller.CoreWebView2().unwrap() };
-
-                let handler = CallDevToolsProtocolMethodCompletedHandler::create(
-                    Box::new(|_result: windows::core::Result<()>, _json: String| Ok(())),
-                );
-
-                let method_name = HSTRING::from("Network.clearBrowserCache");
-                let params = HSTRING::from("{}");
-
-                unsafe {
-                    let _ = core_webview
-                        .CallDevToolsProtocolMethod(&method_name, &params, &handler);
-                }
-            }
-            #[cfg(not(target_os = "windows"))]
-            {
-                let _ = wv;
-            }
-        })
-        .map_err(|e| format!("Failed to clear cache: {}", e))?;
-
-    Ok(())
+    state.clear_cache(&app)
 }
 
 // ── Address bar suggestions ──
