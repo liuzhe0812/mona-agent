@@ -28,7 +28,6 @@ export function PaymentDialog({
   open,
   orderId,
   paymentUrl,
-  paymentMethod,
   onSuccess,
   onCancel,
 }: PaymentDialogProps) {

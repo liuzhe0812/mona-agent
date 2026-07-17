@@ -5,12 +5,30 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tauri::State;
+use rusqlite::OptionalExtension;
 
 use super::SystemState;
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_registry_startup_id, parse_scheduled_task_line};
+    use super::{acknowledge_startup_items, parse_registry_startup_id, parse_scheduled_task_line, sync_startup_items, StartupItem};
+
+    fn startup_item(id: &str) -> StartupItem {
+        StartupItem {
+            id: id.to_string(),
+            name: id.to_string(),
+            publisher: String::new(),
+            source: "注册表".to_string(),
+            scope: "user".to_string(),
+            command: String::new(),
+            target_path: String::new(),
+            added: None,
+            enabled: true,
+            signed: true,
+            first_seen_at: None,
+            is_new: false,
+        }
+    }
 
     #[test]
     fn parses_the_complete_registry_key_and_value_name() {
@@ -34,6 +52,33 @@ mod tests {
         assert_eq!(item.command, "C:\\Updater\\update.exe --silent");
         assert!(item.enabled);
     }
+
+    #[test]
+    fn treats_the_initial_inventory_as_a_baseline() {
+        let db = rusqlite::Connection::open_in_memory().unwrap();
+        let mut items = vec![startup_item("wechat"), startup_item("onedrive")];
+
+        sync_startup_items(&db, &mut items, 100).unwrap();
+
+        assert!(items.iter().all(|item| !item.is_new));
+    }
+
+    #[test]
+    fn clears_a_new_item_after_the_user_reviews_startup_items() {
+        let db = rusqlite::Connection::open_in_memory().unwrap();
+        let mut baseline = vec![startup_item("wechat")];
+        sync_startup_items(&db, &mut baseline, 100).unwrap();
+
+        let mut with_new_item = vec![startup_item("wechat"), startup_item("update-helper")];
+        sync_startup_items(&db, &mut with_new_item, 200).unwrap();
+        assert!(with_new_item[1].is_new);
+
+        acknowledge_startup_items(&db, 300).unwrap();
+        let mut reviewed = vec![startup_item("wechat"), startup_item("update-helper")];
+        sync_startup_items(&db, &mut reviewed, 400).unwrap();
+
+        assert!(reviewed.iter().all(|item| !item.is_new));
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,6 +95,7 @@ pub struct StartupItem {
     pub enabled: bool,
     pub signed: bool,
     pub first_seen_at: Option<i64>,
+    pub is_new: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -93,6 +139,76 @@ fn now_ts() -> i64 {
         .unwrap_or(0)
 }
 
+fn ensure_startup_tracking_tables(db: &rusqlite::Connection) -> rusqlite::Result<()> {
+    db.execute_batch(
+        "CREATE TABLE IF NOT EXISTS startup_seen (id TEXT PRIMARY KEY, first_seen_at INTEGER NOT NULL);
+         CREATE TABLE IF NOT EXISTS startup_reviewed (id TEXT PRIMARY KEY, reviewed_at INTEGER NOT NULL);
+         CREATE TABLE IF NOT EXISTS startup_tracking_state (id INTEGER PRIMARY KEY CHECK (id = 1), initialized_at INTEGER NOT NULL);",
+    )
+}
+
+fn acknowledge_startup_items(db: &rusqlite::Connection, reviewed_at: i64) -> rusqlite::Result<()> {
+    ensure_startup_tracking_tables(db)?;
+    db.execute(
+        "INSERT OR REPLACE INTO startup_reviewed (id, reviewed_at) SELECT id, ?1 FROM startup_seen",
+        rusqlite::params![reviewed_at],
+    )?;
+    Ok(())
+}
+
+fn sync_startup_items(
+    db: &rusqlite::Connection,
+    items: &mut [StartupItem],
+    now: i64,
+) -> rusqlite::Result<()> {
+    ensure_startup_tracking_tables(db)?;
+    let initialized: i64 = db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM startup_tracking_state WHERE id = 1)",
+        [],
+        |row| row.get(0),
+    )?;
+
+    for item in items.iter_mut() {
+        let first_seen_at: Option<i64> = db
+            .query_row(
+                "SELECT first_seen_at FROM startup_seen WHERE id = ?1",
+                rusqlite::params![item.id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        item.first_seen_at = Some(match first_seen_at {
+            Some(ts) => ts,
+            None => {
+                db.execute(
+                    "INSERT INTO startup_seen (id, first_seen_at) VALUES (?1, ?2)",
+                    rusqlite::params![item.id, now],
+                )?;
+                now
+            }
+        });
+
+        let reviewed: i64 = db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM startup_reviewed WHERE id = ?1)",
+            rusqlite::params![item.id],
+            |row| row.get(0),
+        )?;
+        item.is_new = initialized != 0 && reviewed == 0;
+    }
+
+    if initialized == 0 {
+        acknowledge_startup_items(db, now)?;
+        db.execute(
+            "INSERT INTO startup_tracking_state (id, initialized_at) VALUES (1, ?1)",
+            rusqlite::params![now],
+        )?;
+        for item in items.iter_mut() {
+            item.is_new = false;
+        }
+    }
+
+    Ok(())
+}
+
 fn format_iso(ts: i64) -> String {
     use chrono::{DateTime, Utc};
     let dt: DateTime<Utc> = DateTime::<Utc>::from_timestamp(ts, 0).unwrap_or_default();
@@ -132,6 +248,7 @@ fn parse_scheduled_task_line(line: &str) -> Option<StartupItem> {
         enabled: !state.eq_ignore_ascii_case("Disabled"),
         signed: false,
         first_seen_at: None,
+        is_new: false,
     })
 }
 
@@ -148,7 +265,7 @@ fn read_scheduled_tasks() -> Vec<StartupItem> {
     else {
         return Vec::new();
     };
-    String::from_utf8_lossy(&output.stdout)
+    super::decode_windows_output(&output.stdout)
         .lines()
         .filter_map(parse_scheduled_task_line)
         .collect()
@@ -231,6 +348,7 @@ fn read_reg_run(
                 enabled,
                 signed: false,
                 first_seen_at: None,
+                is_new: false,
             });
         }
     }
@@ -284,6 +402,7 @@ fn read_startup_folder(
             enabled,
             signed: false,
             first_seen_at: None,
+            is_new: false,
         });
     }
     out
@@ -301,7 +420,7 @@ fn resolve_lnk_target(lnk_path: &PathBuf) -> Option<String> {
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])
         .output()
         .ok()?;
-    let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let s = super::decode_windows_output(&output.stdout).trim().to_string();
     if s.is_empty() {
         None
     } else {
@@ -364,7 +483,7 @@ fn batch_query_signatures(paths: &[String]) -> std::collections::HashMap<String,
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])
         .output();
     if let Ok(o) = output {
-        let stdout = String::from_utf8_lossy(&o.stdout);
+        let stdout = super::decode_windows_output(&o.stdout);
         for line in stdout.lines() {
             if let Some((path, rest)) = line.split_once('|') {
                 let mut parts = rest.splitn(2, '|');
@@ -466,7 +585,7 @@ fn write_startup_approved(item: &StartupItem, enabled: bool) -> Result<(), Strin
         if output.status.success() {
             return Ok(());
         }
-        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+        return Err(super::decode_windows_output(&output.stderr).trim().to_string());
     }
 
     let (root, approved_path, value_name) = if item.source == "注册表" {
@@ -540,14 +659,6 @@ fn write_startup_approved_elevated(
     value_name: &str,
     data: &[u8],
 ) -> Result<(), String> {
-    use windows::core::{HSTRING, PCWSTR};
-    use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
-    use windows::Win32::System::Threading::{GetExitCodeProcess, WaitForSingleObject};
-    use windows::Win32::UI::Shell::{
-        SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, ShellExecuteExW,
-    };
-    use windows::Win32::UI::WindowsAndMessaging::SW_HIDE;
-
     let byte_array = data
         .iter()
         .map(|b| format!("0x{:02X}", b))
@@ -566,50 +677,15 @@ fn write_startup_approved_elevated(
         ps_path, ps_path, value_name.replace('\'', "''"), byte_array, result_path, result_path
     );
 
-    let params = HSTRING::from(format!("-NoProfile -NonInteractive -Command \"{}\"", script));
-    let mut info = SHELLEXECUTEINFOW::default();
-    info.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
-    info.fMask = SEE_MASK_NOCLOSEPROCESS;
-    info.lpVerb = windows::core::w!("runas");
-    info.lpFile = windows::core::w!("powershell.exe");
-    info.lpParameters = PCWSTR(params.as_ptr());
-    info.nShow = SW_HIDE.0 as i32;
-
-    unsafe {
-        match ShellExecuteExW(&mut info) {
-            Ok(()) => {
-                let handle: HANDLE = info.hProcess;
-                if !handle.is_invalid() {
-                    let wait_result = WaitForSingleObject(handle, 60_000);
-                    let mut exit_code: u32 = 0;
-                    let _ = GetExitCodeProcess(handle, &mut exit_code);
-                    let _ = CloseHandle(handle);
-                    if wait_result != WAIT_OBJECT_0 {
-                        let _ = std::fs::remove_file(&result_file);
-                        return Err("UAC 提权进程等待超时".to_string());
-                    }
-                    // 读取结果文件
-                    let result = std::fs::read_to_string(&result_file)
-                        .unwrap_or_default()
-                        .trim()
-                        .to_string();
-                    let _ = std::fs::remove_file(&result_file);
-                    if result == "OK" {
-                        return Ok(());
-                    }
-                    if result.is_empty() {
-                        return Err("UAC 提权执行完成但无结果返回（退出码可能非零）".to_string());
-                    }
-                    return Err(format!("提权写入失败：{}", result));
-                }
-                Ok(())
-            }
-            Err(e) => {
-                let _ = std::fs::remove_file(&result_file);
-                Err(format!("UAC 提权被拒绝或失败：{}", e))
-            }
-        }
+    if let Err(error) = super::run_elevated("powershell.exe", &format!("-NoProfile -NonInteractive -Command \"{script}\""), 60_000) {
+        let _ = std::fs::remove_file(&result_file);
+        return Err(error);
     }
+    let result = std::fs::read_to_string(&result_file).unwrap_or_default().trim().to_string();
+    let _ = std::fs::remove_file(&result_file);
+    if result == "OK" { Ok(()) }
+    else if result.is_empty() { Err("管理员操作完成但没有返回结果".into()) }
+    else { Err(format!("提权写入失败：{result}")) }
 }
 
 #[cfg(windows)]
@@ -624,7 +700,7 @@ fn read_boot_durations(limit: usize) -> Vec<BootDurationPoint> {
         .output();
     let mut points = Vec::new();
     if let Ok(o) = output {
-        let stdout = String::from_utf8_lossy(&o.stdout);
+        let stdout = super::decode_windows_output(&o.stdout);
         for line in stdout.lines() {
             if let Some((ts_str, dur_str)) = line.split_once('|') {
                 if let (Ok(dt), Ok(d)) = (
@@ -669,45 +745,10 @@ pub async fn system_list_startup_items(
         .await
         .map_err(|error| format!("扫描启动项失败：{error}"))?;
 
-    // 记录首次发现时间（first_seen_at），用 SQLite 快照表持久化
     {
         let inner = state.0.lock().map_err(|e| format!("State lock: {}", e))?;
-        inner
-            .db
-            .execute_batch(
-                "CREATE TABLE IF NOT EXISTS startup_seen (id TEXT PRIMARY KEY, first_seen_at INTEGER NOT NULL);",
-            )
-            .map_err(|e| format!("Failed to init startup_seen: {}", e))?;
-
-        let now = now_ts();
-        for item in &mut items {
-            let existing: Option<i64> = inner
-                .db
-                .query_row(
-                    "SELECT first_seen_at FROM startup_seen WHERE id = ?1",
-                    rusqlite::params![item.id],
-                    |r| r.get(0),
-                )
-                .ok();
-            match existing {
-                Some(ts) => {
-                    item.first_seen_at = Some(ts);
-                    if item.added.is_none() {
-                        item.added = Some(format_iso(ts));
-                    }
-                }
-                None => {
-                    let _ = inner.db.execute(
-                        "INSERT OR REPLACE INTO startup_seen (id, first_seen_at) VALUES (?1, ?2)",
-                        rusqlite::params![item.id, now],
-                    );
-                    item.first_seen_at = Some(now);
-                    if item.added.is_none() {
-                        item.added = Some(format_iso(now));
-                    }
-                }
-            }
-        }
+        sync_startup_items(&inner.db, &mut items, now_ts())
+            .map_err(|e| format!("同步启动项基线失败：{}", e))?;
     }
 
     let enabled_count = items.iter().filter(|i| i.enabled).count();
@@ -717,6 +758,15 @@ pub async fn system_list_startup_items(
         disabled_count: items.len() - enabled_count,
         items,
     })
+}
+
+#[tauri::command]
+pub async fn system_acknowledge_startup_items(
+    state: State<'_, SystemState>,
+) -> Result<(), String> {
+    let inner = state.0.lock().map_err(|e| format!("State lock: {}", e))?;
+    acknowledge_startup_items(&inner.db, now_ts())
+        .map_err(|e| format!("确认启动项失败：{}", e))
 }
 
 #[tauri::command]

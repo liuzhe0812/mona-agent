@@ -95,6 +95,39 @@
         .toast { position: fixed; top: 20px; right: 20px; padding: 12px 18px; background: #111827; color: #fff; border-radius: 8px; font-size: 13px; box-shadow: 0 10px 25px rgba(0,0,0,.15); opacity: 0; transform: translateY(-10px); transition: all .2s; pointer-events: none; z-index: 100; }
         .toast.show { opacity: 1; transform: translateY(0); }
         .toast.error { background: #dc2626; }
+        .metric-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; padding: 24px; }
+        .metric-card { background: #fff; padding: 18px 20px; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,.06); border: 1px solid #f0f0f0; }
+        .metric-card .label { font-size: 12px; color: #888; margin-bottom: 6px; }
+        .metric-card .value { font-size: 24px; font-weight: 700; color: #111827; }
+        .metric-card .delta { font-size: 12px; color: #10b981; margin-top: 4px; }
+        .metric-card .delta.down { color: #ef4444; }
+        .metric-section { padding: 0 24px 24px; }
+        .metric-section h2 { font-size: 16px; margin-bottom: 12px; color: #111827; }
+        .chart-row { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; }
+        .chart-card { background: #fff; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,.06); border: 1px solid #f0f0f0; padding: 20px; }
+        .chart-card h3 { font-size: 14px; font-weight: 600; color: #374151; margin-bottom: 16px; }
+        .bar-chart { display: flex; align-items: flex-end; gap: 4px; height: 160px; padding-top: 8px; }
+        .bar-chart .bar { flex: 1; background: linear-gradient(180deg, #3b82f6 0%, #2563eb 100%); border-radius: 3px 3px 0 0; min-height: 2px; transition: opacity .2s; position: relative; }
+        .bar-chart .bar:hover { opacity: .85; }
+        .bar-chart .bar .tip { position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%); background: #1f2937; color: #fff; padding: 4px 8px; border-radius: 4px; font-size: 11px; white-space: nowrap; opacity: 0; pointer-events: none; transition: opacity .2s; }
+        .bar-chart .bar:hover .tip { opacity: 1; }
+        .bar-labels { display: flex; gap: 4px; margin-top: 6px; }
+        .bar-labels span { flex: 1; text-align: center; font-size: 10px; color: #9ca3af; }
+        .donut-wrap { display: flex; align-items: center; justify-content: center; padding: 12px; }
+        .donut-legend { margin-left: 20px; }
+        .donut-legend .item { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 13px; }
+        .donut-legend .item .dot { width: 10px; height: 10px; border-radius: 2px; }
+        .expiry-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+        .expiry-card { background: #f9fafb; border-radius: 8px; padding: 14px; text-align: center; border: 1px solid #f0f0f0; }
+        .expiry-card .num { font-size: 22px; font-weight: 700; color: #111827; }
+        .expiry-card .lbl { font-size: 12px; color: #6b7280; margin-top: 4px; }
+        .renewal-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+        .renewal-stat { background: #f9fafb; border-radius: 8px; padding: 14px; border: 1px solid #f0f0f0; }
+        .renewal-stat .num { font-size: 20px; font-weight: 700; }
+        .renewal-stat .lbl { font-size: 12px; color: #6b7280; margin-top: 4px; }
+        .renewal-stat.success .num { color: #10b981; }
+        .renewal-stat.failed .num { color: #ef4444; }
+        .renewal-stat.retrying .num { color: #f59e0b; }
     </style>
 </head>
 <body>
@@ -116,6 +149,7 @@
                 <button onclick="switchTab('pricing')" id="tab-pricing" class="tab-btn">价格配置</button>
                 <button onclick="switchTab('promo')" id="tab-promo" class="tab-btn">注册活动</button>
                 <button onclick="switchTab('notifications')" id="tab-notifications" class="tab-btn">通知管理</button>
+                <button onclick="switchTab('dashboard')" id="tab-dashboard" class="tab-btn">运营看板</button>
                 <button onclick="doLogout()">退出</button>
             </div>
         </div>
@@ -229,6 +263,99 @@
             <div class="users">
                 <div class="users-header"><h2>通知管理</h2><button onclick="openNotifModal()">+ 新建通知</button></div>
                 <table id="notifTable"><thead><tr><th>ID</th><th>标题</th><th>类型</th><th>状态</th><th>过期时间</th><th>已读</th><th>操作</th></tr></thead><tbody></tbody></table>
+            </div>
+        </div>
+
+        <div id="section-dashboard" class="tab-section">
+            <!-- 收入总览 -->
+            <div class="metric-section">
+                <h2>收入总览</h2>
+                <div class="metric-grid">
+                    <div class="metric-card"><div class="label">今日收入</div><div class="value" id="revToday">-</div></div>
+                    <div class="metric-card"><div class="label">本周收入</div><div class="value" id="revWeek">-</div></div>
+                    <div class="metric-card"><div class="label">本月收入</div><div class="value" id="revMonth">-</div></div>
+                    <div class="metric-card"><div class="label">本年收入</div><div class="value" id="revYear">-</div></div>
+                    <div class="metric-card"><div class="label">MRR（月度经常性收入）</div><div class="value" id="revMrr">-</div></div>
+                    <div class="metric-card"><div class="label">ARR（年度经常性收入）</div><div class="value" id="revArr">-</div></div>
+                    <div class="metric-card"><div class="label">客单价（年）</div><div class="value" id="revArpu">-</div></div>
+                </div>
+                <div class="chart-row">
+                    <div class="chart-card">
+                        <h3>月收入趋势（近 12 个月）</h3>
+                        <div class="bar-chart" id="revChart"></div>
+                        <div class="bar-labels" id="revChartLabels"></div>
+                    </div>
+                    <div class="chart-card">
+                        <h3>收入说明</h3>
+                        <p style="font-size:13px;color:#6b7280;line-height:1.8">
+                            <strong>MRR</strong>：当前所有活跃订阅的月费折算总和（年付按 1/12 计）<br>
+                            <strong>ARR</strong>：MRR × 12<br>
+                            <strong>客单价</strong>：本年累计收入 / 付费用户数<br>
+                            <strong>收入来源</strong>：仅统计支付成功（paid）的订单
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 用户与转化 -->
+            <div class="metric-section">
+                <h2>用户与转化</h2>
+                <div class="metric-grid">
+                    <div class="metric-card"><div class="label">累计注册用户</div><div class="value" id="usrTotal">-</div></div>
+                    <div class="metric-card"><div class="label">付费用户数</div><div class="value" id="usrPaying">-</div></div>
+                    <div class="metric-card"><div class="label">当前试用用户</div><div class="value" id="usrTrial">-</div></div>
+                    <div class="metric-card"><div class="label">流失用户</div><div class="value" id="usrChurned">-</div></div>
+                    <div class="metric-card"><div class="label">试用→付费转化率</div><div class="value" id="usrConv">-</div></div>
+                </div>
+                <div class="chart-row">
+                    <div class="chart-card">
+                        <h3>新注册用户趋势（近 30 天）</h3>
+                        <div class="bar-chart" id="usrChart"></div>
+                    </div>
+                    <div class="chart-card">
+                        <h3>指标说明</h3>
+                        <p style="font-size:13px;color:#6b7280;line-height:1.8">
+                            <strong>付费用户</strong>：累计支付成功的独立用户数<br>
+                            <strong>流失用户</strong>：曾经付费但当前无活跃订阅<br>
+                            <strong>转化率</strong>：付费用户 / 历史试用用户数<br>
+                            <strong>试用</strong>：31 天免费试用窗口内
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 订阅与续费 -->
+            <div class="metric-section">
+                <h2>订阅与续费</h2>
+                <div class="metric-grid">
+                    <div class="metric-card"><div class="label">当前活跃订阅</div><div class="value" id="subActive">-</div></div>
+                    <div class="metric-card"><div class="label">自动续费数</div><div class="value" id="subAutoRenew">-</div></div>
+                    <div class="metric-card"><div class="label">自动续费率</div><div class="value" id="subAutoRate">-</div></div>
+                </div>
+                <div class="chart-row" style="grid-template-columns:1fr 1fr">
+                    <div class="chart-card">
+                        <h3>未来到期分布</h3>
+                        <div class="expiry-grid">
+                            <div class="expiry-card"><div class="num" id="exp7">-</div><div class="lbl">7 天内</div></div>
+                            <div class="expiry-card"><div class="num" id="exp30">-</div><div class="lbl">8-30 天</div></div>
+                            <div class="expiry-card"><div class="num" id="exp60">-</div><div class="lbl">31-60 天</div></div>
+                            <div class="expiry-card"><div class="num" id="exp90">-</div><div class="lbl">61-90 天</div></div>
+                        </div>
+                    </div>
+                    <div class="chart-card">
+                        <h3>续费统计</h3>
+                        <div class="renewal-stats">
+                            <div class="renewal-stat"><div class="lbl">总续费次数</div><div class="num" id="rnTotal">-</div></div>
+                            <div class="renewal-stat success"><div class="lbl">成功</div><div class="num" id="rnSuccess">-</div></div>
+                            <div class="renewal-stat failed"><div class="lbl">失败</div><div class="num" id="rnFailed">-</div></div>
+                            <div class="renewal-stat retrying"><div class="lbl">重试中</div><div class="num" id="rnRetrying">-</div></div>
+                        </div>
+                        <div style="margin-top:16px;padding:12px;background:#f9fafb;border-radius:8px;text-align:center">
+                            <div style="font-size:12px;color:#6b7280">续费成功率</div>
+                            <div style="font-size:24px;font-weight:700;color:#10b981;margin-top:4px" id="rnRate">-</div>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -531,6 +658,7 @@
             if (tab === 'pricing') loadPricing();
             if (tab === 'promo') loadPromoTrial();
             if (tab === 'notifications') loadNotifications();
+            if (tab === 'dashboard') loadDashboard();
         }
 
         function showToast(msg, error = false) {
@@ -722,6 +850,76 @@
             if (!confirm('确定删除？')) return;
             await fetch(`${API}/admin/notifications/${id}`, { method: 'DELETE', headers: headers() });
             loadNotifications();
+        }
+
+        async function loadDashboard() {
+            try {
+                const res = await fetch(`${API}/admin/metrics/dashboard`, { headers: headers() });
+                if (!res.ok) throw new Error('加载失败');
+                const data = await res.json();
+                renderRevenueSection(data.revenue);
+                renderUsersSection(data.users);
+                renderSubscriptionsSection(data.subscriptions);
+            } catch (e) {
+                showToast('运营看板加载失败', true);
+            }
+        }
+
+        function fmtMoney(n) {
+            return '¥' + Number(n).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        }
+
+        function fmtPct(n) {
+            return (n * 100).toFixed(1) + '%';
+        }
+
+        function renderRevenueSection(r) {
+            document.getElementById('revToday').textContent = fmtMoney(r.today);
+            document.getElementById('revWeek').textContent = fmtMoney(r.week);
+            document.getElementById('revMonth').textContent = fmtMoney(r.month);
+            document.getElementById('revYear').textContent = fmtMoney(r.year);
+            document.getElementById('revMrr').textContent = fmtMoney(r.mrr);
+            document.getElementById('revArr').textContent = fmtMoney(r.arr);
+            document.getElementById('revArpu').textContent = fmtMoney(r.avg_revenue_per_user);
+            const max = Math.max(...r.monthly_series.map(m => m.amount), 1);
+            const bars = r.monthly_series.map(m => {
+                const h = (m.amount / max) * 100;
+                return `<div class="bar" style="height:${h}%"><span class="tip">${m.month}: ${fmtMoney(m.amount)}</span></div>`;
+            }).join('');
+            document.getElementById('revChart').innerHTML = bars;
+            const labels = r.monthly_series.map(m => `<span>${m.month.slice(5)}</span>`).join('');
+            document.getElementById('revChartLabels').innerHTML = labels;
+        }
+
+        function renderUsersSection(u) {
+            document.getElementById('usrTotal').textContent = u.total;
+            document.getElementById('usrPaying').textContent = u.paying;
+            document.getElementById('usrTrial').textContent = u.active_trials;
+            document.getElementById('usrChurned').textContent = u.churned;
+            document.getElementById('usrConv').textContent = fmtPct(u.conversion_rate);
+            const max = Math.max(...u.new_users_series.map(d => d.count), 1);
+            const bars = u.new_users_series.map(d => {
+                const h = (d.count / max) * 100;
+                return `<div class="bar" style="height:${h}%"><span class="tip">${d.date}: ${d.count}</span></div>`;
+            }).join('');
+            document.getElementById('usrChart').innerHTML = bars;
+        }
+
+        function renderSubscriptionsSection(s) {
+            document.getElementById('subActive').textContent = s.active;
+            document.getElementById('subAutoRenew').textContent = s.auto_renew_count + ' / ' + s.active;
+            document.getElementById('subAutoRate').textContent = fmtPct(s.auto_renew_rate);
+            const e = s.expiry_distribution;
+            document.getElementById('exp7').textContent = e['7d'];
+            document.getElementById('exp30').textContent = e['30d'];
+            document.getElementById('exp60').textContent = e['60d'];
+            document.getElementById('exp90').textContent = e['90d'];
+            const r = s.renewals;
+            document.getElementById('rnTotal').textContent = r.total;
+            document.getElementById('rnSuccess').textContent = r.success;
+            document.getElementById('rnFailed').textContent = r.failed;
+            document.getElementById('rnRetrying').textContent = r.retrying;
+            document.getElementById('rnRate').textContent = fmtPct(r.success_rate);
         }
 
         // Auto-login if token exists

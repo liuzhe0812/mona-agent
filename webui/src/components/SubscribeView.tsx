@@ -5,6 +5,12 @@ import { PaymentDialog } from "@/components/PaymentDialog";
 import { Check, Copy, Loader2, Mail, RotateCcw, Zap } from "lucide-react";
 import { isTauri } from "@/lib/tauri";
 
+const PRO_BENEFITS = [
+  "让 Mona 理解你的工作上下文",
+  "在笔记、终端、邮件等模块获得AI协作",
+  "使用知识库、AI 文档与跨模块知识沉淀",
+];
+
 interface SubscribeViewProps {
   userEmail: string;
   onBackToLogin: () => void;
@@ -28,7 +34,7 @@ export function SubscribeView({
   loading,
   onManageSubscription,
 }: SubscribeViewProps) {
-  const { pricingConfig, pricingError, refreshLicense, licenseActive, localTrial, serverTrial, fetchPricing } = useLicense();
+  const { pricingConfig, pricingError, refreshLicense, licenseActive, serverTrial, fetchPricing } = useLicense();
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
@@ -143,7 +149,7 @@ export function SubscribeView({
   }
 
   // 已订阅用户视图
-  const isPaidUser = licenseActive && !localTrial && !serverTrial;
+  const isPaidUser = licenseActive && !serverTrial;
 
   const content = (
     <div className="flex w-full flex-col gap-4">
@@ -158,6 +164,15 @@ export function SubscribeView({
         <p className="text-sm text-muted-foreground">
           {isPaidUser ? "当前订阅已生效" : "选择订阅方案，扫码即可开通"}
         </p>
+      </div>
+
+      <div className="space-y-2 rounded-lg border border-primary/15 bg-primary/5 p-3 text-sm">
+        {PRO_BENEFITS.map((benefit) => (
+          <div key={benefit} className="flex items-center gap-2">
+            <Check className="h-4 w-4 shrink-0 text-primary" />
+            <span>{benefit}</span>
+          </div>
+        ))}
       </div>
 
       <div className="grid grid-cols-3 gap-3">
@@ -185,9 +200,10 @@ export function SubscribeView({
                 <span className="text-xs text-muted-foreground">/{unitLabel}</span>
               </div>
               {plan.originalPrice ? (
-                <span className="text-xs text-muted-foreground line-through">
-                  ¥{plan.originalPrice}
-                </span>
+                <div className="flex items-center gap-1.5 text-xs">
+                  <span className="text-muted-foreground line-through">¥{plan.originalPrice}</span>
+                  <span className="font-medium text-primary">早期用户价</span>
+                </div>
               ) : null}
               <div className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
                 <span
@@ -260,13 +276,13 @@ export function SubscribeView({
         </Button>
       </div>
 
-      {licenseActive && (localTrial || serverTrial) && (
+      {licenseActive && serverTrial && (
         <p className="text-center text-sm text-amber-600">
           当前为试用状态，购买正式订阅可解锁全部功能。
         </p>
       )}
 
-      {licenseActive && !localTrial && !serverTrial && (
+      {licenseActive && !serverTrial && (
         <p className="text-center text-sm text-green-600">订阅已生效，请返回主界面。</p>
       )}
 

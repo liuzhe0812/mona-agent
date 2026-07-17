@@ -11,7 +11,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
-type LoginView = "login" | "register" | "forgot" | "reset" | "subscribe" | "manage";
+type LoginView = "login" | "register" | "forgot" | "reset" | "subscribe" | "manage" | "change";
 
 export function LoginDialog({
   open,
@@ -24,7 +24,7 @@ export function LoginDialog({
   initialView?: LoginView;
   autoSubscribeAfterLogin?: boolean;
 }) {
-  const { login, register, sendRegisterCode, forgotPassword, resetPassword, loggedIn, logout, licenseInfo, localTrial, localTrialExpired, remainingDays, pricingConfig, fetchPricing } = useLicense();
+  const { login, register, sendRegisterCode, forgotPassword, resetPassword, changePassword, loggedIn, logout, licenseInfo, pricingConfig, fetchPricing } = useLicense();
   const [view, setView] = useState<LoginView>(initialView);
   const [email, setEmail] = useState("");
   const [accountInput, setAccountInput] = useState("");
@@ -33,6 +33,7 @@ export function LoginDialog({
   const [registerCode, setRegisterCode] = useState("");
   const [resetCode, setResetCode] = useState("");
   const [newPassword, setNewPassword] = useState("");
+  const [oldPassword, setOldPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
@@ -72,6 +73,8 @@ export function LoginDialog({
       setSuccess("");
       setRegisterCode("");
       setResetCode("");
+      setOldPassword("");
+      setNewPassword("");
       setCodeSent(false);
     }
     onOpenChange(v);
@@ -198,6 +201,31 @@ export function LoginDialog({
     }
   };
 
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError("");
+    if (newPassword.length < 8) {
+      setError("密码至少 8 位");
+      return;
+    }
+    if (newPassword === oldPassword) {
+      setError("新密码不能与旧密码相同");
+      return;
+    }
+    setLoading(true);
+    try {
+      const msg = await changePassword(oldPassword, newPassword);
+      setSuccess(msg || "密码修改成功");
+      setOldPassword("");
+      setNewPassword("");
+      setView("login");
+    } catch (err) {
+      setError(String(err).replace(/^Error:\s*/, ""));
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const isSubscribeView = view === "subscribe";
   const isManageView = view === "manage";
   const showAccountInfo = loggedIn && view === "login";
@@ -219,7 +247,9 @@ export function LoginDialog({
                       ? "注册"
                       : view === "forgot"
                       ? "找回密码"
-                      : "重置密码"}
+                      : view === "reset"
+                      ? "重置密码"
+                      : "修改密码"}
           </DialogTitle>
         </DialogHeader>
 
@@ -267,6 +297,12 @@ export function LoginDialog({
             )}
             <Button
               variant="outline"
+              onClick={() => { setView("change"); setError(""); setSuccess(""); setOldPassword(""); setNewPassword(""); }}
+            >
+              修改密码
+            </Button>
+            <Button
+              variant="outline"
               onClick={async () => {
                 await logout();
                 setView("login");
@@ -281,13 +317,6 @@ export function LoginDialog({
           <>
             {error && <p className="text-sm text-destructive">{error}</p>}
             {success && <p className="text-sm text-green-600">{success}</p>}
-
-            {localTrialExpired && view === "login" && (
-              <p className="text-sm text-muted-foreground">试用期已结束，请登录账号以继续使用全部功能</p>
-            )}
-            {localTrial && !localTrialExpired && view === "login" && (
-              <p className="text-sm text-muted-foreground">试用剩余 {remainingDays} 天，登录后可获取正式授权</p>
-            )}
 
             {view === "login" && (
               <form onSubmit={handleLogin} className="flex flex-col gap-3">
@@ -350,6 +379,19 @@ export function LoginDialog({
                 </Button>
                 <button type="button" className="text-center text-xs text-muted-foreground hover:underline" onClick={() => { setView("login"); setError(""); setSuccess(""); }}>
                   返回登录
+                </button>
+              </form>
+            )}
+
+            {view === "change" && (
+              <form onSubmit={handleChangePassword} className="flex flex-col gap-3">
+                <Input type="password" placeholder="旧密码" value={oldPassword} onChange={(e) => setOldPassword(e.target.value)} disabled={loading} autoFocus />
+                <Input type="password" placeholder="新密码（至少 8 位）" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} disabled={loading} />
+                <Button type="submit" disabled={!oldPassword || !newPassword || loading}>
+                  {loading ? "修改中..." : "修改密码"}
+                </Button>
+                <button type="button" className="text-center text-xs text-muted-foreground hover:underline" onClick={() => { setView("login"); setError(""); setSuccess(""); setOldPassword(""); setNewPassword(""); }}>
+                  返回账号信息
                 </button>
               </form>
             )}

@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     license_private_key_path: str = "keys/private.pem"
     license_public_key_path: str = "keys/public.pem"
     license_expire_days: int = 7
-    trial_days: int = 31
+    trial_days: int = 30
     max_devices_per_user: int = 3
 
     smtp_host: str = ""

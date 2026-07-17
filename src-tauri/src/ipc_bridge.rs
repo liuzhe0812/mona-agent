@@ -435,38 +435,38 @@ impl IpcBridge {
                 let url = args.get("url").and_then(|v| v.as_str()).ok_or("Missing url")?;
                 let is_incognito = args.get("isIncognito").and_then(|v| v.as_bool()).unwrap_or(false);
                 let ad_block_enabled = args.get("adBlockEnabled").and_then(|v| v.as_bool()).unwrap_or(true);
-                let result = browser_state.create_tab(&self.app_handle, id, url, is_incognito, ad_block_enabled)?;
+                let result = browser_state.create_tab(&self.app_handle, id, url, is_incognito, ad_block_enabled).await?;
                 serde_json::to_value(result).map_err(|e| e.to_string())
             }
             "browser_close_tab" => {
                 let browser_state = self.app_handle.state::<crate::browser::BrowserState>();
                 let id = args.get("id").and_then(|v| v.as_str()).ok_or("Missing id")?;
-                browser_state.close_tab(&self.app_handle, id)?;
+                browser_state.close_tab(&self.app_handle, id).await?;
                 Ok(Value::Null)
             }
             "browser_navigate_tab" => {
                 let browser_state = self.app_handle.state::<crate::browser::BrowserState>();
                 let id = args.get("id").and_then(|v| v.as_str()).ok_or("Missing id")?;
                 let url = args.get("url").and_then(|v| v.as_str()).ok_or("Missing url")?;
-                browser_state.navigate_tab(&self.app_handle, id, url)?;
+                browser_state.navigate_tab(&self.app_handle, id, url).await?;
                 Ok(Value::Null)
             }
             "browser_go_back" => {
                 let browser_state = self.app_handle.state::<crate::browser::BrowserState>();
                 let id = args.get("id").and_then(|v| v.as_str()).ok_or("Missing id")?;
-                browser_state.go_back(&self.app_handle, id)?;
+                browser_state.go_back(&self.app_handle, id).await?;
                 Ok(Value::Null)
             }
             "browser_go_forward" => {
                 let browser_state = self.app_handle.state::<crate::browser::BrowserState>();
                 let id = args.get("id").and_then(|v| v.as_str()).ok_or("Missing id")?;
-                browser_state.go_forward(&self.app_handle, id)?;
+                browser_state.go_forward(&self.app_handle, id).await?;
                 Ok(Value::Null)
             }
             "browser_reload" => {
                 let browser_state = self.app_handle.state::<crate::browser::BrowserState>();
                 let id = args.get("id").and_then(|v| v.as_str()).ok_or("Missing id")?;
-                browser_state.reload(&self.app_handle, id)?;
+                browser_state.reload(&self.app_handle, id).await?;
                 Ok(Value::Null)
             }
             "browser_list_tabs" => {

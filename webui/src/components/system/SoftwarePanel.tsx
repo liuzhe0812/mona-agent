@@ -1,14 +1,17 @@
 import { AlertTriangle, Boxes, RefreshCw, ShieldCheck } from "lucide-react";
 import { Fragment, useMemo, useState } from "react";
 
-import { MetricCard, PanelCard, StatusPill, primaryButtonClass, secondaryButtonClass } from "./SystemUi";
-import { useMaintenanceHistory, useSoftwareManagement } from "./useSystemData";
+import { MetricCard, PanelCard, StatusPill, TaskFailureNotice, primaryButtonClass, secondaryButtonClass } from "./SystemUi";
+import type { SystemAgentHandoffTask } from "./systemAgentHandoff";
+import { useMaintenanceHistory, useSoftwareManagement, type SoftwareFailure } from "./useSystemData";
+import { WindowsAppsPanel } from "./WindowsAppsPanel";
 
-type SoftwareSection = "updates" | "installed" | "uninstall-history";
+type SoftwareSection = "updates" | "installed" | "windows-apps" | "uninstall-history";
 
 const softwareSections: { id: SoftwareSection; label: string }[] = [
   { id: "updates", label: "软件更新" },
   { id: "installed", label: "已安装软件" },
+  { id: "windows-apps", label: "Windows 预装应用" },
   { id: "uninstall-history", label: "卸载记录" },
 ];
 
@@ -41,7 +44,15 @@ function formatRecordTime(timestamp: number): string {
   });
 }
 
-export function SoftwarePanel() {
+function failureKey(failure: SoftwareFailure): string {
+  return `${failure.packageId}:${failure.action}:${failure.ts}`;
+}
+
+interface SoftwarePanelProps {
+  onHandoff: (task: SystemAgentHandoffTask) => void;
+}
+
+export function SoftwarePanel({ onHandoff }: SoftwarePanelProps) {
   const { data, loading, error, workingIds, lastAction, lastUninstall, progressMap, refresh, upgrade, uninstall } = useSoftwareManagement();
   const maintenance = useMaintenanceHistory();
   const [activeSection, setActiveSection] = useState<SoftwareSection>("updates");
@@ -49,6 +60,9 @@ export function SoftwarePanel() {
   const [selectedInstalledId, setSelectedInstalledId] = useState("");
   const [installedQuery, setInstalledQuery] = useState("");
   const [confirmingUninstall, setConfirmingUninstall] = useState(false);
+  const [handedOffFailures, setHandedOffFailures] = useState<Set<string>>(new Set());
+  const [uninstallHandedOff, setUninstallHandedOff] = useState(false);
+  const [uninstallDismissed, setUninstallDismissed] = useState(false);
 
   const updates = data?.updates ?? [];
   const installed = data?.installed ?? [];
@@ -61,6 +75,8 @@ export function SoftwarePanel() {
   }, [installed, installedQuery]);
   const uninstallEvents = (maintenance.data?.events ?? []).filter((event) => event.category === "卸载");
   const busy = workingIds.size > 0;
+  const visibleFailures = (data?.failures ?? []).filter((failure) => !handedOffFailures.has(failureKey(failure)));
+  const handedOffFailureCount = (data?.failures.length ?? 0) - visibleFailures.length;
 
   const toggle = (id: string) => setSelected((current) => {
     const next = new Set(current);
@@ -76,6 +92,8 @@ export function SoftwarePanel() {
 
   const handleUninstall = async () => {
     if (!selectedInstalled) return;
+    setUninstallHandedOff(false);
+    setUninstallDismissed(false);
     await uninstall(selectedInstalled);
     setConfirmingUninstall(false);
     void maintenance.refresh();
@@ -83,7 +101,7 @@ export function SoftwarePanel() {
 
   const updateCount = data?.updates.length ?? 0;
   const installedCount = data?.installedCount ?? 0;
-  const failedCount = data?.failedCount ?? 0;
+  const failedCount = visibleFailures.length;
   const knownSizeDetail = data
     ? `已知占用 ${formatBytes(data.knownSizeBytes)} · 覆盖 ${data.knownSizeCount}/${data.installedCount}`
     : "正在读取注册表";
@@ -107,7 +125,7 @@ export function SoftwarePanel() {
         <MetricCard
           label="更新失败"
           value={`${failedCount} 项`}
-          detail={failedCount ? "需要处理" : "暂无未解决失败"}
+          detail={handedOffFailureCount ? `${handedOffFailureCount} 项已交给 Mona` : failedCount ? "需要处理" : "暂无未解决失败"}
           icon={<AlertTriangle className="h-4 w-4" />}
           accent={failedCount ? "orange" : "green"}
         />
@@ -120,7 +138,7 @@ export function SoftwarePanel() {
         />
       </div>
 
-      <div role="tablist" aria-label="软件管理" className="flex gap-5 border-b border-border/70 px-1">
+      <div role="tablist" aria-label="软件管理" className="scrollbar-hover flex gap-5 overflow-x-auto border-b border-border/70 px-1">
         {softwareSections.map((section) => (
           <button
             key={section.id}
@@ -128,7 +146,7 @@ export function SoftwarePanel() {
             role="tab"
             aria-selected={activeSection === section.id}
             onClick={() => setActiveSection(section.id)}
-            className={`relative px-1 pb-2.5 text-sm font-medium transition ${activeSection === section.id ? "text-blue-600" : "text-muted-foreground hover:text-foreground"}`}
+            className={`relative whitespace-nowrap px-1 pb-2.5 text-sm font-medium transition ${activeSection === section.id ? "text-blue-600" : "text-muted-foreground hover:text-foreground"}`}
           >
             {section.label}
             {activeSection === section.id && <span className="absolute inset-x-0 bottom-0 h-0.5 rounded-full bg-blue-600" />}
@@ -144,21 +162,30 @@ export function SoftwarePanel() {
 
       {activeSection === "updates" && (
         <>
-          {data && data.failures.length > 0 && (
+          {visibleFailures.length > 0 && (
             <PanelCard title="未解决失败">
               <div className="space-y-2">
-                {data.failures.map((failure) => {
+                {visibleFailures.map((failure) => {
                   const update = updates.find((item) => item.id === failure.packageId);
                   return (
-                    <div key={`${failure.packageId}-${failure.action}`} className="flex flex-wrap items-center gap-3 rounded-lg border border-orange-500/25 bg-orange-500/5 p-3 text-xs">
-                      <AlertTriangle className="h-4 w-4 shrink-0 text-orange-600" />
-                      <div className="min-w-0 flex-1">
-                        <p className="font-medium">{failure.name} · {failure.action === "upgrade" ? "更新失败" : "卸载失败"}</p>
-                        <p className="mt-1 break-words text-muted-foreground">{failure.message || "安装器未返回详细原因"}</p>
-                      </div>
-                      <span className="text-[10px] text-muted-foreground">{formatRecordTime(failure.ts)}</span>
-                      {update && <button className={secondaryButtonClass} onClick={() => upgrade([update])} disabled={busy}>重试</button>}
-                    </div>
+                    <TaskFailureNotice
+                      key={failureKey(failure)}
+                      title={`${failure.name} · ${failure.action === "upgrade" ? "更新失败" : "卸载失败"}`}
+                      detail={`${failure.message || "安装器未返回详细原因"} · ${formatRecordTime(failure.ts)}`}
+                      onRetry={update ? () => void upgrade([update]) : undefined}
+                      onHandoff={() => {
+                        setHandedOffFailures((current) => new Set(current).add(failureKey(failure)));
+                        onHandoff({
+                          id: crypto.randomUUID(),
+                          title: `${failure.action === "uninstall" ? "卸载" : "更新"} ${failure.name}`,
+                          action: failure.action === "uninstall" ? "卸载软件" : "更新软件",
+                          target: failure.name,
+                          arguments: { packageId: failure.packageId, action: failure.action },
+                          error: failure.message || "安装器未返回详细原因",
+                        });
+                      }}
+                      onDismiss={() => setHandedOffFailures((current) => new Set(current).add(failureKey(failure)))}
+                    />
                   );
                 })}
               </div>
@@ -309,7 +336,9 @@ export function SoftwarePanel() {
         </PanelCard>
       )}
 
-      <PanelCard title="卸载与残留检测">
+      {activeSection === "windows-apps" && <WindowsAppsPanel onHandoff={onHandoff} />}
+
+      {activeSection !== "windows-apps" && <PanelCard title="卸载与残留检测">
         {/* ponytail: WinGet only returns residual candidates after an uninstall completes. */}
         {!lastUninstall && <p className="text-xs text-muted-foreground">完成卸载后，将在此显示检测到的残留候选；系统不会自动删除任何文件。</p>}
         {lastUninstall?.success && lastUninstall.residuals.length === 0 && (
@@ -328,8 +357,30 @@ export function SoftwarePanel() {
             ))}
           </div>
         )}
-        {lastUninstall && !lastUninstall.success && <p role="alert" className="text-xs text-red-700 dark:text-red-400">卸载失败：{lastUninstall.message || "WinGet 未返回详细原因"}</p>}
-      </PanelCard>
+        {lastUninstall && !lastUninstall.success && !uninstallHandedOff && !uninstallDismissed && (
+          <TaskFailureNotice
+            title={`卸载 ${selectedInstalled?.name ?? "软件"} 失败`}
+            detail={lastUninstall.message || "WinGet 未返回详细原因"}
+            onRetry={() => void handleUninstall()}
+            onHandoff={() => {
+              setUninstallHandedOff(true);
+              onHandoff({
+                id: crypto.randomUUID(),
+                title: `卸载 ${selectedInstalled?.name ?? "软件"}`,
+                action: "卸载软件",
+                target: selectedInstalled?.name ?? "软件",
+                arguments: {
+                  id: selectedInstalled?.id ?? null,
+                  name: selectedInstalled?.name ?? null,
+                  installLocation: selectedInstalled?.installLocation || null,
+                },
+                error: lastUninstall.message || "WinGet 未返回详细原因",
+              });
+            }}
+            onDismiss={() => setUninstallDismissed(true)}
+          />
+        )}
+      </PanelCard>}
     </div>
   );
 }

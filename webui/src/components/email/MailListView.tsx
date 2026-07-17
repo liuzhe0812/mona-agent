@@ -83,6 +83,13 @@ export function MailListView({ onReply, onReplyAll, onForward }: MailListViewPro
   const loadMore = useEmailStore((s) => s.loadMore);
   const isUnifiedInbox = useEmailStore((s) => s.isUnifiedInbox);
   const accounts = useEmailStore((s) => s.accounts);
+  // 多选
+  const selectedUids = useEmailStore((s) => s.selectedUids);
+  const selectSingle = useEmailStore((s) => s.selectSingle);
+  const toggleSelect = useEmailStore((s) => s.toggleSelect);
+  const selectRange = useEmailStore((s) => s.selectRange);
+  const batchOperate = useEmailStore((s) => s.batchOperate);
+  const batchOperating = useEmailStore((s) => s.batchOperating);
   const [searchQuery, setSearchQuery] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("date");
   const [filterKey, setFilterKey] = useState<FilterKey>("all");
@@ -182,6 +189,13 @@ export function MailListView({ onReply, onReplyAll, onForward }: MailListViewPro
           target.tagName === "TEXTAREA" ||
           target.isContentEditable
         ) {
+          return;
+        }
+        const { selectedUids, batchOperate } = useEmailStore.getState();
+        // 多选模式：批量删除
+        if (selectedUids.size > 1 && gatewayUrl) {
+          e.preventDefault();
+          void batchOperate(gatewayUrl, "delete");
           return;
         }
         if (selectedMessage && gatewayUrl) {
@@ -316,6 +330,9 @@ export function MailListView({ onReply, onReplyAll, onForward }: MailListViewPro
           >
             {rowVirtualizer.getVirtualItems().map((virtualRow) => {
               const message = filteredMessages[virtualRow.index];
+              const msgKey = `${message.uid}:${message.accountId}`;
+              const isSelected = selectedUids.has(msgKey);
+              const isMultiSelectMode = selectedUids.size > 1;
               return (
                 <div
                   key={message.uid}
@@ -332,18 +349,53 @@ export function MailListView({ onReply, onReplyAll, onForward }: MailListViewPro
                   <MailListItem
                     message={message}
                     active={selectedMessage?.uid === message.uid}
+                    selected={isSelected}
+                    multiSelectMode={isMultiSelectMode}
                     folders={folders}
-                    onClick={() => selectMessage(message)}
+                    onClick={(e) => {
+                      if (e.shiftKey) {
+                        selectRange(message, filteredMessages);
+                      } else if (e.ctrlKey || e.metaKey) {
+                        toggleSelect(message);
+                      } else {
+                        selectSingle(message);
+                      }
+                    }}
                     onToggleRead={() => {
-                      if (gatewayUrl) void toggleRead(gatewayUrl, message);
+                      if (isMultiSelectMode && isSelected) {
+                        void batchOperate(gatewayUrl, "mark_read");
+                      } else if (gatewayUrl) {
+                        void toggleRead(gatewayUrl, message);
+                      }
                     }}
                     onToggleStar={() => {
-                      if (gatewayUrl) void toggleStarred(gatewayUrl, message);
+                      if (isMultiSelectMode && isSelected) {
+                        void batchOperate(gatewayUrl, "star");
+                      } else if (gatewayUrl) {
+                        void toggleStarred(gatewayUrl, message);
+                      }
                     }}
                     onDelete={() => {
-                      if (gatewayUrl) void deleteMessage(gatewayUrl, message);
+                      if (isMultiSelectMode && isSelected) {
+                        void batchOperate(gatewayUrl, "delete");
+                      } else if (gatewayUrl) {
+                        void deleteMessage(gatewayUrl, message);
+                      }
                     }}
-                    onMove={(dest) => void handleMove(message, dest)}
+                    onMove={(dest) => {
+                      if (isMultiSelectMode && isSelected) {
+                        void batchOperate(gatewayUrl, "move", dest);
+                      } else {
+                        void handleMove(message, dest);
+                      }
+                    }}
+                    onBatchMarkRead={() => void batchOperate(gatewayUrl, "mark_read")}
+                    onBatchMarkUnread={() => void batchOperate(gatewayUrl, "mark_unread")}
+                    onBatchStar={() => void batchOperate(gatewayUrl, "star")}
+                    onBatchUnstar={() => void batchOperate(gatewayUrl, "unstar")}
+                    onBatchDelete={() => void batchOperate(gatewayUrl, "delete")}
+                    onBatchMove={(dest) => void batchOperate(gatewayUrl, "move", dest)}
+                    batchOperating={batchOperating}
                     onReply={() => onReply?.(message)}
                     onReplyAll={() => onReplyAll?.(message)}
                     onForward={() => onForward?.(message)}
@@ -373,12 +425,21 @@ export function MailListView({ onReply, onReplyAll, onForward }: MailListViewPro
 interface MailListItemProps {
   message: EmailMessage;
   active: boolean;
+  selected: boolean;
+  multiSelectMode: boolean;
   folders: { name: string; unreadCount?: number }[];
-  onClick: () => void;
+  onClick: (e: React.MouseEvent) => void;
   onToggleRead: () => void;
   onToggleStar: () => void;
   onDelete: () => void;
   onMove: (destFolder: string) => void;
+  onBatchMarkRead: () => void;
+  onBatchMarkUnread: () => void;
+  onBatchStar: () => void;
+  onBatchUnstar: () => void;
+  onBatchDelete: () => void;
+  onBatchMove: (destFolder: string) => void;
+  batchOperating: boolean;
   onReply: () => void;
   onReplyAll: () => void;
   onForward: () => void;
@@ -390,12 +451,21 @@ interface MailListItemProps {
 function MailListItem({
   message,
   active,
+  selected,
+  multiSelectMode,
   folders,
   onClick,
   onToggleRead,
   onToggleStar,
   onDelete,
   onMove,
+  onBatchMarkRead,
+  onBatchMarkUnread,
+  onBatchStar,
+  onBatchUnstar,
+  onBatchDelete,
+  onBatchMove,
+  batchOperating,
   onReply,
   onReplyAll,
   onForward,
@@ -406,6 +476,10 @@ function MailListItem({
     folders.filter((f) => f.name !== message.folder),
   );
   const contactsByEmail = useEmailStore((s) => s.contactsByEmail);
+  const selectedUids = useEmailStore((s) => s.selectedUids);
+
+  // 多选模式下，右键菜单显示批量操作；否则显示单邮件菜单
+  const showBatchMenu = multiSelectMode && selected;
 
   return (
     <ContextMenu>
@@ -413,16 +487,30 @@ function MailListItem({
         <div
           className={cn(
             "flex cursor-pointer flex-col gap-0.5 border-b border-border/60 border-l-2 px-3 py-2 transition-colors",
-            active
-              ? "border-l-blue-500 bg-blue-500/10"
-              : message.isRead
-                ? "border-l-transparent hover:bg-accent/60"
-                : "border-l-blue-400/60 hover:bg-accent/60",
+            selected
+              ? "border-l-blue-500 bg-blue-500/15"
+              : active
+                ? "border-l-blue-500 bg-blue-500/10"
+                : message.isRead
+                  ? "border-l-transparent hover:bg-accent/60"
+                  : "border-l-blue-400/60 hover:bg-accent/60",
           )}
           onClick={onClick}
         >
           <div className="flex items-center gap-2">
-            {!message.isRead && (
+            {multiSelectMode && (
+              <span
+                className={cn(
+                  "flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border",
+                  selected
+                    ? "border-blue-500 bg-blue-500 text-white"
+                    : "border-muted-foreground/40 bg-transparent",
+                )}
+              >
+                {selected && <Check className="h-2.5 w-2.5" />}
+              </span>
+            )}
+            {!message.isRead && !multiSelectMode && (
               <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-blue-500" />
             )}
             {accountColor && (
@@ -465,73 +553,151 @@ function MailListItem({
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent className="min-w-[180px]">
-        <ContextMenuItem onClick={onReply} className="flex items-center gap-2 text-[12px]">
-          <Reply className="h-3.5 w-3.5" />
-          回复
-          <span className="ml-auto text-[11px] text-muted-foreground">Ctrl+R</span>
-        </ContextMenuItem>
-        <ContextMenuItem onClick={onReplyAll} className="flex items-center gap-2 text-[12px]">
-          <ReplyAll className="h-3.5 w-3.5" />
-          回复全部
-          <span className="ml-auto text-[11px] text-muted-foreground">Ctrl+Shift+R</span>
-        </ContextMenuItem>
-        <ContextMenuItem onClick={onForward} className="flex items-center gap-2 text-[12px]">
-          <Forward className="h-3.5 w-3.5" />
-          转发
-        </ContextMenuItem>
-        <ContextMenuSeparator />
-        <ContextMenuItem onClick={onAnalyze} className="flex items-center gap-2 text-[12px]">
-          <Sparkles className="h-3.5 w-3.5" />
-          AI 内容分析
-        </ContextMenuItem>
-        <ContextMenuSeparator />
-        <ContextMenuItem onClick={onToggleRead} className="flex items-center gap-2 text-[12px]">
-          <MailOpen className="h-3.5 w-3.5" />
-          {message.isRead ? "标为未读" : "标为已读"}
-          <span className="ml-auto text-[11px] text-muted-foreground">Ctrl+U</span>
-        </ContextMenuItem>
-        <ContextMenuItem onClick={onToggleStar} className="flex items-center gap-2 text-[12px]">
-          <Star
-            className={cn(
-              "h-3.5 w-3.5",
-              message.isStarred ? "fill-amber-400 text-amber-400" : "",
+        {showBatchMenu ? (
+          <>
+            <div className="px-2 py-1 text-[11px] text-muted-foreground">
+              已选中 {selectedUids.size} 封邮件
+            </div>
+            <ContextMenuSeparator />
+            <ContextMenuItem
+              onClick={onBatchMarkRead}
+              disabled={batchOperating}
+              className="flex items-center gap-2 text-[12px]"
+            >
+              <MailOpen className="h-3.5 w-3.5" />
+              标为已读
+            </ContextMenuItem>
+            <ContextMenuItem
+              onClick={onBatchMarkUnread}
+              disabled={batchOperating}
+              className="flex items-center gap-2 text-[12px]"
+            >
+              <MailOpen className="h-3.5 w-3.5" />
+              标为未读
+            </ContextMenuItem>
+            <ContextMenuSeparator />
+            <ContextMenuItem
+              onClick={onBatchStar}
+              disabled={batchOperating}
+              className="flex items-center gap-2 text-[12px]"
+            >
+              <Star className="h-3.5 w-3.5" />
+              星标邮件
+            </ContextMenuItem>
+            <ContextMenuItem
+              onClick={onBatchUnstar}
+              disabled={batchOperating}
+              className="flex items-center gap-2 text-[12px]"
+            >
+              <Star className="h-3.5 w-3.5" />
+              取消星标
+            </ContextMenuItem>
+            <ContextMenuSeparator />
+            {moveTargets.length > 0 && (
+              <ContextMenuSub>
+                <ContextMenuSubTrigger className="flex items-center gap-2 text-[12px]">
+                  <FolderInput className="h-3.5 w-3.5" />
+                  移动到
+                </ContextMenuSubTrigger>
+                <ContextMenuSubContent className="min-w-[140px]">
+                  {moveTargets.map((folder) => (
+                    <ContextMenuItem
+                      key={folder.name}
+                      onClick={() => onBatchMove(folder.name)}
+                      disabled={batchOperating}
+                      className="flex items-center justify-between gap-2 text-[12px]"
+                    >
+                      <span className="truncate">{getFolderDisplayName(folder.name)}</span>
+                      {folder.unreadCount ? (
+                        <span className="shrink-0 text-[10px] text-muted-foreground">
+                          {folder.unreadCount}
+                        </span>
+                      ) : null}
+                    </ContextMenuItem>
+                  ))}
+                </ContextMenuSubContent>
+              </ContextMenuSub>
             )}
-          />
-          {message.isStarred ? "取消星标" : "星标邮件"}
-        </ContextMenuItem>
-        <ContextMenuSeparator />
-        {moveTargets.length > 0 && (
-          <ContextMenuSub>
-            <ContextMenuSubTrigger className="flex items-center gap-2 text-[12px]">
-              <FolderInput className="h-3.5 w-3.5" />
-              移动到
-            </ContextMenuSubTrigger>
-            <ContextMenuSubContent className="min-w-[140px]">
-              {moveTargets.map((folder) => (
-                <ContextMenuItem
-                  key={folder.name}
-                  onClick={() => onMove(folder.name)}
-                  className="flex items-center justify-between gap-2 text-[12px]"
-                >
-                  <span className="truncate">{getFolderDisplayName(folder.name)}</span>
-                  {folder.unreadCount ? (
-                    <span className="shrink-0 text-[10px] text-muted-foreground">
-                      {folder.unreadCount}
-                    </span>
-                  ) : null}
-                </ContextMenuItem>
-              ))}
-            </ContextMenuSubContent>
-          </ContextMenuSub>
+            <ContextMenuItem
+              onClick={onBatchDelete}
+              disabled={batchOperating}
+              className="flex items-center gap-2 text-[12px] text-destructive focus:text-destructive"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              删除
+            </ContextMenuItem>
+          </>
+        ) : (
+          <>
+            <ContextMenuItem onClick={onReply} className="flex items-center gap-2 text-[12px]">
+              <Reply className="h-3.5 w-3.5" />
+              回复
+              <span className="ml-auto text-[11px] text-muted-foreground">Ctrl+R</span>
+            </ContextMenuItem>
+            <ContextMenuItem onClick={onReplyAll} className="flex items-center gap-2 text-[12px]">
+              <ReplyAll className="h-3.5 w-3.5" />
+              回复全部
+              <span className="ml-auto text-[11px] text-muted-foreground">Ctrl+Shift+R</span>
+            </ContextMenuItem>
+            <ContextMenuItem onClick={onForward} className="flex items-center gap-2 text-[12px]">
+              <Forward className="h-3.5 w-3.5" />
+              转发
+            </ContextMenuItem>
+            <ContextMenuSeparator />
+            <ContextMenuItem onClick={onAnalyze} className="flex items-center gap-2 text-[12px]">
+              <Sparkles className="h-3.5 w-3.5" />
+              AI 内容分析
+            </ContextMenuItem>
+            <ContextMenuSeparator />
+            <ContextMenuItem onClick={onToggleRead} className="flex items-center gap-2 text-[12px]">
+              <MailOpen className="h-3.5 w-3.5" />
+              {message.isRead ? "标为未读" : "标为已读"}
+              <span className="ml-auto text-[11px] text-muted-foreground">Ctrl+U</span>
+            </ContextMenuItem>
+            <ContextMenuItem onClick={onToggleStar} className="flex items-center gap-2 text-[12px]">
+              <Star
+                className={cn(
+                  "h-3.5 w-3.5",
+                  message.isStarred ? "fill-amber-400 text-amber-400" : "",
+                )}
+              />
+              {message.isStarred ? "取消星标" : "星标邮件"}
+            </ContextMenuItem>
+            <ContextMenuSeparator />
+            {moveTargets.length > 0 && (
+              <ContextMenuSub>
+                <ContextMenuSubTrigger className="flex items-center gap-2 text-[12px]">
+                  <FolderInput className="h-3.5 w-3.5" />
+                  移动到
+                </ContextMenuSubTrigger>
+                <ContextMenuSubContent className="min-w-[140px]">
+                  {moveTargets.map((folder) => (
+                    <ContextMenuItem
+                      key={folder.name}
+                      onClick={() => onMove(folder.name)}
+                      className="flex items-center justify-between gap-2 text-[12px]"
+                    >
+                      <span className="truncate">{getFolderDisplayName(folder.name)}</span>
+                      {folder.unreadCount ? (
+                        <span className="shrink-0 text-[10px] text-muted-foreground">
+                          {folder.unreadCount}
+                        </span>
+                      ) : null}
+                    </ContextMenuItem>
+                  ))}
+                </ContextMenuSubContent>
+              </ContextMenuSub>
+            )}
+            <ContextMenuItem
+              onClick={onDelete}
+              className="flex items-center gap-2 text-[12px] text-destructive focus:text-destructive"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              删除
+              <span className="ml-auto text-[11px] text-muted-foreground">Delete</span>
+            </ContextMenuItem>
+          </>
         )}
-        <ContextMenuItem
-          onClick={onDelete}
-          className="flex items-center gap-2 text-[12px] text-destructive focus:text-destructive"
-        >
-          <Trash2 className="h-3.5 w-3.5" />
-          删除
-          <span className="ml-auto text-[11px] text-muted-foreground">Delete</span>
-        </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
   );

@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, State};
 
-use super::SystemState;
+use super::{win11debloat, SystemState};
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -94,6 +94,28 @@ pub struct ResidualCandidate {
     pub size_bytes: u64,
     pub category: String,
     pub requires_confirmation: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WindowsAppEntry {
+    pub id: String,
+    pub app_ids: Vec<String>,
+    pub name: String,
+    pub description: String,
+    pub recommendation: String,
+    pub removal_method: String,
+    pub installed: bool,
+    pub selected_by_default: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WindowsAppCatalogResult {
+    pub items: Vec<WindowsAppEntry>,
+    pub total: usize,
+    pub installed_count: usize,
+    pub source_version: String,
 }
 
 fn now_ts() -> i64 {
@@ -285,8 +307,8 @@ fn scan_residual_candidates(
 }
 
 fn command_message(stdout: &[u8], stderr: &[u8]) -> String {
-    let stderr = strip_ansi(&String::from_utf8_lossy(stderr));
-    let stdout = strip_ansi(&String::from_utf8_lossy(stdout));
+    let stderr = strip_ansi(&super::decode_windows_output(stderr));
+    let stdout = strip_ansi(&super::decode_windows_output(stdout));
     let text = if stderr.trim().is_empty() { &stdout } else { &stderr };
     let text = text.trim();
     if text.is_empty() {
@@ -551,7 +573,7 @@ pub async fn system_winget_status() -> Result<WingetStatus, String> {
 
         match output {
             Ok(out) => {
-                let version = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                let version = super::decode_windows_output(&out.stdout).trim().to_string();
                 Ok(WingetStatus {
                     available: !version.is_empty(),
                     version,
@@ -655,7 +677,7 @@ pub async fn system_check_updates(
             });
         }
 
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stdout = super::decode_windows_output(&output.stdout);
         let raw_entries = parse_winget_upgrade_list(&stdout);
 
         // 4. 检测运行中进程
@@ -719,6 +741,99 @@ pub async fn system_check_updates(
 }
 
 #[cfg(windows)]
+/// 检测 winget 卸载失败是否是 MSIX/UWP 包 COM 接口问题（0x80040115 等）
+fn looks_like_msix_failure(message: &str) -> bool {
+    let lower = message.to_lowercase();
+    lower.contains("0x80040115")
+        || lower.contains("0x80073cf1")
+        || lower.contains("class not registered")
+        || (lower.contains("appx") && lower.contains("error"))
+        || (lower.contains("msix") && lower.contains("error"))
+}
+
+#[cfg(windows)]
+fn installed_appx_names() -> std::collections::HashSet<String> {
+    let output = std::process::Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command", "Get-AppxPackage -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output();
+    output.ok().filter(|value| value.status.success()).map(|value| {
+        super::decode_windows_output(&value.stdout).lines().map(|line| line.trim().to_ascii_lowercase())
+            .filter(|line| !line.is_empty()).collect()
+    }).unwrap_or_default()
+}
+
+#[cfg(not(windows))]
+fn installed_appx_names() -> std::collections::HashSet<String> { std::collections::HashSet::new() }
+
+fn known_desktop_app_installed(name: &str) -> bool {
+    let candidates = match name {
+        "Microsoft Edge" => vec![std::env::var_os("PROGRAMFILES(X86)").map(PathBuf::from).map(|root| root.join("Microsoft/Edge/Application/msedge.exe"))],
+        "OneDrive" => vec![
+            std::env::var_os("LOCALAPPDATA").map(PathBuf::from).map(|root| root.join("Microsoft/OneDrive/OneDrive.exe")),
+            std::env::var_os("PROGRAMFILES").map(PathBuf::from).map(|root| root.join("Microsoft OneDrive/OneDrive.exe")),
+        ],
+        _ => Vec::new(),
+    };
+    candidates.into_iter().flatten().any(|path| path.exists())
+}
+
+#[tauri::command]
+pub async fn system_list_windows_apps() -> Result<WindowsAppCatalogResult, String> {
+    let catalog = win11debloat::windows_app_catalog()?;
+    let installed_names = tokio::task::spawn_blocking(installed_appx_names).await
+        .map_err(|error| format!("读取 Windows 应用列表失败：{error}"))?;
+    let items = catalog.apps.into_iter().map(|rule| {
+        let installed = rule.app_id.iter().any(|id| {
+            let id = id.to_ascii_lowercase();
+            installed_names.iter().any(|name| name == &id || name.contains(&id))
+        }) || known_desktop_app_installed(&rule.friendly_name);
+        WindowsAppEntry {
+            id: rule.app_id.first().cloned().unwrap_or_else(|| rule.friendly_name.clone()),
+            app_ids: rule.app_id,
+            name: rule.friendly_name,
+            description: rule.description,
+            recommendation: rule.recommendation,
+            removal_method: rule.removal_method,
+            installed,
+            selected_by_default: rule.selected_by_default,
+        }
+    }).collect::<Vec<_>>();
+    let installed_count = items.iter().filter(|item| item.installed).count();
+    Ok(WindowsAppCatalogResult { total: items.len(), items, installed_count, source_version: catalog.version })
+}
+
+/// 通过 PowerShell Get-AppxPackage + Remove-AppxPackage 卸载 UWP/MSIX 包
+#[cfg(windows)]
+async fn remove_appx_package(name: &str) -> Result<std::process::Output, String> {
+    // 转义单引号：PowerShell 字符串里 ' 需要变成 ''
+    let safe_name = name.replace('\'', "''");
+    let script = format!(
+        "$pkg = Get-AppxPackage -Name '*{safe_name}*' -ErrorAction SilentlyContinue; \
+         if ($pkg) {{ \
+             $pkg | ForEach-Object {{ Remove-AppxPackage -Package $_.PackageFullName -ErrorAction Stop }}; \
+             Write-Output 'OK'; \
+         }} else {{ \
+             Write-Error 'AppxPackage not found'; \
+             exit 1; \
+         }}"
+    );
+    tokio::task::spawn_blocking(move || {
+        std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+    })
+    .await
+    .map_err(|e| format!("执行 PowerShell 失败: {e}"))?
+    .map_err(|e| format!("启动 PowerShell 失败: {e}"))
+}
+
+#[cfg(not(windows))]
+async fn remove_appx_package(_name: &str) -> Result<std::process::Output, String> {
+    Err("仅 Windows 支持".to_string())
+}
+
 async fn run_winget(args: Vec<String>) -> Result<std::process::Output, String> {
     tokio::task::spawn_blocking(move || {
         std::process::Command::new("winget")
@@ -729,6 +844,96 @@ async fn run_winget(args: Vec<String>) -> Result<std::process::Output, String> {
     .await
     .map_err(|e| format!("执行 WinGet 失败: {e}"))?
     .map_err(|e| format!("启动 WinGet 失败: {e}"))
+}
+
+/// 流式执行 winget，逐行回调 stdout（兼容 \r 进度条刷新），返回 (exit_status, stderr_text)
+#[cfg(windows)]
+async fn run_winget_streaming<F>(
+    args: Vec<String>,
+    mut on_line: F,
+) -> Result<(std::process::ExitStatus, String), String>
+where
+    F: FnMut(&str) + Send + 'static,
+{
+    use std::io::{BufRead, BufReader, Read};
+    tokio::task::spawn_blocking(move || {
+        let mut cmd = std::process::Command::new("winget");
+        cmd.args(args)
+            .creation_flags(CREATE_NO_WINDOW)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        let mut child = cmd.spawn().map_err(|e| format!("启动 WinGet 失败: {e}"))?;
+        let stdout = child.stdout.take().ok_or("stdout pipe 失败")?;
+        let stderr = child.stderr.take();
+
+        let reader = BufReader::new(stdout);
+        for line in reader.lines().map_while(Result::ok) {
+            // winget 进度条用 \r 刷新，一行内可能含多段进度
+            for segment in line.split('\r') {
+                let seg = segment.trim();
+                if !seg.is_empty() {
+                    on_line(seg);
+                }
+            }
+        }
+
+        let mut stderr_text = String::new();
+        if let Some(mut s) = stderr {
+            let _ = s.read_to_string(&mut stderr_text);
+        }
+        let status = child.wait().map_err(|e| format!("等待失败: {e}"))?;
+        Ok((status, stderr_text))
+    })
+    .await
+    .map_err(|e| format!("任务失败: {e}"))?
+}
+
+#[tauri::command]
+pub async fn system_remove_windows_app(
+    state: State<'_, SystemState>,
+    id: String,
+    risk_acknowledged: bool,
+) -> Result<UpgradeResult, String> {
+    let catalog = win11debloat::windows_app_catalog()?;
+    let rule = catalog.apps.into_iter().find(|rule| rule.app_id.first() == Some(&id))
+        .ok_or_else(|| "该应用不在 Mona 固定卸载目录中".to_string())?;
+    if rule.recommendation == "unsafe" && !risk_acknowledged {
+        return Err("高风险 Windows 应用需要明确确认后才能卸载".into());
+    }
+    let package_id = rule.app_id.first().cloned().ok_or("应用目录缺少固定 ID")?;
+    let name = rule.friendly_name.clone();
+    let mut success = false;
+    let mut exit_code = None;
+    let mut messages = Vec::new();
+    if rule.removal_method.eq_ignore_ascii_case("Appx") {
+        for app_id in &rule.app_id {
+            match remove_appx_package(app_id).await {
+                Ok(output) => {
+                    let message = command_message(&output.stdout, &output.stderr);
+                    if output.status.success() { success = true; }
+                    exit_code = output.status.code();
+                    if !message.trim().is_empty() { messages.push(message); }
+                }
+                Err(error) => messages.push(error),
+            }
+        }
+    } else {
+        for app_id in &rule.app_id {
+            let output = run_winget(vec![
+                "uninstall".into(), "--id".into(), app_id.clone(), "--exact".into(),
+                "--accept-source-agreements".into(), "--disable-interactivity".into(),
+            ]).await?;
+            exit_code = output.status.code();
+            let message = command_message(&output.stdout, &output.stderr);
+            if !message.trim().is_empty() { messages.push(message); }
+            if output.status.success() { success = true; break; }
+        }
+    }
+    let message = if messages.is_empty() {
+        if success { "卸载完成" } else { "Windows 未返回可用的卸载结果" }.into()
+    } else { messages.join("；") };
+    persist_operation(&state, &package_id, &name, "uninstall", success, exit_code, &message);
+    Ok(UpgradeResult { success, message, exit_code, residuals: vec![] })
 }
 
 #[tauri::command]
@@ -764,10 +969,34 @@ pub async fn system_upgrade_software(
             },
         );
 
-        let output = match run_winget(args).await {
-            Ok(output) => output,
+        let app_for_stream = app.clone();
+        let id_for_stream = id.clone();
+        let last_line = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+        let last_line_clone = last_line.clone();
+        let (status, stderr_text) = match run_winget_streaming(args, move |line: &str| {
+            *last_line_clone.lock().unwrap() = line.to_string();
+            let _ = app_for_stream.emit(
+                "software-upgrade-progress",
+                UpgradeProgress {
+                    id: id_for_stream.clone(),
+                    line: line.to_string(),
+                    status: "running".to_string(),
+                },
+            );
+        })
+        .await
+        {
+            Ok(v) => v,
             Err(error) => {
                 persist_operation(&state, &id, &name, "upgrade", false, None, &error);
+                let _ = app.emit(
+                    "software-upgrade-progress",
+                    UpgradeProgress {
+                        id: id.clone(),
+                        line: error.clone(),
+                        status: "failed".to_string(),
+                    },
+                );
                 return Ok(UpgradeResult {
                     success: false,
                     message: error,
@@ -776,9 +1005,15 @@ pub async fn system_upgrade_software(
                 });
             }
         };
-        let success = output.status.success();
-        let exit_code = output.status.code();
-        let detail = command_message(&output.stdout, &output.stderr);
+        let success = status.success();
+        let exit_code = status.code();
+        let stderr_clean = strip_ansi(&stderr_text);
+        let stdout_last = strip_ansi(&last_line.lock().unwrap().clone());
+        let detail = if !stderr_clean.trim().is_empty() {
+            stderr_clean.trim().to_string()
+        } else {
+            stdout_last.trim().to_string()
+        };
         let message = if detail.is_empty() {
             if success { "更新完成" } else { "WinGet 更新失败" }.to_string()
         } else {
@@ -855,9 +1090,36 @@ pub async fn system_uninstall_software(
                 });
             }
         };
-        let success = output.status.success();
-        let exit_code = output.status.code();
-        let detail = command_message(&output.stdout, &output.stderr);
+        let mut success = output.status.success();
+        let mut exit_code = output.status.code();
+        let mut detail = command_message(&output.stdout, &output.stderr);
+        // winget 对 MSIX/UWP 包卸载支持有缺陷（0x80040115），fallback 到 PowerShell Remove-AppxPackage
+        if !success && looks_like_msix_failure(&detail) {
+            let _ = app.emit(
+                "software-uninstall-progress",
+                UpgradeProgress {
+                    id: package_id.clone(),
+                    line: "正在通过 PowerShell 卸载 MSIX 包".to_string(),
+                    status: "running".to_string(),
+                },
+            );
+            match remove_appx_package(&name).await {
+                Ok(appx_output) => {
+                    let appx_success = appx_output.status.success();
+                    let appx_detail = command_message(&appx_output.stdout, &appx_output.stderr);
+                    success = appx_success;
+                    exit_code = appx_output.status.code();
+                    detail = if appx_detail.is_empty() {
+                        if appx_success { "卸载完成".to_string() } else { "PowerShell 卸载失败".to_string() }
+                    } else {
+                        appx_detail
+                    };
+                }
+                Err(e) => {
+                    detail = format!("{detail}\nPowerShell fallback 失败: {e}");
+                }
+            }
+        }
         let message = if detail.is_empty() {
             if success { "卸载完成" } else { "WinGet 卸载失败" }.to_string()
         } else {

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use super::SystemState;
+use super::{win11debloat, SystemState};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -31,6 +31,19 @@ fn software_category(action: &str) -> &'static str {
         "uninstall" => "卸载",
         _ => "维护",
     }
+}
+
+fn configuration_title(item_id: &str) -> String {
+    win11debloat::configuration_catalog().ok()
+        .and_then(|catalog| catalog.features.into_iter().find(|feature| feature.feature_id == item_id))
+        .map(|feature| feature.label)
+        .unwrap_or_else(|| "Windows 配置".into())
+}
+
+fn configuration_reversible(item_id: &str) -> bool {
+    let Ok(catalog) = win11debloat::configuration_catalog() else { return false };
+    catalog.features.iter().find(|feature| feature.feature_id == item_id)
+        .is_some_and(win11debloat::feature_can_restore)
 }
 
 #[tauri::command]
@@ -63,6 +76,14 @@ pub async fn system_get_maintenance_history(
             status TEXT NOT NULL,
             bytes_changed INTEGER NOT NULL,
             detail TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS configuration_operations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts INTEGER NOT NULL,
+            item_id TEXT NOT NULL,
+            mode TEXT NOT NULL,
+            success INTEGER NOT NULL,
+            detail TEXT NOT NULL
         );",
     ).map_err(|error| format!("初始化维护记录失败：{error}"))?;
 
@@ -92,6 +113,32 @@ pub async fn system_get_maintenance_history(
                 restore_enabled: Some(!enabled),
             })
         }).map_err(|error| format!("读取启动项记录失败：{error}"))?;
+        events.extend(rows.filter_map(Result::ok));
+    }
+    {
+        let mut statement = inner.db.prepare(
+            "SELECT id, ts, item_id, mode, success, detail FROM configuration_operations ORDER BY ts DESC LIMIT 100",
+        ).map_err(|error| format!("读取配置记录失败：{error}"))?;
+        let rows = statement.query_map([], |row| {
+            let id: i64 = row.get(0)?;
+            let item_id: String = row.get(2)?;
+            let mode: String = row.get(3)?;
+            let success: bool = row.get::<_, i64>(4)? != 0;
+            let title = configuration_title(&item_id);
+            Ok(MaintenanceEvent {
+                id: format!("configuration-{id}"),
+                ts: row.get(1)?,
+                category: "系统优化".to_string(),
+                title: format!("{} {}", if mode == "restore" { "恢复" } else { "优化" }, title),
+                source: "用户确认".to_string(),
+                status: if success { "成功" } else { "失败" }.to_string(),
+                detail: row.get(5)?,
+                bytes_changed: 0,
+                reversible: mode == "restore" || configuration_reversible(&item_id),
+                related_id: Some(item_id),
+                restore_enabled: None,
+            })
+        }).map_err(|error| format!("读取配置记录失败：{error}"))?;
         events.extend(rows.filter_map(Result::ok));
     }
     {
@@ -152,12 +199,18 @@ pub async fn system_get_maintenance_history(
 
 #[cfg(test)]
 mod tests {
-    use super::software_category;
+    use super::{configuration_title, software_category};
 
     #[test]
     fn maps_persisted_software_actions_to_maintenance_categories() {
         assert_eq!(software_category("upgrade"), "更新");
         assert_eq!(software_category("uninstall"), "卸载");
         assert_eq!(software_category("unknown"), "维护");
+    }
+
+    #[test]
+    fn labels_persisted_configuration_changes() {
+        assert_eq!(configuration_title("DisableFastStartup"), "Disable fast start-up");
+        assert_eq!(configuration_title("unknown"), "Windows 配置");
     }
 }

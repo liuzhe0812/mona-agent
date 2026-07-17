@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { Maximize2, Minus, Plus, Settings, X } from "lucide-react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { Button } from "@/components/ui/button";
 import { ConnectionBadge } from "@/components/ConnectionBadge";
@@ -29,13 +30,10 @@ interface AppTitleBarProps {
 }
 
 async function withCurrentWindow(
-  action: (win: Awaited<
-    ReturnType<typeof import("@tauri-apps/api/window").getCurrentWindow>
-  >) => Promise<void>,
+  action: (win: ReturnType<typeof getCurrentWindow>) => Promise<void>,
 ) {
   if (!isTauri()) return;
   try {
-    const { getCurrentWindow } = await import("@tauri-apps/api/window");
     await action(getCurrentWindow());
   } catch (e) {
     console.error("[AppTitleBar] window action failed:", e);
@@ -60,7 +58,7 @@ export function AppTitleBar({
 }: AppTitleBarProps) {
   return (
     <header
-      data-tauri-drag-region
+      data-tauri-drag-region="deep"
       className="flex h-9 shrink-0 items-center border-b border-border/70 bg-sidebar/95 text-sidebar-foreground"
     >
       {/* 标签栏 */}

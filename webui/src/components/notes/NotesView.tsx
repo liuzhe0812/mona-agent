@@ -15,6 +15,9 @@ import {
   FolderPlus,
   GitFork,
   ListChecks,
+  LockKeyhole,
+  Mic,
+  MicOff,
   MoreHorizontal,
   Pencil,
   Plus,
@@ -69,6 +72,7 @@ import { RightSidebarToggleIcon } from "./RightSidebarToggleIcon";
 import { TasksPanel } from "./TasksPanel";
 import { toggleTaskInMarkdown } from "./tasks-extract";
 import { deriveNotePreview } from "./notes-ai";
+import { useSpeechRecognition } from "./useSpeechRecognition";
 import {
   Workspace,
   createInitialWorkspace,
@@ -105,6 +109,7 @@ const RIGHT_SIDEBAR_DEFAULT_WIDTH = 260;
 
 interface NotesViewProps {
   onSendToAgent?: (prompt: string) => void | Promise<void>;
+  onOpenSubscribe?: () => void;
   initialNoteId?: string;
   createOnOpen?: boolean;
   onCreateOnOpenHandled?: () => void;
@@ -112,6 +117,7 @@ interface NotesViewProps {
 
 export function NotesView({
   onSendToAgent: _onSendToAgent,
+  onOpenSubscribe,
   initialNoteId,
   createOnOpen = false,
   onCreateOnOpenHandled,
@@ -145,6 +151,62 @@ export function NotesView({
   const rightDragRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const lastSavedSnapshotRef = useRef<string | null>(null);
   const latestSnapshotRef = useRef<string | null>(null);
+
+  // 录音转写状态。当前正在录音的笔记 id 和已确定的文字。
+  // 用 ref 避免回调闭包陈旧问题，state 仅用于按钮 UI 反馈。
+  // 录音内容会追加到当前活动笔记末尾（保留笔记原有内容），而非创建新笔记。
+  const recordingNoteRef = useRef<string | null>(null);
+  // 录音开始时笔记原有的正文（用于在写入时拼到前面，避免覆盖用户已有内容）
+  const recordingBaseRef = useRef<string>("");
+  const recordingFinalRef = useRef<string>("");
+  const recordingInterimRef = useRef<string>("");
+  const [recordingActive, setRecordingActive] = useState(false);
+  const [recordingError, setRecordingError] = useState<string | null>(null);
+
+  // 把当前累积的文字写入对应笔记。final+interim 一起写，让用户实时看到进度。
+  // 在录音开始时记下的 base 内容后追加，保留笔记原有内容。
+  const flushRecordingToNote = useCallback(() => {
+    const noteId = recordingNoteRef.current;
+    if (!noteId) return;
+    const base = recordingBaseRef.current;
+    const finalText = recordingFinalRef.current;
+    const interim = recordingInterimRef.current;
+    const appended = `${finalText}${interim ? interim : ""}`;
+    const markdown = base ? `${base.replace(/\s+$/, "")}\n\n${appended}` : appended;
+    setNotes((current) =>
+      current.map((n) =>
+        n.id === noteId
+          ? {
+              ...n,
+              contentMarkdown: markdown,
+              plainText: markdown,
+              preview: markdown.slice(0, 46) || "录音中…",
+              updatedAt: nowTimestamp(),
+            }
+          : n,
+      ),
+    );
+  }, []);
+
+  const speech = useSpeechRecognition({
+    lang: "zh-CN",
+    onFinalChunk: (text) => {
+      // final 结果追加到累积文字末尾，interim 清空（刚确认的就是 interim 的内容）
+      recordingFinalRef.current = `${recordingFinalRef.current}${text}`.trimStart();
+      recordingInterimRef.current = "";
+      flushRecordingToNote();
+    },
+    onInterim: (text) => {
+      recordingInterimRef.current = text;
+      flushRecordingToNote();
+    },
+  });
+
+  // 同步 hook 的 error 到本地 state（用于弹提示）
+  useEffect(() => {
+    if (speech.error) setRecordingError(speech.error);
+  }, [speech.error]);
+
 
   // Dialog state for replacing browser native prompt/confirm
   type PromptState =
@@ -252,6 +314,56 @@ export function NotesView({
       updateLeaf(prev, prev.activeLeafId, (leaf) => ({ ...leaf, graphOpen: !leaf.graphOpen })),
     );
   }, [updateLeaf]);
+
+  const startRecording = useCallback(() => {
+    if (!speech.supported) {
+      setRecordingError("当前环境不支持语音识别（需 Edge / WebView2 内核）");
+      return;
+    }
+    // 按钮只对当前活动笔记生效：没有打开笔记时直接退出。
+    // 录音内容追加到当前笔记末尾，不创建新笔记。
+    const note = activeNote;
+    if (!note) {
+      setRecordingError("请先打开一个笔记");
+      return;
+    }
+    setRecordingError(null);
+    recordingNoteRef.current = note.id;
+    recordingBaseRef.current = note.contentMarkdown ?? "";
+    recordingFinalRef.current = "";
+    recordingInterimRef.current = "";
+    setRecordingActive(true);
+    speech.start();
+  }, [speech, activeNote]);
+
+  const stopRecording = useCallback(() => {
+    speech.stop();
+    setRecordingActive(false);
+    // 录音结束后清理状态。转写文字已实时写入笔记，这里只清空 ref。
+    // 如果没有识别到任何内容，回退到录音前的正文。
+    const noteId = recordingNoteRef.current;
+    const finalText = recordingFinalRef.current.trim();
+    const base = recordingBaseRef.current;
+    if (noteId && !finalText && base) {
+      setNotes((current) =>
+        current.map((n) =>
+          n.id === noteId
+            ? {
+                ...n,
+                contentMarkdown: base,
+                plainText: base,
+                preview: base.slice(0, 46) || "空白笔记",
+                updatedAt: nowTimestamp(),
+              }
+            : n,
+        ),
+      );
+    }
+    recordingNoteRef.current = null;
+    recordingBaseRef.current = "";
+    recordingFinalRef.current = "";
+    recordingInterimRef.current = "";
+  }, [speech]);
 
   const selectNoteInWorkspace = useCallback(
     (noteId: string, leafId?: string) => {
@@ -729,12 +841,22 @@ export function NotesView({
   const handleRenameNotebook = useCallback((notebookId: string, name: string) => {
     const target = notebooks.find((n) => n.id === notebookId);
     if (!target || name === target.name) return;
+    // Rust scan_vault 用文件夹名作为 notebook id，重命名时必须同步更新 id
+    // 和所有相关 note 的 notebookId，否则保存后会导致 notebook_id 不匹配。
     setNotebooks((current) =>
       current.map((notebook) =>
-        notebook.id === notebookId ? { ...notebook, name } : notebook,
+        notebook.id === notebookId ? { ...notebook, id: name, name } : notebook,
       ),
     );
-  }, [notebooks]);
+    setNotes((current) =>
+      current.map((note) =>
+        note.notebookId === notebookId ? { ...note, notebookId: name } : note,
+      ),
+    );
+    if (activeNotebookId === notebookId) {
+      setActiveNotebookId(name);
+    }
+  }, [notebooks, activeNotebookId]);
 
   const deleteNotebook = useCallback((notebookId: string) => {
     if (notebookId === "") {
@@ -1502,7 +1624,7 @@ export function NotesView({
                 onDrop={handleSidebarDrop}
               >
                 <div className="flex h-9 shrink-0 items-center justify-center gap-0.5 px-2">
-                  <IconButton label="新建笔记" onClick={() => createNote()}>
+                  <IconButton label="新建笔记" onClick={() => createNote("manual", "")}>
                     <Plus className="h-3.5 w-3.5" />
                   </IconButton>
                   <IconButton
@@ -1517,17 +1639,6 @@ export function NotesView({
                   </IconButton>
                   <IconButton label="全局搜索 (Ctrl+K)" onClick={() => { setGlobalSearchInitialQuery(""); setGlobalSearchOpen(true); }}>
                     <Search className="h-3.5 w-3.5" />
-                  </IconButton>
-                  <IconButton
-                    label={tasksPanelOpen ? "关闭任务面板" : "任务管理"}
-                    onClick={() => setTasksPanelOpen((v) => !v)}
-                  >
-                    <ListChecks
-                      className={cn(
-                        "h-3.5 w-3.5",
-                        tasksPanelOpen && "text-primary",
-                      )}
-                    />
                   </IconButton>
                   <IconButton
                     label={viewMode === "favorite" ? "显示全部笔记" : "显示收藏笔记"}
@@ -1772,7 +1883,7 @@ export function NotesView({
                     </div>
                   </ContextMenuTrigger>
                   <ContextMenuContent className="w-48">
-                    <ContextMenuItem onSelect={() => createNote("manual")}>
+                    <ContextMenuItem onSelect={() => createNote("manual", "")}>
                       <FileText className="mr-2 h-3.5 w-3.5" />
                       新建笔记
                     </ContextMenuItem>
@@ -1853,6 +1964,18 @@ export function NotesView({
                     <>
                       <button
                         type="button"
+                        title={tasksPanelOpen ? "关闭任务面板" : "任务管理"}
+                        aria-label="任务管理"
+                        onClick={() => setTasksPanelOpen((v) => !v)}
+                        className={cn(
+                          "grid h-8 w-8 place-items-center hover:bg-accent hover:text-foreground",
+                          tasksPanelOpen ? "bg-accent text-foreground" : "text-muted-foreground",
+                        )}
+                      >
+                        <ListChecks className="h-4 w-4" />
+                      </button>
+                      <button
+                        type="button"
                         title="关系图"
                         aria-label="关系图"
                         onClick={toggleGraphInActiveLeaf}
@@ -1876,7 +1999,17 @@ export function NotesView({
                         >
                           <AgentLogo state={agentStreaming ? "working" : "idle"} className="h-5 w-5" />
                         </button>
-                      ) : null}
+                      ) : (
+                        <button
+                          type="button"
+                          title="升级 Pro 解锁笔记 AI"
+                          aria-label="升级 Pro 解锁笔记 AI"
+                          onClick={onOpenSubscribe}
+                          className="grid h-8 w-8 place-items-center text-muted-foreground hover:bg-accent hover:text-foreground"
+                        >
+                          <LockKeyhole className="h-4 w-4" />
+                        </button>
+                      )}
                       <button
                         type="button"
                         title={rightSidebarOpen ? "收起右侧面板" : "展开右侧面板"}
@@ -1890,8 +2023,36 @@ export function NotesView({
                   }
                   toolbarExtra={(noteId) => {
                     const note = notes.find((n) => n.id === noteId);
+                    const isRecordingThis = recordingActive && recordingNoteRef.current === noteId;
                     return (
                       <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          title={
+                            !speech.supported
+                              ? "当前环境不支持语音识别（需 Edge / WebView2 内核）"
+                              : isRecordingThis
+                                ? "停止录音"
+                                : "录音笔记"
+                          }
+                          aria-label="录音笔记"
+                          disabled={!speech.supported || (recordingActive && !isRecordingThis)}
+                          onClick={isRecordingThis ? stopRecording : startRecording}
+                          className={cn(
+                            "grid h-7 w-7 place-items-center rounded-md hover:bg-accent hover:text-foreground",
+                            isRecordingThis
+                              ? "bg-accent text-rose-500"
+                              : recordingError
+                                ? "text-amber-500"
+                                : "text-muted-foreground",
+                          )}
+                        >
+                          {isRecordingThis ? (
+                            <MicOff className="h-4 w-4" />
+                          ) : (
+                            <Mic className="h-4 w-4" />
+                          )}
+                        </button>
                         <button
                           type="button"
                           title={editorMode === "visual" ? "切换为 MD 源码" : "切换为可视化编辑"}
@@ -2374,7 +2535,7 @@ interface NotebookSectionProps {
   onDeleteMany?: (notes: OperationNote[]) => void;
   onSetContextLevel?: (note: OperationNote, level: NoteContextLevel) => void;
   onToggleFavorite?: (note: OperationNote) => void;
-  onCreateNote?: (sourceKind: NoteSourceKind) => void;
+  onCreateNote?: (sourceKind: NoteSourceKind, notebookId?: string) => void;
   onCreateNotebook?: () => void;
   notebooks: Notebook[];
   allNotes?: OperationNote[];
@@ -2465,7 +2626,7 @@ function NotebookSection({
           </button>
         </ContextMenuTrigger>
         <ContextMenuContent className="w-48">
-          <ContextMenuItem onSelect={() => onCreateNote?.("manual")}>
+          <ContextMenuItem onSelect={() => onCreateNote?.("manual", notebook.id)}>
             <FileText className="mr-2 h-3.5 w-3.5" />
             新建笔记
           </ContextMenuItem>
@@ -2518,7 +2679,7 @@ function NotebookSection({
             onDeleteMany={onDeleteMany}
             onSetContextLevel={onSetContextLevel}
             onToggleFavorite={onToggleFavorite}
-            onCreateNote={onCreateNote}
+            onCreateNote={(sourceKind) => onCreateNote?.(sourceKind, notebook.id)}
             notebooks={notebooks}
             allNotes={allNotes}
           />

@@ -8,7 +8,15 @@
       "title": "Couldn't reach mona",
       "gatewayHint": "Make sure the gateway is running (`mona gateway`) and that this page is open on the same machine.",
       "otherFeaturesHint": "Notes, Settings, SSH, Browser and other features don't depend on the runtime and remain available.",
-      "retry": "Retry"
+      "retry": "Retry",
+      "viewLog": "View error log",
+      "logTitle": "Gateway error log",
+      "logEmpty": "Log file is empty or missing",
+      "logPath": "Log path",
+      "logLoading": "Reading log…",
+      "logLoadError": "Failed to read log",
+      "copyLog": "Copy log",
+      "copyLogDone": "Copied"
     },
     "auth": {
       "title": "Authentication required",

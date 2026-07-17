@@ -2,7 +2,8 @@ import { ArrowDown, ArrowUp, ArrowUpDown, Ban, CheckCircle2, Clock3, Loader2, Ro
 import { useMemo, useState } from "react";
 
 import { useBootHistory, useStartupChanges, useStartupItems, type StartupItem } from "./useSystemData";
-import { MetricCard, PanelCard, StatusPill } from "./SystemUi";
+import { MetricCard, PanelCard, StatusPill, TaskFailureNotice } from "./SystemUi";
+import type { SystemAgentHandoffTask } from "./systemAgentHandoff";
 
 type StartupSortKey = "name" | "publisher" | "source" | "scope" | "enabled" | "added";
 type StartupSort = { key: StartupSortKey; direction: "asc" | "desc" };
@@ -79,18 +80,23 @@ function SortableHeader({
   );
 }
 
-export function StartupPanel() {
+interface StartupPanelProps {
+  onHandoff: (task: SystemAgentHandoffTask) => void;
+}
+
+export function StartupPanel({ onHandoff }: StartupPanelProps) {
   const { data, loading, error, toggling, refresh, toggle } = useStartupItems();
   const { data: bootHistory } = useBootHistory();
   const { data: changes } = useStartupChanges();
   const [notice, setNotice] = useState("");
   const [sort, setSort] = useState<StartupSort | null>(null);
+  const [failedTask, setFailedTask] = useState<SystemAgentHandoffTask | null>(null);
+  const [handoffAcknowledged, setHandoffAcknowledged] = useState(false);
 
   const items = data?.items ?? [];
-  const weekAgo = useMemo(() => Date.now() / 1000 - 7 * 24 * 3600, []);
   const recentCount = useMemo(
-    () => items.filter((i) => i.firstSeenAt !== null && i.firstSeenAt > weekAgo).length,
-    [items, weekAgo],
+    () => items.filter((i) => i.isNew).length,
+    [items],
   );
   const sortedItems = useMemo(() => {
     if (!sort) return items;
@@ -106,8 +112,22 @@ export function StartupPanel() {
   }, [items, sort]);
 
   const toggleItem = async (item: StartupItem) => {
+    setHandoffAcknowledged(false);
     const newEnabled = !item.enabled;
-    await toggle(item.id, newEnabled);
+    const failure = await toggle(item.id, newEnabled);
+    if (failure) {
+      setNotice("");
+      setFailedTask({
+        id: crypto.randomUUID(),
+        title: `${newEnabled ? "恢复" : "禁用"} ${item.name} 启动项`,
+        action: newEnabled ? "恢复启动项" : "禁用启动项",
+        target: item.name,
+        arguments: { id: item.id, enabled: newEnabled },
+        error: failure,
+      });
+      return;
+    }
+    setFailedTask(null);
     setNotice(`${item.name} ${newEnabled ? "已恢复" : "已禁用，可随时恢复"}`);
   };
 
@@ -122,16 +142,25 @@ export function StartupPanel() {
 
   return (
     <div className="space-y-3">
-      {error && (
-        <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-700 dark:text-red-400">
-          {error}
-          <button onClick={refresh} className="ml-2 underline">重试</button>
-        </div>
+      {error && !handoffAcknowledged && (
+        <TaskFailureNotice
+          title={failedTask?.title ? `${failedTask.title}失败` : "启动项读取失败"}
+          detail={error}
+          onRetry={() => {
+            const item = failedTask && items.find((current) => current.id === failedTask.arguments.id);
+            if (item) void toggleItem(item);
+            else void refresh();
+          }}
+          onHandoff={failedTask ? () => {
+            setHandoffAcknowledged(true);
+            onHandoff(failedTask);
+          } : undefined}
+        />
       )}
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <MetricCard label="启动项" value={loading ? "—" : String(data?.total ?? 0)} detail={`已启用 ${data?.enabledCount ?? 0}`} icon={<Rocket className="h-4 w-4" />} />
-        <MetricCard label="本周新发现" value={loading ? "—" : String(recentCount)} detail={recentCount > 0 ? "需关注" : "暂无变化"} icon={<Sparkles className="h-4 w-4" />} accent="violet" />
+        <MetricCard label="待审查新增" value={loading ? "—" : String(recentCount)} detail={recentCount > 0 ? "需关注" : "暂无变化"} icon={<Sparkles className="h-4 w-4" />} accent="violet" />
         <MetricCard label="已禁用" value={loading ? "—" : String(data?.disabledCount ?? 0)} detail="可随时恢复" icon={<Ban className="h-4 w-4" />} accent="orange" />
         <MetricCard label="最近启动" value={bootHistory?.lastDurationMs ? formatDuration(bootHistory.lastDurationMs) : "—"} detail={bootHistory?.lastDeltaMs !== null ? formatDelta(bootHistory?.lastDeltaMs ?? null) : "暂无记录"} icon={<Clock3 className="h-4 w-4" />} accent="green" />
       </div>

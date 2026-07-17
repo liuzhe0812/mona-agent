@@ -53,8 +53,8 @@ def _seed_plans(db):
     """预置套餐"""
     plans = [
         PricingPlan(id="monthly", name="月度会员", price=29.0, duration_months=1, period_days=30, auto_renewable=True, sort_order=1),
-        PricingPlan(id="yearly", name="年度会员", price=288.0, original_price=348.0, duration_months=12, period_days=365, auto_renewable=True, badge="推荐", sort_order=2),
-        PricingPlan(id="lifetime", name="终身版", price=888.0, duration_months=None, period_days=None, auto_renewable=False, badge="限时", sort_order=3),
+        PricingPlan(id="quarterly", name="季度会员", price=79.0, duration_months=3, period_days=90, auto_renewable=True, sort_order=2),
+        PricingPlan(id="yearly", name="年度会员", price=288.0, original_price=348.0, duration_months=12, period_days=365, auto_renewable=True, badge="推荐", sort_order=3),
     ]
     for p in plans:
         db.merge(p)
@@ -70,10 +70,10 @@ class TestPricingConfig:
         plans = {p["id"]: p for p in data["plans"]}
         assert plans["monthly"]["period_days"] == 30
         assert plans["monthly"]["auto_renewable"] is True
+        assert plans["quarterly"]["period_days"] == 90
+        assert plans["quarterly"]["auto_renewable"] is True
         assert plans["yearly"]["period_days"] == 365
         assert plans["yearly"]["auto_renewable"] is True
-        assert plans["lifetime"]["period_days"] is None
-        assert plans["lifetime"]["auto_renewable"] is False
 
 
 class TestSubscriptionQuery:
@@ -113,6 +113,31 @@ class TestSubscriptionQuery:
 
 
 class TestSubscribe:
+    def test_subscribe_accepts_quarterly_plan(self, client, db):
+        _seed_plans(db)
+        token = _register_and_get_token(client, db, email="quarter@test.com", account="quarteruser")
+
+        resp = client.post(
+            "/payment/subscribe",
+            json={"plan_code": "quarterly", "payment_method": "alipay_page"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        assert resp.status_code == 503
+        assert resp.json()["error"] == "alipay_disabled"
+
+    def test_subscribe_rejects_lifetime_plan(self, client, db):
+        _seed_plans(db)
+        token = _register_and_get_token(client, db, email="lifetime@test.com", account="lifetimeuser")
+
+        resp = client.post(
+            "/payment/subscribe",
+            json={"plan_code": "lifetime", "payment_method": "alipay_page"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        assert resp.status_code == 422
+
     def test_subscribe_alipay_disabled(self, client, db):
         _seed_plans(db)
         token = _register_and_get_token(client, db, email="sub3@test.com", account="subuser3")

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { mergeServerTabs, type Tab } from "./useBrowserTabs";
+import {
+  createBrowserTabId,
+  mergeServerTabs,
+  shouldPersistBrowserSession,
+  type Tab,
+} from "./useBrowserTabs";
 
 const monaTab: Tab = {
   id: "mona",
@@ -24,5 +29,22 @@ describe("mergeServerTabs", () => {
       monaTab,
       localBrowserTab,
     ]);
+  });
+});
+
+describe("browser session persistence", () => {
+  it("is disabled in development so dev never reopens production tabs", () => {
+    expect(shouldPersistBrowserSession(true)).toBe(false);
+    expect(shouldPersistBrowserSession(false)).toBe(true);
+  });
+});
+
+describe("browser tab ids", () => {
+  it("uses collision-resistant UUIDs instead of a resettable counter", () => {
+    const first = createBrowserTabId();
+    const second = createBrowserTabId();
+
+    expect(first).toMatch(/^tab-[0-9a-f-]{36}$/);
+    expect(second).not.toBe(first);
   });
 });

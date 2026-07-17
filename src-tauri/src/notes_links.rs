@@ -5,7 +5,7 @@
 //! `[[wiki link]]` / `![[embed]]` references. Results are cached at
 //! `<vault>/.mona/links.json` and exposed via Tauri commands.
 
-use crate::notes::{self, OperationNote};
+use crate::notes::{self, NoteLinkData};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -46,6 +46,11 @@ pub struct LinkGraph {
     pub nodes: Vec<LinkNode>,
     pub edges: Vec<LinkEdge>,
     pub last_scan_at: i64,
+    /// Saved layout positions (note id -> [x, y]) for the frontend to restore
+    /// the previous view instantly without re-running the force simulation from
+    /// scratch. Populated by `notes_links_save_positions`.
+    #[serde(default)]
+    pub positions: HashMap<String, [f64; 2]>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -96,9 +101,11 @@ struct CachedGraph {
     nodes: Vec<LinkNode>,
     edges: Vec<LinkEdge>,
     last_scan_at: i64,
+    #[serde(default)]
+    positions: HashMap<String, [f64; 2]>,
 }
 
-const CACHE_VERSION: u32 = 2;
+const CACHE_VERSION: u32 = 3;
 
 fn links_cache_path(vault: &Path) -> PathBuf {
     vault.join(".mona").join("links.json")
@@ -110,30 +117,28 @@ fn links_cache_path(vault: &Path) -> PathBuf {
 
 #[derive(Clone)]
 struct ScannedNote {
-    note: OperationNote,
+    note: NoteLinkData,
     relative_path: String,
     absolute_path: PathBuf,
-    /// Raw markdown body (without frontmatter) used for link extraction.
-    body: String,
 }
 
 /// Scan all .md files one level deep (matching `notes::scan_vault`).
+/// Uses `parse_note_for_links` (lightweight) instead of `parse_note_file`
+/// to skip preview/plain_text computation — those fields are not needed for
+/// graph building and are expensive on large notes.
 fn scan_vault_links(vault: &Path) -> Vec<ScannedNote> {
     let mut out: Vec<ScannedNote> = Vec::new();
-    let push = |path: &Path, notebook: &str, out: &mut Vec<ScannedNote>| {
-        if let Ok(note) = notes::parse_note_file(path, notebook) {
+    let push = |path: &Path, out: &mut Vec<ScannedNote>| {
+        if let Ok(note) = notes::parse_note_for_links(path) {
             let relative = path
                 .strip_prefix(vault)
                 .unwrap_or(path)
                 .to_string_lossy()
                 .replace('\\', "/");
-            // parse_note_file already returns body without frontmatter.
-            let body = note.content_markdown.clone();
             out.push(ScannedNote {
                 note,
                 relative_path: relative,
                 absolute_path: path.to_path_buf(),
-                body,
             });
         }
     };
@@ -143,7 +148,7 @@ fn scan_vault_links(vault: &Path) -> Vec<ScannedNote> {
         for entry in entries.flatten() {
             let p = entry.path();
             if p.extension().and_then(|e| e.to_str()) == Some("md") {
-                push(&p, "", &mut out);
+                push(&p, &mut out);
             }
         }
     }
@@ -166,7 +171,7 @@ fn scan_vault_links(vault: &Path) -> Vec<ScannedNote> {
                 for md_entry in md_entries.flatten() {
                     let md_path = md_entry.path();
                     if md_path.extension().and_then(|e| e.to_str()) == Some("md") {
-                        push(&md_path, &name, &mut out);
+                        push(&md_path, &mut out);
                     }
                 }
             }
@@ -350,7 +355,7 @@ fn build_graph(vault: &Path) -> LinkGraph {
 
     let mut edges: Vec<LinkEdge> = Vec::new();
     for sn in &scanned {
-        let refs = extract_wiki_links(&sn.body);
+        let refs = extract_wiki_links(&sn.note.body);
         for r in refs {
             let resolved = title_index.get(&r.target.to_lowercase()).cloned();
             edges.push(LinkEdge {
@@ -367,6 +372,7 @@ fn build_graph(vault: &Path) -> LinkGraph {
         nodes,
         edges,
         last_scan_at: now_unix(),
+        positions: HashMap::new(),
     }
 }
 
@@ -385,6 +391,7 @@ fn load_cached_graph(vault: &Path) -> Option<LinkGraph> {
         nodes: cached.nodes,
         edges: cached.edges,
         last_scan_at: cached.last_scan_at,
+        positions: cached.positions,
     })
 }
 
@@ -395,7 +402,8 @@ fn save_cached_graph(vault: &Path, graph: &LinkGraph) -> Result<(), String> {
         version: CACHE_VERSION,
         nodes: graph.nodes.clone(),
         edges: graph.edges.clone(),
-        last_scan_at: graph.last_scan_at.clone(),
+        last_scan_at: graph.last_scan_at,
+        positions: graph.positions.clone(),
     };
     let json = serde_json::to_string(&cached)
         .map_err(|e| format!("Failed to serialize links.json: {}", e))?;
@@ -457,26 +465,57 @@ fn vault_mtime_newer_than(vault: &Path, threshold: i64) -> bool {
 }
 
 /// Get the current graph, rebuilding from disk if no cache exists or cache is stale.
+/// Preserves saved layout positions across rebuilds so the frontend can restore
+/// the previous view instantly.
 fn current_graph() -> Result<LinkGraph, String> {
     let start = std::time::Instant::now();
     let vault = notes::read_vault_path().ok_or_else(|| "No vault configured".to_string())?;
     log::info!("[graph] current_graph start, vault={:?}", vault);
-    if let Some(cached) = load_cached_graph(&vault) {
+    let existing_cache = load_cached_graph(&vault);
+    if let Some(ref cached) = existing_cache {
         let stale = vault_mtime_newer_than(&vault, cached.last_scan_at);
         log::info!("[graph] cache stale={} threshold={}", stale, cached.last_scan_at);
         if !stale {
             log::info!("[graph] loaded from cache, {} nodes, elapsed {:?}", cached.nodes.len(), start.elapsed());
-            return Ok(cached);
+            return Ok(cached.clone());
         }
         log::info!("[graph] cache stale, rebuilding...");
     } else {
         log::info!("[graph] no cache, building...");
     }
-    let graph = build_graph(&vault);
+    let mut graph = build_graph(&vault);
+    // Preserve saved layout positions across rebuilds.
+    if let Some(ref cached) = existing_cache {
+        graph.positions = cached.positions.clone();
+    }
     log::info!("[graph] built {} nodes {} edges, elapsed {:?}", graph.nodes.len(), graph.edges.len(), start.elapsed());
     save_cached_graph(&vault, &graph)?;
     log::info!("[graph] saved, total elapsed {:?}", start.elapsed());
     Ok(graph)
+}
+
+/// Background refresh of the link graph cache. Fire-and-forget: callers
+/// don't wait for completion. Used by `notes::notes_save_state` to pre-warm
+/// the cache so the next `notes_links_get_graph` call hits the cache instead
+/// of triggering a full rebuild. Preserves saved layout positions.
+pub fn refresh_cache_background(vault: PathBuf) {
+    tauri::async_runtime::spawn_blocking(move || {
+        let start = std::time::Instant::now();
+        let existing_positions = load_cached_graph(&vault)
+            .map(|g| g.positions)
+            .unwrap_or_default();
+        let mut graph = build_graph(&vault);
+        graph.positions = existing_positions;
+        if let Err(e) = save_cached_graph(&vault, &graph) {
+            log::warn!("[graph] background refresh save failed: {}", e);
+            return;
+        }
+        log::info!(
+            "[graph] background refresh done: {} nodes, elapsed {:?}",
+            graph.nodes.len(),
+            start.elapsed()
+        );
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -499,8 +538,8 @@ fn find_plain_mentions(
             continue;
         }
         // to_lowercase may change byte length for some Unicode chars, so all
-        // byte-offset operations below must use body_lc, never sn.body.
-        let body_lc = sn.body.to_lowercase();
+        // byte-offset operations below must use body_lc, never sn.note.body.
+        let body_lc = sn.note.body.to_lowercase();
         let mut from = 0;
         while let Some(pos) = body_lc[from..].find(&q_lc) {
             let abs_pos = from + pos;
@@ -695,6 +734,46 @@ pub async fn notes_links_get_graph() -> Result<LinkGraph, String> {
     }
 }
 
+/// Persist layout positions so the frontend can restore the previous view
+/// instantly on next open without re-running the force simulation from scratch.
+/// Only updates the `positions` field of the cache; nodes/edges are preserved.
+#[tauri::command]
+pub async fn notes_links_save_positions(positions: HashMap<String, [f64; 2]>) -> Result<(), String> {
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let vault = notes::read_vault_path().ok_or_else(|| "No vault configured".to_string())?;
+        let cache_path = links_cache_path(&vault);
+        let cached: CachedGraph = match fs::read_to_string(&cache_path) {
+            Ok(content) => serde_json::from_str(&content).unwrap_or_else(|_| CachedGraph {
+                version: CACHE_VERSION,
+                nodes: Vec::new(),
+                edges: Vec::new(),
+                last_scan_at: 0,
+                positions: HashMap::new(),
+            }),
+            Err(_) => CachedGraph {
+                version: CACHE_VERSION,
+                nodes: Vec::new(),
+                edges: Vec::new(),
+                last_scan_at: 0,
+                positions: HashMap::new(),
+            },
+        };
+        let mut updated = cached;
+        updated.positions = positions;
+        let dir = vault.join(".mona");
+        let _ = fs::create_dir_all(&dir);
+        let json = serde_json::to_string(&updated)
+            .map_err(|e| format!("Failed to serialize links.json: {}", e))?;
+        fs::write(cache_path, json)
+            .map_err(|e| format!("Failed to write links.json: {}", e))
+    })
+    .await;
+    match result {
+        Ok(inner) => inner,
+        Err(e) => Err(format!("Save positions task failed: {}", e)),
+    }
+}
+
 #[tauri::command]
 pub async fn notes_links_get_backlinks(note_id: String) -> Result<Vec<BacklinkItem>, String> {
     let result = tauri::async_runtime::spawn_blocking(move || {
@@ -705,7 +784,7 @@ pub async fn notes_links_get_backlinks(note_id: String) -> Result<Vec<BacklinkIt
             if sn.note.id == note_id {
                 continue;
             }
-            let refs = extract_wiki_links(&sn.body);
+            let refs = extract_wiki_links(&sn.note.body);
             for r in refs {
                 // A backlink exists if this note links to `note_id`. We resolve by
                 // title/alias match against the target note.
@@ -718,8 +797,8 @@ pub async fn notes_links_get_backlinks(note_id: String) -> Result<Vec<BacklinkIt
                             .iter()
                             .any(|a| a.eq_ignore_ascii_case(&r.target));
                     if is_match {
-                        let line = line_number(&sn.body, r.start_byte);
-                        let snippet = snippet_around(&sn.body, r.start_byte, r.target.len() + 4);
+                        let line = line_number(&sn.note.body, r.start_byte);
+                        let snippet = snippet_around(&sn.note.body, r.start_byte, r.target.len() + 4);
                         out.push(BacklinkItem {
                             note_id: sn.note.id.clone(),
                             title: sn.note.title.clone(),

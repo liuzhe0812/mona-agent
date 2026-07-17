@@ -225,7 +225,8 @@ export function XtermTerminal({ sessionId }: Props) {
       dataDisposable.dispose();
       titleDisposable.dispose();
       registry.unregister(sessionId);
-      terminal.dispose();
+      // xterm WebglAddon.dispose() 在容器已分离时偶发抛 _isDisposed 异常（上游 bug），吞掉避免中断清理
+      try { terminal.dispose(); } catch { /* terminal already disposed */ }
       terminalRef.current = null;
       fitAddonRef.current = null;
       lastSizeRef.current = null;

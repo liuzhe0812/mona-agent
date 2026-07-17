@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
+import { invokeWithTimeout } from "@/lib/tauri";
+
 export interface CpuInfo {
   usagePercent: number;
   frequencyGhz: number;
@@ -66,13 +68,13 @@ export function useSystemOverview() {
 
     const tick = async () => {
       try {
-        const result = await invoke<SystemOverview>("system_get_overview");
+        const result = await invokeWithTimeout<SystemOverview>("system_get_overview", {}, 5_000);
         if (active) {
           setData(result);
           setError(null);
         }
       } catch (e) {
-        if (active) setError(String(e));
+        if (active) setError(e instanceof Error ? e.message : String(e));
       } finally {
         if (active) timer = setTimeout(tick, POLL_INTERVAL);
       }
@@ -392,9 +394,11 @@ export function useStorageScan() {
       setStatus("done");
       setProgress(null);
       saveStorageCache({ result: res, lastScanAt: now });
+      return res;
     } catch (e) {
       setError(String(e));
       setStatus("error");
+      return null;
     }
   };
 
@@ -450,6 +454,7 @@ export interface StartupItem {
   enabled: boolean;
   signed: boolean;
   firstSeenAt: number | null;
+  isNew: boolean;
 }
 
 export interface StartupListResult {
@@ -511,8 +516,11 @@ export function useStartupItems() {
     try {
       await invoke("system_toggle_startup_item", { id, enabled });
       await refresh();
+      return null;
     } catch (e) {
-      setError(extractErrorMessage(e));
+      const message = extractErrorMessage(e);
+      setError(message);
+      return message;
     } finally {
       setToggling(false);
     }
@@ -617,11 +625,21 @@ export function useMaintenanceHistory() {
   };
 
   const restore = async (event: MaintenanceEvent) => {
-    if (!event.relatedId || event.restoreEnabled === null) return;
+    if (!event.relatedId) return null;
     setRestoringId(event.id);
     try {
-      await invoke("system_toggle_startup_item", { id: event.relatedId, enabled: event.restoreEnabled });
+      if (event.category === "系统优化" && event.reversible) {
+        await invoke("system_apply_configuration_item", { itemId: event.relatedId, mode: "restore" });
+      } else {
+        if (event.restoreEnabled === null) return null;
+        await invoke("system_toggle_startup_item", { id: event.relatedId, enabled: event.restoreEnabled });
+      }
       await refresh();
+      return null;
+    } catch (restoreError) {
+      const message = extractErrorMessage(restoreError);
+      setError(message);
+      return message;
     } finally {
       setRestoringId(null);
     }

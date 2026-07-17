@@ -1,8 +1,9 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SystemView } from "./SystemView";
+import type { DiagnosticStage, SystemDiagnosticEvidence, SystemDiagnosticReport, SystemEvidence, SystemEvidenceStage } from "./systemAgentApi";
 import type { StorageScanResult } from "./useSystemData";
 
 const storageScanMock = vi.hoisted(() => vi.fn<() => Promise<StorageScanResult>>(() => Promise.resolve({
@@ -13,8 +14,12 @@ const storageScanMock = vi.hoisted(() => vi.fn<() => Promise<StorageScanResult>>
   totalScannedGb: 0,
 })));
 
+const startupIssueMock = vi.hoisted(() => ({ isNew: false }));
+const overviewFailureMock = vi.hoisted(() => ({ message: "" }));
+const configurationApplyMock = vi.hoisted(() => vi.fn(() => Promise.resolve({ itemId: "privacy_advertising_id", success: true, detail: "操作已完成", requiresRestart: false })));
+
 const systemAgentMock = vi.hoisted(() => ({
-  collect: vi.fn(() => Promise.resolve({})),
+  collect: vi.fn<(storage: StorageScanResult | null, onProgress?: (stage: SystemEvidenceStage) => void) => Promise<SystemEvidence>>(() => Promise.resolve({} as SystemEvidence)),
   plan: vi.fn(() => Promise.resolve({
     summary: "已发现 1 项可更新软件",
     findings: ["Google Chrome 有可用安全更新"],
@@ -35,16 +40,37 @@ const systemAgentMock = vi.hoisted(() => ({
     verified: true,
     detail: "Google Chrome 更新完成",
   })),
+  diagnosticCollect: vi.fn<(symptom: string, onProgress?: (stage: DiagnosticStage, state: "running" | "completed") => void) => Promise<SystemDiagnosticEvidence>>(() => Promise.resolve({ symptom: "general", checks: [] })),
+  diagnosticReport: vi.fn(() => Promise.resolve({ summary: "未发现需要立即处置的系统故障", hypotheses: [], cautions: [] } as SystemDiagnosticReport)),
 }));
 
 vi.mock("./systemAgentApi", () => ({
   collectSystemEvidence: systemAgentMock.collect,
   requestSystemPlan: systemAgentMock.plan,
   executeSystemAction: systemAgentMock.execute,
+  collectSystemDiagnosticEvidence: systemAgentMock.diagnosticCollect,
+  requestSystemDiagnosis: systemAgentMock.diagnosticReport,
+  diagnosticStages: () => ["pending_reboot", "component_health", "driver_issues", "power_events", "network_configuration", "recovery_status"],
+}));
+
+vi.mock("./SystemAgentChat", () => ({
+  SystemAgentChat: ({ task }: { task: { error: string; target: string } | null }) => (
+    <div data-testid="system-agent-handoff">
+      <p>{task?.error}</p>
+      <p>{task?.target}</p>
+    </div>
+  ),
+}));
+
+vi.mock("@/lib/tauri", () => ({
+  invokeWithTimeout: <T,>(command: string, args?: Record<string, unknown>) => invoke<T>(command, args),
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn((command: string) => {
+    if (command === "system_get_overview" && overviewFailureMock.message) {
+      return Promise.reject(new Error(overviewFailureMock.message));
+    }
     if (command === "system_get_history") return Promise.resolve([]);
     if (command === "system_check_updates") return Promise.resolve({
       updates: [
@@ -73,10 +99,10 @@ vi.mock("@tauri-apps/api/core", () => ({
     });
     if (command === "system_list_startup_items") return Promise.resolve({
       items: [
-        { id: "wechat", name: "WeChat", publisher: "Tencent", source: "注册表", scope: "user", command: "C:\\WeChat\\WeChat.exe", targetPath: "C:\\WeChat\\WeChat.exe", added: "2024/05/12", enabled: true, signed: true, firstSeenAt: 1715472000 },
-        { id: "onedrive", name: "OneDrive", publisher: "Microsoft", source: "注册表", scope: "user", command: "C:\\OneDrive\\OneDrive.exe", targetPath: "C:\\OneDrive\\OneDrive.exe", added: "2024/01/15", enabled: true, signed: true, firstSeenAt: 1705276800 },
-        { id: "teams", name: "Microsoft Teams Machine-Wide Installer With A Very Long Startup Name", publisher: "Microsoft", source: "注册表", scope: "user", command: "C:\\Teams\\Teams.exe", targetPath: "C:\\Teams\\Teams.exe", added: "2024/02/20", enabled: false, signed: true, firstSeenAt: 1708358400 },
-        { id: "task:\\Updater|UpdateHelper", name: "UpdateHelper", publisher: "Example", source: "计划任务", scope: "machine", command: "C:\\Updater\\update.exe", targetPath: "C:\\Updater\\update.exe", added: null, enabled: true, signed: false, firstSeenAt: 1715472000 },
+        { id: "wechat", name: "WeChat", publisher: "Tencent", source: "注册表", scope: "user", command: "C:\\WeChat\\WeChat.exe", targetPath: "C:\\WeChat\\WeChat.exe", added: "2024/05/12", enabled: true, signed: true, firstSeenAt: Math.floor(Date.now() / 1000), isNew: startupIssueMock.isNew },
+        { id: "onedrive", name: "OneDrive", publisher: "Microsoft", source: "注册表", scope: "user", command: "C:\\OneDrive\\OneDrive.exe", targetPath: "C:\\OneDrive\\OneDrive.exe", added: "2024/01/15", enabled: true, signed: true, firstSeenAt: Math.floor(Date.now() / 1000), isNew: startupIssueMock.isNew },
+        { id: "teams", name: "Microsoft Teams Machine-Wide Installer With A Very Long Startup Name", publisher: "Microsoft", source: "注册表", scope: "user", command: "C:\\Teams\\Teams.exe", targetPath: "C:\\Teams\\Teams.exe", added: "2024/02/20", enabled: false, signed: true, firstSeenAt: 1708358400, isNew: false },
+        { id: "task:\\Updater|UpdateHelper", name: "UpdateHelper", publisher: "Example", source: "计划任务", scope: "machine", command: "C:\\Updater\\update.exe", targetPath: "C:\\Updater\\update.exe", added: null, enabled: true, signed: false, firstSeenAt: 1715472000, isNew: false },
       ],
       total: 4,
       enabledCount: 3,
@@ -85,6 +111,10 @@ vi.mock("@tauri-apps/api/core", () => ({
     if (command === "system_toggle_startup_item") return Promise.resolve();
     if (command === "system_batch_toggle_startup_items") return Promise.resolve(1);
     if (command === "system_get_boot_history") return Promise.resolve({ points: [], lastDurationMs: null, lastDeltaMs: null });
+    if (command === "system_acknowledge_startup_items") {
+      startupIssueMock.isNew = false;
+      return Promise.resolve();
+    }
     if (command === "system_get_startup_changes") return Promise.resolve([]);
     if (command === "system_get_maintenance_history") return Promise.resolve({
       events: [
@@ -92,6 +122,36 @@ vi.mock("@tauri-apps/api/core", () => ({
         { id: "software-8", ts: 1715472060, category: "卸载", title: "卸载 Notepad++", source: "用户操作", status: "成功", detail: "WinGet 卸载完成", bytesChanged: 0, reversible: false, relatedId: null, restoreEnabled: null },
       ],
     });
+    if (command === "system_get_configuration_audit") return Promise.resolve({
+      items: [{
+        id: "privacy_advertising_id",
+        category: "隐私与遥测",
+        title: "跨应用广告标识",
+        description: "允许应用基于广告 ID 提供个性化广告。",
+        currentValue: "允许个性化广告",
+        recommendedValue: "关闭个性化广告",
+        status: "available",
+        risk: "low",
+        impact: "减少跨应用广告跟踪",
+        reversible: true,
+        requiresRestart: false,
+        requiresAdministrator: false,
+        canApply: true,
+        canRestore: false,
+        note: "只修改当前 Windows 用户的广告标识开关。",
+      }],
+    });
+    if (command === "system_apply_configuration_item") return configurationApplyMock();
+    if (command === "system_list_windows_apps") return Promise.resolve({
+      items: [
+        { id: "Clipchamp.Clipchamp", appIds: ["Clipchamp.Clipchamp"], name: "Clipchamp", description: "Microsoft 视频编辑器", recommendation: "safe", removalMethod: "Appx", installed: true, selectedByDefault: true },
+        { id: "Microsoft.WindowsStore", appIds: ["Microsoft.WindowsStore"], name: "Microsoft Store", description: "Windows 应用商店", recommendation: "unsafe", removalMethod: "Appx", installed: true, selectedByDefault: false },
+      ],
+      total: 141,
+      installedCount: 2,
+      sourceVersion: "1.0",
+    });
+    if (command === "system_remove_windows_app") return Promise.resolve({ success: true, message: "卸载完成", exitCode: 0, residuals: [] });
     if (command === "scan_storage") return storageScanMock();
     return Promise.resolve({
       cpu: { usagePercent: 18, frequencyGhz: 2.1, coreCount: 8 },
@@ -113,6 +173,127 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 describe("SystemView", () => {
+  beforeEach(() => {
+    startupIssueMock.isNew = false;
+    overviewFailureMock.message = "";
+    configurationApplyMock.mockReset();
+    configurationApplyMock.mockResolvedValue({ itemId: "privacy_advertising_id", success: true, detail: "操作已完成", requiresRestart: false });
+    localStorage.removeItem("system.storageScan");
+  });
+
+  it("shows the overview recovery state when native data cannot be read", async () => {
+    overviewFailureMock.message = "系统概览读取失败";
+    render(<SystemView />);
+
+    expect(await screen.findByText("暂时无法读取系统状态")).toBeTruthy();
+    expect(screen.getByText("系统概览读取失败")).toBeTruthy();
+  });
+
+  it("only shows the header Mona button after the assistant auto-collapses", () => {
+    const originalWidth = window.innerWidth;
+    localStorage.removeItem("system.assistantCollapsed");
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1440 });
+    render(<SystemView />);
+
+    const pageHeader = screen.getByRole("heading", { name: "系统" }).closest("header")!;
+    expect(within(pageHeader).queryByRole("button", { name: /Mona 系统管家/ })).toBeNull();
+
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1279 });
+    fireEvent(window, new Event("resize"));
+    expect(document.querySelector('aside[aria-label="Mona 系统管家"]')?.getAttribute("aria-hidden")).toBe("true");
+    const expandButton = within(pageHeader).getByRole("button", { name: "展开 Mona 系统管家" });
+    fireEvent.click(expandButton);
+
+    const assistant = screen.getByRole("complementary", { name: "Mona 系统管家" });
+    expect(assistant.className).toMatch(/(?:^|\s)translate-x-0(?:\s|$)/);
+    expect(within(pageHeader).queryByRole("button", { name: /Mona 系统管家/ })).toBeNull();
+    fireEvent.click(within(assistant).getByRole("button", { name: "关闭 Mona 系统管家" }));
+    expect(within(pageHeader).getByRole("button", { name: "展开 Mona 系统管家" })).toBeTruthy();
+
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1280 });
+    fireEvent(window, new Event("resize"));
+    expect(screen.getByRole("complementary", { name: "Mona 系统管家" }).getAttribute("aria-hidden")).toBe("false");
+    expect(screen.getByRole("heading", { name: "Mona 系统管家" })).toBeTruthy();
+    expect(within(pageHeader).queryByRole("button", { name: /Mona 系统管家/ })).toBeNull();
+
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: originalWidth });
+    localStorage.removeItem("system.assistantCollapsed");
+  });
+
+  it("keeps an AI diagnosis running after its dialog closes and reopens the result", async () => {
+    let finishEvidence: (value: SystemDiagnosticEvidence) => void = () => {};
+    systemAgentMock.diagnosticCollect.mockImplementationOnce(() => new Promise<SystemDiagnosticEvidence>((resolve) => {
+      finishEvidence = resolve;
+    }));
+    systemAgentMock.diagnosticReport.mockResolvedValueOnce({
+      summary: "已完成本机故障诊断",
+      hypotheses: [],
+      cautions: [],
+    });
+
+    render(<SystemView />);
+    fireEvent.click(screen.getByRole("button", { name: "AI 故障诊断" }));
+    expect(screen.getByRole("dialog", { name: "AI 故障诊断" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "开始 AI 故障诊断" }));
+    await waitFor(() => expect(systemAgentMock.diagnosticCollect).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole("button", { name: "关闭 AI 故障诊断" }));
+
+    expect(screen.getByRole("button", { name: "AI 故障诊断（诊断中）" })).toBeTruthy();
+    act(() => finishEvidence({ symptom: "general", checks: [] }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "查看 AI 诊断结果" })).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: "查看 AI 诊断结果" }));
+    expect(await screen.findByText("已完成本机故障诊断")).toBeTruthy();
+  });
+
+  it("shows collected Windows evidence while Mona is still analyzing", async () => {
+    let finishReport: (value: SystemDiagnosticReport) => void = () => {};
+    systemAgentMock.diagnosticCollect.mockResolvedValueOnce({
+      symptom: "general",
+      checks: [{ id: "pending_reboot", status: "attention", summary: "检测到待重启状态", detail: "来源：Windows 更新" }],
+    });
+    systemAgentMock.diagnosticReport.mockImplementationOnce(() => new Promise<SystemDiagnosticReport>((resolve) => {
+      finishReport = resolve;
+    }));
+
+    render(<SystemView />);
+    fireEvent.click(screen.getByRole("button", { name: "AI 故障诊断" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "开始 AI 故障诊断" }));
+    });
+
+    expect(await screen.findByText("本机检查结果")).toBeTruthy();
+    expect(screen.getByText("Mona 正在关联证据")).toBeTruthy();
+    expect(storageScanMock).not.toHaveBeenCalled();
+
+    act(() => finishReport({ summary: "已生成证据关联结论", hypotheses: [], cautions: [] }));
+    expect(await screen.findByText("已生成证据关联结论")).toBeTruthy();
+  });
+
+  it("shows real Windows diagnostic stages while local checks are still running", async () => {
+    let finishEvidence: (value: SystemDiagnosticEvidence) => void = () => {};
+    systemAgentMock.diagnosticCollect.mockImplementationOnce((_symptom, onProgress?: (stage: DiagnosticStage, state: "running" | "completed") => void) => new Promise<SystemDiagnosticEvidence>((resolve) => {
+      onProgress?.("pending_reboot", "running");
+      onProgress?.("pending_reboot", "completed");
+      onProgress?.("component_health", "running");
+      onProgress?.("component_health", "completed");
+      onProgress?.("driver_issues", "running");
+      finishEvidence = resolve;
+    }));
+
+    render(<SystemView />);
+    fireEvent.click(screen.getByRole("button", { name: "AI 故障诊断" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "开始 AI 故障诊断" }));
+    });
+
+    expect(await screen.findByText("2 / 6")).toBeTruthy();
+    expect(screen.getByText("正在检查：设备状态")).toBeTruthy();
+
+    await act(async () => finishEvidence({ symptom: "general", checks: [] }));
+  });
+
   it("switches between all five system panels", () => {
     render(<SystemView />);
 
@@ -130,6 +311,9 @@ describe("SystemView", () => {
     fireEvent.click(screen.getByRole("tab", { name: "启动项" }));
     expect(screen.getByRole("heading", { name: "启动应用" })).toBeTruthy();
 
+    fireEvent.click(screen.getByRole("tab", { name: "系统优化" }));
+    expect(screen.getByRole("heading", { name: "Windows 系统优化" })).toBeTruthy();
+
     fireEvent.click(screen.getByRole("tab", { name: "维护记录" }));
     expect(screen.getByRole("heading", { name: "维护时间线" })).toBeTruthy();
   });
@@ -139,11 +323,62 @@ describe("SystemView", () => {
 
     expect(await screen.findByRole("button", { name: "10 分钟" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Mona 系统管家" })).toBeTruthy();
-    expect(screen.getByText("告诉 Mona 你想改善什么")).toBeTruthy();
-    expect(screen.getByText("仅发送必要摘要")).toBeTruthy();
+    expect(screen.getByText("从一个问题开始")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "分析 C 盘空间如何优化" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "帮我优化开机速度" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "电脑用着卡，帮我排查" })).toBeTruthy();
     expect(screen.getByTestId("system-layout").className).toContain(
       "xl:grid-cols-[minmax(0,1fr)_360px]",
     );
+  });
+
+  it("keeps basic Windows settings separate from AI fault diagnosis", async () => {
+    render(<SystemView initialTab="optimization" />);
+
+    expect(await screen.findByRole("heading", { name: "Windows 系统优化" })).toBeTruthy();
+    expect(screen.queryByText("仅保留高频、可解释、可恢复的系统开关；复杂故障交给 AI 故障诊断分析。")).toBeNull();
+    expect(screen.getByRole("button", { name: "隐私与建议内容" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Windows 更新" })).toBeTruthy();
+    expect(screen.getByText("高风险待确认")).toBeTruthy();
+    expect(screen.getByText("不会由 AI 自动修改")).toBeTruthy();
+    expect(screen.queryByText(/Win11Debloat 式配置/)).toBeNull();
+    expect(screen.getByRole("switch", { name: "应用跨应用广告标识" }).getAttribute("aria-checked")).toBe("false");
+    expect(screen.getByRole("button", { name: /AI 故障诊断/ })).toBeTruthy();
+  });
+
+  it("surfaces actionable issues and opens their existing workflows", async () => {
+    localStorage.removeItem("system.storageScan");
+    try {
+      render(<SystemView />);
+
+      expect(await screen.findByRole("heading", { name: "现在值得处理" })).toBeTruthy();
+      expect(screen.getByRole("heading", { name: "C 盘空间紧张" })).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "查看并扫描" }));
+      expect(await screen.findByRole("heading", { name: "磁盘分区" })).toBeTruthy();
+
+  } finally {
+      localStorage.removeItem("system.storageScan");
+    }
+  });
+
+  it("does not treat the initial startup inventory as newly added", async () => {
+    render(<SystemView />);
+
+    await screen.findByRole("heading", { name: "现在值得处理" });
+    expect(screen.queryByRole("heading", { name: "启动项有新增" })).toBeNull();
+  });
+
+  it("acknowledges reviewed startup items before returning to the overview", async () => {
+    startupIssueMock.isNew = true;
+    render(<SystemView />);
+
+    expect(await screen.findByRole("heading", { name: "启动项有新增" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "审查启动项" }));
+    await waitFor(() => expect(vi.mocked(invoke)).toHaveBeenCalledWith("system_acknowledge_startup_items"));
+    expect(await screen.findByRole("heading", { name: "启动应用" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("tab", { name: "概览" }));
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "启动项有新增" })).toBeNull());
   });
 
   it("shows real process disk read and write rates without a network placeholder", async () => {
@@ -229,6 +464,19 @@ describe("SystemView", () => {
     expect(screen.getByRole("switch", { name: "切换 OneDrive 启动状态" }).getAttribute("aria-checked")).toBe("true");
   });
 
+  it("hands a failed startup toggle to Mona in the right sidebar", async () => {
+    render(<SystemView initialTab="startup" />);
+
+    const wechatSwitch = await screen.findByRole("switch", { name: "切换 WeChat 启动状态" });
+    vi.mocked(invoke).mockRejectedValueOnce(new Error("access denied"));
+    fireEvent.click(wechatSwitch);
+
+    expect(await screen.findByTestId("system-task-failure")).toBeTruthy();
+    fireEvent.click(await screen.findByRole("button", { name: "交给 Mona" }));
+    expect(screen.queryByTestId("system-task-failure")).toBeNull();
+    expect((await screen.findByTestId("system-agent-handoff")).textContent).toContain("access denied");
+  });
+
   it("keeps startup columns fixed and exposes truncated names through a tooltip", async () => {
     render(<SystemView initialTab="startup" />);
 
@@ -287,10 +535,14 @@ describe("SystemView", () => {
     expect(screen.getByText("应用")).toBeTruthy();
   });
 
-  it("shows persistent software failure details and an installed software table", async () => {
+  it("removes a handed-off software failure from the current task list", async () => {
     render(<SystemView initialTab="software" />);
 
-    expect(await screen.findByText("安装器返回 1603")).toBeTruthy();
+    expect(await screen.findByText(/安装器返回 1603/)).toBeTruthy();
+    expect(screen.getByTestId("system-task-failure")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "交给 Mona" }));
+    expect(screen.queryByTestId("system-task-failure")).toBeNull();
+    expect((await screen.findByTestId("system-agent-handoff")).textContent).toContain("安装器返回 1603");
     fireEvent.click(screen.getByRole("tab", { name: "已安装软件" }));
     expect(screen.getByRole("columnheader", { name: "已安装软件" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "卸载 Notepad++" })).toBeTruthy();
@@ -308,6 +560,38 @@ describe("SystemView", () => {
     expect((rows[0] as HTMLTableRowElement).cells[0].textContent).toContain("Microsoft Teams");
   });
 
+  it("offers the complete Windows settings navigation and compact filters", async () => {
+    render(<SystemView initialTab="optimization" />);
+
+    expect(await screen.findByRole("button", { name: "隐私与建议内容" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "任务栏" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "文件资源管理器" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "可选 Windows 功能" })).toBeTruthy();
+    expect(screen.getByRole("searchbox", { name: "搜索 Windows 设置" })).toBeTruthy();
+    expect(screen.getByRole("combobox", { name: "风险筛选" })).toBeTruthy();
+  });
+
+  it("shows configuration failures inside the active confirmation dialog", async () => {
+    configurationApplyMock.mockRejectedValueOnce(new Error("拒绝访问"));
+    render(<SystemView initialTab="optimization" />);
+
+    fireEvent.click(await screen.findByRole("switch", { name: "应用跨应用广告标识" }));
+    const dialog = screen.getByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "确认应用" }));
+
+    expect((await within(dialog).findByRole("alert")).textContent).toContain("拒绝访问");
+  });
+
+  it("integrates the complete Windows preinstalled app catalog into software management", async () => {
+    render(<SystemView initialTab="software" />);
+
+    fireEvent.click(screen.getByRole("tab", { name: "Windows 预装应用" }));
+    expect(await screen.findByText("Clipchamp")).toBeTruthy();
+    expect(screen.getByText("Microsoft Store")).toBeTruthy();
+    expect(screen.getByText("完整目录 141 项")).toBeTruthy();
+    expect(screen.getByRole("combobox", { name: "预装应用风险筛选" })).toBeTruthy();
+  });
+
   it("renders maintenance history returned by the backend instead of mock events", async () => {
     render(<SystemView initialTab="maintenance" />);
 
@@ -319,12 +603,12 @@ describe("SystemView", () => {
   it("keeps a real Agent plan across tabs and opens its evidence source", async () => {
     render(<SystemView initialTab="software" />);
 
-    fireEvent.click(screen.getByRole("button", { name: /Mona 协助/ }));
+    fireEvent.click(screen.getByRole("button", { name: "分析 C 盘空间如何优化" }));
     expect(screen.getByText("正在整理系统证据")).toBeTruthy();
 
     expect(await screen.findByText("已发现 1 项可更新软件")).toBeTruthy();
     expect(systemAgentMock.collect).toHaveBeenCalled();
-    expect(systemAgentMock.plan).toHaveBeenCalledWith("检查电脑状态并生成安全处理方案", {});
+    expect(systemAgentMock.plan).toHaveBeenCalledWith("分析 C 盘空间如何优化", {});
     expect(screen.getByText("更新 Google Chrome")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("tab", { name: "启动项" }));
@@ -337,7 +621,7 @@ describe("SystemView", () => {
   it("executes only the selected real Agent actions and reports verification", async () => {
     render(<SystemView initialTab="software" />);
 
-    fireEvent.click(screen.getByRole("button", { name: /Mona 协助/ }));
+    fireEvent.click(screen.getByRole("button", { name: "分析 C 盘空间如何优化" }));
     await screen.findByText("更新 Google Chrome");
     fireEvent.click(screen.getByRole("button", { name: "确认并执行" }));
 

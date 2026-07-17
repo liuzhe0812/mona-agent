@@ -23,6 +23,7 @@ use settings::AppSettings;
 use std::sync::{Arc, Mutex};
 use tauri::webview::{DownloadEvent, WebviewWindowBuilder};
 use tauri::{Emitter, Listener, Manager, WebviewUrl};
+use tauri::utils::config::Color;
 use tauri_plugin_global_shortcut::ShortcutState;
 
 const GATEWAY_START_TIMEOUT_SECS: u64 = 90;
@@ -30,12 +31,13 @@ const GATEWAY_START_TIMEOUT_SECS: u64 = 90;
 #[cfg(test)]
 mod browser_ipc_tests {
     #[test]
-    fn browser_uses_a_raw_webview2_content_runtime() {
+    fn browser_uses_tauri_managed_child_webviews() {
         let browser = include_str!("browser/mod.rs");
         let runtime = include_str!("lib.rs");
 
-        assert!(browser.contains("wry::WebViewBuilder"));
-        assert!(!browser.contains("tauri::WebviewBuilder"));
+        assert!(browser.contains("WebviewBuilder::new"));
+        assert!(!browser.contains("wry::WebViewBuilder"));
+        assert!(!runtime.contains(&["tauri_plugin_shell", "::init()"].concat()));
         assert!(!runtime.contains(&[".invoke", "_system("].concat()));
     }
 
@@ -59,6 +61,15 @@ mod browser_ipc_tests {
             assert!(popup.contains(".visible(false)"));
             assert!(popup.contains("window.show()"));
         }
+    }
+
+    #[test]
+    fn browser_popup_capabilities_use_window_labels() {
+        let capabilities = include_str!("../capabilities/default.json");
+
+        assert!(capabilities.contains("browser-address-suggestions"));
+        assert!(capabilities.contains("browser-downloads"));
+        assert!(!capabilities.contains("\"browser-suggestions\""));
     }
 }
 
@@ -378,8 +389,28 @@ fn get_pending_md_files(state: tauri::State<PendingMdFiles>) -> Vec<String> {
     result
 }
 
+/// 前端主题切换时调用，同步窗口背景色，避免拖动调整大小时露出对比色残影。
+/// 浅色主题传 (255,255,255,255)，深色主题传 (26,26,26,255) 匹配 body 背景。
+#[tauri::command]
+fn set_window_background_color(
+    app: tauri::AppHandle,
+    r: u8,
+    g: u8,
+    b: u8,
+    a: u8,
+) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("main") {
+        window
+            .set_background_color(Some(Color(r, g, b, a)))
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    browser::configure_webview2_cdp();
+
     let gateway_state = GatewayState::new();
     let terminal_state = terminal::TerminalState::new();
     let db_state = db::DbState::new();
@@ -390,10 +421,13 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_log::Builder::new().build())
-        .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_opener::init())
+        .plugin(
+            tauri_plugin_opener::Builder::new()
+                .open_js_links_on_click(false)
+                .build(),
+        )
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
@@ -444,6 +478,7 @@ pub fn run() {
             stop_gateway,
             gateway_status,
             diagnose_gateway,
+            gateway::read_gateway_log,
             local_http_request,
             open_in_browser,
             mona_config_status,
@@ -452,6 +487,7 @@ pub fn run() {
             read_email_schedule_config,
             write_email_schedule_config,
             get_pending_md_files,
+            set_window_background_color,
             quick_ask::quick_ask_hide,
             quick_ask::quick_ask_show,
             quick_ask::quick_ask_focus_chat,
@@ -461,6 +497,7 @@ pub fn run() {
             notes::notes_save_state,
             notes::notes_export_temp,
             notes::notes_create_from_chat,
+            notes::notes_edit_note,
             notes::notes_read_note_content,
             notes::notes_search,
             notes::notes_search_all,
@@ -472,6 +509,7 @@ pub fn run() {
             notes::get_agent_search_scope,
             notes::set_agent_search_scope,
             notes_links::notes_links_get_graph,
+            notes_links::notes_links_save_positions,
             notes_links::notes_links_get_backlinks,
             notes_links::notes_links_get_mentions,
             notes_links::notes_links_rename_sync,
@@ -649,6 +687,7 @@ pub fn run() {
             license::auth_logout,
             license::auth_forgot_password,
             license::auth_reset_password,
+            license::auth_change_password,
             license::get_auth_status,
             license::bind_device,
             license::upload_image,
@@ -704,7 +743,7 @@ pub fn run() {
             browser::suggestions::browser_hide_address_suggestions,
             browser::suggestions::browser_select_address_suggestion,
             browser::downloads::browser_show_downloads,
-            browser::downloads::show_browser_downloads_window,
+            browser::downloads::browser_toggle_downloads,
             browser::downloads::browser_hide_downloads,
             browser::storage::browser_add_bookmark,
             browser::storage::browser_remove_bookmark,
@@ -734,25 +773,37 @@ pub fn run() {
             system::software::system_check_updates,
             system::software::system_upgrade_software,
             system::software::system_uninstall_software,
+            system::software::system_list_windows_apps,
+            system::software::system_remove_windows_app,
             system::startup::system_list_startup_items,
+            system::startup::system_acknowledge_startup_items,
             system::startup::system_toggle_startup_item,
             system::startup::system_batch_toggle_startup_items,
             system::startup::system_get_boot_history,
             system::startup::system_get_startup_changes,
             system::maintenance::system_get_maintenance_history,
+            system::diagnostics::system_get_configuration_audit,
+            system::diagnostics::system_apply_configuration_item,
+            system::diagnostics::system_check_pending_reboot,
+            system::diagnostics::system_check_component_health,
+            system::diagnostics::system_check_driver_issues,
+            system::diagnostics::system_check_power_events,
+            system::diagnostics::system_check_network_configuration,
+            system::diagnostics::system_check_recovery_status,
         ])
         .setup(move |app| {
             // 创建主窗口（在 builder 上注册 on_download，让 video 原生下载按钮生效）
+            // 禁用 Tauri 原生拖放处理器，启用 HTML5 drag-and-drop API（标签页拖拽排序等）
             let _main_window = WebviewWindowBuilder::new(
-                app,
-                "main",
-                WebviewUrl::App("index.html".into()),
+                app, "main", WebviewUrl::App("index.html".into()),
             )
             .title("Mona")
             .inner_size(1200.0, 800.0)
             .min_inner_size(800.0, 600.0)
             .center()
             .decorations(false)
+            .background_color(Color(255, 255, 255, 255))
+            .disable_drag_drop_handler()
             .on_download(|webview, event| {
                 match event {
                     DownloadEvent::Requested { url, destination } => {
@@ -799,6 +850,45 @@ pub fn run() {
             // 设置高分辨率窗口图标，确保任务栏在高 DPI 下清晰
             if let Some(win) = app.get_webview_window("main") {
                 let _ = win.set_icon(tray::load_icon());
+
+                // 在主窗口上注册 WebView2 PermissionRequested 处理器，
+                // 自动批准麦克风权限（用于笔记模块的录音转写功能），
+                // 避免弹出 WebView2 默认的权限请求弹窗，其他权限保持默认行为。
+                #[cfg(target_os = "windows")]
+                {
+                    use tauri::webview::Webview;
+                    let _ = win.with_webview(|wv| {
+                        use webview2_com::PermissionRequestedEventHandler;
+                        use webview2_com::Microsoft::Web::WebView2::Win32::{
+                            ICoreWebView2PermissionRequestedEventArgs, COREWEBVIEW2_PERMISSION_KIND,
+                            COREWEBVIEW2_PERMISSION_STATE,
+                        };
+                        unsafe {
+                            let core = wv.controller().CoreWebView2().ok();
+                            if let Some(core) = core {
+                                let handler = PermissionRequestedEventHandler::create(
+                                    Box::new(
+                                        move |_sender, args: Option<ICoreWebView2PermissionRequestedEventArgs>| {
+                                            if let Some(args) = args {
+                                                let mut kind = COREWEBVIEW2_PERMISSION_KIND::default();
+                                                let _ = args.PermissionKind(&mut kind);
+                                                // COREWEBVIEW2_PERMISSION_KIND_MICROPHONE = 1
+                                                if kind.0 == 1 {
+                                                    let _ = args.SetState(
+                                                        COREWEBVIEW2_PERMISSION_STATE(1), // ALLOW
+                                                    );
+                                                }
+                                            }
+                                            Ok(())
+                                        },
+                                    ),
+                                );
+                                let mut token: i64 = 0;
+                                let _ = core.add_PermissionRequested(&handler, &mut token);
+                            }
+                        }
+                    });
+                }
             }
 
             tray::setup_tray(app)?;
@@ -945,9 +1035,11 @@ pub fn run() {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                     let current_settings = settings::load_settings();
                     if current_settings.run_in_background {
+                        log::info!("[window] CloseRequested: prevent_close + hide (run_in_background=true)");
                         api.prevent_close();
                         let _ = window.hide();
                     } else {
+                        log::info!("[window] CloseRequested: closing app (run_in_background=false)");
                         let _ = gateway_state_for_close.stop();
                     }
                 }

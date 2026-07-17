@@ -1,8 +1,9 @@
-import { openPath } from "@tauri-apps/plugin-opener";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Database, Eraser, FolderSearch, HardDrive, Loader2, PieChart, RefreshCw } from "lucide-react";
 import { useState } from "react";
 
 import { MetricCard, PanelCard, ProgressBar, primaryButtonClass, secondaryButtonClass } from "./SystemUi";
+import type { SystemAgentHandoffTask } from "./systemAgentHandoff";
 import {
   formatGb,
   formatPercent,
@@ -76,6 +77,7 @@ function ScanStatusBar({
   progress,
   error,
   onScan,
+  onHandoff,
 }: {
   status: string;
   result: StorageScanResult | null;
@@ -83,6 +85,7 @@ function ScanStatusBar({
   progress: ScanProgress | null;
   error: string | null;
   onScan: () => void;
+  onHandoff: (task: SystemAgentHandoffTask) => void;
 }) {
   const scanning = status === "scanning";
   return (
@@ -98,7 +101,7 @@ function ScanStatusBar({
         ) : status === "error" ? (
           <>
             <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-red-500" />
-            <span className="truncate">扫描失败：{error ?? "未知错误"}</span>
+            <span role="alert" className="truncate">扫描失败：{error ?? "未知错误"}</span>
           </>
         ) : result ? (
           <>
@@ -114,15 +117,31 @@ function ScanStatusBar({
           </>
         )}
       </div>
-      <button
-        type="button"
-        className={`${secondaryButtonClass} shrink-0`}
-        onClick={onScan}
-        disabled={scanning}
-      >
-        <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${scanning ? "animate-spin" : ""}`} />
-        {result ? "重新扫描" : "开始扫描"}
-      </button>
+      <div className="flex shrink-0 gap-2">
+        {status === "error" && (
+          <button
+            type="button"
+            className={secondaryButtonClass}
+            onClick={() => onHandoff({
+              id: crypto.randomUUID(),
+              title: "扫描存储空间",
+              action: "扫描存储空间",
+              target: "本机磁盘",
+              arguments: {},
+              error: error ?? "未知错误",
+            })}
+          >交给 Mona</button>
+        )}
+        <button
+          type="button"
+          className={secondaryButtonClass}
+          onClick={onScan}
+          disabled={scanning}
+        >
+          <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${scanning ? "animate-spin" : ""}`} />
+          {result ? "重新扫描" : "开始扫描"}
+        </button>
+      </div>
     </div>
   );
 }
@@ -170,21 +189,26 @@ function SpaceDistribution({
   progress: ScanProgress | null;
   error: string | null;
 }) {
+  const handleOpen = (path: string) => {
+    revealItemInDir(path).catch((err) => console.error("revealItemInDir failed:", err));
+  };
   return (
     <PanelCard title="空间分布（扫描区域）" className="h-full">
       {directories.length === 0 ? (
         <AnalysisPlaceholder status={status} progress={progress} error={error} />
       ) : (
-        <div className="grid h-[184px] grid-cols-2 grid-rows-3 gap-1 overflow-hidden rounded-lg text-white">
+        <div className="grid h-[200px] grid-cols-2 grid-rows-3 gap-1 overflow-hidden rounded-lg text-white">
           {directories.slice(0, 4).map((directory, index) => (
-            <div
+            <button
+              type="button"
               key={directory.path}
-              className={`${TREEMAP_TONES[index]} flex min-w-0 flex-col items-center justify-center rounded-md p-2 text-center ${index === 0 ? "row-span-3" : index === 1 ? "row-span-2" : ""}`}
-              title={`${directory.path} · ${formatStorage(directory.sizeGb)}`}
+              onClick={() => handleOpen(directory.path)}
+              title={`${directory.path} · ${formatStorage(directory.sizeGb)}（点击打开目录）`}
+              className={`${TREEMAP_TONES[index]} flex min-w-0 cursor-pointer flex-col items-center justify-center gap-0.5 overflow-hidden rounded-md p-1.5 text-center transition hover:brightness-110 hover:ring-2 hover:ring-white/60 ${index === 0 ? "row-span-3" : index === 1 ? "row-span-2" : ""}`}
             >
-              <span className="max-w-full truncate text-xs font-medium">{directory.path.split("\\").filter(Boolean).pop() ?? directory.path}</span>
-              <span className="mt-1 text-[10px] text-white/90">{formatStorage(directory.sizeGb)}</span>
-            </div>
+              <span className="max-w-full truncate text-[11px] font-medium leading-tight">{directory.path.split("\\").filter(Boolean).pop() ?? directory.path}</span>
+              <span className="text-[10px] leading-tight text-white/90">{formatStorage(directory.sizeGb)}</span>
+            </button>
           ))}
         </div>
       )}
@@ -229,11 +253,13 @@ function DirectoryTable({
   status,
   progress,
   error,
+  onAnalyze,
 }: {
   directories: DirectorySize[];
   status: string;
   progress: ScanProgress | null;
   error: string | null;
+  onAnalyze?: (goal: string) => void;
 }) {
   return (
     <PanelCard title="占用最大的目录（扫描区域）" className="h-full">
@@ -250,7 +276,7 @@ function DirectoryTable({
                   <td className="truncate py-2.5 pr-3 font-medium" title={directory.path}>{directory.path}</td>
                   <td>{formatStorage(directory.sizeGb)}</td>
                   <td>{directory.fileCount.toLocaleString()}</td>
-                  <td><button className="text-blue-600 hover:underline" onClick={() => void openPath(directory.path)}>查看</button></td>
+                  <td><button className="text-blue-600 hover:underline" onClick={() => onAnalyze?.(`分析目录「${directory.path}」的空间使用情况（当前占用 ${formatStorage(directory.sizeGb)}，共 ${directory.fileCount.toLocaleString()} 个文件）。请识别可安全清理的子目录、大文件类型、临时缓存和冗余数据，评估每项可释放的空间与风险等级，给出具体的空间优化建议。`)}>分析</button></td>
                 </tr>
               ))}
             </tbody>
@@ -268,6 +294,7 @@ function CleanupPanel({
   error,
   onClean,
   cleaning,
+  onHandoff,
 }: {
   items: CleanupItem[];
   status: string;
@@ -275,10 +302,12 @@ function CleanupPanel({
   error: string | null;
   onClean: ReturnType<typeof useStorageScan>["clean"];
   cleaning: boolean;
+  onHandoff: (task: SystemAgentHandoffTask) => void;
 }) {
   const [selected, setSelected] = useState<Set<string>>(() => new Set(items.filter((item) => item.cleanable && item.recommended && item.sizeGb > 0).map((item) => item.id)));
   const [confirming, setConfirming] = useState(false);
   const [notice, setNotice] = useState("");
+  const [failedTask, setFailedTask] = useState<SystemAgentHandoffTask | null>(null);
   const selectedItems = items.filter((item) => selected.has(item.id) && item.cleanable && item.sizeGb > 0);
   const selectedSize = selectedItems.reduce((sum, item) => sum + item.sizeGb, 0);
 
@@ -292,9 +321,26 @@ function CleanupPanel({
     try {
       const result = await onClean(selectedItems.map((item) => item.id));
       setNotice(result.failures.length > 0 ? `已释放 ${formatStorage(result.freedGb)}，${result.failures.length} 项未完成` : `清理完成，实际释放 ${formatStorage(result.freedGb)}`);
+      setFailedTask(result.failures.length > 0 ? {
+        id: crypto.randomUUID(),
+        title: "清理存储空间",
+        action: "清理存储空间",
+        target: selectedItems.map((item) => item.name).join("、"),
+        arguments: { ids: selectedItems.map((item) => item.id) },
+        error: result.failures.join("；"),
+      } : null);
       setSelected(new Set());
     } catch (cleanupError) {
-      setNotice(`清理失败：${String(cleanupError)}`);
+      const error = String(cleanupError);
+      setNotice(`清理失败：${error}`);
+      setFailedTask({
+        id: crypto.randomUUID(),
+        title: "清理存储空间",
+        action: "清理存储空间",
+        target: selectedItems.map((item) => item.name).join("、"),
+        arguments: { ids: selectedItems.map((item) => item.id) },
+        error,
+      });
     } finally {
       setConfirming(false);
     }
@@ -336,14 +382,19 @@ function CleanupPanel({
               <button className={primaryButtonClass} onClick={() => void clean()} disabled={cleaning}>{cleaning ? "正在清理" : "确认清理"}</button>
             </div>
           )}
-          {notice && <p role="status" className="mt-2 text-xs text-muted-foreground">{notice}</p>}
+           {notice && (
+             <div role={failedTask ? "alert" : "status"} className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+               <span>{notice}</span>
+               {failedTask && <button type="button" className={secondaryButtonClass} onClick={() => onHandoff(failedTask)}>交给 Mona</button>}
+             </div>
+           )}
         </>
       )}
     </PanelCard>
   );
 }
 
-export function StoragePanel({ scan }: { scan: ReturnType<typeof useStorageScan> }) {
+export function StoragePanel({ scan, onHandoff, onAnalyze }: { scan: ReturnType<typeof useStorageScan>; onHandoff: (task: SystemAgentHandoffTask) => void; onAnalyze?: (goal: string) => void }) {
   const { status, result, lastScanAt, progress, error, cleaning, start, clean } = scan;
   const { data: overview, error: overviewError } = useSystemOverview();
   const disks = result?.disks ?? overview?.disks ?? [];
@@ -358,7 +409,7 @@ export function StoragePanel({ scan }: { scan: ReturnType<typeof useStorageScan>
 
   return (
     <div className="space-y-3">
-      <ScanStatusBar status={status} result={result} lastScanAt={lastScanAt} progress={progress} error={error} onScan={start} />
+      <ScanStatusBar status={status} result={result} lastScanAt={lastScanAt} progress={progress} error={error} onScan={start} onHandoff={onHandoff} />
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <MetricCard label="总容量" value={disks.length ? formatStorage(totalCapacity) : "—"} detail={disks.length ? `${disks.length} 个本地磁盘` : "正在读取实时信息"} icon={<HardDrive className="h-4 w-4" />} />
@@ -376,8 +427,8 @@ export function StoragePanel({ scan }: { scan: ReturnType<typeof useStorageScan>
       </div>
 
       <div className="grid gap-3 lg:grid-cols-[1.08fr_1fr]">
-        <DirectoryTable directories={directories} status={status} progress={progress} error={error} />
-        <CleanupPanel items={cleanupItems} status={status} progress={progress} error={error} onClean={clean} cleaning={cleaning} />
+        <DirectoryTable directories={directories} status={status} progress={progress} error={error} onAnalyze={onAnalyze} />
+        <CleanupPanel items={cleanupItems} status={status} progress={progress} error={error} onClean={clean} cleaning={cleaning} onHandoff={onHandoff} />
       </div>
     </div>
   );

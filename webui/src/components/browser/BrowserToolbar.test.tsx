@@ -9,9 +9,24 @@ const menuNew = vi.hoisted(() => vi.fn().mockResolvedValue({ popup, close }));
 const showAddressSuggestions = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const hideAddressSuggestions = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const showDownloads = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const toggleDownloads = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 
 vi.mock("@/lib/tauri", () => ({ isTauri: () => true }));
 vi.mock("@tauri-apps/api/menu", () => ({ Menu: { new: menuNew } }));
+vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn().mockResolvedValue(vi.fn()) }));
+vi.mock("@/hooks/useDownloads", () => ({
+  useDownloads: () => ({
+    downloads: [],
+    hasActiveDownloads: false,
+    cancelDownload: vi.fn(),
+    pauseDownload: vi.fn(),
+    resumeDownload: vi.fn(),
+    openDownload: vi.fn(),
+    revealDownload: vi.fn(),
+    removeDownload: vi.fn(),
+    clearCompleted: vi.fn(),
+  }),
+}));
 vi.mock("@/lib/browser-ipc", () => ({
   browserIsBookmarked: vi.fn().mockResolvedValue(false),
   browserAddBookmark: vi.fn(),
@@ -20,6 +35,7 @@ vi.mock("@/lib/browser-ipc", () => ({
   browserShowAddressSuggestions: showAddressSuggestions,
   browserHideAddressSuggestions: hideAddressSuggestions,
   browserShowDownloads: showDownloads,
+  browserToggleDownloads: toggleDownloads,
   browserListenAddressSuggestionSelected: vi.fn().mockResolvedValue(vi.fn()),
   browserClearHistory: vi.fn(),
   browserClearCache: vi.fn(),
@@ -34,6 +50,7 @@ describe("BrowserToolbar", () => {
     showAddressSuggestions.mockClear();
     hideAddressSuggestions.mockClear();
     showDownloads.mockClear();
+    toggleDownloads.mockClear();
   });
 
   it("uses a native window for address suggestions", async () => {
@@ -126,12 +143,36 @@ describe("BrowserToolbar", () => {
     expect(onFind).toHaveBeenCalledTimes(1);
 
     const createNoteItem = items.find((item) => item.text === "生成 Markdown 笔记");
-    expect(createNoteItem).toBeDefined();
-    createNoteItem?.action?.();
+    expect(createNoteItem).toBeUndefined();
+  });
+
+  it("triggers note creation from the toolbar button", () => {
+    const onCreateNote = vi.fn();
+
+    render(
+      <BrowserToolbar
+        tabId="tab-1"
+        url="https://example.com"
+        title="Example"
+        isAiControlled={false}
+        isAiPanelOpen={false}
+        bookmarkBarVisible={true}
+        onNavigate={vi.fn()}
+        onGoBack={vi.fn()}
+        onGoForward={vi.fn()}
+        onReload={vi.fn()}
+        onToggleAiPanel={vi.fn()}
+        onToggleBookmarkBar={vi.fn()}
+        onCreateNote={onCreateNote}
+      />,
+    );
+
+    fireEvent.click(screen.getByTitle("提取为笔记"));
+
     expect(onCreateNote).toHaveBeenCalledTimes(1);
   });
 
-  it("opens the browser download bubble from the toolbar", () => {
+  it("opens downloads from a conventional toolbar button", () => {
     vi.spyOn(HTMLButtonElement.prototype, "getBoundingClientRect").mockReturnValue({
       left: 720,
       top: 12,
@@ -140,6 +181,7 @@ describe("BrowserToolbar", () => {
       width: 24,
       height: 24,
     } as DOMRect);
+
     render(
       <BrowserToolbar
         tabId="tab-1"
@@ -159,6 +201,6 @@ describe("BrowserToolbar", () => {
 
     fireEvent.click(screen.getByTitle("下载"));
 
-    expect(showDownloads).toHaveBeenCalledWith({ left: 384, top: 42 });
+    expect(toggleDownloads).toHaveBeenCalledWith({ left: 384, top: 42 });
   });
 });

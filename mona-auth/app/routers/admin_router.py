@@ -1,6 +1,7 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -501,3 +502,175 @@ def admin_unsign_agreement(
             sub.cancelled_at = datetime.now(timezone.utc)
     db.commit()
     return {"message": "Agreement unsigned", "alipay_result": result.success}
+
+
+@router.get("/metrics/dashboard")
+def get_metrics_dashboard(
+    _admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """运营看板：一次性返回所有指标数据。"""
+    now = datetime.now(timezone.utc)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    week_start = today_start - timedelta(days=today_start.weekday())
+    month_start = today_start.replace(day=1)
+    year_start = today_start.replace(month=1, day=1)
+
+    # ── 收入总览 ──
+    def sum_amount(start, end):
+        return db.query(func.coalesce(func.sum(Payment.amount), 0)).filter(
+            Payment.status == PaymentStatus.PAID,
+            Payment.paid_at >= start,
+            Payment.paid_at < end,
+        ).scalar() or 0
+
+    revenue_today = sum_amount(today_start, now)
+    revenue_week = sum_amount(week_start, now)
+    revenue_month = sum_amount(month_start, now)
+    revenue_year = sum_amount(year_start, now)
+
+    # MRR：当前 active 订阅的月费总和
+    # 月付直接计月费；年付除以 12；无法识别的按 amount 月费
+    active_subs = db.query(Subscription).filter(Subscription.status == SubscriptionStatus.ACTIVE).all()
+    plan_map = {p.id: p for p in db.query(PricingPlan).all()}
+    mrr = 0.0
+    plan_count = {}
+    for sub in active_subs:
+        plan = plan_map.get(sub.plan_code) if sub.plan_code else None
+        if plan:
+            if plan.duration_months and plan.duration_months >= 12:
+                mrr += plan.price / 12
+            elif plan.duration_months:
+                mrr += plan.price / plan.duration_months
+            else:
+                mrr += plan.price
+            plan_count[plan.name] = plan_count.get(plan.name, 0) + 1
+
+    arr = mrr * 12
+    paying_users_count = db.query(func.count(func.distinct(Payment.user_id))).filter(
+        Payment.status == PaymentStatus.PAID
+    ).scalar() or 0
+    avg_revenue_per_user = revenue_year / paying_users_count if paying_users_count else 0
+
+    # ── 用户与转化 ──
+    total_users = db.query(User).count()
+    active_trials = db.query(User).filter(User.trial_expires_at > now).count()
+    expired_trials = db.query(User).filter(
+        User.trial_expires_at != None,
+        User.trial_expires_at <= now,
+    ).count()
+    ever_tried = active_trials + expired_trials
+    conversion_rate = paying_users_count / ever_tried if ever_tried else 0
+
+    # 流失用户：曾经付费但当前无 active subscription
+    paid_user_ids = {r[0] for r in db.query(func.distinct(Payment.user_id)).filter(Payment.status == PaymentStatus.PAID).all()}
+    active_sub_user_ids = {r[0] for r in db.query(Subscription.user_id).filter(Subscription.status == SubscriptionStatus.ACTIVE).all()}
+    churned_users = len(paid_user_ids - active_sub_user_ids)
+
+    # 新增用户趋势（近 30 天按天）
+    trend_start = today_start - timedelta(days=29)
+    new_users_trend = db.query(
+        func.date(User.created_at).label('d'),
+        func.count(User.id).label('c')
+    ).filter(User.created_at >= trend_start).group_by(func.date(User.created_at)).all()
+    trend_map = {str(r.d): r.c for r in new_users_trend}
+    new_users_series = []
+    for i in range(30):
+        d = (trend_start + timedelta(days=i)).strftime('%Y-%m-%d')
+        new_users_series.append({"date": d, "count": trend_map.get(d, 0)})
+
+    # ── 订阅与续费 ──
+    active_count = len(active_subs)
+    auto_renew_count = sum(1 for s in active_subs if s.auto_renew)
+    auto_renew_rate = auto_renew_count / active_count if active_count else 0
+
+    # 到期分布
+    exp_7 = db.query(Subscription).filter(
+        Subscription.status == SubscriptionStatus.ACTIVE,
+        Subscription.current_period_end >= now,
+        Subscription.current_period_end < now + timedelta(days=7),
+    ).count()
+    exp_30 = db.query(Subscription).filter(
+        Subscription.status == SubscriptionStatus.ACTIVE,
+        Subscription.current_period_end >= now + timedelta(days=7),
+        Subscription.current_period_end < now + timedelta(days=30),
+    ).count()
+    exp_60 = db.query(Subscription).filter(
+        Subscription.status == SubscriptionStatus.ACTIVE,
+        Subscription.current_period_end >= now + timedelta(days=30),
+        Subscription.current_period_end < now + timedelta(days=60),
+    ).count()
+    exp_90 = db.query(Subscription).filter(
+        Subscription.status == SubscriptionStatus.ACTIVE,
+        Subscription.current_period_end >= now + timedelta(days=60),
+        Subscription.current_period_end < now + timedelta(days=90),
+    ).count()
+
+    # 续费统计
+    total_renewals = db.query(SubscriptionRenewal).count()
+    success_renewals = db.query(SubscriptionRenewal).filter(
+        SubscriptionRenewal.status == RenewalStatus.SUCCESS
+    ).count()
+    failed_renewals = db.query(SubscriptionRenewal).filter(
+        SubscriptionRenewal.status == RenewalStatus.FAILED
+    ).count()
+    retrying_renewals = db.query(SubscriptionRenewal).filter(
+        SubscriptionRenewal.status == RenewalStatus.RETRYING
+    ).count()
+    renewal_success_rate = success_renewals / total_renewals if total_renewals else 0
+
+    # 月收入趋势（近 12 个月）
+    month_trend_start = (now.replace(day=1) - timedelta(days=11 * 30)).replace(day=1)
+    revenue_trend = db.query(
+        func.date_format(Payment.paid_at, '%Y-%m').label('m'),
+        func.sum(Payment.amount).label('s')
+    ).filter(
+        Payment.status == PaymentStatus.PAID,
+        Payment.paid_at >= month_trend_start,
+    ).group_by(func.date_format(Payment.paid_at, '%Y-%m')).all()
+    rev_map = {r.m: float(r.s) for r in revenue_trend}
+    revenue_series = []
+    for i in range(12):
+        d = (month_trend_start + timedelta(days=i * 30)).strftime('%Y-%m')
+        revenue_series.append({"month": d, "amount": rev_map.get(d, 0)})
+
+    return {
+        "revenue": {
+            "today": float(revenue_today),
+            "week": float(revenue_week),
+            "month": float(revenue_month),
+            "year": float(revenue_year),
+            "mrr": round(float(mrr), 2),
+            "arr": round(float(arr), 2),
+            "avg_revenue_per_user": round(float(avg_revenue_per_user), 2),
+            "monthly_series": revenue_series,
+        },
+        "users": {
+            "total": total_users,
+            "paying": paying_users_count,
+            "active_trials": active_trials,
+            "expired_trials": expired_trials,
+            "conversion_rate": round(float(conversion_rate), 4),
+            "churned": churned_users,
+            "new_users_series": new_users_series,
+        },
+        "subscriptions": {
+            "active": active_count,
+            "auto_renew_count": auto_renew_count,
+            "auto_renew_rate": round(float(auto_renew_rate), 4),
+            "plan_distribution": plan_count,
+            "expiry_distribution": {
+                "7d": exp_7,
+                "30d": exp_30,
+                "60d": exp_60,
+                "90d": exp_90,
+            },
+            "renewals": {
+                "total": total_renewals,
+                "success": success_renewals,
+                "failed": failed_renewals,
+                "retrying": retrying_renewals,
+                "success_rate": round(float(renewal_success_rate), 4),
+            },
+        },
+    }

@@ -129,6 +129,7 @@ pub fn setup_tray(app: &App) -> Result<(), Box<dyn std::error::Error>> {
             "new_note" => {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.show();
+                    let _ = window.unminimize();
                     let _ = window.set_focus();
                 }
                 let _ = app.emit("tray-new-note", ());
@@ -136,6 +137,7 @@ pub fn setup_tray(app: &App) -> Result<(), Box<dyn std::error::Error>> {
             "new_ssh" => {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.show();
+                    let _ = window.unminimize();
                     let _ = window.set_focus();
                 }
                 let _ = app.emit("tray-new-ssh", ());
@@ -143,6 +145,7 @@ pub fn setup_tray(app: &App) -> Result<(), Box<dyn std::error::Error>> {
             "show" => {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.show();
+                    let _ = window.unminimize();
                     let _ = window.set_focus();
                 }
             }
@@ -179,6 +182,7 @@ pub fn setup_tray(app: &App) -> Result<(), Box<dyn std::error::Error>> {
                 let app = tray.app_handle();
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.show();
+                    let _ = window.unminimize();
                     let _ = window.set_focus();
                 }
             }

@@ -15,6 +15,8 @@ export function useDownloads() {
   const [downloads, setDownloads] = useState<DownloadInfo[]>([]);
   const downloadsRef = useRef(downloads);
   downloadsRef.current = downloads;
+  // 每个下载的上一次进度采样，用于估算速度
+  const speedSamplesRef = useRef(new Map<string, { bytes: number; time: number; speed: number }>());
 
   // 同步已有下载列表
   useEffect(() => {
@@ -48,9 +50,17 @@ export function useDownloads() {
         "browser-download-progress",
         (event) => {
           const { id, receivedBytes, totalBytes } = event.payload;
+          const now = Date.now();
+          const last = speedSamplesRef.current.get(id);
+          let speed = last?.speed ?? 0;
+          // 采样间隔 >=500ms 才更新速度，避免抖动
+          if (!last || now - last.time >= 500) {
+            speed = last ? (receivedBytes - last.bytes) / ((now - last.time) / 1000) : 0;
+            speedSamplesRef.current.set(id, { bytes: receivedBytes, time: now, speed });
+          }
           setDownloads((prev) =>
             prev.map((d) =>
-              d.id === id ? { ...d, receivedBytes, totalBytes } : d
+              d.id === id ? { ...d, receivedBytes, totalBytes, bytesPerSecond: speed } : d
             )
           );
         }
@@ -121,6 +131,7 @@ export function useDownloads() {
   const removeDownload = useCallback(async (id: string) => {
     try {
       await browserRemoveDownload(id);
+      speedSamplesRef.current.delete(id);
       setDownloads((prev) => prev.filter((d) => d.id !== id));
     } catch (e) {
       console.error("[useDownloads] remove failed:", e);

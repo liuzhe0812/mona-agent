@@ -222,8 +222,8 @@ export async function browserShowDownloads(anchor: DownloadPopupAnchor): Promise
   return invoke<void>("browser_show_downloads", { anchor });
 }
 
-export async function browserShowDownloadsWindow(): Promise<void> {
-  return invoke<void>("show_browser_downloads_window");
+export async function browserToggleDownloads(anchor: DownloadPopupAnchor): Promise<void> {
+  return invoke<void>("browser_toggle_downloads", { anchor });
 }
 
 export async function browserHideDownloads(): Promise<void> {
@@ -241,6 +241,8 @@ export interface DownloadInfo {
   receivedBytes: number;
   state: string; // "in_progress" | "interrupted" | "completed" | "cancelled"
   savePath: string;
+  /** 前端估算的下载速度（字节/秒），用于剩余时间显示 */
+  bytesPerSecond?: number;
 }
 
 /** 取消下载 */

@@ -1,4 +1,5 @@
 use crate::settings::app_data_dir;
+use crate::notes_links;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -1058,9 +1059,10 @@ pub(crate) fn parse_note_file(path: &Path, notebook_name: &str) -> Result<Operat
 
     let id = fm.id.unwrap_or_else(|| file_stem.clone());
     let title = fm.title.unwrap_or_else(|| file_stem.clone());
-    let notebook_id = fm
-        .notebook_id
-        .unwrap_or_else(|| notebook_name.to_string());
+    // 始终以文件夹位置作为 notebook_id 的真实来源，忽略 frontmatter 中的
+    // notebookId 字段。早期前端生成的 notebook UUID 与 Rust 用文件夹名做 ID
+    // 的约定不一致，保留 frontmatter 值会导致 validate_state 失败。
+    let notebook_id = notebook_name.to_string();
     let source = NoteSource {
         kind: fm.source_kind.unwrap_or_else(|| "manual".to_string()),
         label: fm.source_label.unwrap_or_else(|| "手动记录".to_string()),
@@ -1088,6 +1090,44 @@ pub(crate) fn parse_note_file(path: &Path, notebook_name: &str) -> Result<Operat
         note_type: fm.note_type.unwrap_or_else(default_note_type),
         aliases: fm.aliases,
         favorite: fm.favorite.unwrap_or(false),
+    })
+}
+
+/// Lightweight note data for graph building.
+/// Skips preview/plain_text computation which is expensive on large notes.
+/// Only extracts fields the link graph actually needs: id, title, aliases,
+/// note_type, and the raw markdown body (without frontmatter) for [[wiki link]]
+/// extraction.
+#[derive(Clone)]
+pub(crate) struct NoteLinkData {
+    pub id: String,
+    pub title: String,
+    pub aliases: Vec<String>,
+    pub note_type: String,
+    pub body: String,
+}
+
+pub(crate) fn parse_note_for_links(path: &Path) -> Result<NoteLinkData, String> {
+    let content =
+        fs::read_to_string(path).map_err(|e| format!("Failed to read note {:?}: {}", path, e))?;
+    let (fm_opt, body) = split_frontmatter(&content);
+    let fm = fm_opt
+        .as_ref()
+        .map(|lines| parse_frontmatter_lines(lines))
+        .unwrap_or_default();
+
+    let file_stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("untitled")
+        .to_string();
+
+    Ok(NoteLinkData {
+        id: fm.id.unwrap_or_else(|| file_stem.clone()),
+        title: fm.title.unwrap_or_else(|| file_stem.clone()),
+        aliases: fm.aliases,
+        note_type: fm.note_type.unwrap_or_else(default_note_type),
+        body,
     })
 }
 
@@ -1266,7 +1306,26 @@ pub async fn notes_load_state() -> Result<NotesState, String> {
 }
 
 #[tauri::command]
-pub async fn notes_save_state(state: NotesState) -> Result<(), String> {
+pub async fn notes_save_state(mut state: NotesState) -> Result<(), String> {
+    // 自动修复：将引用不存在 notebook 的 note 移到根目录（notebook_id = ""）。
+    // 这通常发生在早期前端生成的 notebook UUID 与 Rust 文件夹名 ID 不一致时。
+    let notebook_ids: HashSet<&str> = state.notebooks.iter().map(|n| n.id.as_str()).collect();
+    let needs_fix = state.notes.iter().any(|n| {
+        !n.notebook_id.is_empty() && !notebook_ids.contains(n.notebook_id.as_str())
+    });
+    if needs_fix {
+        for note in &mut state.notes {
+            if !note.notebook_id.is_empty() && !notebook_ids.contains(note.notebook_id.as_str()) {
+                log::warn!(
+                    "Note {} references missing notebook {}, moving to root",
+                    note.id,
+                    note.notebook_id
+                );
+                note.notebook_id.clear();
+            }
+        }
+    }
+
     validate_state(&state)?;
 
     let vault = match read_vault_path() {
@@ -1416,6 +1475,11 @@ pub async fn notes_save_state(state: NotesState) -> Result<(), String> {
 
     // Clean up orphan images.
     cleanup_orphaned_assets_vault(&vault, &state.notes)?;
+
+    // Pre-warm the link graph cache in the background so the next
+    // `notes_links_get_graph` call hits the cache instead of triggering a
+    // full rebuild. Fire-and-forget: does not block the save return.
+    notes_links::refresh_cache_background(vault.clone());
 
     Ok(())
 }
@@ -1587,6 +1651,217 @@ pub async fn notes_read_note_content(note_id: String) -> Result<NoteContent, Str
         updated_at: note.updated_at.clone(),
         context_level,
     })
+}
+
+// ---------------------------------------------------------------------------
+// Edit note (for agent notes_edit tool)
+// ---------------------------------------------------------------------------
+
+/// Request body for `notes_edit_note`. Only one operation per call.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotesEditRequest {
+    pub note_id: String,
+    /// "replace_text" | "set_title" | "set_tags"
+    pub operation: String,
+    /// For replace_text: exact substring to find (must be unique in the body).
+    #[serde(default)]
+    pub old_string: Option<String>,
+    /// For replace_text: replacement text.
+    #[serde(default)]
+    pub new_string: Option<String>,
+    /// For set_title.
+    #[serde(default)]
+    pub title: Option<String>,
+    /// For set_tags.
+    #[serde(default)]
+    pub tags: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotesEditResult {
+    pub note_id: String,
+    pub title: String,
+    pub preview: String,
+    pub updated_at: String,
+    /// First 200 chars of the new content, for the agent to verify the change.
+    pub content_head: String,
+}
+
+/// Edit an existing note by id. Supports three atomic operations:
+/// - replace_text: find old_string in the body and replace with new_string.
+///   old_string must match exactly once (unique), otherwise returns an error.
+/// - set_title: change the note title (also updates frontmatter).
+/// - set_tags: replace the tags list.
+///
+/// The note file is rewritten in place. Other frontmatter fields are preserved.
+#[tauri::command]
+pub async fn notes_edit_note(req: NotesEditRequest) -> Result<NotesEditResult, String> {
+    let vault = read_vault_path()
+        .ok_or_else(|| "Notes vault is not configured".to_string())?;
+
+    // Locate the note file by id.
+    let files = scan_existing_note_files(&vault)?;
+    let file_path = files
+        .get(&req.note_id)
+        .ok_or_else(|| format!("Note not found: {}", req.note_id))?
+        .clone();
+
+    // Read current file content and split into frontmatter + body.
+    let raw = fs::read_to_string(&file_path)
+        .map_err(|e| format!("Failed to read note file: {}", e))?;
+    let (fm_opt, body) = split_frontmatter(&raw);
+    let mut fm = fm_opt
+        .as_ref()
+        .map(|lines| parse_frontmatter_lines(lines))
+        .unwrap_or_default();
+
+    // For replace_text we operate on the body only; for set_title/set_tags
+    // we update the parsed frontmatter and leave the body untouched.
+    let op = req.operation.as_str();
+    let new_body = match op {
+        "replace_text" => {
+            let old = req
+                .old_string
+                .as_deref()
+                .ok_or_else(|| "old_string is required for replace_text".to_string())?;
+            let new = req.new_string.as_deref().unwrap_or("");
+            if old.is_empty() {
+                return Err("old_string must not be empty".to_string());
+            }
+            // Count matches; require exactly one to avoid ambiguous edits.
+            let count = body.matches(old).count();
+            if count == 0 {
+                return Err(format!(
+                    "old_string not found in note {}. Provide the exact text to replace.",
+                    req.note_id
+                ));
+            }
+            if count > 1 {
+                return Err(format!(
+                    "old_string matches {} locations in note {}. Include more surrounding context so the match is unique.",
+                    count, req.note_id
+                ));
+            }
+            body.replacen(old, new, 1)
+        }
+        "set_title" => {
+            let title = req
+                .title
+                .as_deref()
+                .ok_or_else(|| "title is required for set_title".to_string())?
+                .trim()
+                .to_string();
+            if title.is_empty() {
+                return Err("title must not be empty".to_string());
+            }
+            fm.title = Some(title);
+            // Body unchanged.
+            body
+        }
+        "set_tags" => {
+            let tags = req.tags.clone().unwrap_or_default();
+            // Validate each tag is non-empty after trimming; drop empties.
+            let cleaned: Vec<String> = tags
+                .into_iter()
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty())
+                .collect();
+            fm.tags = cleaned;
+            body
+        }
+        other => {
+            return Err(format!(
+                "Unknown operation '{}'. Supported: replace_text, set_title, set_tags.",
+                other
+            ));
+        }
+    };
+
+    // Rebuild the note struct from parsed frontmatter + new body so we can
+    // reuse serialize_note_to_file, which preserves all frontmatter fields
+    // and computes the file layout consistently.
+    let notebook_name = file_path
+        .parent()
+        .and_then(|p| p.file_name())
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_string())
+        .unwrap_or_default();
+    let notebook_id = if file_path.parent() == Some(vault.as_path()) {
+        String::new()
+    } else {
+        notebook_name.clone()
+    };
+
+    let now_iso = chrono::Utc::now().to_rfc3339();
+    let note = OperationNote {
+        id: req.note_id.clone(),
+        notebook_id,
+        title: fm.title.clone().unwrap_or_else(|| {
+            file_path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("untitled")
+                .to_string()
+        }),
+        preview: make_preview(&new_body),
+        created_at: fm.created_at.clone().unwrap_or_else(|| now_iso.clone()),
+        updated_at: now_iso.clone(),
+        source: NoteSource {
+            kind: fm.source_kind.unwrap_or_else(|| "manual".to_string()),
+            label: fm.source_label.unwrap_or_else(|| "手动记录".to_string()),
+        },
+        tags: fm.tags.clone(),
+        content_markdown: new_body.clone(),
+        content_json: None,
+        plain_text: Some(strip_markdown(&new_body)),
+        agent_chat_id: fm.agent_chat_id.filter(|s| !s.is_empty()),
+        applied_agent_message_ids: fm.applied_agent_message_ids.clone(),
+        context_level: fm
+            .context_level
+            .clone()
+            .unwrap_or_else(|| default_context_level()),
+        note_type: fm.note_type.clone().unwrap_or_else(default_note_type),
+        aliases: fm.aliases.clone(),
+        favorite: fm.favorite.unwrap_or(false),
+    };
+
+    // set_title may rename the file on disk to match the new title, mirroring
+    // how the UI renames .md files when the title changes. For replace_text
+    // and set_tags we keep the existing filename to avoid surprising moves.
+    if op == "set_title" {
+        let base = sanitize_filename(&note.title);
+        let mut filename = format!("{}.md", base);
+        let mut target = file_path.with_file_name(&filename);
+        let mut counter = 1;
+        while target.exists() && target != file_path {
+            filename = format!("{}_{}.md", base, counter);
+            target = file_path.with_file_name(&filename);
+            counter += 1;
+        }
+        fs::write(&file_path, serialize_note_to_file(&note))
+            .map_err(|e| format!("Failed to write note: {}", e))?;
+        if target != file_path {
+            let _ = fs::rename(&file_path, &target);
+        }
+    } else {
+        fs::write(&file_path, serialize_note_to_file(&note))
+            .map_err(|e| format!("Failed to write note: {}", e))?;
+    }
+
+    // Refresh graph cache in background (links may have changed).
+    crate::notes_links::refresh_cache_background(vault.clone());
+
+    let content_head: String = note.content_markdown.chars().take(200).collect();
+    let result = NotesEditResult {
+        note_id: note.id.clone(),
+        title: note.title.clone(),
+        preview: note.preview.clone(),
+        updated_at: note.updated_at.clone(),
+        content_head,
+    };
+    Ok(result)
 }
 
 // ---------------------------------------------------------------------------

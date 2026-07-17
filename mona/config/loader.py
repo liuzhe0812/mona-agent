@@ -41,6 +41,14 @@ def load_config(config_path: Path | None = None) -> Config:
     """
     path = config_path or get_config_path()
 
+    # Ensure forward references in ToolsConfig/Config are resolved. The eager
+    # call at the bottom of schema.py may have failed due to circular imports
+    # triggered by the entry point's import order; retry here once the import
+    # graph has settled.
+    if not Config.__pydantic_complete__:
+        from mona.config.schema import _resolve_tool_config_refs
+        _resolve_tool_config_refs()
+
     config = Config()
     if path.exists():
         try:

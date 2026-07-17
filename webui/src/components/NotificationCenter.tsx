@@ -21,9 +21,6 @@ export function NotificationCenter({ onOpenSubscribe }: NotificationCenterProps)
   const { notifications, unreadCount, loading, markAsRead, markAllAsRead } =
     useNotifications();
 
-  // 没有通知时隐藏按钮，保持标题栏整洁
-  if (notifications.length === 0) return null;
-
   const badgeText = unreadCount > 99 ? "99+" : String(unreadCount);
 
   const handleAction = (actionUrl?: string) => {

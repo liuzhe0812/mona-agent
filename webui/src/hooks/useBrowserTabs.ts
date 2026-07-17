@@ -15,6 +15,10 @@ import {
 import { isTauri } from "@/lib/tauri";
 
 const SESSION_STORAGE_KEY = "mona-browser-session";
+
+export function shouldPersistBrowserSession(isDevelopment: boolean): boolean {
+  return !isDevelopment;
+}
 const SESSION_RESTORE_DELAY = 800; // ms，等待主窗口初始化完成
 
 export interface Tab {
@@ -78,7 +82,13 @@ export function mergeServerTabs(currentTabs: Tab[], serverTabs: BrowserTabInfo[]
   ];
 }
 
-let _tabCounter = 0;
+function createTabId(prefix: string): string {
+  return `${prefix}-${crypto.randomUUID()}`;
+}
+
+export function createBrowserTabId(): string {
+  return createTabId("tab");
+}
 
 // 关闭标签后选择下一个激活标签：优先左侧相邻标签，避免直接跳回 mona
 function pickNextActiveAfterClose(tabsList: Tab[], closedId: string): string {
@@ -98,6 +108,7 @@ export function useBrowserTabs() {
 
   // 最近关闭的标签（用于 Ctrl+Shift+T 恢复）
   const recentlyClosedRef = useRef<Array<{ url: string; title: string }>>([]);
+  const creatingTabIdsRef = useRef(new Set<string>());
 
   // tabs 的 ref，用于在事件监听器中访问最新状态（避免 stale closure）
   const tabsRef = useRef<Tab[]>([MONA_TAB]);
@@ -110,7 +121,7 @@ export function useBrowserTabs() {
   // ── 会话恢复 ──
   // 启动时恢复上次的标签页
   useEffect(() => {
-    if (!isTauri()) return;
+    if (!isTauri() || !shouldPersistBrowserSession(import.meta.env.DEV)) return;
     let cancelled = false;
 
     const restoreSession = async () => {
@@ -139,8 +150,7 @@ export function useBrowserTabs() {
         for (const savedTab of uniqueTabs.slice(0, 10)) {
           // 限制最多恢复 10 个标签
           if (cancelled) return;
-          _tabCounter++;
-          const id = `tab-${_tabCounter}`;
+          const id = createBrowserTabId();
           const newTab: Tab = {
             id,
             type: "browser",
@@ -175,7 +185,7 @@ export function useBrowserTabs() {
 
   // 定期保存会话（标签 URL 列表）
   useEffect(() => {
-    if (!isTauri()) return;
+    if (!isTauri() || !shouldPersistBrowserSession(import.meta.env.DEV)) return;
     const saveSession = () => {
       try {
         const seenUrls = new Set<string>();
@@ -319,6 +329,11 @@ export function useBrowserTabs() {
     let unlistenTitleChanged: (() => void) | undefined;
     let unlistenFaviconChanged: (() => void) | undefined;
     let unlistenHistoryChanged: (() => void) | undefined;
+    const keepListener = (unlisten: () => void): boolean => {
+      if (!cancelled) return true;
+      unlisten();
+      return false;
+    };
 
     (async () => {
       const { listen } = await import("@tauri-apps/api/event");
@@ -343,6 +358,7 @@ export function useBrowserTabs() {
           setActiveTabId(id);
         }
       );
+      if (!keepListener(unlistenCreated)) return;
 
       unlistenClosed = await listen<string>("browser-tab-closed", (event) => {
         const id = event.payload;
@@ -350,6 +366,7 @@ export function useBrowserTabs() {
         setTabs((prev) => prev.filter((t) => t.id !== id));
         setActiveTabId((current) => (current === id ? nextActive : current));
       });
+      if (!keepListener(unlistenClosed)) return;
 
       unlistenUrlChanged = await listen<{ id: string; url: string }>(
         "browser-url-changed",
@@ -365,17 +382,18 @@ export function useBrowserTabs() {
           }
         }
       );
+      if (!keepListener(unlistenUrlChanged)) return;
 
       // 监听 target="_blank" / window.open 的新标签请求
-      unlistenOpenNewTab = await listen<{ url: string }>(
+      unlistenOpenNewTab = await listen<{ sourceTabId?: string; url: string }>(
         "browser-open-new-tab",
         (event) => {
-          const { url } = event.payload;
-          _tabCounter++;
-          const id = `tab-${_tabCounter}`;
-          // 继承当前活动标签的无痕状态
-          const currentTab = tabsRef.current.find((t) => t.id === activeTabIdRef.current);
-          const isIncognito = currentTab?.isIncognito ?? false;
+          const { sourceTabId, url } = event.payload;
+          const id = createBrowserTabId();
+          const sourceTab = tabsRef.current.find(
+            (t) => t.id === (sourceTabId ?? activeTabIdRef.current),
+          );
+          const isIncognito = sourceTab?.isIncognito ?? false;
           const newTab: Tab = {
             id,
             type: "browser",
@@ -385,7 +403,7 @@ export function useBrowserTabs() {
             webviewCreated: false,
             isLoading: true,
             isIncognito,
-            adBlockEnabled: currentTab?.adBlockEnabled ?? true,
+            adBlockEnabled: sourceTab?.adBlockEnabled ?? true,
           };
           setTabs((prev) => [...prev, newTab]);
           setActiveTabId(id);
@@ -401,6 +419,7 @@ export function useBrowserTabs() {
           });
         }
       );
+      if (!keepListener(unlistenOpenNewTab)) return;
 
       // 导航开始
       unlistenNavStarted = await listen<{ id: string; url: string }>(
@@ -412,6 +431,7 @@ export function useBrowserTabs() {
           );
         }
       );
+      if (!keepListener(unlistenNavStarted)) return;
 
       // 导航完成
       unlistenNavCompleted = await listen<{ id: string; success: boolean }>(
@@ -423,6 +443,7 @@ export function useBrowserTabs() {
           );
         }
       );
+      if (!keepListener(unlistenNavCompleted)) return;
 
       // 标题变化
       unlistenTitleChanged = await listen<{ id: string; title: string }>(
@@ -439,6 +460,7 @@ export function useBrowserTabs() {
           }
         }
       );
+      if (!keepListener(unlistenTitleChanged)) return;
 
       // Favicon 变化
       unlistenFaviconChanged = await listen<{ id: string; favicon: string }>(
@@ -450,6 +472,7 @@ export function useBrowserTabs() {
           );
         }
       );
+      if (!keepListener(unlistenFaviconChanged)) return;
 
       // 后退/前进状态变化
       unlistenHistoryChanged = await listen<{ id: string; canGoBack: boolean; canGoForward: boolean }>(
@@ -461,6 +484,7 @@ export function useBrowserTabs() {
           );
         }
       );
+      if (!keepListener(unlistenHistoryChanged)) return;
     })();
 
     return () => {
@@ -479,8 +503,7 @@ export function useBrowserTabs() {
 
   // 创建纯 UI 标签（不创建 WebView，等用户输入 URL 后再创建）
   const addEmptyTab = useCallback((opts?: { isIncognito?: boolean }) => {
-    _tabCounter++;
-    const id = `tab-${_tabCounter}`;
+    const id = createBrowserTabId();
     const newTab: Tab = {
       id,
       type: "browser",
@@ -493,6 +516,7 @@ export function useBrowserTabs() {
     };
     setTabs((prev) => [...prev, newTab]);
     setActiveTabId(id);
+    return id;
   }, []);
 
   // 导航到 URL：如果 WebView 已创建则用 navigate，否则创建新 WebView
@@ -507,23 +531,34 @@ export function useBrowserTabs() {
 
     // 查找当前标签状态
     const tab = tabs.find((t) => t.id === tabId);
+    const t0 = performance.now();
+    console.log("[useBrowserTabs] navigateToUrl tabId=", tabId, "webviewCreated=", tab?.webviewCreated, "creatingGuard=", creatingTabIdsRef.current.has(tabId), "url=", normalizedUrl);
 
     if (tab?.webviewCreated) {
       // WebView 已存在，导航到新 URL
       try {
+        console.log("[useBrowserTabs] >>> browserNavigateTab begin");
         await browserNavigateTab(tabId, normalizedUrl);
+        console.log("[useBrowserTabs] <<< browserNavigateTab done elapsed=", performance.now() - t0);
         setTabs((prev) =>
           prev.map((t) =>
             t.id === tabId ? { ...t, url: normalizedUrl, title: normalizedUrl, isLoading: true } : t
           )
         );
       } catch (e) {
-        console.error("[useBrowserTabs] navigate tab failed:", e);
+        console.error("[useBrowserTabs] navigate tab failed:", e, "elapsed=", performance.now() - t0);
       }
     } else {
       // WebView 未创建，创建新 WebView（传入无痕和广告拦截标志）
+      if (creatingTabIdsRef.current.has(tabId)) {
+        console.log("[useBrowserTabs] tabId=", tabId, "already creating, skip");
+        return;
+      }
+      creatingTabIdsRef.current.add(tabId);
       try {
+        console.log("[useBrowserTabs] >>> browserCreateTab begin");
         await browserCreateTab(tabId, normalizedUrl, tab?.isIncognito ?? false, tab?.adBlockEnabled ?? true);
+        console.log("[useBrowserTabs] <<< browserCreateTab done elapsed=", performance.now() - t0);
         setTabs((prev) =>
           prev.map((t) =>
             t.id === tabId
@@ -532,7 +567,9 @@ export function useBrowserTabs() {
           )
         );
       } catch (e) {
-        console.error("[useBrowserTabs] create tab failed:", e);
+        console.error("[useBrowserTabs] create tab failed:", e, "elapsed=", performance.now() - t0);
+      } finally {
+        creatingTabIdsRef.current.delete(tabId);
       }
     }
   }, [tabs]);
@@ -646,8 +683,7 @@ export function useBrowserTabs() {
       setActiveTabId(existing.id);
       return;
     }
-    _tabCounter++;
-    const id = `md-${_tabCounter}`;
+    const id = createTabId("md");
     const newTab: Tab = {
       id,
       type: "md-reader",
@@ -668,8 +704,7 @@ export function useBrowserTabs() {
       setActiveTabId(existing.id);
       return;
     }
-    _tabCounter++;
-    const id = `history-${_tabCounter}`;
+    const id = createTabId("history");
     const newTab: Tab = {
       id,
       type: "history",
@@ -803,8 +838,7 @@ export function useBrowserTabs() {
   const duplicateTab = useCallback(async (id: string) => {
     const tab = tabs.find((t) => t.id === id);
     if (!tab || tab.type !== "browser" || !tab.url) return;
-    _tabCounter++;
-    const newId = `tab-${_tabCounter}`;
+    const newId = createBrowserTabId();
     const newTab: Tab = {
       id: newId,
       type: "browser",
@@ -834,8 +868,7 @@ export function useBrowserTabs() {
   const reopenClosedTab = useCallback(async () => {
     const last = recentlyClosedRef.current.pop();
     if (!last) return;
-    _tabCounter++;
-    const id = `tab-${_tabCounter}`;
+    const id = createBrowserTabId();
     const newTab: Tab = {
       id,
       type: "browser",

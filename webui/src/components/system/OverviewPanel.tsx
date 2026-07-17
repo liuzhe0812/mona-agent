@@ -1,14 +1,20 @@
-import { TriangleAlert } from "lucide-react";
+import { Clock3, HardDrive } from "lucide-react";
 import { useState } from "react";
 
-import { PanelCard, secondaryButtonClass } from "./SystemUi";
+import type { SystemTab } from "./mockData";
+import { PanelCard, primaryButtonClass, StatusPill } from "./SystemUi";
 import {
   formatGb,
   formatMbps,
   formatPercent,
+  useBootHistory,
+  useStartupItems,
   useSystemHistory,
   useSystemOverview,
+  type BootHistoryResult,
+  type DiskInfo,
   type SamplePoint,
+  type StartupItem,
 } from "./useSystemData";
 
 const TIME_RANGES = [
@@ -72,15 +78,23 @@ function formatClock(date: Date): string {
   return `${h}:${m}`;
 }
 
+type OverviewAction = "scan-storage" | "open-startup";
+
 interface Issue {
+  id: OverviewAction;
   title: string;
-  detail: string;
-  tone: "red" | "orange" | "violet";
+  evidence: string;
+  impact: string;
+  actionLabel: string;
+  priority: string;
+  tone: "red" | "orange" | "blue";
 }
 
-function buildIssues(
-  disks: { driveLetter: string; usagePercent: number; usedGb: number; totalGb: number }[],
-): Issue[] {
+function formatDuration(milliseconds: number): string {
+  return milliseconds < 1000 ? `${milliseconds} ms` : `${(milliseconds / 1000).toFixed(1)} 秒`;
+}
+
+function buildIssues(disks: DiskInfo[], startupItems: StartupItem[], bootHistory: BootHistoryResult | null): Issue[] {
   const issues: Issue[] = [];
   const critical = disks.find((disk) => disk.usagePercent >= 90);
   const warning = disks.find((disk) => disk.usagePercent >= 80);
@@ -88,18 +102,34 @@ function buildIssues(
 
   if (disk) {
     issues.push({
-      title: `${disk.driveLetter}磁盘空间不足`,
-      detail: `${disk.driveLetter} 已使用 ${formatGb(disk.usedGb)} / ${formatGb(disk.totalGb)} GB（${formatPercent(disk.usagePercent)}）`,
+      id: "scan-storage",
+      title: `${disk.driveLetter}空间紧张`,
+      evidence: `可用空间 ${formatGb(disk.availableGb)} GB · 占用 ${formatPercent(disk.usagePercent)}`,
+      impact: "可能影响更新与文件保存",
+      actionLabel: "查看并扫描",
+      priority: critical ? "需关注" : "建议处理",
       tone: critical ? "red" : "orange",
     });
   }
-  if (issues.length === 0) {
+
+  const recentStartupCount = startupItems.filter((item) => item.isNew).length;
+  const bootDelta = bootHistory?.lastDeltaMs ?? 0;
+  if (recentStartupCount > 0 || bootDelta > 0) {
+    const evidence = [
+      recentStartupCount > 0 ? `新增 ${recentStartupCount} 项启动项待审查` : "",
+      bootDelta > 0 ? `比上次慢 ${formatDuration(bootDelta)}` : "",
+    ].filter(Boolean).join(" · ");
     issues.push({
-      title: "系统状态良好",
-      detail: "所有磁盘空间充足，暂未发现需要关注的问题。",
-      tone: "violet",
+      id: "open-startup",
+      title: bootDelta > 0 ? "启动耗时增加" : "启动项有新增",
+      evidence,
+      impact: "可能延长开机等待时间",
+      actionLabel: "审查启动项",
+      priority: "建议检查",
+      tone: "orange",
     });
   }
+
   return issues.slice(0, 3);
 }
 
@@ -138,13 +168,30 @@ function OverviewMetric({
   );
 }
 
-export function OverviewPanel() {
-  const { data } = useSystemOverview();
+interface OverviewPanelProps {
+  onNavigate: (tab: SystemTab) => void;
+  onStartStorageScan: () => void;
+  onAcknowledgeStartupItems: () => Promise<void>;
+}
+
+export function OverviewPanel({ onNavigate, onStartStorageScan, onAcknowledgeStartupItems }: OverviewPanelProps) {
+  const { data, error } = useSystemOverview();
+  const { data: startup } = useStartupItems();
+  const { data: bootHistory } = useBootHistory();
   const [timeRange, setTimeRange] = useState<(typeof TIME_RANGES)[number]>(TIME_RANGES[0]);
   const [sort, setSort] = useState<{ key: ProcessSortKey; direction: SortDirection }>({ key: "cpuPercent", direction: "descending" });
   const { data: history } = useSystemHistory(timeRange.seconds);
 
   if (!data) {
+    if (error) {
+      return (
+        <section className="rounded-xl border border-amber-200/80 bg-amber-500/[0.035] p-5">
+          <h2 className="text-sm font-semibold">暂时无法读取系统状态</h2>
+          <p className="mt-2 text-xs text-muted-foreground">{error}</p>
+          <p className="mt-1 text-xs text-muted-foreground">正在自动重试。</p>
+        </section>
+      );
+    }
     return (
       <div className="space-y-3">
         <h2 className="sr-only">电脑状态概览</h2>
@@ -157,7 +204,7 @@ export function OverviewPanel() {
   }
 
   const cDrive = data.disks[0];
-  const issues = buildIssues(data.disks);
+  const issues = buildIssues(data.disks, startup?.items ?? [], bootHistory);
   const cpuPolyline = buildPolyline(history, (point) => point.cpuUsage);
   const memoryPolyline = buildPolyline(history, (point) => point.memUsage);
   const cpuMiniPolyline = buildPolyline(history, (point) => point.cpuUsage, 120, 48);
@@ -166,9 +213,9 @@ export function OverviewPanel() {
   const historyReady = history.length >= 2;
   const timeLabels = buildTimeLabels(history, timeRange.seconds);
   const issueTone = {
-    red: "border-red-200/80 bg-red-500/[0.025]",
-    orange: "border-orange-200/90 bg-orange-500/[0.025]",
-    violet: "border-violet-200/90 bg-violet-500/[0.025]",
+    red: "border-red-200/80 bg-red-500/[0.035]",
+    orange: "border-orange-200/90 bg-orange-500/[0.035]",
+    blue: "border-blue-200/90 bg-blue-500/[0.035]",
   };
   const sortedProcesses = [...data.topProcesses].sort((left, right) => {
     const direction = sort.direction === "ascending" ? 1 : -1;
@@ -181,16 +228,60 @@ export function OverviewPanel() {
       direction: current.key === key && current.direction === "descending" ? "ascending" : "descending",
     }));
   };
+  const openIssue = async (issue: Issue) => {
+    if (issue.id === "scan-storage") {
+      onNavigate("storage");
+      onStartStorageScan();
+      return;
+    }
+    if (issue.id === "open-startup") await onAcknowledgeStartupItems();
+    onNavigate("startup");
+  };
 
   return (
     <div className="space-y-3">
       <h2 className="sr-only">电脑状态概览</h2>
 
-      <div className="grid gap-3 md:grid-cols-3">
-        <OverviewMetric label="CPU" value={formatPercent(data.cpu.usagePercent)} detail={`${data.cpu.frequencyGhz.toFixed(1)} GHz`} points={cpuMiniPolyline} color="#2f80ff" />
-        <OverviewMetric label="内存" value={formatPercent(data.memory.usagePercent)} detail={`${formatGb(data.memory.usedGb)} / ${formatGb(data.memory.totalGb)} GB`} points={memoryMiniPolyline} color="#9367ff" />
-        <OverviewMetric label="网络" value={formatMbps(data.network.totalMbps)} detail={`↑ ${formatMbps(data.network.uploadMbps)}　↓ ${formatMbps(data.network.downloadMbps)}`} points={networkMiniPolyline} color="#4caf72" />
-      </div>
+      {issues.length > 0 && (
+        <section className="rounded-xl border border-border/70 bg-card shadow-sm">
+          <div className="border-b border-border/60 px-4 py-3">
+            <h2 className="text-sm font-semibold">现在值得处理</h2>
+            <p className="mt-1 text-[11px] text-muted-foreground">基于本机实时证据，为你排序 {issues.length} 个可执行问题</p>
+          </div>
+          <div className="grid gap-3 p-3 md:grid-cols-3">
+            {issues.map((issue) => {
+              const Icon = issue.id === "scan-storage" ? HardDrive : Clock3;
+              const pillTone = issue.tone === "red" ? "red" : issue.tone === "orange" ? "orange" : "blue";
+              return (
+                <article key={issue.id} className={`flex min-w-0 flex-col rounded-xl border p-3 ${issueTone[issue.tone]}`}>
+                  <div className="flex items-start gap-3">
+                    <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${issue.tone === "red" ? "bg-red-500/10 text-red-600" : issue.tone === "orange" ? "bg-orange-500/10 text-orange-600" : "bg-blue-500/10 text-blue-600"}`}><Icon className="h-4 w-4" /></span>
+                    <div className="min-w-0 flex-1">
+                      <StatusPill tone={pillTone}>{issue.priority}</StatusPill>
+                      <h3 className="mt-2 text-sm font-semibold">{issue.title}</h3>
+                    </div>
+                  </div>
+                  <p className="mt-3 text-[11px] leading-5 text-muted-foreground">{issue.evidence}</p>
+                  <p className="mt-1 text-[11px] leading-5 text-muted-foreground">{issue.impact}</p>
+                  <div className="mt-3 flex items-center gap-2">
+                    <button type="button" onClick={() => void openIssue(issue)} className={`${primaryButtonClass} flex-1`}>{issue.actionLabel}</button>
+                    {issue.id === "scan-storage" && <span className="text-[10px] text-muted-foreground">先分析，暂不清理</span>}
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
+      <section>
+        <h2 className="mb-2 text-sm font-semibold">系统状态</h2>
+        <div className="grid gap-3 md:grid-cols-3">
+          <OverviewMetric label="CPU" value={formatPercent(data.cpu.usagePercent)} detail={`${data.cpu.frequencyGhz.toFixed(1)} GHz`} points={cpuMiniPolyline} color="#2f80ff" />
+          <OverviewMetric label="内存" value={formatPercent(data.memory.usagePercent)} detail={`${formatGb(data.memory.usedGb)} / ${formatGb(data.memory.totalGb)} GB`} points={memoryMiniPolyline} color="#9367ff" />
+          <OverviewMetric label="网络" value={formatMbps(data.network.totalMbps)} detail={`↑ ${formatMbps(data.network.uploadMbps)}　↓ ${formatMbps(data.network.downloadMbps)}`} points={networkMiniPolyline} color="#4caf72" />
+        </div>
+      </section>
 
       <div className="grid gap-3 lg:grid-cols-[minmax(0,1.7fr)_minmax(280px,0.8fr)]">
         <PanelCard
@@ -245,18 +336,6 @@ export function OverviewPanel() {
           </PanelCard>
         )}
       </div>
-
-      <PanelCard title="当前主要问题">
-        <div className="grid gap-3 md:grid-cols-3">
-          {issues.map((issue) => (
-            <div key={issue.title} className={`rounded-lg border p-3 ${issueTone[issue.tone]}`}>
-              <div className="flex items-center gap-2"><TriangleAlert className={`h-4 w-4 ${issue.tone === "red" ? "text-red-500" : issue.tone === "orange" ? "text-orange-500" : "text-violet-500"}`} /><strong className="text-sm">{issue.title}</strong></div>
-              <p className="mt-2 min-h-5 text-[11px] leading-5 text-muted-foreground">依据：{issue.detail}</p>
-              <button type="button" className={`${secondaryButtonClass} mt-2.5 w-full`}>问 Mona</button>
-            </div>
-          ))}
-        </div>
-      </PanelCard>
 
       <PanelCard title="资源占用较高的程序">
         <div className="overflow-x-auto">

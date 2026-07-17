@@ -517,6 +517,33 @@ export function BatchModeView() {
     if (activeSessionId === sessionId) setActiveSessionId(null);
   };
 
+  const handleDisconnectAllSessions = async () => {
+    const connected = sessions.filter((s) => s.status === "connected");
+    for (const session of connected) {
+      try {
+        await sshDisconnect(session.id);
+        cleanupTerminal(session.id);
+        updateSession(session.id, { status: "disconnected" });
+      } catch {}
+    }
+    if (connected.some((s) => s.id === activeSessionId)) {
+      setActiveSessionId(null);
+    }
+  };
+
+  const handleDeleteDisconnectedSessions = () => {
+    const toRemove = sessions.filter(
+      (s) => s.status === "disconnected" || s.status === "error",
+    );
+    for (const session of toRemove) {
+      cleanupTerminal(session.id);
+    }
+    setSessions(sessions.filter((s) => s.status !== "disconnected" && s.status !== "error"));
+    if (toRemove.some((s) => s.id === activeSessionId)) {
+      setActiveSessionId(null);
+    }
+  };
+
   const handleSendCommand = async () => {
     if (!commandInput.trim()) return;
     const targets = sessions.filter((s) => s.selected && s.status === "connected");
@@ -1011,6 +1038,13 @@ export function BatchModeView() {
                       className={session.status !== "connected" ? "text-red-600" : "text-muted-foreground"}
                     >
                       <Trash2 className="mr-2 h-3 w-3" /> 删除
+                    </ContextMenuItem>
+                    <ContextMenuSeparator />
+                    <ContextMenuItem onClick={() => handleDisconnectAllSessions()}>
+                      <Unplug className="mr-2 h-3 w-3" /> 断开全部会话
+                    </ContextMenuItem>
+                    <ContextMenuItem onClick={() => handleDeleteDisconnectedSessions()}>
+                      <Trash2 className="mr-2 h-3 w-3" /> 删除断开会话
                     </ContextMenuItem>
                   </ContextMenuContent>
                 </ContextMenu>

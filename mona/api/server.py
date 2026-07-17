@@ -31,6 +31,7 @@ from mona.api.hoard_handlers import (
     handle_hoard_add,
     handle_hoard_delete_by_url,
 )
+from mona.api.url2note import Url2NoteError, Url2NoteExtractor
 from mona.config.paths import get_media_dir, get_workspace_path
 from mona.email.imap_pool import imap_pool_manager
 from mona.kb.api import (
@@ -50,7 +51,7 @@ from mona.kb.api import (
     handle_kb_update_wiki_page,
 )
 from mona.security.network import validate_host
-from mona.system_agent import handle_system_plan
+from mona.system_agent import handle_system_diagnose, handle_system_plan
 from mona.utils.helpers import safe_filename
 from mona.utils.media_decode import (
     MAX_FILE_SIZE,
@@ -1712,10 +1713,10 @@ def _imap_fetch_recent(body: dict[str, Any]) -> list[dict[str, Any]]:
 
         messages: list[dict[str, Any]] = []
         for uid in uids:
-            # Foxmail 风格：同步时拉完整 RFC822（BODY.PEEK[]），落盘 .eml。
-            # 点击邮件时 Rust 本地 mailparse 解析，毫秒级，无需走 IMAP。
+            # 只拉 HEADER（BODY.PEEK[HEADER]），新邮件同步毫秒级完成，通知即时弹出
+            # 正文和附件在用户点击邮件时由 fetch_body 按需拉取完整 RFC822 并落盘
             status, fetched = client.uid(
-                "FETCH", uid, "(BODY.PEEK[] UID FLAGS)"
+                "FETCH", uid, "(BODY.PEEK[HEADER] UID FLAGS)"
             )
             if status != "OK" or not fetched:
                 continue
@@ -4034,6 +4035,27 @@ async def handle_video_runtime_check(request: web.Request) -> web.Response:
         return web.json_response({"error": str(e)}, status=500)
 
 
+async def handle_url2note_extract(request: web.Request) -> web.Response:
+    """POST /api/url2note/extract - extract one public URL for a Markdown note."""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+    url = str(body.get("url") or "").strip() if isinstance(body, dict) else ""
+    if not url:
+        return web.json_response({"error": "url is required"}, status=400)
+    try:
+        source = await Url2NoteExtractor().extract(url)
+        return web.json_response(
+            {"title": source.title, "url": source.url, "kind": source.kind, "text": source.text}
+        )
+    except Url2NoteError as exc:
+        return web.json_response({"error": str(exc)}, status=422)
+    except Exception:
+        logger.exception("url2note extraction error")
+        return web.json_response({"error": "URL extraction failed"}, status=500)
+
+
 async def handle_video_runtime_download(request: web.Request) -> web.Response:
     """POST /api/video/runtime-download  body: {"component": "node|ffmpeg|chrome"}."""
     try:
@@ -4502,6 +4524,7 @@ def create_app(
     app.router.add_post("/shutdown", handle_shutdown)
     app.router.add_post("/api/tauri/invoke", handle_tauri_invoke)
     app.router.add_post("/api/system/plan", handle_system_plan)
+    app.router.add_post("/api/system/diagnose", handle_system_diagnose)
 
     # KB routes
     app.router.add_get("/api/kb/projects", handle_kb_list_projects)
@@ -4595,6 +4618,7 @@ def create_app(
     # Video project routes
     app.router.add_get("/api/video/runtime-check", handle_video_runtime_check)
     app.router.add_post("/api/video/runtime-download", handle_video_runtime_download)
+    app.router.add_post("/api/url2note/extract", handle_url2note_extract)
     app.router.add_get("/api/video/projects", handle_video_projects)
     app.router.add_post("/api/video/project/create", handle_video_project_create)
     app.router.add_get("/api/video/project", handle_video_project)

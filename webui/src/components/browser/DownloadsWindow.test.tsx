@@ -17,20 +17,30 @@ vi.mock("@/hooks/useDownloads", () => ({
 
 vi.mock("@/hooks/useTheme", () => ({ useTheme: () => ({}) }));
 vi.mock("@tauri-apps/api/window", () => ({
-  getCurrentWindow: () => ({ onFocusChanged: vi.fn().mockResolvedValue(vi.fn()) }),
+  getCurrentWindow: () => ({
+    setSize: vi.fn().mockResolvedValue(undefined),
+  }),
 }));
+vi.mock("@tauri-apps/api/dpi", () => ({
+  LogicalSize: class {
+    constructor(
+      public width: number,
+      public height: number,
+    ) {}
+  },
+}));
+vi.mock("@tauri-apps/api/event", () => ({ emit: vi.fn().mockResolvedValue(undefined) }));
 vi.mock("@/lib/browser-ipc", () => ({
   browserHideDownloads: vi.fn(),
-  browserShowDownloadsWindow: vi.fn(),
 }));
 
 import { DownloadsWindow } from "./DownloadsWindow";
 
 describe("DownloadsWindow", () => {
-  it("shows download records in a floating panel", () => {
+  it("shows recent downloads card with empty state", () => {
     render(<DownloadsWindow />);
 
-    expect(screen.getByText("下载记录")).toBeTruthy();
+    expect(screen.getByText("近期的下载记录")).toBeTruthy();
     expect(screen.getByText("暂无下载记录")).toBeTruthy();
   });
 });

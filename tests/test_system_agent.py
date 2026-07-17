@@ -3,7 +3,7 @@ import json
 import pytest
 
 from mona.providers.base import LLMResponse
-from mona.system_agent import generate_system_plan, handle_system_plan
+from mona.system_agent import generate_diagnostic_report, generate_system_plan, handle_system_plan
 
 
 class FakeProvider:
@@ -84,6 +84,44 @@ async def test_system_agent_derives_display_text_from_verified_targets():
     assert result["findings"] == ["扫描结果显示「临时文件」可安全清理"]
     assert result["actions"][0]["title"] == "清理临时文件"
     assert result["actions"][0]["reason"] == "扫描结果显示「临时文件」可安全清理"
+
+
+@pytest.mark.asyncio
+async def test_diagnostic_report_only_keeps_hypotheses_linked_to_collected_evidence():
+    provider = FakeProvider(json.dumps({
+        "summary": "更新未完成可能需要先重启。",
+        "hypotheses": [
+            {
+                "title": "系统存在待重启状态",
+                "confidence": "high",
+                "evidenceIds": ["pending_reboot"],
+                "explanation": "检测到更新组件要求重启。",
+                "nextStep": "先保存工作并重启，再复查更新。",
+            },
+            {
+                "title": "虚构的硬件故障",
+                "confidence": "high",
+                "evidenceIds": ["not-collected"],
+                "explanation": "没有依据。",
+                "nextStep": "不要展示。",
+            },
+        ],
+        "cautions": ["未收集蓝屏转储时，不应断言硬件损坏。"],
+    }, ensure_ascii=False))
+
+    result = await generate_diagnostic_report(provider, "更新失败", {
+        "symptom": "update",
+        "checks": [{"id": "pending_reboot", "status": "attention", "summary": "检测到待重启状态"}],
+    })
+
+    assert provider.calls[0]["tools"] is None
+    assert result["hypotheses"] == [{
+        "title": "系统存在待重启状态",
+        "confidence": "high",
+        "evidenceIds": ["pending_reboot"],
+        "explanation": "检测到更新组件要求重启。",
+        "nextStep": "先保存工作并重启，再复查更新。",
+    }]
 
 
 @pytest.mark.asyncio

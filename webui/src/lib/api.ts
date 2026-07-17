@@ -694,6 +694,30 @@ export async function downloadVideoRuntime(
   );
 }
 
+export interface Url2NoteSource {
+  title: string;
+  url: string;
+  kind: "article" | "video";
+  text: string;
+}
+
+export async function extractUrl2Note(
+  token: string,
+  url: string,
+  base?: string,
+): Promise<Url2NoteSource> {
+  const effectiveBase = base ?? (await getGatewayHttpBase());
+  return request<Url2NoteSource>(
+    `${effectiveBase}/api/url2note/extract`,
+    token,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url }),
+    },
+  );
+}
+
 export async function fetchVideoProjects(
   token: string,
   base?: string,

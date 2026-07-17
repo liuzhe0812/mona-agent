@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Play, Square, Plus, FolderOpen, Save, Download, Upload, Trash2, PlusCircle, ChevronLeft, ChevronRight } from "lucide-react";
+import { Play, Square, Plus, FolderOpen, Save, Download, Upload, Trash2, PlusCircle, ChevronLeft, ChevronRight, LockKeyhole } from "lucide-react";
 import { AgentLogo } from "@/components/AgentLogo";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -30,7 +30,7 @@ const AGENT_PANEL_MIN = 240;
 const AGENT_PANEL_MAX = 480;
 const AGENT_PANEL_DEFAULT = 320;
 
-export function DbClientView() {
+export function DbClientView({ onOpenSubscribe }: { onOpenSubscribe?: () => void }) {
   const { licenseActive } = useLicense();
   const loadSavedConnections = useDbStore((s) => s.loadSavedConnections);
   const queryTabs = useDbStore((s) => s.queryTabs);
@@ -262,23 +262,25 @@ export function DbClientView() {
                 <span className="text-[11px] text-muted-foreground">
                   {selectedTable?.name}
                 </span>
-                {licenseActive && (
-                  <>
-                    <Separator orientation="vertical" className="h-5" />
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button
-                          type="button"
-                          className="flex items-center justify-center"
-                          onClick={() => setAgentPanelCollapsed((c) => !c)}
-                        >
+                <>
+                  <Separator orientation="vertical" className="h-5" />
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        className="flex items-center justify-center"
+                        onClick={licenseActive ? () => setAgentPanelCollapsed((c) => !c) : onOpenSubscribe}
+                      >
+                        {licenseActive ? (
                           <AgentLogo state={agentStreaming ? "working" : "idle"} className="h-5 w-5" />
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent>{agentPanelCollapsed ? "展开 Mona" : "收起 Mona"}</TooltipContent>
-                    </Tooltip>
-                  </>
-                )}
+                        ) : (
+                          <LockKeyhole className="h-4 w-4 text-muted-foreground" />
+                        )}
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent>{licenseActive ? (agentPanelCollapsed ? "展开 Mona" : "收起 Mona") : "升级 Pro 解锁数据库 AI"}</TooltipContent>
+                  </Tooltip>
+                </>
               </div>
             </TooltipProvider>
 

@@ -8,7 +8,15 @@
       "title": "無法連線到 mona",
       "gatewayHint": "請確認 gateway 已啟動（`mona gateway`），並且目前頁面與 gateway 在同一台機器上開啟。",
       "otherFeaturesHint": "筆記、設定、SSH、瀏覽器等功能不依賴執行階段，可正常使用。",
-      "retry": "重試"
+      "retry": "重試",
+      "viewLog": "查看錯誤日誌",
+      "logTitle": "Gateway 錯誤日誌",
+      "logEmpty": "日誌檔案為空或不存在",
+      "logPath": "日誌路徑",
+      "logLoading": "正在讀取日誌…",
+      "logLoadError": "讀取日誌失敗",
+      "copyLog": "複製日誌",
+      "copyLogDone": "已複製"
     },
     "system": {
       "section": "系統",

@@ -339,7 +339,7 @@ pub async fn browser_clear_cache(
     if state.list_tabs().is_empty() {
         return Ok(());
     }
-    state.clear_cache(&app)
+    state.clear_cache(&app).await
 }
 
 // ── Address bar suggestions ──

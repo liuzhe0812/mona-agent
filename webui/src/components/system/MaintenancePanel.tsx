@@ -2,9 +2,10 @@ import { AlertTriangle, CheckCircle2, Database, History, RotateCcw } from "lucid
 import { useMemo, useState } from "react";
 
 import { MetricCard, PanelCard, StatusPill, secondaryButtonClass } from "./SystemUi";
+import type { SystemAgentHandoffTask } from "./systemAgentHandoff";
 import { useMaintenanceHistory, type MaintenanceEvent } from "./useSystemData";
 
-const filters = ["全部", "清理", "更新", "启动项", "卸载"];
+const filters = ["全部", "清理", "更新", "启动项", "卸载", "系统优化"];
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024 ** 2) return `${Math.round(bytes / 1024)} KB`;
@@ -21,11 +22,16 @@ function statusTone(status: string): "green" | "orange" | "red" {
   return status === "部分成功" ? "orange" : "red";
 }
 
-export function MaintenancePanel() {
+interface MaintenancePanelProps {
+  onHandoff: (task: SystemAgentHandoffTask) => void;
+}
+
+export function MaintenancePanel({ onHandoff }: MaintenancePanelProps) {
   const { data, loading, error, restoringId, refresh, restore } = useMaintenanceHistory();
   const [filter, setFilter] = useState("全部");
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState("");
+  const [failedTask, setFailedTask] = useState<SystemAgentHandoffTask | null>(null);
   const events = data?.events ?? [];
   const now = new Date();
   const monthEvents = events.filter((event) => {
@@ -40,7 +46,22 @@ export function MaintenancePanel() {
     return events.filter((event) => (filter === "全部" || event.category === filter) && (!keyword || `${event.title} ${event.detail} ${event.source}`.toLocaleLowerCase().includes(keyword)));
   }, [events, filter, query]);
   const selected = filtered.find((event) => event.id === selectedId) ?? filtered[0] ?? null;
-  const recoverable = events.filter((event) => event.reversible && event.relatedId && event.restoreEnabled !== null).slice(0, 5);
+  const recoverable = events.filter((event) => event.reversible && event.relatedId && (event.restoreEnabled !== null || event.category === "系统优化")).slice(0, 5);
+
+  const restoreEvent = async (event: MaintenanceEvent) => {
+    const failure = await restore(event);
+    if (!failure) return;
+    setFailedTask({
+      id: crypto.randomUUID(),
+      title: `恢复 ${event.title}`,
+      action: event.category === "系统优化" ? "恢复系统配置" : "恢复启动项",
+      target: event.title,
+      arguments: event.category === "系统优化"
+        ? { itemId: event.relatedId, mode: "restore" }
+        : { id: event.relatedId, enabled: event.restoreEnabled },
+      error: failure,
+    });
+  };
 
   return (
     <div className="space-y-3">
@@ -51,7 +72,7 @@ export function MaintenancePanel() {
         <MetricCard label="失败操作" value={loading ? "—" : `${failedCount} 项`} detail={failedCount ? "保留原始失败信息" : "暂无失败"} icon={<AlertTriangle className="h-4 w-4" />} accent={failedCount ? "orange" : "green"} />
       </div>
 
-      {error && <div role="alert" className="rounded-xl border border-red-500/30 bg-red-500/5 p-3 text-xs text-red-700">维护记录读取失败：{error}<button className="ml-2 underline" onClick={refresh}>重试</button></div>}
+      {error && <div role="alert" className="rounded-xl border border-red-500/30 bg-red-500/5 p-3 text-xs text-red-700">维护记录读取失败：{error}<button className="ml-2 underline" onClick={refresh}>重试</button>{failedTask && <button type="button" className="ml-2 underline" onClick={() => onHandoff(failedTask)}>交给 Mona</button>}</div>}
 
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap gap-2">{filters.map((item) => <button key={item} onClick={() => setFilter(item)} className={item === filter ? "h-8 rounded-lg bg-blue-600 px-3 text-xs text-white" : secondaryButtonClass}>{item}</button>)}</div>
@@ -65,7 +86,7 @@ export function MaintenancePanel() {
           ) : filtered.length === 0 ? (
             <div className="flex h-48 items-center justify-center text-xs text-muted-foreground">没有匹配的维护记录</div>
           ) : (
-            <div className="relative space-y-1 before:absolute before:bottom-4 before:left-[78px] before:top-4 before:w-px before:bg-border">
+            <div className="scrollbar-hover relative max-h-[60vh] space-y-1 overflow-y-auto before:absolute before:bottom-4 before:left-[78px] before:top-4 before:w-px before:bg-border">
               {filtered.map((event) => (
                 <button key={event.id} type="button" onClick={() => setSelectedId(event.id)} className={`relative flex w-full items-center gap-3 rounded-lg p-2 text-left transition ${selected?.id === event.id ? "bg-blue-500/5" : "hover:bg-muted/40"}`}>
                   <span className="w-16 shrink-0 text-[10px] text-muted-foreground">{eventTime(event.ts)}</span>
@@ -99,7 +120,7 @@ export function MaintenancePanel() {
                 {recoverable.map((event: MaintenanceEvent) => (
                   <div key={event.id} className="flex items-center gap-2 rounded-lg border p-2.5">
                     <span className="min-w-0 flex-1 truncate" title={event.title}>{event.title}</span>
-                    <button className={secondaryButtonClass} disabled={restoringId === event.id} onClick={() => void restore(event)}><RotateCcw className="mr-1 h-3 w-3" />{restoringId === event.id ? "恢复中" : "恢复"}</button>
+                    <button className={secondaryButtonClass} disabled={restoringId === event.id} onClick={() => void restoreEvent(event)}><RotateCcw className="mr-1 h-3 w-3" />{restoringId === event.id ? "恢复中" : "恢复"}</button>
                   </div>
                 ))}
                 <p className="text-[10px] text-muted-foreground">卸载、更新和文件清理不支持自动回滚。</p>

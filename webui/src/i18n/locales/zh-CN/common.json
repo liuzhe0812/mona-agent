@@ -8,7 +8,15 @@
       "title": "无法连接到 mona",
       "gatewayHint": "请确认 gateway 已启动（`mona gateway`），并且当前页面与 gateway 运行在同一台机器上。",
       "otherFeaturesHint": "笔记、设置、SSH、浏览器等功能不依赖运行时，可正常使用。",
-      "retry": "重试"
+      "retry": "重试",
+      "viewLog": "查看错误日志",
+      "logTitle": "Gateway 错误日志",
+      "logEmpty": "日志文件为空或不存在",
+      "logPath": "日志路径",
+      "logLoading": "正在读取日志…",
+      "logLoadError": "读取日志失败",
+      "copyLog": "复制日志",
+      "copyLogDone": "已复制"
     },
     "system": {
       "section": "系统",
@@ -471,7 +479,7 @@
         "refUrlUpload": "上传参考图片"
       },
       "workspace": {
-        "placeholder": "选择文件夹（可选）",
+        "placeholder": "工作区",
         "clear": "清除文件夹选择"
       },
       "tools": {

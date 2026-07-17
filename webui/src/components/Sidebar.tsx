@@ -7,6 +7,7 @@ import {
   LogIn,
   Menu,
   MoreHorizontal,
+  LockKeyhole,
   Pencil,
   Pin,
   PinOff,
@@ -98,7 +99,7 @@ interface SidebarProps {
 
 export function Sidebar(props: SidebarProps) {
   const { t } = useTranslation();
-  const { loggedIn, licenseInfo, licenseActive, localTrial, localTrialExpired, serverTrial, remainingDays } =
+  const { loggedIn, licenseInfo, licenseActive, serverTrial } =
     useLicense();
   const [menuPortalContainer, setMenuPortalContainer] =
     useState<HTMLElement | null>(null);
@@ -200,6 +201,7 @@ export function Sidebar(props: SidebarProps) {
             titleOverrides={props.titleOverrides ?? {}}
             pinnedKeys={props.pinnedKeys ?? []}
             archivedKeys={props.archivedKeys ?? []}
+            runningChatIds={props.runningChatIds}
             onRequestDelete={props.onRequestDelete}
             onTogglePin={props.onTogglePin}
             onRequestRename={props.onRequestRename}
@@ -250,26 +252,7 @@ export function Sidebar(props: SidebarProps) {
               className={collapsed ? undefined : "flex-1"}
               icon={<User className="h-4 w-4" />}
             />
-            {!collapsed && (!licenseActive || serverTrial || localTrial) && (
-              <Button
-                size="sm"
-                onClick={props.onOpenSubscribe ?? props.onOpenLogin}
-                className="h-5 shrink-0 rounded-full bg-blue-500/15 px-1.5 text-[10px] font-medium text-blue-600 hover:bg-blue-500/25 dark:text-blue-400"
-              >
-                升级 Pro
-              </Button>
-            )}
-          </div>
-        ) : localTrial && !localTrialExpired ? (
-          <div className={cn("flex items-center gap-1", collapsed ? "w-14 flex-col px-0" : "w-full")}>
-            <SidebarActionButton
-              collapsed={collapsed}
-              label={`试用剩余 ${remainingDays} 天`}
-              onClick={props.onOpenLogin ?? (() => {})}
-              className={collapsed ? undefined : "flex-1"}
-              icon={<User className="h-4 w-4" />}
-            />
-            {!collapsed && (
+            {!collapsed && (!licenseActive || serverTrial) && (
               <Button
                 size="sm"
                 onClick={props.onOpenSubscribe ?? props.onOpenLogin}
@@ -376,7 +359,7 @@ function ToolboxNavigation({
   emailUnreadCount: number;
 }) {
   const { licenseActive } = useLicense();
-  const LICENSE_REQUIRED = new Set(["知识库", "AI文档", "邮件"]);
+  const LICENSE_REQUIRED = new Set(["知识库", "AI文档"]);
   const handlers = {
     onNewChat,
     onOpenNote,
@@ -390,9 +373,7 @@ function ToolboxNavigation({
     onOpenProfile,
     onGoHome,
   };
-  const visibleSecondary = licenseActive
-    ? SECONDARY_ITEMS
-    : SECONDARY_ITEMS.filter((item) => !LICENSE_REQUIRED.has(item.label));
+  const visibleSecondary = SECONDARY_ITEMS;
 
   return (
     <div
@@ -453,16 +434,20 @@ function ToolboxNavigation({
             sideOffset={8}
             className="min-w-[160px]"
           >
-            {visibleSecondary.map((item) => (
-              <DropdownMenuItem
-                key={item.label}
-                className="gap-2 px-2.5 py-1.5 text-[13px]"
-                onSelect={() => getToolboxHandler(item.label, handlers)()}
-              >
-                {item.icon}
-                <span>{item.label}</span>
-              </DropdownMenuItem>
-            ))}
+            {visibleSecondary.map((item) => {
+              const locked = !licenseActive && LICENSE_REQUIRED.has(item.label);
+              return (
+                <DropdownMenuItem
+                  key={item.label}
+                  className="gap-2 px-2.5 py-1.5 text-[13px]"
+                  onSelect={() => getToolboxHandler(item.label, handlers)()}
+                >
+                  {item.icon}
+                  <span>{item.label}</span>
+                  {locked && <LockKeyhole className="ml-auto h-3.5 w-3.5 text-muted-foreground" />}
+                </DropdownMenuItem>
+              );
+            })}
           </DropdownMenuContent>
         </DropdownMenu>
       )}
@@ -552,6 +537,7 @@ function CollapsedChatList({
   titleOverrides,
   pinnedKeys,
   archivedKeys,
+  runningChatIds,
   onRequestDelete,
   onTogglePin,
   onRequestRename,
@@ -563,6 +549,7 @@ function CollapsedChatList({
   titleOverrides: Record<string, string>;
   pinnedKeys: string[];
   archivedKeys: string[];
+  runningChatIds?: string[];
   onRequestDelete: (key: string, label: string) => void;
   onTogglePin: (key: string) => void;
   onRequestRename: (key: string, label: string) => void;
@@ -575,6 +562,7 @@ function CollapsedChatList({
 
   const pinned = new Set(pinnedKeys);
   const archived = new Set(archivedKeys);
+  const running = new Set(runningChatIds ?? []);
 
   const sorted = [...sessions].sort((a, b) => {
     const at = Date.parse(a.updatedAt ?? a.createdAt ?? "");
@@ -629,10 +617,30 @@ function CollapsedChatList({
             const initial = title.charAt(0).toUpperCase() || "?";
             const isPinned = pinned.has(s.key);
             const isArchived = archived.has(s.key);
+            const isRunning = running.has(s.chatId);
             return (
               <ContextMenu key={s.key}>
                 <ContextMenuTrigger asChild>
-                  <div>
+                  <div className="relative">
+                    {isRunning && (
+                      <svg
+                        aria-hidden
+                        className="pointer-events-none absolute inset-0 h-full w-full animate-spin text-blue-500 [animation-duration:1.4s] motion-reduce:animate-none dark:text-blue-400"
+                        viewBox="0 0 36 36"
+                        fill="none"
+                      >
+                        <circle cx="18" cy="18" r="17" stroke="currentColor" strokeOpacity="0.18" strokeWidth="1.5" />
+                        <circle
+                          cx="18"
+                          cy="18"
+                          r="17"
+                          stroke="currentColor"
+                          strokeWidth="1.5"
+                          strokeLinecap="round"
+                          strokeDasharray="22 88"
+                        />
+                      </svg>
+                    )}
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <button

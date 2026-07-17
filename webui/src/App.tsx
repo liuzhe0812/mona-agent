@@ -2,6 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useTranslation } from "react-i18next";
+import { Check, Copy, FileText, X } from "lucide-react";
 import { DeleteConfirm } from "@/components/DeleteConfirm";
 import { RenameChatDialog } from "@/components/RenameChatDialog";
 import { Sidebar } from "@/components/Sidebar";
@@ -10,6 +11,13 @@ import { QuickAskWindow } from "@/components/quick/QuickAskWindow";
 import { SettingsView } from "@/components/settings/SettingsView";
 import { ThreadShell } from "@/components/thread/ThreadShell";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { AppTitleBar } from "@/components/workspace/AppTitleBar";
 import { BrowserTabView } from "@/components/browser/BrowserTabView";
 import { HistoryPage } from "@/components/browser/HistoryPage";
@@ -35,11 +43,12 @@ import {
   saveSecret,
 } from "@/lib/bootstrap";
 import { removeProject, resetApiBase } from "@/lib/api";
+import { browserHideTabsExcept } from "@/lib/browser-ipc";
 import { deriveTitle } from "@/lib/format";
 import { MonaClient } from "@/lib/mona-client";
 import { ClientProvider, useClientOptional, type RuntimeStatus } from "@/providers/ClientProvider";
 import type { ChatSummary } from "@/lib/types";
-import { isTauri, getGatewayStatus, startGateway, getDesktopSettings, type SidebarShortcuts, type UpdateCheckResult } from "@/lib/tauri";
+import { isTauri, getGatewayStatus, startGateway, getDesktopSettings, readGatewayLog, type GatewayLog, type SidebarShortcuts, type UpdateCheckResult } from "@/lib/tauri";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -63,6 +72,14 @@ const SIDEBAR_RAIL_WIDTH = 56;
 const TOKEN_REFRESH_MARGIN_MS = 30_000;
 const TOKEN_REFRESH_MIN_DELAY_MS = 5_000;
 type ShellView = "chat" | "settings" | "note" | "ssh" | "db" | "kb" | "doc" | "email" | "schedule" | "system" | "profile";
+
+export function openNewBrowserTab(
+  setView: (view: ShellView) => void,
+  addEmptyTab: () => void,
+) {
+  setView("chat");
+  addEmptyTab();
+}
 
 interface QueuedAgentPrompt {
   id: string;
@@ -141,6 +158,18 @@ const NotificationWindow = lazy(() =>
   })),
 );
 
+const AddressSuggestionsWindow = lazy(() =>
+  import("@/components/browser/AddressSuggestionsWindow").then((module) => ({
+    default: module.AddressSuggestionsWindow,
+  })),
+);
+
+const DownloadsWindow = lazy(() =>
+  import("@/components/browser/DownloadsWindow").then((module) => ({
+    default: module.DownloadsWindow,
+  })),
+);
+
 function bootstrapTokenExpiresAt(expiresInSeconds: number): number {
   return Date.now() + Math.max(0, expiresInSeconds) * 1000;
 }
@@ -168,6 +197,14 @@ function isMailPreviewRoute(): boolean {
 
 function isNotificationRoute(): boolean {
   return typeof window !== "undefined" && window.location.hash.startsWith("#/notification");
+}
+
+function isAddressSuggestionsRoute(): boolean {
+  return typeof window !== "undefined" && window.location.hash.startsWith("#/browser-suggestions");
+}
+
+function isDownloadsRoute(): boolean {
+  return typeof window !== "undefined" && window.location.hash.startsWith("#/browser-downloads");
 }
 
 function shortcutFromKeyboardEvent(event: KeyboardEvent): string | null {
@@ -443,6 +480,8 @@ export default function App() {
   const composeRoute = isComposeRoute();
   const mailPreviewRoute = isMailPreviewRoute();
   const notificationRoute = isNotificationRoute();
+  const addressSuggestionsRoute = isAddressSuggestionsRoute();
+  const downloadsRoute = isDownloadsRoute();
 
   return (
     <ClientProvider
@@ -452,7 +491,15 @@ export default function App() {
       runtimeStatus={runtimeStatus}
       runtimeError={errorMessage}
     >
-      {notificationRoute ? (
+      {downloadsRoute ? (
+        <Suspense fallback={null}>
+          <DownloadsWindow />
+        </Suspense>
+      ) : addressSuggestionsRoute ? (
+        <Suspense fallback={null}>
+          <AddressSuggestionsWindow />
+        </Suspense>
+      ) : notificationRoute ? (
         <Suspense fallback={null}>
           <NotificationWindow />
         </Suspense>
@@ -494,7 +541,33 @@ function Shell({
   const { t, i18n } = useTranslation();
   const { client, runtimeStatus, runtimeError, token } = useClientOptional();
   const { theme, toggle } = useTheme();
-  const { loggedIn } = useLicense();
+  const { checking, licenseActive, loggedIn, pricingConfig } = useLicense();
+  const loginRequired = !checking && !loggedIn;
+  const [promoClosed, setPromoClosed] = useState(false);
+  const promo = pricingConfig?.promoTrial;
+  const promoKey = promo?.end_at ? `mona_promo_closed_${promo.end_at}` : "mona_promo_closed";
+  const promoVisible = !!promo?.enabled && !promoClosed;
+  const promoText = useMemo(() => {
+    if (!promo?.enabled) return "";
+    let text = `🎉 限时活动：注册即送 ${promo.days} 天试用`;
+    if (promo.end_at) {
+      const d = new Date(promo.end_at);
+      if (!isNaN(d.getTime())) {
+        text += ` · 截止 ${d.toLocaleDateString("zh-CN", { month: "long", day: "numeric" })}`;
+      }
+    }
+    return text;
+  }, [promo]);
+  useEffect(() => {
+    if (!promo?.enabled) return;
+    try {
+      if (localStorage.getItem(promoKey) === "1") setPromoClosed(true);
+    } catch { /* ignore */ }
+  }, [promoKey, promo]);
+  const handleClosePromo = () => {
+    setPromoClosed(true);
+    try { localStorage.setItem(promoKey, "1"); } catch { /* ignore */ }
+  };
   const { sessions, loading, refresh, createChat, deleteChat } = useSessions();
   const { state: sidebarState, update: updateSidebarState } =
     useSidebarState(sessions, !loading);
@@ -804,11 +877,23 @@ function Shell({
     switchBrowserTab("mona");
   }, [switchBrowserTab]);
 
+  const handleBrowserTabClick = useCallback((id: string) => {
+    if (id !== "mona") setView("chat");
+    switchBrowserTab(id);
+  }, [switchBrowserTab]);
+
   const onGoHome = useCallback(() => {
     setView("chat");
     switchToMonaTab();
     setMobileSidebarOpen(false);
   }, [switchToMonaTab]);
+
+  const onOpenSubscribe = useCallback(() => {
+    setLoginDialogInitialView(loggedIn ? "subscribe" : "login");
+    setLoginDialogSubscribeIntent(!loggedIn);
+    setLoginDialogOpen(true);
+    setMobileSidebarOpen(false);
+  }, [loggedIn]);
 
   const onOpenNote = useCallback(() => {
     setCreateNoteOnOpen(false);
@@ -855,16 +940,24 @@ function Shell({
   }, [switchToMonaTab]);
 
   const onOpenDoc = useCallback(() => {
+    if (!licenseActive) {
+      onOpenSubscribe();
+      return;
+    }
     setView("doc");
     switchToMonaTab();
     setMobileSidebarOpen(false);
-  }, [switchToMonaTab]);
+  }, [licenseActive, onOpenSubscribe, switchToMonaTab]);
 
   const onOpenKb = useCallback(() => {
+    if (!licenseActive) {
+      onOpenSubscribe();
+      return;
+    }
     setView("kb");
     switchToMonaTab();
     setMobileSidebarOpen(false);
-  }, [switchToMonaTab]);
+  }, [licenseActive, onOpenSubscribe, switchToMonaTab]);
 
   const onOpenEmail = useCallback(() => {
     setView("email");
@@ -1221,14 +1314,6 @@ function Shell({
     setMobileSidebarOpen(false);
   }, []);
 
-  const onOpenSubscribe = useCallback(() => {
-    // 未登录时先显示登录视图，登录成功后由 LoginDialog 自动跳转到订阅视图
-    setLoginDialogInitialView(loggedIn ? "subscribe" : "login");
-    setLoginDialogSubscribeIntent(!loggedIn);
-    setLoginDialogOpen(true);
-    setMobileSidebarOpen(false);
-  }, [loggedIn]);
-
   const onBackToChat = useCallback(() => {
     setView("chat");
     switchToMonaTab();
@@ -1345,6 +1430,15 @@ function Shell({
     : t("app.brand");
 
   const isBrowserTabActive = activeBrowserTab.type !== "mona";
+  const browserSurfaceVisible =
+    view === "chat" && activeBrowserTab.type === "browser" && !loginDialogOpen;
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    void browserHideTabsExcept(
+      browserSurfaceVisible ? activeBrowserTab.id : undefined,
+    ).catch(() => {});
+  }, [activeBrowserTab.id, browserSurfaceVisible]);
 
   useEffect(() => {
     if (view === "settings") {
@@ -1406,9 +1500,9 @@ function Shell({
           <AppTitleBar
             tabs={browserTabs}
             activeTabId={activeBrowserTabId}
-            onTabClick={switchBrowserTab}
+            onTabClick={handleBrowserTabClick}
             onTabClose={closeBrowserTab}
-            onNewTab={addEmptyTab}
+            onNewTab={() => openNewBrowserTab(setView, addEmptyTab)}
             onOpenSettings={onOpenSettings}
             onOpenSubscribe={onOpenSubscribe}
             settingsBadge={!!updateAvailable}
@@ -1421,6 +1515,27 @@ function Shell({
           />
         )}
 
+        {/* 活动走马灯（关闭后不再显示） */}
+        {promoVisible && (
+          <>
+            <style>{`@keyframes monaMarquee{0%{transform:translateX(0)}100%{transform:translateX(-50%)}}`}</style>
+            <div className="relative flex h-7 shrink-0 items-center overflow-hidden bg-gradient-to-r from-emerald-500 to-emerald-600 pl-3 pr-8 text-white">
+              <div className="flex whitespace-nowrap" style={{ animation: "monaMarquee 18s linear infinite" }}>
+                <span className="px-4 text-xs font-medium">{promoText}</span>
+                <span className="px-4 text-xs font-medium">{promoText}</span>
+              </div>
+              <button
+                type="button"
+                onClick={handleClosePromo}
+                className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full p-0.5 hover:bg-white/20"
+                title="关闭"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </div>
+          </>
+        )}
+
         {/* 标题栏下方：Sidebar + 主内容区 */}
         <div className="flex min-h-0 flex-1 overflow-hidden">
           {/* 侧边栏（浏览器全屏时隐藏） */}
@@ -1428,7 +1543,7 @@ function Shell({
             <aside
               className={cn(
                 "relative z-20 shrink-0 overflow-hidden",
-                "transition-[width] duration-300 ease-out",
+                activeBrowserTab.type !== "browser" && "transition-[width] duration-300 ease-out",
               )}
               style={{
                 width: desktopSidebarOpen ? SIDEBAR_WIDTH : SIDEBAR_RAIL_WIDTH,
@@ -1523,6 +1638,7 @@ function Shell({
                   <Suspense fallback={<ModuleLoading title="正在打开笔记" />}>
                     <NotesView
                       onSendToAgent={onSendNoteToAgent}
+                      onOpenSubscribe={onOpenSubscribe}
                       initialNoteId={new URLSearchParams(window.location.search).get("noteId") ?? undefined}
                       createOnOpen={createNoteOnOpen}
                       onCreateOnOpenHandled={() => setCreateNoteOnOpen(false)}
@@ -1549,13 +1665,13 @@ function Shell({
                   (view !== "ssh" || isBrowserTabActive) && "invisible pointer-events-none",
                 )}
               >
-                <TerminalView />
+                <TerminalView onOpenSubscribe={onOpenSubscribe} />
               </div>
               {view === "db" && (
                 <div className={cn("absolute inset-0 flex flex-col", isBrowserTabActive && "hidden")}>
                   {client ? (
                     <Suspense fallback={<ModuleLoading title="正在打开数据库客户端" />}>
-                      <DbClientView />
+                      <DbClientView onOpenSubscribe={onOpenSubscribe} />
                     </Suspense>
                   ) : (
                     <RuntimePlaceholder
@@ -1585,7 +1701,7 @@ function Shell({
                 <div className={cn("absolute inset-0 flex flex-col", isBrowserTabActive && "hidden")}>
                   {client ? (
                     <Suspense fallback={<ModuleLoading title="正在打开邮件" />}>
-                      <EmailClientView />
+                      <EmailClientView onOpenSubscribe={onOpenSubscribe} />
                     </Suspense>
                   ) : (
                     <RuntimePlaceholder
@@ -1657,12 +1773,11 @@ function Shell({
                       onNavigate={(url) => {
                         // 关闭历史记录标签，打开新标签导航
                         void closeBrowserTab(tab.id);
-                        addEmptyTab();
-                        // 使用 setTimeout 等待新标签创建
+                        const newTabId = addEmptyTab();
+                        // 等待新标签进入 React 状态后再创建原生 WebView。
                         setTimeout(() => {
-                          const newTabId = `tab-${Date.now()}`;
                           navigateToUrl(newTabId, url).catch(() => {});
-                        }, 100);
+                        }, 0);
                       }}
                       onBack={() => void closeBrowserTab(tab.id)}
                     />
@@ -1678,7 +1793,8 @@ function Shell({
                   >
                     <BrowserTabView
                       tab={tab}
-                      isVisible={tab.id === activeBrowserTabId && !loginDialogOpen}
+                      isVisible={tab.id === activeBrowserTabId && browserSurfaceVisible}
+                      layoutVersion={desktopSidebarOpen}
                       isFullscreen={browserFullscreen}
                       onToggleFullscreen={toggleFullscreen}
                       onExitFullscreen={exitFullscreen}
@@ -1712,9 +1828,9 @@ function Shell({
         />
 
         <LoginDialog
-          open={loginDialogOpen}
-          onOpenChange={setLoginDialogOpen}
-          initialView={loginDialogInitialView}
+          open={loginRequired || loginDialogOpen}
+          onOpenChange={loginRequired ? () => {} : setLoginDialogOpen}
+          initialView={loginRequired ? "login" : loginDialogInitialView}
           autoSubscribeAfterLogin={loginDialogSubscribeIntent}
         />
 
@@ -1773,6 +1889,8 @@ function RuntimePlaceholder({
   onRetry: () => void;
 }) {
   const { t } = useTranslation();
+  const [logOpen, setLogOpen] = useState(false);
+
   // 连接中：显示简洁的连接提示，避免聊天区空白造成"应用卡住"的错觉
   if (status === "connecting") {
     return (
@@ -1800,10 +1918,130 @@ function RuntimePlaceholder({
         <p className="text-xs text-muted-foreground">
           {t("app.error.otherFeaturesHint")}
         </p>
-        <Button variant="outline" size="sm" onClick={onRetry}>
-          {t("app.error.retry")}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={onRetry}>
+            {t("app.error.retry")}
+          </Button>
+          {isTauri() ? (
+            <Button variant="outline" size="sm" onClick={() => setLogOpen(true)}>
+              <FileText className="mr-1.5 h-3.5 w-3.5" />
+              {t("app.error.viewLog")}
+            </Button>
+          ) : null}
+        </div>
       </div>
+      {isTauri() ? (
+        <GatewayLogDialog open={logOpen} onOpenChange={setLogOpen} />
+      ) : null}
     </div>
+  );
+}
+
+function GatewayLogDialog({
+  open,
+  onOpenChange,
+}: {
+  open: boolean;
+  onOpenChange: (next: boolean) => void;
+}) {
+  const { t } = useTranslation();
+  const [log, setLog] = useState<GatewayLog | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    setCopied(false);
+    readGatewayLog(200)
+      .then((res) => {
+        if (cancelled) return;
+        setLog(res);
+        setLoading(false);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : String(err));
+        setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  const handleCopy = async () => {
+    if (!log?.tail) return;
+    try {
+      await navigator.clipboard.writeText(log.tail);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // ignore clipboard errors
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="flex max-h-[80vh] w-[680px] max-w-[92vw] flex-col gap-0 overflow-hidden rounded-[22px] border-border/70 bg-popover p-0 shadow-2xl">
+        <DialogHeader className="border-b border-border/60 px-5 py-4 text-left">
+          <DialogTitle className="flex items-center gap-2 text-base">
+            <FileText className="h-4 w-4 text-muted-foreground" />
+            {t("app.error.logTitle")}
+          </DialogTitle>
+          <DialogDescription className="sr-only">
+            {t("app.error.logTitle")}
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="flex-1 overflow-hidden px-5 py-3">
+          {loading ? (
+            <p className="text-sm text-muted-foreground">{t("app.error.logLoading")}</p>
+          ) : error ? (
+            <p className="text-sm text-destructive">{t("app.error.logLoadError")}: {error}</p>
+          ) : log ? (
+            <>
+              {log.path ? (
+                <p className="mb-2 break-all text-xs text-muted-foreground">
+                  <span className="font-medium">{t("app.error.logPath")}: </span>
+                  <span className="select-text font-mono">{log.path}</span>
+                </p>
+              ) : null}
+              <div className="max-h-[55vh] overflow-y-auto scrollbar-thin rounded-md bg-background/60 p-3">
+                {log.tail ? (
+                  <pre className="whitespace-pre-wrap break-all text-left font-mono text-xs leading-relaxed text-foreground/90 select-text">
+                    {log.tail}
+                  </pre>
+                ) : (
+                  <p className="text-sm text-muted-foreground">{t("app.error.logEmpty")}</p>
+                )}
+              </div>
+            </>
+          ) : null}
+        </div>
+
+        <div className="flex items-center justify-end gap-2 border-t border-border/60 px-5 py-3">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={handleCopy}
+            disabled={!log?.tail || loading}
+          >
+            {copied ? (
+              <Check className="mr-1.5 h-3.5 w-3.5" />
+            ) : (
+              <Copy className="mr-1.5 h-3.5 w-3.5" />
+            )}
+            {copied ? t("app.error.copyLogDone") : t("app.error.copyLog")}
+          </Button>
+          <Button type="button" size="sm" onClick={() => onOpenChange(false)}>
+            {t("deleteConfirm.cancel")}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }

@@ -24,9 +24,6 @@ fn place_window(app: &AppHandle, anchor: &DownloadPopupAnchor) -> Result<(), Str
     let main_position = main.inner_position().map_err(|e| e.to_string())?;
 
     window
-        .set_size(LogicalSize::new(WIDTH, HEIGHT))
-        .map_err(|e| e.to_string())?;
-    window
         .set_position(PhysicalPosition::new(
             main_position.x + (anchor.left * scale).round() as i32,
             main_position.y + (anchor.top * scale).round() as i32,
@@ -35,54 +32,85 @@ fn place_window(app: &AppHandle, anchor: &DownloadPopupAnchor) -> Result<(), Str
 }
 
 #[tauri::command]
-pub fn browser_show_downloads(
+pub async fn browser_show_downloads(
     app: AppHandle,
     anchor: DownloadPopupAnchor,
 ) -> Result<(), String> {
-    if app.get_webview_window(WINDOW_LABEL).is_none() {
-        let window_app = app.clone();
-        app.run_on_main_thread(move || {
-            if window_app.get_webview_window(WINDOW_LABEL).is_some() {
+    // 与地址栏建议窗一致：不可聚焦的悬浮窗，不抢焦点、无焦点事件，避免失焦即隐藏
+    let app_handle = app.clone();
+    app.run_on_main_thread(move || {
+        let app = &app_handle;
+        if let Some(window) = app.get_webview_window(WINDOW_LABEL) {
+            log::info!("[downloads] window exists, re-show");
+            if let Err(e) = place_window(app, &anchor) {
+                log::warn!("[downloads] place_window failed: {e}");
+            }
+            if let Err(e) = window.show() {
+                log::warn!("[downloads] show failed: {e}");
+            }
+            log_window_state(&window);
+            return;
+        }
+
+        let Some(main) = app.get_webview_window("main") else {
+            log::warn!("[downloads] main window not found");
+            return;
+        };
+        let builder = WebviewWindowBuilder::new(
+            app,
+            WINDOW_LABEL,
+            WebviewUrl::App("#/browser-downloads".into()),
+        )
+        .title("")
+        .decorations(false)
+        .skip_taskbar(true)
+        .resizable(false)
+        .focusable(false)
+        .visible(false)
+        .shadow(false);
+        let window = match builder.parent(&main).and_then(|builder| builder.build()) {
+            Ok(window) => window,
+            Err(e) => {
+                log::warn!("[downloads] build failed: {e}");
                 return;
             }
-            let Some(main) = window_app.get_webview_window("main") else {
-                return;
-            };
-            let builder = WebviewWindowBuilder::new(
-                &window_app,
-                WINDOW_LABEL,
-                WebviewUrl::App("#/browser-downloads".into()),
-            )
-            .title("")
-            .decorations(false)
-            .skip_taskbar(true)
-            .resizable(false)
-            .visible(false)
-            .shadow(false);
-            let Ok(window) = builder.parent(&main).and_then(|builder| builder.build())
-            else {
-                return;
-            };
-            let _ = window.set_size(LogicalSize::new(WIDTH, HEIGHT));
-            let _ = place_window(&window_app, &anchor);
-            let _ = window.show();
-            let _ = window.set_focus();
-        })
-        .map_err(|e| e.to_string())?;
-        return Ok(());
-    }
+        };
+        log::info!("[downloads] window built");
+        if let Err(e) = window.set_size(LogicalSize::new(WIDTH, HEIGHT)) {
+            log::warn!("[downloads] set_size failed: {e}");
+        }
+        if let Err(e) = place_window(app, &anchor) {
+            log::warn!("[downloads] place_window failed: {e}");
+        }
+        if let Err(e) = window.show() {
+            log::warn!("[downloads] show failed: {e}");
+        }
+        log_window_state(&window);
+    })
+    .map_err(|e| e.to_string())
+}
 
-    place_window(&app, &anchor)?;
-    show_browser_downloads_window(app)
+fn log_window_state(window: &tauri::WebviewWindow) {
+    let visible = window.is_visible().map_err(|e| e.to_string());
+    let pos = window.outer_position().map_err(|e| e.to_string());
+    let size = window.outer_size().map_err(|e| e.to_string());
+    log::info!(
+        "[downloads] state visible={:?} outer_pos={:?} outer_size={:?}",
+        visible,
+        pos,
+        size
+    );
 }
 
 #[tauri::command]
-pub fn show_browser_downloads_window(app: AppHandle) -> Result<(), String> {
+pub async fn browser_toggle_downloads(app: AppHandle, anchor: DownloadPopupAnchor) -> Result<(), String> {
     if let Some(window) = app.get_webview_window(WINDOW_LABEL) {
-        window.show().map_err(|e| e.to_string())?;
-        window.set_focus().map_err(|e| e.to_string())?;
+        if window.is_visible().unwrap_or(false) {
+            let _ = window.hide();
+            return Ok(());
+        }
     }
-    Ok(())
+    browser_show_downloads(app, anchor).await
 }
 
 #[tauri::command]

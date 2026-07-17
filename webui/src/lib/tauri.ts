@@ -103,7 +103,7 @@ async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T
   return tauriInvoke<T>(cmd, args);
 }
 
-async function invokeWithTimeout<T>(
+export async function invokeWithTimeout<T>(
   cmd: string,
   args: Record<string, unknown>,
   ms: number,
@@ -174,6 +174,16 @@ export async function stopGateway(): Promise<void> {
   return invoke<void>("stop_gateway");
 }
 
+export interface GatewayLog {
+  path: string;
+  exists: boolean;
+  tail: string;
+}
+
+export async function readGatewayLog(maxLines?: number): Promise<GatewayLog> {
+  return invoke<GatewayLog>("read_gateway_log", { maxLines: maxLines ?? null });
+}
+
 export async function writeMonaProviderConfig(
   provider: string,
   apiKey: string,
@@ -214,6 +224,19 @@ export async function writeEmailScheduleConfig(
   config: EmailScheduleConfig,
 ): Promise<void> {
   return invoke<void>("write_email_schedule_config", { schedule: config });
+}
+
+/**
+ * 同步主窗口背景色到当前主题，避免拖动调整大小时露出对比色残影。
+ * 浅色主题传 (255,255,255,255)，深色主题传 (26,26,26,255)。
+ */
+export async function setWindowBackgroundColor(
+  r: number,
+  g: number,
+  b: number,
+  a: number,
+): Promise<void> {
+  return invoke<void>("set_window_background_color", { r, g, b, a });
 }
 
 export async function loadDesktopNotesState(): Promise<unknown | null> {
@@ -269,6 +292,8 @@ export interface LinkGraph {
   nodes: LinkNode[];
   edges: LinkEdge[];
   lastScanAt: string;
+  /** Saved layout positions (note id -> [x, y]) for instant view restore. */
+  positions?: Record<string, [number, number]>;
 }
 
 export async function searchNotebookNotes(
@@ -328,6 +353,13 @@ export async function setAgentSearchScope(scope: AgentSearchScope): Promise<void
 export async function getNotesLinkGraph(): Promise<LinkGraph | null> {
   if (!isTauri()) return null;
   return invoke<LinkGraph>("notes_links_get_graph");
+}
+
+export async function saveNotesLinkPositions(
+  positions: Record<string, [number, number]>,
+): Promise<void> {
+  if (!isTauri()) return;
+  return invoke<void>("notes_links_save_positions", { positions });
 }
 
 export async function getNoteBacklinks(noteId: string): Promise<unknown[]> {

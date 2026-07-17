@@ -1038,11 +1038,11 @@ export function ThreadComposer({
               className={cn(
                 "rounded-full text-muted-foreground hover:text-foreground",
                 isHero
-                  ? "h-9 w-9 border border-border/55 bg-card shadow-[0_2px_8px_rgba(15,23,42,0.05)] hover:bg-card"
-                  : "h-7.5 w-7.5 border border-border/55 bg-card shadow-[0_2px_8px_rgba(15,23,42,0.05)] hover:bg-card",
+                  ? "h-7 w-7 border border-border/55 bg-card shadow-[0_2px_8px_rgba(15,23,42,0.05)] hover:bg-card"
+                  : "h-6 w-6 border border-border/55 bg-card shadow-[0_2px_8px_rgba(15,23,42,0.05)] hover:bg-card",
               )}
             >
-              <Plus className={cn(isHero ? "h-5 w-5" : "h-4 w-4")} />
+              <Plus className={cn(isHero ? "h-4 w-4" : "h-3.5 w-3.5")} />
             </Button>
             {leadingActions ? (
               <div className="flex min-w-0 items-center gap-1">{leadingActions}</div>
@@ -1068,7 +1068,7 @@ export function ThreadComposer({
                 }}
                 className={cn(
                   "rounded-full border border-border/55 px-2.5 font-medium shadow-[0_2px_8px_rgba(15,23,42,0.04)]",
-                  isHero ? "h-9 text-[12px]" : "h-7.5 text-[10.5px]",
+                  isHero ? "h-7 text-[12px]" : "h-6 text-[10.5px]",
                   imageMode
                     ? "border-primary/30 bg-primary/10 text-primary hover:bg-primary/12"
                     : "bg-card text-muted-foreground hover:bg-card hover:text-foreground",
@@ -1088,7 +1088,7 @@ export function ThreadComposer({
                   onClick={() => setAspectMenuOpen((open) => !open)}
                   className={cn(
                     "rounded-full border border-border/55 bg-card px-2.5 font-medium text-foreground/80 shadow-[0_2px_8px_rgba(15,23,42,0.04)] hover:bg-card",
-                    isHero ? "h-9 text-[12px]" : "h-7.5 text-[10.5px]",
+                    isHero ? "h-7 text-[12px]" : "h-6 text-[10.5px]",
                   )}
                 >
                   <span>{t(`thread.composer.imageMode.aspect.${imageAspectRatio.replace(":", "_")}`)}</span>
@@ -1122,7 +1122,7 @@ export function ThreadComposer({
                 }}
                 className={cn(
                   "rounded-full border border-border/55 px-2.5 font-medium shadow-[0_2px_8px_rgba(15,23,42,0.04)]",
-                  isHero ? "h-9 text-[12px]" : "h-7.5 text-[10.5px]",
+                  isHero ? "h-7 text-[12px]" : "h-6 text-[10.5px]",
                   videoMode
                     ? "border-primary/30 bg-primary/10 text-primary hover:bg-primary/12"
                     : "bg-card text-muted-foreground hover:bg-card hover:text-foreground",
@@ -1145,7 +1145,7 @@ export function ThreadComposer({
                   }}
                   className={cn(
                     "rounded-full border border-border/55 bg-card px-2.5 font-medium text-foreground/80 shadow-[0_2px_8px_rgba(15,23,42,0.04)] hover:bg-card",
-                    isHero ? "h-9 text-[12px]" : "h-7.5 text-[10.5px]",
+                    isHero ? "h-7 text-[12px]" : "h-6 text-[10.5px]",
                   )}
                 >
                   <span>{t(`thread.composer.videoMode.aspect.${videoAspectRatio.replace(":", "_")}`)}</span>
@@ -1166,7 +1166,7 @@ export function ThreadComposer({
                   }}
                   className={cn(
                     "rounded-full border border-border/55 bg-card px-2.5 font-medium text-foreground/80 shadow-[0_2px_8px_rgba(15,23,42,0.04)] hover:bg-card",
-                    isHero ? "h-9 text-[12px]" : "h-7.5 text-[10.5px]",
+                    isHero ? "h-7 text-[12px]" : "h-6 text-[10.5px]",
                   )}
                 >
                   <span>{videoDuration === 0 ? t("thread.composer.videoMode.duration.auto") : `${videoDuration}s`}</span>
@@ -1203,12 +1203,12 @@ export function ThreadComposer({
                     type="button"
                     title={kbProjectName ?? "选择知识库"}
                     className={cn(
-                      "inline-flex min-w-0 items-center gap-1.5 rounded-full border px-2.5 py-1",
+                      "inline-flex min-w-0 items-center gap-1.5 rounded-full border px-2.5",
                       "border-foreground/10 bg-foreground/[0.035] font-medium text-foreground/80",
                       "hover:bg-foreground/[0.07] transition-colors cursor-pointer",
                       isHero
-                        ? "max-w-[13rem] text-[12px] shadow-[0_2px_8px_rgba(15,23,42,0.04)]"
-                        : "max-w-[10rem] text-[10.5px] shadow-[0_2px_8px_rgba(15,23,42,0.035)]",
+                        ? "h-7 max-w-[13rem] text-[12px] shadow-[0_2px_8px_rgba(15,23,42,0.04)]"
+                        : "h-6 max-w-[10rem] text-[10.5px] shadow-[0_2px_8px_rgba(15,23,42,0.035)]",
                     )}
                   >
                     <span
@@ -1264,12 +1264,12 @@ export function ThreadComposer({
                       type="button"
                       title={modelLabel}
                       className={cn(
-                        "inline-flex min-w-0 items-center gap-1.5 rounded-full border px-2.5 py-1",
+                        "inline-flex min-w-0 items-center gap-1.5 rounded-full border px-2.5",
                         "border-foreground/10 bg-foreground/[0.035] font-medium text-foreground/80",
                         "hover:bg-foreground/[0.07] transition-colors cursor-pointer",
                         isHero
-                          ? "max-w-[13rem] text-[12px] shadow-[0_2px_8px_rgba(15,23,42,0.04)]"
-                          : "max-w-[10rem] text-[10.5px] shadow-[0_2px_8px_rgba(15,23,42,0.035)]",
+                          ? "h-7 max-w-[13rem] text-[12px] shadow-[0_2px_8px_rgba(15,23,42,0.04)]"
+                          : "h-6 max-w-[10rem] text-[10.5px] shadow-[0_2px_8px_rgba(15,23,42,0.035)]",
                       )}
                     >
                       <span
@@ -1341,11 +1341,11 @@ export function ThreadComposer({
                 <span
                   title={modelLabel}
                   className={cn(
-                    "inline-flex min-w-0 items-center gap-1.5 rounded-full border px-2.5 py-1",
+                    "inline-flex min-w-0 items-center gap-1.5 rounded-full border px-2.5",
                     "border-foreground/10 bg-foreground/[0.035] font-medium text-foreground/80",
                     isHero
-                      ? "max-w-[13rem] text-[12px] shadow-[0_2px_8px_rgba(15,23,42,0.04)]"
-                      : "max-w-[10rem] text-[10.5px] shadow-[0_2px_8px_rgba(15,23,42,0.035)]",
+                      ? "h-7 max-w-[13rem] text-[12px] shadow-[0_2px_8px_rgba(15,23,42,0.04)]"
+                      : "h-6 max-w-[10rem] text-[10.5px] shadow-[0_2px_8px_rgba(15,23,42,0.035)]",
                   )}
                 >
                   <span
@@ -1445,7 +1445,7 @@ function WorkspaceSelector({ workspace, onChange, disabled }: WorkspaceSelectorP
           onClick={pickWorkspace}
           title={workspace}
           className={cn(
-            "inline-flex min-w-0 items-center gap-1.5 rounded-lg border px-2.5 py-1.5",
+            "inline-flex min-w-0 h-7 items-center gap-1.5 rounded-lg border px-2.5",
             "border-border/60 bg-muted/60 text-[12px] font-medium text-foreground/80",
             "hover:bg-muted/80 transition-colors cursor-pointer",
             (disabled || picking) && "pointer-events-none opacity-55",
@@ -1479,7 +1479,7 @@ function WorkspaceSelector({ workspace, onChange, disabled }: WorkspaceSelectorP
       disabled={disabled || picking}
       onClick={pickWorkspace}
       className={cn(
-        "inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5",
+        "inline-flex h-7 items-center gap-1.5 rounded-lg border px-2.5",
         "border-transparent bg-muted/80 text-[12px] font-medium text-foreground/65",
         "hover:bg-muted transition-colors cursor-pointer",
         (disabled || picking) && "pointer-events-none opacity-55",

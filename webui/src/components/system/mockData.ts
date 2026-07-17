@@ -3,6 +3,7 @@ export type SystemTab =
   | "storage"
   | "software"
   | "startup"
+  | "optimization"
   | "maintenance";
 
 export interface SystemTabDefinition {
@@ -15,6 +16,7 @@ export const systemTabs: SystemTabDefinition[] = [
   { id: "storage", label: "存储空间" },
   { id: "software", label: "软件管理" },
   { id: "startup", label: "启动项" },
+  { id: "optimization", label: "系统优化" },
   { id: "maintenance", label: "维护记录" },
 ];
 

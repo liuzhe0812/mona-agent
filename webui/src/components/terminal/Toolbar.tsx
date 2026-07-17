@@ -8,6 +8,7 @@ import {
   Monitor,
   FolderTree,
   Activity,
+  LockKeyhole,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AgentLogo } from "@/components/AgentLogo";
@@ -18,7 +19,7 @@ import { sshOpenSftp, desktopConnect } from "./ipc";
 import { SessionManagerDialog } from "./Dialogs/SessionManagerDialog";
 import { cn } from "@/lib/utils";
 
-export function Toolbar() {
+export function Toolbar({ onOpenSubscribe }: { onOpenSubscribe?: () => void }) {
   const { licenseActive } = useLicense();
   const toggleAIPanel = useTerminalStore((s) => s.toggleAIPanel);
   const aiPanelVisible = useTerminalStore((s) => s.aiPanelVisible);
@@ -186,7 +187,7 @@ export function Toolbar() {
           </Button>
         </>
       )}
-      {licenseActive && (
+      {licenseActive ? (
         <Button
           variant="ghost"
           size="sm"
@@ -198,6 +199,16 @@ export function Toolbar() {
             state={aiStreaming ? "working" : "idle"}
             className="h-5 w-5"
           />
+        </Button>
+      ) : (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 w-7 p-0 text-muted-foreground"
+          onClick={onOpenSubscribe}
+          title="升级 Pro 解锁终端 AI"
+        >
+          <LockKeyhole className="h-4 w-4" />
         </Button>
       )}
       <SessionManagerDialog

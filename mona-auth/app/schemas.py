@@ -36,6 +36,11 @@ class ResetPasswordRequest(BaseModel):
     new_password: str = Field(min_length=8, max_length=128)
 
 
+class ChangePasswordRequest(BaseModel):
+    old_password: str
+    new_password: str = Field(min_length=8, max_length=128)
+
+
 class DeviceBindRequest(BaseModel):
     device_fingerprint: str = Field(min_length=8, max_length=255)
     device_name: str | None = Field(default=None, max_length=255)
@@ -121,7 +126,7 @@ class SubscriptionInfo(BaseModel):
 # ── 支付宝订阅相关 ──
 
 class SubscribeRequest(BaseModel):
-    plan_code: str = Field(..., pattern=r"^(monthly|yearly|lifetime)$")
+    plan_code: str = Field(..., pattern=r"^(monthly|quarterly|yearly)$")
     payment_method: str = Field(..., pattern=r"^(alipay_periodic|alipay_page)$")
 
 
@@ -215,10 +220,17 @@ class ContactConfig(BaseModel):
     wechat: str
 
 
+class PromoTrialInfo(BaseModel):
+    enabled: bool
+    days: int = 0
+    end_at: str | None = None
+
+
 class PricingConfigResponse(BaseModel):
     plans: list[PricingPlanInfo]
     contact: ContactConfig
     promotional_banner: str | None = None
+    promo_trial: PromoTrialInfo | None = None
 
 
 class NotificationInfo(BaseModel):

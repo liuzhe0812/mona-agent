@@ -40,6 +40,23 @@ interface BrowserTabViewProps {
   onOpenDevtools?: () => void;
 }
 
+export interface WebviewBounds {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  visible: boolean;
+}
+
+export function sameWebviewBounds(a: WebviewBounds | null, b: WebviewBounds): boolean {
+  return !!a
+    && a.left === b.left
+    && a.top === b.top
+    && a.width === b.width
+    && a.height === b.height
+    && a.visible === b.visible;
+}
+
 export function BrowserTabView({
   tab,
   isVisible,
@@ -61,8 +78,10 @@ export function BrowserTabView({
 }: BrowserTabViewProps) {
   const { token } = useClientOptional();
   const webviewContainerRef = useRef<HTMLDivElement>(null);
-  const resizeObserverRef = useRef<ResizeObserver | null>(null);
-  const lastBoundsRef = useRef<{ left: number; top: number; width: number; height: number } | null>(null);
+  const lastVisibleBoundsRef = useRef<Omit<WebviewBounds, "visible"> | null>(null);
+  const lastAppliedBoundsRef = useRef<WebviewBounds | null>(null);
+  const pendingBoundsRef = useRef<WebviewBounds | null>(null);
+  const boundsUpdateRunningRef = useRef(false);
   const [isAiPanelOpen, setIsAiPanelOpen] = useState(false);
   const [bookmarkBarVisible, setBookmarkBarVisible] = useState(true);
   const [findBarVisible, setFindBarVisible] = useState(false);
@@ -76,89 +95,77 @@ export function BrowserTabView({
   const toolbarHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const modalSurfaceOpen = cookieManagerOpen || shareDialogOpen;
 
-  // 更新子 WebView 位置和大小
-  const updateWebviewBounds = useCallback(async () => {
+  const applyWebviewBounds = useCallback((bounds: WebviewBounds) => {
+    if (sameWebviewBounds(lastAppliedBoundsRef.current, bounds)) return;
+    pendingBoundsRef.current = bounds;
+    if (boundsUpdateRunningRef.current) return;
+
+    boundsUpdateRunningRef.current = true;
+    void (async () => {
+      try {
+        while (pendingBoundsRef.current) {
+          const next = pendingBoundsRef.current;
+          pendingBoundsRef.current = null;
+          if (sameWebviewBounds(lastAppliedBoundsRef.current, next)) continue;
+          await browserSetTabBounds(
+            tab.id,
+            next.left,
+            next.top,
+            next.width,
+            next.height,
+            next.visible,
+          );
+          lastAppliedBoundsRef.current = next;
+        }
+      } catch (e) {
+        console.debug("[BrowserTabView] updateWebviewBounds error:", e);
+      } finally {
+        boundsUpdateRunningRef.current = false;
+      }
+    })();
+  }, [tab.id]);
+
+  const updateWebviewBounds = useCallback(() => {
     if (!isTauri() || !tab.webviewCreated) return;
 
-    try {
-      const isAiActive = tab.isAiControlled || !!tab.aiStatus;
-
-      // 原生 WebView2 是独立的子窗口，不能被 DOM 对话框覆盖。
-      // 仅在真正的模态对话框打开时暂时隐藏内容区；地址建议、书签菜单等非模态 UI
-      // 保持网页可见，避免再次出现整块页面闪烁或消失。
-      if (modalSurfaceOpen) {
-        await browserSetTabBounds(tab.id, -9999, -9999, 1, 1, false);
-        return;
-      }
-
-      if (isVisible && webviewContainerRef.current) {
-        const rect = webviewContainerRef.current.getBoundingClientRect();
-        if (rect.width === 0 || rect.height === 0) {
-          await browserSetTabBounds(tab.id, -9999, -9999, 1, 1, false);
-          return;
-        }
-        // 缓存最后已知的位置
-        lastBoundsRef.current = { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
-        await browserSetTabBounds(tab.id, rect.left, rect.top, rect.width, rect.height, true);
-      } else if (isAiActive && lastBoundsRef.current) {
-        // AI 控制中但标签不可见：使用缓存的位置并隐藏
-        // 这样 Playwright CDP 操作（click/screenshot）不会因 WebView 不可见而失败
-        const { left, top, width, height } = lastBoundsRef.current;
-        await browserSetTabBounds(tab.id, left, top, width, height, false);
-      } else {
-        // 非活跃且非 AI 控制：隐藏并移到屏幕外
-        await browserSetTabBounds(tab.id, -9999, -9999, 1, 1, false);
-      }
-    } catch (e) {
-      console.debug("[BrowserTabView] updateWebviewBounds error:", e);
+    if (!isVisible || modalSurfaceOpen || !webviewContainerRef.current) {
+      const last = lastVisibleBoundsRef.current ?? { left: 0, top: 0, width: 1, height: 1 };
+      applyWebviewBounds({ ...last, visible: false });
+      return;
     }
-  }, [tab.id, tab.webviewCreated, tab.isAiControlled, tab.aiStatus, isVisible, modalSurfaceOpen]);
 
-  // 下拉菜单或分享弹窗开关时立即更新 WebView 位置（无延迟）
-  // 当 WebView 创建后或可见性变化时，更新位置
+    const rect = webviewContainerRef.current.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) {
+      const last = lastVisibleBoundsRef.current ?? { left: 0, top: 0, width: 1, height: 1 };
+      applyWebviewBounds({ ...last, visible: false });
+      return;
+    }
+
+    const next = { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
+    lastVisibleBoundsRef.current = next;
+    applyWebviewBounds({ ...next, visible: true });
+  }, [applyWebviewBounds, isVisible, modalSurfaceOpen, tab.webviewCreated]);
+
   useEffect(() => {
     if (!tab.webviewCreated) return;
-
-    // 标签变为可见时立即显示 WebView，避免下方视图（如终端）的残影透出
-    let rafId: number | undefined;
-    if (isVisible) {
-      rafId = requestAnimationFrame(() => {
-        updateWebviewBounds();
-      });
-    }
-
-    const timer = setTimeout(() => {
-      requestAnimationFrame(() => {
-        updateWebviewBounds();
-      });
-    }, isVisible ? 50 : 0);
-
-    return () => {
-      if (rafId) cancelAnimationFrame(rafId);
-      clearTimeout(timer);
-    };
-  }, [tab.webviewCreated, isVisible, isAiPanelOpen, isFullscreen, showFullscreenToolbar, updateWebviewBounds]);
-
-  useEffect(() => {
-    if (!tab.webviewCreated || !isVisible) return;
     const frame = requestAnimationFrame(() => {
-      void updateWebviewBounds();
+      updateWebviewBounds();
     });
     return () => cancelAnimationFrame(frame);
-  }, [layoutVersion, tab.webviewCreated, isVisible, updateWebviewBounds]);
+  }, [
+    isAiPanelOpen,
+    isFullscreen,
+    isVisible,
+    layoutVersion,
+    modalSurfaceOpen,
+    showFullscreenToolbar,
+    tab.webviewCreated,
+    updateWebviewBounds,
+  ]);
 
   useEffect(() => {
     if (!isVisible) void browserHideAddressSuggestions(tab.id).catch(() => {});
   }, [tab.id, isVisible]);
-
-  // AI Panel 开关时，延迟再次更新 WebView 位置（确保 DOM 已完成布局）
-  useEffect(() => {
-    if (!tab.webviewCreated || !isVisible) return;
-    const timer = setTimeout(() => {
-      updateWebviewBounds();
-    }, 200);
-    return () => clearTimeout(timer);
-  }, [isAiPanelOpen, tab.webviewCreated, isVisible, updateWebviewBounds]);
 
   // 监听容器大小变化
   useEffect(() => {
@@ -168,15 +175,9 @@ export function BrowserTabView({
       updateWebviewBounds();
     });
     observer.observe(webviewContainerRef.current);
-    resizeObserverRef.current = observer;
-
-    const handleResize = () => updateWebviewBounds();
-    window.addEventListener("resize", handleResize, { passive: true });
 
     return () => {
       observer.disconnect();
-      window.removeEventListener("resize", handleResize);
-      resizeObserverRef.current = null;
     };
   }, [updateWebviewBounds]);
 
@@ -187,6 +188,12 @@ export function BrowserTabView({
     let unlisten: (() => void) | undefined;
     let unlistenNavCompleted: (() => void) | undefined;
     let unlistenNavStarted: (() => void) | undefined;
+    let cancelled = false;
+    const keepListener = (stop: () => void): boolean => {
+      if (!cancelled) return true;
+      stop();
+      return false;
+    };
 
     (async () => {
       const { listen } = await import("@tauri-apps/api/event");
@@ -198,6 +205,7 @@ export function BrowserTabView({
           }
         }
       );
+      if (!keepListener(unlisten)) return;
 
       // 导航完成时检查是否成功
       unlistenNavCompleted = await listen<{ id: string; success: boolean }>(
@@ -208,6 +216,7 @@ export function BrowserTabView({
           }
         }
       );
+      if (!keepListener(unlistenNavCompleted)) return;
 
       // 导航开始时清除错误状态
       unlistenNavStarted = await listen<{ id: string; url: string }>(
@@ -218,9 +227,11 @@ export function BrowserTabView({
           }
         }
       );
+      if (!keepListener(unlistenNavStarted)) return;
     })();
 
     return () => {
+      cancelled = true;
       unlisten?.();
       unlistenNavCompleted?.();
       unlistenNavStarted?.();
@@ -290,7 +301,11 @@ export function BrowserTabView({
   }, [tab.id, tab.webviewCreated]);
 
   const handleCreateNote = useCallback(async () => {
-    if (isCreatingNote || !tab.url) return;
+    if (isCreatingNote) return;
+    if (!tab.url || !/^https?:\/\//i.test(tab.url)) {
+      window.alert("当前页面不是可提取的网页（仅支持 http/https 链接）");
+      return;
+    }
     if (!token) {
       window.alert("Mona 尚未连接，无法生成笔记");
       return;
@@ -416,6 +431,7 @@ export function BrowserTabView({
               onToggleFullscreen={onToggleFullscreen}
               onExitFullscreen={onExitFullscreen}
               onCreateNote={handleCreateNote}
+              isCreatingNote={isCreatingNote}
             />
           </div>
         )}
@@ -460,6 +476,7 @@ export function BrowserTabView({
         onToggleDarkMode={onToggleDarkMode}
         onOpenDevtools={onOpenDevtools}
         onCreateNote={handleCreateNote}
+        isCreatingNote={isCreatingNote}
         onShare={() => setShareDialogOpen(true)}
       />
       <BookmarkBar onNavigate={onNavigate} visible={bookmarkBarVisible} />

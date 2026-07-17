@@ -3484,7 +3484,6 @@ dependencies = [
  "windows-registry 0.5.3",
  "windows-result 0.3.4",
  "windows-strings 0.4.2",
- "wry",
  "zstd",
 ]
 

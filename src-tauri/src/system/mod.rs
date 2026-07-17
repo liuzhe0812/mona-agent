@@ -4,6 +4,8 @@
 pub mod software;
 pub mod startup;
 pub mod maintenance;
+pub mod diagnostics;
+pub mod win11debloat;
 
 use crate::settings::app_data_dir;
 use rusqlite::{params, Connection};
@@ -20,6 +22,59 @@ const SYSTEM_DB_FILE: &str = "system.sqlite3";
 const SAMPLE_INTERVAL_SECS: u64 = 10;
 const HISTORY_WINDOW_SECS: i64 = 3600;
 
+pub(crate) fn decode_windows_output(bytes: &[u8]) -> String {
+    let utf16 = bytes.starts_with(&[0xff, 0xfe])
+        || (bytes.len() >= 4
+            && bytes.len() % 2 == 0
+            && bytes.iter().skip(1).step_by(2).filter(|byte| **byte == 0).count()
+                > bytes.len() / 8);
+    if utf16 {
+        let offset = usize::from(bytes.starts_with(&[0xff, 0xfe])) * 2;
+        return String::from_utf16_lossy(
+            &bytes[offset..]
+                .chunks_exact(2)
+                .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                .collect::<Vec<_>>(),
+        );
+    }
+    if let Ok(text) = std::str::from_utf8(bytes) {
+        return text.to_string();
+    }
+    encoding_rs::GBK.decode(bytes).0.into_owned()
+}
+
+#[cfg(windows)]
+pub(crate) fn run_elevated(program: &str, parameters: &str, timeout_ms: u32) -> Result<(), String> {
+    use windows::core::{HSTRING, PCWSTR};
+    use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
+    use windows::Win32::System::Threading::{GetExitCodeProcess, WaitForSingleObject};
+    use windows::Win32::UI::Shell::{ShellExecuteExW, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW};
+    use windows::Win32::UI::WindowsAndMessaging::SW_HIDE;
+
+    let program = HSTRING::from(program);
+    let parameters = HSTRING::from(parameters);
+    let mut info = SHELLEXECUTEINFOW::default();
+    info.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
+    info.fMask = SEE_MASK_NOCLOSEPROCESS;
+    info.lpVerb = windows::core::w!("runas");
+    info.lpFile = PCWSTR(program.as_ptr());
+    info.lpParameters = PCWSTR(parameters.as_ptr());
+    info.nShow = SW_HIDE.0 as i32;
+
+    unsafe {
+        ShellExecuteExW(&mut info).map_err(|error| format!("管理员授权被取消或启动失败：{error}"))?;
+        let handle: HANDLE = info.hProcess;
+        if handle.is_invalid() { return Err("管理员进程未能启动".into()); }
+        let wait = WaitForSingleObject(handle, timeout_ms);
+        let mut exit_code = 1;
+        let _ = GetExitCodeProcess(handle, &mut exit_code);
+        let _ = CloseHandle(handle);
+        if wait != WAIT_OBJECT_0 { return Err("管理员操作等待超时".into()); }
+        if exit_code != 0 { return Err(format!("管理员操作失败，错误码 {exit_code}")); }
+    }
+    Ok(())
+}
+
 fn history_window_secs(window_secs: Option<i64>) -> i64 {
     match window_secs {
         Some(value @ (600 | 1800 | 3600)) => value,
@@ -30,7 +85,7 @@ fn history_window_secs(window_secs: Option<i64>) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        bytes_per_second, cleanup_is_allowed, file_type_category, history_window_secs,
+        bytes_per_second, cleanup_is_allowed, decode_windows_output, file_type_category, history_window_secs,
         whole_machine_cpu_percent, HISTORY_WINDOW_SECS,
     };
     use std::path::Path;
@@ -46,6 +101,18 @@ mod tests {
     #[test]
     fn converts_sample_bytes_to_bytes_per_second() {
         assert_eq!(bytes_per_second(2_000_000, 2.0), 1_000_000.0);
+    }
+
+    #[test]
+    fn decodes_native_windows_output_without_mojibake() {
+        assert_eq!(decode_windows_output("操作已完成".as_bytes()), "操作已完成");
+        let (gbk, _, _) = encoding_rs::GBK.encode("拒绝访问");
+        assert_eq!(decode_windows_output(&gbk), "拒绝访问");
+        let utf16 = [0xff, 0xfe]
+            .into_iter()
+            .chain("需要管理员权限".encode_utf16().flat_map(u16::to_le_bytes))
+            .collect::<Vec<_>>();
+        assert_eq!(decode_windows_output(&utf16), "需要管理员权限");
     }
 
     #[test]
@@ -678,14 +745,6 @@ fn scan_storage_inner(app: AppHandle) -> StorageScanResult {
                 if p.exists() {
                     targets.push(p);
                 }
-            }
-        }
-        // 其他盘符根目录
-        for d in disks_list.list() {
-            let mp = d.mount_point();
-            let s = mp.to_string_lossy();
-            if !s.starts_with("C:") && !s.starts_with("A:") {
-                targets.push(mp.to_path_buf());
             }
         }
         targets

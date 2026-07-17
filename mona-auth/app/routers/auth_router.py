@@ -7,11 +7,13 @@ from sqlalchemy.orm import Session
 from app.auth import create_access_token, hash_password, verify_password
 from app.config import settings
 from app.database import get_db
+from app.deps import get_current_user
 from app.email import send_register_code_email, send_reset_code_email
 from app.errors import AuthError
 from app.middleware import limiter
 from app.models import AppConfig, PasswordResetCode, UsedDeviceTrial, User
 from app.schemas import (
+    ChangePasswordRequest,
     ForgotPasswordRequest,
     LoginRequest,
     RegisterRequest,
@@ -21,6 +23,16 @@ from app.schemas import (
 )
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+def _parse_config_datetime(value: str) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def _get_active_promo_trial_days(db: Session) -> int | None:
@@ -44,20 +56,14 @@ def _get_active_promo_trial_days(db: Session) -> int | None:
     end_row = db.query(AppConfig).filter(AppConfig.key == "promo_trial_end_at").first()
 
     if start_row and start_row.value:
-        try:
-            start = datetime.fromisoformat(start_row.value)
-            if now < start:
-                return None
-        except ValueError:
-            pass
+        start = _parse_config_datetime(start_row.value)
+        if start and now < start:
+            return None
 
     if end_row and end_row.value:
-        try:
-            end = datetime.fromisoformat(end_row.value)
-            if now > end:
-                return None
-        except ValueError:
-            pass
+        end = _parse_config_datetime(end_row.value)
+        if end and now > end:
+            return None
 
     return days
 
@@ -254,3 +260,23 @@ def reset_password(request: Request, body: ResetPasswordRequest, db: Session = D
     db.commit()
 
     return {"message": "Password has been reset successfully"}
+
+
+@router.post("/change-password")
+@limiter.limit("5/minute")
+def change_password(
+    request: Request,
+    body: ChangePasswordRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if not verify_password(body.old_password, current_user.password_hash):
+        raise AuthError("invalid_credentials", "旧密码错误", status_code=401)
+
+    if body.old_password == body.new_password:
+        raise AuthError("same_as_old", "新密码不能与旧密码相同", status_code=400)
+
+    current_user.password_hash = hash_password(body.new_password)
+    db.commit()
+
+    return {"message": "密码修改成功"}
