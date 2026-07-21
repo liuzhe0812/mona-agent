@@ -184,9 +184,8 @@ class _AccountImapPool:
         # 先检查连接是否已被服务器关闭（state 变为 LOGOUT）。
         # 这种情况下 _client 对象还在，recently_used 会误判为可用。
         if self._client is not None and self._is_logged_out():
-            logger.info(
-                f"[imap-pool] connection in LOGOUT state, will reconnect for "
-                f"{self._body.get('imapUsername', '?')}"
+            logger.debug(
+                "[imap-pool] connection in LOGOUT state, will reconnect"
             )
             with contextlib.suppress(Exception):
                 self._client.logout()
@@ -204,10 +203,7 @@ class _AccountImapPool:
 
         # 新建连接
         self._client = self._create_client()
-        logger.info(
-            f"[imap-pool] established connection for "
-            f"{self._body.get('imapUsername', '?')}"
-        )
+        logger.debug("[imap-pool] established connection")
         return self._client
 
     def _is_logged_out(self) -> bool:
@@ -298,7 +294,7 @@ class ImapPoolManager:
             pool = self._pools.get(key)
             # 配置变更或池失败已过期：重建
             if pool is not None and pool.config_changed(body):
-                logger.info(f"[imap-pool] config changed, recreating pool for {key}")
+                logger.debug("[imap-pool] config changed, recreating pool")
                 pool.close()
                 pool = None
             if pool is None:
@@ -317,7 +313,7 @@ class ImapPoolManager:
             pool = self._pools.pop(key, None)
         if pool:
             pool.close()
-            logger.info(f"[imap-pool] removed pool for {key}")
+            logger.debug("[imap-pool] removed pool")
 
     def reset_pool(self, body: dict[str, Any]) -> None:
         """重置账号的连接池（修改配置/测试连接时调用）。"""
@@ -326,7 +322,7 @@ class ImapPoolManager:
             pool = self._pools.pop(key, None)
         if pool:
             pool.close()
-            logger.info(f"[imap-pool] reset pool for {key}")
+            logger.debug("[imap-pool] reset pool")
 
     def close_all(self) -> None:
         """关闭所有连接池（gateway 关闭时调用）。"""

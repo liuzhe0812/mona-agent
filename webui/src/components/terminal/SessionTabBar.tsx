@@ -210,8 +210,8 @@ export function SessionTabBar() {
           "@/components/notes/notes-storage"
         );
         const state = await loadNotesState();
-        const notebookId = state.notebooks[0]?.id;
-        if (!notebookId) return;
+        // 终端导出统一落到 vault 根目录。
+        const notebookId = "";
         const note = createBlankNote(notebookId, "ssh");
         const preview = content.split("\n").filter((l) => l.trim()).slice(-1)[0]?.slice(0, 60) ?? "终端记录";
         note.title = `终端记录 ${new Date().toLocaleString("zh-CN")}`;

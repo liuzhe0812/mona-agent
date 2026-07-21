@@ -203,6 +203,7 @@ interface SettingsViewProps {
   onRestart?: () => void;
   isRestarting?: boolean;
   initialSection?: string;
+  onTriggerAgent?: (prompt: string) => void;
 }
 
 function readLocalPreferences(): LocalPreferences {
@@ -241,6 +242,7 @@ export function SettingsView({
   onRestart,
   isRestarting = false,
   initialSection,
+  onTriggerAgent,
 }: SettingsViewProps) {
   const { t } = useTranslation();
   const { token } = useClientOptional();
@@ -487,6 +489,7 @@ export function SettingsView({
       if (payload.requires_restart) {
         setPendingRestartSections((prev) => ({ ...prev, image: true }));
       }
+      setImageApiKeyDraft("");
       setError(null);
     } catch (err) {
       setError((err as Error).message);
@@ -512,6 +515,7 @@ export function SettingsView({
       if (payload.requires_restart) {
         setPendingRestartSections((prev) => ({ ...prev, image: true }));
       }
+      setVideoApiKeyDraft("");
       setError(null);
     } catch (err) {
       setError((err as Error).message);
@@ -817,6 +821,7 @@ export function SettingsView({
             onToggleVideoKeyVisible={() => setVideoKeyVisible((v) => !v)}
             onRestart={onRestart}
             isRestarting={isRestarting}
+            onTriggerAgent={onTriggerAgent}
           />
         );
       case "web":
@@ -1318,6 +1323,7 @@ function AiModelsSettings({
   // shared
   onRestart,
   isRestarting,
+  onTriggerAgent,
 }: {
   settings: SettingsPayload;
   // chat tab
@@ -1363,6 +1369,7 @@ function AiModelsSettings({
   // shared
   onRestart?: () => void;
   isRestarting?: boolean;
+  onTriggerAgent?: (prompt: string) => void;
 }) {
   const { t } = useTranslation();
   const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
@@ -1375,24 +1382,6 @@ function AiModelsSettings({
         <TabsTrigger value="image">{tx("settings.aiModels.image", "图片模型")}</TabsTrigger>
         <TabsTrigger value="video">{tx("settings.aiModels.video", "视频模型")}</TabsTrigger>
       </TabsList>
-
-      <a
-        href="https://mona.lzfun.vip/tutorial"
-        target="_blank"
-        rel="noopener noreferrer"
-        className="mb-5 flex items-center gap-3 rounded-lg border border-emerald-200/60 bg-emerald-50/60 px-4 py-3 transition-colors hover:border-emerald-300 hover:bg-emerald-50 dark:border-emerald-900/40 dark:bg-emerald-950/20 dark:hover:bg-emerald-950/30"
-      >
-        <Sparkles className="h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
-        <div className="flex-1 text-[13px] leading-5">
-          <div className="font-medium text-emerald-700 dark:text-emerald-300">
-            还没有 API Key？免费获取 LLM / 图像 / 视频模型
-          </div>
-          <div className="text-emerald-700/60 dark:text-emerald-400/60">
-            点此查看图文教程，3 步拿到免费 Key 并配置到 Mona
-          </div>
-        </div>
-        <ExternalLink className="h-3.5 w-3.5 shrink-0 text-emerald-500 dark:text-emerald-400/70" />
-      </a>
 
       <TabsContent value="chat">
         <ModelsProvidersSettings
@@ -1417,6 +1406,7 @@ function AiModelsSettings({
           isRestarting={isRestarting}
           highlightProvider={highlightProvider}
           onHighlightConsumed={onHighlightConsumed}
+          onTriggerAgent={onTriggerAgent}
         />
       </TabsContent>
 
@@ -1489,6 +1479,7 @@ function ModelsProvidersSettings({
   isRestarting,
   highlightProvider,
   onHighlightConsumed,
+  onTriggerAgent,
 }: {
   settings: SettingsPayload;
   expandedProvider: string | null;
@@ -1511,6 +1502,7 @@ function ModelsProvidersSettings({
   isRestarting?: boolean;
   highlightProvider?: string | null;
   onHighlightConsumed?: () => void;
+  onTriggerAgent?: (prompt: string) => void;
 }) {
   const { t } = useTranslation();
   const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
@@ -1760,6 +1752,34 @@ function ModelsProvidersSettings({
 
   return (
     <div className="space-y-7">
+      {onTriggerAgent ? (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-full border border-primary/30 bg-primary/5 px-4 py-2.5">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <Sparkles className="h-4 w-4 shrink-0 text-primary" aria-hidden />
+            <span className="truncate text-[13px] font-medium text-foreground">
+              {tx("settings.agnesSetup.title", "一键配置 Agnes AI")}
+            </span>
+            <a
+              href="https://agnes-ai.com/doc/cid5"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="hidden items-center gap-1 text-[12px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline sm:inline-flex"
+            >
+              <ExternalLink className="h-3 w-3 shrink-0" />
+              {tx("settings.agnesSetup.manualTutorial", "手动配置教程")}
+            </a>
+          </div>
+          <Button
+            type="button"
+            size="sm"
+            className="h-7 rounded-full px-3.5 text-[12px]"
+            onClick={() => onTriggerAgent("一键配置 Agnes")}
+          >
+            <Zap className="mr-1.5 h-3 w-3" aria-hidden />
+            {tx("settings.agnesSetup.cta", "一键配置")}
+          </Button>
+        </div>
+      ) : null}
       {/* 供应商配置区 */}
       <section>
         <SettingsSectionTitle>供应商</SettingsSectionTitle>
@@ -1849,11 +1869,13 @@ function ImageGenerationSettings({
 }) {
   const { t } = useTranslation();
   const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
+  const [keyEditing, setKeyEditing] = useState(false);
   const selectedProvider =
     settings.image_generation.providers.find((provider) => provider.name === form.provider) ??
     settings.image_generation.providers[0];
   const providerConfigured = !!selectedProvider?.configured;
-  const hasApiKeyDraft = apiKeyDraft.trim().length > 0;
+  const hasApiKeyDraft = apiKeyDraft.length > 0;
+  const showKeyInput = keyEditing || hasApiKeyDraft;
   const missingCredential = form.enabled && !providerConfigured && !hasApiKeyDraft;
   const imageModelOptions = selectedProvider?.image_models ?? [];
   const aspectOptions = optionRowsWithCurrent(
@@ -1905,10 +1927,11 @@ function ImageGenerationSettings({
                   };
                 });
                 onApiKeyDraftChange("");
+                setKeyEditing(false);
               }}
             />
           </SettingsRow>
-          {providerConfigured && !hasApiKeyDraft ? (
+          {providerConfigured && !showKeyInput ? (
             <SettingsRow
               title={tx("settings.rows.imageProviderStatus", "Provider credentials")}
               description={tx("settings.help.imageProviderStatus", "Image generation reuses provider credentials from Providers.")}
@@ -1923,10 +1946,13 @@ function ImageGenerationSettings({
                 <Button
                   size="sm"
                   variant="ghost"
-                  onClick={() => onApiKeyDraftChange(" ")}
+                  onClick={() => {
+                    onApiKeyDraftChange("");
+                    setKeyEditing(true);
+                  }}
                   className="rounded-full text-[13px] text-muted-foreground"
                 >
-                  {tx("settings.image.changeKey", "Change")}
+                  {tx("settings.image.changeKey", "修改")}
                 </Button>
               </div>
             </SettingsRow>
@@ -2079,11 +2105,13 @@ function VideoGenerationSettings({
 }) {
   const { t } = useTranslation();
   const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
+  const [keyEditing, setKeyEditing] = useState(false);
   const selectedProvider =
     settings.video_generation.providers.find((provider) => provider.name === form.provider) ??
     settings.video_generation.providers[0];
   const providerConfigured = !!selectedProvider?.configured;
-  const hasApiKeyDraft = apiKeyDraft.trim().length > 0;
+  const hasApiKeyDraft = apiKeyDraft.length > 0;
+  const showKeyInput = keyEditing || hasApiKeyDraft;
   const missingCredential = form.enabled && !providerConfigured && !hasApiKeyDraft;
   const videoModelOptions = selectedProvider?.video_models ?? [];
   const aspectOptions = optionRowsWithCurrent(
@@ -2135,10 +2163,11 @@ function VideoGenerationSettings({
                   };
                 });
                 onApiKeyDraftChange("");
+                setKeyEditing(false);
               }}
             />
           </SettingsRow>
-          {providerConfigured && !hasApiKeyDraft ? (
+          {providerConfigured && !showKeyInput ? (
             <SettingsRow
               title={tx("settings.rows.videoProviderStatus", "供应商凭据")}
               description={tx("settings.help.videoProviderStatus", "视频生成复用供应商的凭据配置。")}
@@ -2153,7 +2182,10 @@ function VideoGenerationSettings({
                 <Button
                   size="sm"
                   variant="ghost"
-                  onClick={() => onApiKeyDraftChange(" ")}
+                  onClick={() => {
+                    onApiKeyDraftChange("");
+                    setKeyEditing(true);
+                  }}
                   className="rounded-full text-[13px] text-muted-foreground"
                 >
                   {tx("settings.video.changeKey", "修改")}

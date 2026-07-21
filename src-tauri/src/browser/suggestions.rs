@@ -73,23 +73,18 @@ pub async fn browser_show_address_suggestions(
     state: tauri::State<'_, AddressSuggestionWindowState>,
     mut popup: AddressSuggestionPopup,
 ) -> Result<(), String> {
-    let t_enter = std::time::Instant::now();
     popup.suggestions.truncate(8);
     if popup.suggestions.is_empty() {
-        log::info!("[suggestions] show: empty list, hide tab={}", popup.tab_id);
         return browser_hide_address_suggestions(app, state, popup.tab_id);
     }
 
     let window_exists = app.get_webview_window(WINDOW_LABEL).is_some();
-    log::info!("[suggestions] show tab={} count={} window_exists={}", popup.tab_id, popup.suggestions.len(), window_exists);
 
     if !window_exists {
         let initial_popup = popup.clone();
         if let Ok(mut active_tab) = state.active_tab.lock() {
             *active_tab = Some(popup.tab_id);
         }
-        log::info!("[suggestions] window not exists, building webview window (async)");
-        let t_build = std::time::Instant::now();
         let main = app
             .get_webview_window("main")
             .ok_or_else(|| "main window not found".to_string())?;
@@ -110,18 +105,15 @@ pub async fn browser_show_address_suggestions(
         .shadow(false);
         match builder.parent(&main).and_then(|builder| builder.build()) {
             Ok(_) => {
-                log::info!("[suggestions] build ok elapsed={:?}", t_build.elapsed());
                 let _ = place_window(&app, &initial_popup);
                 if let Some(window) = app.get_webview_window(WINDOW_LABEL) {
                     let _ = window.show();
                 }
             }
             Err(e) => {
-                log::warn!("[suggestions] build FAILED elapsed={:?} err={}", t_build.elapsed(), e);
                 return Err(e.to_string());
             }
         }
-        log::info!("[suggestions] show: build done, total elapsed={:?}", t_enter.elapsed());
         return Ok(());
     }
 
@@ -136,7 +128,6 @@ pub async fn browser_show_address_suggestions(
     if let Ok(mut active_tab) = state.active_tab.lock() {
         *active_tab = Some(popup.tab_id);
     }
-    log::info!("[suggestions] show: existing window updated, total elapsed={:?}", t_enter.elapsed());
     Ok(())
 }
 
@@ -154,19 +145,14 @@ pub fn browser_hide_address_suggestions(
     state: tauri::State<'_, AddressSuggestionWindowState>,
     tab_id: String,
 ) -> Result<(), String> {
-    let t_enter = std::time::Instant::now();
     let mut active_tab = state.active_tab.lock().map_err(|e| e.to_string())?;
     if active_tab.as_deref() != Some(tab_id.as_str()) {
-        log::info!("[suggestions] hide tab={} skipped (active={:?})", tab_id, active_tab.as_deref());
         return Ok(());
     }
     if let Some(window) = app.get_webview_window(WINDOW_LABEL) {
-        let t_hide = std::time::Instant::now();
         window.hide().map_err(|e| e.to_string())?;
-        log::info!("[suggestions] hide tab={} window.hide elapsed={:?}", tab_id, t_hide.elapsed());
     }
     *active_tab = None;
-    log::info!("[suggestions] hide tab={} total elapsed={:?}", tab_id, t_enter.elapsed());
     Ok(())
 }
 

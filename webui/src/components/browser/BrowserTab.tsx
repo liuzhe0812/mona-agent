@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { FileText, X, Pin, PinOff, Copy, CopyX, ArrowRightToLine, Clock, VolumeX, Volume2, Eye, Moon } from "lucide-react";
+import { FileText, X, Pin, PinOff, Copy, CopyX, ArrowRightToLine, Clock, VolumeX, Volume2, Eye, Moon, FolderOpen, NotebookPen } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { isTauri } from "@/lib/tauri";
 import type { MenuOptions } from "@tauri-apps/api/menu";
@@ -19,11 +19,13 @@ interface TabMenuHandlers {
   onCloseOthers?: () => void;
   onCloseRight?: () => void;
   onToggleMute?: () => void;
+  onSaveAsNote?: () => void;
+  onRevealInExplorer?: () => void;
 }
 
 async function showNativeTabMenu(tab: Tab, handlers: TabMenuHandlers) {
   const { Menu } = await import("@tauri-apps/api/menu");
-  const { onPinToggle, onDuplicate, onClose, onCloseOthers, onCloseRight, onToggleMute } = handlers;
+  const { onPinToggle, onDuplicate, onClose, onCloseOthers, onCloseRight, onToggleMute, onSaveAsNote, onRevealInExplorer } = handlers;
   const isPinned = tab.isPinned;
   const items: NonNullable<MenuOptions["items"]> = [];
   if (onPinToggle) {
@@ -34,6 +36,15 @@ async function showNativeTabMenu(tab: Tab, handlers: TabMenuHandlers) {
   }
   if (onToggleMute) {
     items.push({ text: tab.isMuted ? "取消静音" : "静音标签", action: onToggleMute });
+  }
+  if (onSaveAsNote || onRevealInExplorer) {
+    items.push({ item: "Separator" });
+  }
+  if (onSaveAsNote) {
+    items.push({ text: "保存为笔记", action: onSaveAsNote });
+  }
+  if (onRevealInExplorer) {
+    items.push({ text: "打开文件路径", action: onRevealInExplorer });
   }
   if (onClose || onCloseOthers || onCloseRight) {
     items.push({ item: "Separator" });
@@ -76,6 +87,8 @@ interface BrowserTabProps {
   onCloseRight?: () => void;
   onReorder?: (fromId: string, toId: string) => void;
   onToggleMute?: () => void;
+  onSaveAsNote?: () => void;
+  onRevealInExplorer?: () => void;
 }
 
 export function BrowserTabItem({
@@ -89,6 +102,8 @@ export function BrowserTabItem({
   onCloseRight,
   onReorder,
   onToggleMute,
+  onSaveAsNote,
+  onRevealInExplorer,
 }: BrowserTabProps) {
   const [isDragOver, setIsDragOver] = useState(false);
   const faviconUrl = tab.type === "browser" && tab.url ? getFaviconUrl(tab.url) : null;
@@ -191,7 +206,7 @@ export function BrowserTabItem({
       <div
         onContextMenu={(e) => {
           e.preventDefault();
-          void showNativeTabMenu(tab, { onPinToggle, onDuplicate, onClose, onCloseOthers, onCloseRight, onToggleMute });
+          void showNativeTabMenu(tab, { onPinToggle, onDuplicate, onClose, onCloseOthers, onCloseRight, onToggleMute, onSaveAsNote, onRevealInExplorer });
         }}
       >
         {tabContent}
@@ -230,6 +245,19 @@ export function BrowserTabItem({
               <Volume2 className="mr-2 h-3.5 w-3.5" />
             )}
             {tab.isMuted ? "取消静音" : "静音标签"}
+          </ContextMenuItem>
+        )}
+        {(onSaveAsNote || onRevealInExplorer) && <ContextMenuSeparator />}
+        {onSaveAsNote && (
+          <ContextMenuItem onClick={onSaveAsNote}>
+            <NotebookPen className="mr-2 h-3.5 w-3.5" />
+            保存为笔记
+          </ContextMenuItem>
+        )}
+        {onRevealInExplorer && (
+          <ContextMenuItem onClick={onRevealInExplorer}>
+            <FolderOpen className="mr-2 h-3.5 w-3.5" />
+            打开文件路径
           </ContextMenuItem>
         )}
         <ContextMenuSeparator />

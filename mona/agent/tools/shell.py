@@ -1,4 +1,4 @@
-﻿"""Shell execution tool."""
+"""Shell execution tool."""
 
 from __future__ import annotations
 
@@ -219,7 +219,13 @@ class ExecTool(Tool):
             "For long-running or interactive commands, pass yield_time_ms; "
             "if the command keeps running, exec returns a session_id that can "
             "be polled or written to with write_stdin. Output is truncated at "
-            "10 000 chars; timeout defaults to 60s."
+            "10 000 chars; timeout defaults to 60s. "
+            "If the command creates a new user-facing file (e.g. via officecli, "
+            "python scripts, exporters, or any tool that writes to disk), you "
+            "MUST call deliver_file afterwards so the file shows up in the "
+            "workspace panel for the user. This applies to .pptx/.xlsx/.docx/"
+            ".pdf/.html/.png/.csv/.json and similar deliverables — do NOT "
+            "call deliver_file for temporary or intermediate files."
         )
 
     @property

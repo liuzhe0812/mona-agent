@@ -45,6 +45,15 @@ async function notifyNewMail(
       icon: "mail",
       autoCloseMs: 6000,
       clickAction: "open-email",
+      // 点击通知时携带邮件标识，监听方据此打开独立预览窗口（而非主窗口）
+      // 多封新邮件时只打开最新一封的预览，符合通知 body 中展示的是"最新: xxx"
+      clickData: {
+        type: "mail",
+        accountId: firstMessage.accountId,
+        uid: firstMessage.uid,
+        folder: firstMessage.folder,
+        subject: firstMessage.subject,
+      },
     });
   } catch {
     // 通知不可用时静默忽略

@@ -25,6 +25,7 @@ import { useBrowserTabs } from "@/hooks/useBrowserTabs";
 import { TerminalView } from "@/components/terminal/TerminalView";
 import { useTerminalStore } from "@/components/terminal/store/terminalStore";
 import { useDbStore } from "@/components/db/store/dbStore";
+import { useMdReaderStore } from "@/components/md-reader/mdReaderStore";
 
 import { useSessions } from "@/hooks/useSessions";
 import { useDeferredTitleRefresh } from "@/hooks/useDeferredTitleRefresh";
@@ -48,7 +49,7 @@ import { deriveTitle } from "@/lib/format";
 import { MonaClient } from "@/lib/mona-client";
 import { ClientProvider, useClientOptional, type RuntimeStatus } from "@/providers/ClientProvider";
 import type { ChatSummary } from "@/lib/types";
-import { isTauri, getGatewayStatus, startGateway, getDesktopSettings, readGatewayLog, type GatewayLog, type SidebarShortcuts, type UpdateCheckResult } from "@/lib/tauri";
+import { isTauri, getGatewayStatus, startGateway, getDesktopSettings, readGatewayLog, createNoteFromChat, revealItemInDir, type GatewayLog, type SidebarShortcuts, type UpdateCheckResult } from "@/lib/tauri";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -604,6 +605,22 @@ function Shell({
     toggleDarkMode,
     openDevtools,
   } = useBrowserTabs();
+  const mdReaderTabs = useMdReaderStore((s) => s.tabs);
+  const saveMdAsNote = useCallback((tabId: string) => {
+    const tab = browserTabs.find((t) => t.id === tabId);
+    if (!tab || tab.type !== "md-reader" || !tab.mdFilePath) return;
+    const mdTab = mdReaderTabs.find((t) => t.filePath === tab.mdFilePath);
+    const content = mdTab?.content ?? "";
+    const title = tab.title.replace(/\.md$/i, "") || "未命名笔记";
+    createNoteFromChat(title, content).catch((err) => {
+      console.error("[saveMdAsNote] failed:", err);
+    });
+  }, [browserTabs, mdReaderTabs]);
+  const revealMdInExplorer = useCallback((tabId: string) => {
+    const tab = browserTabs.find((t) => t.id === tabId);
+    if (!tab || tab.type !== "md-reader" || !tab.mdFilePath) return;
+    void revealItemInDir(tab.mdFilePath);
+  }, [browserTabs]);
   const [desktopSidebarOpen, setDesktopSidebarOpen] =
     useState<boolean>(readSidebarOpen);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
@@ -1022,6 +1039,29 @@ function Shell({
     [activeSession?.chatId, createChat, switchToMonaTab],
   );
 
+  // Trigger an agent task from a non-chat surface (e.g. settings page banner).
+  // Always starts a fresh session so the setup flow has a clean context.
+  const onTriggerAgent = useCallback(
+    async (prompt: string) => {
+      const trimmed = prompt.trim();
+      if (!trimmed) return;
+      try {
+        const chatId = await createChat();
+        setActiveKey(`websocket:${chatId}`);
+        setQueuedAgentPrompt({
+          id: crypto.randomUUID(),
+          content: trimmed,
+        });
+        setView("chat");
+        switchToMonaTab();
+        setMobileSidebarOpen(false);
+      } catch (e) {
+        console.error("Failed to trigger agent task", e);
+      }
+    },
+    [createChat, switchToMonaTab],
+  );
+
   const onNewChat = useCallback(() => {
     setActiveKey(null);
     setView("chat");
@@ -1239,8 +1279,27 @@ function Shell({
           addMdReaderTab(filePath);
         }
       });
-      const un5 = await listen<{ action: string }>("notification-action", async (event) => {
+      const un5 = await listen<{ action: string; data?: unknown }>("notification-action", async (event) => {
         const action = event.payload?.action;
+        const data = event.payload?.data as
+          | { type?: string; accountId?: string; uid?: string; folder?: string; subject?: string }
+          | undefined;
+        // 邮件通知点击：携带邮件标识时，直接打开独立预览窗口，不唤醒主窗口
+        if (action === "open-email" && data?.type === "mail" && data.accountId && data.uid && data.folder) {
+          try {
+            await invoke("email_open_view_window", {
+              payload: {
+                accountId: data.accountId,
+                uid: data.uid,
+                folder: data.folder,
+                subject: data.subject,
+              },
+            });
+          } catch (err) {
+            console.error("[NotificationAction] 打开邮件预览窗口失败:", err);
+          }
+          return;
+        }
         if (action === "open-email" || action === "open-schedule") {
           try {
             const { getCurrentWindow } = await import("@tauri-apps/api/window");
@@ -1512,6 +1571,8 @@ function Shell({
             onCloseRight={closeTabsToRight}
             onReorder={reorderTabs}
             onToggleMute={toggleMute}
+            onSaveMdAsNote={saveMdAsNote}
+            onRevealMdInExplorer={revealMdInExplorer}
           />
         )}
 
@@ -1656,6 +1717,7 @@ function Shell({
                     onRestart={onRestart}
                     isRestarting={isRestarting}
                     initialSection={settingsInitialSection}
+                    onTriggerAgent={onTriggerAgent}
                   />
                 </div>
               )}

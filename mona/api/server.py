@@ -302,7 +302,7 @@ class _IdleWorker:
 
             # 获取需要监听的文件夹列表
             mailboxes = self._get_mailboxes_to_monitor(client)
-            logger.info(f"[idle] {self._account_id} connected, monitoring: {mailboxes}")
+            logger.info(f"[idle] account connected, monitoring: {mailboxes}")
 
             # 为每个文件夹创建独立的 IDLE 连接
             # 使用线程池并行监听多个文件夹
@@ -968,9 +968,9 @@ async def handle_chat_completions(request: web.Request) -> web.Response:
     session_locks: dict[str, asyncio.Lock] = request.app["session_locks"]
     session_lock = session_locks.setdefault(session_key, asyncio.Lock())
 
-    logger.info(
-        "API request session_key={} media={} text={} stream={}",
-        session_key, len(media_paths), text[:80], stream,
+    logger.debug(
+        "API request session_key={} media={} text_len={} stream={}",
+        session_key, len(media_paths), len(text), stream,
     )
     # -- streaming path --
     if stream:
@@ -1672,9 +1672,9 @@ def _imap_fetch_recent(body: dict[str, Any]) -> list[dict[str, Any]]:
                 uids = [u for u in data[0].split() if int(u) > last_uid]
             # 部分企业邮箱对 UID n:* 范围搜索返回空，回退到 SEARCH ALL 本地过滤
             if not uids:
-                logger.info(
-                    f"[imap-sync] UID range search returned empty for {imap_username}, "
-                    f"falling back to SEARCH ALL"
+                logger.debug(
+                    "[imap-sync] UID range search returned empty, "
+                    "falling back to SEARCH ALL"
                 )
                 status, data = client.uid("SEARCH", "ALL")
                 if status == "OK" and data and data[0]:
@@ -1699,14 +1699,14 @@ def _imap_fetch_recent(body: dict[str, Any]) -> list[dict[str, Any]]:
             and max(int(u) for u in all_uids) <= last_uid
         ):
             logger.warning(
-                f"[imap-sync] local last_uid={last_uid} >= server max uid for "
-                f"{imap_username}, resetting and fetching recent 20"
+                f"[imap-sync] local last_uid={last_uid} >= server max uid, "
+                f"resetting and fetching recent 20"
             )
             uids = all_uids[-20:]
 
         if not uids:
-            logger.info(
-                f"[imap-sync] no new uids for {imap_username} "
+            logger.debug(
+                f"[imap-sync] no new uids "
                 f"(mailbox={mailbox}, last_uid={last_uid})"
             )
             return []
@@ -1772,8 +1772,8 @@ def _imap_fetch_recent(body: dict[str, Any]) -> list[dict[str, Any]]:
         return messages
 
     result = imap_pool_manager.run(body, op)
-    logger.info(
-        f"[imap-sync] {imap_username} mailbox={mailbox} "
+    logger.debug(
+        f"[imap-sync] mailbox={mailbox} "
         f"last_uid={last_uid} fetched={len(result)} new messages"
     )
     return result
@@ -1816,8 +1816,8 @@ def _imap_list_uids(body: dict[str, Any]) -> dict[str, Any]:
         return {"uids": uids, "uidValidity": uid_validity}
 
     result = imap_pool_manager.run(body, op)
-    logger.info(
-        f"[imap-uids] {imap_username} mailbox={mailbox} "
+    logger.debug(
+        f"[imap-uids] mailbox={mailbox} "
         f"total_uids={len(result.get('uids', []))} uid_validity={result.get('uidValidity', '')}"
     )
     return result
@@ -1874,21 +1874,19 @@ def _imap_list_folders(body: dict[str, Any]) -> list[dict[str, Any]]:
 
     def op(client: imaplib.IMAP4) -> list[dict[str, Any]]:
         status, folder_data = client.list()
-        logger.info(
-            "IMAP LIST status=%s folders=%s for %s",
+        logger.debug(
+            "IMAP LIST status=%s folders=%s",
             status,
             len(folder_data) if folder_data else 0,
-            imap_username,
         )
         # 部分 IMAP 服务器在刚执行完 CREATE 后 LIST 会瞬态返回空，重试一次
         if status == "OK" and not folder_data:
             time.sleep(0.8)
             status, folder_data = client.list()
-            logger.info(
-                "IMAP LIST retry status=%s folders=%s for %s",
+            logger.debug(
+                "IMAP LIST retry status=%s folders=%s",
                 status,
                 len(folder_data) if folder_data else 0,
-                imap_username,
             )
         if status != "OK" or not folder_data:
             return []
@@ -1910,11 +1908,10 @@ def _imap_list_folders(body: dict[str, Any]) -> list[dict[str, Any]]:
             # 解码 Modified UTF-7 编码的文件夹名（如中文文件夹）
             name = _decode_imap_utf7(name)
             if original_name != name:
-                logger.info(
-                    "[imap-folder] decoded '%s' -> '%s' for %s",
+                logger.debug(
+                    "[imap-folder] decoded '%s' -> '%s'",
                     original_name,
                     name,
-                    imap_username,
                 )
             elif "&" in original_name:
                 logger.warning(
@@ -1969,12 +1966,11 @@ def _imap_create_folder(body: dict[str, Any]) -> None:
 
     def op(client: imaplib.IMAP4) -> None:
         status, data = client.create(_imap_quote_mailbox(mailbox))
-        logger.info(
-            "IMAP CREATE status=%s data=%s mailbox=%s for %s",
+        logger.debug(
+            "IMAP CREATE status=%s data=%s mailbox=%s",
             status,
             data,
             mailbox,
-            imap_username,
         )
         if status != "OK":
             # 提取服务器返回的错误描述，便于诊断
@@ -1995,7 +1991,7 @@ def _imap_create_folder(body: dict[str, Any]) -> None:
                 or "already exist" in msg_lower
                 or "exist with the same name" in msg_lower
             ):
-                logger.info(
+                logger.debug(
                     "IMAP CREATE: folder already exists, treating as success: %s",
                     mailbox,
                 )
@@ -2023,13 +2019,12 @@ def _imap_rename_folder(body: dict[str, Any]) -> None:
 
     def op(client: imaplib.IMAP4) -> None:
         status, data = client.rename(_imap_quote_mailbox(old_name), _imap_quote_mailbox(new_name))
-        logger.info(
-            "IMAP RENAME status=%s data=%s old=%s new=%s for %s",
+        logger.debug(
+            "IMAP RENAME status=%s data=%s old=%s new=%s",
             status,
             data,
             old_name,
             new_name,
-            imap_username,
         )
         if status != "OK":
             server_msg = ""
@@ -2060,12 +2055,11 @@ def _imap_delete_folder(body: dict[str, Any]) -> None:
 
     def op(client: imaplib.IMAP4) -> None:
         status, data = client.delete(_imap_quote_mailbox(folder_name))
-        logger.info(
-            "IMAP DELETE status=%s data=%s folder=%s for %s",
+        logger.debug(
+            "IMAP DELETE status=%s data=%s folder=%s",
             status,
             data,
             folder_name,
-            imap_username,
         )
         if status != "OK":
             server_msg = ""
@@ -2181,7 +2175,7 @@ def _smtp_send_message_no_append(body: dict[str, Any]) -> bytes:
     smtp_password = str(body.get("smtpPassword", "") or "")
     # 调试日志：仅记录密码长度，不记录密码任何部分（安全考虑）
     pwd_len = len(smtp_password)
-    logger.info(f"[smtp] host={smtp_host}:{smtp_port} user={smtp_username} pwd_len={pwd_len}")
+    logger.debug(f"[smtp] host={smtp_host}:{smtp_port} pwd_len={pwd_len}")
     use_tls = bool(body.get("useTls", True))
     use_ssl = bool(body.get("useSsl", False))
     from_address = str(body.get("fromAddress", "") or "").strip()
@@ -2317,7 +2311,7 @@ def _imap_append_sent(body: dict[str, Any], raw_bytes: bytes) -> None:
                             folder_names.append(m.group(1))
                     except Exception:
                         pass
-                logger.info(f"[append-sent] 服务器文件夹列表: {folder_names}")
+                logger.debug(f"[append-sent] 服务器文件夹列表: {folder_names}")
         except Exception:
             logger.debug("[append-sent] LIST 失败，跳过诊断")
 
@@ -2325,12 +2319,12 @@ def _imap_append_sent(body: dict[str, Any], raw_bytes: bytes) -> None:
         for sent_box in sent_candidates:
             try:
                 quoted = _imap_quote_mailbox(sent_box)
-                logger.info(f"[append-sent] 尝试 APPEND 到 {sent_box} (quoted={quoted})")
+                logger.debug(f"[append-sent] 尝试 APPEND 到 {sent_box} (quoted={quoted})")
                 typ, _ = client.append(
                     quoted, "(\\Seen)", None, raw_bytes
                 )
                 if typ == "OK":
-                    logger.info(f"[append-sent] 成功保存副本到 {sent_box}")
+                    logger.debug(f"[append-sent] 成功保存副本到 {sent_box}")
                     return
                 else:
                     logger.warning(f"[append-sent] APPEND {sent_box} 返回 {typ}")
@@ -2353,12 +2347,12 @@ def _imap_append_sent(body: dict[str, Any], raw_bytes: bytes) -> None:
                         folder_name = m.group(1)
                         try:
                             quoted = _imap_quote_mailbox(folder_name)
-                            logger.info(f"[append-sent] LIST 发现文件夹 {folder_name}，尝试 APPEND")
+                            logger.debug(f"[append-sent] LIST 发现文件夹 {folder_name}，尝试 APPEND")
                             typ, _ = client.append(
                                 quoted, "(\\Seen)", None, raw_bytes
                             )
                             if typ == "OK":
-                                logger.info(f"[append-sent] 成功保存副本到 {folder_name}")
+                                logger.debug(f"[append-sent] 成功保存副本到 {folder_name}")
                                 return
                         except imaplib.IMAP4.error as e:
                             logger.warning(f"[append-sent] APPEND {folder_name} 失败: {e}")
@@ -2391,14 +2385,14 @@ async def handle_email_send(request: web.Request) -> web.Response:
     try:
         # 1. SMTP 发送（同步）
         raw_bytes = await _retry_smtp_call(_smtp_send_message_no_append, body)
-        logger.info(f"[email-send] SMTP 发送成功，raw_bytes 大小={len(raw_bytes)}")
+        logger.debug(f"[email-send] SMTP 发送成功，raw_bytes 大小={len(raw_bytes)}")
 
         # 2. 同步保存副本到 IMAP 服务器（等 APPEND 完成再返回）
         # 必须同步：Rust 侧返回后会立即同步"已发送"文件夹，APPEND 必须先完成
         if raw_bytes:
             try:
                 await _safe_append_sent(body, raw_bytes)
-                logger.info("[email-send] IMAP APPEND 副本保存完成")
+                logger.debug("[email-send] IMAP APPEND 副本保存完成")
             except Exception:
                 logger.warning("[email-send] 保存已发送副本失败（不影响发送结果）", exc_info=True)
         else:
@@ -2431,7 +2425,7 @@ def _append_sent_done_callback(task: asyncio.Task) -> None:
     """异步保存副本任务的完成回调，记录成功/失败日志。"""
     try:
         task.result()
-        logger.info("[email-send] 保存已发送副本异步任务完成")
+        logger.debug("[email-send] 保存已发送副本异步任务完成")
     except asyncio.CancelledError:
         logger.warning("[email-send] 保存已发送副本异步任务被取消")
     except Exception as e:
@@ -2444,9 +2438,9 @@ async def _safe_append_sent(body: dict[str, Any], raw_bytes: bytes) -> None:
     通过 _run_imap_locked 获取 per-account 锁，避免与后台同步并发操作同一 IMAP 连接。
     """
     try:
-        logger.info("[append-sent] 开始保存已发送邮件副本")
+        logger.debug("[append-sent] 开始保存已发送邮件副本")
         await _run_imap_locked(body, lambda b: _imap_append_sent_sync(b, raw_bytes))
-        logger.info("[append-sent] 保存已发送邮件副本流程结束")
+        logger.debug("[append-sent] 保存已发送邮件副本流程结束")
     except Exception:
         logger.warning("保存已发送邮件副本失败", exc_info=True)
 
@@ -4247,233 +4241,6 @@ async def handle_video_project_save_chat_id(request: web.Request) -> web.Respons
 
 
 # ---------------------------------------------------------------------------
-# Flowchart project routes (/api/flowchart/*)
-# ---------------------------------------------------------------------------
-
-
-def _flowchart_projects_dir() -> Path:
-    return get_workspace_path() / "flowchart_projects"
-
-
-def _get_flowchart_project_status(project_dir: Path) -> dict:
-    """Inspect a flowchart project directory and return its status."""
-    generating_marker = project_dir / ".generating"
-    diagram = project_dir / "diagram.drawio"
-    graph_json = project_dir / "graph.json"
-    output_dir = project_dir / "output"
-    has_svg = (output_dir / "diagram.svg").is_file()
-    has_png = (output_dir / "diagram.png").is_file()
-    has_export = has_svg or has_png
-    if has_export:
-        status = "done"
-    elif generating_marker.exists() and not diagram.exists():
-        status = "generating"
-    elif diagram.exists():
-        status = "done"
-    elif graph_json.exists():
-        status = "generating"
-    else:
-        status = "init"
-    return {
-        "status": status,
-        "hasDiagram": diagram.exists(),
-        "hasGraph": graph_json.exists(),
-        "hasExport": has_export,
-        "hasSvg": has_svg,
-        "hasPng": has_png,
-    }
-
-
-async def handle_flowchart_projects(request: web.Request) -> web.Response:
-    """GET /api/flowchart/projects - list all flowchart projects."""
-    try:
-        projects_dir = _flowchart_projects_dir()
-        if not projects_dir.exists():
-            return web.json_response({"projects": []})
-        projects = []
-        for d in sorted(projects_dir.iterdir()):
-            if not d.is_dir() or d.name.startswith("_"):
-                continue
-            status_info = _get_flowchart_project_status(d)
-            stat = d.stat()
-            chat_id_file = d / ".chat_id"
-            chat_id = (
-                chat_id_file.read_text(encoding="utf-8").strip()
-                if chat_id_file.exists()
-                else None
-            )
-            projects.append({
-                "name": d.name,
-                "createdAt": stat.st_ctime,
-                "chatId": chat_id,
-                **status_info,
-            })
-        return web.json_response({"projects": projects})
-    except Exception as e:
-        logger.exception("flowchart projects error")
-        return web.json_response({"error": str(e)}, status=500)
-
-
-async def handle_flowchart_project_create(request: web.Request) -> web.Response:
-    """POST /api/flowchart/project/create  body: {"name"}."""
-    try:
-        body = await request.json()
-    except Exception:
-        return web.json_response({"error": "Invalid JSON body"}, status=400)
-    try:
-        name = str(body.get("name", "") or "").strip()
-        if not name or "/" in name or "\\" in name or ".." in name:
-            return web.json_response({"error": "invalid project name"}, status=400)
-        project_dir = _flowchart_projects_dir() / name
-        if project_dir.exists():
-            return web.json_response(
-                {"error": "project already exists"}, status=409
-            )
-        (project_dir / "output").mkdir(parents=True, exist_ok=True)
-        (project_dir / ".generating").write_text("1", encoding="utf-8")
-        return web.json_response({"ok": True, "name": name})
-    except Exception as e:
-        logger.exception("flowchart project create error")
-        return web.json_response({"error": str(e)}, status=500)
-
-
-async def handle_flowchart_project(request: web.Request) -> web.Response:
-    """GET /api/flowchart/project?name=<n> - get a single project's status."""
-    try:
-        name = request.query.get("name") or ""
-        if not name or "/" in name or "\\" in name or ".." in name:
-            return web.json_response({"error": "invalid project name"}, status=400)
-        project_dir = _flowchart_projects_dir() / name
-        if not project_dir.is_dir():
-            return web.json_response({"status": "not_found"}, status=404)
-        status_info = _get_flowchart_project_status(project_dir)
-        chat_id_file = project_dir / ".chat_id"
-        chat_id = (
-            chat_id_file.read_text(encoding="utf-8").strip()
-            if chat_id_file.exists()
-            else None
-        )
-        return web.json_response({"name": name, "chatId": chat_id, **status_info})
-    except Exception as e:
-        logger.exception("flowchart project error")
-        return web.json_response({"error": str(e)}, status=500)
-
-
-async def handle_flowchart_project_xml(request: web.Request) -> web.Response:
-    """GET /api/flowchart/project-xml?name=<n> - read diagram.drawio content."""
-    try:
-        name = request.query.get("name") or ""
-        if not name or "/" in name or "\\" in name or ".." in name:
-            return web.json_response({"error": "invalid project name"}, status=400)
-        project_dir = _flowchart_projects_dir() / name
-        diagram = project_dir / "diagram.drawio"
-        if not diagram.is_file():
-            return web.json_response({"error": "diagram not found"}, status=404)
-        xml = diagram.read_text(encoding="utf-8")
-        return web.json_response({"name": name, "xml": xml})
-    except Exception as e:
-        logger.exception("flowchart project xml error")
-        return web.json_response({"error": str(e)}, status=500)
-
-
-async def handle_flowchart_project_save(request: web.Request) -> web.Response:
-    """POST /api/flowchart/project-save  body: {"name", "xml"}."""
-    try:
-        body = await request.json()
-    except Exception:
-        return web.json_response({"error": "Invalid JSON body"}, status=400)
-    try:
-        name = str(body.get("name", "") or "").strip()
-        if not name or "/" in name or "\\" in name or ".." in name:
-            return web.json_response({"error": "invalid project name"}, status=400)
-        project_dir = _flowchart_projects_dir() / name
-        if not project_dir.is_dir():
-            return web.json_response({"error": "project not found"}, status=404)
-        xml = str(body.get("xml", "") or "")
-        (project_dir / "diagram.drawio").write_text(xml, encoding="utf-8")
-        # Saving user edits means generation is complete.
-        (project_dir / ".generating").unlink(missing_ok=True)
-        return web.json_response({"ok": True})
-    except Exception as e:
-        logger.exception("flowchart project save error")
-        return web.json_response({"error": str(e)}, status=500)
-
-
-async def handle_flowchart_project_export(request: web.Request) -> web.Response:
-    """GET /api/flowchart/project-export?name=<n>&format=<svg|png>."""
-    try:
-        name = request.query.get("name") or ""
-        fmt = (request.query.get("format") or "svg").lower()
-        if not name or "/" in name or "\\" in name or ".." in name:
-            return web.json_response({"error": "invalid project name"}, status=400)
-        if fmt not in {"svg", "png"}:
-            return web.json_response(
-                {"error": "format must be svg or png"}, status=400
-            )
-        project_dir = _flowchart_projects_dir() / name
-        export_file = project_dir / "output" / f"diagram.{fmt}"
-        if not export_file.is_file():
-            return web.json_response(
-                {"error": "export file not found"}, status=404
-            )
-        content = export_file.read_bytes()
-        content_type = (
-            "image/svg+xml" if fmt == "svg" else "image/png"
-        )
-        return web.Response(body=content, content_type=content_type)
-    except Exception as e:
-        logger.exception("flowchart project export error")
-        return web.json_response({"error": str(e)}, status=500)
-
-
-async def handle_flowchart_project_save_chat_id(
-    request: web.Request,
-) -> web.Response:
-    """POST /api/flowchart/project-save-chat-id  body: {"name", "chatId"}."""
-    try:
-        body = await request.json()
-    except Exception:
-        return web.json_response({"error": "Invalid JSON body"}, status=400)
-    try:
-        name = str(body.get("name", "") or "").strip()
-        if not name or "/" in name or "\\" in name or ".." in name:
-            return web.json_response({"error": "invalid project name"}, status=400)
-        project_dir = _flowchart_projects_dir() / name
-        if not project_dir.is_dir():
-            return web.json_response({"error": "project not found"}, status=404)
-        chat_id = str(body.get("chatId", "") or "")
-        (project_dir / ".chat_id").write_text(chat_id, encoding="utf-8")
-        return web.json_response({"ok": True})
-    except Exception as e:
-        logger.exception("flowchart save chat id error")
-        return web.json_response({"error": str(e)}, status=500)
-
-
-async def handle_flowchart_runtime_check(request: web.Request) -> web.Response:
-    """GET /api/flowchart/runtime-check - detect draw.io webapp availability."""
-    try:
-        from mona.api.flowchart_runtime import get_flowchart_runtime
-
-        result = get_flowchart_runtime().check()
-        return web.json_response(result)
-    except Exception as e:
-        logger.exception("flowchart runtime-check error")
-        return web.json_response({"error": str(e)}, status=500)
-
-
-async def handle_flowchart_runtime_download(request: web.Request) -> web.Response:
-    """POST /api/flowchart/runtime-download - download draw.io webapp."""
-    try:
-        from mona.api.flowchart_runtime import get_flowchart_runtime
-
-        result = await get_flowchart_runtime().ensure_runtime()
-        return web.json_response(result)
-    except Exception as e:
-        logger.exception("flowchart runtime-download error")
-        return web.json_response({"error": str(e)}, status=500)
-
-
-# ---------------------------------------------------------------------------
 # CORS middleware (allows browser-based clients like the ESP32 simulator)
 # ---------------------------------------------------------------------------
 
@@ -4626,34 +4393,6 @@ def create_app(
     app.router.add_post(
         "/api/video/project-save-chat-id", handle_video_project_save_chat_id
     )
-
-    # Flowchart project routes
-    app.router.add_get("/api/flowchart/projects", handle_flowchart_projects)
-    app.router.add_post("/api/flowchart/project/create", handle_flowchart_project_create)
-    app.router.add_get("/api/flowchart/project", handle_flowchart_project)
-    app.router.add_get("/api/flowchart/project-xml", handle_flowchart_project_xml)
-    app.router.add_post("/api/flowchart/project-save", handle_flowchart_project_save)
-    app.router.add_get(
-        "/api/flowchart/project-export", handle_flowchart_project_export
-    )
-    app.router.add_post(
-        "/api/flowchart/project-save-chat-id",
-        handle_flowchart_project_save_chat_id,
-    )
-    app.router.add_get(
-        "/api/flowchart/runtime-check", handle_flowchart_runtime_check
-    )
-    app.router.add_post(
-        "/api/flowchart/runtime-download", handle_flowchart_runtime_download
-    )
-
-    # draw.io webapp static files (served at /drawio/*)
-    # 优先使用用户下载的 ~/.mona/runtime/drawio/,回退打包的 mona/static/drawio/
-    from mona.api.flowchart_runtime import get_flowchart_runtime
-
-    _drawio_dir = get_flowchart_runtime().get_drawio_path()
-    if _drawio_dir and _drawio_dir.is_dir():
-        app.router.add_static("/drawio", str(_drawio_dir), show_index=True)
 
     # 设置 IDLE 管理器的事件循环
     _idle_manager.set_loop(asyncio.get_event_loop())

@@ -1,4 +1,4 @@
-﻿"""QQ channel implementation using botpy SDK.
+"""QQ channel implementation using botpy SDK.
 
 Inbound:
 - Parse QQ botpy messages (C2C / Group)
@@ -188,7 +188,7 @@ class QQChannel(BaseChannel):
             root = Path.home() / ".mona" / "media" / "qq"
 
         root.mkdir(parents=True, exist_ok=True)
-        self.logger.info("media directory: {}", str(root))
+        self.logger.debug("media directory: {}", str(root))
         return root
 
     async def start(self) -> None:
@@ -362,7 +362,7 @@ class QQChannel(BaseChannel):
                     media=media_obj,
                 )
 
-            self.logger.info("media sent: {}", filename)
+            self.logger.debug("media sent: {}", filename)
             return True
         except (aiohttp.ClientError, OSError) as e:
             # Network / transport errors — propagate for retry by caller
@@ -559,7 +559,7 @@ class QQChannel(BaseChannel):
             filename = getattr(att, "filename", None) or ""
             ctype = getattr(att, "content_type", None) or ""
 
-            self.logger.info("Downloading file: {}", filename or url)
+            self.logger.debug("Downloading file: {}", filename or url)
             local_path = await self._download_to_media_dir_chunked(url, filename_hint=filename)
 
             att_meta.append(
@@ -677,7 +677,7 @@ class QQChannel(BaseChannel):
                 # Atomic rename
                 await asyncio.to_thread(os.replace, tmp_path, target)
                 tmp_path = None  # mark as moved
-                self.logger.info("file saved: {}", str(target))
+                self.logger.debug("file saved: {}", str(target))
                 return str(target)
 
         except Exception:

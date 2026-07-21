@@ -159,7 +159,7 @@
       "jinaReader": "Jina Reader",
       "imageGeneration": "图片生成",
       "imageProvider": "图片服务商",
-      "imageProviderStatus": "服务商状态",
+      "imageProviderStatus": "服务商凭证",
       "imageProviderBase": "服务商地址",
       "imageModel": "图片模型",
       "defaultAspectRatio": "默认比例",
@@ -307,7 +307,8 @@
       "noModelMatch": "无匹配候选，可继续输入或直接使用当前值",
       "addModel": "添加模型",
       "configureProvider": "配置服务商",
-      "missingCredential": "启用图片生成前，请先配置这个服务商。"
+      "missingCredential": "启用图片生成前，请先配置这个服务商。",
+      "changeKey": "修改"
     }
   },
   "chat": {
@@ -456,27 +457,7 @@
       "videoMode": {
         "label": "视频生成",
         "toggle": "切换视频生成模式",
-        "placeholder": "描述要生成的视频…",
-        "aspectAria": "视频画幅",
-        "aspectLabel": "视频画幅",
-        "aspect": {
-          "auto": "自动",
-          "1_1": "方形 1:1",
-          "3_4": "竖版 3:4",
-          "9_16": "故事版 9:16",
-          "4_3": "横版 4:3",
-          "16_9": "宽屏 16:9"
-        },
-        "durationAria": "视频时长",
-        "durationLabel": "视频时长",
-        "duration": {
-          "auto": "自动",
-          "s": "{{seconds}}秒"
-        },
-        "refUrlPlaceholder": "参考图片 URL（可选，用于图生视频）",
-        "refUrlAria": "参考图片 URL",
-        "refUrlClear": "清除参考图片 URL",
-        "refUrlUpload": "上传参考图片"
+        "placeholder": "描述要生成的视频，可拖入图片作为参考…"
       },
       "workspace": {
         "placeholder": "工作区",

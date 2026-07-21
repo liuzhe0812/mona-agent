@@ -556,6 +556,10 @@ export interface NotificationPayloadInput {
   autoCloseMs?: number;
   /** 点击卡片本身触发的 action */
   clickAction?: string;
+  /** 点击通知时携带的结构化数据，随 notification-action 事件一并 emit。
+   *  例如邮件通知携带 { type: "mail", accountId, uid, folder, subject }，
+   *  让监听方打开独立预览窗口而非主窗口。 */
+  clickData?: unknown;
 }
 
 export async function showNotification(

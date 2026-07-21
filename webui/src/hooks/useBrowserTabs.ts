@@ -16,8 +16,8 @@ import { isTauri } from "@/lib/tauri";
 
 const SESSION_STORAGE_KEY = "mona-browser-session";
 
-export function shouldPersistBrowserSession(isDevelopment: boolean): boolean {
-  return !isDevelopment;
+export function shouldPersistBrowserSession(_isDevelopment: boolean): boolean {
+  return false;
 }
 const SESSION_RESTORE_DELAY = 800; // ms，等待主窗口初始化完成
 

@@ -47,7 +47,7 @@ pub async fn start_proxy(
         // Accept a single WebSocket connection
         match listener.accept().await {
             Ok((stream, addr)) => {
-                log::info!("VNC proxy: client connected from {}", addr);
+                log::debug!("VNC proxy: client connected from {}", addr);
                 if let Err(e) = proxy_connection(stream, &vnc_addr, expected_token).await {
                     log::warn!("VNC proxy error: {}", e);
                 }
@@ -57,7 +57,7 @@ pub async fn start_proxy(
             }
         }
 
-        log::info!(
+        log::debug!(
             "VNC proxy: bridge ended for session {} (VNC stays alive)",
             session_id
         );
@@ -123,7 +123,7 @@ async fn proxy_connection(
         );
         e
     })?;
-    log::info!("VNC proxy: connected to VNC at {}", vnc_addr);
+    log::debug!("VNC proxy: connected to VNC at {}", vnc_addr);
 
     let (vnc_read, mut vnc_write) = tokio::io::split(vnc_stream);
     let (mut ws_tx, mut ws_rx) = ws_stream.split();

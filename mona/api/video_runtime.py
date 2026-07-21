@@ -461,7 +461,7 @@ class VideoRuntime:
                         downloaded += len(chunk)
                         if progress_cb:
                             progress_cb(downloaded, total)
-        logger.info("Downloaded {} -> {}", url, dest)
+        logger.debug("Downloaded {} -> {}", url, dest)
 
     @staticmethod
     def _extract_zip(zip_path: Path, dest: Path) -> None:

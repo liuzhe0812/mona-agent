@@ -2568,7 +2568,7 @@ class WebSocketChannel(BaseChannel):
             return _http_error(401, "Unauthorized")
         query = _parse_query(request.path)
         file_rel = _query_first(query, "path") or ""
-        logger.info("KB read_file: project={}, path={}", project_id, file_rel)
+        logger.debug("KB read_file: project={}, path={}", project_id, file_rel)
         if not file_rel:
             return _http_error(400, "path is required")
         try:
@@ -2592,7 +2592,7 @@ class WebSocketChannel(BaseChannel):
                 return _http_error(400, f"Unsupported file type: {file_path.suffix}")
             if content.startswith("[error:"):
                 return _http_error(422, content)
-            logger.info("KB read_file: extracted {} chars from {}", len(content), file_rel)
+            logger.debug("KB read_file: extracted {} chars from {}", len(content), file_rel)
             return _http_json_response({"content": content, "path": file_rel})
         except Exception as e:
             logger.exception("KB read_file error")
@@ -3502,13 +3502,13 @@ class WebSocketChannel(BaseChannel):
             if isinstance(workspace, str):
                 workspace = workspace.strip() or None
             # ``agent_kind`` marks the session for a dedicated document agent loop.
-            # Supported kinds: ppt / video / flowchart — each routes to a
+            # Supported kinds: ppt / video — each routes to a
             # DocumentAgentLoop with its own tool whitelist + soul prompt.
             agent_kind = envelope.get("agent_kind")
             if not isinstance(agent_kind, str):
                 agent_kind = None
             agent_kind = agent_kind.strip() if agent_kind else None
-            if agent_kind not in ("ppt", "video", "flowchart", None):
+            if agent_kind not in ("ppt", "video", None):
                 agent_kind = None
             if (workspace is not None or agent_kind is not None) and self._session_manager is not None:
                 session = self._session_manager.get_or_create(f"websocket:{new_id}")
@@ -3611,17 +3611,10 @@ class WebSocketChannel(BaseChannel):
                 }
             video_generation = envelope.get("video_generation")
             if isinstance(video_generation, dict) and video_generation.get("enabled") is True:
-                v_aspect = video_generation.get("aspect_ratio")
-                v_duration = video_generation.get("duration")
-                v_ref_url = video_generation.get("reference_image_url")
-                metadata["video_generation"] = {
-                    "enabled": True,
-                    "aspect_ratio": v_aspect if isinstance(v_aspect, str) and v_aspect else None,
-                    "duration": v_duration if isinstance(v_duration, int) and v_duration > 0 else None,
-                    "reference_image_url": (
-                        v_ref_url if isinstance(v_ref_url, str) and v_ref_url.strip() else None
-                    ),
-                }
+                # WebUI video mode now only signals intent — the AI picks
+                # aspect_ratio / duration and treats attached images as
+                # image-to-video references via the generate_video tool.
+                metadata["video_generation"] = {"enabled": True}
             await self._handle_message(
                 sender_id=client_id,
                 chat_id=cid,
@@ -3684,7 +3677,7 @@ class WebSocketChannel(BaseChannel):
         }
         self._try_append_webui_transcript(chat_id, payload)
         raw = json.dumps(payload, ensure_ascii=False)
-        self.logger.info(
+        self.logger.debug(
             "deliver_files: sending to {} subscribers for chat_id={}, files={}",
             len(conns), chat_id, [f.get("name") for f in files],
         )

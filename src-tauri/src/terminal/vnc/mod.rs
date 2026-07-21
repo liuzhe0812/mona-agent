@@ -33,7 +33,7 @@ impl VncState {
     pub async fn shutdown(&self) {
         let mut sessions = self.sessions.write().await;
         for (id, session) in sessions.drain() {
-            log::info!("Shutting down VNC session: {}", id);
+            log::debug!("Shutting down VNC session: {}", id);
             session.bridge_handle.abort();
         }
     }

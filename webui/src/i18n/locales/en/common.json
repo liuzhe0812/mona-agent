@@ -445,27 +445,7 @@
       "videoMode": {
         "label": "Video Generation",
         "toggle": "Toggle video generation mode",
-        "placeholder": "Describe a video to generate…",
-        "aspectAria": "Video aspect ratio",
-        "aspectLabel": "Video aspect",
-        "aspect": {
-          "auto": "Auto",
-          "1_1": "Square 1:1",
-          "3_4": "Portrait 3:4",
-          "9_16": "Story 9:16",
-          "4_3": "Landscape 4:3",
-          "16_9": "Wide 16:9"
-        },
-        "durationAria": "Video duration",
-        "durationLabel": "Video duration",
-        "duration": {
-          "auto": "Auto",
-          "s": "{{seconds}}s"
-        },
-        "refUrlPlaceholder": "Reference image URL (optional, for image-to-video)",
-        "refUrlAria": "Reference image URL",
-        "refUrlClear": "Clear reference image URL",
-        "refUrlUpload": "Upload reference image"
+        "placeholder": "Describe a video to generate — drop images as references…"
       },
       "workspace": {
         "placeholder": "Select folder (optional)",

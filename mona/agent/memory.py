@@ -571,7 +571,7 @@ class Consolidator:
         chunk = session.messages[session.last_consolidated:end_idx]
         if not chunk:
             return None
-        logger.info(
+        logger.debug(
             "Replay-window consolidation for {}: chunk={} msgs, replay_max={}",
             session.key,
             len(chunk),
@@ -741,7 +741,7 @@ class Consolidator:
                 if not chunk:
                     break
 
-                logger.info(
+                logger.debug(
                     "Token consolidation round {} for {}: {}/{} via {}, chunk={} msgs",
                     round_num,
                     session.key,
@@ -1085,7 +1085,7 @@ class Dream:
                 tool_choice=None,
             )
             analysis = phase1_response.content or ""
-            logger.debug("Dream Phase 1 analysis ({} chars): {}", len(analysis), analysis[:500])
+            logger.debug("Dream Phase 1 analysis ({} chars)", len(analysis))
         except Exception:
             logger.exception("Dream Phase 1 failed")
             return False
@@ -1128,7 +1128,7 @@ class Dream:
                 result.stop_reason, len(result.tool_events),
             )
             for ev in (result.tool_events or []):
-                logger.info("Dream tool_event: name={}, status={}, detail={}", ev.get("name"), ev.get("status"), ev.get("detail", "")[:200])
+                logger.debug("Dream tool_event: name={}, status={}, detail={}", ev.get("name"), ev.get("status"), ev.get("detail", "")[:200])
         except Exception:
             logger.exception("Dream Phase 2 failed")
             result = None

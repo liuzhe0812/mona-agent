@@ -116,7 +116,7 @@ pub async fn ssh_connect_with_id(
     cols: u32,
     rows: u32,
 ) -> Result<String, String> {
-    log::info!(
+    log::debug!(
         "[batch] ssh_connect_with_id called: session_id={}, host={}:{}",
         session_id,
         config.host,
@@ -147,7 +147,7 @@ async fn ssh_connect_with_id_inner(
     cols: u32,
     rows: u32,
 ) -> Result<String, String> {
-    log::info!(
+    log::debug!(
         "[batch] ssh_connect_with_id_inner: session_id={}, host={}:{}, username={}, auth_type={}",
         session_id,
         config.host,
@@ -175,7 +175,7 @@ async fn ssh_connect_with_id_inner(
         ..config
     };
 
-    log::info!(
+    log::debug!(
         "[batch] After restore_credential: session_id={}, auth_type={}",
         session_id,
         match &config.auth {
@@ -235,7 +235,7 @@ async fn ssh_connect_with_id_inner(
         e.to_string()
     })?;
 
-    log::info!(
+    log::debug!(
         "[batch] SSH connected for session_id={}, host={}",
         session_id,
         config.host
@@ -266,7 +266,7 @@ async fn ssh_connect_with_id_inner(
             e.to_string()
         })?;
 
-    log::info!(
+    log::debug!(
         "[batch] Shell started for session_id={}, registering session",
         session_id
     );
@@ -284,7 +284,7 @@ async fn ssh_connect_with_id_inner(
             e.to_string()
         })?;
 
-    log::info!(
+    log::debug!(
         "[batch] Session registered successfully: session_id={}",
         session_id
     );

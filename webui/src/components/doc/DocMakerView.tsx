@@ -10,16 +10,11 @@ const VideoMakerView = lazy(() =>
   import("@/components/doc/video/VideoMakerView").then((m) => ({ default: m.VideoMakerView })),
 );
 
-const FlowchartMakerView = lazy(() =>
-  import("@/components/doc/flowchart/FlowchartMakerView").then((m) => ({ default: m.FlowchartMakerView })),
-);
-
-type DocTab = "ppt" | "video" | "flowchart";
+type DocTab = "ppt" | "video";
 
 const TABS: Array<{ key: DocTab; label: string }> = [
   { key: "ppt", label: "PPT" },
   { key: "video", label: "视频" },
-  { key: "flowchart", label: "流程图" },
 ];
 
 const STORAGE_KEY = "mona.doc.activeTab";
@@ -27,7 +22,7 @@ const STORAGE_KEY = "mona.doc.activeTab";
 function loadActiveTab(): DocTab {
   try {
     const v = localStorage.getItem(STORAGE_KEY);
-    if (v === "ppt" || v === "video" || v === "flowchart") return v;
+    if (v === "ppt" || v === "video") return v;
   } catch {
     // ignore
   }
@@ -72,11 +67,6 @@ export function DocMakerView() {
         {activeTab === "video" && (
           <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-muted-foreground">正在打开视频制作...</div>}>
             <VideoMakerView />
-          </Suspense>
-        )}
-        {activeTab === "flowchart" && (
-          <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-muted-foreground">正在打开流程图制作...</div>}>
-            <FlowchartMakerView />
           </Suspense>
         )}
       </div>

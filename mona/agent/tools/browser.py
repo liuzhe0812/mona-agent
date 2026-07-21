@@ -357,7 +357,7 @@ class BrowserConnectionManager:
                 page = await self._find_page_for_tab(tab_id)
                 if page is not None:
                     self._pages[tab_id] = page
-                    logger.info("[CDP] Tab {} page found after {:.1f}s", tab_id, (attempt + 1) * 0.5)
+                    logger.debug("[CDP] Tab {} page found after {:.1f}s", tab_id, (attempt + 1) * 0.5)
                     return tab_id, cdp_port
             except Exception as e:
                 logger.debug("[CDP] Poll attempt {} for tab={} failed: {}", attempt + 1, tab_id, e)

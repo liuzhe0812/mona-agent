@@ -869,7 +869,7 @@ class OpenAIImageGenerationClient(ImageGenerationProvider):
 
         body.update(self.extra_body)
 
-        logger.info("OpenAI Images API request: POST {}/images/generations body={}", self.api_base, body)
+        logger.debug("OpenAI Images API request: POST {}/images/generations", self.api_base)
 
         response = await self._http_post(
             f"{self.api_base}/images/generations",
@@ -887,8 +887,7 @@ class OpenAIImageGenerationClient(ImageGenerationProvider):
             ) from exc
 
         payload = response.json()
-        logger.info("OpenAI Images API response ({}): {}", response.status_code,
-                       {k: v for k, v in payload.items() if k != "data"})
+        logger.debug("OpenAI Images API response ({})", response.status_code)
 
         client = self._client
         owns_client = client is None
@@ -968,10 +967,9 @@ class OpenAICompatImageGenerationClient(ImageGenerationProvider):
 
         body.update(self.extra_body)
 
-        logger.info(
-            "OpenAI-compat Images API request: POST {}/images/generations body={}",
+        logger.debug(
+            "OpenAI-compat Images API request: POST {}/images/generations",
             self.api_base,
-            body,
         )
 
         response = await self._http_post(
@@ -1059,10 +1057,7 @@ class CodexImageGenerationClient(ImageGenerationProvider):
         if not token or not token.access:
             raise ImageGenerationError(self.missing_key_message)
 
-        logger.info(
-            "Using Codex OAuth token for image generation (account: {})",
-            token.account_id,
-        )
+        logger.debug("Using Codex OAuth token for image generation")
 
         if reference_images:
             logger.warning(
@@ -1092,8 +1087,7 @@ class CodexImageGenerationClient(ImageGenerationProvider):
         }
         body.update(self.extra_body)
 
-        logger.info("Codex Responses API request: POST {}/codex/responses body={}",
-                       self.api_base, {k: v for k, v in body.items() if k != "input"})
+        logger.debug("Codex Responses API request: POST {}/codex/responses", self.api_base)
 
         response = await self._http_post(
             f"{self.api_base}/codex/responses",

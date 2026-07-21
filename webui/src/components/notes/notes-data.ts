@@ -107,8 +107,6 @@ export interface OperationNote {
   aliases?: string[];
   /** Whether the note is starred/favorited by the user. */
   favorite?: boolean;
-  /** Whether the note is bookmarked by the user. */
-  bookmarked?: boolean;
 }
 
 // ---------------------------------------------------------------------------

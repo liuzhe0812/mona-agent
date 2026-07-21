@@ -1,4 +1,4 @@
-﻿"""DingTalk/DingDing channel implementation using Stream Mode."""
+"""DingTalk/DingDing channel implementation using Stream Mode."""
 
 import asyncio
 import json
@@ -127,7 +127,7 @@ class monaDingTalkHandler(CallbackHandler):
                 or message.data.get("openConversationId")
             )
 
-            self.channel.logger.info("Received message from {} ({}): {}", sender_name, sender_id, content)
+            self.channel.logger.debug("Received message from {} ({})", sender_name, sender_id)
 
             # Forward to mona via _on_message (non-blocking).
             # Store reference to prevent GC before task completes.
@@ -690,7 +690,7 @@ class DingTalkChannel(BaseChannel):
         permission checks before publishing to the bus.
         """
         try:
-            self.logger.info("inbound: {} from {}", content, sender_name)
+            self.logger.debug("inbound from {}", sender_name)
             is_group = conversation_type == "2" and conversation_id
             chat_id = f"group:{conversation_id}" if is_group else sender_id
             await self._handle_message(
@@ -747,7 +747,7 @@ class DingTalkChannel(BaseChannel):
             download_dir.mkdir(parents=True, exist_ok=True)
             file_path = download_dir / filename
             await asyncio.to_thread(file_path.write_bytes, file_resp.content)
-            self.logger.info("file saved: {}", file_path)
+            self.logger.debug("file saved: {}", file_path)
             return str(file_path)
         except Exception:
             self.logger.exception("file download error")

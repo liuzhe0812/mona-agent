@@ -66,8 +66,8 @@ _CREATE_PARAMETERS = tool_parameters_schema(
         "produced by notes_save_image."
     ),
     notebook_name=StringSchema(
-        "Notebook (folder) name to place the note in. Defaults to '默认分类'. "
-        "The folder is created if it does not exist."
+        "Notebook (folder) name to place the note in. Defaults to the vault root "
+        "when omitted. The folder is created if it does not exist."
     ),
     tags=ArraySchema(StringSchema(""), description="Optional list of tags."),
     required=["title", "content_markdown"],
@@ -129,7 +129,7 @@ class NotesCreateTool(Tool):
             note_id = tauri_invoke("notes_create_from_chat", args)
         except RuntimeError as e:
             return f"Error creating note: {e}"
-        return f"Created note with id={note_id} in notebook '{notebook_name or '默认分类'}'."
+        return f"Created note with id={note_id} in notebook '{notebook_name or '(root)'}'."
 
 
 # ---------------------------------------------------------------------------

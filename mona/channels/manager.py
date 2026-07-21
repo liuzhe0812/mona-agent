@@ -1,4 +1,4 @@
-﻿"""Channel manager for coordinating chat channels."""
+"""Channel manager for coordinating chat channels."""
 
 from __future__ import annotations
 
@@ -362,7 +362,7 @@ class ChannelManager:
                         and not msg.metadata.get("_streamed")
                     ):
                         if self._should_suppress_outbound(msg):
-                            logger.info("Suppressing duplicate outbound message to {}:{}", msg.channel, msg.chat_id)
+                            logger.debug("Suppressing duplicate outbound message to {}:{}", msg.channel, msg.chat_id)
                             continue
                     await self._send_with_retry(channel, msg)
                 else:

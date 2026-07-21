@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from loguru import logger
 from pydantic import Field
 
 from mona.agent.tools.base import Tool, tool_parameters
@@ -26,6 +27,7 @@ from mona.utils.artifacts import (
     generated_video_tool_result,
     store_generated_video_artifact,
 )
+from mona.utils.image_upload import ImageUploadError, upload_image_to_mona
 
 if TYPE_CHECKING:
     from mona.config.schema import ProviderConfig
@@ -51,8 +53,12 @@ class VideoGenerationToolConfig(Base):
             min_length=1,
         ),
         reference_images=ArraySchema(
-            StringSchema("Image URL for image-to-video generation. Only HTTP(S) URLs are supported."),
-            description="Optional image URLs to drive image-to-video generation.",
+            StringSchema(
+                "Reference image for image-to-video generation. May be an HTTP(S) URL, "
+                "a local file path under ~/.mona/media/, or a data: URL. Local paths and "
+                "data URLs are uploaded to Mona's image host automatically.",
+            ),
+            description="Optional reference images to drive image-to-video generation.",
         ),
         aspect_ratio=StringSchema(
             "Optional output aspect ratio, e.g. 16:9, 9:16, 1:1, 4:3, 3:4.",
@@ -149,10 +155,11 @@ class VideoGenerationTool(Tool):
             model = self.config.model
             if not model:
                 return "Error: no video model configured. Set the video model in Video settings."
+            normalized_refs = await self._normalize_reference_images(reference_images)
             response = await client.generate(
                 prompt=prompt,
                 model=model,
-                reference_images=reference_images,
+                reference_images=normalized_refs,
                 aspect_ratio=aspect_ratio or self.config.default_aspect_ratio,
                 duration=duration or self.config.default_duration,
             )
@@ -163,11 +170,35 @@ class VideoGenerationTool(Tool):
                 model=model,
                 provider=self.config.provider,
                 video_url=response.video_url,
-                source_images=reference_images,
+                source_images=normalized_refs,
                 save_dir=self.config.save_dir,
                 duration=response.seconds,
                 size=response.size,
             )
             return generated_video_tool_result([artifact])
-        except (ArtifactError, VideoGenerationError, OSError) as exc:
+        except (ArtifactError, ImageUploadError, VideoGenerationError, OSError) as exc:
             return f"Error: {exc}"
+
+    async def _normalize_reference_images(
+        self,
+        refs: list[str] | None,
+    ) -> list[str] | None:
+        """Convert local paths / data URLs in ``refs`` to public HTTP URLs.
+
+        HTTP(S) URLs are passed through unchanged. Local file paths must live
+        under ``~/.mona/media/``; data URLs are decoded in-memory. Each source
+        is uploaded to Mona's image host (``mona.lzfun.vip``).
+        """
+        if not refs:
+            return refs
+        normalized: list[str] = []
+        for ref in refs:
+            if not isinstance(ref, str) or not ref.strip():
+                continue
+            try:
+                url = await upload_image_to_mona(ref.strip())
+            except ImageUploadError as exc:
+                logger.warning("Skipping reference image ({!r}): {}", ref, exc)
+                continue
+            normalized.append(url)
+        return normalized or None

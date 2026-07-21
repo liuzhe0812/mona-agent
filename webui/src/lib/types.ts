@@ -528,9 +528,6 @@ export interface OutboundImageGeneration {
 
 export interface OutboundVideoGeneration {
   enabled: true;
-  aspect_ratio?: string | null;
-  duration?: number | null;
-  reference_image_url?: string | null;
 }
 
 /** Response shape for ``GET .../webui-thread`` (server-built transcript replay). */

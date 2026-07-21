@@ -12,6 +12,8 @@ import StarterKit from "@tiptap/starter-kit";
 import { NodeSelection, TextSelection } from "@tiptap/pm/state";
 
 import { WikiLink } from "./WikiLinkExtension";
+import { MermaidCodeBlock } from "./MermaidCodeBlock";
+import { FindReplaceBar, setActiveFindApi, useFindBarHotkey } from "./FindReplaceBar";
 import {
   Bold,
   CheckSquare,
@@ -519,7 +521,9 @@ export function MarkdownEditor({
     () => [
       StarterKit.configure({
         heading: { levels: [1, 2, 3, 4] },
+        codeBlock: false,
       }),
+      MermaidCodeBlock,
       NoteImage,
       TaskList.configure({
         HTMLAttributes: {},
@@ -723,6 +727,30 @@ export function MarkdownEditor({
     };
   }, [editor]);
 
+  // In-editor find/replace bar state. Ctrl+F / Ctrl+H open it.
+  const [findBarState, setFindBarState] = useState<{
+    open: boolean;
+    mode: "find" | "replace";
+  } | null>(null);
+  useFindBarHotkey((mode) => setFindBarState({ open: true, mode }));
+
+  // Register this editor as the find/replace target. Re-register on focus so
+  // the most recently focused editor wins when multiple tabs are open.
+  useEffect(() => {
+    if (!editor) return;
+    const api = {
+      openFind: () => setFindBarState({ open: true, mode: "find" as const }),
+      openReplace: () => setFindBarState({ open: true, mode: "replace" as const }),
+    };
+    const dispose = setActiveFindApi(api);
+    const handleFocus = () => setActiveFindApi(api);
+    editor.on("focus", handleFocus);
+    return () => {
+      editor.off("focus", handleFocus);
+      dispose();
+    };
+  }, [editor]);
+
   useEffect(() => {
     if (!editor) return;
     const editorMarkdown = editor.getMarkdown();
@@ -801,6 +829,14 @@ export function MarkdownEditor({
           </div>
         )}
       </div>
+
+      {mode === "visual" && findBarState?.open && editor ? (
+        <FindReplaceBar
+          editor={editor}
+          mode={findBarState.mode}
+          onClose={() => setFindBarState(null)}
+        />
+      ) : null}
 
       {mode === "visual" ? (
         <EditorContextMenu editor={editor} onMoveSelectionToNote={onMoveSelectionToNote}>

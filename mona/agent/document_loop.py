@@ -1,8 +1,8 @@
 """Document agent loop: focused, single-task, tool-whitelisted.
 
 泛化自 PPTAgentLoop,按 ``agent_kind`` 声明式加载 DocumentProfile:
-- soul prompt(ppt_soul.md / video_soul.md / flowchart_soul.md)
-- skill(mona-ppt / mona-video / mona-flowchart)
+- soul prompt(ppt_soul.md / video_soul.md)
+- skill(mona-ppt / mona-video)
 - tools whitelist
 
 DocumentAgentLoop 不直接消费 message bus。主 AgentLoop 在
@@ -58,24 +58,6 @@ _VIDEO_TOOLS: frozenset[str] = frozenset({
     "memory_read",
 })
 
-# Flowchart 不需要 generate_image(纯结构化图表生成);build_xml.py 通过
-# exec 调用,其余通用工具保留。
-_FLOWCHART_TOOLS: frozenset[str] = frozenset({
-    "read_file",
-    "write_file",
-    "edit_file",
-    "list_files",
-    "exec",
-    "web_search",
-    "web_fetch",
-    "skill_read",
-    "skill_script_run",
-    "skill_reference_read",
-    "skill_asset_copy",
-    "memory_read",
-})
-
-
 @dataclass(frozen=True)
 class DocumentProfile:
     """单个文档子类型的声明式配置。"""
@@ -99,17 +81,11 @@ DOCUMENT_PROFILES: dict[str, DocumentProfile] = {
         skill_name="mona-video",
         tools_whitelist=_VIDEO_TOOLS,
     ),
-    "flowchart": DocumentProfile(
-        agent_kind="flowchart",
-        soul_template="agent/flowchart_soul.md",
-        skill_name="mona-flowchart",
-        tools_whitelist=_FLOWCHART_TOOLS,
-    ),
 }
 
 
 class DocumentAgentLoop(AgentLoop):
-    """Agent loop 变体,用于复杂文档生成任务(PPT / 视频 / 流程图)。
+    """Agent loop 变体,用于复杂文档生成任务(PPT / 视频)。
 
     与主 loop 共享 provider/sessions/bus 等运行时依赖,但:
     - 替换 context builder 为 DocumentContextBuilder(profile 驱动的 soul prompt)

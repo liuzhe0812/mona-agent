@@ -339,7 +339,7 @@ fn now_unix() -> i64 {
 fn build_graph(vault: &Path) -> LinkGraph {
     let t0 = std::time::Instant::now();
     let scanned = scan_vault_links(vault);
-    log::info!("[graph] scan_vault_links: {} notes, {:?}", scanned.len(), t0.elapsed());
+    log::debug!("[graph] scan_vault_links: {} notes, {:?}", scanned.len(), t0.elapsed());
     let title_index = build_title_index(&scanned);
 
     let nodes: Vec<LinkNode> = scanned
@@ -470,27 +470,27 @@ fn vault_mtime_newer_than(vault: &Path, threshold: i64) -> bool {
 fn current_graph() -> Result<LinkGraph, String> {
     let start = std::time::Instant::now();
     let vault = notes::read_vault_path().ok_or_else(|| "No vault configured".to_string())?;
-    log::info!("[graph] current_graph start, vault={:?}", vault);
+    log::debug!("[graph] current_graph start, vault={:?}", vault);
     let existing_cache = load_cached_graph(&vault);
     if let Some(ref cached) = existing_cache {
         let stale = vault_mtime_newer_than(&vault, cached.last_scan_at);
-        log::info!("[graph] cache stale={} threshold={}", stale, cached.last_scan_at);
+        log::debug!("[graph] cache stale={} threshold={}", stale, cached.last_scan_at);
         if !stale {
-            log::info!("[graph] loaded from cache, {} nodes, elapsed {:?}", cached.nodes.len(), start.elapsed());
+            log::debug!("[graph] loaded from cache, {} nodes, elapsed {:?}", cached.nodes.len(), start.elapsed());
             return Ok(cached.clone());
         }
-        log::info!("[graph] cache stale, rebuilding...");
+        log::debug!("[graph] cache stale, rebuilding...");
     } else {
-        log::info!("[graph] no cache, building...");
+        log::debug!("[graph] no cache, building...");
     }
     let mut graph = build_graph(&vault);
     // Preserve saved layout positions across rebuilds.
     if let Some(ref cached) = existing_cache {
         graph.positions = cached.positions.clone();
     }
-    log::info!("[graph] built {} nodes {} edges, elapsed {:?}", graph.nodes.len(), graph.edges.len(), start.elapsed());
+    log::debug!("[graph] built {} nodes {} edges, elapsed {:?}", graph.nodes.len(), graph.edges.len(), start.elapsed());
     save_cached_graph(&vault, &graph)?;
-    log::info!("[graph] saved, total elapsed {:?}", start.elapsed());
+    log::debug!("[graph] saved, total elapsed {:?}", start.elapsed());
     Ok(graph)
 }
 
@@ -510,7 +510,7 @@ pub fn refresh_cache_background(vault: PathBuf) {
             log::warn!("[graph] background refresh save failed: {}", e);
             return;
         }
-        log::info!(
+        log::debug!(
             "[graph] background refresh done: {} nodes, elapsed {:?}",
             graph.nodes.len(),
             start.elapsed()
@@ -716,11 +716,10 @@ fn next_char_boundary(s: &str, idx: usize) -> usize {
 
 #[tauri::command]
 pub async fn notes_links_get_graph() -> Result<LinkGraph, String> {
-    log::info!("[graph] notes_links_get_graph invoked");
     let result = tauri::async_runtime::spawn_blocking(current_graph).await;
     match result {
         Ok(Ok(graph)) => {
-            log::info!("[graph] notes_links_get_graph success: {} nodes", graph.nodes.len());
+            log::debug!("[graph] notes_links_get_graph success: {} nodes", graph.nodes.len());
             Ok(graph)
         }
         Ok(Err(e)) => {

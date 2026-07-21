@@ -60,11 +60,8 @@ fn next_available_download_path(directory: &Path, filename: &str) -> PathBuf {
 }
 
 async fn remove_native_webview(app: &AppHandle, id: &str) -> Result<(), String> {
-    let t_remove = std::time::Instant::now();
     if let Some(webview) = app.get_webview(&format!("browser-{}", id)) {
-        log::info!("[remove_native_webview] id={} close begin", id);
         webview.close().map_err(|error| error.to_string())?;
-        log::info!("[remove_native_webview] id={} close() returned after {:?}", id, t_remove.elapsed());
 
         // Webview::close only queues the runtime close message. Wait for a
         // following main-thread task so a subsequent add_child cannot race
@@ -73,30 +70,21 @@ async fn remove_native_webview(app: &AppHandle, id: &str) -> Result<(), String> 
             .get_window("main")
             .ok_or_else(|| "Main window not found".to_string())?;
         let (tx, rx) = tokio::sync::oneshot::channel();
-        let barrier_t0 = std::time::Instant::now();
         window
             .run_on_main_thread(move || {
                 let _ = tx.send(());
             })
             .map_err(|error| error.to_string())?;
-        log::info!("[remove_native_webview] id={} waiting main thread barrier", id);
         match tokio::time::timeout(std::time::Duration::from_secs(5), rx).await {
-            Ok(Ok(_)) => {
-                log::info!("[remove_native_webview] id={} main thread barrier passed after {:?}", id, barrier_t0.elapsed());
-            }
+            Ok(Ok(_)) => {}
             Ok(Err(_)) => {
-                log::warn!("[remove_native_webview] id={} main thread barrier CANCELLED after {:?}", id, barrier_t0.elapsed());
                 return Err("Browser tab close barrier was cancelled".to_string());
             }
             Err(_) => {
-                log::warn!("[remove_native_webview] id={} main thread barrier TIMED OUT after 5s", id);
                 return Err("Timed out waiting for browser tab to close".to_string());
             }
         }
-    } else {
-        log::info!("[remove_native_webview] id={} no webview to close", id);
     }
-    log::info!("[remove_native_webview] id={} total elapsed={:?}", id, t_remove.elapsed());
     Ok(())
 }
 
@@ -634,10 +622,7 @@ impl BrowserState {
         is_incognito: bool,
         ad_block_enabled: bool,
     ) -> Result<CreateTabResult, String> {
-        let t_create = std::time::Instant::now();
-        log::info!("[create_tab] id={} waiting lifecycle lock", id);
         let _lifecycle_guard = self.lifecycle.lock().await;
-        log::info!("[create_tab] id={} lifecycle lock acquired after {:?}", id, t_create.elapsed());
         let cdp_port = CDP_PORT;
         let webview_label = format!("browser-{}", id);
 
@@ -711,13 +696,6 @@ impl BrowserState {
             .on_navigation(move |url| {
                 let allowed = matches!(url.scheme(), "https" | "http" | "blob" | "data")
                     || url.as_str() == "about:blank";
-                log::info!(
-                    "[on_navigation] tab={} url={} scheme={} allowed={}",
-                    tab_id,
-                    url,
-                    url.scheme(),
-                    allowed
-                );
                 if allowed {
                     if let Some(mut tab) = tabs.get_mut(&tab_id) {
                         tab.url = url.to_string();
@@ -747,11 +725,7 @@ impl BrowserState {
                 .get_webview("main")
                 .ok_or_else(|| "Main webview not found".to_string())?;
             let (tx, rx) = tokio::sync::oneshot::channel();
-            let with_webview_t0 = std::time::Instant::now();
-            log::info!("[create_tab] id={} dispatching with_webview to main thread", id);
             main.with_webview(move |webview| {
-                let t_add_child = std::time::Instant::now();
-                log::info!("[create_tab] >>> main thread: add_child begin");
                 let result = window
                     .add_child(
                         webview_builder.with_environment(webview.environment()),
@@ -759,22 +733,15 @@ impl BrowserState {
                         tauri::LogicalSize::new(1, 1),
                     )
                     .map_err(|error| error.to_string());
-                log::info!("[create_tab] <<< main thread: add_child done ok={} elapsed={:?}", result.is_ok(), t_add_child.elapsed());
                 let _ = tx.send(result);
             })
             .map_err(|error| error.to_string())?;
-            log::info!("[create_tab] id={} with_webview dispatched, waiting result (elapsed {:?})", id, with_webview_t0.elapsed());
             match tokio::time::timeout(std::time::Duration::from_secs(15), rx).await {
-                Ok(Ok(r)) => {
-                    log::info!("[create_tab] id={} add_child result received after {:?}", id, with_webview_t0.elapsed());
-                    r
-                }
+                Ok(Ok(r)) => r,
                 Ok(Err(_)) => {
-                    log::warn!("[create_tab] id={} add_child channel cancelled after {:?}", id, with_webview_t0.elapsed());
                     return Err("Browser tab creation was cancelled".to_string());
                 }
                 Err(_) => {
-                    log::warn!("[create_tab] id={} add_child TIMED OUT after 15s", id);
                     return Err("Timed out creating browser tab".to_string());
                 }
             }
@@ -894,7 +861,6 @@ impl BrowserState {
                             }
                         };
                         let uri = read_webview2_string(|raw| unsafe { operation.Uri(raw) });
-                        log::info!("[DownloadStarting] uri={}", uri);
                         let mime_type =
                             read_webview2_string(|raw| unsafe { operation.MimeType(raw) });
                         let suggested_path =
@@ -1036,17 +1002,13 @@ impl BrowserState {
 
     /// 关闭标签
     pub async fn close_tab(&self, app: &AppHandle, id: &str) -> Result<(), String> {
-        let t_close = std::time::Instant::now();
-        log::info!("[close_tab] id={} waiting lifecycle lock", id);
         let _lifecycle_guard = self.lifecycle.lock().await;
-        log::info!("[close_tab] id={} lifecycle lock acquired after {:?}", id, t_close.elapsed());
         if !self.tabs.contains_key(id) {
             return Err(format!("Tab {} not found", id));
         }
         remove_native_webview(app, id).await?;
         self.tabs.remove(id);
         let _ = app.emit("browser-tab-closed", id);
-        log::info!("[close_tab] id={} total elapsed={:?}", id, t_close.elapsed());
         Ok(())
     }
 
@@ -1101,45 +1063,21 @@ impl BrowserState {
         height: f64,
         visible: bool,
     ) -> Result<(), String> {
-        let t_bounds = std::time::Instant::now();
         if !self.tabs.contains_key(id) {
             return Err(format!("Tab {} not found", id));
         }
         let webview = get_browser_webview(app, id)?;
         if !visible {
-            let t_hide = std::time::Instant::now();
             webview.hide().map_err(|error| error.to_string())?;
-            log::info!("[set_tab_bounds] id={} hide elapsed={:?}", id, t_hide.elapsed());
             return Ok(());
         }
-        let t_pos = std::time::Instant::now();
         webview
             .set_position(tauri::LogicalPosition::new(left, top))
             .map_err(|error| error.to_string())?;
-        let pos_elapsed = t_pos.elapsed();
-        let t_size = std::time::Instant::now();
         webview
             .set_size(tauri::LogicalSize::new(width.max(1.0), height.max(1.0)))
             .map_err(|error| error.to_string())?;
-        let size_elapsed = t_size.elapsed();
-        let t_show = std::time::Instant::now();
         webview.show().map_err(|error| error.to_string())?;
-        let show_elapsed = t_show.elapsed();
-        let total = t_bounds.elapsed();
-        if pos_elapsed > std::time::Duration::from_millis(100)
-            || size_elapsed > std::time::Duration::from_millis(100)
-            || show_elapsed > std::time::Duration::from_millis(100)
-        {
-            log::warn!(
-                "[set_tab_bounds] id={} SLOW op pos={:?} size={:?} show={:?} total={:?}",
-                id, pos_elapsed, size_elapsed, show_elapsed, total
-            );
-        } else {
-            log::info!(
-                "[set_tab_bounds] id={} ok pos={:?} size={:?} show={:?} total={:?}",
-                id, pos_elapsed, size_elapsed, show_elapsed, total
-            );
-        }
         Ok(())
     }
 
@@ -1161,18 +1099,14 @@ impl BrowserState {
     }
 
     pub async fn navigate_tab(&self, app: &AppHandle, id: &str, url: &str) -> Result<(), String> {
-        let t_nav = std::time::Instant::now();
         let parsed_url = Url::parse(url).map_err(|e| format!("Invalid URL: {}", e))?;
         let webview = get_browser_webview(app, id)?;
-        let t_invoke = std::time::Instant::now();
         webview
             .navigate(parsed_url)
             .map_err(|error| format!("Navigate failed: {}", error))?;
-        log::info!("[navigate_tab] id={} navigate invoked elapsed={:?}", id, t_invoke.elapsed());
         if let Some(mut tab) = self.tabs.get_mut(id) {
             tab.url = url.to_string();
         }
-        log::info!("[navigate_tab] id={} total elapsed={:?}", id, t_nav.elapsed());
         Ok(())
     }
 

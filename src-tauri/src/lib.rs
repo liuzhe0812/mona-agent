@@ -353,6 +353,24 @@ async fn write_mona_model_config(
 }
 
 #[tauri::command]
+async fn write_mona_image_gen_config(
+    provider: String,
+    model: String,
+    enabled: Option<bool>,
+) -> Result<(), String> {
+    settings::write_mona_image_gen_config(&provider, &model, enabled)
+}
+
+#[tauri::command]
+async fn write_mona_video_gen_config(
+    provider: String,
+    model: String,
+    enabled: Option<bool>,
+) -> Result<(), String> {
+    settings::write_mona_video_gen_config(&provider, &model, enabled)
+}
+
+#[tauri::command]
 async fn read_email_schedule_config() -> Result<serde_json::Value, String> {
     Ok(settings::read_email_schedule_config())
 }
@@ -484,6 +502,8 @@ pub fn run() {
             mona_config_status,
             write_mona_provider_config,
             write_mona_model_config,
+            write_mona_image_gen_config,
+            write_mona_video_gen_config,
             read_email_schedule_config,
             write_email_schedule_config,
             get_pending_md_files,
@@ -839,7 +859,7 @@ pub fn run() {
                         }
                     }
                     DownloadEvent::Finished { path, success, .. } => {
-                        log::info!("[download] finished: {:?} success={}", path, success);
+                        log::debug!("[download] finished: {:?} success={}", path, success);
                     }
                     _ => {}
                 }
@@ -992,7 +1012,7 @@ pub fn run() {
                         }
                     });
                 } else {
-                    log::info!("No provider configured, skipping gateway auto-start");
+                    log::debug!("No provider configured, skipping gateway auto-start");
                 }
             }
 
@@ -1024,7 +1044,7 @@ pub fn run() {
                         }
                     }
                     Err(e) => {
-                        log::info!("Update check failed: {}", e);
+                        log::warn!("Update check failed: {}", e);
                     }
                 }
             });
@@ -1035,11 +1055,11 @@ pub fn run() {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                     let current_settings = settings::load_settings();
                     if current_settings.run_in_background {
-                        log::info!("[window] CloseRequested: prevent_close + hide (run_in_background=true)");
+                        log::debug!("[window] CloseRequested: prevent_close + hide (run_in_background=true)");
                         api.prevent_close();
                         let _ = window.hide();
                     } else {
-                        log::info!("[window] CloseRequested: closing app (run_in_background=false)");
+                        log::debug!("[window] CloseRequested: closing app (run_in_background=false)");
                         let _ = gateway_state_for_close.stop();
                     }
                 }

@@ -99,7 +99,7 @@ impl GatewayManager {
                             format!("{}{}{}", dir.display(), sep, existing)
                         };
                         cmd.env("PYTHONPATH", &new_path);
-                        log::info!("Dev mode: PYTHONPATH set to {:?}", dir);
+                        log::debug!("Dev mode: PYTHONPATH set to {:?}", dir);
                         break;
                     }
                     cursor = dir.parent().map(|p| p.to_path_buf());
@@ -108,7 +108,7 @@ impl GatewayManager {
         } else {
             // Release mode: packaged gateway exe only
             let exe_path = python::deploy_gateway(app_handle)?;
-            log::info!("Using packaged gateway: {:?}", exe_path);
+            log::debug!("Using packaged gateway: {:?}", exe_path);
             if !exe_path.exists() {
                 return Err(format!("Gateway executable not found at {:?}", exe_path));
             }

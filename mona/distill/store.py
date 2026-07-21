@@ -119,7 +119,7 @@ def write_distill_result(memory_dir: Path, result: DistillResult) -> None:
         user_path = memory_dir / _USER_FILENAME
         try:
             update_user_section(user_path, result.user_section, result.markdown)
-            logger.debug(f"[distill.store] updated USER.md section: {result.user_section}")
+            logger.debug("[distill.store] updated USER.md section")
         except Exception as e:
             logger.error(f"[distill.store] failed to update USER.md: {e}")
 

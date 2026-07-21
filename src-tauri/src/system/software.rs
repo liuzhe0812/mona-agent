@@ -329,7 +329,7 @@ fn persist_operation(
     message: &str,
 ) {
     let Ok(inner) = state.0.lock() else {
-        eprintln!("software operation history: state lock failed");
+        log::error!("software operation history: state lock failed");
         return;
     };
     if let Err(error) = record_software_operation(
@@ -342,7 +342,7 @@ fn persist_operation(
         exit_code,
         message,
     ) {
-        eprintln!("software operation history: {error}");
+        log::warn!("software operation history: {error}");
     }
 }
 

@@ -22,6 +22,7 @@ interface NotificationPayload {
   actions: NotificationAction[];
   autoCloseMs: number;
   clickAction?: string;
+  clickData?: unknown;
 }
 
 function decodePayload(): NotificationPayload | null {
@@ -126,8 +127,8 @@ export function NotificationWindow() {
   }, [closing]);
 
   const handleAction = useCallback(
-    (action: string) => {
-      void invoke("emit_notification_action", { action }).catch(() => {});
+    (action: string, data?: unknown) => {
+      void invoke("emit_notification_action", { action, data }).catch(() => {});
       handleClose();
     },
     [handleClose],
@@ -135,7 +136,7 @@ export function NotificationWindow() {
 
   const handleCardClick = useCallback(() => {
     if (payload?.clickAction) {
-      handleAction(payload.clickAction);
+      handleAction(payload.clickAction, payload.clickData);
     }
   }, [payload, handleAction]);
 

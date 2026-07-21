@@ -297,7 +297,7 @@ def search_messages(
         msg.pop("bodyHtml", None)
         results.append(msg)
 
-    logger.info("Email search: {} results", len(results))
+    logger.debug("Email search: {} results", len(results))
     return results
 
 

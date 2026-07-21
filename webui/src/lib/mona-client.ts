@@ -369,7 +369,7 @@ export class MonaClient {
    *  ``null`` or omit for the default "会话" section.
    *
    *  ``agentKind`` routes the session to a dedicated document agent loop.
-   *  Supported: ``"ppt"`` / ``"video"`` / ``"flowchart"`` — each routes to a
+   *  Supported: ``"ppt"`` / ``"video"`` — each routes to a
    *  DocumentAgentLoop with its own tool whitelist + soul prompt. */
   newChat(
     timeoutMs: number = 5_000,

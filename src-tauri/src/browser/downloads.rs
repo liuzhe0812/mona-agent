@@ -41,19 +41,12 @@ pub async fn browser_show_downloads(
     app.run_on_main_thread(move || {
         let app = &app_handle;
         if let Some(window) = app.get_webview_window(WINDOW_LABEL) {
-            log::info!("[downloads] window exists, re-show");
-            if let Err(e) = place_window(app, &anchor) {
-                log::warn!("[downloads] place_window failed: {e}");
-            }
-            if let Err(e) = window.show() {
-                log::warn!("[downloads] show failed: {e}");
-            }
-            log_window_state(&window);
+            let _ = place_window(app, &anchor);
+            let _ = window.show();
             return;
         }
 
         let Some(main) = app.get_webview_window("main") else {
-            log::warn!("[downloads] main window not found");
             return;
         };
         let builder = WebviewWindowBuilder::new(
@@ -68,38 +61,14 @@ pub async fn browser_show_downloads(
         .focusable(false)
         .visible(false)
         .shadow(false);
-        let window = match builder.parent(&main).and_then(|builder| builder.build()) {
-            Ok(window) => window,
-            Err(e) => {
-                log::warn!("[downloads] build failed: {e}");
-                return;
-            }
+        let Ok(window) = builder.parent(&main).and_then(|builder| builder.build()) else {
+            return;
         };
-        log::info!("[downloads] window built");
-        if let Err(e) = window.set_size(LogicalSize::new(WIDTH, HEIGHT)) {
-            log::warn!("[downloads] set_size failed: {e}");
-        }
-        if let Err(e) = place_window(app, &anchor) {
-            log::warn!("[downloads] place_window failed: {e}");
-        }
-        if let Err(e) = window.show() {
-            log::warn!("[downloads] show failed: {e}");
-        }
-        log_window_state(&window);
+        let _ = window.set_size(LogicalSize::new(WIDTH, HEIGHT));
+        let _ = place_window(app, &anchor);
+        let _ = window.show();
     })
     .map_err(|e| e.to_string())
-}
-
-fn log_window_state(window: &tauri::WebviewWindow) {
-    let visible = window.is_visible().map_err(|e| e.to_string());
-    let pos = window.outer_position().map_err(|e| e.to_string());
-    let size = window.outer_size().map_err(|e| e.to_string());
-    log::info!(
-        "[downloads] state visible={:?} outer_pos={:?} outer_size={:?}",
-        visible,
-        pos,
-        size
-    );
 }
 
 #[tauri::command]

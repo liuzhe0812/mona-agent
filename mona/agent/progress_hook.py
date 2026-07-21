@@ -1,4 +1,4 @@
-﻿"""Agent hook that adapts runner events into channel progress UI."""
+"""Agent hook that adapts runner events into channel progress UI."""
 
 from __future__ import annotations
 
@@ -123,7 +123,7 @@ class AgentProgressHook(AgentHook):
             )
         for tc in context.tool_calls:
             args_str = json.dumps(tc.arguments, ensure_ascii=False)
-            logger.info("Tool call: {}({})", tc.name, args_str[:200])
+            logger.debug("Tool call: {}({})", tc.name, args_str[:200])
         if self._set_tool_context:
             self._set_tool_context(
                 self._channel,

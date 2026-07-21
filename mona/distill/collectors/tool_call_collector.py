@@ -193,7 +193,7 @@ def collect_tool_calls(
     stats.earliest = earliest.isoformat() if earliest else None
     stats.latest = latest.isoformat() if latest else None
 
-    logger.info(
+    logger.debug(
         f"[tool_call_collector] scanned {sessions_scanned} sessions, "
         f"{total_calls} tool calls, {len(tool_counter)} unique tools"
     )

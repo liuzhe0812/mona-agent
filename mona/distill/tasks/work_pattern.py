@@ -42,7 +42,7 @@ class WorkPatternTask(DistillTask):
     ) -> DistillResult:
         # If no data, return early
         if data.get("total_calls", 0) == 0:
-            logger.info("[work_pattern] no tool calls found, skipping")
+            logger.debug("[work_pattern] no tool calls found, skipping")
             return DistillResult(
                 task_name=_TASK_NAME,
                 success=False,

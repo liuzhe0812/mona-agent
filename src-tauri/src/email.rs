@@ -328,7 +328,7 @@ fn reparse_header_and_fix_db(
                     uid, account_id, mailbox,
                 ],
             );
-            log::info!(
+            log::debug!(
                 "[email-header-fix] 修复乱码 header uid={} account={} folder={} to={:?}",
                 uid, account_id, mailbox, &hdr_to
             );
@@ -801,7 +801,7 @@ pub fn verify_consistency_on_startup(state: &EmailState) {
                 continue;
             }
 
-            log::info!(
+            log::debug!(
                 "[email-verify] account={} folder={} 不一致: .eml缺索引={}, 索引缺.eml={}",
                 account_id,
                 folder,
@@ -3638,7 +3638,7 @@ async fn sync_folder_internal(
     let new_messages: Vec<Value> = resp.json().await.map_err(|e| format!("解析响应失败: {e}"))?;
 
     let conn = state.conn()?;
-    log::info!(
+    log::debug!(
         "[email-sync] account={} mailbox={} last_uid={:?} gateway_returned={}",
         req.account_id,
         req.mailbox,
@@ -3691,7 +3691,7 @@ async fn sync_folder_internal(
                 if local_folder != &req.mailbox {
                     // 跨文件夹重复：邮件已被规则移动到其他文件夹，当前文件夹的副本是 stale 的
                     // 跳过 INSERT，避免同一封邮件在多个文件夹显示
-                    log::info!(
+                    log::debug!(
                         "[email-sync] 跨文件夹去重: 跳过 uid={} message_id={} (已存在于文件夹 {}，当前同步 {})",
                         uid,
                         message_id_str,
@@ -3720,7 +3720,7 @@ async fn sync_folder_internal(
                     "DELETE FROM messages WHERE uid = ?1 AND account_id = ?2 AND folder = ?3",
                     params![local_uid, &req.account_id, &req.mailbox],
                 );
-                log::info!(
+                log::debug!(
                     "[email-sync] 去重: 删除旧版本 uid={} (IMAP uid={} 替换, message_id={}, is_read={}, is_starred={})",
                     local_uid,
                     uid,
@@ -3992,7 +3992,7 @@ async fn sync_folder_internal(
         msgs
     };
 
-    log::info!(
+    log::debug!(
         "[email-sync] account={} done new_count={} returned_to_frontend={}",
         req.account_id,
         new_count,
@@ -4034,7 +4034,7 @@ async fn trigger_schedule_extract(gateway_url: &str, account_id: &str, folder: &
     match client.post(&url).json(&body).send().await {
         Ok(resp) => {
             if resp.status().is_success() {
-                log::info!(
+                log::debug!(
                     "[schedule-extract] triggered: account={} folder={} uids={}",
                     account_id, folder, uids.len()
                 );
@@ -4171,7 +4171,7 @@ pub fn start_background_sync(app_handle: AppHandle, gateway_port: u16) {
             match email_outbox_process(email_state, gateway_url.clone()).await {
                 Ok(n) => {
                     if n > 0 {
-                        log::info!("[email-bg] outbox processed: {} sent", n);
+                        log::debug!("[email-bg] outbox processed: {} sent", n);
                         let _ = app_handle.emit("email-outbox-updated", ());
                     }
                 }
@@ -4181,7 +4181,7 @@ pub fn start_background_sync(app_handle: AppHandle, gateway_port: u16) {
             // 2. 邮件同步 + 删除对账 + 预下载
             match run_bg_sync_cycle(&app_handle, &gateway_url, &mut total_new).await {
                 Ok(()) => {
-                    log::info!(
+                    log::debug!(
                         "[email-bg] sync cycle done in {:.1}s, new={}",
                         started.elapsed().as_secs_f32(),
                         total_new
@@ -4257,7 +4257,7 @@ async fn run_bg_sync_cycle(
     for account in accounts {
         // 检查 IMAP 冷却期：如果账号最近认证失败，跳过避免加剧风控
         if let Some(remaining) = check_account_cooldown(&email_state, &account.id, "imap") {
-            log::info!(
+            log::debug!(
                 "[email-bg] account={} in IMAP cooldown, skip ({}s remaining)",
                 account.id,
                 remaining
@@ -4310,7 +4310,7 @@ async fn run_bg_sync_cycle(
         // folders 为空：可能是新账号还没在前端展开过。先调用 gateway 拉取文件夹列表，
         // 写入 SQLite 缓存后再进行邮件同步，确保新账号也能被后台同步覆盖。
         if folders.is_empty() {
-            log::info!(
+            log::debug!(
                 "[email-bg] account={} folders empty, syncing folder list from IMAP",
                 account.id
             );
@@ -4342,7 +4342,7 @@ async fn run_bg_sync_cycle(
                         }
                     }
                     folders = remote_folders.iter().map(|f| f.name.clone()).collect();
-                    log::info!(
+                    log::debug!(
                         "[email-bg] account={} synced {} folders from IMAP",
                         account.id,
                         folders.len()
@@ -4388,7 +4388,7 @@ async fn run_bg_sync_cycle(
             Err(_) => folders.clone(),
         };
         if filtered_folders.len() != folders.len() {
-            log::info!(
+            log::debug!(
                 "[email-bg] account={} folder filter: {} -> {} (skip empty custom folders)",
                 account.id,
                 folders.len(),
@@ -4429,7 +4429,7 @@ async fn run_bg_sync_cycle(
                     // 同步成功，清除 IMAP 冷却期（如果之前有）
                     clear_account_cooldown(&email_state, &account.id, "imap");
                     if result.new_count > 0 {
-                        log::info!(
+                        log::debug!(
                             "[email-bg] account={} folder={} new={}",
                             account.id,
                             folder,
@@ -4540,7 +4540,7 @@ async fn prefetch_unread_bodies(
         return Ok(());
     }
 
-    log::info!(
+    log::debug!(
         "[email-bg] account={} folder={} prefetching {} unread bodies",
         account.id,
         folder,
@@ -4649,7 +4649,7 @@ async fn prefetch_unread_bodies(
         }
     }
 
-    log::info!(
+    log::debug!(
         "[email-bg] account={} folder={} prefetch done success={} failed={}",
         account.id,
         folder,
@@ -4908,7 +4908,7 @@ async fn reconcile_deletions(
         }
     }
 
-    log::info!(
+    log::debug!(
         "[email-bg] account={} folder={} reconciled {} deleted-from-server messages",
         account.id,
         folder,
@@ -4966,7 +4966,7 @@ async fn apply_rule_actions(
                 if let Err(e) = update_local_cache(state, gateway_url, &rule.action, &target, rule.action_target.as_deref(), account, plain_password).await {
                     failed += 1;
                     let msg = format!("uid={uid} 本地缓存更新失败: {e}");
-                    eprintln!("[rule] {msg}");
+                    log::warn!("[rule] {msg}");
                     errors.push(msg);
                 } else {
                     success += 1;
@@ -4975,7 +4975,7 @@ async fn apply_rule_actions(
             Err(e) => {
                 failed += 1;
                 let msg = format!("uid={uid} action={}: {e}", rule.action);
-                eprintln!("[rule] 规则动作失败 {msg}");
+                log::warn!("[rule] 规则动作失败 {msg}");
                 errors.push(msg);
             }
         }
@@ -5363,12 +5363,12 @@ pub async fn email_send(
                                 ],
                             ) {
                                 Ok(_) => {
-                                    log::info!(
-                                        "[email-send] 本地落盘成功: uid={}, folder={}, size={}",
-                                        uid,
-                                        sent_folder,
-                                        raw_bytes.len()
-                                    );
+                                    log::debug!(
+                                    "[email-send] 本地落盘成功: uid={}, folder={}, size={}",
+                                    uid,
+                                    sent_folder,
+                                    raw_bytes.len()
+                                );
                                     local_write_ok = true;
                                 }
                                 Err(e) => {
@@ -5396,7 +5396,7 @@ pub async fn email_send(
     //   失败只记日志，不影响发送结果（用户下次手动收取时也会拉回）。
     // 备注：本地落盘成功时，此同步作为补充（拉取 IMAP 版本替换 "L" uid 本地版本，由 sync_folder_internal 去重处理）；
     //   本地落盘失败时，此同步作为兜底（确保邮件至少能通过 IMAP 同步进入索引）。
-    log::info!("[email-send] 开始同步已发送文件夹索引: account={} local_write_ok={}", req.account_id, local_write_ok);
+    log::debug!("[email-send] 开始同步已发送文件夹索引: account={} local_write_ok={}", req.account_id, local_write_ok);
     let account_id = req.account_id.clone();
     let gw = gateway_url.clone();
     let db_path = state.db_path().to_path_buf();
@@ -5434,7 +5434,7 @@ pub async fn email_send(
             )
             .unwrap_or_else(|_| "Sent".to_string());
         drop(conn);
-        log::info!("[email-send] 同步已发送文件夹: name={}, last_uid={:?}", sent_folder, last_uid);
+        log::debug!("[email-send] 同步已发送文件夹: name={}, last_uid={:?}", sent_folder, last_uid);
         let sync_req = SyncRequest {
             account_id: account.id.clone(),
             imap_host: account.imap_host.clone(),
@@ -5449,7 +5449,7 @@ pub async fn email_send(
     }
     .await;
     match sync_result {
-        Ok(r) => log::info!(
+        Ok(r) => log::debug!(
             "[email-send] 已发送文件夹同步完成: new={}, msgs={}",
             r.new_count,
             r.new_messages.len()
@@ -6497,7 +6497,7 @@ async fn update_local_cache(
                     params![dest, &new_eml_path, &target.uid, &target.account_id, &target.folder],
                 )
                 .map_err(|e| e.to_string())?;
-                log::info!(
+                log::debug!(
                     "[rule-move] uid={} {} -> {} 本地移动完成",
                     target.uid,
                     target.folder,

@@ -74,6 +74,7 @@ interface NoteListProps {
   onSelectionChange?: (ids: Set<string>) => void;
   onCopyMarkdown?: (note: OperationNote) => void;
   onCopyPath?: (note: OperationNote) => void;
+  onRevealInExplorer?: (note: OperationNote) => void;
   onDuplicate?: (note: OperationNote) => void;
   onEditTags?: (note: OperationNote, tags: string[]) => void;
   onRename?: (note: OperationNote) => void;
@@ -152,6 +153,7 @@ export function NoteList({
   onSelectionChange,
   onCopyMarkdown,
   onCopyPath,
+  onRevealInExplorer,
   onDuplicate,
   onEditTags,
   onRename,
@@ -259,6 +261,7 @@ export function NoteList({
                   }}
                   onCopyMarkdown={onCopyMarkdown}
                   onCopyPath={onCopyPath}
+                  onRevealInExplorer={onRevealInExplorer}
                   onDuplicate={onDuplicate}
                   onEditTags={onEditTags ? () => setEditingNote(note) : undefined}
                   onRename={onRename ? () => onRename(note) : undefined}
@@ -408,6 +411,7 @@ export function NoteRow({
   onSelect,
   onCopyMarkdown,
   onCopyPath,
+  onRevealInExplorer,
   onDuplicate,
   onEditTags,
   onRename,
@@ -426,6 +430,7 @@ export function NoteRow({
   onSelect: (e: React.MouseEvent) => void;
   onCopyMarkdown?: (note: OperationNote) => void;
   onCopyPath?: (note: OperationNote) => void;
+  onRevealInExplorer?: (note: OperationNote) => void;
   onDuplicate?: (note: OperationNote) => void;
   onEditTags?: () => void;
   onRename?: () => void;
@@ -563,6 +568,12 @@ export function NoteRow({
           <ContextMenuItem onSelect={() => onCopyPath(note)}>
             <Clipboard className="mr-2 h-3.5 w-3.5" />
             复制路径
+          </ContextMenuItem>
+        ) : null}
+        {onRevealInExplorer ? (
+          <ContextMenuItem onSelect={() => onRevealInExplorer(note)}>
+            <FolderOpen className="mr-2 h-3.5 w-3.5" />
+            打开文件路径
           </ContextMenuItem>
         ) : null}
         {onSetContextLevel ? (

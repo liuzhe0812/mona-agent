@@ -1,4 +1,4 @@
-﻿"""Cron service for scheduling agent tasks."""
+"""Cron service for scheduling agent tasks."""
 
 import asyncio
 import json
@@ -428,7 +428,7 @@ class CronService:
 
             job.state.last_status = "ok"
             job.state.last_error = None
-            logger.info("Cron: job '{}' completed", job.name)
+            logger.debug("Cron: job '{}' completed", job.name)
 
         except Exception as e:
             job.state.last_status = "error"

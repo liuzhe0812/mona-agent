@@ -11,14 +11,10 @@ pub async fn browser_create_tab(
     is_incognito: Option<bool>,
     ad_block_enabled: Option<bool>,
 ) -> Result<CreateTabResult, String> {
-    let t0 = std::time::Instant::now();
-    log::info!("[browser_cmd] create_tab enter id={} url={}", id, url);
     let state = app.state::<BrowserState>();
-    let result = state
+    state
         .create_tab(&app, &id, &url, is_incognito.unwrap_or(false), ad_block_enabled.unwrap_or(true))
-        .await;
-    log::info!("[browser_cmd] create_tab exit id={} ok={} elapsed={:?}", id, result.is_ok(), t0.elapsed());
-    result
+        .await
 }
 
 /// 关闭浏览器标签
@@ -94,12 +90,8 @@ pub async fn browser_set_tab_bounds(
     height: f64,
     visible: bool,
 ) -> Result<(), String> {
-    let t0 = std::time::Instant::now();
-    log::info!("[browser_cmd] set_tab_bounds enter id={} visible={} {}x{}@{},{}", id, visible, width, height, left, top);
     let state = app.state::<BrowserState>();
-    let result = state.set_tab_bounds(&app, &id, left, top, width, height, visible).await;
-    log::info!("[browser_cmd] set_tab_bounds exit id={} ok={} elapsed={:?}", id, result.is_ok(), t0.elapsed());
-    result
+    state.set_tab_bounds(&app, &id, left, top, width, height, visible).await
 }
 
 #[tauri::command]
@@ -117,12 +109,8 @@ pub async fn browser_navigate_tab(
     id: String,
     url: String,
 ) -> Result<(), String> {
-    let t0 = std::time::Instant::now();
-    log::info!("[browser_cmd] navigate_tab enter id={} url={}", id, url);
     let state = app.state::<BrowserState>();
-    let result = state.navigate_tab(&app, &id, &url).await;
-    log::info!("[browser_cmd] navigate_tab exit id={} ok={} elapsed={:?}", id, result.is_ok(), t0.elapsed());
-    result
+    state.navigate_tab(&app, &id, &url).await
 }
 
 /// 后退

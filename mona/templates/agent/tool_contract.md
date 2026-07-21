@@ -40,6 +40,7 @@ documents the general tool contract and non-obvious usage patterns.
 - For long-running or interactive commands, pass `yield_time_ms`; if the process keeps running, continue with `write_stdin`.
 - Use `write_stdin` to poll, provide stdin, close stdin, wait for expected output with `wait_for`, or terminate an existing exec session.
 - Use `list_exec_sessions` to recover active session IDs after context shifts.
+- **Delivering files created by `exec`**: when a shell command creates a new user-facing file (e.g. via `officecli`, python scripts, exporters, or any tool that writes to disk — `.pptx`/`.xlsx`/`.docx`/`.pdf`/`.html`/`.png`/`.csv`/`.json` and similar deliverables), you MUST call `deliver_file` afterwards. Without `deliver_file`, the file will not appear in the workspace panel and the user cannot preview or open it. Skip `deliver_file` for temporary or intermediate files (build artifacts, caches, intermediate outputs).
 
 ## Remote Terminal and SSH Sessions
 

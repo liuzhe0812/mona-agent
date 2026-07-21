@@ -494,7 +494,7 @@ class AgentLoop:
     def _ensure_document_loop(self, agent_kind: str) -> AgentLoop:
         """Lazily construct a document agent loop for the given kind.
 
-        Document loops (PPT / video / flowchart) share this loop's provider,
+        Document loops (PPT / video) share this loop's provider,
         sessions, bus, and other runtime dependencies, but each has its own
         filtered tool registry and DocumentContextBuilder driven by the
         matching DocumentProfile. Raises if construction fails — no fallback.
@@ -552,7 +552,7 @@ class AgentLoop:
             )
             registered.append("my")
 
-        logger.info("Registered {} tools: {}", len(registered), registered)
+        logger.debug("Registered {} tools: {}", len(registered), registered)
 
     async def _connect_mcp(self) -> None:
         """Connect to configured MCP servers (one-time, lazy)."""
@@ -672,6 +672,7 @@ class AgentLoop:
             current_message=video_generation_prompt(
                 image_generation_prompt(msg.content, msg.metadata),
                 msg.metadata,
+                media=msg.media,
             ),
             media=msg.media if msg.media else None,
             channel=msg.channel,
@@ -935,7 +936,7 @@ class AgentLoop:
                         effective_key,
                     )
                 else:
-                    logger.info(
+                    logger.debug(
                         "Routed follow-up message to pending queue for session {}",
                         effective_key,
                     )
@@ -1108,7 +1109,7 @@ class AgentLoop:
         channel, chat_id = (
             msg.chat_id.split(":", 1) if ":" in msg.chat_id else ("cli", msg.chat_id)
         )
-        logger.info("Processing system message from {}", msg.sender_id)
+        logger.debug("Processing system message from {}", msg.sender_id)
         key = msg.session_key_override or f"{channel}:{chat_id}"
         session = self.sessions.get_or_create(key)
         if self._restore_runtime_checkpoint(session):
@@ -1325,7 +1326,7 @@ class AgentLoop:
                 return None
 
         preview = final_content[:120] + "..." if len(final_content) > 120 else final_content
-        logger.info("Response to {}:{}: {}", msg.channel, msg.sender_id, preview)
+        logger.debug("Response to {}:{}: {}", msg.channel, msg.sender_id, preview)
 
         meta = dict(msg.metadata or {})
         meta.pop(DELIVER_FILES_PENDING_META, None)
@@ -1353,7 +1354,7 @@ class AgentLoop:
             msg = ctx.msg
 
         preview = msg.content[:80] + "..." if len(msg.content) > 80 else msg.content
-        logger.info("Processing message from {}:{}: {}", msg.channel, msg.sender_id, preview)
+        logger.debug("Processing message from {}:{}: {}", msg.channel, msg.sender_id, preview)
 
         # Session is already fetched by the caller (_process_message) but
         # ensure it exists in case this handler is invoked independently.

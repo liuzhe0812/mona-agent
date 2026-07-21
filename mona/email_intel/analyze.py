@@ -282,10 +282,9 @@ async def analyze_email(
         image_hint=image_hint,
     )
 
-    logger.info(
-        "Email analyze: subject={!r} from={!r} body_len={} images={}",
+    logger.debug(
+        "Email analyze: subject={!r} body_len={} images={}",
         subject[:50] if subject else "",
-        from_address,
         len(body),
         len(valid_images),
     )
@@ -314,7 +313,7 @@ async def analyze_email(
     raw = _extract_json(content)
     result = _normalize_result(raw)
 
-    logger.info(
+    logger.debug(
         "Email analyze done: category={} intent={} urgency={}",
         result["category"],
         result["intent"],

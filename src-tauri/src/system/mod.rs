@@ -838,7 +838,7 @@ fn clear_directory_contents(path: &Path) -> Result<u64, String> {
             fs::remove_file(&entry_path)
         };
         if let Err(error) = result {
-            eprintln!("storage cleanup skipped {}: {error}", entry_path.display());
+            log::warn!("storage cleanup skipped {}: {error}", entry_path.display());
         }
     }
     Ok(before.saturating_sub(dir_size(path).0))

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { PanelRightOpen } from "lucide-react";
 
 import { AgentLogo } from "@/components/AgentLogo";
 import { ThreadComposer } from "@/components/thread/ThreadComposer";
@@ -9,6 +10,7 @@ import { ThreadViewport } from "@/components/thread/ThreadViewport";
 import { NewChatDashboard } from "@/components/thread/NewChatDashboard";
 import { SplitPane } from "@/components/deliver/SplitPane";
 import { FilePreviewPanel } from "@/components/deliver/FilePreviewPanel";
+import { WorkspacePanel } from "@/components/deliver/WorkspacePanel";
 import { useFilePreviewStore } from "@/components/deliver/filePreviewStore";
 import { useMonaStream, type SendImage, type SendOptions } from "@/hooks/useMonaStream";
 import { usePendingQueue } from "@/hooks/usePendingQueue";
@@ -25,9 +27,27 @@ import { setKbToken } from "@/lib/kb-api";
 import { useScheduleStore } from "@/components/schedule/scheduleStore";
 import { useEmailStore } from "@/components/email/store/emailStore";
 import { deriveTitle } from "@/lib/format";
+import { cn } from "@/lib/utils";
 
 function projectWebuiThreadMessages(messages: UIMessage[]): UIMessage[] {
   return scrubSubagentUiMessages(normalizeLegacyLongTaskMessages(messages));
+}
+
+const WORKSPACE_DELIVERABLE_EXTS = new Set([
+  // Web / docs
+  ".html", ".htm", ".md", ".pdf",
+  // Office
+  ".docx", ".doc", ".xlsx", ".xls", ".pptx", ".ppt",
+  // Images
+  ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg",
+  // Data
+  ".json", ".yaml", ".yml", ".toml", ".csv",
+]);
+
+function isWorkspaceDeliverable(fileName: string): boolean {
+  const dot = fileName.lastIndexOf(".");
+  if (dot < 0) return false;
+  return WORKSPACE_DELIVERABLE_EXTS.has(fileName.slice(dot).toLowerCase());
 }
 
 function preserveDeliveredFiles(oldMessages: UIMessage[], newMessages: UIMessage[]): UIMessage[] {
@@ -588,6 +608,52 @@ export function ThreadShell({
   const previewFile = useFilePreviewStore((s) => s.file);
   const splitRatio = useFilePreviewStore((s) => s.splitRatio);
   const setSplitRatio = useFilePreviewStore((s) => s.setSplitRatio);
+  const middleRatio = useFilePreviewStore((s) => s.middleRatio);
+  const setMiddleRatio = useFilePreviewStore((s) => s.setMiddleRatio);
+  const workspaceCollapsed = useFilePreviewStore((s) => s.workspaceCollapsed);
+  const toggleWorkspaceCollapsed = useFilePreviewStore(
+    (s) => s.toggleWorkspaceCollapsed,
+  );
+
+  // Aggregate all delivered files produced during the session.
+  // Includes both explicit deliver_file calls and files written/edited by AI
+  // tools (write_file, apply_patch, etc.) that are previewable deliverables.
+  const deliveredFiles = useMemo(() => {
+    const out: DeliveredFile[] = [];
+    const seen = new Set<string>();
+    const push = (file: DeliveredFile) => {
+      const key = file.absolute_path || file.path || file.name;
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push(file);
+    };
+    for (const m of displayMessages) {
+      if (m.deliveredFiles?.length) {
+        for (const f of m.deliveredFiles) push(f);
+      }
+      if (m.fileEdits?.length) {
+        for (const edit of m.fileEdits) {
+          if (edit.status !== "done") continue;
+          if (!edit.absolute_path && !edit.path) continue;
+          const name = (edit.path || edit.absolute_path || "").split(/[\\/]/).pop() || "";
+          if (!isWorkspaceDeliverable(name)) continue;
+          push({
+            path: edit.path,
+            absolute_path: edit.absolute_path || edit.path,
+            name,
+            size: 0,
+            size_human: "",
+            mime: "",
+          });
+        }
+      }
+    }
+    return out;
+  }, [displayMessages]);
+
+  const middleVisible = !!previewFile;
+  const rightVisible = deliveredFiles.length > 0 && !workspaceCollapsed;
+  const showWorkspaceToggle = deliveredFiles.length > 0 && workspaceCollapsed;
 
   return (
     <SplitPane
@@ -612,12 +678,33 @@ export function ThreadShell({
             conversationKey={historyKey}
             showScrollToBottomButton={!!session}
           />
+          {showWorkspaceToggle ? (
+            <button
+              type="button"
+              onClick={toggleWorkspaceCollapsed}
+              title="展开工作区"
+              className={cn(
+                "absolute right-0 top-1/2 z-10 -translate-y-1/2",
+                "flex flex-col items-center gap-1 rounded-l-md",
+                "border border-r-0 border-border/60 bg-popover/95 px-1.5 py-2 shadow-md",
+                "text-muted-foreground hover:bg-muted hover:text-foreground",
+                "transition-colors",
+              )}
+            >
+              <PanelRightOpen className="h-4 w-4" />
+              <span className="text-[10px] font-medium">{deliveredFiles.length}</span>
+            </button>
+          ) : null}
         </section>
       }
-      right={<FilePreviewPanel />}
+      middle={<FilePreviewPanel />}
+      right={<WorkspacePanel files={deliveredFiles} />}
       ratio={splitRatio}
       onRatioChange={setSplitRatio}
-      rightVisible={!!previewFile}
+      middleRatio={middleRatio}
+      onMiddleRatioChange={setMiddleRatio}
+      middleVisible={middleVisible}
+      rightVisible={rightVisible}
     />
   );
 }

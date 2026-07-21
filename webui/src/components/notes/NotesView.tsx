@@ -63,9 +63,10 @@ import {
 import { useLicense } from "@/hooks/useLicense";
 
 import { GlobalSearchDialog } from "./GlobalSearchDialog";
-import { ConfirmDialog, PromptDialog, ReplaceDialog, TemplatePickerDialog } from "./NotesDialogs";
+import { ConfirmDialog, PromptDialog, TemplatePickerDialog } from "./NotesDialogs";
 import { NoteAgentPanel } from "./NoteAgentPanel";
 import type { EditorMode } from "@/components/common/MarkdownEditor";
+import { openActiveEditorFind, openActiveEditorReplace } from "@/components/common/FindReplaceBar";
 import { NoteList, NoteRow, sortNotesByMode, type SortMode } from "./NoteList";
 import { RightSidebar, type RightTab } from "./RightSidebar";
 import { RightSidebarToggleIcon } from "./RightSidebarToggleIcon";
@@ -219,7 +220,6 @@ export function NotesView({
     | { kind: "deleteNotes"; noteIds: string[] };
   const [promptState, setPromptState] = useState<PromptState | null>(null);
   const [confirmState, setConfirmState] = useState<ConfirmState | null>(null);
-  const [replaceDialog, setReplaceDialog] = useState<{ noteId: string } | null>(null);
   const [globalSearchInitialQuery, setGlobalSearchInitialQuery] = useState("");
   const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
   const [expandedNotebookIds, setExpandedNotebookIds] = useState<Set<string>>(new Set());
@@ -715,9 +715,9 @@ export function NotesView({
 
   const createNote = useCallback(
     (sourceKind: NoteSourceKind = "manual", overrideNotebookId?: string) => {
-      // activeNotebook may be null (vault root) — that's allowed.
-      const notebookId =
-        overrideNotebookId !== undefined ? overrideNotebookId : activeNotebook ? activeNotebook.id : "";
+      // 仅文件夹右键菜单显式传入 overrideNotebookId 时落到对应文件夹；
+      // 其他所有路径默认落到 vault 根目录。
+      const notebookId = overrideNotebookId !== undefined ? overrideNotebookId : "";
       let nextNote: OperationNote;
       try {
         nextNote = createBlankNote(notebookId, sourceKind);
@@ -746,7 +746,7 @@ export function NotesView({
       });
       setSearchQuery("");
     },
-    [activeNotebook, updateLeaf],
+    [updateLeaf],
   );
 
   useEffect(() => {
@@ -761,8 +761,9 @@ export function NotesView({
     (templateId: string, title: string) => {
       const template = notes.find((n) => n.id === templateId);
       if (!template) return;
-      const notebookId = activeNotebook ? activeNotebook.id : "";
-      const notebookName = activeNotebook ? activeNotebook.name : "";
+      // 模板创建仅从顶部工具栏触发，统一落到 vault 根目录。
+      const notebookId = "";
+      const notebookName = "";
       let nextNote: OperationNote;
       try {
         nextNote = createNoteFromTemplate(template, notebookId, title, notebookName);
@@ -783,7 +784,7 @@ export function NotesView({
       });
       setSearchQuery("");
     },
-    [notes, activeNotebook, updateLeaf],
+    [notes, updateLeaf],
   );
 
   const toggleNoteTemplate = useCallback(
@@ -801,7 +802,8 @@ export function NotesView({
 
   const moveSelectionToNote = useCallback(
     (selectedText: string) => {
-      const notebookId = activeNotebook ? activeNotebook.id : "";
+      // 编辑器选区创建笔记，统一落到 vault 根目录。
+      const notebookId = "";
       const title = selectedText.trim().split("\n")[0].slice(0, 40) || "从选区创建的笔记";
       const nextNote: OperationNote = {
         ...createBlankNote(notebookId, "manual"),
@@ -812,7 +814,7 @@ export function NotesView({
       setNotes((current) => [nextNote, ...current]);
       setActiveNoteId(nextNote.id);
     },
-    [activeNotebook],
+    [],
   );
 
   const createNotebook = useCallback(() => {
@@ -1106,17 +1108,6 @@ export function NotesView({
     [],
   );
 
-  const toggleBookmark = useCallback(
-    (note: OperationNote) => {
-      setNotes((current) =>
-        current.map((n) =>
-          n.id === note.id ? { ...n, bookmarked: !n.bookmarked } : n,
-        ),
-      );
-    },
-    [],
-  );
-
   const toggleTaskInNote = useCallback(
     (noteId: string, line: number) => {
       setNotes((current) =>
@@ -1223,13 +1214,12 @@ export function NotesView({
     [searchQuery],
   );
 
-  const findInNote = useCallback((note: OperationNote) => {
-    setGlobalSearchInitialQuery(note.title || "");
-    setGlobalSearchOpen(true);
+  const findInNote = useCallback((_note: OperationNote) => {
+    openActiveEditorFind();
   }, []);
 
-  const replaceInNote = useCallback((note: OperationNote) => {
-    setReplaceDialog({ noteId: note.id });
+  const replaceInNote = useCallback((_note: OperationNote) => {
+    openActiveEditorReplace();
   }, []);
 
   const tabMenuCallbacks = useMemo(
@@ -1238,7 +1228,6 @@ export function NotesView({
       onRename: renameNote,
       onMoveToNotebook: moveNote,
       onToggleFavorite: toggleFavorite,
-      onToggleBookmark: toggleBookmark,
       onMergeNote: mergeNoteInto,
       onFind: findInNote,
       onReplace: replaceInNote,
@@ -1251,7 +1240,6 @@ export function NotesView({
       renameNote,
       moveNote,
       toggleFavorite,
-      toggleBookmark,
       mergeNoteInto,
       findInNote,
       replaceInNote,
@@ -1259,31 +1247,6 @@ export function NotesView({
       revealNoteInExplorer,
       showNoteInFileList,
     ],
-  );
-
-  const handleReplaceConfirm = useCallback(
-    (noteId: string, findText: string, replaceText: string) => {
-      if (!findText) return;
-      setNotes((current) => {
-        const note = current.find((n) => n.id === noteId);
-        if (!note) return current;
-        const nextMarkdown = note.contentMarkdown.split(findText).join(replaceText);
-        if (nextMarkdown === note.contentMarkdown) return current;
-        return current.map((n) =>
-          n.id === noteId
-            ? {
-                ...n,
-                contentMarkdown: nextMarkdown,
-                plainText: nextMarkdown.replace(/[#*_`\[\]\(\)]/g, ""),
-                preview: nextMarkdown.slice(0, 46) || "空白笔记",
-                updatedAt: nowTimestamp(),
-              }
-            : n,
-        );
-      });
-      setReplaceDialog(null);
-    },
-    [],
   );
 
   const dropNoteById = useCallback(
@@ -1417,13 +1380,10 @@ export function NotesView({
 
   const saveAgentResultAsNote = useCallback(
     (markdown: string, title: string) => {
-      if (!activeNotebook) {
-        notifyError("请先创建笔记本");
-        return;
-      }
+      // NoteAgentPanel 存为笔记，统一落到 vault 根目录。
       let nextNote: OperationNote;
       try {
-        nextNote = createBlankNote(activeNotebook.id, "agent");
+        nextNote = createBlankNote("", "agent");
       } catch (error) {
         notifyError(error instanceof Error ? error.message : "新建笔记失败");
         return;
@@ -1442,7 +1402,7 @@ export function NotesView({
       setActiveNoteId(nextNote.id);
       setSearchQuery("");
     },
-    [activeNotebook],
+    [],
   );
 
   const handleDragStart = useCallback(
@@ -1767,6 +1727,7 @@ export function NotesView({
                           onSelectionChange={setSelectedNoteIds}
                           onCopyMarkdown={copyNoteMarkdown}
                           onCopyPath={copyNotePath}
+                          onRevealInExplorer={revealNoteInExplorer}
                           onDuplicate={duplicateNote}
                           onEditTags={editNoteTags}
                           onRename={renameNote}
@@ -1818,6 +1779,7 @@ export function NotesView({
                             onSelectionChange={setSelectedNoteIds}
                             onCopyMarkdown={copyNoteMarkdown}
                             onCopyPath={copyNotePath}
+                            onRevealInExplorer={revealNoteInExplorer}
                             onDuplicate={duplicateNote}
                             onEditTags={editNoteTags}
                             onRename={renameNote}
@@ -1859,6 +1821,7 @@ export function NotesView({
                         onSelectionChange={setSelectedNoteIds}
                         onCopyMarkdown={copyNoteMarkdown}
                         onCopyPath={copyNotePath}
+                        onRevealInExplorer={revealNoteInExplorer}
                         onDuplicate={duplicateNote}
                         onEditTags={editNoteTags}
                         onRename={renameNote}
@@ -2213,14 +2176,6 @@ export function NotesView({
         onConfirm={handleConfirmAction}
         onOpenChange={(open) => { if (!open) setConfirmState(null); }}
       />
-      <ReplaceDialog
-        open={replaceDialog !== null}
-        noteTitle={replaceDialog ? notes.find((n) => n.id === replaceDialog.noteId)?.title : undefined}
-        onConfirm={(findText, replaceText) => {
-          if (replaceDialog) handleReplaceConfirm(replaceDialog.noteId, findText, replaceText);
-        }}
-        onOpenChange={(open) => { if (!open) setReplaceDialog(null); }}
-      />
       <TemplatePickerDialog
         open={templatePickerOpen}
         templates={templateNotes}
@@ -2330,6 +2285,7 @@ interface RootNotesListProps {
   onSelectionChange?: (ids: Set<string>) => void;
   onCopyMarkdown?: (note: OperationNote) => void;
   onCopyPath?: (note: OperationNote) => void;
+  onRevealInExplorer?: (note: OperationNote) => void;
   onDuplicate?: (note: OperationNote) => void;
   onEditTags?: (note: OperationNote, tags: string[]) => void;
   onRename?: (note: OperationNote) => void;
@@ -2354,6 +2310,7 @@ function RootNotesList({
   onSelectionChange,
   onCopyMarkdown,
   onCopyPath,
+  onRevealInExplorer,
   onDuplicate,
   onEditTags,
   onRename,
@@ -2416,6 +2373,7 @@ function RootNotesList({
             onOpenInNewTab={onOpenInNewTab ? () => onOpenInNewTab(note.id) : undefined}
             onCopyMarkdown={onCopyMarkdown}
             onCopyPath={onCopyPath}
+            onRevealInExplorer={onRevealInExplorer}
             onDuplicate={onDuplicate}
             onEditTags={onEditTags ? () => onEditTags(note, note.tags) : undefined}
             onRename={onRename ? () => onRename(note) : undefined}
@@ -2443,6 +2401,7 @@ function FavoriteNotesList({
   onSelectionChange,
   onCopyMarkdown,
   onCopyPath,
+  onRevealInExplorer,
   onDuplicate,
   onEditTags,
   onRename,
@@ -2493,6 +2452,7 @@ function FavoriteNotesList({
             onOpenInNewTab={onOpenInNewTab ? () => onOpenInNewTab(note.id) : undefined}
             onCopyMarkdown={onCopyMarkdown}
             onCopyPath={onCopyPath}
+            onRevealInExplorer={onRevealInExplorer}
             onDuplicate={onDuplicate}
             onEditTags={onEditTags ? () => onEditTags(note, note.tags) : undefined}
             onRename={onRename ? () => onRename(note) : undefined}
@@ -2526,6 +2486,7 @@ interface NotebookSectionProps {
   onSelectionChange?: (ids: Set<string>) => void;
   onCopyMarkdown?: (note: OperationNote) => void;
   onCopyPath?: (note: OperationNote) => void;
+  onRevealInExplorer?: (note: OperationNote) => void;
   onDuplicate?: (note: OperationNote) => void;
   onEditTags?: (note: OperationNote, tags: string[]) => void;
   onRename?: (note: OperationNote) => void;
@@ -2560,6 +2521,7 @@ function NotebookSection({
   onSelectionChange,
   onCopyMarkdown,
   onCopyPath,
+  onRevealInExplorer,
   onDuplicate,
   onEditTags,
   onRename,
@@ -2670,6 +2632,7 @@ function NotebookSection({
             onOpenInNewTab={onOpenInNewTab}
             onCopyMarkdown={onCopyMarkdown}
             onCopyPath={onCopyPath}
+            onRevealInExplorer={onRevealInExplorer}
             onDuplicate={onDuplicate}
             onEditTags={onEditTags}
             onRename={onRename}

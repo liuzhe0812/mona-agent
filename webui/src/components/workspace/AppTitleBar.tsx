@@ -27,6 +27,9 @@ interface AppTitleBarProps {
   onCloseRight?: (id: string) => void;
   onReorder?: (fromId: string, toId: string) => void;
   onToggleMute?: (id: string) => void;
+  // md-reader 标签专用
+  onSaveMdAsNote?: (id: string) => void;
+  onRevealMdInExplorer?: (id: string) => void;
 }
 
 async function withCurrentWindow(
@@ -55,6 +58,8 @@ export function AppTitleBar({
   onCloseRight,
   onReorder,
   onToggleMute,
+  onSaveMdAsNote,
+  onRevealMdInExplorer,
 }: AppTitleBarProps) {
   return (
     <header
@@ -76,6 +81,8 @@ export function AppTitleBar({
             onCloseRight={tab.type !== "mona" && onCloseRight ? () => onCloseRight(tab.id) : undefined}
             onReorder={onReorder}
             onToggleMute={tab.type === "browser" && onToggleMute ? () => onToggleMute(tab.id) : undefined}
+            onSaveAsNote={tab.type === "md-reader" && onSaveMdAsNote ? () => onSaveMdAsNote(tab.id) : undefined}
+            onRevealInExplorer={tab.type === "md-reader" && onRevealMdInExplorer ? () => onRevealMdInExplorer(tab.id) : undefined}
           />
         ))}
         <Button

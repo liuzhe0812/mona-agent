@@ -175,12 +175,12 @@ class DeliverFileTool(Tool, ContextAware):
         )
 
         try:
-            logger.info(
+            logger.debug(
                 "deliver_file: sending _deliver_files event channel={} chat_id={} files={}",
                 default_channel, default_chat_id, [f["name"] for f in files],
             )
             await self._send_callback(msg)
-            logger.info("deliver_file: _deliver_files event sent successfully")
+            logger.debug("deliver_file: _deliver_files event sent successfully")
             return f"Delivered {len(files)} file(s) to user"
         except Exception as e:
             logger.exception("deliver_file: error sending _deliver_files event: {}", e)
