@@ -129,7 +129,15 @@ New-Item -ItemType Directory -Path $StagingDir -Force | Out-Null
 
 # Rename mona-desktop.exe -> Mona.exe
 Copy-Item "src-tauri\target\release\mona-desktop.exe" "$StagingDir\Mona.exe"
-Copy-Item -Recurse "src-tauri\resources\mona-gateway" "$StagingDir\mona-gateway"
+# IMPORTANT: PowerShell `Copy-Item -Recurse source dest` nests source INSIDE dest if dest already exists.
+# Since $StagingDir was just recreated empty, `mona-gateway` subdir doesn't exist yet, so this is safe.
+# But to be defensive against re-runs, explicitly create the target dir and copy contents with `\*`.
+New-Item -ItemType Directory -Path "$StagingDir\mona-gateway" -Force | Out-Null
+Copy-Item -Recurse "src-tauri\resources\mona-gateway\*" "$StagingDir\mona-gateway"
+# Verify NO nested mona-gateway/ directory was created (regression check)
+if (Test-Path "$StagingDir\mona-gateway\mona-gateway") {
+    throw "Nested mona-gateway/ directory detected! Staging copy failed. Aborting."
+}
 
 $UpdatePackage = "dist\mona-$Version.tar.zst"
 New-Item -ItemType Directory -Path "dist" -Force | Out-Null
@@ -318,7 +326,8 @@ Remove-Item -Force tmp_*.txt -ErrorAction SilentlyContinue
 | Nginx 403 | Check permissions: `chmod -R 755 /var/www/mona/` |
 | Nginx 404 on `/changelog` | Add SPA fallback: `try_files $uri $uri/ /index.html;` in nginx config |
 | `cargo tauri build` fails with `--ci` error | Set `$env:CI = ""` before building |
-| Update package too large | Strip `__pycache__`, `.pyc`, `.pyo` from Python runtime; exclude unused packages in spec |
+| Update package too large | First check for nested `mona-gateway/mona-gateway/` in tar (file count doubled = nesting bug); then strip `__pycache__`, `.pyc`, `.pyo` from Python runtime; exclude unused packages in spec |
+| Update package size suddenly doubled vs previous release | Almost certainly the `Copy-Item -Recurse` nesting bug. Verify with: `tar -tf dist/mona-<ver>.tar.zst \| Measure-Object` — if count ≈ 2× previous, staging dir had nested `mona-gateway/mona-gateway/`. Re-run Step 3 with the fixed staging commands. |
 | Hot-update SHA256 mismatch | Re-compute hash after upload, ensure binary mode transfer |
 | PyInstaller missing import | Add to `hidden_imports` list in `src-tauri/mona-gateway.spec` |
 | Changelog page shows old data | Confirm `site/public/changelog.json` was updated and redeployed |

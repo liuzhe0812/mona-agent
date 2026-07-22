@@ -687,6 +687,89 @@ def replay_transcript_to_ui_messages(
     return messages
 
 
+def _resolve_legacy_artifact_paths(messages: list[dict[str, Any]]) -> None:
+    """Rewrite legacy artifact paths in-place via the migration manifest.
+
+    Per shared-output-workspace-execution-plan §8.4:
+    - If ``deliveredFiles.absolute_path`` / ``fileEdits.absolute_path`` no
+      longer exists on disk, look up the migration manifest's old→new map.
+    - Replace the path only in the UI payload; the on-disk transcript is
+      never modified.
+    - Unmatched paths are left as-is (caller retains existing "file does not
+      exist" behavior).
+    """
+    try:
+        from mona.config.migrate_global import resolve_legacy_path
+    except Exception:
+        return
+
+    # Cache manifest presence across all messages in one replay.
+    manifest_loaded = False
+    has_manifest = False
+
+    def _ensure_manifest_loaded() -> bool:
+        nonlocal manifest_loaded, has_manifest
+        if not manifest_loaded:
+            manifest_loaded = True
+            try:
+                from mona.config.migrate_global import _manifest_path
+                has_manifest = _manifest_path().exists()
+            except Exception:
+                has_manifest = False
+        return has_manifest
+
+    def _maybe_rewrite(file: dict[str, Any]) -> None:
+        if not isinstance(file, dict):
+            return
+        abs_path = file.get("absolute_path")
+        if not isinstance(abs_path, str) or not abs_path:
+            return
+        # Only rewrite if the file is missing — preserves newer user files
+        # that may have moved manually.
+        try:
+            if Path(abs_path).exists():
+                return
+        except Exception:
+            return
+        if not _ensure_manifest_loaded():
+            return
+        try:
+            new_path = resolve_legacy_path(abs_path)
+        except Exception:
+            return
+        if new_path is None:
+            return
+        try:
+            if not new_path.exists():
+                return
+        except Exception:
+            return
+        file["absolute_path"] = str(new_path)
+        # Update relative `path` too if it matches the old basename and the
+        # new location is inside the shared output dir.
+        rel = file.get("path")
+        if isinstance(rel, str) and rel and not Path(rel).is_absolute():
+            try:
+                from mona.config.paths import get_shared_output_dir, get_workspace_path
+                shared_root = get_shared_output_dir(get_workspace_path())
+                file["path"] = str(new_path.relative_to(shared_root))
+            except Exception:
+                # Leave the relative path alone; absolute path is sufficient.
+                pass
+
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        delivered = message.get("deliveredFiles")
+        if isinstance(delivered, list):
+            for file in delivered:
+                _maybe_rewrite(file)
+        edits = message.get("fileEdits")
+        if isinstance(edits, list):
+            for edit in edits:
+                _maybe_rewrite(edit)
+
+
 def build_webui_thread_response(
     session_key: str,
     *,
@@ -697,6 +780,9 @@ def build_webui_thread_response(
     if not lines:
         return None
     msgs = replay_transcript_to_ui_messages(lines, augment_user_media=augment_user_media)
+    # Rewrite legacy artifact paths through the migration manifest so old
+    # session cards still open after files have moved into workspace/output/.
+    _resolve_legacy_artifact_paths(msgs)
     return {
         "schemaVersion": WEBUI_TRANSCRIPT_SCHEMA_VERSION,
         "sessionKey": session_key,

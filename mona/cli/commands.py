@@ -74,9 +74,9 @@ class SafeFileHistory(FileHistory):
     def store_string(self, string: str) -> None:
         super().store_string(_sanitize_surrogates(string))
 from mona.cli.stream import StreamRenderer, ThinkingSpinner
+from mona.config.migrate_workspace_output import run_startup_migrations
 from mona.config.paths import get_workspace_path, is_default_workspace
 from mona.config.schema import Config
-from mona.utils.helpers import sync_workspace_templates
 from mona.utils.restart import (
     consume_restart_notice_from_env,
     format_restart_completed_message,
@@ -473,7 +473,9 @@ def onboard(
         workspace_path.mkdir(parents=True, exist_ok=True)
         console.print(f"[green]✓[/green] Created workspace at {workspace_path}")
 
-    sync_workspace_templates(workspace_path)
+    # Run consolidated startup migrations: global resources → global templates
+    # → shared output dir → loose artifact migration.
+    run_startup_migrations()
 
     agent_cmd = 'mona agent -m "Hello!"'
     gateway_cmd = "mona gateway"
@@ -635,7 +637,9 @@ def serve(
     host = host if host is not None else api_cfg.host
     port = port if port is not None else api_cfg.port
     timeout = timeout if timeout is not None else api_cfg.timeout
-    sync_workspace_templates(runtime_config.workspace_path)
+    # Run consolidated startup migrations: global resources → global templates
+    # → shared output dir → loose artifact migration.
+    run_startup_migrations()
     bus = MessageBus()
     session_manager = SessionManager(runtime_config.workspace_path)
     try:
@@ -730,10 +734,12 @@ def _run_gateway(
     port = port if port is not None else config.gateway.port
 
     console.print(f"{__logo__} Starting mona gateway version {__version__} on port {port}...")
-    sync_workspace_templates(config.workspace_path)
-    # One-time migration: move memory/skills/HEARTBEAT.md out of workspace
-    from mona.config.migrate_global import migrate_global_resources
-    migrate_global_resources()
+    # Run consolidated startup migrations: global resources → global templates
+    # → shared output dir → loose artifact migration. The old
+    # sync_workspace_templates + migrate_global_resources pair is superseded
+    # by this single call which writes templates to ~/.mona/ (not workspace)
+    # and uses move semantics for the migration.
+    run_startup_migrations()
     bus = MessageBus()
     try:
         provider_snapshot = build_provider_snapshot(config)
@@ -1171,7 +1177,9 @@ def agent(
     from mona.providers.video_generation import video_gen_provider_configs
 
     config = _load_runtime_config(config, workspace)
-    sync_workspace_templates(config.workspace_path)
+    # Run consolidated startup migrations: global resources → global templates
+    # → shared output dir → loose artifact migration.
+    run_startup_migrations()
 
     bus = MessageBus()
 

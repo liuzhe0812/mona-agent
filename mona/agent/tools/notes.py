@@ -17,8 +17,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from loguru import logger
-
 from mona.agent.tools.base import Tool, tool_parameters
 from mona.agent.tools.schema import (
     ArraySchema,
@@ -60,7 +58,10 @@ def _vault_ready() -> bool:
 # ---------------------------------------------------------------------------
 
 _CREATE_PARAMETERS = tool_parameters_schema(
-    title=StringSchema("Note title (required)."),
+    title=StringSchema(
+        "Note title. If omitted, the first non-empty line of content_markdown is used "
+        "as the title (body content is preserved unchanged)."
+    ),
     content_markdown=StringSchema(
         "Note body in Markdown. Supports images via `![alt](assets/xxx.png)` references "
         "produced by notes_save_image."
@@ -70,7 +71,7 @@ _CREATE_PARAMETERS = tool_parameters_schema(
         "when omitted. The folder is created if it does not exist."
     ),
     tags=ArraySchema(StringSchema(""), description="Optional list of tags."),
-    required=["title", "content_markdown"],
+    required=["content_markdown"],
 )
 
 
@@ -105,11 +106,19 @@ class NotesCreateTool(Tool):
 
     async def execute(self, **kwargs: Any) -> Any:
         title = str(kwargs.get("title", "")).strip()
-        if not title:
-            return "Error: title is required."
         content = str(kwargs.get("content_markdown", ""))
         if not content.strip():
             return "Error: content_markdown is required."
+        # 标题未提供时，从正文第一个非空行提取（正文保持原样，不剥离该行）。
+        if not title:
+            first_line = next(
+                (line.strip() for line in content.splitlines() if line.strip()),
+                "",
+            )
+            if first_line:
+                title = first_line[:40]
+            else:
+                return "Error: unable to derive a title from content. Please provide a title."
         notebook_name = kwargs.get("notebook_name")
         tags = kwargs.get("tags") or []
 
@@ -145,10 +154,16 @@ _SEARCH_PARAMETERS = tool_parameters_schema(
 
 @tool_parameters(_SEARCH_PARAMETERS)
 class NotesSearchTool(Tool):
-    """Search notes across the entire vault."""
+    """Search notes across the entire vault.
+
+    Deprecated: replaced by KnowledgeSearchTool (knowledge_search).
+    Retained as non-discoverable so the class can be used internally
+    or by tests. The Rust command `notes_search_all` is still the
+    underlying capability invoked by knowledge_search.
+    """
 
     _scopes = {"core"}
-    _plugin_discoverable = True
+    _plugin_discoverable = False
     read_only = True
     subscription_required = True
 

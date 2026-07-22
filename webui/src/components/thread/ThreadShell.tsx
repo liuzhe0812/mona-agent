@@ -11,19 +11,17 @@ import { NewChatDashboard } from "@/components/thread/NewChatDashboard";
 import { SplitPane } from "@/components/deliver/SplitPane";
 import { FilePreviewPanel } from "@/components/deliver/FilePreviewPanel";
 import { WorkspacePanel } from "@/components/deliver/WorkspacePanel";
-import { useFilePreviewStore } from "@/components/deliver/filePreviewStore";
+import { useFilePreviewStore, type PreviewScope } from "@/components/deliver/filePreviewStore";
 import { useMonaStream, type SendImage, type SendOptions } from "@/hooks/useMonaStream";
 import { usePendingQueue } from "@/hooks/usePendingQueue";
 import { useSessionHistory } from "@/hooks/useSessions";
+import { useArtifacts } from "@/hooks/useArtifacts";
 import { fetchSettings, fetchZenFreeModels, listSlashCommands, updateSettings } from "@/lib/api";
 import type { ChatSummary, DeliveredFile, SlashCommand, UIMessage } from "@/lib/types";
 import { useWorkspaceStore } from "@/lib/workspace-store";
 import { normalizeLegacyLongTaskMessages } from "@/lib/thread-display-compat";
 import { scrubSubagentUiMessages } from "@/lib/subagent-channel-display";
 import { useClient } from "@/providers/ClientProvider";
-import { useKbStore } from "@/stores/kb-store";
-import { retrieveKbContext, buildKbSystemPrompt } from "@/lib/kb-rag";
-import { setKbToken } from "@/lib/kb-api";
 import { useScheduleStore } from "@/components/schedule/scheduleStore";
 import { useEmailStore } from "@/components/email/store/emailStore";
 import { deriveTitle } from "@/lib/format";
@@ -156,29 +154,8 @@ export function ThreadShell({
     version: historyVersion,
   } = useSessionHistory(historyKey);
   const { client, modelName, token } = useClient();
-  const kbProjectsRaw = useKbStore((s) => s.projects);
-  const loadKbProjects = useKbStore((s) => s.loadProjects);
-  useEffect(() => {
-    setKbToken(token);
-    void loadKbProjects();
-  }, [loadKbProjects, token]);
-  const kbProjects = useMemo(
-    () => kbProjectsRaw.map((p) => ({ id: p.id, name: p.name })),
-    [kbProjectsRaw],
-  );
-  const selectedKbForChat = useKbStore((s) => s.selectedKbForChat);
-  const setSelectedKbForChat = useKbStore((s) => s.setSelectedKbForChat);
-  const selectedKbProjectName = useKbStore(
-    (s) => {
-      const p = s.projects.find((p) => p.id === s.selectedKbForChat);
-      if (p) return p.name;
-      return null;
-    },
-  );
   const [booting, setBooting] = useState(false);
   const [slashCommands, setSlashCommands] = useState<SlashCommand[]>([]);
-  const [imageMode, setImageMode] = useState(false);
-  const [videoMode, setVideoMode] = useState(false);
   const [providerOptions, setProviderOptions] = useState<
     Array<{ name: string; label: string; free_default_model?: string | null; model?: string | null }>
   >([]);
@@ -199,7 +176,13 @@ export function ThreadShell({
     if (!chatId) return historical;
     return messageCacheRef.current.get(chatId) ?? historical;
   }, [chatId, historical]);
+
+  // Refresh signal bumped on every turn_end and on chat switch; consumed
+  // by ``useArtifacts`` so the shared-output scan re-runs and converges
+  // with the in-flight ``deliver_file`` / ``file_edit`` events.
+  const [artifactsRefreshSignal, setArtifactsRefreshSignal] = useState(0);
   const handleTurnEnd = useCallback(() => {
+    setArtifactsRefreshSignal((value) => value + 1);
     onTurnEnd?.();
   }, [onTurnEnd]);
   const {
@@ -433,29 +416,11 @@ export function ThreadShell({
     [token, onModelNameChange],
   );
 
-  const injectKbContext = useCallback(
-    async (content: string): Promise<string> => {
-      if (!selectedKbForChat) return content;
-      try {
-        const ragContext = await retrieveKbContext(selectedKbForChat, content);
-        if (ragContext) {
-          const systemPrompt = buildKbSystemPrompt(ragContext);
-          return `${systemPrompt}\n\n---\n\n${content}`;
-        }
-      } catch (err) {
-        console.warn("[ThreadShell] KB RAG retrieval failed:", err);
-      }
-      return content;
-    },
-    [selectedKbForChat],
-  );
-
   const handleWelcomeSend = useCallback(
     async (content: string, images?: SendImage[], options?: SendOptions) => {
       if (booting) return;
       setBooting(true);
-      const finalContent = await injectKbContext(content);
-      pendingFirstRef.current = { content: finalContent, images, options };
+      pendingFirstRef.current = { content, images, options };
       const newId = await onCreateChat?.(selectedWorkspace);
       if (!newId) {
         pendingFirstRef.current = null;
@@ -464,7 +429,7 @@ export function ThreadShell({
       // Clear the transient workspace selection after creating the chat.
       setSelectedWorkspace(null);
     },
-    [booting, onCreateChat, injectKbContext, selectedWorkspace],
+    [booting, onCreateChat, selectedWorkspace],
   );
 
   const handleThreadSend = useCallback(
@@ -474,10 +439,9 @@ export function ThreadShell({
         return;
       }
       setScrollToBottomSignal((value) => value + 1);
-      const finalContent = await injectKbContext(content);
-      send(finalContent, _images, _options);
+      send(content, _images, _options);
     },
-    [isStreaming, pendingQueue, send, injectKbContext],
+    [isStreaming, pendingQueue, send],
   );
 
   const handlePendingAppend = useCallback(
@@ -528,10 +492,6 @@ export function ThreadShell({
           onModelSwitch={handleModelSwitch}
           variant={showHeroComposer ? "hero" : "thread"}
           slashCommands={slashCommands}
-          imageMode={imageMode}
-          onImageModeChange={setImageMode}
-          videoMode={videoMode}
-          onVideoModeChange={setVideoMode}
           onStop={stop}
           runStartedAt={runStartedAt}
           goalState={goalState}
@@ -540,10 +500,6 @@ export function ThreadShell({
           onPendingRemove={pendingQueue.remove}
           onPendingEdit={pendingQueue.update}
           isPendingFull={pendingQueue.messages.length >= 3}
-          kbProjectId={selectedKbForChat}
-          kbProjectName={selectedKbProjectName}
-          kbProjects={kbProjects.length > 0 ? kbProjects : undefined}
-          onKbSelect={setSelectedKbForChat}
           onOpenSettings={onOpenSettings}
         />
       ) : (
@@ -558,10 +514,6 @@ export function ThreadShell({
           onModelSwitch={handleModelSwitch}
           variant="hero"
           slashCommands={slashCommands}
-          imageMode={imageMode}
-          onImageModeChange={setImageMode}
-          videoMode={videoMode}
-          onVideoModeChange={setVideoMode}
           runStartedAt={runStartedAt}
           goalState={goalState}
           pendingMessages={pendingQueue.messages}
@@ -569,10 +521,6 @@ export function ThreadShell({
           onPendingRemove={pendingQueue.remove}
           onPendingEdit={pendingQueue.update}
           isPendingFull={pendingQueue.messages.length >= 3}
-          kbProjectId={selectedKbForChat}
-          kbProjectName={selectedKbProjectName}
-          kbProjects={kbProjects.length > 0 ? kbProjects : undefined}
-          onKbSelect={setSelectedKbForChat}
           workspace={selectedWorkspace}
           onWorkspaceChange={setSelectedWorkspace}
           onOpenSettings={onOpenSettings}
@@ -608,17 +556,34 @@ export function ThreadShell({
   const previewFile = useFilePreviewStore((s) => s.file);
   const splitRatio = useFilePreviewStore((s) => s.splitRatio);
   const setSplitRatio = useFilePreviewStore((s) => s.setSplitRatio);
-  const middleRatio = useFilePreviewStore((s) => s.middleRatio);
-  const setMiddleRatio = useFilePreviewStore((s) => s.setMiddleRatio);
   const workspaceCollapsed = useFilePreviewStore((s) => s.workspaceCollapsed);
   const toggleWorkspaceCollapsed = useFilePreviewStore(
     (s) => s.toggleWorkspaceCollapsed,
   );
 
+  // Session type: project sessions read the bound ``metadata.workspace`` as
+  // their effective workspace; non-project sessions (and the home screen)
+  // operate against the shared ``<workspace>/output/`` directory.
+  const isProjectSession = !!session?.workspace;
+  const sessionKey = session?.key ?? null;
+  const isHome = !session;
+  const workspaceScope: PreviewScope = isProjectSession ? "project" : "shared";
+
+  // Shared-output scan: only fetched for non-project sessions. Project
+  // sessions keep using the existing aggregation from messages (which is
+  // limited to explicit deliver_file + file_edit events).
+  const artifacts = useArtifacts(
+    !isProjectSession && !isHome ? token : null,
+    `${historyKey ?? "home"}-${artifactsRefreshSignal}`,
+  );
+
   // Aggregate all delivered files produced during the session.
   // Includes both explicit deliver_file calls and files written/edited by AI
   // tools (write_file, apply_patch, etc.) that are previewable deliverables.
-  const deliveredFiles = useMemo(() => {
+  // For non-project sessions these act as live events merged with the
+  // authoritative shared-output scan; for project sessions they are the
+  // only data source.
+  const messageFiles = useMemo(() => {
     const out: DeliveredFile[] = [];
     const seen = new Set<string>();
     const push = (file: DeliveredFile) => {
@@ -651,9 +616,32 @@ export function ThreadShell({
     return out;
   }, [displayMessages]);
 
-  const middleVisible = !!previewFile;
-  const rightVisible = deliveredFiles.length > 0 && !workspaceCollapsed;
-  const showWorkspaceToggle = deliveredFiles.length > 0 && workspaceCollapsed;
+  // Pick the authoritative data source for the workspace panel.
+  // - Non-project: merge scan results with live events (scan wins on dedup
+  //   so its richer metadata — size, mtime, mime — is preferred).
+  // - Project: live events only.
+  const workspaceFiles = useMemo(() => {
+    if (isProjectSession) return messageFiles;
+    const out: DeliveredFile[] = [];
+    const seen = new Set<string>();
+    const push = (file: DeliveredFile) => {
+      const key = file.absolute_path || file.path || file.name;
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push(file);
+    };
+    // Scan first so its metadata (size, mtime) wins over the sparse
+    // file_edit shape when both reference the same absolute path.
+    for (const f of artifacts.files) push(f);
+    for (const f of messageFiles) push(f);
+    return out;
+  }, [isProjectSession, artifacts.files, messageFiles]);
+
+  const hasFiles = workspaceFiles.length > 0;
+  // Right panel shows the file list by default, or the in-pane preview
+  // when a file is selected. Hidden entirely for empty sessions.
+  const rightVisible = !isHome && (hasFiles || !!previewFile) && !workspaceCollapsed;
+  const showWorkspaceToggle = !isHome && hasFiles && workspaceCollapsed;
 
   return (
     <SplitPane
@@ -692,18 +680,28 @@ export function ThreadShell({
               )}
             >
               <PanelRightOpen className="h-4 w-4" />
-              <span className="text-[10px] font-medium">{deliveredFiles.length}</span>
+              <span className="text-[10px] font-medium">{workspaceFiles.length}</span>
             </button>
           ) : null}
         </section>
       }
-      middle={<FilePreviewPanel />}
-      right={<WorkspacePanel files={deliveredFiles} />}
+      right={
+        previewFile ? (
+          <FilePreviewPanel />
+        ) : (
+          <WorkspacePanel
+            files={workspaceFiles}
+            scope={workspaceScope}
+            sessionKey={isProjectSession ? sessionKey : null}
+            loading={!isProjectSession ? artifacts.loading : false}
+            error={!isProjectSession ? artifacts.error : null}
+            truncated={!isProjectSession ? artifacts.truncated : false}
+            onRefresh={!isProjectSession ? artifacts.refresh : undefined}
+          />
+        )
+      }
       ratio={splitRatio}
       onRatioChange={setSplitRatio}
-      middleRatio={middleRatio}
-      onMiddleRatioChange={setMiddleRatio}
-      middleVisible={middleVisible}
       rightVisible={rightVisible}
     />
   );

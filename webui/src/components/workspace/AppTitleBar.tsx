@@ -5,7 +5,6 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Button } from "@/components/ui/button";
 import { ConnectionBadge } from "@/components/ConnectionBadge";
 import { BrowserTabItem } from "@/components/browser/BrowserTab";
-import { NotificationCenter } from "@/components/NotificationCenter";
 import { isTauri } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 import type { Tab } from "@/hooks/useBrowserTabs";
@@ -17,7 +16,6 @@ interface AppTitleBarProps {
   onTabClose: (id: string) => void;
   onNewTab: () => void;
   onOpenSettings?: (section?: string) => void;
-  onOpenSubscribe?: () => void;
   /** When true, renders a pulsing badge on the settings button (e.g. update available). */
   settingsBadge?: boolean;
   // 标签管理增强
@@ -50,7 +48,6 @@ export function AppTitleBar({
   onTabClose,
   onNewTab,
   onOpenSettings,
-  onOpenSubscribe,
   settingsBadge,
   onPinToggle,
   onDuplicate,
@@ -104,7 +101,6 @@ export function AppTitleBar({
             <Settings className="h-3.5 w-3.5" />
           </TitleBarButton>
         )}
-        <NotificationCenter onOpenSubscribe={onOpenSubscribe} />
         <TitleBarButton
           label="最小化"
           onClick={() => {

@@ -1,9 +1,12 @@
-import type { ReactNode } from "react";
+import { useRef, type ReactNode } from "react";
 import type { JSONContent } from "@tiptap/core";
 
 import { MarkdownEditor, type EditorMode } from "@/components/common/MarkdownEditor";
 
 import type { Notebook, OperationNote } from "./notes-data";
+
+const DEFAULT_TITLE = "未命名笔记";
+const AUTO_TITLE_MAX_LEN = 40;
 
 interface NoteEditorProps {
   note: OperationNote;
@@ -43,12 +46,37 @@ export function NoteEditor({
         ? "保存失败"
         : "已自动保存";
 
+  // 跟踪上次内容是否包含换行，用于检测"首次产生第二行"（回车或粘贴多行）。
+  // NoteEditor 通过 key={note.id} 重新挂载，切换笔记时 ref 会自动重置。
+  const hadNewlineRef = useRef(note.contentMarkdown.includes("\n"));
+
+  const handleContentChange = (next: {
+    contentMarkdown: string;
+    contentJson?: JSONContent;
+    plainText: string;
+  }) => {
+    const plainText = next.plainText || "";
+    const hasNewlineNow = plainText.includes("\n");
+
+    // 从"无换行"转变为"有换行"时，若标题仍是默认占位（用户未手动改过），
+    // 自动取第一行作为标题。正文保留不变（用户已确认保留）。
+    if (!hadNewlineRef.current && hasNewlineNow && note.title === DEFAULT_TITLE) {
+      const firstLine = plainText.split("\n")[0].trim();
+      if (firstLine) {
+        onTitleChange(firstLine.slice(0, AUTO_TITLE_MAX_LEN));
+      }
+    }
+    hadNewlineRef.current = hasNewlineNow;
+
+    onContentChange(next);
+  };
+
   return (
     <MarkdownEditor
       content={note.contentMarkdown}
       mode={mode}
       noteTitles={noteTitles}
-      onContentChange={onContentChange}
+      onContentChange={handleContentChange}
       onMoveSelectionToNote={onMoveSelectionToNote}
       onOpenNoteByTitle={onOpenNoteByTitle}
       toolbarExtra={toolbarExtra}

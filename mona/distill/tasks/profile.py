@@ -21,6 +21,7 @@ from mona.utils.prompt_templates import render_template
 
 _TASK_NAME = "profile"
 _USER_SECTION = "Profile"
+_FOCUS_SECTION = "Current Focus"
 _TEMPLATE = "distill/profile.md"
 
 
@@ -39,9 +40,10 @@ class ProfileTask(DistillTask):
         email_stats = collect_email_stats()
         session_stats = collect_session_topics(ctx.workspace, since=ctx.since)
 
-        # Read existing work patterns from rich profile
+        # Read existing work patterns + trajectory from rich profile
         rich = read_rich_profile(ctx.memory_dir)
         work_patterns = rich.get("work_patterns", {})
+        prev_trajectory = rich.get("trajectory", [])
 
         # 读取 USER.md 作为先验（用户手写的偏好不应被 LLM 覆盖）
         user_prior = _extract_user_prior(read_user_profile(ctx.memory_dir))
@@ -52,6 +54,7 @@ class ProfileTask(DistillTask):
             "work_patterns": work_patterns,
             "sessions": session_stats.to_dict(),
             "user_prior": user_prior,
+            "prev_trajectory": prev_trajectory,
         }
 
     async def distill(
@@ -94,6 +97,12 @@ class ProfileTask(DistillTask):
         if ctx.provider is None:
             # Rule-based fallback
             result_data = _rule_based_profile(data)
+            focus_md = _format_current_focus_markdown(
+                result_data,
+                data.get("prev_trajectory", []),
+                data.get("work_patterns", {}),
+            )
+            extra = [(_FOCUS_SECTION, focus_md)] if focus_md else []
             return DistillResult(
                 task_name=_TASK_NAME,
                 success=True,
@@ -101,6 +110,7 @@ class ProfileTask(DistillTask):
                 data=result_data,
                 markdown=_format_profile_markdown(result_data),
                 user_section=_USER_SECTION,
+                extra_sections=extra,
             )
 
         try:
@@ -175,6 +185,11 @@ class ProfileTask(DistillTask):
                 data=result_data,
                 markdown=_format_profile_markdown(parsed),
                 user_section=_USER_SECTION,
+                extra_sections=_build_focus_extra(
+                    parsed,
+                    data.get("prev_trajectory", []),
+                    data.get("work_patterns", {}),
+                ),
             )
         except Exception as e:
             logger.exception("[profile] LLM distillation failed")
@@ -254,50 +269,165 @@ def _rule_based_profile(data: dict[str, Any]) -> dict[str, Any]:
 
 
 def _format_profile_markdown(data: dict[str, Any]) -> str:
-    """Format profile as markdown for USER.md."""
-    lines = []
+    """Format profile as a compact narrative paragraph for USER.md.
+
+    输出为紧凑的自然语言段落而非字段罗列，便于 agent 形成立体认知。
+    每个信息簇独立成句，缺失字段跳过，不输出空标签。
+    """
+    sentences: list[str] = []
+
+    # 身份与技术栈：合并为一句
     identity = data.get("identity", {})
-    if identity.get("primary_role"):
-        lines.append(f"**Role:** {identity['primary_role']}")
-        if identity.get("secondary_roles"):
-            lines.append(f"**Secondary Roles:** {', '.join(identity['secondary_roles'])}")
-        lines.append("")
+    role = identity.get("primary_role") or ""
+    secondary = identity.get("secondary_roles") or []
+    role_phrase = role
+    if role and secondary:
+        role_phrase = f"{role}（兼{'、'.join(secondary[:2])}）"
 
     tech_stack = data.get("tech_stack", [])
-    if tech_stack:
-        lines.append("**Tech Stack:**")
-        for area in tech_stack:
-            items = area.get("items", [])
-            if items:
-                lines.append(f"- {area.get('area', '')}: {', '.join(items)}")
-        lines.append("")
+    tech_items: list[str] = []
+    for area in tech_stack:
+        items = area.get("items") or []
+        if items:
+            tech_items.extend(items)
+    if role_phrase and tech_items:
+        sentences.append(
+            f"用户是{role_phrase}，技术栈以{'、'.join(tech_items[:6])}为主"
+        )
+    elif role_phrase:
+        sentences.append(f"用户是{role_phrase}")
+    elif tech_items:
+        sentences.append(f"技术栈以{'、'.join(tech_items[:6])}为主")
 
-    interests = data.get("interests", [])
-    if interests:
-        lines.append(f"**Interests:** {', '.join(interests)}")
-        lines.append("")
-
+    # 知识结构：深度 + 探索
     ks = data.get("knowledge_structure", {})
-    if ks.get("deep_areas"):
-        lines.append(f"**Deep Knowledge:** {', '.join(ks['deep_areas'])}")
-    if ks.get("exploring_areas"):
-        lines.append(f"**Exploring:** {', '.join(ks['exploring_areas'])}")
-    lines.append("")
+    deep = ks.get("deep_areas") or []
+    exploring = ks.get("exploring_areas") or []
+    knowledge_parts: list[str] = []
+    if deep:
+        knowledge_parts.append(f"深度掌握{'、'.join(deep[:4])}")
+    if exploring:
+        knowledge_parts.append(f"正在探索{'、'.join(exploring[:3])}")
+    if knowledge_parts:
+        sentences.append("，".join(knowledge_parts))
 
+    # 兴趣领域
+    interests = data.get("interests") or []
+    if interests:
+        sentences.append(f"关注领域：{'、'.join(interests[:5])}")
+
+    # 协作关系
     rel = data.get("relationships", {})
-    if rel.get("frequent_contacts"):
-        lines.append(f"**Frequent Contacts:** {', '.join(rel['frequent_contacts'])}")
-    if rel.get("collaboration_pattern"):
-        lines.append(f"**Collaboration:** {rel['collaboration_pattern']}")
-    lines.append("")
+    contacts = rel.get("frequent_contacts") or []
+    collab = rel.get("collaboration_pattern") or ""
+    collab_parts: list[str] = []
+    if contacts:
+        collab_parts.append(f"主要协作对象：{'、'.join(contacts[:3])}")
+    if collab and collab != "unknown":
+        collab_parts.append(collab)
+    if collab_parts:
+        sentences.append("；".join(collab_parts))
 
+    # 工作节奏
     rhythm = data.get("work_rhythm", {})
-    if rhythm.get("active_hours"):
-        lines.append(f"**Active Hours:** {rhythm['active_hours']}")
-    if rhythm.get("intensity"):
-        lines.append(f"**Work Intensity:** {rhythm['intensity']}")
+    hours = rhythm.get("active_hours") or ""
+    intensity = rhythm.get("intensity") or ""
+    rhythm_parts: list[str] = []
+    if hours and hours != "unknown":
+        rhythm_parts.append(f"活跃时段{hours}")
+    if intensity and intensity != "unknown":
+        rhythm_parts.append(f"强度{intensity}")
+    if rhythm_parts:
+        sentences.append("，".join(rhythm_parts))
 
-    return "\n".join(lines) if lines else "(insufficient data)"
+    if not sentences:
+        return "(insufficient data)"
+    return "。".join(sentences) + "。"
+
+
+def _build_focus_extra(
+    parsed: dict[str, Any],
+    prev_trajectory: list[dict[str, Any]],
+    work_patterns: dict[str, Any],
+) -> list[tuple[str, str]]:
+    """Build extra_sections entry for Current Focus, or empty list if nothing to say."""
+    focus_md = _format_current_focus_markdown(parsed, prev_trajectory, work_patterns)
+    return [(_FOCUS_SECTION, focus_md)] if focus_md else []
+
+
+def _format_current_focus_markdown(
+    parsed: dict[str, Any],
+    prev_trajectory: list[dict[str, Any]],
+    work_patterns: dict[str, Any],
+) -> str:
+    """生成 ## Current Focus 段：反映用户当前的关注点与最近变化。
+
+    数据来源：
+    - 当前主要关注领域：本次蒸馏的 interests + deep_areas
+    - 最近新学技能：本次 tech_stack 中上次 trajectory 快照未出现的 items
+    - 最近工作焦点：rich profile 中 work_patterns.work_focus
+
+    整段控制在 ~150 tokens 以内，无内容时返回空字符串（不写入 USER.md）。
+    """
+    lines: list[str] = []
+
+    # 1. 当前主要关注领域（合并 interests + deep_areas，最多 3 条）
+    interests = parsed.get("interests") or []
+    ks = parsed.get("knowledge_structure", {})
+    deep = ks.get("deep_areas") or []
+    focus_areas: list[str] = []
+    for item in interests + deep:
+        if item and item not in focus_areas:
+            focus_areas.append(item)
+        if len(focus_areas) >= 3:
+            break
+    if focus_areas:
+        lines.append(f"- 当前关注：{'、'.join(focus_areas)}")
+
+    # 2. 最近新学技能：对比上次 trajectory 快照（仅当存在历史 profile 快照时）
+    prev_tech_items = _extract_prev_tech_items(prev_trajectory)
+    if prev_tech_items is not None:
+        curr_tech_items: list[str] = []
+        for area in parsed.get("tech_stack", []) or []:
+            for item in area.get("items") or []:
+                if item and item not in curr_tech_items:
+                    curr_tech_items.append(item)
+        new_skills = [t for t in curr_tech_items if t not in prev_tech_items][:3]
+        if new_skills:
+            lines.append(f"- 最近新接触：{'、'.join(new_skills)}")
+
+    # 3. 最近工作焦点：直接取 work_patterns.work_focus
+    work_focus = work_patterns.get("work_focus") or ""
+    if work_focus and work_focus != "unknown":
+        lines.append(f"- 工作焦点：{work_focus}")
+
+    if not lines:
+        return ""
+    return "\n".join(lines)
+
+
+def _extract_prev_tech_items(
+    prev_trajectory: list[dict[str, Any]],
+) -> set[str] | None:
+    """从 trajectory 历史快照中提取最近一次 profile 快照的 tech_stack items。
+
+    返回 None 表示无历史 profile 快照（首次蒸馏），不应对比"新学技能"。
+    返回空 set 表示有历史但 tech_stack 为空。
+    """
+    if not prev_trajectory:
+        return None
+    # 反向查找最近一次 profile 任务快照
+    for point in reversed(prev_trajectory):
+        if point.get("task") != "profile":
+            continue
+        snapshot = point.get("data_snapshot") or {}
+        items: set[str] = set()
+        for area in snapshot.get("tech_stack", []) or []:
+            for item in area.get("items") or []:
+                if item:
+                    items.add(item)
+        return items
+    return None
 
 
 def _build_tech_radar(parsed: dict[str, Any]) -> dict[str, Any]:

@@ -149,7 +149,7 @@ export function MessageBubble({
           <p
             className={cn(
               "ml-auto max-w-full rounded-[18px] bg-secondary/70 px-4 py-2",
-              "text-left text-[16px]/[1.75] whitespace-pre-wrap break-words",
+              "text-left text-[16px]/[1.75] whitespace-pre-wrap break-words select-text",
             )}
           >
             {/* IMPORTANT: Use displayContent (short label) when available, fallback to content.

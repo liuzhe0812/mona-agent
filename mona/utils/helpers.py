@@ -571,7 +571,14 @@ def build_status_content(
 
 
 def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]:
-    """Sync bundled templates to workspace. Creates missing files without overwriting user files."""
+    """Sync bundled templates to workspace. Creates missing files without overwriting user files.
+
+    .. deprecated::
+        Use :func:`sync_global_templates` instead. This function still writes
+        global resources (AGENTS.md, SOUL.md, memory/, skills/) to the
+        workspace root, which is no longer the desired behavior. It is kept
+        for backward compatibility with older callers.
+    """
     from importlib.resources import files as pkg_files
 
     try:
@@ -619,5 +626,78 @@ def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]
         gs.init()
     except Exception:
         logger.exception("Failed to initialize git store for {}", workspace)
+
+    return added
+
+
+def sync_global_templates(silent: bool = False) -> list[str]:
+    """Sync bundled global templates to ``~/.mona/`` (not the workspace).
+
+    Writes AGENTS.md, SOUL.md, USER.md, MEMORY.md, history.jsonl and creates
+    the skills directory under the instance data dir (``~/.mona/``) rather
+    than the workspace root. This keeps the workspace clean for user
+    artifacts and enforces the ``_FsTool`` hard boundary.
+
+    Creates missing files without overwriting existing user content.
+    Idempotent: safe to call on every startup.
+    """
+    from importlib.resources import files as pkg_files
+
+    from mona.config.paths import (
+        get_memory_dir,
+        get_memory_history_path,
+        get_skills_dir,
+    )
+
+    try:
+        tpl = pkg_files("mona") / "templates"
+    except Exception:
+        return []
+    if not tpl.is_dir():
+        return []
+
+    memory_dir = get_memory_dir()
+    added: list[str] = []
+
+    def _write(src, dest: Path):
+        content = src.read_text(encoding="utf-8") if src else ""
+        if dest.exists():
+            return
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(content, encoding="utf-8")
+        added.append(str(dest.relative_to(memory_dir.parent)))
+
+    # Global .md templates (AGENTS.md, SOUL.md, USER.md, etc.)
+    for item in tpl.iterdir():
+        if item.name.endswith(".md") and not item.name.startswith("."):
+            _write(item, memory_dir / item.name)
+    # MEMORY.md lives under memory/
+    _write(tpl / "memory" / "MEMORY.md", memory_dir / "MEMORY.md")
+    # Empty history.jsonl if missing
+    _write(None, get_memory_history_path())
+    # Ensure skills directory exists
+    get_skills_dir()
+
+    if added and not silent:
+        from rich.console import Console
+
+        for name in added:
+            Console().print(f"  [dim]Created {name}[/dim]")
+
+    # Initialize git for memory version control at the global memory dir
+    try:
+        from mona.utils.gitstore import GitStore
+
+        gs = GitStore(
+            memory_dir,
+            tracked_files=[
+                "SOUL.md",
+                "USER.md",
+                "MEMORY.md",
+            ],
+        )
+        gs.init()
+    except Exception:
+        logger.exception("Failed to initialize git store for {}", memory_dir)
 
     return added

@@ -1,5 +1,6 @@
 import type {
   ChatSummary,
+  DeliveredFile,
   ImageGenerationSettingsUpdate,
   PptProject,
   PptTemplatesResponse,
@@ -784,6 +785,71 @@ export async function saveVideoChatId(
       body: JSON.stringify({ name, chatId }),
     },
   );
+}
+
+// ---------------------------------------------------------------------------
+// Shared output artifacts & authenticated file preview
+// ---------------------------------------------------------------------------
+
+export interface ArtifactListResponse {
+  files: DeliveredFile[];
+  truncated: boolean;
+}
+
+/** List all shared-output artifacts under ``<workspace>/output/``.
+ *
+ *  The directory root is fixed by the server; clients cannot pass an
+ *  arbitrary root. Files are returned sorted by mtime desc. */
+export async function listArtifacts(
+  token: string,
+  base?: string,
+): Promise<ArtifactListResponse> {
+  const effectiveBase = base ?? (await getApiBase());
+  return request<ArtifactListResponse>(
+    `${effectiveBase}/api/artifacts`,
+    token,
+  );
+}
+
+export interface FilePreviewParams {
+  /** ``shared`` resolves against ``<workspace>/output/``; ``project``
+   *  resolves against the session's bound workspace directory. */
+  scope: "shared" | "project";
+  /** Relative path under the scope root. Must not be empty, absolute,
+   *  or contain ``..``. */
+  path: string;
+  /** Required when ``scope === "project"``: the websocket session key
+   *  whose ``metadata.workspace`` is the preview root. */
+  sessionKey?: string | null;
+}
+
+/** Fetch a file preview as a Blob using an authenticated request.
+ *
+ *  Returns the Blob and the resolved MIME type so callers can build a
+ *  typed object URL or render HTML source as ``text/plain``. The server
+ *  already forces ``text/plain`` for ``.html``/``.htm`` to prevent
+ *  execution; callers should still render the result inside a sandboxed
+ *  surface to be safe. */
+export async function fetchFilePreviewBlob(
+  token: string,
+  params: FilePreviewParams,
+  base?: string,
+): Promise<{ blob: Blob; mime: string }> {
+  const effectiveBase = base ?? (await getApiBase());
+  const query = new URLSearchParams();
+  query.set("scope", params.scope);
+  query.set("path", params.path);
+  if (params.sessionKey) query.set("session_key", params.sessionKey);
+  const url = `${effectiveBase}/api/file-preview?${query.toString()}`;
+  const res = await httpFetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new ApiError(res.status, `HTTP ${res.status}`);
+  }
+  const blob = await res.blob();
+  const mime = res.headers.get("content-type") ?? "application/octet-stream";
+  return { blob, mime };
 }
 
 

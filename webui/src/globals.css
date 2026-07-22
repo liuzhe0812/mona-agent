@@ -413,6 +413,16 @@
   margin-right: 0.5rem !important;
   user-select: none !important;
 }
+
+/* ─── jit-viewer overrides ─────────────────────────────────────────── */
+.jv-viewer__branding { display: none !important; }
+.jv-toolbar__bottom:not(:has(.jv-toolbar-btn)):not(:has(.jv-pagination)) { display: none !important; }
+.jv-toolbar__filename { display: none !important; }
+.jv-toolbar__top, .jv-toolbar__bottom { height: 36px !important; padding: 0 8px !important; }
+.jv-toolbar__left, .jv-toolbar__center { display: none !important; }
+.jv-toolbar__top .jv-toolbar__right { flex: 1 !important; justify-content: flex-start !important; }
+.jv-toolbar-btn--fullscreen { margin-left: auto !important; }
+.jv-toolbar-btn { padding: 4px 8px !important; }
 .notes-prosemirror li[data-type="taskItem"] > label input[type="checkbox"] {
   cursor: pointer !important;
   margin: 0 !important;

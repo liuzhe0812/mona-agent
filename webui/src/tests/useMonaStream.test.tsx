@@ -1151,28 +1151,6 @@ describe("useMonaStream", () => {
     expect(result.current.messages[0].media).toHaveLength(1);
   });
 
-  it("passes image generation options to the websocket client", () => {
-    const fake = fakeClient();
-    const { result } = renderHook(() => useMonaStream("chat-img", EMPTY_MESSAGES), {
-      wrapper: wrap(fake.client),
-    });
-
-    act(() => {
-      result.current.send(
-        "draw a square icon",
-        undefined,
-        { imageGeneration: { enabled: true, aspect_ratio: "1:1" } },
-      );
-    });
-
-    expect(fake.client.sendMessage).toHaveBeenCalledWith(
-      "chat-img",
-      "draw a square icon",
-      undefined,
-      { imageGeneration: { enabled: true, aspect_ratio: "1:1" } },
-    );
-  });
-
   it("stops the active turn without adding a user slash command bubble", () => {
     const fake = fakeClient();
     const { result } = renderHook(() => useMonaStream("chat-stop", EMPTY_MESSAGES), {

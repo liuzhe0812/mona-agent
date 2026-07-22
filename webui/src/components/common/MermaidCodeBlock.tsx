@@ -5,7 +5,7 @@ import { CodeBlock } from "@tiptap/extension-code-block";
 import { TextSelection } from "@tiptap/pm/state";
 import { Pencil } from "lucide-react";
 
-import { MermaidDiagram } from "@/components/knowledge/mermaid-diagram";
+import { MermaidDiagram } from "@/components/common/mermaid-diagram";
 
 /**
  * TipTap CodeBlock extension that renders `language="mermaid"` blocks as SVG

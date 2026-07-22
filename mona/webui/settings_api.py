@@ -140,34 +140,48 @@ def _is_under(path: Path, directory: Path) -> bool:
 
 
 def _migrate_workspace_data(old_ws: Path, new_ws: Path) -> None:
-    """Move sessions and other runtime data from old workspace to new one."""
+    """Copy non-destructively sessions/ and output/ from old workspace to new.
+
+    Per shared-output-workspace-execution-plan §8.5:
+    - Copy ``sessions/`` and ``output/`` only.
+    - Do NOT copy ``memory/`` or ``skills/`` — they are now global resources
+      stored under ``~/.mona/`` and migrating them between workspaces would
+      duplicate or overwrite global state.
+    - Source workspace is preserved; the user decides when to clean up.
+    """
     import shutil
 
     if not old_ws.exists():
         return
     new_ws.mkdir(parents=True, exist_ok=True)
 
-    # Migrate sessions directory
-    old_sessions = old_ws / "sessions"
-    new_sessions = new_ws / "sessions"
-    if old_sessions.exists() and old_sessions.is_dir():
-        new_sessions.mkdir(parents=True, exist_ok=True)
-        for item in old_sessions.iterdir():
-            if item.is_file() and item.suffix == ".jsonl":
-                dest = new_sessions / item.name
-                if not dest.exists():
-                    shutil.copy2(str(item), str(dest))
+    # Helper for non-destructive directory copies.
+    def _copy_dir_non_destructive(src: Path, dest: Path, *, suffix_filter: str | None = None) -> None:
+        if not src.exists() or not src.is_dir():
+            return
+        dest.mkdir(parents=True, exist_ok=True)
+        for item in src.iterdir():
+            if suffix_filter and (not item.is_file() or item.suffix != suffix_filter):
+                continue
+            target = dest / item.name
+            if target.exists():
+                continue
+            try:
+                if item.is_dir():
+                    shutil.copytree(item, target)
+                else:
+                    shutil.copy2(str(item), str(target))
+            except Exception:
+                logger.exception("Failed to copy {} → {}", item, target)
 
-    # Migrate memory directory
-    old_memory = old_ws / "memory"
-    new_memory = new_ws / "memory"
-    if old_memory.exists() and old_memory.is_dir():
-        new_memory.mkdir(parents=True, exist_ok=True)
-        for item in old_memory.iterdir():
-            if item.is_file():
-                dest = new_memory / item.name
-                if not dest.exists():
-                    shutil.copy2(str(item), str(dest))
+    # 1. Migrate sessions directory (only .jsonl files).
+    _copy_dir_non_destructive(old_ws / "sessions", new_ws / "sessions", suffix_filter=".jsonl")
+
+    # 2. Migrate shared output directory (recursive, all files).
+    _copy_dir_non_destructive(old_ws / "output", new_ws / "output")
+
+    # NOTE: memory/ and skills/ are intentionally NOT copied — they are global
+    # resources under ~/.mona/ and not workspace-scoped.
 
 
 def _image_generation_provider_rows(config: Any) -> list[dict[str, Any]]:

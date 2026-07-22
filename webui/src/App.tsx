@@ -72,7 +72,7 @@ const SIDEBAR_WIDTH = 220;
 const SIDEBAR_RAIL_WIDTH = 56;
 const TOKEN_REFRESH_MARGIN_MS = 30_000;
 const TOKEN_REFRESH_MIN_DELAY_MS = 5_000;
-type ShellView = "chat" | "settings" | "note" | "ssh" | "db" | "kb" | "doc" | "email" | "schedule" | "system" | "profile";
+type ShellView = "chat" | "settings" | "note" | "ssh" | "db" | "doc" | "email" | "schedule" | "system" | "profile";
 
 export function openNewBrowserTab(
   setView: (view: ShellView) => void,
@@ -108,12 +108,6 @@ const DocMakerView = lazy(() =>
 const MdFileView = lazy(() =>
   import("@/components/md-reader/MdFileView").then((module) => ({
     default: module.MdFileView,
-  })),
-);
-
-const KnowledgeBaseView = lazy(() =>
-  import("@/components/knowledge/KnowledgeBaseView").then((module) => ({
-    default: module.KnowledgeBaseView,
   })),
 );
 
@@ -966,16 +960,6 @@ function Shell({
     setMobileSidebarOpen(false);
   }, [licenseActive, onOpenSubscribe, switchToMonaTab]);
 
-  const onOpenKb = useCallback(() => {
-    if (!licenseActive) {
-      onOpenSubscribe();
-      return;
-    }
-    setView("kb");
-    switchToMonaTab();
-    setMobileSidebarOpen(false);
-  }, [licenseActive, onOpenSubscribe, switchToMonaTab]);
-
   const onOpenEmail = useCallback(() => {
     setView("email");
     switchToMonaTab();
@@ -1531,7 +1515,6 @@ function Shell({
     onOpenDoc,
     onOpenSSH,
     onOpenDb,
-    onOpenKb,
     onOpenEmail,
     onOpenSchedule,
     onOpenSystem,
@@ -1563,7 +1546,6 @@ function Shell({
             onTabClose={closeBrowserTab}
             onNewTab={() => openNewBrowserTab(setView, addEmptyTab)}
             onOpenSettings={onOpenSettings}
-            onOpenSubscribe={onOpenSubscribe}
             settingsBadge={!!updateAvailable}
             onPinToggle={togglePinTab}
             onDuplicate={duplicateTab}
@@ -1660,7 +1642,7 @@ function Shell({
               <div
                 className={cn(
                   "absolute inset-0 flex flex-col",
-                  (view === "settings" || view === "note" || view === "ssh" || view === "db" || view === "kb" || view === "doc" || view === "email" || view === "schedule" || view === "system" || view === "profile" || activeBrowserTab.type !== "mona") &&
+                  (view === "settings" || view === "note" || view === "ssh" || view === "db" || view === "doc" || view === "email" || view === "schedule" || view === "system" || view === "profile" || activeBrowserTab.type !== "mona") &&
                     "invisible pointer-events-none",
                 )}
               >
@@ -1734,21 +1716,6 @@ function Shell({
                   {client ? (
                     <Suspense fallback={<ModuleLoading title="正在打开数据库客户端" />}>
                       <DbClientView onOpenSubscribe={onOpenSubscribe} />
-                    </Suspense>
-                  ) : (
-                    <RuntimePlaceholder
-                      status={runtimeStatus}
-                      message={runtimeError}
-                      onRetry={onRetryConnection}
-                    />
-                  )}
-                </div>
-              )}
-              {view === "kb" && (
-                <div className={cn("absolute inset-0 flex flex-col", isBrowserTabActive && "hidden")}>
-                  {client ? (
-                    <Suspense fallback={<ModuleLoading title="正在打开知识库" />}>
-                      <KnowledgeBaseView />
                     </Suspense>
                   ) : (
                     <RuntimePlaceholder

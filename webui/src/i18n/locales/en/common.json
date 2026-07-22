@@ -427,26 +427,6 @@
       "send": "Send message",
       "stop": "Stop response",
       "attachImage": "Attach image",
-      "imageMode": {
-        "label": "Image Generation",
-        "toggle": "Toggle image generation mode",
-        "placeholder": "Describe or edit an image…",
-        "aspectAria": "Image aspect ratio",
-        "aspectLabel": "Image aspect",
-        "aspect": {
-          "auto": "Auto",
-          "1_1": "Square 1:1",
-          "3_4": "Portrait 3:4",
-          "9_16": "Story 9:16",
-          "4_3": "Landscape 4:3",
-          "16_9": "Wide 16:9"
-        }
-      },
-      "videoMode": {
-        "label": "Video Generation",
-        "toggle": "Toggle video generation mode",
-        "placeholder": "Describe a video to generate — drop images as references…"
-      },
       "workspace": {
         "placeholder": "Select folder (optional)",
         "clear": "Clear folder selection"

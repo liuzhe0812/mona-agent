@@ -25,7 +25,6 @@ import sidebarMonaIcon from "@/assets/icons/sidebar-mona.png";
 import sidebarNoteIcon from "@/assets/icons/sidebar-note.png";
 import sidebarTerminalIcon from "@/assets/icons/sidebar-terminal.png";
 import sidebarDatabaseIcon from "@/assets/icons/sidebar-database.png";
-import sidebarKnowledgeIcon from "@/assets/icons/sidebar-knowledge.png";
 import sidebarDocIcon from "@/assets/icons/sidebar-doc.png";
 import sidebarEmailIcon from "@/assets/icons/sidebar-email.png";
 import sidebarScheduleIcon from "@/assets/icons/sidebar-schedule.png";
@@ -72,7 +71,6 @@ interface SidebarProps {
   onOpenDoc?: () => void;
   onOpenSSH?: () => void;
   onOpenDb?: () => void;
-  onOpenKb?: () => void;
   onOpenEmail?: () => void;
   onOpenSchedule?: () => void;
   onOpenSystem?: () => void;
@@ -157,7 +155,6 @@ export function Sidebar(props: SidebarProps) {
         onOpenDoc={props.onOpenDoc ?? (() => {})}
         onOpenSSH={props.onOpenSSH ?? (() => {})}
         onOpenDb={props.onOpenDb ?? (() => {})}
-        onOpenKb={props.onOpenKb ?? (() => {})}
         onOpenEmail={props.onOpenEmail ?? (() => {})}
         onOpenSchedule={props.onOpenSchedule ?? (() => {})}
         onOpenSystem={props.onOpenSystem ?? (() => {})}
@@ -296,7 +293,6 @@ const PRIMARY_ITEMS: ToolboxItem[] = [
 // 二级入口（收纳在"更多"菜单中）
 const SECONDARY_ITEMS: ToolboxItem[] = [
   { label: "数据库", icon: <img src={sidebarDatabaseIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
-  { label: "知识库", icon: <img src={sidebarKnowledgeIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
   { label: "AI文档", icon: <img src={sidebarDocIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
   { label: "画像", icon: <img src={sidebarProfileIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
 ];
@@ -307,7 +303,6 @@ function getToolboxHandler(label: string, handlers: {
   onOpenDoc: () => void;
   onOpenSSH: () => void;
   onOpenDb: () => void;
-  onOpenKb: () => void;
   onOpenEmail: () => void;
   onOpenSchedule: () => void;
   onOpenSystem: () => void;
@@ -320,7 +315,6 @@ function getToolboxHandler(label: string, handlers: {
     case "AI文档": return handlers.onOpenDoc;
     case "终端": return handlers.onOpenSSH;
     case "数据库": return handlers.onOpenDb;
-    case "知识库": return handlers.onOpenKb;
     case "邮件": return handlers.onOpenEmail;
     case "日程": return handlers.onOpenSchedule;
     case "系统": return handlers.onOpenSystem;
@@ -336,7 +330,6 @@ function ToolboxNavigation({
   onOpenDoc,
   onOpenSSH,
   onOpenDb,
-  onOpenKb,
   onOpenEmail,
   onOpenSchedule,
   onOpenSystem,
@@ -350,7 +343,6 @@ function ToolboxNavigation({
   onOpenDoc: () => void;
   onOpenSSH: () => void;
   onOpenDb: () => void;
-  onOpenKb: () => void;
   onOpenEmail: () => void;
   onOpenSchedule: () => void;
   onOpenSystem: () => void;
@@ -359,14 +351,13 @@ function ToolboxNavigation({
   emailUnreadCount: number;
 }) {
   const { licenseActive } = useLicense();
-  const LICENSE_REQUIRED = new Set(["知识库", "AI文档"]);
+  const LICENSE_REQUIRED = new Set(["AI文档"]);
   const handlers = {
     onNewChat,
     onOpenNote,
     onOpenDoc,
     onOpenSSH,
     onOpenDb,
-    onOpenKb,
     onOpenEmail,
     onOpenSchedule,
     onOpenSystem,

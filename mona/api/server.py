@@ -34,21 +34,22 @@ from mona.api.hoard_handlers import (
 from mona.api.url2note import Url2NoteError, Url2NoteExtractor
 from mona.config.paths import get_media_dir, get_workspace_path
 from mona.email.imap_pool import imap_pool_manager
-from mona.kb.api import (
-    handle_kb_create_project,
-    handle_kb_delete_file,
-    handle_kb_get_reviews,
-    handle_kb_get_wiki_page,
-    handle_kb_graph,
-    handle_kb_import_files,
-    handle_kb_lint,
-    handle_kb_list_files,
-    handle_kb_list_projects,
-    handle_kb_list_wiki,
-    handle_kb_rename_project,
-    handle_kb_save_reviews,
-    handle_kb_search,
-    handle_kb_update_wiki_page,
+from mona.materials.api import (
+    handle_materials_create_directory,
+    handle_materials_delete,
+    handle_materials_delete_wiki_page,
+    handle_materials_extract,
+    handle_materials_get_text,
+    handle_materials_get_raw,
+    handle_materials_get_raw_binary,
+    handle_materials_get_wiki_page,
+    handle_materials_list_files,
+    handle_materials_list_wiki,
+    handle_materials_llm_config,
+    handle_materials_move,
+    handle_materials_search,
+    handle_materials_status,
+    handle_materials_write_wiki_page,
 )
 from mona.security.network import validate_host
 from mona.system_agent import handle_system_diagnose, handle_system_plan
@@ -4293,21 +4294,22 @@ def create_app(
     app.router.add_post("/api/system/plan", handle_system_plan)
     app.router.add_post("/api/system/diagnose", handle_system_diagnose)
 
-    # KB routes
-    app.router.add_get("/api/kb/projects", handle_kb_list_projects)
-    app.router.add_post("/api/kb/projects", handle_kb_create_project)
-    app.router.add_post("/api/kb/{id}/rename", handle_kb_rename_project)
-    app.router.add_get("/api/kb/{id}/files", handle_kb_list_files)
-    app.router.add_post("/api/kb/{id}/import", handle_kb_import_files)
-    app.router.add_delete("/api/kb/{id}/files/{path:.*}", handle_kb_delete_file)
-    app.router.add_get("/api/kb/{id}/wiki", handle_kb_list_wiki)
-    app.router.add_get("/api/kb/{id}/wiki/{path:.*}", handle_kb_get_wiki_page)
-    app.router.add_post("/api/kb/{id}/wiki/update/{path:.*}", handle_kb_update_wiki_page)
-    app.router.add_get("/api/kb/{id}/graph", handle_kb_graph)
-    app.router.add_get("/api/kb/{id}/search", handle_kb_search)
-    app.router.add_get("/api/kb/{id}/reviews", handle_kb_get_reviews)
-    app.router.add_post("/api/kb/{id}/reviews", handle_kb_save_reviews)
-    app.router.add_get("/api/kb/{id}/lint", handle_kb_lint)
+    # Materials routes (资料库：用户上传文档 → 提取文本 → AI 编译 wiki)
+    app.router.add_get("/api/materials/files", handle_materials_list_files)
+    app.router.add_post("/api/materials/directory", handle_materials_create_directory)
+    app.router.add_delete("/api/materials/files/{path:.*}", handle_materials_delete)
+    app.router.add_post("/api/materials/move", handle_materials_move)
+    app.router.add_post("/api/materials/extract", handle_materials_extract)
+    app.router.add_get("/api/materials/text/{path:.*}", handle_materials_get_text)
+    app.router.add_get("/api/materials/raw/{path:.*}", handle_materials_get_raw)
+    app.router.add_get("/api/materials/raw-binary/{path:.*}", handle_materials_get_raw_binary)
+    app.router.add_get("/api/materials/wiki", handle_materials_list_wiki)
+    app.router.add_get("/api/materials/wiki/{path:.*}", handle_materials_get_wiki_page)
+    app.router.add_post("/api/materials/wiki/write", handle_materials_write_wiki_page)
+    app.router.add_delete("/api/materials/wiki/{path:.*}", handle_materials_delete_wiki_page)
+    app.router.add_get("/api/materials/search", handle_materials_search)
+    app.router.add_get("/api/materials/status", handle_materials_status)
+    app.router.add_get("/api/materials/llm-config", handle_materials_llm_config)
 
     # Hoard routes (Agent URL memory: browser star sync)
     app.router.add_post("/api/hoard", handle_hoard_add)

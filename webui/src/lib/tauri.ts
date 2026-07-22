@@ -430,6 +430,28 @@ export async function revealItemInDir(path: string): Promise<void> {
   await revealItemInDir(path);
 }
 
+/** Open an external http(s) URL in the user's default web browser.
+ *  Falls back to ``window.open`` outside Tauri (browser/dev mode). */
+export async function openExternalUrl(url: string): Promise<void> {
+  if (!isTauri()) {
+    window.open(url, "_blank", "noopener,noreferrer");
+    return;
+  }
+  try {
+    const { openUrl } = await import("@tauri-apps/plugin-opener");
+    await openUrl(url);
+  } catch (err) {
+    console.warn("[tauri] opener.openUrl failed, falling back to shell.open:", err);
+    try {
+      const { open } = await import("@tauri-apps/plugin-shell");
+      await open(url);
+    } catch (err2) {
+      console.error("[tauri] shell.open also failed:", err2);
+      window.open(url, "_blank", "noopener,noreferrer");
+    }
+  }
+}
+
 export async function saveMarkdownFile(title: string, content: string): Promise<boolean> {
   if (!isTauri()) {
     const blob = new Blob([content], { type: "text/markdown;charset=utf-8" });
@@ -570,4 +592,42 @@ export async function showNotification(
 
 export async function closeNotificationWindow(label: string): Promise<void> {
   return invoke<void>("close_notification_window", { label });
+}
+
+// ---------------------------------------------------------------------------
+// Materials (资料库 Tauri 命令封装)
+// ---------------------------------------------------------------------------
+
+export interface MaterialsEntry {
+  name: string;
+  path: string;
+  kind: "directory" | "file";
+  size: number | null;
+  mtime: number | null;
+}
+
+/** 复制用户选择的文件到资料库 raw 目录。 */
+export function materialsImportFiles(
+  sourcePaths: string[],
+  targetDir: string,
+): Promise<MaterialsEntry[]> {
+  return invoke<MaterialsEntry[]>("materials_import_files", {
+    sourcePaths,
+    targetDir,
+  });
+}
+
+/** 列出 raw 目录下的文件和文件夹（非递归）。 */
+export function materialsListDir(subdir: string | null): Promise<MaterialsEntry[]> {
+  return invoke<MaterialsEntry[]>("materials_list_dir", { subdir });
+}
+
+/** 确保 .mona/materials/{raw,text,wiki}/ 存在。 */
+export function materialsEnsureInitialized(): Promise<boolean> {
+  return invoke<boolean>("materials_ensure_initialized");
+}
+
+/** 返回 wiki 目录绝对路径。 */
+export function materialsGetWikiDir(): Promise<string | null> {
+  return invoke<string | null>("materials_get_wiki_dir");
 }

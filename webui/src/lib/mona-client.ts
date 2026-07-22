@@ -2,9 +2,7 @@ import type {
   ConnectionStatus,
   InboundEvent,
   Outbound,
-  OutboundImageGeneration,
   OutboundMedia,
-  OutboundVideoGeneration,
   GoalStateWsPayload,
 } from "./types";
 
@@ -415,8 +413,6 @@ export class MonaClient {
     content: string,
     media?: OutboundMedia[],
     options?: {
-      imageGeneration?: OutboundImageGeneration;
-      videoGeneration?: OutboundVideoGeneration;
       /** IMPORTANT: Short display text persisted to server for history replay.
        *  DO NOT remove — keeps user messages showing original input, not enriched prompts. */
       displayContent?: string;
@@ -435,8 +431,6 @@ export class MonaClient {
       chat_id: chatId,
       content,
       ...(media && media.length > 0 ? { media } : {}),
-      ...(options?.imageGeneration ? { image_generation: options.imageGeneration } : {}),
-      ...(options?.videoGeneration ? { video_generation: options.videoGeneration } : {}),
       ...(options?.displayContent ? { display_content: options.displayContent } : {}),
       ...(options?.terminalSessionId ? { terminal_session_id: options.terminalSessionId } : {}),
       ...(options?.terminalExecMode ? { terminal_exec_mode: options.terminalExecMode } : {}),

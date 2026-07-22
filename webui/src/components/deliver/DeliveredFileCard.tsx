@@ -7,7 +7,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { isTauri, openPathWithSystemApp, revealItemInDir } from "@/lib/tauri";
-import { useFilePreviewStore } from "./filePreviewStore";
+import { useFilePreviewStore, type PreviewScope } from "./filePreviewStore";
 import { cn } from "@/lib/utils";
 import type { DeliveredFile } from "@/lib/types";
 
@@ -33,15 +33,25 @@ function KindIcon({ name }: { name: string }) {
 
 interface DeliveredFileCardProps {
   file: DeliveredFile;
+  /** Preview scope: ``shared`` resolves under ``<workspace>/output/``;
+   *  ``project`` resolves under the session's bound workspace. */
+  scope?: PreviewScope;
+  /** Required when ``scope === "project"``. */
+  sessionKey?: string | null;
   className?: string;
 }
 
-export function DeliveredFileCard({ file, className }: DeliveredFileCardProps) {
+export function DeliveredFileCard({
+  file,
+  scope = "shared",
+  sessionKey = null,
+  className,
+}: DeliveredFileCardProps) {
   const openPreview = useFilePreviewStore((s) => s.open);
 
   const handleClick = useCallback(() => {
-    openPreview(file);
-  }, [file, openPreview]);
+    openPreview(file, scope, sessionKey);
+  }, [file, scope, sessionKey, openPreview]);
 
   const handleOpenWithSystem = useCallback(() => {
     if (isTauri()) void openPathWithSystemApp(file.absolute_path);
@@ -97,16 +107,25 @@ export function DeliveredFileCard({ file, className }: DeliveredFileCardProps) {
 
 export function DeliveredFileCardList({
   files,
+  scope = "shared",
+  sessionKey = null,
   className,
 }: {
   files: DeliveredFile[];
+  scope?: PreviewScope;
+  sessionKey?: string | null;
   className?: string;
 }) {
   if (files.length === 0) return null;
   return (
     <div className={cn("flex flex-wrap gap-2", className)}>
       {files.map((f, i) => (
-        <DeliveredFileCard key={`${f.absolute_path}-${i}`} file={f} />
+        <DeliveredFileCard
+          key={`${f.absolute_path}-${i}`}
+          file={f}
+          scope={scope}
+          sessionKey={sessionKey}
+        />
       ))}
     </div>
   );

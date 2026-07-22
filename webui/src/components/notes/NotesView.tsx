@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ArrowDownUp,
-  ChevronUp,
   ChevronsDownUp,
   ChevronsUpDown,
   ChevronRight,
@@ -65,6 +64,7 @@ import { useLicense } from "@/hooks/useLicense";
 import { GlobalSearchDialog } from "./GlobalSearchDialog";
 import { ConfirmDialog, PromptDialog, TemplatePickerDialog } from "./NotesDialogs";
 import { NoteAgentPanel } from "./NoteAgentPanel";
+import { MaterialsSidebar, MaterialsPreview, type MaterialsSelection } from "./materials/MaterialsView";
 import type { EditorMode } from "@/components/common/MarkdownEditor";
 import { openActiveEditorFind, openActiveEditorReplace } from "@/components/common/FindReplaceBar";
 import { NoteList, NoteRow, sortNotesByMode, type SortMode } from "./NoteList";
@@ -138,6 +138,8 @@ export function NotesView({
   const [storageReady, setStorageReady] = useState(false);
   const [storageError, setStorageError] = useState<string | null>(null);
   const [vaultPath, setVaultPath] = useState<string | null>(null);
+  const [moduleView, setModuleView] = useState<"notes" | "materials">("notes");
+  const [materialsSelection, setMaterialsSelection] = useState<MaterialsSelection>(null);
   const [vaultBusy, setVaultBusy] = useState(false);
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [agentPanelCollapsed, setAgentPanelCollapsed] = useState(true);
@@ -1575,7 +1577,8 @@ export function NotesView({
               onOpenOrCreate={openOrCreateVault}
             />
           ) : (
-            <>
+            <div className="flex min-w-0 flex-1 flex-col">
+              <div className="flex min-h-0 flex-1">
               <aside
                 className="relative hidden w-[260px] shrink-0 flex-col border-r border-border/70 bg-sidebar/35 md:flex"
                 onDragEnter={handleSidebarDragEnter}
@@ -1583,6 +1586,8 @@ export function NotesView({
                 onDragLeave={handleSidebarDragLeave}
                 onDrop={handleSidebarDrop}
               >
+                {moduleView === "notes" ? (
+                <>
                 <div className="flex h-9 shrink-0 items-center justify-center gap-0.5 px-2">
                   <IconButton label="新建笔记" onClick={() => createNote("manual", "")}>
                     <Plus className="h-3.5 w-3.5" />
@@ -1856,24 +1861,51 @@ export function NotesView({
                     </ContextMenuItem>
                   </ContextMenuContent>
                 </ContextMenu>
-                <div className="flex h-9 shrink-0 items-center border-t border-border/55 px-2">
+                </>
+                ) : (
+                  <MaterialsSidebar
+                    selection={materialsSelection}
+                    onSelect={setMaterialsSelection}
+                  />
+                )}
+                <div className="flex h-9 shrink-0 items-center gap-2 border-t border-border/55 px-2">
+                  <div className="flex items-center rounded-lg bg-muted/50 p-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setModuleView("notes")}
+                      className={cn(
+                        "rounded-md px-2.5 py-1 text-[11.5px] font-medium transition-colors",
+                        moduleView === "notes"
+                          ? "bg-background text-foreground shadow-sm"
+                          : "text-muted-foreground hover:text-foreground",
+                      )}
+                    >
+                      笔记
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setModuleView("materials")}
+                      className={cn(
+                        "rounded-md px-2.5 py-1 text-[11.5px] font-medium transition-colors",
+                        moduleView === "materials"
+                          ? "bg-background text-foreground shadow-sm"
+                          : "text-muted-foreground hover:text-foreground",
+                      )}
+                    >
+                      资料
+                    </button>
+                  </div>
                   <button
                     type="button"
-                    title="切换笔记仓库"
+                    title={`切换仓库${vaultPath ? `: ${vaultPath.split(/[\\/]/).pop()}` : ""}`}
                     onClick={openOrCreateVault}
-                    className="flex min-w-0 items-center gap-1.5 rounded px-1 py-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+                    className="ml-auto grid h-7 w-7 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
                   >
-                    <ChevronUp className="h-3.5 w-3.5 shrink-0" />
-                    <span className="min-w-0 flex-1 truncate text-[11.5px] font-semibold uppercase tracking-wide">
-                      {vaultPath ? vaultPath.split(/[\\/]/).pop() : "笔记本"}
-                    </span>
-                    <span className="shrink-0 rounded-full bg-muted/50 px-1.5 py-px text-[10.5px]">
-                      {notebooks.length}
-                    </span>
+                    <FolderOpen className="h-3.5 w-3.5" />
                   </button>
                 </div>
               </aside>
-              {tasksPanelOpen ? (
+              {moduleView === "notes" && tasksPanelOpen ? (
                 <div className="absolute left-[260px] top-0 bottom-0 z-30 w-[300px] border-r border-border/70 bg-background shadow-lg">
                   <TasksPanel
                     notes={notes}
@@ -1888,7 +1920,7 @@ export function NotesView({
                 </div>
               ) : null}
               <div className="relative flex min-w-0 min-h-0 flex-1">
-                <Workspace
+                {moduleView === "notes" ? <Workspace
                   workspace={workspace}
                   onChange={setWorkspace}
                   notes={notes}
@@ -2114,8 +2146,8 @@ export function NotesView({
                       </div>
                     );
                   }}
-                />
-                {rightSidebarOpen && (
+                /> : <MaterialsPreview selection={materialsSelection} />}
+                {moduleView === "notes" && rightSidebarOpen && (
                   <>
                     <div
                       onMouseDown={handleRightDragStart}
@@ -2133,7 +2165,8 @@ export function NotesView({
                   </>
                 )}
               </div>
-            </>
+              </div>
+            </div>
           )}
         </div>
       </section>

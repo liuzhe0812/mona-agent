@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 import json
 import re
 import shutil
@@ -37,7 +37,8 @@ def mock_paths():
     with patch("mona.config.loader.get_config_path") as mock_cp, \
          patch("mona.config.loader.save_config") as mock_sc, \
          patch("mona.config.loader.load_config") as mock_lc, \
-         patch("mona.cli.commands.get_workspace_path") as mock_ws:
+         patch("mona.cli.commands.get_workspace_path") as mock_ws, \
+         patch("mona.cli.commands.run_startup_migrations") as mock_migrations:
         base_dir = Path("./test_onboard_data")
         if base_dir.exists():
             shutil.rmtree(base_dir)
@@ -57,7 +58,7 @@ def mock_paths():
 
         mock_sc.side_effect = _save_config
 
-        yield config_file, workspace_dir, mock_ws
+        yield config_file, workspace_dir, mock_ws, mock_migrations
 
         if base_dir.exists():
             shutil.rmtree(base_dir)
@@ -65,7 +66,7 @@ def mock_paths():
 
 def test_onboard_fresh_install(mock_paths):
     """No existing config — should create from scratch."""
-    config_file, workspace_dir, mock_ws = mock_paths
+    config_file, workspace_dir, mock_ws, mock_migrations = mock_paths
 
     result = runner.invoke(app, ["onboard"])
 
@@ -74,15 +75,15 @@ def test_onboard_fresh_install(mock_paths):
     assert "Created workspace" in result.stdout
     assert "mona is ready" in result.stdout
     assert config_file.exists()
-    assert (workspace_dir / "AGENTS.md").exists()
-    assert (workspace_dir / "memory" / "MEMORY.md").exists()
+    # Templates now live under ~/.mona/ (via run_startup_migrations), not workspace.
+    mock_migrations.assert_called_once_with()
     expected_workspace = Config().workspace_path
     assert mock_ws.call_args.args == (expected_workspace,)
 
 
 def test_onboard_existing_config_refresh(mock_paths):
     """Config exists, user declines overwrite — should refresh (load-merge-save)."""
-    config_file, workspace_dir, _ = mock_paths
+    config_file, workspace_dir, _, mock_migrations = mock_paths
     config_file.write_text('{"existing": true}')
 
     result = runner.invoke(app, ["onboard"], input="n\n")
@@ -91,12 +92,12 @@ def test_onboard_existing_config_refresh(mock_paths):
     assert "Config already exists" in result.stdout
     assert "existing values preserved" in result.stdout
     assert workspace_dir.exists()
-    assert (workspace_dir / "AGENTS.md").exists()
+    mock_migrations.assert_called_once_with()
 
 
 def test_onboard_existing_config_overwrite(mock_paths):
     """Config exists, user confirms overwrite — should reset to defaults."""
-    config_file, workspace_dir, _ = mock_paths
+    config_file, workspace_dir, _, _ = mock_paths
     config_file.write_text('{"existing": true}')
 
     result = runner.invoke(app, ["onboard"], input="y\n")
@@ -108,8 +109,8 @@ def test_onboard_existing_config_overwrite(mock_paths):
 
 
 def test_onboard_existing_workspace_safe_create(mock_paths):
-    """Workspace exists — should not recreate, but still add missing templates."""
-    config_file, workspace_dir, _ = mock_paths
+    """Workspace exists — should not recreate, but still run migrations."""
+    config_file, workspace_dir, _, mock_migrations = mock_paths
     workspace_dir.mkdir(parents=True)
     config_file.write_text("{}")
 
@@ -117,8 +118,7 @@ def test_onboard_existing_workspace_safe_create(mock_paths):
 
     assert result.exit_code == 0
     assert "Created workspace" not in result.stdout
-    assert "Created AGENTS.md" in result.stdout
-    assert (workspace_dir / "AGENTS.md").exists()
+    mock_migrations.assert_called_once_with()
 
 
 def _strip_ansi(text):
@@ -141,7 +141,7 @@ def test_onboard_help_shows_workspace_and_config_options():
 
 
 def test_onboard_interactive_discard_does_not_save_or_create_workspace(mock_paths, monkeypatch):
-    config_file, workspace_dir, _ = mock_paths
+    config_file, workspace_dir, _, _ = mock_paths
 
     from mona.cli.onboard import OnboardResult
 
@@ -163,6 +163,7 @@ def test_onboard_uses_explicit_config_and_workspace_paths(tmp_path, monkeypatch)
     workspace_path = tmp_path / "workspace"
 
     monkeypatch.setattr("mona.channels.registry.discover_all", lambda: {})
+    monkeypatch.setattr("mona.cli.commands.run_startup_migrations", lambda: None)
 
     result = runner.invoke(
         app,
@@ -172,7 +173,8 @@ def test_onboard_uses_explicit_config_and_workspace_paths(tmp_path, monkeypatch)
     assert result.exit_code == 0
     saved = Config.model_validate(json.loads(config_path.read_text(encoding="utf-8")))
     assert saved.workspace_path == workspace_path
-    assert (workspace_path / "AGENTS.md").exists()
+    # Templates now live under ~/.mona/ (via run_startup_migrations), not workspace.
+    assert workspace_path.exists()
     stripped_output = _strip_ansi(result.stdout)
     compact_output = stripped_output.replace("\n", "")
     resolved_config = str(config_path.resolve())
@@ -191,6 +193,7 @@ def test_onboard_wizard_preserves_explicit_config_in_next_steps(tmp_path, monkey
         lambda initial_config: OnboardResult(config=initial_config, should_save=True),
     )
     monkeypatch.setattr("mona.channels.registry.discover_all", lambda: {})
+    monkeypatch.setattr("mona.cli.commands.run_startup_migrations", lambda: None)
 
     result = runner.invoke(
         app,
@@ -630,7 +633,7 @@ def mock_agent_runtime(tmp_path):
 
     with patch("mona.config.loader.load_config", return_value=config) as mock_load_config, \
          patch("mona.config.loader.resolve_config_env_vars", side_effect=lambda c: c), \
-         patch("mona.cli.commands.sync_workspace_templates") as mock_sync_templates, \
+         patch("mona.cli.commands.run_startup_migrations") as mock_run_migrations, \
          patch("mona.providers.factory.make_provider", return_value=_fake_provider()), \
          patch("mona.cli.commands._print_agent_response") as mock_print_response, \
          patch("mona.bus.queue.MessageBus"), \
@@ -647,7 +650,7 @@ def mock_agent_runtime(tmp_path):
         yield {
             "config": config,
             "load_config": mock_load_config,
-            "sync_templates": mock_sync_templates,
+            "run_migrations": mock_run_migrations,
             "from_config": mock_from_config,
             "agent_loop": agent_loop,
             "print_response": mock_print_response,
@@ -670,9 +673,7 @@ def test_agent_uses_default_config_when_no_workspace_or_config_flags(mock_agent_
 
     assert result.exit_code == 0
     assert mock_agent_runtime["load_config"].call_args.args == (None,)
-    assert mock_agent_runtime["sync_templates"].call_args.args == (
-        mock_agent_runtime["config"].workspace_path,
-    )
+    mock_agent_runtime["run_migrations"].assert_called_once_with()
     passed_config = mock_agent_runtime["from_config"].call_args.args[0]
     assert passed_config.workspace_path == mock_agent_runtime["config"].workspace_path
     mock_agent_runtime["agent_loop"].process_direct.assert_awaited_once()
@@ -704,7 +705,7 @@ def test_agent_config_sets_active_path(monkeypatch, tmp_path: Path) -> None:
         lambda path: seen.__setitem__("config_path", path),
     )
     monkeypatch.setattr("mona.config.loader.load_config", lambda _path=None: config)
-    monkeypatch.setattr("mona.cli.commands.sync_workspace_templates", lambda _path: None)
+    monkeypatch.setattr("mona.cli.commands.run_startup_migrations", lambda: None)
     monkeypatch.setattr("mona.providers.factory.make_provider", lambda _config: _fake_provider())
     monkeypatch.setattr("mona.bus.queue.MessageBus", lambda: object())
     monkeypatch.setattr("mona.cron.service.CronService", lambda _store: object())
@@ -742,7 +743,7 @@ def test_agent_uses_workspace_directory_for_cron_store(monkeypatch, tmp_path: Pa
 
     monkeypatch.setattr("mona.config.loader.set_config_path", lambda _path: None)
     monkeypatch.setattr("mona.config.loader.load_config", lambda _path=None: config)
-    monkeypatch.setattr("mona.cli.commands.sync_workspace_templates", lambda _path: None)
+    monkeypatch.setattr("mona.cli.commands.run_startup_migrations", lambda: None)
     monkeypatch.setattr("mona.providers.factory.make_provider", lambda _config: _fake_provider())
     monkeypatch.setattr("mona.bus.queue.MessageBus", lambda: object())
 
@@ -791,7 +792,7 @@ def test_agent_workspace_override_does_not_migrate_legacy_cron(
 
     monkeypatch.setattr("mona.config.loader.set_config_path", lambda _path: None)
     monkeypatch.setattr("mona.config.loader.load_config", lambda _path=None: config)
-    monkeypatch.setattr("mona.cli.commands.sync_workspace_templates", lambda _path: None)
+    monkeypatch.setattr("mona.cli.commands.run_startup_migrations", lambda: None)
     monkeypatch.setattr("mona.providers.factory.make_provider", lambda _config: _fake_provider())
     monkeypatch.setattr("mona.bus.queue.MessageBus", lambda: object())
     monkeypatch.setattr("mona.config.paths.get_cron_dir", lambda: legacy_dir)
@@ -847,7 +848,7 @@ def test_agent_custom_config_workspace_does_not_migrate_legacy_cron(
 
     monkeypatch.setattr("mona.config.loader.set_config_path", lambda _path: None)
     monkeypatch.setattr("mona.config.loader.load_config", lambda _path=None: config)
-    monkeypatch.setattr("mona.cli.commands.sync_workspace_templates", lambda _path: None)
+    monkeypatch.setattr("mona.cli.commands.run_startup_migrations", lambda: None)
     monkeypatch.setattr("mona.providers.factory.make_provider", lambda _config: _fake_provider())
     monkeypatch.setattr("mona.bus.queue.MessageBus", lambda: object())
     monkeypatch.setattr("mona.config.paths.get_cron_dir", lambda: legacy_dir)
@@ -890,7 +891,7 @@ def test_agent_overrides_workspace_path(mock_agent_runtime):
 
     assert result.exit_code == 0
     assert mock_agent_runtime["config"].agents.defaults.workspace == str(workspace_path)
-    assert mock_agent_runtime["sync_templates"].call_args.args == (workspace_path,)
+    mock_agent_runtime["run_migrations"].assert_called_once_with()
     passed_config = mock_agent_runtime["from_config"].call_args.args[0]
     assert passed_config.workspace_path == workspace_path
 
@@ -908,7 +909,7 @@ def test_agent_workspace_override_wins_over_config_workspace(mock_agent_runtime,
     assert result.exit_code == 0
     assert mock_agent_runtime["load_config"].call_args.args == (config_path.resolve(),)
     assert mock_agent_runtime["config"].agents.defaults.workspace == str(workspace_path)
-    assert mock_agent_runtime["sync_templates"].call_args.args == (workspace_path,)
+    mock_agent_runtime["run_migrations"].assert_called_once_with()
     passed_config = mock_agent_runtime["from_config"].call_args.args[0]
     assert passed_config.workspace_path == workspace_path
 
@@ -955,7 +956,7 @@ def _patch_cli_command_runtime(
     config: Config,
     *,
     set_config_path=None,
-    sync_templates=None,
+    run_migrations=None,
     make_provider=None,
     message_bus=None,
     session_manager=None,
@@ -971,8 +972,8 @@ def _patch_cli_command_runtime(
     monkeypatch.setattr("mona.config.loader.load_config", lambda _path=None: config)
     monkeypatch.setattr("mona.config.loader.resolve_config_env_vars", lambda c: c)
     monkeypatch.setattr(
-        "mona.cli.commands.sync_workspace_templates",
-        sync_templates or (lambda _path: None),
+        "mona.cli.commands.run_startup_migrations",
+        run_migrations or (lambda: None),
     )
     monkeypatch.setattr(
         "mona.providers.factory.make_provider",
@@ -1050,7 +1051,7 @@ def test_gateway_uses_workspace_from_config_by_default(monkeypatch, tmp_path: Pa
         monkeypatch,
         config,
         set_config_path=lambda path: seen.__setitem__("config_path", path),
-        sync_templates=lambda path: seen.__setitem__("workspace", path),
+        run_migrations=lambda: seen.__setitem__("migrations_called", True),
         make_provider=_stop_gateway_provider,
     )
 
@@ -1058,7 +1059,7 @@ def test_gateway_uses_workspace_from_config_by_default(monkeypatch, tmp_path: Pa
 
     assert isinstance(result.exception, _StopGatewayError)
     assert seen["config_path"] == config_file.resolve()
-    assert seen["workspace"] == Path(config.agents.defaults.workspace)
+    assert seen.get("migrations_called") is True
 
 
 def test_gateway_workspace_option_overrides_config(monkeypatch, tmp_path: Path) -> None:
@@ -1071,7 +1072,7 @@ def test_gateway_workspace_option_overrides_config(monkeypatch, tmp_path: Path) 
     _patch_cli_command_runtime(
         monkeypatch,
         config,
-        sync_templates=lambda path: seen.__setitem__("workspace", path),
+        run_migrations=lambda: seen.__setitem__("migrations_called", True),
         make_provider=_stop_gateway_provider,
     )
 
@@ -1081,7 +1082,7 @@ def test_gateway_workspace_option_overrides_config(monkeypatch, tmp_path: Path) 
     )
 
     assert isinstance(result.exception, _StopGatewayError)
-    assert seen["workspace"] == override
+    assert seen.get("migrations_called") is True
     assert config.workspace_path == override
 
 
@@ -1126,7 +1127,7 @@ def test_gateway_cron_evaluator_receives_scheduled_reminder_context(
 
     monkeypatch.setattr("mona.config.loader.set_config_path", lambda _path: None)
     monkeypatch.setattr("mona.config.loader.load_config", lambda _path=None: config)
-    monkeypatch.setattr("mona.cli.commands.sync_workspace_templates", lambda _path: None)
+    monkeypatch.setattr("mona.cli.commands.run_startup_migrations", lambda: None)
     monkeypatch.setattr("mona.providers.factory.make_provider", lambda _config: provider)
     monkeypatch.setattr(
         "mona.providers.factory.build_provider_snapshot",
@@ -1287,7 +1288,7 @@ def test_gateway_cron_job_suppresses_intermediate_progress(
 
     monkeypatch.setattr("mona.config.loader.set_config_path", lambda _path: None)
     monkeypatch.setattr("mona.config.loader.load_config", lambda _path=None: config)
-    monkeypatch.setattr("mona.cli.commands.sync_workspace_templates", lambda _path: None)
+    monkeypatch.setattr("mona.cli.commands.run_startup_migrations", lambda: None)
     monkeypatch.setattr("mona.providers.factory.make_provider", lambda _config: _fake_provider())
     monkeypatch.setattr(
         "mona.providers.factory.build_provider_snapshot",

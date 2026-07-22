@@ -267,7 +267,7 @@ fn push_cjk_bigrams(chars: &[char], tokens: &mut Vec<String>) {
 }
 
 /// 查询分词：空白切分拉丁文，CJK 连续段切 2-gram。
-/// 对齐 Python 侧 mona/kb/search.py 的 _tokenize_query。
+/// 对齐 Python 侧 mona/materials/search.py 的 _tokenize_query。
 fn tokenize_query(query: &str) -> Vec<String> {
     let mut tokens: Vec<String> = Vec::new();
     for raw in query.split_whitespace() {

@@ -9,6 +9,7 @@ from loguru import logger
 from pydantic import Field
 
 from mona.agent.tools.base import Tool, tool_parameters
+from mona.agent.tools.path_utils import get_current_workspace
 from mona.agent.tools.schema import (
     ArraySchema,
     IntegerSchema,
@@ -103,6 +104,11 @@ class VideoGenerationTool(Tool):
         self.config = config
         self.provider_configs = dict(provider_configs or {})
 
+    def _active_workspace(self) -> Path:
+        """Return the active session workspace (contextvar) or configured fallback."""
+        ws = get_current_workspace(self.workspace)
+        return ws if ws is not None else self.workspace
+
     @property
     def name(self) -> str:
         return "generate_video"
@@ -164,6 +170,9 @@ class VideoGenerationTool(Tool):
                 duration=duration or self.config.default_duration,
             )
             raw = await download_video_bytes(response.video_url)
+            # Store generated videos under the active session workspace so they
+            # appear in the shared output artifact panel for normal sessions.
+            artifact_root = self._active_workspace()
             artifact = store_generated_video_artifact(
                 raw,
                 prompt=prompt,
@@ -174,6 +183,7 @@ class VideoGenerationTool(Tool):
                 save_dir=self.config.save_dir,
                 duration=response.seconds,
                 size=response.size,
+                artifact_root=artifact_root,
             )
             return generated_video_tool_result([artifact])
         except (ArtifactError, ImageUploadError, VideoGenerationError, OSError) as exc:

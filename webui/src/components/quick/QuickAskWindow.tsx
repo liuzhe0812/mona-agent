@@ -3,7 +3,7 @@ import { FileText, Terminal } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { ThreadComposer } from "@/components/thread/ThreadComposer";
-import type { SendImage, SendOptions } from "@/hooks/useMonaStream";
+import type { SendImage } from "@/hooks/useMonaStream";
 import { useTheme } from "@/hooks/useTheme";
 import { listSlashCommands } from "@/lib/api";
 import {
@@ -27,7 +27,6 @@ export function QuickAskWindow() {
   const { client, modelName, token } = useClient();
   useTheme();
   const [slashCommands, setSlashCommands] = useState<SlashCommand[]>([]);
-  const [imageMode, setImageMode] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -61,15 +60,13 @@ export function QuickAskWindow() {
   }, []);
 
   const handleSend = useCallback(
-    async (content: string, images?: SendImage[], options?: SendOptions) => {
+    async (content: string, images?: SendImage[]) => {
       if (submitting) return;
       setSubmitting(true);
       setError(null);
       try {
         const chatId = await client.newChat();
-        client.sendMessage(chatId, content, images?.map((image) => image.media), {
-          imageGeneration: options?.imageGeneration,
-        });
+        client.sendMessage(chatId, content, images?.map((image) => image.media));
         await quickAskFocusChat(chatId);
         await quickAskHide();
       } catch (e) {
@@ -100,8 +97,6 @@ export function QuickAskWindow() {
           modelLabel={toModelBadgeLabel(modelName)}
           variant="hero"
           slashCommands={slashCommands}
-          imageMode={imageMode}
-          onImageModeChange={setImageMode}
           leadingActions={
             <>
               <Button

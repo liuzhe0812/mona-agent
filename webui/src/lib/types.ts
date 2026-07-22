@@ -38,6 +38,9 @@ export interface DeliveredFile {
   size_human: string;
   mime: string;
   summary?: string;
+  /** ISO 8601 timestamp from the shared-output scan. May be absent on
+   *  deliver_file/file_edit events that don't carry mtime. */
+  modified_at?: string;
 }
 
 export interface UIMessage {
@@ -521,15 +524,6 @@ export interface OutboundMedia {
   name?: string;
 }
 
-export interface OutboundImageGeneration {
-  enabled: true;
-  aspect_ratio?: string | null;
-}
-
-export interface OutboundVideoGeneration {
-  enabled: true;
-}
-
 /** Response shape for ``GET .../webui-thread`` (server-built transcript replay). */
 export interface WebuiThreadPersistedPayload {
   schemaVersion: number;
@@ -546,8 +540,6 @@ export type Outbound =
       chat_id: string;
       content: string;
       media?: OutboundMedia[];
-      image_generation?: OutboundImageGeneration;
-      video_generation?: OutboundVideoGeneration;
       webui?: true;
       /** IMPORTANT: Short display text for the user message bubble (e.g. action label).
        *  When set, the frontend renders this instead of the full `content`.

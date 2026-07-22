@@ -1,6 +1,21 @@
 {
   "releases": [
     {
+      "version": "1.2.1",
+      "pubDate": "2026-07-22T02:00:26Z",
+      "gitHash": "41cc93a20cec91e2bdbd992bd28bf8123cd8f97d",
+      "previousGitHash": "43c36c6293ab19524a56f336291d4a7fe2a3fd93",
+      "summary": "",
+      "items": [
+        "AI 直接配置 API 密钥：可在对话中让 AI 帮忙设置模型提供商密钥",
+        "对话区升级为三栏布局：左侧对话、中间文件预览、右侧工作区列表，支持独立拖拽调整比例",
+        "AI 生成的文件自动入库：exec 命令生成的 PPT、Excel、Word、PDF 等文件现在会自动出现在工作区侧边栏",
+        "Markdown 新增 Mermaid 代码块渲染，可直接渲染流程图、时序图等图表",
+        "编辑器新增查找替换功能",
+        "移除内置流程图制作模块，相关代码与资源已清理"
+      ]
+    },
+    {
       "version": "1.2.0",
       "pubDate": "2026-07-17T14:55:53Z",
       "gitHash": "43c36c6293ab19524a56f336291d4a7fe2a3fd93",

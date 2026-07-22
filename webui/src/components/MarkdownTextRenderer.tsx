@@ -10,7 +10,7 @@ import remarkMath from "remark-math";
 
 import { CodeBlock } from "@/components/CodeBlock";
 import { FileReferenceChip, isLikelyFilePath } from "@/components/FileReferenceChip";
-import { isTauri, openPathWithSystemApp, revealItemInDir } from "@/lib/tauri";
+import { isTauri, openPathWithSystemApp, openExternalUrl, revealItemInDir } from "@/lib/tauri";
 import { useWorkspaceStore, resolveToAbsolutePath } from "@/lib/workspace-store";
 import { cn } from "@/lib/utils";
 
@@ -143,6 +143,17 @@ export default function MarkdownTextRenderer({
             target="_blank"
             rel="noreferrer noopener"
             className="text-primary underline underline-offset-2 hover:opacity-80"
+            onClick={(e) => {
+              // In Tauri desktop, <a target="_blank"> opens an empty app
+              // window instead of the system browser. Intercept and route
+              // through the opener plugin so http(s) links launch the
+              // user's default browser.
+              if (!isTauri()) return;
+              const url = typeof href === "string" ? href : "";
+              if (!url || !/^https?:\/\//i.test(url)) return;
+              e.preventDefault();
+              void openExternalUrl(url);
+            }}
             {...props}
           >
             {markdownChildren}

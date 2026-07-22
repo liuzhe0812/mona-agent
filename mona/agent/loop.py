@@ -70,7 +70,8 @@ _FREE_TIER_CAPABILITY_NOTE = (
     "# Subscription Status\n\n"
     "The user does not have an active subscription or trial. The following "
     "capabilities are **unavailable** to you right now:\n"
-    "- Searching or reading existing notes (notes_search, notes_read)\n"
+    "- Searching the knowledge base (knowledge_search) or reading existing "
+    "notes (notes_read)\n"
     "- Searching, reading, or operating on emails (email_search, email_read, "
     "email_action)\n"
     "- Searching the unified memory (hoard_search) for note or email sources\n\n"
@@ -80,10 +81,10 @@ _FREE_TIER_CAPABILITY_NOTE = (
     "- Search the unified memory (hoard_search) for browser and chat sources\n"
     "- Use all other tools normally\n\n"
     "Rules:\n"
-    "- Do NOT claim or imply that you have searched notes or emails.\n"
-    "- If the user asks you to find something in their notes or emails, explain "
-    "that an active subscription or trial is required and they can subscribe to "
-    "unlock this capability.\n"
+    "- Do NOT claim or imply that you have searched notes, materials, or emails.\n"
+    "- If the user asks you to find something in their notes, materials, or "
+    "emails, explain that an active subscription or trial is required and they "
+    "can subscribe to unlock this capability.\n"
     "- You can still create new notes at the user's request."
 )
 
@@ -481,15 +482,25 @@ class AgentLoop:
     def _effective_workspace(self, session: Session | None) -> Path:
         """Compute the effective workspace for a session.
 
-        - Session with ``metadata.workspace`` set to an absolute path: that path (resolved).
-        - Default session or no session: ``self.workspace`` (``config.workspace_path``).
+        - Session with ``metadata.workspace`` set to an absolute path: that
+          path (resolved) — project session keeps its own root.
+        - Session with ``metadata.agent_kind`` in ``{"ppt", "video"}``: the
+          configured workspace root — dedicated agents keep their existing
+          workspace semantics (ppt_projects/, video_projects/).
+        - Default session or no session: ``<workspace>/output`` — the shared
+          artifacts directory for non-project sessions.
         """
+        from mona.config.paths import get_shared_output_dir
+
         if session is None:
-            return self.workspace
+            return get_shared_output_dir(self.workspace)
         ws_override = session.metadata.get("workspace")
         if isinstance(ws_override, str) and ws_override.strip():
             return Path(ws_override).expanduser().resolve()
-        return self.workspace
+        agent_kind = session.metadata.get("agent_kind")
+        if isinstance(agent_kind, str) and agent_kind in {"ppt", "video"}:
+            return self.workspace
+        return get_shared_output_dir(self.workspace)
 
     def _ensure_document_loop(self, agent_kind: str) -> AgentLoop:
         """Lazily construct a document agent loop for the given kind.

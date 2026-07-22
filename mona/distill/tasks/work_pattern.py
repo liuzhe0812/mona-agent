@@ -7,7 +7,6 @@ Writes results to USER.md (Work Patterns section) and profile.rich.json.
 from __future__ import annotations
 
 import json
-from datetime import datetime
 from typing import Any
 
 from loguru import logger
@@ -15,7 +14,6 @@ from loguru import logger
 from mona.distill.base import DistillContext, DistillResult, DistillTask
 from mona.distill.collectors import collect_tool_calls
 from mona.utils.prompt_templates import render_template
-
 
 _TASK_NAME = "work-pattern"
 _USER_SECTION = "Work Patterns"
@@ -139,44 +137,43 @@ def _rule_based_fallback(data: dict[str, Any]) -> dict[str, Any]:
 
 
 def _format_markdown(data: dict[str, Any]) -> str:
-    """Format work patterns as markdown for USER.md."""
-    lines = []
-    tasks = data.get("frequent_tasks", [])
+    """Format work patterns as a compact narrative paragraph for USER.md.
+
+    输出为紧凑的自然语言段落而非字段罗列，便于 agent 形成立体认知。
+    缺失字段跳过，不输出空标签或 unknown 占位。
+    """
+    sentences: list[str] = []
+
+    tasks = data.get("frequent_tasks") or []
     if tasks:
-        lines.append("**Frequent Tasks:**")
-        for t in tasks:
-            lines.append(f"- {t}")
-        lines.append("")
+        sentences.append(f"高频任务：{'、'.join(tasks[:5])}")
 
-    tools = data.get("preferred_tools", [])
+    tools = data.get("preferred_tools") or []
     if tools:
-        lines.append("**Preferred Tools:**")
-        lines.append(", ".join(tools))
-        lines.append("")
+        sentences.append(f"偏好工具：{'、'.join(tools[:5])}")
 
-    chains = data.get("tool_chains", [])
+    chains = data.get("tool_chains") or []
     if chains:
-        lines.append("**Common Tool Sequences:**")
-        for c in chains:
-            lines.append(f"- {c}")
-        lines.append("")
+        chain_str = "；".join(c if isinstance(c, str) else " → ".join(c) for c in chains[:3])
+        sentences.append(f"常用工具链：{chain_str}")
 
-    active = data.get("active_hours")
-    if active:
-        lines.append(f"**Active Hours:** {active}")
-        lines.append("")
+    active = data.get("active_hours") or ""
+    if active and "unknown" not in active.lower():
+        sentences.append(f"活跃时段{active}")
 
-    style = data.get("output_style")
-    if style:
-        lines.append(f"**Output Style:** {style}")
-        lines.append("")
+    style = data.get("output_style") or ""
+    if style and style != "adaptive":
+        sentences.append(f"输出风格偏{style}")
+    elif style:
+        sentences.append("输出风格自适应")
 
-    focus = data.get("work_focus")
-    if focus:
-        lines.append(f"**Work Focus:** {focus}")
-        lines.append("")
+    focus = data.get("work_focus") or ""
+    if focus and "unknown" not in focus.lower():
+        sentences.append(f"工作焦点：{focus}")
 
-    return "\n".join(lines) if lines else "(insufficient data)"
+    if not sentences:
+        return "(insufficient data)"
+    return "；".join(sentences) + "。"
 
 
 async def _call_llm(ctx: DistillContext, prompt: str) -> str:

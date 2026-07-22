@@ -8,6 +8,7 @@ mod ipc_bridge;
 mod license;
 mod notes;
 mod notes_links;
+mod materials;
 mod notification_window;
 mod python;
 mod quick_ask;
@@ -535,6 +536,10 @@ pub fn run() {
             notes_links::notes_links_rename_sync,
             notes_links::notes_links_search_mentions,
             notes_links::notes_moc_list,
+            materials::materials_import_files,
+            materials::materials_list_dir,
+            materials::materials_ensure_initialized,
+            materials::materials_get_wiki_dir,
             hoard::hoard_add,
             hoard::hoard_update,
             hoard::hoard_delete,
@@ -935,6 +940,21 @@ pub fn run() {
             // asset protocol scope so images can be rendered via convertFileSrc.
             if let Some(vault) = notes::read_vault_path_for_setup() {
                 notes::register_vault_assets_scope(app.handle(), &vault);
+            }
+
+            // One-time cleanup: remove the legacy ~/MonaKB/ directory left by
+            // the deleted KB module. A marker file prevents repeated attempts.
+            {
+                let marker = settings::app_data_dir().join(".monakb-cleanup-done");
+                if !marker.exists() {
+                    if let Some(home) = dirs::home_dir() {
+                        let legacy_kb = home.join("MonaKB");
+                        if legacy_kb.is_dir() {
+                            let _ = std::fs::remove_dir_all(&legacy_kb);
+                        }
+                    }
+                    let _ = std::fs::write(&marker, "1");
+                }
             }
 
             let app_handle_for_file = app.handle().clone();

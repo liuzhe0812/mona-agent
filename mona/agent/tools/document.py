@@ -28,7 +28,7 @@ from loguru import logger
 from pydantic import Field
 
 from mona.agent.tools.base import Tool, tool_parameters
-from mona.agent.tools.path_utils import resolve_workspace_path
+from mona.agent.tools.path_utils import get_current_workspace, resolve_workspace_path
 from mona.agent.tools.schema import IntegerSchema, StringSchema, tool_parameters_schema
 from mona.config.schema import Base
 
@@ -438,6 +438,11 @@ class DocumentTool(Tool):
         self.config = config or DocumentToolConfig()
         self._restrict = restrict_to_workspace or self.config.restrict_to_workspace
 
+    def _active_workspace(self) -> Path:
+        """Return the active session workspace (contextvar) or configured fallback."""
+        ws = get_current_workspace(self._workspace)
+        return ws if ws is not None else self._workspace
+
     @property
     def read_only(self) -> bool:
         return True
@@ -445,15 +450,16 @@ class DocumentTool(Tool):
     async def execute(self, path: str, max_chars: int | None = None, **kwargs: Any) -> str:
         limit = max_chars or self.config.max_chars
 
-        # Resolve path with workspace boundary enforcement
+        # Resolve path against the active session workspace.
+        active_ws = self._active_workspace()
         if self._restrict:
             try:
-                resolved = resolve_workspace_path(path, self._workspace, self._workspace)
+                resolved = resolve_workspace_path(path, active_ws, active_ws)
             except (OSError, PermissionError, ValueError) as e:
                 return f"Error: path not allowed: {e}"
         else:
             p = Path(path).expanduser()
-            resolved = p if p.is_absolute() else self._workspace / p
+            resolved = p if p.is_absolute() else active_ws / p
 
         if not resolved.is_file():
             return f"Error: file not found: {path}"

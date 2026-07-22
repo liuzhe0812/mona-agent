@@ -5,7 +5,6 @@ const startDragging = vi.fn().mockResolvedValue(undefined);
 
 vi.mock("@/components/ConnectionBadge", () => ({ ConnectionBadge: () => null }));
 vi.mock("@/components/browser/BrowserTab", () => ({ BrowserTabItem: () => null }));
-vi.mock("@/components/NotificationCenter", () => ({ NotificationCenter: () => null }));
 vi.mock("@/lib/tauri", () => ({ isTauri: () => true }));
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ startDragging }),

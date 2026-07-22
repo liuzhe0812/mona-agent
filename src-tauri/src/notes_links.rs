@@ -105,7 +105,7 @@ struct CachedGraph {
     positions: HashMap<String, [f64; 2]>,
 }
 
-const CACHE_VERSION: u32 = 3;
+const CACHE_VERSION: u32 = 4;
 
 fn links_cache_path(vault: &Path) -> PathBuf {
     vault.join(".mona").join("links.json")
@@ -178,7 +178,35 @@ fn scan_vault_links(vault: &Path) -> Vec<ScannedNote> {
         }
     }
 
+    // Recursively scan materials wiki directory: <vault>/.mona/materials/wiki/
+    // Wiki pages use `wiki-<UUID>` ids in frontmatter and participate in the
+    // unified link graph alongside notes (`note-<UUID>`).
+    let wiki_dir = vault.join(".mona").join("materials").join("wiki");
+    if wiki_dir.is_dir() {
+        scan_wiki_recursive(&wiki_dir, &push, &mut out);
+    }
+
     out
+}
+
+/// Recursively walk `dir` and push every `.md` file found. Wiki directory
+/// supports multi-level nesting (unlike notes which are 1-level deep).
+fn scan_wiki_recursive(
+    dir: &Path,
+    push: &dyn Fn(&Path, &mut Vec<ScannedNote>),
+    out: &mut Vec<ScannedNote>,
+) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let p = entry.path();
+        if p.is_dir() {
+            scan_wiki_recursive(&p, push, out);
+        } else if p.extension().and_then(|e| e.to_str()) == Some("md") {
+            push(&p, out);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
