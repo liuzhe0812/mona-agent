@@ -476,6 +476,7 @@ class NotesSaveImageTool(Tool):
 
     _scopes = {"core"}
     _plugin_discoverable = True
+    subscription_required = True
 
     @classmethod
     def enabled(cls, ctx: Any) -> bool:

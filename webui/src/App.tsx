@@ -536,8 +536,7 @@ function Shell({
   const { t, i18n } = useTranslation();
   const { client, runtimeStatus, runtimeError, token } = useClientOptional();
   const { theme, toggle } = useTheme();
-  const { checking, licenseActive, loggedIn, pricingConfig } = useLicense();
-  const loginRequired = !checking && !loggedIn;
+  const { licenseActive, loggedIn, pricingConfig } = useLicense();
   const [promoClosed, setPromoClosed] = useState(false);
   const promo = pricingConfig?.promoTrial;
   const promoKey = promo?.end_at ? `mona_promo_closed_${promo.end_at}` : "mona_promo_closed";
@@ -1856,9 +1855,9 @@ function Shell({
         />
 
         <LoginDialog
-          open={loginRequired || loginDialogOpen}
-          onOpenChange={loginRequired ? () => {} : setLoginDialogOpen}
-          initialView={loginRequired ? "login" : loginDialogInitialView}
+          open={loginDialogOpen}
+          onOpenChange={setLoginDialogOpen}
+          initialView={loginDialogInitialView}
           autoSubscribeAfterLogin={loginDialogSubscribeIntent}
         />
 

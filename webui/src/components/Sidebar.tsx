@@ -368,6 +368,25 @@ export function Sidebar(props: SidebarProps) {
               className={collapsed ? undefined : "flex-1"}
               icon={<LogIn className="h-4 w-4" />}
             />
+            {collapsed ? (
+              <SidebarActionButton
+                collapsed={collapsed}
+                label="设置"
+                onClick={() => props.onOpenSettings()}
+                icon={<Settings className="h-4 w-4" />}
+              />
+            ) : (
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label="设置"
+                title="设置"
+                onClick={() => props.onOpenSettings()}
+                className="h-8 w-8 shrink-0 rounded-full text-sidebar-foreground/85 hover:bg-sidebar-accent/75 hover:text-sidebar-foreground"
+              >
+                <Settings className="h-4 w-4" />
+              </Button>
+            )}
           </div>
         )}
       </div>

@@ -1217,6 +1217,25 @@ fn default_imap_port() -> u16 {
 pub struct EmailState {
     db_path: PathBuf,
     schema_initialized: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// 用户主动 fetch_body 进行中标志：prefetch 检测到时让出 IMAP 锁，避免阻塞用户请求
+    user_fetch_in_progress: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// RAII guard：用户主动 fetch_body 期间持有，drop 时自动清除标志。
+/// 确保无论函数如何返回（成功/失败/early return），标志都会被清除。
+struct UserFetchGuard(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+impl UserFetchGuard {
+    fn new(flag: std::sync::Arc<std::sync::atomic::AtomicBool>) -> Self {
+        flag.store(true, std::sync::atomic::Ordering::Relaxed);
+        Self(flag)
+    }
+}
+
+impl Drop for UserFetchGuard {
+    fn drop(&mut self) {
+        self.0.store(false, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 impl EmailState {
@@ -1225,6 +1244,7 @@ impl EmailState {
         Self {
             db_path,
             schema_initialized: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            user_fetch_in_progress: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
@@ -4496,13 +4516,16 @@ async fn run_bg_sync_cycle(
     Ok(())
 }
 
-const PREFETCH_UNREAD_LIMIT: u32 = 50;
+const PREFETCH_UNREAD_LIMIT: u32 = 20;
 
-/// 预下载未读邮件的正文（仅 INBOX，最近 50 封未读且 body_fetched=0）。
+/// 预下载未读邮件的正文（仅 INBOX，最近 20 封未读且 body_fetched=0）。
 ///
 /// 同步时只拉取 HEADER + FLAGS，正文按需拉取。但未读邮件用户大概率会查看，
 /// 后台静默预下载可让用户点击时秒开，提升体验。
 /// 单封失败不影响其他，整体不阻塞同步主流程。
+///
+/// 抢占机制：检测到用户主动 fetch_body 进行中时，sleep 让出 IMAP 锁窗口，
+/// 避免预下载串行占用账号级锁阻塞用户请求。
 async fn prefetch_unread_bodies(
     state: &EmailState,
     gateway_url: &str,
@@ -4564,6 +4587,15 @@ async fn prefetch_unread_bodies(
     let mut success = 0u32;
     let mut failed = 0u32;
     for uid in &uids_to_prefetch {
+        // 抢占检测：用户正在主动 fetch_body 时，sleep 让出 IMAP 锁窗口，跳过本轮预下载
+        // prefetch 是尽力而为的优化，绝不应阻塞用户主动操作
+        if state
+            .user_fetch_in_progress
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            continue;
+        }
         let mut req = base_req.clone();
         req["uid"] = serde_json::Value::String(uid.clone());
         match client.post(&url).json(&req).send().await {
@@ -5401,10 +5433,12 @@ pub async fn email_send(
     let gw = gateway_url.clone();
     let db_path = state.db_path().to_path_buf();
     let schema_initialized = state.schema_initialized.clone();
+    let user_fetch_in_progress = state.user_fetch_in_progress.clone();
     let sync_result: Result<SyncResult, String> = async {
         let state_inner = EmailState {
             db_path: db_path.clone(),
             schema_initialized,
+            user_fetch_in_progress,
         };
         let conn = state_inner.conn()?;
         let account = get_imap_credentials(&conn, &account_id)?;
@@ -6614,7 +6648,10 @@ pub async fn email_fetch_body(
         }
     }
 
-    // 3. 本地无 .eml 或 .eml 缺少正文，调 gateway /email/fetch_body 拉完整 RFC822 并落盘
+    // 3. 本地无 .eml 或 .eml 缺少正文，调 gateway /email/fetch_body 拉正文
+    // 抢占标志：prefetch 检测到此标志时让出 IMAP 锁，避免阻塞用户请求
+    let _guard = UserFetchGuard::new(state.user_fetch_in_progress.clone());
+
     let (account, plain_password) = {
         let conn = state.conn()?;
         let account = get_imap_credentials(&conn, &account_id)?;
@@ -6622,6 +6659,8 @@ pub async fn email_fetch_body(
         (account, plain)
     };
 
+    // 优化：不要求 gateway 返回 rawBytes（完整 RFC822 base64），大幅减小 JSON 体积
+    // 落盘 .eml 改为后台异步调 email_fetch_raw 完成，不阻塞用户
     let req = serde_json::json!({
         "accountId": account_id,
         "imapHost": account.imap_host,
@@ -6631,6 +6670,7 @@ pub async fn email_fetch_body(
         "mailbox": mailbox,
         "uid": uid,
         "useSsl": account.imap_use_ssl,
+        "includeRawBytes": false,
     });
 
     let url = format!("{}/email/fetch_body", gateway_url.trim_end_matches('/'));
@@ -6653,84 +6693,145 @@ pub async fn email_fetch_body(
         .await
         .map_err(|e| format!("解析响应失败: {e}"))?;
 
-    // 4. 如果 gateway 返回 rawBytes（完整 RFC822），落盘为 .eml 文件
-    let raw_bytes_b64 = body.get("rawBytes").and_then(|v| v.as_str()).unwrap_or("");
-    let new_eml_path: String = if !raw_bytes_b64.is_empty() {
-        match base64::engine::general_purpose::STANDARD.decode(raw_bytes_b64) {
-            Ok(bytes) => match write_eml_file(&account_id, &mailbox, &uid, &bytes) {
-                Ok(rel) => rel,
-                Err(e) => {
-                    log::warn!("[email-fetch-body] 落盘 .eml 失败: {}", e);
-                    String::new()
-                }
-            },
-            Err(e) => {
-                log::warn!("[email-fetch-body] base64 解码 rawBytes 失败: {}", e);
-                String::new()
-            }
-        }
-    } else {
-        String::new()
-    };
-
-    // 5. 更新本地缓存：eml_path + body_fetched（不再写 body_text）
-    let conn = state.conn()?;
-    if new_eml_path.is_empty() {
-        conn.execute(
+    // 4. 更新本地缓存：body_fetched=1（eml_path 由后台 fetch_raw 任务异步更新）
+    {
+        let conn = state.conn()?;
+        let _ = conn.execute(
             "UPDATE messages SET body_fetched = 1
              WHERE uid = ?1 AND account_id = ?2 AND folder = ?3",
             params![uid, account_id, mailbox],
-        )
-        .map_err(|e| e.to_string())?;
-    } else {
-        conn.execute(
-            "UPDATE messages SET body_fetched = 1, eml_path = ?1
-             WHERE uid = ?2 AND account_id = ?3 AND folder = ?4",
-            params![new_eml_path, uid, account_id, mailbox],
-        )
-        .map_err(|e| e.to_string())?;
+        );
     }
-
     // 同步 .meta.json：body_fetched=true
     if let Some(mut meta) = read_meta_json(&account_id, &mailbox, &uid) {
         meta.body_fetched = true;
         let _ = write_meta_json(&meta);
     }
 
-    // 6. 优先用 Rust mailparse 重新解析本地 .eml 返回（避免 Python 解析失败导致空正文）
-    if !new_eml_path.is_empty() {
-        let eml_abs = eml_absolute_path(&new_eml_path);
-        if let Ok(eml_bytes) = std::fs::read(&eml_abs) {
-            if let Ok(parsed) = mailparse::parse_mail(&eml_bytes) {
-                let mut body_text = String::new();
-                let mut body_html: Option<String> = None;
-                extract_bodies(&parsed, &mut body_text, &mut body_html);
-                if body_text.len() > 50000 {
-                    body_text.truncate(50000);
-                }
-                if !body_text.is_empty() || body_html.is_some() {
-                    let mut attachments: Vec<serde_json::Value> = Vec::new();
-                    extract_attachments(&parsed, &mut attachments);
-                    // 重新解析 header，修复旧数据中可能的乱码（gb2312→gb18030 修复前的旧邮件）
-                    let header = reparse_header_and_fix_db(
-                        state.inner(),
-                        &eml_bytes,
-                        &uid,
-                        &account_id,
-                        &mailbox,
-                    );
-                    return Ok(serde_json::json!({
-                        "bodyText": body_text,
-                        "bodyHtml": body_html,
-                        "attachments": attachments,
-                        "header": header,
-                    }));
-                }
+    // 5. 后台异步落盘 .eml（不阻塞用户，失败仅记日志）
+    // 复用 email_fetch_raw 的核心逻辑：拉取 RFC822 → 落盘 → 更新 eml_path
+    {
+        let state_clone = state.inner().clone();
+        let gateway_url_clone = gateway_url.clone();
+        let account_id_clone = account_id.clone();
+        let uid_clone = uid.clone();
+        let mailbox_clone = mailbox.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Err(e) = fetch_raw_and_cache(
+                &state_clone,
+                &gateway_url_clone,
+                &account_id_clone,
+                &uid_clone,
+                &mailbox_clone,
+            )
+            .await
+            {
+                log::warn!(
+                    "[email-fetch-body] 后台落盘 .eml 失败 account={} uid={}: {}",
+                    account_id_clone,
+                    uid_clone,
+                    e
+                );
             }
-        }
+        });
     }
 
     Ok(body)
+}
+
+/// 拉取 RFC822 并落盘 .eml + 更新 eml_path（后台异步调用，不阻塞用户）。
+/// 复用 email_fetch_raw 的核心逻辑，但不返回 rawBase64。
+async fn fetch_raw_and_cache(
+    state: &EmailState,
+    gateway_url: &str,
+    account_id: &str,
+    uid: &str,
+    mailbox: &str,
+) -> Result<(), String> {
+    // 优先检查本地是否已有 .eml（避免重复拉取）
+    {
+        let conn = state.conn()?;
+        let eml_path: String = conn
+            .query_row(
+                "SELECT eml_path FROM messages WHERE uid = ?1 AND account_id = ?2 AND folder = ?3",
+                params![uid, account_id, mailbox],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap_or_default();
+        if !eml_path.is_empty() {
+            return Ok(());
+        }
+    }
+
+    // 让出用户请求：如果用户正在主动 fetch_body，等待其完成后再拉取（最多等 30s）
+    // 避免后台落盘任务与用户请求抢占账号级 IMAP 锁
+    for _ in 0..60 {
+        if !state
+            .user_fetch_in_progress
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+
+    let (account, plain_password) = {
+        let conn = state.conn()?;
+        let account = get_imap_credentials(&conn, account_id)?;
+        let plain = decrypt_password(&account.imap_password)?;
+        (account, plain)
+    };
+
+    let req = serde_json::json!({
+        "accountId": account_id,
+        "imapHost": account.imap_host,
+        "imapPort": account.imap_port,
+        "imapUsername": account.imap_username,
+        "imapPassword": plain_password,
+        "mailbox": mailbox,
+        "uid": uid,
+        "useSsl": account.imap_use_ssl,
+    });
+
+    let url = format!("{}/email/fetch_raw", gateway_url.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(60))
+        .build()
+        .map_err(|e| format!("构建 HTTP 客户端失败: {e}"))?;
+    let resp = client
+        .post(&url)
+        .json(&req)
+        .send()
+        .await
+        .map_err(|e| format!("请求 gateway 失败: {e}"))?;
+    if !resp.status().is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!("gateway 返回错误: {text}"));
+    }
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("解析响应失败: {e}"))?;
+
+    if let Some(raw_b64) = body.get("rawBase64").and_then(|v| v.as_str()) {
+        if !raw_b64.is_empty() {
+            match base64::engine::general_purpose::STANDARD.decode(raw_b64) {
+                Ok(bytes) => match write_eml_file(account_id, mailbox, uid, &bytes) {
+                    Ok(rel) => {
+                        let conn = state.conn()?;
+                        let _ = conn.execute(
+                            "UPDATE messages SET eml_path = ?1
+                             WHERE uid = ?2 AND account_id = ?3 AND folder = ?4",
+                            params![rel, uid, account_id, mailbox],
+                        );
+                    }
+                    Err(e) => log::warn!("[email-fetch-body] 后台落盘 .eml 失败: {}", e),
+                },
+                Err(e) => log::warn!("[email-fetch-body] 后台 base64 解码失败: {}", e),
+            }
+        }
+    }
+    Ok(())
 }
 
 /// 拉取邮件原始 RFC822 字节（用于 .eml 导出）

@@ -3627,9 +3627,10 @@ async def handle_email_fetch_attachment(request: web.Request) -> web.Response:
 def _imap_fetch_body(body: dict[str, Any]) -> dict[str, Any]:
     """连接 IMAP 拉取单封邮件的完整正文（同步时只拉头部，此处按需拉取正文）。
 
-    请求体：{ imapHost, imapPort, imapUsername, imapPassword, mailbox, uid, useSsl }
-    返回：{ bodyText, bodyHtml, hasAttachments, attachments, rawBytes }
-    Foxmail 风格：额外返回 rawBytes（base64 编码的完整 RFC822），供 Rust 侧落盘为 .eml。
+    请求体：{ imapHost, imapPort, imapUsername, imapPassword, mailbox, uid, useSsl, includeRawBytes? }
+    返回：{ bodyText, bodyHtml, hasAttachments, attachments, rawBytes? }
+    - includeRawBytes=false（用户主动点击）：只返回解析后的正文，不返回 rawBytes，JSON 体积小
+    - includeRawBytes=true（默认，prefetch）：额外返回 rawBytes（base64 RFC822），供 Rust 侧落盘 .eml
     复用持久连接池。
     """
     imap_host = str(body.get("imapHost", "") or "").strip()
@@ -3643,6 +3644,8 @@ def _imap_fetch_body(body: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("uid is required")
 
     _validate_mail_host(imap_host)
+    # includeRawBytes 默认 true（保持向后兼容）；用户主动点击时传 false 跳过 rawBytes 传输
+    include_raw = bool(body.get("includeRawBytes", True))
 
     def op(client: imaplib.IMAP4) -> dict[str, Any]:
         status, _ = client.select(_imap_quote_mailbox(mailbox))
@@ -3663,14 +3666,16 @@ def _imap_fetch_body(body: dict[str, Any]) -> dict[str, Any]:
         if body_text:
             body_text = body_text[:50000]
 
-        return {
+        result: dict[str, Any] = {
             "bodyText": body_text,
             "bodyHtml": body_html,
             "hasAttachments": _email_has_attachments(parsed),
             "attachments": _email_extract_attachments(parsed),
-            # Foxmail 风格：返回完整 RFC822 字节（base64），供 Rust 侧落盘为 .eml 文件
-            "rawBytes": base64.b64encode(raw_bytes).decode("ascii"),
         }
+        if include_raw:
+            # Foxmail 风格：返回完整 RFC822 字节（base64），供 Rust 侧落盘为 .eml 文件
+            result["rawBytes"] = base64.b64encode(raw_bytes).decode("ascii")
+        return result
 
     return imap_pool_manager.run(body, op)
 
