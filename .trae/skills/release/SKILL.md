@@ -141,10 +141,13 @@ if (Test-Path "$StagingDir\mona-gateway\mona-gateway") {
 
 $UpdatePackage = "dist\mona-$Version.tar.zst"
 New-Item -ItemType Directory -Path "dist" -Force | Out-Null
-# Windows 的 bsdtar 支持 --zstd；如果不支持，可用 Python 脚本 scripts/build_update_package.py
-tar --zstd -cf $UpdatePackage -C $StagingDir Mona.exe mona-gateway
 
-# Compute SHA256
+# Use the Python build script: it cleans __pycache__/.pyc/.dist-info/tests
+# from staging before packing, and uses zstd level 22 for max compression.
+# This typically shrinks the update package by ~30-40% vs raw `tar --zstd`.
+python scripts\build_update_package.py $Version $StagingDir $UpdatePackage
+
+# Compute SHA256 and size (script prints them too, but we need them in PS vars)
 $Hash = (Get-FileHash $UpdatePackage -Algorithm SHA256).Hash.ToLower()
 $Size = (Get-Item $UpdatePackage).Length
 
@@ -326,7 +329,7 @@ Remove-Item -Force tmp_*.txt -ErrorAction SilentlyContinue
 | Nginx 403 | Check permissions: `chmod -R 755 /var/www/mona/` |
 | Nginx 404 on `/changelog` | Add SPA fallback: `try_files $uri $uri/ /index.html;` in nginx config |
 | `cargo tauri build` fails with `--ci` error | Set `$env:CI = ""` before building |
-| Update package too large | First check for nested `mona-gateway/mona-gateway/` in tar (file count doubled = nesting bug); then strip `__pycache__`, `.pyc`, `.pyo` from Python runtime; exclude unused packages in spec |
+| Update package too large | `build_update_package.py` already strips `__pycache__`/`.pyc`/`.dist-info`/`tests` and uses zstd-22. If still too large: check for nested `mona-gateway/mona-gateway/` (file count doubled = nesting bug); then exclude unused packages in `mona-gateway.spec` |
 | Update package size suddenly doubled vs previous release | Almost certainly the `Copy-Item -Recurse` nesting bug. Verify with: `tar -tf dist/mona-<ver>.tar.zst \| Measure-Object` — if count ≈ 2× previous, staging dir had nested `mona-gateway/mona-gateway/`. Re-run Step 3 with the fixed staging commands. |
 | Hot-update SHA256 mismatch | Re-compute hash after upload, ensure binary mode transfer |
 | PyInstaller missing import | Add to `hidden_imports` list in `src-tauri/mona-gateway.spec` |

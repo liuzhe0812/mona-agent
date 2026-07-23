@@ -4,7 +4,9 @@ import {
   ArchiveRestore,
   ChevronDown,
   ChevronUp,
+  Download,
   LogIn,
+  LogOut,
   Menu,
   MoreHorizontal,
   LockKeyhole,
@@ -12,8 +14,11 @@ import {
   Pin,
   PinOff,
   Search,
+  Settings,
+  Sparkles,
   Trash2,
   User,
+  UserCog,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -36,6 +41,8 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Separator } from "@/components/ui/separator";
@@ -83,6 +90,7 @@ interface SidebarProps {
   onGoHome?: () => void;
   containActionMenus?: boolean;
   collapsed?: boolean;
+  updateAvailable?: boolean;
   pinnedKeys?: string[];
   archivedKeys?: string[];
   titleOverrides?: Record<string, string>;
@@ -97,7 +105,7 @@ interface SidebarProps {
 
 export function Sidebar(props: SidebarProps) {
   const { t } = useTranslation();
-  const { loggedIn, licenseInfo, licenseActive, serverTrial } =
+  const { loggedIn, licenseInfo, licenseActive, serverTrial, logout } =
     useLicense();
   const [menuPortalContainer, setMenuPortalContainer] =
     useState<HTMLElement | null>(null);
@@ -242,21 +250,113 @@ export function Sidebar(props: SidebarProps) {
       >
         {loggedIn ? (
           <div className={cn("flex items-center gap-1", collapsed ? "w-14 flex-col px-0" : "w-full")}>
-            <SidebarActionButton
-              collapsed={collapsed}
-              label={licenseInfo?.account ?? licenseInfo?.email ?? t("sidebar.account", "账号")}
-              onClick={props.onOpenLogin ?? (() => {})}
-              className={collapsed ? undefined : "flex-1"}
-              icon={<User className="h-4 w-4" />}
-            />
-            {!collapsed && (!licenseActive || serverTrial) && (
-              <Button
-                size="sm"
-                onClick={props.onOpenSubscribe ?? props.onOpenLogin}
-                className="h-5 shrink-0 rounded-full bg-blue-500/15 px-1.5 text-[10px] font-medium text-blue-600 hover:bg-blue-500/25 dark:text-blue-400"
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  aria-label={licenseInfo?.account ?? licenseInfo?.email ?? t("sidebar.account", "账号")}
+                  title={collapsed ? (licenseInfo?.account ?? licenseInfo?.email ?? t("sidebar.account", "账号")) : undefined}
+                  className={cn(
+                    "group relative h-8 min-w-0 gap-2 overflow-hidden rounded-full font-medium text-sidebar-foreground/85 hover:bg-sidebar-accent/75 hover:text-sidebar-foreground",
+                    "transition-[width,padding,border-radius,color,background-color] duration-300 ease-out",
+                    collapsed
+                      ? "flex w-9 shrink-0 items-center justify-center gap-0 rounded-xl px-0"
+                      : "flex w-full shrink-0 items-center justify-start gap-2 px-3 text-[12.5px]",
+                  )}
+                >
+                  <span className="flex shrink-0 items-center justify-center" aria-hidden>
+                    <User className="h-4 w-4" />
+                  </span>
+                  <span
+                    className={cn(
+                      "min-w-0 overflow-hidden truncate whitespace-nowrap transition-[max-width,opacity,transform] duration-200 ease-out",
+                      collapsed
+                        ? "max-w-0 -translate-x-0 opacity-0"
+                        : "max-w-[10rem] translate-x-0 opacity-100",
+                    )}
+                  >
+                    {licenseInfo?.account ?? licenseInfo?.email ?? t("sidebar.account", "账号")}
+                  </span>
+                  {collapsed && props.updateAvailable && (
+                    <span className="absolute right-0.5 top-0.5 flex h-1.5 w-1.5">
+                      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-blue-500/70" />
+                      <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-blue-500" />
+                    </span>
+                  )}
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent
+                side="top"
+                align={collapsed ? "center" : "start"}
+                sideOffset={8}
+                className="min-w-[200px]"
               >
-                升级 Pro
-              </Button>
+                <DropdownMenuLabel className="px-2.5 py-2 font-normal">
+                  <div className="flex items-center gap-2.5">
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-500/15 text-blue-600 dark:text-blue-400">
+                      <User className="h-4 w-4" />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5">
+                        <span className="truncate text-[13px] font-semibold text-foreground">
+                          {licenseInfo?.account ?? licenseInfo?.email ?? t("sidebar.account", "账号")}
+                        </span>
+                        {licenseActive && !serverTrial && (
+                          <span className="shrink-0 rounded-full bg-gradient-to-r from-amber-500 to-orange-500 px-1 py-px text-[8px] font-bold leading-tight text-white">
+                            Pro
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  className="gap-2 px-2.5 py-1.5 text-[13px]"
+                  onSelect={() => props.onOpenLogin?.()}
+                >
+                  <UserCog className="h-4 w-4" />
+                  <span>管理账户</span>
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  className="gap-2 px-2.5 py-1.5 text-[13px]"
+                  onSelect={() => props.onOpenSettings()}
+                >
+                  <Settings className="h-4 w-4" />
+                  <span>设置</span>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                {(!licenseActive || serverTrial) && (
+                  <>
+                    <DropdownMenuItem
+                      className="gap-2 px-2.5 py-1.5 text-[13px]"
+                      onSelect={() => (props.onOpenSubscribe ?? props.onOpenLogin)?.()}
+                    >
+                      <Sparkles className="h-4 w-4 text-amber-500" />
+                      <span>升级 Pro</span>
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                  </>
+                )}
+                <DropdownMenuItem
+                  className="gap-2 px-2.5 py-1.5 text-[13px] text-destructive focus:text-destructive"
+                  onSelect={() => void logout()}
+                >
+                  <LogOut className="h-4 w-4" />
+                  <span>退出登录</span>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            {!collapsed && props.updateAvailable && (
+              <button
+                type="button"
+                onClick={() => props.onOpenSettings("about")}
+                className="flex h-5 shrink-0 items-center gap-1 rounded-full bg-foreground/90 px-2 text-[10px] font-medium text-background hover:bg-foreground"
+                title="发现新版本，点击更新"
+              >
+                <Download className="h-2.5 w-2.5" />
+                更新
+              </button>
             )}
           </div>
         ) : (

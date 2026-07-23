@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Maximize2, Minus, Plus, Settings, X } from "lucide-react";
+import { Maximize2, Minus, Plus, X } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { Button } from "@/components/ui/button";
@@ -15,9 +15,6 @@ interface AppTitleBarProps {
   onTabClick: (id: string) => void;
   onTabClose: (id: string) => void;
   onNewTab: () => void;
-  onOpenSettings?: (section?: string) => void;
-  /** When true, renders a pulsing badge on the settings button (e.g. update available). */
-  settingsBadge?: boolean;
   // 标签管理增强
   onPinToggle?: (id: string) => void;
   onDuplicate?: (id: string) => void;
@@ -47,8 +44,6 @@ export function AppTitleBar({
   onTabClick,
   onTabClose,
   onNewTab,
-  onOpenSettings,
-  settingsBadge,
   onPinToggle,
   onDuplicate,
   onCloseOthers,
@@ -96,11 +91,6 @@ export function AppTitleBar({
       {/* 右侧控制按钮 */}
       <div className="ml-auto flex h-full items-center">
         <ConnectionBadge />
-        {onOpenSettings && (
-          <TitleBarButton label="设置" onClick={() => onOpenSettings()} badge={settingsBadge}>
-            <Settings className="h-3.5 w-3.5" />
-          </TitleBarButton>
-        )}
         <TitleBarButton
           label="最小化"
           onClick={() => {
@@ -135,13 +125,11 @@ function TitleBarButton({
   label,
   children,
   danger = false,
-  badge = false,
   onClick,
 }: {
   label: string;
   children: ReactNode;
   danger?: boolean;
-  badge?: boolean;
   onClick: () => void;
 }) {
   return (
@@ -157,12 +145,6 @@ function TitleBarButton({
       )}
     >
       {children}
-      {badge ? (
-        <span className="absolute right-2.5 top-2 flex h-1.5 w-1.5">
-          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-blue-500/70" />
-          <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-blue-500" />
-        </span>
-      ) : null}
     </Button>
   );
 }

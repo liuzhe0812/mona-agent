@@ -15,9 +15,65 @@ Example:
 from __future__ import annotations
 
 import hashlib
+import shutil
 import sys
 import tarfile
 from pathlib import Path
+
+# Runtime-irrelevant artifacts left behind by PyInstaller COLLECT.
+# Stripping them shrinks the update package by ~25-35%.
+#
+# NOTE: `.dist-info/` and `.egg-info/` are intentionally KEPT — some libs
+# read their own version via importlib.metadata at runtime, and PyInstaller's
+# metadata hook is not 100% reliable. These dirs are tiny anyway (<3% total).
+_JUNK_DIR_NAMES = {
+    "__pycache__",
+    "tests",
+    "test",
+    "testing",
+    "_pytest",
+    "pytest",
+}
+
+_JUNK_FILE_SUFFIXES = (
+    ".pyc",
+    ".pyo",
+)
+
+_JUNK_FILE_NAMES = {
+    "py.typed",  # PEP 561 marker, unused at runtime
+}
+
+
+def clean_staging(staging: Path) -> tuple[int, int]:
+    """Remove runtime-irrelevant files from the staging directory.
+
+    Only touches the mona-gateway/ subtree (where PyInstaller output lives).
+    Returns (deleted_files, deleted_dirs) counts for logging.
+    """
+    gateway_dir = staging / "mona-gateway"
+    if not gateway_dir.exists():
+        return 0, 0
+
+    deleted_files = 0
+    deleted_dirs = 0
+
+    for path in gateway_dir.rglob("*"):
+        if not path.exists():
+            continue
+        if path.is_dir():
+            if path.name in _JUNK_DIR_NAMES:
+                shutil.rmtree(path, ignore_errors=True)
+                deleted_dirs += 1
+        elif path.is_file():
+            if (
+                path.name in _JUNK_FILE_NAMES
+                or path.name.endswith(_JUNK_FILE_SUFFIXES)
+            ):
+                path.unlink(missing_ok=True)
+                deleted_files += 1
+
+    return deleted_files, deleted_dirs
 
 
 def build_package(staging_dir: str, output_path: str) -> None:
@@ -28,12 +84,15 @@ def build_package(staging_dir: str, output_path: str) -> None:
     if not staging.exists():
         raise FileNotFoundError(f"Staging directory does not exist: {staging_dir}")
 
+    del_files, del_dirs = clean_staging(staging)
+    print(f"[clean] Removed {del_files} files, {del_dirs} dirs from staging")
+
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
 
-    # Use zstd level 19 for a good balance between size and speed.
-    # Level 22 is very slow for large packages; 19 is close in ratio.
-    cctx = zstandard.ZstdCompressor(level=19, threads=0)
+    # Level 22 maximizes compression ratio. Build-time cost is acceptable
+    # since releases are infrequent; download size matters more to users.
+    cctx = zstandard.ZstdCompressor(level=22, threads=0)
 
     with open(output, "wb") as f:
         with cctx.stream_writer(f) as compressor:

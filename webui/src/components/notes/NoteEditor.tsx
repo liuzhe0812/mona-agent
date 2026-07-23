@@ -8,6 +8,23 @@ import type { Notebook, OperationNote } from "./notes-data";
 const DEFAULT_TITLE = "未命名笔记";
 const AUTO_TITLE_MAX_LEN = 40;
 
+// 剥离常见 Markdown 语法，用于从第一行生成干净的标题。
+function stripMarkdownForTitle(text: string): string {
+  let s = text.trim();
+  s = s.replace(/^#{1,6}\s+/, ""); // heading
+  s = s.replace(/^([-*+]|\d+\.)\s+/, ""); // list
+  s = s.replace(/^>\s*/, ""); // blockquote
+  s = s.replace(/^!\[([^\]]*)\]\([^)]*\).*/, "$1"); // leading image → alt
+  s = s.replace(/\[([^\]]*)\]\([^)]*\)/g, "$1"); // link → text
+  s = s.replace(/\*\*([^*]+)\*\*/g, "$1"); // bold
+  s = s.replace(/__([^_]+)__/g, "$1");
+  s = s.replace(/\*([^*]+)\*/g, "$1"); // italic
+  s = s.replace(/_([^_]+)_/g, "$1");
+  s = s.replace(/~~([^~]+)~~/g, "$1"); // strikethrough
+  s = s.replace(/`([^`]+)`/g, "$1"); // inline code
+  return s.trim();
+}
+
 interface NoteEditorProps {
   note: OperationNote;
   notebook?: Notebook | null;
@@ -61,7 +78,7 @@ export function NoteEditor({
     // 从"无换行"转变为"有换行"时，若标题仍是默认占位（用户未手动改过），
     // 自动取第一行作为标题。正文保留不变（用户已确认保留）。
     if (!hadNewlineRef.current && hasNewlineNow && note.title === DEFAULT_TITLE) {
-      const firstLine = plainText.split("\n")[0].trim();
+      const firstLine = stripMarkdownForTitle(plainText.split("\n")[0]);
       if (firstLine) {
         onTitleChange(firstLine.slice(0, AUTO_TITLE_MAX_LEN));
       }

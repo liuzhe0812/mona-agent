@@ -643,6 +643,24 @@ export function ThreadShell({
   const rightVisible = !isHome && (hasFiles || !!previewFile) && !workspaceCollapsed;
   const showWorkspaceToggle = !isHome && hasFiles && workspaceCollapsed;
 
+  // Delete a shared-output artifact from disk and trigger a scan refresh so
+  // the workspace panel re-reads the directory and drops the row.
+  const handleDeleteArtifact = useCallback(
+    async (file: DeliveredFile) => {
+      const target = file.absolute_path || file.path;
+      if (!target) return;
+      try {
+        const { remove } = await import("@tauri-apps/plugin-fs");
+        await remove(target);
+      } catch (err) {
+        console.error("[artifact] delete failed:", err);
+        return;
+      }
+      artifacts.refresh();
+    },
+    [artifacts],
+  );
+
   return (
     <SplitPane
       left={
@@ -697,6 +715,7 @@ export function ThreadShell({
             error={!isProjectSession ? artifacts.error : null}
             truncated={!isProjectSession ? artifacts.truncated : false}
             onRefresh={!isProjectSession ? artifacts.refresh : undefined}
+            onDelete={!isProjectSession ? handleDeleteArtifact : undefined}
           />
         )
       }

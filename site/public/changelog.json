@@ -1,6 +1,20 @@
 {
   "releases": [
     {
+      "version": "1.2.2",
+      "pubDate": "2026-07-22T17:16:28Z",
+      "gitHash": "d542dbc1b5f11ee83d2f8be6f06a040f085fcec5",
+      "previousGitHash": "41cc93a20cec91e2bdbd992bd28bf8123cd8f97d",
+      "summary": "",
+      "items": [
+        "知识库模块重构为素材中心，支持本地文件导入与语义搜索",
+        "新增 Office 文档预览组件，支持直接在对话区查看 PPT、Word、Excel 文件",
+        "新增 AI 知识搜索工具，可在对话中检索工作区素材",
+        "移除内置通知中心模块",
+        "修复热更新包体积异常问题（打包目录嵌套导致体积翻倍）"
+      ]
+    },
+    {
       "version": "1.2.1",
       "pubDate": "2026-07-22T02:00:26Z",
       "gitHash": "41cc93a20cec91e2bdbd992bd28bf8123cd8f97d",

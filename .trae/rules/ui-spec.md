@@ -2,6 +2,20 @@
 
 本文件汇总前端 UI 视觉与交互规范，所有新增组件、页面调整都应遵循此处规则。已落地实现的规则以本文件为准；如与 `project_rules.md` 中的 UI 规范冲突，以本文件为准。
 
+## 红线：禁止使用浏览器原生控件样式
+
+- **禁止直接使用浏览器原生表单控件**（`<input>`、`<textarea>`、`<select>`、`<button>` 等），必须使用项目 UI 组件库封装的对应组件，确保视觉风格统一
+- 输入框：使用 `Input`（`@/components/ui/input`）或 `Textarea`（`@/components/ui/textarea`）
+- 下拉选择：使用 `Select` / `Combobox` 等组件库封装
+- 按钮：使用 `Button`（`@/components/ui/button`）
+- 全局已通过 `globals.css` 移除浏览器默认 focus outline（`*:focus { outline: none; }`），聚焦样式由组件库内部 `focus-visible:ring` 控制
+
+### 输入框细节
+
+- 圆角统一使用 `rounded-full`（单行输入）或 `rounded-lg`（多行文本域）
+- 高度统一 `h-8`，字号 `text-[13px]`
+- 禁止在输入框上添加额外的 `border`、`outline`、`ring` 样式，除非有明确的交互需求（如错误状态 `ring-destructive`）
+
 ## 滚动条
 
 滚动条默认必须保持安静：未悬停时完全隐藏，悬停容器时才淡入显示浅色 thumb。禁止使用浏览器原生高对比滚动条样式。

@@ -1527,6 +1527,7 @@ function Shell({
     runningChatIds: runningChatIdList,
     completedChatIds: completedChatIdList,
     viewState: sidebarState.view,
+    updateAvailable: !!updateAvailable,
     showArchived: sidebarState.view.show_archived,
     archivedCount: sidebarState.archived_keys.length,
     onRemoveProject,
@@ -1545,8 +1546,6 @@ function Shell({
             onTabClick={handleBrowserTabClick}
             onTabClose={closeBrowserTab}
             onNewTab={() => openNewBrowserTab(setView, addEmptyTab)}
-            onOpenSettings={onOpenSettings}
-            settingsBadge={!!updateAvailable}
             onPinToggle={togglePinTab}
             onDuplicate={duplicateTab}
             onCloseOthers={closeOtherTabs}

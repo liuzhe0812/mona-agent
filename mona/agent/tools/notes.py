@@ -14,6 +14,7 @@ Design notes:
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -51,6 +52,29 @@ def _get_vault_path() -> Path | None:
 def _vault_ready() -> bool:
     """Check whether the notes vault is configured."""
     return _get_vault_path() is not None
+
+
+# 剥离常见 Markdown 语法，用于从首行生成干净的标题。需与前端实现保持一致。
+_MARKDOWN_STRIP_PATTERNS = [
+    (re.compile(r"^#{1,6}\s+"), ""),  # heading
+    (re.compile(r"^([-*+]|\d+\.)\s+"), ""),  # list
+    (re.compile(r"^>\s*"), ""),  # blockquote
+    (re.compile(r"^!\[([^\]]*)\]\([^)]*\).*"), r"\1"),  # leading image → alt
+    (re.compile(r"\[([^\]]*)\]\([^)]*\)"), r"\1"),  # link → text
+    (re.compile(r"\*\*([^*]+)\*\*"), r"\1"),  # bold
+    (re.compile(r"__([^_]+)__"), r"\1"),
+    (re.compile(r"\*([^*]+)\*"), r"\1"),  # italic
+    (re.compile(r"_([^_]+)_"), r"\1"),
+    (re.compile(r"~~([^~]+)~~"), r"\1"),  # strikethrough
+    (re.compile(r"`([^`]+)`"), r"\1"),  # inline code
+]
+
+
+def _strip_markdown_for_title(text: str) -> str:
+    s = text.strip()
+    for pattern, repl in _MARKDOWN_STRIP_PATTERNS:
+        s = pattern.sub(repl, s)
+    return s.strip()
 
 
 # ---------------------------------------------------------------------------
@@ -109,14 +133,15 @@ class NotesCreateTool(Tool):
         content = str(kwargs.get("content_markdown", ""))
         if not content.strip():
             return "Error: content_markdown is required."
-        # 标题未提供时，从正文第一个非空行提取（正文保持原样，不剥离该行）。
+        # 标题未提供时，从正文第一个非空行提取并剥离 Markdown 语法（正文保持原样）。
         if not title:
             first_line = next(
                 (line.strip() for line in content.splitlines() if line.strip()),
                 "",
             )
-            if first_line:
-                title = first_line[:40]
+            cleaned = _strip_markdown_for_title(first_line)
+            if cleaned:
+                title = cleaned[:40]
             else:
                 return "Error: unable to derive a title from content. Please provide a title."
         notebook_name = kwargs.get("notebook_name")
