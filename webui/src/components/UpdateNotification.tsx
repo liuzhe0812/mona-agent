@@ -44,6 +44,13 @@ interface UpdateNotificationProps {
    * ref-backed state. We expose it via a callback.
    */
   onUpdateAvailable?: (info: UpdateCheckResult | null) => void;
+  /**
+   * External trigger to open the update dialog. Increment this number to
+   * request opening the dialog (e.g. from a sidebar button click).
+   * Only opens if an update is known to be available; otherwise triggers
+   * a fresh check and shows the dialog.
+   */
+  openTrigger?: number;
 }
 
 const STAGE_LABELS: Record<string, string> = {
@@ -64,6 +71,7 @@ function formatSize(bytes: number | null | undefined): string {
 
 export function UpdateNotification({
   onUpdateAvailable,
+  openTrigger,
 }: UpdateNotificationProps) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [view, setView] = useState<UpdateView>({ kind: "idle" });
@@ -205,6 +213,22 @@ export function UpdateNotification({
     },
     [view.kind],
   );
+
+  // External trigger to open the update dialog (e.g. from sidebar button)
+  useEffect(() => {
+    if (!openTrigger || openTrigger <= 0) return;
+    // If we already know an update is available, open directly and start update
+    const info = availableInfoRef.current;
+    if (info?.has_update && view.kind !== "updating") {
+      setView({ kind: "available", info });
+      setDialogOpen(true);
+    } else if (view.kind !== "updating") {
+      // No known update — open dialog and trigger a fresh check
+      setDialogOpen(true);
+      void handleCheckUpdate();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openTrigger]);
 
   const isUpdating = view.kind === "updating";
 

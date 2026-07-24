@@ -3660,34 +3660,34 @@ function AboutSettings() {
                     : undefined
               }
             >
-              <div className="flex items-center gap-2">
+              <div className="flex shrink-0 items-center gap-2">
                 {updateCheck?.has_update && !updateDownloading ? (
                   <Button
                     size="sm"
-                    variant="outline"
                     onClick={handlePerformUpdate}
-                    className="rounded-full"
+                    className="shrink-0 rounded-full"
                   >
-                    <Download className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+                    <Download className="mr-1.5 h-3.5 w-3.5 shrink-0" aria-hidden />
                     {tx("settings.about.downloadAndInstall", "下载并安装")}
                   </Button>
-                ) : null}
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={handleCheckUpdate}
-                  disabled={updateChecking || updateDownloading}
-                  className="rounded-full"
-                >
-                  {updateChecking ? (
-                    <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden />
-                  ) : (
-                    <RefreshCw className="mr-1.5 h-3.5 w-3.5" aria-hidden />
-                  )}
-                  {updateChecking
-                    ? tx("settings.about.checking", "检查中...")
-                    : tx("settings.about.checkNow", "立即检查")}
-                </Button>
+                ) : (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={handleCheckUpdate}
+                    disabled={updateChecking || updateDownloading}
+                    className="shrink-0 rounded-full"
+                  >
+                    {updateChecking ? (
+                      <Loader2 className="mr-1.5 h-3.5 w-3.5 shrink-0 animate-spin" aria-hidden />
+                    ) : (
+                      <RefreshCw className="mr-1.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+                    )}
+                    {updateChecking
+                      ? tx("settings.about.checking", "检查中...")
+                      : tx("settings.about.checkNow", "立即检查")}
+                  </Button>
+                )}
               </div>
             </SettingsRow>
             {updateDownloading && updateProgress ? (

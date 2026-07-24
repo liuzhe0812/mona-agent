@@ -91,6 +91,7 @@ interface SidebarProps {
   containActionMenus?: boolean;
   collapsed?: boolean;
   updateAvailable?: boolean;
+  onStartUpdate?: () => void;
   pinnedKeys?: string[];
   archivedKeys?: string[];
   titleOverrides?: Record<string, string>;
@@ -278,10 +279,19 @@ export function Sidebar(props: SidebarProps) {
                     {licenseInfo?.account ?? licenseInfo?.email ?? t("sidebar.account", "账号")}
                   </span>
                   {collapsed && props.updateAvailable && (
-                    <span className="absolute right-0.5 top-0.5 flex h-1.5 w-1.5">
-                      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-blue-500/70" />
-                      <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-blue-500" />
-                    </span>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        props.onStartUpdate?.();
+                      }}
+                      className="absolute -right-0.5 -top-0.5 flex h-3 w-3 items-center justify-center rounded-full bg-blue-500 text-white shadow-sm ring-2 ring-sidebar transition-colors hover:bg-blue-600"
+                      title="发现新版本，点击立即更新"
+                      aria-label="发现新版本，点击立即更新"
+                    >
+                      <Download className="h-2 w-2" />
+                    </button>
                   )}
                 </button>
               </DropdownMenuTrigger>
@@ -350,11 +360,11 @@ export function Sidebar(props: SidebarProps) {
             {!collapsed && props.updateAvailable && (
               <button
                 type="button"
-                onClick={() => props.onOpenSettings("about")}
-                className="flex h-5 shrink-0 items-center gap-1 rounded-full bg-foreground/90 px-2 text-[10px] font-medium text-background hover:bg-foreground"
-                title="发现新版本，点击更新"
+                onClick={() => props.onStartUpdate?.()}
+                className="group flex h-5 shrink-0 items-center gap-1 rounded-full bg-gradient-to-r from-blue-500 to-blue-400 px-2 text-[10px] font-medium text-white shadow-sm transition-colors hover:from-blue-600 hover:to-blue-500"
+                title="发现新版本，点击立即更新"
               >
-                <Download className="h-2.5 w-2.5" />
+                <Sparkles className="h-2.5 w-2.5 animate-pulse [animation-duration:2s] [animation-timing-function:ease-in-out]" />
                 更新
               </button>
             )}

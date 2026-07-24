@@ -636,6 +636,7 @@ function Shell({
   const [loginDialogInitialView, setLoginDialogInitialView] = useState<"login" | "subscribe">("login");
   const [loginDialogSubscribeIntent, setLoginDialogSubscribeIntent] = useState(false);
   const [updateAvailable, setUpdateAvailable] = useState<UpdateCheckResult | null>(null);
+  const [updateDialogTrigger, setUpdateDialogTrigger] = useState(0);
   const runningChatIdsRef = useRef<Set<string>>(new Set());
   const sidebarShortcutsRef = useRef<SidebarShortcuts>({
     mona: "Alt+1",
@@ -1527,6 +1528,7 @@ function Shell({
     completedChatIds: completedChatIdList,
     viewState: sidebarState.view,
     updateAvailable: !!updateAvailable,
+    onStartUpdate: () => setUpdateDialogTrigger((n) => n + 1),
     showArchived: sidebarState.view.show_archived,
     archivedCount: sidebarState.archived_keys.length,
     onRemoveProject,
@@ -1861,7 +1863,10 @@ function Shell({
           autoSubscribeAfterLogin={loginDialogSubscribeIntent}
         />
 
-        <UpdateNotification onUpdateAvailable={setUpdateAvailable} />
+        <UpdateNotification
+          onUpdateAvailable={setUpdateAvailable}
+          openTrigger={updateDialogTrigger}
+        />
 
         <DeleteConfirm
           open={!!pendingDelete}
