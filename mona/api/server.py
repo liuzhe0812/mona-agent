@@ -1715,10 +1715,11 @@ def _imap_fetch_recent(body: dict[str, Any]) -> list[dict[str, Any]]:
 
         messages: list[dict[str, Any]] = []
         for uid in uids:
-            # 拉完整 RFC822（BODY.PEEK[]），同步时即落盘完整 .eml 并解析正文，
-            # 确保 AI 和离线场景均能直接读取，无需点击触发 fetch_body 补全。
+            # 同步时只拉 HEADER（BODY.PEEK[HEADER]），保证新邮件同步毫秒级完成、通知即时弹出。
+            # 正文和附件由 fetch_body 按需拉取完整 RFC822 并落盘（用户点击或 AI 读取时触发）。
+            # fetch_raw_and_cache 已修复：检查 body_fetched 而非 eml_path，确保落盘不被跳过。
             status, fetched = client.uid(
-                "FETCH", uid, "(BODY.PEEK[] UID FLAGS)"
+                "FETCH", uid, "(BODY.PEEK[HEADER] UID FLAGS)"
             )
             if status != "OK" or not fetched:
                 continue
@@ -1747,11 +1748,6 @@ def _imap_fetch_recent(body: dict[str, Any]) -> list[dict[str, Any]]:
             date_value = parsed.get("Date", "")
             message_id = parsed.get("Message-ID", "") or ""
 
-            # 解析正文（与 fetch_body 逻辑一致），body_text 截断到 50000 字符
-            body_text, body_html = _email_extract_bodies(parsed)
-            if body_text:
-                body_text = body_text[:50000]
-
             messages.append(
                 {
                     "uid": uid_str,
@@ -1761,16 +1757,16 @@ def _imap_fetch_recent(body: dict[str, Any]) -> list[dict[str, Any]]:
                     "to": ", ".join(to_addrs),
                     "cc": ", ".join(cc_addrs),
                     "date": date_value,
-                    "bodyText": body_text,
-                    "bodyHtml": body_html,
-                    "bodyFetched": True,
+                    "bodyText": "",
+                    "bodyHtml": None,
+                    "bodyFetched": False,
                     "hasAttachments": _email_has_attachments(parsed),
                     "rawSize": len(raw_bytes),
                     "isRead": _email_extract_seen_flag(fetched),
                     "isStarred": _email_extract_flagged_flag(fetched),
                     "messageId": message_id,
                     "attachments": _email_extract_attachments(parsed),
-                    # 完整 RFC822 字节（base64），同步时即落盘为 .eml，AI 和前端均走本地文件
+                    # HEADER 原始字节（base64），落盘为 .eml；fetch_body 时用完整 RFC822 覆盖
                     "rawBytes": base64.b64encode(raw_bytes).decode("ascii"),
                 }
             )

@@ -23,6 +23,12 @@ _GATEWAY_BASE = "http://127.0.0.1"
 _FALLBACK_IPC_PORT = 17860
 _IPC_PORT_FILE = Path.home() / ".mona" / "ipc_bridge_port"
 
+# Opener that bypasses all proxy settings. The IPC bridge is a localhost
+# HTTP server; system proxies (V2Ray/Clash on 127.0.0.1:10809) intercept
+# the request and fail to route it back, causing spurious connection errors
+# that trigger fail-closed subscription gating (all Pro tools hidden).
+_NO_PROXY_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
 # TTL cache for the subscription access check so we don't hit the IPC bridge
 # on every single tool call within a short window. The AgentLoop refreshes
 # the ToolRegistry flag once per turn; this cache covers subagents and
@@ -55,7 +61,7 @@ def tauri_invoke(cmd: str, args: dict[str, Any] | None = None) -> Any:
         url, data=payload, headers={"Content-Type": "application/json"}
     )
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with _NO_PROXY_OPENER.open(req, timeout=30) as resp:
             result = json.loads(resp.read().decode())
             if isinstance(result, dict) and "error" in result:
                 logger.warning("IPC bridge error for cmd={!r}: {}", cmd, result["error"])

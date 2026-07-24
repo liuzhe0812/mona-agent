@@ -666,7 +666,7 @@ export function FileManagerApp({
       {contextMenu && (
         <div
           ref={contextMenuRef}
-          className="fixed z-[9999] w-48 rounded-lg border border-white/10 bg-[#252526] py-1 shadow-2xl"
+          className="fixed z-[100001] w-48 rounded-lg border border-white/10 bg-[#252526] py-1 shadow-2xl"
           style={{ top: contextMenu.y, left: contextMenu.x }}
           onClick={(e) => e.stopPropagation()}
           onContextMenu={(e) => e.preventDefault()}

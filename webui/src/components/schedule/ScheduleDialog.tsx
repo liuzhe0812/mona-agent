@@ -176,7 +176,7 @@ export function ScheduleDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-1">
+        <div className="space-y-3">
           {/* Type selector */}
           <div className="flex gap-2">
             <button
@@ -301,7 +301,7 @@ export function ScheduleDialog({
                 value={aiMessage}
                 onChange={(e) => setAiMessage(e.target.value)}
                 placeholder="到时间让 AI 执行的指令，例如：检查邮箱并汇总未读邮件"
-                className="rounded-lg min-h-[60px] text-[13px]"
+                className="rounded-lg min-h-[44px] text-[13px]"
               />
               <button
                 type="button"
@@ -326,7 +326,7 @@ export function ScheduleDialog({
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder="备注（可选）"
-              className="rounded-lg min-h-[40px] text-[13px]"
+              className="rounded-lg min-h-[36px] text-[13px]"
             />
           </div>
 

@@ -8,6 +8,7 @@ import {
   ArrowRightFromLine,
   Download,
   Notebook,
+  ExternalLink,
 } from "lucide-react";
 import { useTerminalStore } from "./store/terminalStore";
 import { sshConnect, sshDisconnect, shellKill, shellSpawn, sshOpenSftp, vncDisconnect } from "./ipc";
@@ -226,6 +227,40 @@ export function SessionTabBar() {
     [getTerminalContent],
   );
 
+  const handleOpenInNewWindow = useCallback(
+    async (session: { id: string; type: string; configId: string; title: string }) => {
+      if (!isTauri()) return;
+      try {
+        const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+        const label = `terminal-window-${session.id}`;
+        const existing = await WebviewWindow.getByLabel(label);
+        if (existing) {
+          await existing.setFocus();
+          return;
+        }
+        const url = new URL(window.location.href);
+        url.searchParams.set("terminalWindow", "1");
+        url.searchParams.set("configId", session.configId);
+        url.searchParams.set("sessionType", session.type);
+        url.searchParams.set("sessionTitle", session.title);
+        const webview = new WebviewWindow(label, {
+          url: url.toString(),
+          title: session.title || "终端",
+          width: 1200,
+          height: 720,
+          minWidth: 640,
+          minHeight: 400,
+        });
+        webview.once("tauri://error", (event) => {
+          console.error("[terminal-window] failed to create:", event);
+        });
+      } catch (err) {
+        console.error("[terminal-window] error:", err);
+      }
+    },
+    [],
+  );
+
   return (
     <>
       <div className="flex h-8 shrink-0 items-end border-b border-border bg-sidebar/50 px-1">
@@ -277,7 +312,7 @@ export function SessionTabBar() {
                   />
                 </div>
               </ContextMenuTrigger>
-              <ContextMenuContent className="w-48">
+              <ContextMenuContent className="w-48 z-[100001]">
                 <ContextMenuItem onClick={() => handleRename(session)}>
                   <Pencil className="mr-2 h-3.5 w-3.5" /> 重命名
                 </ContextMenuItem>
@@ -302,6 +337,10 @@ export function SessionTabBar() {
                     </ContextMenuItem>
                   </>
                 )}
+                <ContextMenuSeparator />
+                <ContextMenuItem onClick={() => handleOpenInNewWindow(session)}>
+                  <ExternalLink className="mr-2 h-3.5 w-3.5" /> 在新窗口打开
+                </ContextMenuItem>
                 <ContextMenuSeparator />
                 <ContextMenuItem onClick={() => handleClose(session.id, session.type)}>
                   <X className="mr-2 h-3.5 w-3.5" /> 关闭

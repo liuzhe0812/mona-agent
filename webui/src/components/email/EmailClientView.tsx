@@ -246,7 +246,6 @@ export function EmailClientView({ onOpenSubscribe }: { onOpenSubscribe?: () => v
         <ToolbarButton
           icon={Inbox}
           label="收取"
-          variant="primary"
           disabled={(!selectedAccountId && !isUnifiedInbox) || syncing || backgroundSyncing || !gatewayUrl || !isOnline}
           onClick={() => {
             // 统一收件箱模式：同步所有账号；单账号模式：仅同步当前账号

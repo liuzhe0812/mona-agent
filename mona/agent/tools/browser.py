@@ -32,13 +32,23 @@ from mona.config.schema import Base
 # ---------------------------------------------------------------------------
 
 
+_playwright_checked = False
+_playwright_ok = False
+
+
 def _playwright_available() -> bool:
+    global _playwright_checked, _playwright_ok
+    if _playwright_checked:
+        return _playwright_ok
+    _playwright_checked = True
     try:
         import playwright  # noqa: F401
 
-        return True
-    except ImportError:
-        return False
+        _playwright_ok = True
+    except ImportError as e:
+        _playwright_ok = False
+        logger.warning("playwright not available, browser tools will be disabled: {}", e)
+    return _playwright_ok
 
 
 # ---------------------------------------------------------------------------

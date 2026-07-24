@@ -89,9 +89,9 @@ export function NewChatDashboard({
     : "暂无可继续的工作";
 
   return (
-    <div className="mt-7 w-full max-w-[58rem] text-left">
+    <div className="mt-5 w-full max-w-[58rem] text-left">
       <div className="grid gap-3 md:grid-cols-[minmax(0,1.55fr)_minmax(15rem,0.9fr)]">
-        <section className="rounded-lg border border-border/80 bg-card px-5 py-4 shadow-[0_8px_22px_rgba(15,23,42,0.035)]">
+        <section className="rounded-lg border border-border/80 bg-card px-4 py-3 shadow-[0_8px_22px_rgba(15,23,42,0.035)]">
           <div className="mb-3 flex items-center justify-between gap-3">
             <h2 className="text-[15px] font-semibold text-foreground">今日焦点</h2>
             {nextItem ? (
@@ -140,7 +140,7 @@ export function NewChatDashboard({
         </section>
 
         <div className="grid gap-3">
-          <section className="flex min-h-[112px] flex-col justify-between rounded-lg border border-border/80 bg-card px-4 py-3.5 shadow-[0_8px_22px_rgba(15,23,42,0.035)]">
+          <section className="flex min-h-[100px] flex-col justify-between rounded-lg border border-border/80 bg-card px-4 py-3 shadow-[0_8px_22px_rgba(15,23,42,0.035)]">
             <h2 className="text-[14px] font-semibold text-foreground">继续工作</h2>
             <div className="flex items-end justify-between gap-3">
               <div className="min-w-0">
@@ -162,7 +162,7 @@ export function NewChatDashboard({
             </div>
           </section>
 
-          <section className="flex min-h-[112px] flex-col justify-between rounded-lg border border-border/80 bg-card px-4 py-3.5 shadow-[0_8px_22px_rgba(15,23,42,0.035)]">
+          <section className="flex min-h-[100px] flex-col justify-between rounded-lg border border-border/80 bg-card px-4 py-3 shadow-[0_8px_22px_rgba(15,23,42,0.035)]">
             <h2 className="text-[14px] font-semibold text-foreground">待处理邮件</h2>
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-3">
@@ -213,7 +213,7 @@ function DashboardAction({
       type="button"
       onClick={onClick}
       disabled={!onClick || disabled}
-      className="flex h-14 items-center justify-center gap-2 border-b border-border/70 text-[14px] font-medium text-foreground transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-45 sm:border-b-0 sm:border-r last:border-0"
+      className="flex h-12 items-center justify-center gap-2 border-b border-border/70 text-[13px] font-medium text-foreground transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-45 sm:border-b-0 sm:border-r last:border-0"
     >
       {icon}
       {label}

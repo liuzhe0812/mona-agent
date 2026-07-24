@@ -18,9 +18,12 @@ import {
   ChevronUp,
   CircleHelp,
   Folder,
+  Globe,
   History,
   ImageIcon,
+  Layers,
   Loader2,
+  Mail,
   Plus,
   RotateCw,
   Settings,
@@ -105,6 +108,34 @@ const COMMAND_ICONS: Record<string, LucideIcon> = {
   "square-pen": SquarePen,
   "undo-2": Undo2,
 };
+
+interface HeroPromptChip {
+  label: string;
+  prompt: string;
+  Icon: LucideIcon;
+  iconClass: string;
+}
+
+const HERO_PROMPT_CHIPS: HeroPromptChip[] = [
+  {
+    label: "网页生成笔记",
+    prompt: "把这个网页转成笔记：|",
+    Icon: Globe,
+    iconClass: "text-[#4f9de8]",
+  },
+  {
+    label: "邮件整理今日待办",
+    prompt: "整理今天邮件里的待办事项",
+    Icon: Mail,
+    iconClass: "text-[#d8852d]",
+  },
+  {
+    label: "帮我想想关于…",
+    prompt: "帮我找找记录过关于「|」的内容，从笔记、资料、邮件、记忆里整理出来",
+    Icon: Layers,
+    iconClass: "text-[#4f9de8]",
+  },
+];
 
 const SLASH_PALETTE_GAP_PX = 8;
 const SLASH_PALETTE_MAX_HEIGHT_PX = 288;
@@ -575,6 +606,24 @@ export function ThreadComposer({
     [resizeTextarea],
   );
 
+  const applyHeroChip = useCallback((chip: HeroPromptChip) => {
+    const marker = "|";
+    const markerIdx = chip.prompt.indexOf(marker);
+    const text = chip.prompt.replace(marker, "");
+    setValue(text);
+    setSlashMenuDismissed(true);
+    setInlineError(null);
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (!el) return;
+      el.style.height = "auto";
+      el.style.height = `${Math.min(el.scrollHeight, 260)}px`;
+      const pos = markerIdx >= 0 ? markerIdx : text.length;
+      el.focus();
+      el.setSelectionRange(pos, pos);
+    });
+  }, []);
+
   const submit = useCallback(() => {
     if (!canSend) return;
     const trimmed = value.trim();
@@ -701,6 +750,29 @@ export function ThreadComposer({
           onHover={setSelectedCommandIndex}
           onChoose={chooseSlashCommand}
         />
+      ) : null}
+      {isHero ? (
+        <div className="mx-auto mb-2.5 flex w-full max-w-[58rem] flex-wrap gap-2">
+          {HERO_PROMPT_CHIPS.map((chip) => {
+            const Icon = chip.Icon;
+            return (
+              <button
+                key={chip.label}
+                type="button"
+                onClick={() => applyHeroChip(chip)}
+                className={cn(
+                  "inline-flex h-7 items-center gap-1.5 rounded-full border px-3",
+                  "border-border/55 bg-muted/40 text-[12px] font-medium text-foreground/75",
+                  "hover:bg-muted hover:text-foreground transition-colors",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                )}
+              >
+                <Icon className={cn("h-3.5 w-3.5", chip.iconClass)} aria-hidden />
+                {chip.label}
+              </button>
+            );
+          })}
+        </div>
       ) : null}
       <div
         className={cn(

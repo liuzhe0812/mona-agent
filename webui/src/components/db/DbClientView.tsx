@@ -50,7 +50,7 @@ export function DbClientView({ onOpenSubscribe }: { onOpenSubscribe?: () => void
 
   const [leftWidth, setLeftWidth] = useState(LEFT_PANEL_DEFAULT);
   const [resultHeight, setResultHeight] = useState(RESULT_PANEL_DEFAULT);
-  const [agentPanelCollapsed, setAgentPanelCollapsed] = useState(false);
+  const [agentPanelCollapsed, setAgentPanelCollapsed] = useState(true);
   const [agentPanelWidth, setAgentPanelWidth] = useState(AGENT_PANEL_DEFAULT);
   const leftDraggingRef = useRef(false);
   const resultDraggingRef = useRef(false);
@@ -160,6 +160,15 @@ export function DbClientView({ onOpenSubscribe }: { onOpenSubscribe?: () => void
               onTabClick={setActiveTab}
               onTabClose={removeQueryTab}
               onAddTab={addQueryTab}
+              onToggleAgent={licenseActive ? () => setAgentPanelCollapsed((c) => !c) : (onOpenSubscribe ?? (() => {}))}
+              agentPanelCollapsed={agentPanelCollapsed}
+              agentLogoNode={
+                licenseActive ? (
+                  <AgentLogo state={agentStreaming ? "working" : "idle"} className="h-5 w-5" />
+                ) : (
+                  <LockKeyhole className="h-4 w-4 text-muted-foreground" />
+                )
+              }
             />
 
             <TooltipProvider delayDuration={300}>
@@ -262,25 +271,6 @@ export function DbClientView({ onOpenSubscribe }: { onOpenSubscribe?: () => void
                 <span className="text-[11px] text-muted-foreground">
                   {selectedTable?.name}
                 </span>
-                <>
-                  <Separator orientation="vertical" className="h-5" />
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button
-                        type="button"
-                        className="flex items-center justify-center"
-                        onClick={licenseActive ? () => setAgentPanelCollapsed((c) => !c) : onOpenSubscribe}
-                      >
-                        {licenseActive ? (
-                          <AgentLogo state={agentStreaming ? "working" : "idle"} className="h-5 w-5" />
-                        ) : (
-                          <LockKeyhole className="h-4 w-4 text-muted-foreground" />
-                        )}
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent>{licenseActive ? (agentPanelCollapsed ? "展开 Mona" : "收起 Mona") : "升级 Pro 解锁数据库 AI"}</TooltipContent>
-                  </Tooltip>
-                </>
               </div>
             </TooltipProvider>
 
@@ -391,12 +381,18 @@ function QueryTabBar({
   onTabClick,
   onTabClose,
   onAddTab,
+  onToggleAgent,
+  agentPanelCollapsed,
+  agentLogoNode,
 }: {
   tabs: { id: string; title: string }[];
   activeTabId: string | null;
   onTabClick: (id: string) => void;
   onTabClose: (id: string) => void;
   onAddTab: () => void;
+  onToggleAgent: () => void;
+  agentPanelCollapsed: boolean;
+  agentLogoNode: React.ReactNode;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
@@ -495,8 +491,18 @@ function QueryTabBar({
       <button
         className="flex shrink-0 items-center justify-center px-2 py-1.5 text-muted-foreground hover:text-foreground hover:bg-accent"
         onClick={onAddTab}
+        title="新建查询"
       >
         <Plus className="h-3.5 w-3.5" />
+      </button>
+      <div className="flex-1" />
+      <button
+        type="button"
+        className="flex shrink-0 items-center justify-center px-2 py-1.5"
+        onClick={onToggleAgent}
+        title={agentPanelCollapsed ? "展开 Mona" : "收起 Mona"}
+      >
+        {agentLogoNode}
       </button>
     </div>
   );

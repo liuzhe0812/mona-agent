@@ -6,6 +6,12 @@ pub mod startup;
 pub mod maintenance;
 pub mod diagnostics;
 pub mod win11debloat;
+pub mod network;
+pub mod performance;
+pub mod context_menu;
+pub mod process_control;
+pub mod repair;
+pub mod defender;
 
 use crate::settings::app_data_dir;
 use rusqlite::{params, Connection};

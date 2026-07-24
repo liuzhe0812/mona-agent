@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, createContext, useContext } from "react";
 import {
   Wifi,
   Terminal,
@@ -21,6 +21,11 @@ import { desktopDisconnect, desktopConnect, desktopExec } from "../ipc";
 import { useTerminalStore } from "../store/terminalStore";
 import type { ConnectionConfig } from "../types/terminal";
 import type { AppType, WindowState } from "./types";
+
+export const DesktopPortalContext = createContext<HTMLElement | null>(null);
+export function useDesktopPortal() {
+  return useContext(DesktopPortalContext);
+}
 
 const desktopStyles = `
   .desktop-mode-container {
@@ -266,6 +271,7 @@ interface DesktopModeProps {
 
 export function DesktopMode({ sessionId }: DesktopModeProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const [portalTarget, setPortalTarget] = useState<HTMLElement | null>(null);
   const [containerSize, setContainerSize] = useState({ width: 1200, height: 800 });
 
   const session = useTerminalStore((s) =>
@@ -295,6 +301,7 @@ export function DesktopMode({ sessionId }: DesktopModeProps) {
       }
     };
     updateSize();
+    setPortalTarget(containerRef.current);
     const observer = new ResizeObserver(updateSize);
     if (containerRef.current) {
       observer.observe(containerRef.current);
@@ -482,47 +489,49 @@ export function DesktopMode({ sessionId }: DesktopModeProps) {
   };
 
   return (
-    <div className="desktop-mode-container" ref={containerRef}>
-      <style>{desktopStyles}</style>
+    <DesktopPortalContext.Provider value={portalTarget}>
+      <div className="desktop-mode-container" ref={containerRef}>
+        <style>{desktopStyles}</style>
 
-      <MenuBar
-        activeTitle={activeWindow?.title ?? "桌面"}
-        hostLabel={hostLabel}
-        windows={windows}
-        activeWindowId={activeWindowId}
-        onOpenApp={handleOpenApp}
-        onCloseWindow={closeWindow}
-        onMinimizeAll={handleMinimizeAll}
-        onActivateWindow={handleActivateFromMenu}
-      />
+        <MenuBar
+          activeTitle={activeWindow?.title ?? "桌面"}
+          hostLabel={hostLabel}
+          windows={windows}
+          activeWindowId={activeWindowId}
+          onOpenApp={handleOpenApp}
+          onCloseWindow={closeWindow}
+          onMinimizeAll={handleMinimizeAll}
+          onActivateWindow={handleActivateFromMenu}
+        />
 
-      <DesktopSurface onOpenApp={handleOpenApp} onDesktopContextMenu={handleDesktopContextMenu} />
+        <DesktopSurface onOpenApp={handleOpenApp} onDesktopContextMenu={handleDesktopContextMenu} />
 
-      {windows.map((window) => (
-        <Window
-          key={window.id}
-          window={window}
-          isActive={activeWindowId === window.id}
-          onClose={() => closeWindow(window.id)}
-          onMinimize={() => minimizeWindow(window.id)}
-          onMaximize={() => toggleMaximize(window.id)}
-          onActivate={() => activateWindow(window.id)}
-          onUpdatePosition={(pos) => updateWindowPosition(window.id, pos)}
-          onUpdateSize={(size) => updateWindowSize(window.id, size)}
-          containerBounds={containerSize}
-        >
-          {renderWindowContent(window)}
-        </Window>
-      ))}
+        {windows.map((window) => (
+          <Window
+            key={window.id}
+            window={window}
+            isActive={activeWindowId === window.id}
+            onClose={() => closeWindow(window.id)}
+            onMinimize={() => minimizeWindow(window.id)}
+            onMaximize={() => toggleMaximize(window.id)}
+            onActivate={() => activateWindow(window.id)}
+            onUpdatePosition={(pos) => updateWindowPosition(window.id, pos)}
+            onUpdateSize={(size) => updateWindowSize(window.id, size)}
+            containerBounds={containerSize}
+          >
+            {renderWindowContent(window)}
+          </Window>
+        ))}
 
-      <Taskbar
-        windows={windows}
-        activeWindowId={activeWindowId}
-        onRestoreWindow={restoreWindow}
-        onMinimizeWindow={minimizeWindow}
-        onOpenApp={handleOpenApp}
-        onDisconnect={handleDisconnect}
-      />
-    </div>
+        <Taskbar
+          windows={windows}
+          activeWindowId={activeWindowId}
+          onRestoreWindow={restoreWindow}
+          onMinimizeWindow={minimizeWindow}
+          onOpenApp={handleOpenApp}
+          onDisconnect={handleDisconnect}
+        />
+      </div>
+    </DesktopPortalContext.Provider>
   );
 }

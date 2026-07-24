@@ -1592,6 +1592,75 @@ def status():
 
 
 # ============================================================================
+# Doctor — post-build smoke test & runtime diagnostics
+# ============================================================================
+
+
+@app.command()
+def doctor():
+    """Diagnose runtime environment: verify critical dependencies and tool availability.
+
+    Used for post-build smoke testing (PyInstaller often misses lazily-imported
+    submodules) and runtime troubleshooting. Exits with code 1 if any critical
+    dependency import fails.
+    """
+    console.print(f"{__logo__} mona Doctor\n")
+    failed = False
+
+    # Critical dynamic dependencies that PyInstaller static analysis often misses.
+    # Each entry: (import_path, description)
+    critical_deps = [
+        ("playwright", "Browser automation — top-level"),
+        ("playwright.async_api", "Browser automation — async API"),
+        ("playwright._impl._driver", "Browser automation — driver"),
+        ("lark_oapi", "Feishu/Lark channel"),
+        ("lark_oapi.api.im.v1", "Feishu/Lark channel — IM API"),
+        ("fitz", "PDF reading (PyMuPDF)"),
+        ("boto3", "AWS Bedrock provider"),
+        ("botocore", "AWS Bedrock provider"),
+    ]
+    console.print("[bold]Critical Dependencies[/bold]\n")
+    for mod_path, desc in critical_deps:
+        try:
+            __import__(mod_path)
+            console.print(f"  {mod_path}: [green]✓[/green] [dim]{desc}[/dim]")
+        except ImportError as e:
+            console.print(f"  {mod_path}: [red]✗[/red] [dim]{desc}[/dim]  [red]{e}[/red]")
+            failed = True
+    console.print()
+
+    # Tool availability — disabled tools are informational, not failures.
+    # Import errors above already flag the root cause.
+    console.print("[bold]Tool Availability[/bold]\n")
+    try:
+        from mona.agent.tools.context import ToolContext
+        from mona.agent.tools.loader import ToolLoader
+
+        loader = ToolLoader()
+        ctx = ToolContext(config=None, workspace=".")
+        for cls in sorted(loader.discover(), key=lambda c: c.__name__):
+            try:
+                ok = cls.enabled(ctx)
+            except Exception as e:  # noqa: BLE001
+                # enabled() may access ctx.config which is None here — that's a
+                # config issue, not a packaging issue, so don't count as failure.
+                console.print(f"  {cls.__name__}: [yellow]? needs config[/yellow] [dim]{e}[/dim]")
+                continue
+            if ok:
+                console.print(f"  {cls.__name__}: [green]✓[/green]")
+            else:
+                console.print(f"  {cls.__name__}: [yellow]disabled[/yellow]")
+    except Exception as e:  # noqa: BLE001
+        console.print(f"  [red]Failed to load tools: {e}[/red]")
+        failed = True
+
+    if failed:
+        console.print("\n[red]✗ Doctor checks failed[/red]")
+        raise typer.Exit(1)
+    console.print("\n[green]✓ All doctor checks passed[/green]")
+
+
+# ============================================================================
 # OAuth Login
 # ============================================================================
 

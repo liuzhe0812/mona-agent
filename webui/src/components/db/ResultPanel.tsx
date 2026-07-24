@@ -3,10 +3,17 @@ import { Save, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { cn } from "@/lib/utils";
 import { useDbStore } from "./store/dbStore";
 import * as ipc from "./ipc";
-import { displayCellValue } from "./types";
+import { displayCellValue, NULL_MARKER, DEFAULT_MARKER } from "./types";
 import type { CellValue, QueryResult } from "./types";
 
 type ResultTab = "result" | "message" | "plan" | "properties";
@@ -19,6 +26,13 @@ export function ResultPanel() {
 
   useEffect(() => {
     if (activeTab?.result?.message?.startsWith("保存失败")) {
+      setActiveResultTab("message");
+    }
+  }, [activeTab?.result?.message]);
+
+  useEffect(() => {
+    const msg = activeTab?.result?.message;
+    if (msg && (msg.startsWith("插入失败") || msg.startsWith("删除失败"))) {
       setActiveResultTab("message");
     }
   }, [activeTab?.result?.message]);
@@ -55,10 +69,10 @@ export function ResultPanel() {
           属性
         </ResultTabButton>
         <div className="flex-1" />
-        {edits.length > 0 && (
+        {(edits.length > 0 || (activeTab.insertedRows?.length ?? 0) > 0) && (
           <div className="flex items-center gap-1 px-2">
             <span className="text-[11px] text-yellow-500">
-              {edits.length} 处修改
+              {edits.length + (activeTab.insertedRows?.length ?? 0)} 处修改
             </span>
             <Button
               variant="ghost"
@@ -96,9 +110,14 @@ export function ResultPanel() {
           </div>
         )}
         {activeResultTab === "result" && result && result.columns.length > 0 ? (
-          <ResultTable result={result} tabId={activeTabId!} edits={edits} />
+          <ResultTable
+            result={result}
+            tabId={activeTabId!}
+            edits={edits}
+            insertedRows={activeTab.insertedRows ?? []}
+          />
         ) : activeResultTab === "message" && result ? (
-          <div className="p-3.5 text-[13px] text-foreground">
+          <div className="select-text whitespace-pre-wrap break-all p-3.5 text-[13px] text-foreground">
             {result.message ?? "无消息"}
           </div>
         ) : activeResultTab === "properties" ? (
@@ -137,72 +156,156 @@ function ResultTable({
   result,
   tabId,
   edits,
+  insertedRows,
 }: {
   result: QueryResult;
   tabId: string;
   edits: { rowIdx: number; colIdx: number; newValue: string }[];
+  insertedRows: number[];
 }) {
   const editMap = new Map<string, string>();
   for (const e of edits) {
     editMap.set(`${e.rowIdx}:${e.colIdx}`, e.newValue);
   }
 
-  return (
-    <table className="w-full border-collapse text-[12px]">
-      <thead>
-        <tr>
-          <th className="sticky top-0 z-10 w-10 bg-card px-2.5 py-1.5 text-right text-[11px] font-semibold text-muted-foreground">
-            #
-          </th>
-          {result.columns.map((col) => (
-            <th
-              key={col.name}
-              className="sticky top-0 z-10 bg-card px-2.5 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground"
-            >
-              {col.name}
-              {col.is_primary_key && (
-                <span className="ml-1 text-[10px] text-yellow-500">PK</span>
-              )}
-            </th>
-          ))}
-        </tr>
-      </thead>
-      <tbody>
-        {result.rows.map((row, rowIdx) => (
-          <tr
-            key={rowIdx}
-            className={cn(
-              "border-b border-border/50 hover:bg-accent transition-colors",
-              edits.some((e) => e.rowIdx === rowIdx) && "bg-orange-500/5",
-            )}
-          >
-            <td className="px-2.5 py-1 text-right text-[11px] text-muted-foreground">
-              {rowIdx + 1}
-            </td>
-            {row.map((cell, colIdx) => {
-              const editKey = `${rowIdx}:${colIdx}`;
-              const editValue = editMap.get(editKey);
-              const isDirty = editValue !== undefined;
+  const [selectedCell, setSelectedCell] = useState<{ row: number; col: number } | null>(null);
 
+  const currentTab = useDbStore((s) => s.queryTabs.find((t) => t.id === tabId));
+  const canModifyRow = !!currentTab?.database && currentTab.title !== "新查询";
+
+  const handleSetNull = () => {
+    if (!selectedCell) return;
+    useDbStore.getState().updateCell(tabId, selectedCell.row, selectedCell.col, NULL_MARKER);
+  };
+  const handleSetEmpty = () => {
+    if (!selectedCell) return;
+    useDbStore.getState().updateCell(tabId, selectedCell.row, selectedCell.col, "");
+  };
+  const handleSetDefault = () => {
+    if (!selectedCell) return;
+    useDbStore.getState().updateCell(tabId, selectedCell.row, selectedCell.col, DEFAULT_MARKER);
+  };
+  const handleInsertRow = () => {
+    useDbStore.getState().insertRow(tabId);
+  };
+  const handleDeleteRow = () => {
+    if (!selectedCell) return;
+    useDbStore.getState().deleteRow(tabId, selectedCell.row);
+  };
+
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger className="block">
+        <table className="w-full border-collapse text-[12px]">
+          <thead>
+            <tr>
+              <th
+                className={cn(
+                  "sticky top-0 z-10 w-10 px-2.5 py-1.5 text-right text-[11px] font-semibold text-muted-foreground transition-colors",
+                  selectedCell ? "bg-blue-100 dark:bg-blue-900/50" : "bg-card",
+                )}
+              >
+                #
+              </th>
+              {result.columns.map((col, colIdx) => {
+                const isColSelected = selectedCell?.col === colIdx;
+                return (
+                  <th
+                    key={col.name}
+                    className={cn(
+                      "sticky top-0 z-10 px-2.5 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wider transition-colors",
+                      isColSelected
+                        ? "bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300"
+                        : "bg-card text-muted-foreground",
+                    )}
+                  >
+                    {col.name}
+                    {col.is_primary_key && (
+                      <span className="ml-1 text-[10px] text-yellow-500">PK</span>
+                    )}
+                  </th>
+                );
+              })}
+            </tr>
+          </thead>
+          <tbody>
+            {result.rows.map((row, rowIdx) => {
+              const isRowDirty = edits.some((e) => e.rowIdx === rowIdx);
+              const isInsertedRow = insertedRows.includes(rowIdx);
+              const isRowSelected = selectedCell?.row === rowIdx;
               return (
-                <EditableCell
-                  key={colIdx}
-                  cell={cell}
-                  isDirty={isDirty}
-                  editValue={editValue ?? undefined}
-                  onSave={(newValue) => {
-                    useDbStore.getState().updateCell(tabId, rowIdx, colIdx, newValue);
-                  }}
-                  onRevert={() => {
-                    useDbStore.getState().revertCell(tabId, rowIdx, colIdx);
-                  }}
-                />
+                <tr
+                  key={rowIdx}
+                  className={cn(
+                    "border-b border-border/50 transition-colors",
+                    isRowDirty && "bg-orange-500/5",
+                    isInsertedRow && "bg-green-500/5",
+                  )}
+                >
+                  <td
+                    className={cn(
+                      "px-2.5 py-1 text-right text-[11px] text-muted-foreground transition-colors",
+                      !isRowDirty && !isInsertedRow && isRowSelected && "bg-blue-500/10 text-blue-600 dark:text-blue-300",
+                      isInsertedRow && "text-green-600 dark:text-green-400 font-bold",
+                    )}
+                  >
+                    {isInsertedRow ? "*" : rowIdx + 1}
+                  </td>
+                  {row.map((cell, colIdx) => {
+                const editKey = `${rowIdx}:${colIdx}`;
+                const editValue = editMap.get(editKey);
+                const isDirty = editValue !== undefined;
+                const isSelected =
+                  selectedCell?.row === rowIdx && selectedCell?.col === colIdx;
+
+                return (
+                  <EditableCell
+                    key={colIdx}
+                    cell={cell}
+                    isDirty={isDirty}
+                    editValue={editValue ?? undefined}
+                    isSelected={isSelected}
+                    isRowSelected={isRowSelected}
+                    onCellClick={() => setSelectedCell({ row: rowIdx, col: colIdx })}
+                    onCellPointerDown={(e) => {
+                      if (e.button === 2) {
+                        setSelectedCell({ row: rowIdx, col: colIdx });
+                      }
+                    }}
+                    onSave={(newValue) => {
+                      useDbStore.getState().updateCell(tabId, rowIdx, colIdx, newValue);
+                    }}
+                    onRevert={() => {
+                      useDbStore.getState().revertCell(tabId, rowIdx, colIdx);
+                    }}
+                  />
+                );
+              })}
+                </tr>
               );
             })}
-          </tr>
-        ))}
-      </tbody>
-    </table>
+          </tbody>
+        </table>
+      </ContextMenuTrigger>
+      <ContextMenuContent>
+        <ContextMenuItem onClick={handleSetNull} disabled={!selectedCell}>
+          设置为 NULL
+        </ContextMenuItem>
+        <ContextMenuItem onClick={handleSetEmpty} disabled={!selectedCell}>
+          设置为空字符串
+        </ContextMenuItem>
+        <ContextMenuItem onClick={handleSetDefault} disabled={!selectedCell}>
+          设置为默认值
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem onClick={handleInsertRow} disabled={!canModifyRow}>
+          插入行
+        </ContextMenuItem>
+        <ContextMenuItem onClick={handleDeleteRow} disabled={!canModifyRow || !selectedCell}>
+          删除行
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
 
@@ -210,12 +313,20 @@ function EditableCell({
   cell,
   isDirty,
   editValue,
+  isSelected,
+  isRowSelected,
+  onCellClick,
+  onCellPointerDown,
   onSave,
   onRevert,
 }: {
   cell: CellValue;
   isDirty: boolean;
   editValue?: string;
+  isSelected: boolean;
+  isRowSelected: boolean;
+  onCellClick: () => void;
+  onCellPointerDown: (e: React.PointerEvent) => void;
   onSave: (value: string) => void;
   onRevert: () => void;
 }) {
@@ -229,8 +340,15 @@ function EditableCell({
     }
   }, [editing]);
 
-  const displayValue = isDirty ? editValue : displayCellValue(cell);
+  const getDisplayValue = () => {
+    if (!isDirty) return displayCellValue(cell);
+    if (editValue === NULL_MARKER) return "NULL";
+    if (editValue === DEFAULT_MARKER) return "DEFAULT";
+    return editValue;
+  };
+  const displayValue = getDisplayValue();
   const isNull = !isDirty && cell.type === "null";
+  const isEditedNull = isDirty && editValue === NULL_MARKER;
 
   if (editing) {
     return (
@@ -238,7 +356,7 @@ function EditableCell({
         <input
           ref={inputRef}
           className="w-full rounded border border-blue-500 bg-background px-2 py-0.5 text-[12px] outline-none"
-          defaultValue={isDirty ? editValue! : cell.type === "null" ? "" : displayCellValue(cell)}
+          defaultValue={isDirty ? (editValue === NULL_MARKER || editValue === DEFAULT_MARKER ? "" : editValue!) : cell.type === "null" ? "" : displayCellValue(cell)}
           onBlur={(e) => {
             const val = e.target.value;
             const original = cell.type === "null" ? "" : displayCellValue(cell);
@@ -264,12 +382,16 @@ function EditableCell({
   return (
     <td
       className={cn(
-        "max-w-[300px] cursor-text truncate px-2.5 py-1",
-        isNull && "italic text-muted-foreground",
-        isDirty && "bg-orange-500/15 text-orange-300 font-medium",
+        "max-w-[300px] cursor-text truncate px-2.5 py-1 transition-colors",
+        (isNull || isEditedNull) && "italic text-muted-foreground",
+        isDirty && "bg-orange-500/20 text-orange-600 dark:text-orange-300 font-medium",
+        !isDirty && isSelected && "bg-blue-500/20 ring-1 ring-inset ring-blue-600",
+        !isDirty && !isSelected && isRowSelected && "bg-blue-500/10",
       )}
+      onClick={onCellClick}
+      onPointerDown={onCellPointerDown}
       onDoubleClick={() => setEditing(true)}
-      title={isDirty ? `${displayCellValue(cell)} → ${editValue}` : displayValue}
+      title={isDirty ? `${displayCellValue(cell)} → ${displayValue}` : displayValue}
     >
       {displayValue}
     </td>

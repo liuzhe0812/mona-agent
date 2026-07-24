@@ -11,6 +11,7 @@ import {
   desktopExec,
 } from "../../ipc";
 import type { UnlistenFn } from "../../ipc";
+import { useDesktopPortal } from "../DesktopMode";
 import {
   FolderOpen,
   Search,
@@ -127,6 +128,7 @@ const generateTerminalSessionId = () =>
   `desktop_term_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
 export function TerminalApp({ sessionId }: TerminalAppProps) {
+  const portalTarget = useDesktopPortal();
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -435,13 +437,13 @@ export function TerminalApp({ sessionId }: TerminalAppProps) {
                 <span className="text-sm font-medium">已成功复制到剪贴板</span>
               </div>
             </div>,
-            document.body,
+            portalTarget ?? document.body,
           )}
 
         {contextMenu &&
           createPortal(
             <div
-              className="fixed z-[9999] bg-[#252526] border border-white/10 rounded-lg shadow-2xl py-1 w-48 animate-in fade-in zoom-in-95 duration-100"
+              className="fixed z-[100001] bg-[#252526] border border-white/10 rounded-lg shadow-2xl py-1 w-48 animate-in fade-in zoom-in-95 duration-100"
               style={{ top: contextMenu.y, left: contextMenu.x }}
               onClick={(e) => e.stopPropagation()}
               onContextMenu={(e) => e.preventDefault()}
@@ -469,7 +471,7 @@ export function TerminalApp({ sessionId }: TerminalAppProps) {
                 清屏
               </button>
             </div>,
-            document.body,
+            portalTarget ?? document.body,
           )}
 
         <div

@@ -39,6 +39,9 @@ const tabLabels: Record<SystemTab, string> = {
   software: "软件管理",
   startup: "启动项",
   optimization: "系统优化",
+  network: "网络",
+  advanced: "高级优化",
+  tools: "系统工具",
   maintenance: "维护记录",
 };
 

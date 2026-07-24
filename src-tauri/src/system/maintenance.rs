@@ -84,6 +84,54 @@ pub async fn system_get_maintenance_history(
             mode TEXT NOT NULL,
             success INTEGER NOT NULL,
             detail TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS network_operations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            mode TEXT NOT NULL,
+            success INTEGER NOT NULL,
+            detail TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS performance_operations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            mode TEXT NOT NULL,
+            success INTEGER NOT NULL,
+            detail TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS context_menu_operations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            mode TEXT NOT NULL,
+            success INTEGER NOT NULL,
+            detail TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS process_control_operations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            mode TEXT NOT NULL,
+            success INTEGER NOT NULL,
+            detail TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS repair_operations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            mode TEXT NOT NULL,
+            success INTEGER NOT NULL,
+            detail TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS defender_operations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            mode TEXT NOT NULL,
+            success INTEGER NOT NULL,
+            detail TEXT NOT NULL
         );",
     ).map_err(|error| format!("初始化维护记录失败：{error}"))?;
 
@@ -190,6 +238,151 @@ pub async fn system_get_maintenance_history(
                 restore_enabled: None,
             })
         }).map_err(|error| format!("读取清理记录失败：{error}"))?;
+        events.extend(rows.filter_map(Result::ok));
+    }
+    {
+        let mut statement = inner.db.prepare(
+            "SELECT id, ts, title, success, detail FROM network_operations ORDER BY ts DESC LIMIT 100",
+        ).map_err(|error| format!("读取网络记录失败：{error}"))?;
+        let rows = statement.query_map([], |row| {
+            let id: i64 = row.get(0)?;
+            let success: bool = row.get::<_, i64>(3)? != 0;
+            Ok(MaintenanceEvent {
+                id: format!("network-{id}"),
+                ts: row.get(1)?,
+                category: "网络".to_string(),
+                title: row.get(2)?,
+                source: "用户操作".to_string(),
+                status: if success { "成功" } else { "失败" }.to_string(),
+                detail: row.get(4)?,
+                bytes_changed: 0,
+                reversible: false,
+                related_id: None,
+                restore_enabled: None,
+            })
+        }).map_err(|error| format!("读取网络记录失败：{error}"))?;
+        events.extend(rows.filter_map(Result::ok));
+    }
+    {
+        let mut statement = inner.db.prepare(
+            "SELECT id, ts, title, mode, success, detail FROM performance_operations ORDER BY ts DESC LIMIT 100",
+        ).map_err(|error| format!("读取性能优化记录失败：{error}"))?;
+        let rows = statement.query_map([], |row| {
+            let id: i64 = row.get(0)?;
+            let ts: i64 = row.get(1)?;
+            let title: String = row.get(2)?;
+            let mode: String = row.get(3)?;
+            let success: bool = row.get::<_, i64>(4)? != 0;
+            let detail: String = row.get(5)?;
+            let reversible = mode == "restore";
+            Ok(MaintenanceEvent {
+                id: format!("performance-{id}"),
+                ts,
+                category: "高级优化".to_string(),
+                title,
+                source: "用户确认".to_string(),
+                status: if success { "成功" } else { "失败" }.to_string(),
+                detail,
+                bytes_changed: 0,
+                reversible,
+                related_id: None,
+                restore_enabled: if reversible { None } else { Some(true) },
+            })
+        }).map_err(|error| format!("读取性能优化记录失败：{error}"))?;
+        events.extend(rows.filter_map(Result::ok));
+    }
+    {
+        let mut statement = inner.db.prepare(
+            "SELECT id, ts, title, mode, success, detail FROM context_menu_operations ORDER BY ts DESC LIMIT 100",
+        ).map_err(|error| format!("读取右键菜单记录失败：{error}"))?;
+        let rows = statement.query_map([], |row| {
+            let id: i64 = row.get(0)?;
+            let success: bool = row.get::<_, i64>(4)? != 0;
+            Ok(MaintenanceEvent {
+                id: format!("context-menu-{id}"),
+                ts: row.get(1)?,
+                category: "高级优化".to_string(),
+                title: row.get(2)?,
+                source: "用户确认".to_string(),
+                status: if success { "成功" } else { "失败" }.to_string(),
+                detail: row.get(5)?,
+                bytes_changed: 0,
+                reversible: true,
+                related_id: None,
+                restore_enabled: None,
+            })
+        }).map_err(|error| format!("读取右键菜单记录失败：{error}"))?;
+        events.extend(rows.filter_map(Result::ok));
+    }
+    {
+        let mut statement = inner.db.prepare(
+            "SELECT id, ts, title, mode, success, detail FROM process_control_operations ORDER BY ts DESC LIMIT 100",
+        ).map_err(|error| format!("读取进程管控记录失败：{error}"))?;
+        let rows = statement.query_map([], |row| {
+            let id: i64 = row.get(0)?;
+            let mode: String = row.get(3)?;
+            let success: bool = row.get::<_, i64>(4)? != 0;
+            Ok(MaintenanceEvent {
+                id: format!("process-control-{id}"),
+                ts: row.get(1)?,
+                category: "系统工具".to_string(),
+                title: row.get(2)?,
+                source: "用户操作".to_string(),
+                status: if success { "成功" } else { "失败" }.to_string(),
+                detail: row.get(5)?,
+                bytes_changed: 0,
+                reversible: mode == "unblock",
+                related_id: None,
+                restore_enabled: None,
+            })
+        }).map_err(|error| format!("读取进程管控记录失败：{error}"))?;
+        events.extend(rows.filter_map(Result::ok));
+    }
+    {
+        let mut statement = inner.db.prepare(
+            "SELECT id, ts, title, mode, success, detail FROM repair_operations ORDER BY ts DESC LIMIT 100",
+        ).map_err(|error| format!("读取系统修复记录失败：{error}"))?;
+        let rows = statement.query_map([], |row| {
+            let id: i64 = row.get(0)?;
+            let success: bool = row.get::<_, i64>(4)? != 0;
+            Ok(MaintenanceEvent {
+                id: format!("repair-{id}"),
+                ts: row.get(1)?,
+                category: "系统修复".to_string(),
+                title: row.get(2)?,
+                source: "用户确认".to_string(),
+                status: if success { "成功" } else { "失败" }.to_string(),
+                detail: row.get(5)?,
+                bytes_changed: 0,
+                reversible: false,
+                related_id: None,
+                restore_enabled: None,
+            })
+        }).map_err(|error| format!("读取系统修复记录失败：{error}"))?;
+        events.extend(rows.filter_map(Result::ok));
+    }
+    {
+        let mut statement = inner.db.prepare(
+            "SELECT id, ts, title, mode, success, detail FROM defender_operations ORDER BY ts DESC LIMIT 100",
+        ).map_err(|error| format!("读取 Defender 记录失败：{error}"))?;
+        let rows = statement.query_map([], |row| {
+            let id: i64 = row.get(0)?;
+            let mode: String = row.get(3)?;
+            let success: bool = row.get::<_, i64>(4)? != 0;
+            Ok(MaintenanceEvent {
+                id: format!("defender-{id}"),
+                ts: row.get(1)?,
+                category: "Defender".to_string(),
+                title: row.get(2)?,
+                source: "用户确认".to_string(),
+                status: if success { "成功" } else { "失败" }.to_string(),
+                detail: row.get(5)?,
+                bytes_changed: 0,
+                reversible: mode == "enable",
+                related_id: None,
+                restore_enabled: None,
+            })
+        }).map_err(|error| format!("读取 Defender 记录失败：{error}"))?;
         events.extend(rows.filter_map(Result::ok));
     }
     events.sort_by(|left, right| right.ts.cmp(&left.ts));

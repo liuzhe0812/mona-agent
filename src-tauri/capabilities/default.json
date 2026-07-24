@@ -1,7 +1,7 @@
 {
   "identifier": "default",
   "description": "Capability for trusted application webviews",
-  "webviews": ["main", "quick-ask", "md-reader-*", "compose-*", "mailview-*", "notification-*", "browser-downloads", "browser-address-suggestions", "browser-tab-*"],
+  "webviews": ["main", "quick-ask", "md-reader-*", "compose-*", "mailview-*", "notification-*", "browser-downloads", "browser-address-suggestions", "browser-tab-*", "terminal-window-*"],
   "permissions": [
     "core:default",
     "core:window:default",

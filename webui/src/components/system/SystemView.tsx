@@ -5,13 +5,16 @@ import { Loader2, Sparkles } from "lucide-react";
 import { AgentLogo } from "@/components/AgentLogo";
 import sidebarSystemIcon from "@/assets/icons/sidebar-system.png";
 
+import { AdvancedOptimizationPanel } from "./AdvancedOptimizationPanel";
 import { MaintenancePanel } from "./MaintenancePanel";
+import { NetworkPanel } from "./NetworkPanel";
 import { OverviewPanel } from "./OverviewPanel";
 import { SystemOptimizationPanel } from "./SystemOptimizationPanel";
 import { SoftwarePanel } from "./SoftwarePanel";
 import { StartupPanel } from "./StartupPanel";
 import { StoragePanel } from "./StoragePanel";
 import { SystemAssistant } from "./SystemAssistant";
+import { SystemToolsPanel } from "./SystemToolsPanel";
 import { SystemScanDialog, type SystemScanStatus } from "./SystemScanDialog";
 import type { SystemAgentHandoffTask } from "./systemAgentHandoff";
 import { featureImpact, featureTitle } from "./systemOptimizationCatalog";
@@ -60,7 +63,13 @@ export function SystemView({ initialTab = "overview" }: { initialTab?: SystemTab
           })} />
       : activeTab === "maintenance"
         ? <MaintenancePanel onHandoff={setHandoffTask} />
-        : null;
+        : activeTab === "network"
+          ? <NetworkPanel />
+          : activeTab === "advanced"
+            ? <AdvancedOptimizationPanel />
+            : activeTab === "tools"
+              ? <SystemToolsPanel />
+              : null;
 
   const expandAssistant = () => {
     setAssistantCollapsed(false);

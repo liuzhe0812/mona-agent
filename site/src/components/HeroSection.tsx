@@ -2,8 +2,8 @@ import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { BookOpen, Download, ShieldCheck } from "lucide-react";
 import AgentLogo from "@/components/AgentLogo";
+import ChatDemo from "@/components/ChatDemo";
 import MagneticButton from "@/components/MagneticButton";
-import OpsConsole from "@/components/OpsConsole";
 import PageTurnButton from "@/components/PageTurnButton";
 import ParticleNetwork from "@/components/ParticleNetwork";
 import { DOWNLOAD_URL } from "@/lib/constants";
@@ -111,7 +111,7 @@ export default function HeroSection() {
           animate={{ opacity: 1, x: 0 }}
           transition={{ duration: 0.8, delay: 0.22, ease: "easeOut" }}
         >
-          <OpsConsole compact />
+          <ChatDemo compact />
         </motion.div>
       </div>
 

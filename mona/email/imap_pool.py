@@ -159,7 +159,7 @@ class _AccountImapPool:
                 if _is_retryable(e):
                     self._invalidate()
                     if attempt == 0:
-                        logger.warning(
+                        logger.debug(
                             f"[imap-pool] connection lost, will reconnect and retry: {e}"
                         )
                         continue
@@ -356,7 +356,7 @@ class ImapPoolManager:
                     else:
                         pool._invalidate()
                 except Exception as e:
-                    logger.warning(f"[imap-pool] keepalive NOOP failed, will reconnect on next use: {e}")
+                    logger.debug(f"[imap-pool] keepalive NOOP failed, will reconnect on next use: {e}")
                     pool._invalidate()
 
     def status(self) -> list[dict[str, Any]]:

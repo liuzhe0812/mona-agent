@@ -535,8 +535,8 @@ export function ThreadShell({
     </div>
   ) : (
     <div className="flex w-full flex-col items-center text-center animate-in fade-in-0 slide-in-from-bottom-2 duration-500">
-      <AgentLogo state="welcome" className="mb-4 h-16 w-16 opacity-90" />
-      <h1 className="text-balance text-[40px] font-normal leading-tight tracking-[-0.045em] text-foreground sm:text-[48px]">
+      <AgentLogo state="welcome" className="mb-3 h-12 w-12 opacity-90" />
+      <h1 className="text-balance text-[28px] font-normal leading-tight tracking-[-0.035em] text-foreground sm:text-[32px]">
         {t("thread.empty.greeting")}
       </h1>
       <NewChatDashboard

@@ -11,7 +11,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { getGatewayStatus, openPathWithSystemApp, isTauri } from "@/lib/tauri";
-import { fetchEmailBody, getMessages, listAccounts, downloadAttachmentToFile } from "./lib/emailApi";
+import { fetchEmailBody, listAccounts, downloadAttachmentToFile } from "./lib/emailApi";
 import type { EmailAccount, EmailAttachment, EmailMessage } from "./lib/types";
 import { SafeHtmlFrame } from "./MailView";
 
@@ -64,83 +64,55 @@ export function MailPreviewWindow() {
 
     (async () => {
       try {
-        const gw = await getGatewayStatus().catch(() => null);
+        // 并行：gateway 状态 + 账号列表（互不依赖）
+        // listAccounts 仅用于附件下载，可延迟；getMessages 去掉：fetchEmailBody 会返回 header
+        const [gw, accounts] = await Promise.all([
+          getGatewayStatus().catch(() => null),
+          listAccounts().catch(() => []),
+        ]);
         const url =
           gw?.running && gw?.port ? `http://127.0.0.1:${gw.port}` : "";
-        if (!cancelled) setGatewayUrl(url);
-
-        // 获取账号列表，找到对应账号
-        const accounts = await listAccounts().catch(() => []);
-        const acc = accounts.find((a) => a.id === params.accountId);
-        if (!cancelled) setAccount(acc ?? null);
-
-        // 用 before_uid = uid+1 + limit=1 取目标邮件元数据
-        const uidNum = Number.parseInt(params.uid, 10);
-        const beforeUid = Number.isFinite(uidNum)
-          ? String(uidNum + 1)
-          : null;
-        const msgs = await getMessages(
-          params.accountId,
-          params.folder,
-          beforeUid,
-          1,
-        );
-        const target = msgs.find((m) => m.uid === params.uid);
-        if (!target) {
-          if (!cancelled) {
-            setError("邮件不存在或已被删除");
-            setLoading(false);
-          }
-          return;
+        if (!cancelled) {
+          setGatewayUrl(url);
+          const acc = accounts.find((a) => a.id === params.accountId);
+          setAccount(acc ?? null);
         }
-        if (!cancelled) setMessage(target);
 
-        // 拉取正文
-        if (url) {
-          try {
-            const body = await fetchEmailBody(
-              url,
-              params.accountId,
-              params.uid,
-              params.folder,
-            );
-            if (!cancelled) {
-              setMessage((prev) =>
-                prev
-                  ? {
-                      ...prev,
-                      bodyText: body.bodyText,
-                      bodyHtml: body.bodyHtml,
-                      attachments: body.attachments,
-                      bodyFetched: true,
-                    }
-                  : prev,
-              );
-            }
-          } catch (e) {
-            if (!cancelled) {
-              setMessage((prev) =>
-                prev
-                  ? {
-                      ...prev,
-                      bodyFetched: true,
-                      bodyError: String(e),
-                    }
-                  : prev,
-              );
-            }
-          }
-        } else {
+        // fetchEmailBody 优先读本地 .eml（毫秒级），返回 body + header
+        // 不再先调 getMessages 拿 header——fetchEmailBody 的返回值包含 header
+        try {
+          const body = await fetchEmailBody(
+            url,
+            params.accountId,
+            params.uid,
+            params.folder,
+          );
           if (!cancelled) {
-            setMessage((prev) =>
-              prev
-                ? {
-                    ...prev,
-                    bodyFetched: true,
-                    bodyError: "Gateway 未运行，无法加载正文",
-                  }
-                : prev,
-            );
+            setMessage(() => ({
+              uid: params.uid,
+              accountId: params.accountId,
+              folder: params.folder,
+              subject: body.header?.subject ?? "",
+              fromAddress: body.header?.fromAddress ?? "",
+              fromName: body.header?.fromName ?? "",
+              toAddresses: body.header?.toAddresses ?? "",
+              ccAddresses: body.header?.ccAddresses ?? "",
+              date: "",
+              hasAttachments: (body.attachments?.length ?? 0) > 0,
+              isRead: true,
+              isStarred: false,
+              rawSize: 0,
+              messageId: "",
+              attachments: body.attachments ?? [],
+              bodyText: body.bodyText,
+              bodyHtml: body.bodyHtml,
+              bodyFetched: true,
+              emlPath: "",
+            }));
+          }
+        } catch (e) {
+          if (!cancelled) {
+            setError(`加载邮件失败: ${e instanceof Error ? e.message : String(e)}`);
           }
         }
       } catch (e) {

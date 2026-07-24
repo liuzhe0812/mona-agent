@@ -109,7 +109,10 @@ export function CalendarMonth({
           return (
             <div
               key={date.toISOString()}
-              onClick={() => onSelectDate(date)}
+              onClick={() => {
+                onSelectDate(date);
+                onCreateAt(date);
+              }}
               className={cn(
                 "border-r border-b border-border/50 min-h-[80px] p-1 cursor-pointer hover:bg-accent/40 transition-colors overflow-hidden",
                 !inMonth && "bg-muted/30 text-muted-foreground",

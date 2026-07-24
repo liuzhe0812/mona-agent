@@ -107,7 +107,7 @@ $NewVersion = "<determined_version>"
 
 Execute the `windows-packager` skill's build pipeline (Step 1 + Step 2):
 
-1. **Build mona-gateway** — `windows-packager` Step 1: `pip install ".[api,wecom,weixin,pdf]"`, `python -m PyInstaller src-tauri\mona-gateway.spec`, copy `dist/mona-gateway/` to `src-tauri/resources/mona-gateway/`
+1. **Build mona-gateway** — `windows-packager` Step 1: `pip install ".[api,wecom,weixin,pdf]"`, `python -m PyInstaller src-tauri\mona-gateway.spec`, copy `dist/mona-gateway/` to `src-tauri/resources/mona-gateway/`. **Step 1 ends with a `doctor` smoke test** (`mona-gateway.exe doctor`) that verifies critical dependencies (playwright, lark_oapi, fitz, boto3) import correctly in the packaged build — this must pass before proceeding.
 2. **Build Tauri Client** — `windows-packager` Step 2: `cargo tauri build`, produces NSIS installer + `mona-desktop.exe`
 
 Output artifacts:
@@ -332,7 +332,7 @@ Remove-Item -Force tmp_*.txt -ErrorAction SilentlyContinue
 | Update package too large | `build_update_package.py` already strips `__pycache__`/`.pyc`/`.dist-info`/`tests` and uses zstd-22. If still too large: check for nested `mona-gateway/mona-gateway/` (file count doubled = nesting bug); then exclude unused packages in `mona-gateway.spec` |
 | Update package size suddenly doubled vs previous release | Almost certainly the `Copy-Item -Recurse` nesting bug. Verify with: `tar -tf dist/mona-<ver>.tar.zst \| Measure-Object` — if count ≈ 2× previous, staging dir had nested `mona-gateway/mona-gateway/`. Re-run Step 3 with the fixed staging commands. |
 | Hot-update SHA256 mismatch | Re-compute hash after upload, ensure binary mode transfer |
-| PyInstaller missing import | Add to `hidden_imports` list in `src-tauri/mona-gateway.spec` |
+| PyInstaller missing import | Step 1 smoke test (`mona-gateway.exe doctor`) catches this before release. To fix: add `collect_submodules('<package>')` to `src-tauri/mona-gateway.spec` and rebuild |
 | Changelog page shows old data | Confirm `site/public/changelog.json` was updated and redeployed |
 | `previousGitHash` is empty | First release or legacy entry missing `gitHash`; ask user for manual items |
 | `pyproject.toml` parse error after bump | File has UTF-8 BOM — rewrite using Python or `[System.IO.File]::WriteAllText()` with `UTF8Encoding($false)` |

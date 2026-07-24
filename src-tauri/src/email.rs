@@ -3783,7 +3783,9 @@ async fn sync_folder_internal(
                 |_| Ok(true),
             )
             .unwrap_or(false);
-        // 同步时拉完整 RFC822 落盘为 .eml，body_fetched=true（正文已包含）
+        // 同步时只拉 HEADER 落盘（快速同步），body_fetched=false。
+        // 正文由 fetch_body 按需拉取完整 RFC822 并覆盖落盘（用户点击或 AI 读取时触发）。
+        // fetch_raw_and_cache 已修复：检查 body_fetched 而非 eml_path，确保落盘不被跳过。
         let raw_bytes_b64 = msg.get("rawBytes").and_then(|v| v.as_str()).unwrap_or("");
         // 保存解码后的 eml 字节，用于落盘后用 Rust parse_eml_header 重新解析 header
         // 确保 subject/from/to/cc 解码质量不依赖 gateway Python 代码（gb2312→gb18030 归一化在 Rust 侧保证）
@@ -3806,7 +3808,7 @@ async fn sync_folder_internal(
                                 is_read,
                                 is_starred,
                                 has_attachments,
-                                body_fetched: true, // 同步时已拉完整 RFC822，正文已落盘
+                                body_fetched: false, // HEADER only，正文未拉取
                                 message_id: message_id_str.to_string(),
                                 eml_mtime: chrono::Utc::now().timestamp(),
                             };
@@ -4060,6 +4062,42 @@ async fn sync_folder_internal(
         let gw = gateway_url.to_string();
         tokio::spawn(async move {
             trigger_schedule_extract(&gw, &account_id, &mailbox, &uids).await;
+        });
+    }
+
+    // 异步预取未读邮件正文（不阻塞 sync 返回）
+    // 同步只拉了 HEADER，这里后台拉完整 RFC822 落盘，
+    // 确保用户/AI 打开邮件时走本地 .eml，毫秒级无等待。
+    if !new_uids.is_empty() && !gateway_url.is_empty() && req.mailbox == "INBOX" {
+        let state_clone = state.clone();
+        let gw = gateway_url.to_string();
+        let account_id = req.account_id.clone();
+        let mailbox = req.mailbox.clone();
+        tokio::spawn(async move {
+            let (account, plain_password) = {
+                match state_clone.conn() {
+                    Ok(conn) => match get_imap_credentials(&conn, &account_id) {
+                        Ok(a) => match decrypt_password(&a.imap_password) {
+                            Ok(p) => (a, p),
+                            Err(e) => {
+                                log::warn!("[email-sync] prefetch: decrypt password failed: {}", e);
+                                return;
+                            }
+                        },
+                        Err(e) => {
+                            log::warn!("[email-sync] prefetch: get credentials failed: {}", e);
+                            return;
+                        }
+                    },
+                    Err(e) => {
+                        log::warn!("[email-sync] prefetch: get conn failed: {}", e);
+                        return;
+                    }
+                }
+            };
+            if let Err(e) = prefetch_unread_bodies(&state_clone, &gw, &account, &plain_password, &mailbox).await {
+                log::debug!("[email-sync] prefetch unread bodies failed: {}", e);
+            }
         });
     }
 

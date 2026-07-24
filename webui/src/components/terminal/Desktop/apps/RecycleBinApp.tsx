@@ -352,7 +352,7 @@ export function RecycleBinApp({ sessionId }: RecycleBinAppProps) {
 
       {contextMenu && (
         <div
-          className="fixed z-[9999] w-48 rounded-lg border border-white/10 bg-[#252526] py-1 shadow-2xl"
+          className="fixed z-[100001] w-48 rounded-lg border border-white/10 bg-[#252526] py-1 shadow-2xl"
           style={{ top: contextMenu.y, left: contextMenu.x }}
           onClick={(e) => e.stopPropagation()}
           onContextMenu={(e) => e.preventDefault()}
@@ -411,7 +411,7 @@ export function RecycleBinApp({ sessionId }: RecycleBinAppProps) {
 
       {confirmEmpty && (
         <div
-          className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50"
+          className="fixed inset-0 z-[100001] flex items-center justify-center bg-black/50"
           onClick={() => setConfirmEmpty(false)}
         >
           <div

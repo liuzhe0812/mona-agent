@@ -12,7 +12,7 @@ import type {
   UserInfo,
   DbViewType,
 } from "../types";
-import { displayCellValue } from "../types";
+import { displayCellValue, NULL_MARKER, DEFAULT_MARKER } from "../types";
 import * as ipc from "../ipc";
 
 interface DbState {
@@ -65,6 +65,8 @@ interface DbState {
   revertCell: (tabId: string, rowIdx: number, colIdx: number) => void;
   revertAllEdits: (tabId: string) => void;
   saveEdits: (tabId: string) => Promise<void>;
+  insertRow: (tabId: string) => void;
+  deleteRow: (tabId: string, rowIdx: number) => Promise<void>;
 }
 
 export const useDbStore = create<DbState>((set, get) => ({
@@ -261,6 +263,7 @@ export const useDbStore = create<DbState>((set, get) => ({
         connectionId,
         database,
         edits: [],
+        insertedRows: [],
         tableInfo: null,
         agentChatId: null,
       };
@@ -299,6 +302,7 @@ export const useDbStore = create<DbState>((set, get) => ({
       connectionId: get().selectedConnectionId,
       database: get().selectedDatabase,
       edits: [],
+      insertedRows: [],
       tableInfo: null,
       agentChatId: null,
     };
@@ -537,8 +541,11 @@ export const useDbStore = create<DbState>((set, get) => ({
   revertAllEdits: (tabId) => {
     set((state) => ({
       queryTabs: state.queryTabs.map((t) => {
-        if (t.id !== tabId) return t;
-        return { ...t, edits: [] };
+        if (t.id !== tabId || !t.result) return t;
+        // 移除所有前端插入的行
+        const insertedSet = new Set(t.insertedRows);
+        const newRows = t.result.rows.filter((_, i) => !insertedSet.has(i));
+        return { ...t, edits: [], insertedRows: [], result: { ...t.result, rows: newRows } };
       }),
     }));
   },
@@ -616,15 +623,22 @@ export const useDbStore = create<DbState>((set, get) => ({
     };
 
     const formatValue = (val: string, colIdx: number) => {
-      if (val === "") return "NULL";
+      if (val === NULL_MARKER) return "NULL";
+      if (val === DEFAULT_MARKER) return "DEFAULT";
+      if (val === "") return "''";
       if (isNumericCol(colIdx) && /^-?\d+(\.\d+)?$/.test(val)) return val;
       return `'${val.replace(/'/g, "''")}'`;
     };
 
     const formatCellValue = (cell: CellValue) => {
       if (cell.type === "null") return "NULL";
-      if (cell.type === "integer" || cell.type === "float" || cell.type === "bool") {
+      if (cell.type === "bool") return cell.value ? "1" : "0";
+      if (cell.type === "integer" || cell.type === "float") {
         return String(cell.value);
+      }
+      if (cell.type === "blob") {
+        const hex = cell.value;
+        return isSqlite ? `X'${hex}'` : `UNHEX('${hex}')`;
       }
       return `'${String(cell.value).replace(/'/g, "''")}'`;
     };
@@ -637,8 +651,30 @@ export const useDbStore = create<DbState>((set, get) => ({
     }
 
     try {
+      const insertedRowSet = new Set(tab.insertedRows);
+
       for (const [rowIdx, edits] of rowEdits) {
         const row = tab.result.rows[rowIdx];
+
+        if (insertedRowSet.has(rowIdx)) {
+          // 新插入行：执行 INSERT
+          const colParts: string[] = [];
+          const valParts: string[] = [];
+          for (const e of edits) {
+            const colName = tab.result!.columns[e.colIdx].name;
+            const val = formatValue(e.newValue, e.colIdx);
+            colParts.push(isSqlite ? `"${colName}"` : `\`${colName}\``);
+            valParts.push(val);
+          }
+          const tableName = tab.title;
+          const sql = isSqlite
+            ? `INSERT INTO "${tableName}" (${colParts.join(", ")}) VALUES (${valParts.join(", ")})`
+            : `INSERT INTO \`${tab.database}\`.\`${tableName}\` (${colParts.join(", ")}) VALUES (${valParts.join(", ")})`;
+          await ipc.dbExecuteQuery(tab.connectionId, sql, undefined, tab.database ?? undefined);
+          continue;
+        }
+
+        // 已存在行：执行 UPDATE
         const setClauses = edits.map((e) => {
           const colName = tab.result!.columns[e.colIdx].name;
           const val = formatValue(e.newValue, e.colIdx);
@@ -682,7 +718,7 @@ export const useDbStore = create<DbState>((set, get) => ({
 
       set((state) => ({
         queryTabs: state.queryTabs.map((t) =>
-          t.id === tabId ? { ...t, edits: [] } : t,
+          t.id === tabId ? { ...t, edits: [], insertedRows: [] } : t,
         ),
       }));
 
@@ -701,6 +737,156 @@ export const useDbStore = create<DbState>((set, get) => ({
                       affected_rows: 0,
                       execution_time_ms: 0,
                       message: `保存失败: ${String(e)}`,
+                    },
+              }
+            : t,
+        ),
+      }));
+    }
+  },
+
+  insertRow: (tabId) => {
+    const tab = get().queryTabs.find((t) => t.id === tabId);
+    if (!tab || !tab.result || !tab.database || tab.title === "新查询") return;
+
+    const newRowIdx = tab.result.rows.length;
+    const nullCells: CellValue[] = tab.result.columns.map(() => ({ type: "null" as const }));
+
+    set((state) => ({
+      queryTabs: state.queryTabs.map((t) =>
+        t.id === tabId && t.result
+          ? {
+              ...t,
+              result: {
+                ...t.result,
+                rows: [...t.result.rows, nullCells],
+              },
+              insertedRows: [...t.insertedRows, newRowIdx],
+            }
+          : t,
+      ),
+    }));
+  },
+
+  deleteRow: async (tabId, rowIdx) => {
+    const tab = get().queryTabs.find((t) => t.id === tabId);
+    if (!tab || !tab.connectionId || !tab.database || !tab.result) return;
+
+    // 前端插入的未保存行：直接从前端移除
+    if (tab.insertedRows.includes(rowIdx)) {
+      set((state) => ({
+        queryTabs: state.queryTabs.map((t) => {
+          if (t.id !== tabId || !t.result) return t;
+          const newRows = t.result.rows.filter((_, i) => i !== rowIdx);
+          const newInsertedRows = t.insertedRows
+            .filter((i) => i !== rowIdx)
+            .map((i) => (i > rowIdx ? i - 1 : i));
+          const newEdits = t.edits
+            .filter((e) => e.rowIdx !== rowIdx)
+            .map((e) => (e.rowIdx > rowIdx ? { ...e, rowIdx: e.rowIdx - 1 } : e));
+          return {
+            ...t,
+            result: { ...t.result, rows: newRows },
+            insertedRows: newInsertedRows,
+            edits: newEdits,
+          };
+        }),
+      }));
+      return;
+    }
+
+    const conn = get().activeConnections.find((c) => c.id === tab.connectionId);
+    const isSqlite = conn?.config.db_type === "sqlite";
+    const tableName = tab.title;
+    const row = tab.result.rows[rowIdx];
+    if (!row) return;
+
+    const formatCellValue = (cell: CellValue) => {
+      if (cell.type === "null") return "NULL";
+      if (cell.type === "bool") return cell.value ? "1" : "0";
+      if (cell.type === "integer" || cell.type === "float") {
+        return String(cell.value);
+      }
+      if (cell.type === "blob") {
+        const hex = cell.value;
+        return isSqlite ? `X'${hex}'` : `UNHEX('${hex}')`;
+      }
+      return `'${String(cell.value).replace(/'/g, "''")}'`;
+    };
+
+    let pkCols: { name: string; idx: number }[] = [];
+    if (tab.result.columns.some((c) => c.is_primary_key)) {
+      pkCols = tab.result.columns
+        .map((c, i) => ({ name: c.name, idx: i }))
+        .filter((c) => tab.result!.columns[c.idx].is_primary_key);
+    }
+
+    if (pkCols.length === 0 && tab.connectionId && tab.database) {
+      try {
+        const pkSql = isSqlite
+          ? `PRAGMA table_info("${tab.title}")`
+          : `SHOW COLUMNS FROM \`${tab.database}\`.\`${tab.title}\` WHERE \`Key\` = 'PRI'`;
+        const pkResult = await ipc.dbExecuteQuery(tab.connectionId, pkSql, undefined, tab.database ?? undefined);
+        const pkNames = new Set<string>();
+        for (const r of pkResult.rows) {
+          const nameCell = isSqlite ? r[1] : r[0];
+          if (nameCell.type !== "null") pkNames.add(displayCellValue(nameCell));
+        }
+        for (let i = 0; i < tab.result.columns.length; i++) {
+          if (pkNames.has(tab.result.columns[i].name)) {
+            pkCols.push({ name: tab.result.columns[i].name, idx: i });
+          }
+        }
+      } catch (e) {
+        console.error("[deleteRow] Failed to get primary key columns:", e);
+      }
+    }
+
+    let whereClause: string;
+    if (pkCols.length > 0) {
+      whereClause = pkCols
+        .map((pk) => {
+          const cell = row[pk.idx];
+          const val = formatCellValue(cell);
+          const q = isSqlite ? `"${pk.name}"` : `\`${pk.name}\``;
+          return cell.type === "null" ? `${q} IS NULL` : `${q} = ${val}`;
+        })
+        .join(" AND ");
+    } else {
+      whereClause = tab.result.columns
+        .map((col, i) => {
+          const cell = row[i];
+          const val = formatCellValue(cell);
+          const q = isSqlite ? `"${col.name}"` : `\`${col.name}\``;
+          return cell.type === "null" ? `${q} IS NULL` : `${q} = ${val}`;
+        })
+        .join(" AND ");
+    }
+
+    const sql = isSqlite
+      ? `DELETE FROM "${tableName}" WHERE ${whereClause}`
+      : `DELETE FROM \`${tab.database}\`.\`${tableName}\` WHERE ${whereClause}`;
+
+    try {
+      const result = await ipc.dbExecuteQuery(tab.connectionId, sql, undefined, tab.database ?? undefined);
+      if (result.affected_rows === 0) {
+        throw new Error(`DELETE 未影响任何行，可能 WHERE 条件未匹配到数据。SQL: ${sql}`);
+      }
+      await get().executeQuery(tabId);
+    } catch (e) {
+      set((state) => ({
+        queryTabs: state.queryTabs.map((t) =>
+          t.id === tabId
+            ? {
+                ...t,
+                result: t.result
+                  ? { ...t.result, message: `删除失败: ${String(e)}` }
+                  : {
+                      columns: [],
+                      rows: [],
+                      affected_rows: 0,
+                      execution_time_ms: 0,
+                      message: `删除失败: ${String(e)}`,
                     },
               }
             : t,

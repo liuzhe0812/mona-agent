@@ -23,9 +23,9 @@ const steps = [
   },
   {
     icon: FileClock,
-    title: "自动留痕",
-    desc: "会话自动变成 Markdown 笔记、知识点和复盘材料，后续能再次调用。",
-    code: "note: weekly/report-2026-07-11.md · auto-tagged",
+    title: "可复盘",
+    desc: "对话和操作记录完整保留，随时回看当时怎么做的、为什么这么做。",
+    code: "history: session 2026-07-11 · 12 steps · replayable",
   },
 ];
 

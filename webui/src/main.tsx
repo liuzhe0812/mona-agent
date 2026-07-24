@@ -11,10 +11,23 @@ const NotificationWindow = lazy(() =>
   })),
 );
 
+const StandaloneTerminalWindow = lazy(() =>
+  import("./components/terminal/StandaloneTerminalWindow").then((module) => ({
+    default: module.StandaloneTerminalWindow,
+  })),
+);
+
 function isNotificationRoute(): boolean {
   return (
     typeof window !== "undefined" &&
     window.location.hash.startsWith("#/notification")
+  );
+}
+
+function isStandaloneTerminalRoute(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    new URLSearchParams(window.location.search).get("terminalWindow") === "1"
   );
 }
 
@@ -105,6 +118,12 @@ if (isNotificationRoute()) {
   ReactDOM.createRoot(root).render(
     <Suspense fallback={null}>
       <NotificationWindow />
+    </Suspense>,
+  );
+} else if (isStandaloneTerminalRoute()) {
+  ReactDOM.createRoot(root).render(
+    <Suspense fallback={null}>
+      <StandaloneTerminalWindow />
     </Suspense>,
   );
 } else {

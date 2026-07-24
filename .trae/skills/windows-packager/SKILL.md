@@ -99,6 +99,17 @@ if (Test-Path "src-tauri\resources\mona-gateway\mona-gateway") {
     throw "Nested mona-gateway/mona-gateway/ detected! Copy-Item nesting bug. Aborting."
 }
 Write-Output "Gateway built successfully: $gatewayExe"
+
+# 6. Smoke test — verify critical dependencies import correctly in the packaged exe.
+#    PyInstaller static analysis often misses lazily-imported submodules
+#    (e.g. playwright.async_api, playwright._impl._driver). This catches
+#    packaging regressions BEFORE building the Tauri installer.
+Write-Output "Running gateway doctor smoke test..."
+& $gatewayExe doctor
+if ($LASTEXITCODE -ne 0) {
+    throw "Gateway doctor smoke test FAILED! Critical dependencies are missing in the packaged build. See output above. Common fix: add collect_submodules('<package>') to src-tauri/mona-gateway.spec"
+}
+Write-Output "Gateway smoke test passed."
 ```
 
 **Critical rules:**

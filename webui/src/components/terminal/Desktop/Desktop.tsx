@@ -236,7 +236,7 @@ export function DesktopSurface({ onOpenApp, onDesktopContextMenu }: DesktopSurfa
               <span
                 className={`w-full break-words rounded-sm px-1 text-center text-[11px] leading-tight drop-shadow-md line-clamp-2 ${
                   isIconSelected(icon.id)
-                    ? "bg-[#0a82ff]/90 text-white"
+                    ? "text-white"
                     : "text-white/90"
                 }`}
               >
