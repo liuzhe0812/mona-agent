@@ -1727,6 +1727,22 @@ impl EmailState {
             )
             .map_err(|e| e.to_string())?;
         }
+        // 迁移：给 folders 表加 last_synced_uid 列（按 folder 存储同步水位线，
+        // 替代从 messages 表查 MAX(uid_int)，避免本地残留过期高 UID 导致 IMAP 同步死循环）
+        let has_last_synced_uid: bool = conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM pragma_table_info('folders') WHERE name='last_synced_uid'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(false);
+        if !has_last_synced_uid {
+            conn.execute(
+                "ALTER TABLE folders ADD COLUMN last_synced_uid INTEGER",
+                [],
+            )
+            .map_err(|e| e.to_string())?;
+        }
         // FTS5 全文搜索索引（外部内容表，关联 messages）
         // 注意：body_text 已移除，FTS5 只索引头字段
         conn.execute_batch(
@@ -3459,9 +3475,13 @@ pub async fn email_sync_folders(
     )
     .map_err(|e| e.to_string())?;
     for folder in &folders {
+        // 用 ON CONFLICT 而非 INSERT OR REPLACE：REPLACE 会先 DELETE 再 INSERT，
+        // 清空 last_synced_uid 和 uid_validity 列，导致同步水位线丢失、死循环复发。
         tx.execute(
-            "INSERT OR REPLACE INTO folders (account_id, name, delimiter, flags, has_children, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO folders (account_id, name, delimiter, flags, has_children, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(account_id, name) DO UPDATE SET
+               delimiter = ?3, flags = ?4, has_children = ?5, updated_at = ?6",
             params![
                 account_id,
                 folder.name,
@@ -3763,8 +3783,7 @@ async fn sync_folder_internal(
                 |_| Ok(true),
             )
             .unwrap_or(false);
-        // Foxmail 风格文件存储：gateway 返回 rawBytes（HEADER 原始字节），落盘为 .eml 文件
-        // 同步时只拉 HEADER，body_fetched=false；用户点击邮件时 fetch_body 拉完整 RFC822 覆盖落盘
+        // 同步时拉完整 RFC822 落盘为 .eml，body_fetched=true（正文已包含）
         let raw_bytes_b64 = msg.get("rawBytes").and_then(|v| v.as_str()).unwrap_or("");
         // 保存解码后的 eml 字节，用于落盘后用 Rust parse_eml_header 重新解析 header
         // 确保 subject/from/to/cc 解码质量不依赖 gateway Python 代码（gb2312→gb18030 归一化在 Rust 侧保证）
@@ -3787,7 +3806,7 @@ async fn sync_folder_internal(
                                 is_read,
                                 is_starred,
                                 has_attachments,
-                                body_fetched: false, // HEADER only，正文未拉取
+                                body_fetched: true, // 同步时已拉完整 RFC822，正文已落盘
                                 message_id: message_id_str.to_string(),
                                 eml_mtime: chrono::Utc::now().timestamp(),
                             };
@@ -3891,16 +3910,28 @@ async fn sync_folder_internal(
     // 自动从新邮件收集联系人（发件人 + 收件人 + 抄送）
     // 使用重新解析的正确 header，避免 gateway 返回的乱码字段污染通讯录
     auto_collect_contacts(&conn, &req.account_id, &corrected_messages);
-    // 更新 last_synced_uid（取本次同步中最大的 UID）
+    // 更新同步水位线（取本次同步中最大的 UID）
+    // folders.last_synced_uid 是按 folder 存储的水位线，下次同步以此为基准，
+    // 避免从 messages 表查 MAX(uid_int) 时因本地残留过期高 UID 而陷入死循环。
+    // gateway 在 server max uid < last_uid 时会重置并返回最近 20 封，
+    // 这里用返回邮件的 max uid 更新水位线，下次同步就不会再传过期的 last_uid。
     if let Some(max_uid) = new_messages
         .iter()
         .filter_map(|m| m["uid"].as_str())
-        .filter_map(|s| s.parse::<u64>().ok())
+        .filter_map(|s| s.parse::<i64>().ok())
         .max()
     {
         conn.execute(
             "UPDATE accounts SET last_synced_uid = ?1 WHERE id = ?2",
             params![max_uid.to_string(), req.account_id],
+        )
+        .map_err(|e| e.to_string())?;
+        // UPSERT folders.last_synced_uid（folder 行可能在 list_folders 之前不存在）
+        conn.execute(
+            "INSERT INTO folders (account_id, name, delimiter, flags, has_children, updated_at, last_synced_uid)
+             VALUES (?1, ?2, '/', '', 0, ?3, ?4)
+             ON CONFLICT(account_id, name) DO UPDATE SET last_synced_uid = ?4",
+            params![&req.account_id, &req.mailbox, chrono::Utc::now().to_rfc3339(), max_uid],
         )
         .map_err(|e| e.to_string())?;
     }
@@ -4417,21 +4448,38 @@ async fn run_bg_sync_cycle(
         }
 
         for folder in &filtered_folders {
-            // 该文件夹下本地的最大 UID（按整数排序）
+            // 优先用 folders 表的 last_synced_uid 作为同步水位线，
+            // 避免从 messages 表查 MAX(uid_int) 时因本地残留过期高 UID 而死循环。
+            // folders.last_synced_uid 为空时（首次同步或旧库迁移），回退到 messages 表。
             let last_uid: Option<String> = email_state
                 .conn()
                 .ok()
                 .and_then(|conn| {
                     conn.query_row(
-                        "SELECT MAX(uid_int) FROM messages
-                         WHERE account_id = ?1 AND folder = ?2",
+                        "SELECT last_synced_uid FROM folders
+                         WHERE account_id = ?1 AND name = ?2",
                         params![&account.id, &folder],
                         |row| row.get::<_, Option<i64>>(0),
                     )
                     .ok()
                     .flatten()
                 })
-                .map(|n| n.to_string());
+                .filter(|n| *n > 0)
+                .map(|n| n.to_string())
+                .or_else(|| {
+                    // 回退：folders 表无记录（首次同步），从 messages 表取 MAX(uid_int)
+                    email_state.conn().ok().and_then(|conn| {
+                        conn.query_row(
+                            "SELECT MAX(uid_int) FROM messages
+                             WHERE account_id = ?1 AND folder = ?2",
+                            params![&account.id, &folder],
+                            |row| row.get::<_, Option<i64>>(0),
+                        )
+                        .ok()
+                        .flatten()
+                        .map(|n| n.to_string())
+                    })
+                });
 
             let req = SyncRequest {
                 account_id: account.id.clone(),
@@ -5443,17 +5491,6 @@ pub async fn email_send(
         let conn = state_inner.conn()?;
         let account = get_imap_credentials(&conn, &account_id)?;
         let plain = decrypt_password(&account.imap_password)?;
-        // 取本地"已发送"文件夹最大 UID 做增量同步（首次为 None，全量拉最近 20 封）
-        let last_uid: Option<String> = conn
-            .query_row(
-                "SELECT MAX(uid_int) FROM messages
-                 WHERE account_id = ?1 AND (folder = 'Sent' OR folder = 'Sent Items' OR folder = 'Sent Messages' OR folder = '已发送')",
-                params![&account_id],
-                |row| row.get::<_, Option<i64>>(0),
-            )
-            .ok()
-            .flatten()
-            .map(|n| if n > 0 { n.to_string() } else { String::new() });
         // 从 folders 表探测"已发送"文件夹的实际名称
         let sent_folder: String = conn
             .query_row(
@@ -5467,6 +5504,30 @@ pub async fn email_send(
                 |row| row.get::<_, String>(0),
             )
             .unwrap_or_else(|_| "Sent".to_string());
+        // 优先用 folders 表的 last_synced_uid 作为同步水位线，回退到 messages 表
+        let last_uid: Option<String> = conn
+            .query_row(
+                "SELECT last_synced_uid FROM folders
+                 WHERE account_id = ?1 AND name = ?2",
+                params![&account_id, &sent_folder],
+                |row| row.get::<_, Option<i64>>(0),
+            )
+            .ok()
+            .flatten()
+            .filter(|n| *n > 0)
+            .map(|n| n.to_string())
+            .or_else(|| {
+                conn.query_row(
+                    "SELECT MAX(uid_int) FROM messages
+                     WHERE account_id = ?1 AND folder = ?2",
+                    params![&account_id, &sent_folder],
+                    |row| row.get::<_, Option<i64>>(0),
+                )
+                .ok()
+                .flatten()
+                .filter(|n| *n > 0)
+                .map(|n| n.to_string())
+            });
         drop(conn);
         log::debug!("[email-send] 同步已发送文件夹: name={}, last_uid={:?}", sent_folder, last_uid);
         let sync_req = SyncRequest {
@@ -6587,17 +6648,39 @@ pub async fn email_fetch_body(
     uid: String,
     mailbox: String,
 ) -> Result<serde_json::Value, String> {
-    if gateway_url.is_empty() {
-        return Err("gateway URL 为空".into());
-    }
-
-    // 1. 检查本地 .eml 是否已落盘
+    // 1. 检查本地 .eml 是否已落盘 + 同时取 SQLite 已有的 header（已解码，避免重复解析）
+    // 单个连接完成所有 SQLite 操作，避免开两次连接的开销
     let conn = state.conn()?;
-    let eml_path: String = conn
+    let (eml_path, db_header): (String, Option<serde_json::Value>) = conn
         .query_row(
-            "SELECT eml_path FROM messages WHERE uid = ?1 AND account_id = ?2 AND folder = ?3",
+            "SELECT eml_path, subject, from_address, from_name, to_addresses, cc_addresses
+             FROM messages WHERE uid = ?1 AND account_id = ?2 AND folder = ?3",
             params![&uid, &account_id, &mailbox],
-            |row| row.get::<_, String>(0),
+            |row| {
+                let eml_path: String = row.get(0).unwrap_or_default();
+                let subject: String = row.get(1).unwrap_or_default();
+                let from_address: String = row.get(2).unwrap_or_default();
+                let from_name: String = row.get(3).unwrap_or_default();
+                let to_addresses: String = row.get(4).unwrap_or_default();
+                let cc_addresses: String = row.get(5).unwrap_or_default();
+                // 检测是否有乱码标志（旧数据 gb2312→gb18030 修复前），有则返回 None 触发重新解析
+                let has_fffd = subject.contains('\u{FFFD}')
+                    || from_name.contains('\u{FFFD}')
+                    || to_addresses.contains('\u{FFFD}')
+                    || cc_addresses.contains('\u{FFFD}');
+                let header = if has_fffd {
+                    None
+                } else {
+                    Some(serde_json::json!({
+                        "subject": subject,
+                        "fromAddress": from_address,
+                        "fromName": from_name,
+                        "toAddresses": to_addresses,
+                        "ccAddresses": cc_addresses,
+                    }))
+                };
+                Ok((eml_path, header))
+            },
         )
         .unwrap_or_default();
     drop(conn);
@@ -6620,14 +6703,18 @@ pub async fn email_fetch_body(
                         if !body_text.is_empty() || body_html.is_some() {
                             let mut attachments: Vec<serde_json::Value> = Vec::new();
                             extract_attachments(&parsed, &mut attachments);
-                            // 重新解析 header，修复旧数据中可能的乱码（gb2312→gb18030 修复前的旧邮件）
-                            let header = reparse_header_and_fix_db(
-                                state.inner(),
-                                &eml_bytes,
-                                &uid,
-                                &account_id,
-                                &mailbox,
-                            );
+                            // header：优先用 SQLite 已解码的值（无乱码时）；
+                            // 有乱码标志时才重新解析 .eml header 并修复数据库（一次性操作）
+                            let header = match db_header {
+                                Some(h) => h,
+                                None => reparse_header_and_fix_db(
+                                    state.inner(),
+                                    &eml_bytes,
+                                    &uid,
+                                    &account_id,
+                                    &mailbox,
+                                ),
+                            };
                             return Ok(serde_json::json!({
                                 "bodyText": body_text,
                                 "bodyHtml": body_html,
@@ -6648,7 +6735,12 @@ pub async fn email_fetch_body(
         }
     }
 
-    // 3. 本地无 .eml 或 .eml 缺少正文，调 gateway /email/fetch_body 拉正文
+    // 3. 本地无 .eml 或 .eml 缺少正文，需要调 gateway 拉取
+    // 此时必须要有 gateway_url（本地快速路径已尝试过且失败）
+    if gateway_url.is_empty() {
+        return Err("gateway URL 为空且本地无 .eml 缓存，无法拉取正文".into());
+    }
+
     // 抢占标志：prefetch 检测到此标志时让出 IMAP 锁，避免阻塞用户请求
     let _guard = UserFetchGuard::new(state.user_fetch_in_progress.clone());
 
@@ -6748,17 +6840,18 @@ async fn fetch_raw_and_cache(
     uid: &str,
     mailbox: &str,
 ) -> Result<(), String> {
-    // 优先检查本地是否已有 .eml（避免重复拉取）
+    // 优先检查本地是否已有完整 .eml（body_fetched=1 表示已拉取完整 RFC822）
+    // 注意：仅检查 eml_path 非空不够，同步时可能已落盘 HEADER-only 的 .eml
     {
         let conn = state.conn()?;
-        let eml_path: String = conn
+        let (eml_path, body_fetched): (String, bool) = conn
             .query_row(
-                "SELECT eml_path FROM messages WHERE uid = ?1 AND account_id = ?2 AND folder = ?3",
+                "SELECT eml_path, body_fetched FROM messages WHERE uid = ?1 AND account_id = ?2 AND folder = ?3",
                 params![uid, account_id, mailbox],
-                |row| row.get::<_, String>(0),
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, bool>(1)?)),
             )
             .unwrap_or_default();
-        if !eml_path.is_empty() {
+        if !eml_path.is_empty() && body_fetched {
             return Ok(());
         }
     }

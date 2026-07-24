@@ -39,9 +39,9 @@ from mona.materials.api import (
     handle_materials_delete,
     handle_materials_delete_wiki_page,
     handle_materials_extract,
-    handle_materials_get_text,
     handle_materials_get_raw,
     handle_materials_get_raw_binary,
+    handle_materials_get_text,
     handle_materials_get_wiki_page,
     handle_materials_list_files,
     handle_materials_list_wiki,
@@ -257,7 +257,7 @@ class _IdleWorker:
                         f"stopping IDLE to avoid rate limiting"
                     )
                     return
-                logger.warning(
+                logger.debug(
                     f"[idle] {self._account_id} error: {e}, retry in {backoff}s"
                 )
                 self._stop_event.wait(backoff)
@@ -882,8 +882,8 @@ async def handle_profile_distill(request: web.Request) -> web.Response:
 
 async def handle_profile_snapshots(request: web.Request) -> web.Response:
     """GET /api/profile/snapshots — list all historical snapshots."""
-    from mona.distill.scoring import load_snapshots
     from mona.config.paths import get_memory_dir
+    from mona.distill.scoring import load_snapshots
 
     snapshots = load_snapshots(get_memory_dir())
     return web.json_response({"snapshots": snapshots})
@@ -891,8 +891,8 @@ async def handle_profile_snapshots(request: web.Request) -> web.Response:
 
 async def handle_profile_comparison(request: web.Request) -> web.Response:
     """GET /api/profile/comparison?date=YYYY-MM-DD — get current vs previous snapshot."""
-    from mona.distill.scoring import load_snapshots, compute_growth_comparison
     from mona.config.paths import get_memory_dir
+    from mona.distill.scoring import compute_growth_comparison, load_snapshots
 
     current_date = request.query.get("date")
     snapshots = load_snapshots(get_memory_dir())
@@ -1691,16 +1691,17 @@ def _imap_fetch_recent(body: dict[str, Any]) -> list[dict[str, Any]]:
             all_uids = data[0].split()
             uids = all_uids[-20:]
 
-        # 保护：如果服务器最大 UID 仍 <= last_uid，说明本地 last_uid 已过期/无效，
-        # 重置并重新拉取最近 20 封，避免永远漏掉新邮件。
+        # 保护：如果服务器最大 UID < last_uid，说明本地 last_uid 已过期/无效
+        # （服务器删除了高 UID 邮件），重置并重新拉取最近 20 封，避免永远漏掉新邮件。
+        # 注意：用严格小于，last_uid == server max uid 是正常已同步状态，不触发重置。
         if (
             last_uid is not None
             and last_uid > 0
             and all_uids
-            and max(int(u) for u in all_uids) <= last_uid
+            and max(int(u) for u in all_uids) < last_uid
         ):
             logger.warning(
-                f"[imap-sync] local last_uid={last_uid} >= server max uid, "
+                f"[imap-sync] local last_uid={last_uid} > server max uid, "
                 f"resetting and fetching recent 20"
             )
             uids = all_uids[-20:]
@@ -1714,10 +1715,10 @@ def _imap_fetch_recent(body: dict[str, Any]) -> list[dict[str, Any]]:
 
         messages: list[dict[str, Any]] = []
         for uid in uids:
-            # 只拉 HEADER（BODY.PEEK[HEADER]），新邮件同步毫秒级完成，通知即时弹出
-            # 正文和附件在用户点击邮件时由 fetch_body 按需拉取完整 RFC822 并落盘
+            # 拉完整 RFC822（BODY.PEEK[]），同步时即落盘完整 .eml 并解析正文，
+            # 确保 AI 和离线场景均能直接读取，无需点击触发 fetch_body 补全。
             status, fetched = client.uid(
-                "FETCH", uid, "(BODY.PEEK[HEADER] UID FLAGS)"
+                "FETCH", uid, "(BODY.PEEK[] UID FLAGS)"
             )
             if status != "OK" or not fetched:
                 continue
@@ -1746,6 +1747,11 @@ def _imap_fetch_recent(body: dict[str, Any]) -> list[dict[str, Any]]:
             date_value = parsed.get("Date", "")
             message_id = parsed.get("Message-ID", "") or ""
 
+            # 解析正文（与 fetch_body 逻辑一致），body_text 截断到 50000 字符
+            body_text, body_html = _email_extract_bodies(parsed)
+            if body_text:
+                body_text = body_text[:50000]
+
             messages.append(
                 {
                     "uid": uid_str,
@@ -1755,17 +1761,16 @@ def _imap_fetch_recent(body: dict[str, Any]) -> list[dict[str, Any]]:
                     "to": ", ".join(to_addrs),
                     "cc": ", ".join(cc_addrs),
                     "date": date_value,
-                    "bodyText": "",
-                    "bodyHtml": None,
-                    "bodyFetched": False,
+                    "bodyText": body_text,
+                    "bodyHtml": body_html,
+                    "bodyFetched": True,
                     "hasAttachments": _email_has_attachments(parsed),
                     "rawSize": len(raw_bytes),
                     "isRead": _email_extract_seen_flag(fetched),
                     "isStarred": _email_extract_flagged_flag(fetched),
                     "messageId": message_id,
                     "attachments": _email_extract_attachments(parsed),
-                    # Foxmail 风格：返回完整 RFC822 字节（base64），供 Rust 侧落盘为 .eml
-                    # 点击邮件时 Rust 本地 mailparse 解析 .eml，毫秒级
+                    # 完整 RFC822 字节（base64），同步时即落盘为 .eml，AI 和前端均走本地文件
                     "rawBytes": base64.b64encode(raw_bytes).decode("ascii"),
                 }
             )
@@ -2138,7 +2143,7 @@ async def handle_email_sync(request: web.Request) -> web.Response:
         err_msg = str(e)
         # IMAP SELECT 失败（如企业邮箱限制非 INBOX 文件夹访问），返回 422 而非 500
         if "select" in err_msg.lower() and "failed" in err_msg.lower():
-            logger.warning("Email sync rejected (folder not accessible): %s", err_msg)
+            logger.warning(f"Email sync rejected (folder not accessible): {err_msg}")
             return web.json_response(
                 {"error": f"该文件夹不支持同步: {err_msg}"},
                 status=422,
@@ -2223,7 +2228,7 @@ def _smtp_send_message_no_append(body: dict[str, Any]) -> bytes:
         try:
             data_bytes = base64.b64decode(data_b64)
         except Exception:
-            logger.warning("附件 base64 解码失败，跳过: %s", filename)
+            logger.warning(f"附件 base64 解码失败，跳过: {filename}")
             continue
         # 解析 maintype/subtype
         if "/" in content_type:
@@ -3378,8 +3383,17 @@ async def handle_email_schedule_extract(request: web.Request) -> web.Response:
     if provider is None:
         return web.json_response({"error": "LLM provider 不可用"}, status=503)
 
-    # 从 agent_loop 的 config 取 tools.email_intel.schedule 配置
-    config = getattr(agent_loop, "config", None)
+    # 实时从 config.json 重新加载 schedule 配置。
+    # agent_loop.config 是启动时的内存快照，用户在 UI 修改 schedule 配置后
+    # gateway 不会自动 reload，必须实时读取才能让"启用"立即生效。
+    from mona.config.loader import load_config
+
+    try:
+        config = load_config()
+    except Exception:
+        logger.exception("Failed to reload config for schedule extract")
+        config = getattr(agent_loop, "config", None)
+
     schedule_config = None
     if config is not None:
         tools = getattr(config, "tools", None)

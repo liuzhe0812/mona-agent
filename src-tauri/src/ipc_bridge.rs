@@ -556,6 +556,39 @@ impl IpcBridge {
                 let has_access = crate::license::check_license_access();
                 Ok(Value::Bool(has_access))
             }
+            "email_fetch_body" => {
+                // AI 读取邮件时，若本地 .eml 只有 HEADER（同步时省流量未拉正文），
+                // 通过此 bridge 命令触发 IMAP 拉取完整 RFC822 并落盘。
+                let gateway_url = args
+                    .get("gatewayUrl")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let account_id = args
+                    .get("accountId")
+                    .and_then(|v| v.as_str())
+                    .ok_or("Missing accountId")?
+                    .to_string();
+                let uid = args
+                    .get("uid")
+                    .and_then(|v| v.as_str())
+                    .ok_or("Missing uid")?
+                    .to_string();
+                let mailbox = args
+                    .get("mailbox")
+                    .and_then(|v| v.as_str())
+                    .ok_or("Missing mailbox")?
+                    .to_string();
+                let email_state = self.app_handle.state::<crate::email::EmailState>();
+                crate::email::email_fetch_body(
+                    email_state,
+                    gateway_url,
+                    account_id,
+                    uid,
+                    mailbox,
+                )
+                .await
+            }
             _ => Err(format!("Unknown command: {}", cmd)),
         }
     }
