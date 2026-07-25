@@ -1,0 +1,104 @@
+"""Tests for the tool failure circuit-breaker in AgentRunner."""
+
+from __future__ import annotations
+
+from unittest.mock import MagicMock
+
+from mona.agent.runner import AgentRunSpec, AgentRunner
+from mona.providers.base import ToolCallRequest
+
+
+def _spec(max_failures: int = 3) -> AgentRunSpec:
+    return AgentRunSpec(
+        initial_messages=[],
+        tools=MagicMock(),
+        model="test-model",
+        max_iterations=1,
+        max_tool_result_chars=4096,
+        max_tool_failures=max_failures,
+    )
+
+
+def _call(name: str) -> ToolCallRequest:
+    return ToolCallRequest(id=f"call-{name}", name=name, arguments={})
+
+
+def test_success_resets_counter():
+    counts: dict[str, int] = {}
+    disabled: set[str] = set()
+    AgentRunner._update_failure_counts(
+        counts, disabled, [_call("t1")], [{"name": "t1", "status": "ok"}],
+        spec=_spec(),
+    )
+    assert counts["t1"] == 0
+    assert not disabled
+
+
+def test_failure_below_threshold_does_not_disable():
+    counts: dict[str, int] = {}
+    disabled: set[str] = set()
+    for _ in range(2):
+        AgentRunner._update_failure_counts(
+            counts, disabled, [_call("t1")], [{"name": "t1", "status": "error"}],
+            spec=_spec(max_failures=3),
+        )
+    assert counts["t1"] == 2
+    assert not disabled
+
+
+def test_failure_at_threshold_disables_tool():
+    counts: dict[str, int] = {}
+    disabled: set[str] = set()
+    spec = _spec(max_failures=3)
+    for _ in range(3):
+        AgentRunner._update_failure_counts(
+            counts, disabled, [_call("t1")], [{"name": "t1", "status": "error"}],
+            spec=spec,
+        )
+    assert "t1" in disabled
+
+
+def test_already_disabled_tool_not_counted_again():
+    counts: dict[str, int] = {"t1": 3}
+    disabled: set[str] = {"t1"}
+    AgentRunner._update_failure_counts(
+        counts, disabled, [_call("t1")], [{"name": "t1", "status": "error"}],
+        spec=_spec(),
+    )
+    # Counter unchanged because the tool was already disabled and skipped.
+    assert counts["t1"] == 3
+
+
+def test_mixed_calls_count_independently():
+    counts: dict[str, int] = {}
+    disabled: set[str] = set()
+    spec = _spec(max_failures=2)
+    AgentRunner._update_failure_counts(
+        counts, disabled,
+        [_call("good"), _call("bad")],
+        [{"name": "good", "status": "ok"}, {"name": "bad", "status": "error"}],
+        spec=spec,
+    )
+    assert counts["good"] == 0
+    assert counts["bad"] == 1
+    assert not disabled
+    AgentRunner._update_failure_counts(
+        counts, disabled,
+        [_call("good"), _call("bad")],
+        [{"name": "good", "status": "ok"}, {"name": "bad", "status": "error"}],
+        spec=spec,
+    )
+    assert "bad" in disabled
+    assert "good" not in disabled
+
+
+def test_max_failures_zero_disables_feature():
+    counts: dict[str, int] = {}
+    disabled: set[str] = set()
+    spec = _spec(max_failures=0)
+    AgentRunner._update_failure_counts(
+        counts, disabled, [_call("t1")], [{"name": "t1", "status": "error"}],
+        spec=spec,
+    )
+    assert not counts
+    assert not disabled
