@@ -1632,6 +1632,7 @@ def doctor():
     # Tool availability — disabled tools are informational, not failures.
     # Import errors above already flag the root cause.
     console.print("[bold]Tool Availability[/bold]\n")
+    discovered_names: set[str] = set()
     try:
         from mona.agent.tools.context import ToolContext
         from mona.agent.tools.loader import ToolLoader
@@ -1639,6 +1640,7 @@ def doctor():
         loader = ToolLoader()
         ctx = ToolContext(config=None, workspace=".")
         for cls in sorted(loader.discover(), key=lambda c: c.__name__):
+            discovered_names.add(cls.__name__)
             try:
                 ok = cls.enabled(ctx)
             except Exception as e:  # noqa: BLE001
@@ -1653,6 +1655,32 @@ def doctor():
     except Exception as e:  # noqa: BLE001
         console.print(f"  [red]Failed to load tools: {e}[/red]")
         failed = True
+
+    # Critical tool classes — these are dynamically discovered by ToolLoader
+    # via pkgutil.iter_modules, which PyInstaller static analysis cannot see.
+    # If any are missing from the discovered set, the build is broken (spec
+    # forgot to collect_submodules). Fail the doctor check so the packager
+    # catches it before shipping a broken release.
+    critical_tool_classes = [
+        "EmailSearchTool", "EmailReadTool", "EmailActionTool",
+        "TerminalExecTool", "TerminalOutputTool", "TerminalUploadTool",
+        "KnowledgeSearchTool", "DbQueryTool", "ApplyPatchTool",
+        "SpawnTool", "DeliverFileTool", "HoardSearchTool",
+    ]
+    console.print("\n[bold]Critical Tool Classes[/bold]\n")
+    missing_critical = []
+    for cls_name in critical_tool_classes:
+        if cls_name in discovered_names:
+            console.print(f"  {cls_name}: [green]✓[/green]")
+        else:
+            console.print(f"  {cls_name}: [red]✗ MISSING[/red]")
+            missing_critical.append(cls_name)
+            failed = True
+    if missing_critical:
+        console.print(
+            "\n[red]Critical tools missing![/red] PyInstaller spec likely forgot "
+            "to collect_submodules('mona'). Add it to hidden_imports and rebuild."
+        )
 
     if failed:
         console.print("\n[red]✗ Doctor checks failed[/red]")
