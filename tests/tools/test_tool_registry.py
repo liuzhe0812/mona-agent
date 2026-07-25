@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from typing import Any
 
@@ -101,3 +101,61 @@ def test_unregister_invalidates_cache() -> None:
     second = registry.get_definitions()
     assert first is not second
     assert len(second) == 1
+
+
+def test_get_definitions_excludes_unavailable_tools() -> None:
+    """A tool with ``is_available=False`` is hidden from the model.
+
+    This protects against the LLM seeing a terminal tool that will always
+    fail this turn (e.g. no active terminal session) and then misreading
+    the error string as "tool does not exist".
+    """
+    registry = ToolRegistry()
+    available_tool = _FakeTool("read_file")
+    unavailable_tool = _FakeTool("terminal_exec")
+    unavailable_tool.is_available = False
+    registry.register(available_tool)
+    registry.register(unavailable_tool)
+
+    names = _tool_names(registry.get_definitions())
+
+    assert "read_file" in names
+    assert "terminal_exec" not in names
+
+
+def test_invalidate_definitions_cache_refreshes_after_availability_change() -> None:
+    """``invalidate_definitions_cache`` forces the next ``get_definitions``
+    call to re-evaluate ``is_available`` flags.
+
+    This is called by AgentLoop after ``set_context`` so that runtime
+    availability changes take effect immediately.
+    """
+    registry = ToolRegistry()
+    tool = _FakeTool("terminal_exec")
+    registry.register(tool)
+    assert "terminal_exec" in _tool_names(registry.get_definitions())
+
+    tool.is_available = False
+    # Without invalidation, the stale cache would still return the tool.
+    assert "terminal_exec" in _tool_names(registry.get_definitions())
+
+    registry.invalidate_definitions_cache()
+    assert "terminal_exec" not in _tool_names(registry.get_definitions())
+
+
+def test_prepare_call_rejects_unavailable_tool_with_clear_message() -> None:
+    """A call to an ``is_available=False`` tool returns an error prefixed
+    with ``tool_unavailable:`` so the LLM does not confuse it with a missing
+    tool.
+    """
+    registry = ToolRegistry()
+    tool = _FakeTool("terminal_exec")
+    tool.is_available = False
+    registry.register(tool)
+
+    _tool, _params, error = registry.prepare_call("terminal_exec", {})
+
+    assert error is not None
+    assert error.startswith("tool_unavailable:")
+    assert "transient state" in error
+    assert "not a missing tool" in error

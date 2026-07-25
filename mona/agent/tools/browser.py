@@ -26,6 +26,11 @@ from mona.agent.tools.schema import StringSchema, tool_parameters_schema
 from mona.agent.tools.tauri_ipc import tauri_invoke as _tauri_invoke
 from mona.config.schema import Base
 
+# Opener that bypasses all proxy settings. The CDP HTTP endpoint is a
+# localhost server; system proxies (V2Ray/Clash on 127.0.0.1:10809) intercept
+# the request and fail to route it back, causing spurious connection errors.
+_NO_PROXY_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
 
 # ---------------------------------------------------------------------------
 # Playwright availability check
@@ -129,7 +134,7 @@ class BrowserConnectionManager:
         config = BrowserToolsConfig()
         url = f"http://{config.cdp_host}:{config.cdp_port}/json"
         try:
-            with urllib.request.urlopen(url, timeout=3) as resp:
+            with _NO_PROXY_OPENER.open(url, timeout=3) as resp:
                 targets = json.loads(resp.read().decode())
                 if not isinstance(targets, list) or len(targets) == 0:
                     return False
@@ -177,7 +182,7 @@ class BrowserConnectionManager:
         config = BrowserToolsConfig()
         url = f"http://{config.cdp_host}:{config.cdp_port}/json"
         try:
-            with urllib.request.urlopen(url, timeout=5) as resp:
+            with _NO_PROXY_OPENER.open(url, timeout=5) as resp:
                 return json.loads(resp.read().decode())
         except Exception as e:
             logger.debug("Failed to fetch CDP /json targets: {}", e)

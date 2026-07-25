@@ -1,10 +1,7 @@
 from __future__ import annotations
 
 import base64
-import json
 import re
-import urllib.request
-from pathlib import Path
 from typing import Any
 
 from loguru import logger
@@ -12,38 +9,19 @@ from loguru import logger
 from mona.agent.tools.base import Tool, tool_parameters
 from mona.agent.tools.context import RequestContext
 from mona.agent.tools.schema import StringSchema, tool_parameters_schema
+from mona.agent.tools.tauri_ipc import tauri_invoke as _shared_tauri_invoke
 from mona.config.schema import TerminalToolConfig
-
-_GATEWAY_BASE = "http://127.0.0.1"
-_FALLBACK_IPC_PORT = 17860
-_IPC_PORT_FILE = Path.home() / ".mona" / "ipc_bridge_port"
-
-
-def _read_ipc_port() -> int:
-    try:
-        text = _IPC_PORT_FILE.read_text().strip()
-        port = int(text)
-        if 1 <= port <= 65535:
-            return port
-    except (FileNotFoundError, ValueError, PermissionError):
-        pass
-    return _FALLBACK_IPC_PORT
 
 
 def _tauri_invoke(cmd: str, args: dict[str, Any] | None = None) -> Any:
-    port = _read_ipc_port()
-    payload = json.dumps({"cmd": cmd, "args": args or {}}).encode()
-    url = f"{_GATEWAY_BASE}:{port}"
-    req = urllib.request.Request(
-        url, data=payload, headers={"Content-Type": "application/json"}
-    )
+    """Wrapper around the shared IPC helper that returns error strings
+    instead of raising, matching the original terminal.py contract.
+    """
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            result = json.loads(resp.read().decode())
-            if isinstance(result, dict) and "error" in result:
-                logger.warning("IPC bridge error for cmd={!r}: {}", cmd, result["error"])
-                return f"Error: {result['error']}"
-            return result.get("result", result)
+        return _shared_tauri_invoke(cmd, args)
+    except RuntimeError as e:
+        logger.warning("IPC bridge error for cmd={!r}: {}", cmd, e)
+        return f"Error: {e}"
     except Exception as e:
         logger.warning("IPC bridge invoke failed for cmd={!r}: {}", cmd, e)
         return f"Error: Tauri invoke failed: {e}"
@@ -104,6 +82,11 @@ class TerminalExecTool(Tool):
 
     def set_context(self, ctx: RequestContext) -> None:
         self._request_ctx = ctx
+        # Hide this tool from the model when no terminal session is active so
+        # the model does not attempt to call it and then misread the resulting
+        # error string as "tool does not exist". The AgentLoop refreshes the
+        # registry cache after set_context returns.
+        self.is_available = bool(ctx.terminal_session_id)
 
     @property
     def name(self) -> str:
@@ -147,7 +130,14 @@ class TerminalExecTool(Tool):
             self._request_ctx.terminal_session_id if self._request_ctx else None
         )
         if not effective_session:
-            return "Error: No terminal session available. The user is not currently viewing a terminal."
+            return (
+                "tool_unavailable: terminal_exec requires an active terminal "
+                "session, but the user is not currently viewing a terminal. "
+                "This is a transient state — the tool exists but cannot run. "
+                "Ask the user to open the terminal panel, or if you only need "
+                "to run a shell command in the workspace, use the `exec` tool "
+                "instead. Do NOT claim you do not have terminal tools."
+            )
 
         explicit_approval = (
             require_approval is not None
@@ -216,6 +206,7 @@ class TerminalOutputTool(Tool):
 
     def set_context(self, ctx: RequestContext) -> None:
         self._request_ctx = ctx
+        self.is_available = bool(ctx.terminal_session_id)
 
     @property
     def name(self) -> str:
@@ -287,6 +278,7 @@ class TerminalUploadTool(Tool):
 
     def set_context(self, ctx: RequestContext) -> None:
         self._request_ctx = ctx
+        self.is_available = bool(ctx.terminal_session_id)
 
     @property
     def name(self) -> str:
@@ -318,7 +310,13 @@ class TerminalUploadTool(Tool):
             self._request_ctx.terminal_session_id if self._request_ctx else None
         )
         if not effective_session:
-            return "Error: No terminal session available. The user is not currently viewing a terminal."
+            return (
+                "tool_unavailable: terminal_upload requires an active terminal "
+                "session, but the user is not currently viewing a terminal. "
+                "This is a transient state — the tool exists but cannot run. "
+                "Ask the user to open the terminal panel and try again. "
+                "Do NOT claim you do not have terminal tools."
+            )
 
         enc = (encoding or "text").lower()
         if enc == "base64":

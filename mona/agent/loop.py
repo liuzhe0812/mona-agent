@@ -617,6 +617,11 @@ class AgentLoop:
             tool = self.tools.get(name)
             if tool and isinstance(tool, ContextAware):
                 tool.set_context(request_ctx)
+        # A tool's ``set_context`` may have toggled its ``is_available`` flag
+        # (e.g. terminal tools hidden when no terminal session is active).
+        # Invalidate the definitions cache so the next ``get_definitions``
+        # call reflects the new availability.
+        self.tools.invalidate_definitions_cache()
 
     @staticmethod
     def _runtime_chat_id(msg: InboundMessage) -> str:

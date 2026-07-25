@@ -54,6 +54,15 @@ class ToolRegistry:
         if changed:
             self._cached_definitions = None
 
+    def invalidate_definitions_cache(self) -> None:
+        """Clear the cached tool definitions.
+
+        Call this after ``set_context`` mutates a tool's runtime availability
+        flag (``is_available``) so the next ``get_definitions`` call reflects
+        the new state.
+        """
+        self._cached_definitions = None
+
     @property
     def has_subscription_access(self) -> bool:
         return self._has_subscription_access
@@ -87,7 +96,9 @@ class ToolRegistry:
 
         Subscription-gated tools are excluded when the user has no active
         subscription or trial, so the model never sees them and cannot call
-        them.
+        them. Tools whose ``is_available`` flag is False (e.g. terminal tools
+        without an active terminal session) are also excluded so the model
+        does not attempt to call a tool that will always fail this turn.
         """
         if self._cached_definitions is not None:
             return self._cached_definitions
@@ -98,6 +109,8 @@ class ToolRegistry:
                 not self._has_subscription_access
                 and getattr(tool, "subscription_required", False)
             ):
+                continue
+            if not getattr(tool, "is_available", True):
                 continue
             definitions.append(tool.to_schema())
 
@@ -144,6 +157,19 @@ class ToolRegistry:
                 "not active. Do not claim to have searched notes or emails. Tell "
                 "the user they can subscribe to unlock Agent access to existing "
                 "notes and emails."
+            )
+
+        # Defense-in-depth: a tool hidden via ``is_available=False`` (e.g.
+        # terminal tools when no terminal session is active) may still be
+        # called from historical context. Reject with a clear, actionable
+        # message so the model does not misread "tool unavailable" as
+        # "tool does not exist".
+        if not getattr(tool, "is_available", True):
+            return tool, params, (
+                f"tool_unavailable: Tool '{name}' is registered but not "
+                "available in the current context. This is a transient "
+                "state, not a missing tool. Ask the user to open the "
+                "required panel (e.g. the terminal panel) and try again."
             )
 
         cast_params = tool.cast_params(params)
