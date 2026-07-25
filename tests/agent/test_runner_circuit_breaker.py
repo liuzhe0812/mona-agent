@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from mona.agent.runner import AgentRunSpec, AgentRunner
+from mona.agent.runner import AgentRunner, AgentRunSpec
 from mona.providers.base import ToolCallRequest
 
 
@@ -102,3 +102,33 @@ def test_max_failures_zero_disables_feature():
     )
     assert not counts
     assert not disabled
+
+
+def test_same_tool_called_twice_in_one_turn_counts_once():
+    """Repeated calls to the same tool in one iteration count as a single failure."""
+    counts: dict[str, int] = {}
+    disabled: set[str] = set()
+    spec = _spec(max_failures=3)
+    AgentRunner._update_failure_counts(
+        counts, disabled,
+        [_call("t1"), _call("t1")],
+        [{"name": "t1", "status": "error"}, {"name": "t1", "status": "error"}],
+        spec=spec,
+    )
+    assert counts["t1"] == 1
+    assert not disabled
+
+
+def test_mixed_success_failure_marks_as_error():
+    """If one call succeeds and another fails, the tool is still counted as failed."""
+    counts: dict[str, int] = {}
+    disabled: set[str] = set()
+    spec = _spec(max_failures=1)
+    AgentRunner._update_failure_counts(
+        counts, disabled,
+        [_call("t1"), _call("t1")],
+        [{"name": "t1", "status": "ok"}, {"name": "t1", "status": "error"}],
+        spec=spec,
+    )
+    assert counts["t1"] == 1
+    assert "t1" in disabled

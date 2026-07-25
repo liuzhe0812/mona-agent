@@ -14,6 +14,7 @@ from loguru import logger
 
 from mona.agent.hook import AgentHook, AgentHookContext
 from mona.agent.tools.registry import ToolRegistry
+from mona.agent.tools.result_compress import compress_tool_result
 from mona.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from mona.utils.file_edit_events import (
     StreamingFileEditTracker,
@@ -22,7 +23,6 @@ from mona.utils.file_edit_events import (
     build_file_edit_start_event,
     prepare_file_edit_trackers,
 )
-from mona.agent.tools.result_compress import compress_tool_result
 from mona.utils.helpers import (
     IncrementalThinkExtractor,
     build_assistant_message,
@@ -858,23 +858,28 @@ class AgentRunner:
 
         A tool that returns an error event increments its counter; a success
         resets it. When the counter reaches ``spec.max_tool_failures`` the tool
-        is added to ``disabled`` for the rest of this turn and a one-line
-        guidance message is appended so the model picks another path instead
-        of retrying the now-hidden tool.
+        is added to ``disabled`` for the rest of this turn so the model can no
+        longer see it and must pick another path.
         """
         if spec.max_tool_failures <= 0:
             return
+        # Collapse events by tool name: any error marks the tool as failed for
+        # this iteration, so repeated calls to the same tool in one batch count
+        # as a single failure (not N).
         status_by_name: dict[str, str] = {}
         for event in events:
             name = event.get("name")
-            if name:
+            if not name:
+                continue
+            if event.get("status") == "error":
+                status_by_name[name] = "error"
+            elif name not in status_by_name:
                 status_by_name[name] = event.get("status", "ok")
         newly_disabled: list[str] = []
-        for tool_call in tool_calls:
-            name = tool_call.name
+        for name, status in status_by_name.items():
             if name in disabled:
                 continue
-            if status_by_name.get(name) == "error":
+            if status == "error":
                 count = failure_counts.get(name, 0) + 1
                 failure_counts[name] = count
                 if count >= spec.max_tool_failures:
