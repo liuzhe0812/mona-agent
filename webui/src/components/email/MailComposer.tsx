@@ -27,6 +27,7 @@ import { useEmailStore } from "./store/emailStore";
 import { sendEmail, saveDraft, fetchEmailBody, type EmailAttachmentInput } from "./lib/emailApi";
 import { EmailRichEditor, type EmailRichEditorHandle } from "./EmailRichEditor";
 import { ContactPicker } from "./contacts/ContactPicker";
+import { ComposeAiButton } from "./ComposeAiButton";
 import type { EmailAccount, EmailMessage, EmailSignature } from "./lib/types";
 
 export type ComposerMode = "compose" | "reply" | "replyAll" | "forward";
@@ -546,6 +547,17 @@ export function MailComposer({
         <Camera className="h-3.5 w-3.5" />
         截屏
       </Button>
+      <span className="mx-0.5 h-4 w-px bg-border/70" />
+      <ComposeAiButton
+        mode={mode}
+        baseMessage={baseMessage}
+        bodyText={bodyText}
+        onResult={(html) => {
+          setBodyHtml(html);
+          editorRef.current?.setHtml(html);
+        }}
+        disabled={!account || sending || savingDraft}
+      />
       {signatures.length > 0 && (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>

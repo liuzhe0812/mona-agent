@@ -19,6 +19,7 @@ import type { UIMessage } from "@/lib/types";
 import { useClient } from "@/providers/ClientProvider";
 import { useDbStore } from "./store/dbStore";
 import type { QueryTab } from "./types";
+import { SqlResultCard } from "./SqlResultCard";
 import {
   type DbActionConfirmResult,
   ExplainPlanConfig,
@@ -74,6 +75,7 @@ export function DbAgentPanel({
   const pendingSendOptsRef = useRef<SendOptions | null>(null);
   const pendingNlToSqlRef = useRef(false);
   const { client } = useClient();
+  const [pendingSqlResult, setPendingSqlResult] = useState<string | null>(null);
 
   const activeTabId = useDbStore((s) => s.activeTabId);
   const queryTabs = useDbStore((s) => s.queryTabs);
@@ -107,6 +109,7 @@ export function DbAgentPanel({
   useEffect(() => {
     setDraft("");
     setNotice(null);
+    setPendingSqlResult(null);
     if (!activeTab?.agentChatId) setMessages([]);
   }, [activeTab?.id, activeTab?.agentChatId, setMessages]);
 
@@ -218,11 +221,11 @@ export function DbAgentPanel({
     const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant" && m.content);
     if (!lastAssistant?.content) return;
     const extracted = extractSql(lastAssistant.content);
-    if (extracted && activeTabId) {
-      updateTabSql(activeTabId, extracted);
+    if (extracted) {
+      setPendingSqlResult(extracted);
     }
     pendingNlToSqlRef.current = false;
-  }, [messages, isStreaming, activeTabId, updateTabSql]);
+  }, [messages, isStreaming]);
 
   const handleResetChat = useCallback(() => {
     setMessages([]);
@@ -338,6 +341,17 @@ export function DbAgentPanel({
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-2.5 py-2 scrollbar-thin">
+        {pendingSqlResult && activeTabId ? (
+          <SqlResultCard
+            sql={pendingSqlResult}
+            onInsert={(sql) => {
+              const tab = useDbStore.getState().queryTabs.find((t) => t.id === activeTabId);
+              if (tab) updateTabSql(activeTabId, `${tab.sql}\n${sql}`);
+            }}
+            onReplace={(sql) => updateTabSql(activeTabId, sql)}
+            onDismiss={() => setPendingSqlResult(null)}
+          />
+        ) : null}
         <DbChat
           messages={messages}
           loading={loading}

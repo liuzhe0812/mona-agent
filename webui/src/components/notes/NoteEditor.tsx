@@ -1,4 +1,4 @@
-import { useRef, type ReactNode } from "react";
+import { useCallback, useRef, type ReactNode } from "react";
 import type { JSONContent } from "@tiptap/core";
 
 import { MarkdownEditor, type EditorMode } from "@/components/common/MarkdownEditor";
@@ -66,6 +66,9 @@ export function NoteEditor({
   // 跟踪上次内容是否包含换行，用于检测"首次产生第二行"（回车或粘贴多行）。
   // NoteEditor 通过 key={note.id} 重新挂载，切换笔记时 ref 会自动重置。
   const hadNewlineRef = useRef(note.contentMarkdown.includes("\n"));
+  const noteTitleRef = useRef(note.title);
+  noteTitleRef.current = note.title;
+  const getNoteTitle = useCallback(() => noteTitleRef.current, []);
 
   const handleContentChange = (next: {
     contentMarkdown: string;
@@ -98,6 +101,8 @@ export function NoteEditor({
       onOpenNoteByTitle={onOpenNoteByTitle}
       toolbarExtra={toolbarExtra}
       toolbarLeadingExtra={toolbarLeadingExtra}
+      enableSelectionAi
+      getNoteTitle={getNoteTitle}
       statsExtra={
         <span className={saveStatus === "error" ? "text-destructive" : undefined}>
           {saveLabel}

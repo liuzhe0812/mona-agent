@@ -48,6 +48,7 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { SelectionAiToolbar } from "./SelectionAiToolbar";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -95,6 +96,10 @@ export interface MarkdownEditorProps {
   toolbarTrailingExtra?: React.ReactNode;
   /** Note titles for `[[wiki link]]` autocomplete in markdown mode. */
   noteTitles?: string[];
+  /** Enable inline selection AI toolbar (润色/缩写/翻译). */
+  enableSelectionAi?: boolean;
+  /** Returns the current note title for selection AI context. */
+  getNoteTitle?: () => string;
 }
 
 // Custom Image extension that serializes `assets/xxx.png` from title/alt instead of data URL
@@ -145,6 +150,8 @@ export function MarkdownEditor({
   toolbarLeadingExtra,
   toolbarTrailingExtra,
   noteTitles,
+  enableSelectionAi = false,
+  getNoteTitle,
 }: MarkdownEditorProps) {
   const settingContentRef = useRef(false);
   const lastMarkdownRef = useRef(content);
@@ -924,6 +931,13 @@ export function MarkdownEditor({
                   ))}
                 </div>
               )}
+              {enableSelectionAi && getNoteTitle ? (
+                <SelectionAiToolbar
+                  editor={editor}
+                  getNoteTitle={getNoteTitle}
+                  wrapperRef={visualEditorRef}
+                />
+              ) : null}
             </div>
           </div>
         </EditorContextMenu>
