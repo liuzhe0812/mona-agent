@@ -352,6 +352,12 @@
     "loadingConversation": "Loading conversation…",
     "empty": {
       "greeting": "What can I do for you?",
+      "daypart": {
+        "morning": "Good morning.",
+        "afternoon": "Good afternoon.",
+        "evening": "Good evening.",
+        "night": "Up late."
+      },
       "quickActions": {
         "plan": {
           "title": "Create a project plan",

@@ -1242,7 +1242,7 @@ class AgentLoop:
         # registry and DocumentContextBuilder.
         from mona.agent.document_loop import DOCUMENT_PROFILES
         agent_kind = session.metadata.get("agent_kind")
-        if agent_kind and agent_kind in DOCUMENT_PROFILES:
+        if agent_kind and agent_kind in DOCUMENT_PROFILES and not hasattr(self, "_profile"):
             doc_loop = self._ensure_document_loop(agent_kind)
             return await doc_loop._process_message(
                 msg,

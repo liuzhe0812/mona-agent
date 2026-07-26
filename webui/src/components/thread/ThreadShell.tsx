@@ -137,7 +137,7 @@ export function ThreadShell({
   onModelNameChange,
   onOpenSettings,
 }: ThreadShellProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const chatId = session?.chatId ?? null;
   const historyKey = session?.key ?? null;
   const [selectedWorkspace, setSelectedWorkspace] = useState<string | null>(
@@ -529,27 +529,84 @@ export function ThreadShell({
     </>
   );
 
+  const [clockNow, setClockNow] = useState(() => new Date());
+  useEffect(() => {
+    if (session) return;
+    const id = setInterval(() => setClockNow(new Date()), 20_000);
+    return () => clearInterval(id);
+  }, [session]);
+
+  const mailMessages = useEmailStore((s) => s.messages);
+  const unreadMails = useMemo(
+    () =>
+      mailMessages
+        .filter((message) => !message.isRead)
+        .slice(0, 2)
+        .map((message) => ({
+          sender: message.fromName?.trim() || message.fromAddress,
+          subject: message.subject,
+        })),
+    [mailMessages],
+  );
+
+  const hour = clockNow.getHours();
+  const daypartKey = hour < 5 ? "night" : hour < 12 ? "morning" : hour < 18 ? "afternoon" : hour < 23 ? "evening" : "night";
+  const clockLine = new Intl.DateTimeFormat(i18n.language, {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(clockNow);
+  const dateLine = new Intl.DateTimeFormat(i18n.language, {
+    month: "long",
+    day: "numeric",
+  }).format(clockNow);
+  const weekdayLine = new Intl.DateTimeFormat(i18n.language, {
+    weekday: "long",
+  }).format(clockNow);
+
   const emptyState = loading ? (
     <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
       {t("thread.loadingConversation")}
     </div>
   ) : (
-    <div className="flex w-full flex-col items-center text-center animate-in fade-in-0 slide-in-from-bottom-2 duration-500">
-      <AgentLogo state="welcome" className="mb-3 h-12 w-12 opacity-90" />
-      <h1 className="text-balance text-[28px] font-normal leading-tight tracking-[-0.035em] text-foreground sm:text-[32px]">
-        {t("thread.empty.greeting")}
-      </h1>
-      <NewChatDashboard
-        scheduleItems={scheduleItems}
-        unreadCount={emailUnreadCount}
-        recentSession={recentSession}
-        disabled={booting || isStreaming}
-        onContinue={onSelectSession}
-        onConnectHost={onOpenSSH}
-        onConnectDatabase={onOpenDb}
-        onCreateNote={onCreateNote}
-        onOpenEmail={onOpenEmail}
-      />
+    <div className="relative w-full">
+      <div aria-hidden className="pointer-events-none absolute -top-32 left-1/2 h-[28rem] w-[52rem] -translate-x-1/2">
+        <div className="absolute inset-0 bg-[radial-gradient(closest-side_at_50%_36%,hsl(var(--theme)/0.09),transparent_72%)]" />
+        <div className="absolute inset-0 bg-[radial-gradient(closest-side_at_30%_58%,rgba(16,185,129,0.07),transparent_70%)]" />
+        <div className="absolute inset-0 bg-[radial-gradient(closest-side_at_71%_60%,rgba(235,164,93,0.09),transparent_70%)]" />
+      </div>
+      <div className="relative grid w-full grid-cols-1 gap-y-10 md:grid-cols-[minmax(0,5fr)_minmax(0,6fr)]">
+        <div className="flex animate-in fill-mode-backwards fade-in-0 slide-in-from-bottom-3 flex-col items-start text-left duration-500 md:pr-14">
+          <div className="relative animate-in fill-mode-backwards zoom-in-95 duration-700">
+            <div aria-hidden className="absolute left-1/2 top-1/2 h-24 w-24 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[radial-gradient(closest-side,hsl(var(--theme)/0.15),transparent)]" />
+            <AgentLogo state="welcome" className="relative h-12 w-12" />
+          </div>
+          <div className="mt-7 text-[54px] font-extralight leading-none tracking-[-0.03em] tabular-nums text-foreground">
+            {clockLine}
+          </div>
+          <p className="mt-3 text-[13px] tracking-[0.08em] text-muted-foreground">
+            {dateLine} · {weekdayLine}
+          </p>
+          <h1 className="mt-9 text-[24px] font-medium tracking-[-0.01em] text-foreground">
+            {t(`thread.empty.daypart.${daypartKey}`)}
+          </h1>
+          <p className="mt-2 text-[14px] leading-relaxed text-muted-foreground">
+            {t("thread.empty.greeting")}
+          </p>
+        </div>
+        <NewChatDashboard
+          scheduleItems={scheduleItems}
+          unreadCount={emailUnreadCount}
+          unreadMails={unreadMails}
+          recentSession={recentSession}
+          disabled={booting || isStreaming}
+          onContinue={onSelectSession}
+          onConnectHost={onOpenSSH}
+          onConnectDatabase={onOpenDb}
+          onCreateNote={onCreateNote}
+          onOpenEmail={onOpenEmail}
+        />
+      </div>
     </div>
   );
 

@@ -365,6 +365,12 @@
     "loadingConversation": "正在加载对话…",
     "empty": {
       "greeting": "我可以帮你做什么？",
+      "daypart": {
+        "morning": "早上好。",
+        "afternoon": "下午好。",
+        "evening": "晚上好。",
+        "night": "夜深了。"
+      },
       "quickActions": {
         "plan": {
           "title": "创建项目计划",

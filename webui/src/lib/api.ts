@@ -594,6 +594,33 @@ export async function pptAddSources(
   return request(`${effectiveBase}/api/ppt/add-sources?${query}`, token);
 }
 
+export interface PptOfficeCliStatus {
+  ok: boolean;
+  version: string | null;
+  path: string | null;
+  error: string | null;
+  supported: boolean;
+}
+
+export async function fetchPptOfficeCliCheck(
+  token: string,
+  base?: string,
+): Promise<PptOfficeCliStatus> {
+  const effectiveBase = base ?? (await getApiBase());
+  return request<PptOfficeCliStatus>(
+    `${effectiveBase}/api/ppt/officecli-check`,
+    token,
+  );
+}
+
+export async function downloadPptOfficeCli(
+  token: string,
+  base?: string,
+): Promise<{ ok: boolean; path?: string; cached?: boolean; error?: string }> {
+  const effectiveBase = base ?? (await getApiBase());
+  return request(`${effectiveBase}/api/ppt/officecli-download`, token);
+}
+
 export async function savePptChatId(
   token: string,
   project: string,
@@ -727,10 +754,18 @@ export async function fetchVideoProjects(
   return request(`${effectiveBase}/api/video/projects`, token);
 }
 
+export interface VideoTtsConfig {
+  narrationEnabled?: boolean;
+  ttsProvider?: string;
+  ttsVoice?: string;
+  ttsRate?: string;
+}
+
 export async function createVideoProject(
   token: string,
   name: string,
   resolution: string,
+  tts?: VideoTtsConfig,
   base?: string,
 ): Promise<{ ok: boolean; error?: string }> {
   const effectiveBase = base ?? (await getGatewayHttpBase());
@@ -740,7 +775,7 @@ export async function createVideoProject(
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, resolution }),
+      body: JSON.stringify({ name, resolution, ...(tts ?? {}) }),
     },
   );
 }
@@ -767,6 +802,28 @@ export async function fetchVideoProjectFile(
   query.set("name", name);
   query.set("path", path);
   return request(`${effectiveBase}/api/video/project-file?${query}`, token);
+}
+
+export async function deleteVideoProject(
+  token: string,
+  name: string,
+  base?: string,
+): Promise<{ ok: boolean }> {
+  const effectiveBase = base ?? (await getApiBase());
+  const query = new URLSearchParams();
+  query.set("name", name);
+  return request(`${effectiveBase}/api/video/delete-project?${query}`, token);
+}
+
+export function buildVideoDownloadUrl(
+  base: string,
+  token: string,
+  name: string,
+): string {
+  const query = new URLSearchParams();
+  query.set("name", name);
+  query.set("token", token);
+  return `${base}/api/video/download?${query}`;
 }
 
 export async function saveVideoChatId(

@@ -28,7 +28,6 @@ The skill format and metadata structure follow OpenClaw's conventions to maintai
 | Skill | Description |
 |-------|-------------|
 | `clawhub` | Search and install agent skills from ClawHub, the public skill registry. |
-| `agnes-setup` | One-click setup wizard for Agnes AI: registers an account, retrieves an API key, and configures LLM / image / video models. |
 | `cron` | Schedule reminders and recurring tasks. |
 | `doc-writing-guide` | Primary skill for document and content writing (PRD, product requirements, MVP spec, research report, etc.). |
 | `docx` | Comprehensive document creation, editing, and analysis with tracked changes, comments, and formatting preservation. |

@@ -69,5 +69,17 @@ For each scene, write HTML + CSS + GSAP animation. Use `data-start`/`data-durati
 ### Step 6: Quality Gate + Render
 Run quality check on all scenes. Fix errors. Render to MP4 via `render.py`.
 
+### Step 6.5: Narration Synthesis (conditional)
+Only run when `<project_path>/meta.json` contains `narrationEnabled: true`.
+
+1. Read `meta.json` to obtain TTS config (`ttsProvider`, `ttsVoice`, `ttsRate`). Defaults: `edge` + `zh-CN-XiaoyiNeural` + `+0%` — no API key required.
+2. Ensure every scene in `storyboard.md` has a non-empty `- Narration:` line. If any is missing, ask the user before proceeding.
+3. Run the synthesis script via `skill_script_run`:
+   ```
+   python ${SKILL_DIR}/scripts/synthesize_narration.py <project_path>
+   ```
+   Output: `<project_path>/audio/scene_NN.mp3` per scene + `<project_path>/audio/narration.mp3` (concatenated).
+4. If the script reports `skipped: true`, narration is disabled for this project — proceed to Step 7 without audio.
+
 ### Step 7: Export
-Output final MP4 to `<project_path>/output/`.
+Output final MP4 to `<project_path>/output/`. If `audio/narration.mp3` exists, mux it into the final video using the FFmpeg command in `references/postprocess-export.md`.

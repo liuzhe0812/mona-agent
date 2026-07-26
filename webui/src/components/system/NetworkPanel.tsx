@@ -1,4 +1,4 @@
-import { CheckCircle2, Globe, Loader2, RotateCcw, ShieldOff, Trash2, Zap } from "lucide-react";
+import { CheckCircle2, Globe, Loader2, RotateCcw, ShieldOff, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
 import { Checkbox } from "@/components/ui/checkbox";
@@ -7,7 +7,6 @@ import { cn } from "@/lib/utils";
 
 import {
   editHosts,
-  flushDns,
   getDnsStatus,
   listHostsEntries,
   resetDns,
@@ -77,34 +76,16 @@ function DnsSection() {
     }
   };
 
-  const handleFlush = async () => {
-    setActing("flush");
-    try {
-      const result = await flushDns();
-      setMessage({ text: result.detail, tone: "ok" });
-    } catch (error) {
-      setMessage({ text: String(error), tone: "err" });
-    } finally {
-      setActing(null);
-    }
-  };
-
   const activePresetId = status?.activePresetId ?? null;
 
   return (
     <PanelCard
       title="DNS 服务器"
       action={
-        <div className="flex items-center gap-2">
-          <button type="button" className={secondaryButtonClass} onClick={handleFlush} disabled={acting === "flush"}>
-            {acting === "flush" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Zap className="h-3.5 w-3.5" />}
-            刷新缓存
-          </button>
-          <button type="button" className={secondaryButtonClass} onClick={handleReset} disabled={acting === "reset" || !status}>
-            {acting === "reset" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
-            恢复 DHCP
-          </button>
-        </div>
+        <button type="button" className={secondaryButtonClass} onClick={handleReset} disabled={acting === "reset" || !status}>
+          {acting === "reset" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
+          恢复 DHCP
+        </button>
       }
     >
       <div className="flex flex-col gap-4">

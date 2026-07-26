@@ -5,11 +5,9 @@ import {
   ChevronRight,
   CircleHelp,
   FileCog,
-  Filter,
   Gamepad2,
   Loader2,
   LayoutGrid,
-  LockKeyhole,
   MonitorCog,
   Palette,
   RefreshCw,
@@ -43,8 +41,11 @@ import {
   type ConfigurationRisk,
   type ConfigurationStatus,
 } from "./systemOptimizationApi";
+import { ContextMenuSection, DefenderSection, PerformanceSection } from "./AdvancedOptimizationPanel";
+import { NetworkPanel } from "./NetworkPanel";
+import { ProcessBlacklistPanel } from "./SystemToolsPanel";
 import { fallbackCategories, featureImpact, featureTitle, groupTitle, optionLabel } from "./systemOptimizationCatalog";
-import { MetricCard, StatusPill, secondaryButtonClass } from "./SystemUi";
+import { StatusPill, secondaryButtonClass } from "./SystemUi";
 
 const categoryIcons: Record<string, typeof ShieldCheck> = {
   "隐私与建议内容": ShieldCheck,
@@ -58,8 +59,20 @@ const categoryIcons: Record<string, typeof ShieldCheck> = {
   游戏: Gamepad2,
   多任务: MonitorCog,
   "可选 Windows 功能": WandSparkles,
+  性能与响应: MonitorCog,
+  网络与解析: SlidersHorizontal,
+  安全与防护: ShieldCheck,
+  应用与进程: MonitorCog,
   其他: CircleHelp,
 };
+
+const configurationCategories = [
+  "性能与响应",
+  ...fallbackCategories,
+  "网络与解析",
+  "安全与防护",
+  "应用与进程",
+];
 
 const statusMeta: Record<ConfigurationStatus, { label: string; tone: "green" | "blue" | "orange" | "red" | "neutral" }> = {
   configured: { label: "已生效", tone: "green" },
@@ -127,14 +140,12 @@ function SettingSwitch({ item, onAction }: { item: ConfigurationAuditItem; onAct
   );
 }
 
-export function SystemOptimizationPanel({ onAdvisory }: { onAdvisory?: (item: ConfigurationAuditItem) => void }) {
+export function SystemOptimizationPanel() {
   const [audit, setAudit] = useState<ConfigurationAudit | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [category, setCategory] = useState("全部设置");
   const [query, setQuery] = useState("");
-  const [risk, setRisk] = useState<"all" | ConfigurationRisk>("all");
-  const [status, setStatus] = useState<"all" | ConfigurationStatus>("all");
   const [compatibleOnly, setCompatibleOnly] = useState(true);
   const [pending, setPending] = useState<PendingAction | null>(null);
   const [acknowledged, setAcknowledged] = useState(false);
@@ -156,30 +167,26 @@ export function SystemOptimizationPanel({ onAdvisory }: { onAdvisory?: (item: Co
   const items = audit?.items ?? [];
   const itemById = useMemo(() => new Map(items.map((item) => [item.id, item])), [items]);
   const categoryCounts = useMemo(() => new Map((audit?.categories ?? []).map((item) => [item.label, item.count])), [audit]);
-  const categories = fallbackCategories;
+  const categories = configurationCategories;
+  const showCatalogSettings = category === "全部设置" || fallbackCategories.includes(category);
   const normalizedQuery = query.trim().toLocaleLowerCase();
   const visibleItems = useMemo(() => items.filter((item) => {
+    if (!showCatalogSettings) return false;
     if (item.groupId) return false;
     if (category !== "全部设置" && item.category !== category) return false;
     if (!itemMatches(item, normalizedQuery)) return false;
-    if (risk !== "all" && item.risk !== risk) return false;
-    if (status !== "all" && item.status !== status) return false;
     return !compatibleOnly || item.status !== "unavailable";
-  }), [items, category, normalizedQuery, risk, status, compatibleOnly]);
+  }), [items, showCatalogSettings, category, normalizedQuery, compatibleOnly]);
   const visibleGroups = useMemo(() => (audit?.groups ?? []).filter((group) => {
+    if (!showCatalogSettings) return false;
     if (category !== "全部设置" && group.category !== category) return false;
     const groupItems = group.values.flatMap((value) => value.featureIds.map((id) => itemById.get(id))).filter(Boolean) as ConfigurationAuditItem[];
     if (compatibleOnly && groupItems.every((item) => item.status === "unavailable")) return false;
-    if (risk !== "all" && groupRisk(group, itemById) !== risk) return false;
-    if (status !== "all" && !groupItems.some((item) => item.status === status)) return false;
     if (!normalizedQuery) return true;
     return `${groupTitle(group.id, group.label)} ${group.label} ${group.description}`.toLocaleLowerCase().includes(normalizedQuery)
       || groupItems.some((item) => itemMatches(item, normalizedQuery));
-  }), [audit, category, itemById, compatibleOnly, risk, status, normalizedQuery]);
+  }), [audit, showCatalogSettings, category, itemById, compatibleOnly, normalizedQuery]);
 
-  const configuredCount = items.filter((item) => item.status === "configured").length;
-  const unavailableCount = items.filter((item) => item.status === "unavailable").length;
-  const attentionCount = items.filter((item) => item.risk === "high" && item.status !== "configured" && item.status !== "unavailable").length;
   const shownCount = visibleItems.length + visibleGroups.length;
 
   const confirm = async () => {
@@ -206,53 +213,15 @@ export function SystemOptimizationPanel({ onAdvisory }: { onAdvisory?: (item: Co
         <div className="pointer-events-none absolute -right-8 -top-16 h-36 w-36 rounded-full bg-blue-400/15 blur-3xl" />
         <div className="relative flex flex-wrap items-center gap-3">
           <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-blue-700 text-white shadow-lg shadow-blue-500/20"><SlidersHorizontal className="h-5 w-5" /></span>
-          <h2 className="text-lg font-semibold tracking-tight">Windows 系统优化</h2>
+          <div>
+            <h2 className="text-lg font-semibold tracking-tight">系统优化</h2>
+            <p className="mt-1 text-xs text-muted-foreground">集中管理性能、界面、网络、安全和应用行为。</p>
+          </div>
           <div className="ml-auto flex items-center gap-2">
             {audit?.windowsBuild ? <StatusPill tone="neutral">Build {audit.windowsBuild}</StatusPill> : null}
-            <button type="button" className={secondaryButtonClass} onClick={() => void refresh()} disabled={loading}>
-              <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />重新检测
-            </button>
           </div>
         </div>
       </section>
-
-      <div className="grid grid-cols-4 gap-3">
-        <MetricCard
-          label="Windows 设置"
-          value={loading ? "—" : String(items.length || 93)}
-          detail="12 个功能分类"
-          icon={<SlidersHorizontal className="h-4 w-4" />}
-          onClick={() => { setStatus("all"); setRisk("all"); setCompatibleOnly(true); }}
-          active={status === "all" && risk === "all" && compatibleOnly}
-        />
-        <MetricCard
-          label="已应用"
-          value={loading ? "—" : String(configuredCount)}
-          detail="与内置规则完全匹配"
-          icon={<CheckCircle2 className="h-4 w-4" />}
-          accent="green"
-          onClick={() => { setStatus("configured"); setRisk("all"); setCompatibleOnly(true); }}
-          active={status === "configured" && risk === "all" && compatibleOnly}
-        />
-        <MetricCard
-          label="当前不可用"
-          value={loading ? "—" : String(unavailableCount)}
-          detail="受 Windows 版本限制"
-          icon={<LockKeyhole className="h-4 w-4" />}
-          accent="violet"
-          onClick={() => { setStatus("unavailable"); setRisk("all"); setCompatibleOnly(false); }}
-          active={status === "unavailable" && risk === "all" && !compatibleOnly}
-        />
-        <MetricCard
-          label="高风险待确认"
-          value={loading ? "—" : String(attentionCount)}
-          detail="不会由 AI 自动修改"
-          icon={<AlertTriangle className="h-4 w-4" />}
-          accent="orange"
-          onClick={() => { setRisk("high"); setStatus("all"); setCompatibleOnly(true); }}
-          active={risk === "high" && status === "all" && compatibleOnly}
-        />
-      </div>
 
       {notice && (
         <div role={notice.tone === "error" ? "alert" : "status"} className={`flex items-start gap-2 rounded-xl border px-4 py-3 text-xs ${notice.tone === "error" ? "border-red-500/25 bg-red-500/5 text-red-700 dark:text-red-400" : "border-emerald-500/25 bg-emerald-500/5 text-emerald-700 dark:text-emerald-400"}`}>
@@ -261,22 +230,17 @@ export function SystemOptimizationPanel({ onAdvisory }: { onAdvisory?: (item: Co
       )}
 
       <section className="overflow-hidden rounded-2xl border border-border/70 bg-card shadow-sm">
-        <div className="flex flex-wrap items-center gap-2 border-b border-border/60 px-4 py-3">
-          <div className="relative min-w-[220px] flex-1">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-            <input role="searchbox" aria-label="搜索 Windows 设置" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索 Windows 设置" className="h-9 w-full rounded-lg border border-border/70 bg-background pl-9 pr-3 text-xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+        {showCatalogSettings && (
+          <div className="flex flex-wrap items-center gap-2 border-b border-border/60 px-4 py-3">
+            <div className="relative min-w-[220px] flex-1">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+              <input role="searchbox" aria-label="搜索 Windows 设置" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索 Windows 设置" className="h-9 w-full rounded-lg border border-border/70 bg-background pl-9 pr-3 text-xs outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+            </div>
+            <label className="inline-flex h-9 cursor-pointer items-center gap-2 rounded-lg border border-border/70 bg-background px-3 text-xs">
+              <input type="checkbox" checked={compatibleOnly} onChange={(event) => setCompatibleOnly(event.target.checked)} />仅当前设备可用
+            </label>
           </div>
-          <div className="flex items-center gap-1.5 text-muted-foreground"><Filter className="h-3.5 w-3.5" /></div>
-          <select aria-label="风险筛选" value={risk} onChange={(event) => setRisk(event.target.value as typeof risk)} className="h-9 rounded-lg border border-border/70 bg-background px-2.5 text-xs">
-            <option value="all">全部风险</option><option value="low">低风险</option><option value="medium">需确认</option><option value="high">高风险</option>
-          </select>
-          <select aria-label="状态筛选" value={status} onChange={(event) => setStatus(event.target.value as typeof status)} className="h-9 rounded-lg border border-border/70 bg-background px-2.5 text-xs">
-            <option value="all">全部状态</option><option value="configured">已生效</option><option value="available">未设置</option><option value="unknown">状态未知</option><option value="unavailable">不适用</option>
-          </select>
-          <label className="inline-flex h-9 cursor-pointer items-center gap-2 rounded-lg border border-border/70 bg-background px-3 text-xs">
-            <input type="checkbox" checked={compatibleOnly} onChange={(event) => setCompatibleOnly(event.target.checked)} />仅当前设备可用
-          </label>
-        </div>
+        )}
 
         <div className="flex gap-1 overflow-x-auto border-b border-border/60 px-3 py-2 lg:hidden">
           {["全部设置", ...categories].map((label) => <button key={label} type="button" aria-label={`${label}（紧凑导航）`} onClick={() => setCategory(label)} className={`whitespace-nowrap rounded-lg px-2.5 py-1.5 text-xs ${category === label ? "bg-blue-600 text-white" : "text-muted-foreground hover:bg-muted"}`}>{label}</button>)}
@@ -286,17 +250,17 @@ export function SystemOptimizationPanel({ onAdvisory }: { onAdvisory?: (item: Co
           <nav aria-label="Windows 设置分类" className="hidden border-r border-border/60 bg-muted/[0.18] p-2 lg:block">
             {["全部设置", ...categories].map((label) => {
               const Icon = label === "全部设置" ? SlidersHorizontal : (categoryIcons[label] ?? CircleHelp);
-              const count = label === "全部设置" ? items.length : (categoryCounts.get(label) ?? items.filter((item) => item.category === label).length);
-              return <button key={label} type="button" aria-label={label} onClick={() => setCategory(label)} className={`mb-0.5 flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs transition ${category === label ? "bg-blue-600 text-white shadow-sm" : "text-muted-foreground hover:bg-background hover:text-foreground"}`}><Icon className="h-3.5 w-3.5 shrink-0" /><span className="min-w-0 flex-1 truncate">{label}</span><span className={`text-[10px] ${category === label ? "text-blue-100" : "text-muted-foreground/70"}`}>{count}</span></button>;
+              const count = label === "全部设置" ? items.length : fallbackCategories.includes(label) ? (categoryCounts.get(label) ?? items.filter((item) => item.category === label).length) : null;
+              return <button key={label} type="button" aria-label={label} onClick={() => setCategory(label)} className={`mb-0.5 flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs transition ${category === label ? "bg-blue-600 text-white shadow-sm" : "text-muted-foreground hover:bg-background hover:text-foreground"}`}><Icon className="h-3.5 w-3.5 shrink-0" /><span className="min-w-0 flex-1 truncate">{label}</span>{count !== null && <span className={`text-[10px] ${category === label ? "text-blue-100" : "text-muted-foreground/70"}`}>{count}</span>}</button>;
             })}
           </nav>
 
           <div className="min-w-0 p-3">
-            <div className="mb-2 flex items-center justify-between px-1"><p className="text-xs font-medium">{category}</p><span className="text-[11px] text-muted-foreground">显示 {shownCount} 个配置控件</span></div>
-            {loading && <div className="space-y-2">{[0, 1, 2, 3, 4].map((value) => <div key={value} className="h-[78px] animate-pulse rounded-xl border border-border/50 bg-muted/30" />)}</div>}
-            {!loading && error && <div role="alert" className="rounded-xl border border-red-500/25 bg-red-500/5 p-4 text-xs text-red-700 dark:text-red-400">无法读取 Windows 设置：{error}</div>}
-            {!loading && !error && shownCount === 0 && <div className="rounded-xl border border-dashed border-border/70 py-16 text-center text-xs text-muted-foreground">没有符合当前筛选条件的设置</div>}
-            {!loading && !error && shownCount > 0 && (
+            <div className="mb-2 flex items-center justify-between px-1"><p className="text-xs font-medium">{category}</p>{showCatalogSettings && <span className="text-[11px] text-muted-foreground">{shownCount} 个配置</span>}</div>
+            {showCatalogSettings && loading && <div className="space-y-2">{[0, 1, 2, 3, 4].map((value) => <div key={value} className="h-[78px] animate-pulse rounded-xl border border-border/50 bg-muted/30" />)}</div>}
+            {showCatalogSettings && !loading && error && <div role="alert" className="rounded-xl border border-red-500/25 bg-red-500/5 p-4 text-xs text-red-700 dark:text-red-400">无法读取 Windows 设置：{error}</div>}
+            {showCatalogSettings && !loading && !error && shownCount === 0 && <div className="rounded-xl border border-dashed border-border/70 py-16 text-center text-xs text-muted-foreground">没有符合当前条件的设置</div>}
+            {showCatalogSettings && !loading && !error && shownCount > 0 && (
               <div className="space-y-2">
                 {visibleGroups.map((group) => {
                   const groupItems = group.values.flatMap((value) => value.featureIds.map((id) => itemById.get(id))).filter(Boolean) as ConfigurationAuditItem[];
@@ -328,6 +292,11 @@ export function SystemOptimizationPanel({ onAdvisory }: { onAdvisory?: (item: Co
                 })}
               </div>
             )}
+            {category === "性能与响应" && <PerformanceSection />}
+            {category === "文件资源管理器" && <div className="mt-3"><ContextMenuSection /></div>}
+            {category === "网络与解析" && <NetworkPanel />}
+            {category === "安全与防护" && <DefenderSection />}
+            {category === "应用与进程" && <ProcessBlacklistPanel />}
           </div>
         </div>
       </section>
@@ -339,7 +308,6 @@ export function SystemOptimizationPanel({ onAdvisory }: { onAdvisory?: (item: Co
             <div className="space-y-4 p-5 text-xs leading-5">
               <section><h4 className="font-semibold">当前状态</h4><p className="mt-1 rounded-lg border border-border/60 bg-muted/25 px-3 py-2 text-muted-foreground">{details.currentValue}</p></section>
               <section><h4 className="font-semibold">功能影响</h4><p className="mt-1 text-muted-foreground">{featureImpact(details.id) || displayDescription(details)}</p></section>
-              {onAdvisory && <button type="button" className={`${secondaryButtonClass} w-full justify-center`} onClick={() => { const item = details; setDetails(null); onAdvisory(item); }}><Sparkles className="mr-1.5 h-3.5 w-3.5" />Mona 建议</button>}
               <section className="grid grid-cols-2 gap-2"><div className="rounded-lg border border-border/60 p-3"><p className="text-muted-foreground">恢复能力</p><p className="mt-1 font-medium">{details.reversible ? "支持自动恢复" : "需要手动恢复"}</p></div><div className="rounded-lg border border-border/60 p-3"><p className="text-muted-foreground">兼容范围</p><p className="mt-1 font-medium">{details.minVersion ? `Build ${details.minVersion}+` : "Windows 10/11"}</p></div></section>
               {details.risk === "high" && <div className="flex gap-2 rounded-lg border border-red-500/25 bg-red-500/5 p-3 text-red-700 dark:text-red-400"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /><span>此设置可能影响安全、恢复或系统组件。Mona 不会自动替你选择。</span></div>}
               <p className="text-[11px] text-muted-foreground">{details.note}</p>

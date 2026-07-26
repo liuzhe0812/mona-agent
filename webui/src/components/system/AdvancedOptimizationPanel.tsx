@@ -18,19 +18,9 @@ import {
 } from "./advancedSystemApi";
 import { PanelCard, StatusPill, primaryButtonClass, secondaryButtonClass } from "./SystemUi";
 
-export function AdvancedOptimizationPanel() {
-  return (
-    <div className="flex flex-col gap-4">
-      <PerformanceSection />
-      <ContextMenuSection />
-      <DefenderSection />
-    </div>
-  );
-}
-
 // ===== P2 性能微调 =====
 
-function PerformanceSection() {
+export function PerformanceSection() {
   const [items, setItems] = useState<PerformanceItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [acting, setActing] = useState<string | null>(null);
@@ -125,7 +115,7 @@ function PerformanceSection() {
 
 // ===== P3 右键菜单 =====
 
-function ContextMenuSection() {
+export function ContextMenuSection() {
   const [items, setItems] = useState<ContextMenuItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [acting, setActing] = useState<string | null>(null);
@@ -196,7 +186,7 @@ function ContextMenuSection() {
 
 // ===== P6 Defender =====
 
-function DefenderSection() {
+export function DefenderSection() {
   const [status, setStatus] = useState<DefenderStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [acting, setActing] = useState(false);

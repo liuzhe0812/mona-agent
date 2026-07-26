@@ -68,6 +68,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -1508,6 +1509,62 @@ function ModelsProvidersSettings({
   const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
   const highlightRef = useRef<HTMLDivElement>(null);
 
+  // --- Agnes 一键配置对话框状态 ---
+  const [agnesDialogOpen, setAgnesDialogOpen] = useState(false);
+  const [agnesEmail, setAgnesEmail] = useState("");
+  const [agnesPassword, setAgnesPassword] = useState("");
+  const [agnesPasswordVisible, setAgnesPasswordVisible] = useState(false);
+
+  const handleAgnesSubmit = useCallback(() => {
+    const email = agnesEmail.trim();
+    const password = agnesPassword;
+    if (!email || !password || !onTriggerAgent) {
+      setAgnesDialogOpen(false);
+      return;
+    }
+    const prompt = [
+      "请帮我完成 Agnes AI 的一键注册和配置。我已经填好注册信息，直接用即可，不要再向我索取邮箱密码：",
+      `- 注册邮箱：${email}`,
+      `- 注册密码：${password}`,
+      "",
+      "## 平台信息",
+      "- 主站：https://agnes-ai.com/",
+      "- 控制台：https://platform.agnes-ai.com/",
+      "- API Base：https://apihub.agnes-ai.com/v1（OpenAI 兼容）",
+      "- LLM 模型 ID：agnes-2.0-flash",
+      "- 文生图模型 ID：agnes-image-2.1-flash",
+      "- 文生视频模型 ID：agnes-video-v2.0",
+      "",
+      "## 执行流程",
+      "1. 用 browser_open 打开 https://platform.agnes-ai.com/。若是登录页，找“注册”或 Sign Up 链接点击进入。用 browser_snapshot 定位邮箱框、密码框、发送验证码按钮、提交按钮。",
+      "2. 用 browser_type 填入上面的邮箱和密码（不要点提交）。再点“发送验证码”按钮。",
+      `3. 触发验证码后告诉我已发送到 ${email}，等我在对话中回复 6 位验证码再继续。`,
+      "4. 用户回复验证码后，用 browser_type 填入验证码，点提交按钮。用 browser_snapshot 检查是否注册成功：跳转到控制台首页即成功；若出现“验证码错误”/“邮箱已注册”等错误，截图告诉我并停止；若出现图片/滑块验证码，截图让我在浏览器窗口手动完成，等我说“继续”再 snapshot。",
+      "5. 注册成功后用 browser_navigate 打开 https://platform.agnes-ai.com/apiKey（或从控制台菜单找 API Keys / 密钥管理进入）。找“创建 API Key”/“Create Key”按钮点击，弹窗需要名称就填 Mona 或留默认。",
+      "6. 用 browser_snapshot 抓取新生成的 API Key（通常是 sk- 开头字符串）。如果被遮罩，用 browser_read 读取输入框 value。拿到 key 后立即在内存保留，不要在回复正文里复述完整 key。",
+      "7. 用 browser_close 关闭浏览器。",
+      "8. 调用 config_set_provider 一次性写入所有配置：provider=\"agnes\", api_key=\"<抓到的 key>\", set_as_default=true, default_model=\"agnes-2.0-flash\", image_model=\"agnes-image-2.1-flash\", video_model=\"agnes-video-v2.0\"。",
+      "9. 报告完成：账号已注册（邮箱 xxx）、API key 已写入 ~/.mona/config.json、三个模型已启用，并提示我重启 Mona 让配置生效。如果密码是我替你填的，建议尽快去 Agnes 平台改密码。",
+      "",
+      "## 失败处理",
+      "- 邮箱已注册：截图告知，询问是否改为登录已有账号；若是，让用户提供已有账号邮箱密码，跳到第 5 步。",
+      "- 验证码连续 3 次错误：停止，请稍后重试。",
+      "- 图片验证码用户拒绝手动：停止，告知用户当前 Agnes 需要人工验证。",
+      "- API Key 创建按钮找不到：截图给我，让我手动创建 key 后告诉你，你跳到第 8 步。",
+      "- config_set_provider 报错：原样告知错误，让我去设置页 BYOK 区域手动填入。",
+      "",
+      "## 安全要求",
+      "- 不要在回复正文复述完整 API key（日志中可传递，会被自动脱敏）。",
+      "- 不要在对话里复述我的密码。",
+      "- 浏览器关闭后流程结束，不留残留凭据。",
+    ].join("\n");
+    setAgnesDialogOpen(false);
+    setAgnesEmail("");
+    setAgnesPassword("");
+    setAgnesPasswordVisible(false);
+    onTriggerAgent(prompt);
+  }, [agnesEmail, agnesPassword, onTriggerAgent]);
+
   // --- Provider list logic ---
   const configuredProviders = settings.providers.filter((provider) => provider.configured);
   const sortedConfiguredProviders = useMemo(() => {
@@ -1773,13 +1830,24 @@ function ModelsProvidersSettings({
             type="button"
             size="sm"
             className="h-7 rounded-full px-3.5 text-[12px]"
-            onClick={() => onTriggerAgent("一键配置 Agnes")}
+            onClick={() => setAgnesDialogOpen(true)}
           >
             <Zap className="mr-1.5 h-3 w-3" aria-hidden />
             {tx("settings.agnesSetup.cta", "一键配置")}
           </Button>
         </div>
       ) : null}
+      <AgnesSetupDialog
+        open={agnesDialogOpen}
+        email={agnesEmail}
+        password={agnesPassword}
+        passwordVisible={agnesPasswordVisible}
+        onEmailChange={setAgnesEmail}
+        onPasswordChange={setAgnesPassword}
+        onTogglePasswordVisible={() => setAgnesPasswordVisible((v) => !v)}
+        onClose={() => setAgnesDialogOpen(false)}
+        onSubmit={handleAgnesSubmit}
+      />
       {/* 供应商配置区 */}
       <section>
         <SettingsSectionTitle>供应商</SettingsSectionTitle>
@@ -1833,6 +1901,129 @@ function ModelsProvidersSettings({
         </div>
       </section>
     </div>
+  );
+}
+
+function AgnesSetupDialog({
+  open,
+  email,
+  password,
+  passwordVisible,
+  onEmailChange,
+  onPasswordChange,
+  onTogglePasswordVisible,
+  onClose,
+  onSubmit,
+}: {
+  open: boolean;
+  email: string;
+  password: string;
+  passwordVisible: boolean;
+  onEmailChange: (value: string) => void;
+  onPasswordChange: (value: string) => void;
+  onTogglePasswordVisible: () => void;
+  onClose: () => void;
+  onSubmit: () => void;
+}) {
+  const { t } = useTranslation();
+  const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
+  const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
+  const passwordValid = password.length >= 6;
+  const canSubmit = emailValid && passwordValid;
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) onClose();
+      }}
+    >
+      <DialogContent className="max-w-md rounded-2xl border-border/70 bg-popover p-6 shadow-2xl">
+        <form
+          className="grid gap-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!canSubmit) return;
+            onSubmit();
+          }}
+        >
+          <DialogHeader className="text-left">
+            <DialogTitle className="flex items-center gap-2 text-base">
+              <Sparkles className="h-4 w-4 text-primary" aria-hidden />
+              {tx("settings.agnesSetup.dialogTitle", "一键配置 Agnes AI")}
+            </DialogTitle>
+            <DialogDescription>
+              {tx(
+                "settings.agnesSetup.dialogDescription",
+                "填写 Agnes 注册邮箱和密码，AI 将自动打开浏览器完成注册、获取 API Key 并配置 LLM、文生图、文生视频三类模型。验证码会在注册过程中向你索取。",
+              )}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid gap-2">
+            <label htmlFor="agnes-setup-email" className="text-[12px] font-medium text-muted-foreground">
+              {tx("settings.agnesSetup.emailLabel", "注册邮箱")}
+            </label>
+            <Input
+              id="agnes-setup-email"
+              type="email"
+              value={email}
+              onChange={(event) => onEmailChange(event.target.value)}
+              placeholder={tx("settings.agnesSetup.emailPlaceholder", "you@example.com")}
+              autoFocus
+              autoComplete="email"
+              className="h-9 rounded-lg text-[13px]"
+            />
+          </div>
+
+          <div className="grid gap-2">
+            <label htmlFor="agnes-setup-password" className="text-[12px] font-medium text-muted-foreground">
+              {tx("settings.agnesSetup.passwordLabel", "注册密码")}
+            </label>
+            <div className="relative">
+              <Input
+                id="agnes-setup-password"
+                type={passwordVisible ? "text" : "password"}
+                value={password}
+                onChange={(event) => onPasswordChange(event.target.value)}
+                placeholder={tx("settings.agnesSetup.passwordPlaceholder", "至少 6 位")}
+                autoComplete="new-password"
+                className="h-9 rounded-lg pr-9 text-[13px]"
+              />
+              <button
+                type="button"
+                onClick={onTogglePasswordVisible}
+                aria-label={passwordVisible ? tx("common.hide", "隐藏") : tx("common.show", "显示")}
+                className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1 text-muted-foreground transition-colors hover:text-foreground"
+              >
+                {passwordVisible ? (
+                  <EyeOff className="h-3.5 w-3.5" aria-hidden />
+                ) : (
+                  <Eye className="h-3.5 w-3.5" aria-hidden />
+                )}
+              </button>
+            </div>
+          </div>
+
+          <p className="text-[11px] leading-relaxed text-muted-foreground">
+            {tx(
+              "settings.agnesSetup.securityNote",
+              "密码仅在本地浏览器中填入并随本次会话发送给 AI 完成注册，不会被存储。注册完成后建议尽快去 Agnes 平台修改密码。",
+            )}
+          </p>
+
+          <DialogFooter className="gap-2 sm:space-x-0">
+            <Button type="button" variant="outline" onClick={onClose}>
+              {tx("common.cancel", "取消")}
+            </Button>
+            <Button type="submit" disabled={!canSubmit}>
+              <Zap className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+              {tx("settings.agnesSetup.startSetup", "开始配置")}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
 

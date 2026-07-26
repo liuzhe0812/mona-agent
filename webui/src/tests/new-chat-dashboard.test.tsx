@@ -98,7 +98,7 @@ describe("NewChatDashboard", () => {
 
     expect(screen.getByText("今日焦点")).toBeInTheDocument();
     expect(screen.getByText("客户方案调研")).toBeInTheDocument();
-    expect(screen.getByText("待处理邮件").parentElement).toHaveTextContent("12 封未读");
+    expect(screen.getByText("待处理邮件").closest("section")).toHaveTextContent("12 封未读");
 
     fireEvent.click(screen.getByRole("button", { name: "继续" }));
     fireEvent.click(screen.getByRole("button", { name: "连接主机" }));

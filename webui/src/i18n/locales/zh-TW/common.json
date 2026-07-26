@@ -296,6 +296,12 @@
     "empty": {
       "description": "你可以提問、延續本地工作，或是開始新的執行緒。",
       "greeting": "我可以幫你做什麼？",
+      "daypart": {
+        "morning": "早安。",
+        "afternoon": "午安。",
+        "evening": "晚安。",
+        "night": "夜深了。"
+      },
       "quickActions": {
         "plan": {
           "title": "建立專案計畫",

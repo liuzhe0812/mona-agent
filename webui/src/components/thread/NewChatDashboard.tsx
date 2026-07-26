@@ -1,9 +1,8 @@
 import {
+  ArrowRight,
   Check,
-  Circle,
   Database,
   FilePenLine,
-  Mail,
   TerminalSquare,
 } from "lucide-react";
 
@@ -12,9 +11,15 @@ import type { ChatSummary } from "@/lib/types";
 import { deriveTitle } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
+export interface UnreadMailPreview {
+  sender: string;
+  subject: string;
+}
+
 interface NewChatDashboardProps {
   scheduleItems: ScheduleItem[];
   unreadCount: number;
+  unreadMails?: UnreadMailPreview[];
   recentSession: ChatSummary | null;
   now?: Date;
   disabled?: boolean;
@@ -68,9 +73,13 @@ function focusState(item: ScheduleItem, nextItem: ScheduleItem | null): "done" |
   return item.id === nextItem?.id ? "next" : "upcoming";
 }
 
+const sectionClass = "border-t border-border/50 py-5 first:border-t-0 first:pt-0";
+const sectionTitleClass = "text-[12px] font-semibold tracking-[0.16em] text-muted-foreground/75";
+
 export function NewChatDashboard({
   scheduleItems,
   unreadCount,
+  unreadMails,
   recentSession,
   now = new Date(),
   disabled = false,
@@ -87,117 +96,148 @@ export function NewChatDashboard({
   const recentTitle = recentSession
     ? recentSession.title?.trim() || deriveTitle(recentSession.preview, "未命名会话")
     : "暂无可继续的工作";
+  const recentExcerpt = recentSession?.preview?.replace(/\s+/g, " ").trim() ?? "";
 
   return (
-    <div className="mt-5 w-full max-w-[58rem] text-left">
-      <div className="grid gap-3 md:grid-cols-[minmax(0,1.55fr)_minmax(15rem,0.9fr)]">
-        <section className="rounded-lg border border-border/80 bg-card px-4 py-3 shadow-[0_8px_22px_rgba(15,23,42,0.035)]">
-          <div className="mb-3 flex items-center justify-between gap-3">
-            <h2 className="text-[15px] font-semibold text-foreground">今日焦点</h2>
-            {nextItem ? (
-              <span className="text-[12px] text-muted-foreground">
-                下一项 <span className="font-medium text-[#4f9de8]">{formatTime(nextItem.startAtMs)}</span>
-              </span>
+    <div className="w-full animate-in fill-mode-backwards fade-in-0 slide-in-from-bottom-2 text-left duration-500 [animation-delay:140ms] md:border-l md:border-border/40 md:pl-14">
+      <section className={sectionClass}>
+        <header className="flex items-baseline justify-between gap-3">
+          <h2 className={sectionTitleClass}>今日焦点</h2>
+          {nextItem ? (
+            <span className="text-[11.5px] text-muted-foreground">
+              下一项 <span className="font-medium tabular-nums text-[#347fca] dark:text-[#7cb8f0]">{formatTime(nextItem.startAtMs)}</span>
+            </span>
+          ) : null}
+        </header>
+
+        {focusItems.length > 0 ? (
+          <ol className="mt-3 space-y-0.5">
+            {focusItems.map((item) => {
+              const state = focusState(item, nextItem);
+              const isNext = state === "next";
+              return (
+                <li
+                  key={item.id}
+                  className={cn(
+                    "flex items-center gap-3 rounded-md px-1.5 py-1.5 transition-colors hover:bg-accent/60",
+                    isNext && "bg-[#4f9de8]/[0.07] hover:bg-[#4f9de8]/[0.1]",
+                  )}
+                >
+                  <span className="flex h-4 w-4 shrink-0 items-center justify-center">
+                    {state === "done" ? (
+                      <Check className="h-3.5 w-3.5 text-[#10b981]" />
+                    ) : (
+                      <span
+                        className={cn(
+                          "h-2 w-2 rounded-full",
+                          isNext
+                            ? "bg-[#4f9de8] ring-4 ring-[#4f9de8]/15"
+                            : "border border-muted-foreground/40",
+                        )}
+                      />
+                    )}
+                  </span>
+                  <time className={cn(
+                    "w-10 shrink-0 text-[12.5px] tabular-nums text-muted-foreground",
+                    isNext && "font-medium text-[#347fca] dark:text-[#7cb8f0]",
+                  )}>
+                    {formatTime(item.startAtMs)}
+                  </time>
+                  <span className={cn(
+                    "min-w-0 truncate text-[13.5px]",
+                    state === "done"
+                      ? "text-muted-foreground line-through decoration-muted-foreground/40"
+                      : "font-medium text-foreground",
+                  )}>
+                    {item.title}
+                  </span>
+                </li>
+              );
+            })}
+          </ol>
+        ) : (
+          <p className="mt-3 px-1.5 text-[13px] text-muted-foreground">今天暂无安排</p>
+        )}
+      </section>
+
+      <section className={sectionClass}>
+        <header className="flex items-baseline justify-between gap-3">
+          <h2 className={sectionTitleClass}>待处理邮件</h2>
+          <div className="flex items-baseline gap-3">
+            <span className="text-[11.5px] text-muted-foreground">
+              {unreadCount > 0 ? (
+                <><span className="font-medium tabular-nums text-[#d8852d] dark:text-[#f0b273]">{unreadCount}</span> 封未读</>
+              ) : "收件箱已清空"}
+            </span>
+            {unreadCount > 0 && onOpenEmail ? (
+              <button
+                type="button"
+                onClick={onOpenEmail}
+                disabled={disabled}
+                className="group inline-flex items-center gap-1 text-[12px] font-medium text-[#d8852d] transition-colors hover:text-[#c2741f] disabled:pointer-events-none disabled:opacity-50 dark:text-[#f0b273]"
+              >
+                查看
+                <ArrowRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />
+              </button>
             ) : null}
           </div>
-
-          {focusItems.length > 0 ? (
-            <ol className="relative space-y-1 before:absolute before:bottom-5 before:left-[13px] before:top-5 before:w-px before:bg-border">
-              {focusItems.map((item) => {
-                const state = focusState(item, nextItem);
-                const isNext = state === "next";
-                return (
-                  <li
-                    key={item.id}
-                    className={cn(
-                      "relative grid min-h-14 grid-cols-[28px_58px_minmax(0,1fr)] items-center gap-2 rounded-md px-1.5 py-1.5",
-                      isNext && "bg-[#4f9de8]/[0.08]",
-                    )}
-                  >
-                    <span
-                      className={cn(
-                        "relative z-10 flex h-6 w-6 items-center justify-center rounded-full border-2 bg-card",
-                        state === "done" && "border-muted bg-muted text-muted-foreground",
-                        isNext && "border-[#4f9de8] text-[#4f9de8]",
-                        state === "upcoming" && "border-muted-foreground/45 text-transparent",
-                      )}
-                    >
-                      {state === "done" ? <Check className="h-3.5 w-3.5" /> : <Circle className="h-3.5 w-3.5 fill-current" />}
-                    </span>
-                    <time className={cn("text-[13px] tabular-nums text-muted-foreground", isNext && "font-medium text-[#4f9de8]")}>
-                      {formatTime(item.startAtMs)}
-                    </time>
-                    <span className="min-w-0 truncate text-[14px] font-medium text-foreground">{item.title}</span>
-                  </li>
-                );
-              })}
-            </ol>
-          ) : (
-            <div className="flex h-[166px] items-center justify-center text-[13px] text-muted-foreground">
-              今天暂无安排
-            </div>
-          )}
-        </section>
-
-        <div className="grid gap-3">
-          <section className="flex min-h-[100px] flex-col justify-between rounded-lg border border-border/80 bg-card px-4 py-3 shadow-[0_8px_22px_rgba(15,23,42,0.035)]">
-            <h2 className="text-[14px] font-semibold text-foreground">继续工作</h2>
-            <div className="flex items-end justify-between gap-3">
-              <div className="min-w-0">
-                <p className="truncate text-[14px] font-medium text-foreground">{recentTitle}</p>
-                {recentSession ? (
-                  <p className="mt-1 text-[12px] text-muted-foreground">{formatRelativeTime(recentSession.updatedAt, now)}</p>
-                ) : null}
-              </div>
-              {recentSession && onContinue ? (
-                <button
-                  type="button"
-                  onClick={() => onContinue(recentSession.key)}
-                  disabled={disabled}
-                  className="h-7 shrink-0 rounded-md border border-[#4f9de8]/35 bg-[#4f9de8]/[0.07] px-2 text-[12px] font-medium text-[#347fca] transition-colors hover:bg-[#4f9de8]/[0.13] disabled:pointer-events-none disabled:opacity-50"
-                >
-                  继续
-                </button>
-              ) : null}
-            </div>
-          </section>
-
-          <section className="flex min-h-[100px] flex-col justify-between rounded-lg border border-border/80 bg-card px-4 py-3 shadow-[0_8px_22px_rgba(15,23,42,0.035)]">
-            <h2 className="text-[14px] font-semibold text-foreground">待处理邮件</h2>
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex items-center gap-3">
-                <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#eba45d]/15 text-[#d8852d]">
-                  <Mail className="h-5 w-5" />
+        </header>
+        {unreadMails && unreadMails.length > 0 ? (
+          <ul className="mt-3 space-y-0.5">
+            {unreadMails.map((mail, index) => (
+              <li key={index} className="flex items-baseline gap-2.5 rounded-md px-1.5 py-1.5">
+                <span className="max-w-[38%] shrink-0 truncate text-[13px] font-medium text-foreground">
+                  {mail.sender}
                 </span>
-                <p className="text-[14px] font-medium text-foreground">
-                  {unreadCount > 0 ? <><span className="mr-1 text-[26px] leading-none text-[#d8852d]">{unreadCount}</span> 封未读</> : "收件箱已清空"}
-                </p>
-              </div>
-              {unreadCount > 0 && onOpenEmail ? (
-                <button
-                  type="button"
-                  onClick={onOpenEmail}
-                  disabled={disabled}
-                  className="h-7 shrink-0 rounded-md border border-[#eba45d]/35 bg-[#eba45d]/[0.07] px-2 text-[12px] font-medium text-[#d8852d] transition-colors hover:bg-[#eba45d]/[0.13] disabled:pointer-events-none disabled:opacity-50"
-                >
-                  查看
-                </button>
-              ) : null}
-            </div>
-          </section>
-        </div>
-      </div>
+                <span className="min-w-0 truncate text-[12.5px] text-muted-foreground">
+                  {mail.subject}
+                </span>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </section>
 
-      <div className="mt-3 grid overflow-hidden rounded-lg border border-border/80 bg-card shadow-[0_8px_22px_rgba(15,23,42,0.035)] sm:grid-cols-3">
-        <DashboardAction label="连接主机" icon={<TerminalSquare className="h-5 w-5 text-[#4f9de8]" />} onClick={onConnectHost} disabled={disabled} />
-        <DashboardAction label="连接数据库" icon={<Database className="h-5 w-5 text-[#4f9de8]" />} onClick={onConnectDatabase} disabled={disabled} />
-        <DashboardAction label="新建笔记" icon={<FilePenLine className="h-5 w-5 text-[#d8852d]" />} onClick={onCreateNote} disabled={disabled} />
+      <section className={sectionClass}>
+        <header className="flex items-baseline justify-between gap-3">
+          <h2 className={sectionTitleClass}>继续工作</h2>
+          <div className="flex items-baseline gap-3">
+            {recentSession ? (
+              <span className="text-[11.5px] text-muted-foreground">
+                {formatRelativeTime(recentSession.updatedAt, now)}
+              </span>
+            ) : null}
+            {recentSession && onContinue ? (
+              <button
+                type="button"
+                onClick={() => onContinue(recentSession.key)}
+                disabled={disabled}
+                className="group inline-flex items-center gap-1 text-[12px] font-medium text-[#0e9f6e] transition-colors hover:text-[#0b8a5e] disabled:pointer-events-none disabled:opacity-50 dark:text-[#34d399]"
+              >
+                继续
+                <ArrowRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />
+              </button>
+            ) : null}
+          </div>
+        </header>
+        <div className="mt-3 px-1.5">
+          <p className="truncate text-[13.5px] font-medium text-foreground">{recentTitle}</p>
+          {recentExcerpt ? (
+            <p className="mt-1 truncate text-[12.5px] text-muted-foreground">{recentExcerpt}</p>
+          ) : null}
+        </div>
+      </section>
+
+      <div className="flex items-center gap-1.5 border-t border-border/50 pt-4">
+        <QuietAction label="连接主机" icon={<TerminalSquare className="h-3.5 w-3.5" />} onClick={onConnectHost} disabled={disabled} />
+        <QuietAction label="连接数据库" icon={<Database className="h-3.5 w-3.5" />} onClick={onConnectDatabase} disabled={disabled} />
+        <QuietAction label="新建笔记" icon={<FilePenLine className="h-3.5 w-3.5" />} onClick={onCreateNote} disabled={disabled} />
       </div>
     </div>
   );
 }
 
-function DashboardAction({
+function QuietAction({
   label,
   icon,
   onClick,
@@ -213,9 +253,11 @@ function DashboardAction({
       type="button"
       onClick={onClick}
       disabled={!onClick || disabled}
-      className="flex h-12 items-center justify-center gap-2 border-b border-border/70 text-[13px] font-medium text-foreground transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-45 sm:border-b-0 sm:border-r last:border-0"
+      className="group inline-flex h-8 items-center gap-2 rounded-full pl-2 pr-3 text-[12.5px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-45"
     >
-      {icon}
+      <span className="flex h-5 w-5 items-center justify-center opacity-70 transition-transform group-hover:scale-110">
+        {icon}
+      </span>
       {label}
     </button>
   );

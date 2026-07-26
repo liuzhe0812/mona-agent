@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SystemView } from "./SystemView";
-import type { DiagnosticStage, SystemDiagnosticEvidence, SystemDiagnosticReport, SystemEvidence, SystemEvidenceStage } from "./systemAgentApi";
+import type { SystemEvidence, SystemEvidenceStage } from "./systemAgentApi";
 import type { StorageScanResult } from "./useSystemData";
 
 const storageScanMock = vi.hoisted(() => vi.fn<() => Promise<StorageScanResult>>(() => Promise.resolve({
@@ -40,17 +40,12 @@ const systemAgentMock = vi.hoisted(() => ({
     verified: true,
     detail: "Google Chrome 更新完成",
   })),
-  diagnosticCollect: vi.fn<(symptom: string, onProgress?: (stage: DiagnosticStage, state: "running" | "completed") => void) => Promise<SystemDiagnosticEvidence>>(() => Promise.resolve({ symptom: "general", checks: [] })),
-  diagnosticReport: vi.fn(() => Promise.resolve({ summary: "未发现需要立即处置的系统故障", hypotheses: [], cautions: [] } as SystemDiagnosticReport)),
 }));
 
 vi.mock("./systemAgentApi", () => ({
   collectSystemEvidence: systemAgentMock.collect,
   requestSystemPlan: systemAgentMock.plan,
   executeSystemAction: systemAgentMock.execute,
-  collectSystemDiagnosticEvidence: systemAgentMock.diagnosticCollect,
-  requestSystemDiagnosis: systemAgentMock.diagnosticReport,
-  diagnosticStages: () => ["pending_reboot", "component_health", "driver_issues", "power_events", "network_configuration", "recovery_status"],
 }));
 
 vi.mock("./SystemAgentChat", () => ({
@@ -142,6 +137,26 @@ vi.mock("@tauri-apps/api/core", () => ({
       }],
     });
     if (command === "system_apply_configuration_item") return configurationApplyMock();
+    if (command === "system_list_performance_items") return Promise.resolve([]);
+    if (command === "system_list_context_menu_items") return Promise.resolve([]);
+    if (command === "system_get_defender_status") return Promise.resolve({
+      realtimeEnabled: true,
+      isManagedByPolicy: false,
+      canControl: true,
+      thirdPartyAv: [],
+      detail: "实时保护已启用",
+    });
+    if (command === "system_list_blocked_processes") return Promise.resolve([]);
+    if (command === "system_get_dns_status") return Promise.resolve({
+      adapters: [],
+      activeServers: [],
+      activePresetId: null,
+      presets: [],
+    });
+    if (command === "system_list_hosts_entries") return Promise.resolve({
+      entries: [],
+      backupFiles: [],
+    });
     if (command === "system_list_windows_apps") return Promise.resolve({
       items: [
         { id: "Clipchamp.Clipchamp", appIds: ["Clipchamp.Clipchamp"], name: "Clipchamp", description: "Microsoft 视频编辑器", recommendation: "safe", removalMethod: "Appx", installed: true, selectedByDefault: true },
@@ -220,80 +235,6 @@ describe("SystemView", () => {
     localStorage.removeItem("system.assistantCollapsed");
   });
 
-  it("keeps an AI diagnosis running after its dialog closes and reopens the result", async () => {
-    let finishEvidence: (value: SystemDiagnosticEvidence) => void = () => {};
-    systemAgentMock.diagnosticCollect.mockImplementationOnce(() => new Promise<SystemDiagnosticEvidence>((resolve) => {
-      finishEvidence = resolve;
-    }));
-    systemAgentMock.diagnosticReport.mockResolvedValueOnce({
-      summary: "已完成本机故障诊断",
-      hypotheses: [],
-      cautions: [],
-    });
-
-    render(<SystemView />);
-    fireEvent.click(screen.getByRole("button", { name: "AI 故障诊断" }));
-    expect(screen.getByRole("dialog", { name: "AI 故障诊断" })).toBeTruthy();
-
-    fireEvent.click(screen.getByRole("button", { name: "开始 AI 故障诊断" }));
-    await waitFor(() => expect(systemAgentMock.diagnosticCollect).toHaveBeenCalled());
-    fireEvent.click(screen.getByRole("button", { name: "关闭 AI 故障诊断" }));
-
-    expect(screen.getByRole("button", { name: "AI 故障诊断（诊断中）" })).toBeTruthy();
-    act(() => finishEvidence({ symptom: "general", checks: [] }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "查看 AI 诊断结果" })).toBeTruthy());
-
-    fireEvent.click(screen.getByRole("button", { name: "查看 AI 诊断结果" }));
-    expect(await screen.findByText("已完成本机故障诊断")).toBeTruthy();
-  });
-
-  it("shows collected Windows evidence while Mona is still analyzing", async () => {
-    let finishReport: (value: SystemDiagnosticReport) => void = () => {};
-    systemAgentMock.diagnosticCollect.mockResolvedValueOnce({
-      symptom: "general",
-      checks: [{ id: "pending_reboot", status: "attention", summary: "检测到待重启状态", detail: "来源：Windows 更新" }],
-    });
-    systemAgentMock.diagnosticReport.mockImplementationOnce(() => new Promise<SystemDiagnosticReport>((resolve) => {
-      finishReport = resolve;
-    }));
-
-    render(<SystemView />);
-    fireEvent.click(screen.getByRole("button", { name: "AI 故障诊断" }));
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "开始 AI 故障诊断" }));
-    });
-
-    expect(await screen.findByText("本机检查结果")).toBeTruthy();
-    expect(screen.getByText("Mona 正在关联证据")).toBeTruthy();
-    expect(storageScanMock).not.toHaveBeenCalled();
-
-    act(() => finishReport({ summary: "已生成证据关联结论", hypotheses: [], cautions: [] }));
-    expect(await screen.findByText("已生成证据关联结论")).toBeTruthy();
-  });
-
-  it("shows real Windows diagnostic stages while local checks are still running", async () => {
-    let finishEvidence: (value: SystemDiagnosticEvidence) => void = () => {};
-    systemAgentMock.diagnosticCollect.mockImplementationOnce((_symptom, onProgress?: (stage: DiagnosticStage, state: "running" | "completed") => void) => new Promise<SystemDiagnosticEvidence>((resolve) => {
-      onProgress?.("pending_reboot", "running");
-      onProgress?.("pending_reboot", "completed");
-      onProgress?.("component_health", "running");
-      onProgress?.("component_health", "completed");
-      onProgress?.("driver_issues", "running");
-      finishEvidence = resolve;
-    }));
-
-    render(<SystemView />);
-    fireEvent.click(screen.getByRole("button", { name: "AI 故障诊断" }));
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "开始 AI 故障诊断" }));
-    });
-
-    expect(await screen.findByText("2 / 6")).toBeTruthy();
-    expect(screen.getByText("正在检查：设备状态")).toBeTruthy();
-
-    await act(async () => finishEvidence({ symptom: "general", checks: [] }));
-  });
-
   it("switches between all five system panels", () => {
     render(<SystemView />);
 
@@ -312,7 +253,7 @@ describe("SystemView", () => {
     expect(screen.getByRole("heading", { name: "启动应用" })).toBeTruthy();
 
     fireEvent.click(screen.getByRole("tab", { name: "系统优化" }));
-    expect(screen.getByRole("heading", { name: "Windows 系统优化" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "系统优化" })).toBeTruthy();
 
     fireEvent.click(screen.getByRole("tab", { name: "维护记录" }));
     expect(screen.getByRole("heading", { name: "维护时间线" })).toBeTruthy();
@@ -324,26 +265,37 @@ describe("SystemView", () => {
     expect(await screen.findByRole("button", { name: "10 分钟" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Mona 系统管家" })).toBeTruthy();
     expect(screen.getByText("从一个问题开始")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "分析 C 盘空间如何优化" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "帮我优化开机速度" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "电脑用着卡，帮我排查" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "释放 C 盘可清理空间" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "减少不必要的开机启动项" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "调整系统配置提升响应速度" })).toBeTruthy();
     expect(screen.getByTestId("system-layout").className).toContain(
       "xl:grid-cols-[minmax(0,1fr)_360px]",
     );
   });
 
-  it("keeps basic Windows settings separate from AI fault diagnosis", async () => {
+  it("consolidates persistent configuration under system optimization", async () => {
     render(<SystemView initialTab="optimization" />);
 
-    expect(await screen.findByRole("heading", { name: "Windows 系统优化" })).toBeTruthy();
-    expect(screen.queryByText("仅保留高频、可解释、可恢复的系统开关；复杂故障交给 AI 故障诊断分析。")).toBeNull();
+    expect(await screen.findByRole("heading", { name: "系统优化" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "隐私与建议内容" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Windows 更新" })).toBeTruthy();
-    expect(screen.getByText("高风险待确认")).toBeTruthy();
-    expect(screen.getByText("不会由 AI 自动修改")).toBeTruthy();
-    expect(screen.queryByText(/Win11Debloat 式配置/)).toBeNull();
     expect(screen.getByRole("switch", { name: "应用跨应用广告标识" }).getAttribute("aria-checked")).toBe("false");
-    expect(screen.getByRole("button", { name: /AI 故障诊断/ })).toBeTruthy();
+    expect(screen.queryByRole("tab", { name: "网络" })).toBeNull();
+    expect(screen.queryByRole("tab", { name: "高级优化" })).toBeNull();
+    expect(screen.queryByRole("tab", { name: "系统工具" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /AI 故障诊断/ })).toBeNull();
+    expect(screen.queryByText("文件锁查询")).toBeNull();
+    expect(screen.queryByText("系统完整性修复")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "网络与解析" }));
+    expect(await screen.findByText("DNS 服务器")).toBeTruthy();
+    expect(screen.getByText("HOSTS 编辑器")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "安全与防护" }));
+    expect(await screen.findByText("Windows Defender 控制")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "应用与进程" }));
+    expect(await screen.findByText("进程黑名单")).toBeTruthy();
   });
 
   it("surfaces actionable issues and opens their existing workflows", async () => {
@@ -567,8 +519,12 @@ describe("SystemView", () => {
     expect(screen.getByRole("button", { name: "任务栏" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "文件资源管理器" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "可选 Windows 功能" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "性能与响应" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "网络与解析" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "安全与防护" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "应用与进程" })).toBeTruthy();
     expect(screen.getByRole("searchbox", { name: "搜索 Windows 设置" })).toBeTruthy();
-    expect(screen.getByRole("combobox", { name: "风险筛选" })).toBeTruthy();
+    expect(screen.queryByRole("combobox", { name: "风险筛选" })).toBeNull();
   });
 
   it("shows configuration failures inside the active confirmation dialog", async () => {
@@ -603,12 +559,12 @@ describe("SystemView", () => {
   it("keeps a real Agent plan across tabs and opens its evidence source", async () => {
     render(<SystemView initialTab="software" />);
 
-    fireEvent.click(screen.getByRole("button", { name: "分析 C 盘空间如何优化" }));
+    fireEvent.click(screen.getByRole("button", { name: "释放 C 盘可清理空间" }));
     expect(screen.getByText("正在整理系统证据")).toBeTruthy();
 
     expect(await screen.findByText("已发现 1 项可更新软件")).toBeTruthy();
     expect(systemAgentMock.collect).toHaveBeenCalled();
-    expect(systemAgentMock.plan).toHaveBeenCalledWith("分析 C 盘空间如何优化", {});
+    expect(systemAgentMock.plan).toHaveBeenCalledWith("释放 C 盘可清理空间", {});
     expect(screen.getByText("更新 Google Chrome")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("tab", { name: "启动项" }));
@@ -621,7 +577,7 @@ describe("SystemView", () => {
   it("executes only the selected real Agent actions and reports verification", async () => {
     render(<SystemView initialTab="software" />);
 
-    fireEvent.click(screen.getByRole("button", { name: "分析 C 盘空间如何优化" }));
+    fireEvent.click(screen.getByRole("button", { name: "释放 C 盘可清理空间" }));
     await screen.findByText("更新 Google Chrome");
     fireEvent.click(screen.getByRole("button", { name: "确认并执行" }));
 

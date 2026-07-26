@@ -4118,7 +4118,9 @@ async def handle_video_projects(request: web.Request) -> web.Response:
 
 
 async def handle_video_project_create(request: web.Request) -> web.Response:
-    """POST /api/video/project/create  body: {"name", "resolution", "fps", "quality"}."""
+    """POST /api/video/project/create  body: {"name", "resolution", "fps", "quality",
+    optional "narrationEnabled", "ttsProvider", "ttsVoice", "ttsRate"}.
+    """
     try:
         body = await request.json()
     except Exception:
@@ -4131,21 +4133,32 @@ async def handle_video_project_create(request: web.Request) -> web.Response:
         fps = int(body.get("fps", 30) or 30)
         quality = str(body.get("quality", "standard") or "standard")
 
+        # Optional narration/TTS config — defaults to edge TTS when narrationEnabled=true.
+        narration_enabled = bool(body.get("narrationEnabled", False))
+        tts_provider = str(body.get("ttsProvider", "") or "").strip()
+        tts_voice = str(body.get("ttsVoice", "") or "").strip()
+        tts_rate = str(body.get("ttsRate", "") or "").strip()
+
         project_dir = _video_projects_dir() / name
         if project_dir.exists():
             return web.json_response(
                 {"error": "project already exists"}, status=409
             )
         # Pre-build the standard directory layout.
-        for sub in ("scenes", "compositions", "assets", "renders", "output/preview"):
+        for sub in ("scenes", "compositions", "assets", "renders", "audio", "output/preview"):
             (project_dir / sub).mkdir(parents=True, exist_ok=True)
         (project_dir / ".generating").write_text("1", encoding="utf-8")
-        meta = {
+        meta: dict[str, object] = {
             "name": name,
             "resolution": resolution,
             "fps": fps,
             "quality": quality,
         }
+        if narration_enabled:
+            meta["narrationEnabled"] = True
+            meta["ttsProvider"] = tts_provider or "edge"
+            meta["ttsVoice"] = tts_voice or "zh-CN-XiaoyiNeural"
+            meta["ttsRate"] = tts_rate or "+0%"
         (project_dir / "meta.json").write_text(
             _json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
         )

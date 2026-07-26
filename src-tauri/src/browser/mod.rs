@@ -29,7 +29,31 @@ pub fn configure_webview2_cdp() {
 
 fn browser_initialization_script(id: &str) -> String {
     let id = serde_json::to_string(id).expect("browser tab id is serializable");
-    format!("window.__mona_tab_id = {id};")
+    // Inject a hover-reveal scrollbar style so web pages match Mona's UI spec:
+    // thumb is hidden by default and only fades in when the cursor is inside
+    // the scrollable region. Uses neutral gray (works on both light and dark
+    // sites) instead of Mona's CSS variables, which don't exist in page scope.
+    format!(
+        r#"window.__mona_tab_id = {id};
+(function () {{
+  if (window.__mona_scrollbar_style) return;
+  window.__mona_scrollbar_style = true;
+  var css = [
+    'html {{ scrollbar-width: thin; scrollbar-color: transparent transparent; transition: scrollbar-color 0.2s ease; }}',
+    'html:hover {{ scrollbar-color: rgba(128,128,128,0.4) transparent; }}',
+    '::-webkit-scrollbar {{ width: 8px; height: 8px; }}',
+    '::-webkit-scrollbar-track {{ background: transparent; }}',
+    '::-webkit-scrollbar-thumb {{ background-color: transparent; border-radius: 9999px; border: 2px solid transparent; background-clip: padding-box; transition: background-color 0.2s ease; }}',
+    ':hover::-webkit-scrollbar-thumb {{ background-color: rgba(128,128,128,0.4); }}',
+    ':hover::-webkit-scrollbar-thumb:hover {{ background-color: rgba(128,128,128,0.6); }}'
+  ].join('\n');
+  var style = document.createElement('style');
+  style.setAttribute('data-mona-scrollbar', 'true');
+  style.textContent = css;
+  (document.head || document.documentElement).appendChild(style);
+}})();
+"#
+    )
 }
 
 fn next_available_download_path(directory: &Path, filename: &str) -> PathBuf {

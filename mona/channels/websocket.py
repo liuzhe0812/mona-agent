@@ -858,11 +858,23 @@ class WebSocketChannel(BaseChannel):
         if got == "/api/ppt/delete-project":
             return self._handle_ppt_delete_project(request)
 
+        if got == "/api/video/download":
+            return self._handle_video_download(request)
+
+        if got == "/api/video/delete-project":
+            return self._handle_video_delete_project(request)
+
         if got == "/api/ppt/project-slides":
             return self._handle_ppt_project_slides(request)
 
         if got == "/api/ppt/visual-plan":
             return self._handle_ppt_visual_plan(request)
+
+        if got == "/api/ppt/officecli-check":
+            return self._handle_ppt_officecli_check(request)
+
+        if got == "/api/ppt/officecli-download":
+            return await self._handle_ppt_officecli_download(request)
 
         if got.startswith("/api/ppt/project-svg"):
             return self._handle_ppt_project_svg(request)
@@ -1724,6 +1736,31 @@ class WebSocketChannel(BaseChannel):
             logger.exception("ppt export status error")
             return _http_error(500, str(e))
 
+    def _handle_ppt_officecli_check(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        try:
+            from mona.api.officecli_runtime import OfficeCliRuntime
+
+            return _http_json_response(OfficeCliRuntime().check())
+        except Exception as e:
+            logger.exception("ppt officecli-check error")
+            return _http_error(500, str(e))
+
+    async def _handle_ppt_officecli_download(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        try:
+            from mona.api.officecli_runtime import OfficeCliRuntime
+
+            result = await OfficeCliRuntime().ensure()
+            if not result.get("ok"):
+                return _http_json_response(result, status=500)
+            return _http_json_response(result)
+        except Exception as e:
+            logger.exception("ppt officecli-download error")
+            return _http_error(500, str(e))
+
     def _handle_ppt_generate_preview(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
@@ -1869,6 +1906,78 @@ class WebSocketChannel(BaseChannel):
             return _http_json_response({"ok": True})
         except Exception as e:
             logger.exception("ppt delete project error")
+            return _http_error(500, str(e))
+
+    def _handle_video_download(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        try:
+            from mona.config.paths import get_workspace_path
+
+            query = _parse_query(request.path)
+            project_name = _query_first(query, "name") or _query_first(query, "project") or ""
+            if (
+                not project_name
+                or "/" in project_name
+                or "\\" in project_name
+                or ".." in project_name
+            ):
+                return _http_error(400, "invalid project name")
+
+            workspace = get_workspace_path()
+            project_dir = workspace / "video_projects" / project_name
+
+            # Prefer renders/output.mp4 (new pipeline), fallback to any mp4 in output/.
+            candidates = [project_dir / "renders" / "output.mp4"]
+            output_dir = project_dir / "output"
+            if output_dir.exists():
+                candidates.extend(sorted(output_dir.glob("*.mp4"), reverse=True))
+            chosen = next((p for p in candidates if p.is_file()), None)
+            if chosen is None:
+                return _http_error(404, "no mp4 found")
+
+            content = chosen.read_bytes()
+            return _http_response(
+                content,
+                content_type="video/mp4",
+                extra_headers=[
+                    ("Content-Disposition", f'attachment; filename="{chosen.name}"'),
+                    ("Cache-Control", "no-cache"),
+                ],
+            )
+        except Exception as e:
+            logger.exception("video download error")
+            return _http_error(500, str(e))
+
+    def _handle_video_delete_project(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        try:
+            import shutil
+
+            from mona.config.paths import get_workspace_path
+
+            query = _parse_query(request.path)
+            project_name = _query_first(query, "name") or _query_first(query, "project") or ""
+
+            if (
+                not project_name
+                or "/" in project_name
+                or "\\" in project_name
+                or ".." in project_name
+            ):
+                return _http_error(400, "invalid project name")
+
+            workspace = get_workspace_path()
+            project_dir = workspace / "video_projects" / project_name
+            if not project_dir.is_dir():
+                return _http_error(404, "project not found")
+
+            shutil.rmtree(project_dir)
+
+            return _http_json_response({"ok": True})
+        except Exception as e:
+            logger.exception("video delete project error")
             return _http_error(500, str(e))
 
     def _handle_ppt_visual_plan(self, request: WsRequest) -> Response:

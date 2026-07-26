@@ -29,8 +29,8 @@ import type { SystemAgentHandoffTask } from "./systemAgentHandoff";
 type AgentStage = "idle" | "diagnosing" | "plan" | "running" | "done";
 type AssistantViewMode = "planner" | "agent";
 
-const DEFAULT_GOAL = "检查电脑状态并生成安全处理方案";
-const suggestions = ["分析 C 盘空间如何优化", "帮我优化开机速度", "电脑用着卡，帮我排查"];
+const DEFAULT_GOAL = "根据当前配置生成可执行的系统调整方案";
+const suggestions = ["释放 C 盘可清理空间", "减少不必要的开机启动项", "调整系统配置提升响应速度"];
 const evidenceSources: SystemTab[] = ["overview", "storage", "software", "startup", "optimization", "maintenance"];
 
 const tabLabels: Record<SystemTab, string> = {
@@ -39,9 +39,6 @@ const tabLabels: Record<SystemTab, string> = {
   software: "软件管理",
   startup: "启动项",
   optimization: "系统优化",
-  network: "网络",
-  advanced: "高级优化",
-  tools: "系统工具",
   maintenance: "维护记录",
 };
 
