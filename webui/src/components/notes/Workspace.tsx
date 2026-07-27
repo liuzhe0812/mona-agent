@@ -63,15 +63,6 @@ export function findLeafById(node: PaneNode, id: string): LeafPane | null {
   return null;
 }
 
-export function findParentOfLeaf(node: PaneNode, id: string, parent?: SplitPane): SplitPane | null {
-  if (node.type === "leaf") return node.id === id ? parent ?? null : null;
-  for (const child of node.children) {
-    const found = findParentOfLeaf(child, id, node);
-    if (found) return found;
-  }
-  return null;
-}
-
 export function mapNode(node: PaneNode, mapper: (n: PaneNode) => PaneNode): PaneNode {
   const mapped = mapper(node);
   if (mapped.type === "split") {
@@ -276,7 +267,6 @@ function PaneLeafView({
           <NoteEditor
             key={activeNote.id}
             note={activeNote}
-            notebook={notebooks.find((n) => n.id === activeNote.notebookId) ?? null}
             saveStatus={saveStatus}
             mode={editorMode}
             noteTitles={noteTitles}

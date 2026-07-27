@@ -998,31 +998,6 @@ function Shell({
     }
   }, [createChat]);
 
-  const onSendNoteToAgent = useCallback(
-    async (content: string) => {
-      const prompt = content.trim();
-      if (!prompt) return;
-
-      try {
-        let chatId = activeSession?.chatId ?? null;
-        if (!chatId) {
-          chatId = await createChat();
-          setActiveKey(`websocket:${chatId}`);
-        }
-        setQueuedAgentPrompt({
-          id: crypto.randomUUID(),
-          content: prompt,
-        });
-        setView("chat");
-        switchToMonaTab();
-        setMobileSidebarOpen(false);
-      } catch (e) {
-        console.error("Failed to send note prompt to agent", e);
-      }
-    },
-    [activeSession?.chatId, createChat, switchToMonaTab],
-  );
-
   // Trigger an agent task from a non-chat surface (e.g. settings page banner).
   // Always starts a fresh session so the setup flow has a clean context.
   const onTriggerAgent = useCallback(
@@ -1680,7 +1655,6 @@ function Shell({
                 <div className={cn("absolute inset-0 flex flex-col", isBrowserTabActive && "hidden")}>
                   <Suspense fallback={<ModuleLoading title="正在打开笔记" />}>
                     <NotesView
-                      onSendToAgent={onSendNoteToAgent}
                       onOpenSubscribe={onOpenSubscribe}
                       initialNoteId={new URLSearchParams(window.location.search).get("noteId") ?? undefined}
                       createOnOpen={createNoteOnOpen}

@@ -109,7 +109,6 @@ const RIGHT_SIDEBAR_MAX_WIDTH = 420;
 const RIGHT_SIDEBAR_DEFAULT_WIDTH = 260;
 
 interface NotesViewProps {
-  onSendToAgent?: (prompt: string) => void | Promise<void>;
   onOpenSubscribe?: () => void;
   initialNoteId?: string;
   createOnOpen?: boolean;
@@ -117,7 +116,6 @@ interface NotesViewProps {
 }
 
 export function NotesView({
-  onSendToAgent: _onSendToAgent,
   onOpenSubscribe,
   initialNoteId,
   createOnOpen = false,
@@ -1505,14 +1503,9 @@ export function NotesView({
             ),
           );
           // Sync [[wiki links]] across the vault (fire-and-forget).
-          renameSyncWikiLinks(oldTitle, newTitle)
-            .then((result) => {
-              if (result.updatedLinks > 0) {
-              }
-            })
-            .catch((err: unknown) => {
-              console.warn("rename sync failed:", err);
-            });
+          renameSyncWikiLinks(oldTitle, newTitle).catch((err: unknown) => {
+            console.warn("rename sync failed:", err);
+          });
         }
         break;
       }
@@ -2604,7 +2597,7 @@ function NotebookSection({
             onClick={onToggle}
             onDragOver={handleDragOver}
             onDrop={handleDrop}
-            className="group flex h-8 w-full items-center gap-1 rounded-md px-1.5 text-left text-foreground/85 transition-colors hover:bg-accent/40"
+            className="group flex h-8 w-full items-center gap-1 rounded-md px-1.5 text-left text-foreground/85 transition-colors hover:bg-accent"
           >
             <ChevronRight
               className={cn(

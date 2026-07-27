@@ -3,7 +3,7 @@ import type { JSONContent } from "@tiptap/core";
 
 import { MarkdownEditor, type EditorMode } from "@/components/common/MarkdownEditor";
 
-import type { Notebook, OperationNote } from "./notes-data";
+import type { OperationNote } from "./notes-data";
 
 const DEFAULT_TITLE = "未命名笔记";
 const AUTO_TITLE_MAX_LEN = 40;
@@ -27,7 +27,6 @@ function stripMarkdownForTitle(text: string): string {
 
 interface NoteEditorProps {
   note: OperationNote;
-  notebook?: Notebook | null;
   saveStatus?: "idle" | "saving" | "saved" | "error";
   mode: EditorMode;
   noteTitles?: string[];
@@ -45,7 +44,6 @@ interface NoteEditorProps {
 
 export function NoteEditor({
   note,
-  notebook: _notebook,
   saveStatus = "idle",
   mode,
   noteTitles,

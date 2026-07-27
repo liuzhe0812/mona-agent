@@ -5,7 +5,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
 
 import type { OperationNote } from "./notes-data";
-import { extractAllTasks, toggleTaskInMarkdown, type ExtractedTask } from "./tasks-extract";
+import { extractAllTasks, type ExtractedTask } from "./tasks-extract";
 
 interface TasksPanelProps {
   notes: OperationNote[];
@@ -177,7 +177,7 @@ function TaskRow({
 }) {
   return (
     <div
-      className="group flex items-start gap-2 px-3 py-1.5 hover:bg-accent/40"
+      className="group flex items-start gap-2 px-3 py-1.5 hover:bg-accent"
       onDoubleClick={onNavigate}
     >
       <Checkbox
@@ -215,6 +215,3 @@ function TaskRow({
     </div>
   );
 }
-
-/** Re-export for use in NotesView */
-export { toggleTaskInMarkdown };

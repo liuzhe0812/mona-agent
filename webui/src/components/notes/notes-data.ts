@@ -51,9 +51,9 @@ export const TRANSFORMATION_VARIABLES: Array<{ token: string; label: string; des
   { token: "{{note_source}}", label: "笔记来源", description: "笔记的来源标签" },
 ];
 
-/** Format an ISO timestamp or relative label into a human-readable relative time string. */
+/** Format an ISO timestamp into a human-readable relative time string. */
 export function formatRelativeTime(timestamp: string): string {
-  // If it's not an ISO date, return as-is (legacy labels like "刚刚")
+  // Defensive: if timestamp is not a parseable ISO string, return as-is.
   const date = new Date(timestamp);
   if (isNaN(date.getTime())) return timestamp;
 
