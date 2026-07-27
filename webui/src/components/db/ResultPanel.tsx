@@ -16,7 +16,7 @@ import * as ipc from "./ipc";
 import { displayCellValue, NULL_MARKER, DEFAULT_MARKER } from "./types";
 import type { CellValue, QueryResult } from "./types";
 
-type ResultTab = "result" | "message" | "plan" | "properties";
+type ResultTab = "result" | "message" | "properties";
 
 export function ResultPanel() {
   const activeTabId = useDbStore((s) => s.activeTabId);
@@ -55,12 +55,6 @@ export function ResultPanel() {
           onClick={() => setActiveResultTab("message")}
         >
           消息
-        </ResultTabButton>
-        <ResultTabButton
-          active={activeResultTab === "plan"}
-          onClick={() => setActiveResultTab("plan")}
-        >
-          执行计划
         </ResultTabButton>
         <ResultTabButton
           active={activeResultTab === "properties"}

@@ -853,7 +853,6 @@ pub async fn get_users_on_handle(
                 UserInfo {
                     username,
                     host,
-                    privileges: String::new(),
                     password_expired: pw_expired == "Y",
                     account_locked: locked == "Y",
                 }

@@ -89,10 +89,6 @@ export async function dbKillProcess(
   return invoke("db_kill_process", { connectionId, processId });
 }
 
-export async function dbListConnections(): Promise<ConnectionInfo[]> {
-  return invoke<ConnectionInfo[]>("db_list_connections");
-}
-
 export async function dbSaveConnections(
   connections: DbConnectionConfig[],
 ): Promise<void> {

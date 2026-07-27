@@ -152,7 +152,6 @@ export interface ProcessInfo {
 export interface UserInfo {
   username: string;
   host: string;
-  privileges: string;
   password_expired: boolean;
   account_locked: boolean;
 }

@@ -294,7 +294,6 @@ pub struct ProcessInfo {
 pub struct UserInfo {
     pub username: String,
     pub host: String,
-    pub privileges: String,
     pub password_expired: bool,
     pub account_locked: bool,
 }
