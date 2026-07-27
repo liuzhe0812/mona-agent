@@ -85,10 +85,6 @@ export async function sshOpenSftp(sessionId: string): Promise<string> {
   return invoke<string>("ssh_open_sftp", { sessionId });
 }
 
-export async function getFileIcon(path: string): Promise<string> {
-  return invoke<string>("get_file_icon", { path });
-}
-
 export async function getFileTypeIcon(
   extension: string,
   isDirectory: boolean,
@@ -106,10 +102,6 @@ export interface LocalFileInfo {
 
 export async function localListDir(path: string): Promise<LocalFileInfo[]> {
   return invoke<LocalFileInfo[]>("local_list_dir", { path });
-}
-
-export async function localHomeDir(): Promise<string> {
-  return invoke<string>("local_home_dir");
 }
 
 export async function localDesktopDir(): Promise<string> {
@@ -153,10 +145,6 @@ export async function shellResize(
 
 export async function shellKill(sessionId: string): Promise<void> {
   return invoke("shell_kill", { sessionId });
-}
-
-export async function shellGetBuffer(sessionId: string): Promise<string> {
-  return invoke<string>("shell_get_buffer", { sessionId });
 }
 
 export async function sftpList(sessionId: string, path: string): Promise<FileInfo[]> {
@@ -400,10 +388,6 @@ export async function sshTrustHostKey(host: string, port: number): Promise<void>
   return invoke("ssh_trust_host_key", { host, port });
 }
 
-export async function sshRemoveHostKey(host: string, port: number): Promise<void> {
-  return invoke("ssh_remove_host_key", { host, port });
-}
-
 export type UnlistenFn = () => void;
 
 export interface TerminalOutputEvent {
@@ -422,54 +406,12 @@ export function onTerminalOutput(
   );
 }
 
-export interface SessionInfo {
-  id: string;
-  configId: string;
-  sessionType: string;
-  status: string;
-  createdAt: string;
-}
-
-export async function terminalListSessions(): Promise<SessionInfo[]> {
-  return invoke<SessionInfo[]>("terminal_list_sessions");
-}
-
-export async function terminalGetOutput(sessionId: string): Promise<string> {
-  return invoke<string>("terminal_get_output", { sessionId });
-}
-
-export async function terminalExecCommand(
-  sessionId: string,
-  command: string,
-): Promise<void> {
-  return invoke("terminal_exec_command", { sessionId, command });
-}
-
-export interface PendingCommand {
-  requestId: string;
-  sessionId: string;
-  command: string;
-  source: string;
-}
-
-export async function terminalRequestExec(
-  sessionId: string,
-  command: string,
-  source: string,
-): Promise<string> {
-  return invoke<string>("terminal_request_exec", { sessionId, command, source });
-}
-
 export async function terminalRespondExec(
   requestId: string,
   approved: boolean,
   reason?: string,
 ): Promise<void> {
   return invoke("terminal_respond_exec", { requestId, approved, reason });
-}
-
-export async function terminalListPendingExec(): Promise<PendingCommand[]> {
-  return invoke<PendingCommand[]>("terminal_list_pending_exec");
 }
 
 export interface ExecRequestEvent {
@@ -703,8 +645,4 @@ export async function vncDisconnect(sessionId: string): Promise<void> {
 
 export async function vncReconnect(sessionId: string): Promise<VncSessionInfo> {
   return invoke<VncSessionInfo>("vnc_reconnect", { sessionId });
-}
-
-export async function vncListSessions(): Promise<VncSessionInfo[]> {
-  return invoke<VncSessionInfo[]>("vnc_list_sessions");
 }

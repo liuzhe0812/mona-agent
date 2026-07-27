@@ -114,14 +114,6 @@ export interface IdeExecResult {
   exitCode: number | null;
 }
 
-export interface BatchConnectConfig {
-  startIp: string;
-  count: number;
-  username: string;
-  password: string;
-  port: number;
-}
-
 export interface RemoteCpuInfo {
   load: number;
   load1: number;

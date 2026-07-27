@@ -203,8 +203,6 @@ export function XtermTerminal({ sessionId }: Props) {
       }
     });
 
-    // 选中即复制（已移除，改为右键复制）
-
     registry.register(sessionId, terminal);
 
     terminalRef.current = terminal;
