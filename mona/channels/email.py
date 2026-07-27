@@ -197,7 +197,7 @@ class EmailChannel(BaseChannel):
 
         # autoReplyEnabled only controls automatic replies, not proactive sends
         if is_reply and not self.config.auto_reply_enabled and not force_send:
-            self.logger.info("Skip automatic reply to {}: auto_reply_enabled is false", to_addr)
+            self.logger.debug("Skip automatic reply: auto_reply_enabled is false")
             return
 
         base_subject = self._last_subject_by_chat.get(to_addr, "mona reply")
@@ -384,7 +384,7 @@ class EmailChannel(BaseChannel):
                 if not sender:
                     continue
                 if self._is_self_address(sender):
-                    self.logger.info("From {} ignored: matches bot-owned address", sender)
+                    self.logger.debug("From sender ignored: matches bot-owned address")
                     self._remember_processed_uid(uid, dedupe, cycle_uids)
                     if mark_seen:
                         client.store(imap_id, "+FLAGS", "\\Seen")
@@ -696,7 +696,7 @@ class EmailChannel(BaseChannel):
             try:
                 dest.write_bytes(payload)
                 saved.append(dest)
-                logger.info("Attachment saved: {}", dest)
+                logger.debug("Attachment saved: {}", dest)
             except Exception as exc:
                 logger.warning("Failed to save attachment {}: {}", dest, exc)
 

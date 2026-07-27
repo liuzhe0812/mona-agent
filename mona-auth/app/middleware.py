@@ -7,6 +7,14 @@ from slowapi.util import get_remote_address
 limiter = Limiter(key_func=get_remote_address)
 
 
+def reset_limiter_state() -> None:
+    """清空 rate limiter 计数器（测试用）"""
+    storage = limiter._storage  # type: ignore[attr-defined]
+    # MemoryStorage 的存储在 storage.storage 字典中
+    if hasattr(storage, "storage") and isinstance(storage.storage, dict):
+        storage.storage.clear()
+
+
 def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) -> Response:
     from fastapi.responses import JSONResponse
 

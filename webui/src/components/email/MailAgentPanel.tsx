@@ -10,6 +10,9 @@ import { useClient } from "@/providers/ClientProvider";
 import { useEmailStore } from "./store/emailStore";
 import type { BatchActionRequest, BatchActionTarget, EmailBatchAction } from "./lib/types";
 import { batchAction, createFolder } from "./lib/emailApi";
+import { EmailAnalysisCard } from "./EmailAnalysisCard";
+
+const EMAIL_BODY_CHAR_LIMIT = 4000;
 
 const ACTION_LABELS: Record<string, string> = {
   mark_read: "标记为已读",
@@ -99,6 +102,8 @@ export function MailAgentPanel() {
   const analysisLoading = useEmailStore((s) => s.analysisLoading);
   const runAnalysis = useEmailStore((s) => s.runAnalysis);
   const accounts = useEmailStore((s) => s.accounts);
+  const analysisCache = useEmailStore((s) => s.analysisCache);
+  const bodyCache = useEmailStore((s) => s.bodyCache);
 
   // 流式对话
   const chatId = agentChatId;
@@ -120,8 +125,20 @@ export function MailAgentPanel() {
     dismissStreamError,
   } = useMonaStream(chatId, historical, hasPendingToolCalls);
 
+  // A2: 切换邮件时重置 AI 会话，防止上一封邮件的上下文残留
+  const lastEmailUidRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!chatId || loading) return;
+    const currentUid = selectedMessage?.uid ?? null;
+    if (lastEmailUidRef.current !== null && currentUid !== null && lastEmailUidRef.current !== currentUid) {
+      if (agentChatId) {
+        setAgentChatId(null);
+        setMessages([]);
+      }
+    }
+    lastEmailUidRef.current = currentUid;
+  }, [selectedMessage?.uid, agentChatId, setAgentChatId, setMessages]);
+
+  useEffect(() => {
     setMessages((current) => {
       if (historical.length === 0 && current.length > 0) return current;
       return historical;
@@ -165,9 +182,41 @@ export function MailAgentPanel() {
     lines.push(`from: ${selectedMessage.fromAddress}`);
     if (selectedMessage.fromName) lines.push(`from_name: ${selectedMessage.fromName}`);
     lines.push(`date: ${selectedMessage.date}`);
+
+    // 注入已有分析结果（复用 email_analyze 流水线）
+    const analysisKey = `${selectedMessage.uid}:${selectedMessage.accountId}:${selectedMessage.folder}`;
+    const analysis = analysisCache[analysisKey];
+    if (analysis) {
+      lines.push("[EMAIL_ANALYSIS]");
+      lines.push(`summary: ${analysis.summary}`);
+      lines.push(`category: ${analysis.category}`);
+      lines.push(`intent: ${analysis.intent}`);
+      lines.push(`urgency: ${analysis.urgency}`);
+      if (analysis.keyInfo) lines.push(`key_info: ${analysis.keyInfo}`);
+      lines.push("[/EMAIL_ANALYSIS]");
+    }
+
+    // 注入正文（截断 + 截断提示）
+    const bodyKey = analysisKey;
+    const cached = bodyCache[bodyKey];
+    const bodyText = cached?.bodyText || selectedMessage.bodyText || "";
+    if (bodyText) {
+      lines.push("[EMAIL_BODY]");
+      if (bodyText.length > EMAIL_BODY_CHAR_LIMIT) {
+        const truncated = bodyText.slice(0, EMAIL_BODY_CHAR_LIMIT);
+        lines.push(truncated);
+        lines.push(
+          `\n…（正文已截断，如需完整内容请使用 read_email_body 工具读取 account_id=${selectedMessage.accountId} folder=${selectedMessage.folder} uid=${selectedMessage.uid}）`,
+        );
+      } else {
+        lines.push(bodyText);
+      }
+      lines.push("[/EMAIL_BODY]");
+    }
+
     lines.push("[/EMAIL_CONTEXT]");
     return lines.join("\n");
-  }, [selectedMessage]);
+  }, [selectedMessage, analysisCache, bodyCache]);
 
   const sendPromptToAgent = useCallback(
     async (prompt: string, displayName?: string) => {
@@ -327,6 +376,22 @@ export function MailAgentPanel() {
 
       {/* 消息列表 */}
       <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-2.5 py-2 scrollbar-thin">
+        {selectedMessage ? (
+          (() => {
+            const analysisKey = `${selectedMessage.uid}:${selectedMessage.accountId}:${selectedMessage.folder}`;
+            const analysis = analysisCache[analysisKey];
+            if (analysis) {
+              return (
+                <EmailAnalysisCard
+                  analysis={analysis}
+                  message={selectedMessage}
+                  accountId={selectedMessage.accountId}
+                />
+              );
+            }
+            return null;
+          })()
+        ) : null}
         <EmailChat
           messages={messages}
           loading={loading}

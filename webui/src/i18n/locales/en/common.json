@@ -8,7 +8,15 @@
       "title": "Couldn't reach mona",
       "gatewayHint": "Make sure the gateway is running (`mona gateway`) and that this page is open on the same machine.",
       "otherFeaturesHint": "Notes, Settings, SSH, Browser and other features don't depend on the runtime and remain available.",
-      "retry": "Retry"
+      "retry": "Retry",
+      "viewLog": "View error log",
+      "logTitle": "Gateway error log",
+      "logEmpty": "Log file is empty or missing",
+      "logPath": "Log path",
+      "logLoading": "Reading log…",
+      "logLoadError": "Failed to read log",
+      "copyLog": "Copy log",
+      "copyLogDone": "Copied"
     },
     "auth": {
       "title": "Authentication required",
@@ -100,8 +108,7 @@
     "aiModels": {
       "tabsAria": "Model settings type",
       "chat": "Chat models",
-      "image": "Image models",
-      "embedding": "Embedding models"
+      "image": "Image models"
     },
     "sections": {
       "interface": "Interface",
@@ -161,12 +168,6 @@
       "ssrfWhitelist": "SSRF whitelist",
       "mcpServers": "MCP servers",
       "pathAppend": "PATH append",
-      "embeddingEnabled": "Embedding model",
-      "embeddingEndpoint": "Endpoint",
-      "embeddingApiKey": "API key",
-      "embeddingModel": "Model name",
-      "embeddingDimensionality": "Output dimensionality",
-      "embeddingSave": "Save embedding settings",
       "configurationDocs": "Configuration docs"
     },
     "help": {
@@ -194,12 +195,6 @@
       "botIcon": "Short emoji or text shown beside the bot name.",
       "timezone": "IANA timezone used by runtime context and schedules.",
       "toolHintMaxLength": "Maximum characters shown in tool progress hints.",
-      "embeddingEnabled": "Enable the global embedding model used by KB / notes-kb vector indexing.",
-      "embeddingEndpoint": "OpenAI-compatible embeddings endpoint, e.g. https://api.openai.com/v1 or https://dashscope.aliyuncs.com/compatible-mode/v1.",
-      "embeddingApiKey": "API key for the embeddings endpoint. Saved locally only.",
-      "embeddingModel": "Embedding model name, e.g. text-embedding-3-small, bge-m3.",
-      "embeddingDimensionality": "Optional output dimensionality. Leave empty to use the model default.",
-      "embeddingSave": "Applies to new embedding requests. Per-vault files still override this global default.",
       "advancedReadOnly": "Advanced safety controls are read-only in WebUI. Edit config.json intentionally when needed."
     },
     "values": {
@@ -357,6 +352,12 @@
     "loadingConversation": "Loading conversation…",
     "empty": {
       "greeting": "What can I do for you?",
+      "daypart": {
+        "morning": "Good morning.",
+        "afternoon": "Good afternoon.",
+        "evening": "Good evening.",
+        "night": "Up late."
+      },
       "quickActions": {
         "plan": {
           "title": "Create a project plan",
@@ -432,46 +433,6 @@
       "send": "Send message",
       "stop": "Stop response",
       "attachImage": "Attach image",
-      "imageMode": {
-        "label": "Image Generation",
-        "toggle": "Toggle image generation mode",
-        "placeholder": "Describe or edit an image…",
-        "aspectAria": "Image aspect ratio",
-        "aspectLabel": "Image aspect",
-        "aspect": {
-          "auto": "Auto",
-          "1_1": "Square 1:1",
-          "3_4": "Portrait 3:4",
-          "9_16": "Story 9:16",
-          "4_3": "Landscape 4:3",
-          "16_9": "Wide 16:9"
-        }
-      },
-      "videoMode": {
-        "label": "Video Generation",
-        "toggle": "Toggle video generation mode",
-        "placeholder": "Describe a video to generate…",
-        "aspectAria": "Video aspect ratio",
-        "aspectLabel": "Video aspect",
-        "aspect": {
-          "auto": "Auto",
-          "1_1": "Square 1:1",
-          "3_4": "Portrait 3:4",
-          "9_16": "Story 9:16",
-          "4_3": "Landscape 4:3",
-          "16_9": "Wide 16:9"
-        },
-        "durationAria": "Video duration",
-        "durationLabel": "Video duration",
-        "duration": {
-          "auto": "Auto",
-          "s": "{{seconds}}s"
-        },
-        "refUrlPlaceholder": "Reference image URL (optional, for image-to-video)",
-        "refUrlAria": "Reference image URL",
-        "refUrlClear": "Clear reference image URL",
-        "refUrlUpload": "Upload reference image"
-      },
       "workspace": {
         "placeholder": "Select folder (optional)",
         "clear": "Clear folder selection"

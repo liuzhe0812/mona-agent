@@ -14,15 +14,16 @@ import {
   Activity,
   ArrowUp,
   BookOpen,
-  Check,
   ChevronDown,
   ChevronUp,
   CircleHelp,
   Folder,
+  Globe,
   History,
   ImageIcon,
-  Link2,
+  Layers,
   Loader2,
+  Mail,
   Plus,
   RotateCw,
   Settings,
@@ -31,8 +32,6 @@ import {
   SquarePen,
   Target,
   Undo2,
-  Upload,
-  Video,
   X,
   type LucideIcon,
 } from "lucide-react";
@@ -56,7 +55,6 @@ import { useClipboardAndDrop } from "@/hooks/useClipboardAndDrop";
 import type { SendImage, SendOptions } from "@/hooks/useMonaStream";
 import type { PendingMessage } from "@/hooks/usePendingQueue";
 import type { SlashCommand, GoalStateWsPayload } from "@/lib/types";
-import { isTauri } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 import { PendingQueueStrip } from "@/components/thread/PendingQueueStrip";
 
@@ -81,21 +79,12 @@ interface ThreadComposerProps {
   onModelSwitch?: (provider: string, model: string) => void;
   variant?: "thread" | "hero";
   slashCommands?: SlashCommand[];
-  imageMode?: boolean;
-  onImageModeChange?: (enabled: boolean) => void;
-  videoMode?: boolean;
-  onVideoModeChange?: (enabled: boolean) => void;
   onStop?: () => void;
   /** Unix seconds from server; turn elapsed timer above input while set. */
   runStartedAt?: number | null;
   /** Sustained objective for this chat (WebSocket ``goal_state``). */
   goalState?: GoalStateWsPayload;
   leadingActions?: ReactNode;
-  /** KB RAG: selected knowledge base project for chat context */
-  kbProjectId?: string | null;
-  kbProjectName?: string | null;
-  kbProjects?: Array<{ id: string; name: string }>;
-  onKbSelect?: (id: string | null) => void;
   /** Project workspace bound to a new-chat composer. Only shown in hero mode. */
   workspace?: string | null;
   onWorkspaceChange?: (workspace: string | null) => void;
@@ -120,15 +109,34 @@ const COMMAND_ICONS: Record<string, LucideIcon> = {
   "undo-2": Undo2,
 };
 
-type ImageAspectRatio = "auto" | "1:1" | "3:4" | "9:16" | "4:3" | "16:9";
+interface HeroPromptChip {
+  label: string;
+  prompt: string;
+  Icon: LucideIcon;
+  iconClass: string;
+}
 
-const IMAGE_ASPECT_RATIOS: ImageAspectRatio[] = ["auto", "1:1", "3:4", "9:16", "4:3", "16:9"];
+const HERO_PROMPT_CHIPS: HeroPromptChip[] = [
+  {
+    label: "网页生成笔记",
+    prompt: "把这个网页转成笔记：|",
+    Icon: Globe,
+    iconClass: "text-[#4f9de8]",
+  },
+  {
+    label: "邮件整理今日待办",
+    prompt: "整理今天邮件里的待办事项",
+    Icon: Mail,
+    iconClass: "text-[#d8852d]",
+  },
+  {
+    label: "帮我想想关于…",
+    prompt: "帮我找找记录过关于「|」的内容，从笔记、资料、邮件、记忆里整理出来",
+    Icon: Layers,
+    iconClass: "text-[#4f9de8]",
+  },
+];
 
-type VideoAspectRatio = "auto" | "1:1" | "3:4" | "9:16" | "4:3" | "16:9";
-type VideoDuration = 0 | 3 | 5 | 10 | 18;
-
-const VIDEO_ASPECT_RATIOS: VideoAspectRatio[] = ["auto", "1:1", "3:4", "9:16", "4:3", "16:9"];
-const VIDEO_DURATIONS: VideoDuration[] = [0, 3, 5, 10, 18];
 const SLASH_PALETTE_GAP_PX = 8;
 const SLASH_PALETTE_MAX_HEIGHT_PX = 288;
 const SLASH_PALETTE_MIN_HEIGHT_PX = 144;
@@ -143,20 +151,6 @@ interface SlashPaletteLayout {
 
 function slashCommandI18nKey(command: string): string {
   return command.replace(/^\//, "").replace(/-/g, "_");
-}
-
-function scrollNearestOverflowParent(target: EventTarget | null, deltaY: number) {
-  if (!(target instanceof Element) || deltaY === 0) return;
-  let el: HTMLElement | null = target.parentElement;
-  while (el) {
-    const style = window.getComputedStyle(el);
-    const canScroll = /(auto|scroll)/.test(style.overflowY) && el.scrollHeight > el.clientHeight;
-    if (canScroll) {
-      el.scrollTop += deltaY;
-      return;
-    }
-    el = el.parentElement;
-  }
 }
 
 function getVisibleBounds(el: HTMLElement): { top: number; bottom: number } {
@@ -417,10 +411,6 @@ export function ThreadComposer({
   onModelSwitch,
   variant = "thread",
   slashCommands = [],
-  imageMode: controlledImageMode,
-  onImageModeChange,
-  videoMode: controlledVideoMode,
-  onVideoModeChange,
   onStop,
   runStartedAt = null,
   goalState,
@@ -429,10 +419,6 @@ export function ThreadComposer({
   onPendingAppend,
   onPendingRemove,
   isPendingFull = false,
-  kbProjectId,
-  kbProjectName,
-  kbProjects,
-  onKbSelect,
   workspace,
   onWorkspaceChange,
   onOpenSettings,
@@ -442,58 +428,14 @@ export function ThreadComposer({
   const [inlineError, setInlineError] = useState<string | null>(null);
   const [slashMenuDismissed, setSlashMenuDismissed] = useState(false);
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(0);
-  const [uncontrolledImageMode, setUncontrolledImageMode] = useState(false);
-  const [imageAspectRatio, setImageAspectRatio] = useState<ImageAspectRatio>("auto");
-  const [aspectMenuOpen, setAspectMenuOpen] = useState(false);
-  const [uncontrolledVideoMode, setUncontrolledVideoMode] = useState(false);
-  const [videoAspectRatio, setVideoAspectRatio] = useState<VideoAspectRatio>("auto");
-  const [videoDuration, setVideoDuration] = useState<VideoDuration>(0);
-  const [videoAspectMenuOpen, setVideoAspectMenuOpen] = useState(false);
-  const [videoDurationMenuOpen, setVideoDurationMenuOpen] = useState(false);
-  const [videoRefUrl, setVideoRefUrl] = useState("");
-  const [refUploading, setRefUploading] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const formRef = useRef<HTMLFormElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const aspectControlRef = useRef<HTMLDivElement>(null);
-  const videoAspectControlRef = useRef<HTMLDivElement>(null);
   const chipRefs = useRef(new Map<string, HTMLButtonElement>());
   const isHero = variant === "hero";
-  const imageMode = controlledImageMode ?? uncontrolledImageMode;
-  const videoMode = controlledVideoMode ?? uncontrolledVideoMode;
-  const setVideoMode = useCallback(
-    (enabled: boolean) => {
-      if (controlledVideoMode === undefined) {
-        setUncontrolledVideoMode(enabled);
-      }
-      onVideoModeChange?.(enabled);
-      if (enabled && imageMode) {
-        if (controlledImageMode === undefined) setUncontrolledImageMode(false);
-        onImageModeChange?.(false);
-      }
-    },
-    [controlledVideoMode, onVideoModeChange, imageMode, controlledImageMode, onImageModeChange],
-  );
-  const setImageMode = useCallback(
-    (enabled: boolean) => {
-      if (controlledImageMode === undefined) {
-        setUncontrolledImageMode(enabled);
-      }
-      onImageModeChange?.(enabled);
-      if (enabled && videoMode) {
-        if (controlledVideoMode === undefined) setUncontrolledVideoMode(false);
-        onVideoModeChange?.(false);
-      }
-    },
-    [controlledImageMode, onImageModeChange, videoMode, controlledVideoMode, onVideoModeChange],
-  );
   const resolvedPlaceholder = isStreaming
     ? t("thread.composer.placeholderStreaming")
-    : videoMode
-      ? t("thread.composer.videoMode.placeholder")
-      : imageMode
-        ? t("thread.composer.imageMode.placeholder")
-        : placeholder ?? t("thread.composer.placeholderThread");
+    : placeholder ?? t("thread.composer.placeholderThread");
 
   const { images, enqueue, remove, clear, encoding, full } =
     useAttachedImages();
@@ -527,31 +469,6 @@ export function ThreadComposer({
     onDragLeave,
     onDrop,
   } = useClipboardAndDrop(addFiles);
-
-  const uploadRefImage = useCallback(async () => {
-    if (refUploading) return;
-    if (!isTauri()) return;
-    setRefUploading(true);
-    setInlineError(null);
-    try {
-      const { open } = await import("@tauri-apps/plugin-dialog");
-      const selected = await open({
-        multiple: false,
-        filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "gif"] }],
-      });
-      if (typeof selected !== "string" || !selected.trim()) return;
-      const { invoke } = await import("@tauri-apps/api/core");
-      const result = await invoke<{ url?: string }>("upload_image", { filePath: selected });
-      if (typeof result.url === "string") {
-        setVideoRefUrl(result.url);
-      }
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      setInlineError(msg);
-    } finally {
-      setRefUploading(false);
-    }
-  }, [refUploading]);
 
   useEffect(() => {
     if (disabled) return;
@@ -669,38 +586,6 @@ export function ThreadComposer({
     };
   }, [filteredSlashCommands.length, showSlashMenu]);
 
-  useEffect(() => {
-    if (!aspectMenuOpen) return;
-
-    const closeOnPointerDown = (event: PointerEvent) => {
-      const target = event.target;
-      if (target instanceof Node && aspectControlRef.current?.contains(target)) return;
-      setAspectMenuOpen(false);
-    };
-    const closeOnKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setAspectMenuOpen(false);
-        textareaRef.current?.focus();
-      }
-    };
-    const closeOnScroll = () => setAspectMenuOpen(false);
-    const closeOnWheel = (event: WheelEvent) => {
-      setAspectMenuOpen(false);
-      scrollNearestOverflowParent(event.target, event.deltaY);
-    };
-
-    document.addEventListener("pointerdown", closeOnPointerDown, true);
-    document.addEventListener("keydown", closeOnKeyDown);
-    document.addEventListener("scroll", closeOnScroll, true);
-    document.addEventListener("wheel", closeOnWheel, { capture: true, passive: true });
-    return () => {
-      document.removeEventListener("pointerdown", closeOnPointerDown, true);
-      document.removeEventListener("keydown", closeOnKeyDown);
-      document.removeEventListener("scroll", closeOnScroll, true);
-      document.removeEventListener("wheel", closeOnWheel, true);
-    };
-  }, [aspectMenuOpen]);
-
   const resizeTextarea = useCallback(() => {
     requestAnimationFrame(() => {
       const el = textareaRef.current;
@@ -721,6 +606,24 @@ export function ThreadComposer({
     [resizeTextarea],
   );
 
+  const applyHeroChip = useCallback((chip: HeroPromptChip) => {
+    const marker = "|";
+    const markerIdx = chip.prompt.indexOf(marker);
+    const text = chip.prompt.replace(marker, "");
+    setValue(text);
+    setSlashMenuDismissed(true);
+    setInlineError(null);
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (!el) return;
+      el.style.height = "auto";
+      el.style.height = `${Math.min(el.scrollHeight, 260)}px`;
+      const pos = markerIdx >= 0 ? markerIdx : text.length;
+      el.focus();
+      el.setSelectionRange(pos, pos);
+    });
+  }, []);
+
   const submit = useCallback(() => {
     if (!canSend) return;
     const trimmed = value.trim();
@@ -738,24 +641,7 @@ export function ThreadComposer({
             preview: { url: img.dataUrl, name: img.file.name },
           }))
         : undefined;
-    const options: SendOptions | undefined = videoMode
-      ? {
-          videoGeneration: {
-            enabled: true,
-            aspect_ratio: videoAspectRatio === "auto" ? null : videoAspectRatio,
-            duration: videoDuration === 0 ? null : videoDuration,
-            reference_image_url: videoRefUrl.trim() ? videoRefUrl.trim() : null,
-          },
-        }
-      : imageMode
-        ? {
-            imageGeneration: {
-              enabled: true,
-              aspect_ratio: imageAspectRatio === "auto" ? null : imageAspectRatio,
-            },
-          }
-        : undefined;
-    onSend(trimmed, payload, options);
+    onSend(trimmed, payload);
     setValue("");
     setInlineError(null);
     // Bubble owns the data URL copy; safe to revoke every staged blob
@@ -763,7 +649,7 @@ export function ThreadComposer({
     clear();
     setSlashMenuDismissed(false);
     resizeTextarea();
-  }, [canSend, clear, imageAspectRatio, imageMode, onSend, readyImages, resizeTextarea, value, videoAspectRatio, videoDuration, videoMode, videoRefUrl]);
+  }, [canSend, clear, onSend, readyImages, resizeTextarea, value]);
 
   const onKeyDown = (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     if (showSlashMenu) {
@@ -865,6 +751,29 @@ export function ThreadComposer({
           onChoose={chooseSlashCommand}
         />
       ) : null}
+      {isHero ? (
+        <div className="mx-auto mb-2.5 flex w-full max-w-[58rem] flex-wrap gap-2">
+          {HERO_PROMPT_CHIPS.map((chip) => {
+            const Icon = chip.Icon;
+            return (
+              <button
+                key={chip.label}
+                type="button"
+                onClick={() => applyHeroChip(chip)}
+                className={cn(
+                  "inline-flex h-7 items-center gap-1.5 rounded-full border px-3",
+                  "border-border/55 bg-muted/40 text-[12px] font-medium text-foreground/75",
+                  "hover:bg-muted hover:text-foreground transition-colors",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                )}
+              >
+                <Icon className={cn("h-3.5 w-3.5", chip.iconClass)} aria-hidden />
+                {chip.label}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
       <div
         className={cn(
           "relative mx-auto flex w-full flex-col overflow-visible transition-all duration-200",
@@ -948,60 +857,6 @@ export function ThreadComposer({
             "disabled:cursor-not-allowed",
           )}
         />
-        {videoMode ? (
-          <div className={cn("flex items-center gap-1.5", isHero ? "mx-5 mb-2" : "mx-4 mb-1.5")}>
-            <Link2 className={cn("shrink-0 text-muted-foreground", isHero ? "h-4 w-4" : "h-3.5 w-3.5")} />
-            <input
-              type="url"
-              value={videoRefUrl}
-              onChange={(e) => setVideoRefUrl(e.target.value)}
-              placeholder={t("thread.composer.videoMode.refUrlPlaceholder")}
-              aria-label={t("thread.composer.videoMode.refUrlAria")}
-              className={cn(
-                "min-w-0 flex-1 rounded-full border border-border/55 bg-card px-3 text-foreground/80",
-                "placeholder:text-muted-foreground/60",
-                "focus:outline-none focus-visible:outline-none",
-                isHero ? "h-8 text-[12px]" : "h-7 text-[11.5px]",
-              )}
-            />
-            {isTauri() ? (
-              <button
-                type="button"
-                aria-label={t("thread.composer.videoMode.refUrlUpload")}
-                onClick={uploadRefImage}
-                disabled={refUploading}
-                className={cn(
-                  "inline-flex shrink-0 items-center justify-center rounded-full",
-                  "text-muted-foreground hover:text-foreground",
-                  "disabled:opacity-50 disabled:pointer-events-none",
-                  isHero ? "h-7 w-7" : "h-6 w-6",
-                )}
-              >
-                {refUploading ? (
-                  <Loader2 className={cn("animate-spin", isHero ? "h-3.5 w-3.5" : "h-3 w-3")} />
-                ) : (
-                  <Upload className={isHero ? "h-3.5 w-3.5" : "h-3 w-3"} />
-                )}
-              </button>
-            ) : null}
-            {videoRefUrl ? (
-              <button
-                type="button"
-                aria-label={t("thread.composer.videoMode.refUrlClear")}
-                onClick={() => {
-                  setVideoRefUrl("");
-                  textareaRef.current?.focus();
-                }}
-                className={cn(
-                  "inline-flex shrink-0 items-center justify-center rounded-full text-muted-foreground hover:text-foreground",
-                  isHero ? "h-6 w-6" : "h-5 w-5",
-                )}
-              >
-                <X className={isHero ? "h-3.5 w-3.5" : "h-3 w-3"} />
-              </button>
-            ) : null}
-          </div>
-        ) : null}
         {inlineError ? (
           <div
             role="alert"
@@ -1038,11 +893,11 @@ export function ThreadComposer({
               className={cn(
                 "rounded-full text-muted-foreground hover:text-foreground",
                 isHero
-                  ? "h-9 w-9 border border-border/55 bg-card shadow-[0_2px_8px_rgba(15,23,42,0.05)] hover:bg-card"
-                  : "h-7.5 w-7.5 border border-border/55 bg-card shadow-[0_2px_8px_rgba(15,23,42,0.05)] hover:bg-card",
+                  ? "h-7 w-7 border border-border/55 bg-card shadow-[0_2px_8px_rgba(15,23,42,0.05)] hover:bg-card"
+                  : "h-6 w-6 border border-border/55 bg-card shadow-[0_2px_8px_rgba(15,23,42,0.05)] hover:bg-card",
               )}
             >
-              <Plus className={cn(isHero ? "h-5 w-5" : "h-4 w-4")} />
+              <Plus className={cn(isHero ? "h-4 w-4" : "h-3.5 w-3.5")} />
             </Button>
             {leadingActions ? (
               <div className="flex min-w-0 items-center gap-1">{leadingActions}</div>
@@ -1054,208 +909,6 @@ export function ThreadComposer({
                 disabled={disabled}
               />
             ) : null}
-            <div ref={aspectControlRef} className="relative flex items-center gap-1">
-              <Button
-                type="button"
-                variant="ghost"
-                disabled={disabled}
-                aria-pressed={imageMode}
-                aria-label={t("thread.composer.imageMode.toggle")}
-                onClick={() => {
-                  setImageMode(!imageMode);
-                  setAspectMenuOpen(false);
-                  textareaRef.current?.focus();
-                }}
-                className={cn(
-                  "rounded-full border border-border/55 px-2.5 font-medium shadow-[0_2px_8px_rgba(15,23,42,0.04)]",
-                  isHero ? "h-9 text-[12px]" : "h-7.5 text-[10.5px]",
-                  imageMode
-                    ? "border-primary/30 bg-primary/10 text-primary hover:bg-primary/12"
-                    : "bg-card text-muted-foreground hover:bg-card hover:text-foreground",
-                )}
-              >
-                <ImageIcon className={cn("mr-1.5", isHero ? "h-4 w-4" : "h-3.5 w-3.5")} />
-                {t("thread.composer.imageMode.label")}
-              </Button>
-              {imageMode ? (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  disabled={disabled}
-                  aria-haspopup="listbox"
-                  aria-expanded={aspectMenuOpen}
-                  aria-label={t("thread.composer.imageMode.aspectAria")}
-                  onClick={() => setAspectMenuOpen((open) => !open)}
-                  className={cn(
-                    "rounded-full border border-border/55 bg-card px-2.5 font-medium text-foreground/80 shadow-[0_2px_8px_rgba(15,23,42,0.04)] hover:bg-card",
-                    isHero ? "h-9 text-[12px]" : "h-7.5 text-[10.5px]",
-                  )}
-                >
-                  <span>{t(`thread.composer.imageMode.aspect.${imageAspectRatio.replace(":", "_")}`)}</span>
-                  <ChevronDown className={cn("ml-1.5", isHero ? "h-3.5 w-3.5" : "h-3 w-3")} />
-                </Button>
-              ) : null}
-              {imageMode && aspectMenuOpen ? (
-                <ImageAspectMenu
-                  selected={imageAspectRatio}
-                  isHero={isHero}
-                  onSelect={(ratio) => {
-                    setImageAspectRatio(ratio);
-                    setAspectMenuOpen(false);
-                    textareaRef.current?.focus();
-                  }}
-                />
-              ) : null}
-            </div>
-            <div ref={videoAspectControlRef} className="relative flex items-center gap-1">
-              <Button
-                type="button"
-                variant="ghost"
-                disabled={disabled}
-                aria-pressed={videoMode}
-                aria-label={t("thread.composer.videoMode.toggle")}
-                onClick={() => {
-                  setVideoMode(!videoMode);
-                  setVideoAspectMenuOpen(false);
-                  setVideoDurationMenuOpen(false);
-                  textareaRef.current?.focus();
-                }}
-                className={cn(
-                  "rounded-full border border-border/55 px-2.5 font-medium shadow-[0_2px_8px_rgba(15,23,42,0.04)]",
-                  isHero ? "h-9 text-[12px]" : "h-7.5 text-[10.5px]",
-                  videoMode
-                    ? "border-primary/30 bg-primary/10 text-primary hover:bg-primary/12"
-                    : "bg-card text-muted-foreground hover:bg-card hover:text-foreground",
-                )}
-              >
-                <Video className={cn("mr-1.5", isHero ? "h-4 w-4" : "h-3.5 w-3.5")} />
-                {t("thread.composer.videoMode.label")}
-              </Button>
-              {videoMode ? (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  disabled={disabled}
-                  aria-haspopup="listbox"
-                  aria-expanded={videoAspectMenuOpen}
-                  aria-label={t("thread.composer.videoMode.aspectAria")}
-                  onClick={() => {
-                    setVideoAspectMenuOpen((open) => !open);
-                    setVideoDurationMenuOpen(false);
-                  }}
-                  className={cn(
-                    "rounded-full border border-border/55 bg-card px-2.5 font-medium text-foreground/80 shadow-[0_2px_8px_rgba(15,23,42,0.04)] hover:bg-card",
-                    isHero ? "h-9 text-[12px]" : "h-7.5 text-[10.5px]",
-                  )}
-                >
-                  <span>{t(`thread.composer.videoMode.aspect.${videoAspectRatio.replace(":", "_")}`)}</span>
-                  <ChevronDown className={cn("ml-1.5", isHero ? "h-3.5 w-3.5" : "h-3 w-3")} />
-                </Button>
-              ) : null}
-              {videoMode ? (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  disabled={disabled}
-                  aria-haspopup="listbox"
-                  aria-expanded={videoDurationMenuOpen}
-                  aria-label={t("thread.composer.videoMode.durationAria")}
-                  onClick={() => {
-                    setVideoDurationMenuOpen((open) => !open);
-                    setVideoAspectMenuOpen(false);
-                  }}
-                  className={cn(
-                    "rounded-full border border-border/55 bg-card px-2.5 font-medium text-foreground/80 shadow-[0_2px_8px_rgba(15,23,42,0.04)] hover:bg-card",
-                    isHero ? "h-9 text-[12px]" : "h-7.5 text-[10.5px]",
-                  )}
-                >
-                  <span>{videoDuration === 0 ? t("thread.composer.videoMode.duration.auto") : `${videoDuration}s`}</span>
-                  <ChevronDown className={cn("ml-1.5", isHero ? "h-3.5 w-3.5" : "h-3 w-3")} />
-                </Button>
-              ) : null}
-              {videoMode && videoAspectMenuOpen ? (
-                <VideoAspectMenu
-                  selected={videoAspectRatio}
-                  isHero={isHero}
-                  onSelect={(ratio) => {
-                    setVideoAspectRatio(ratio);
-                    setVideoAspectMenuOpen(false);
-                    textareaRef.current?.focus();
-                  }}
-                />
-              ) : null}
-              {videoMode && videoDurationMenuOpen ? (
-                <VideoDurationMenu
-                  selected={videoDuration}
-                  isHero={isHero}
-                  onSelect={(dur) => {
-                    setVideoDuration(dur);
-                    setVideoDurationMenuOpen(false);
-                    textareaRef.current?.focus();
-                  }}
-                />
-              ) : null}
-            </div>
-            {kbProjects && kbProjects.length > 0 ? (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <button
-                    type="button"
-                    title={kbProjectName ?? "选择知识库"}
-                    className={cn(
-                      "inline-flex min-w-0 items-center gap-1.5 rounded-full border px-2.5 py-1",
-                      "border-foreground/10 bg-foreground/[0.035] font-medium text-foreground/80",
-                      "hover:bg-foreground/[0.07] transition-colors cursor-pointer",
-                      isHero
-                        ? "max-w-[13rem] text-[12px] shadow-[0_2px_8px_rgba(15,23,42,0.04)]"
-                        : "max-w-[10rem] text-[10.5px] shadow-[0_2px_8px_rgba(15,23,42,0.035)]",
-                    )}
-                  >
-                    <span
-                      aria-hidden
-                      className={cn(
-                        "h-1.5 w-1.5 flex-none rounded-full",
-                        kbProjectId ? "bg-purple-500/80" : "bg-foreground/20",
-                      )}
-                    />
-                    <BookOpen className={cn("flex-none", isHero ? "h-3 w-3" : "h-2.5 w-2.5")} />
-                    <span className="truncate">{kbProjectName ?? "知识库"}</span>
-                    <ChevronDown className={cn("flex-none opacity-50", isHero ? "h-3 w-3" : "h-2.5 w-2.5")} />
-                  </button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" side="top" className="min-w-[180px]">
-                  {kbProjectId && (
-                    <DropdownMenuItem
-                      className="flex items-center gap-2 text-[13px]"
-                      onSelect={() => onKbSelect?.(null)}
-                    >
-                      <span aria-hidden className="h-1.5 w-1.5 flex-none rounded-full bg-foreground/20" />
-                      <span>不使用</span>
-                    </DropdownMenuItem>
-                  )}
-                  {kbProjects.map((p) => (
-                    <DropdownMenuItem
-                      key={p.id}
-                      className="flex items-center gap-2 text-[13px]"
-                      onSelect={() => onKbSelect?.(p.id)}
-                    >
-                      <span
-                        aria-hidden
-                        className={cn(
-                          "h-1.5 w-1.5 flex-none rounded-full",
-                          p.id === kbProjectId ? "bg-purple-500/80" : "bg-foreground/20",
-                        )}
-                      />
-                      <BookOpen className="h-3 w-3 flex-none text-muted-foreground" />
-                      <span className="truncate">{p.name}</span>
-                      {p.id === kbProjectId && (
-                        <Check className="ml-auto h-3 w-3 text-muted-foreground" />
-                      )}
-                    </DropdownMenuItem>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            ) : null}
             {modelLabel ? (
               modelOptions.length > 0 && onModelSwitch ? (
                 <DropdownMenu>
@@ -1264,12 +917,12 @@ export function ThreadComposer({
                       type="button"
                       title={modelLabel}
                       className={cn(
-                        "inline-flex min-w-0 items-center gap-1.5 rounded-full border px-2.5 py-1",
+                        "inline-flex min-w-0 items-center gap-1.5 rounded-full border px-2.5",
                         "border-foreground/10 bg-foreground/[0.035] font-medium text-foreground/80",
                         "hover:bg-foreground/[0.07] transition-colors cursor-pointer",
                         isHero
-                          ? "max-w-[13rem] text-[12px] shadow-[0_2px_8px_rgba(15,23,42,0.04)]"
-                          : "max-w-[10rem] text-[10.5px] shadow-[0_2px_8px_rgba(15,23,42,0.035)]",
+                          ? "h-7 max-w-[13rem] text-[12px] shadow-[0_2px_8px_rgba(15,23,42,0.04)]"
+                          : "h-6 max-w-[10rem] text-[10.5px] shadow-[0_2px_8px_rgba(15,23,42,0.035)]",
                       )}
                     >
                       <span
@@ -1341,11 +994,11 @@ export function ThreadComposer({
                 <span
                   title={modelLabel}
                   className={cn(
-                    "inline-flex min-w-0 items-center gap-1.5 rounded-full border px-2.5 py-1",
+                    "inline-flex min-w-0 items-center gap-1.5 rounded-full border px-2.5",
                     "border-foreground/10 bg-foreground/[0.035] font-medium text-foreground/80",
                     isHero
-                      ? "max-w-[13rem] text-[12px] shadow-[0_2px_8px_rgba(15,23,42,0.04)]"
-                      : "max-w-[10rem] text-[10.5px] shadow-[0_2px_8px_rgba(15,23,42,0.035)]",
+                      ? "h-7 max-w-[13rem] text-[12px] shadow-[0_2px_8px_rgba(15,23,42,0.04)]"
+                      : "h-6 max-w-[10rem] text-[10.5px] shadow-[0_2px_8px_rgba(15,23,42,0.035)]",
                   )}
                 >
                   <span
@@ -1445,7 +1098,7 @@ function WorkspaceSelector({ workspace, onChange, disabled }: WorkspaceSelectorP
           onClick={pickWorkspace}
           title={workspace}
           className={cn(
-            "inline-flex min-w-0 items-center gap-1.5 rounded-lg border px-2.5 py-1.5",
+            "inline-flex min-w-0 h-7 items-center gap-1.5 rounded-lg border px-2.5",
             "border-border/60 bg-muted/60 text-[12px] font-medium text-foreground/80",
             "hover:bg-muted/80 transition-colors cursor-pointer",
             (disabled || picking) && "pointer-events-none opacity-55",
@@ -1479,7 +1132,7 @@ function WorkspaceSelector({ workspace, onChange, disabled }: WorkspaceSelectorP
       disabled={disabled || picking}
       onClick={pickWorkspace}
       className={cn(
-        "inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5",
+        "inline-flex h-7 items-center gap-1.5 rounded-lg border px-2.5",
         "border-transparent bg-muted/80 text-[12px] font-medium text-foreground/65",
         "hover:bg-muted transition-colors cursor-pointer",
         (disabled || picking) && "pointer-events-none opacity-55",
@@ -1489,165 +1142,6 @@ function WorkspaceSelector({ workspace, onChange, disabled }: WorkspaceSelectorP
       <span>{t("thread.composer.workspace.placeholder")}</span>
       <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground/60" />
     </button>
-  );
-}
-
-function ImageAspectMenu({
-  selected,
-  isHero,
-  onSelect,
-}: {
-  selected: ImageAspectRatio;
-  isHero: boolean;
-  onSelect: (ratio: ImageAspectRatio) => void;
-}) {
-  const { t } = useTranslation();
-  return (
-    <div
-      role="listbox"
-      aria-label={t("thread.composer.imageMode.aspectAria")}
-      className={cn(
-        "absolute left-0 bottom-full mb-2 z-30 w-44 overflow-hidden rounded-[16px] border",
-        "border-border/65 bg-popover p-1.5 text-popover-foreground shadow-[0_16px_45px_rgba(15,23,42,0.16)]",
-        "dark:border-white/10 dark:shadow-[0_18px_45px_rgba(0,0,0,0.42)]",
-        isHero ? "text-[12px]" : "text-[11.5px]",
-      )}
-    >
-      <div className="px-2 pb-1 pt-1 font-medium text-muted-foreground/70">
-        {t("thread.composer.imageMode.aspectLabel")}
-      </div>
-      {IMAGE_ASPECT_RATIOS.map((ratio) => {
-        const label = t(`thread.composer.imageMode.aspect.${ratio.replace(":", "_")}`);
-        return (
-          <button
-            key={ratio}
-            type="button"
-            role="option"
-            aria-selected={selected === ratio}
-            onMouseDown={(e) => {
-              e.preventDefault();
-              onSelect(ratio);
-            }}
-            className={cn(
-              "flex w-full items-center justify-between rounded-[11px] px-2.5 py-2 text-left transition-colors",
-              selected === ratio
-                ? "bg-primary/10 text-foreground"
-                : "text-foreground/86 hover:bg-accent/55",
-            )}
-          >
-            <span>{label}</span>
-            {selected === ratio ? <Check className="h-3.5 w-3.5 text-primary" /> : null}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-function VideoAspectMenu({
-  selected,
-  isHero,
-  onSelect,
-}: {
-  selected: VideoAspectRatio;
-  isHero: boolean;
-  onSelect: (ratio: VideoAspectRatio) => void;
-}) {
-  const { t } = useTranslation();
-  return (
-    <div
-      role="listbox"
-      aria-label={t("thread.composer.videoMode.aspectAria")}
-      className={cn(
-        "absolute left-0 bottom-full mb-2 z-30 w-44 overflow-hidden rounded-[16px] border",
-        "border-border/65 bg-popover p-1.5 text-popover-foreground shadow-[0_16px_45px_rgba(15,23,42,0.16)]",
-        "dark:border-white/10 dark:shadow-[0_18px_45px_rgba(0,0,0,0.42)]",
-        isHero ? "text-[12px]" : "text-[11.5px]",
-      )}
-    >
-      <div className="px-2 pb-1 pt-1 font-medium text-muted-foreground/70">
-        {t("thread.composer.videoMode.aspectLabel")}
-      </div>
-      {VIDEO_ASPECT_RATIOS.map((ratio) => {
-        const label = t(`thread.composer.videoMode.aspect.${ratio.replace(":", "_")}`);
-        return (
-          <button
-            key={ratio}
-            type="button"
-            role="option"
-            aria-selected={selected === ratio}
-            onMouseDown={(e) => {
-              e.preventDefault();
-              onSelect(ratio);
-            }}
-            className={cn(
-              "flex w-full items-center justify-between rounded-[11px] px-2.5 py-2 text-left transition-colors",
-              selected === ratio
-                ? "bg-primary/10 text-foreground"
-                : "text-foreground/86 hover:bg-accent/55",
-            )}
-          >
-            <span>{label}</span>
-            {selected === ratio ? <Check className="h-3.5 w-3.5 text-primary" /> : null}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-function VideoDurationMenu({
-  selected,
-  isHero,
-  onSelect,
-}: {
-  selected: VideoDuration;
-  isHero: boolean;
-  onSelect: (duration: VideoDuration) => void;
-}) {
-  const { t } = useTranslation();
-  return (
-    <div
-      role="listbox"
-      aria-label={t("thread.composer.videoMode.durationAria")}
-      className={cn(
-        "absolute left-0 bottom-full mb-2 z-30 w-44 overflow-hidden rounded-[16px] border",
-        "border-border/65 bg-popover p-1.5 text-popover-foreground shadow-[0_16px_45px_rgba(15,23,42,0.16)]",
-        "dark:border-white/10 dark:shadow-[0_18px_45px_rgba(0,0,0,0.42)]",
-        isHero ? "text-[12px]" : "text-[11.5px]",
-      )}
-    >
-      <div className="px-2 pb-1 pt-1 font-medium text-muted-foreground/70">
-        {t("thread.composer.videoMode.durationLabel")}
-      </div>
-      {VIDEO_DURATIONS.map((dur) => {
-        const label =
-          dur === 0
-            ? t("thread.composer.videoMode.duration.auto")
-            : t("thread.composer.videoMode.duration.s", { seconds: dur });
-        return (
-          <button
-            key={dur}
-            type="button"
-            role="option"
-            aria-selected={selected === dur}
-            onMouseDown={(e) => {
-              e.preventDefault();
-              onSelect(dur);
-            }}
-            className={cn(
-              "flex w-full items-center justify-between rounded-[11px] px-2.5 py-2 text-left transition-colors",
-              selected === dur
-                ? "bg-primary/10 text-foreground"
-                : "text-foreground/86 hover:bg-accent/55",
-            )}
-          >
-            <span>{label}</span>
-            {selected === dur ? <Check className="h-3.5 w-3.5 text-primary" /> : null}
-          </button>
-        );
-      })}
-    </div>
   );
 }
 

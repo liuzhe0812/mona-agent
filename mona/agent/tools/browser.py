@@ -17,6 +17,7 @@ import json
 import urllib.request
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from loguru import logger
 
@@ -25,19 +26,34 @@ from mona.agent.tools.schema import StringSchema, tool_parameters_schema
 from mona.agent.tools.tauri_ipc import tauri_invoke as _tauri_invoke
 from mona.config.schema import Base
 
+# Opener that bypasses all proxy settings. The CDP HTTP endpoint is a
+# localhost server; system proxies (V2Ray/Clash on 127.0.0.1:10809) intercept
+# the request and fail to route it back, causing spurious connection errors.
+_NO_PROXY_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
 
 # ---------------------------------------------------------------------------
 # Playwright availability check
 # ---------------------------------------------------------------------------
 
 
+_playwright_checked = False
+_playwright_ok = False
+
+
 def _playwright_available() -> bool:
+    global _playwright_checked, _playwright_ok
+    if _playwright_checked:
+        return _playwright_ok
+    _playwright_checked = True
     try:
         import playwright  # noqa: F401
 
-        return True
-    except ImportError:
-        return False
+        _playwright_ok = True
+    except ImportError as e:
+        _playwright_ok = False
+        logger.warning("playwright not available, browser tools will be disabled: {}", e)
+    return _playwright_ok
 
 
 # ---------------------------------------------------------------------------
@@ -118,7 +134,7 @@ class BrowserConnectionManager:
         config = BrowserToolsConfig()
         url = f"http://{config.cdp_host}:{config.cdp_port}/json"
         try:
-            with urllib.request.urlopen(url, timeout=3) as resp:
+            with _NO_PROXY_OPENER.open(url, timeout=3) as resp:
                 targets = json.loads(resp.read().decode())
                 if not isinstance(targets, list) or len(targets) == 0:
                     return False
@@ -166,7 +182,7 @@ class BrowserConnectionManager:
         config = BrowserToolsConfig()
         url = f"http://{config.cdp_host}:{config.cdp_port}/json"
         try:
-            with urllib.request.urlopen(url, timeout=5) as resp:
+            with _NO_PROXY_OPENER.open(url, timeout=5) as resp:
                 return json.loads(resp.read().decode())
         except Exception as e:
             logger.debug("Failed to fetch CDP /json targets: {}", e)
@@ -300,7 +316,7 @@ class BrowserConnectionManager:
         # Check cache
         if tab_id in self._pages:
             page = self._pages[tab_id]
-            if await self._is_page_valid(page):
+            if await self._cdp_healthy() and await self._is_page_valid(page):
                 return page
             # Cached page is stale, remove it
             del self._pages[tab_id]
@@ -337,6 +353,11 @@ class BrowserConnectionManager:
         config = BrowserToolsConfig()
         cdp_port = result.get("cdp_port", config.cdp_port) if isinstance(result, dict) else config.cdp_port
 
+        # WebView2 does not reliably publish a newly-created child target to an
+        # existing Playwright-over-CDP connection. Reconnect once after creation.
+        if self._browser is not None:
+            await self._reset_cdp()
+
         # Ensure CDP connection, then poll for the page to appear
         try:
             await self._ensure_cdp_connection()
@@ -351,7 +372,7 @@ class BrowserConnectionManager:
                 page = await self._find_page_for_tab(tab_id)
                 if page is not None:
                     self._pages[tab_id] = page
-                    logger.info("[CDP] Tab {} page found after {:.1f}s", tab_id, (attempt + 1) * 0.5)
+                    logger.debug("[CDP] Tab {} page found after {:.1f}s", tab_id, (attempt + 1) * 0.5)
                     return tab_id, cdp_port
             except Exception as e:
                 logger.debug("[CDP] Poll attempt {} for tab={} failed: {}", attempt + 1, tab_id, e)
@@ -368,11 +389,12 @@ class BrowserConnectionManager:
 
 def _is_main_window_url(url: str) -> bool:
     """Check if a URL belongs to the main Tauri window (not a browser tab)."""
-    return (
-        url.startswith("tauri://")
-        or url.startswith("http://localhost:1")
-        or url == "about:blank"
-    )
+    parsed = urlparse(url)
+    if parsed.scheme == "tauri" or parsed.hostname == "tauri.localhost":
+        return True
+    if parsed.hostname in {"127.0.0.1", "localhost"} and parsed.port == 9527:
+        return True
+    return url == "about:blank"
 
 
 def _resolve_locator(page: Any, target: str) -> Any:

@@ -1,4 +1,4 @@
-﻿"""Post-run evaluation for background tasks (heartbeat & cron).
+"""Post-run evaluation for background tasks (heartbeat & cron).
 
 After the agent executes a background task, this module makes a lightweight
 LLM call to decide whether the result warrants notifying the user.
@@ -81,7 +81,7 @@ async def evaluate_response(
         args = llm_response.tool_calls[0].arguments
         should_notify = args.get("should_notify", True)
         reason = args.get("reason", "")
-        logger.info("evaluate_response: should_notify={}, reason={}", should_notify, reason)
+        logger.debug("evaluate_response: should_notify={}, reason={}", should_notify, reason)
         return bool(should_notify)
 
     except Exception:

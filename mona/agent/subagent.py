@@ -189,7 +189,7 @@ class SubagentManager:
         origin_message_id: str | None = None,
     ) -> None:
         """Execute the subagent task and announce the result."""
-        logger.info("Subagent [{}] starting task: {}", task_id, label)
+        logger.debug("Subagent [{}] starting task: {}", task_id, label)
 
         async def _on_checkpoint(payload: dict) -> None:
             status.phase = payload.get("phase", status.phase)

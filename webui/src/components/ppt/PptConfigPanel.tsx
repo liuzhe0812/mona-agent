@@ -1,15 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, FileText, FolderOpen, Loader2, Upload, Wand2, X } from "lucide-react";
+import { CheckCircle2, ChevronDown, ChevronRight, Download, FileText, FolderOpen, Loader2, Presentation, Upload, Wand2, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { fetchPptTemplates, getApiBase, pptAddSources } from "@/lib/api";
+import { downloadPptOfficeCli, fetchPptOfficeCliCheck, fetchPptTemplates, pptAddSources, type PptOfficeCliStatus } from "@/lib/api";
 import { isTauri } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 import { useClient } from "@/providers/ClientProvider";
-import type { PptCanvasFormat, PptTemplate } from "@/lib/types";
+import type { PptCanvasFormat } from "@/lib/types";
 import type {
   PptConfig,
+  PptMode,
   PptImageMode,
   PptVisualMode,
   PptStyleMode,
@@ -20,7 +21,6 @@ import type {
   PptEntranceAnimation,
   PptAnimationTrigger,
 } from "./PptMakerView";
-import { PptTemplateDialog } from "./PptTemplateDialog";
 
 interface PptConfigPanelProps {
   config: PptConfig;
@@ -103,26 +103,124 @@ export function PptConfigPanel({ config, setConfig, phase, onStart }: PptConfigP
   const { client, token } = useClient();
   const readOnly = phase !== "config";
 
-  const [templates, setTemplates] = useState<PptTemplate[]>([]);
   const [canvasFormats, setCanvasFormats] = useState<PptCanvasFormat[]>([]);
   const [sourceTab, setSourceTab] = useState<SourceTab>("topic");
   const [uploading, setUploading] = useState(false);
-  const [apiBase, setApiBase] = useState<string | null>(null);
-  const [templateDialogOpen, setTemplateDialogOpen] = useState(false);
   const [designExpanded, setDesignExpanded] = useState(false);
   const [exportExpanded, setExportExpanded] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // --- Template mode (officecli engine) ---
+  const [engineStatus, setEngineStatus] = useState<PptOfficeCliStatus | null>(null);
+  const [engineChecking, setEngineChecking] = useState(false);
+  const [engineDownloading, setEngineDownloading] = useState(false);
+  const [engineProgress, setEngineProgress] = useState(0);
+  const [templateUploading, setTemplateUploading] = useState(false);
+  const templateInputRef = useRef<HTMLInputElement>(null);
+
+  const isTemplateMode = config.mode === "template";
+  const engineOk = Boolean(engineStatus?.ok);
+
+  const refreshEngineStatus = useCallback(async (): Promise<boolean> => {
+    setEngineChecking(true);
+    try {
+      const status = await fetchPptOfficeCliCheck(token);
+      setEngineStatus(status);
+      return status.ok;
+    } catch {
+      setEngineStatus(null);
+      return false;
+    } finally {
+      setEngineChecking(false);
+    }
+  }, [token]);
+
+  // Check the engine the first time template mode is entered
   useEffect(() => {
-    getApiBase().then(setApiBase);
-  }, []);
+    if (!isTemplateMode || readOnly || engineStatus || engineChecking) return;
+    refreshEngineStatus();
+  }, [isTemplateMode, readOnly, engineStatus, engineChecking, refreshEngineStatus]);
+
+  const handleDownloadEngine = useCallback(async () => {
+    if (engineDownloading) return;
+    setEngineDownloading(true);
+    setEngineProgress(0);
+    // Simulate incremental progress while the download runs (same pattern
+    // as the video runtime download).
+    const timer = setInterval(() => {
+      setEngineProgress((prev) => Math.min(prev + 4, 90));
+    }, 300);
+    try {
+      const result = await downloadPptOfficeCli(token);
+      clearInterval(timer);
+      if (result.ok) {
+        setEngineProgress(100);
+        await refreshEngineStatus();
+      } else {
+        setEngineStatus((prev) =>
+          prev
+            ? { ...prev, ok: false, error: result.error ?? "下载失败" }
+            : { ok: false, version: null, path: null, error: result.error ?? "下载失败", supported: true },
+        );
+      }
+    } catch (e) {
+      clearInterval(timer);
+      setEngineStatus((prev) =>
+        prev
+          ? { ...prev, ok: false, error: e instanceof Error ? e.message : "下载失败" }
+          : { ok: false, version: null, path: null, error: "下载失败", supported: true },
+      );
+    } finally {
+      setEngineDownloading(false);
+    }
+  }, [engineDownloading, token, refreshEngineStatus]);
+
+  const addTemplateFile = useCallback(
+    async (paths: string[]) => {
+      const pptx = paths.find((p) => p.toLowerCase().endsWith(".pptx"));
+      if (!pptx) return;
+      setTemplateUploading(true);
+      try {
+        const res = await pptAddSources(token, [pptx]);
+        const uploaded = res.files.find((f) => f.path.toLowerCase().endsWith(".pptx"));
+        if (uploaded) {
+          setConfig((prev) => ({ ...prev, templateFile: uploaded.path }));
+        }
+      } catch (e) {
+        console.error("Failed to upload template", e);
+      } finally {
+        setTemplateUploading(false);
+      }
+    },
+    [token, setConfig],
+  );
+
+  const handlePickTemplate = useCallback(async () => {
+    if (readOnly || templateUploading) return;
+    if (isTauri()) {
+      try {
+        const { open } = await import("@tauri-apps/plugin-dialog");
+        const selected = await open({
+          multiple: false,
+          directory: false,
+          title: "选择 PPT 模版",
+          filters: [{ name: "PowerPoint", extensions: ["pptx"] }],
+        });
+        if (!selected) return;
+        await addTemplateFile([String(selected)]);
+      } catch (e) {
+        console.error("Failed to pick template via Tauri dialog", e);
+      }
+    } else {
+      templateInputRef.current?.click();
+    }
+  }, [readOnly, templateUploading, addTemplateFile]);
 
   useEffect(() => {
     let cancelled = false;
     fetchPptTemplates(token)
       .then((res) => {
         if (!cancelled) {
-          setTemplates(res.templates);
           setCanvasFormats(res.canvasFormats);
         }
       })
@@ -131,37 +229,6 @@ export function PptConfigPanel({ config, setConfig, phase, onStart }: PptConfigP
       cancelled = true;
     };
   }, [token]);
-
-  const selectedTemplate = templates.find(
-    (t) => t.key === config.templateKey && t.kind === config.templateKind,
-  );
-
-  function templateImgUrl(url: string): string {
-    const base = apiBase ?? "";
-    const sep = url.includes("?") ? "&" : "?";
-    return `${base}${url}${sep}token=${encodeURIComponent(token)}`;
-  }
-
-  function handleSelectTemplate(tpl: PptTemplate) {
-    if (readOnly) return;
-    if (config.templateKey === tpl.key && config.templateKind === tpl.kind) {
-      setConfig((prev) => ({ ...prev, templateKey: null, templateKind: null }));
-    } else {
-      setTemplates((prev) => {
-        const exists = prev.some((t) => t.key === tpl.key && t.kind === tpl.kind);
-        if (exists) {
-          return prev.map((t) => (t.key === tpl.key && t.kind === tpl.kind ? tpl : t));
-        }
-        return [...prev, tpl];
-      });
-      setConfig((prev) => ({
-        ...prev,
-        templateKey: tpl.key,
-        templateKind: tpl.kind,
-        canvasFormat: tpl.canvasFormat ?? prev.canvasFormat,
-      }));
-    }
-  }
 
   const handlePickFiles = useCallback(async () => {
     if (readOnly || uploading) return;
@@ -305,76 +372,188 @@ export function PptConfigPanel({ config, setConfig, phase, onStart }: PptConfigP
     <div className="flex h-full flex-col">
       <div className="min-h-0 flex-1 overflow-y-auto p-3 space-y-4">
         <section>
-          <h3 className="mb-2 text-[12px] font-medium text-foreground">模板</h3>
-          {selectedTemplate ? (
-            <div className="flex items-center gap-2 rounded-lg border border-primary/50 bg-muted/30 p-2">
-              <div className="h-10 w-16 shrink-0 overflow-hidden rounded bg-muted">
-                {selectedTemplate.coverSvgUrl ? (
-                  <img
-                    src={templateImgUrl(selectedTemplate.coverSvgUrl)}
-                    alt={selectedTemplate.name}
-                    className="h-full w-full object-cover"
-                  />
-                ) : (
-                  <div
-                    className="flex h-full w-full items-center justify-center"
-                    style={{ backgroundColor: selectedTemplate.primaryColor || "#e5e5e5" }}
-                  >
-                    <span className="text-[8px] font-medium text-white/80">
-                      {selectedTemplate.name.slice(0, 4)}
-                    </span>
-                  </div>
+          <h3 className="mb-2 text-[12px] font-medium text-foreground">制作方式</h3>
+          <div className="grid grid-cols-2 gap-1">
+            {(
+              [
+                { value: "design", label: "AI 设计", title: "从 0 生成高视觉质量 PPT" },
+                { value: "template", label: "我的模版", title: "上传 .pptx 模版，保留原有母版样式填充内容" },
+              ] as Array<{ value: PptMode; label: string; title: string }>
+            ).map((item) => (
+              <button
+                key={item.value}
+                type="button"
+                title={item.title}
+                className={cn(
+                  "rounded-md px-2 py-1 text-[11px] font-medium transition-colors",
+                  config.mode === item.value
+                    ? "bg-primary/10 text-foreground"
+                    : "text-muted-foreground hover:text-foreground hover:bg-muted/50",
                 )}
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-1.5">
-                  <span className="truncate text-[11px] font-medium text-foreground">
-                    {selectedTemplate.name}
-                  </span>
-                  {selectedTemplate.kind === "brand" && selectedTemplate.primaryColor && (
-                    <span
-                      className="h-2 w-2 shrink-0 rounded-full"
-                      style={{ backgroundColor: selectedTemplate.primaryColor }}
-                    />
-                  )}
-                </div>
-                <span className="text-[10px] text-muted-foreground">
-                  {selectedTemplate.group}
-                </span>
-              </div>
-              {!readOnly && (
-                <button
-                  type="button"
-                  className="shrink-0 text-muted-foreground hover:text-foreground"
-                  onClick={() =>
-                    setConfig((prev) => ({ ...prev, templateKey: null, templateKind: null }))
-                  }
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
-              )}
-            </div>
-          ) : null}
-          {!readOnly && (
-            <Button
-              variant="outline"
-              size="sm"
-              className="mt-1.5 w-full text-[11px]"
-              onClick={() => setTemplateDialogOpen(true)}
-            >
-              {selectedTemplate ? "更换模板" : "选择模板"}
-            </Button>
-          )}
-          <PptTemplateDialog
-            open={templateDialogOpen}
-            onOpenChange={setTemplateDialogOpen}
-            selectedKey={config.templateKey}
-            selectedKind={config.templateKind}
-            token={token}
-            onSelect={handleSelectTemplate}
-          />
+                onClick={() => setConfig((prev) => ({ ...prev, mode: item.value }))}
+                disabled={readOnly}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
         </section>
 
+        {isTemplateMode && (
+          <section>
+            <h3 className="mb-2 text-[12px] font-medium text-foreground">模版引擎</h3>
+            {engineChecking && !engineStatus ? (
+              <div className="flex items-center gap-1.5 rounded-lg border border-border/70 p-2 text-[11px] text-muted-foreground">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                正在检测 OfficeCLI 引擎...
+              </div>
+            ) : engineOk ? (
+              <div className="flex items-center gap-1.5 rounded-lg border border-border/70 bg-muted/30 p-2 text-[11px]">
+                <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+                <span className="min-w-0 flex-1 truncate text-foreground">
+                  引擎已就绪{engineStatus?.version ? `（${engineStatus.version}）` : ""}
+                </span>
+              </div>
+            ) : (
+              <div className="space-y-2 rounded-lg border border-border/70 p-2">
+                <div className="text-[11px] text-muted-foreground">
+                  {engineStatus && !engineStatus.supported
+                    ? "当前系统平台暂不支持模版模式"
+                    : "模版模式需要 OfficeCLI 引擎（约 33 MB，仅首次下载）"}
+                </div>
+                {engineStatus?.error && engineStatus.supported && (
+                  <div className="text-[10px] text-destructive">{engineStatus.error}</div>
+                )}
+                {engineStatus?.supported !== false && (
+                  <>
+                    {engineDownloading && (
+                      <div className="h-1 w-full overflow-hidden rounded-full bg-muted">
+                        <div
+                          className="h-full rounded-full bg-primary transition-all"
+                          style={{ width: `${engineProgress}%` }}
+                        />
+                      </div>
+                    )}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="w-full text-[11px]"
+                      onClick={handleDownloadEngine}
+                      disabled={engineDownloading || readOnly}
+                    >
+                      {engineDownloading ? (
+                        <>
+                          <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                          正在下载 {engineProgress}%
+                        </>
+                      ) : (
+                        <>
+                          <Download className="mr-1.5 h-3.5 w-3.5" />
+                          {engineStatus?.error ? "重试下载" : "下载引擎"}
+                        </>
+                      )}
+                    </Button>
+                  </>
+                )}
+              </div>
+            )}
+          </section>
+        )}
+
+        {isTemplateMode && (
+          <section>
+            <h3 className="mb-2 text-[12px] font-medium text-foreground">PPT 模版</h3>
+            <input
+              ref={templateInputRef}
+              type="file"
+              className="hidden"
+              accept=".pptx"
+              onChange={async (e) => {
+                const file = e.target.files?.[0];
+                e.target.value = "";
+                if (!file) return;
+                const path = (file as File & { path?: string }).path;
+                if (isTauri() && typeof path === "string") {
+                  await addTemplateFile([path]);
+                } else {
+                  setTemplateUploading(true);
+                  const reader = new FileReader();
+                  reader.onload = () => {
+                    const data_url = reader.result as string;
+                    let handled = false;
+                    const timeout = setTimeout(() => {
+                      if (handled) return;
+                      handled = true;
+                      unsub();
+                      setTemplateUploading(false);
+                    }, 30_000);
+                    const unsub = client.onPptUploadResult((result) => {
+                      if (handled) return;
+                      handled = true;
+                      clearTimeout(timeout);
+                      unsub();
+                      setTemplateUploading(false);
+                      const uploaded = result.files?.find((f) =>
+                        f.path.toLowerCase().endsWith(".pptx"),
+                      );
+                      if (result.ok && uploaded) {
+                        setConfig((prev) => ({ ...prev, templateFile: uploaded.path }));
+                      }
+                    });
+                    client.sendPptUpload([{ name: file.name, data_url }]);
+                  };
+                  reader.onerror = () => setTemplateUploading(false);
+                  reader.readAsDataURL(file);
+                }
+              }}
+            />
+            {config.templateFile ? (
+              <div className="flex items-center gap-1.5 rounded-md bg-muted/50 px-2 py-1.5 text-[11px]">
+                <Presentation className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                <span className="min-w-0 flex-1 truncate">{config.templateFile}</span>
+                {!readOnly && (
+                  <button
+                    type="button"
+                    className="shrink-0 text-muted-foreground hover:text-foreground"
+                    onClick={() => setConfig((prev) => ({ ...prev, templateFile: null }))}
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                )}
+              </div>
+            ) : (
+              <button
+                type="button"
+                className={cn(
+                  "flex min-h-[60px] w-full items-center justify-center rounded-lg border border-dashed text-[11px] transition-colors",
+                  templateUploading
+                    ? "border-border/50 bg-muted/20 text-muted-foreground"
+                    : "border-border/70 text-muted-foreground hover:border-border hover:bg-muted/30",
+                  (!engineOk || readOnly) && "cursor-not-allowed opacity-50",
+                )}
+                onClick={handlePickTemplate}
+                disabled={!engineOk || readOnly || templateUploading}
+              >
+                {templateUploading ? (
+                  <>
+                    <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                    正在上传模版...
+                  </>
+                ) : (
+                  <>
+                    <Upload className="mr-1.5 h-3.5 w-3.5" />
+                    选择 .pptx 模版文件
+                  </>
+                )}
+              </button>
+            )}
+            <p className="mt-1 text-[10px] text-muted-foreground">
+              保留模版的母版、版式与配色，AI 仅填充内容
+            </p>
+          </section>
+        )}
+
+        {!isTemplateMode && (
         <section>
           <button
             type="button"
@@ -586,7 +765,9 @@ export function PptConfigPanel({ config, setConfig, phase, onStart }: PptConfigP
             </div>
           )}
         </section>
+        )}
 
+        {!isTemplateMode && (
         <section>
           <button
             type="button"
@@ -715,7 +896,10 @@ export function PptConfigPanel({ config, setConfig, phase, onStart }: PptConfigP
             </div>
           )}
         </section>
+        )}
 
+        {!isTemplateMode && (
+        <>
         <section>
           <h3 className="mb-2 text-[12px] font-medium text-foreground">画布格式</h3>
           <select
@@ -781,6 +965,8 @@ export function PptConfigPanel({ config, setConfig, phase, onStart }: PptConfigP
             </div>
           </div>
         </section>
+        </>
+        )}
 
         <section>
           <h3 className="mb-2 text-[12px] font-medium text-foreground">输入来源</h3>
@@ -997,11 +1183,19 @@ export function PptConfigPanel({ config, setConfig, phase, onStart }: PptConfigP
         <div className="shrink-0 border-t border-border/70 p-3">
           <Button
             className="w-full"
-            disabled={!config.topic && config.sourceFiles.length === 0}
+            disabled={
+              (!config.topic && config.sourceFiles.length === 0) ||
+              (isTemplateMode && (!engineOk || !config.templateFile))
+            }
             onClick={onStart}
           >
             开始生成
           </Button>
+          {isTemplateMode && (!engineOk || !config.templateFile) && (
+            <p className="mt-1.5 text-center text-[10px] text-muted-foreground">
+              {!engineOk ? "请先下载模版引擎" : "请先上传 PPT 模版"}
+            </p>
+          )}
         </div>
       )}
     </div>

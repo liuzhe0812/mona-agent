@@ -18,10 +18,10 @@ export default function QuickStartSection() {
                   Mona Desktop
                 </div>
                 <h2 className="max-w-3xl text-4xl font-semibold leading-tight md:text-5xl">
-                  下载 Mona，直接进运维现场。
+                  下载 Mona，激活全部能力。
                 </h2>
                 <p className="mt-5 max-w-2xl text-base leading-7 text-black/[0.62] md:text-lg">
-                  Mona 面向真实团队的日常运维、排障、知识沉淀和汇报产出，把高频现场收进一个稳定、可复盘的工作台。
+                  Mona 是 AI 原生工作台，面向真实团队的日常邮件、日程、笔记、运维、知识沉淀和汇报产出，把高频工作收进一个稳定、可复盘的桌面。
                 </p>
                 <div className="mt-8 flex flex-col gap-3 sm:flex-row">
                   <a
@@ -40,7 +40,7 @@ export default function QuickStartSection() {
                   </a>
                 </div>
                 <p className="mt-8 font-mono text-xs text-black/[0.38]">
-                  © 2026 Mona · AI Agent 原生运维工具
+                  © 2026 Mona · AI Agent 原生工作台
                 </p>
               </div>
               <div className="mx-auto h-36 w-36 md:h-44 md:w-44">

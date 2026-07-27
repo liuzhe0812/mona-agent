@@ -13,6 +13,7 @@ from mona.agent.tools.schema import (
     StringSchema,
     tool_parameters_schema,
 )
+from mona.agent.tools.url2note import Url2NoteTool
 
 __all__ = [
     "Schema",
@@ -26,6 +27,7 @@ __all__ = [
     "ToolContext",
     "ToolLoader",
     "ToolRegistry",
+    "Url2NoteTool",
     "tool_parameters",
     "tool_parameters_schema",
 ]

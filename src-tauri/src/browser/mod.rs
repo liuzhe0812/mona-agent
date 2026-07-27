@@ -1,139 +1,149 @@
 pub mod commands;
+pub mod downloads;
+pub mod suggestions;
 pub mod storage;
 pub mod tab;
 
 use dashmap::DashMap;
-use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use tab::{BrowserTab, CreateTabResult};
-use tauri::{AppHandle, Emitter, Manager, WebviewBuilder, WebviewUrl};
+use tauri::{
+    webview::NewWindowResponse,
+    AppHandle, Emitter, Manager, WebviewBuilder, WebviewUrl,
+};
 use url::Url;
 
-const CDP_PORT_START: u16 = 9300;
+pub const CDP_PORT: u16 = 9300;
 
-/// 注入 tab ID 标记和页面事件监听的初始化脚本
-/// target="_blank" 链接和 window.open 由 WebView2 的 NewWindowRequested 事件处理
-const TAB_INIT_SCRIPT: &str = r#"
-(function() {
-  if (window.__mona_tab_events_injected) return;
-  window.__mona_tab_events_injected = true;
-
-  var tabId = window.__mona_tab_id;
-
-  function emit(event, data) {
-    if (window.__TAURI__ && window.__TAURI__.event) {
-      try { window.__TAURI__.event.emit(event, Object.assign({ id: tabId }, data || {})); } catch(e) {}
+pub fn configure_webview2_cdp() {
+    #[cfg(target_os = "windows")]
+    if std::env::var_os("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").is_none() {
+        std::env::set_var(
+            "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+            format!("--remote-debugging-port={CDP_PORT}"),
+        );
     }
-  }
+}
 
-  // 全屏按键透传
-  document.addEventListener('keydown', function(e) {
-    if (e.key !== 'Escape' && e.key !== 'F11') return;
-    emit('browser-fullscreen-key', { key: e.key });
-  }, true);
+fn browser_initialization_script(id: &str) -> String {
+    let id = serde_json::to_string(id).expect("browser tab id is serializable");
+    // Inject a hover-reveal scrollbar style so web pages match Mona's UI spec:
+    // thumb is hidden by default and only fades in when the cursor is inside
+    // the scrollable region. Uses neutral gray (works on both light and dark
+    // sites) instead of Mona's CSS variables, which don't exist in page scope.
+    format!(
+        r#"window.__mona_tab_id = {id};
+(function () {{
+  if (window.__mona_scrollbar_style) return;
+  window.__mona_scrollbar_style = true;
+  var css = [
+    'html {{ scrollbar-width: thin; scrollbar-color: transparent transparent; transition: scrollbar-color 0.2s ease; }}',
+    'html:hover {{ scrollbar-color: rgba(128,128,128,0.4) transparent; }}',
+    '::-webkit-scrollbar {{ width: 8px; height: 8px; }}',
+    '::-webkit-scrollbar-track {{ background: transparent; }}',
+    '::-webkit-scrollbar-thumb {{ background-color: transparent; border-radius: 9999px; border: 2px solid transparent; background-clip: padding-box; transition: background-color 0.2s ease; }}',
+    ':hover::-webkit-scrollbar-thumb {{ background-color: rgba(128,128,128,0.4); }}',
+    ':hover::-webkit-scrollbar-thumb:hover {{ background-color: rgba(128,128,128,0.6); }}'
+  ].join('\n');
+  var style = document.createElement('style');
+  style.setAttribute('data-mona-scrollbar', 'true');
+  style.textContent = css;
+  (document.head || document.documentElement).appendChild(style);
+}})();
+"#
+    )
+}
 
-  // 标题变化
-  function emitTitle() {
-    if (document.title) {
-      emit('browser-tab-title-changed', { title: document.title });
+fn next_available_download_path(directory: &Path, filename: &str) -> PathBuf {
+    let filename = Path::new(filename)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("download");
+    let candidate = directory.join(filename);
+    if !candidate.exists() {
+        return candidate;
     }
-  }
 
-  // Favicon 提取
-  function emitFavicon() {
-    var link = document.querySelector('link[rel~="icon"]') ||
-               document.querySelector('link[rel="shortcut icon"]') ||
-               document.querySelector('link[rel="apple-touch-icon"]');
-    if (link && link.href) {
-      emit('browser-favicon-changed', { favicon: link.href });
+    let path = Path::new(filename);
+    let stem = path.file_stem().and_then(|value| value.to_str()).unwrap_or("download");
+    let extension = path.extension().and_then(|value| value.to_str());
+    for index in 1.. {
+        let name = match extension {
+            Some(extension) => format!("{stem} ({index}).{extension}"),
+            None => format!("{stem} ({index})"),
+        };
+        let candidate = directory.join(name);
+        if !candidate.exists() {
+            return candidate;
+        }
     }
-  }
+    unreachable!()
+}
 
-  // 页面加载完成
-  function onLoaded() {
-    emit('browser-nav-completed', { success: true, url: location.href });
-    emitTitle();
-    emitFavicon();
-  }
+async fn remove_native_webview(app: &AppHandle, id: &str) -> Result<(), String> {
+    if let Some(webview) = app.get_webview(&format!("browser-{}", id)) {
+        webview.close().map_err(|error| error.to_string())?;
 
-  if (document.readyState === 'complete') {
-    onLoaded();
-  } else {
-    window.addEventListener('load', onLoaded);
-    document.addEventListener('DOMContentLoaded', function() {
-      emitTitle();
-      emitFavicon();
+        // Webview::close only queues the runtime close message. Wait for a
+        // following main-thread task so a subsequent add_child cannot race
+        // the WebView2 controller teardown.
+        let window = app
+            .get_window("main")
+            .ok_or_else(|| "Main window not found".to_string())?;
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        window
+            .run_on_main_thread(move || {
+                let _ = tx.send(());
+            })
+            .map_err(|error| error.to_string())?;
+        match tokio::time::timeout(std::time::Duration::from_secs(5), rx).await {
+            Ok(Ok(_)) => {}
+            Ok(Err(_)) => {
+                return Err("Browser tab close barrier was cancelled".to_string());
+            }
+            Err(_) => {
+                return Err("Timed out waiting for browser tab to close".to_string());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn get_browser_webview(app: &AppHandle, id: &str) -> Result<tauri::Webview, String> {
+    app.get_webview(&format!("browser-{}", id))
+        .ok_or_else(|| format!("Browser tab {} not found", id))
+}
+
+fn decode_script_json(result: &str) -> Option<serde_json::Value> {
+    serde_json::from_str::<String>(result)
+        .ok()
+        .and_then(|json| serde_json::from_str(&json).ok())
+        .or_else(|| serde_json::from_str(result).ok())
+}
+
+#[cfg(target_os = "windows")]
+fn read_webview2_string(
+    getter: impl FnOnce(*mut windows_strings::PWSTR) -> windows::core::Result<()>,
+) -> String {
+    let mut raw = windows_strings::PWSTR::null();
+    if getter(&mut raw).is_err() {
+        return String::new();
+    }
+    let value = unsafe { raw.to_string() }.unwrap_or_default();
+    unsafe {
+        windows::Win32::System::Com::CoTaskMemFree(Some(raw.as_ptr().cast()));
+    }
+    value
+}
+
+fn emit_browser_event(app: AppHandle, event: &'static str, payload: serde_json::Value) {
+    tauri::async_runtime::spawn(async move {
+        let _ = app.emit(event, payload);
     });
-  }
-
-  // 监听 title 变化
-  var titleObserver = new MutationObserver(emitTitle);
-  function startTitleObserver() {
-    var titleEl = document.querySelector('title');
-    if (titleEl) {
-      titleObserver.observe(titleEl, { childList: true, characterData: true, subtree: true });
-    }
-    emitTitle();
-  }
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', startTitleObserver);
-  } else {
-    startTitleObserver();
-  }
-
-  // 监听 favicon 变化
-  var headObserver = new MutationObserver(emitFavicon);
-  function startHeadObserver() {
-    var head = document.querySelector('head');
-    if (head) {
-      headObserver.observe(head, { childList: true, subtree: true });
-    }
-    emitFavicon();
-  }
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', startHeadObserver);
-  } else {
-    startHeadObserver();
-  }
-
-  // 链接预览：鼠标悬停在链接上时显示 URL 提示框
-  var linkTooltip = document.createElement('div');
-  linkTooltip.id = 'mona-link-tooltip';
-  linkTooltip.style.cssText = 'position:fixed;z-index:999999;background:#1a1a1a;color:#fff;padding:4px 8px;border-radius:4px;font-size:12px;font-family:sans-serif;max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;pointer-events:none;display:none;box-shadow:0 2px 8px rgba(0,0,0,0.3);';
-  (document.body || document.documentElement).appendChild(linkTooltip);
-
-  document.addEventListener('mouseover', function(e) {
-    var link = e.target.closest && e.target.closest('a[href]');
-    if (link && link.href) {
-      linkTooltip.textContent = link.href;
-      linkTooltip.style.display = 'block';
-    }
-  }, true);
-
-  document.addEventListener('mouseout', function(e) {
-    var link = e.target.closest && e.target.closest('a[href]');
-    if (link) {
-      linkTooltip.style.display = 'none';
-    }
-  }, true);
-
-  document.addEventListener('mousemove', function(e) {
-    if (linkTooltip.style.display === 'block') {
-      var x = e.clientX + 10;
-      var y = e.clientY + 20;
-      // 避免超出视口
-      if (x + linkTooltip.offsetWidth > window.innerWidth) {
-        x = window.innerWidth - linkTooltip.offsetWidth - 10;
-      }
-      if (y + linkTooltip.offsetHeight > window.innerHeight) {
-        y = e.clientY - linkTooltip.offsetHeight - 10;
-      }
-      linkTooltip.style.left = x + 'px';
-      linkTooltip.style.top = y + 'px';
-    }
-  }, true);
-})();
-"#;
+}
 
 /// 广告拦截脚本：注入 CSS 隐藏常见广告元素，并拦截已知广告域名的请求
 const AD_BLOCK_SCRIPT: &str = r#"
@@ -224,6 +234,7 @@ const AD_BLOCK_SCRIPT: &str = r#"
 
 /// 下载条目信息（可序列化，用于 IPC 返回和事件 payload）
 #[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DownloadInfo {
     pub id: String,
     pub url: String,
@@ -235,11 +246,142 @@ pub struct DownloadInfo {
     pub save_path: String,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::{
+        browser_initialization_script, decode_script_json, next_available_download_path,
+        DownloadInfo, CDP_PORT,
+    };
+
+    #[test]
+    fn script_result_decodes_json_string_values() {
+        let result = decode_script_json(r#""[{\"name\":\"session\"}]""#).unwrap();
+        assert_eq!(result[0]["name"], "session");
+    }
+
+    #[test]
+    fn download_payload_matches_the_frontend_contract() {
+        let value = serde_json::to_value(DownloadInfo {
+            id: "dl-1".to_string(),
+            url: "https://example.com/file".to_string(),
+            filename: "file".to_string(),
+            mime_type: "application/octet-stream".to_string(),
+            total_bytes: 2,
+            received_bytes: 1,
+            state: "in_progress".to_string(),
+            save_path: "file".to_string(),
+        })
+        .unwrap();
+
+        assert_eq!(value["totalBytes"], 2);
+        assert_eq!(value["receivedBytes"], 1);
+        assert_eq!(value["savePath"], "file");
+        assert!(value.get("total_bytes").is_none());
+    }
+
+    #[test]
+    fn browser_webviews_start_hidden_and_offscreen() {
+        let source = include_str!("mod.rs");
+        let managed_builder = ["WebviewBuilder", "::new"].concat();
+        let offscreen = ["LogicalPosition::new(", "-9999, -9999)"].concat();
+        let hidden = ["child_webview", ".hide()"].concat();
+
+        assert!(source.contains(&managed_builder));
+        assert!(source.contains(&offscreen));
+        assert!(source.contains(&hidden));
+    }
+
+    #[test]
+    fn browser_webview_lifecycle_is_serialized_and_close_is_acknowledged() {
+        let source = include_str!("mod.rs");
+        let close = source
+            .split("async fn remove_native_webview")
+            .nth(1)
+            .and_then(|source| source.split("fn get_browser_webview").next())
+            .unwrap();
+
+        assert!(source.contains("lifecycle: tokio::sync::Mutex<()>"));
+        assert!(source.matches("self.lifecycle.lock().await").count() >= 2);
+        assert!(close.contains("run_on_main_thread"));
+        assert!(close.contains("tokio::time::timeout"));
+    }
+
+    #[test]
+    fn browser_webviews_share_the_main_webview2_environment() {
+        let source = include_str!("mod.rs");
+
+        assert!(source.contains("get_webview(\"main\")"));
+        assert!(source.contains("with_environment(webview.environment())"));
+    }
+
+    #[test]
+    fn browser_downloads_have_one_tab_independent_native_owner() {
+        let source = include_str!("mod.rs");
+        let implementation = source.rsplit("impl BrowserState").next().unwrap();
+        let native_handler = ["DownloadStarting", "EventHandler::create"].concat();
+        let managed_hook = [".on_", "download("].concat();
+
+        assert_eq!(implementation.matches(&native_handler).count(), 1);
+        assert!(!implementation.contains(&managed_hook));
+        assert!(implementation.contains("operation: Some(operation.clone())"));
+    }
+
+    #[test]
+    fn browser_new_windows_use_the_managed_webview_hook() {
+        let source = include_str!("mod.rs");
+        let duplicate_handler = ["NewWindowRequested", "EventHandler"].concat();
+
+        assert!(source.contains(".on_new_window(move"));
+        assert!(!source.contains(&duplicate_handler));
+    }
+
+    #[test]
+    fn visible_bounds_updates_do_not_hide_the_webview() {
+        let source = include_str!("mod.rs");
+        let bounds = source
+            .split("pub async fn set_tab_bounds")
+            .nth(1)
+            .and_then(|source| source.split("pub async fn hide_tabs_except").next())
+            .unwrap();
+
+        assert!(!bounds.contains("webview.hide()"));
+    }
+
+    #[test]
+    fn browser_tabs_share_cdp_port_and_have_safe_page_markers() {
+        assert_eq!(CDP_PORT, 9300);
+        assert_eq!(
+            browser_initialization_script("tab-'\"-1"),
+            "window.__mona_tab_id = \"tab-'\\\"-1\";"
+        );
+    }
+
+    #[test]
+    fn downloads_do_not_overwrite_existing_files() {
+        let directory = std::env::temp_dir().join(format!(
+            "mona-browser-download-test-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let existing = directory.join("report.pdf");
+        std::fs::write(&existing, b"existing").unwrap();
+
+        assert_eq!(
+            next_available_download_path(&directory, "report.pdf"),
+            directory.join("report (1).pdf")
+        );
+
+        std::fs::remove_file(existing).unwrap();
+        std::fs::remove_dir(directory).unwrap();
+    }
+}
+
 /// 存储下载操作 COM 接口（用于 cancel/pause/resume）
 /// WebView2 COM 接口是 MTA 兼容的，可以安全跨线程访问
 #[cfg(target_os = "windows")]
 pub struct DownloadEntry {
-    pub operation: webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2DownloadOperation,
+    pub operation:
+        Option<webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2DownloadOperation>,
     pub info: DownloadInfo,
 }
 
@@ -253,25 +395,250 @@ pub struct DownloadEntry {
     pub info: DownloadInfo,
 }
 
+/// WebView2 COM 接口是 MTA 兼容的，可安全跨线程访问
+/// 用于在 Tauri async_runtime 中持有 DownloadStarting 事件参数与 Deferral
+#[cfg(target_os = "windows")]
+struct DownloadStartingArgsSend {
+    args: webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2DownloadStartingEventArgs,
+    deferral: webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Deferral,
+    operation: webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2DownloadOperation,
+}
+#[cfg(target_os = "windows")]
+unsafe impl Send for DownloadStartingArgsSend {}
+#[cfg(target_os = "windows")]
+unsafe impl Sync for DownloadStartingArgsSend {}
+
+#[cfg(target_os = "windows")]
+impl DownloadStartingArgsSend {
+    /// 在文件保存对话框完成后调用：根据用户选择的路径完成下载启动流程
+    fn finish(
+        self,
+        save_path: Option<PathBuf>,
+        fallback_filename: &str,
+        downloads_dir: &Path,
+        downloads: Arc<DashMap<String, DownloadEntry>>,
+        next_id: Arc<AtomicU64>,
+        emit: AppHandle,
+        uri: String,
+        mime_type: String,
+    ) {
+        use windows::core::HSTRING;
+        let Self {
+            args,
+            deferral,
+            operation,
+        } = self;
+        let save_path = match save_path {
+            Some(p) => p,
+            None => {
+                // 用户取消对话框 → 取消下载
+                unsafe {
+                    let _ = args.SetCancel(true);
+                    let _ = deferral.Complete();
+                }
+                return;
+            }
+        };
+        let save_path = if save_path.exists() {
+            next_available_download_path(
+                save_path.parent().unwrap_or(downloads_dir),
+                save_path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or(fallback_filename),
+            )
+        } else {
+            save_path
+        };
+        unsafe {
+            if let Err(error) = args.SetResultFilePath(
+                &HSTRING::from(save_path.to_string_lossy().as_ref()),
+            ) {
+                log::error!("[DownloadStarting] SetResultFilePath failed: {error}");
+                let _ = args.SetCancel(true);
+                let _ = deferral.Complete();
+                return;
+            }
+            if let Err(error) = args.SetHandled(true) {
+                log::error!("[DownloadStarting] SetHandled failed: {error}");
+                let _ = args.SetCancel(true);
+                let _ = deferral.Complete();
+                return;
+            }
+        }
+        let mut total_bytes = 0;
+        unsafe {
+            let _ = operation.TotalBytesToReceive(&mut total_bytes);
+        }
+        let id = format!("dl-{}", next_id.fetch_add(1, Ordering::SeqCst));
+        let info = DownloadInfo {
+            id: id.clone(),
+            url: uri,
+            filename: save_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("download")
+                .to_string(),
+            mime_type,
+            total_bytes,
+            received_bytes: 0,
+            state: "in_progress".to_string(),
+            save_path: save_path.to_string_lossy().to_string(),
+        };
+        downloads.insert(
+            id.clone(),
+            DownloadEntry {
+                operation: Some(operation.clone()),
+                info: info.clone(),
+            },
+        );
+        let _ = emit.emit("browser-download-started", info);
+        register_download_progress_handlers(operation, emit, downloads, id);
+        unsafe {
+            let _ = deferral.Complete();
+        }
+    }
+}
+
+/// 注册 BytesReceivedChanged 和 StateChanged 事件处理器（进度推送 + 状态更新）
+#[cfg(target_os = "windows")]
+fn register_download_progress_handlers(
+    operation: webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2DownloadOperation,
+    emit: AppHandle,
+    downloads: Arc<DashMap<String, DownloadEntry>>,
+    id: String,
+) {
+    use webview2_com::Microsoft::Web::WebView2::Win32::{
+        COREWEBVIEW2_DOWNLOAD_STATE_COMPLETED,
+        COREWEBVIEW2_DOWNLOAD_STATE_IN_PROGRESS,
+        ICoreWebView2DownloadOperation,
+    };
+    use webview2_com::{BytesReceivedChangedEventHandler, StateChangedEventHandler};
+    let progress_emit = emit.clone();
+    let progress_downloads = downloads.clone();
+    let progress_id = id.clone();
+    let last_progress_ms = Arc::new(AtomicU64::new(0));
+    let progress_handler = BytesReceivedChangedEventHandler::create(Box::new(
+        move |sender: Option<ICoreWebView2DownloadOperation>, _args| {
+            let Some(sender) = sender else {
+                return Ok(());
+            };
+            let mut received = 0;
+            let mut total = 0;
+            unsafe {
+                let _ = sender.BytesReceived(&mut received);
+                let _ = sender.TotalBytesToReceive(&mut total);
+            }
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+            let previous = last_progress_ms.load(Ordering::Relaxed);
+            let finished = total > 0 && received >= total;
+            if !finished && now.saturating_sub(previous) < 250 {
+                return Ok(());
+            }
+            if last_progress_ms
+                .compare_exchange(previous, now, Ordering::Relaxed, Ordering::Relaxed)
+                .is_err()
+            {
+                return Ok(());
+            }
+            if let Some(mut entry) = progress_downloads.get_mut(&progress_id) {
+                entry.info.received_bytes = received;
+                entry.info.total_bytes = total;
+            }
+            let _ = progress_emit.emit(
+                "browser-download-progress",
+                serde_json::json!({
+                    "id": progress_id,
+                    "receivedBytes": received,
+                    "totalBytes": total,
+                }),
+            );
+            Ok(())
+        },
+    ));
+    let mut token = 0;
+    unsafe {
+        let _ = operation.add_BytesReceivedChanged(&progress_handler, &mut token);
+    }
+
+    let state_emit = emit;
+    let state_downloads = downloads;
+    let state_id = id;
+    let state_handler = StateChangedEventHandler::create(Box::new(
+        move |sender: Option<ICoreWebView2DownloadOperation>, _args| {
+            let Some(sender) = sender else {
+                return Ok(());
+            };
+            let mut native_state = COREWEBVIEW2_DOWNLOAD_STATE_IN_PROGRESS;
+            let mut received = 0;
+            let mut total = 0;
+            unsafe {
+                sender.State(&mut native_state)?;
+                let _ = sender.BytesReceived(&mut received);
+                let _ = sender.TotalBytesToReceive(&mut total);
+            }
+            let mut state = if native_state == COREWEBVIEW2_DOWNLOAD_STATE_COMPLETED {
+                "completed"
+            } else if native_state == COREWEBVIEW2_DOWNLOAD_STATE_IN_PROGRESS {
+                "in_progress"
+            } else {
+                "interrupted"
+            }
+            .to_string();
+            if let Some(mut entry) = state_downloads.get_mut(&state_id) {
+                if entry.info.state == "cancelled" {
+                    state = "cancelled".to_string();
+                }
+                entry.info.received_bytes = received;
+                entry.info.total_bytes = total;
+                entry.info.state = state.clone();
+                if state == "completed" || state == "cancelled" {
+                    entry.operation = None;
+                }
+            }
+            let _ = state_emit.emit(
+                "browser-download-progress",
+                serde_json::json!({
+                    "id": state_id,
+                    "receivedBytes": received,
+                    "totalBytes": total,
+                }),
+            );
+            let _ = state_emit.emit(
+                "browser-download-state-changed",
+                serde_json::json!({ "id": state_id, "state": state }),
+            );
+            Ok(())
+        },
+    ));
+    let mut token = 0;
+    unsafe {
+        let _ = operation.add_StateChanged(&state_handler, &mut token);
+    }
+}
+
 pub struct BrowserState {
     tabs: Arc<DashMap<String, BrowserTab>>,
-    next_cdp_port: AtomicU16,
     downloads: Arc<DashMap<String, DownloadEntry>>,
     next_download_id: Arc<AtomicU64>,
+    lifecycle: tokio::sync::Mutex<()>,
 }
 
 impl BrowserState {
     pub fn new() -> Self {
         Self {
             tabs: Arc::new(DashMap::new()),
-            next_cdp_port: AtomicU16::new(CDP_PORT_START),
             downloads: Arc::new(DashMap::new()),
             next_download_id: Arc::new(AtomicU64::new(1)),
+            lifecycle: tokio::sync::Mutex::new(()),
         }
     }
 
     /// 创建浏览器标签（在 Rust 侧创建 WebView，配置 on_navigation 允许外部导航）
-    pub fn create_tab(
+    pub async fn create_tab(
         &self,
         app: &AppHandle,
         id: &str,
@@ -279,134 +646,176 @@ impl BrowserState {
         is_incognito: bool,
         ad_block_enabled: bool,
     ) -> Result<CreateTabResult, String> {
-        let cdp_port = self.next_cdp_port.fetch_add(1, Ordering::SeqCst);
+        let _lifecycle_guard = self.lifecycle.lock().await;
+        let cdp_port = CDP_PORT;
         let webview_label = format!("browser-{}", id);
+
+        // A tab ID owns exactly one native WebView for its whole lifetime.
+        // Replacing a duplicate here can overlap WebView2 teardown and creation.
+        if self.tabs.contains_key(id) || app.get_webview(&webview_label).is_some() {
+            return Err(format!("Browser tab {id} already exists"));
+        }
 
         let parsed_url: Url = url
             .parse()
             .map_err(|e| format!("Invalid URL: {}", e))?;
 
+        // 导航事件可能在首次 load_url 后立即抵达；先登记元数据，确保事件能更新正确的标签。
+        let tab = BrowserTab {
+            id: id.to_string(),
+            title: "New Tab".to_string(),
+            url: url.to_string(),
+            cdp_port,
+            webview_label: webview_label.clone(),
+            is_ai_controlled: false,
+            zoom_factor: 1.0,
+            is_incognito,
+            is_muted: false,
+        };
+        self.tabs.insert(id.to_string(), tab);
+
         // 获取主窗口
-        let window = app
-            .get_window("main")
-            .ok_or_else(|| "Main window not found".to_string())?;
 
         // 为 on_navigation 闭包克隆所需变量
         let tabs = self.tabs.clone();
         let app_handle = app.clone();
-        let app_handle2 = app.clone();
         let tab_id = id.to_string();
         let tab_id_events = tab_id.clone();
-        let downloads = self.downloads.clone();
-        let next_download_id = self.next_download_id.clone();
+        let download_events = self.downloads.clone();
+        let download_event_ids = self.next_download_id.clone();
+        let download_event_app = app.clone();
+        let new_window_app = app.clone();
+        let new_window_source_id = id.to_string();
+        let title_app = app.clone();
+        let title_tab_id = id.to_string();
 
-        // 注入 tab ID 标记和页面事件监听脚本
-        let mut init_script = format!(
-            "window.__mona_tab_id = '{}';\n{}",
-            id, TAB_INIT_SCRIPT
-        );
-        // 如果启用广告拦截，追加广告拦截脚本
-        if ad_block_enabled {
-            init_script.push('\n');
-            init_script.push_str(AD_BLOCK_SCRIPT);
-        }
-
+        // 仅在需要时注入广告拦截脚本；浏览器页面不注入应用桥接代码。
+        let init_script = ad_block_enabled.then_some(AD_BLOCK_SCRIPT);
+        let window = app
+            .get_window("main")
+            .ok_or_else(|| "Main window not found".to_string())?;
         let webview_builder = WebviewBuilder::new(&webview_label, WebviewUrl::External(parsed_url))
+            .initialization_script(browser_initialization_script(id))
+            .incognito(is_incognito)
+            .on_new_window(move |url, _features| {
+                emit_browser_event(
+                    new_window_app.clone(),
+                    "browser-open-new-tab",
+                    serde_json::json!({
+                        "sourceTabId": new_window_source_id,
+                        "url": url.to_string(),
+                    }),
+                );
+                NewWindowResponse::Deny
+            })
+            .on_document_title_changed(move |_webview, title| {
+                if !title.is_empty() {
+                    emit_browser_event(
+                        title_app.clone(),
+                        "browser-tab-title-changed",
+                        serde_json::json!({ "id": title_tab_id, "title": title }),
+                    );
+                }
+            })
             .on_navigation(move |url| {
-                let scheme = url.scheme();
-                let allowed = scheme == "https" || scheme == "http";
+                let allowed = matches!(url.scheme(), "https" | "http" | "blob" | "data")
+                    || url.as_str() == "about:blank";
                 if allowed {
-                    // 更新 DashMap 中的 tab URL
                     if let Some(mut tab) = tabs.get_mut(&tab_id) {
                         tab.url = url.to_string();
                     }
-                    // 通知前端 URL 变化
-                    let _ = app_handle.emit(
+                    emit_browser_event(
+                        app_handle.clone(),
                         "browser-url-changed",
                         serde_json::json!({ "id": tab_id, "url": url.to_string() }),
                     );
-                    // 通知前端导航开始
-                    let _ = app_handle.emit(
+                    emit_browser_event(
+                        app_handle.clone(),
                         "browser-nav-started",
                         serde_json::json!({ "id": tab_id, "url": url.to_string() }),
                     );
                 }
                 allowed
-            })
-            .initialization_script(init_script);
+            });
 
-        // 初始位置放在屏幕外，避免 WebView 覆盖工具栏
-        // updateWebviewBounds 会在前端将其移到正确位置
-        let child_webview = window
+        let webview_builder = match init_script {
+            Some(script) => webview_builder.initialization_script(script),
+            None => webview_builder,
+        };
+
+        #[cfg(target_os = "windows")]
+        let child_result = {
+            let main = app
+                .get_webview("main")
+                .ok_or_else(|| "Main webview not found".to_string())?;
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            main.with_webview(move |webview| {
+                let result = window
+                    .add_child(
+                        webview_builder.with_environment(webview.environment()),
+                        tauri::LogicalPosition::new(-9999, -9999),
+                        tauri::LogicalSize::new(1, 1),
+                    )
+                    .map_err(|error| error.to_string());
+                let _ = tx.send(result);
+            })
+            .map_err(|error| error.to_string())?;
+            match tokio::time::timeout(std::time::Duration::from_secs(15), rx).await {
+                Ok(Ok(r)) => r,
+                Ok(Err(_)) => {
+                    return Err("Browser tab creation was cancelled".to_string());
+                }
+                Err(_) => {
+                    return Err("Timed out creating browser tab".to_string());
+                }
+            }
+        };
+
+        #[cfg(not(target_os = "windows"))]
+        let child_result = window
             .add_child(
                 webview_builder,
                 tauri::LogicalPosition::new(-9999, -9999),
                 tauri::LogicalSize::new(1, 1),
             )
-            .map_err(|e| format!("Failed to create webview: {}", e))?;
+            .map_err(|error| error.to_string());
 
-        // 注册 WebView2 事件处理器
-        let emit_handle = app_handle2.clone();
-        child_webview.with_webview(move |wv| {
+        let child_webview = match child_result {
+            Ok(webview) => webview,
+            Err(error) => {
+                self.tabs.remove(id);
+                return Err(format!("Failed to create browser tab: {error}"));
+            }
+        };
+        if let Err(error) = child_webview.hide() {
+            let _ = child_webview.close();
+            self.tabs.remove(id);
+            return Err(error.to_string());
+        }
+
+        // Tauri 没有历史状态 Hook，且页面加载 Hook 不提供导航成功状态；
+        // 这里只保留这两个 WebView2 事件的唯一处理器。
+        let emit_handle = app.clone();
+        if let Err(error) = child_webview.with_webview(move |wv| {
             #[cfg(target_os = "windows")]
             {
                 use webview2_com::Microsoft::Web::WebView2::Win32::{
                     ICoreWebView2,
                     ICoreWebView2_4,
-                    ICoreWebView2NewWindowRequestedEventArgs,
-                    ICoreWebView2NavigationCompletedEventArgs,
                     ICoreWebView2DownloadStartingEventArgs,
-                    ICoreWebView2DownloadOperation,
+                    ICoreWebView2NavigationCompletedEventArgs,
                 };
                 use webview2_com::{
-                    NewWindowRequestedEventHandler,
-                    NavigationCompletedEventHandler,
-                    DocumentTitleChangedEventHandler,
-                    HistoryChangedEventHandler,
                     DownloadStartingEventHandler,
-                    BytesReceivedChangedEventHandler,
-                    StateChangedEventHandler,
+                    NavigationCompletedEventHandler,
+                    HistoryChangedEventHandler,
                 };
-                use windows::core::IUnknown;
-                use windows::core::Interface;
-                use windows_strings::PWSTR;
-                use windows::core::HSTRING;
+                use windows::core::{Interface, IUnknown};
 
                 let controller = wv.controller();
                 let core_webview = unsafe { controller.CoreWebView2().unwrap() };
 
-                // 1. NewWindowRequested — 拦截 target="_blank"
-                let emit = emit_handle.clone();
-                let handler = NewWindowRequestedEventHandler::create(Box::new(
-                    move |_sender: Option<ICoreWebView2>,
-                          args: Option<ICoreWebView2NewWindowRequestedEventArgs>| {
-                        if let Some(args) = args {
-                            let mut raw_uri = PWSTR::null();
-                            let uri = unsafe {
-                                match args.Uri(&mut raw_uri) {
-                                    Ok(()) => {
-                                        let s = raw_uri.to_string().unwrap_or_default();
-                                        windows::Win32::System::Com::CoTaskMemFree(Some(raw_uri.as_ptr() as *const _));
-                                        s
-                                    }
-                                    Err(_) => String::new(),
-                                }
-                            };
-                            if !uri.is_empty() {
-                                let _ = emit.emit(
-                                    "browser-open-new-tab",
-                                    serde_json::json!({ "url": uri }),
-                                );
-                            }
-                            unsafe { let _ = args.SetHandled(true); }
-                        }
-                        Ok(())
-                    },
-                ));
-                let mut token: i64 = 0;
-                unsafe { let _ = core_webview.add_NewWindowRequested(&handler, &mut token); }
-
-                // 2. NavigationCompleted — 加载完成/失败
+                // NavigationCompleted — 加载完成/失败
                 let nav_emit = emit_handle.clone();
                 let nav_tab_id = tab_id_events.clone();
                 let nav_handler = NavigationCompletedEventHandler::create(Box::new(
@@ -417,7 +826,8 @@ impl BrowserState {
                             unsafe {
                                 let _ = args.IsSuccess(&mut success);
                             }
-                            let _ = nav_emit.emit(
+                            emit_browser_event(
+                                nav_emit.clone(),
                                 "browser-nav-completed",
                                 serde_json::json!({ "id": nav_tab_id, "success": success.as_bool() }),
                             );
@@ -428,34 +838,7 @@ impl BrowserState {
                 let mut token: i64 = 0;
                 unsafe { let _ = core_webview.add_NavigationCompleted(&nav_handler, &mut token); }
 
-                // 3. DocumentTitleChanged — 标题变化
-                let title_emit = emit_handle.clone();
-                let title_tab_id = tab_id_events.clone();
-                let title_handler = DocumentTitleChangedEventHandler::create(Box::new(
-                    move |sender: Option<ICoreWebView2>,
-                          _args: Option<IUnknown>| {
-                        if let Some(sender) = sender {
-                            let mut title = PWSTR::null();
-                            unsafe {
-                                if sender.DocumentTitle(&mut title).is_ok() {
-                                    let title_str = title.to_string().unwrap_or_default();
-                                    windows::Win32::System::Com::CoTaskMemFree(Some(title.as_ptr() as *const _));
-                                    if !title_str.is_empty() {
-                                        let _ = title_emit.emit(
-                                            "browser-tab-title-changed",
-                                            serde_json::json!({ "id": title_tab_id, "title": title_str }),
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                        Ok(())
-                    },
-                ));
-                let mut token: i64 = 0;
-                unsafe { let _ = core_webview.add_DocumentTitleChanged(&title_handler, &mut token); }
-
-                // 4. HistoryChanged — 后退/前进按钮状态
+                // HistoryChanged — 后退/前进按钮状态
                 let hist_emit = emit_handle.clone();
                 let hist_tab_id = tab_id_events.clone();
                 let hist_handler = HistoryChangedEventHandler::create(Box::new(
@@ -468,7 +851,8 @@ impl BrowserState {
                                 let _ = sender.CanGoBack(&mut can_go_back);
                                 let _ = sender.CanGoForward(&mut can_go_forward);
                             }
-                            let _ = hist_emit.emit(
+                            emit_browser_event(
+                                hist_emit.clone(),
                                 "browser-history-changed",
                                 serde_json::json!({ "id": hist_tab_id, "canGoBack": can_go_back.as_bool(), "canGoForward": can_go_forward.as_bool() }),
                             );
@@ -479,161 +863,112 @@ impl BrowserState {
                 let mut token: i64 = 0;
                 unsafe { let _ = core_webview.add_HistoryChanged(&hist_handler, &mut token); }
 
-                // 5. DownloadStarting — 拦截下载，自定义保存路径，通知前端
-                let dl_emit = emit_handle.clone();
-                let dl_downloads = downloads.clone();
-                let dl_next_id = next_download_id.clone();
+                // PermissionRequested — 权限管理（地理位置、通知、摄像头等默认拒绝，剪贴板允许）
+                // DownloadStarting is the single download owner. Its COM
+                // operation outlives the source tab, matching browser behavior.
+                let dl_emit = download_event_app.clone();
+                let dl_downloads = download_events.clone();
+                let dl_next_id = download_event_ids.clone();
+                let app_dialog = download_event_app.clone();
                 let dl_handler = DownloadStartingEventHandler::create(Box::new(
                     move |_sender: Option<ICoreWebView2>,
                           args: Option<ICoreWebView2DownloadStartingEventArgs>| {
-                        if let Some(args) = args {
-                            // 获取 DownloadOperation
-                            let operation = match unsafe { args.DownloadOperation() } {
-                                Ok(op) => op,
-                                Err(_) => return Ok(()),
-                            };
+                        let Some(args) = args else {
+                            log::warn!("[DownloadStarting] args is None");
+                            return Ok(());
+                        };
+                        let operation = match unsafe { args.DownloadOperation() } {
+                            Ok(op) => op,
+                            Err(error) => {
+                                log::error!("[DownloadStarting] DownloadOperation failed: {error}");
+                                return Err(error);
+                            }
+                        };
+                        let uri = read_webview2_string(|raw| unsafe { operation.Uri(raw) });
+                        let mime_type =
+                            read_webview2_string(|raw| unsafe { operation.MimeType(raw) });
+                        let suggested_path =
+                            read_webview2_string(|raw| unsafe { args.ResultFilePath(raw) });
+                        let fallback = url::Url::parse(&uri)
+                            .ok()
+                            .and_then(|url| {
+                                url.path_segments()
+                                    .and_then(|mut segments| segments.next_back())
+                                    .map(str::to_owned)
+                            })
+                            .filter(|name| !name.is_empty())
+                            .and_then(|name| {
+                                urlencoding::decode(&name)
+                                    .ok()
+                                    .map(|value| value.into_owned())
+                            })
+                            .unwrap_or_else(|| "download".to_string());
+                        let filename = Path::new(&suggested_path)
+                            .file_name()
+                            .and_then(|name| name.to_str())
+                            .filter(|name| !name.is_empty())
+                            .unwrap_or(&fallback)
+                            .to_string();
 
-                            // 从 operation 读取元数据
-                            let read_pwstr = |op: &ICoreWebView2DownloadOperation,
-                                              getter: unsafe fn(&ICoreWebView2DownloadOperation, *mut PWSTR) -> windows::core::Result<()>| {
-                                let mut raw = PWSTR::null();
-                                unsafe {
-                                    if getter(op, &mut raw).is_ok() {
-                                        let s = raw.to_string().unwrap_or_default();
-                                        windows::Win32::System::Com::CoTaskMemFree(Some(raw.as_ptr() as *const _));
-                                        return s;
-                                    }
-                                }
-                                String::new()
-                            };
-
-                            let uri = read_pwstr(&operation, |o, p| unsafe { o.Uri(p) });
-                            let mime_type = read_pwstr(&operation, |o, p| unsafe { o.MimeType(p) });
-
-                            // 从 URI 提取文件名
-                            let filename = {
-                                let parsed = url::Url::parse(&uri).ok();
-                                let last_segment = parsed
+                        // 用 Deferral 推迟完成，弹出文件保存对话框，让用户选择路径（对齐 Chrome）
+                        let deferral = match unsafe { args.GetDeferral() } {
+                            Ok(deferral) => deferral,
+                            Err(error) => {
+                                log::error!("[DownloadStarting] GetDeferral failed: {error}");
+                                return Err(error);
+                            }
+                        };
+                        let send_args = DownloadStartingArgsSend {
+                            args,
+                            deferral,
+                            operation: operation.clone(),
+                        };
+                        let uri_for_dialog = uri.clone();
+                        let mime_for_dialog = mime_type.clone();
+                        let dl_downloads_for_dialog = dl_downloads.clone();
+                        let dl_next_id_for_dialog = dl_next_id.clone();
+                        let dl_emit_for_dialog = dl_emit.clone();
+                        let filename_for_dialog = filename.clone();
+                        let dialog_app = app_dialog.clone();
+                        tauri::async_runtime::spawn(async move {
+                            use tauri_plugin_dialog::DialogExt;
+                            let downloads_dir = dirs::download_dir().unwrap_or_else(std::env::temp_dir);
+                            let dialog = dialog_app
+                                .dialog()
+                                .file()
+                                .set_file_name(&filename_for_dialog)
+                                .set_directory(&downloads_dir);
+                            dialog.save_file(move |file_path| {
+                                let save_path = file_path
                                     .as_ref()
-                                    .and_then(|u| u.path_segments())
-                                    .and_then(|mut seg| seg.next_back())
-                                    .filter(|s| !s.is_empty())
-                                    .map(|s| s.to_string())
-                                    .unwrap_or_else(|| "download".to_string());
-                                urlencoding::decode(&last_segment)
-                                    .map(|s| s.into_owned())
-                                    .unwrap_or(last_segment)
-                            };
-
-                            // 构造保存路径：Downloads 文件夹 + 文件名
-                            let download_dir = dirs::download_dir()
-                                .unwrap_or_else(|| std::env::temp_dir());
-                            let save_path = download_dir.join(&filename);
-                            let save_path_str = save_path.to_string_lossy().to_string();
-
-                            // 设置保存路径并标记为已处理（阻止默认下载 UI）
-                            let path_hstring = HSTRING::from(&save_path_str);
-                            unsafe {
-                                let _ = args.SetResultFilePath(&path_hstring);
-                                let _ = args.SetHandled(true);
-                            }
-
-                            let mut total_bytes: i64 = 0;
-                            unsafe {
-                                let _ = operation.TotalBytesToReceive(&mut total_bytes);
-                            }
-
-                            // 生成下载 ID
-                            let dl_id = format!("dl-{}", dl_next_id.fetch_add(1, Ordering::SeqCst));
-
-                            let info = DownloadInfo {
-                                id: dl_id.clone(),
-                                url: uri.clone(),
-                                filename: filename.clone(),
-                                mime_type: mime_type.clone(),
-                                total_bytes,
-                                received_bytes: 0,
-                                state: "in_progress".to_string(),
-                                save_path: save_path_str.clone(),
-                            };
-
-                            // 通知前端下载已开始
-                            let _ = dl_emit.emit(
-                                "browser-download-started",
-                                serde_json::to_value(&info).unwrap_or(serde_json::json!({})),
-                            );
-
-                            // 注册 BytesReceivedChanged — 下载进度
-                            let prog_emit = dl_emit.clone();
-                            let prog_id = dl_id.clone();
-                            let prog_handler = BytesReceivedChangedEventHandler::create(Box::new(
-                                move |sender: Option<ICoreWebView2DownloadOperation>, _args| {
-                                    if let Some(sender) = sender {
-                                        let mut received: i64 = 0;
-                                        let mut total: i64 = 0;
-                                        unsafe {
-                                            let _ = sender.BytesReceived(&mut received);
-                                            let _ = sender.TotalBytesToReceive(&mut total);
-                                        }
-                                        let _ = prog_emit.emit(
-                                            "browser-download-progress",
-                                            serde_json::json!({ "id": prog_id, "receivedBytes": received, "totalBytes": total }),
-                                        );
-                                    }
-                                    Ok(())
-                                },
-                            ));
-                            let mut token: i64 = 0;
-                            unsafe { let _ = operation.add_BytesReceivedChanged(&prog_handler, &mut token); }
-
-                            // 注册 StateChanged — 下载状态变化
-                            let state_emit = dl_emit.clone();
-                            let state_id = dl_id.clone();
-                            let state_downloads = dl_downloads.clone();
-                            let state_handler = StateChangedEventHandler::create(Box::new(
-                                move |sender: Option<ICoreWebView2DownloadOperation>, _args| {
-                                    if let Some(sender) = sender {
-                                        let mut dl_state = webview2_com::Microsoft::Web::WebView2::Win32::COREWEBVIEW2_DOWNLOAD_STATE::default();
-                                        unsafe {
-                                            let _ = sender.State(&mut dl_state);
-                                        }
-                                        let state_str = match dl_state.0 {
-                                            0 => "in_progress",
-                                            1 => "interrupted",
-                                            2 => "completed",
-                                            _ => "unknown",
-                                        };
-                                        let _ = state_emit.emit(
-                                            "browser-download-state-changed",
-                                            serde_json::json!({ "id": state_id, "state": state_str }),
-                                        );
-                                        // 更新存储的 DownloadInfo
-                                        if let Some(mut entry) = state_downloads.get_mut(&state_id) {
-                                            entry.info.state = state_str.to_string();
-                                            let mut received: i64 = 0;
-                                            unsafe { let _ = sender.BytesReceived(&mut received); }
-                                            entry.info.received_bytes = received;
-                                        }
-                                    }
-                                    Ok(())
-                                },
-                            ));
-                            let mut token: i64 = 0;
-                            unsafe { let _ = operation.add_StateChanged(&state_handler, &mut token); }
-
-                            // 存储 DownloadOperation
-                            dl_downloads.insert(dl_id, DownloadEntry { operation, info });
-                        }
+                                    .and_then(|p| p.as_path().map(|p| p.to_path_buf()));
+                                send_args.finish(
+                                    save_path,
+                                    &filename_for_dialog,
+                                    &downloads_dir,
+                                    dl_downloads_for_dialog,
+                                    dl_next_id_for_dialog,
+                                    dl_emit_for_dialog,
+                                    uri_for_dialog,
+                                    mime_for_dialog,
+                                );
+                            });
+                        });
                         Ok(())
                     },
                 ));
-                let mut token: i64 = 0;
-                // DownloadStarting 在 ICoreWebView2_4 上，需要 cast
-                if let Ok(cwv4) = core_webview.cast::<ICoreWebView2_4>() {
-                    unsafe { let _ = cwv4.add_DownloadStarting(&dl_handler, &mut token); }
+                let mut token = 0;
+                match core_webview.cast::<ICoreWebView2_4>() {
+                    Ok(core_webview4) => unsafe {
+                        if let Err(error) = core_webview4.add_DownloadStarting(&dl_handler, &mut token) {
+                            log::error!("failed to register browser download handler: {error}");
+                        }
+                    },
+                    Err(error) => {
+                        log::error!("WebView2 download API unavailable (cast to ICoreWebView2_4 failed): {error}");
+                    }
                 }
 
-                // 6. PermissionRequested — 权限管理（地理位置、通知、摄像头等默认拒绝，剪贴板允许）
                 use webview2_com::PermissionRequestedEventHandler;
                 use webview2_com::Microsoft::Web::WebView2::Win32::{
                     ICoreWebView2PermissionRequestedEventArgs,
@@ -666,21 +1001,11 @@ impl BrowserState {
             {
                 let _ = wv;
             }
-        }).map_err(|e| format!("Failed to register WebView event handlers: {}", e))?;
-
-        let tab = BrowserTab {
-            id: id.to_string(),
-            title: "New Tab".to_string(),
-            url: url.to_string(),
-            cdp_port,
-            webview_label,
-            is_ai_controlled: false,
-            zoom_factor: 1.0,
-            is_incognito,
-            is_muted: false,
-        };
-
-        self.tabs.insert(id.to_string(), tab);
+        }) {
+            let _ = child_webview.close();
+            self.tabs.remove(id);
+            return Err(format!("Failed to register browser events: {error}"));
+        }
 
         // 通知前端新标签已创建（AI 通过 IPC 创建时前端不知道）
         let _ = app.emit(
@@ -700,17 +1025,15 @@ impl BrowserState {
     }
 
     /// 关闭标签
-    pub fn close_tab(&self, app: &AppHandle, id: &str) -> Result<(), String> {
-        if let Some((_, tab)) = self.tabs.remove(id) {
-            // 通过 label 获取子 WebView 并关闭
-            if let Some(webview) = app.get_webview(&tab.webview_label) {
-                let _ = webview.close();
-            }
-            let _ = app.emit("browser-tab-closed", id);
-            Ok(())
-        } else {
-            Err(format!("Tab {} not found", id))
+    pub async fn close_tab(&self, app: &AppHandle, id: &str) -> Result<(), String> {
+        let _lifecycle_guard = self.lifecycle.lock().await;
+        if !self.tabs.contains_key(id) {
+            return Err(format!("Tab {} not found", id));
         }
+        remove_native_webview(app, id).await?;
+        self.tabs.remove(id);
+        let _ = app.emit("browser-tab-closed", id);
+        Ok(())
     }
 
     /// 更新标签 URL
@@ -754,21 +1077,57 @@ impl BrowserState {
     }
 
     /// 导航标签到指定 URL（用于 target="_blank" 新窗口请求等场景）
-    pub fn navigate_tab(&self, app: &AppHandle, id: &str, url: &str) -> Result<(), String> {
-        let tab = self
+    pub async fn set_tab_bounds(
+        &self,
+        app: &AppHandle,
+        id: &str,
+        left: f64,
+        top: f64,
+        width: f64,
+        height: f64,
+        visible: bool,
+    ) -> Result<(), String> {
+        if !self.tabs.contains_key(id) {
+            return Err(format!("Tab {} not found", id));
+        }
+        let webview = get_browser_webview(app, id)?;
+        if !visible {
+            webview.hide().map_err(|error| error.to_string())?;
+            return Ok(());
+        }
+        webview
+            .set_position(tauri::LogicalPosition::new(left, top))
+            .map_err(|error| error.to_string())?;
+        webview
+            .set_size(tauri::LogicalSize::new(width.max(1.0), height.max(1.0)))
+            .map_err(|error| error.to_string())?;
+        webview.show().map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
+    /// 隐藏除当前活动标签外的所有原生浏览器子 WebView。
+    pub async fn hide_tabs_except(&self, app: &AppHandle, active_id: Option<&str>) -> Result<(), String> {
+        let ids = self
             .tabs
-            .get(id)
-            .ok_or_else(|| format!("Tab {} not found", id))?;
-        let webview = app
-            .get_webview(&tab.webview_label)
-            .ok_or_else(|| format!("WebView {} not found", tab.webview_label))?;
-        let parsed_url: Url = url
-            .parse()
-            .map_err(|e| format!("Invalid URL: {}", e))?;
+            .iter()
+            .filter(|tab| Some(tab.key().as_str()) != active_id)
+            .map(|tab| tab.key().clone())
+            .collect::<Vec<_>>();
+
+        for id in ids {
+            get_browser_webview(app, &id)?
+                .hide()
+                .map_err(|error| error.to_string())?;
+        }
+        Ok(())
+    }
+
+    pub async fn navigate_tab(&self, app: &AppHandle, id: &str, url: &str) -> Result<(), String> {
+        let parsed_url = Url::parse(url).map_err(|e| format!("Invalid URL: {}", e))?;
+        let webview = get_browser_webview(app, id)?;
         webview
             .navigate(parsed_url)
-            .map_err(|e| format!("Navigate failed: {}", e))?;
-        drop(tab); // 释放 DashMap 引用后再修改
+            .map_err(|error| format!("Navigate failed: {}", error))?;
         if let Some(mut tab) = self.tabs.get_mut(id) {
             tab.url = url.to_string();
         }
@@ -776,71 +1135,32 @@ impl BrowserState {
     }
 
     /// 后退（通过 JS history.back()）
-    pub fn go_back(&self, app: &AppHandle, id: &str) -> Result<(), String> {
-        let tab = self
-            .tabs
-            .get(id)
-            .ok_or_else(|| format!("Tab {} not found", id))?;
-        let webview = app
-            .get_webview(&tab.webview_label)
-            .ok_or_else(|| format!("WebView {} not found", tab.webview_label))?;
-        webview
+    pub async fn go_back(&self, app: &AppHandle, id: &str) -> Result<(), String> {
+        get_browser_webview(app, id)?
             .eval("if(window.history.length>1) window.history.back();")
-            .map_err(|e| format!("Go back failed: {}", e))
+            .map_err(|error| format!("Go back failed: {}", error))
     }
 
     /// 前进（通过 JS history.forward()）
-    pub fn go_forward(&self, app: &AppHandle, id: &str) -> Result<(), String> {
-        let tab = self
-            .tabs
-            .get(id)
-            .ok_or_else(|| format!("Tab {} not found", id))?;
-        let webview = app
-            .get_webview(&tab.webview_label)
-            .ok_or_else(|| format!("WebView {} not found", tab.webview_label))?;
-        webview
+    pub async fn go_forward(&self, app: &AppHandle, id: &str) -> Result<(), String> {
+        get_browser_webview(app, id)?
             .eval("window.history.forward();")
-            .map_err(|e| format!("Go forward failed: {}", e))
+            .map_err(|error| format!("Go forward failed: {}", error))
     }
 
     /// 刷新（通过 JS location.reload()）
-    pub fn reload(&self, app: &AppHandle, id: &str) -> Result<(), String> {
-        let tab = self
-            .tabs
-            .get(id)
-            .ok_or_else(|| format!("Tab {} not found", id))?;
-        let webview = app
-            .get_webview(&tab.webview_label)
-            .ok_or_else(|| format!("WebView {} not found", tab.webview_label))?;
-        webview
-            .eval("window.location.reload();")
-            .map_err(|e| format!("Reload failed: {}", e))
+    pub async fn reload(&self, app: &AppHandle, id: &str) -> Result<(), String> {
+        get_browser_webview(app, id)?
+            .reload()
+            .map_err(|error| format!("Reload failed: {}", error))
     }
 
     /// 设置页面缩放（0.25 ~ 5.0）
-    pub fn set_zoom(&self, app: &AppHandle, id: &str, zoom_factor: f64) -> Result<(), String> {
-        let tab = self
-            .tabs
-            .get(id)
-            .ok_or_else(|| format!("Tab {} not found", id))?;
-        let webview = app
-            .get_webview(&tab.webview_label)
-            .ok_or_else(|| format!("WebView {} not found", tab.webview_label))?;
+    pub async fn set_zoom(&self, app: &AppHandle, id: &str, zoom_factor: f64) -> Result<(), String> {
         let clamped = zoom_factor.clamp(0.25, 5.0);
-        webview.with_webview(move |wv| {
-            #[cfg(target_os = "windows")]
-            {
-                let controller = wv.controller();
-                unsafe {
-                    let _ = controller.SetZoomFactor(clamped);
-                }
-            }
-            #[cfg(not(target_os = "windows"))]
-            {
-                let _ = wv;
-                let _ = clamped;
-            }
-        }).map_err(|e| format!("Set zoom failed: {}", e))?;
+        get_browser_webview(app, id)?
+            .set_zoom(clamped)
+            .map_err(|error| format!("Set zoom failed: {}", error))?;
         if let Some(mut tab) = self.tabs.get_mut(id) {
             tab.zoom_factor = clamped;
         }
@@ -857,34 +1177,113 @@ impl BrowserState {
     }
 
     /// 打印当前页面
-    pub fn print_page(&self, app: &AppHandle, id: &str) -> Result<(), String> {
-        let tab = self
-            .tabs
-            .get(id)
-            .ok_or_else(|| format!("Tab {} not found", id))?;
-        let webview = app
-            .get_webview(&tab.webview_label)
-            .ok_or_else(|| format!("WebView {} not found", tab.webview_label))?;
-        webview
+    pub async fn print_page(&self, app: &AppHandle, id: &str) -> Result<(), String> {
+        get_browser_webview(app, id)?
             .eval("window.print();")
-            .map_err(|e| format!("Print failed: {}", e))
+            .map_err(|error| format!("Print failed: {}", error))
     }
 
     /// 在指定标签的 WebView 中执行 JS 代码
-    pub fn eval_script(&self, app: &AppHandle, id: &str, script: &str) -> Result<(), String> {
-        let tab = self
-            .tabs
-            .get(id)
-            .ok_or_else(|| format!("Tab {} not found", id))?;
-        let webview = app
-            .get_webview(&tab.webview_label)
-            .ok_or_else(|| format!("WebView {} not found", tab.webview_label))?;
-        webview
+    pub async fn eval_script(&self, app: &AppHandle, id: &str, script: &str) -> Result<(), String> {
+        get_browser_webview(app, id)?
             .eval(script)
-            .map_err(|e| format!("Eval failed: {}", e))
+            .map_err(|error| format!("Eval failed: {}", error))
     }
 
     /// WebView 内部 URL 变化回调
+    pub async fn clear_cache(&self, app: &AppHandle) -> Result<(), String> {
+        let id = self
+            .tabs
+            .iter()
+            .next()
+            .map(|tab| tab.key().clone())
+            .ok_or_else(|| "No browser tab found".to_string())?;
+
+        get_browser_webview(app, &id)?
+            .with_webview(|webview| {
+            #[cfg(target_os = "windows")]
+            {
+                use webview2_com::CallDevToolsProtocolMethodCompletedHandler;
+                use windows::core::HSTRING;
+
+                if let Ok(core_webview) = unsafe { webview.controller().CoreWebView2() } {
+                    let handler = CallDevToolsProtocolMethodCompletedHandler::create(
+                        Box::new(|_result: windows::core::Result<()>, _json: String| Ok(())),
+                    );
+                    unsafe {
+                        let _ = core_webview.CallDevToolsProtocolMethod(
+                            &HSTRING::from("Network.clearBrowserCache"),
+                            &HSTRING::from("{}"),
+                            &handler,
+                        );
+                    }
+                }
+            }
+        })
+        .map_err(|error| error.to_string())
+    }
+
+    pub async fn eval_script_result(
+        &self,
+        app: &AppHandle,
+        id: &str,
+        script: &str,
+    ) -> Result<serde_json::Value, String> {
+        let script = script.to_string();
+        let (tx, rx) = tokio::sync::oneshot::channel::<Result<String, String>>();
+        let tx = Arc::new(Mutex::new(Some(tx)));
+        get_browser_webview(app, id)?
+            .with_webview(move |webview| {
+            #[cfg(target_os = "windows")]
+            {
+                use webview2_com::ExecuteScriptCompletedHandler;
+                use windows::core::HSTRING;
+
+                match unsafe { webview.controller().CoreWebView2() } {
+                    Ok(core_webview) => {
+                        let callback_tx = tx.clone();
+                        let handler = ExecuteScriptCompletedHandler::create(Box::new(move |status, result| {
+                            if let Some(tx) = callback_tx.lock().ok().and_then(|mut sender| sender.take()) {
+                                let result = status
+                                    .map(|_| result)
+                                    .map_err(|error| error.to_string());
+                                let _ = tx.send(result);
+                            }
+                            Ok(())
+                        }));
+                        if let Err(error) = unsafe {
+                            core_webview.ExecuteScript(&HSTRING::from(script), &handler)
+                        } {
+                            if let Some(tx) = tx.lock().ok().and_then(|mut sender| sender.take()) {
+                                let _ = tx.send(Err(error.to_string()));
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        if let Some(tx) = tx.lock().ok().and_then(|mut sender| sender.take()) {
+                            let _ = tx.send(Err(error.to_string()));
+                        }
+                    }
+                }
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                let _ = webview;
+                let _ = script;
+                if let Some(tx) = tx.lock().ok().and_then(|mut sender| sender.take()) {
+                    let _ = tx.send(Err("Browser script results are unsupported".to_string()));
+                }
+            }
+        })
+        .map_err(|error| format!("Eval failed: {}", error))?;
+
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), rx)
+            .await
+            .map_err(|_| "Timed out waiting for browser script result".to_string())?
+            .map_err(|_| "Browser script result channel closed".to_string())??;
+        decode_script_json(&result).ok_or_else(|| "Browser script returned invalid JSON".to_string())
+    }
+
     pub fn on_url_changed(&self, app: &AppHandle, id: &str, url: &str) -> Result<(), String> {
         if let Some(mut tab) = self.tabs.get_mut(id) {
             tab.url = url.to_string();
@@ -900,11 +1299,19 @@ impl BrowserState {
 
     /// 取消下载
     pub fn cancel_download(&self, id: &str) -> Result<(), String> {
-        let entry = self.downloads.get(id)
-            .ok_or_else(|| format!("Download {} not found", id))?;
+        // 先 clone COM 引用并 drop 读锁，避免在持有 DashMap 读锁时
+        // 调用 COM 方法（可能同步触发事件回调，回调里 get_mut 会死锁）
+        #[cfg(target_os = "windows")]
+        let operation_opt = {
+            let entry = self.downloads.get(id)
+                .ok_or_else(|| format!("Download {} not found", id))?;
+            entry.operation.clone()
+        };
         #[cfg(target_os = "windows")]
         {
-            unsafe { let _ = entry.operation.Cancel(); }
+            let operation = operation_opt
+                .ok_or_else(|| "Download controls unavailable".to_string())?;
+            unsafe { let _ = operation.Cancel(); }
         }
         if let Some(mut entry) = self.downloads.get_mut(id) {
             entry.info.state = "cancelled".to_string();
@@ -914,22 +1321,34 @@ impl BrowserState {
 
     /// 暂停下载
     pub fn pause_download(&self, id: &str) -> Result<(), String> {
-        let entry = self.downloads.get(id)
-            .ok_or_else(|| format!("Download {} not found", id))?;
+        #[cfg(target_os = "windows")]
+        let operation_opt = {
+            let entry = self.downloads.get(id)
+                .ok_or_else(|| format!("Download {} not found", id))?;
+            entry.operation.clone()
+        };
         #[cfg(target_os = "windows")]
         {
-            unsafe { let _ = entry.operation.Pause(); }
+            let operation = operation_opt
+                .ok_or_else(|| "Download controls unavailable".to_string())?;
+            unsafe { let _ = operation.Pause(); }
         }
         Ok(())
     }
 
     /// 恢复下载
     pub fn resume_download(&self, id: &str) -> Result<(), String> {
-        let entry = self.downloads.get(id)
-            .ok_or_else(|| format!("Download {} not found", id))?;
+        #[cfg(target_os = "windows")]
+        let operation_opt = {
+            let entry = self.downloads.get(id)
+                .ok_or_else(|| format!("Download {} not found", id))?;
+            entry.operation.clone()
+        };
         #[cfg(target_os = "windows")]
         {
-            unsafe { let _ = entry.operation.Resume(); }
+            let operation = operation_opt
+                .ok_or_else(|| "Download controls unavailable".to_string())?;
+            unsafe { let _ = operation.Resume(); }
         }
         Ok(())
     }
@@ -957,52 +1376,25 @@ impl BrowserState {
 
     /// 获取当前页面的 Cookie（通过 JS document.cookie，仅返回非 HttpOnly 的 cookie）
     /// 结果通过 Tauri event "browser-cookies-result" 回传
-    pub fn get_cookies(&self, app: &AppHandle, id: &str) -> Result<(), String> {
-        let tab = self
-            .tabs
-            .get(id)
-            .ok_or_else(|| format!("Tab {} not found", id))?;
-        let webview = app
-            .get_webview(&tab.webview_label)
-            .ok_or_else(|| format!("WebView {} not found", tab.webview_label))?;
-        let tab_id = id.to_string();
-        let emit_handle = app.clone();
-        let js = format!(
-            r#"
-            (function() {{
-                var cookies = [];
-                var cookieStr = document.cookie || '';
-                cookieStr.split(';').forEach(function(pair) {{
-                    var idx = pair.indexOf('=');
-                    if (idx > 0) {{
-                        var name = pair.substring(0, idx).trim();
-                        var value = pair.substring(idx + 1).trim();
-                        cookies.push({{ name: name, value: value, domain: location.hostname, path: '/' }});
-                    }}
-                }});
-                if (window.__TAURI__ && window.__TAURI__.event) {{
-                    try {{ window.__TAURI__.event.emit('browser-cookies-result', {{ id: '{}', cookies: cookies }}); }} catch(e) {{}}
-                }}
-            }})();
-            "#,
-            tab_id
+    pub async fn get_cookies(&self, app: &AppHandle, id: &str) -> Result<(), String> {
+        let js = r#"
+            (function() {
+                return JSON.stringify((document.cookie || '').split(';').filter(Boolean).map(function(pair) {
+                    var index = pair.indexOf('=');
+                    return { name: pair.slice(0, index).trim(), value: pair.slice(index + 1).trim(), domain: location.hostname, path: '/' };
+                }));
+            })()
+        "#;
+        let cookies = self.eval_script_result(app, id, js).await?;
+        let _ = app.emit(
+            "browser-cookies-result",
+            serde_json::json!({ "id": id, "cookies": cookies }),
         );
-        // 闭包需要 'static，使用 emit_handle 而非 app
-        let _ = emit_handle;
-        webview
-            .eval(&js)
-            .map_err(|e| format!("Get cookies failed: {}", e))
+        Ok(())
     }
 
     /// 清除当前页面的 Cookie（通过 JS 设置过期）
-    pub fn clear_cookies(&self, app: &AppHandle, id: &str) -> Result<(), String> {
-        let tab = self
-            .tabs
-            .get(id)
-            .ok_or_else(|| format!("Tab {} not found", id))?;
-        let webview = app
-            .get_webview(&tab.webview_label)
-            .ok_or_else(|| format!("WebView {} not found", tab.webview_label))?;
+    pub async fn clear_cookies(&self, app: &AppHandle, id: &str) -> Result<(), String> {
         let js = r#"
             (function() {
                 var cookies = document.cookie.split(';');
@@ -1018,24 +1410,19 @@ impl BrowserState {
                 });
             })();
         "#;
-        webview
+        get_browser_webview(app, id)?
             .eval(js)
-            .map_err(|e| format!("Clear cookies failed: {}", e))
+            .map_err(|error| format!("Clear cookies failed: {}", error))
     }
 
     /// 切换广告拦截状态（运行时注入或移除广告拦截脚本）
-    pub fn set_ad_block_enabled(&self, app: &AppHandle, id: &str, enabled: bool) -> Result<(), String> {
-        let tab = self
-            .tabs
-            .get(id)
-            .ok_or_else(|| format!("Tab {} not found", id))?;
-        let webview = app
-            .get_webview(&tab.webview_label)
-            .ok_or_else(|| format!("WebView {} not found", tab.webview_label))?;
+    pub async fn set_ad_block_enabled(&self, app: &AppHandle, id: &str, enabled: bool) -> Result<(), String> {
         if enabled {
             // 注入广告拦截脚本
             let js = AD_BLOCK_SCRIPT;
-            webview.eval(js).map_err(|e| format!("Enable ad block failed: {}", e))?;
+            get_browser_webview(app, id)?
+                .eval(js)
+                .map_err(|error| format!("Enable ad block failed: {}", error))?;
         } else {
             // 移除广告拦截样式
             let js = r#"
@@ -1045,25 +1432,20 @@ impl BrowserState {
                     window.__mona_ad_block_injected = false;
                 })();
             "#;
-            webview.eval(js).map_err(|e| format!("Disable ad block failed: {}", e))?;
+            get_browser_webview(app, id)?
+                .eval(js)
+                .map_err(|error| format!("Disable ad block failed: {}", error))?;
         }
         Ok(())
     }
 
     /// 切换标签静音状态（通过 WebView2 的 IsMuted 属性）
-    pub fn set_muted(&self, app: &AppHandle, id: &str, muted: bool) -> Result<(), String> {
-        let tab = self
-            .tabs
-            .get(id)
-            .ok_or_else(|| format!("Tab {} not found", id))?;
-        let webview = app
-            .get_webview(&tab.webview_label)
-            .ok_or_else(|| format!("WebView {} not found", tab.webview_label))?;
-        drop(tab);
+    pub async fn set_muted(&self, app: &AppHandle, id: &str, muted: bool) -> Result<(), String> {
         if let Some(mut tab) = self.tabs.get_mut(id) {
             tab.is_muted = muted;
         }
-        webview.with_webview(move |wv| {
+        get_browser_webview(app, id)?
+            .with_webview(move |wv| {
             #[cfg(target_os = "windows")]
             {
                 use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2_8;
@@ -1080,7 +1462,8 @@ impl BrowserState {
                 let _ = wv;
                 let _ = muted;
             }
-        }).map_err(|e| format!("Set muted failed: {}", e))?;
+        })
+        .map_err(|error| error.to_string())?;
         Ok(())
     }
 
@@ -1103,18 +1486,11 @@ impl BrowserState {
     // ── 高级功能 ──
 
     /// 打开开发者工具
-    pub fn open_devtools(&self, app: &AppHandle, id: &str) -> Result<(), String> {
-        let tab = self
-            .tabs
-            .get(id)
-            .ok_or_else(|| format!("Tab {} not found", id))?;
-        let webview = app
-            .get_webview(&tab.webview_label)
-            .ok_or_else(|| format!("WebView {} not found", tab.webview_label))?;
-        webview.with_webview(move |wv| {
+    pub async fn open_devtools(&self, app: &AppHandle, id: &str) -> Result<(), String> {
+        get_browser_webview(app, id)?
+            .with_webview(move |wv| {
             #[cfg(target_os = "windows")]
             {
-                use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2;
                 let controller = wv.controller();
                 let core_webview = unsafe { controller.CoreWebView2().unwrap() };
                 unsafe { let _ = core_webview.OpenDevToolsWindow(); }
@@ -1123,19 +1499,13 @@ impl BrowserState {
             {
                 let _ = wv;
             }
-        }).map_err(|e| format!("Open DevTools failed: {}", e))?;
+        })
+        .map_err(|error| error.to_string())?;
         Ok(())
     }
 
     /// 切换暗色模式（注入或移除暗色模式 CSS）
-    pub fn set_dark_mode(&self, app: &AppHandle, id: &str, enabled: bool) -> Result<(), String> {
-        let tab = self
-            .tabs
-            .get(id)
-            .ok_or_else(|| format!("Tab {} not found", id))?;
-        let webview = app
-            .get_webview(&tab.webview_label)
-            .ok_or_else(|| format!("WebView {} not found", tab.webview_label))?;
+    pub async fn set_dark_mode(&self, app: &AppHandle, id: &str, enabled: bool) -> Result<(), String> {
         if enabled {
             // 注入暗色模式 CSS（反转颜色，但保留图片/视频）
             let js = r#"
@@ -1151,7 +1521,9 @@ impl BrowserState {
                     (document.head || document.documentElement).appendChild(style);
                 })();
             "#;
-            webview.eval(js).map_err(|e| format!("Enable dark mode failed: {}", e))?;
+            get_browser_webview(app, id)?
+                .eval(js)
+                .map_err(|error| format!("Enable dark mode failed: {}", error))?;
         } else {
             // 移除暗色模式样式
             let js = r#"
@@ -1160,43 +1532,32 @@ impl BrowserState {
                     if (style) style.parentNode.removeChild(style);
                 })();
             "#;
-            webview.eval(js).map_err(|e| format!("Disable dark mode failed: {}", e))?;
+            get_browser_webview(app, id)?
+                .eval(js)
+                .map_err(|error| format!("Disable dark mode failed: {}", error))?;
         }
         Ok(())
     }
 
     /// 获取页面元信息（用于分享/二维码）
-    pub fn get_page_info(&self, app: &AppHandle, id: &str) -> Result<(), String> {
-        let tab = self
-            .tabs
-            .get(id)
-            .ok_or_else(|| format!("Tab {} not found", id))?;
-        let webview = app
-            .get_webview(&tab.webview_label)
-            .ok_or_else(|| format!("WebView {} not found", tab.webview_label))?;
-        let tab_id = id.to_string();
-        let js = format!(
-            r#"
-            (function() {{
-                var info = {{
+    pub async fn get_page_info(&self, app: &AppHandle, id: &str) -> Result<(), String> {
+        let js = r#"
+            (function() {
+                var description = document.querySelector('meta[name="description"]');
+                var ogImage = document.querySelector('meta[property="og:image"]');
+                return JSON.stringify({
                     url: location.href,
                     title: document.title || '',
-                    description: '',
-                    ogImage: ''
-                }};
-                var desc = document.querySelector('meta[name="description"]');
-                if (desc) info.description = desc.getAttribute('content') || '';
-                var ogImg = document.querySelector('meta[property="og:image"]');
-                if (ogImg) info.ogImage = ogImg.getAttribute('content') || '';
-                if (window.__TAURI__ && window.__TAURI__.event) {{
-                    try {{ window.__TAURI__.event.emit('browser-page-info-result', {{ id: '{}', info: info }}); }} catch(e) {{}}
-                }}
-            }})();
-            "#,
-            tab_id
+                    description: description ? description.getAttribute('content') || '' : '',
+                    ogImage: ogImage ? ogImage.getAttribute('content') || '' : ''
+                });
+            })()
+        "#;
+        let info = self.eval_script_result(app, id, js).await?;
+        let _ = app.emit(
+            "browser-page-info-result",
+            serde_json::json!({ "id": id, "info": info }),
         );
-        webview
-            .eval(&js)
-            .map_err(|e| format!("Get page info failed: {}", e))
+        Ok(())
     }
 }

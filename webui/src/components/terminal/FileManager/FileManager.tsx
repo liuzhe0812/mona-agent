@@ -449,6 +449,17 @@ export function FileManager({ sessionId }: Props) {
           if (file.isDir) {
             await sftpUploadDir(sessionId, file.path, remoteFilePath, fileTaskId);
           } else if (fromSide === "system" && file._rawFile) {
+            if (file.name.includes("/")) {
+              const dirPart = file.name.substring(0, file.name.lastIndexOf("/"));
+              const segments = dirPart.split("/").filter(Boolean);
+              let acc = remotePath === "/" ? "" : remotePath;
+              for (const seg of segments) {
+                acc = acc ? `${acc}/${seg}` : `/${seg}`;
+                try {
+                  await sftpMkdir(sessionId, acc);
+                } catch {}
+              }
+            }
             const buf = await file._rawFile.arrayBuffer();
             await sftpUpload(sessionId, remoteFilePath, Array.from(new Uint8Array(buf)), fileTaskId);
           } else {

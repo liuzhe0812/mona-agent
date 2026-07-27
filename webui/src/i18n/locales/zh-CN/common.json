@@ -8,7 +8,15 @@
       "title": "无法连接到 mona",
       "gatewayHint": "请确认 gateway 已启动（`mona gateway`），并且当前页面与 gateway 运行在同一台机器上。",
       "otherFeaturesHint": "笔记、设置、SSH、浏览器等功能不依赖运行时，可正常使用。",
-      "retry": "重试"
+      "retry": "重试",
+      "viewLog": "查看错误日志",
+      "logTitle": "Gateway 错误日志",
+      "logEmpty": "日志文件为空或不存在",
+      "logPath": "日志路径",
+      "logLoading": "正在读取日志…",
+      "logLoadError": "读取日志失败",
+      "copyLog": "复制日志",
+      "copyLogDone": "已复制"
     },
     "system": {
       "section": "系统",
@@ -112,8 +120,7 @@
     "aiModels": {
       "tabsAria": "模型设置类型",
       "chat": "聊天模型",
-      "image": "图片模型",
-      "embedding": "嵌入模型"
+      "image": "图片模型"
     },
     "sections": {
       "interface": "界面",
@@ -152,7 +159,7 @@
       "jinaReader": "Jina Reader",
       "imageGeneration": "图片生成",
       "imageProvider": "图片服务商",
-      "imageProviderStatus": "服务商状态",
+      "imageProviderStatus": "服务商凭证",
       "imageProviderBase": "服务商地址",
       "imageModel": "图片模型",
       "defaultAspectRatio": "默认比例",
@@ -173,12 +180,6 @@
       "ssrfWhitelist": "SSRF 白名单",
       "mcpServers": "MCP 服务器",
       "pathAppend": "PATH 追加",
-      "embeddingEnabled": "嵌入模型",
-      "embeddingEndpoint": "接入点",
-      "embeddingApiKey": "API 密钥",
-      "embeddingModel": "模型名称",
-      "embeddingDimensionality": "输出维度",
-      "embeddingSave": "保存嵌入设置",
       "configurationDocs": "配置文档"
     },
     "help": {
@@ -206,12 +207,6 @@
       "botIcon": "显示在 bot 名称旁的短 emoji 或文本。",
       "timezone": "运行时上下文和计划任务使用的 IANA 时区。",
       "toolHintMaxLength": "工具进度提示显示的最大字符数。",
-      "embeddingEnabled": "启用全局嵌入模型，用于 KB / notes-kb 向量索引。",
-      "embeddingEndpoint": "OpenAI 兼容的 embeddings 接入点，例如 https://api.openai.com/v1 或 https://dashscope.aliyuncs.com/compatible-mode/v1。",
-      "embeddingApiKey": "嵌入接口的 API 密钥，仅本地保存。",
-      "embeddingModel": "嵌入模型名称，例如 text-embedding-3-small、bge-m3。",
-      "embeddingDimensionality": "可选输出维度，留空使用模型默认值。",
-      "embeddingSave": "对新嵌入请求生效；per-vault 配置文件仍会覆盖此全局默认值。",
       "advancedReadOnly": "高级安全控制在 WebUI 中只读；需要时请谨慎编辑 config.json。"
     },
     "values": {
@@ -312,7 +307,8 @@
       "noModelMatch": "无匹配候选，可继续输入或直接使用当前值",
       "addModel": "添加模型",
       "configureProvider": "配置服务商",
-      "missingCredential": "启用图片生成前，请先配置这个服务商。"
+      "missingCredential": "启用图片生成前，请先配置这个服务商。",
+      "changeKey": "修改"
     }
   },
   "chat": {
@@ -369,6 +365,12 @@
     "loadingConversation": "正在加载对话…",
     "empty": {
       "greeting": "我可以帮你做什么？",
+      "daypart": {
+        "morning": "早上好。",
+        "afternoon": "下午好。",
+        "evening": "晚上好。",
+        "night": "夜深了。"
+      },
       "quickActions": {
         "plan": {
           "title": "创建项目计划",
@@ -443,48 +445,8 @@
       "send": "发送消息",
       "stop": "停止响应",
       "attachImage": "添加图片",
-      "imageMode": {
-        "label": "图片生成",
-        "toggle": "切换图片生成模式",
-        "placeholder": "描述或编辑图片…",
-        "aspectAria": "图片画幅",
-        "aspectLabel": "图片画幅",
-        "aspect": {
-          "auto": "自动",
-          "1_1": "方形 1:1",
-          "3_4": "竖版 3:4",
-          "9_16": "故事版 9:16",
-          "4_3": "横版 4:3",
-          "16_9": "宽屏 16:9"
-        }
-      },
-      "videoMode": {
-        "label": "视频生成",
-        "toggle": "切换视频生成模式",
-        "placeholder": "描述要生成的视频…",
-        "aspectAria": "视频画幅",
-        "aspectLabel": "视频画幅",
-        "aspect": {
-          "auto": "自动",
-          "1_1": "方形 1:1",
-          "3_4": "竖版 3:4",
-          "9_16": "故事版 9:16",
-          "4_3": "横版 4:3",
-          "16_9": "宽屏 16:9"
-        },
-        "durationAria": "视频时长",
-        "durationLabel": "视频时长",
-        "duration": {
-          "auto": "自动",
-          "s": "{{seconds}}秒"
-        },
-        "refUrlPlaceholder": "参考图片 URL（可选，用于图生视频）",
-        "refUrlAria": "参考图片 URL",
-        "refUrlClear": "清除参考图片 URL",
-        "refUrlUpload": "上传参考图片"
-      },
       "workspace": {
-        "placeholder": "选择文件夹（可选）",
+        "placeholder": "工作区",
         "clear": "清除文件夹选择"
       },
       "tools": {

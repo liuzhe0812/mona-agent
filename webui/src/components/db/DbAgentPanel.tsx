@@ -12,7 +12,6 @@ import {
   Wrench,
 } from "lucide-react";
 import { AgentLogo } from "@/components/AgentLogo";
-import { Button } from "@/components/ui/button";
 import { ThreadMessages } from "@/components/thread/ThreadMessages";
 import { useMonaStream, type SendOptions } from "@/hooks/useMonaStream";
 import { useSessionHistory } from "@/hooks/useSessions";
@@ -20,6 +19,7 @@ import type { UIMessage } from "@/lib/types";
 import { useClient } from "@/providers/ClientProvider";
 import { useDbStore } from "./store/dbStore";
 import type { QueryTab } from "./types";
+import { SqlResultCard } from "./SqlResultCard";
 import {
   type DbActionConfirmResult,
   ExplainPlanConfig,
@@ -75,6 +75,7 @@ export function DbAgentPanel({
   const pendingSendOptsRef = useRef<SendOptions | null>(null);
   const pendingNlToSqlRef = useRef(false);
   const { client } = useClient();
+  const [pendingSqlResult, setPendingSqlResult] = useState<string | null>(null);
 
   const activeTabId = useDbStore((s) => s.activeTabId);
   const queryTabs = useDbStore((s) => s.queryTabs);
@@ -108,6 +109,7 @@ export function DbAgentPanel({
   useEffect(() => {
     setDraft("");
     setNotice(null);
+    setPendingSqlResult(null);
     if (!activeTab?.agentChatId) setMessages([]);
   }, [activeTab?.id, activeTab?.agentChatId, setMessages]);
 
@@ -219,11 +221,11 @@ export function DbAgentPanel({
     const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant" && m.content);
     if (!lastAssistant?.content) return;
     const extracted = extractSql(lastAssistant.content);
-    if (extracted && activeTabId) {
-      updateTabSql(activeTabId, extracted);
+    if (extracted) {
+      setPendingSqlResult(extracted);
     }
     pendingNlToSqlRef.current = false;
-  }, [messages, isStreaming, activeTabId, updateTabSql]);
+  }, [messages, isStreaming]);
 
   const handleResetChat = useCallback(() => {
     setMessages([]);
@@ -262,17 +264,6 @@ export function DbAgentPanel({
               className="grid h-6 w-6 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
             >
               <RotateCcw className="h-3.5 w-3.5" />
-            </button>
-          ) : null}
-          {isStreaming ? (
-            <button
-              type="button"
-              aria-label="停止生成"
-              title="停止生成"
-              onClick={stop}
-              className="grid h-6 w-6 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
-            >
-              <Square className="h-3 w-3" />
             </button>
           ) : null}
         </div>
@@ -350,6 +341,17 @@ export function DbAgentPanel({
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-2.5 py-2 scrollbar-thin">
+        {pendingSqlResult && activeTabId ? (
+          <SqlResultCard
+            sql={pendingSqlResult}
+            onInsert={(sql) => {
+              const tab = useDbStore.getState().queryTabs.find((t) => t.id === activeTabId);
+              if (tab) updateTabSql(activeTabId, `${tab.sql}\n${sql}`);
+            }}
+            onReplace={(sql) => updateTabSql(activeTabId, sql)}
+            onDismiss={() => setPendingSqlResult(null)}
+          />
+        ) : null}
         <DbChat
           messages={messages}
           loading={loading}
@@ -363,19 +365,19 @@ export function DbAgentPanel({
       </div>
 
       <div className="shrink-0 p-2">
-        <div className="flex min-h-9 items-end gap-1.5 rounded-xl border border-border/75 bg-background px-2.5 py-1.5 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
+        <div className="flex min-h-[52px] items-end gap-1.5 rounded-xl border border-border/75 bg-background px-2.5 py-1.5 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
           <textarea
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {
-              if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+              if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();
-                sendDraft();
+                if (!isStreaming) sendDraft();
               }
             }}
             disabled={!activeTab?.connectionId || creatingChat}
-            className="min-h-5 flex-1 resize-none bg-transparent text-[12px] leading-5 outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
-            rows={1}
+            className="min-h-[44px] flex-1 resize-none bg-transparent text-[12px] leading-5 outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
+            rows={2}
             placeholder="输入问题，或用中文描述想查的数据..."
           />
           <button
@@ -388,21 +390,26 @@ export function DbAgentPanel({
           >
             <Zap className="h-3.5 w-3.5" />
           </button>
-          <Button
+          <button
             type="button"
-            size="icon"
-            aria-label="发送"
-            title="发送消息"
-            disabled={!activeTab?.connectionId || !draft.trim() || creatingChat || isStreaming}
-            onClick={sendDraft}
-            className="h-6 w-6 rounded-lg bg-foreground text-background hover:bg-foreground/90 disabled:bg-muted disabled:text-muted-foreground"
+            aria-label={isStreaming ? "停止生成" : "发送"}
+            title={isStreaming ? "停止生成" : "发送消息"}
+            disabled={!isStreaming && (!activeTab?.connectionId || !draft.trim() || creatingChat)}
+            onClick={isStreaming ? stop : sendDraft}
+            className={`grid h-6 w-6 shrink-0 place-items-center rounded-lg transition-colors ${
+              isStreaming
+                ? "text-destructive hover:bg-destructive/10"
+                : "bg-foreground text-background hover:bg-foreground/90 disabled:bg-muted disabled:text-muted-foreground"
+            }`}
           >
             {creatingChat ? (
               <Loader2 className="h-3 w-3 animate-spin" />
+            ) : isStreaming ? (
+              <Square className="h-3 w-3" />
             ) : (
               <Send className="h-3 w-3" />
             )}
-          </Button>
+          </button>
         </div>
       </div>
     </aside>

@@ -68,6 +68,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -95,7 +96,6 @@ import {
   logoutWeixin,
   startWeixinLogin,
   updateChannelSettings,
-  updateEmbeddingSettings,
   updateImageGenerationSettings,
   updateProviderSettings,
   updateSettings,
@@ -125,7 +125,6 @@ import { getFolderDisplayName } from "@/components/email/lib/folderUtils";
 import { useClientOptional } from "@/providers/ClientProvider";
 import type {
   ChannelInfo,
-  EmbeddingSettingsUpdate,
   ImageGenerationSettingsUpdate,
   SettingsPayload,
   VideoGenerationSettingsUpdate,
@@ -205,6 +204,7 @@ interface SettingsViewProps {
   onRestart?: () => void;
   isRestarting?: boolean;
   initialSection?: string;
+  onTriggerAgent?: (prompt: string) => void;
 }
 
 function readLocalPreferences(): LocalPreferences {
@@ -243,6 +243,7 @@ export function SettingsView({
   onRestart,
   isRestarting = false,
   initialSection,
+  onTriggerAgent,
 }: SettingsViewProps) {
   const { t } = useTranslation();
   const { token } = useClientOptional();
@@ -294,15 +295,6 @@ export function SettingsView({
     defaultAspectRatio: "16:9",
     defaultDuration: 5,
   });
-  const [embeddingForm, setEmbeddingForm] = useState<EmbeddingSettingsUpdate>({
-    enabled: false,
-    endpoint: "",
-    apiKey: "",
-    model: "",
-    outputDimensionality: null,
-  });
-  const [embeddingKeyVisible, setEmbeddingKeyVisible] = useState(false);
-  const [embeddingSaving, setEmbeddingSaving] = useState(false);
   const [webSearchKeyVisible, setWebSearchKeyVisible] = useState(false);
   const [webSearchKeyEditing, setWebSearchKeyEditing] = useState(false);
   const [form, setForm] = useState<AgentSettingsDraft>({
@@ -360,13 +352,6 @@ export function SettingsView({
     });
     setImageApiKeyDraft("");
     setVideoApiKeyDraft("");
-    setEmbeddingForm({
-      enabled: payload.embedding.enabled,
-      endpoint: payload.embedding.endpoint,
-      apiKey: "",
-      model: payload.embedding.model,
-      outputDimensionality: payload.embedding.output_dimensionality,
-    });
     if (payload.restart_required_sections) {
       setPendingRestartSections({
         runtime: payload.restart_required_sections.includes("runtime"),
@@ -455,18 +440,6 @@ export function SettingsView({
     return formDirty || videoApiKeyDraft.trim().length > 0;
   }, [videoGenerationForm, settings, videoApiKeyDraft]);
 
-  const embeddingDirty = useMemo(() => {
-    if (!settings) return false;
-    return (
-      embeddingForm.enabled !== settings.embedding.enabled ||
-      embeddingForm.endpoint !== settings.embedding.endpoint ||
-      embeddingForm.model !== settings.embedding.model ||
-      embeddingForm.outputDimensionality !== settings.embedding.output_dimensionality ||
-      // apiKey is never echoed back, so a non-empty draft means the user typed a new key
-      (embeddingForm.apiKey ?? "") !== ""
-    );
-  }, [embeddingForm, settings]);
-
   const hasPendingRestart = useMemo(
     () =>
       !!settings?.requires_restart ||
@@ -517,6 +490,7 @@ export function SettingsView({
       if (payload.requires_restart) {
         setPendingRestartSections((prev) => ({ ...prev, image: true }));
       }
+      setImageApiKeyDraft("");
       setError(null);
     } catch (err) {
       setError((err as Error).message);
@@ -542,36 +516,12 @@ export function SettingsView({
       if (payload.requires_restart) {
         setPendingRestartSections((prev) => ({ ...prev, image: true }));
       }
+      setVideoApiKeyDraft("");
       setError(null);
     } catch (err) {
       setError((err as Error).message);
     } finally {
       setVideoGenerationSaving(false);
-    }
-  };
-
-  const saveEmbeddingSettings = async () => {
-    if (!settings || !embeddingDirty || embeddingSaving) return;
-    setEmbeddingSaving(true);
-    try {
-      const update: EmbeddingSettingsUpdate = {
-        enabled: embeddingForm.enabled,
-        endpoint: embeddingForm.endpoint,
-        model: embeddingForm.model,
-        outputDimensionality: embeddingForm.outputDimensionality,
-      };
-      // Only send apiKey when the user typed a new one (never echoed back).
-      if ((embeddingForm.apiKey ?? "") !== "") {
-        update.apiKey = embeddingForm.apiKey;
-      }
-      const payload = await updateEmbeddingSettings(token, update);
-      applyPayload(payload);
-      setEmbeddingForm((prev) => ({ ...prev, apiKey: "" }));
-      setError(null);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setEmbeddingSaving(false);
     }
   };
 
@@ -870,16 +820,9 @@ export function SettingsView({
             onVideoApiKeyDraftChange={setVideoApiKeyDraft}
             videoKeyVisible={videoKeyVisible}
             onToggleVideoKeyVisible={() => setVideoKeyVisible((v) => !v)}
-            // embedding tab props
-            embeddingForm={embeddingForm}
-            embeddingDirty={embeddingDirty}
-            embeddingSaving={embeddingSaving}
-            embeddingKeyVisible={embeddingKeyVisible}
-            onEmbeddingFormChange={setEmbeddingForm}
-            onEmbeddingSave={saveEmbeddingSettings}
-            onToggleEmbeddingKeyVisible={() => setEmbeddingKeyVisible((v) => !v)}
             onRestart={onRestart}
             isRestarting={isRestarting}
+            onTriggerAgent={onTriggerAgent}
           />
         );
       case "web":
@@ -1378,17 +1321,10 @@ function AiModelsSettings({
   onVideoApiKeyDraftChange,
   videoKeyVisible,
   onToggleVideoKeyVisible,
-  // embedding tab
-  embeddingForm,
-  embeddingDirty,
-  embeddingSaving,
-  embeddingKeyVisible,
-  onEmbeddingFormChange,
-  onEmbeddingSave,
-  onToggleEmbeddingKeyVisible,
   // shared
   onRestart,
   isRestarting,
+  onTriggerAgent,
 }: {
   settings: SettingsPayload;
   // chat tab
@@ -1431,17 +1367,10 @@ function AiModelsSettings({
   onVideoApiKeyDraftChange: Dispatch<SetStateAction<string>>;
   videoKeyVisible: boolean;
   onToggleVideoKeyVisible: () => void;
-  // embedding tab
-  embeddingForm: EmbeddingSettingsUpdate;
-  embeddingDirty: boolean;
-  embeddingSaving: boolean;
-  embeddingKeyVisible: boolean;
-  onEmbeddingFormChange: Dispatch<SetStateAction<EmbeddingSettingsUpdate>>;
-  onEmbeddingSave: () => void;
-  onToggleEmbeddingKeyVisible: () => void;
   // shared
   onRestart?: () => void;
   isRestarting?: boolean;
+  onTriggerAgent?: (prompt: string) => void;
 }) {
   const { t } = useTranslation();
   const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
@@ -1453,26 +1382,7 @@ function AiModelsSettings({
         <TabsTrigger value="chat">{tx("settings.aiModels.chat", "聊天模型")}</TabsTrigger>
         <TabsTrigger value="image">{tx("settings.aiModels.image", "图片模型")}</TabsTrigger>
         <TabsTrigger value="video">{tx("settings.aiModels.video", "视频模型")}</TabsTrigger>
-        <TabsTrigger value="embedding">{tx("settings.aiModels.embedding", "嵌入模型")}</TabsTrigger>
       </TabsList>
-
-      <a
-        href="https://mona.lzfun.vip/tutorial"
-        target="_blank"
-        rel="noopener noreferrer"
-        className="mb-5 flex items-center gap-3 rounded-lg border border-emerald-200/60 bg-emerald-50/60 px-4 py-3 transition-colors hover:border-emerald-300 hover:bg-emerald-50 dark:border-emerald-900/40 dark:bg-emerald-950/20 dark:hover:bg-emerald-950/30"
-      >
-        <Sparkles className="h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
-        <div className="flex-1 text-[13px] leading-5">
-          <div className="font-medium text-emerald-700 dark:text-emerald-300">
-            还没有 API Key？免费获取 LLM / 图像 / 视频模型
-          </div>
-          <div className="text-emerald-700/60 dark:text-emerald-400/60">
-            点此查看图文教程，3 步拿到免费 Key 并配置到 Mona
-          </div>
-        </div>
-        <ExternalLink className="h-3.5 w-3.5 shrink-0 text-emerald-500 dark:text-emerald-400/70" />
-      </a>
 
       <TabsContent value="chat">
         <ModelsProvidersSettings
@@ -1497,6 +1407,7 @@ function AiModelsSettings({
           isRestarting={isRestarting}
           highlightProvider={highlightProvider}
           onHighlightConsumed={onHighlightConsumed}
+          onTriggerAgent={onTriggerAgent}
         />
       </TabsContent>
 
@@ -1543,161 +1454,7 @@ function AiModelsSettings({
           onToggleKeyVisible={onToggleVideoKeyVisible}
         />
       </TabsContent>
-
-      <TabsContent value="embedding">
-        <EmbeddingSettings
-          settings={settings}
-          form={embeddingForm}
-          dirty={embeddingDirty}
-          saving={embeddingSaving}
-          keyVisible={embeddingKeyVisible}
-          onChangeForm={onEmbeddingFormChange}
-          onSave={onEmbeddingSave}
-          onToggleKeyVisible={onToggleEmbeddingKeyVisible}
-        />
-      </TabsContent>
     </Tabs>
-  );
-}
-
-function EmbeddingSettings({
-  settings,
-  form,
-  dirty,
-  saving,
-  keyVisible,
-  onChangeForm,
-  onSave,
-  onToggleKeyVisible,
-}: {
-  settings: SettingsPayload;
-  form: EmbeddingSettingsUpdate;
-  dirty: boolean;
-  saving: boolean;
-  keyVisible: boolean;
-  onChangeForm: Dispatch<SetStateAction<EmbeddingSettingsUpdate>>;
-  onSave: () => void;
-  onToggleKeyVisible: () => void;
-}) {
-  const { t } = useTranslation();
-  const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
-  const apiKeyHint = settings.embedding.api_key_hint;
-  const apiKeyConfigured = !!apiKeyHint && apiKeyHint !== "—";
-
-  return (
-    <SettingsGroup>
-      <SettingsRow
-        title={tx("settings.rows.embeddingEnabled", "启用嵌入模型")}
-        description={tx(
-          "settings.help.embeddingEnabled",
-          "为知识库和笔记向量索引提供嵌入能力。关闭后相关功能会降级为关键词检索。",
-        )}
-      >
-        <ToggleSwitch
-          checked={form.enabled ?? false}
-          onChange={(checked) => onChangeForm((prev) => ({ ...prev, enabled: checked }))}
-        />
-      </SettingsRow>
-
-      <SettingsRow
-        title={tx("settings.rows.embeddingEndpoint", "服务商地址")}
-        description={tx(
-          "settings.help.embeddingEndpoint",
-          "OpenAI 兼容的 embeddings 接入点，例如 `https://api.openai.com/v1`",
-        )}
-      >
-        <Input
-          value={form.endpoint}
-          onChange={(event) => onChangeForm((prev) => ({ ...prev, endpoint: event.target.value }))}
-          placeholder={tx("settings.image.embeddingEndpointPlaceholder", "https://api.openai.com/v1")}
-          className="h-8 w-[min(420px,80vw)] rounded-full text-[13px]"
-        />
-      </SettingsRow>
-
-      <SettingsRow
-        title={tx("settings.rows.embeddingApiKey", "API Key")}
-        description={tx(
-          "settings.help.embeddingApiKey",
-          "嵌入服务的密钥。本地 Ollama 可留空。保存后不再回显。",
-        )}
-      >
-        <div className="flex items-center gap-2">
-          <Input
-            type={keyVisible ? "text" : "password"}
-            value={form.apiKey ?? ""}
-            onChange={(event) => onChangeForm((prev) => ({ ...prev, apiKey: event.target.value }))}
-            placeholder={apiKeyConfigured ? apiKeyHint : tx("settings.image.embeddingApiKeyPlaceholder", "输入 API Key")}
-            className="h-8 w-[min(300px,70vw)] rounded-full text-[13px]"
-          />
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            onClick={onToggleKeyVisible}
-            className="rounded-full"
-          >
-            {keyVisible ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-          </Button>
-        </div>
-      </SettingsRow>
-
-      <SettingsRow
-        title={tx("settings.rows.embeddingModel", "模型")}
-        description={tx(
-          "settings.help.embeddingModel",
-          "嵌入模型 ID，如 BAAI/bge-m3、text-embedding-3-small 等。",
-        )}
-      >
-        <Input
-          value={form.model}
-          onChange={(event) => onChangeForm((prev) => ({ ...prev, model: event.target.value }))}
-          placeholder={tx("settings.image.embeddingModelPlaceholder", "例如 BAAI/bge-m3")}
-          className="h-8 w-[min(300px,70vw)] rounded-full text-[13px]"
-        />
-      </SettingsRow>
-
-      <SettingsRow
-        title={tx("settings.rows.embeddingDimensionality", "输出维度")}
-        description={tx(
-          "settings.help.embeddingDimensionality",
-          "可选。指定嵌入向量维度，留空则使用模型默认值。仅部分模型支持。",
-        )}
-      >
-        <Input
-          type="number"
-          value={form.outputDimensionality ?? ""}
-          onChange={(event) => {
-            const v = event.target.value.trim();
-            onChangeForm((prev) => ({
-              ...prev,
-              outputDimensionality: v === "" ? null : Number(v),
-            }));
-          }}
-          placeholder={tx("settings.image.embeddingDimPlaceholder", "留空使用默认")}
-          className="h-8 w-[min(160px,40vw)] rounded-full text-[13px]"
-        />
-      </SettingsRow>
-
-      <SettingsRow
-        title={tx("settings.rows.embeddingSave", "保存")}
-        description={tx(
-          "settings.help.embeddingSave",
-          "保存后立即生效，无需重启。嵌入配置全局共享，笔记仓库会自动回退到此配置。",
-        )}
-      >
-        <Button
-          type="button"
-          size="sm"
-          variant={dirty ? "default" : "outline"}
-          disabled={!dirty || saving}
-          onClick={onSave}
-          className="rounded-full"
-        >
-          {saving ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
-          {saving ? tx("settings.status.saving", "保存中…") : tx("settings.status.save", "保存")}
-        </Button>
-      </SettingsRow>
-    </SettingsGroup>
   );
 }
 
@@ -1723,6 +1480,7 @@ function ModelsProvidersSettings({
   isRestarting,
   highlightProvider,
   onHighlightConsumed,
+  onTriggerAgent,
 }: {
   settings: SettingsPayload;
   expandedProvider: string | null;
@@ -1745,10 +1503,67 @@ function ModelsProvidersSettings({
   isRestarting?: boolean;
   highlightProvider?: string | null;
   onHighlightConsumed?: () => void;
+  onTriggerAgent?: (prompt: string) => void;
 }) {
   const { t } = useTranslation();
   const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
   const highlightRef = useRef<HTMLDivElement>(null);
+
+  // --- Agnes 一键配置对话框状态 ---
+  const [agnesDialogOpen, setAgnesDialogOpen] = useState(false);
+  const [agnesEmail, setAgnesEmail] = useState("");
+  const [agnesPassword, setAgnesPassword] = useState("");
+  const [agnesPasswordVisible, setAgnesPasswordVisible] = useState(false);
+
+  const handleAgnesSubmit = useCallback(() => {
+    const email = agnesEmail.trim();
+    const password = agnesPassword;
+    if (!email || !password || !onTriggerAgent) {
+      setAgnesDialogOpen(false);
+      return;
+    }
+    const prompt = [
+      "请帮我完成 Agnes AI 的一键注册和配置。我已经填好注册信息，直接用即可，不要再向我索取邮箱密码：",
+      `- 注册邮箱：${email}`,
+      `- 注册密码：${password}`,
+      "",
+      "## 平台信息",
+      "- 主站：https://agnes-ai.com/",
+      "- 控制台：https://platform.agnes-ai.com/",
+      "- API Base：https://apihub.agnes-ai.com/v1（OpenAI 兼容）",
+      "- LLM 模型 ID：agnes-2.0-flash",
+      "- 文生图模型 ID：agnes-image-2.1-flash",
+      "- 文生视频模型 ID：agnes-video-v2.0",
+      "",
+      "## 执行流程",
+      "1. 用 browser_open 打开 https://platform.agnes-ai.com/。若是登录页，找“注册”或 Sign Up 链接点击进入。用 browser_snapshot 定位邮箱框、密码框、发送验证码按钮、提交按钮。",
+      "2. 用 browser_type 填入上面的邮箱和密码（不要点提交）。再点“发送验证码”按钮。",
+      `3. 触发验证码后告诉我已发送到 ${email}，等我在对话中回复 6 位验证码再继续。`,
+      "4. 用户回复验证码后，用 browser_type 填入验证码，点提交按钮。用 browser_snapshot 检查是否注册成功：跳转到控制台首页即成功；若出现“验证码错误”/“邮箱已注册”等错误，截图告诉我并停止；若出现图片/滑块验证码，截图让我在浏览器窗口手动完成，等我说“继续”再 snapshot。",
+      "5. 注册成功后用 browser_navigate 打开 https://platform.agnes-ai.com/apiKey（或从控制台菜单找 API Keys / 密钥管理进入）。找“创建 API Key”/“Create Key”按钮点击，弹窗需要名称就填 Mona 或留默认。",
+      "6. 用 browser_snapshot 抓取新生成的 API Key（通常是 sk- 开头字符串）。如果被遮罩，用 browser_read 读取输入框 value。拿到 key 后立即在内存保留，不要在回复正文里复述完整 key。",
+      "7. 用 browser_close 关闭浏览器。",
+      "8. 调用 config_set_provider 一次性写入所有配置：provider=\"agnes\", api_key=\"<抓到的 key>\", set_as_default=true, default_model=\"agnes-2.0-flash\", image_model=\"agnes-image-2.1-flash\", video_model=\"agnes-video-v2.0\"。",
+      "9. 报告完成：账号已注册（邮箱 xxx）、API key 已写入 ~/.mona/config.json、三个模型已启用，并提示我重启 Mona 让配置生效。如果密码是我替你填的，建议尽快去 Agnes 平台改密码。",
+      "",
+      "## 失败处理",
+      "- 邮箱已注册：截图告知，询问是否改为登录已有账号；若是，让用户提供已有账号邮箱密码，跳到第 5 步。",
+      "- 验证码连续 3 次错误：停止，请稍后重试。",
+      "- 图片验证码用户拒绝手动：停止，告知用户当前 Agnes 需要人工验证。",
+      "- API Key 创建按钮找不到：截图给我，让我手动创建 key 后告诉你，你跳到第 8 步。",
+      "- config_set_provider 报错：原样告知错误，让我去设置页 BYOK 区域手动填入。",
+      "",
+      "## 安全要求",
+      "- 不要在回复正文复述完整 API key（日志中可传递，会被自动脱敏）。",
+      "- 不要在对话里复述我的密码。",
+      "- 浏览器关闭后流程结束，不留残留凭据。",
+    ].join("\n");
+    setAgnesDialogOpen(false);
+    setAgnesEmail("");
+    setAgnesPassword("");
+    setAgnesPasswordVisible(false);
+    onTriggerAgent(prompt);
+  }, [agnesEmail, agnesPassword, onTriggerAgent]);
 
   // --- Provider list logic ---
   const configuredProviders = settings.providers.filter((provider) => provider.configured);
@@ -1994,6 +1809,45 @@ function ModelsProvidersSettings({
 
   return (
     <div className="space-y-7">
+      {onTriggerAgent ? (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-full border border-primary/30 bg-primary/5 px-4 py-2.5">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <Sparkles className="h-4 w-4 shrink-0 text-primary" aria-hidden />
+            <span className="truncate text-[13px] font-medium text-foreground">
+              {tx("settings.agnesSetup.title", "一键配置 Agnes AI")}
+            </span>
+            <a
+              href="https://agnes-ai.com/doc/cid5"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="hidden items-center gap-1 text-[12px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline sm:inline-flex"
+            >
+              <ExternalLink className="h-3 w-3 shrink-0" />
+              {tx("settings.agnesSetup.manualTutorial", "手动配置教程")}
+            </a>
+          </div>
+          <Button
+            type="button"
+            size="sm"
+            className="h-7 rounded-full px-3.5 text-[12px]"
+            onClick={() => setAgnesDialogOpen(true)}
+          >
+            <Zap className="mr-1.5 h-3 w-3" aria-hidden />
+            {tx("settings.agnesSetup.cta", "一键配置")}
+          </Button>
+        </div>
+      ) : null}
+      <AgnesSetupDialog
+        open={agnesDialogOpen}
+        email={agnesEmail}
+        password={agnesPassword}
+        passwordVisible={agnesPasswordVisible}
+        onEmailChange={setAgnesEmail}
+        onPasswordChange={setAgnesPassword}
+        onTogglePasswordVisible={() => setAgnesPasswordVisible((v) => !v)}
+        onClose={() => setAgnesDialogOpen(false)}
+        onSubmit={handleAgnesSubmit}
+      />
       {/* 供应商配置区 */}
       <section>
         <SettingsSectionTitle>供应商</SettingsSectionTitle>
@@ -2050,6 +1904,129 @@ function ModelsProvidersSettings({
   );
 }
 
+function AgnesSetupDialog({
+  open,
+  email,
+  password,
+  passwordVisible,
+  onEmailChange,
+  onPasswordChange,
+  onTogglePasswordVisible,
+  onClose,
+  onSubmit,
+}: {
+  open: boolean;
+  email: string;
+  password: string;
+  passwordVisible: boolean;
+  onEmailChange: (value: string) => void;
+  onPasswordChange: (value: string) => void;
+  onTogglePasswordVisible: () => void;
+  onClose: () => void;
+  onSubmit: () => void;
+}) {
+  const { t } = useTranslation();
+  const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
+  const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
+  const passwordValid = password.length >= 6;
+  const canSubmit = emailValid && passwordValid;
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) onClose();
+      }}
+    >
+      <DialogContent className="max-w-md rounded-2xl border-border/70 bg-popover p-6 shadow-2xl">
+        <form
+          className="grid gap-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!canSubmit) return;
+            onSubmit();
+          }}
+        >
+          <DialogHeader className="text-left">
+            <DialogTitle className="flex items-center gap-2 text-base">
+              <Sparkles className="h-4 w-4 text-primary" aria-hidden />
+              {tx("settings.agnesSetup.dialogTitle", "一键配置 Agnes AI")}
+            </DialogTitle>
+            <DialogDescription>
+              {tx(
+                "settings.agnesSetup.dialogDescription",
+                "填写 Agnes 注册邮箱和密码，AI 将自动打开浏览器完成注册、获取 API Key 并配置 LLM、文生图、文生视频三类模型。验证码会在注册过程中向你索取。",
+              )}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid gap-2">
+            <label htmlFor="agnes-setup-email" className="text-[12px] font-medium text-muted-foreground">
+              {tx("settings.agnesSetup.emailLabel", "注册邮箱")}
+            </label>
+            <Input
+              id="agnes-setup-email"
+              type="email"
+              value={email}
+              onChange={(event) => onEmailChange(event.target.value)}
+              placeholder={tx("settings.agnesSetup.emailPlaceholder", "you@example.com")}
+              autoFocus
+              autoComplete="email"
+              className="h-9 rounded-lg text-[13px]"
+            />
+          </div>
+
+          <div className="grid gap-2">
+            <label htmlFor="agnes-setup-password" className="text-[12px] font-medium text-muted-foreground">
+              {tx("settings.agnesSetup.passwordLabel", "注册密码")}
+            </label>
+            <div className="relative">
+              <Input
+                id="agnes-setup-password"
+                type={passwordVisible ? "text" : "password"}
+                value={password}
+                onChange={(event) => onPasswordChange(event.target.value)}
+                placeholder={tx("settings.agnesSetup.passwordPlaceholder", "至少 6 位")}
+                autoComplete="new-password"
+                className="h-9 rounded-lg pr-9 text-[13px]"
+              />
+              <button
+                type="button"
+                onClick={onTogglePasswordVisible}
+                aria-label={passwordVisible ? tx("common.hide", "隐藏") : tx("common.show", "显示")}
+                className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1 text-muted-foreground transition-colors hover:text-foreground"
+              >
+                {passwordVisible ? (
+                  <EyeOff className="h-3.5 w-3.5" aria-hidden />
+                ) : (
+                  <Eye className="h-3.5 w-3.5" aria-hidden />
+                )}
+              </button>
+            </div>
+          </div>
+
+          <p className="text-[11px] leading-relaxed text-muted-foreground">
+            {tx(
+              "settings.agnesSetup.securityNote",
+              "密码仅在本地浏览器中填入并随本次会话发送给 AI 完成注册，不会被存储。注册完成后建议尽快去 Agnes 平台修改密码。",
+            )}
+          </p>
+
+          <DialogFooter className="gap-2 sm:space-x-0">
+            <Button type="button" variant="outline" onClick={onClose}>
+              {tx("common.cancel", "取消")}
+            </Button>
+            <Button type="submit" disabled={!canSubmit}>
+              <Zap className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+              {tx("settings.agnesSetup.startSetup", "开始配置")}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function ImageGenerationSettings({
   settings,
   form,
@@ -2083,11 +2060,13 @@ function ImageGenerationSettings({
 }) {
   const { t } = useTranslation();
   const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
+  const [keyEditing, setKeyEditing] = useState(false);
   const selectedProvider =
     settings.image_generation.providers.find((provider) => provider.name === form.provider) ??
     settings.image_generation.providers[0];
   const providerConfigured = !!selectedProvider?.configured;
-  const hasApiKeyDraft = apiKeyDraft.trim().length > 0;
+  const hasApiKeyDraft = apiKeyDraft.length > 0;
+  const showKeyInput = keyEditing || hasApiKeyDraft;
   const missingCredential = form.enabled && !providerConfigured && !hasApiKeyDraft;
   const imageModelOptions = selectedProvider?.image_models ?? [];
   const aspectOptions = optionRowsWithCurrent(
@@ -2139,10 +2118,11 @@ function ImageGenerationSettings({
                   };
                 });
                 onApiKeyDraftChange("");
+                setKeyEditing(false);
               }}
             />
           </SettingsRow>
-          {providerConfigured && !hasApiKeyDraft ? (
+          {providerConfigured && !showKeyInput ? (
             <SettingsRow
               title={tx("settings.rows.imageProviderStatus", "Provider credentials")}
               description={tx("settings.help.imageProviderStatus", "Image generation reuses provider credentials from Providers.")}
@@ -2157,10 +2137,13 @@ function ImageGenerationSettings({
                 <Button
                   size="sm"
                   variant="ghost"
-                  onClick={() => onApiKeyDraftChange(" ")}
+                  onClick={() => {
+                    onApiKeyDraftChange("");
+                    setKeyEditing(true);
+                  }}
                   className="rounded-full text-[13px] text-muted-foreground"
                 >
-                  {tx("settings.image.changeKey", "Change")}
+                  {tx("settings.image.changeKey", "修改")}
                 </Button>
               </div>
             </SettingsRow>
@@ -2313,11 +2296,13 @@ function VideoGenerationSettings({
 }) {
   const { t } = useTranslation();
   const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
+  const [keyEditing, setKeyEditing] = useState(false);
   const selectedProvider =
     settings.video_generation.providers.find((provider) => provider.name === form.provider) ??
     settings.video_generation.providers[0];
   const providerConfigured = !!selectedProvider?.configured;
-  const hasApiKeyDraft = apiKeyDraft.trim().length > 0;
+  const hasApiKeyDraft = apiKeyDraft.length > 0;
+  const showKeyInput = keyEditing || hasApiKeyDraft;
   const missingCredential = form.enabled && !providerConfigured && !hasApiKeyDraft;
   const videoModelOptions = selectedProvider?.video_models ?? [];
   const aspectOptions = optionRowsWithCurrent(
@@ -2369,10 +2354,11 @@ function VideoGenerationSettings({
                   };
                 });
                 onApiKeyDraftChange("");
+                setKeyEditing(false);
               }}
             />
           </SettingsRow>
-          {providerConfigured && !hasApiKeyDraft ? (
+          {providerConfigured && !showKeyInput ? (
             <SettingsRow
               title={tx("settings.rows.videoProviderStatus", "供应商凭据")}
               description={tx("settings.help.videoProviderStatus", "视频生成复用供应商的凭据配置。")}
@@ -2387,7 +2373,10 @@ function VideoGenerationSettings({
                 <Button
                   size="sm"
                   variant="ghost"
-                  onClick={() => onApiKeyDraftChange(" ")}
+                  onClick={() => {
+                    onApiKeyDraftChange("");
+                    setKeyEditing(true);
+                  }}
                   className="rounded-full text-[13px] text-muted-foreground"
                 >
                   {tx("settings.video.changeKey", "修改")}
@@ -3862,34 +3851,34 @@ function AboutSettings() {
                     : undefined
               }
             >
-              <div className="flex items-center gap-2">
+              <div className="flex shrink-0 items-center gap-2">
                 {updateCheck?.has_update && !updateDownloading ? (
                   <Button
                     size="sm"
-                    variant="outline"
                     onClick={handlePerformUpdate}
-                    className="rounded-full"
+                    className="shrink-0 rounded-full"
                   >
-                    <Download className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+                    <Download className="mr-1.5 h-3.5 w-3.5 shrink-0" aria-hidden />
                     {tx("settings.about.downloadAndInstall", "下载并安装")}
                   </Button>
-                ) : null}
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={handleCheckUpdate}
-                  disabled={updateChecking || updateDownloading}
-                  className="rounded-full"
-                >
-                  {updateChecking ? (
-                    <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden />
-                  ) : (
-                    <RefreshCw className="mr-1.5 h-3.5 w-3.5" aria-hidden />
-                  )}
-                  {updateChecking
-                    ? tx("settings.about.checking", "检查中...")
-                    : tx("settings.about.checkNow", "立即检查")}
-                </Button>
+                ) : (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={handleCheckUpdate}
+                    disabled={updateChecking || updateDownloading}
+                    className="shrink-0 rounded-full"
+                  >
+                    {updateChecking ? (
+                      <Loader2 className="mr-1.5 h-3.5 w-3.5 shrink-0 animate-spin" aria-hidden />
+                    ) : (
+                      <RefreshCw className="mr-1.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+                    )}
+                    {updateChecking
+                      ? tx("settings.about.checking", "检查中...")
+                      : tx("settings.about.checkNow", "立即检查")}
+                  </Button>
+                )}
               </div>
             </SettingsRow>
             {updateDownloading && updateProgress ? (

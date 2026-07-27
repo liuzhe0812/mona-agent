@@ -1,4 +1,4 @@
-# Video Shared Standards — 共享标准(占位,Phase 3 完善)
+# Video Shared Standards — 共享标准
 
 ## Color Palette
 

@@ -44,6 +44,7 @@ pub fn start_polling(app: tauri::AppHandle, port: u16) {
                                 actions: vec![],
                                 auto_close_ms: 8000,
                                 click_action: Some("open-schedule".to_string()),
+                                click_data: None,
                             };
                             if let Err(e) =
                                 notification_window::show_notification_inner(&app, payload)

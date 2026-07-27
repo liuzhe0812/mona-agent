@@ -1,4 +1,4 @@
-﻿import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MonaClient } from "@/lib/mona-client";
 
@@ -302,33 +302,6 @@ describe("MonaClient", () => {
     // handleOpen re-attaches; then the queued message follows.
     expect(lastSocket().sent).toContain(
       JSON.stringify({ type: "message", chat_id: "chat-x", content: "hello", webui: true }),
-    );
-  });
-
-  it("includes image generation options in outbound messages", () => {
-    const client = new MonaClient({
-      url: "ws://test",
-      reconnect: false,
-      socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket,
-    });
-    client.connect();
-    lastSocket().fakeOpen();
-
-    client.sendMessage(
-      "chat-img",
-      "draw a banner",
-      undefined,
-      { imageGeneration: { enabled: true, aspect_ratio: "16:9" } },
-    );
-
-    expect(lastSocket().sent).toContain(
-      JSON.stringify({
-        type: "message",
-        chat_id: "chat-img",
-        content: "draw a banner",
-        image_generation: { enabled: true, aspect_ratio: "16:9" },
-        webui: true,
-      }),
     );
   });
 

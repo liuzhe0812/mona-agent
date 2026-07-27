@@ -1,4 +1,4 @@
-﻿"""WeCom (Enterprise WeChat) channel implementation using wecom_aibot_sdk."""
+"""WeCom (Enterprise WeChat) channel implementation using wecom_aibot_sdk."""
 
 import asyncio
 import base64
@@ -136,8 +136,7 @@ class WecomChannel(BaseChannel):
         self._client.on("message.mixed", self._on_mixed_message)
         self._client.on("event.enter_chat", self._on_enter_chat)
 
-        self.logger.info("bot starting with WebSocket long connection")
-        self.logger.info("No public IP required - using WebSocket to receive events")
+        self.logger.info("bot starting with WebSocket long connection (no public IP required)")
 
         # Connect
         await self._client.connect_async()
@@ -548,7 +547,7 @@ class WecomChannel(BaseChannel):
                     "msgtype": "markdown",
                     "markdown": {"content": content},
                 })
-                self.logger.info("proactive send to {}", msg.chat_id)
+                self.logger.debug("proactive send to {}", msg.chat_id)
 
         except Exception:
             self.logger.exception("Error sending message to chat_id={}", msg.chat_id)

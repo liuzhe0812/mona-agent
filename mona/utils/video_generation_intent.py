@@ -7,28 +7,36 @@ from typing import Any
 VIDEO_GENERATION_METADATA_KEY = "video_generation"
 
 
-def video_generation_prompt(content: str, metadata: dict[str, Any] | None) -> str:
-    """Decorate a user prompt when WebUI video mode is enabled."""
+def video_generation_prompt(
+    content: str,
+    metadata: dict[str, Any] | None,
+    *,
+    media: list[str] | None = None,
+) -> str:
+    """Decorate a user prompt when WebUI video mode is enabled.
+
+    The WebUI no longer asks the user to pick aspect ratio / duration / a
+    reference image URL inline. Instead the AI chooses parameters from the
+    prompt itself, and treats any attached images as image-to-video references.
+    Attached image paths are surfaced to the model so it can pass them to
+    ``generate_video``; the tool uploads them to Mona's image host and only
+    forwards the resulting HTTP URL to the provider.
+    """
     raw = (metadata or {}).get(VIDEO_GENERATION_METADATA_KEY)
     if not isinstance(raw, dict) or raw.get("enabled") is not True:
         return content
 
-    aspect_ratio = raw.get("aspect_ratio")
-    duration = raw.get("duration")
-    reference_image_url = raw.get("reference_image_url")
-
     parts: list[str] = [
-        "The user selected WebUI video generation mode. Use the generate_video tool."
+        "The user selected WebUI video generation mode. Use the generate_video tool.",
+        "Choose suitable aspect_ratio and duration yourself based on the prompt.",
     ]
-    if isinstance(aspect_ratio, str) and aspect_ratio.strip():
-        parts.append(f"Pass aspect_ratio={aspect_ratio!r}.")
-    else:
-        parts.append("Choose the most suitable aspect_ratio yourself.")
-    if isinstance(duration, int) and duration > 0:
-        parts.append(f"Pass duration={duration}.")
-    if isinstance(reference_image_url, str) and reference_image_url.strip():
+    image_paths = [p for p in (media or []) if isinstance(p, str) and p.strip()]
+    if image_paths:
+        listed = ", ".join(repr(p) for p in image_paths)
         parts.append(
-            f"Pass reference_images=[{reference_image_url!r}] to drive image-to-video generation."
+            "The user attached image(s). Pass their local paths as reference_images "
+            f"to drive image-to-video generation: [{listed}]. "
+            "The tool will upload them automatically — do not invent HTTP URLs."
         )
     instruction = " ".join(parts)
     return f"{content}\n\n[WebUI video generation instruction: {instruction}]"

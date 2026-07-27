@@ -367,7 +367,7 @@ pub fn cleanup_after_update() -> Result<(), String> {
         return Ok(());
     }
 
-    log::info!("Cleaning up after update...");
+    log::debug!("Cleaning up after update...");
 
     // Remove marker
     let _ = fs::remove_file(&marker);
@@ -389,7 +389,7 @@ pub fn cleanup_after_update() -> Result<(), String> {
         let _ = fs::remove_file(&exe_old);
     }
 
-    log::info!("Update cleanup complete");
+    log::debug!("Update cleanup complete");
     Ok(())
 }
 

@@ -332,11 +332,16 @@ class SkillAssetCopyTool(Tool):
         asset_file = skill_dir / "assets" / asset
         if not asset_file.exists():
             return f"Error: asset '{asset}' not found in skill '{skill}' (expected at {asset_file})."
-        # Resolve destination (allow absolute or relative to workspace)
+        # Resolve destination (allow absolute or relative to the active
+        # session workspace). Using the contextvar-aware helper ensures that
+        # normal sessions copy assets into ``workspace/output/`` rather than
+        # the workspace root.
         dest_path = Path(dest).expanduser()
         if not dest_path.is_absolute():
+            from mona.agent.tools.path_utils import get_current_workspace
             from mona.config.paths import get_workspace_path
-            dest_path = get_workspace_path() / dest_path
+            active_ws = get_current_workspace(get_workspace_path())
+            dest_path = active_ws / dest_path
         try:
             dest_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(asset_file, dest_path)

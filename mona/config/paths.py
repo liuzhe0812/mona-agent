@@ -54,6 +54,20 @@ def get_workspace_path(workspace: str | None = None) -> Path:
     return ensure_dir(path)
 
 
+def get_shared_output_dir(workspace: str | Path) -> Path:
+    """Return the shared artifacts directory for non-project sessions.
+
+    ``workspace`` must be the configured Mona workspace root (the same value
+    returned by :func:`get_workspace_path`). The shared output directory is
+    always ``<workspace>/output``. Project workspaces are NOT auto-appended;
+    callers must pass the Mona workspace root, not a project directory.
+
+    The directory is created on call.
+    """
+    root = Path(workspace).expanduser().resolve()
+    return ensure_dir(root / "output")
+
+
 def is_default_workspace(workspace: str | Path | None) -> bool:
     """Return whether a workspace resolves to mona's default workspace path."""
     current = Path(workspace).expanduser() if workspace is not None else Path.home() / ".mona" / "workspace"

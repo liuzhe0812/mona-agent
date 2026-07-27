@@ -92,8 +92,10 @@ export function createNoteFromTemplate(
 }
 
 export function createCustomNotebook(name: string): Notebook {
+  // Rust scan_vault 用文件夹名作为 notebook id，前端必须保持一致，
+  // 否则保存后重启加载会导致 notebook_id 不匹配。
   return {
-    id: createId("notebook"),
+    id: name,
     name,
   };
 }

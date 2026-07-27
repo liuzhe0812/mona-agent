@@ -3,7 +3,7 @@ import { X, ZoomIn, ZoomOut, Maximize2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { getNotesLinkGraph, type LinkGraph, type LinkNode } from "@/lib/tauri";
+import { getNotesLinkGraph, saveNotesLinkPositions, type LinkGraph, type LinkNode } from "@/lib/tauri";
 
 interface GraphViewDialogProps {
   open: boolean;
@@ -96,7 +96,21 @@ export function GraphViewDialog({
         const rect = containerRef.current?.getBoundingClientRect();
         const cx = (rect?.width ?? dimensions.w) / 2;
         const cy = (rect?.height ?? dimensions.h) / 2;
+        const savedPositions = data.positions;
         nodesRef.current = data.nodes.map((n, i) => {
+          // Restore saved layout positions so the graph renders near its
+          // previous state instead of starting from a ring each time.
+          const saved = savedPositions?.[n.id];
+          if (saved) {
+            return {
+              ...n,
+              x: saved[0],
+              y: saved[1],
+              vx: 0,
+              vy: 0,
+              degree: degreeMap.get(n.id) ?? 0,
+            };
+          }
           const angle = (i / Math.max(data.nodes.length, 1)) * Math.PI * 2;
           const r = 100;
           return {
@@ -124,6 +138,19 @@ export function GraphViewDialog({
       window.clearTimeout(timeoutId);
     };
   }, [open, retryCount]);
+
+  // Save layout positions when the dialog closes so the next open restores
+  // the previous view instantly without re-running the force simulation.
+  useEffect(() => {
+    if (open) return;
+    const nodes = nodesRef.current;
+    if (nodes.length === 0) return;
+    const positions: Record<string, [number, number]> = {};
+    for (const n of nodes) {
+      positions[n.id] = [n.x, n.y];
+    }
+    void saveNotesLinkPositions(positions);
+  }, [open]);
 
   // Track container size.
   useEffect(() => {

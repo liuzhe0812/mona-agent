@@ -276,7 +276,7 @@ pub fn write_mona_provider_config(
         .map_err(|e| format!("Failed to serialize config: {}", e))?;
     fs::write(&config_path, content).map_err(|e| format!("Failed to write config: {}", e))?;
 
-    log::info!("Wrote provider config for {}", provider);
+    log::debug!("Wrote provider config for {}", provider);
     Ok(())
 }
 
@@ -314,7 +314,7 @@ pub fn write_mona_model_config(model: &str, provider: &str) -> Result<(), String
         .map_err(|e| format!("Failed to serialize config: {}", e))?;
     fs::write(&config_path, content).map_err(|e| format!("Failed to write config: {}", e))?;
 
-    log::info!("Wrote model config: {} (provider: {})", model, provider);
+    log::debug!("Wrote model config: {} (provider: {})", model, provider);
     Ok(())
 }
 
@@ -381,7 +381,7 @@ pub fn write_email_schedule_config(schedule: &serde_json::Value) -> Result<(), S
         .map_err(|e| format!("Failed to serialize config: {}", e))?;
     fs::write(&config_path, content).map_err(|e| format!("Failed to write config: {}", e))?;
 
-    log::info!("Wrote email schedule config");
+    log::debug!("Wrote email schedule config");
     Ok(())
 }
 
@@ -430,5 +430,94 @@ pub fn ensure_desktop_config(gateway_port: u16) -> Result<(), String> {
     fs::write(&config_path, content).map_err(|e| format!("Failed to write config: {}", e))?;
 
     log::info!("Ensured desktop config: websocket enabled, gateway port {}", gateway_port);
+    Ok(())
+}
+
+/// 写入 config.json 中 tools.imageGeneration 字段（enabled/provider/model）。
+/// 仅写入非 None 的字段，已存在的其他字段（defaultAspectRatio 等）保留不变。
+pub fn write_mona_image_gen_config(
+    provider: &str,
+    model: &str,
+    enabled: Option<bool>,
+) -> Result<(), String> {
+    let config_path = mona_config_path();
+    let parent = config_path.parent().ok_or("Invalid config path")?;
+    fs::create_dir_all(parent).map_err(|e| format!("Failed to create config dir: {}", e))?;
+
+    let mut config: serde_json::Value = if config_path.exists() {
+        let content = fs::read_to_string(&config_path)
+            .map_err(|e| format!("Failed to read config: {}", e))?;
+        serde_json::from_str(&content).unwrap_or(serde_json::json!({}))
+    } else {
+        serde_json::json!({})
+    };
+
+    let image_gen = config
+        .as_object_mut()
+        .ok_or("Config is not an object")?
+        .entry("tools".to_string())
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .ok_or("tools is not an object")?
+        .entry("imageGeneration".to_string())
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .ok_or("imageGeneration is not an object")?;
+
+    image_gen.insert("provider".to_string(), serde_json::json!(provider));
+    image_gen.insert("model".to_string(), serde_json::json!(model));
+    if let Some(enabled) = enabled {
+        image_gen.insert("enabled".to_string(), serde_json::json!(enabled));
+    }
+
+    let content = serde_json::to_string_pretty(&config)
+        .map_err(|e| format!("Failed to serialize config: {}", e))?;
+    fs::write(&config_path, content).map_err(|e| format!("Failed to write config: {}", e))?;
+
+    log::debug!("Wrote imageGeneration config: provider={}, model={}", provider, model);
+    Ok(())
+}
+
+/// 写入 config.json 中 tools.videoGeneration 字段（enabled/provider/model）。
+pub fn write_mona_video_gen_config(
+    provider: &str,
+    model: &str,
+    enabled: Option<bool>,
+) -> Result<(), String> {
+    let config_path = mona_config_path();
+    let parent = config_path.parent().ok_or("Invalid config path")?;
+    fs::create_dir_all(parent).map_err(|e| format!("Failed to create config dir: {}", e))?;
+
+    let mut config: serde_json::Value = if config_path.exists() {
+        let content = fs::read_to_string(&config_path)
+            .map_err(|e| format!("Failed to read config: {}", e))?;
+        serde_json::from_str(&content).unwrap_or(serde_json::json!({}))
+    } else {
+        serde_json::json!({})
+    };
+
+    let video_gen = config
+        .as_object_mut()
+        .ok_or("Config is not an object")?
+        .entry("tools".to_string())
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .ok_or("tools is not an object")?
+        .entry("videoGeneration".to_string())
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .ok_or("videoGeneration is not an object")?;
+
+    video_gen.insert("provider".to_string(), serde_json::json!(provider));
+    video_gen.insert("model".to_string(), serde_json::json!(model));
+    if let Some(enabled) = enabled {
+        video_gen.insert("enabled".to_string(), serde_json::json!(enabled));
+    }
+
+    let content = serde_json::to_string_pretty(&config)
+        .map_err(|e| format!("Failed to serialize config: {}", e))?;
+    fs::write(&config_path, content).map_err(|e| format!("Failed to write config: {}", e))?;
+
+    log::debug!("Wrote videoGeneration config: provider={}, model={}", provider, model);
     Ok(())
 }

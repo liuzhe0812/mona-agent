@@ -8,7 +8,15 @@
       "title": "無法連線到 mona",
       "gatewayHint": "請確認 gateway 已啟動（`mona gateway`），並且目前頁面與 gateway 在同一台機器上開啟。",
       "otherFeaturesHint": "筆記、設定、SSH、瀏覽器等功能不依賴執行階段，可正常使用。",
-      "retry": "重試"
+      "retry": "重試",
+      "viewLog": "查看錯誤日誌",
+      "logTitle": "Gateway 錯誤日誌",
+      "logEmpty": "日誌檔案為空或不存在",
+      "logPath": "日誌路徑",
+      "logLoading": "正在讀取日誌…",
+      "logLoadError": "讀取日誌失敗",
+      "copyLog": "複製日誌",
+      "copyLogDone": "已複製"
     },
     "system": {
       "section": "系統",
@@ -288,6 +296,12 @@
     "empty": {
       "description": "你可以提問、延續本地工作，或是開始新的執行緒。",
       "greeting": "我可以幫你做什麼？",
+      "daypart": {
+        "morning": "早安。",
+        "afternoon": "午安。",
+        "evening": "晚安。",
+        "night": "夜深了。"
+      },
       "quickActions": {
         "plan": {
           "title": "建立專案計畫",
@@ -377,27 +391,7 @@
       "videoMode": {
         "label": "影片生成",
         "toggle": "切換影片生成模式",
-        "placeholder": "描述要生成的影片…",
-        "aspectAria": "影片畫幅",
-        "aspectLabel": "影片畫幅",
-        "aspect": {
-          "auto": "自動",
-          "1_1": "方形 1:1",
-          "3_4": "直式 3:4",
-          "9_16": "故事版 9:16",
-          "4_3": "橫式 4:3",
-          "16_9": "寬螢幕 16:9"
-        },
-        "durationAria": "影片時長",
-        "durationLabel": "影片時長",
-        "duration": {
-          "auto": "自動",
-          "s": "{{seconds}}秒"
-        },
-        "refUrlPlaceholder": "參考圖片 URL（可選，用於圖生影片）",
-        "refUrlAria": "參考圖片 URL",
-        "refUrlClear": "清除參考圖片 URL",
-        "refUrlUpload": "上傳參考圖片"
+        "placeholder": "描述要生成的影片，可拖入圖片作為參考…"
       },
       "workspace": {
         "placeholder": "選擇資料夾（可選）",

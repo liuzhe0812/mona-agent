@@ -1,4 +1,4 @@
-﻿"""Base class for agent tools."""
+"""Base class for agent tools."""
 from __future__ import annotations
 
 import typing
@@ -171,6 +171,16 @@ class Tool(ABC):
     config_key: str = ""
     _plugin_discoverable: bool = True
     _scopes: set[str] = {"core"}
+
+    # When True, the tool is hidden from the model and rejected at execution
+    # time unless the user has an active subscription or valid trial.
+    subscription_required: bool = False
+
+    # Runtime availability flag. When False, the tool is excluded from
+    # ``get_definitions`` so the model never sees it. Unlike
+    # ``subscription_required``, this reflects per-request context (e.g.
+    # ``terminal_session_id`` missing) and is updated by ``set_context``.
+    is_available: bool = True
 
     @classmethod
     def config_cls(cls) -> type[BaseModel] | None:

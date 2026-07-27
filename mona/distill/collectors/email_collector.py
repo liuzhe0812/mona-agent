@@ -125,7 +125,7 @@ def collect_email_stats(top_n: int = 15) -> EmailStats:
                 month_counter[month] += 1
         stats.monthly_distribution = dict(sorted(month_counter.items()))
 
-        logger.info(
+        logger.debug(
             f"[email_collector] {stats.total_emails} emails, "
             f"{stats.total_senders} senders, "
             f"{len(stats.monthly_distribution)} months"

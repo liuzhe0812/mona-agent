@@ -135,6 +135,7 @@ fn show_existing_quick_ask_window(window: &WebviewWindow) -> Result<(), String> 
 fn show_main_window(app: &AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("main") {
         window.show().map_err(|e| e.to_string())?;
+        window.unminimize().map_err(|e| e.to_string())?;
         window.set_focus().map_err(|e| e.to_string())?;
     }
     Ok(())
@@ -146,6 +147,7 @@ fn toggle_main_window_inner(app: &AppHandle) -> Result<(), String> {
             window.hide().map_err(|e| e.to_string())?;
         } else {
             window.show().map_err(|e| e.to_string())?;
+            window.unminimize().map_err(|e| e.to_string())?;
             window.set_focus().map_err(|e| e.to_string())?;
         }
     }

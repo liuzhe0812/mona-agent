@@ -265,7 +265,7 @@ export function ThreadViewport({
           </div>
         ) : (
           <div ref={contentRef} className="mx-auto flex min-h-full w-full max-w-[72rem] flex-col">
-            <div className="flex w-full flex-1 items-center justify-center px-4 pb-10 pt-8">
+            <div className="flex w-full flex-1 items-center justify-center px-4 pb-6 pt-5">
               <div className="flex w-full max-w-[58rem] flex-col">
                 {emptyState}
               </div>

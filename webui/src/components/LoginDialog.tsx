@@ -3,6 +3,7 @@ import { useLicense } from "@/hooks/useLicense";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SubscribeView } from "./SubscribeView";
+import { ManageSubscription } from "./ManageSubscription";
 import {
   Dialog,
   DialogContent,
@@ -10,18 +11,20 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
-type LoginView = "login" | "register" | "forgot" | "reset" | "subscribe";
+type LoginView = "login" | "register" | "forgot" | "reset" | "subscribe" | "manage" | "change";
 
 export function LoginDialog({
   open,
   onOpenChange,
   initialView = "login",
+  autoSubscribeAfterLogin = false,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   initialView?: LoginView;
+  autoSubscribeAfterLogin?: boolean;
 }) {
-  const { login, register, sendRegisterCode, forgotPassword, resetPassword, loggedIn, logout, licenseInfo, localTrial, localTrialExpired, remainingDays, pricingConfig, fetchPricing } = useLicense();
+  const { login, register, sendRegisterCode, forgotPassword, resetPassword, changePassword, loggedIn, logout, licenseInfo, pricingConfig, fetchPricing } = useLicense();
   const [view, setView] = useState<LoginView>(initialView);
   const [email, setEmail] = useState("");
   const [accountInput, setAccountInput] = useState("");
@@ -30,19 +33,22 @@ export function LoginDialog({
   const [registerCode, setRegisterCode] = useState("");
   const [resetCode, setResetCode] = useState("");
   const [newPassword, setNewPassword] = useState("");
+  const [oldPassword, setOldPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [codeSent, setCodeSent] = useState(false);
   const [codeCooldown, setCodeCooldown] = useState(0);
   const [subscribeLoading, setSubscribeLoading] = useState(false);
+  const [pendingSubscribe, setPendingSubscribe] = useState(false);
 
   useEffect(() => {
     if (open) {
       setView(initialView);
+      setPendingSubscribe(autoSubscribeAfterLogin && initialView !== "subscribe");
       setSubscribeLoading(initialView === "subscribe" && !pricingConfig);
     }
-  }, [open, initialView, pricingConfig]);
+  }, [open, initialView, pricingConfig, autoSubscribeAfterLogin]);
 
   useEffect(() => {
     if (open && view === "subscribe") {
@@ -67,6 +73,8 @@ export function LoginDialog({
       setSuccess("");
       setRegisterCode("");
       setResetCode("");
+      setOldPassword("");
+      setNewPassword("");
       setCodeSent(false);
     }
     onOpenChange(v);
@@ -78,7 +86,12 @@ export function LoginDialog({
     setLoading(true);
     try {
       await login(accountInput, password);
-      handleClose(false);
+      if (pendingSubscribe) {
+        setPendingSubscribe(false);
+        setView("subscribe");
+      } else {
+        handleClose(false);
+      }
     } catch (err) {
       setError(String(err).replace(/^Error:\s*/, ""));
     } finally {
@@ -89,13 +102,17 @@ export function LoginDialog({
   const passwordMismatch = confirmPassword.length > 0 && password !== confirmPassword;
 
   const handleSendCode = async () => {
+    if (!accountInput.trim()) {
+      setError("请先输入账号");
+      return;
+    }
     if (!email) {
       setError("请先输入邮箱");
       return;
     }
     setError("");
     try {
-      await sendRegisterCode(email);
+      await sendRegisterCode(email, accountInput.trim());
       setCodeSent(true);
       setSuccess("验证码已发送");
       setCodeCooldown(60);
@@ -135,7 +152,12 @@ export function LoginDialog({
     setLoading(true);
     try {
       await register(email, password, registerCode, accountInput.trim());
-      handleClose(false);
+      if (pendingSubscribe) {
+        setPendingSubscribe(false);
+        setView("subscribe");
+      } else {
+        handleClose(false);
+      }
     } catch (err) {
       setError(String(err).replace(/^Error:\s*/, ""));
     } finally {
@@ -179,25 +201,55 @@ export function LoginDialog({
     }
   };
 
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError("");
+    if (newPassword.length < 8) {
+      setError("密码至少 8 位");
+      return;
+    }
+    if (newPassword === oldPassword) {
+      setError("新密码不能与旧密码相同");
+      return;
+    }
+    setLoading(true);
+    try {
+      const msg = await changePassword(oldPassword, newPassword);
+      setSuccess(msg || "密码修改成功");
+      setOldPassword("");
+      setNewPassword("");
+      setView("login");
+    } catch (err) {
+      setError(String(err).replace(/^Error:\s*/, ""));
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const isSubscribeView = view === "subscribe";
+  const isManageView = view === "manage";
   const showAccountInfo = loggedIn && view === "login";
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className={isSubscribeView ? "sm:max-w-lg" : "sm:max-w-sm"}>
+      <DialogContent className={isSubscribeView || isManageView ? "sm:max-w-lg" : "sm:max-w-sm"}>
         <DialogHeader>
           <DialogTitle>
             {isSubscribeView
               ? "购买订阅"
-              : showAccountInfo
-                ? "账号信息"
-                : view === "login"
-                  ? "登录"
-                  : view === "register"
-                    ? "注册"
-                    : view === "forgot"
+              : isManageView
+                ? "订阅管理"
+                : showAccountInfo
+                  ? "账号信息"
+                  : view === "login"
+                    ? "登录"
+                    : view === "register"
+                      ? "注册"
+                      : view === "forgot"
                       ? "找回密码"
-                      : "重置密码"}
+                      : view === "reset"
+                      ? "重置密码"
+                      : "修改密码"}
           </DialogTitle>
         </DialogHeader>
 
@@ -207,7 +259,12 @@ export function LoginDialog({
             onBackToLogin={() => setView(loggedIn ? "login" : "login")}
             embed
             loading={subscribeLoading}
+            onManageSubscription={() => setView("manage")}
           />
+        )}
+
+        {isManageView && (
+          <ManageSubscription onBack={() => setView("subscribe")} />
         )}
 
         {showAccountInfo && (
@@ -240,6 +297,12 @@ export function LoginDialog({
             )}
             <Button
               variant="outline"
+              onClick={() => { setView("change"); setError(""); setSuccess(""); setOldPassword(""); setNewPassword(""); }}
+            >
+              修改密码
+            </Button>
+            <Button
+              variant="outline"
               onClick={async () => {
                 await logout();
                 setView("login");
@@ -254,13 +317,6 @@ export function LoginDialog({
           <>
             {error && <p className="text-sm text-destructive">{error}</p>}
             {success && <p className="text-sm text-green-600">{success}</p>}
-
-            {localTrialExpired && view === "login" && (
-              <p className="text-sm text-muted-foreground">试用期已结束，请登录账号以继续使用全部功能</p>
-            )}
-            {localTrial && !localTrialExpired && view === "login" && (
-              <p className="text-sm text-muted-foreground">试用剩余 {remainingDays} 天，登录后可获取正式授权</p>
-            )}
 
             {view === "login" && (
               <form onSubmit={handleLogin} className="flex flex-col gap-3">
@@ -277,13 +333,6 @@ export function LoginDialog({
                     注册新账号
                   </button>
                 </div>
-                <button
-                  type="button"
-                  className="text-center text-xs text-primary hover:underline"
-                  onClick={() => { setView("subscribe"); setError(""); setSuccess(""); }}
-                >
-                  购买订阅
-                </button>
               </form>
             )}
 
@@ -293,7 +342,7 @@ export function LoginDialog({
                 <Input type="email" placeholder="邮箱" value={email} onChange={(e) => setEmail(e.target.value)} disabled={loading} />
                 <div className="flex gap-2">
                   <Input type="text" placeholder="6 位验证码" value={registerCode} onChange={(e) => setRegisterCode(e.target.value)} disabled={loading} maxLength={6} className="flex-1" />
-                  <Button type="button" variant="outline" onClick={handleSendCode} disabled={!email || codeCooldown > 0 || loading} className="shrink-0 whitespace-nowrap">
+                  <Button type="button" variant="outline" onClick={handleSendCode} disabled={!accountInput.trim() || !email || codeCooldown > 0 || loading} className="shrink-0 whitespace-nowrap">
                     {codeCooldown > 0 ? `${codeCooldown}s` : codeSent ? "重新发送" : "获取验证码"}
                   </Button>
                 </div>
@@ -304,13 +353,6 @@ export function LoginDialog({
                 </Button>
                 <button type="button" className="text-center text-xs text-muted-foreground hover:underline" onClick={() => { setView("login"); setError(""); setSuccess(""); }}>
                   已有账号？登录
-                </button>
-                <button
-                  type="button"
-                  className="text-center text-xs text-primary hover:underline"
-                  onClick={() => { setView("subscribe"); setError(""); setSuccess(""); }}
-                >
-                  购买订阅
                 </button>
               </form>
             )}
@@ -337,6 +379,19 @@ export function LoginDialog({
                 </Button>
                 <button type="button" className="text-center text-xs text-muted-foreground hover:underline" onClick={() => { setView("login"); setError(""); setSuccess(""); }}>
                   返回登录
+                </button>
+              </form>
+            )}
+
+            {view === "change" && (
+              <form onSubmit={handleChangePassword} className="flex flex-col gap-3">
+                <Input type="password" placeholder="旧密码" value={oldPassword} onChange={(e) => setOldPassword(e.target.value)} disabled={loading} autoFocus />
+                <Input type="password" placeholder="新密码（至少 8 位）" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} disabled={loading} />
+                <Button type="submit" disabled={!oldPassword || !newPassword || loading}>
+                  {loading ? "修改中..." : "修改密码"}
+                </Button>
+                <button type="button" className="text-center text-xs text-muted-foreground hover:underline" onClick={() => { setView("login"); setError(""); setSuccess(""); setOldPassword(""); setNewPassword(""); }}>
+                  返回账号信息
                 </button>
               </form>
             )}

@@ -8,7 +8,7 @@ from loguru import logger
 
 from mona.agent.tools.base import Tool, tool_parameters
 from mona.agent.tools.context import ContextAware, RequestContext
-from mona.agent.tools.path_utils import resolve_workspace_path
+from mona.agent.tools.path_utils import get_current_workspace, resolve_workspace_path
 from mona.agent.tools.schema import ArraySchema, StringSchema, tool_parameters_schema
 from mona.bus.events import OutboundMessage
 from mona.config.paths import get_workspace_path
@@ -112,17 +112,20 @@ class DeliverFileTool(Tool, ContextAware):
             return "Error: No active chat context"
 
         files: list[dict[str, Any]] = []
-        allowed_dir = self._workspace if self._restrict_to_workspace else None
+        # Use session workspace from contextvar (set per-task by AgentLoop),
+        # falling back to the tool's configured workspace.
+        active_workspace = get_current_workspace(self._workspace)
+        allowed_dir = active_workspace if self._restrict_to_workspace else None
 
         for raw_path in paths:
             if self._restrict_to_workspace:
                 try:
-                    resolved = resolve_workspace_path(raw_path, self._workspace, allowed_dir)
+                    resolved = resolve_workspace_path(raw_path, active_workspace, allowed_dir)
                 except (OSError, PermissionError, ValueError) as e:
                     return f"Error: path not allowed: {e}"
             else:
                 p = Path(raw_path).expanduser()
-                resolved = p if p.is_absolute() else self._workspace / p
+                resolved = p if p.is_absolute() else active_workspace / p
 
             if not resolved.is_file():
                 return f"Error: file not found: {resolved}"
@@ -133,7 +136,7 @@ class DeliverFileTool(Tool, ContextAware):
                 size = 0
 
             try:
-                display_path = resolved.relative_to(self._workspace).as_posix()
+                display_path = resolved.relative_to(active_workspace).as_posix()
             except ValueError:
                 display_path = resolved.as_posix()
 
@@ -175,12 +178,12 @@ class DeliverFileTool(Tool, ContextAware):
         )
 
         try:
-            logger.info(
+            logger.debug(
                 "deliver_file: sending _deliver_files event channel={} chat_id={} files={}",
                 default_channel, default_chat_id, [f["name"] for f in files],
             )
             await self._send_callback(msg)
-            logger.info("deliver_file: _deliver_files event sent successfully")
+            logger.debug("deliver_file: _deliver_files event sent successfully")
             return f"Delivered {len(files)} file(s) to user"
         except Exception as e:
             logger.exception("deliver_file: error sending _deliver_files event: {}", e)

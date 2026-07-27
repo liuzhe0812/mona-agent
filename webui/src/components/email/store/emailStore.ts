@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
-import type { EmailAccount, EmailAnalysis, EmailAttachment, EmailFolder, EmailMessage } from "../lib/types";
+import type { EmailAccount, EmailAnalysis, EmailAttachment, EmailBatchAction, EmailFolder, EmailMessage } from "../lib/types";
 import * as api from "../lib/emailApi";
 import { sortFolders } from "../lib/folderUtils";
 import { showNotification } from "@/lib/tauri";
@@ -45,6 +45,15 @@ async function notifyNewMail(
       icon: "mail",
       autoCloseMs: 6000,
       clickAction: "open-email",
+      // 点击通知时携带邮件标识，监听方据此打开独立预览窗口（而非主窗口）
+      // 多封新邮件时只打开最新一封的预览，符合通知 body 中展示的是"最新: xxx"
+      clickData: {
+        type: "mail",
+        accountId: firstMessage.accountId,
+        uid: firstMessage.uid,
+        folder: firstMessage.folder,
+        subject: firstMessage.subject,
+      },
     });
   } catch {
     // 通知不可用时静默忽略
@@ -89,6 +98,12 @@ interface EmailState {
   // 联系人邮箱→名称映射（小写 email → displayName），用于地址显示解析
   contactsByEmail: Record<string, string>;
   contactsLoaded: boolean;
+  // 多选模式：选中的邮件 key 集合（key = `${uid}:${accountId}`），Shift/Ctrl+点击累积
+  selectedUids: Set<string>;
+  // Shift 多选的锚点 key（第一次点击的位置），用于计算范围
+  anchorUid: string | null;
+  // 批量操作进行中（禁用 UI 防止重复触发）
+  batchOperating: boolean;
 
   loadAccounts: () => Promise<void>;
   addAccount: (account: EmailAccount) => Promise<void>;
@@ -133,6 +148,12 @@ interface EmailState {
   setAgentChatId: (chatId: string | null) => void;
   // 检测 gateway 是否在线（ping /health），更新 isOnline 状态
   checkGatewayHealth: (gatewayUrl: string) => Promise<boolean>;
+  // Shift/Ctrl 多选操作
+  selectSingle: (message: EmailMessage) => void;
+  toggleSelect: (message: EmailMessage) => void;
+  selectRange: (message: EmailMessage, orderedList: EmailMessage[]) => void;
+  clearSelection: () => void;
+  batchOperate: (gatewayUrl: string, action: EmailBatchAction, destFolder?: string) => Promise<void>;
 }
 
 export const useEmailStore = create<EmailState>((set, get) => ({
@@ -162,6 +183,9 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   isUnifiedInbox: false,
   contactsByEmail: {},
   contactsLoaded: false,
+  selectedUids: new Set<string>(),
+  anchorUid: null,
+  batchOperating: false,
 
   setGatewayUrl: (url) => set({ gatewayUrl: url }),
 
@@ -271,6 +295,8 @@ export const useEmailStore = create<EmailState>((set, get) => ({
       selectedMessage: null,
       hasMore: false,
       isUnifiedInbox: false,
+      selectedUids: new Set<string>(),
+      anchorUid: null,
     });
   },
 
@@ -398,6 +424,8 @@ export const useEmailStore = create<EmailState>((set, get) => ({
           totalUnreadCount: total,
         };
       });
+      // 同步托盘图标（refreshUnreadCounts 是未读数变化的统一出口）
+      await setTrayUnreadCount(get().totalUnreadCount);
       if (shouldLoadMessages) {
         await get().loadMessages(accountId, selectedFolder);
       }
@@ -433,7 +461,7 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   selectFolder: (folder) => {
     // 不清空 messages，避免切换文件夹时列表瞬间空白闪烁
     // loadMessages 会无缝替换为新文件夹的内容
-    set({ selectedFolder: folder, selectedMessage: null, hasMore: false, isUnifiedInbox: false });
+    set({ selectedFolder: folder, selectedMessage: null, hasMore: false, isUnifiedInbox: false, selectedUids: new Set<string>(), anchorUid: null });
   },
 
   loadMessages: async (accountId, folderParam) => {
@@ -684,12 +712,15 @@ export const useEmailStore = create<EmailState>((set, get) => ({
 
   selectMessage: (message) => {
     if (!message) {
-      set({ selectedMessage: null });
+      set({ selectedMessage: null, selectedUids: new Set(), anchorUid: null });
       return;
     }
+    // 单选清空多选
+    const key = `${message.uid}:${message.accountId}`;
     // 命中内存缓存时直接带正文，MailView 首次渲染即显示（零加载）
     const cacheKey = `${message.uid}:${message.accountId}:${message.folder}`;
     const cached = get().bodyCache[cacheKey];
+    const next = new Set<string>([key]);
     if (cached && (cached.bodyText || cached.bodyHtml)) {
       set({
         selectedMessage: {
@@ -700,14 +731,144 @@ export const useEmailStore = create<EmailState>((set, get) => ({
           bodyError: null,
           attachments: cached.attachments ?? message.attachments,
         },
+        selectedUids: next,
+        anchorUid: key,
       });
       return;
     }
-    set({ selectedMessage: message });
+    set({ selectedMessage: message, selectedUids: next, anchorUid: key });
     // 预取正文：不等 MailView 的 useEffect，省一个渲染周期
     const gw = get().gatewayUrl;
     if (gw && !message.bodyFetched) {
       void get().fetchBody(gw, message);
+    }
+  },
+
+  selectSingle: (message) => {
+    const key = `${message.uid}:${message.accountId}`;
+    set({
+      selectedMessage: message,
+      selectedUids: new Set<string>([key]),
+      anchorUid: key,
+    });
+  },
+
+  toggleSelect: (message) => {
+    const key = `${message.uid}:${message.accountId}`;
+    const prev = get().selectedUids;
+    const next = new Set(prev);
+    if (next.has(key)) {
+      next.delete(key);
+    } else {
+      next.add(key);
+    }
+    // 多选时清空单邮件预览；恢复单选时预览该项
+    if (next.size === 0) {
+      set({ selectedUids: next, selectedMessage: null, anchorUid: null });
+    } else if (next.size === 1) {
+      set({ selectedUids: next, selectedMessage: message, anchorUid: key });
+    } else {
+      set({ selectedUids: next, selectedMessage: null, anchorUid: key });
+    }
+  },
+
+  selectRange: (message, orderedList) => {
+    const anchorKey = get().anchorUid;
+    const targetKey = `${message.uid}:${message.accountId}`;
+    if (!anchorKey) {
+      // 无锚点，退化为单选
+      set({
+        selectedUids: new Set<string>([targetKey]),
+        selectedMessage: message,
+        anchorUid: targetKey,
+      });
+      return;
+    }
+    const keys = orderedList.map((m) => `${m.uid}:${m.accountId}`);
+    const anchorIdx = keys.indexOf(anchorKey);
+    const targetIdx = keys.indexOf(targetKey);
+    if (anchorIdx < 0 || targetIdx < 0) {
+      set({
+        selectedUids: new Set<string>([targetKey]),
+        selectedMessage: message,
+        anchorUid: targetKey,
+      });
+      return;
+    }
+    const [start, end] = anchorIdx <= targetIdx ? [anchorIdx, targetIdx] : [targetIdx, anchorIdx];
+    const rangeKeys = keys.slice(start, end + 1);
+    set({
+      selectedUids: new Set<string>(rangeKeys),
+      selectedMessage: null,
+      // 保持锚点不变，允许连续 Shift 扩展范围
+      anchorUid: anchorKey,
+    });
+  },
+
+  clearSelection: () => {
+    set({ selectedUids: new Set<string>(), anchorUid: null });
+  },
+
+  batchOperate: async (gatewayUrl, action: EmailBatchAction, destFolder) => {
+    const { selectedUids, messages, batchOperating } = get();
+    if (batchOperating || selectedUids.size === 0 || !gatewayUrl) return;
+    // 从 messages 反查选中的邮件
+    const selectedMessages = messages.filter((m) =>
+      selectedUids.has(`${m.uid}:${m.accountId}`),
+    );
+    if (selectedMessages.length === 0) return;
+    set({ batchOperating: true, error: null });
+    // 乐观更新：立即从列表移除（delete/move）或更新状态（read/star）
+    const prevMessages = get().messages;
+    if (action === "delete" || action === "move") {
+      useEmailStore.setState((state) => ({
+        messages: state.messages.filter(
+          (m) => !selectedUids.has(`${m.uid}:${m.accountId}`),
+        ),
+        selectedMessage: null,
+      }));
+    }
+    try {
+      const targets = selectedMessages.map((m) => ({
+        uid: m.uid,
+        accountId: m.accountId,
+        folder: m.folder,
+      }));
+      const result = await api.batchAction(gatewayUrl, {
+        action,
+        messages: targets,
+        destFolder: destFolder ?? null,
+      });
+      // 刷新涉及账号的未读数
+      const accountIds = new Set(selectedMessages.map((m) => m.accountId));
+      for (const aid of accountIds) {
+        await get().refreshUnreadCounts(aid);
+      }
+      if (action === "delete" || action === "move") {
+        // 已乐观移除，无需再处理
+      } else {
+        // read/star：直接更新内存中对应邮件的状态（Rust 侧已更新 SQLite）
+        const updateField = action === "mark_read" || action === "mark_unread" ? "isRead" : "isStarred";
+        const updateValue = action === "mark_read" || action === "star";
+        useEmailStore.setState((state) => ({
+          messages: state.messages.map((m) =>
+            selectedUids.has(`${m.uid}:${m.accountId}`)
+              ? { ...m, [updateField]: updateValue }
+              : m,
+          ),
+        }));
+      }
+      set({ selectedUids: new Set<string>(), anchorUid: null, batchOperating: false });
+      if (result.failed > 0) {
+        set({ error: `${result.failed} 封邮件操作失败` });
+      }
+    } catch (e) {
+      // 回滚
+      set({
+        messages: prevMessages,
+        batchOperating: false,
+        error: String(e),
+      });
     }
   },
 
@@ -776,6 +937,7 @@ export const useEmailStore = create<EmailState>((set, get) => ({
         message.folder,
       );
       // 写入内存缓存 + 更新本地消息对象
+      const header = result.header;
       set((state) => ({
         bodyCache: {
           ...state.bodyCache,
@@ -790,6 +952,16 @@ export const useEmailStore = create<EmailState>((set, get) => ({
                 bodyFetched: true,
                 bodyError: null,
                 attachments: result.attachments ?? m.attachments,
+                // 用重新解析的 header 修复旧数据中可能的乱码（gb2312→gb18030 修复前）
+                ...(header
+                  ? {
+                      subject: header.subject,
+                      fromAddress: header.fromAddress,
+                      fromName: header.fromName,
+                      toAddresses: header.toAddresses,
+                      ccAddresses: header.ccAddresses,
+                    }
+                  : {}),
               }
             : m,
         ),
@@ -802,6 +974,15 @@ export const useEmailStore = create<EmailState>((set, get) => ({
                 bodyFetched: true,
                 bodyError: null,
                 attachments: result.attachments ?? state.selectedMessage.attachments,
+                ...(header
+                  ? {
+                      subject: header.subject,
+                      fromAddress: header.fromAddress,
+                      fromName: header.fromName,
+                      toAddresses: header.toAddresses,
+                      ccAddresses: header.ccAddresses,
+                    }
+                  : {}),
               }
             : state.selectedMessage,
       }));

@@ -123,7 +123,7 @@ impl SshClient {
             Some(HostKeyVerification::Trusted) => {}
             Some(HostKeyVerification::Unknown { fingerprint }) => {
                 if skip_verify {
-                    log::info!(
+                    log::debug!(
                         "[batch] Skipping host key verification for {}:{} (fingerprint: {})",
                         host,
                         port,
@@ -154,7 +154,7 @@ impl SshClient {
             }
             None => {
                 if skip_verify {
-                    log::info!(
+                    log::debug!(
                         "[batch] No host key verification performed for {}:{}, continuing",
                         host,
                         port
@@ -170,7 +170,7 @@ impl SshClient {
 
         match auth {
             AuthConfig::Password { password } => {
-                log::info!(
+                log::debug!(
                     "[batch] Authenticating with password for {}@{}:{} (pwd_len={})",
                     username,
                     host,
@@ -202,7 +202,7 @@ impl SshClient {
                         "Password authentication failed".into(),
                     ));
                 }
-                log::info!(
+                log::debug!(
                     "[batch] Password authentication succeeded for {}@{}:{}",
                     username,
                     host,

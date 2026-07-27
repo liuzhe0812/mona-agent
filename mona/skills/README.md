@@ -36,7 +36,6 @@ The skill format and metadata structure follow OpenClaw's conventions to maintai
 | `image-generation` | Generate images and iteratively edit saved image artifacts. |
 | `long-goal` | Sustained objectives: `long_task`, `complete_goal`, idempotent goals, modular project work, early research. |
 | `memory` | Two-layer memory system with Dream-managed knowledge files. |
-| `mona-flowchart` | AI-driven flowchart generation using draw.io. Converts text descriptions into structured flowcharts. |
 | `mona-ppt` | AI-driven multi-format SVG content generation system. Exports to PPTX through multi-role collaboration. |
 | `mona-video` | AI-driven video generation system using Hyperframes. Renders HTML+GSAP animation compositions to MP4. |
 | `my` | Check and set the agent's own runtime state (model, iterations, context window, token usage, web config). |

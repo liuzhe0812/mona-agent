@@ -12,7 +12,9 @@ pub async fn browser_create_tab(
     ad_block_enabled: Option<bool>,
 ) -> Result<CreateTabResult, String> {
     let state = app.state::<BrowserState>();
-    state.create_tab(&app, &id, &url, is_incognito.unwrap_or(false), ad_block_enabled.unwrap_or(true))
+    state
+        .create_tab(&app, &id, &url, is_incognito.unwrap_or(false), ad_block_enabled.unwrap_or(true))
+        .await
 }
 
 /// 关闭浏览器标签
@@ -22,7 +24,7 @@ pub async fn browser_close_tab(
     id: String,
 ) -> Result<(), String> {
     let state = app.state::<BrowserState>();
-    state.close_tab(&app, &id)
+    state.close_tab(&app, &id).await
 }
 
 /// 更新标签 URL
@@ -79,13 +81,36 @@ pub async fn browser_set_ai_status(
 
 /// 导航标签到指定 URL（用于地址栏输入、target="_blank" 等场景）
 #[tauri::command]
+pub async fn browser_set_tab_bounds(
+    app: tauri::AppHandle,
+    id: String,
+    left: f64,
+    top: f64,
+    width: f64,
+    height: f64,
+    visible: bool,
+) -> Result<(), String> {
+    let state = app.state::<BrowserState>();
+    state.set_tab_bounds(&app, &id, left, top, width, height, visible).await
+}
+
+#[tauri::command]
+pub async fn browser_hide_tabs_except(
+    app: tauri::AppHandle,
+    active_id: Option<String>,
+) -> Result<(), String> {
+    let state = app.state::<BrowserState>();
+    state.hide_tabs_except(&app, active_id.as_deref()).await
+}
+
+#[tauri::command]
 pub async fn browser_navigate_tab(
     app: tauri::AppHandle,
     id: String,
     url: String,
 ) -> Result<(), String> {
     let state = app.state::<BrowserState>();
-    state.navigate_tab(&app, &id, &url)
+    state.navigate_tab(&app, &id, &url).await
 }
 
 /// 后退
@@ -95,7 +120,7 @@ pub async fn browser_go_back(
     id: String,
 ) -> Result<(), String> {
     let state = app.state::<BrowserState>();
-    state.go_back(&app, &id)
+    state.go_back(&app, &id).await
 }
 
 /// 前进
@@ -105,7 +130,7 @@ pub async fn browser_go_forward(
     id: String,
 ) -> Result<(), String> {
     let state = app.state::<BrowserState>();
-    state.go_forward(&app, &id)
+    state.go_forward(&app, &id).await
 }
 
 /// 刷新
@@ -115,7 +140,7 @@ pub async fn browser_reload(
     id: String,
 ) -> Result<(), String> {
     let state = app.state::<BrowserState>();
-    state.reload(&app, &id)
+    state.reload(&app, &id).await
 }
 
 /// WebView 内部 URL 变化回调（由 initialization_script 调用）
@@ -254,7 +279,7 @@ pub async fn browser_set_zoom(
     zoom_factor: f64,
 ) -> Result<(), String> {
     let state = app.state::<BrowserState>();
-    state.set_zoom(&app, &id, zoom_factor)
+    state.set_zoom(&app, &id, zoom_factor).await
 }
 
 /// 获取当前缩放
@@ -274,7 +299,7 @@ pub async fn browser_print_page(
     id: String,
 ) -> Result<(), String> {
     let state = app.state::<BrowserState>();
-    state.print_page(&app, &id)
+    state.print_page(&app, &id).await
 }
 
 /// 在 WebView 中执行 JS 代码
@@ -285,7 +310,17 @@ pub async fn browser_eval_script(
     script: String,
 ) -> Result<(), String> {
     let state = app.state::<BrowserState>();
-    state.eval_script(&app, &id, &script)
+    state.eval_script(&app, &id, &script).await
+}
+
+#[tauri::command]
+pub async fn browser_eval_script_result(
+    app: tauri::AppHandle,
+    id: String,
+    script: String,
+) -> Result<serde_json::Value, String> {
+    let state = app.state::<BrowserState>();
+    state.eval_script_result(&app, &id, &script).await
 }
 
 // ── 隐私安全命令 ──
@@ -297,7 +332,7 @@ pub async fn browser_get_cookies(
     id: String,
 ) -> Result<(), String> {
     let state = app.state::<BrowserState>();
-    state.get_cookies(&app, &id)
+    state.get_cookies(&app, &id).await
 }
 
 /// 清除当前页面的 Cookie
@@ -307,7 +342,7 @@ pub async fn browser_clear_cookies(
     id: String,
 ) -> Result<(), String> {
     let state = app.state::<BrowserState>();
-    state.clear_cookies(&app, &id)
+    state.clear_cookies(&app, &id).await
 }
 
 /// 切换广告拦截状态
@@ -318,7 +353,7 @@ pub async fn browser_set_ad_block(
     enabled: bool,
 ) -> Result<(), String> {
     let state = app.state::<BrowserState>();
-    state.set_ad_block_enabled(&app, &id, enabled)
+    state.set_ad_block_enabled(&app, &id, enabled).await
 }
 
 /// 切换标签静音
@@ -329,7 +364,7 @@ pub async fn browser_set_muted(
     muted: bool,
 ) -> Result<(), String> {
     let state = app.state::<BrowserState>();
-    state.set_muted(&app, &id, muted)
+    state.set_muted(&app, &id, muted).await
 }
 
 /// 获取标签静音状态
@@ -361,7 +396,7 @@ pub async fn browser_open_devtools(
     id: String,
 ) -> Result<(), String> {
     let state = app.state::<BrowserState>();
-    state.open_devtools(&app, &id)
+    state.open_devtools(&app, &id).await
 }
 
 /// 切换暗色模式
@@ -372,7 +407,7 @@ pub async fn browser_set_dark_mode(
     enabled: bool,
 ) -> Result<(), String> {
     let state = app.state::<BrowserState>();
-    state.set_dark_mode(&app, &id, enabled)
+    state.set_dark_mode(&app, &id, enabled).await
 }
 
 /// 获取页面元信息（结果通过 browser-page-info-result 事件回传）
@@ -382,5 +417,5 @@ pub async fn browser_get_page_info(
     id: String,
 ) -> Result<(), String> {
     let state = app.state::<BrowserState>();
-    state.get_page_info(&app, &id)
+    state.get_page_info(&app, &id).await
 }

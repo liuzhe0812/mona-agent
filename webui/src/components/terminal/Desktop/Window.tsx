@@ -1,6 +1,8 @@
 import { useState, useEffect } from "react";
-import { Minus, Square, X } from "lucide-react";
+import { Minus, Plus, X } from "lucide-react";
 import type { WindowState } from "./types";
+
+const MENU_BAR_HEIGHT = 28;
 
 interface WindowProps {
   window: WindowState;
@@ -94,7 +96,7 @@ export function Window({
 
         onUpdatePosition({
           x: Math.max(0, Math.min(newX, maxX)),
-          y: Math.max(0, Math.min(newY, maxY)),
+          y: Math.max(MENU_BAR_HEIGHT, Math.min(newY, maxY)),
         });
       }
 
@@ -125,6 +127,11 @@ export function Window({
         if (newHeight < 300) {
           if (resizeDir.includes("n")) newY -= 300 - newHeight;
           newHeight = 300;
+        }
+
+        if (resizeDir.includes("n") && newY < MENU_BAR_HEIGHT) {
+          newHeight -= MENU_BAR_HEIGHT - newY;
+          newY = MENU_BAR_HEIGHT;
         }
 
         if (resizeDir.includes("n") || resizeDir.includes("w")) {
@@ -168,9 +175,9 @@ export function Window({
   const style = win.isMaximized
     ? {
         left: 0,
-        top: 0,
+        top: MENU_BAR_HEIGHT,
         width: "100%",
-        height: "100%",
+        height: `calc(100% - ${MENU_BAR_HEIGHT}px)`,
         zIndex: 99999,
         borderRadius: 0,
       }
@@ -184,11 +191,13 @@ export function Window({
 
   return (
     <div
-      className={`absolute overflow-hidden rounded-lg shadow-2xl transition-shadow ${
+      className={`absolute overflow-hidden ${
+        win.isMaximized ? "rounded-none" : "rounded-[10px]"
+      } ${
         isActive
-          ? "shadow-black/70 ring-1 ring-blue-500/30"
-          : "shadow-black/50"
-      } ${win.isMaximized ? "rounded-none" : ""}`}
+          ? "shadow-[0_28px_80px_-12px_rgba(0,0,0,0.7)] ring-1 ring-white/15"
+          : "shadow-[0_14px_44px_-10px_rgba(0,0,0,0.55)] ring-1 ring-white/10"
+      }`}
       style={style}
       onMouseDown={handleMouseDown}
     >
@@ -230,49 +239,81 @@ export function Window({
       )}
 
       <div
-        className="desktop-window-titlebar flex h-8 cursor-default select-none items-center justify-between px-3"
+        className="desktop-window-titlebar relative flex h-8 cursor-default select-none items-center px-3"
         style={{
-          background:
-            "linear-gradient(180deg, #323246 0%, #28283c 100%)",
-          borderBottom: "1px solid rgba(255, 255, 255, 0.08)",
+          background: isActive
+            ? "linear-gradient(180deg, #3b3b40 0%, #333338 100%)"
+            : "linear-gradient(180deg, #2e2e33 0%, #2a2a2f 100%)",
+          borderBottom: "1px solid rgba(0, 0, 0, 0.35)",
         }}
         onDoubleClick={onMaximize}
       >
-        <span className="text-sm font-medium text-white/90">
-          {win.title}
-        </span>
-        <div className="flex items-center gap-1">
+        <div className="group flex items-center gap-2">
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onClose();
+            }}
+            className={`flex h-3 w-3 items-center justify-center rounded-full border ${
+              isActive
+                ? "border-[#d44b43] bg-[#ff5f57]"
+                : "border-white/10 bg-white/20"
+            }`}
+          >
+            {isActive && (
+              <X
+                className="h-2 w-2 text-[#7a1a12] opacity-0 transition-opacity group-hover:opacity-100"
+                strokeWidth={3.5}
+              />
+            )}
+          </button>
           <button
             onClick={(e) => {
               e.stopPropagation();
               onMinimize();
             }}
-            className="flex h-6 w-6 items-center justify-center rounded transition-colors hover:bg-white/10"
+            className={`flex h-3 w-3 items-center justify-center rounded-full border ${
+              isActive
+                ? "border-[#d89e24] bg-[#febc2e]"
+                : "border-white/10 bg-white/20"
+            }`}
           >
-            <Minus className="h-3.5 w-3.5 text-white/70" />
+            {isActive && (
+              <Minus
+                className="h-2 w-2 text-[#8a5a00] opacity-0 transition-opacity group-hover:opacity-100"
+                strokeWidth={3.5}
+              />
+            )}
           </button>
           <button
             onClick={(e) => {
               e.stopPropagation();
               onMaximize();
             }}
-            className="flex h-6 w-6 items-center justify-center rounded transition-colors hover:bg-white/10"
+            className={`flex h-3 w-3 items-center justify-center rounded-full border ${
+              isActive
+                ? "border-[#1dad2b] bg-[#28c840]"
+                : "border-white/10 bg-white/20"
+            }`}
           >
-            <Square className="h-3 w-3 text-white/70" />
-          </button>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onClose();
-            }}
-            className="flex h-6 w-6 items-center justify-center rounded transition-colors hover:bg-red-500"
-          >
-            <X className="h-3.5 w-3.5 text-white/70 hover:text-white" />
+            {isActive && (
+              <Plus
+                className="h-2 w-2 text-[#0e5f16] opacity-0 transition-opacity group-hover:opacity-100"
+                strokeWidth={3.5}
+              />
+            )}
           </button>
         </div>
+        <span
+          className={`absolute left-1/2 -translate-x-1/2 text-[13px] font-medium ${
+            isActive ? "text-white/85" : "text-white/40"
+          }`}
+        >
+          {win.title}
+        </span>
       </div>
 
-      <div className="h-[calc(100%-32px)] overflow-hidden bg-[#1e1e2e]">
+      <div className="h-[calc(100%-32px)] overflow-hidden bg-[#1d1d1f]">
         {children}
       </div>
     </div>

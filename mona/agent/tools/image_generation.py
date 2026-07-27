@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import Field
 
 from mona.agent.tools.base import Tool, tool_parameters
+from mona.agent.tools.path_utils import get_current_workspace
 from mona.agent.tools.schema import (
     ArraySchema,
     IntegerSchema,
@@ -102,6 +103,11 @@ class ImageGenerationTool(Tool):
         if provider_config is not None and "openrouter" not in self.provider_configs:
             self.provider_configs["openrouter"] = provider_config
 
+    def _active_workspace(self) -> Path:
+        """Return the active session workspace (contextvar) or configured fallback."""
+        ws = get_current_workspace(self.workspace)
+        return ws if ws is not None else self.workspace
+
     @property
     def name(self) -> str:
         return "generate_image"
@@ -140,14 +146,15 @@ class ImageGenerationTool(Tool):
         return cls(**kwargs)
 
     def _resolve_reference_image(self, value: str) -> str:
+        active_ws = self._active_workspace()
         raw_path = Path(value).expanduser()
-        path = raw_path if raw_path.is_absolute() else self.workspace / raw_path
+        path = raw_path if raw_path.is_absolute() else active_ws / raw_path
         try:
             resolved = path.resolve(strict=True)
         except OSError as exc:
             raise ImageGenerationError(f"reference image not found: {value}") from exc
 
-        allowed_roots = [self.workspace.resolve(), get_media_dir().resolve()]
+        allowed_roots = [active_ws.resolve(), get_media_dir().resolve()]
         if not any(_is_relative_to(resolved, root) for root in allowed_roots):
             raise ImageGenerationError(
                 "reference_images must be inside the workspace or mona media directory"
@@ -193,6 +200,9 @@ class ImageGenerationTool(Tool):
             model = self.config.model
             if not model:
                 return "Error: no image model configured. Set the image model in Image settings."
+            # Store generated images under the active session workspace so they
+            # appear in the shared output artifact panel for normal sessions.
+            artifact_root = self._active_workspace()
             artifacts: list[dict[str, Any]] = []
             while len(artifacts) < requested:
                 response = await client.generate(
@@ -210,6 +220,7 @@ class ImageGenerationTool(Tool):
                         source_images=refs,
                         save_dir=self.config.save_dir,
                         provider=self.config.provider,
+                        artifact_root=artifact_root,
                     )
                     artifacts.append(artifact)
                     if len(artifacts) >= requested:

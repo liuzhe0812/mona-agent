@@ -1,4 +1,4 @@
-﻿"""Feishu/Lark channel implementation using lark-oapi SDK with WebSocket long connection."""
+"""Feishu/Lark channel implementation using lark-oapi SDK with WebSocket long connection."""
 
 import asyncio
 import importlib.util
@@ -424,8 +424,7 @@ class FeishuChannel(BaseChannel):
         else:
             self.logger.warning("Could not fetch bot open_id; @mention matching may be inaccurate")
 
-        self.logger.info("bot started with WebSocket long connection")
-        self.logger.info("No public IP required - using WebSocket to receive events")
+        self.logger.info("bot started with WebSocket long connection (no public IP required)")
 
         # Keep running until stopped
         while self._running:
@@ -1685,7 +1684,6 @@ class FeishuChannel(BaseChannel):
             message = event.message
             sender = event.sender
 
-            self.logger.debug("raw message: {}", message.content)
             self.logger.debug("mentions: {}", getattr(message, "mentions", None))
 
             message_id = message.message_id

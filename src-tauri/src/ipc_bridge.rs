@@ -435,38 +435,38 @@ impl IpcBridge {
                 let url = args.get("url").and_then(|v| v.as_str()).ok_or("Missing url")?;
                 let is_incognito = args.get("isIncognito").and_then(|v| v.as_bool()).unwrap_or(false);
                 let ad_block_enabled = args.get("adBlockEnabled").and_then(|v| v.as_bool()).unwrap_or(true);
-                let result = browser_state.create_tab(&self.app_handle, id, url, is_incognito, ad_block_enabled)?;
+                let result = browser_state.create_tab(&self.app_handle, id, url, is_incognito, ad_block_enabled).await?;
                 serde_json::to_value(result).map_err(|e| e.to_string())
             }
             "browser_close_tab" => {
                 let browser_state = self.app_handle.state::<crate::browser::BrowserState>();
                 let id = args.get("id").and_then(|v| v.as_str()).ok_or("Missing id")?;
-                browser_state.close_tab(&self.app_handle, id)?;
+                browser_state.close_tab(&self.app_handle, id).await?;
                 Ok(Value::Null)
             }
             "browser_navigate_tab" => {
                 let browser_state = self.app_handle.state::<crate::browser::BrowserState>();
                 let id = args.get("id").and_then(|v| v.as_str()).ok_or("Missing id")?;
                 let url = args.get("url").and_then(|v| v.as_str()).ok_or("Missing url")?;
-                browser_state.navigate_tab(&self.app_handle, id, url)?;
+                browser_state.navigate_tab(&self.app_handle, id, url).await?;
                 Ok(Value::Null)
             }
             "browser_go_back" => {
                 let browser_state = self.app_handle.state::<crate::browser::BrowserState>();
                 let id = args.get("id").and_then(|v| v.as_str()).ok_or("Missing id")?;
-                browser_state.go_back(&self.app_handle, id)?;
+                browser_state.go_back(&self.app_handle, id).await?;
                 Ok(Value::Null)
             }
             "browser_go_forward" => {
                 let browser_state = self.app_handle.state::<crate::browser::BrowserState>();
                 let id = args.get("id").and_then(|v| v.as_str()).ok_or("Missing id")?;
-                browser_state.go_forward(&self.app_handle, id)?;
+                browser_state.go_forward(&self.app_handle, id).await?;
                 Ok(Value::Null)
             }
             "browser_reload" => {
                 let browser_state = self.app_handle.state::<crate::browser::BrowserState>();
                 let id = args.get("id").and_then(|v| v.as_str()).ok_or("Missing id")?;
-                browser_state.reload(&self.app_handle, id)?;
+                browser_state.reload(&self.app_handle, id).await?;
                 Ok(Value::Null)
             }
             "browser_list_tabs" => {
@@ -551,6 +551,43 @@ impl IpcBridge {
                 let saved_path =
                     crate::notes::notes_save_image(file_path, file_name).await?;
                 Ok(Value::String(saved_path))
+            }
+            "license_has_access" => {
+                let has_access = crate::license::check_license_access();
+                Ok(Value::Bool(has_access))
+            }
+            "email_fetch_body" => {
+                // AI 读取邮件时，若本地 .eml 只有 HEADER（同步时省流量未拉正文），
+                // 通过此 bridge 命令触发 IMAP 拉取完整 RFC822 并落盘。
+                let gateway_url = args
+                    .get("gatewayUrl")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let account_id = args
+                    .get("accountId")
+                    .and_then(|v| v.as_str())
+                    .ok_or("Missing accountId")?
+                    .to_string();
+                let uid = args
+                    .get("uid")
+                    .and_then(|v| v.as_str())
+                    .ok_or("Missing uid")?
+                    .to_string();
+                let mailbox = args
+                    .get("mailbox")
+                    .and_then(|v| v.as_str())
+                    .ok_or("Missing mailbox")?
+                    .to_string();
+                let email_state = self.app_handle.state::<crate::email::EmailState>();
+                crate::email::email_fetch_body(
+                    email_state,
+                    gateway_url,
+                    account_id,
+                    uid,
+                    mailbox,
+                )
+                .await
             }
             _ => Err(format!("Unknown command: {}", cmd)),
         }

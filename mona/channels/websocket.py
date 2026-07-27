@@ -52,7 +52,6 @@ from mona.webui.settings_api import (
     settings_payload,
     update_agent_settings,
     update_channel_settings,
-    update_embedding_settings,
     update_image_generation_settings,
     update_provider_settings,
     update_video_generation_settings,
@@ -808,9 +807,6 @@ class WebSocketChannel(BaseChannel):
         if got == "/api/settings/video-generation/update":
             return self._handle_settings_video_generation_update(request)
 
-        if got == "/api/settings/embedding/update":
-            return self._handle_settings_embedding_update(request)
-
         if got == "/api/settings/channels/update":
             return self._handle_settings_channels_update(request)
 
@@ -862,68 +858,29 @@ class WebSocketChannel(BaseChannel):
         if got == "/api/ppt/delete-project":
             return self._handle_ppt_delete_project(request)
 
+        if got == "/api/video/download":
+            return self._handle_video_download(request)
+
+        if got == "/api/video/delete-project":
+            return self._handle_video_delete_project(request)
+
         if got == "/api/ppt/project-slides":
             return self._handle_ppt_project_slides(request)
 
         if got == "/api/ppt/visual-plan":
             return self._handle_ppt_visual_plan(request)
 
+        if got == "/api/ppt/officecli-check":
+            return self._handle_ppt_officecli_check(request)
+
+        if got == "/api/ppt/officecli-download":
+            return await self._handle_ppt_officecli_download(request)
+
         if got.startswith("/api/ppt/project-svg"):
             return self._handle_ppt_project_svg(request)
 
         if got.startswith("/api/ppt/project-file"):
             return self._handle_ppt_project_file(request)
-
-        if got == "/api/kb/llm-config":
-            return self._handle_kb_llm_config(request)
-
-        # KB API routes (all GET + query params due to websockets HTTP limitation)
-        if got == "/api/kb/projects":
-            return self._handle_kb_list_projects(request)
-        if got == "/api/kb/projects/create":
-            return self._handle_kb_create_project(request)
-        m = re.match(r"^/api/kb/([^/]+)/rename$", got)
-        if m:
-            return self._handle_kb_rename_project(request, m.group(1))
-        m = re.match(r"^/api/kb/([^/]+)/files$", got)
-        if m:
-            return self._handle_kb_list_files(request, m.group(1))
-        m = re.match(r"^/api/kb/([^/]+)/files/read$", got)
-        if m:
-            return self._handle_kb_read_file(request, m.group(1))
-        m = re.match(r"^/api/kb/([^/]+)/files/delete$", got)
-        if m:
-            return self._handle_kb_delete_file(request, m.group(1))
-        m = re.match(r"^/api/kb/([^/]+)/source/cascade$", got)
-        if m:
-            return self._handle_kb_delete_source_cascade(request, m.group(1))
-        m = re.match(r"^/api/kb/([^/]+)/wiki$", got)
-        if m:
-            return self._handle_kb_list_wiki(request, m.group(1))
-        m = re.match(r"^/api/kb/([^/]+)/wiki/update/(.+)$", got)
-        if m:
-            return self._handle_kb_update_wiki_page(request, m.group(1), m.group(2))
-        m = re.match(r"^/api/kb/([^/]+)/wiki/(.+)$", got)
-        if m:
-            return self._handle_kb_get_wiki_page(request, m.group(1), m.group(2))
-        m = re.match(r"^/api/kb/([^/]+)/wiki/write$", got)
-        if m:
-            return self._handle_kb_write_wiki_page(request, m.group(1))
-        m = re.match(r"^/api/kb/([^/]+)/graph$", got)
-        if m:
-            return self._handle_kb_graph(request, m.group(1))
-        m = re.match(r"^/api/kb/([^/]+)/search$", got)
-        if m:
-            return self._handle_kb_search(request, m.group(1))
-        m = re.match(r"^/api/kb/([^/]+)/reviews$", got)
-        if m:
-            return self._handle_kb_get_reviews(request, m.group(1))
-        m = re.match(r"^/api/kb/([^/]+)/reviews/save$", got)
-        if m:
-            return self._handle_kb_save_reviews(request, m.group(1))
-        m = re.match(r"^/api/kb/([^/]+)/lint$", got)
-        if m:
-            return self._handle_kb_lint(request, m.group(1))
 
         m = re.match(r"^/api/sessions/([^/]+)/messages$", got)
         if m:
@@ -948,8 +905,15 @@ class WebSocketChannel(BaseChannel):
             return self._handle_media_fetch(m.group(1), m.group(2))
 
         if got.startswith("/api/file-preview"):
-            query_string = _query_first(query, "path") or ""
-            return self._handle_file_preview(query_string)
+            return self._handle_file_preview(
+                request,
+                scope=_query_first(query, "scope") or "",
+                session_key=_query_first(query, "session_key") or "",
+                path=_query_first(query, "path") or "",
+            )
+
+        if got == "/api/artifacts":
+            return self._handle_artifacts_list(request)
 
         # 4. WebSocket upgrade (the channel's primary purpose). Only run the
         # handshake gate on requests that actually ask to upgrade; otherwise
@@ -1184,16 +1148,6 @@ class WebSocketChannel(BaseChannel):
         except WebUISettingsError as e:
             return _http_error(e.status, e.message)
         return _http_json_response(self._with_settings_restart_state(payload, section="image"))
-
-    def _handle_settings_embedding_update(self, request: WsRequest) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        query = _parse_query(request.path)
-        try:
-            payload = update_embedding_settings(query)
-        except WebUISettingsError as e:
-            return _http_error(e.status, e.message)
-        return _http_json_response(payload)
 
     def _handle_settings_channels_update(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):
@@ -1782,6 +1736,31 @@ class WebSocketChannel(BaseChannel):
             logger.exception("ppt export status error")
             return _http_error(500, str(e))
 
+    def _handle_ppt_officecli_check(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        try:
+            from mona.api.officecli_runtime import OfficeCliRuntime
+
+            return _http_json_response(OfficeCliRuntime().check())
+        except Exception as e:
+            logger.exception("ppt officecli-check error")
+            return _http_error(500, str(e))
+
+    async def _handle_ppt_officecli_download(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        try:
+            from mona.api.officecli_runtime import OfficeCliRuntime
+
+            result = await OfficeCliRuntime().ensure()
+            if not result.get("ok"):
+                return _http_json_response(result, status=500)
+            return _http_json_response(result)
+        except Exception as e:
+            logger.exception("ppt officecli-download error")
+            return _http_error(500, str(e))
+
     def _handle_ppt_generate_preview(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
@@ -1927,6 +1906,78 @@ class WebSocketChannel(BaseChannel):
             return _http_json_response({"ok": True})
         except Exception as e:
             logger.exception("ppt delete project error")
+            return _http_error(500, str(e))
+
+    def _handle_video_download(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        try:
+            from mona.config.paths import get_workspace_path
+
+            query = _parse_query(request.path)
+            project_name = _query_first(query, "name") or _query_first(query, "project") or ""
+            if (
+                not project_name
+                or "/" in project_name
+                or "\\" in project_name
+                or ".." in project_name
+            ):
+                return _http_error(400, "invalid project name")
+
+            workspace = get_workspace_path()
+            project_dir = workspace / "video_projects" / project_name
+
+            # Prefer renders/output.mp4 (new pipeline), fallback to any mp4 in output/.
+            candidates = [project_dir / "renders" / "output.mp4"]
+            output_dir = project_dir / "output"
+            if output_dir.exists():
+                candidates.extend(sorted(output_dir.glob("*.mp4"), reverse=True))
+            chosen = next((p for p in candidates if p.is_file()), None)
+            if chosen is None:
+                return _http_error(404, "no mp4 found")
+
+            content = chosen.read_bytes()
+            return _http_response(
+                content,
+                content_type="video/mp4",
+                extra_headers=[
+                    ("Content-Disposition", f'attachment; filename="{chosen.name}"'),
+                    ("Cache-Control", "no-cache"),
+                ],
+            )
+        except Exception as e:
+            logger.exception("video download error")
+            return _http_error(500, str(e))
+
+    def _handle_video_delete_project(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        try:
+            import shutil
+
+            from mona.config.paths import get_workspace_path
+
+            query = _parse_query(request.path)
+            project_name = _query_first(query, "name") or _query_first(query, "project") or ""
+
+            if (
+                not project_name
+                or "/" in project_name
+                or "\\" in project_name
+                or ".." in project_name
+            ):
+                return _http_error(400, "invalid project name")
+
+            workspace = get_workspace_path()
+            project_dir = workspace / "video_projects" / project_name
+            if not project_dir.is_dir():
+                return _http_error(404, "project not found")
+
+            shutil.rmtree(project_dir)
+
+            return _http_json_response({"ok": True})
+        except Exception as e:
+            logger.exception("video delete project error")
             return _http_error(500, str(e))
 
     def _handle_ppt_visual_plan(self, request: WsRequest) -> Response:
@@ -2429,31 +2480,104 @@ class WebSocketChannel(BaseChannel):
             ],
         )
 
-    def _handle_file_preview(self, raw_path: str) -> Response:
-        if not raw_path:
+    def _handle_file_preview(
+        self,
+        request: WsRequest,
+        *,
+        scope: str,
+        session_key: str,
+        path: str,
+    ) -> Response:
+        # 1. Auth: every file-preview request must carry a valid API token.
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+
+        # 2. Path validation: only non-empty relative paths without traversal.
+        if not path:
             return _http_error(400, "missing path")
+        # Reject absolute paths: Windows drive letter (C:\), POSIX root (/),
+        # or UNC/Windows-rooted backslash prefix.
+        if re.match(r"^[A-Za-z]:[\\/]", path) or path.startswith("/") or path.startswith("\\"):
+            return _http_error(400, "absolute paths are not allowed")
+        if ".." in re.split(r"[\\/]", path):
+            return _http_error(400, "path traversal is not allowed")
+
+        # 3. Resolve the workspace root by scope.
+        if scope == "shared":
+            from mona.config.paths import get_shared_output_dir, get_workspace_path
+
+            root = get_shared_output_dir(get_workspace_path())
+        elif scope == "project":
+            if not session_key:
+                return _http_error(400, "missing session_key")
+            if self._session_manager is None:
+                return _http_error(404, "session not found")
+            decoded_key = _decode_api_key(session_key)
+            if decoded_key is None or not self._is_websocket_channel_session_key(decoded_key):
+                return _http_error(404, "session not found")
+            data = self._session_manager.read_session_file(decoded_key)
+            if data is None:
+                return _http_error(404, "session not found")
+            metadata = data.get("metadata") or {}
+            workspace = metadata.get("workspace")
+            if not workspace:
+                return _http_error(404, "session not found")
+            root = Path(workspace).expanduser()
+        else:
+            return _http_error(400, "invalid scope")
+
+        # 4. Combine and resolve, then re-check the boundary to block symlink
+        # escapes that point outside the resolved root.
         try:
-            target = Path(raw_path).resolve()
-        except Exception:
+            root_resolved = root.resolve()
+            target = (root_resolved / path).resolve()
+            target.relative_to(root_resolved)
+        except (ValueError, OSError):
             return _http_error(400, "invalid path")
+
+        # 4a. Fallback: deliver_file sends paths relative to workspace (e.g.
+        # "output/report.docx"), while listArtifacts sends paths relative to
+        # output dir (e.g. "report.docx"). If the direct resolve misses, try
+        # resolving from the workspace root for shared scope.
+        if not target.is_file() and scope == "shared":
+            try:
+                from mona.config.paths import get_workspace_path
+
+                ws_root = get_workspace_path().resolve()
+                target2 = (ws_root / path).resolve()
+                target2.relative_to(ws_root)
+                if target2.is_file():
+                    target = target2
+            except (ValueError, OSError):
+                pass
+
+        # 5. File existence and read.
         if not target.is_file():
             return _http_error(404, "file not found")
         try:
             data = target.read_bytes()
         except OSError:
             return _http_error(500, "read error")
-        mime, _ = mimetypes.guess_type(str(target))
-        if not mime:
-            mime = "application/octet-stream"
-        safe_mimes = {
-            "text/plain", "text/html", "text/css", "text/javascript",
-            "application/json", "application/xml", "text/xml",
-            "text/markdown", "text/csv",
-            "image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml",
-        }
-        if mime not in safe_mimes:
-            mime = "text/plain"
-        content_type = f"{mime}; charset=utf-8" if mime.startswith("text/") else mime
+
+        # 6. MIME handling. HTML/Htm are forced to text/plain so the browser
+        # never executes the page or loads its relative resources; the preview
+        # surface only shows source.
+        if target.suffix.lower() in (".html", ".htm"):
+            content_type = "text/plain; charset=utf-8"
+        else:
+            mime, _ = mimetypes.guess_type(str(target))
+            if not mime:
+                mime = "application/octet-stream"
+            safe_mimes = {
+                "text/plain", "text/html", "text/css", "text/javascript",
+                "application/json", "application/xml", "text/xml",
+                "text/markdown", "text/csv",
+                "image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml",
+            }
+            if mime not in safe_mimes:
+                mime = "text/plain"
+            content_type = f"{mime}; charset=utf-8" if mime.startswith("text/") else mime
+
         return _http_response(
             data,
             content_type=content_type,
@@ -2461,6 +2585,45 @@ class WebSocketChannel(BaseChannel):
                 ("Cache-Control", "no-store"),
                 ("X-Content-Type-Options", "nosniff"),
             ],
+        )
+
+    def _handle_artifacts_list(self, request: WsRequest) -> Response:
+        """List shared artifacts under ``<workspace>/output``.
+
+        Requires API token. The root is fixed to the configured workspace's
+        ``output/`` directory; clients cannot pass an arbitrary root.
+        """
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        from mona.config.paths import get_shared_output_dir, get_workspace_path
+        from mona.utils.artifact_listing import list_artifacts
+
+        output_dir = get_shared_output_dir(get_workspace_path())
+        try:
+            result = list_artifacts(output_dir)
+        except Exception:
+            logger.exception("Failed to list artifacts in {}", output_dir)
+            return _http_error(500, "scan failed")
+        payload = {
+            "files": [
+                {
+                    "path": f.path,
+                    "absolute_path": f.absolute_path,
+                    "name": f.name,
+                    "size": f.size,
+                    "size_human": f.size_human,
+                    "mime": f.mime,
+                    "modified_at": f.modified_at,
+                }
+                for f in result.files
+            ],
+            "truncated": result.truncated,
+        }
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        return _http_response(
+            body,
+            content_type="application/json; charset=utf-8",
+            extra_headers=[("Cache-Control", "no-store")],
         )
 
     def _handle_session_delete(self, request: WsRequest, key: str) -> Response:
@@ -2478,498 +2641,6 @@ class WebSocketChannel(BaseChannel):
         deleted = self._session_manager.delete_session(decoded_key)
         delete_webui_thread(decoded_key)
         return _http_json_response({"deleted": bool(deleted)})
-
-    def _handle_kb_llm_config(self, request: WsRequest) -> Response:
-        """Return the current LLM provider config for the knowledge base frontend."""
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        try:
-            from mona.config.loader import load_config, resolve_config_env_vars
-
-            config = resolve_config_env_vars(load_config())
-            model = config.agents.defaults.model
-            provider_name = config.get_provider_name(model) or ""
-            api_key = config.get_api_key(model) or ""
-            api_base = config.get_api_base(model) or ""
-
-            return _http_json_response({
-                "model": model,
-                "providerName": provider_name,
-                "apiKey": api_key,
-                "apiBase": api_base,
-            })
-        except Exception as e:
-            return _http_error(500, f"Failed to get LLM config: {e}")
-
-    # ------------------------------------------------------------------
-    # KB API handlers (GET + query params, consistent with websockets HTTP)
-    # ------------------------------------------------------------------
-
-    def _handle_kb_list_projects(self, request: WsRequest) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        try:
-            from mona.kb.api import KB_ROOT
-            KB_ROOT.mkdir(parents=True, exist_ok=True)
-            projects = []
-            for child in sorted(KB_ROOT.iterdir()):
-                if child.is_dir() and (child / ".llm-wiki").exists():
-                    projects.append({"id": child.name, "name": child.name, "path": str(child)})
-            return _http_json_response({"projects": projects})
-        except Exception as e:
-            return _http_error(500, str(e))
-
-    def _handle_kb_create_project(self, request: WsRequest) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        query = _parse_query(request.path)
-        name = _query_first(query, "name") or ""
-        if not name.strip():
-            return _http_error(400, "name is required")
-        name = name.strip()
-        try:
-            from mona.kb.api import KB_ROOT, _init_project_dirs
-            project_path = KB_ROOT / name
-            if project_path.exists():
-                return _http_error(409, f"Project '{name}' already exists")
-            _init_project_dirs(project_path)
-            return _http_json_response({"id": name, "name": name, "path": str(project_path)})
-        except Exception as e:
-            return _http_error(500, str(e))
-
-    def _handle_kb_rename_project(self, request: WsRequest, project_id: str) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        query = _parse_query(request.path)
-        new_name = (_query_first(query, "name") or "").strip()
-        if not new_name:
-            return _http_error(400, "New name is required")
-        try:
-            from mona.kb.api import KB_ROOT
-            project_path = KB_ROOT / project_id
-            if not project_path.exists():
-                return _http_error(404, f"Project '{project_id}' not found")
-            new_path = KB_ROOT / new_name
-            if new_path.exists():
-                return _http_error(409, f"Project '{new_name}' already exists")
-            project_path.rename(new_path)
-            return _http_json_response({"id": new_name, "name": new_name, "path": str(new_path)})
-        except Exception as e:
-            return _http_error(500, str(e))
-
-    def _handle_kb_list_files(self, request: WsRequest, project_id: str) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        try:
-            from mona.kb.api import KB_ROOT
-            project_path = KB_ROOT / project_id
-            if not project_path.exists():
-                return _http_error(404, f"Project '{project_id}' not found")
-            raw_dir = project_path / "raw"
-            files = []
-            if raw_dir.exists():
-                for f in sorted(raw_dir.rglob("*")):
-                    if f.is_file():
-                        rel = str(f.relative_to(raw_dir)).replace("\\", "/")
-                        files.append({"path": rel, "size": f.stat().st_size})
-            return _http_json_response({"files": files})
-        except Exception as e:
-            return _http_error(500, str(e))
-
-    def _handle_kb_read_file(self, request: WsRequest, project_id: str) -> Response:
-        """Read a source file's text content (extracts text from PDF/DOCX)."""
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        query = _parse_query(request.path)
-        file_rel = _query_first(query, "path") or ""
-        logger.info("KB read_file: project={}, path={}", project_id, file_rel)
-        if not file_rel:
-            return _http_error(400, "path is required")
-        try:
-            from mona.kb.api import KB_ROOT
-            from mona.utils.document import extract_text
-            project_path = KB_ROOT / project_id
-            if not project_path.exists():
-                logger.warning("KB read_file: project '{}' not found", project_id)
-                return _http_error(404, f"Project '{project_id}' not found")
-            file_path = project_path / file_rel
-            # Security: ensure path is within project
-            try:
-                file_path.resolve().relative_to(project_path.resolve())
-            except ValueError:
-                return _http_error(400, "Invalid file path")
-            if not file_path.exists():
-                logger.warning("KB read_file: file '{}' not found at {}", file_rel, file_path)
-                return _http_error(404, f"File '{file_rel}' not found")
-            content = extract_text(file_path)
-            if content is None:
-                return _http_error(400, f"Unsupported file type: {file_path.suffix}")
-            if content.startswith("[error:"):
-                return _http_error(422, content)
-            logger.info("KB read_file: extracted {} chars from {}", len(content), file_rel)
-            return _http_json_response({"content": content, "path": file_rel})
-        except Exception as e:
-            logger.exception("KB read_file error")
-            return _http_error(500, str(e))
-
-    def _handle_kb_delete_file(self, request: WsRequest, project_id: str) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        query = _parse_query(request.path)
-        file_rel = _query_first(query, "path") or ""
-        if not file_rel:
-            return _http_error(400, "path is required")
-        try:
-            from mona.kb.api import KB_ROOT
-            project_path = KB_ROOT / project_id
-            if not project_path.exists():
-                return _http_error(404, f"Project '{project_id}' not found")
-            file_path = project_path / "raw" / file_rel
-            try:
-                file_path.resolve().relative_to((project_path / "raw").resolve())
-            except ValueError:
-                return _http_error(400, "Invalid file path")
-            if not file_path.exists():
-                return _http_error(404, f"File '{file_rel}' not found")
-            file_path.unlink()
-            return _http_json_response({"deleted": file_rel})
-        except Exception as e:
-            return _http_error(500, str(e))
-
-    def _handle_kb_delete_source_cascade(
-        self, request: WsRequest, project_id: str
-    ) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        query = _parse_query(request.path)
-        source_rel = _query_first(query, "path") or ""
-        if not source_rel:
-            return _http_error(400, "path is required")
-        try:
-            from mona.kb.api import KB_ROOT
-            from mona.kb.ingest import parse_frontmatter
-
-            project_path = KB_ROOT / project_id
-            if not project_path.exists():
-                return _http_error(404, f"Project '{project_id}' not found")
-
-            # Delete the source file
-            file_path = project_path / "raw" / source_rel
-            try:
-                file_path.resolve().relative_to(
-                    (project_path / "raw").resolve()
-                )
-            except ValueError:
-                return _http_error(400, "Invalid file path")
-            if not file_path.exists():
-                return _http_error(404, f"File '{source_rel}' not found")
-            file_path.unlink()
-
-            # Find and delete wiki pages that reference this source
-            deleted_pages: list[str] = []
-            wiki_dir = project_path / "wiki"
-            if wiki_dir.exists():
-                source_lower = source_rel.lower()
-                pages_to_delete = []
-                for f in sorted(wiki_dir.rglob("*.md")):
-                    try:
-                        raw = f.read_text(encoding="utf-8")
-                        fm, _ = parse_frontmatter(raw)
-                    except Exception:
-                        continue
-                    sources = fm.get("sources", [])
-                    if not isinstance(sources, list):
-                        continue
-                    for src in sources:
-                        if (
-                            isinstance(src, str)
-                            and src.lower() == source_lower
-                        ):
-                            rel = str(f.relative_to(wiki_dir)).replace(
-                                "\\", "/"
-                            )
-                            pages_to_delete.append(f)
-                            deleted_pages.append(rel)
-                            break
-                for f in pages_to_delete:
-                    f.unlink()
-
-            return _http_json_response({
-                "deletedSource": source_rel,
-                "deletedPages": deleted_pages,
-            })
-        except Exception as e:
-            return _http_error(500, str(e))
-
-    def _handle_kb_list_wiki(self, request: WsRequest, project_id: str) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        try:
-            from mona.kb.api import KB_ROOT
-            from mona.kb.ingest import parse_frontmatter
-            project_path = KB_ROOT / project_id
-            if not project_path.exists():
-                return _http_error(404, f"Project '{project_id}' not found")
-            wiki_dir = project_path / "wiki"
-            pages = []
-            if wiki_dir.exists():
-                for f in sorted(wiki_dir.rglob("*.md")):
-                    rel = str(f.relative_to(wiki_dir)).replace("\\", "/")
-                    try:
-                        raw = f.read_text(encoding="utf-8")
-                        fm, _ = parse_frontmatter(raw)
-                    except Exception:
-                        fm = {}
-                    title = fm.get("title", rel.replace(".md", ""))
-                    page_type = fm.get("type", "")
-                    tags = fm.get("tags", [])
-                    if isinstance(tags, str):
-                        tags = [t.strip() for t in tags.split(",") if t.strip()]
-                    pages.append({"path": rel, "title": title, "type": page_type, "tags": tags})
-            return _http_json_response({"pages": pages})
-        except Exception as e:
-            return _http_error(500, str(e))
-
-    def _handle_kb_get_wiki_page(self, request: WsRequest, project_id: str, page_rel: str) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        try:
-            from mona.kb.api import KB_ROOT
-            from mona.kb.ingest import parse_frontmatter
-            project_path = KB_ROOT / project_id
-            if not project_path.exists():
-                return _http_error(404, f"Project '{project_id}' not found")
-            page_path = project_path / "wiki" / page_rel
-            try:
-                page_path.resolve().relative_to((project_path / "wiki").resolve())
-            except ValueError:
-                return _http_error(400, "Invalid page path")
-            if not page_path.exists():
-                return _http_error(404, f"Page '{page_rel}' not found")
-            content = page_path.read_text(encoding="utf-8")
-            fm, body = parse_frontmatter(content)
-            return _http_json_response({"path": page_rel, "frontmatter": fm, "body": body, "raw": content})
-        except Exception as e:
-            return _http_error(500, str(e))
-
-    def _handle_kb_update_wiki_page(self, request: WsRequest, project_id: str, page_rel: str) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        try:
-            import json as _json
-
-            from mona.kb.api import KB_ROOT
-
-            project_path = KB_ROOT / project_id
-            if not project_path.exists():
-                return _http_error(404, f"Project '{project_id}' not found")
-            page_path = project_path / "wiki" / page_rel
-            try:
-                page_path.resolve().relative_to((project_path / "wiki").resolve())
-            except ValueError:
-                return _http_error(400, "Invalid page path")
-            body = request.body.decode("utf-8") if request.body else "{}"
-            try:
-                data = _json.loads(body)
-            except Exception:
-                return _http_error(400, "Invalid JSON body")
-            content = data.get("content", "")
-            page_path.parent.mkdir(parents=True, exist_ok=True)
-            page_path.write_text(content, encoding="utf-8")
-            return _http_json_response({"success": True})
-        except Exception as e:
-            return _http_error(500, str(e))
-
-    def _handle_kb_write_wiki_page(self, request: WsRequest, project_id: str) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        try:
-            from mona.kb.api import KB_ROOT
-
-            query = _parse_query(request.path)
-            path = _query_first(query, "path") or ""
-            if not path.strip():
-                return _http_error(400, "Query parameter 'path' is required")
-            content = request.body.decode("utf-8") if request.body else ""
-            project_path = KB_ROOT / project_id
-            if not project_path.exists():
-                return _http_error(404, f"Project '{project_id}' not found")
-            page_path = project_path / "wiki" / path
-            try:
-                page_path.resolve().relative_to((project_path / "wiki").resolve())
-            except ValueError:
-                return _http_error(400, "Invalid page path")
-            page_path.parent.mkdir(parents=True, exist_ok=True)
-            page_path.write_text(content, encoding="utf-8")
-            return _http_json_response({"success": True, "path": path})
-        except Exception as e:
-            return _http_error(500, str(e))
-
-    def _handle_kb_graph(self, request: WsRequest, project_id: str) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        try:
-            from mona.kb.api import KB_ROOT
-            from mona.kb.ingest import build_graph_from_pages, parse_frontmatter
-            project_path = KB_ROOT / project_id
-            if not project_path.exists():
-                return _http_error(404, f"Project '{project_id}' not found")
-            wiki_dir = project_path / "wiki"
-            if not wiki_dir.exists():
-                return _http_json_response({"nodes": [], "edges": []})
-            pages = []
-            for f in sorted(wiki_dir.rglob("*.md")):
-                rel = str(f.relative_to(wiki_dir)).replace("\\", "/")
-                try:
-                    raw = f.read_text(encoding="utf-8")
-                    fm, _ = parse_frontmatter(raw)
-                except Exception:
-                    fm = {}
-                pages.append({"path": rel, "frontmatter": fm})
-            nodes, edges = build_graph_from_pages(pages)
-            return _http_json_response({"nodes": nodes, "edges": edges})
-        except Exception as e:
-            return _http_error(500, str(e))
-
-    def _handle_kb_search(self, request: WsRequest, project_id: str) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        query = _parse_query(request.path)
-        q = _query_first(query, "q") or ""
-        if not q.strip():
-            return _http_error(400, "Query parameter 'q' is required")
-        count = int(_query_first(query, "count") or "10")
-        try:
-            from mona.kb.api import KB_ROOT
-            from mona.kb.search import search_wiki
-            project_path = KB_ROOT / project_id
-            if not project_path.exists():
-                return _http_error(404, f"Project '{project_id}' not found")
-            results = search_wiki(project_path, q, count=count)
-            return _http_json_response({"results": results})
-        except Exception as e:
-            return _http_error(500, str(e))
-
-    def _handle_kb_get_reviews(self, request: WsRequest, project_id: str) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        try:
-            from mona.kb.api import KB_ROOT
-
-            project_path = KB_ROOT / project_id
-            if not project_path.exists():
-                return _http_error(404, f"Project '{project_id}' not found")
-            reviews_file = project_path / ".llm-wiki" / "reviews.json"
-            if not reviews_file.exists():
-                return _http_json_response({"items": []})
-            try:
-                data = json.loads(reviews_file.read_text(encoding="utf-8"))
-                return _http_json_response({"items": data.get("items", [])})
-            except Exception:
-                return _http_json_response({"items": []})
-        except Exception as e:
-            return _http_error(500, str(e))
-
-    def _handle_kb_save_reviews(self, request: WsRequest, project_id: str) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        try:
-            from mona.kb.api import KB_ROOT
-
-            project_path = KB_ROOT / project_id
-            if not project_path.exists():
-                return _http_error(404, f"Project '{project_id}' not found")
-            body = request.body.decode("utf-8") if request.body else "{}"
-            try:
-                data = json.loads(body)
-            except Exception:
-                return _http_error(400, "Invalid JSON body")
-            items = data.get("items", [])
-            reviews_file = project_path / ".llm-wiki" / "reviews.json"
-            reviews_file.write_text(
-                json.dumps({"items": items}, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-            return _http_json_response({"success": True})
-        except Exception as e:
-            return _http_error(500, str(e))
-
-    def _handle_kb_lint(self, request: WsRequest, project_id: str) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        try:
-            from mona.kb.api import KB_ROOT
-            from mona.kb.ingest import parse_frontmatter
-
-            project_path = KB_ROOT / project_id
-            if not project_path.exists():
-                return _http_error(404, f"Project '{project_id}' not found")
-            wiki_dir = project_path / "wiki"
-            if not wiki_dir.exists():
-                return _http_json_response({"results": []})
-
-            pages = []
-            slug_to_path = {}
-            page_paths = set()
-
-            for f in sorted(wiki_dir.rglob("*.md")):
-                rel = str(f.relative_to(wiki_dir)).replace("\\", "/")
-                page_paths.add(rel)
-                stem = rel.replace(".md", "").split("/")[-1].lower()
-                slug_to_path[stem] = rel
-                try:
-                    raw = f.read_text(encoding="utf-8")
-                    fm, _ = parse_frontmatter(raw)
-                except Exception:
-                    fm = {}
-                related = fm.get("related", [])
-                if isinstance(related, str):
-                    related = [r.strip() for r in related.split(",") if r.strip()]
-                pages.append({"path": rel, "related": related})
-
-            incoming = {p: set() for p in page_paths}
-            for page in pages:
-                for target in page["related"]:
-                    resolved = slug_to_path.get(target.lower(), target)
-                    if resolved in incoming:
-                        incoming[resolved].add(page["path"])
-
-            results = []
-            structural = {"index.md", "overview.md", "log.md"}
-
-            for page in pages:
-                path = page["path"]
-                is_structural = any(path.endswith(s) for s in structural)
-
-                for target in page["related"]:
-                    resolved = slug_to_path.get(target.lower(), target)
-                    if resolved not in page_paths:
-                        results.append({
-                            "type": "broken-link",
-                            "severity": "warning",
-                            "page": path,
-                            "detail": f"链接到不存在的页面: {target}",
-                        })
-
-                if not is_structural and not incoming.get(path):
-                    results.append({
-                        "type": "orphan",
-                        "severity": "info",
-                        "page": path,
-                        "detail": "没有任何页面链接到此页面",
-                    })
-
-                if not is_structural and len(page["related"]) == 0:
-                    results.append({
-                        "type": "no-outlinks",
-                        "severity": "info",
-                        "page": path,
-                        "detail": "此页面没有链接到其他页面",
-                    })
-
-            return _http_json_response({"results": results})
-        except Exception as e:
-            return _http_error(500, str(e))
 
     def _serve_static(self, request_path: str) -> Response | None:
         """Resolve *request_path* against the built SPA directory; SPA fallback to index.html."""
@@ -3516,13 +3187,13 @@ class WebSocketChannel(BaseChannel):
             if isinstance(workspace, str):
                 workspace = workspace.strip() or None
             # ``agent_kind`` marks the session for a dedicated document agent loop.
-            # Supported kinds: ppt / video / flowchart — each routes to a
+            # Supported kinds: ppt / video — each routes to a
             # DocumentAgentLoop with its own tool whitelist + soul prompt.
             agent_kind = envelope.get("agent_kind")
             if not isinstance(agent_kind, str):
                 agent_kind = None
             agent_kind = agent_kind.strip() if agent_kind else None
-            if agent_kind not in ("ppt", "video", "flowchart", None):
+            if agent_kind not in ("ppt", "video", None):
                 agent_kind = None
             if (workspace is not None or agent_kind is not None) and self._session_manager is not None:
                 session = self._session_manager.get_or_create(f"websocket:{new_id}")
@@ -3625,17 +3296,10 @@ class WebSocketChannel(BaseChannel):
                 }
             video_generation = envelope.get("video_generation")
             if isinstance(video_generation, dict) and video_generation.get("enabled") is True:
-                v_aspect = video_generation.get("aspect_ratio")
-                v_duration = video_generation.get("duration")
-                v_ref_url = video_generation.get("reference_image_url")
-                metadata["video_generation"] = {
-                    "enabled": True,
-                    "aspect_ratio": v_aspect if isinstance(v_aspect, str) and v_aspect else None,
-                    "duration": v_duration if isinstance(v_duration, int) and v_duration > 0 else None,
-                    "reference_image_url": (
-                        v_ref_url if isinstance(v_ref_url, str) and v_ref_url.strip() else None
-                    ),
-                }
+                # WebUI video mode now only signals intent — the AI picks
+                # aspect_ratio / duration and treats attached images as
+                # image-to-video references via the generate_video tool.
+                metadata["video_generation"] = {"enabled": True}
             await self._handle_message(
                 sender_id=client_id,
                 chat_id=cid,
@@ -3698,7 +3362,7 @@ class WebSocketChannel(BaseChannel):
         }
         self._try_append_webui_transcript(chat_id, payload)
         raw = json.dumps(payload, ensure_ascii=False)
-        self.logger.info(
+        self.logger.debug(
             "deliver_files: sending to {} subscribers for chat_id={}, files={}",
             len(conns), chat_id, [f.get("name") for f in files],
         )

@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 from urllib.parse import quote
@@ -27,12 +28,74 @@ from mona.agent.tools.schema import (
     tool_parameters_schema,
 )
 
+# ---------------------------------------------------------------------------
+# Gateway URL helper (lightweight, cached) for Tauri IPC calls
+# ---------------------------------------------------------------------------
+
+_gateway_url_cache: str | None = None
+
+
+def _get_gateway_url() -> str:
+    """获取 gateway HTTP 地址（轻量读 config.json，模块级缓存）。"""
+    global _gateway_url_cache
+    if _gateway_url_cache:
+        return _gateway_url_cache
+    port = 17173  # 默认端口
+    try:
+        from mona.config.loader import get_config_path
+
+        path = get_config_path()
+        if path.exists():
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            port = int(data.get("gateway", {}).get("port", port))
+    except Exception as e:  # noqa: BLE001
+        logger.debug("Failed to read gateway port from config, using default: {}", e)
+    _gateway_url_cache = f"http://127.0.0.1:{port}"
+    return _gateway_url_cache
+
+
+def _fetch_body_via_tauri(account_id: str, uid: str, folder: str) -> str:
+    """通过 Tauri IPC 调用 email_fetch_body 命令补全邮件正文。
+
+    Rust 侧 email_fetch_body 会：
+    1. 先尝试本地 .eml 解析（body_fetched=0 时为空）
+    2. 本地为空则回退 IMAP 拉完整 RFC822，落盘 .eml 并返回正文
+
+    返回纯文本正文（优先 text/plain，为空时从 HTML 提取）。
+    失败时返回空字符串（由调用方处理）。
+    """
+    from mona.agent.tools.tauri_ipc import tauri_invoke
+
+    result = tauri_invoke(
+        "email_fetch_body",
+        {
+            "gatewayUrl": _get_gateway_url(),
+            "accountId": account_id,
+            "uid": uid,
+            "mailbox": folder,
+        },
+    )
+    if not isinstance(result, dict):
+        return ""
+    body_text = result.get("bodyText") or ""
+    if body_text:
+        return body_text
+    body_html = result.get("bodyHtml") or ""
+    if body_html:
+        from mona.email_intel.analyze import _html_to_text
+
+        return _html_to_text(body_html)
+    return ""
+
 
 class _EmailToolBase(Tool):
     """邮件工具基类。所有邮件工具默认开启。"""
 
     _scopes = {"core"}
     _plugin_discoverable = True
+    # All email tools (search/read/action) require an active subscription.
+    subscription_required = True
 
     @classmethod
     def enabled(cls, ctx: ToolContext) -> bool:
@@ -242,6 +305,29 @@ class EmailReadTool(_EmailToolBase):
         ]
         if msg.get("ccAddresses"):
             lines.append(f"抄送: {msg['ccAddresses']}")
+
+        # 正文：优先 text/plain，为空时从 HTML 提取纯文本（很多邮件只有 HTML part）
+        body = msg.get("bodyText") or ""
+        body_html = msg.get("bodyHtml") or ""
+        if not body and body_html:
+            from mona.email_intel.analyze import _html_to_text
+
+            body = _html_to_text(body_html)
+
+        # 同步时只拉 HEADER 落盘 .eml（省流量），用户未点开的邮件 body_fetched=0，
+        # 本地 .eml 没有正文。此处检测到正文为空时，通过 Tauri IPC 触发
+        # email_fetch_body 命令：Rust 侧会自动回退 IMAP 拉完整 RFC822、落盘并返回正文。
+        if not body:
+            try:
+                body = await asyncio.to_thread(
+                    _fetch_body_via_tauri,
+                    account_id,
+                    uid,
+                    folder,
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.warning("email_read: fetch_body fallback failed for uid={}: {}", uid, e)
+
         lines.extend([
             f"日期: {msg['date']}",
             f"文件夹: {msg['folder']}",
@@ -250,7 +336,7 @@ class EmailReadTool(_EmailToolBase):
             f"附件: {'有' if msg['hasAttachments'] else '无'}",
             "",
             "--- 正文 ---",
-            msg.get("bodyText") or "(无正文)",
+            body or "(无正文)",
         ])
 
         if include_analysis:

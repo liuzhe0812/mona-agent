@@ -7,11 +7,13 @@ from sqlalchemy.orm import Session
 from app.auth import create_access_token, hash_password, verify_password
 from app.config import settings
 from app.database import get_db
+from app.deps import get_current_user
 from app.email import send_register_code_email, send_reset_code_email
 from app.errors import AuthError
 from app.middleware import limiter
 from app.models import AppConfig, PasswordResetCode, UsedDeviceTrial, User
 from app.schemas import (
+    ChangePasswordRequest,
     ForgotPasswordRequest,
     LoginRequest,
     RegisterRequest,
@@ -21,6 +23,16 @@ from app.schemas import (
 )
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+def _parse_config_datetime(value: str) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def _get_active_promo_trial_days(db: Session) -> int | None:
@@ -44,20 +56,14 @@ def _get_active_promo_trial_days(db: Session) -> int | None:
     end_row = db.query(AppConfig).filter(AppConfig.key == "promo_trial_end_at").first()
 
     if start_row and start_row.value:
-        try:
-            start = datetime.fromisoformat(start_row.value)
-            if now < start:
-                return None
-        except ValueError:
-            pass
+        start = _parse_config_datetime(start_row.value)
+        if start and now < start:
+            return None
 
     if end_row and end_row.value:
-        try:
-            end = datetime.fromisoformat(end_row.value)
-            if now > end:
-                return None
-        except ValueError:
-            pass
+        end = _parse_config_datetime(end_row.value)
+        if end and now > end:
+            return None
 
     return days
 
@@ -67,9 +73,13 @@ def _get_active_promo_trial_days(db: Session) -> int | None:
 def send_register_code(
     request: Request,
     body: SendRegisterCodeRequest,
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
+    # 校验账号是否已存在（不隐藏错误，让用户知道账号被占用）
+    existing_account = db.query(User).filter(User.account == body.account).first()
+    if existing_account:
+        raise AuthError("account_exists", "该账号已被注册，请更换", status_code=409)
+
     existing = db.query(User).filter(User.email == body.email).first()
     if existing:
         # Don't reveal whether email is already registered
@@ -85,8 +95,13 @@ def send_register_code(
     db.add(record)
     db.commit()
 
-    background_tasks.add_task(send_register_code_email, body.email, code)
-    return {"message": "If the email is available, a verification code has been sent"}
+    # 同步发送邮件，失败则报错让前端感知
+    try:
+        send_register_code_email(body.email, code)
+    except Exception as e:
+        raise AuthError("email_send_failed", f"验证码发送失败：{e}", status_code=502)
+
+    return {"message": "验证码已发送"}
 
 
 @router.post("/register", response_model=TokenResponse)
@@ -245,3 +260,23 @@ def reset_password(request: Request, body: ResetPasswordRequest, db: Session = D
     db.commit()
 
     return {"message": "Password has been reset successfully"}
+
+
+@router.post("/change-password")
+@limiter.limit("5/minute")
+def change_password(
+    request: Request,
+    body: ChangePasswordRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if not verify_password(body.old_password, current_user.password_hash):
+        raise AuthError("invalid_credentials", "旧密码错误", status_code=401)
+
+    if body.old_password == body.new_password:
+        raise AuthError("same_as_old", "新密码不能与旧密码相同", status_code=400)
+
+    current_user.password_hash = hash_password(body.new_password)
+    db.commit()
+
+    return {"message": "密码修改成功"}

@@ -141,7 +141,7 @@ def collect_session_topics(
         total += 1
 
     stats.total_sessions = total
-    logger.info(f"[session_collector] extracted {total} sessions")
+    logger.debug(f"[session_collector] extracted {total} sessions")
     return stats
 
 

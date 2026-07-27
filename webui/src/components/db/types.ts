@@ -166,6 +166,9 @@ export interface CellEdit {
   newValue: string;
 }
 
+export const NULL_MARKER = "\u0000NULL";
+export const DEFAULT_MARKER = "\u0000DEFAULT";
+
 export interface QueryTab {
   id: string;
   title: string;
@@ -175,6 +178,7 @@ export interface QueryTab {
   connectionId: string | null;
   database: string | null;
   edits: CellEdit[];
+  insertedRows: number[];
   tableInfo: TableInfo | null;
   agentChatId: string | null;
 }

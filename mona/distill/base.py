@@ -39,6 +39,10 @@ class DistillResult:
     markdown: str = ""
     # Section heading in USER.md (e.g. "Work Patterns")
     user_section: str = ""
+    # Additional USER.md sections to write (section_name, markdown) pairs.
+    # Used when a single distill task produces multiple USER.md sections
+    # (e.g. ProfileTask writes both "Profile" and "Current Focus").
+    extra_sections: list[tuple[str, str]] = field(default_factory=list)
     error: str | None = None
 
 

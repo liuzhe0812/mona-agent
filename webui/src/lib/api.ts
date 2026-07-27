@@ -1,6 +1,6 @@
 import type {
   ChatSummary,
-  EmbeddingSettingsUpdate,
+  DeliveredFile,
   ImageGenerationSettingsUpdate,
   PptProject,
   PptTemplatesResponse,
@@ -389,26 +389,6 @@ export async function updateVideoGenerationSettings(
   );
 }
 
-export async function updateEmbeddingSettings(
-  token: string,
-  update: EmbeddingSettingsUpdate,
-  base?: string,
-): Promise<SettingsPayload> {
-  const effectiveBase = base ?? (await getApiBase());
-  const query = new URLSearchParams();
-  if (update.enabled !== undefined) query.set("enabled", String(update.enabled));
-  if (update.endpoint !== undefined) query.set("endpoint", update.endpoint);
-  if (update.apiKey !== undefined) query.set("api_key", update.apiKey);
-  if (update.model !== undefined) query.set("model", update.model);
-  if (update.outputDimensionality !== undefined) {
-    query.set("output_dimensionality", String(update.outputDimensionality ?? ""));
-  }
-  return request<SettingsPayload>(
-    `${effectiveBase}/api/settings/embedding/update?${query}`,
-    token,
-  );
-}
-
 export async function updateChannelSettings(
   token: string,
   channel: string,
@@ -614,6 +594,33 @@ export async function pptAddSources(
   return request(`${effectiveBase}/api/ppt/add-sources?${query}`, token);
 }
 
+export interface PptOfficeCliStatus {
+  ok: boolean;
+  version: string | null;
+  path: string | null;
+  error: string | null;
+  supported: boolean;
+}
+
+export async function fetchPptOfficeCliCheck(
+  token: string,
+  base?: string,
+): Promise<PptOfficeCliStatus> {
+  const effectiveBase = base ?? (await getApiBase());
+  return request<PptOfficeCliStatus>(
+    `${effectiveBase}/api/ppt/officecli-check`,
+    token,
+  );
+}
+
+export async function downloadPptOfficeCli(
+  token: string,
+  base?: string,
+): Promise<{ ok: boolean; path?: string; cached?: boolean; error?: string }> {
+  const effectiveBase = base ?? (await getApiBase());
+  return request(`${effectiveBase}/api/ppt/officecli-download`, token);
+}
+
 export async function savePptChatId(
   token: string,
   project: string,
@@ -682,8 +689,11 @@ export interface VideoProject {
   name: string;
   createdAt: number;
   resolution: string;
-  status: "init" | "generating" | "done" | "error";
+  status: "init" | "generating" | "done" | "error" | "planning";
   hasVideo: boolean;
+  hasStoryboard?: boolean;
+  hasIndex?: boolean;
+  sceneCount?: number;
   chatId: string | null;
 }
 
@@ -715,6 +725,30 @@ export async function downloadVideoRuntime(
   );
 }
 
+export interface Url2NoteSource {
+  title: string;
+  url: string;
+  kind: "article" | "video";
+  text: string;
+}
+
+export async function extractUrl2Note(
+  token: string,
+  url: string,
+  base?: string,
+): Promise<Url2NoteSource> {
+  const effectiveBase = base ?? (await getGatewayHttpBase());
+  return request<Url2NoteSource>(
+    `${effectiveBase}/api/url2note/extract`,
+    token,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url }),
+    },
+  );
+}
+
 export async function fetchVideoProjects(
   token: string,
   base?: string,
@@ -723,10 +757,18 @@ export async function fetchVideoProjects(
   return request(`${effectiveBase}/api/video/projects`, token);
 }
 
+export interface VideoTtsConfig {
+  narrationEnabled?: boolean;
+  ttsProvider?: string;
+  ttsVoice?: string;
+  ttsRate?: string;
+}
+
 export async function createVideoProject(
   token: string,
   name: string,
   resolution: string,
+  tts?: VideoTtsConfig,
   base?: string,
 ): Promise<{ ok: boolean; error?: string }> {
   const effectiveBase = base ?? (await getGatewayHttpBase());
@@ -736,7 +778,7 @@ export async function createVideoProject(
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, resolution }),
+      body: JSON.stringify({ name, resolution, ...(tts ?? {}) }),
     },
   );
 }
@@ -765,6 +807,28 @@ export async function fetchVideoProjectFile(
   return request(`${effectiveBase}/api/video/project-file?${query}`, token);
 }
 
+export async function deleteVideoProject(
+  token: string,
+  name: string,
+  base?: string,
+): Promise<{ ok: boolean }> {
+  const effectiveBase = base ?? (await getApiBase());
+  const query = new URLSearchParams();
+  query.set("name", name);
+  return request(`${effectiveBase}/api/video/delete-project?${query}`, token);
+}
+
+export function buildVideoDownloadUrl(
+  base: string,
+  token: string,
+  name: string,
+): string {
+  const query = new URLSearchParams();
+  query.set("name", name);
+  query.set("token", token);
+  return `${base}/api/video/download?${query}`;
+}
+
 export async function saveVideoChatId(
   token: string,
   name: string,
@@ -784,145 +848,353 @@ export async function saveVideoChatId(
 }
 
 // ---------------------------------------------------------------------------
-// Flowchart APIs
+// Video export
 // ---------------------------------------------------------------------------
 
-export interface FlowchartProject {
-  name: string;
-  createdAt: number;
-  status: "init" | "generating" | "done";
-  hasDiagram: boolean;
-  chatId: string | null;
+export interface VideoExportStatus {
+  stage: "idle" | "rendering" | "done" | "error";
+  progress: number;
+  message?: string;
+  output?: string;
+  duration?: number;
+  fps?: number;
+  resolution?: [number, number];
+  totalFrames?: number;
+  audio?: boolean;
+  hasVideo?: boolean;
+  needDownload?: boolean;
+  startedAt?: string;
+  finishedAt?: string;
 }
 
-export async function fetchFlowchartProjects(
-  token: string,
-  base?: string,
-): Promise<{ projects: FlowchartProject[] }> {
-  const effectiveBase = base ?? (await getGatewayHttpBase());
-  return request(`${effectiveBase}/api/flowchart/projects`, token);
-}
-
-export async function createFlowchartProject(
+export async function exportVideoProject(
   token: string,
   name: string,
+  opts?: { fps?: number; quality?: "draft" | "standard" | "high" },
   base?: string,
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<{ ok: boolean; stage?: string; message?: string; error?: string }> {
   const effectiveBase = base ?? (await getGatewayHttpBase());
-  return request<{ ok: boolean; error?: string }>(
-    `${effectiveBase}/api/flowchart/project/create`,
+  return request(
+    `${effectiveBase}/api/video/project/export`,
     token,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ name, ...(opts ?? {}) }),
     },
   );
 }
 
-export async function fetchFlowchartProject(
+export async function fetchVideoExportStatus(
   token: string,
   name: string,
   base?: string,
-): Promise<FlowchartProject> {
+): Promise<VideoExportStatus> {
   const effectiveBase = base ?? (await getGatewayHttpBase());
   const query = new URLSearchParams();
   query.set("name", name);
-  return request(`${effectiveBase}/api/flowchart/project?${query}`, token);
+  return request(`${effectiveBase}/api/video/project/export-status?${query}`, token);
 }
 
-export async function fetchFlowchartProjectXml(
+export function buildVideoPreviewFullUrl(base: string, token: string, name: string): string {
+  const query = new URLSearchParams();
+  query.set("name", name);
+  query.set("token", token);
+  return `${base}/api/video/project/preview-full?${query}`;
+}
+
+// ---------------------------------------------------------------------------
+// Video storyboard scene CRUD
+// ---------------------------------------------------------------------------
+
+export interface VideoScene {
+  index: number;
+  title: string;
+  duration: number;
+  durationRaw: string;
+  visual: string;
+  animation: string;
+  narration: string;
+  assets: string[];
+}
+
+export async function fetchVideoStoryboard(
   token: string,
   name: string,
   base?: string,
-): Promise<{ ok: boolean; xml?: string; error?: string }> {
+): Promise<{ ok: boolean; scenes?: VideoScene[]; source?: string; error?: string }> {
   const effectiveBase = base ?? (await getGatewayHttpBase());
   const query = new URLSearchParams();
   query.set("name", name);
-  return request(`${effectiveBase}/api/flowchart/project-xml?${query}`, token);
+  return request(`${effectiveBase}/api/video/project/storyboard?${query}`, token);
 }
 
-export async function saveFlowchartProject(
+export async function updateVideoScene(
   token: string,
   name: string,
-  xml: string,
+  scene: Partial<VideoScene> & { index: number },
   base?: string,
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<{ ok: boolean; scene?: VideoScene; error?: string }> {
   const effectiveBase = base ?? (await getGatewayHttpBase());
-  return request<{ ok: boolean; error?: string }>(
-    `${effectiveBase}/api/flowchart/project-save`,
-    token,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, xml }),
-    },
-  );
+  return request(`${effectiveBase}/api/video/project/scene`, token, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, ...scene }),
+  });
 }
 
-export async function exportFlowchartProject(
+export async function deleteVideoScene(
   token: string,
   name: string,
-  format: string,
+  index: number,
   base?: string,
-): Promise<{ ok: boolean; url?: string; data?: string; error?: string }> {
+): Promise<{ ok: boolean; scenes?: VideoScene[]; error?: string }> {
   const effectiveBase = base ?? (await getGatewayHttpBase());
   const query = new URLSearchParams();
   query.set("name", name);
-  query.set("format", format);
-  return request(`${effectiveBase}/api/flowchart/project-export?${query}`, token);
+  query.set("index", String(index));
+  return request(`${effectiveBase}/api/video/project/scene?${query}`, token, {
+    method: "DELETE",
+  });
 }
 
-export async function saveFlowchartChatId(
+export async function addVideoScene(
   token: string,
   name: string,
-  chatId: string,
+  scene?: Partial<VideoScene>,
   base?: string,
-): Promise<{ ok: boolean }> {
+): Promise<{ ok: boolean; scene?: VideoScene; error?: string }> {
   const effectiveBase = base ?? (await getGatewayHttpBase());
-  return request<{ ok: boolean }>(
-    `${effectiveBase}/api/flowchart/project-save-chat-id`,
-    token,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, chatId }),
+  return request(`${effectiveBase}/api/video/project/scene/add`, token, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, ...(scene ?? {}) }),
+  });
+}
+
+export async function reorderVideoScenes(
+  token: string,
+  name: string,
+  indices: number[],
+  base?: string,
+): Promise<{ ok: boolean; scenes?: VideoScene[]; error?: string }> {
+  const effectiveBase = base ?? (await getGatewayHttpBase());
+  return request(`${effectiveBase}/api/video/project/scene/reorder`, token, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, indices }),
+  });
+}
+
+export async function lockVideoStoryboard(
+  token: string,
+  name: string,
+  base?: string,
+): Promise<{ ok: boolean; phase?: string; error?: string }> {
+  const effectiveBase = base ?? (await getGatewayHttpBase());
+  return request(`${effectiveBase}/api/video/project/lock-storyboard`, token, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+}
+
+export function buildSceneNarrationUrl(
+  base: string,
+  token: string,
+  name: string,
+  index: number,
+): string {
+  // narration API is POST with JSON body; for <audio> we can't use POST directly.
+  // Frontend will fetch bytes and create blob URL instead.
+  return "";
+}
+
+export async function fetchSceneNarrationBytes(
+  token: string,
+  name: string,
+  index: number,
+  base?: string,
+): Promise<Blob | null> {
+  const effectiveBase = base ?? (await getGatewayHttpBase());
+  const res = await fetch(`${effectiveBase}/api/video/project/scene/narration`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
     },
-  );
+    body: JSON.stringify({ name, index }),
+  });
+  if (!res.ok) return null;
+  return res.blob();
 }
 
-export interface FlowchartRuntimeItem {
-  ok: boolean;
-  version?: string;
-  path?: string;
+// ---------------------------------------------------------------------------
+// Video scene HTML generation / preview / state machine (P2)
+// ---------------------------------------------------------------------------
+
+export type SceneHtmlStatus = "pending" | "generating" | "previewing" | "confirmed";
+
+export interface VideoSceneWithHtml extends VideoScene {
+  htmlStatus?: SceneHtmlStatus;
+  htmlPath?: string;
+  confirmedAt?: string;
 }
 
-export interface FlowchartRuntimeStatus {
-  drawio: FlowchartRuntimeItem;
+export async function generateSceneHtml(
+  token: string,
+  name: string,
+  index: number,
+  base?: string,
+): Promise<{ ok: boolean; scene?: VideoSceneWithHtml; htmlPath?: string; error?: string }> {
+  const effectiveBase = base ?? (await getGatewayHttpBase());
+  return request(`${effectiveBase}/api/video/ai/scene-html`, token, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, index }),
+  });
 }
 
-export async function fetchFlowchartRuntimeCheck(
+export function buildScenePreviewUrl(
+  base: string,
+  token: string,
+  name: string,
+  index: number,
+): string {
+  const query = new URLSearchParams();
+  query.set("name", name);
+  query.set("index", String(index));
+  query.set("token", token);
+  return `${base}/api/video/project/scene/preview?${query}`;
+}
+
+export async function fetchScenePreviewHtml(
+  token: string,
+  name: string,
+  index: number,
+  base?: string,
+): Promise<{ html: string | null; needsGeneration: boolean }> {
+  const effectiveBase = base ?? (await getGatewayHttpBase());
+  const query = new URLSearchParams();
+  query.set("name", name);
+  query.set("index", String(index));
+  const res = await fetch(`${effectiveBase}/api/video/project/scene/preview?${query}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (res.status === 404) {
+    return { html: null, needsGeneration: true };
+  }
+  if (!res.ok) return { html: null, needsGeneration: false };
+  const html = await res.text();
+  return { html, needsGeneration: false };
+}
+
+export async function confirmVideoScene(
+  token: string,
+  name: string,
+  index: number,
+  base?: string,
+): Promise<{ ok: boolean; scene?: VideoSceneWithHtml; allConfirmed?: boolean; phase?: string; error?: string }> {
+  const effectiveBase = base ?? (await getGatewayHttpBase());
+  return request(`${effectiveBase}/api/video/project/scene/confirm`, token, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, index }),
+  });
+}
+
+export async function regenerateVideoScene(
+  token: string,
+  name: string,
+  index: number,
+  base?: string,
+): Promise<{ ok: boolean; scene?: VideoSceneWithHtml; error?: string }> {
+  const effectiveBase = base ?? (await getGatewayHttpBase());
+  return request(`${effectiveBase}/api/video/project/scene/regenerate`, token, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, index }),
+  });
+}
+
+export async function rewriteVideoScene(
+  token: string,
+  name: string,
+  index: number,
+  requirement: string,
+  base?: string,
+): Promise<{ ok: boolean; scene?: VideoSceneWithHtml; error?: string }> {
+  const effectiveBase = base ?? (await getGatewayHttpBase());
+  return request(`${effectiveBase}/api/video/ai/scene-rewrite`, token, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, index, requirement }),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Shared output artifacts & authenticated file preview
+// ---------------------------------------------------------------------------
+
+export interface ArtifactListResponse {
+  files: DeliveredFile[];
+  truncated: boolean;
+}
+
+/** List all shared-output artifacts under ``<workspace>/output/``.
+ *
+ *  The directory root is fixed by the server; clients cannot pass an
+ *  arbitrary root. Files are returned sorted by mtime desc. */
+export async function listArtifacts(
   token: string,
   base?: string,
-): Promise<FlowchartRuntimeStatus> {
-  const effectiveBase = base ?? (await getGatewayHttpBase());
-  return request<FlowchartRuntimeStatus>(
-    `${effectiveBase}/api/flowchart/runtime-check`,
+): Promise<ArtifactListResponse> {
+  const effectiveBase = base ?? (await getApiBase());
+  return request<ArtifactListResponse>(
+    `${effectiveBase}/api/artifacts`,
     token,
   );
 }
 
-export async function downloadFlowchartRuntime(
-  token: string,
-  base?: string,
-): Promise<{ ok: boolean; error?: string }> {
-  const effectiveBase = base ?? (await getGatewayHttpBase());
-  return request<{ ok: boolean; error?: string }>(
-    `${effectiveBase}/api/flowchart/runtime-download`,
-    token,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-    },
-  );
+export interface FilePreviewParams {
+  /** ``shared`` resolves against ``<workspace>/output/``; ``project``
+   *  resolves against the session's bound workspace directory. */
+  scope: "shared" | "project";
+  /** Relative path under the scope root. Must not be empty, absolute,
+   *  or contain ``..``. */
+  path: string;
+  /** Required when ``scope === "project"``: the websocket session key
+   *  whose ``metadata.workspace`` is the preview root. */
+  sessionKey?: string | null;
 }
+
+/** Fetch a file preview as a Blob using an authenticated request.
+ *
+ *  Returns the Blob and the resolved MIME type so callers can build a
+ *  typed object URL or render HTML source as ``text/plain``. The server
+ *  already forces ``text/plain`` for ``.html``/``.htm`` to prevent
+ *  execution; callers should still render the result inside a sandboxed
+ *  surface to be safe. */
+export async function fetchFilePreviewBlob(
+  token: string,
+  params: FilePreviewParams,
+  base?: string,
+): Promise<{ blob: Blob; mime: string }> {
+  const effectiveBase = base ?? (await getApiBase());
+  const query = new URLSearchParams();
+  query.set("scope", params.scope);
+  query.set("path", params.path);
+  if (params.sessionKey) query.set("session_key", params.sessionKey);
+  const url = `${effectiveBase}/api/file-preview?${query.toString()}`;
+  const res = await httpFetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new ApiError(res.status, `HTTP ${res.status}`);
+  }
+  const blob = await res.blob();
+  const mime = res.headers.get("content-type") ?? "application/octet-stream";
+  return { blob, mime };
+}
+
+

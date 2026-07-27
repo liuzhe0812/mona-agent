@@ -25,3 +25,16 @@ A bugfix should make the protected invariant clear, change the smallest surface 
 ## Explicit over magical
 
 Configuration must be declared explicitly in `config/schema.py` Pydantic models. Error handling should raise clear exceptions rather than silently correcting bad input. Provider auto-detection exists, but every resolution path must be traceable from the factory to the concrete provider class.
+
+## KV-cache contract
+
+The system prompt must stay byte-stable across all iterations within a single turn so provider-side prompt caches (Anthropic `cache_control`, OpenAI prefix caching) can be hit.
+
+Invariants:
+
+- `ContextBuilder.build_messages` is called exactly once at the turn entry (`AgentLoop._build_initial_messages` / `_dispatch`). The `AgentRunner` iteration loop only appends assistant and tool messages; it never rebuilds the system message.
+- Dynamic per-turn context (current time, channel, chat id, sender id, browser page url/title, goal-state runtime lines) is appended to the **user** message via `_build_runtime_context` and tagged with `_RUNTIME_CONTEXT_TAG`. It must never enter the system prompt.
+- The system prompt's cross-turn variation sources are limited to legitimate semantic changes: `memory/MEMORY.md` edits, the always-on skills list, unprocessed `history.jsonl` entries, and the archived session summary. These change between turns, not within a turn.
+- Tool implementations must not mutate `MEMORY.md`, `SOUL.md`, `USER.md`, the skills list, or `history.jsonl` as a side effect of being called within a turn. If a tool needs to persist state, write to a separate artifact path; durable memory updates belong to the Dream/Consolidator layers, which run between turns.
+
+Follow-up (not yet implemented): inject explicit `cache_control: {type: "ephemeral"}` markers at the end of the system prompt and the tool definitions for providers that support it. This is a provider-layer change and must not alter the prompt text itself.

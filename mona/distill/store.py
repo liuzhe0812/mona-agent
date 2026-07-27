@@ -111,17 +111,24 @@ def write_distill_result(memory_dir: Path, result: DistillResult) -> None:
     """Write distill result to both stores.
 
     - Updates USER.md section if result.user_section is set
+    - Writes any extra_sections to USER.md (e.g. Current Focus)
     - Merges result.data into profile.rich.json under result.task_name key
     - Appends trajectory point if result.data contains trajectory data
     """
-    # 1. Update USER.md
+    # 1. Update USER.md primary section + extra sections
+    user_path = memory_dir / _USER_FILENAME
+    sections_to_write: list[tuple[str, str]] = []
     if result.user_section and result.markdown:
-        user_path = memory_dir / _USER_FILENAME
+        sections_to_write.append((result.user_section, result.markdown))
+    sections_to_write.extend(result.extra_sections)
+    for section_name, section_md in sections_to_write:
+        if not section_md:
+            continue
         try:
-            update_user_section(user_path, result.user_section, result.markdown)
-            logger.debug(f"[distill.store] updated USER.md section: {result.user_section}")
+            update_user_section(user_path, section_name, section_md)
+            logger.debug(f"[distill.store] updated USER.md section: {section_name}")
         except Exception as e:
-            logger.error(f"[distill.store] failed to update USER.md: {e}")
+            logger.error(f"[distill.store] failed to update USER.md section {section_name}: {e}")
 
     # 2. Update profile.rich.json
     profile = read_rich_profile(memory_dir)

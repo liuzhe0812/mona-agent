@@ -5,7 +5,7 @@ description: "Build and publish Mona releases to Qiniu Cloud (CDN) + VPS for hot
 
 # Mona Release Pipeline
 
-Pre-check → Git commit → Bump version → Build → Update package → Changelog → Upload → Manifest → Deploy site → Verify.
+Pre-check → Git commit → Bump version → Build → Update package → Changelog → Upload → Manifest → Deploy site → Verify → Push.
 
 ## Prerequisites
 
@@ -107,7 +107,7 @@ $NewVersion = "<determined_version>"
 
 Execute the `windows-packager` skill's build pipeline (Step 1 + Step 2):
 
-1. **Build mona-gateway** — `windows-packager` Step 1: `pip install ".[api,wecom,weixin,pdf]"`, `python -m PyInstaller src-tauri\mona-gateway.spec`, copy `dist/mona-gateway/` to `src-tauri/resources/mona-gateway/`
+1. **Build mona-gateway** — `windows-packager` Step 1: `pip install ".[api,wecom,weixin,pdf]"`, `python -m PyInstaller src-tauri\mona-gateway.spec`, copy `dist/mona-gateway/` to `src-tauri/resources/mona-gateway/`. **Step 1 ends with a `doctor` smoke test** (`mona-gateway.exe doctor`) that verifies critical dependencies (playwright, lark_oapi, fitz, boto3) import correctly in the packaged build — this must pass before proceeding.
 2. **Build Tauri Client** — `windows-packager` Step 2: `cargo tauri build`, produces NSIS installer + `mona-desktop.exe`
 
 Output artifacts:
@@ -129,14 +129,25 @@ New-Item -ItemType Directory -Path $StagingDir -Force | Out-Null
 
 # Rename mona-desktop.exe -> Mona.exe
 Copy-Item "src-tauri\target\release\mona-desktop.exe" "$StagingDir\Mona.exe"
-Copy-Item -Recurse "src-tauri\resources\mona-gateway" "$StagingDir\mona-gateway"
+# IMPORTANT: PowerShell `Copy-Item -Recurse source dest` nests source INSIDE dest if dest already exists.
+# Since $StagingDir was just recreated empty, `mona-gateway` subdir doesn't exist yet, so this is safe.
+# But to be defensive against re-runs, explicitly create the target dir and copy contents with `\*`.
+New-Item -ItemType Directory -Path "$StagingDir\mona-gateway" -Force | Out-Null
+Copy-Item -Recurse "src-tauri\resources\mona-gateway\*" "$StagingDir\mona-gateway"
+# Verify NO nested mona-gateway/ directory was created (regression check)
+if (Test-Path "$StagingDir\mona-gateway\mona-gateway") {
+    throw "Nested mona-gateway/ directory detected! Staging copy failed. Aborting."
+}
 
 $UpdatePackage = "dist\mona-$Version.tar.zst"
 New-Item -ItemType Directory -Path "dist" -Force | Out-Null
-# Windows 的 bsdtar 支持 --zstd；如果不支持，可用 Python 脚本 scripts/build_update_package.py
-tar --zstd -cf $UpdatePackage -C $StagingDir Mona.exe mona-gateway
 
-# Compute SHA256
+# Use the Python build script: it cleans __pycache__/.pyc/.dist-info/tests
+# from staging before packing, and uses zstd level 22 for max compression.
+# This typically shrinks the update package by ~30-40% vs raw `tar --zstd`.
+python scripts\build_update_package.py $Version $StagingDir $UpdatePackage
+
+# Compute SHA256 and size (script prints them too, but we need them in PS vars)
 $Hash = (Get-FileHash $UpdatePackage -Algorithm SHA256).Hash.ToLower()
 $Size = (Get-Item $UpdatePackage).Length
 
@@ -289,7 +300,37 @@ Check:
 4. NSIS installer — HTTP 200
 5. Open `https://mona.lzfun.vip/changelog` in browser — page renders correctly
 
-## Step 8: Cleanup
+## Step 8: Push to Remote
+
+将 release 过程中产生的 commits 推送到远端仓库。
+
+### 8.1 提交版本 bump 和 changelog 改动
+
+版本 bump（Step 1）和 changelog 更新（Step 4.4）会修改文件但流程中未显式 commit。先检查并提交：
+
+```powershell
+git status --short
+git add src-tauri/Cargo.toml src-tauri/tauri.conf.json pyproject.toml site/public/changelog.json
+git commit -m "chore(release): v<version>"
+```
+
+如果 `git status` 显示这些文件已干净（已被前序 commit 包含），跳过 commit 直接进入下一步。
+
+### 8.2 推送到远端
+
+```powershell
+git push origin HEAD
+```
+
+如果当前分支没有 upstream，使用 `git push -u origin HEAD`。
+
+### 8.3 红线
+
+- **禁止** `git push --force` / `--force-with-lease` 到 main/master
+- 推送前确认 `.env`、API key 等敏感文件不在待推送内容中（应已被 `.gitignore` 排除）
+- 如果 push 失败因远端有新提交，先 `git pull --rebase` 再 push，不要强推
+
+## Step 9: Cleanup
 
 ```powershell
 Remove-Item -Recurse -Force "$env:TEMP\mona-python-build" -ErrorAction SilentlyContinue
@@ -318,9 +359,10 @@ Remove-Item -Force tmp_*.txt -ErrorAction SilentlyContinue
 | Nginx 403 | Check permissions: `chmod -R 755 /var/www/mona/` |
 | Nginx 404 on `/changelog` | Add SPA fallback: `try_files $uri $uri/ /index.html;` in nginx config |
 | `cargo tauri build` fails with `--ci` error | Set `$env:CI = ""` before building |
-| Update package too large | Strip `__pycache__`, `.pyc`, `.pyo` from Python runtime; exclude unused packages in spec |
+| Update package too large | `build_update_package.py` already strips `__pycache__`/`.pyc`/`.dist-info`/`tests` and uses zstd-22. If still too large: check for nested `mona-gateway/mona-gateway/` (file count doubled = nesting bug); then exclude unused packages in `mona-gateway.spec` |
+| Update package size suddenly doubled vs previous release | Almost certainly the `Copy-Item -Recurse` nesting bug. Verify with: `tar -tf dist/mona-<ver>.tar.zst \| Measure-Object` — if count ≈ 2× previous, staging dir had nested `mona-gateway/mona-gateway/`. Re-run Step 3 with the fixed staging commands. |
 | Hot-update SHA256 mismatch | Re-compute hash after upload, ensure binary mode transfer |
-| PyInstaller missing import | Add to `hidden_imports` list in `src-tauri/mona-gateway.spec` |
+| PyInstaller missing import | Step 1 smoke test (`mona-gateway.exe doctor`) catches this before release. To fix: add `collect_submodules('<package>')` to `src-tauri/mona-gateway.spec` and rebuild |
 | Changelog page shows old data | Confirm `site/public/changelog.json` was updated and redeployed |
 | `previousGitHash` is empty | First release or legacy entry missing `gitHash`; ask user for manual items |
 | `pyproject.toml` parse error after bump | File has UTF-8 BOM — rewrite using Python or `[System.IO.File]::WriteAllText()` with `UTF8Encoding($false)` |

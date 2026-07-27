@@ -6,10 +6,12 @@ import {
   ReplyAll,
   Forward,
   Loader2,
+  LockKeyhole,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AgentLogo } from "@/components/AgentLogo";
 import { cn } from "@/lib/utils";
+import { useLicense } from "@/hooks/useLicense";
 import { getGatewayHttpBase } from "@/lib/api";
 import { useEmailStore } from "./store/emailStore";
 import { FolderTree } from "./FolderTree";
@@ -25,7 +27,8 @@ const MIN_LIST_WIDTH = 240;
 const MAX_LIST_WIDTH = 600;
 const FOLDER_TREE_WIDTH = 180;
 
-export function EmailClientView() {
+export function EmailClientView({ onOpenSubscribe }: { onOpenSubscribe?: () => void }) {
+  const { licenseActive } = useLicense();
   const loadAccounts = useEmailStore((s) => s.loadAccounts);
   const selectedAccountId = useEmailStore((s) => s.selectedAccountId);
   const selectedFolder = useEmailStore((s) => s.selectedFolder);
@@ -218,10 +221,15 @@ export function EmailClientView() {
         void toggleRead(gatewayUrl, selectedMessage);
         return;
       }
-      // Esc: 取消选中
+      // Esc: 多选时清空多选，否则取消选中
       if (e.key === "Escape") {
         e.preventDefault();
-        selectMessage(null);
+        const { selectedUids, clearSelection } = useEmailStore.getState();
+        if (selectedUids.size > 1) {
+          clearSelection();
+        } else {
+          selectMessage(null);
+        }
         return;
       }
     };
@@ -238,7 +246,6 @@ export function EmailClientView() {
         <ToolbarButton
           icon={Inbox}
           label="收取"
-          variant="primary"
           disabled={(!selectedAccountId && !isUnifiedInbox) || syncing || backgroundSyncing || !gatewayUrl || !isOnline}
           onClick={() => {
             // 统一收件箱模式：同步所有账号；单账号模式：仅同步当前账号
@@ -284,11 +291,11 @@ export function EmailClientView() {
             "h-7 w-7 p-0",
             agentPanelVisible ? "text-foreground" : "text-muted-foreground hover:text-foreground",
           )}
-          onClick={() => setAgentPanelVisible((v) => !v)}
-          aria-label={agentPanelVisible ? "隐藏 AI 面板" : "显示 AI 面板"}
-          title={agentPanelVisible ? "隐藏 AI 面板" : "显示 AI 面板"}
+          onClick={licenseActive ? () => setAgentPanelVisible((v) => !v) : onOpenSubscribe}
+          aria-label={licenseActive ? (agentPanelVisible ? "隐藏 AI 面板" : "显示 AI 面板") : "升级 Pro 解锁邮件 AI"}
+          title={licenseActive ? (agentPanelVisible ? "隐藏 AI 面板" : "显示 AI 面板") : "升级 Pro 解锁邮件 AI"}
         >
-          <AgentLogo state="idle" className="h-5 w-5" />
+          {licenseActive ? <AgentLogo state="idle" className="h-5 w-5" /> : <LockKeyhole className="h-4 w-4" />}
         </Button>
       </div>
 
@@ -324,7 +331,7 @@ export function EmailClientView() {
             <div className="min-w-0 flex-1 bg-background">
               <MailView />
             </div>
-            {agentPanelVisible && (
+            {licenseActive && agentPanelVisible && (
               <div className="w-[320px] shrink-0 border-l border-border bg-muted/20">
                 <MailAgentPanel />
               </div>

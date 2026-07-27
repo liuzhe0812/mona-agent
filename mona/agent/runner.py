@@ -14,6 +14,7 @@ from loguru import logger
 
 from mona.agent.hook import AgentHook, AgentHookContext
 from mona.agent.tools.registry import ToolRegistry
+from mona.agent.tools.result_compress import compress_tool_result
 from mona.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from mona.utils.file_edit_events import (
     StreamingFileEditTracker,
@@ -57,6 +58,24 @@ _MAX_INJECTION_CYCLES = 5
 _SNIP_SAFETY_BUFFER = 1024
 _MICROCOMPACT_KEEP_RECENT = 10
 _MICROCOMPACT_MIN_CHARS = 500
+
+
+def _definition_matches(definition: Any, names: set[str]) -> bool:
+    """Return True if a tool definition's name is in ``names``.
+
+    Handles both OpenAI function-calling schema (``{"function": {"name": ...}}``)
+    and flat ``{"name": ...}`` shapes defensively.
+    """
+    if not isinstance(definition, dict):
+        return False
+    func = definition.get("function")
+    if isinstance(func, dict):
+        name = func.get("name")
+    else:
+        name = definition.get("name")
+    return isinstance(name, str) and name in names
+
+
 _COMPACTABLE_TOOLS = frozenset({
     "read_file", "exec", "grep", "find_files",
     "web_search", "web_fetch", "list_dir", "list_exec_sessions",
@@ -81,6 +100,7 @@ class AgentRunSpec:
     max_iterations_message: str | None = None
     concurrent_tools: bool = False
     fail_on_tool_error: bool = False
+    max_tool_failures: int = 3
     workspace: Path | None = None
     session_key: str | None = None
     context_window_tokens: int | None = None
@@ -191,7 +211,7 @@ class AgentRunner:
                     },
                 )
         self._append_injected_messages(messages, injections)
-        logger.info(
+        logger.debug(
             "Injected {} follow-up message(s) {} ({}/{})",
             len(injections), phase, injection_cycles, _MAX_INJECTION_CYCLES,
         )
@@ -254,6 +274,9 @@ class AgentRunner:
         external_lookup_counts: dict[str, int] = {}
         # Per-turn throttle for repeated attempts against the same outside target.
         workspace_violation_counts: dict[str, int] = {}
+        # Per-turn consecutive-failure counter for tool circuit-breaking.
+        tool_failure_counts: dict[str, int] = {}
+        disabled_tools: set[str] = set()
         empty_content_retries = 0
         length_recovery_count = 0
         had_injections = False
@@ -286,7 +309,10 @@ class AgentRunner:
                     messages_for_model = messages
             context = AgentHookContext(iteration=iteration, messages=messages)
             await hook.before_iteration(context)
-            response = await self._request_model(spec, messages_for_model, hook, context)
+            response = await self._request_model(
+                spec, messages_for_model, hook, context,
+                disabled_tools=disabled_tools or None,
+            )
             raw_usage = self._usage_dict(response.usage)
             context.response = response
             context.usage = dict(raw_usage)
@@ -340,6 +366,13 @@ class AgentRunner:
                 tool_events.extend(new_events)
                 context.tool_results = list(results)
                 context.tool_events = list(new_events)
+                self._update_failure_counts(
+                    tool_failure_counts,
+                    disabled_tools,
+                    response.tool_calls,
+                    new_events,
+                    spec=spec,
+                )
                 completed_tool_results: list[dict[str, Any]] = []
                 for tool_call, result in zip(response.tool_calls, results):
                     tool_message = {
@@ -601,6 +634,8 @@ class AgentRunner:
         messages: list[dict[str, Any]],
         hook: AgentHook,
         context: AgentHookContext,
+        *,
+        disabled_tools: set[str] | None = None,
     ):
         timeout_s: float | None = spec.llm_timeout_s
         if timeout_s is None:
@@ -615,10 +650,16 @@ class AgentRunner:
         if timeout_s is not None and timeout_s <= 0:
             timeout_s = None
 
+        tool_defs = spec.tools.get_definitions()
+        if disabled_tools:
+            tool_defs = [
+                d for d in tool_defs
+                if not _definition_matches(d, disabled_tools)
+            ]
         kwargs = self._build_request_kwargs(
             spec,
             messages,
-            tools=spec.tools.get_definitions(),
+            tools=tool_defs,
         )
         wants_streaming = hook.wants_streaming()
         wants_progress_streaming = (
@@ -803,6 +844,55 @@ class AgentRunner:
             if error is not None and fatal_error is None:
                 fatal_error = error
         return results, events, fatal_error
+
+    @staticmethod
+    def _update_failure_counts(
+        failure_counts: dict[str, int],
+        disabled: set[str],
+        tool_calls: list[ToolCallRequest],
+        events: list[dict[str, str]],
+        *,
+        spec: AgentRunSpec,
+    ) -> None:
+        """Track consecutive tool failures and circuit-break repeat offenders.
+
+        A tool that returns an error event increments its counter; a success
+        resets it. When the counter reaches ``spec.max_tool_failures`` the tool
+        is added to ``disabled`` for the rest of this turn so the model can no
+        longer see it and must pick another path.
+        """
+        if spec.max_tool_failures <= 0:
+            return
+        # Collapse events by tool name: any error marks the tool as failed for
+        # this iteration, so repeated calls to the same tool in one batch count
+        # as a single failure (not N).
+        status_by_name: dict[str, str] = {}
+        for event in events:
+            name = event.get("name")
+            if not name:
+                continue
+            if event.get("status") == "error":
+                status_by_name[name] = "error"
+            elif name not in status_by_name:
+                status_by_name[name] = event.get("status", "ok")
+        newly_disabled: list[str] = []
+        for name, status in status_by_name.items():
+            if name in disabled:
+                continue
+            if status == "error":
+                count = failure_counts.get(name, 0) + 1
+                failure_counts[name] = count
+                if count >= spec.max_tool_failures:
+                    disabled.add(name)
+                    newly_disabled.append(name)
+            else:
+                failure_counts[name] = 0
+        if newly_disabled:
+            logger.warning(
+                "Tool circuit-breaker: disabling {} after {} consecutive failures",
+                ", ".join(newly_disabled),
+                spec.max_tool_failures,
+            )
 
     async def _run_tool(
         self,
@@ -1100,6 +1190,10 @@ class AgentRunner:
                 spec.session_key or "default",
             )
             content = result
+        if isinstance(content, str):
+            compressed = compress_tool_result(content, tool_name=tool_name)
+            if compressed is not content and len(compressed) < len(content):
+                content = compressed
         if isinstance(content, str) and len(content) > spec.max_tool_result_chars:
             return truncate_text(content, spec.max_tool_result_chars)
         return content

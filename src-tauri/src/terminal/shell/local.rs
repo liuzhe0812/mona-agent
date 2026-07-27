@@ -167,7 +167,7 @@ impl LocalShell {
             })?;
 
         let (shell, utf8_mode) = detect_shell();
-        log::info!(
+        log::debug!(
             "Spawning local shell: {} (utf8={}), session={}",
             shell, utf8_mode, session_id
         );
@@ -210,11 +210,11 @@ impl LocalShell {
         std::thread::spawn(move || {
             let mut reader = reader;
             let mut buf = [0u8; 4096];
-            log::info!("PTY reader thread started for session {}", sid);
+            log::debug!("PTY reader thread started for session {}", sid);
             loop {
                 match reader.read(&mut buf) {
                     Ok(0) => {
-                        log::info!("PTY reader: shell exited for session {}", sid);
+                        log::debug!("PTY reader: shell exited for session {}", sid);
                         let msg = "\r\n[Shell exited]\r\n".to_string();
                         sb.push(msg.clone());
                         let payload = serde_json::json!({

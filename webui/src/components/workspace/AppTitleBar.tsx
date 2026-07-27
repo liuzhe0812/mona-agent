@@ -1,10 +1,10 @@
 import type { ReactNode } from "react";
-import { Maximize2, Minus, Plus, Settings, X } from "lucide-react";
+import { Maximize2, Minus, Plus, X } from "lucide-react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { Button } from "@/components/ui/button";
 import { ConnectionBadge } from "@/components/ConnectionBadge";
 import { BrowserTabItem } from "@/components/browser/BrowserTab";
-import { NotificationCenter } from "@/components/NotificationCenter";
 import { isTauri } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 import type { Tab } from "@/hooks/useBrowserTabs";
@@ -15,10 +15,6 @@ interface AppTitleBarProps {
   onTabClick: (id: string) => void;
   onTabClose: (id: string) => void;
   onNewTab: () => void;
-  onOpenSettings?: (section?: string) => void;
-  onOpenSubscribe?: () => void;
-  /** When true, renders a pulsing badge on the settings button (e.g. update available). */
-  settingsBadge?: boolean;
   // 标签管理增强
   onPinToggle?: (id: string) => void;
   onDuplicate?: (id: string) => void;
@@ -26,16 +22,16 @@ interface AppTitleBarProps {
   onCloseRight?: (id: string) => void;
   onReorder?: (fromId: string, toId: string) => void;
   onToggleMute?: (id: string) => void;
+  // md-reader 标签专用
+  onSaveMdAsNote?: (id: string) => void;
+  onRevealMdInExplorer?: (id: string) => void;
 }
 
 async function withCurrentWindow(
-  action: (win: Awaited<
-    ReturnType<typeof import("@tauri-apps/api/window").getCurrentWindow>
-  >) => Promise<void>,
+  action: (win: ReturnType<typeof getCurrentWindow>) => Promise<void>,
 ) {
   if (!isTauri()) return;
   try {
-    const { getCurrentWindow } = await import("@tauri-apps/api/window");
     await action(getCurrentWindow());
   } catch (e) {
     console.error("[AppTitleBar] window action failed:", e);
@@ -48,19 +44,18 @@ export function AppTitleBar({
   onTabClick,
   onTabClose,
   onNewTab,
-  onOpenSettings,
-  onOpenSubscribe,
-  settingsBadge,
   onPinToggle,
   onDuplicate,
   onCloseOthers,
   onCloseRight,
   onReorder,
   onToggleMute,
+  onSaveMdAsNote,
+  onRevealMdInExplorer,
 }: AppTitleBarProps) {
   return (
     <header
-      data-tauri-drag-region
+      data-tauri-drag-region="deep"
       className="flex h-9 shrink-0 items-center border-b border-border/70 bg-sidebar/95 text-sidebar-foreground"
     >
       {/* 标签栏 */}
@@ -78,6 +73,8 @@ export function AppTitleBar({
             onCloseRight={tab.type !== "mona" && onCloseRight ? () => onCloseRight(tab.id) : undefined}
             onReorder={onReorder}
             onToggleMute={tab.type === "browser" && onToggleMute ? () => onToggleMute(tab.id) : undefined}
+            onSaveAsNote={tab.type === "md-reader" && onSaveMdAsNote ? () => onSaveMdAsNote(tab.id) : undefined}
+            onRevealInExplorer={tab.type === "md-reader" && onRevealMdInExplorer ? () => onRevealMdInExplorer(tab.id) : undefined}
           />
         ))}
         <Button
@@ -94,12 +91,6 @@ export function AppTitleBar({
       {/* 右侧控制按钮 */}
       <div className="ml-auto flex h-full items-center">
         <ConnectionBadge />
-        {onOpenSettings && (
-          <TitleBarButton label="设置" onClick={() => onOpenSettings()} badge={settingsBadge}>
-            <Settings className="h-3.5 w-3.5" />
-          </TitleBarButton>
-        )}
-        <NotificationCenter onOpenSubscribe={onOpenSubscribe} />
         <TitleBarButton
           label="最小化"
           onClick={() => {
@@ -134,13 +125,11 @@ function TitleBarButton({
   label,
   children,
   danger = false,
-  badge = false,
   onClick,
 }: {
   label: string;
   children: ReactNode;
   danger?: boolean;
-  badge?: boolean;
   onClick: () => void;
 }) {
   return (
@@ -156,12 +145,6 @@ function TitleBarButton({
       )}
     >
       {children}
-      {badge ? (
-        <span className="absolute right-2.5 top-2 flex h-1.5 w-1.5">
-          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-blue-500/70" />
-          <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-blue-500" />
-        </span>
-      ) : null}
     </Button>
   );
 }

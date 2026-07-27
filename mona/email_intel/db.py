@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,32 @@ from typing import Any
 from loguru import logger
 
 from mona.config.paths import get_data_dir
+
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]+")
+
+
+def _tokenize_query(query: str) -> list[str]:
+    """查询分词：空白切分拉丁文，CJK 连续段切 2-gram。
+
+    对齐 mona/kb/search.py 的实现，保证全项目检索分词一致。
+    """
+    tokens: list[str] = []
+    for raw in query.split():
+        if not raw.strip():
+            continue
+        if _CJK_RE.search(raw):
+            for run in _CJK_RE.findall(raw):
+                if len(run) == 1:
+                    tokens.append(run.lower())
+                else:
+                    for i in range(len(run) - 1):
+                        tokens.append(run[i : i + 2].lower())
+            for part in _CJK_RE.split(raw):
+                if part.strip():
+                    tokens.append(part.lower())
+        else:
+            tokens.append(raw.lower())
+    return tokens
 
 _EMAIL_DB_FILE = "email.sqlite3"
 
@@ -171,8 +198,8 @@ def search_messages(
 ) -> list[dict[str, Any]]:
     """搜索邮件，返回匹配的邮件列表（不含正文，节省内存）。
 
-    所有筛选条件为可选，None 表示不筛选。keyword 在 subject 上做 LIKE。
-    返回结果按 date DESC 排序。
+    所有筛选条件为可选，None 表示不筛选。keyword 在 subject 上做 LIKE（CJK bigram 分词，OR 连接）。
+    有关键词时按命中 token 数 DESC + date DESC 排序；无关键词时按 date DESC 排序。
 
     Args:
         account_id: 限定账号
@@ -196,6 +223,8 @@ def search_messages(
 
     conditions: list[str] = []
     params: list[Any] = []
+    score_clauses: list[str] = []
+    score_params: list[Any] = []
 
     if account_id:
         conditions.append("account_id = ?")
@@ -204,17 +233,18 @@ def search_messages(
         conditions.append("folder = ?")
         params.append(folder)
     if keyword:
-        # 多 token LIKE：query 按空格切分，每个 token 独立匹配 subject。
-        # WHERE 子句用 AND 连接（所有 token 都需命中），保证结果相关性。
-        # body_text 列已移除（Foxmail 模式正文存 .eml），关键词仅在 subject 上匹配。
-        tokens = [t for t in keyword.split() if t.strip()]
+        # 多 token LIKE（CJK bigram 分词）：每个 token 独立匹配 subject，OR 连接。
+        # 评分 = 命中 token 数，按评分 DESC + date DESC 排序，避免 AND 过严漏召回。
+        tokens = _tokenize_query(keyword)
         if tokens:
             token_clauses = []
             for tok in tokens:
                 pat = f"%{tok}%"
                 token_clauses.append("subject LIKE ?")
                 params.append(pat)
-            conditions.append(f"({' AND '.join(token_clauses)})")
+                score_clauses.append("CASE WHEN subject LIKE ? THEN 1 ELSE 0 END")
+                score_params.append(pat)
+            conditions.append(f"({' OR '.join(token_clauses)})")
     if from_address:
         conditions.append("from_address LIKE ?")
         params.append(f"%{from_address}%")
@@ -239,15 +269,19 @@ def search_messages(
 
     where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
 
+    order_clause = (
+        f"({' + '.join(score_clauses)}) DESC, date DESC" if score_clauses else "date DESC"
+    )
     sql = f"""
         SELECT uid, account_id, folder, subject, from_address, from_name,
                to_addresses, cc_addresses, date, has_attachments, is_read,
                is_starred, raw_size, message_id
         FROM messages
         {where_clause}
-        ORDER BY date DESC
+        ORDER BY {order_clause}
         LIMIT ? OFFSET ?
     """
+    params.extend(score_params)
     params.extend([limit, offset])
 
     logger.debug("Email search SQL: {} params: {}", sql, params)
@@ -263,7 +297,7 @@ def search_messages(
         msg.pop("bodyHtml", None)
         results.append(msg)
 
-    logger.info("Email search: {} results", len(results))
+    logger.debug("Email search: {} results", len(results))
     return results
 
 

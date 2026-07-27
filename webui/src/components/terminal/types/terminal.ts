@@ -45,12 +45,11 @@ export interface FileInfo {
 }
 
 export type BatchTransferStatus =
-  | "Pending"
-  | "Connecting"
-  | "Transferring"
-  | "Completed"
-  | "Error"
-  | "Cancelled";
+  | "connecting"
+  | "transferring"
+  | "completed"
+  | "error"
+  | "cancelled";
 
 export interface BatchTransferProgress {
   batchId: string;
@@ -79,6 +78,12 @@ export interface BatchUploadRequest {
   files: string[];
   targetDirectory: string;
   maxConcurrent?: number;
+}
+
+export interface ExpandedFileEntry {
+  localPath: string;
+  relPrefix: string;
+  displayName: string;
 }
 
 export interface ProjectInfo {

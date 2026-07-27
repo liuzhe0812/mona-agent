@@ -58,6 +58,22 @@ export async function browserSetAiStatus(id: string, controlled: boolean): Promi
 }
 
 /** 导航标签到指定 URL（用于地址栏输入、target="_blank" 等场景） */
+export async function browserSetTabBounds(
+  id: string,
+  left: number,
+  top: number,
+  width: number,
+  height: number,
+  visible: boolean,
+): Promise<void> {
+  return invoke<void>("browser_set_tab_bounds", { id, left, top, width, height, visible });
+}
+
+/** 隐藏除当前活动标签外的所有原生浏览器子视图。 */
+export async function browserHideTabsExcept(activeId?: string): Promise<void> {
+  return invoke<void>("browser_hide_tabs_except", { activeId: activeId ?? null });
+}
+
 export async function browserNavigateTab(id: string, url: string): Promise<void> {
   return invoke<void>("browser_navigate_tab", { id, url });
 }
@@ -99,6 +115,14 @@ export interface AddressBarSuggestion {
   isBookmark: boolean;
   visitCount: number;
   lastVisitedAt: string;
+}
+
+export interface AddressSuggestionPopup {
+  tabId: string;
+  left: number;
+  top: number;
+  width: number;
+  suggestions: AddressBarSuggestion[];
 }
 
 /** 添加收藏 */
@@ -170,6 +194,42 @@ export async function browserSearchSuggestions(query: string, limit?: number): P
   return invoke<AddressBarSuggestion[]>("browser_search_suggestions", { query, limit });
 }
 
+export async function browserShowAddressSuggestions(popup: AddressSuggestionPopup): Promise<void> {
+  return invoke<void>("browser_show_address_suggestions", { popup });
+}
+
+export async function browserHideAddressSuggestions(tabId: string): Promise<void> {
+  return invoke<void>("browser_hide_address_suggestions", { tabId });
+}
+
+export async function browserSelectAddressSuggestion(tabId: string, url: string): Promise<void> {
+  return invoke<void>("browser_select_address_suggestion", { tabId, url });
+}
+
+export async function browserListenAddressSuggestionSelected(
+  callback: (payload: { tabId: string; url: string }) => void,
+): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<{ tabId: string; url: string }>("browser-address-suggestion-selected", (event) => callback(event.payload));
+}
+
+export interface DownloadPopupAnchor {
+  left: number;
+  top: number;
+}
+
+export async function browserShowDownloads(anchor: DownloadPopupAnchor): Promise<void> {
+  return invoke<void>("browser_show_downloads", { anchor });
+}
+
+export async function browserToggleDownloads(anchor: DownloadPopupAnchor): Promise<void> {
+  return invoke<void>("browser_toggle_downloads", { anchor });
+}
+
+export async function browserHideDownloads(): Promise<void> {
+  return invoke<void>("browser_hide_downloads");
+}
+
 // ── Download Management ──
 
 export interface DownloadInfo {
@@ -181,6 +241,8 @@ export interface DownloadInfo {
   receivedBytes: number;
   state: string; // "in_progress" | "interrupted" | "completed" | "cancelled"
   savePath: string;
+  /** 前端估算的下载速度（字节/秒），用于剩余时间显示 */
+  bytesPerSecond?: number;
 }
 
 /** 取消下载 */
@@ -238,6 +300,10 @@ export async function browserPrintPage(id: string): Promise<void> {
 /** 在 WebView 中执行 JS 代码 */
 export async function browserEvalScript(id: string, script: string): Promise<void> {
   return invoke<void>("browser_eval_script", { id, script });
+}
+
+export async function browserEvalScriptResult<T>(id: string, script: string): Promise<T> {
+  return invoke<T>("browser_eval_script_result", { id, script });
 }
 
 // ── Privacy & Security ──

@@ -58,7 +58,7 @@ pub fn deploy_gateway(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> 
             );
             true
         } else {
-            log::info!("Gateway already deployed at {:?}", dest_dir);
+            log::debug!("Gateway already deployed at {:?}", dest_dir);
             false
         }
     };
@@ -117,11 +117,11 @@ fn find_gateway_resource_dir(app_handle: &tauri::AppHandle) -> Result<PathBuf, S
     if let Ok(resource_dir) = app_handle.path().resource_dir() {
         let candidate = resource_dir.join(GATEWAY_DIR_NAME);
         if candidate.is_dir() && candidate.join(GATEWAY_EXE_NAME).exists() {
-            log::info!("Found gateway dir via resource_dir: {:?}", candidate);
+            log::debug!("Found gateway dir via resource_dir: {:?}", candidate);
             return Ok(candidate);
         }
         tried.push(format!("resource_dir/{}", GATEWAY_DIR_NAME));
-        log::info!(
+        log::debug!(
             "resource_dir is {:?}, but {} not found there",
             resource_dir,
             GATEWAY_DIR_NAME
@@ -140,7 +140,7 @@ fn find_gateway_resource_dir(app_handle: &tauri::AppHandle) -> Result<PathBuf, S
                     exe_dir.join(sub).join(GATEWAY_DIR_NAME)
                 };
                 if candidate.is_dir() && candidate.join(GATEWAY_EXE_NAME).exists() {
-                    log::info!("Found gateway dir near exe: {:?}", candidate);
+                    log::debug!("Found gateway dir near exe: {:?}", candidate);
                     return Ok(candidate);
                 }
                 tried.push(format!("exe_dir/{}/{}", sub, GATEWAY_DIR_NAME));
@@ -151,7 +151,7 @@ fn find_gateway_resource_dir(app_handle: &tauri::AppHandle) -> Result<PathBuf, S
     // 3. Fallback: relative path (dev mode)
     let candidate = PathBuf::from("resources").join(GATEWAY_DIR_NAME);
     if candidate.is_dir() && candidate.join(GATEWAY_EXE_NAME).exists() {
-        log::info!("Found gateway dir via relative path: {:?}", candidate);
+        log::debug!("Found gateway dir via relative path: {:?}", candidate);
         return Ok(candidate);
     }
     tried.push(format!("resources/{}", GATEWAY_DIR_NAME));

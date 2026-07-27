@@ -24,6 +24,8 @@ import {
   Share2,
   ImageDown,
   CalendarPlus,
+  Check,
+  FolderInput,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -33,8 +35,15 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { useEmailStore, resolveSenderDisplay } from "./store/emailStore";
 import type { EmailAnalysis, EmailAttachment, EmailKeyInfo, EmailMessage } from "./lib/types";
+import { getFolderDisplayName, sortFolders } from "./lib/folderUtils";
 import * as emailApi from "./lib/emailApi";
 import { save, open as openDialog } from "@tauri-apps/plugin-dialog";
 import { writeFile } from "@tauri-apps/plugin-fs";
@@ -118,6 +127,12 @@ export function MailView() {
   const contactsByEmail = useEmailStore((s) => s.contactsByEmail);
   const loadContacts = useEmailStore((s) => s.loadContacts);
   const selectedAccountId = useEmailStore((s) => s.selectedAccountId);
+  // 多选
+  const selectedUids = useEmailStore((s) => s.selectedUids);
+  const folders = useEmailStore((s) => s.folders);
+  const batchOperate = useEmailStore((s) => s.batchOperate);
+  const batchOperating = useEmailStore((s) => s.batchOperating);
+  const clearSelection = useEmailStore((s) => s.clearSelection);
 
   // 首次渲染时加载通讯录，建立 email→name 映射（仅一次）
   useEffect(() => {
@@ -248,6 +263,111 @@ export function MailView() {
   };
 
   if (!selectedMessage) {
+    // 多选模式：显示批量操作面板
+    if (selectedUids.size > 1) {
+      const moveTargets = sortFolders(folders);
+      return (
+        <div className="flex h-full flex-col items-center justify-center gap-4 bg-muted/10">
+          <div className="text-center">
+            <Check className="mx-auto h-10 w-10 text-blue-500" />
+            <p className="mt-2 text-[14px] font-medium text-foreground">
+              已选中 {selectedUids.size} 封邮件
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 gap-1.5 text-[12px]"
+              disabled={batchOperating}
+              onClick={() => void batchOperate(gatewayUrl, "mark_read")}
+            >
+              <MailOpen className="h-3.5 w-3.5" />
+              标为已读
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 gap-1.5 text-[12px]"
+              disabled={batchOperating}
+              onClick={() => void batchOperate(gatewayUrl, "mark_unread")}
+            >
+              <MailOpen className="h-3.5 w-3.5" />
+              标为未读
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 gap-1.5 text-[12px]"
+              disabled={batchOperating}
+              onClick={() => void batchOperate(gatewayUrl, "star")}
+            >
+              <Star className="h-3.5 w-3.5" />
+              星标
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 gap-1.5 text-[12px]"
+              disabled={batchOperating}
+              onClick={() => void batchOperate(gatewayUrl, "unstar")}
+            >
+              <Star className="h-3.5 w-3.5" />
+              取消星标
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 gap-1.5 text-[12px] text-destructive hover:text-destructive"
+              disabled={batchOperating}
+              onClick={() => void batchOperate(gatewayUrl, "delete")}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              删除
+            </Button>
+          </div>
+          {moveTargets.length > 0 && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 gap-1.5 text-[12px]"
+                  disabled={batchOperating}
+                >
+                  <FolderInput className="h-3.5 w-3.5" />
+                  移动到
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="center" className="min-w-[160px]">
+                {moveTargets.map((folder) => (
+                  <DropdownMenuItem
+                    key={folder.name}
+                    onClick={() => void batchOperate(gatewayUrl, "move", folder.name)}
+                    className="flex items-center justify-between gap-2 text-[12px]"
+                  >
+                    <span className="truncate">{getFolderDisplayName(folder.name)}</span>
+                    {folder.unreadCount ? (
+                      <span className="shrink-0 text-[10px] text-muted-foreground">
+                        {folder.unreadCount}
+                      </span>
+                    ) : null}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+          <Button
+            variant="ghost"
+            size="sm"
+            className="mt-2 h-7 gap-1.5 text-[12px] text-muted-foreground"
+            onClick={clearSelection}
+          >
+            取消选择
+          </Button>
+        </div>
+      );
+    }
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 bg-muted/10 text-muted-foreground">
         <MailOpen className="h-10 w-10 opacity-30" />

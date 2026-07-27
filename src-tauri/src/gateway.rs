@@ -99,7 +99,7 @@ impl GatewayManager {
                             format!("{}{}{}", dir.display(), sep, existing)
                         };
                         cmd.env("PYTHONPATH", &new_path);
-                        log::info!("Dev mode: PYTHONPATH set to {:?}", dir);
+                        log::debug!("Dev mode: PYTHONPATH set to {:?}", dir);
                         break;
                     }
                     cursor = dir.parent().map(|p| p.to_path_buf());
@@ -108,7 +108,7 @@ impl GatewayManager {
         } else {
             // Release mode: packaged gateway exe only
             let exe_path = python::deploy_gateway(app_handle)?;
-            log::info!("Using packaged gateway: {:?}", exe_path);
+            log::debug!("Using packaged gateway: {:?}", exe_path);
             if !exe_path.exists() {
                 return Err(format!("Gateway executable not found at {:?}", exe_path));
             }
@@ -253,7 +253,7 @@ impl GatewayManager {
 
 }
 
-fn gateway_log_path() -> std::path::PathBuf {
+pub(crate) fn gateway_log_path() -> std::path::PathBuf {
     settings::app_data_dir().join("logs").join("gateway.log")
 }
 
@@ -405,7 +405,7 @@ fn strip_harmful_python_env(cmd: &mut std::process::Command) {
 }
 
 /// Read the last N lines of the gateway log file for error diagnostics.
-fn read_log_tail(max_lines: usize) -> String {
+pub(crate) fn read_log_tail(max_lines: usize) -> String {
     let path = gateway_log_path();
     let content = match std::fs::read_to_string(&path) {
         Ok(c) => c,
@@ -419,6 +419,35 @@ fn read_log_tail(max_lines: usize) -> String {
         result = result[result.len() - MAX_TAIL_BYTES..].to_string();
     }
     result
+}
+
+/// Read the gateway log for display in the error UI.
+/// Returns the log file path and the last `max_lines` lines (uncapped in size).
+#[tauri::command]
+pub async fn read_gateway_log(max_lines: Option<usize>) -> Result<serde_json::Value, String> {
+    let max_lines = max_lines.unwrap_or(200).max(1);
+    let path = gateway_log_path();
+    let path_str = path.display().to_string();
+    let exists = path.exists();
+
+    let content = if exists {
+        std::fs::read_to_string(&path).map_err(|e| format!("Failed to read gateway log: {}", e))?
+    } else {
+        String::new()
+    };
+
+    let tail: String = if content.is_empty() {
+        String::new()
+    } else {
+        let lines: Vec<&str> = content.lines().rev().take(max_lines).collect();
+        lines.into_iter().rev().collect::<Vec<&str>>().join("\n")
+    };
+
+    Ok(serde_json::json!({
+        "path": path_str,
+        "exists": exists,
+        "tail": tail,
+    }))
 }
 
 pub async fn wait_for_gateway<F>(

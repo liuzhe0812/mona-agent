@@ -1,4 +1,4 @@
-# Video Executor Base — 通用执行标准(占位,Phase 3 完善)
+# Video Executor Base — 通用执行标准
 
 ## Scene File Naming
 

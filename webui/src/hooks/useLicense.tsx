@@ -5,7 +5,6 @@ interface LicenseInfo {
   status: string;
   expires_at: string | null;
   trial: boolean;
-  local_trial?: boolean;
   remaining_days?: number;
   email: string | null;
   account: string | null;
@@ -15,15 +14,24 @@ interface PricingPlan {
   id: string;
   name: string;
   price: number;
-  durationMonths: number;
+  durationMonths?: number;
+  periodDays?: number;
+  autoRenewable?: boolean;
   originalPrice?: number;
   badge?: string;
+}
+
+interface PromoTrial {
+  enabled: boolean;
+  days: number;
+  end_at: string | null;
 }
 
 interface PricingConfig {
   plans: PricingPlan[];
   contact: { email: string; wechat: string };
   promotionalBanner: string | null;
+  promoTrial: PromoTrial | null;
 }
 
 interface LicenseContextValue {
@@ -31,8 +39,6 @@ interface LicenseContextValue {
   checking: boolean;
   licenseInfo: LicenseInfo | null;
   loggedIn: boolean;
-  localTrial: boolean;
-  localTrialExpired: boolean;
   serverTrial: boolean;
   remainingDays: number;
   deviceMismatch: boolean;
@@ -41,10 +47,11 @@ interface LicenseContextValue {
   fetchPricing: () => Promise<void>;
   login: (account: string, password: string) => Promise<void>;
   register: (email: string, password: string, code: string, account: string) => Promise<void>;
-  sendRegisterCode: (email: string) => Promise<string>;
+  sendRegisterCode: (email: string, account: string) => Promise<string>;
   logout: () => Promise<void>;
   forgotPassword: (email: string) => Promise<string>;
   resetPassword: (email: string, code: string, newPassword: string) => Promise<string>;
+  changePassword: (oldPassword: string, newPassword: string) => Promise<string>;
   bindDevice: () => Promise<{ success: boolean; remaining_changes?: number }>;
   refreshLicense: () => Promise<void>;
 }
@@ -54,8 +61,6 @@ const LicenseContext = createContext<LicenseContextValue>({
   checking: true,
   licenseInfo: null,
   loggedIn: false,
-  localTrial: false,
-  localTrialExpired: false,
   serverTrial: false,
   remainingDays: 0,
   deviceMismatch: false,
@@ -68,6 +73,7 @@ const LicenseContext = createContext<LicenseContextValue>({
   logout: async () => {},
   forgotPassword: async () => "",
   resetPassword: async () => "",
+  changePassword: async () => "",
   bindDevice: async () => ({ success: false }),
   refreshLicense: async () => {},
 });
@@ -77,8 +83,6 @@ export function LicenseProvider({ children }: { children: React.ReactNode }) {
   const [checking, setChecking] = useState(true);
   const [licenseInfo, setLicenseInfo] = useState<LicenseInfo | null>(null);
   const [loggedIn, setLoggedIn] = useState(false);
-  const [localTrial, setLocalTrial] = useState(false);
-  const [localTrialExpired, setLocalTrialExpired] = useState(false);
   const [serverTrial, setServerTrial] = useState(false);
   const [remainingDays, setRemainingDays] = useState(0);
   const [deviceMismatch, setDeviceMismatch] = useState(false);
@@ -100,10 +104,10 @@ export function LicenseProvider({ children }: { children: React.ReactNode }) {
       const result = await invokeTauri<LicenseInfo>("check_license");
       setLicenseInfo(result);
       setLicenseActive(result.status === "valid");
-      setLoggedIn(result.status !== "not_logged_in");
-      setLocalTrial(!!result.local_trial && result.status === "valid");
-      setLocalTrialExpired(!!result.local_trial && result.status === "expired");
-      setServerTrial(!!result.trial && result.status === "valid" && !result.local_trial);
+      // 登录状态基于是否有账号信息
+      const hasAccount = !!(result.email || result.account);
+      setLoggedIn(hasAccount);
+      setServerTrial(!!result.trial && result.status === "valid");
       setRemainingDays(result.remaining_days ?? 0);
       setDeviceMismatch(result.status === "device_mismatch");
     } catch {
@@ -131,7 +135,9 @@ export function LicenseProvider({ children }: { children: React.ReactNode }) {
           id: String(p.id ?? ""),
           name: String(p.name ?? ""),
           price: Number(p.price ?? 0),
-          durationMonths: Number(p.duration_months ?? p.durationMonths ?? 1),
+          durationMonths: p.duration_months != null ? Number(p.duration_months) : undefined,
+          periodDays: p.period_days != null ? Number(p.period_days) : undefined,
+          autoRenewable: p.auto_renewable != null ? Boolean(p.auto_renewable) : undefined,
           originalPrice: p.original_price != null ? Number(p.original_price) : undefined,
           badge: p.badge ? String(p.badge) : undefined,
         })),
@@ -141,6 +147,16 @@ export function LicenseProvider({ children }: { children: React.ReactNode }) {
         },
         promotionalBanner:
           data.promotional_banner != null ? String(data.promotional_banner) : null,
+        promoTrial: data.promo_trial
+          ? {
+              enabled: Boolean((data.promo_trial as Record<string, unknown>).enabled),
+              days: Number((data.promo_trial as Record<string, unknown>).days ?? 0),
+              end_at:
+                (data.promo_trial as Record<string, unknown>).end_at != null
+                  ? String((data.promo_trial as Record<string, unknown>).end_at)
+                  : null,
+            }
+          : null,
       });
     } catch (err) {
       setPricingConfig(null);
@@ -165,8 +181,8 @@ export function LicenseProvider({ children }: { children: React.ReactNode }) {
     }
   }, [invokeTauri, checkLicense]);
 
-  const sendRegisterCode = useCallback(async (email: string): Promise<string> => {
-    const result = await invokeTauri<{ success: boolean; message?: string }>("send_register_code", { email });
+  const sendRegisterCode = useCallback(async (email: string, account: string): Promise<string> => {
+    const result = await invokeTauri<{ success: boolean; message?: string }>("send_register_code", { email, account });
     return result.message || "";
   }, [invokeTauri]);
 
@@ -175,8 +191,6 @@ export function LicenseProvider({ children }: { children: React.ReactNode }) {
     setLoggedIn(false);
     setLicenseActive(false);
     setLicenseInfo(null);
-    setLocalTrial(false);
-    setLocalTrialExpired(false);
     setServerTrial(false);
     setDeviceMismatch(false);
   }, [invokeTauri]);
@@ -189,6 +203,13 @@ export function LicenseProvider({ children }: { children: React.ReactNode }) {
   const resetPassword = useCallback(async (email: string, code: string, newPassword: string): Promise<string> => {
     const result = await invokeTauri<{ success: boolean; message?: string }>("auth_reset_password", {
       email, code, newPassword,
+    });
+    return result.message || "";
+  }, [invokeTauri]);
+
+  const changePassword = useCallback(async (oldPassword: string, newPassword: string): Promise<string> => {
+    const result = await invokeTauri<{ success: boolean; message?: string }>("auth_change_password", {
+      oldPassword, newPassword,
     });
     return result.message || "";
   }, [invokeTauri]);
@@ -217,8 +238,6 @@ export function LicenseProvider({ children }: { children: React.ReactNode }) {
       checking,
       licenseInfo,
       loggedIn,
-      localTrial,
-      localTrialExpired,
       serverTrial,
       remainingDays,
       deviceMismatch,
@@ -231,6 +250,7 @@ export function LicenseProvider({ children }: { children: React.ReactNode }) {
       logout,
       forgotPassword,
       resetPassword,
+      changePassword,
       bindDevice,
       refreshLicense: checkLicense,
     }}>

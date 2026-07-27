@@ -8,12 +8,39 @@ Tauri commands are used for CRUD operations from the frontend.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
 from loguru import logger
+
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]+")
+
+
+def _tokenize_query(query: str) -> list[str]:
+    """查询分词：空白切分拉丁文，CJK 连续段切 2-gram。
+
+    对齐 mona/kb/search.py 的实现，保证 Rust/Python/KB 三侧分词一致。
+    """
+    tokens: list[str] = []
+    for raw in query.split():
+        if not raw.strip():
+            continue
+        if _CJK_RE.search(raw):
+            for run in _CJK_RE.findall(raw):
+                if len(run) == 1:
+                    tokens.append(run.lower())
+                else:
+                    for i in range(len(run) - 1):
+                        tokens.append(run[i : i + 2].lower())
+            for part in _CJK_RE.split(raw):
+                if part.strip():
+                    tokens.append(part.lower())
+        else:
+            tokens.append(raw.lower())
+    return tokens
 
 
 def _hoard_db_path() -> Path:
@@ -94,6 +121,7 @@ class HoardManager:
             try:
                 conn.executescript(
                     """
+                    PRAGMA journal_mode=WAL;
                     CREATE TABLE IF NOT EXISTS hoards (
                         id TEXT PRIMARY KEY,
                         url TEXT,
@@ -128,11 +156,11 @@ class HoardManager:
             logger.debug(f"[hoard] _ensure_db skipped: {e}")
 
     def _connect_raw(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(str(self.db_path))
+        conn = sqlite3.connect(str(self.db_path), timeout=5.0)
         return conn
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(str(self.db_path))
+        conn = sqlite3.connect(str(self.db_path), timeout=5.0)
         conn.row_factory = sqlite3.Row
         return conn
 
@@ -247,15 +275,23 @@ class HoardManager:
             conn.close()
 
     def search(
-        self, query: str, source: str | None = None, limit: int = 20
+        self,
+        query: str,
+        source: str | None = None,
+        limit: int = 20,
+        exclude_sources: list[str] | None = None,
     ) -> list[HoardItem]:
         """Multi-token LIKE search with additive scoring.
 
         Query is split on whitespace into tokens; each token independently
         matches (title +3, tags +2, summary +2, content +1). Total score is
         summed across tokens and multiplied by source_strength.
+
+        When ``exclude_sources`` is provided, matching rows from those sources
+        are excluded at the SQL level — this is used by the subscription gate
+        to filter out ``note`` and ``email`` sources for free-tier users.
         """
-        tokens = [t.lower() for t in query.split() if t.strip()]
+        tokens = _tokenize_query(query)
         if not tokens:
             return []
 
@@ -286,24 +322,28 @@ class HoardManager:
             order_expr = f"({' + '.join(score_terms)}) * source_strength"
             where_sql = " OR ".join(where_clauses)
 
+            # Apply exclusions even when a specific source is requested.
+            source_filters: list[str] = []
+            source_params: list[str] = []
             if source:
-                sql = (
-                    f"SELECT * FROM hoards WHERE source = ? AND ({where_sql}) "
-                    f"ORDER BY {order_expr} DESC LIMIT ?"
-                )
-                rows = conn.execute(
-                    sql,
-                    [source, *where_params, *score_params, limit],
-                ).fetchall()
-            else:
-                sql = (
-                    f"SELECT * FROM hoards WHERE {where_sql} "
-                    f"ORDER BY {order_expr} DESC LIMIT ?"
-                )
-                rows = conn.execute(
-                    sql,
-                    [*where_params, *score_params, limit],
-                ).fetchall()
+                source_filters.append("source = ?")
+                source_params.append(source)
+            if exclude_sources:
+                placeholders = ", ".join("?" for _ in exclude_sources)
+                source_filters.append(f"source NOT IN ({placeholders})")
+                source_params.extend(exclude_sources)
+            source_clause = (
+                " AND ".join(source_filters) + " AND " if source_filters else ""
+            )
+
+            sql = (
+                f"SELECT * FROM hoards WHERE {source_clause}({where_sql}) "
+                f"ORDER BY {order_expr} DESC LIMIT ?"
+            )
+            rows = conn.execute(
+                sql,
+                [*source_params, *where_params, *score_params, limit],
+            ).fetchall()
             return [HoardItem.from_row(r) for r in rows]
         finally:
             conn.close()

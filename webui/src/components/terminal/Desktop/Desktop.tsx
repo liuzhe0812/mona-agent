@@ -22,20 +22,33 @@ const desktopIcons: DesktopIcon[] = [
   { id: "4", name: "任务管理器", icon: "activity", appType: "taskManager" },
 ];
 
-function getIconComponent(iconName: string, size: number) {
-  const props = { size, className: "drop-shadow-md" };
+function getIconComponent(iconName: string) {
+  let tile = "from-sky-400 to-blue-600";
+  let glyph = <Monitor className="h-6 w-6 text-white drop-shadow" />;
   switch (iconName) {
     case "monitor":
-      return <Monitor {...props} className="text-blue-400 drop-shadow-md" />;
+      break;
     case "terminal":
-      return <Terminal {...props} className="text-green-400 drop-shadow-md" />;
+      tile = "from-zinc-600 to-zinc-900";
+      glyph = <Terminal className="h-6 w-6 text-white drop-shadow" />;
+      break;
     case "trash":
-      return <Trash2 {...props} className="text-gray-400 drop-shadow-md" />;
+      tile = "from-zinc-400 to-zinc-600";
+      glyph = <Trash2 className="h-6 w-6 text-white drop-shadow" />;
+      break;
     case "activity":
-      return <Activity {...props} className="text-orange-400 drop-shadow-md" />;
-    default:
-      return <Monitor {...props} />;
+      tile = "from-emerald-400 to-green-600";
+      glyph = <Activity className="h-6 w-6 text-white drop-shadow" />;
+      break;
   }
+  return (
+    <div
+      className={`relative flex h-11 w-11 items-center justify-center overflow-hidden rounded-[12px] border border-white/25 bg-gradient-to-b ${tile} shadow-md`}
+    >
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-1/2 bg-gradient-to-b from-white/30 to-transparent" />
+      {glyph}
+    </div>
+  );
 }
 
 interface SelectionBox {
@@ -188,7 +201,7 @@ export function DesktopSurface({ onOpenApp, onDesktopContextMenu }: DesktopSurfa
 
   return (
     <div
-      className="absolute inset-0 overflow-hidden p-3 pt-4"
+      className="absolute inset-0 overflow-hidden p-3 pt-9"
       ref={containerRef}
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
@@ -204,23 +217,29 @@ export function DesktopSurface({ onOpenApp, onDesktopContextMenu }: DesktopSurfa
             <div
               key={icon.id}
               id={`desktop-icon-${icon.id}`}
-              className={`desktop-icon absolute flex h-20 w-20 cursor-pointer flex-col items-center justify-center gap-1 rounded p-1 transition-colors hover:bg-white/10 ${
+              className={`desktop-icon absolute flex h-20 w-20 cursor-pointer flex-col items-center justify-center gap-1 rounded-lg p-1 transition-colors hover:bg-white/10 ${
                 isIconSelected(icon.id)
-                  ? "border-white/30 bg-white/20 border"
+                  ? "border-white/25 bg-white/20 border"
                   : "border border-transparent"
               }`}
               style={{
-                left: GRID_PADDING + col * GRID_SIZE,
+                right: GRID_PADDING + col * GRID_SIZE,
                 top: GRID_PADDING + row * GRID_SIZE,
               }}
               onClick={() => handleIconClick(icon)}
               onDoubleClick={() => handleIconDoubleClick(icon)}
               onContextMenu={(e) => handleIconContextMenu(e, icon)}
             >
-              <div className="flex h-10 w-10 items-center justify-center">
-                {getIconComponent(icon.icon, 32)}
+              <div className="flex h-11 w-11 items-center justify-center">
+                {getIconComponent(icon.icon)}
               </div>
-              <span className="w-full break-words px-1 text-center text-[11px] leading-tight text-white/90 drop-shadow-md line-clamp-2">
+              <span
+                className={`w-full break-words rounded-sm px-1 text-center text-[11px] leading-tight drop-shadow-md line-clamp-2 ${
+                  isIconSelected(icon.id)
+                    ? "text-white"
+                    : "text-white/90"
+                }`}
+              >
                 {icon.name}
               </span>
             </div>
@@ -230,7 +249,7 @@ export function DesktopSurface({ onOpenApp, onDesktopContextMenu }: DesktopSurfa
 
       {selectionBox && (
         <div
-          className="pointer-events-none absolute border border-blue-400/80 bg-blue-400/20"
+          className="pointer-events-none absolute border border-[#0a82ff]/60 bg-[#0a82ff]/15"
           style={{
             left: Math.min(selectionBox.startX, selectionBox.endX),
             top: Math.min(selectionBox.startY, selectionBox.endY),
@@ -243,7 +262,7 @@ export function DesktopSurface({ onOpenApp, onDesktopContextMenu }: DesktopSurfa
       {contextMenu && (
         <div
           ref={menuRef}
-          className="fixed z-[99999] min-w-[160px] rounded-lg border border-white/10 bg-[#252526] py-1 shadow-2xl"
+          className="fixed z-[99999] min-w-[180px] rounded-xl border border-white/15 bg-[#2b2b2f]/80 p-1 shadow-[0_16px_48px_rgba(0,0,0,0.45)] backdrop-blur-2xl"
           style={{
             top: Math.min(contextMenu.y, window.innerHeight - 250),
             left: Math.min(contextMenu.x, window.innerWidth - 180),
@@ -260,7 +279,7 @@ export function DesktopSurface({ onOpenApp, onDesktopContextMenu }: DesktopSurfa
                   <>
                     <button
                       onClick={() => handleMenuOpen(icon)}
-                      className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-white/80 transition-colors hover:bg-[#37373d] hover:text-white"
+                      className="flex w-full items-center gap-2 rounded-md px-2.5 py-1 text-left text-[13px] text-white/90 transition-colors hover:bg-[#0a82ff] hover:text-white"
                     >
                       <FolderOpen className="h-3.5 w-3.5" />
                       打开
@@ -276,20 +295,20 @@ export function DesktopSurface({ onOpenApp, onDesktopContextMenu }: DesktopSurfa
                   onDesktopContextMenu?.("paste");
                   setContextMenu(null);
                 }}
-                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-white/80 transition-colors hover:bg-[#37373d] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                className="flex w-full items-center gap-2 rounded-md px-2.5 py-1 text-left text-[13px] text-white/90 transition-colors hover:bg-[#0a82ff] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <ClipboardPaste className="h-3.5 w-3.5" />
                 粘贴
               </button>
 
-              <div className="my-0.5 border-t border-white/10" />
+              <div className="mx-2 my-1 border-t border-white/10" />
 
               <button
                 onClick={() => {
                   onDesktopContextMenu?.("newFile");
                   setContextMenu(null);
                 }}
-                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-white/80 transition-colors hover:bg-[#37373d] hover:text-white"
+                className="flex w-full items-center gap-2 rounded-md px-2.5 py-1 text-left text-[13px] text-white/90 transition-colors hover:bg-[#0a82ff] hover:text-white"
               >
                 <FilePlus className="h-3.5 w-3.5" />
                 新建文件
@@ -300,20 +319,20 @@ export function DesktopSurface({ onOpenApp, onDesktopContextMenu }: DesktopSurfa
                   onDesktopContextMenu?.("newFolder");
                   setContextMenu(null);
                 }}
-                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-white/80 transition-colors hover:bg-[#37373d] hover:text-white"
+                className="flex w-full items-center gap-2 rounded-md px-2.5 py-1 text-left text-[13px] text-white/90 transition-colors hover:bg-[#0a82ff] hover:text-white"
               >
                 <FolderPlus className="h-3.5 w-3.5" />
                 新建文件夹
               </button>
 
-              <div className="my-0.5 border-t border-white/10" />
+              <div className="mx-2 my-1 border-t border-white/10" />
 
               <button
                 onClick={() => {
                   onOpenApp("terminal", "终端");
                   setContextMenu(null);
                 }}
-                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-white/80 transition-colors hover:bg-[#37373d] hover:text-white"
+                className="flex w-full items-center gap-2 rounded-md px-2.5 py-1 text-left text-[13px] text-white/90 transition-colors hover:bg-[#0a82ff] hover:text-white"
               >
                 <Terminal className="h-3.5 w-3.5" />
                 打开终端
@@ -324,20 +343,20 @@ export function DesktopSurface({ onOpenApp, onDesktopContextMenu }: DesktopSurfa
                   onOpenApp("fileManager", "此电脑", { path: "" });
                   setContextMenu(null);
                 }}
-                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-white/80 transition-colors hover:bg-[#37373d] hover:text-white"
+                className="flex w-full items-center gap-2 rounded-md px-2.5 py-1 text-left text-[13px] text-white/90 transition-colors hover:bg-[#0a82ff] hover:text-white"
               >
                 <Monitor className="h-3.5 w-3.5" />
                 文件管理器
               </button>
 
-              <div className="my-0.5 border-t border-white/10" />
+              <div className="mx-2 my-1 border-t border-white/10" />
 
               <button
                 onClick={() => {
                   onDesktopContextMenu?.("refresh");
                   setContextMenu(null);
                 }}
-                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-white/80 transition-colors hover:bg-[#37373d] hover:text-white"
+                className="flex w-full items-center gap-2 rounded-md px-2.5 py-1 text-left text-[13px] text-white/90 transition-colors hover:bg-[#0a82ff] hover:text-white"
               >
                 <RotateCw className="h-3.5 w-3.5" />
                 刷新

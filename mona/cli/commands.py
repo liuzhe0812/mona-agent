@@ -74,9 +74,9 @@ class SafeFileHistory(FileHistory):
     def store_string(self, string: str) -> None:
         super().store_string(_sanitize_surrogates(string))
 from mona.cli.stream import StreamRenderer, ThinkingSpinner
+from mona.config.migrate_workspace_output import run_startup_migrations
 from mona.config.paths import get_workspace_path, is_default_workspace
 from mona.config.schema import Config
-from mona.utils.helpers import sync_workspace_templates
 from mona.utils.restart import (
     consume_restart_notice_from_env,
     format_restart_completed_message,
@@ -473,7 +473,9 @@ def onboard(
         workspace_path.mkdir(parents=True, exist_ok=True)
         console.print(f"[green]✓[/green] Created workspace at {workspace_path}")
 
-    sync_workspace_templates(workspace_path)
+    # Run consolidated startup migrations: global resources → global templates
+    # → shared output dir → loose artifact migration.
+    run_startup_migrations()
 
     agent_cmd = 'mona agent -m "Hello!"'
     gateway_cmd = "mona gateway"
@@ -635,7 +637,9 @@ def serve(
     host = host if host is not None else api_cfg.host
     port = port if port is not None else api_cfg.port
     timeout = timeout if timeout is not None else api_cfg.timeout
-    sync_workspace_templates(runtime_config.workspace_path)
+    # Run consolidated startup migrations: global resources → global templates
+    # → shared output dir → loose artifact migration.
+    run_startup_migrations()
     bus = MessageBus()
     session_manager = SessionManager(runtime_config.workspace_path)
     try:
@@ -730,10 +734,12 @@ def _run_gateway(
     port = port if port is not None else config.gateway.port
 
     console.print(f"{__logo__} Starting mona gateway version {__version__} on port {port}...")
-    sync_workspace_templates(config.workspace_path)
-    # One-time migration: move memory/skills/HEARTBEAT.md out of workspace
-    from mona.config.migrate_global import migrate_global_resources
-    migrate_global_resources()
+    # Run consolidated startup migrations: global resources → global templates
+    # → shared output dir → loose artifact migration. The old
+    # sync_workspace_templates + migrate_global_resources pair is superseded
+    # by this single call which writes templates to ~/.mona/ (not workspace)
+    # and uses move semantics for the migration.
+    run_startup_migrations()
     bus = MessageBus()
     try:
         provider_snapshot = build_provider_snapshot(config)
@@ -1171,7 +1177,9 @@ def agent(
     from mona.providers.video_generation import video_gen_provider_configs
 
     config = _load_runtime_config(config, workspace)
-    sync_workspace_templates(config.workspace_path)
+    # Run consolidated startup migrations: global resources → global templates
+    # → shared output dir → loose artifact migration.
+    run_startup_migrations()
 
     bus = MessageBus()
 
@@ -1581,6 +1589,103 @@ def status():
                     console.print(f"{spec.label}: [green]✓[/green]")
                 else:
                     console.print(f"{spec.label}: [dim]not set[/dim]")
+
+
+# ============================================================================
+# Doctor — post-build smoke test & runtime diagnostics
+# ============================================================================
+
+
+@app.command()
+def doctor():
+    """Diagnose runtime environment: verify critical dependencies and tool availability.
+
+    Used for post-build smoke testing (PyInstaller often misses lazily-imported
+    submodules) and runtime troubleshooting. Exits with code 1 if any critical
+    dependency import fails.
+    """
+    console.print(f"{__logo__} mona Doctor\n")
+    failed = False
+
+    # Critical dynamic dependencies that PyInstaller static analysis often misses.
+    # Each entry: (import_path, description)
+    critical_deps = [
+        ("playwright", "Browser automation — top-level"),
+        ("playwright.async_api", "Browser automation — async API"),
+        ("playwright._impl._driver", "Browser automation — driver"),
+        ("lark_oapi", "Feishu/Lark channel"),
+        ("lark_oapi.api.im.v1", "Feishu/Lark channel — IM API"),
+        ("fitz", "PDF reading (PyMuPDF)"),
+        ("boto3", "AWS Bedrock provider"),
+        ("botocore", "AWS Bedrock provider"),
+    ]
+    console.print("[bold]Critical Dependencies[/bold]\n")
+    for mod_path, desc in critical_deps:
+        try:
+            __import__(mod_path)
+            console.print(f"  {mod_path}: [green]✓[/green] [dim]{desc}[/dim]")
+        except ImportError as e:
+            console.print(f"  {mod_path}: [red]✗[/red] [dim]{desc}[/dim]  [red]{e}[/red]")
+            failed = True
+    console.print()
+
+    # Tool availability — disabled tools are informational, not failures.
+    # Import errors above already flag the root cause.
+    console.print("[bold]Tool Availability[/bold]\n")
+    discovered_names: set[str] = set()
+    try:
+        from mona.agent.tools.context import ToolContext
+        from mona.agent.tools.loader import ToolLoader
+
+        loader = ToolLoader()
+        ctx = ToolContext(config=None, workspace=".")
+        for cls in sorted(loader.discover(), key=lambda c: c.__name__):
+            discovered_names.add(cls.__name__)
+            try:
+                ok = cls.enabled(ctx)
+            except Exception as e:  # noqa: BLE001
+                # enabled() may access ctx.config which is None here — that's a
+                # config issue, not a packaging issue, so don't count as failure.
+                console.print(f"  {cls.__name__}: [yellow]? needs config[/yellow] [dim]{e}[/dim]")
+                continue
+            if ok:
+                console.print(f"  {cls.__name__}: [green]✓[/green]")
+            else:
+                console.print(f"  {cls.__name__}: [yellow]disabled[/yellow]")
+    except Exception as e:  # noqa: BLE001
+        console.print(f"  [red]Failed to load tools: {e}[/red]")
+        failed = True
+
+    # Critical tool classes — these are dynamically discovered by ToolLoader
+    # via pkgutil.iter_modules, which PyInstaller static analysis cannot see.
+    # If any are missing from the discovered set, the build is broken (spec
+    # forgot to collect_submodules). Fail the doctor check so the packager
+    # catches it before shipping a broken release.
+    critical_tool_classes = [
+        "EmailSearchTool", "EmailReadTool", "EmailActionTool",
+        "TerminalExecTool", "TerminalOutputTool", "TerminalUploadTool",
+        "KnowledgeSearchTool", "DbQueryTool", "ApplyPatchTool",
+        "SpawnTool", "DeliverFileTool", "HoardSearchTool",
+    ]
+    console.print("\n[bold]Critical Tool Classes[/bold]\n")
+    missing_critical = []
+    for cls_name in critical_tool_classes:
+        if cls_name in discovered_names:
+            console.print(f"  {cls_name}: [green]✓[/green]")
+        else:
+            console.print(f"  {cls_name}: [red]✗ MISSING[/red]")
+            missing_critical.append(cls_name)
+            failed = True
+    if missing_critical:
+        console.print(
+            "\n[red]Critical tools missing![/red] PyInstaller spec likely forgot "
+            "to collect_submodules('mona'). Add it to hidden_imports and rebuild."
+        )
+
+    if failed:
+        console.print("\n[red]✗ Doctor checks failed[/red]")
+        raise typer.Exit(1)
+    console.print("\n[green]✓ All doctor checks passed[/green]")
 
 
 # ============================================================================

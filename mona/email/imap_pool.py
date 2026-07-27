@@ -159,7 +159,7 @@ class _AccountImapPool:
                 if _is_retryable(e):
                     self._invalidate()
                     if attempt == 0:
-                        logger.warning(
+                        logger.debug(
                             f"[imap-pool] connection lost, will reconnect and retry: {e}"
                         )
                         continue
@@ -176,8 +176,21 @@ class _AccountImapPool:
 
         为减少因频繁 NOOP 检测误判导致的不必要重连 login，
         上次使用后 5 分钟内直接复用连接，超时后再做 NOOP 健康检查。
+        但若连接已被服务器单方面关闭（imaplib.state == LOGOUT），
+        即使在 5 分钟窗口内也必须重连，否则后续命令会报
+        "command FETCH illegal in state LOGOUT"。
         """
         now = time.time()
+        # 先检查连接是否已被服务器关闭（state 变为 LOGOUT）。
+        # 这种情况下 _client 对象还在，recently_used 会误判为可用。
+        if self._client is not None and self._is_logged_out():
+            logger.debug(
+                "[imap-pool] connection in LOGOUT state, will reconnect"
+            )
+            with contextlib.suppress(Exception):
+                self._client.logout()
+            self._client = None
+
         recently_used = self._client is not None and (now - self._last_use) < 300
         if recently_used or (self._client is not None and self._is_alive()):
             return self._client
@@ -190,11 +203,22 @@ class _AccountImapPool:
 
         # 新建连接
         self._client = self._create_client()
-        logger.info(
-            f"[imap-pool] established connection for "
-            f"{self._body.get('imapUsername', '?')}"
-        )
+        logger.debug("[imap-pool] established connection")
         return self._client
+
+    def _is_logged_out(self) -> bool:
+        """检测连接是否已进入 LOGOUT 状态（服务器主动关闭或之前 logout 调用）。
+
+        imaplib.IMAP4.state 在 LOGOUT 时为 'LOGOUT'，此时连接对象还在但
+        任何 IMAP 命令都会被服务器拒绝。recently_used 优化会误判这种连接为可用，
+        导致 "command FETCH illegal in state LOGOUT" 错误。
+        """
+        if self._client is None:
+            return True
+        try:
+            return getattr(self._client, "state", "") == "LOGOUT"
+        except Exception:
+            return True
 
     def _is_alive(self) -> bool:
         """通过 NOOP 检测连接是否存活。"""
@@ -270,7 +294,7 @@ class ImapPoolManager:
             pool = self._pools.get(key)
             # 配置变更或池失败已过期：重建
             if pool is not None and pool.config_changed(body):
-                logger.info(f"[imap-pool] config changed, recreating pool for {key}")
+                logger.debug("[imap-pool] config changed, recreating pool")
                 pool.close()
                 pool = None
             if pool is None:
@@ -289,7 +313,7 @@ class ImapPoolManager:
             pool = self._pools.pop(key, None)
         if pool:
             pool.close()
-            logger.info(f"[imap-pool] removed pool for {key}")
+            logger.debug("[imap-pool] removed pool")
 
     def reset_pool(self, body: dict[str, Any]) -> None:
         """重置账号的连接池（修改配置/测试连接时调用）。"""
@@ -298,7 +322,7 @@ class ImapPoolManager:
             pool = self._pools.pop(key, None)
         if pool:
             pool.close()
-            logger.info(f"[imap-pool] reset pool for {key}")
+            logger.debug("[imap-pool] reset pool")
 
     def close_all(self) -> None:
         """关闭所有连接池（gateway 关闭时调用）。"""
@@ -332,7 +356,7 @@ class ImapPoolManager:
                     else:
                         pool._invalidate()
                 except Exception as e:
-                    logger.warning(f"[imap-pool] keepalive NOOP failed, will reconnect on next use: {e}")
+                    logger.debug(f"[imap-pool] keepalive NOOP failed, will reconnect on next use: {e}")
                     pool._invalidate()
 
     def status(self) -> list[dict[str, Any]]:

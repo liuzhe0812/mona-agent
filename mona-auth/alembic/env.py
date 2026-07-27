@@ -8,7 +8,22 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.config import settings
 from app.database import Base
-from app.models import Device, Subscription, User  # noqa: F401
+from app.models import (  # noqa: F401
+    AgreementStatus,
+    AppConfig,
+    Device,
+    Notification,
+    NotificationRead,
+    Payment,
+    PaymentAgreement,
+    PaymentStatus,
+    PricingPlan,
+    RenewalStatus,
+    Subscription,
+    SubscriptionRenewal,
+    SubscriptionStatus,
+    User,
+)
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.database_url)

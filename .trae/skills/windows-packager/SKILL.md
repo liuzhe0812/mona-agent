@@ -84,14 +84,32 @@ if (Test-Path "src-tauri\resources\mona-gateway.exe") {
 if (Test-Path "src-tauri\resources\mona-gateway") {
     Remove-Item "src-tauri\resources\mona-gateway" -Recurse -Force
 }
-Copy-Item -Recurse "dist\mona-gateway" "src-tauri\resources\mona-gateway"
+# IMPORTANT: PowerShell `Copy-Item -Recurse source dest` nests source INSIDE dest if dest already exists.
+# Explicitly create empty target dir and copy CONTENTS with `\*` to avoid nested mona-gateway/mona-gateway/.
+New-Item -ItemType Directory -Path "src-tauri\resources\mona-gateway" -Force | Out-Null
+Copy-Item -Recurse "dist\mona-gateway\*" "src-tauri\resources\mona-gateway"
 
 # 5. Verify
 $gatewayExe = "src-tauri\resources\mona-gateway\mona-gateway.exe"
 if (-not (Test-Path $gatewayExe)) {
     throw "Gateway exe not found at $gatewayExe"
 }
+# Regression check: ensure no nested mona-gateway/mona-gateway/ directory was created
+if (Test-Path "src-tauri\resources\mona-gateway\mona-gateway") {
+    throw "Nested mona-gateway/mona-gateway/ detected! Copy-Item nesting bug. Aborting."
+}
 Write-Output "Gateway built successfully: $gatewayExe"
+
+# 6. Smoke test — verify critical dependencies import correctly in the packaged exe.
+#    PyInstaller static analysis often misses lazily-imported submodules
+#    (e.g. playwright.async_api, playwright._impl._driver). This catches
+#    packaging regressions BEFORE building the Tauri installer.
+Write-Output "Running gateway doctor smoke test..."
+& $gatewayExe doctor
+if ($LASTEXITCODE -ne 0) {
+    throw "Gateway doctor smoke test FAILED! Critical dependencies are missing in the packaged build. See output above. Common fix: add collect_submodules('<package>') to src-tauri/mona-gateway.spec"
+}
+Write-Output "Gateway smoke test passed."
 ```
 
 **Critical rules:**

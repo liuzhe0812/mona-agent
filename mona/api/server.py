@@ -16,6 +16,7 @@ import smtplib
 import ssl
 import time
 import uuid
+from datetime import datetime
 from email import policy
 from email.header import decode_header, make_header
 from email.message import EmailMessage
@@ -31,25 +32,28 @@ from mona.api.hoard_handlers import (
     handle_hoard_add,
     handle_hoard_delete_by_url,
 )
+from mona.api.url2note import Url2NoteError, Url2NoteExtractor
 from mona.config.paths import get_media_dir, get_workspace_path
 from mona.email.imap_pool import imap_pool_manager
-from mona.kb.api import (
-    handle_kb_create_project,
-    handle_kb_delete_file,
-    handle_kb_get_reviews,
-    handle_kb_get_wiki_page,
-    handle_kb_graph,
-    handle_kb_import_files,
-    handle_kb_lint,
-    handle_kb_list_files,
-    handle_kb_list_projects,
-    handle_kb_list_wiki,
-    handle_kb_rename_project,
-    handle_kb_save_reviews,
-    handle_kb_search,
-    handle_kb_update_wiki_page,
+from mona.materials.api import (
+    handle_materials_create_directory,
+    handle_materials_delete,
+    handle_materials_delete_wiki_page,
+    handle_materials_extract,
+    handle_materials_get_raw,
+    handle_materials_get_raw_binary,
+    handle_materials_get_text,
+    handle_materials_get_wiki_page,
+    handle_materials_list_files,
+    handle_materials_list_wiki,
+    handle_materials_llm_config,
+    handle_materials_move,
+    handle_materials_search,
+    handle_materials_status,
+    handle_materials_write_wiki_page,
 )
 from mona.security.network import validate_host
+from mona.system_agent import handle_system_diagnose, handle_system_plan
 from mona.utils.helpers import safe_filename
 from mona.utils.media_decode import (
     MAX_FILE_SIZE,
@@ -137,6 +141,9 @@ def _is_retryable_error(e: Exception) -> bool:
         "timeout", "timed out", "connection reset", "broken pipe",
         "eof", "connection closed", "connection aborted", "temporarily unavailable",
         "socket", "network is unreachable", "connection refused",
+        # 连接池中残留的 LOGOUT 状态连接被复用时，服务器返回此错误。
+        # 内层 imap_pool.run 已会重试一次，外层兜底再重试一次以确保恢复。
+        "illegal in state", "logout",
     )
     return any(m in msg for m in retryable_markers)
 
@@ -251,7 +258,7 @@ class _IdleWorker:
                         f"stopping IDLE to avoid rate limiting"
                     )
                     return
-                logger.warning(
+                logger.debug(
                     f"[idle] {self._account_id} error: {e}, retry in {backoff}s"
                 )
                 self._stop_event.wait(backoff)
@@ -297,7 +304,7 @@ class _IdleWorker:
 
             # 获取需要监听的文件夹列表
             mailboxes = self._get_mailboxes_to_monitor(client)
-            logger.info(f"[idle] {self._account_id} connected, monitoring: {mailboxes}")
+            logger.info(f"[idle] account connected, monitoring: {mailboxes}")
 
             # 为每个文件夹创建独立的 IDLE 连接
             # 使用线程池并行监听多个文件夹
@@ -876,8 +883,8 @@ async def handle_profile_distill(request: web.Request) -> web.Response:
 
 async def handle_profile_snapshots(request: web.Request) -> web.Response:
     """GET /api/profile/snapshots — list all historical snapshots."""
-    from mona.distill.scoring import load_snapshots
     from mona.config.paths import get_memory_dir
+    from mona.distill.scoring import load_snapshots
 
     snapshots = load_snapshots(get_memory_dir())
     return web.json_response({"snapshots": snapshots})
@@ -885,8 +892,8 @@ async def handle_profile_snapshots(request: web.Request) -> web.Response:
 
 async def handle_profile_comparison(request: web.Request) -> web.Response:
     """GET /api/profile/comparison?date=YYYY-MM-DD — get current vs previous snapshot."""
-    from mona.distill.scoring import load_snapshots, compute_growth_comparison
     from mona.config.paths import get_memory_dir
+    from mona.distill.scoring import compute_growth_comparison, load_snapshots
 
     current_date = request.query.get("date")
     snapshots = load_snapshots(get_memory_dir())
@@ -963,9 +970,9 @@ async def handle_chat_completions(request: web.Request) -> web.Response:
     session_locks: dict[str, asyncio.Lock] = request.app["session_locks"]
     session_lock = session_locks.setdefault(session_key, asyncio.Lock())
 
-    logger.info(
-        "API request session_key={} media={} text={} stream={}",
-        session_key, len(media_paths), text[:80], stream,
+    logger.debug(
+        "API request session_key={} media={} text_len={} stream={}",
+        session_key, len(media_paths), len(text), stream,
     )
     # -- streaming path --
     if stream:
@@ -1667,9 +1674,9 @@ def _imap_fetch_recent(body: dict[str, Any]) -> list[dict[str, Any]]:
                 uids = [u for u in data[0].split() if int(u) > last_uid]
             # 部分企业邮箱对 UID n:* 范围搜索返回空，回退到 SEARCH ALL 本地过滤
             if not uids:
-                logger.info(
-                    f"[imap-sync] UID range search returned empty for {imap_username}, "
-                    f"falling back to SEARCH ALL"
+                logger.debug(
+                    "[imap-sync] UID range search returned empty, "
+                    "falling back to SEARCH ALL"
                 )
                 status, data = client.uid("SEARCH", "ALL")
                 if status == "OK" and data and data[0]:
@@ -1685,33 +1692,35 @@ def _imap_fetch_recent(body: dict[str, Any]) -> list[dict[str, Any]]:
             all_uids = data[0].split()
             uids = all_uids[-20:]
 
-        # 保护：如果服务器最大 UID 仍 <= last_uid，说明本地 last_uid 已过期/无效，
-        # 重置并重新拉取最近 20 封，避免永远漏掉新邮件。
+        # 保护：如果服务器最大 UID < last_uid，说明本地 last_uid 已过期/无效
+        # （服务器删除了高 UID 邮件），重置并重新拉取最近 20 封，避免永远漏掉新邮件。
+        # 注意：用严格小于，last_uid == server max uid 是正常已同步状态，不触发重置。
         if (
             last_uid is not None
             and last_uid > 0
             and all_uids
-            and max(int(u) for u in all_uids) <= last_uid
+            and max(int(u) for u in all_uids) < last_uid
         ):
             logger.warning(
-                f"[imap-sync] local last_uid={last_uid} >= server max uid for "
-                f"{imap_username}, resetting and fetching recent 20"
+                f"[imap-sync] local last_uid={last_uid} > server max uid, "
+                f"resetting and fetching recent 20"
             )
             uids = all_uids[-20:]
 
         if not uids:
-            logger.info(
-                f"[imap-sync] no new uids for {imap_username} "
+            logger.debug(
+                f"[imap-sync] no new uids "
                 f"(mailbox={mailbox}, last_uid={last_uid})"
             )
             return []
 
         messages: list[dict[str, Any]] = []
         for uid in uids:
-            # Foxmail 风格：同步时拉完整 RFC822（BODY.PEEK[]），落盘 .eml。
-            # 点击邮件时 Rust 本地 mailparse 解析，毫秒级，无需走 IMAP。
+            # 同步时只拉 HEADER（BODY.PEEK[HEADER]），保证新邮件同步毫秒级完成、通知即时弹出。
+            # 正文和附件由 fetch_body 按需拉取完整 RFC822 并落盘（用户点击或 AI 读取时触发）。
+            # fetch_raw_and_cache 已修复：检查 body_fetched 而非 eml_path，确保落盘不被跳过。
             status, fetched = client.uid(
-                "FETCH", uid, "(BODY.PEEK[] UID FLAGS)"
+                "FETCH", uid, "(BODY.PEEK[HEADER] UID FLAGS)"
             )
             if status != "OK" or not fetched:
                 continue
@@ -1758,8 +1767,7 @@ def _imap_fetch_recent(body: dict[str, Any]) -> list[dict[str, Any]]:
                     "isStarred": _email_extract_flagged_flag(fetched),
                     "messageId": message_id,
                     "attachments": _email_extract_attachments(parsed),
-                    # Foxmail 风格：返回完整 RFC822 字节（base64），供 Rust 侧落盘为 .eml
-                    # 点击邮件时 Rust 本地 mailparse 解析 .eml，毫秒级
+                    # HEADER 原始字节（base64），落盘为 .eml；fetch_body 时用完整 RFC822 覆盖
                     "rawBytes": base64.b64encode(raw_bytes).decode("ascii"),
                 }
             )
@@ -1767,8 +1775,8 @@ def _imap_fetch_recent(body: dict[str, Any]) -> list[dict[str, Any]]:
         return messages
 
     result = imap_pool_manager.run(body, op)
-    logger.info(
-        f"[imap-sync] {imap_username} mailbox={mailbox} "
+    logger.debug(
+        f"[imap-sync] mailbox={mailbox} "
         f"last_uid={last_uid} fetched={len(result)} new messages"
     )
     return result
@@ -1811,8 +1819,8 @@ def _imap_list_uids(body: dict[str, Any]) -> dict[str, Any]:
         return {"uids": uids, "uidValidity": uid_validity}
 
     result = imap_pool_manager.run(body, op)
-    logger.info(
-        f"[imap-uids] {imap_username} mailbox={mailbox} "
+    logger.debug(
+        f"[imap-uids] mailbox={mailbox} "
         f"total_uids={len(result.get('uids', []))} uid_validity={result.get('uidValidity', '')}"
     )
     return result
@@ -1869,21 +1877,19 @@ def _imap_list_folders(body: dict[str, Any]) -> list[dict[str, Any]]:
 
     def op(client: imaplib.IMAP4) -> list[dict[str, Any]]:
         status, folder_data = client.list()
-        logger.info(
-            "IMAP LIST status=%s folders=%s for %s",
+        logger.debug(
+            "IMAP LIST status=%s folders=%s",
             status,
             len(folder_data) if folder_data else 0,
-            imap_username,
         )
         # 部分 IMAP 服务器在刚执行完 CREATE 后 LIST 会瞬态返回空，重试一次
         if status == "OK" and not folder_data:
             time.sleep(0.8)
             status, folder_data = client.list()
-            logger.info(
-                "IMAP LIST retry status=%s folders=%s for %s",
+            logger.debug(
+                "IMAP LIST retry status=%s folders=%s",
                 status,
                 len(folder_data) if folder_data else 0,
-                imap_username,
             )
         if status != "OK" or not folder_data:
             return []
@@ -1905,11 +1911,10 @@ def _imap_list_folders(body: dict[str, Any]) -> list[dict[str, Any]]:
             # 解码 Modified UTF-7 编码的文件夹名（如中文文件夹）
             name = _decode_imap_utf7(name)
             if original_name != name:
-                logger.info(
-                    "[imap-folder] decoded '%s' -> '%s' for %s",
+                logger.debug(
+                    "[imap-folder] decoded '%s' -> '%s'",
                     original_name,
                     name,
-                    imap_username,
                 )
             elif "&" in original_name:
                 logger.warning(
@@ -1964,12 +1969,11 @@ def _imap_create_folder(body: dict[str, Any]) -> None:
 
     def op(client: imaplib.IMAP4) -> None:
         status, data = client.create(_imap_quote_mailbox(mailbox))
-        logger.info(
-            "IMAP CREATE status=%s data=%s mailbox=%s for %s",
+        logger.debug(
+            "IMAP CREATE status=%s data=%s mailbox=%s",
             status,
             data,
             mailbox,
-            imap_username,
         )
         if status != "OK":
             # 提取服务器返回的错误描述，便于诊断
@@ -1990,7 +1994,7 @@ def _imap_create_folder(body: dict[str, Any]) -> None:
                 or "already exist" in msg_lower
                 or "exist with the same name" in msg_lower
             ):
-                logger.info(
+                logger.debug(
                     "IMAP CREATE: folder already exists, treating as success: %s",
                     mailbox,
                 )
@@ -2018,13 +2022,12 @@ def _imap_rename_folder(body: dict[str, Any]) -> None:
 
     def op(client: imaplib.IMAP4) -> None:
         status, data = client.rename(_imap_quote_mailbox(old_name), _imap_quote_mailbox(new_name))
-        logger.info(
-            "IMAP RENAME status=%s data=%s old=%s new=%s for %s",
+        logger.debug(
+            "IMAP RENAME status=%s data=%s old=%s new=%s",
             status,
             data,
             old_name,
             new_name,
-            imap_username,
         )
         if status != "OK":
             server_msg = ""
@@ -2055,12 +2058,11 @@ def _imap_delete_folder(body: dict[str, Any]) -> None:
 
     def op(client: imaplib.IMAP4) -> None:
         status, data = client.delete(_imap_quote_mailbox(folder_name))
-        logger.info(
-            "IMAP DELETE status=%s data=%s folder=%s for %s",
+        logger.debug(
+            "IMAP DELETE status=%s data=%s folder=%s",
             status,
             data,
             folder_name,
-            imap_username,
         )
         if status != "OK":
             server_msg = ""
@@ -2138,7 +2140,7 @@ async def handle_email_sync(request: web.Request) -> web.Response:
         err_msg = str(e)
         # IMAP SELECT 失败（如企业邮箱限制非 INBOX 文件夹访问），返回 422 而非 500
         if "select" in err_msg.lower() and "failed" in err_msg.lower():
-            logger.warning("Email sync rejected (folder not accessible): %s", err_msg)
+            logger.warning(f"Email sync rejected (folder not accessible): {err_msg}")
             return web.json_response(
                 {"error": f"该文件夹不支持同步: {err_msg}"},
                 status=422,
@@ -2176,7 +2178,7 @@ def _smtp_send_message_no_append(body: dict[str, Any]) -> bytes:
     smtp_password = str(body.get("smtpPassword", "") or "")
     # 调试日志：仅记录密码长度，不记录密码任何部分（安全考虑）
     pwd_len = len(smtp_password)
-    logger.info(f"[smtp] host={smtp_host}:{smtp_port} user={smtp_username} pwd_len={pwd_len}")
+    logger.debug(f"[smtp] host={smtp_host}:{smtp_port} pwd_len={pwd_len}")
     use_tls = bool(body.get("useTls", True))
     use_ssl = bool(body.get("useSsl", False))
     from_address = str(body.get("fromAddress", "") or "").strip()
@@ -2223,7 +2225,7 @@ def _smtp_send_message_no_append(body: dict[str, Any]) -> bytes:
         try:
             data_bytes = base64.b64decode(data_b64)
         except Exception:
-            logger.warning("附件 base64 解码失败，跳过: %s", filename)
+            logger.warning(f"附件 base64 解码失败，跳过: {filename}")
             continue
         # 解析 maintype/subtype
         if "/" in content_type:
@@ -2312,7 +2314,7 @@ def _imap_append_sent(body: dict[str, Any], raw_bytes: bytes) -> None:
                             folder_names.append(m.group(1))
                     except Exception:
                         pass
-                logger.info(f"[append-sent] 服务器文件夹列表: {folder_names}")
+                logger.debug(f"[append-sent] 服务器文件夹列表: {folder_names}")
         except Exception:
             logger.debug("[append-sent] LIST 失败，跳过诊断")
 
@@ -2320,12 +2322,12 @@ def _imap_append_sent(body: dict[str, Any], raw_bytes: bytes) -> None:
         for sent_box in sent_candidates:
             try:
                 quoted = _imap_quote_mailbox(sent_box)
-                logger.info(f"[append-sent] 尝试 APPEND 到 {sent_box} (quoted={quoted})")
+                logger.debug(f"[append-sent] 尝试 APPEND 到 {sent_box} (quoted={quoted})")
                 typ, _ = client.append(
                     quoted, "(\\Seen)", None, raw_bytes
                 )
                 if typ == "OK":
-                    logger.info(f"[append-sent] 成功保存副本到 {sent_box}")
+                    logger.debug(f"[append-sent] 成功保存副本到 {sent_box}")
                     return
                 else:
                     logger.warning(f"[append-sent] APPEND {sent_box} 返回 {typ}")
@@ -2348,12 +2350,12 @@ def _imap_append_sent(body: dict[str, Any], raw_bytes: bytes) -> None:
                         folder_name = m.group(1)
                         try:
                             quoted = _imap_quote_mailbox(folder_name)
-                            logger.info(f"[append-sent] LIST 发现文件夹 {folder_name}，尝试 APPEND")
+                            logger.debug(f"[append-sent] LIST 发现文件夹 {folder_name}，尝试 APPEND")
                             typ, _ = client.append(
                                 quoted, "(\\Seen)", None, raw_bytes
                             )
                             if typ == "OK":
-                                logger.info(f"[append-sent] 成功保存副本到 {folder_name}")
+                                logger.debug(f"[append-sent] 成功保存副本到 {folder_name}")
                                 return
                         except imaplib.IMAP4.error as e:
                             logger.warning(f"[append-sent] APPEND {folder_name} 失败: {e}")
@@ -2386,14 +2388,14 @@ async def handle_email_send(request: web.Request) -> web.Response:
     try:
         # 1. SMTP 发送（同步）
         raw_bytes = await _retry_smtp_call(_smtp_send_message_no_append, body)
-        logger.info(f"[email-send] SMTP 发送成功，raw_bytes 大小={len(raw_bytes)}")
+        logger.debug(f"[email-send] SMTP 发送成功，raw_bytes 大小={len(raw_bytes)}")
 
         # 2. 同步保存副本到 IMAP 服务器（等 APPEND 完成再返回）
         # 必须同步：Rust 侧返回后会立即同步"已发送"文件夹，APPEND 必须先完成
         if raw_bytes:
             try:
                 await _safe_append_sent(body, raw_bytes)
-                logger.info("[email-send] IMAP APPEND 副本保存完成")
+                logger.debug("[email-send] IMAP APPEND 副本保存完成")
             except Exception:
                 logger.warning("[email-send] 保存已发送副本失败（不影响发送结果）", exc_info=True)
         else:
@@ -2426,7 +2428,7 @@ def _append_sent_done_callback(task: asyncio.Task) -> None:
     """异步保存副本任务的完成回调，记录成功/失败日志。"""
     try:
         task.result()
-        logger.info("[email-send] 保存已发送副本异步任务完成")
+        logger.debug("[email-send] 保存已发送副本异步任务完成")
     except asyncio.CancelledError:
         logger.warning("[email-send] 保存已发送副本异步任务被取消")
     except Exception as e:
@@ -2439,9 +2441,9 @@ async def _safe_append_sent(body: dict[str, Any], raw_bytes: bytes) -> None:
     通过 _run_imap_locked 获取 per-account 锁，避免与后台同步并发操作同一 IMAP 连接。
     """
     try:
-        logger.info("[append-sent] 开始保存已发送邮件副本")
+        logger.debug("[append-sent] 开始保存已发送邮件副本")
         await _run_imap_locked(body, lambda b: _imap_append_sent_sync(b, raw_bytes))
-        logger.info("[append-sent] 保存已发送邮件副本流程结束")
+        logger.debug("[append-sent] 保存已发送邮件副本流程结束")
     except Exception:
         logger.warning("保存已发送邮件副本失败", exc_info=True)
 
@@ -3378,8 +3380,17 @@ async def handle_email_schedule_extract(request: web.Request) -> web.Response:
     if provider is None:
         return web.json_response({"error": "LLM provider 不可用"}, status=503)
 
-    # 从 agent_loop 的 config 取 tools.email_intel.schedule 配置
-    config = getattr(agent_loop, "config", None)
+    # 实时从 config.json 重新加载 schedule 配置。
+    # agent_loop.config 是启动时的内存快照，用户在 UI 修改 schedule 配置后
+    # gateway 不会自动 reload，必须实时读取才能让"启用"立即生效。
+    from mona.config.loader import load_config
+
+    try:
+        config = load_config()
+    except Exception:
+        logger.exception("Failed to reload config for schedule extract")
+        config = getattr(agent_loop, "config", None)
+
     schedule_config = None
     if config is not None:
         tools = getattr(config, "tools", None)
@@ -3627,9 +3638,10 @@ async def handle_email_fetch_attachment(request: web.Request) -> web.Response:
 def _imap_fetch_body(body: dict[str, Any]) -> dict[str, Any]:
     """连接 IMAP 拉取单封邮件的完整正文（同步时只拉头部，此处按需拉取正文）。
 
-    请求体：{ imapHost, imapPort, imapUsername, imapPassword, mailbox, uid, useSsl }
-    返回：{ bodyText, bodyHtml, hasAttachments, attachments, rawBytes }
-    Foxmail 风格：额外返回 rawBytes（base64 编码的完整 RFC822），供 Rust 侧落盘为 .eml。
+    请求体：{ imapHost, imapPort, imapUsername, imapPassword, mailbox, uid, useSsl, includeRawBytes? }
+    返回：{ bodyText, bodyHtml, hasAttachments, attachments, rawBytes? }
+    - includeRawBytes=false（用户主动点击）：只返回解析后的正文，不返回 rawBytes，JSON 体积小
+    - includeRawBytes=true（默认，prefetch）：额外返回 rawBytes（base64 RFC822），供 Rust 侧落盘 .eml
     复用持久连接池。
     """
     imap_host = str(body.get("imapHost", "") or "").strip()
@@ -3643,6 +3655,8 @@ def _imap_fetch_body(body: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("uid is required")
 
     _validate_mail_host(imap_host)
+    # includeRawBytes 默认 true（保持向后兼容）；用户主动点击时传 false 跳过 rawBytes 传输
+    include_raw = bool(body.get("includeRawBytes", True))
 
     def op(client: imaplib.IMAP4) -> dict[str, Any]:
         status, _ = client.select(_imap_quote_mailbox(mailbox))
@@ -3663,14 +3677,16 @@ def _imap_fetch_body(body: dict[str, Any]) -> dict[str, Any]:
         if body_text:
             body_text = body_text[:50000]
 
-        return {
+        result: dict[str, Any] = {
             "bodyText": body_text,
             "bodyHtml": body_html,
             "hasAttachments": _email_has_attachments(parsed),
             "attachments": _email_extract_attachments(parsed),
-            # Foxmail 风格：返回完整 RFC822 字节（base64），供 Rust 侧落盘为 .eml 文件
-            "rawBytes": base64.b64encode(raw_bytes).decode("ascii"),
         }
+        if include_raw:
+            # Foxmail 风格：返回完整 RFC822 字节（base64），供 Rust 侧落盘为 .eml 文件
+            result["rawBytes"] = base64.b64encode(raw_bytes).decode("ascii")
+        return result
 
     return imap_pool_manager.run(body, op)
 
@@ -4030,6 +4046,27 @@ async def handle_video_runtime_check(request: web.Request) -> web.Response:
         return web.json_response({"error": str(e)}, status=500)
 
 
+async def handle_url2note_extract(request: web.Request) -> web.Response:
+    """POST /api/url2note/extract - extract one public URL for a Markdown note."""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+    url = str(body.get("url") or "").strip() if isinstance(body, dict) else ""
+    if not url:
+        return web.json_response({"error": "url is required"}, status=400)
+    try:
+        source = await Url2NoteExtractor().extract(url)
+        return web.json_response(
+            {"title": source.title, "url": source.url, "kind": source.kind, "text": source.text}
+        )
+    except Url2NoteError as exc:
+        return web.json_response({"error": str(exc)}, status=422)
+    except Exception:
+        logger.exception("url2note extraction error")
+        return web.json_response({"error": "URL extraction failed"}, status=500)
+
+
 async def handle_video_runtime_download(request: web.Request) -> web.Response:
     """POST /api/video/runtime-download  body: {"component": "node|ffmpeg|chrome"}."""
     try:
@@ -4082,7 +4119,9 @@ async def handle_video_projects(request: web.Request) -> web.Response:
 
 
 async def handle_video_project_create(request: web.Request) -> web.Response:
-    """POST /api/video/project/create  body: {"name", "resolution", "fps", "quality"}."""
+    """POST /api/video/project/create  body: {"name", "resolution", "fps", "quality",
+    optional "narrationEnabled", "ttsProvider", "ttsVoice", "ttsRate"}.
+    """
     try:
         body = await request.json()
     except Exception:
@@ -4095,21 +4134,39 @@ async def handle_video_project_create(request: web.Request) -> web.Response:
         fps = int(body.get("fps", 30) or 30)
         quality = str(body.get("quality", "standard") or "standard")
 
+        # Optional narration/TTS config — defaults to edge TTS when narrationEnabled=true.
+        narration_enabled = bool(body.get("narrationEnabled", False))
+        tts_provider = str(body.get("ttsProvider", "") or "").strip()
+        tts_voice = str(body.get("ttsVoice", "") or "").strip()
+        tts_rate = str(body.get("ttsRate", "") or "").strip()
+        tts_api_base = str(body.get("ttsApiBase", "") or "").strip()
+        tts_api_key = str(body.get("ttsApiKey", "") or "").strip()
+        tts_model = str(body.get("ttsModel", "") or "").strip()
+
         project_dir = _video_projects_dir() / name
         if project_dir.exists():
             return web.json_response(
                 {"error": "project already exists"}, status=409
             )
         # Pre-build the standard directory layout.
-        for sub in ("scenes", "compositions", "assets", "renders", "output/preview"):
+        for sub in ("scenes", "compositions", "assets", "renders", "audio", "output/preview"):
             (project_dir / sub).mkdir(parents=True, exist_ok=True)
         (project_dir / ".generating").write_text("1", encoding="utf-8")
-        meta = {
+        meta: dict[str, object] = {
             "name": name,
             "resolution": resolution,
             "fps": fps,
             "quality": quality,
         }
+        if narration_enabled:
+            meta["narrationEnabled"] = True
+            meta["ttsProvider"] = tts_provider or "edge"
+            meta["ttsVoice"] = tts_voice or "zh-CN-XiaoyiNeural"
+            meta["ttsRate"] = tts_rate or "+0%"
+            if tts_provider == "custom":
+                meta["ttsApiBase"] = tts_api_base
+                meta["ttsApiKey"] = tts_api_key
+                meta["ttsModel"] = tts_model or "tts-1"
         (project_dir / "meta.json").write_text(
             _json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
         )
@@ -4220,236 +4277,941 @@ async def handle_video_project_save_chat_id(request: web.Request) -> web.Respons
         return web.json_response({"error": str(e)}, status=500)
 
 
-# ---------------------------------------------------------------------------
-# Flowchart project routes (/api/flowchart/*)
-# ---------------------------------------------------------------------------
+def _video_project_dir_or_404(name: str) -> tuple[Path | None, web.Response | None]:
+    """Validate project name and return (project_dir, None) or (None, error_response)."""
+    if not name or "/" in name or "\\" in name or ".." in name:
+        return None, web.json_response({"error": "invalid project name"}, status=400)
+    project_dir = _video_projects_dir() / name
+    if not project_dir.is_dir():
+        return None, web.json_response({"error": "project not found"}, status=404)
+    return project_dir, None
 
 
-def _flowchart_projects_dir() -> Path:
-    return get_workspace_path() / "flowchart_projects"
-
-
-def _get_flowchart_project_status(project_dir: Path) -> dict:
-    """Inspect a flowchart project directory and return its status."""
-    generating_marker = project_dir / ".generating"
-    diagram = project_dir / "diagram.drawio"
-    graph_json = project_dir / "graph.json"
-    output_dir = project_dir / "output"
-    has_svg = (output_dir / "diagram.svg").is_file()
-    has_png = (output_dir / "diagram.png").is_file()
-    has_export = has_svg or has_png
-    if has_export:
-        status = "done"
-    elif generating_marker.exists() and not diagram.exists():
-        status = "generating"
-    elif diagram.exists():
-        status = "done"
-    elif graph_json.exists():
-        status = "generating"
-    else:
-        status = "init"
-    return {
-        "status": status,
-        "hasDiagram": diagram.exists(),
-        "hasGraph": graph_json.exists(),
-        "hasExport": has_export,
-        "hasSvg": has_svg,
-        "hasPng": has_png,
-    }
-
-
-async def handle_flowchart_projects(request: web.Request) -> web.Response:
-    """GET /api/flowchart/projects - list all flowchart projects."""
+def _load_video_meta(project_dir: Path) -> dict:
+    """Load meta.json, return empty dict if missing."""
+    meta_file = project_dir / "meta.json"
+    if not meta_file.is_file():
+        return {}
     try:
-        projects_dir = _flowchart_projects_dir()
-        if not projects_dir.exists():
-            return web.json_response({"projects": []})
-        projects = []
-        for d in sorted(projects_dir.iterdir()):
-            if not d.is_dir() or d.name.startswith("_"):
-                continue
-            status_info = _get_flowchart_project_status(d)
-            stat = d.stat()
-            chat_id_file = d / ".chat_id"
-            chat_id = (
-                chat_id_file.read_text(encoding="utf-8").strip()
-                if chat_id_file.exists()
-                else None
+        return _json.loads(meta_file.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _save_video_meta(project_dir: Path, meta: dict) -> None:
+    """Save meta.json."""
+    (project_dir / "meta.json").write_text(
+        _json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+
+def _sync_storyboard(project_dir: Path, scenes: list[dict]) -> None:
+    """Write scenes to storyboard.md via the write_storyboard script logic."""
+    import importlib.util
+
+    skill_dir = Path(__file__).parent.parent / "skills" / "mona-video"
+    script = skill_dir / "scripts" / "write_storyboard.py"
+    spec = importlib.util.spec_from_file_location("write_storyboard", script)
+    if spec is None or spec.loader is None:
+        return
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    mod.write_storyboard(project_dir, scenes)
+
+
+async def handle_video_project_storyboard(request: web.Request) -> web.Response:
+    """GET /api/video/project/storyboard?name=  → parse storyboard.md into JSON."""
+    try:
+        name = str(request.query.get("name", "") or "").strip()
+        project_dir, err = _video_project_dir_or_404(name)
+        if err is not None:
+            return err
+        assert project_dir is not None
+
+        # Prefer meta.json scenes (source of truth); fallback to parsing storyboard.md
+        meta = _load_video_meta(project_dir)
+        scenes = meta.get("scenes")
+        if isinstance(scenes, list) and scenes:
+            return web.json_response({"ok": True, "scenes": scenes, "source": "meta"})
+
+        # Parse from storyboard.md and cache into meta.json
+        import importlib.util
+
+        skill_dir = Path(__file__).parent.parent / "skills" / "mona-video"
+        script = skill_dir / "scripts" / "parse_storyboard.py"
+        spec = importlib.util.spec_from_file_location("parse_storyboard", script)
+        if spec is None or spec.loader is None:
+            return web.json_response({"ok": False, "error": "parse script missing"})
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        scenes = mod.parse_storyboard(project_dir / "storyboard.md")
+        if scenes:
+            meta["scenes"] = scenes
+            meta.setdefault("phase", "storyboard")
+            _save_video_meta(project_dir, meta)
+        return web.json_response({"ok": True, "scenes": scenes, "source": "storyboard"})
+    except Exception as e:
+        logger.exception("video project storyboard error")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_video_project_scene_update(request: web.Request) -> web.Response:
+    """PUT /api/video/project/scene  body: {name, index, title?, duration?, visual?, animation?, narration?, assets?}."""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+    try:
+        name = str(body.get("name", "") or "").strip()
+        project_dir, err = _video_project_dir_or_404(name)
+        if err is not None:
+            return err
+        assert project_dir is not None
+        index = int(body.get("index", 0) or 0)
+        if index < 1:
+            return web.json_response({"error": "invalid index"}, status=400)
+
+        meta = _load_video_meta(project_dir)
+        scenes = meta.get("scenes") or []
+        if not scenes:
+            return web.json_response({"error": "no scenes; load storyboard first"}, status=409)
+        target = next((s for s in scenes if s.get("index") == index), None)
+        if target is None:
+            return web.json_response({"error": "scene not found"}, status=404)
+
+        if "title" in body:
+            target["title"] = str(body["title"] or "").strip()
+        if "duration" in body:
+            d = body["duration"]
+            if isinstance(d, (int, float)):
+                target["duration"] = int(d)
+                target["durationRaw"] = f"{int(d)}s"
+            elif isinstance(d, str):
+                target["durationRaw"] = d
+                import re
+
+                m = re.search(r"(\d+(?:\.\d+)?)", d)
+                target["duration"] = int(float(m.group(1))) if m else 0
+        if "visual" in body:
+            target["visual"] = str(body["visual"] or "")
+        if "animation" in body:
+            target["animation"] = str(body["animation"] or "")
+        if "narration" in body:
+            target["narration"] = str(body["narration"] or "")
+        if "assets" in body:
+            assets = body["assets"]
+            target["assets"] = assets if isinstance(assets, list) else []
+
+        meta["scenes"] = scenes
+        _save_video_meta(project_dir, meta)
+        _sync_storyboard(project_dir, scenes)
+        return web.json_response({"ok": True, "scene": target})
+    except Exception as e:
+        logger.exception("video scene update error")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_video_project_scene_delete(request: web.Request) -> web.Response:
+    """DELETE /api/video/project/scene?name=&index="""
+    try:
+        name = str(request.query.get("name", "") or "").strip()
+        project_dir, err = _video_project_dir_or_404(name)
+        if err is not None:
+            return err
+        assert project_dir is not None
+        index = int(request.query.get("index", 0) or 0)
+        if index < 1:
+            return web.json_response({"error": "invalid index"}, status=400)
+
+        meta = _load_video_meta(project_dir)
+        scenes = meta.get("scenes") or []
+        if not scenes:
+            return web.json_response({"error": "no scenes"}, status=409)
+        if len(scenes) <= 1:
+            return web.json_response({"error": "cannot delete the last scene"}, status=409)
+        scenes = [s for s in scenes if s.get("index") != index]
+        for i, s in enumerate(scenes, start=1):
+            s["index"] = i
+        meta["scenes"] = scenes
+        _save_video_meta(project_dir, meta)
+        _sync_storyboard(project_dir, scenes)
+        return web.json_response({"ok": True, "scenes": scenes})
+    except Exception as e:
+        logger.exception("video scene delete error")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_video_project_scene_add(request: web.Request) -> web.Response:
+    """POST /api/video/project/scene/add  body: {name, title?, duration?, visual?, animation?, narration?}."""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+    try:
+        name = str(body.get("name", "") or "").strip()
+        project_dir, err = _video_project_dir_or_404(name)
+        if err is not None:
+            return err
+        assert project_dir is not None
+
+        meta = _load_video_meta(project_dir)
+        scenes = meta.get("scenes") or []
+        new_index = (max((s.get("index", 0) for s in scenes), default=0)) + 1
+        new_scene = {
+            "index": new_index,
+            "title": str(body.get("title", "") or "").strip() or f"场景 {new_index}",
+            "duration": int(body.get("duration", 5) or 5),
+            "durationRaw": f"{int(body.get('duration', 5) or 5)}s",
+            "visual": str(body.get("visual", "") or ""),
+            "animation": str(body.get("animation", "") or ""),
+            "narration": str(body.get("narration", "") or ""),
+            "assets": [],
+        }
+        scenes.append(new_scene)
+        meta["scenes"] = scenes
+        _save_video_meta(project_dir, meta)
+        _sync_storyboard(project_dir, scenes)
+        return web.json_response({"ok": True, "scene": new_scene})
+    except Exception as e:
+        logger.exception("video scene add error")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_video_project_scene_reorder(request: web.Request) -> web.Response:
+    """POST /api/video/project/scene/reorder  body: {name, indices: [old_index, ...]}."""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+    try:
+        name = str(body.get("name", "") or "").strip()
+        project_dir, err = _video_project_dir_or_404(name)
+        if err is not None:
+            return err
+        assert project_dir is not None
+        indices = body.get("indices") or []
+        if not isinstance(indices, list) or not indices:
+            return web.json_response({"error": "indices must be non-empty list"}, status=400)
+
+        meta = _load_video_meta(project_dir)
+        scenes = meta.get("scenes") or []
+        if not scenes:
+            return web.json_response({"error": "no scenes"}, status=409)
+        if len(indices) != len(scenes):
+            return web.json_response(
+                {"error": f"indices length {len(indices)} != scenes count {len(scenes)}"},
+                status=400,
             )
-            projects.append({
-                "name": d.name,
-                "createdAt": stat.st_ctime,
-                "chatId": chat_id,
-                **status_info,
+
+        index_map = {s["index"]: s for s in scenes}
+        new_scenes: list[dict] = []
+        for new_pos, old_index in enumerate(indices, start=1):
+            s = index_map.get(int(old_index))
+            if s is None:
+                return web.json_response({"error": f"index {old_index} not found"}, status=404)
+            s["index"] = new_pos
+            new_scenes.append(s)
+        meta["scenes"] = new_scenes
+        _save_video_meta(project_dir, meta)
+        _sync_storyboard(project_dir, new_scenes)
+        return web.json_response({"ok": True, "scenes": new_scenes})
+    except Exception as e:
+        logger.exception("video scene reorder error")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_video_project_lock_storyboard(request: web.Request) -> web.Response:
+    """POST /api/video/project/lock-storyboard  body: {name}."""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+    try:
+        name = str(body.get("name", "") or "").strip()
+        project_dir, err = _video_project_dir_or_404(name)
+        if err is not None:
+            return err
+        assert project_dir is not None
+
+        meta = _load_video_meta(project_dir)
+        scenes = meta.get("scenes") or []
+        if not scenes:
+            return web.json_response({"error": "no scenes to lock"}, status=409)
+
+        # Write storyboard_lock.md (style lock for executor)
+        lock_content = "# Storyboard Lock\n\n"
+        lock_content += "Locked scenes (do not change without user approval):\n\n"
+        for s in scenes:
+            lock_content += f"- Scene {s['index']}: {s.get('title', '')} ({s.get('durationRaw', '')})\n"
+        (project_dir / "storyboard_lock.md").write_text(lock_content, encoding="utf-8")
+
+        meta["storyboardLocked"] = True
+        meta["phase"] = "producing"
+        _save_video_meta(project_dir, meta)
+        return web.json_response({"ok": True, "phase": "producing"})
+    except Exception as e:
+        logger.exception("video lock storyboard error")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_video_project_scene_narration(request: web.Request) -> web.Response:
+    """POST /api/video/project/scene/narration  body: {name, index, regenerate?}.
+
+    Synthesize TTS for a single scene's narration text. Returns the audio
+    bytes directly (audio/mpeg) so the frontend can play via <audio>.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+    try:
+        name = str(body.get("name", "") or "").strip()
+        project_dir, err = _video_project_dir_or_404(name)
+        if err is not None:
+            return err
+        assert project_dir is not None
+        index = int(body.get("index", 0) or 0)
+        if index < 1:
+            return web.json_response({"error": "invalid index"}, status=400)
+
+        meta = _load_video_meta(project_dir)
+        if not meta.get("narrationEnabled", False):
+            return web.json_response(
+                {"error": "narration is disabled for this project"}, status=409
+            )
+
+        scenes = meta.get("scenes") or []
+        target = next((s for s in scenes if s.get("index") == index), None)
+        if target is None:
+            return web.json_response({"error": "scene not found"}, status=404)
+
+        text = (target.get("narration") or "").strip()
+        if not text:
+            return web.json_response(
+                {"error": "scene has no narration text"}, status=409
+            )
+
+        # Resolve TTS provider
+        from mona.providers.tts import EdgeTTSProvider, get_tts_provider
+
+        provider_name = str(meta.get("ttsProvider") or "edge").strip() or "edge"
+        voice = str(meta.get("ttsVoice") or "").strip()
+        rate = str(meta.get("ttsRate") or "+0%").strip() or "+0%"
+
+        if provider_name == "edge":
+            provider = EdgeTTSProvider(
+                voice=voice or "zh-CN-XiaoyiNeural", rate=rate
+            )
+        elif provider_name == "custom":
+            api_base = str(meta.get("ttsApiBase") or "").strip()
+            api_key = str(meta.get("ttsApiKey") or "").strip()
+            model = str(meta.get("ttsModel") or "tts-1").strip() or "tts-1"
+            if not api_base or not api_key:
+                return web.json_response(
+                    {"error": "custom TTS requires ttsApiBase and ttsApiKey"},
+                    status=409,
+                )
+            provider = get_tts_provider(
+                "custom",
+                api_key=api_key,
+                api_base=api_base,
+                voice=voice,
+                model=model,
+                rate=rate,
+            )
+        else:
+            provider = get_tts_provider(provider_name, voice=voice)
+
+        # Synthesize to bytes
+        audio_bytes = await provider.synthesize_to_bytes(text, voice=voice)
+        if audio_bytes is None:
+            return web.json_response(
+                {"error": "TTS synthesis failed"}, status=502
+            )
+
+        # Optionally cache to audio/scene_NN.mp3
+        audio_dir = project_dir / "audio"
+        audio_dir.mkdir(parents=True, exist_ok=True)
+        cache_path = audio_dir / f"scene_{index:02d}.mp3"
+        try:
+            cache_path.write_bytes(audio_bytes)
+        except Exception:
+            pass  # Caching is best-effort
+
+        return web.Response(
+            body=audio_bytes,
+            content_type="audio/mpeg",
+            headers={
+                "Cache-Control": "no-cache",
+                "Content-Disposition": f'inline; filename="scene_{index:02d}.mp3"',
+            },
+        )
+    except Exception as e:
+        logger.exception("video scene narration error")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+def _video_skill_dir() -> Path:
+    return Path(__file__).parent.parent / "skills" / "mona-video"
+
+
+async def _generate_scene_html_via_llm(
+    project_dir: Path, scene: dict, meta: dict
+) -> str:
+    """Call LLM to generate HTML for a single scene. Returns HTML content."""
+    from mona.providers.factory import load_provider_snapshot
+
+    snapshot = load_provider_snapshot()
+    provider = snapshot.provider
+    model = snapshot.model
+
+    lock_path = project_dir / "storyboard_lock.md"
+    lock_content = (
+        lock_path.read_text(encoding="utf-8") if lock_path.is_file() else "(无风格锁定)"
+    )
+    resolution = str(meta.get("resolution") or "1920x1080@30fps")
+
+    system_msg = (
+        "你是视频场景 HTML 工程师。根据分镜描述和风格锁定，生成单个场景的 HTML+GSAP 动画。"
+        "只输出 HTML 内容，不要 markdown 代码块标记，不要任何解释说明。"
+    )
+    user_msg = (
+        f"## 场景信息\n"
+        f"- 编号: {scene.get('index', 1)}\n"
+        f"- 标题: {scene.get('title', '')}\n"
+        f"- 时长: {scene.get('duration', 5)} 秒\n"
+        f"- 画面描述: {scene.get('visual', '')}\n"
+        f"- 动画说明: {scene.get('animation', '')}\n"
+        f"- 旁白: {scene.get('narration', '')}\n"
+        f"- 素材: {', '.join(scene.get('assets', []) or [])}\n\n"
+        f"## 风格锁定\n{lock_content}\n\n"
+        f"## 分辨率\n{resolution}\n\n"
+        f"请生成 scenes/scene_{scene.get('index', 1):02d}.html 的完整内容。"
+    )
+
+    resp = await provider.chat_with_retry(
+        messages=[
+            {"role": "system", "content": system_msg},
+            {"role": "user", "content": user_msg},
+        ],
+        model=model,
+        max_tokens=4096,
+        temperature=0.4,
+    )
+    html = (resp.content or "").strip()
+    # Strip markdown fences if model wrapped output
+    if html.startswith("```"):
+        lines = html.splitlines()
+        if lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].startswith("```"):
+            lines = lines[:-1]
+        html = "\n".join(lines).strip()
+    return html
+
+
+async def handle_video_ai_scene_html(request: web.Request) -> web.Response:
+    """POST /api/video/ai/scene-html  body: {name, index}.
+
+    Generates HTML for a single scene via LLM, writes to scenes/scene_NN.html,
+    updates meta.json scene.htmlStatus. Returns the scene path.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+    try:
+        name = str(body.get("name", "") or "").strip()
+        project_dir, err = _video_project_dir_or_404(name)
+        if err is not None:
+            return err
+        assert project_dir is not None
+        index = int(body.get("index", 0) or 0)
+        if index < 1:
+            return web.json_response({"error": "invalid index"}, status=400)
+
+        meta = _load_video_meta(project_dir)
+        scenes = meta.get("scenes") or []
+        target = next((s for s in scenes if s.get("index") == index), None)
+        if target is None:
+            return web.json_response({"error": "scene not found"}, status=404)
+
+        # Mark as generating
+        target["htmlStatus"] = "generating"
+        _save_video_meta(project_dir, meta)
+
+        try:
+            html = await _generate_scene_html_via_llm(project_dir, target, meta)
+        except Exception as e:
+            target["htmlStatus"] = "pending"
+            _save_video_meta(project_dir, meta)
+            return web.json_response(
+                {"error": f"LLM generation failed: {e}"}, status=502
+            )
+
+        scenes_dir = project_dir / "scenes"
+        scenes_dir.mkdir(parents=True, exist_ok=True)
+        scene_path = scenes_dir / f"scene_{index:02d}.html"
+        scene_path.write_text(html, encoding="utf-8")
+
+        target["htmlStatus"] = "previewing"
+        target["htmlPath"] = f"scenes/scene_{index:02d}.html"
+        _save_video_meta(project_dir, meta)
+
+        return web.json_response({
+            "ok": True,
+            "scene": target,
+            "htmlPath": target["htmlPath"],
+        })
+    except Exception as e:
+        logger.exception("video ai scene html error")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_video_project_scene_preview(request: web.Request) -> web.Response:
+    """GET /api/video/project/scene/preview?name=&index=  → returns HTML content."""
+    try:
+        name = str(request.query.get("name", "") or "").strip()
+        project_dir, err = _video_project_dir_or_404(name)
+        if err is not None:
+            return err
+        assert project_dir is not None
+        index = int(request.query.get("index", 0) or 0)
+        if index < 1:
+            return web.json_response({"error": "invalid index"}, status=400)
+
+        scene_path = project_dir / "scenes" / f"scene_{index:02d}.html"
+        if not scene_path.is_file():
+            return web.json_response(
+                {"error": "scene HTML not generated yet", "needsGeneration": True},
+                status=404,
+            )
+        html = scene_path.read_text(encoding="utf-8")
+        return web.Response(
+            body=html.encode("utf-8"),
+            content_type="text/html",
+            charset="utf-8",
+        )
+    except Exception as e:
+        logger.exception("video scene preview error")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_video_project_scene_confirm(request: web.Request) -> web.Response:
+    """POST /api/video/project/scene/confirm  body: {name, index}.
+
+    Mark a scene as confirmed. If all scenes confirmed, update meta.phase to 'exportable'.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+    try:
+        name = str(body.get("name", "") or "").strip()
+        project_dir, err = _video_project_dir_or_404(name)
+        if err is not None:
+            return err
+        assert project_dir is not None
+        index = int(body.get("index", 0) or 0)
+        if index < 1:
+            return web.json_response({"error": "invalid index"}, status=400)
+
+        meta = _load_video_meta(project_dir)
+        scenes = meta.get("scenes") or []
+        target = next((s for s in scenes if s.get("index") == index), None)
+        if target is None:
+            return web.json_response({"error": "scene not found"}, status=404)
+
+        target["htmlStatus"] = "confirmed"
+        target["confirmedAt"] = datetime.now().isoformat()
+
+        all_confirmed = all(s.get("htmlStatus") == "confirmed" for s in scenes)
+        if all_confirmed:
+            meta["phase"] = "exportable"
+
+        _save_video_meta(project_dir, meta)
+        return web.json_response({
+            "ok": True,
+            "scene": target,
+            "allConfirmed": all_confirmed,
+            "phase": meta.get("phase"),
+        })
+    except Exception as e:
+        logger.exception("video scene confirm error")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_video_project_scene_regenerate(request: web.Request) -> web.Response:
+    """POST /api/video/project/scene/regenerate  body: {name, index}.
+
+    Reset scene htmlStatus to pending, then trigger LLM regeneration.
+    Effectively delegates to the scene-html AI endpoint.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+    try:
+        name = str(body.get("name", "") or "").strip()
+        project_dir, err = _video_project_dir_or_404(name)
+        if err is not None:
+            return err
+        assert project_dir is not None
+        index = int(body.get("index", 0) or 0)
+        if index < 1:
+            return web.json_response({"error": "invalid index"}, status=400)
+
+        meta = _load_video_meta(project_dir)
+        scenes = meta.get("scenes") or []
+        target = next((s for s in scenes if s.get("index") == index), None)
+        if target is None:
+            return web.json_response({"error": "scene not found"}, status=404)
+
+        # Reset status and regenerate
+        target["htmlStatus"] = "generating"
+        _save_video_meta(project_dir, meta)
+
+        try:
+            html = await _generate_scene_html_via_llm(project_dir, target, meta)
+        except Exception as e:
+            target["htmlStatus"] = "pending"
+            _save_video_meta(project_dir, meta)
+            return web.json_response(
+                {"error": f"LLM regeneration failed: {e}"}, status=502
+            )
+
+        scenes_dir = project_dir / "scenes"
+        scenes_dir.mkdir(parents=True, exist_ok=True)
+        scene_path = scenes_dir / f"scene_{index:02d}.html"
+        scene_path.write_text(html, encoding="utf-8")
+
+        target["htmlStatus"] = "previewing"
+        target["htmlPath"] = f"scenes/scene_{index:02d}.html"
+        _save_video_meta(project_dir, meta)
+
+        return web.json_response({"ok": True, "scene": target})
+    except Exception as e:
+        logger.exception("video scene regenerate error")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def _rewrite_scene_via_llm(
+    project_dir: Path, scene: dict, requirement: str, meta: dict
+) -> dict:
+    """Call LLM to rewrite a single scene's storyboard fields. Returns new scene dict."""
+    from mona.providers.factory import load_provider_snapshot
+
+    snapshot = load_provider_snapshot()
+    provider = snapshot.provider
+    model = snapshot.model
+
+    system_msg = (
+        "你是视频分镜师。根据用户需求重写单个场景的分镜内容。"
+        "只输出 JSON，不要 markdown 标记，不要解释。"
+        "JSON 格式: {\"title\": \"\", \"duration\": 5, \"visual\": \"\", \"animation\": \"\", \"narration\": \"\"}"
+    )
+    user_msg = (
+        f"## 当前场景\n"
+        f"- 编号: {scene.get('index', 1)}\n"
+        f"- 标题: {scene.get('title', '')}\n"
+        f"- 时长: {scene.get('duration', 5)} 秒\n"
+        f"- 画面: {scene.get('visual', '')}\n"
+        f"- 动画: {scene.get('animation', '')}\n"
+        f"- 旁白: {scene.get('narration', '')}\n\n"
+        f"## 用户重写需求\n{requirement}\n\n"
+        f"请输出重写后的场景 JSON（保留 index，其他字段可改）。"
+    )
+
+    resp = await provider.chat_with_retry(
+        messages=[
+            {"role": "system", "content": system_msg},
+            {"role": "user", "content": user_msg},
+        ],
+        model=model,
+        max_tokens=1024,
+        temperature=0.5,
+    )
+    text = (resp.content or "").strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].startswith("```"):
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+
+    try:
+        new_fields = _json.loads(text)
+    except Exception as e:
+        raise ValueError(f"LLM did not return valid JSON: {e}")
+
+    new_scene = dict(scene)
+    for k in ("title", "duration", "visual", "animation", "narration"):
+        if k in new_fields:
+            v = new_fields[k]
+            if k == "duration":
+                new_scene[k] = int(v)
+                new_scene["durationRaw"] = f"{int(v)}s"
+            else:
+                new_scene[k] = str(v or "")
+    return new_scene
+
+
+async def handle_video_ai_scene_rewrite(request: web.Request) -> web.Response:
+    """POST /api/video/ai/scene-rewrite  body: {name, index, requirement}.
+
+    LLM rewrites a single scene's storyboard fields. Updates meta.json + storyboard.md.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+    try:
+        name = str(body.get("name", "") or "").strip()
+        project_dir, err = _video_project_dir_or_404(name)
+        if err is not None:
+            return err
+        assert project_dir is not None
+        index = int(body.get("index", 0) or 0)
+        if index < 1:
+            return web.json_response({"error": "invalid index"}, status=400)
+        requirement = str(body.get("requirement", "") or "").strip()
+        if not requirement:
+            return web.json_response({"error": "requirement is empty"}, status=400)
+
+        meta = _load_video_meta(project_dir)
+        scenes = meta.get("scenes") or []
+        target = next((s for s in scenes if s.get("index") == index), None)
+        if target is None:
+            return web.json_response({"error": "scene not found"}, status=404)
+
+        new_scene = await _rewrite_scene_via_llm(
+            project_dir, target, requirement, meta
+        )
+        # Replace in scenes list
+        for i, s in enumerate(scenes):
+            if s.get("index") == index:
+                scenes[i] = new_scene
+                break
+        meta["scenes"] = scenes
+        _save_video_meta(project_dir, meta)
+        _sync_storyboard(project_dir, scenes)
+
+        return web.json_response({"ok": True, "scene": new_scene})
+    except Exception as e:
+        logger.exception("video ai scene rewrite error")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+# ---------------------------------------------------------------------------
+# Video export (Phase 3)
+# ---------------------------------------------------------------------------
+
+# In-memory tracking of active render tasks (keyed by project name).
+_video_render_tasks: dict[str, asyncio.Task] = {}
+
+
+def _read_render_status(project_dir: Path) -> dict:
+    """Read .render_status.json. Returns idle state if missing."""
+    status_file = project_dir / ".render_status.json"
+    if not status_file.is_file():
+        return {"stage": "idle", "progress": 0}
+    try:
+        return _json.loads(status_file.read_text(encoding="utf-8"))
+    except Exception:
+        return {"stage": "idle", "progress": 0}
+
+
+def _write_render_status(project_dir: Path, status: dict) -> None:
+    """Write .render_status.json atomically."""
+    status_file = project_dir / ".render_status.json"
+    status_file.write_text(
+        _json.dumps(status, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+
+async def _run_render_task(project_dir: Path, fps: int, quality: str) -> None:
+    """Background task that runs render.py and updates status."""
+    name = project_dir.name
+    try:
+        _write_render_status(project_dir, {
+            "stage": "rendering",
+            "progress": 5,
+            "message": "启动 Chrome headless...",
+            "started_at": datetime.now().isoformat(),
+        })
+
+        # Run render.py in a thread pool (it uses asyncio.run internally)
+        import importlib.util
+
+        skill_dir = Path(__file__).parent.parent / "skills" / "mona-video"
+        script = skill_dir / "scripts" / "render.py"
+        spec = importlib.util.spec_from_file_location("render", script)
+        if spec is None or spec.loader is None:
+            raise RuntimeError("render.py module spec load failed")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        _write_render_status(project_dir, {
+            "stage": "rendering",
+            "progress": 15,
+            "message": "逐帧截图中...",
+            "started_at": datetime.now().isoformat(),
+        })
+
+        # render_project is a sync wrapper around render_project_async.
+        # Run it in a thread to avoid blocking the event loop.
+        result = await asyncio.to_thread(
+            mod.render_project, str(project_dir), fps, quality
+        )
+
+        if result.get("ok"):
+            _write_render_status(project_dir, {
+                "stage": "done",
+                "progress": 100,
+                "message": "渲染完成",
+                "output": result.get("output"),
+                "duration": result.get("duration"),
+                "fps": result.get("fps"),
+                "resolution": result.get("resolution"),
+                "total_frames": result.get("total_frames"),
+                "audio": result.get("audio"),
+                "finished_at": datetime.now().isoformat(),
             })
-        return web.json_response({"projects": projects})
+            # Update meta.json phase
+            meta = _load_video_meta(project_dir)
+            meta["phase"] = "done"
+            meta["hasVideo"] = True
+            _save_video_meta(project_dir, meta)
+        else:
+            _write_render_status(project_dir, {
+                "stage": "error",
+                "progress": 0,
+                "message": result.get("error", "渲染失败"),
+                "need_download": result.get("need_download", False),
+                "finished_at": datetime.now().isoformat(),
+            })
     except Exception as e:
-        logger.exception("flowchart projects error")
-        return web.json_response({"error": str(e)}, status=500)
+        logger.exception("video render task error")
+        _write_render_status(project_dir, {
+            "stage": "error",
+            "progress": 0,
+            "message": str(e)[:500],
+            "finished_at": datetime.now().isoformat(),
+        })
+    finally:
+        _video_render_tasks.pop(name, None)
 
 
-async def handle_flowchart_project_create(request: web.Request) -> web.Response:
-    """POST /api/flowchart/project/create  body: {"name"}."""
+async def handle_video_project_export(request: web.Request) -> web.Response:
+    """POST /api/video/project/export  body: {name, fps?, quality?}.
+
+    Triggers MP4 rendering in background. Returns immediately with status.
+    """
     try:
         body = await request.json()
     except Exception:
         return web.json_response({"error": "Invalid JSON body"}, status=400)
     try:
         name = str(body.get("name", "") or "").strip()
-        if not name or "/" in name or "\\" in name or ".." in name:
-            return web.json_response({"error": "invalid project name"}, status=400)
-        project_dir = _flowchart_projects_dir() / name
-        if project_dir.exists():
+        project_dir, err = _video_project_dir_or_404(name)
+        if err is not None:
+            return err
+        assert project_dir is not None
+
+        # Reject if a render is already running for this project
+        existing = _video_render_tasks.get(name)
+        if existing is not None and not existing.done():
             return web.json_response(
-                {"error": "project already exists"}, status=409
+                {"error": "render already in progress", "status": _read_render_status(project_dir)},
+                status=409,
             )
-        (project_dir / "output").mkdir(parents=True, exist_ok=True)
-        (project_dir / ".generating").write_text("1", encoding="utf-8")
-        return web.json_response({"ok": True, "name": name})
+
+        meta = _load_video_meta(project_dir)
+        fps = int(body.get("fps", 0) or 0)
+        quality = str(body.get("quality", "standard") or "standard")
+        if quality not in ("draft", "standard", "high"):
+            quality = "standard"
+        # Use meta fps as fallback
+        if fps <= 0:
+            fps = int(meta.get("fps", 30) or 30)
+
+        # Clear any previous render status
+        _write_render_status(project_dir, {
+            "stage": "rendering",
+            "progress": 0,
+            "message": "准备渲染...",
+            "started_at": datetime.now().isoformat(),
+        })
+
+        task = asyncio.create_task(_run_render_task(project_dir, fps, quality))
+        _video_render_tasks[name] = task
+
+        return web.json_response({
+            "ok": True,
+            "stage": "rendering",
+            "message": "渲染已启动",
+        })
     except Exception as e:
-        logger.exception("flowchart project create error")
+        logger.exception("video export error")
         return web.json_response({"error": str(e)}, status=500)
 
 
-async def handle_flowchart_project(request: web.Request) -> web.Response:
-    """GET /api/flowchart/project?name=<n> - get a single project's status."""
+async def handle_video_project_export_status(request: web.Request) -> web.Response:
+    """GET /api/video/project/export-status?name=  → current render status."""
     try:
-        name = request.query.get("name") or ""
-        if not name or "/" in name or "\\" in name or ".." in name:
-            return web.json_response({"error": "invalid project name"}, status=400)
-        project_dir = _flowchart_projects_dir() / name
-        if not project_dir.is_dir():
-            return web.json_response({"status": "not_found"}, status=404)
-        status_info = _get_flowchart_project_status(project_dir)
-        chat_id_file = project_dir / ".chat_id"
-        chat_id = (
-            chat_id_file.read_text(encoding="utf-8").strip()
-            if chat_id_file.exists()
-            else None
-        )
-        return web.json_response({"name": name, "chatId": chat_id, **status_info})
+        name = str(request.query.get("name", "") or "").strip()
+        project_dir, err = _video_project_dir_or_404(name)
+        if err is not None:
+            return err
+        assert project_dir is not None
+        status = _read_render_status(project_dir)
+        # Include output.mp4 existence flag
+        output_mp4 = project_dir / "renders" / "output.mp4"
+        status["hasVideo"] = output_mp4.is_file()
+        return web.json_response({"ok": True, **status})
     except Exception as e:
-        logger.exception("flowchart project error")
+        logger.exception("video export status error")
         return web.json_response({"error": str(e)}, status=500)
 
 
-async def handle_flowchart_project_xml(request: web.Request) -> web.Response:
-    """GET /api/flowchart/project-xml?name=<n> - read diagram.drawio content."""
+async def handle_video_project_preview_full(request: web.Request) -> web.Response:
+    """GET /api/video/project/preview-full?name=  → returns index.html content.
+
+    If index.html does not exist, attempts to generate it from scenes/.
+    """
     try:
-        name = request.query.get("name") or ""
-        if not name or "/" in name or "\\" in name or ".." in name:
-            return web.json_response({"error": "invalid project name"}, status=400)
-        project_dir = _flowchart_projects_dir() / name
-        diagram = project_dir / "diagram.drawio"
-        if not diagram.is_file():
-            return web.json_response({"error": "diagram not found"}, status=404)
-        xml = diagram.read_text(encoding="utf-8")
-        return web.json_response({"name": name, "xml": xml})
+        name = str(request.query.get("name", "") or "").strip()
+        project_dir, err = _video_project_dir_or_404(name)
+        if err is not None:
+            return err
+        assert project_dir is not None
+
+        index_html = project_dir / "index.html"
+        if not index_html.is_file():
+            # Try to generate via merge_scenes.py
+            import importlib.util
+
+            skill_dir = Path(__file__).parent.parent / "skills" / "mona-video"
+            script = skill_dir / "scripts" / "merge_scenes.py"
+            if script.is_file():
+                spec = importlib.util.spec_from_file_location("merge_scenes", script)
+                if spec is not None and spec.loader is not None:
+                    mod = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(mod)
+                    mod.main(str(project_dir))
+            if not index_html.is_file():
+                return web.json_response(
+                    {"error": "index.html not found and no scenes to merge"},
+                    status=404,
+                )
+
+        content = index_html.read_text(encoding="utf-8")
+        return web.Response(body=content, content_type="text/html")
     except Exception as e:
-        logger.exception("flowchart project xml error")
+        logger.exception("video preview full error")
         return web.json_response({"error": str(e)}, status=500)
 
-
-async def handle_flowchart_project_save(request: web.Request) -> web.Response:
-    """POST /api/flowchart/project-save  body: {"name", "xml"}."""
-    try:
-        body = await request.json()
-    except Exception:
-        return web.json_response({"error": "Invalid JSON body"}, status=400)
-    try:
-        name = str(body.get("name", "") or "").strip()
-        if not name or "/" in name or "\\" in name or ".." in name:
-            return web.json_response({"error": "invalid project name"}, status=400)
-        project_dir = _flowchart_projects_dir() / name
-        if not project_dir.is_dir():
-            return web.json_response({"error": "project not found"}, status=404)
-        xml = str(body.get("xml", "") or "")
-        (project_dir / "diagram.drawio").write_text(xml, encoding="utf-8")
-        # Saving user edits means generation is complete.
-        (project_dir / ".generating").unlink(missing_ok=True)
-        return web.json_response({"ok": True})
-    except Exception as e:
-        logger.exception("flowchart project save error")
-        return web.json_response({"error": str(e)}, status=500)
-
-
-async def handle_flowchart_project_export(request: web.Request) -> web.Response:
-    """GET /api/flowchart/project-export?name=<n>&format=<svg|png>."""
-    try:
-        name = request.query.get("name") or ""
-        fmt = (request.query.get("format") or "svg").lower()
-        if not name or "/" in name or "\\" in name or ".." in name:
-            return web.json_response({"error": "invalid project name"}, status=400)
-        if fmt not in {"svg", "png"}:
-            return web.json_response(
-                {"error": "format must be svg or png"}, status=400
-            )
-        project_dir = _flowchart_projects_dir() / name
-        export_file = project_dir / "output" / f"diagram.{fmt}"
-        if not export_file.is_file():
-            return web.json_response(
-                {"error": "export file not found"}, status=404
-            )
-        content = export_file.read_bytes()
-        content_type = (
-            "image/svg+xml" if fmt == "svg" else "image/png"
-        )
-        return web.Response(body=content, content_type=content_type)
-    except Exception as e:
-        logger.exception("flowchart project export error")
-        return web.json_response({"error": str(e)}, status=500)
-
-
-async def handle_flowchart_project_save_chat_id(
-    request: web.Request,
-) -> web.Response:
-    """POST /api/flowchart/project-save-chat-id  body: {"name", "chatId"}."""
-    try:
-        body = await request.json()
-    except Exception:
-        return web.json_response({"error": "Invalid JSON body"}, status=400)
-    try:
-        name = str(body.get("name", "") or "").strip()
-        if not name or "/" in name or "\\" in name or ".." in name:
-            return web.json_response({"error": "invalid project name"}, status=400)
-        project_dir = _flowchart_projects_dir() / name
-        if not project_dir.is_dir():
-            return web.json_response({"error": "project not found"}, status=404)
-        chat_id = str(body.get("chatId", "") or "")
-        (project_dir / ".chat_id").write_text(chat_id, encoding="utf-8")
-        return web.json_response({"ok": True})
-    except Exception as e:
-        logger.exception("flowchart save chat id error")
-        return web.json_response({"error": str(e)}, status=500)
-
-
-async def handle_flowchart_runtime_check(request: web.Request) -> web.Response:
-    """GET /api/flowchart/runtime-check - detect draw.io webapp availability."""
-    try:
-        from mona.api.flowchart_runtime import get_flowchart_runtime
-
-        result = get_flowchart_runtime().check()
-        return web.json_response(result)
-    except Exception as e:
-        logger.exception("flowchart runtime-check error")
-        return web.json_response({"error": str(e)}, status=500)
-
-
-async def handle_flowchart_runtime_download(request: web.Request) -> web.Response:
-    """POST /api/flowchart/runtime-download - download draw.io webapp."""
-    try:
-        from mona.api.flowchart_runtime import get_flowchart_runtime
-
-        result = await get_flowchart_runtime().ensure_runtime()
-        return web.json_response(result)
-    except Exception as e:
-        logger.exception("flowchart runtime-download error")
-        return web.json_response({"error": str(e)}, status=500)
-
-
-# ---------------------------------------------------------------------------
-# CORS middleware (allows browser-based clients like the ESP32 simulator)
-# ---------------------------------------------------------------------------
 
 @web.middleware
 async def _cors_middleware(request: web.Request, handler: Callable) -> web.StreamResponse:
@@ -4497,22 +5259,25 @@ def create_app(
     app.router.add_get("/health", handle_health)
     app.router.add_post("/shutdown", handle_shutdown)
     app.router.add_post("/api/tauri/invoke", handle_tauri_invoke)
+    app.router.add_post("/api/system/plan", handle_system_plan)
+    app.router.add_post("/api/system/diagnose", handle_system_diagnose)
 
-    # KB routes
-    app.router.add_get("/api/kb/projects", handle_kb_list_projects)
-    app.router.add_post("/api/kb/projects", handle_kb_create_project)
-    app.router.add_post("/api/kb/{id}/rename", handle_kb_rename_project)
-    app.router.add_get("/api/kb/{id}/files", handle_kb_list_files)
-    app.router.add_post("/api/kb/{id}/import", handle_kb_import_files)
-    app.router.add_delete("/api/kb/{id}/files/{path:.*}", handle_kb_delete_file)
-    app.router.add_get("/api/kb/{id}/wiki", handle_kb_list_wiki)
-    app.router.add_get("/api/kb/{id}/wiki/{path:.*}", handle_kb_get_wiki_page)
-    app.router.add_post("/api/kb/{id}/wiki/update/{path:.*}", handle_kb_update_wiki_page)
-    app.router.add_get("/api/kb/{id}/graph", handle_kb_graph)
-    app.router.add_get("/api/kb/{id}/search", handle_kb_search)
-    app.router.add_get("/api/kb/{id}/reviews", handle_kb_get_reviews)
-    app.router.add_post("/api/kb/{id}/reviews", handle_kb_save_reviews)
-    app.router.add_get("/api/kb/{id}/lint", handle_kb_lint)
+    # Materials routes (资料库：用户上传文档 → 提取文本 → AI 编译 wiki)
+    app.router.add_get("/api/materials/files", handle_materials_list_files)
+    app.router.add_post("/api/materials/directory", handle_materials_create_directory)
+    app.router.add_delete("/api/materials/files/{path:.*}", handle_materials_delete)
+    app.router.add_post("/api/materials/move", handle_materials_move)
+    app.router.add_post("/api/materials/extract", handle_materials_extract)
+    app.router.add_get("/api/materials/text/{path:.*}", handle_materials_get_text)
+    app.router.add_get("/api/materials/raw/{path:.*}", handle_materials_get_raw)
+    app.router.add_get("/api/materials/raw-binary/{path:.*}", handle_materials_get_raw_binary)
+    app.router.add_get("/api/materials/wiki", handle_materials_list_wiki)
+    app.router.add_get("/api/materials/wiki/{path:.*}", handle_materials_get_wiki_page)
+    app.router.add_post("/api/materials/wiki/write", handle_materials_write_wiki_page)
+    app.router.add_delete("/api/materials/wiki/{path:.*}", handle_materials_delete_wiki_page)
+    app.router.add_get("/api/materials/search", handle_materials_search)
+    app.router.add_get("/api/materials/status", handle_materials_status)
+    app.router.add_get("/api/materials/llm-config", handle_materials_llm_config)
 
     # Hoard routes (Agent URL memory: browser star sync)
     app.router.add_post("/api/hoard", handle_hoard_add)
@@ -4590,6 +5355,7 @@ def create_app(
     # Video project routes
     app.router.add_get("/api/video/runtime-check", handle_video_runtime_check)
     app.router.add_post("/api/video/runtime-download", handle_video_runtime_download)
+    app.router.add_post("/api/url2note/extract", handle_url2note_extract)
     app.router.add_get("/api/video/projects", handle_video_projects)
     app.router.add_post("/api/video/project/create", handle_video_project_create)
     app.router.add_get("/api/video/project", handle_video_project)
@@ -4597,34 +5363,41 @@ def create_app(
     app.router.add_post(
         "/api/video/project-save-chat-id", handle_video_project_save_chat_id
     )
-
-    # Flowchart project routes
-    app.router.add_get("/api/flowchart/projects", handle_flowchart_projects)
-    app.router.add_post("/api/flowchart/project/create", handle_flowchart_project_create)
-    app.router.add_get("/api/flowchart/project", handle_flowchart_project)
-    app.router.add_get("/api/flowchart/project-xml", handle_flowchart_project_xml)
-    app.router.add_post("/api/flowchart/project-save", handle_flowchart_project_save)
     app.router.add_get(
-        "/api/flowchart/project-export", handle_flowchart_project_export
+        "/api/video/project/storyboard", handle_video_project_storyboard
+    )
+    app.router.add_put("/api/video/project/scene", handle_video_project_scene_update)
+    app.router.add_delete(
+        "/api/video/project/scene", handle_video_project_scene_delete
+    )
+    app.router.add_post("/api/video/project/scene/add", handle_video_project_scene_add)
+    app.router.add_post(
+        "/api/video/project/scene/reorder", handle_video_project_scene_reorder
     )
     app.router.add_post(
-        "/api/flowchart/project-save-chat-id",
-        handle_flowchart_project_save_chat_id,
-    )
-    app.router.add_get(
-        "/api/flowchart/runtime-check", handle_flowchart_runtime_check
+        "/api/video/project/lock-storyboard", handle_video_project_lock_storyboard
     )
     app.router.add_post(
-        "/api/flowchart/runtime-download", handle_flowchart_runtime_download
+        "/api/video/project/scene/narration", handle_video_project_scene_narration
     )
-
-    # draw.io webapp static files (served at /drawio/*)
-    # 优先使用用户下载的 ~/.mona/runtime/drawio/,回退打包的 mona/static/drawio/
-    from mona.api.flowchart_runtime import get_flowchart_runtime
-
-    _drawio_dir = get_flowchart_runtime().get_drawio_path()
-    if _drawio_dir and _drawio_dir.is_dir():
-        app.router.add_static("/drawio", str(_drawio_dir), show_index=True)
+    app.router.add_post("/api/video/ai/scene-html", handle_video_ai_scene_html)
+    app.router.add_get(
+        "/api/video/project/scene/preview", handle_video_project_scene_preview
+    )
+    app.router.add_post(
+        "/api/video/project/scene/confirm", handle_video_project_scene_confirm
+    )
+    app.router.add_post(
+        "/api/video/project/scene/regenerate", handle_video_project_scene_regenerate
+    )
+    app.router.add_post("/api/video/ai/scene-rewrite", handle_video_ai_scene_rewrite)
+    app.router.add_post("/api/video/project/export", handle_video_project_export)
+    app.router.add_get(
+        "/api/video/project/export-status", handle_video_project_export_status
+    )
+    app.router.add_get(
+        "/api/video/project/preview-full", handle_video_project_preview_full
+    )
 
     # 设置 IDLE 管理器的事件循环
     _idle_manager.set_loop(asyncio.get_event_loop())

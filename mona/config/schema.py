@@ -309,16 +309,6 @@ class NotesToolsConfig(Base):
     allow_create: bool = True  # controls notes_create and notes_save_image
 
 
-class EmbeddingToolConfig(Base):
-    """Global embedding model configuration for KB / notes-kb vector indexing."""
-
-    enabled: bool = False
-    endpoint: str = ""
-    api_key: str = ""
-    model: str = ""
-    output_dimensionality: int | None = None
-
-
 class TerminalToolConfig(Base):
     enable: bool = True
     exec_mode: TerminalExecMode = TerminalExecMode.AUTO
@@ -404,7 +394,6 @@ class ToolsConfig(Base):
         default_factory=lambda: _lazy_default("mona.email_intel.config", "EmailIntelConfig"),
     )
     notes_tools: NotesToolsConfig = Field(default_factory=NotesToolsConfig)
-    embedding: EmbeddingToolConfig = Field(default_factory=EmbeddingToolConfig)
     restrict_to_workspace: bool = False  # restrict all tool access to workspace directory
     mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
     ssrf_whitelist: list[str] = Field(default_factory=list)  # CIDR ranges to exempt from SSRF blocking (e.g. ["100.64.0.0/10"] for Tailscale)

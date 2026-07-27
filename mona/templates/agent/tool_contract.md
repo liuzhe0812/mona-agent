@@ -12,6 +12,13 @@ documents the general tool contract and non-obvious usage patterns.
 - After meaningful changes, verify with the smallest reliable check: re-read changed state, run targeted tests, or inspect command output.
 - Respect safety and workspace-boundary errors as real limits, not obstacles to bypass.
 
+### Tool availability vs. tool existence
+
+- The tool list shown to you each turn is the **complete and authoritative** set of tools you have. Any tool not in the list does not exist for this turn — do not invent tool names or claim to have called a tool that was not offered.
+- Conversely, a tool call that returns an error string does **not** mean the tool is missing. Tools can fail for transient reasons (network, parameter, environment, missing UI context). Read the error message: it tells you what to do next.
+- An error prefixed with `tool_unavailable:` means the tool is registered but cannot run in the current context. This is a transient state, not a missing capability. Follow the guidance in the error message (e.g. ask the user to open the relevant panel, or fall back to a different tool).
+- Never tell the user "I don't have this tool" or "the tool does not exist" just because a single call failed. Either retry with corrected parameters, follow the error's guidance, or use a different tool. Only state a tool is unavailable when it is genuinely not in your tool list.
+
 ## Discovery and Reading
 
 - Use `find_files` or `list_dir` to locate workspace paths before `read_file` when a path is uncertain.
@@ -40,6 +47,7 @@ documents the general tool contract and non-obvious usage patterns.
 - For long-running or interactive commands, pass `yield_time_ms`; if the process keeps running, continue with `write_stdin`.
 - Use `write_stdin` to poll, provide stdin, close stdin, wait for expected output with `wait_for`, or terminate an existing exec session.
 - Use `list_exec_sessions` to recover active session IDs after context shifts.
+- **Delivering files created by `exec`**: when a shell command creates a new user-facing file (e.g. via `officecli`, python scripts, exporters, or any tool that writes to disk — `.pptx`/`.xlsx`/`.docx`/`.pdf`/`.html`/`.png`/`.csv`/`.json` and similar deliverables), you MUST call `deliver_file` afterwards. Without `deliver_file`, the file will not appear in the workspace panel and the user cannot preview or open it. Skip `deliver_file` for temporary or intermediate files (build artifacts, caches, intermediate outputs).
 
 ## Remote Terminal and SSH Sessions
 
@@ -49,6 +57,7 @@ documents the general tool contract and non-obvious usage patterns.
 - Commands are risk-classified: dangerous commands (e.g. `rm -rf /`, `mkfs`, `dd`) always require user approval; safe commands (e.g. `ls`, `cat`, `df`) may execute directly depending on configuration; unknown commands default to requiring approval.
 - Commands execute in the user's visible terminal, so the user can see AI actions in real time.
 - `terminal_exec` operates on already-connected sessions; it does not create new SSH connections. The user must have an active terminal session open.
+- **Visibility**: `terminal_exec`, `terminal_output`, and `terminal_upload` only appear in your tool list when the user is currently viewing an active terminal session. If they are absent from your tool list this turn, the user has not opened a terminal panel. In that case, either ask the user to open the terminal panel, or fall back to the `exec` tool for shell commands that do not need a remote SSH session.
 
 ## Web and External Information
 

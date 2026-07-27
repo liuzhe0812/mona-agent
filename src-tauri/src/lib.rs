@@ -8,11 +8,13 @@ mod ipc_bridge;
 mod license;
 mod notes;
 mod notes_links;
+mod materials;
 mod notification_window;
 mod python;
 mod quick_ask;
 mod schedule_notifier;
 mod settings;
+mod system;
 mod terminal;
 mod tray;
 mod updater;
@@ -22,9 +24,55 @@ use settings::AppSettings;
 use std::sync::{Arc, Mutex};
 use tauri::webview::{DownloadEvent, WebviewWindowBuilder};
 use tauri::{Emitter, Listener, Manager, WebviewUrl};
+use tauri::utils::config::Color;
 use tauri_plugin_global_shortcut::ShortcutState;
 
 const GATEWAY_START_TIMEOUT_SECS: u64 = 90;
+
+#[cfg(test)]
+mod browser_ipc_tests {
+    #[test]
+    fn browser_uses_tauri_managed_child_webviews() {
+        let browser = include_str!("browser/mod.rs");
+        let runtime = include_str!("lib.rs");
+
+        assert!(browser.contains("WebviewBuilder::new"));
+        assert!(!browser.contains("wry::WebViewBuilder"));
+        assert!(!runtime.contains(&["tauri_plugin_shell", "::init()"].concat()));
+        assert!(!runtime.contains(&[".invoke", "_system("].concat()));
+    }
+
+    #[test]
+    fn browser_popups_are_owned_by_the_main_window() {
+        for popup in [
+            include_str!("browser/downloads.rs"),
+            include_str!("browser/suggestions.rs"),
+        ] {
+            assert!(popup.contains(".parent(&main)"));
+            assert!(!popup.contains(".always_on_top(true)"));
+        }
+    }
+
+    #[test]
+    fn browser_popups_are_shown_when_first_created() {
+        for popup in [
+            include_str!("browser/downloads.rs"),
+            include_str!("browser/suggestions.rs"),
+        ] {
+            assert!(popup.contains(".visible(false)"));
+            assert!(popup.contains("window.show()"));
+        }
+    }
+
+    #[test]
+    fn browser_popup_capabilities_use_window_labels() {
+        let capabilities = include_str!("../capabilities/default.json");
+
+        assert!(capabilities.contains("browser-address-suggestions"));
+        assert!(capabilities.contains("browser-downloads"));
+        assert!(!capabilities.contains("\"browser-suggestions\""));
+    }
+}
 
 /// 存储首次启动时待打开的 md 文件路径（前端就绪后拉取）
 #[derive(Default)]
@@ -306,6 +354,24 @@ async fn write_mona_model_config(
 }
 
 #[tauri::command]
+async fn write_mona_image_gen_config(
+    provider: String,
+    model: String,
+    enabled: Option<bool>,
+) -> Result<(), String> {
+    settings::write_mona_image_gen_config(&provider, &model, enabled)
+}
+
+#[tauri::command]
+async fn write_mona_video_gen_config(
+    provider: String,
+    model: String,
+    enabled: Option<bool>,
+) -> Result<(), String> {
+    settings::write_mona_video_gen_config(&provider, &model, enabled)
+}
+
+#[tauri::command]
 async fn read_email_schedule_config() -> Result<serde_json::Value, String> {
     Ok(settings::read_email_schedule_config())
 }
@@ -328,6 +394,7 @@ fn emit_md_file_open(app_handle: &tauri::AppHandle, file_path: &str) {
     let _ = app_handle.emit_to("main", "md-file-open", file_path);
     if let Some(main_window) = app_handle.get_webview_window("main") {
         let _ = main_window.show();
+        let _ = main_window.unminimize();
         let _ = main_window.set_focus();
     }
 }
@@ -341,16 +408,27 @@ fn get_pending_md_files(state: tauri::State<PendingMdFiles>) -> Vec<String> {
     result
 }
 
+/// 前端主题切换时调用，同步窗口背景色，避免拖动调整大小时露出对比色残影。
+/// 浅色主题传 (255,255,255,255)，深色主题传 (26,26,26,255) 匹配 body 背景。
+#[tauri::command]
+fn set_window_background_color(
+    app: tauri::AppHandle,
+    r: u8,
+    g: u8,
+    b: u8,
+    a: u8,
+) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("main") {
+        window
+            .set_background_color(Some(Color(r, g, b, a)))
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // 在 WebView2 启动前设置 CDP 调试端口（全局，所有 WebView 共享）
-    #[cfg(windows)]
-    {
-        std::env::set_var(
-            "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
-            "--remote-debugging-port=9300",
-        );
-    }
+    browser::configure_webview2_cdp();
 
     let gateway_state = GatewayState::new();
     let terminal_state = terminal::TerminalState::new();
@@ -362,10 +440,13 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_log::Builder::new().build())
-        .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_opener::init())
+        .plugin(
+            tauri_plugin_opener::Builder::new()
+                .open_js_links_on_click(false)
+                .build(),
+        )
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
@@ -404,9 +485,11 @@ pub fn run() {
         .manage(contacts_state)
         .manage(quick_ask::QuickAskShortcutState::default())
         .manage(browser::BrowserState::new())
+        .manage(browser::suggestions::AddressSuggestionWindowState::new())
         .manage(PendingMdFiles::default())
         .manage(tray::PendingMailNavigation::default())
         .manage(notification_window::NotificationWindowState::new())
+        .manage(system::SystemState::new())
         .invoke_handler(tauri::generate_handler![
             get_settings,
             update_settings,
@@ -414,14 +497,18 @@ pub fn run() {
             stop_gateway,
             gateway_status,
             diagnose_gateway,
+            gateway::read_gateway_log,
             local_http_request,
             open_in_browser,
             mona_config_status,
             write_mona_provider_config,
             write_mona_model_config,
+            write_mona_image_gen_config,
+            write_mona_video_gen_config,
             read_email_schedule_config,
             write_email_schedule_config,
             get_pending_md_files,
+            set_window_background_color,
             quick_ask::quick_ask_hide,
             quick_ask::quick_ask_show,
             quick_ask::quick_ask_focus_chat,
@@ -431,6 +518,7 @@ pub fn run() {
             notes::notes_save_state,
             notes::notes_export_temp,
             notes::notes_create_from_chat,
+            notes::notes_edit_note,
             notes::notes_read_note_content,
             notes::notes_search,
             notes::notes_search_all,
@@ -442,11 +530,16 @@ pub fn run() {
             notes::get_agent_search_scope,
             notes::set_agent_search_scope,
             notes_links::notes_links_get_graph,
+            notes_links::notes_links_save_positions,
             notes_links::notes_links_get_backlinks,
             notes_links::notes_links_get_mentions,
             notes_links::notes_links_rename_sync,
             notes_links::notes_links_search_mentions,
             notes_links::notes_moc_list,
+            materials::materials_import_files,
+            materials::materials_list_dir,
+            materials::materials_ensure_initialized,
+            materials::materials_get_wiki_dir,
             hoard::hoard_add,
             hoard::hoard_update,
             hoard::hoard_delete,
@@ -472,6 +565,7 @@ pub fn run() {
             terminal::commands::sftp_mkdir,
             terminal::commands::sftp_remove,
             terminal::commands::sftp_rename,
+            terminal::commands::sftp_paste,
             terminal::commands::sftp_stat,
             terminal::commands::sftp_canonicalize,
             terminal::commands::sftp_download,
@@ -492,6 +586,7 @@ pub fn run() {
             terminal::commands::local_home_dir,
             terminal::commands::local_desktop_dir,
             terminal::commands::sftp_batch_upload,
+            terminal::commands::expand_upload_paths_command,
             terminal::commands::sftp_batch_cancel,
             terminal::commands::sftp_batch_pause,
             terminal::commands::sftp_batch_resume,
@@ -608,6 +703,7 @@ pub fn run() {
             contacts::contact_test_eas,
             license::get_machine_id,
             license::check_license,
+            license::license_has_access,
             license::import_license,
             license::get_pricing,
             license::auth_register,
@@ -616,12 +712,19 @@ pub fn run() {
             license::auth_logout,
             license::auth_forgot_password,
             license::auth_reset_password,
+            license::auth_change_password,
             license::get_auth_status,
             license::bind_device,
             license::upload_image,
             license::list_notifications,
             license::get_unread_notification_count,
             license::mark_notification_read,
+            license::create_subscription,
+            license::poll_payment_status,
+            license::get_subscription_info,
+            license::cancel_auto_renew,
+            license::list_renewals,
+            license::open_external_url,
             updater::check_for_updates,
             updater::perform_update,
             updater::get_current_version,
@@ -632,6 +735,8 @@ pub fn run() {
             browser::commands::browser_list_tabs,
             browser::commands::browser_get_cdp_port,
             browser::commands::browser_set_ai_status,
+            browser::commands::browser_set_tab_bounds,
+            browser::commands::browser_hide_tabs_except,
             browser::commands::browser_navigate_tab,
             browser::commands::browser_go_back,
             browser::commands::browser_go_forward,
@@ -648,6 +753,7 @@ pub fn run() {
             browser::commands::browser_get_zoom,
             browser::commands::browser_print_page,
             browser::commands::browser_eval_script,
+            browser::commands::browser_eval_script_result,
             browser::commands::browser_get_cookies,
             browser::commands::browser_clear_cookies,
             browser::commands::browser_set_ad_block,
@@ -657,6 +763,13 @@ pub fn run() {
             browser::commands::browser_open_devtools,
             browser::commands::browser_set_dark_mode,
             browser::commands::browser_get_page_info,
+            browser::suggestions::browser_show_address_suggestions,
+            browser::suggestions::show_browser_address_suggestions_window,
+            browser::suggestions::browser_hide_address_suggestions,
+            browser::suggestions::browser_select_address_suggestion,
+            browser::downloads::browser_show_downloads,
+            browser::downloads::browser_toggle_downloads,
+            browser::downloads::browser_hide_downloads,
             browser::storage::browser_add_bookmark,
             browser::storage::browser_remove_bookmark,
             browser::storage::browser_update_bookmark,
@@ -676,19 +789,67 @@ pub fn run() {
             notification_window::show_notification_window,
             notification_window::close_notification_window,
             notification_window::emit_notification_action,
+            system::system_get_overview,
+            system::system_get_history,
+            system::scan_storage,
+            system::clean_storage,
+            system::software::system_winget_status,
+            system::software::system_list_software,
+            system::software::system_check_updates,
+            system::software::system_upgrade_software,
+            system::software::system_uninstall_software,
+            system::software::system_list_windows_apps,
+            system::software::system_remove_windows_app,
+            system::startup::system_list_startup_items,
+            system::startup::system_acknowledge_startup_items,
+            system::startup::system_toggle_startup_item,
+            system::startup::system_batch_toggle_startup_items,
+            system::startup::system_get_boot_history,
+            system::startup::system_get_startup_changes,
+            system::maintenance::system_get_maintenance_history,
+            system::diagnostics::system_get_configuration_audit,
+            system::diagnostics::system_apply_configuration_item,
+            system::diagnostics::system_check_pending_reboot,
+            system::diagnostics::system_check_component_health,
+            system::diagnostics::system_check_driver_issues,
+            system::diagnostics::system_check_power_events,
+            system::diagnostics::system_check_network_configuration,
+            system::diagnostics::system_check_recovery_status,
+            system::network::system_list_dns_presets,
+            system::network::system_get_dns_status,
+            system::network::system_set_dns,
+            system::network::system_reset_dns,
+            system::network::system_flush_dns,
+            system::network::system_list_hosts_entries,
+            system::network::system_edit_hosts,
+            system::network::system_restore_hosts_backup,
+            system::performance::system_list_performance_items,
+            system::performance::system_apply_performance_item,
+            system::context_menu::system_list_context_menu_items,
+            system::context_menu::system_apply_context_menu_item,
+            system::process_control::system_list_blocked_processes,
+            system::process_control::system_block_process,
+            system::process_control::system_unblock_process,
+            system::process_control::system_find_file_locks,
+            system::process_control::system_terminate_lock_holder,
+            system::repair::system_check_system_integrity,
+            system::repair::system_repair_item,
+            system::defender::system_get_defender_status,
+            system::defender::system_disable_defender,
+            system::defender::system_enable_defender,
         ])
         .setup(move |app| {
             // 创建主窗口（在 builder 上注册 on_download，让 video 原生下载按钮生效）
+            // 禁用 Tauri 原生拖放处理器，启用 HTML5 drag-and-drop API（标签页拖拽排序等）
             let _main_window = WebviewWindowBuilder::new(
-                app,
-                "main",
-                WebviewUrl::App("index.html".into()),
+                app, "main", WebviewUrl::App("index.html".into()),
             )
             .title("Mona")
             .inner_size(1200.0, 800.0)
             .min_inner_size(800.0, 600.0)
             .center()
             .decorations(false)
+            .background_color(Color(255, 255, 255, 255))
             .disable_drag_drop_handler()
             .on_download(|webview, event| {
                 match event {
@@ -725,7 +886,7 @@ pub fn run() {
                         }
                     }
                     DownloadEvent::Finished { path, success, .. } => {
-                        log::info!("[download] finished: {:?} success={}", path, success);
+                        log::debug!("[download] finished: {:?} success={}", path, success);
                     }
                     _ => {}
                 }
@@ -736,6 +897,45 @@ pub fn run() {
             // 设置高分辨率窗口图标，确保任务栏在高 DPI 下清晰
             if let Some(win) = app.get_webview_window("main") {
                 let _ = win.set_icon(tray::load_icon());
+
+                // 在主窗口上注册 WebView2 PermissionRequested 处理器，
+                // 自动批准麦克风权限（用于笔记模块的录音转写功能），
+                // 避免弹出 WebView2 默认的权限请求弹窗，其他权限保持默认行为。
+                #[cfg(target_os = "windows")]
+                {
+                    use tauri::webview::Webview;
+                    let _ = win.with_webview(|wv| {
+                        use webview2_com::PermissionRequestedEventHandler;
+                        use webview2_com::Microsoft::Web::WebView2::Win32::{
+                            ICoreWebView2PermissionRequestedEventArgs, COREWEBVIEW2_PERMISSION_KIND,
+                            COREWEBVIEW2_PERMISSION_STATE,
+                        };
+                        unsafe {
+                            let core = wv.controller().CoreWebView2().ok();
+                            if let Some(core) = core {
+                                let handler = PermissionRequestedEventHandler::create(
+                                    Box::new(
+                                        move |_sender, args: Option<ICoreWebView2PermissionRequestedEventArgs>| {
+                                            if let Some(args) = args {
+                                                let mut kind = COREWEBVIEW2_PERMISSION_KIND::default();
+                                                let _ = args.PermissionKind(&mut kind);
+                                                // COREWEBVIEW2_PERMISSION_KIND_MICROPHONE = 1
+                                                if kind.0 == 1 {
+                                                    let _ = args.SetState(
+                                                        COREWEBVIEW2_PERMISSION_STATE(1), // ALLOW
+                                                    );
+                                                }
+                                            }
+                                            Ok(())
+                                        },
+                                    ),
+                                );
+                                let mut token: i64 = 0;
+                                let _ = core.add_PermissionRequested(&handler, &mut token);
+                            }
+                        }
+                    });
+                }
             }
 
             tray::setup_tray(app)?;
@@ -752,10 +952,31 @@ pub fn run() {
                 });
             }
 
+            // 启动系统采样后台线程：每 10 秒写入 CPU/内存/网络指标到 SQLite，60 分钟窗口环形置换
+            {
+                let system_state = app.state::<system::SystemState>().inner().clone();
+                system::start_background_sampler(system_state.0);
+            }
+
             // Register the existing notes vault's assets directory with the
             // asset protocol scope so images can be rendered via convertFileSrc.
             if let Some(vault) = notes::read_vault_path_for_setup() {
                 notes::register_vault_assets_scope(app.handle(), &vault);
+            }
+
+            // One-time cleanup: remove the legacy ~/MonaKB/ directory left by
+            // the deleted KB module. A marker file prevents repeated attempts.
+            {
+                let marker = settings::app_data_dir().join(".monakb-cleanup-done");
+                if !marker.exists() {
+                    if let Some(home) = dirs::home_dir() {
+                        let legacy_kb = home.join("MonaKB");
+                        if legacy_kb.is_dir() {
+                            let _ = std::fs::remove_dir_all(&legacy_kb);
+                        }
+                    }
+                    let _ = std::fs::write(&marker, "1");
+                }
             }
 
             let app_handle_for_file = app.handle().clone();
@@ -833,7 +1054,7 @@ pub fn run() {
                         }
                     });
                 } else {
-                    log::info!("No provider configured, skipping gateway auto-start");
+                    log::debug!("No provider configured, skipping gateway auto-start");
                 }
             }
 
@@ -865,7 +1086,7 @@ pub fn run() {
                         }
                     }
                     Err(e) => {
-                        log::info!("Update check failed: {}", e);
+                        log::warn!("Update check failed: {}", e);
                     }
                 }
             });
@@ -876,9 +1097,11 @@ pub fn run() {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                     let current_settings = settings::load_settings();
                     if current_settings.run_in_background {
+                        log::debug!("[window] CloseRequested: prevent_close + hide (run_in_background=true)");
                         api.prevent_close();
                         let _ = window.hide();
                     } else {
+                        log::debug!("[window] CloseRequested: closing app (run_in_background=false)");
                         let _ = gateway_state_for_close.stop();
                     }
                 }

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import math
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +23,7 @@ from loguru import logger
 from pydantic import Field
 
 from mona.agent.tools.base import Tool, tool_parameters
-from mona.agent.tools.path_utils import resolve_workspace_path
+from mona.agent.tools.path_utils import get_current_workspace, resolve_workspace_path
 from mona.agent.tools.schema import (
     ArraySchema,
     IntegerSchema,
@@ -30,8 +31,8 @@ from mona.agent.tools.schema import (
     StringSchema,
     tool_parameters_schema,
 )
-from mona.config.paths import get_media_dir
 from mona.config.schema import Base
+from mona.utils.helpers import ensure_dir
 
 _CHART_TYPES = ("bar", "line", "pie", "area")
 _DEFAULT_WIDTH = 720
@@ -448,6 +449,11 @@ class ChartTool(Tool):
         self.config = config or ChartToolConfig()
         self._restrict = restrict_to_workspace or self.config.restrict_to_workspace
 
+    def _active_workspace(self) -> Path:
+        """Return the active session workspace (contextvar) or configured fallback."""
+        ws = get_current_workspace(self._workspace)
+        return ws if ws is not None else self._workspace
+
     @property
     def read_only(self) -> bool:
         return False
@@ -500,23 +506,28 @@ class ChartTool(Tool):
             logger.exception("Chart rendering failed")
             return f"Error rendering chart: {type(e).__name__}: {e}"
 
-        # Resolve output path
+        # Resolve output path against the active session workspace so charts
+        # land in ``workspace/output/`` for normal sessions instead of the
+        # global media directory.
+        active_ws = self._active_workspace()
         if output:
             if self._restrict:
                 try:
-                    out_path = resolve_workspace_path(output, self._workspace, self._workspace)
+                    out_path = resolve_workspace_path(output, active_ws, active_ws)
                 except (OSError, PermissionError, ValueError) as e:
                     return f"Error: output path not allowed: {e}"
             else:
                 p = Path(output).expanduser()
-                out_path = p if p.is_absolute() else self._workspace / p
+                out_path = p if p.is_absolute() else active_ws / p
             # Ensure .svg extension
             if out_path.suffix.lower() != ".svg":
                 out_path = out_path.with_suffix(".svg")
         else:
-            media_dir = get_media_dir()
+            # Default: <active_ws>/generated/YYYY-MM-DD/<safe_title>.svg
+            day = datetime.now().strftime("%Y-%m-%d")
+            out_dir = ensure_dir(active_ws / "generated" / day)
             safe_title = re.sub(r"[^A-Za-z0-9_-]", "_", title or "chart")[:40] or "chart"
-            out_path = media_dir / f"{safe_title}.svg"
+            out_path = out_dir / f"{safe_title}.svg"
 
         try:
             out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -525,7 +536,7 @@ class ChartTool(Tool):
             return f"Error saving chart: {e}"
 
         try:
-            display_path = out_path.relative_to(self._workspace).as_posix()
+            display_path = out_path.relative_to(active_ws).as_posix()
         except ValueError:
             display_path = str(out_path)
 

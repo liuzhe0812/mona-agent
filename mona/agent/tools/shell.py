@@ -1,4 +1,4 @@
-﻿"""Shell execution tool."""
+"""Shell execution tool."""
 
 from __future__ import annotations
 
@@ -25,6 +25,7 @@ from mona.agent.tools.exec_session import (
     clamp_session_int,
     format_session_poll,
 )
+from mona.agent.tools.path_utils import get_current_workspace
 from mona.agent.tools.sandbox import wrap_command
 from mona.agent.tools.schema import BooleanSchema, IntegerSchema, StringSchema, tool_parameters_schema
 from mona.config.paths import get_media_dir
@@ -219,12 +220,29 @@ class ExecTool(Tool):
             "For long-running or interactive commands, pass yield_time_ms; "
             "if the command keeps running, exec returns a session_id that can "
             "be polled or written to with write_stdin. Output is truncated at "
-            "10 000 chars; timeout defaults to 60s."
+            "10 000 chars; timeout defaults to 60s. "
+            "If the command creates a new user-facing file (e.g. via officecli, "
+            "python scripts, exporters, or any tool that writes to disk), you "
+            "MUST call deliver_file afterwards so the file shows up in the "
+            "workspace panel for the user. This applies to .pptx/.xlsx/.docx/"
+            ".pdf/.html/.png/.csv/.json and similar deliverables — do NOT "
+            "call deliver_file for temporary or intermediate files."
         )
 
     @property
     def exclusive(self) -> bool:
         return True
+
+    def _active_workspace(self) -> Path | None:
+        """Return the active session workspace (contextvar), or configured fallback.
+
+        Mirrors ``_FsTool._resolve``: the configured ``working_dir`` is only a
+        fallback. The per-task contextvar (set by ``AgentLoop`` via
+        ``set_current_workspace``) takes priority so exec follows the active
+        session workspace rather than the statically-bound one.
+        """
+        fallback = Path(self.working_dir) if self.working_dir else None
+        return get_current_workspace(fallback)
 
     async def execute(
         self, command: str | None = None, cmd: str | None = None,
@@ -332,17 +350,19 @@ class ExecTool(Tool):
         shell: str | None = None,
         login: bool | None = None,
     ) -> _PreparedCommand | str:
-        cwd = working_dir or self.working_dir or os.getcwd()
+        active_ws = self._active_workspace()
+        cwd = working_dir or (str(active_ws) if active_ws else None) or os.getcwd()
 
-        # Prevent an LLM-supplied working_dir from escaping the configured
+        # Prevent an LLM-supplied working_dir from escaping the active
         # workspace when restrict_to_workspace is enabled (#2826). Without
         # this, a caller can pass working_dir="/etc" and then all absolute
         # paths under /etc would pass the _guard_command check that anchors
-        # on cwd.
-        if self.restrict_to_workspace and self.working_dir:
+        # on cwd. The boundary follows the active session workspace
+        # (contextvar) rather than the statically-bound working_dir.
+        if self.restrict_to_workspace and active_ws:
             try:
                 requested = Path(cwd).expanduser().resolve()
-                workspace_root = Path(self.working_dir).expanduser().resolve()
+                workspace_root = active_ws.expanduser().resolve()
             except Exception:
                 return (
                     "Error: working_dir could not be resolved"
@@ -365,7 +385,7 @@ class ExecTool(Tool):
                     self.sandbox,
                 )
             else:
-                workspace = self.working_dir or cwd
+                workspace = str(active_ws) if active_ws else cwd
                 command = wrap_command(self.sandbox, command, workspace, cwd)
                 cwd = str(Path(workspace).resolve())
 

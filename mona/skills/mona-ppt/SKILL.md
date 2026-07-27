@@ -17,7 +17,12 @@ metadata:
 
 Pipeline dispatcher for Mona PPT. This file owns execution discipline, step gates, and reference routing. Detailed instructions live in references and are loaded only when the step needs them.
 
-Pipeline: source -> project -> optional template -> Strategist -> optional image acquisition -> Executor SVG -> quality gate -> `svg_to_pptx.py` export.
+Two tracks exist:
+
+- **Track A (default)**: source -> project -> optional template -> Strategist -> optional image acquisition -> Executor SVG -> quality gate -> `svg_to_pptx.py` export.
+- **Track B (template edit)**: user supplies a `.pptx` template file to fill in directly -> `references/template-edit-mode.md` (officecli track, no SVG pipeline).
+
+When the prompt says "模版编辑模式" or names `references/template-edit-mode.md`, follow Track B only and ignore every Track A step below.
 
 ## Core Contract
 
@@ -45,6 +50,7 @@ Pipeline: source -> project -> optional template -> Strategist -> optional image
 
 | Moment | Load |
 |---|---|
+| Template edit mode (Track B, user .pptx template to fill) | `references/template-edit-mode.md` |
 | Step 1-2 source conversion / project setup | `references/source-project.md` |
 | Step 3 explicit template directory path(s) only | `references/template-selection.md` |
 | Custom PPTX template selected | `references/native-pptx-template-mode.md` |

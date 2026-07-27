@@ -1,7 +1,7 @@
 """Video runtime dependency detection and download manager.
 
-Detects Node.js 22+, FFmpeg, and Chrome; lazily downloads missing
-components to ``~/.mona/runtime/<component>/``.
+Detects Node.js 22+, FFmpeg, Chrome, and yt-dlp; lazily downloads missing
+components to Mona's per-user resources directory.
 
 Windows is the primary target: Node and FFmpeg ship as zip archives that
 are extracted in place. Chrome is provisioned through
@@ -31,8 +31,11 @@ if TYPE_CHECKING:
 
 __all__ = ("VideoRuntime",)
 
-# Runtime root: ~/.mona/runtime/
-RUNTIME_ROOT = Path.home() / ".mona" / "runtime"
+# User-managed component root. Do not use the installation directory: it may
+# be read-only for normal Windows users and is replaced by application updates.
+RESOURCE_ROOT = Path(
+    os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local")
+) / "Mona" / "resources"
 
 # Fixed download sources (Windows builds).
 NODE_URL = "https://nodejs.org/dist/v22.11.0/node-v22.11.0-win-x64.zip"
@@ -40,6 +43,7 @@ FFMPEG_URL = (
     "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/"
     "ffmpeg-master-latest-win64-gpl.zip"
 )
+YTDLP_URL = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
 
 NODE_MIN_MAJOR = 22
 
@@ -79,10 +83,10 @@ def _run_sync(cmd: list[str], timeout: float = 10.0) -> tuple[int, str, str]:
 
 
 class VideoRuntime:
-    """Detect and provision Node.js / FFmpeg / Chrome for video rendering."""
+    """Detect and provision video-related executable dependencies."""
 
     def __init__(self, runtime_root: Path | None = None) -> None:
-        self.root = runtime_root or RUNTIME_ROOT
+        self.root = runtime_root or RESOURCE_ROOT
 
     # ------------------------------------------------------------------
     # Path helpers
@@ -112,6 +116,16 @@ class VideoRuntime:
         for exe in ff_dir.rglob("ffmpeg"):
             if exe.is_file() and exe.suffix == "":
                 return exe
+        return None
+
+    def _cached_ytdlp_exe(self) -> Path | None:
+        ytdlp_dir = self._component_dir("yt-dlp")
+        if not ytdlp_dir.exists():
+            return None
+        for name in ("yt-dlp.exe", "yt-dlp"):
+            for executable in ytdlp_dir.rglob(name):
+                if executable.is_file():
+                    return executable
         return None
 
     def _cached_chrome_exe(self) -> Path | None:
@@ -172,6 +186,13 @@ class VideoRuntime:
         cached = self._cached_ffmpeg_exe()
         return str(cached) if cached else None
 
+    def get_ytdlp_path(self) -> str | None:
+        """Return the cached yt-dlp executable, or a system installation."""
+        cached = self._cached_ytdlp_exe()
+        if cached:
+            return str(cached)
+        return shutil.which("yt-dlp")
+
     def get_chrome_path(self) -> str | None:
         """Return a Chromium-based browser executable path."""
         for cand in self._system_chrome_candidates():
@@ -205,6 +226,9 @@ class VideoRuntime:
         ff_exe = self._cached_ffmpeg_exe()
         if ff_exe:
             paths.append(str(ff_exe.parent))
+        ytdlp_exe = self._cached_ytdlp_exe()
+        if ytdlp_exe:
+            paths.append(str(ytdlp_exe.parent))
         if paths:
             env["PATH"] = os.pathsep.join(paths + [env.get("PATH", "")])
         return env
@@ -250,6 +274,17 @@ class VideoRuntime:
         first_line = out.splitlines()[0] if out else ""
         return ComponentStatus(ok=True, version=first_line, path=ff_path)
 
+    def _check_ytdlp(self) -> ComponentStatus:
+        ytdlp_path = self.get_ytdlp_path()
+        if not ytdlp_path:
+            return ComponentStatus(ok=False, error="yt-dlp not found")
+        code, out, err = _run_sync([ytdlp_path, "--version"])
+        if code != 0:
+            return ComponentStatus(
+                ok=False, path=ytdlp_path, error=err or "yt-dlp --version failed"
+            )
+        return ComponentStatus(ok=True, version=out.strip(), path=ytdlp_path)
+
     def _check_chrome(self) -> ComponentStatus:
         ch_path = self.get_chrome_path()
         if not ch_path:
@@ -273,14 +308,15 @@ class VideoRuntime:
         return ComponentStatus(ok=True, version=version, path=ch_path)
 
     def check_all(self) -> dict:
-        """Detect all three dependencies.
+        """Detect available video dependencies.
 
-        Returns ``{node: {...}, ffmpeg: {...}, chrome: {...}}``.
+        Returns ``{node: {...}, ffmpeg: {...}, chrome: {...}, yt_dlp: {...}}``.
         """
         return {
             "node": self._check_node().model_dump(),
             "ffmpeg": self._check_ffmpeg().model_dump(),
             "chrome": self._check_chrome().model_dump(),
+            "yt_dlp": self._check_ytdlp().model_dump(),
         }
 
     # ------------------------------------------------------------------
@@ -292,10 +328,10 @@ class VideoRuntime:
         component: str,
         progress_cb: "Callable[[int, int], None] | None" = None,
     ) -> dict:
-        """Download and extract a component into ``~/.mona/runtime/<component>/``.
+        """Download and extract a component into Mona's resources directory.
 
         Args:
-            component: One of ``"node"``, ``"ffmpeg"``, ``"chrome"``.
+            component: One of ``"node"``, ``"ffmpeg"``, ``"chrome"``, ``"yt_dlp"``.
             progress_cb: Optional callback ``(downloaded_bytes, total_bytes)``.
 
         Returns a dict with ``ok`` and either ``path`` or ``error``.
@@ -306,6 +342,8 @@ class VideoRuntime:
             return await self._ensure_ffmpeg(progress_cb)
         if component == "chrome":
             return await self._ensure_chrome(progress_cb)
+        if component == "yt_dlp":
+            return await self._ensure_ytdlp(progress_cb)
         return {"ok": False, "error": f"Unknown component: {component}"}
 
     async def _ensure_node(
@@ -343,6 +381,23 @@ class VideoRuntime:
             return {"ok": False, "error": "ffmpeg executable not found after extraction"}
         logger.info("FFmpeg provisioned at {}", exe)
         return {"ok": True, "path": str(exe)}
+
+    async def _ensure_ytdlp(
+        self, progress_cb: "Callable[[int, int], None] | None"
+    ) -> dict:
+        existing = self.get_ytdlp_path()
+        if existing:
+            return {"ok": True, "path": existing, "cached": True}
+        dest = self._component_dir("yt-dlp")
+        dest.mkdir(parents=True, exist_ok=True)
+        executable = dest / ("yt-dlp.exe" if sys.platform == "win32" else "yt-dlp")
+        await self._download(YTDLP_URL, executable, progress_cb)
+        if sys.platform != "win32":
+            executable.chmod(executable.stat().st_mode | 0o111)
+        if not executable.is_file():
+            return {"ok": False, "error": "yt-dlp executable not found after download"}
+        logger.info("yt-dlp provisioned at {}", executable)
+        return {"ok": True, "path": str(executable)}
 
     async def _ensure_chrome(
         self, progress_cb: "Callable[[int, int], None] | None"
@@ -406,7 +461,7 @@ class VideoRuntime:
                         downloaded += len(chunk)
                         if progress_cb:
                             progress_cb(downloaded, total)
-        logger.info("Downloaded {} -> {}", url, dest)
+        logger.debug("Downloaded {} -> {}", url, dest)
 
     @staticmethod
     def _extract_zip(zip_path: Path, dest: Path) -> None:

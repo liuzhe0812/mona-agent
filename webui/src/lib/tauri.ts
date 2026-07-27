@@ -103,7 +103,7 @@ async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T
   return tauriInvoke<T>(cmd, args);
 }
 
-async function invokeWithTimeout<T>(
+export async function invokeWithTimeout<T>(
   cmd: string,
   args: Record<string, unknown>,
   ms: number,
@@ -174,6 +174,16 @@ export async function stopGateway(): Promise<void> {
   return invoke<void>("stop_gateway");
 }
 
+export interface GatewayLog {
+  path: string;
+  exists: boolean;
+  tail: string;
+}
+
+export async function readGatewayLog(maxLines?: number): Promise<GatewayLog> {
+  return invoke<GatewayLog>("read_gateway_log", { maxLines: maxLines ?? null });
+}
+
 export async function writeMonaProviderConfig(
   provider: string,
   apiKey: string,
@@ -214,6 +224,19 @@ export async function writeEmailScheduleConfig(
   config: EmailScheduleConfig,
 ): Promise<void> {
   return invoke<void>("write_email_schedule_config", { schedule: config });
+}
+
+/**
+ * 同步主窗口背景色到当前主题，避免拖动调整大小时露出对比色残影。
+ * 浅色主题传 (255,255,255,255)，深色主题传 (26,26,26,255)。
+ */
+export async function setWindowBackgroundColor(
+  r: number,
+  g: number,
+  b: number,
+  a: number,
+): Promise<void> {
+  return invoke<void>("set_window_background_color", { r, g, b, a });
 }
 
 export async function loadDesktopNotesState(): Promise<unknown | null> {
@@ -269,6 +292,8 @@ export interface LinkGraph {
   nodes: LinkNode[];
   edges: LinkEdge[];
   lastScanAt: string;
+  /** Saved layout positions (note id -> [x, y]) for instant view restore. */
+  positions?: Record<string, [number, number]>;
 }
 
 export async function searchNotebookNotes(
@@ -328,6 +353,13 @@ export async function setAgentSearchScope(scope: AgentSearchScope): Promise<void
 export async function getNotesLinkGraph(): Promise<LinkGraph | null> {
   if (!isTauri()) return null;
   return invoke<LinkGraph>("notes_links_get_graph");
+}
+
+export async function saveNotesLinkPositions(
+  positions: Record<string, [number, number]>,
+): Promise<void> {
+  if (!isTauri()) return;
+  return invoke<void>("notes_links_save_positions", { positions });
 }
 
 export async function getNoteBacklinks(noteId: string): Promise<unknown[]> {
@@ -396,6 +428,28 @@ export async function revealItemInDir(path: string): Promise<void> {
   if (!isTauri()) return;
   const { revealItemInDir } = await import("@tauri-apps/plugin-opener");
   await revealItemInDir(path);
+}
+
+/** Open an external http(s) URL in the user's default web browser.
+ *  Falls back to ``window.open`` outside Tauri (browser/dev mode). */
+export async function openExternalUrl(url: string): Promise<void> {
+  if (!isTauri()) {
+    window.open(url, "_blank", "noopener,noreferrer");
+    return;
+  }
+  try {
+    const { openUrl } = await import("@tauri-apps/plugin-opener");
+    await openUrl(url);
+  } catch (err) {
+    console.warn("[tauri] opener.openUrl failed, falling back to shell.open:", err);
+    try {
+      const { open } = await import("@tauri-apps/plugin-shell");
+      await open(url);
+    } catch (err2) {
+      console.error("[tauri] shell.open also failed:", err2);
+      window.open(url, "_blank", "noopener,noreferrer");
+    }
+  }
 }
 
 export async function saveMarkdownFile(title: string, content: string): Promise<boolean> {
@@ -524,6 +578,10 @@ export interface NotificationPayloadInput {
   autoCloseMs?: number;
   /** 点击卡片本身触发的 action */
   clickAction?: string;
+  /** 点击通知时携带的结构化数据，随 notification-action 事件一并 emit。
+   *  例如邮件通知携带 { type: "mail", accountId, uid, folder, subject }，
+   *  让监听方打开独立预览窗口而非主窗口。 */
+  clickData?: unknown;
 }
 
 export async function showNotification(
@@ -534,4 +592,42 @@ export async function showNotification(
 
 export async function closeNotificationWindow(label: string): Promise<void> {
   return invoke<void>("close_notification_window", { label });
+}
+
+// ---------------------------------------------------------------------------
+// Materials (资料库 Tauri 命令封装)
+// ---------------------------------------------------------------------------
+
+export interface MaterialsEntry {
+  name: string;
+  path: string;
+  kind: "directory" | "file";
+  size: number | null;
+  mtime: number | null;
+}
+
+/** 复制用户选择的文件到资料库 raw 目录。 */
+export function materialsImportFiles(
+  sourcePaths: string[],
+  targetDir: string,
+): Promise<MaterialsEntry[]> {
+  return invoke<MaterialsEntry[]>("materials_import_files", {
+    sourcePaths,
+    targetDir,
+  });
+}
+
+/** 列出 raw 目录下的文件和文件夹（非递归）。 */
+export function materialsListDir(subdir: string | null): Promise<MaterialsEntry[]> {
+  return invoke<MaterialsEntry[]>("materials_list_dir", { subdir });
+}
+
+/** 确保 .mona/materials/{raw,text,wiki}/ 存在。 */
+export function materialsEnsureInitialized(): Promise<boolean> {
+  return invoke<boolean>("materials_ensure_initialized");
+}
+
+/** 返回 wiki 目录绝对路径。 */
+export function materialsGetWikiDir(): Promise<string | null> {
+  return invoke<string | null>("materials_get_wiki_dir");
 }

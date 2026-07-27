@@ -14,10 +14,9 @@ Design notes:
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
-
-from loguru import logger
 
 from mona.agent.tools.base import Tool, tool_parameters
 from mona.agent.tools.schema import (
@@ -55,22 +54,48 @@ def _vault_ready() -> bool:
     return _get_vault_path() is not None
 
 
+# 剥离常见 Markdown 语法，用于从首行生成干净的标题。需与前端实现保持一致。
+_MARKDOWN_STRIP_PATTERNS = [
+    (re.compile(r"^#{1,6}\s+"), ""),  # heading
+    (re.compile(r"^([-*+]|\d+\.)\s+"), ""),  # list
+    (re.compile(r"^>\s*"), ""),  # blockquote
+    (re.compile(r"^!\[([^\]]*)\]\([^)]*\).*"), r"\1"),  # leading image → alt
+    (re.compile(r"\[([^\]]*)\]\([^)]*\)"), r"\1"),  # link → text
+    (re.compile(r"\*\*([^*]+)\*\*"), r"\1"),  # bold
+    (re.compile(r"__([^_]+)__"), r"\1"),
+    (re.compile(r"\*([^*]+)\*"), r"\1"),  # italic
+    (re.compile(r"_([^_]+)_"), r"\1"),
+    (re.compile(r"~~([^~]+)~~"), r"\1"),  # strikethrough
+    (re.compile(r"`([^`]+)`"), r"\1"),  # inline code
+]
+
+
+def _strip_markdown_for_title(text: str) -> str:
+    s = text.strip()
+    for pattern, repl in _MARKDOWN_STRIP_PATTERNS:
+        s = pattern.sub(repl, s)
+    return s.strip()
+
+
 # ---------------------------------------------------------------------------
 # notes_create
 # ---------------------------------------------------------------------------
 
 _CREATE_PARAMETERS = tool_parameters_schema(
-    title=StringSchema("Note title (required)."),
+    title=StringSchema(
+        "Note title. If omitted, the first non-empty line of content_markdown is used "
+        "as the title (body content is preserved unchanged)."
+    ),
     content_markdown=StringSchema(
         "Note body in Markdown. Supports images via `![alt](assets/xxx.png)` references "
         "produced by notes_save_image."
     ),
     notebook_name=StringSchema(
-        "Notebook (folder) name to place the note in. Defaults to '默认分类'. "
-        "The folder is created if it does not exist."
+        "Notebook (folder) name to place the note in. Defaults to the vault root "
+        "when omitted. The folder is created if it does not exist."
     ),
     tags=ArraySchema(StringSchema(""), description="Optional list of tags."),
-    required=["title", "content_markdown"],
+    required=["content_markdown"],
 )
 
 
@@ -105,11 +130,20 @@ class NotesCreateTool(Tool):
 
     async def execute(self, **kwargs: Any) -> Any:
         title = str(kwargs.get("title", "")).strip()
-        if not title:
-            return "Error: title is required."
         content = str(kwargs.get("content_markdown", ""))
         if not content.strip():
             return "Error: content_markdown is required."
+        # 标题未提供时，从正文第一个非空行提取并剥离 Markdown 语法（正文保持原样）。
+        if not title:
+            first_line = next(
+                (line.strip() for line in content.splitlines() if line.strip()),
+                "",
+            )
+            cleaned = _strip_markdown_for_title(first_line)
+            if cleaned:
+                title = cleaned[:40]
+            else:
+                return "Error: unable to derive a title from content. Please provide a title."
         notebook_name = kwargs.get("notebook_name")
         tags = kwargs.get("tags") or []
 
@@ -129,7 +163,7 @@ class NotesCreateTool(Tool):
             note_id = tauri_invoke("notes_create_from_chat", args)
         except RuntimeError as e:
             return f"Error creating note: {e}"
-        return f"Created note with id={note_id} in notebook '{notebook_name or '默认分类'}'."
+        return f"Created note with id={note_id} in notebook '{notebook_name or '(root)'}'."
 
 
 # ---------------------------------------------------------------------------
@@ -145,11 +179,18 @@ _SEARCH_PARAMETERS = tool_parameters_schema(
 
 @tool_parameters(_SEARCH_PARAMETERS)
 class NotesSearchTool(Tool):
-    """Search notes across the entire vault."""
+    """Search notes across the entire vault.
+
+    Deprecated: replaced by KnowledgeSearchTool (knowledge_search).
+    Retained as non-discoverable so the class can be used internally
+    or by tests. The Rust command `notes_search_all` is still the
+    underlying capability invoked by knowledge_search.
+    """
 
     _scopes = {"core"}
-    _plugin_discoverable = True
+    _plugin_discoverable = False
     read_only = True
+    subscription_required = True
 
     @classmethod
     def enabled(cls, ctx: Any) -> bool:
@@ -228,6 +269,7 @@ class NotesReadTool(Tool):
     _scopes = {"core"}
     _plugin_discoverable = True
     read_only = True
+    subscription_required = True
 
     @classmethod
     def enabled(cls, ctx: Any) -> bool:
@@ -284,6 +326,133 @@ class NotesReadTool(Tool):
 
 
 # ---------------------------------------------------------------------------
+# notes_edit
+# ---------------------------------------------------------------------------
+
+_EDIT_PARAMETERS = tool_parameters_schema(
+    note_id=StringSchema(
+        "The note ID returned by notes_search or notes_create. Required."
+    ),
+    operation=StringSchema(
+        "Edit operation, one of: 'replace_text' | 'set_title' | 'set_tags'. "
+        "Only one operation per call."
+    ),
+    old_string=StringSchema(
+        "For replace_text: exact substring to find in the note body. "
+        "Must match exactly once (unique); include surrounding context if the "
+        "text appears multiple times. Whitespace and line breaks must match exactly."
+    ),
+    new_string=StringSchema(
+        "For replace_text: replacement text. Pass empty string to delete the match."
+    ),
+    title=StringSchema("For set_title: new note title (non-empty after trim)."),
+    tags=ArraySchema(
+        StringSchema(""),
+        description="For set_tags: new tags list. Pass [] to clear all tags.",
+    ),
+    required=["note_id", "operation"],
+)
+
+
+@tool_parameters(_EDIT_PARAMETERS)
+class NotesEditTool(Tool):
+    """Edit an existing note in place. Supports targeted text replacement and
+    metadata edits without rewriting the whole note."""
+
+    _scopes = {"core"}
+    _plugin_discoverable = True
+
+    @classmethod
+    def enabled(cls, ctx: Any) -> bool:
+        cfg = _notes_config(ctx)
+        if cfg is None:
+            return True
+        return bool(getattr(cfg, "enabled", True)) and bool(
+            getattr(cfg, "allow_create", True)
+        )
+
+    @property
+    def name(self) -> str:
+        return "notes_edit"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Edit an existing note by ID. Supports three atomic operations:\n"
+            "- replace_text: replace one unique substring in the body (old_string "
+            "must match exactly once). Use this for surgical edits; prefer it over "
+            "rewriting the whole note to preserve formatting.\n"
+            "- set_title: change the note title (also renames the .md file).\n"
+            "- set_tags: replace the tags list.\n"
+            "Returns the new title, preview, and first 200 chars of content for "
+            "verification. Read the note first with notes_read if you need to "
+            "locate exact text to replace."
+        )
+
+    async def execute(self, **kwargs: Any) -> Any:
+        note_id = str(kwargs.get("note_id", "")).strip()
+        if not note_id:
+            return "Error: note_id is required."
+        operation = str(kwargs.get("operation", "")).strip()
+        if not operation:
+            return "Error: operation is required."
+        if operation not in {"replace_text", "set_title", "set_tags"}:
+            return (
+                "Error: operation must be one of: replace_text, set_title, set_tags. "
+                f"Got '{operation}'."
+            )
+
+        if not _vault_ready():
+            return "Error: Notes vault is not configured."
+
+        # Validate operation-specific args before IPC to give clear errors.
+        if operation == "replace_text":
+            old = kwargs.get("old_string")
+            if not isinstance(old, str) or not old:
+                return "Error: old_string is required for replace_text."
+        elif operation == "set_title":
+            title = kwargs.get("title")
+            if not isinstance(title, str) or not title.strip():
+                return "Error: title is required for set_title."
+        # set_tags allows empty list to clear tags.
+
+        args: dict[str, Any] = {"noteId": note_id, "operation": operation}
+        if operation == "replace_text":
+            args["oldString"] = str(kwargs["old_string"])
+            new = kwargs.get("new_string")
+            args["newString"] = str(new) if new is not None else ""
+        elif operation == "set_title":
+            args["title"] = str(kwargs["title"])
+        elif operation == "set_tags":
+            tags = kwargs.get("tags") or []
+            args["tags"] = [str(t) for t in tags]
+
+        try:
+            result = tauri_invoke("notes_edit_note", args)
+        except RuntimeError as e:
+            return f"Error editing note: {e}"
+
+        if not isinstance(result, dict):
+            return f"Unexpected response: {result}"
+
+        new_title = result.get("title", "(untitled)")
+        preview = result.get("preview", "")
+        content_head = result.get("contentHead", "")
+        updated = result.get("updatedAt", "")
+
+        lines = [f"Edited note {note_id} ({operation})."]
+        lines.append(f"Title: {new_title}")
+        if updated:
+            lines.append(f"Updated: {updated}")
+        if preview:
+            lines.append(f"Preview: {preview}")
+        if content_head:
+            lines.append("Content head:")
+            lines.append(content_head)
+        return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # notes_save_image
 # ---------------------------------------------------------------------------
 
@@ -307,6 +476,7 @@ class NotesSaveImageTool(Tool):
 
     _scopes = {"core"}
     _plugin_discoverable = True
+    subscription_required = True
 
     @classmethod
     def enabled(cls, ctx: Any) -> bool:

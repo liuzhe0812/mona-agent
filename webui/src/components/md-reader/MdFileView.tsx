@@ -1,7 +1,12 @@
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
+import { PanelRight } from "lucide-react";
 
 import { MarkdownEditor } from "@/components/common/MarkdownEditor";
+import { cn } from "@/lib/utils";
+import { MdOutlinePanel } from "./MdOutlinePanel";
 import { useMdReaderStore } from "./mdReaderStore";
+
+const OUTLINE_DEFAULT_WIDTH = 260;
 
 interface MdFileViewProps {
   filePath: string;
@@ -13,6 +18,9 @@ export function MdFileView({ filePath }: MdFileViewProps) {
   const updateTabContent = useMdReaderStore((s) => s.updateTabContent);
   const updateTabMode = useMdReaderStore((s) => s.updateTabMode);
   const saveTab = useMdReaderStore((s) => s.saveTab);
+
+  const [outlineOpen, setOutlineOpen] = useState(false);
+  const editorContainerRef = useRef<HTMLDivElement | null>(null);
 
   const normalized = filePath.replace(/\\/g, "/");
   const tab = tabs.find((t) => t.filePath.replace(/\\/g, "/") === normalized);
@@ -64,21 +72,48 @@ export function MdFileView({ filePath }: MdFileViewProps) {
   }
 
   return (
-    <MarkdownEditor
-      content={tab.content}
-      mode={tab.mode}
-      onModeChange={(mode) => updateTabMode(tab.id, mode)}
-      onContentChange={(next) => updateTabContent(tab.id, next.contentMarkdown)}
-      placeholder="Markdown 文档内容..."
-      showStats
-      statsExtra={
-        tab.dirty ? (
-          <span className="text-[#eba45d]">未保存</span>
-        ) : (
-          <span>已保存</span>
-        )
-      }
-      className="min-h-0 flex-1"
-    />
+    <div className="flex min-h-0 flex-1">
+      <div ref={editorContainerRef} className="flex min-h-0 min-w-0 flex-1">
+        <MarkdownEditor
+          content={tab.content}
+          mode={tab.mode}
+          onModeChange={(mode) => updateTabMode(tab.id, mode)}
+          onContentChange={(next) => updateTabContent(tab.id, next.contentMarkdown)}
+          placeholder="Markdown 文档内容..."
+          showStats
+          statsExtra={
+            tab.dirty ? (
+              <span className="text-[#eba45d]">未保存</span>
+            ) : (
+              <span>已保存</span>
+            )
+          }
+          toolbarTrailingExtra={
+            <button
+              type="button"
+              title={outlineOpen ? "收起目录" : "展开目录"}
+              aria-label={outlineOpen ? "收起目录" : "展开目录"}
+              onClick={() => setOutlineOpen((v) => !v)}
+              className={cn(
+                "grid h-7 w-7 place-items-center rounded-md transition-colors",
+                outlineOpen
+                  ? "bg-accent text-foreground"
+                  : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+              )}
+            >
+              <PanelRight className="h-4 w-4" />
+            </button>
+          }
+          className="min-h-0 flex-1"
+        />
+      </div>
+      {outlineOpen && (
+        <MdOutlinePanel
+          content={tab.content}
+          editorContainerRef={editorContainerRef}
+          width={OUTLINE_DEFAULT_WIDTH}
+        />
+      )}
+    </div>
   );
 }

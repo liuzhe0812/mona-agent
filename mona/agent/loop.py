@@ -62,6 +62,32 @@ if TYPE_CHECKING:
 
 UNIFIED_SESSION_KEY = "unified:default"
 
+# Appended to the system prompt when the user has no active subscription or
+# trial, so the model knows which capabilities are unavailable and does not
+# hallucinate having searched notes or emails.
+_FREE_TIER_CAPABILITY_NOTE = (
+    "\n\n---\n\n"
+    "# Subscription Status\n\n"
+    "The user does not have an active subscription or trial. The following "
+    "capabilities are **unavailable** to you right now:\n"
+    "- Searching the knowledge base (knowledge_search) or reading existing "
+    "notes (notes_read)\n"
+    "- Saving images to notes (notes_save_image)\n"
+    "- Searching, reading, or operating on emails (email_search, email_read, "
+    "email_action)\n"
+    "- Searching the unified memory (hoard_search) for note or email sources\n\n"
+    "You **may still**:\n"
+    "- Create new notes (notes_create) and edit existing notes (notes_edit)\n"
+    "- Search the unified memory (hoard_search) for browser and chat sources\n"
+    "- Use all other tools normally\n\n"
+    "Rules:\n"
+    "- Do NOT claim or imply that you have searched notes, materials, or emails.\n"
+    "- Do NOT save images to notes.\n"
+    "- If the user asks to read notes/materials/emails or search the knowledge "
+    "base, explain that an active subscription or trial is required and they "
+    "can subscribe to unlock this capability."
+)
+
 
 class TurnState(Enum):
     RESTORE = auto()
@@ -456,20 +482,30 @@ class AgentLoop:
     def _effective_workspace(self, session: Session | None) -> Path:
         """Compute the effective workspace for a session.
 
-        - Session with ``metadata.workspace`` set to an absolute path: that path (resolved).
-        - Default session or no session: ``self.workspace`` (``config.workspace_path``).
+        - Session with ``metadata.workspace`` set to an absolute path: that
+          path (resolved) — project session keeps its own root.
+        - Session with ``metadata.agent_kind`` in ``{"ppt", "video"}``: the
+          configured workspace root — dedicated agents keep their existing
+          workspace semantics (ppt_projects/, video_projects/).
+        - Default session or no session: ``<workspace>/output`` — the shared
+          artifacts directory for non-project sessions.
         """
+        from mona.config.paths import get_shared_output_dir
+
         if session is None:
-            return self.workspace
+            return get_shared_output_dir(self.workspace)
         ws_override = session.metadata.get("workspace")
         if isinstance(ws_override, str) and ws_override.strip():
             return Path(ws_override).expanduser().resolve()
-        return self.workspace
+        agent_kind = session.metadata.get("agent_kind")
+        if isinstance(agent_kind, str) and agent_kind in {"ppt", "video"}:
+            return self.workspace
+        return get_shared_output_dir(self.workspace)
 
     def _ensure_document_loop(self, agent_kind: str) -> AgentLoop:
         """Lazily construct a document agent loop for the given kind.
 
-        Document loops (PPT / video / flowchart) share this loop's provider,
+        Document loops (PPT / video) share this loop's provider,
         sessions, bus, and other runtime dependencies, but each has its own
         filtered tool registry and DocumentContextBuilder driven by the
         matching DocumentProfile. Raises if construction fails — no fallback.
@@ -527,7 +563,7 @@ class AgentLoop:
             )
             registered.append("my")
 
-        logger.info("Registered {} tools: {}", len(registered), registered)
+        logger.debug("Registered {} tools: {}", len(registered), registered)
 
     async def _connect_mcp(self) -> None:
         """Connect to configured MCP servers (one-time, lazy)."""
@@ -581,6 +617,11 @@ class AgentLoop:
             tool = self.tools.get(name)
             if tool and isinstance(tool, ContextAware):
                 tool.set_context(request_ctx)
+        # A tool's ``set_context`` may have toggled its ``is_available`` flag
+        # (e.g. terminal tools hidden when no terminal session is active).
+        # Invalidate the definitions cache so the next ``get_definitions``
+        # call reflects the new availability.
+        self.tools.invalidate_definitions_cache()
 
     @staticmethod
     def _runtime_chat_id(msg: InboundMessage) -> str:
@@ -647,6 +688,7 @@ class AgentLoop:
             current_message=video_generation_prompt(
                 image_generation_prompt(msg.content, msg.metadata),
                 msg.metadata,
+                media=msg.media,
             ),
             media=msg.media if msg.media else None,
             channel=msg.channel,
@@ -910,7 +952,7 @@ class AgentLoop:
                         effective_key,
                     )
                 else:
-                    logger.info(
+                    logger.debug(
                         "Routed follow-up message to pending queue for session {}",
                         effective_key,
                     )
@@ -1083,7 +1125,7 @@ class AgentLoop:
         channel, chat_id = (
             msg.chat_id.split(":", 1) if ":" in msg.chat_id else ("cli", msg.chat_id)
         )
-        logger.info("Processing system message from {}", msg.sender_id)
+        logger.debug("Processing system message from {}", msg.sender_id)
         key = msg.session_key_override or f"{channel}:{chat_id}"
         session = self.sessions.get_or_create(key)
         if self._restore_runtime_checkpoint(session):
@@ -1200,7 +1242,7 @@ class AgentLoop:
         # registry and DocumentContextBuilder.
         from mona.agent.document_loop import DOCUMENT_PROFILES
         agent_kind = session.metadata.get("agent_kind")
-        if agent_kind and agent_kind in DOCUMENT_PROFILES:
+        if agent_kind and agent_kind in DOCUMENT_PROFILES and not hasattr(self, "_profile"):
             doc_loop = self._ensure_document_loop(agent_kind)
             return await doc_loop._process_message(
                 msg,
@@ -1300,7 +1342,7 @@ class AgentLoop:
                 return None
 
         preview = final_content[:120] + "..." if len(final_content) > 120 else final_content
-        logger.info("Response to {}:{}: {}", msg.channel, msg.sender_id, preview)
+        logger.debug("Response to {}:{}: {}", msg.channel, msg.sender_id, preview)
 
         meta = dict(msg.metadata or {})
         meta.pop(DELIVER_FILES_PENDING_META, None)
@@ -1328,7 +1370,7 @@ class AgentLoop:
             msg = ctx.msg
 
         preview = msg.content[:80] + "..." if len(msg.content) > 80 else msg.content
-        logger.info("Processing message from {}:{}: {}", msg.channel, msg.sender_id, preview)
+        logger.debug("Processing message from {}:{}: {}", msg.channel, msg.sender_id, preview)
 
         # Session is already fetched by the caller (_process_message) but
         # ensure it exists in case this handler is invoked independently.
@@ -1379,6 +1421,12 @@ class AgentLoop:
             replay_max_messages=self._max_messages,
         )
         ctx.msg.metadata[DELIVER_FILES_PENDING_META] = ctx.delivered_files
+
+        # Refresh subscription access flag before building tool context so
+        # that subscription-gated tools are hidden from the model this turn.
+        # Fail-closed: any IPC error means no access to personal data.
+        await self._refresh_subscription_access()
+
         self._set_tool_context(
             ctx.msg.channel,
             ctx.msg.chat_id,
@@ -1405,6 +1453,15 @@ class AgentLoop:
         ctx.initial_messages = self._build_initial_messages(
             ctx.msg, ctx.session, ctx.history, ctx.pending_summary
         )
+
+        # When the user has no active subscription/trial, append a capability
+        # note to the system prompt so the model knows notes/email search is
+        # unavailable and does not hallucinate having queried them.
+        if not self.tools.has_subscription_access:
+            ctx.initial_messages = self._inject_capability_note(
+                ctx.initial_messages
+            )
+
         ctx.user_persisted_early = self._persist_user_message_early(
             ctx.msg, ctx.session
         )
@@ -1415,6 +1472,52 @@ class AgentLoop:
             ctx.on_retry_wait = await self._build_retry_wait_callback(ctx.msg)
 
         return "ok"
+
+    async def _refresh_subscription_access(self) -> None:
+        """Read the local license state and update the ToolRegistry.
+
+        Called once at the start of each turn (in ``_state_build``). Uses
+        ``asyncio.to_thread`` because ``tauri_invoke`` is a blocking HTTP
+        call to the IPC bridge. Fail-closed: any error means no access.
+
+        ``check_subscription_access`` caches its result with a short TTL, so
+        mid-turn tool-level checks (e.g. hoard_search) reuse the same value
+        without another IPC round-trip.
+        """
+        try:
+            from mona.agent.tools.tauri_ipc import (
+                check_subscription_access,
+                invalidate_subscription_access_cache,
+            )
+
+            invalidate_subscription_access_cache()
+            has_access = await asyncio.to_thread(check_subscription_access)
+        except Exception as e:
+            logger.debug("subscription access check failed, failing closed: {}", e)
+            has_access = False
+
+        self.tools.set_subscription_access(has_access)
+
+    @staticmethod
+    def _inject_capability_note(
+        messages: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Append the free-tier capability note to the system prompt."""
+        if not messages:
+            return messages
+        result = list(messages)
+        first = result[0]
+        if first.get("role") == "system":
+            content = first.get("content", "")
+            result[0] = {
+                **first,
+                "content": (
+                    content + _FREE_TIER_CAPABILITY_NOTE
+                    if isinstance(content, str)
+                    else content
+                ),
+            }
+        return result
 
     async def _state_run(self, ctx: TurnContext) -> str:
         await self._webui_turns.publish_run_status(ctx.msg, "running")

@@ -198,13 +198,13 @@ class HeartbeatService:
             logger.debug("Heartbeat: HEARTBEAT.md missing or empty")
             return
 
-        logger.info("Heartbeat: checking for tasks...")
+        logger.debug("Heartbeat: checking for tasks...")
 
         try:
             action, tasks = await self._decide(content)
 
             if action != "run":
-                logger.info("Heartbeat: OK (nothing to report)")
+                logger.debug("Heartbeat: OK (nothing to report)")
                 return
 
             logger.info("Heartbeat: tasks found, executing...")
@@ -216,7 +216,7 @@ class HeartbeatService:
                     return
 
                 if not self._is_deliverable(response):
-                    logger.info(
+                    logger.debug(
                         "Heartbeat: suppressed non-deliverable response ({})",
                         response[:80],
                     )
@@ -230,7 +230,7 @@ class HeartbeatService:
                     logger.info("Heartbeat: completed, delivering response")
                     await self.on_notify(response)
                 else:
-                    logger.info("Heartbeat: silenced by post-run evaluation")
+                    logger.debug("Heartbeat: silenced by post-run evaluation")
         except Exception:
             logger.exception("Heartbeat execution failed")
 

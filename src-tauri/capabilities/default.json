@@ -1,7 +1,7 @@
 {
   "identifier": "default",
-  "description": "Capability for the main window",
-  "windows": ["main", "quick-ask", "md-reader-*", "browser-*", "compose-*", "notification-*"],
+  "description": "Capability for trusted application webviews",
+  "webviews": ["main", "quick-ask", "md-reader-*", "compose-*", "mailview-*", "notification-*", "browser-downloads", "browser-address-suggestions", "browser-tab-*", "terminal-window-*"],
   "permissions": [
     "core:default",
     "core:window:default",
@@ -13,6 +13,7 @@
     "core:window:allow-start-dragging",
     "core:window:allow-show",
     "core:window:allow-hide",
+    "core:window:allow-set-size",
     "core:webview:allow-create-webview",
     "core:webview:allow-create-webview-window",
     "core:webview:allow-set-webview-position",

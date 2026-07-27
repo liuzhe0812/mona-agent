@@ -22,7 +22,7 @@ const AI_PANEL_DEFAULT_WIDTH = 320;
 const AI_PANEL_MIN_WIDTH = 240;
 const AI_PANEL_MAX_WIDTH = 600;
 
-export function TerminalView() {
+export function TerminalView({ onOpenSubscribe }: { onOpenSubscribe?: () => void }) {
   const { licenseActive } = useLicense();
   const sessions = useTerminalStore((s) => s.sessions);
   const activeSessionId = useTerminalStore((s) => s.activeSessionId);
@@ -102,7 +102,7 @@ export function TerminalView() {
   return (
     <div className="flex h-full">
       <div className="flex min-w-0 flex-1 flex-col">
-        <Toolbar />
+        <Toolbar onOpenSubscribe={onOpenSubscribe} />
         <SessionTabBar />
         <div className="min-h-0 flex-1">
           <div

@@ -4,15 +4,21 @@ import {
   ArchiveRestore,
   ChevronDown,
   ChevronUp,
+  Download,
   LogIn,
+  LogOut,
   Menu,
   MoreHorizontal,
+  LockKeyhole,
   Pencil,
   Pin,
   PinOff,
   Search,
+  Settings,
+  Sparkles,
   Trash2,
   User,
+  UserCog,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -24,10 +30,10 @@ import sidebarMonaIcon from "@/assets/icons/sidebar-mona.png";
 import sidebarNoteIcon from "@/assets/icons/sidebar-note.png";
 import sidebarTerminalIcon from "@/assets/icons/sidebar-terminal.png";
 import sidebarDatabaseIcon from "@/assets/icons/sidebar-database.png";
-import sidebarKnowledgeIcon from "@/assets/icons/sidebar-knowledge.png";
 import sidebarDocIcon from "@/assets/icons/sidebar-doc.png";
 import sidebarEmailIcon from "@/assets/icons/sidebar-email.png";
 import sidebarScheduleIcon from "@/assets/icons/sidebar-schedule.png";
+import sidebarSystemIcon from "@/assets/icons/sidebar-system.png";
 import sidebarProfileIcon from "@/assets/icons/sidebar-profile.png";
 
 import { Button } from "@/components/ui/button";
@@ -35,6 +41,8 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Separator } from "@/components/ui/separator";
@@ -70,9 +78,9 @@ interface SidebarProps {
   onOpenDoc?: () => void;
   onOpenSSH?: () => void;
   onOpenDb?: () => void;
-  onOpenKb?: () => void;
   onOpenEmail?: () => void;
   onOpenSchedule?: () => void;
+  onOpenSystem?: () => void;
   onOpenProfile?: () => void;
   onOpenSearch: () => void;
   onToggleArchived: () => void;
@@ -82,6 +90,8 @@ interface SidebarProps {
   onGoHome?: () => void;
   containActionMenus?: boolean;
   collapsed?: boolean;
+  updateAvailable?: boolean;
+  onStartUpdate?: () => void;
   pinnedKeys?: string[];
   archivedKeys?: string[];
   titleOverrides?: Record<string, string>;
@@ -96,7 +106,7 @@ interface SidebarProps {
 
 export function Sidebar(props: SidebarProps) {
   const { t } = useTranslation();
-  const { loggedIn, licenseInfo, licenseActive, localTrial, localTrialExpired, serverTrial, remainingDays } =
+  const { loggedIn, licenseInfo, licenseActive, serverTrial, logout } =
     useLicense();
   const [menuPortalContainer, setMenuPortalContainer] =
     useState<HTMLElement | null>(null);
@@ -154,9 +164,9 @@ export function Sidebar(props: SidebarProps) {
         onOpenDoc={props.onOpenDoc ?? (() => {})}
         onOpenSSH={props.onOpenSSH ?? (() => {})}
         onOpenDb={props.onOpenDb ?? (() => {})}
-        onOpenKb={props.onOpenKb ?? (() => {})}
         onOpenEmail={props.onOpenEmail ?? (() => {})}
         onOpenSchedule={props.onOpenSchedule ?? (() => {})}
+        onOpenSystem={props.onOpenSystem ?? (() => {})}
         onOpenProfile={props.onOpenProfile ?? (() => {})}
         onGoHome={props.onGoHome ?? (() => {})}
         emailUnreadCount={emailUnreadCount}
@@ -197,6 +207,7 @@ export function Sidebar(props: SidebarProps) {
             titleOverrides={props.titleOverrides ?? {}}
             pinnedKeys={props.pinnedKeys ?? []}
             archivedKeys={props.archivedKeys ?? []}
+            runningChatIds={props.runningChatIds}
             onRequestDelete={props.onRequestDelete}
             onTogglePin={props.onTogglePin}
             onRequestRename={props.onRequestRename}
@@ -240,40 +251,122 @@ export function Sidebar(props: SidebarProps) {
       >
         {loggedIn ? (
           <div className={cn("flex items-center gap-1", collapsed ? "w-14 flex-col px-0" : "w-full")}>
-            <SidebarActionButton
-              collapsed={collapsed}
-              label={licenseInfo?.account ?? licenseInfo?.email ?? t("sidebar.settings")}
-              onClick={props.onOpenLogin ?? (() => {})}
-              className={collapsed ? undefined : "flex-1"}
-              icon={<User className="h-4 w-4" />}
-            />
-            {!collapsed && (!licenseActive || serverTrial || localTrial) && (
-              <Button
-                size="sm"
-                onClick={props.onOpenSubscribe ?? props.onOpenLogin}
-                className="h-5 shrink-0 rounded-full bg-blue-500/15 px-1.5 text-[10px] font-medium text-blue-600 hover:bg-blue-500/25 dark:text-blue-400"
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  aria-label={licenseInfo?.account ?? licenseInfo?.email ?? t("sidebar.account", "账号")}
+                  title={collapsed ? (licenseInfo?.account ?? licenseInfo?.email ?? t("sidebar.account", "账号")) : undefined}
+                  className={cn(
+                    "group relative h-8 min-w-0 gap-2 overflow-hidden rounded-full font-medium text-sidebar-foreground/85 hover:bg-sidebar-accent/75 hover:text-sidebar-foreground",
+                    "transition-[width,padding,border-radius,color,background-color] duration-300 ease-out",
+                    collapsed
+                      ? "flex w-9 shrink-0 items-center justify-center gap-0 rounded-xl px-0"
+                      : "flex w-full shrink-0 items-center justify-start gap-2 px-3 text-[12.5px]",
+                  )}
+                >
+                  <span className="flex shrink-0 items-center justify-center" aria-hidden>
+                    <User className="h-4 w-4" />
+                  </span>
+                  <span
+                    className={cn(
+                      "min-w-0 overflow-hidden truncate whitespace-nowrap transition-[max-width,opacity,transform] duration-200 ease-out",
+                      collapsed
+                        ? "max-w-0 -translate-x-0 opacity-0"
+                        : "max-w-[10rem] translate-x-0 opacity-100",
+                    )}
+                  >
+                    {licenseInfo?.account ?? licenseInfo?.email ?? t("sidebar.account", "账号")}
+                  </span>
+                  {collapsed && props.updateAvailable && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        props.onStartUpdate?.();
+                      }}
+                      className="absolute -right-0.5 -top-0.5 flex h-3 w-3 items-center justify-center rounded-full bg-blue-500 text-white shadow-sm ring-2 ring-sidebar transition-colors hover:bg-blue-600"
+                      title="发现新版本，点击立即更新"
+                      aria-label="发现新版本，点击立即更新"
+                    >
+                      <Download className="h-2 w-2" />
+                    </button>
+                  )}
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent
+                side="top"
+                align={collapsed ? "center" : "start"}
+                sideOffset={8}
+                className="min-w-[200px]"
               >
-                升级 Pro
-              </Button>
-            )}
-          </div>
-        ) : localTrial && !localTrialExpired ? (
-          <div className={cn("flex items-center gap-1", collapsed ? "w-14 flex-col px-0" : "w-full")}>
-            <SidebarActionButton
-              collapsed={collapsed}
-              label={`试用剩余 ${remainingDays} 天`}
-              onClick={props.onOpenLogin ?? (() => {})}
-              className={collapsed ? undefined : "flex-1"}
-              icon={<User className="h-4 w-4" />}
-            />
-            {!collapsed && (
-              <Button
-                size="sm"
-                onClick={props.onOpenSubscribe ?? props.onOpenLogin}
-                className="h-5 shrink-0 rounded-full bg-blue-500/15 px-1.5 text-[10px] font-medium text-blue-600 hover:bg-blue-500/25 dark:text-blue-400"
+                <DropdownMenuLabel className="px-2.5 py-2 font-normal">
+                  <div className="flex items-center gap-2.5">
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-500/15 text-blue-600 dark:text-blue-400">
+                      <User className="h-4 w-4" />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5">
+                        <span className="truncate text-[13px] font-semibold text-foreground">
+                          {licenseInfo?.account ?? licenseInfo?.email ?? t("sidebar.account", "账号")}
+                        </span>
+                        {licenseActive && !serverTrial && (
+                          <span className="shrink-0 rounded-full bg-gradient-to-r from-amber-500 to-orange-500 px-1 py-px text-[8px] font-bold leading-tight text-white">
+                            Pro
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  className="gap-2 px-2.5 py-1.5 text-[13px]"
+                  onSelect={() => props.onOpenLogin?.()}
+                >
+                  <UserCog className="h-4 w-4" />
+                  <span>管理账户</span>
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  className="gap-2 px-2.5 py-1.5 text-[13px]"
+                  onSelect={() => props.onOpenSettings()}
+                >
+                  <Settings className="h-4 w-4" />
+                  <span>设置</span>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                {(!licenseActive || serverTrial) && (
+                  <>
+                    <DropdownMenuItem
+                      className="gap-2 px-2.5 py-1.5 text-[13px]"
+                      onSelect={() => (props.onOpenSubscribe ?? props.onOpenLogin)?.()}
+                    >
+                      <Sparkles className="h-4 w-4 text-amber-500" />
+                      <span>升级 Pro</span>
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                  </>
+                )}
+                <DropdownMenuItem
+                  className="gap-2 px-2.5 py-1.5 text-[13px] text-destructive focus:text-destructive"
+                  onSelect={() => void logout()}
+                >
+                  <LogOut className="h-4 w-4" />
+                  <span>退出登录</span>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            {!collapsed && props.updateAvailable && (
+              <button
+                type="button"
+                onClick={() => props.onStartUpdate?.()}
+                className="group flex h-5 shrink-0 items-center gap-1 rounded-full bg-gradient-to-r from-blue-500 to-blue-400 px-2 text-[10px] font-medium text-white shadow-sm transition-colors hover:from-blue-600 hover:to-blue-500"
+                title="发现新版本，点击立即更新"
               >
-                升级 Pro
-              </Button>
+                <Sparkles className="h-2.5 w-2.5 animate-pulse [animation-duration:2s] [animation-timing-function:ease-in-out]" />
+                更新
+              </button>
             )}
           </div>
         ) : (
@@ -285,6 +378,25 @@ export function Sidebar(props: SidebarProps) {
               className={collapsed ? undefined : "flex-1"}
               icon={<LogIn className="h-4 w-4" />}
             />
+            {collapsed ? (
+              <SidebarActionButton
+                collapsed={collapsed}
+                label="设置"
+                onClick={() => props.onOpenSettings()}
+                icon={<Settings className="h-4 w-4" />}
+              />
+            ) : (
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label="设置"
+                title="设置"
+                onClick={() => props.onOpenSettings()}
+                className="h-8 w-8 shrink-0 rounded-full text-sidebar-foreground/85 hover:bg-sidebar-accent/75 hover:text-sidebar-foreground"
+              >
+                <Settings className="h-4 w-4" />
+              </Button>
+            )}
           </div>
         )}
       </div>
@@ -304,12 +416,12 @@ const PRIMARY_ITEMS: ToolboxItem[] = [
   { label: "终端", icon: <img src={sidebarTerminalIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
   { label: "邮件", icon: <img src={sidebarEmailIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
   { label: "日程", icon: <img src={sidebarScheduleIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
+  { label: "系统", icon: <img src={sidebarSystemIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
 ];
 
 // 二级入口（收纳在"更多"菜单中）
 const SECONDARY_ITEMS: ToolboxItem[] = [
   { label: "数据库", icon: <img src={sidebarDatabaseIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
-  { label: "知识库", icon: <img src={sidebarKnowledgeIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
   { label: "AI文档", icon: <img src={sidebarDocIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
   { label: "画像", icon: <img src={sidebarProfileIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
 ];
@@ -320,9 +432,9 @@ function getToolboxHandler(label: string, handlers: {
   onOpenDoc: () => void;
   onOpenSSH: () => void;
   onOpenDb: () => void;
-  onOpenKb: () => void;
   onOpenEmail: () => void;
   onOpenSchedule: () => void;
+  onOpenSystem: () => void;
   onOpenProfile: () => void;
   onGoHome: () => void;
 }): () => void {
@@ -332,9 +444,9 @@ function getToolboxHandler(label: string, handlers: {
     case "AI文档": return handlers.onOpenDoc;
     case "终端": return handlers.onOpenSSH;
     case "数据库": return handlers.onOpenDb;
-    case "知识库": return handlers.onOpenKb;
     case "邮件": return handlers.onOpenEmail;
     case "日程": return handlers.onOpenSchedule;
+    case "系统": return handlers.onOpenSystem;
     case "画像": return handlers.onOpenProfile;
     default: return handlers.onGoHome;
   }
@@ -347,9 +459,9 @@ function ToolboxNavigation({
   onOpenDoc,
   onOpenSSH,
   onOpenDb,
-  onOpenKb,
   onOpenEmail,
   onOpenSchedule,
+  onOpenSystem,
   onOpenProfile,
   onGoHome,
   emailUnreadCount,
@@ -360,30 +472,28 @@ function ToolboxNavigation({
   onOpenDoc: () => void;
   onOpenSSH: () => void;
   onOpenDb: () => void;
-  onOpenKb: () => void;
   onOpenEmail: () => void;
   onOpenSchedule: () => void;
+  onOpenSystem: () => void;
   onOpenProfile: () => void;
   onGoHome: () => void;
   emailUnreadCount: number;
 }) {
   const { licenseActive } = useLicense();
-  const LICENSE_REQUIRED = new Set(["知识库", "AI文档", "邮件"]);
+  const LICENSE_REQUIRED = new Set(["AI文档"]);
   const handlers = {
     onNewChat,
     onOpenNote,
     onOpenDoc,
     onOpenSSH,
     onOpenDb,
-    onOpenKb,
     onOpenEmail,
     onOpenSchedule,
+    onOpenSystem,
     onOpenProfile,
     onGoHome,
   };
-  const visibleSecondary = licenseActive
-    ? SECONDARY_ITEMS
-    : SECONDARY_ITEMS.filter((item) => !LICENSE_REQUIRED.has(item.label));
+  const visibleSecondary = SECONDARY_ITEMS;
 
   return (
     <div
@@ -444,16 +554,20 @@ function ToolboxNavigation({
             sideOffset={8}
             className="min-w-[160px]"
           >
-            {visibleSecondary.map((item) => (
-              <DropdownMenuItem
-                key={item.label}
-                className="gap-2 px-2.5 py-1.5 text-[13px]"
-                onSelect={() => getToolboxHandler(item.label, handlers)()}
-              >
-                {item.icon}
-                <span>{item.label}</span>
-              </DropdownMenuItem>
-            ))}
+            {visibleSecondary.map((item) => {
+              const locked = !licenseActive && LICENSE_REQUIRED.has(item.label);
+              return (
+                <DropdownMenuItem
+                  key={item.label}
+                  className="gap-2 px-2.5 py-1.5 text-[13px]"
+                  onSelect={() => getToolboxHandler(item.label, handlers)()}
+                >
+                  {item.icon}
+                  <span>{item.label}</span>
+                  {locked && <LockKeyhole className="ml-auto h-3.5 w-3.5 text-muted-foreground" />}
+                </DropdownMenuItem>
+              );
+            })}
           </DropdownMenuContent>
         </DropdownMenu>
       )}
@@ -543,6 +657,7 @@ function CollapsedChatList({
   titleOverrides,
   pinnedKeys,
   archivedKeys,
+  runningChatIds,
   onRequestDelete,
   onTogglePin,
   onRequestRename,
@@ -554,6 +669,7 @@ function CollapsedChatList({
   titleOverrides: Record<string, string>;
   pinnedKeys: string[];
   archivedKeys: string[];
+  runningChatIds?: string[];
   onRequestDelete: (key: string, label: string) => void;
   onTogglePin: (key: string) => void;
   onRequestRename: (key: string, label: string) => void;
@@ -566,6 +682,7 @@ function CollapsedChatList({
 
   const pinned = new Set(pinnedKeys);
   const archived = new Set(archivedKeys);
+  const running = new Set(runningChatIds ?? []);
 
   const sorted = [...sessions].sort((a, b) => {
     const at = Date.parse(a.updatedAt ?? a.createdAt ?? "");
@@ -620,10 +737,30 @@ function CollapsedChatList({
             const initial = title.charAt(0).toUpperCase() || "?";
             const isPinned = pinned.has(s.key);
             const isArchived = archived.has(s.key);
+            const isRunning = running.has(s.chatId);
             return (
               <ContextMenu key={s.key}>
                 <ContextMenuTrigger asChild>
-                  <div>
+                  <div className="relative">
+                    {isRunning && (
+                      <svg
+                        aria-hidden
+                        className="pointer-events-none absolute inset-0 h-full w-full animate-spin text-blue-500 [animation-duration:1.4s] motion-reduce:animate-none dark:text-blue-400"
+                        viewBox="0 0 36 36"
+                        fill="none"
+                      >
+                        <circle cx="18" cy="18" r="17" stroke="currentColor" strokeOpacity="0.18" strokeWidth="1.5" />
+                        <circle
+                          cx="18"
+                          cy="18"
+                          r="17"
+                          stroke="currentColor"
+                          strokeWidth="1.5"
+                          strokeLinecap="round"
+                          strokeDasharray="22 88"
+                        />
+                      </svg>
+                    )}
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <button

@@ -14,6 +14,7 @@ import { PptPreview } from "./PptPreview";
 import { PptHistory } from "./PptHistory";
 
 type PptPhase = "config" | "generating" | "done";
+export type PptMode = "design" | "template";
 export type PptImageMode = "none" | "key-pages" | "rich";
 export type PptVisualMode = "auto" | "data" | "process";
 export type PptStyleMode = "general" | "consulting" | "top-consulting";
@@ -27,8 +28,10 @@ export type PptAnimationTrigger = "after-previous" | "with-previous" | "on-click
 
 export interface PptConfig {
   // --- Basic ---
+  mode: PptMode;
   templateKey: string | null;
   templateKind: "layout" | "brand" | "native" | null;
+  templateFile: string | null;
   canvasFormat: string;
   imageMode: PptImageMode;
   visualMode: PptVisualMode;
@@ -56,8 +59,10 @@ export interface PptConfig {
 }
 
 export const DEFAULT_CONFIG: PptConfig = {
+  mode: "design",
   templateKey: null,
   templateKind: null,
+  templateFile: null,
   canvasFormat: "ppt169",
   imageMode: "key-pages",
   visualMode: "auto",
@@ -158,7 +163,9 @@ export function PptMakerView() {
       const name = generateProjectName();
       setProjectName(name);
       const prompt = buildPptPrompt(config, name);
-      const displayText = `请制作一份 PPT。\n项目名：${name}`;
+      const displayText = config.mode === "template"
+        ? `请基于模版制作一份 PPT。\n项目名：${name}`
+        : `请制作一份 PPT。\n项目名：${name}`;
       await markPptGenerating(token, name, "start");
       const newChatId = await client.newChat(5_000, false, null, "ppt");
       setChatId(newChatId);
@@ -307,6 +314,11 @@ function generateProjectName(): string {
 
 function buildPptPrompt(config: PptConfig, projectName: string): string {
   const parts: string[] = [];
+
+  if (config.mode === "template" && config.templateFile) {
+    return buildTemplateModePrompt(config, projectName);
+  }
+
   const usesNativeTemplate = Boolean(
     config.templateKey && config.templateKind === "native",
   );
@@ -498,6 +510,39 @@ function buildPptPrompt(config: PptConfig, projectName: string): string {
   }
   if (exportOpts.length > 0) {
     parts.push(`导出选项：${exportOpts.join("；")}`);
+  }
+
+  return parts.join("\n");
+}
+
+function buildTemplateModePrompt(config: PptConfig, projectName: string): string {
+  const parts: string[] = [];
+
+  parts.push("请基于用户提供的 PPTX 模版制作一份 PPT（模版编辑模式）。");
+  parts.push("");
+  parts.push(`项目名：${projectName}`);
+  parts.push(`项目目录：ppt_projects/（init 时加 --dir ppt_projects）`);
+  parts.push(`模版文件：${config.templateFile}`);
+  parts.push("");
+  parts.push("⚠️ 关键规则提醒（详见 mona-ppt SKILL.md 的模版编辑模式）：");
+  parts.push("- 读取 references/template-edit-mode.md 并严格遵守其执行纪律");
+  parts.push("- 本模式使用 officecli 直接编辑模版副本，禁止走 SVG 管线，禁止使用 svg_to_pptx.py / native_pptx_builder.py");
+  parts.push("- 先用 officecli get 分析模版结构（slide master / layout / placeholder / 主题色 / 字体），再制定内容映射计划");
+  parts.push("- 所有修改用 officecli set/add/batch 完成，保持模版原有母版、版式、字体、配色不变");
+  parts.push("- 完成后将最终 pptx 复制到 <project_path>/exports/ 目录");
+
+  if (config.pageCount != null) {
+    parts.push(`页数：${config.pageCount} 页`);
+  }
+  if (config.audience.trim()) {
+    parts.push(`目标受众：${config.audience.trim()}`);
+  }
+
+  if (config.sourceFiles.length > 0) {
+    const filePaths = config.sourceFiles.map((p) => `  - ${p}`).join("\n");
+    parts.push(`源文件：\n${filePaths}`);
+  } else if (config.topic) {
+    parts.push(`主题：${config.topic}`);
   }
 
   return parts.join("\n");

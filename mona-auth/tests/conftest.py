@@ -32,8 +32,13 @@ app.dependency_overrides[get_db] = override_get_db
 @pytest.fixture(autouse=True)
 def setup_db():
     Base.metadata.create_all(bind=engine)
+    # 重置 rate limiter 状态，避免测试间互相干扰
+    from app.middleware import reset_limiter_state
+    reset_limiter_state()
     yield
     Base.metadata.drop_all(bind=engine)
+    from app.middleware import reset_limiter_state
+    reset_limiter_state()
 
 
 @pytest.fixture
@@ -69,7 +74,7 @@ def admin_user(client, db):
 
     resp = client.post(
         "/auth/register",
-        json={"email": email, "password": "admin123", "code": code},
+        json={"email": email, "password": "admin123", "code": code, "account": "adminuser"},
     )
     assert resp.status_code == 200
 

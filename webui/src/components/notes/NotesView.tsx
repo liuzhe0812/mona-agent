@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ArrowDownUp,
-  ChevronUp,
   ChevronsDownUp,
   ChevronsUpDown,
   ChevronRight,
@@ -15,6 +14,9 @@ import {
   FolderPlus,
   GitFork,
   ListChecks,
+  LockKeyhole,
+  Mic,
+  MicOff,
   MoreHorizontal,
   Pencil,
   Plus,
@@ -60,15 +62,18 @@ import {
 import { useLicense } from "@/hooks/useLicense";
 
 import { GlobalSearchDialog } from "./GlobalSearchDialog";
-import { ConfirmDialog, PromptDialog, ReplaceDialog, TemplatePickerDialog } from "./NotesDialogs";
+import { ConfirmDialog, PromptDialog, TemplatePickerDialog } from "./NotesDialogs";
 import { NoteAgentPanel } from "./NoteAgentPanel";
+import { MaterialsSidebar, MaterialsPreview, type MaterialsSelection } from "./materials/MaterialsView";
 import type { EditorMode } from "@/components/common/MarkdownEditor";
+import { openActiveEditorFind, openActiveEditorReplace } from "@/components/common/FindReplaceBar";
 import { NoteList, NoteRow, sortNotesByMode, type SortMode } from "./NoteList";
 import { RightSidebar, type RightTab } from "./RightSidebar";
 import { RightSidebarToggleIcon } from "./RightSidebarToggleIcon";
 import { TasksPanel } from "./TasksPanel";
 import { toggleTaskInMarkdown } from "./tasks-extract";
 import { deriveNotePreview } from "./notes-ai";
+import { useSpeechRecognition } from "./useSpeechRecognition";
 import {
   Workspace,
   createInitialWorkspace,
@@ -105,6 +110,7 @@ const RIGHT_SIDEBAR_DEFAULT_WIDTH = 260;
 
 interface NotesViewProps {
   onSendToAgent?: (prompt: string) => void | Promise<void>;
+  onOpenSubscribe?: () => void;
   initialNoteId?: string;
   createOnOpen?: boolean;
   onCreateOnOpenHandled?: () => void;
@@ -112,6 +118,7 @@ interface NotesViewProps {
 
 export function NotesView({
   onSendToAgent: _onSendToAgent,
+  onOpenSubscribe,
   initialNoteId,
   createOnOpen = false,
   onCreateOnOpenHandled,
@@ -131,6 +138,8 @@ export function NotesView({
   const [storageReady, setStorageReady] = useState(false);
   const [storageError, setStorageError] = useState<string | null>(null);
   const [vaultPath, setVaultPath] = useState<string | null>(null);
+  const [moduleView, setModuleView] = useState<"notes" | "materials">("notes");
+  const [materialsSelection, setMaterialsSelection] = useState<MaterialsSelection>(null);
   const [vaultBusy, setVaultBusy] = useState(false);
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [agentPanelCollapsed, setAgentPanelCollapsed] = useState(true);
@@ -146,6 +155,62 @@ export function NotesView({
   const lastSavedSnapshotRef = useRef<string | null>(null);
   const latestSnapshotRef = useRef<string | null>(null);
 
+  // 录音转写状态。当前正在录音的笔记 id 和已确定的文字。
+  // 用 ref 避免回调闭包陈旧问题，state 仅用于按钮 UI 反馈。
+  // 录音内容会追加到当前活动笔记末尾（保留笔记原有内容），而非创建新笔记。
+  const recordingNoteRef = useRef<string | null>(null);
+  // 录音开始时笔记原有的正文（用于在写入时拼到前面，避免覆盖用户已有内容）
+  const recordingBaseRef = useRef<string>("");
+  const recordingFinalRef = useRef<string>("");
+  const recordingInterimRef = useRef<string>("");
+  const [recordingActive, setRecordingActive] = useState(false);
+  const [recordingError, setRecordingError] = useState<string | null>(null);
+
+  // 把当前累积的文字写入对应笔记。final+interim 一起写，让用户实时看到进度。
+  // 在录音开始时记下的 base 内容后追加，保留笔记原有内容。
+  const flushRecordingToNote = useCallback(() => {
+    const noteId = recordingNoteRef.current;
+    if (!noteId) return;
+    const base = recordingBaseRef.current;
+    const finalText = recordingFinalRef.current;
+    const interim = recordingInterimRef.current;
+    const appended = `${finalText}${interim ? interim : ""}`;
+    const markdown = base ? `${base.replace(/\s+$/, "")}\n\n${appended}` : appended;
+    setNotes((current) =>
+      current.map((n) =>
+        n.id === noteId
+          ? {
+              ...n,
+              contentMarkdown: markdown,
+              plainText: markdown,
+              preview: markdown.slice(0, 46) || "录音中…",
+              updatedAt: nowTimestamp(),
+            }
+          : n,
+      ),
+    );
+  }, []);
+
+  const speech = useSpeechRecognition({
+    lang: "zh-CN",
+    onFinalChunk: (text) => {
+      // final 结果追加到累积文字末尾，interim 清空（刚确认的就是 interim 的内容）
+      recordingFinalRef.current = `${recordingFinalRef.current}${text}`.trimStart();
+      recordingInterimRef.current = "";
+      flushRecordingToNote();
+    },
+    onInterim: (text) => {
+      recordingInterimRef.current = text;
+      flushRecordingToNote();
+    },
+  });
+
+  // 同步 hook 的 error 到本地 state（用于弹提示）
+  useEffect(() => {
+    if (speech.error) setRecordingError(speech.error);
+  }, [speech.error]);
+
+
   // Dialog state for replacing browser native prompt/confirm
   type PromptState =
     | { kind: "createNotebook" }
@@ -157,7 +222,6 @@ export function NotesView({
     | { kind: "deleteNotes"; noteIds: string[] };
   const [promptState, setPromptState] = useState<PromptState | null>(null);
   const [confirmState, setConfirmState] = useState<ConfirmState | null>(null);
-  const [replaceDialog, setReplaceDialog] = useState<{ noteId: string } | null>(null);
   const [globalSearchInitialQuery, setGlobalSearchInitialQuery] = useState("");
   const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
   const [expandedNotebookIds, setExpandedNotebookIds] = useState<Set<string>>(new Set());
@@ -252,6 +316,56 @@ export function NotesView({
       updateLeaf(prev, prev.activeLeafId, (leaf) => ({ ...leaf, graphOpen: !leaf.graphOpen })),
     );
   }, [updateLeaf]);
+
+  const startRecording = useCallback(() => {
+    if (!speech.supported) {
+      setRecordingError("当前环境不支持语音识别（需 Edge / WebView2 内核）");
+      return;
+    }
+    // 按钮只对当前活动笔记生效：没有打开笔记时直接退出。
+    // 录音内容追加到当前笔记末尾，不创建新笔记。
+    const note = activeNote;
+    if (!note) {
+      setRecordingError("请先打开一个笔记");
+      return;
+    }
+    setRecordingError(null);
+    recordingNoteRef.current = note.id;
+    recordingBaseRef.current = note.contentMarkdown ?? "";
+    recordingFinalRef.current = "";
+    recordingInterimRef.current = "";
+    setRecordingActive(true);
+    speech.start();
+  }, [speech, activeNote]);
+
+  const stopRecording = useCallback(() => {
+    speech.stop();
+    setRecordingActive(false);
+    // 录音结束后清理状态。转写文字已实时写入笔记，这里只清空 ref。
+    // 如果没有识别到任何内容，回退到录音前的正文。
+    const noteId = recordingNoteRef.current;
+    const finalText = recordingFinalRef.current.trim();
+    const base = recordingBaseRef.current;
+    if (noteId && !finalText && base) {
+      setNotes((current) =>
+        current.map((n) =>
+          n.id === noteId
+            ? {
+                ...n,
+                contentMarkdown: base,
+                plainText: base,
+                preview: base.slice(0, 46) || "空白笔记",
+                updatedAt: nowTimestamp(),
+              }
+            : n,
+        ),
+      );
+    }
+    recordingNoteRef.current = null;
+    recordingBaseRef.current = "";
+    recordingFinalRef.current = "";
+    recordingInterimRef.current = "";
+  }, [speech]);
 
   const selectNoteInWorkspace = useCallback(
     (noteId: string, leafId?: string) => {
@@ -603,9 +717,9 @@ export function NotesView({
 
   const createNote = useCallback(
     (sourceKind: NoteSourceKind = "manual", overrideNotebookId?: string) => {
-      // activeNotebook may be null (vault root) — that's allowed.
-      const notebookId =
-        overrideNotebookId !== undefined ? overrideNotebookId : activeNotebook ? activeNotebook.id : "";
+      // 仅文件夹右键菜单显式传入 overrideNotebookId 时落到对应文件夹；
+      // 其他所有路径默认落到 vault 根目录。
+      const notebookId = overrideNotebookId !== undefined ? overrideNotebookId : "";
       let nextNote: OperationNote;
       try {
         nextNote = createBlankNote(notebookId, sourceKind);
@@ -634,7 +748,7 @@ export function NotesView({
       });
       setSearchQuery("");
     },
-    [activeNotebook, updateLeaf],
+    [updateLeaf],
   );
 
   useEffect(() => {
@@ -649,8 +763,9 @@ export function NotesView({
     (templateId: string, title: string) => {
       const template = notes.find((n) => n.id === templateId);
       if (!template) return;
-      const notebookId = activeNotebook ? activeNotebook.id : "";
-      const notebookName = activeNotebook ? activeNotebook.name : "";
+      // 模板创建仅从顶部工具栏触发，统一落到 vault 根目录。
+      const notebookId = "";
+      const notebookName = "";
       let nextNote: OperationNote;
       try {
         nextNote = createNoteFromTemplate(template, notebookId, title, notebookName);
@@ -671,7 +786,7 @@ export function NotesView({
       });
       setSearchQuery("");
     },
-    [notes, activeNotebook, updateLeaf],
+    [notes, updateLeaf],
   );
 
   const toggleNoteTemplate = useCallback(
@@ -689,7 +804,8 @@ export function NotesView({
 
   const moveSelectionToNote = useCallback(
     (selectedText: string) => {
-      const notebookId = activeNotebook ? activeNotebook.id : "";
+      // 编辑器选区创建笔记，统一落到 vault 根目录。
+      const notebookId = "";
       const title = selectedText.trim().split("\n")[0].slice(0, 40) || "从选区创建的笔记";
       const nextNote: OperationNote = {
         ...createBlankNote(notebookId, "manual"),
@@ -700,7 +816,7 @@ export function NotesView({
       setNotes((current) => [nextNote, ...current]);
       setActiveNoteId(nextNote.id);
     },
-    [activeNotebook],
+    [],
   );
 
   const createNotebook = useCallback(() => {
@@ -729,12 +845,22 @@ export function NotesView({
   const handleRenameNotebook = useCallback((notebookId: string, name: string) => {
     const target = notebooks.find((n) => n.id === notebookId);
     if (!target || name === target.name) return;
+    // Rust scan_vault 用文件夹名作为 notebook id，重命名时必须同步更新 id
+    // 和所有相关 note 的 notebookId，否则保存后会导致 notebook_id 不匹配。
     setNotebooks((current) =>
       current.map((notebook) =>
-        notebook.id === notebookId ? { ...notebook, name } : notebook,
+        notebook.id === notebookId ? { ...notebook, id: name, name } : notebook,
       ),
     );
-  }, [notebooks]);
+    setNotes((current) =>
+      current.map((note) =>
+        note.notebookId === notebookId ? { ...note, notebookId: name } : note,
+      ),
+    );
+    if (activeNotebookId === notebookId) {
+      setActiveNotebookId(name);
+    }
+  }, [notebooks, activeNotebookId]);
 
   const deleteNotebook = useCallback((notebookId: string) => {
     if (notebookId === "") {
@@ -984,17 +1110,6 @@ export function NotesView({
     [],
   );
 
-  const toggleBookmark = useCallback(
-    (note: OperationNote) => {
-      setNotes((current) =>
-        current.map((n) =>
-          n.id === note.id ? { ...n, bookmarked: !n.bookmarked } : n,
-        ),
-      );
-    },
-    [],
-  );
-
   const toggleTaskInNote = useCallback(
     (noteId: string, line: number) => {
       setNotes((current) =>
@@ -1101,13 +1216,12 @@ export function NotesView({
     [searchQuery],
   );
 
-  const findInNote = useCallback((note: OperationNote) => {
-    setGlobalSearchInitialQuery(note.title || "");
-    setGlobalSearchOpen(true);
+  const findInNote = useCallback((_note: OperationNote) => {
+    openActiveEditorFind();
   }, []);
 
-  const replaceInNote = useCallback((note: OperationNote) => {
-    setReplaceDialog({ noteId: note.id });
+  const replaceInNote = useCallback((_note: OperationNote) => {
+    openActiveEditorReplace();
   }, []);
 
   const tabMenuCallbacks = useMemo(
@@ -1116,7 +1230,6 @@ export function NotesView({
       onRename: renameNote,
       onMoveToNotebook: moveNote,
       onToggleFavorite: toggleFavorite,
-      onToggleBookmark: toggleBookmark,
       onMergeNote: mergeNoteInto,
       onFind: findInNote,
       onReplace: replaceInNote,
@@ -1129,7 +1242,6 @@ export function NotesView({
       renameNote,
       moveNote,
       toggleFavorite,
-      toggleBookmark,
       mergeNoteInto,
       findInNote,
       replaceInNote,
@@ -1137,31 +1249,6 @@ export function NotesView({
       revealNoteInExplorer,
       showNoteInFileList,
     ],
-  );
-
-  const handleReplaceConfirm = useCallback(
-    (noteId: string, findText: string, replaceText: string) => {
-      if (!findText) return;
-      setNotes((current) => {
-        const note = current.find((n) => n.id === noteId);
-        if (!note) return current;
-        const nextMarkdown = note.contentMarkdown.split(findText).join(replaceText);
-        if (nextMarkdown === note.contentMarkdown) return current;
-        return current.map((n) =>
-          n.id === noteId
-            ? {
-                ...n,
-                contentMarkdown: nextMarkdown,
-                plainText: nextMarkdown.replace(/[#*_`\[\]\(\)]/g, ""),
-                preview: nextMarkdown.slice(0, 46) || "空白笔记",
-                updatedAt: nowTimestamp(),
-              }
-            : n,
-        );
-      });
-      setReplaceDialog(null);
-    },
-    [],
   );
 
   const dropNoteById = useCallback(
@@ -1295,13 +1382,10 @@ export function NotesView({
 
   const saveAgentResultAsNote = useCallback(
     (markdown: string, title: string) => {
-      if (!activeNotebook) {
-        notifyError("请先创建笔记本");
-        return;
-      }
+      // NoteAgentPanel 存为笔记，统一落到 vault 根目录。
       let nextNote: OperationNote;
       try {
-        nextNote = createBlankNote(activeNotebook.id, "agent");
+        nextNote = createBlankNote("", "agent");
       } catch (error) {
         notifyError(error instanceof Error ? error.message : "新建笔记失败");
         return;
@@ -1320,7 +1404,7 @@ export function NotesView({
       setActiveNoteId(nextNote.id);
       setSearchQuery("");
     },
-    [activeNotebook],
+    [],
   );
 
   const handleDragStart = useCallback(
@@ -1493,7 +1577,8 @@ export function NotesView({
               onOpenOrCreate={openOrCreateVault}
             />
           ) : (
-            <>
+            <div className="flex min-w-0 flex-1 flex-col">
+              <div className="flex min-h-0 flex-1">
               <aside
                 className="relative hidden w-[260px] shrink-0 flex-col border-r border-border/70 bg-sidebar/35 md:flex"
                 onDragEnter={handleSidebarDragEnter}
@@ -1501,8 +1586,10 @@ export function NotesView({
                 onDragLeave={handleSidebarDragLeave}
                 onDrop={handleSidebarDrop}
               >
+                {moduleView === "notes" ? (
+                <>
                 <div className="flex h-9 shrink-0 items-center justify-center gap-0.5 px-2">
-                  <IconButton label="新建笔记" onClick={() => createNote()}>
+                  <IconButton label="新建笔记" onClick={() => createNote("manual", "")}>
                     <Plus className="h-3.5 w-3.5" />
                   </IconButton>
                   <IconButton
@@ -1517,17 +1604,6 @@ export function NotesView({
                   </IconButton>
                   <IconButton label="全局搜索 (Ctrl+K)" onClick={() => { setGlobalSearchInitialQuery(""); setGlobalSearchOpen(true); }}>
                     <Search className="h-3.5 w-3.5" />
-                  </IconButton>
-                  <IconButton
-                    label={tasksPanelOpen ? "关闭任务面板" : "任务管理"}
-                    onClick={() => setTasksPanelOpen((v) => !v)}
-                  >
-                    <ListChecks
-                      className={cn(
-                        "h-3.5 w-3.5",
-                        tasksPanelOpen && "text-primary",
-                      )}
-                    />
                   </IconButton>
                   <IconButton
                     label={viewMode === "favorite" ? "显示全部笔记" : "显示收藏笔记"}
@@ -1656,6 +1732,7 @@ export function NotesView({
                           onSelectionChange={setSelectedNoteIds}
                           onCopyMarkdown={copyNoteMarkdown}
                           onCopyPath={copyNotePath}
+                          onRevealInExplorer={revealNoteInExplorer}
                           onDuplicate={duplicateNote}
                           onEditTags={editNoteTags}
                           onRename={renameNote}
@@ -1707,6 +1784,7 @@ export function NotesView({
                             onSelectionChange={setSelectedNoteIds}
                             onCopyMarkdown={copyNoteMarkdown}
                             onCopyPath={copyNotePath}
+                            onRevealInExplorer={revealNoteInExplorer}
                             onDuplicate={duplicateNote}
                             onEditTags={editNoteTags}
                             onRename={renameNote}
@@ -1748,6 +1826,7 @@ export function NotesView({
                         onSelectionChange={setSelectedNoteIds}
                         onCopyMarkdown={copyNoteMarkdown}
                         onCopyPath={copyNotePath}
+                        onRevealInExplorer={revealNoteInExplorer}
                         onDuplicate={duplicateNote}
                         onEditTags={editNoteTags}
                         onRename={renameNote}
@@ -1772,7 +1851,7 @@ export function NotesView({
                     </div>
                   </ContextMenuTrigger>
                   <ContextMenuContent className="w-48">
-                    <ContextMenuItem onSelect={() => createNote("manual")}>
+                    <ContextMenuItem onSelect={() => createNote("manual", "")}>
                       <FileText className="mr-2 h-3.5 w-3.5" />
                       新建笔记
                     </ContextMenuItem>
@@ -1782,24 +1861,51 @@ export function NotesView({
                     </ContextMenuItem>
                   </ContextMenuContent>
                 </ContextMenu>
-                <div className="flex h-9 shrink-0 items-center border-t border-border/55 px-2">
+                </>
+                ) : (
+                  <MaterialsSidebar
+                    selection={materialsSelection}
+                    onSelect={setMaterialsSelection}
+                  />
+                )}
+                <div className="flex h-9 shrink-0 items-center gap-2 border-t border-border/55 px-2">
+                  <div className="flex items-center rounded-lg bg-muted/50 p-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setModuleView("notes")}
+                      className={cn(
+                        "rounded-md px-2.5 py-1 text-[11.5px] font-medium transition-colors",
+                        moduleView === "notes"
+                          ? "bg-background text-foreground shadow-sm"
+                          : "text-muted-foreground hover:text-foreground",
+                      )}
+                    >
+                      笔记
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setModuleView("materials")}
+                      className={cn(
+                        "rounded-md px-2.5 py-1 text-[11.5px] font-medium transition-colors",
+                        moduleView === "materials"
+                          ? "bg-background text-foreground shadow-sm"
+                          : "text-muted-foreground hover:text-foreground",
+                      )}
+                    >
+                      资料
+                    </button>
+                  </div>
                   <button
                     type="button"
-                    title="切换笔记仓库"
+                    title={`切换仓库${vaultPath ? `: ${vaultPath.split(/[\\/]/).pop()}` : ""}`}
                     onClick={openOrCreateVault}
-                    className="flex min-w-0 items-center gap-1.5 rounded px-1 py-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+                    className="ml-auto grid h-7 w-7 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
                   >
-                    <ChevronUp className="h-3.5 w-3.5 shrink-0" />
-                    <span className="min-w-0 flex-1 truncate text-[11.5px] font-semibold uppercase tracking-wide">
-                      {vaultPath ? vaultPath.split(/[\\/]/).pop() : "笔记本"}
-                    </span>
-                    <span className="shrink-0 rounded-full bg-muted/50 px-1.5 py-px text-[10.5px]">
-                      {notebooks.length}
-                    </span>
+                    <FolderOpen className="h-3.5 w-3.5" />
                   </button>
                 </div>
               </aside>
-              {tasksPanelOpen ? (
+              {moduleView === "notes" && tasksPanelOpen ? (
                 <div className="absolute left-[260px] top-0 bottom-0 z-30 w-[300px] border-r border-border/70 bg-background shadow-lg">
                   <TasksPanel
                     notes={notes}
@@ -1814,7 +1920,7 @@ export function NotesView({
                 </div>
               ) : null}
               <div className="relative flex min-w-0 min-h-0 flex-1">
-                <Workspace
+                {moduleView === "notes" ? <Workspace
                   workspace={workspace}
                   onChange={setWorkspace}
                   notes={notes}
@@ -1853,6 +1959,18 @@ export function NotesView({
                     <>
                       <button
                         type="button"
+                        title={tasksPanelOpen ? "关闭任务面板" : "任务管理"}
+                        aria-label="任务管理"
+                        onClick={() => setTasksPanelOpen((v) => !v)}
+                        className={cn(
+                          "grid h-8 w-8 place-items-center hover:bg-accent hover:text-foreground",
+                          tasksPanelOpen ? "bg-accent text-foreground" : "text-muted-foreground",
+                        )}
+                      >
+                        <ListChecks className="h-4 w-4" />
+                      </button>
+                      <button
+                        type="button"
                         title="关系图"
                         aria-label="关系图"
                         onClick={toggleGraphInActiveLeaf}
@@ -1876,7 +1994,17 @@ export function NotesView({
                         >
                           <AgentLogo state={agentStreaming ? "working" : "idle"} className="h-5 w-5" />
                         </button>
-                      ) : null}
+                      ) : (
+                        <button
+                          type="button"
+                          title="升级 Pro 解锁笔记 AI"
+                          aria-label="升级 Pro 解锁笔记 AI"
+                          onClick={onOpenSubscribe}
+                          className="grid h-8 w-8 place-items-center text-muted-foreground hover:bg-accent hover:text-foreground"
+                        >
+                          <LockKeyhole className="h-4 w-4" />
+                        </button>
+                      )}
                       <button
                         type="button"
                         title={rightSidebarOpen ? "收起右侧面板" : "展开右侧面板"}
@@ -1890,8 +2018,36 @@ export function NotesView({
                   }
                   toolbarExtra={(noteId) => {
                     const note = notes.find((n) => n.id === noteId);
+                    const isRecordingThis = recordingActive && recordingNoteRef.current === noteId;
                     return (
                       <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          title={
+                            !speech.supported
+                              ? "当前环境不支持语音识别（需 Edge / WebView2 内核）"
+                              : isRecordingThis
+                                ? "停止录音"
+                                : "录音笔记"
+                          }
+                          aria-label="录音笔记"
+                          disabled={!speech.supported || (recordingActive && !isRecordingThis)}
+                          onClick={isRecordingThis ? stopRecording : startRecording}
+                          className={cn(
+                            "grid h-7 w-7 place-items-center rounded-md hover:bg-accent hover:text-foreground",
+                            isRecordingThis
+                              ? "bg-accent text-rose-500"
+                              : recordingError
+                                ? "text-amber-500"
+                                : "text-muted-foreground",
+                          )}
+                        >
+                          {isRecordingThis ? (
+                            <MicOff className="h-4 w-4" />
+                          ) : (
+                            <Mic className="h-4 w-4" />
+                          )}
+                        </button>
                         <button
                           type="button"
                           title={editorMode === "visual" ? "切换为 MD 源码" : "切换为可视化编辑"}
@@ -1990,8 +2146,8 @@ export function NotesView({
                       </div>
                     );
                   }}
-                />
-                {rightSidebarOpen && (
+                /> : <MaterialsPreview selection={materialsSelection} />}
+                {moduleView === "notes" && rightSidebarOpen && (
                   <>
                     <div
                       onMouseDown={handleRightDragStart}
@@ -2009,7 +2165,8 @@ export function NotesView({
                   </>
                 )}
               </div>
-            </>
+              </div>
+            </div>
           )}
         </div>
       </section>
@@ -2051,14 +2208,6 @@ export function NotesView({
         destructive
         onConfirm={handleConfirmAction}
         onOpenChange={(open) => { if (!open) setConfirmState(null); }}
-      />
-      <ReplaceDialog
-        open={replaceDialog !== null}
-        noteTitle={replaceDialog ? notes.find((n) => n.id === replaceDialog.noteId)?.title : undefined}
-        onConfirm={(findText, replaceText) => {
-          if (replaceDialog) handleReplaceConfirm(replaceDialog.noteId, findText, replaceText);
-        }}
-        onOpenChange={(open) => { if (!open) setReplaceDialog(null); }}
       />
       <TemplatePickerDialog
         open={templatePickerOpen}
@@ -2169,6 +2318,7 @@ interface RootNotesListProps {
   onSelectionChange?: (ids: Set<string>) => void;
   onCopyMarkdown?: (note: OperationNote) => void;
   onCopyPath?: (note: OperationNote) => void;
+  onRevealInExplorer?: (note: OperationNote) => void;
   onDuplicate?: (note: OperationNote) => void;
   onEditTags?: (note: OperationNote, tags: string[]) => void;
   onRename?: (note: OperationNote) => void;
@@ -2193,6 +2343,7 @@ function RootNotesList({
   onSelectionChange,
   onCopyMarkdown,
   onCopyPath,
+  onRevealInExplorer,
   onDuplicate,
   onEditTags,
   onRename,
@@ -2255,6 +2406,7 @@ function RootNotesList({
             onOpenInNewTab={onOpenInNewTab ? () => onOpenInNewTab(note.id) : undefined}
             onCopyMarkdown={onCopyMarkdown}
             onCopyPath={onCopyPath}
+            onRevealInExplorer={onRevealInExplorer}
             onDuplicate={onDuplicate}
             onEditTags={onEditTags ? () => onEditTags(note, note.tags) : undefined}
             onRename={onRename ? () => onRename(note) : undefined}
@@ -2282,6 +2434,7 @@ function FavoriteNotesList({
   onSelectionChange,
   onCopyMarkdown,
   onCopyPath,
+  onRevealInExplorer,
   onDuplicate,
   onEditTags,
   onRename,
@@ -2332,6 +2485,7 @@ function FavoriteNotesList({
             onOpenInNewTab={onOpenInNewTab ? () => onOpenInNewTab(note.id) : undefined}
             onCopyMarkdown={onCopyMarkdown}
             onCopyPath={onCopyPath}
+            onRevealInExplorer={onRevealInExplorer}
             onDuplicate={onDuplicate}
             onEditTags={onEditTags ? () => onEditTags(note, note.tags) : undefined}
             onRename={onRename ? () => onRename(note) : undefined}
@@ -2365,6 +2519,7 @@ interface NotebookSectionProps {
   onSelectionChange?: (ids: Set<string>) => void;
   onCopyMarkdown?: (note: OperationNote) => void;
   onCopyPath?: (note: OperationNote) => void;
+  onRevealInExplorer?: (note: OperationNote) => void;
   onDuplicate?: (note: OperationNote) => void;
   onEditTags?: (note: OperationNote, tags: string[]) => void;
   onRename?: (note: OperationNote) => void;
@@ -2374,7 +2529,7 @@ interface NotebookSectionProps {
   onDeleteMany?: (notes: OperationNote[]) => void;
   onSetContextLevel?: (note: OperationNote, level: NoteContextLevel) => void;
   onToggleFavorite?: (note: OperationNote) => void;
-  onCreateNote?: (sourceKind: NoteSourceKind) => void;
+  onCreateNote?: (sourceKind: NoteSourceKind, notebookId?: string) => void;
   onCreateNotebook?: () => void;
   notebooks: Notebook[];
   allNotes?: OperationNote[];
@@ -2399,6 +2554,7 @@ function NotebookSection({
   onSelectionChange,
   onCopyMarkdown,
   onCopyPath,
+  onRevealInExplorer,
   onDuplicate,
   onEditTags,
   onRename,
@@ -2465,7 +2621,7 @@ function NotebookSection({
           </button>
         </ContextMenuTrigger>
         <ContextMenuContent className="w-48">
-          <ContextMenuItem onSelect={() => onCreateNote?.("manual")}>
+          <ContextMenuItem onSelect={() => onCreateNote?.("manual", notebook.id)}>
             <FileText className="mr-2 h-3.5 w-3.5" />
             新建笔记
           </ContextMenuItem>
@@ -2509,6 +2665,7 @@ function NotebookSection({
             onOpenInNewTab={onOpenInNewTab}
             onCopyMarkdown={onCopyMarkdown}
             onCopyPath={onCopyPath}
+            onRevealInExplorer={onRevealInExplorer}
             onDuplicate={onDuplicate}
             onEditTags={onEditTags}
             onRename={onRename}
@@ -2518,7 +2675,7 @@ function NotebookSection({
             onDeleteMany={onDeleteMany}
             onSetContextLevel={onSetContextLevel}
             onToggleFavorite={onToggleFavorite}
-            onCreateNote={onCreateNote}
+            onCreateNote={(sourceKind) => onCreateNote?.(sourceKind, notebook.id)}
             notebooks={notebooks}
             allNotes={allNotes}
           />

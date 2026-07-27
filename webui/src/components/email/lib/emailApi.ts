@@ -463,13 +463,27 @@ export async function fetchEmailBody(
   accountId: string,
   uid: string,
   mailbox: string,
-): Promise<{ bodyText: string; bodyHtml: string | null; attachments?: EmailAttachment[] }> {
-  return invoke<{ bodyText: string; bodyHtml: string | null; attachments?: EmailAttachment[] }>("email_fetch_body", {
+): Promise<FetchEmailBodyResult> {
+  return invoke<FetchEmailBodyResult>("email_fetch_body", {
     gatewayUrl,
     accountId,
     uid,
     mailbox,
   });
+}
+
+export interface FetchEmailBodyResult {
+  bodyText: string;
+  bodyHtml: string | null;
+  attachments?: EmailAttachment[];
+  /** 重新解析的 header（用于修复旧数据中可能的乱码，如 gb2312→gb18030 修复前的旧邮件） */
+  header?: {
+    subject: string;
+    fromAddress: string;
+    fromName: string;
+    toAddresses: string;
+    ccAddresses: string;
+  };
 }
 
 /// 拉取邮件原始 RFC822 字节（用于 .eml 导出）

@@ -62,7 +62,7 @@ pub async fn vnc_connect(
             .await
             .map_err(|e| e.to_string())?;
 
-    log::info!(
+    log::debug!(
         "VNC: bridge started for {} -> ws://127.0.0.1:{} (session {})",
         vnc_addr,
         ws_port,
@@ -117,7 +117,7 @@ pub async fn vnc_disconnect(
     let mut sessions = vnc_state.sessions.write().await;
     match sessions.remove(&session_id) {
         Some(session) => {
-            log::info!("VNC: disconnecting session {}", session_id);
+            log::debug!("VNC: disconnecting session {}", session_id);
             session.bridge_handle.abort();
         }
         None => {
@@ -165,7 +165,7 @@ pub async fn vnc_reconnect(
             .await
             .map_err(|e| e.to_string())?;
 
-    log::info!("VNC: reconnected session {} on ws port {}", session_id, ws_port);
+    log::debug!("VNC: reconnected session {} on ws port {}", session_id, ws_port);
 
     // Update session
     {

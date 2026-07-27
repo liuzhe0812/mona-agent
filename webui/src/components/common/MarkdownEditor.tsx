@@ -12,6 +12,8 @@ import StarterKit from "@tiptap/starter-kit";
 import { NodeSelection, TextSelection } from "@tiptap/pm/state";
 
 import { WikiLink } from "./WikiLinkExtension";
+import { MermaidCodeBlock } from "./MermaidCodeBlock";
+import { FindReplaceBar, setActiveFindApi, useFindBarHotkey } from "./FindReplaceBar";
 import {
   Bold,
   CheckSquare,
@@ -46,6 +48,7 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { SelectionAiToolbar } from "./SelectionAiToolbar";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -89,8 +92,14 @@ export interface MarkdownEditorProps {
   toolbarExtra?: React.ReactNode;
   /** Content rendered at the start of the editor toolbar (e.g. history buttons). */
   toolbarLeadingExtra?: React.ReactNode;
+  /** Content rendered after the mode switch buttons in the toolbar. */
+  toolbarTrailingExtra?: React.ReactNode;
   /** Note titles for `[[wiki link]]` autocomplete in markdown mode. */
   noteTitles?: string[];
+  /** Enable inline selection AI toolbar (润色/缩写/翻译). */
+  enableSelectionAi?: boolean;
+  /** Returns the current note title for selection AI context. */
+  getNoteTitle?: () => string;
 }
 
 // Custom Image extension that serializes `assets/xxx.png` from title/alt instead of data URL
@@ -139,7 +148,10 @@ export function MarkdownEditor({
   children,
   toolbarExtra,
   toolbarLeadingExtra,
+  toolbarTrailingExtra,
   noteTitles,
+  enableSelectionAi = false,
+  getNoteTitle,
 }: MarkdownEditorProps) {
   const settingContentRef = useRef(false);
   const lastMarkdownRef = useRef(content);
@@ -516,7 +528,9 @@ export function MarkdownEditor({
     () => [
       StarterKit.configure({
         heading: { levels: [1, 2, 3, 4] },
+        codeBlock: false,
       }),
+      MermaidCodeBlock,
       NoteImage,
       TaskList.configure({
         HTMLAttributes: {},
@@ -720,6 +734,30 @@ export function MarkdownEditor({
     };
   }, [editor]);
 
+  // In-editor find/replace bar state. Ctrl+F / Ctrl+H open it.
+  const [findBarState, setFindBarState] = useState<{
+    open: boolean;
+    mode: "find" | "replace";
+  } | null>(null);
+  useFindBarHotkey((mode) => setFindBarState({ open: true, mode }));
+
+  // Register this editor as the find/replace target. Re-register on focus so
+  // the most recently focused editor wins when multiple tabs are open.
+  useEffect(() => {
+    if (!editor) return;
+    const api = {
+      openFind: () => setFindBarState({ open: true, mode: "find" as const }),
+      openReplace: () => setFindBarState({ open: true, mode: "replace" as const }),
+    };
+    const dispose = setActiveFindApi(api);
+    const handleFocus = () => setActiveFindApi(api);
+    editor.on("focus", handleFocus);
+    return () => {
+      editor.off("focus", handleFocus);
+      dispose();
+    };
+  }, [editor]);
+
   useEffect(() => {
     if (!editor) return;
     const editorMarkdown = editor.getMarkdown();
@@ -760,39 +798,52 @@ export function MarkdownEditor({
     >
       <div className="flex h-10 shrink-0 items-center justify-between border-b border-border/65 px-3">
         {showToolbar ? <EditorToolbar editor={editor} leadingExtra={toolbarLeadingExtra} /> : <div />}
-        {toolbarExtra ?? (onModeChange ? (
-          <div className="flex items-center gap-0.5 rounded-lg border border-border/70 bg-muted/30 p-0.5">
-            <button
-              type="button"
-              title="可视化编辑"
-              aria-label="可视化编辑"
-              onClick={() => onModeChange("visual")}
-              className={cn(
-                "grid h-6 w-6 place-items-center rounded-md transition-colors",
-                mode === "visual"
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              <Type className="h-3.5 w-3.5" />
-            </button>
-            <button
-              type="button"
-              title="MD 源码"
-              aria-label="MD 源码"
-              onClick={() => onModeChange("markdown")}
-              className={cn(
-                "grid h-6 w-6 place-items-center rounded-md transition-colors",
-                mode === "markdown"
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              <FileCode2 className="h-3.5 w-3.5" />
-            </button>
+        {toolbarExtra ?? (
+          <div className="flex items-center gap-1.5">
+            {onModeChange ? (
+              <div className="flex items-center gap-0.5 rounded-lg border border-border/70 bg-muted/30 p-0.5">
+                <button
+                  type="button"
+                  title="可视化编辑"
+                  aria-label="可视化编辑"
+                  onClick={() => onModeChange("visual")}
+                  className={cn(
+                    "grid h-6 w-6 place-items-center rounded-md transition-colors",
+                    mode === "visual"
+                      ? "bg-background text-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  <Type className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  type="button"
+                  title="MD 源码"
+                  aria-label="MD 源码"
+                  onClick={() => onModeChange("markdown")}
+                  className={cn(
+                    "grid h-6 w-6 place-items-center rounded-md transition-colors",
+                    mode === "markdown"
+                      ? "bg-background text-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  <FileCode2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ) : null}
+            {toolbarTrailingExtra}
           </div>
-        ) : null)}
+        )}
       </div>
+
+      {mode === "visual" && findBarState?.open && editor ? (
+        <FindReplaceBar
+          editor={editor}
+          mode={findBarState.mode}
+          onClose={() => setFindBarState(null)}
+        />
+      ) : null}
 
       {mode === "visual" ? (
         <EditorContextMenu editor={editor} onMoveSelectionToNote={onMoveSelectionToNote}>
@@ -880,6 +931,13 @@ export function MarkdownEditor({
                   ))}
                 </div>
               )}
+              {enableSelectionAi && getNoteTitle ? (
+                <SelectionAiToolbar
+                  editor={editor}
+                  getNoteTitle={getNoteTitle}
+                  wrapperRef={visualEditorRef}
+                />
+              ) : null}
             </div>
           </div>
         </EditorContextMenu>
@@ -1131,7 +1189,7 @@ function EditorContextMenu({ editor, children, onMoveSelectionToNote }: { editor
   };
 
   return (
-    <ContextMenu onOpenChange={updateSelection}>
+    <ContextMenu onOpenChange={(open) => { if (open) updateSelection(); }}>
       <ContextMenuTrigger asChild>
         {children}
       </ContextMenuTrigger>

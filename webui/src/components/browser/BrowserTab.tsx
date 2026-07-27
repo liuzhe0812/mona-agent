@@ -1,6 +1,8 @@
 import { useState } from "react";
-import { FileText, X, Pin, PinOff, Copy, CopyX, ArrowRightToLine, Clock, VolumeX, Volume2, Eye, Moon } from "lucide-react";
+import { FileText, X, Pin, PinOff, Copy, CopyX, ArrowRightToLine, Clock, VolumeX, Volume2, Eye, Moon, FolderOpen, NotebookPen } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { isTauri } from "@/lib/tauri";
+import type { MenuOptions } from "@tauri-apps/api/menu";
 import type { Tab } from "@/hooks/useBrowserTabs";
 import {
   ContextMenu,
@@ -9,6 +11,60 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+
+interface TabMenuHandlers {
+  onPinToggle?: () => void;
+  onDuplicate?: () => void;
+  onClose?: () => void;
+  onCloseOthers?: () => void;
+  onCloseRight?: () => void;
+  onToggleMute?: () => void;
+  onSaveAsNote?: () => void;
+  onRevealInExplorer?: () => void;
+}
+
+async function showNativeTabMenu(tab: Tab, handlers: TabMenuHandlers) {
+  const { Menu } = await import("@tauri-apps/api/menu");
+  const { onPinToggle, onDuplicate, onClose, onCloseOthers, onCloseRight, onToggleMute, onSaveAsNote, onRevealInExplorer } = handlers;
+  const isPinned = tab.isPinned;
+  const items: NonNullable<MenuOptions["items"]> = [];
+  if (onPinToggle) {
+    items.push({ text: isPinned ? "取消固定" : "固定标签", action: onPinToggle });
+  }
+  if (onDuplicate) {
+    items.push({ text: "复制标签", action: onDuplicate });
+  }
+  if (onToggleMute) {
+    items.push({ text: tab.isMuted ? "取消静音" : "静音标签", action: onToggleMute });
+  }
+  if (onSaveAsNote || onRevealInExplorer) {
+    items.push({ item: "Separator" });
+  }
+  if (onSaveAsNote) {
+    items.push({ text: "保存为笔记", action: onSaveAsNote });
+  }
+  if (onRevealInExplorer) {
+    items.push({ text: "打开文件路径", action: onRevealInExplorer });
+  }
+  if (onClose || onCloseOthers || onCloseRight) {
+    items.push({ item: "Separator" });
+  }
+  if (onClose) {
+    items.push({ text: "关闭", action: onClose });
+  }
+  if (onCloseOthers) {
+    items.push({ text: "关闭其他", action: onCloseOthers });
+  }
+  if (onCloseRight) {
+    items.push({ text: "关闭右侧标签", action: onCloseRight });
+  }
+  const menu = await Menu.new({ items });
+  try {
+    await menu.popup();
+  } finally {
+    await menu.close();
+  }
+}
 
 function getFaviconUrl(url: string): string | null {
   try {
@@ -31,6 +87,8 @@ interface BrowserTabProps {
   onCloseRight?: () => void;
   onReorder?: (fromId: string, toId: string) => void;
   onToggleMute?: () => void;
+  onSaveAsNote?: () => void;
+  onRevealInExplorer?: () => void;
 }
 
 export function BrowserTabItem({
@@ -44,6 +102,8 @@ export function BrowserTabItem({
   onCloseRight,
   onReorder,
   onToggleMute,
+  onSaveAsNote,
+  onRevealInExplorer,
 }: BrowserTabProps) {
   const [isDragOver, setIsDragOver] = useState(false);
   const faviconUrl = tab.type === "browser" && tab.url ? getFaviconUrl(tab.url) : null;
@@ -140,12 +200,26 @@ export function BrowserTabItem({
     return tabContent;
   }
 
+  // Tauri 环境下用 OS 原生菜单，避免被原生子 WebView 遮挡
+  if (isTauri()) {
+    return (
+      <div
+        onContextMenu={(e) => {
+          e.preventDefault();
+          void showNativeTabMenu(tab, { onPinToggle, onDuplicate, onClose, onCloseOthers, onCloseRight, onToggleMute, onSaveAsNote, onRevealInExplorer });
+        }}
+      >
+        {tabContent}
+      </div>
+    );
+  }
+
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
         {tabContent}
       </ContextMenuTrigger>
-      <ContextMenuContent className="w-48">
+      <ContextMenuContent className="w-48 z-[9999]">
         <ContextMenuItem onClick={onPinToggle}>
           {isPinned ? (
             <>
@@ -171,6 +245,19 @@ export function BrowserTabItem({
               <Volume2 className="mr-2 h-3.5 w-3.5" />
             )}
             {tab.isMuted ? "取消静音" : "静音标签"}
+          </ContextMenuItem>
+        )}
+        {(onSaveAsNote || onRevealInExplorer) && <ContextMenuSeparator />}
+        {onSaveAsNote && (
+          <ContextMenuItem onClick={onSaveAsNote}>
+            <NotebookPen className="mr-2 h-3.5 w-3.5" />
+            保存为笔记
+          </ContextMenuItem>
+        )}
+        {onRevealInExplorer && (
+          <ContextMenuItem onClick={onRevealInExplorer}>
+            <FolderOpen className="mr-2 h-3.5 w-3.5" />
+            打开文件路径
           </ContextMenuItem>
         )}
         <ContextMenuSeparator />

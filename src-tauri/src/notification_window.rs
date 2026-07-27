@@ -55,6 +55,11 @@ pub struct NotificationPayload {
     /// 点击通知卡片本身时触发的 action（可选）
     #[serde(default)]
     pub click_action: Option<String>,
+    /// 点击通知时携带的结构化数据（可选），随 notification-action 事件一并 emit。
+    /// 用于让监听方区分具体业务上下文，例如邮件通知携带 accountId/uid/folder，
+    /// 点击后直接打开独立预览窗口而非主窗口。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub click_data: Option<serde_json::Value>,
 }
 
 fn default_icon() -> String {
@@ -270,11 +275,16 @@ fn close_and_relayout(app: &AppHandle, label: &str) {
 }
 
 /// 通知窗口加载完成后调用：通知主窗口有通知被点击（可选，前端也可以直接 emit）。
+/// `data` 为通知携带的结构化数据（可选），随事件一并 emit 给监听方。
 #[tauri::command]
 pub fn emit_notification_action(
     app: AppHandle,
     action: String,
+    data: Option<serde_json::Value>,
 ) -> Result<(), String> {
-    app.emit("notification-action", serde_json::json!({ "action": action }))
-        .map_err(|e| e.to_string())
+    app.emit(
+        "notification-action",
+        serde_json::json!({ "action": action, "data": data }),
+    )
+    .map_err(|e| e.to_string())
 }

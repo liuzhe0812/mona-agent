@@ -12,7 +12,7 @@ from mona.agent.tools.base import Tool
 from mona.agent.tools.registry import ToolRegistry
 
 _SKIP_MODULES = frozenset({
-    "base", "schema", "registry", "context", "loader", "config",
+    "base", "schema", "registry", "context", "loader",
     "file_state", "sandbox", "mcp", "__init__", "runtime_state",
     "ssh", "tauri_ipc", "path_utils",
 })
@@ -57,13 +57,6 @@ class ToolLoader:
                     seen.add(id(attr))
                     results.append(attr)
         results.sort(key=lambda cls: cls.__name__)
-        # Add external tool classes not in the tools package (lazy import to avoid cycles)
-        try:
-            from mona.kb.tool import KbSearchTool
-            if id(KbSearchTool) not in seen:
-                results.append(KbSearchTool)
-        except Exception:
-            logger.exception("Failed to import KbSearchTool")
         self._discovered = results
         return results
 

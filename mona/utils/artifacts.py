@@ -56,9 +56,27 @@ def _safe_relative_dir(save_dir: str) -> Path:
     return Path(*rel.parts)
 
 
-def _artifact_root(save_dir: str) -> Path:
+def _artifact_root(save_dir: str, artifact_root: Path | None = None) -> Path:
+    """Resolve the directory that holds generated artifacts.
+
+    When ``artifact_root`` is provided (e.g. the active session workspace),
+    artifacts are stored under ``<artifact_root>/<save_dir>/...`` instead of
+    the global media directory. This keeps generated user files inside the
+    shared output workspace so they appear in the right-side artifact panel.
+    The media root remains the fallback for callers that have not been
+    migrated to the dynamic workspace routing.
+    """
+    safe_rel = _safe_relative_dir(save_dir)
+    if artifact_root is not None:
+        base = Path(artifact_root).expanduser().resolve()
+        root = (base / safe_rel).resolve()
+        try:
+            root.relative_to(base)
+        except ValueError as exc:
+            raise ArtifactError("artifact directory escapes workspace root") from exc
+        return root
     media_root = get_media_dir().resolve()
-    root = (media_root / _safe_relative_dir(save_dir)).resolve()
+    root = (media_root / safe_rel).resolve()
     try:
         root.relative_to(media_root)
     except ValueError as exc:
@@ -75,15 +93,21 @@ def store_generated_image_artifact(
     save_dir: str = "generated",
     provider: str = "openrouter",
     created_at: datetime | None = None,
+    artifact_root: Path | None = None,
 ) -> dict[str, Any]:
-    """Persist a generated image and sidecar metadata under the media root."""
+    """Persist a generated image and sidecar metadata.
+
+    When ``artifact_root`` is provided, the image and its sidecar JSON are
+    written under ``<artifact_root>/<save_dir>/YYYY-MM-DD/``; otherwise they
+    fall back to the global media directory.
+    """
     raw, mime = decode_image_data_url(data_url)
     ext = _MIME_EXTENSIONS.get(mime)
     if ext is None:
         raise ArtifactError(f"unsupported image MIME type: {mime}")
 
     now = created_at or datetime.now().astimezone()
-    day_dir = ensure_dir(_artifact_root(save_dir) / now.strftime("%Y-%m-%d"))
+    day_dir = ensure_dir(_artifact_root(save_dir, artifact_root) / now.strftime("%Y-%m-%d"))
     artifact_id = f"img_{uuid.uuid4().hex[:12]}"
     image_path = day_dir / f"{artifact_id}{ext}"
     metadata_path = day_dir / f"{artifact_id}.json"
@@ -145,12 +169,18 @@ def store_generated_video_artifact(
     duration: str | None = None,
     size: str | None = None,
     created_at: datetime | None = None,
+    artifact_root: Path | None = None,
 ) -> dict[str, Any]:
-    """Persist a generated video and sidecar metadata under the media root."""
+    """Persist a generated video and sidecar metadata.
+
+    When ``artifact_root`` is provided, the video and its sidecar JSON are
+    written under ``<artifact_root>/<save_dir>/YYYY-MM-DD/``; otherwise they
+    fall back to the global media directory.
+    """
     ext = _VIDEO_MIME_EXTENSIONS.get(mime, ".mp4")
 
     now = created_at or datetime.now().astimezone()
-    day_dir = ensure_dir(_artifact_root(save_dir) / now.strftime("%Y-%m-%d"))
+    day_dir = ensure_dir(_artifact_root(save_dir, artifact_root) / now.strftime("%Y-%m-%d"))
     artifact_id = f"vid_{uuid.uuid4().hex[:12]}"
     video_path = day_dir / f"{artifact_id}{ext}"
     metadata_path = day_dir / f"{artifact_id}.json"

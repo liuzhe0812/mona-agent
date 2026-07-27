@@ -68,21 +68,21 @@ export function DesktopLogin({ onLogin, loading, error }: DesktopLoginProps) {
 
   return (
     <div className="flex h-full w-full flex-col items-center justify-center p-4">
-      <div className="w-full max-w-md overflow-hidden rounded-2xl border border-white/10 bg-[rgba(30,30,46,0.85)] p-8 backdrop-blur-xl">
+      <div className="w-full max-w-md overflow-hidden rounded-3xl border border-white/20 bg-white/10 p-8 shadow-[0_24px_80px_rgba(0,0,0,0.4)] backdrop-blur-2xl">
         {loading ? (
           <div className="flex flex-col items-center justify-center space-y-6 py-8">
             <div className="relative">
               <div className="absolute inset-0 animate-pulse rounded-full bg-blue-500/30 blur-xl" />
-              <div className="relative z-10 flex h-20 w-20 items-center justify-center rounded-full border border-white/20 bg-white/10">
-                <Server className="h-10 w-10 animate-pulse text-blue-400" />
+              <div className="relative z-10 flex h-20 w-20 items-center justify-center rounded-full border border-white/25 bg-gradient-to-b from-sky-400 to-blue-600 shadow-xl">
+                <Server className="h-9 w-9 animate-pulse text-white" />
               </div>
-              <div className="absolute -bottom-1 -right-1 z-20 flex h-6 w-6 items-center justify-center rounded-full border-2 border-[#1a1b26] bg-green-500">
+              <div className="absolute -bottom-1 -right-1 z-20 flex h-6 w-6 items-center justify-center rounded-full border-2 border-white/40 bg-green-500">
                 <Loader2 className="h-3 w-3 animate-spin text-white" />
               </div>
             </div>
 
             <div className="w-full space-y-2 text-center">
-              <h2 className="text-xl font-bold text-white">正在连接服务器</h2>
+              <h2 className="text-xl font-semibold text-white">正在连接服务器</h2>
               <p className="text-sm text-white/60">
                 {username}@{host}
               </p>
@@ -93,9 +93,9 @@ export function DesktopLogin({ onLogin, loading, error }: DesktopLoginProps) {
                 <span>{statusText}</span>
                 <span>{progress}%</span>
               </div>
-              <div className="h-2 overflow-hidden rounded-full bg-white/10">
+              <div className="h-1.5 overflow-hidden rounded-full bg-white/15">
                 <div
-                  className="relative h-full bg-blue-500 transition-all duration-500 ease-out"
+                  className="relative h-full rounded-full bg-[#0a82ff] transition-all duration-500 ease-out"
                   style={{ width: `${progress}%` }}
                 >
                   <div className="absolute inset-0 h-full w-full animate-pulse bg-white/20 skew-x-12" />
@@ -105,20 +105,23 @@ export function DesktopLogin({ onLogin, loading, error }: DesktopLoginProps) {
           </div>
         ) : (
           <>
-            <div className="mb-8 text-center">
-              <h1 className="mb-2 text-3xl font-bold text-white">
-                <span className="text-blue-400">SSH</span> 桌面
+            <div className="mb-8 flex flex-col items-center text-center">
+              <div className="mb-4 flex h-20 w-20 items-center justify-center rounded-full border border-white/25 bg-gradient-to-b from-sky-400 to-blue-600 shadow-xl">
+                <Server className="h-9 w-9 text-white" />
+              </div>
+              <h1 className="mb-1 text-2xl font-semibold text-white">
+                SSH 桌面
               </h1>
-              <p className="text-sm text-white/50">连接到远程服务器桌面环境</p>
+              <p className="text-sm text-white/60">连接到远程服务器桌面环境</p>
             </div>
 
-            <div className="mb-6 flex rounded-lg bg-black/30 p-1">
+            <div className="mb-6 flex rounded-full bg-black/25 p-1">
               <button
                 type="button"
                 onClick={() => setLoginType("password")}
-                className={`flex-1 rounded-md py-2.5 text-sm font-medium transition-all ${
+                className={`flex-1 rounded-full py-1.5 text-[13px] font-medium transition-all ${
                   loginType === "password"
-                    ? "bg-white/10 text-white"
+                    ? "bg-white/25 text-white shadow-sm"
                     : "text-white/60 hover:text-white/80"
                 }`}
               >
@@ -127,9 +130,9 @@ export function DesktopLogin({ onLogin, loading, error }: DesktopLoginProps) {
               <button
                 type="button"
                 onClick={() => setLoginType("key")}
-                className={`flex-1 rounded-md py-2.5 text-sm font-medium transition-all ${
+                className={`flex-1 rounded-full py-1.5 text-[13px] font-medium transition-all ${
                   loginType === "key"
-                    ? "bg-white/10 text-white"
+                    ? "bg-white/25 text-white shadow-sm"
                     : "text-white/60 hover:text-white/80"
                 }`}
               >
@@ -139,7 +142,7 @@ export function DesktopLogin({ onLogin, loading, error }: DesktopLoginProps) {
 
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="flex gap-3">
-                <div className="flex flex-1 items-center gap-2 rounded-lg border border-white/10 bg-black/20 px-3 py-2.5">
+                <div className="flex flex-1 items-center gap-2 rounded-full border border-white/15 bg-black/25 px-4 py-2.5">
                   <Server className="h-4 w-4 shrink-0 text-white/40" />
                   <input
                     type="text"
@@ -150,7 +153,7 @@ export function DesktopLogin({ onLogin, loading, error }: DesktopLoginProps) {
                     autoFocus
                   />
                 </div>
-                <div className="flex w-20 items-center justify-center rounded-lg border border-white/10 bg-black/20 px-0">
+                <div className="flex w-20 items-center justify-center rounded-full border border-white/15 bg-black/25 px-0">
                   <input
                     type="number"
                     value={port}
@@ -162,7 +165,7 @@ export function DesktopLogin({ onLogin, loading, error }: DesktopLoginProps) {
                 </div>
               </div>
 
-              <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-black/20 px-3 py-2.5">
+              <div className="flex items-center gap-2 rounded-full border border-white/15 bg-black/25 px-4 py-2.5">
                 <User className="h-4 w-4 shrink-0 text-white/40" />
                 <input
                   type="text"
@@ -174,7 +177,7 @@ export function DesktopLogin({ onLogin, loading, error }: DesktopLoginProps) {
               </div>
 
               {loginType === "password" ? (
-                <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-black/20 px-3 py-2.5">
+                <div className="flex items-center gap-2 rounded-full border border-white/15 bg-black/25 px-4 py-2.5">
                   <Lock className="h-4 w-4 shrink-0 text-white/40" />
                   <input
                     type={showPassword ? "text" : "password"}
@@ -196,7 +199,7 @@ export function DesktopLogin({ onLogin, loading, error }: DesktopLoginProps) {
                   </button>
                 </div>
               ) : (
-                <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-black/20 px-3 py-2.5">
+                <div className="flex items-center gap-2 rounded-full border border-white/15 bg-black/25 px-4 py-2.5">
                   <Shield className="h-4 w-4 shrink-0 text-white/40" />
                   <input
                     type="text"
@@ -215,7 +218,7 @@ export function DesktopLogin({ onLogin, loading, error }: DesktopLoginProps) {
               <button
                 type="submit"
                 disabled={loading || !host || !username}
-                className="w-full rounded-lg bg-blue-600 py-2.5 text-sm font-medium text-white transition-colors hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+                className="w-full rounded-full bg-[#0a82ff] py-2.5 text-sm font-medium text-white shadow-lg shadow-blue-500/30 transition-colors hover:bg-[#339bff] disabled:cursor-not-allowed disabled:opacity-50"
               >
                 连接
               </button>

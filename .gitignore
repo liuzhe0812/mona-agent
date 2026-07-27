@@ -98,6 +98,13 @@ nano.*.save
 .env.*
 !.env.example
 
+# Alipay payment keys (never commit)
+mona-auth/keys/
+*.pem
+
+# AI assistant temp artifacts
+.superpowers/
+
 # Logs & temp
 *.log
 logs/

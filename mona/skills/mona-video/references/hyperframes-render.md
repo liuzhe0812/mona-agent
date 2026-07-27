@@ -1,4 +1,4 @@
-# Hyperframes Render Guide(占位,Phase 3 完善)
+# Hyperframes Render Guide
 
 ## Prerequisites
 

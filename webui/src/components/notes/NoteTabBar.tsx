@@ -1,6 +1,5 @@
 import {
   AppWindow,
-  Bookmark,
   Crosshair,
   ExternalLink,
   FolderInput,
@@ -43,7 +42,6 @@ interface NoteTabBarProps {
   onRename?: (note: OperationNote) => void;
   onMoveToNotebook?: (note: OperationNote, notebookId: string) => void;
   onToggleFavorite?: (note: OperationNote) => void;
-  onToggleBookmark?: (note: OperationNote) => void;
   onMergeNote?: (note: OperationNote, targetNoteId: string) => void;
   onFind?: (note: OperationNote) => void;
   onReplace?: (note: OperationNote) => void;
@@ -66,7 +64,6 @@ export function NoteTabBar({
   onRename,
   onMoveToNotebook,
   onToggleFavorite,
-  onToggleBookmark,
   onMergeNote,
   onFind,
   onReplace,
@@ -180,17 +177,6 @@ export function NoteTabBar({
                     )}
                   />
                   {note.favorite ? "取消收藏" : "收藏"}
-                </ContextMenuItem>
-              ) : null}
-              {onToggleBookmark ? (
-                <ContextMenuItem onSelect={() => onToggleBookmark(note)}>
-                  <Bookmark
-                    className={cn(
-                      "mr-2 h-3.5 w-3.5",
-                      note.bookmarked && "fill-current text-amber-500",
-                    )}
-                  />
-                  {note.bookmarked ? "编辑书签" : "添加书签"}
                 </ContextMenuItem>
               ) : null}
               {onMergeNote ? (
