@@ -15,6 +15,11 @@ design-assets/
 tests/
 docs/
 hardware/
+%TEMP%/
+
+# 清理：根目录非代码/项目配置文件
+CONTACTS_DEV_PLAN.md
+logo.png
 
 # 清理：屏蔽所有隐藏目录（.开头，IDE/CI/AI 助手本地配置）
 .agent/
