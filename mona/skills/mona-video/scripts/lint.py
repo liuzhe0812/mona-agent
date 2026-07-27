@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""Lint video scene HTML files using hyperframes lint.
-
-Phase 3 placeholder: validates basic HTML structure.
-Actual hyperframes lint integration will be added here.
-"""
+"""Lint video scene HTML files for required structure and GSAP references."""
 
 from __future__ import annotations
 

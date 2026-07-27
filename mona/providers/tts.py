@@ -507,6 +507,138 @@ class CosyVoiceTTSProvider(TTSProvider):
 
 
 # ---------------------------------------------------------------------------
+# Custom TTS (OpenAI-compatible /audio/speech endpoint)
+# ---------------------------------------------------------------------------
+
+class CustomTTSProvider(TTSProvider):
+    """TTS provider using an OpenAI-compatible /v1/audio/speech endpoint.
+
+    The user supplies api_base, api_key, model and voice. Works with any
+    provider that mirrors the OpenAI TTS API (MiniMax, SiliconFlow, etc.).
+    """
+
+    name = "custom"
+
+    def __init__(
+        self,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        voice: str = "",
+        model: str = "tts-1",
+        rate: str = "+0%",
+    ):
+        self.api_key = api_key or ""
+        base = (api_base or "").rstrip("/")
+        if not base:
+            self.api_url = ""
+        elif base.endswith("/v1/audio/speech"):
+            self.api_url = base
+        elif base.endswith("/v1"):
+            self.api_url = base + "/audio/speech"
+        elif base.endswith("/audio/speech"):
+            self.api_url = base
+        else:
+            self.api_url = base + "/v1/audio/speech"
+        self.voice = voice
+        self.model = model or "tts-1"
+        self.rate = rate
+
+    async def _post(self, client: httpx.AsyncClient, text: str) -> httpx.Response:
+        payload: dict[str, object] = {
+            "model": self.model,
+            "input": text,
+            "voice": self.voice or "alloy",
+            "response_format": "mp3",
+        }
+        # OpenAI TTS supports speed in [0.25, 4.0]; pass only if non-default.
+        rate_value = _normalize_rate(self.rate)
+        if rate_value not in ("+0%", "0%"):
+            try:
+                pct = int(rate_value.rstrip("%").replace("+", ""))
+                speed = max(0.25, min(4.0, 1.0 + pct / 100.0))
+                payload["speed"] = speed
+            except ValueError:
+                pass
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        return await client.post(self.api_url, json=payload, headers=headers, timeout=60.0)
+
+    async def synthesize(self, text: str, output_path: str | Path, *, voice: str = "") -> Path | None:
+        if not self.api_key or not self.api_url:
+            logger.warning("Custom TTS not configured (api_key/api_base missing)")
+            return None
+        out = Path(output_path)
+        out.parent.mkdir(parents=True, exist_ok=True)
+
+        async with httpx.AsyncClient() as client:
+            for attempt in range(_MAX_RETRIES + 1):
+                try:
+                    response = await self._post(client, text)
+                except _RETRYABLE_EXCEPTIONS as e:
+                    if attempt < _MAX_RETRIES:
+                        await asyncio.sleep(_BACKOFF_S[attempt])
+                        continue
+                    logger.exception("Custom TTS error after {} attempts: {}", _MAX_RETRIES + 1, e)
+                    return None
+                except Exception as e:
+                    logger.exception("Custom TTS error: {}", e)
+                    return None
+
+                if response.status_code in _RETRYABLE_STATUS and attempt < _MAX_RETRIES:
+                    await asyncio.sleep(_BACKOFF_S[attempt])
+                    continue
+
+                try:
+                    response.raise_for_status()
+                except Exception as e:
+                    logger.exception("Custom TTS HTTP error: {}", e)
+                    return None
+
+                try:
+                    out.write_bytes(response.content)
+                    return out
+                except Exception as e:
+                    logger.exception("Custom TTS write failed: {}", e)
+                    return None
+        return None
+
+    async def synthesize_to_bytes(self, text: str, *, voice: str = "") -> bytes | None:
+        if not self.api_key or not self.api_url:
+            logger.warning("Custom TTS not configured (api_key/api_base missing)")
+            return None
+
+        async with httpx.AsyncClient() as client:
+            for attempt in range(_MAX_RETRIES + 1):
+                try:
+                    response = await self._post(client, text)
+                except _RETRYABLE_EXCEPTIONS as e:
+                    if attempt < _MAX_RETRIES:
+                        await asyncio.sleep(_BACKOFF_S[attempt])
+                        continue
+                    logger.exception("Custom TTS error after {} attempts: {}", _MAX_RETRIES + 1, e)
+                    return None
+                except Exception as e:
+                    logger.exception("Custom TTS error: {}", e)
+                    return None
+
+                if response.status_code in _RETRYABLE_STATUS and attempt < _MAX_RETRIES:
+                    await asyncio.sleep(_BACKOFF_S[attempt])
+                    continue
+
+                try:
+                    response.raise_for_status()
+                except Exception as e:
+                    logger.exception("Custom TTS HTTP error: {}", e)
+                    return None
+
+                return response.content
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------
 
@@ -514,6 +646,7 @@ _PROVIDERS: dict[str, type[TTSProvider]] = {
     "edge": EdgeTTSProvider,
     "minimax": MiniMaxTTSProvider,
     "cosyvoice": CosyVoiceTTSProvider,
+    "custom": CustomTTSProvider,
 }
 
 
@@ -524,6 +657,7 @@ def get_tts_provider(
     api_base: str | None = None,
     voice: str = "",
     model: str = "",
+    rate: str = "",
 ) -> TTSProvider:
     """Create a TTS provider instance by name.
 
@@ -532,7 +666,7 @@ def get_tts_provider(
     cls = _PROVIDERS.get(provider, EdgeTTSProvider)
 
     if cls is EdgeTTSProvider:
-        return cls(voice=voice or "zh-CN-XiaoyiNeural")
+        return cls(voice=voice or "zh-CN-XiaoyiNeural", rate=rate or "+0%")
 
     kwargs: dict[str, Any] = {}
     if api_key:
@@ -543,4 +677,6 @@ def get_tts_provider(
         kwargs["voice"] = voice
     if model:
         kwargs["model"] = model
+    if rate and cls is CustomTTSProvider:
+        kwargs["rate"] = rate
     return cls(**kwargs)

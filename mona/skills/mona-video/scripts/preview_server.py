@@ -35,8 +35,7 @@ def serve_project(project_path: str, port: int | None = None) -> dict:
     if port is None:
         port = find_free_port()
 
-    # Phase 3: actual server implementation
-    # For now, report the configuration
+    # Report the configuration; actual serving is handled by the gateway preview API.
     return {
         "ok": True,
         "port": port,

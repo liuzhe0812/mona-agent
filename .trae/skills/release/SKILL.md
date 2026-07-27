@@ -5,7 +5,7 @@ description: "Build and publish Mona releases to Qiniu Cloud (CDN) + VPS for hot
 
 # Mona Release Pipeline
 
-Pre-check → Git commit → Bump version → Build → Update package → Changelog → Upload → Manifest → Deploy site → Verify.
+Pre-check → Git commit → Bump version → Build → Update package → Changelog → Upload → Manifest → Deploy site → Verify → Push.
 
 ## Prerequisites
 
@@ -300,7 +300,37 @@ Check:
 4. NSIS installer — HTTP 200
 5. Open `https://mona.lzfun.vip/changelog` in browser — page renders correctly
 
-## Step 8: Cleanup
+## Step 8: Push to Remote
+
+将 release 过程中产生的 commits 推送到远端仓库。
+
+### 8.1 提交版本 bump 和 changelog 改动
+
+版本 bump（Step 1）和 changelog 更新（Step 4.4）会修改文件但流程中未显式 commit。先检查并提交：
+
+```powershell
+git status --short
+git add src-tauri/Cargo.toml src-tauri/tauri.conf.json pyproject.toml site/public/changelog.json
+git commit -m "chore(release): v<version>"
+```
+
+如果 `git status` 显示这些文件已干净（已被前序 commit 包含），跳过 commit 直接进入下一步。
+
+### 8.2 推送到远端
+
+```powershell
+git push origin HEAD
+```
+
+如果当前分支没有 upstream，使用 `git push -u origin HEAD`。
+
+### 8.3 红线
+
+- **禁止** `git push --force` / `--force-with-lease` 到 main/master
+- 推送前确认 `.env`、API key 等敏感文件不在待推送内容中（应已被 `.gitignore` 排除）
+- 如果 push 失败因远端有新提交，先 `git pull --rebase` 再 push，不要强推
+
+## Step 9: Cleanup
 
 ```powershell
 Remove-Item -Recurse -Force "$env:TEMP\mona-python-build" -ErrorAction SilentlyContinue

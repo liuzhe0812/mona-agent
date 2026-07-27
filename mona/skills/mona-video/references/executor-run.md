@@ -1,4 +1,4 @@
-# Video Executor — HTML/GSAP Composition(占位,Phase 3 完善)
+# Video Executor — HTML/GSAP Composition
 
 ## Composition Structure
 

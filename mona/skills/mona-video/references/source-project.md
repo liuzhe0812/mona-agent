@@ -1,4 +1,4 @@
-# Source Project Setup(占位,Phase 3 完善)
+# Source Project Setup
 
 ## Project Directory Structure
 

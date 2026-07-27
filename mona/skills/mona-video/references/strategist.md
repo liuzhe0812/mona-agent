@@ -1,4 +1,4 @@
-# Video Storyboard Strategist(占位,Phase 3 完善)
+# Video Storyboard Strategist
 
 ## Storyboard Structure
 

@@ -1,4 +1,4 @@
-# Video Postprocess & Export(占位,Phase 3 完善)
+# Video Postprocess & Export
 
 ## Render Pipeline
 

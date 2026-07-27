@@ -113,6 +113,21 @@ async def synthesize_project(project_path: str | Path) -> dict:
     if provider_name == "edge":
         # EdgeTTSProvider accepts rate in __init__.
         provider = EdgeTTSProvider(voice=voice, rate=rate)
+    elif provider_name == "custom":
+        # Custom OpenAI-compatible TTS — user must supply api_base/api_key/model.
+        api_base = str(meta.get("ttsApiBase") or "").strip()
+        api_key = str(meta.get("ttsApiKey") or "").strip()
+        model = str(meta.get("ttsModel") or "tts-1").strip() or "tts-1"
+        if not api_base or not api_key:
+            return {"ok": False, "error": "custom TTS requires ttsApiBase and ttsApiKey in meta.json"}
+        provider = get_tts_provider(
+            "custom",
+            api_key=api_key,
+            api_base=api_base,
+            voice=voice,
+            model=model,
+            rate=rate,
+        )
     else:
         provider = get_tts_provider(provider_name, voice=voice)
 

@@ -36,13 +36,16 @@ import { cn } from "@/lib/utils";
 import { DocChatPanel } from "../DocChatPanel";
 import { VideoPreview } from "./VideoPreview";
 import { VideoRuntimeDialog } from "./VideoRuntimeDialog";
+import { StoryboardPhase } from "./StoryboardPhase";
+import { ProducingPhase } from "./ProducingPhase";
+import { ExportPhase } from "./ExportPhase";
 
 type SidebarTab = "config" | "history";
-type VideoPhase = "config" | "generating" | "done";
+type VideoPhase = "config" | "generating" | "storyboard" | "producing" | "export" | "done";
 type VideoRatio = "16:9" | "9:16" | "1:1";
 type VideoFps = 30 | 60;
 type VideoQuality = "draft" | "standard" | "high";
-type TtsProvider = "edge" | "minimax" | "cosyvoice";
+type TtsProvider = "edge" | "custom";
 
 const RATIOS: Array<{ value: VideoRatio; label: string; resolution: string }> = [
   { value: "16:9", label: "横屏", resolution: "1920×1080" },
@@ -63,9 +66,26 @@ const QUALITY_OPTIONS: Array<{ value: VideoQuality; label: string }> = [
 
 const TTS_PROVIDERS: Array<{ value: TtsProvider; label: string; hint: string }> = [
   { value: "edge", label: "Edge", hint: "免费" },
-  { value: "minimax", label: "MiniMax", hint: "需 Key" },
-  { value: "cosyvoice", label: "CosyVoice", hint: "需 Key" },
+  { value: "custom", label: "自定义", hint: "OpenAI 兼容" },
 ];
+
+const EDGE_VOICES: Array<{ value: string; label: string }> = [
+  { value: "zh-CN-XiaoyiNeural", label: "晓伊（女·温柔）" },
+  { value: "zh-CN-YunxiNeural", label: "云希（男·成熟）" },
+  { value: "zh-CN-YunyangNeural", label: "云扬（男·新闻）" },
+  { value: "zh-CN-XiaoxiaoNeural", label: "晓晓（女·标准）" },
+  { value: "zh-CN-XiaohanNeural", label: "晓涵（女·温暖）" },
+  { value: "zh-CN-XiaomengNeural", label: "晓梦（女·亲切）" },
+  { value: "zh-CN-XiaomoNeural", label: "晓墨（女·知性）" },
+  { value: "zh-CN-XiaoqiuNeural", label: "晓秋（女·沉稳）" },
+  { value: "zh-CN-YunfengNeural", label: "云枫（男·磁性）" },
+  { value: "zh-CN-YunhaoNeural", label: "云皓（男·活力）" },
+  { value: "zh-CN-YunjianNeural", label: "云健（男·运动）" },
+];
+
+const CUSTOM_VOICE_PLACEHOLDER = "alloy";
+const CUSTOM_API_BASE_PLACEHOLDER = "https://api.example.com/v1";
+const CUSTOM_MODEL_PLACEHOLDER = "tts-1";
 
 const RATIO_RESOLUTION_MAP: Record<VideoRatio, string> = {
   "16:9": "1920x1080",
@@ -91,6 +111,9 @@ export function VideoMakerView() {
   const [ttsProvider, setTtsProvider] = useState<TtsProvider>("edge");
   const [ttsVoice, setTtsVoice] = useState("");
   const [ttsRate, setTtsRate] = useState("");
+  const [ttsApiBase, setTtsApiBase] = useState("");
+  const [ttsApiKey, setTtsApiKey] = useState("");
+  const [ttsModel, setTtsModel] = useState("");
   const [phase, setPhase] = useState<VideoPhase>("config");
   const [chatId, setChatId] = useState<string | null>(null);
   const [projectName, setProjectName] = useState<string | null>(null);
@@ -115,7 +138,7 @@ export function VideoMakerView() {
 
   // Auto-switch to history tab when generation starts or completes
   useEffect(() => {
-    if (phase === "generating" || phase === "done") {
+    if (phase === "generating" || phase === "export" || phase === "done") {
       setSidebarTab("history");
     }
   }, [phase]);
@@ -167,7 +190,7 @@ export function VideoMakerView() {
         setPreviewPort(res.previewPort ?? null);
         setVideoUrl(res.videoUrl ?? null);
         if (res.status === "done" && res.hasVideo) {
-          setPhase("done");
+          setPhase("export");
           setRenderStatus({ stage: "complete", progress: 100 });
           setHistoryKey((k) => k + 1);
           generatingRef.current = false;
@@ -266,6 +289,13 @@ export function VideoMakerView() {
             ttsProvider,
             ttsVoice: ttsVoice.trim(),
             ttsRate: ttsRate.trim(),
+            ...(ttsProvider === "custom"
+              ? {
+                  ttsApiBase: ttsApiBase.trim(),
+                  ttsApiKey: ttsApiKey.trim(),
+                  ttsModel: ttsModel.trim(),
+                }
+              : {}),
           }
         : undefined;
       const prompt = buildVideoPrompt({
@@ -280,6 +310,9 @@ export function VideoMakerView() {
               provider: ttsProvider,
               voice: ttsVoice.trim(),
               rate: ttsRate.trim(),
+              apiBase: ttsProvider === "custom" ? ttsApiBase.trim() : undefined,
+              apiKey: ttsProvider === "custom" ? ttsApiKey.trim() : undefined,
+              model: ttsProvider === "custom" ? ttsModel.trim() : undefined,
             }
           : undefined,
       });
@@ -293,7 +326,7 @@ export function VideoMakerView() {
       await saveVideoChatId(token, name, newChatId);
       // 5. Send prompt
       client.sendMessage(newChatId, prompt, undefined, { displayContent: displayText });
-      setPhase("generating");
+      setPhase("storyboard");
       setRenderStatus({ stage: "lint", progress: 0 });
     } catch (e) {
       console.error("Failed to start video generation", e);
@@ -310,6 +343,9 @@ export function VideoMakerView() {
     ttsProvider,
     ttsVoice,
     ttsRate,
+    ttsApiBase,
+    ttsApiKey,
+    ttsModel,
     token,
   ]);
 
@@ -326,12 +362,17 @@ export function VideoMakerView() {
       setProjectName(project.name);
       setChatId(project.chatId);
       const isDone = project.status === "done" || project.hasVideo;
-      setPhase(isDone ? "done" : "generating");
-      setRenderStatus(
-        isDone
-          ? { stage: "complete", progress: 100 }
-          : { stage: "lint", progress: 0 },
-      );
+      if (isDone) {
+        setPhase("export");
+        setRenderStatus({ stage: "complete", progress: 100 });
+      } else if (project.hasStoryboard) {
+        // 旧项目有 storyboard 但未渲染 → 进入分镜阶段
+        setPhase("storyboard");
+        setRenderStatus({ stage: "idle", progress: 0 });
+      } else {
+        setPhase("generating");
+        setRenderStatus({ stage: "lint", progress: 0 });
+      }
     },
     [],
   );
@@ -440,19 +481,6 @@ export function VideoMakerView() {
                 <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overflow-x-hidden p-3">
                   <section>
                     <h3 className="mb-1.5 text-[12px] font-medium text-foreground">
-                      视频主题
-                    </h3>
-                    <Textarea
-                      className="min-h-[80px] resize-none text-[12px]"
-                      placeholder="描述你想制作的视频内容..."
-                      value={topic}
-                      onChange={(e) => setTopic(e.target.value)}
-                      disabled={phase === "generating"}
-                    />
-                  </section>
-
-                  <section>
-                    <h3 className="mb-1.5 text-[12px] font-medium text-foreground">
                       画面比例
                     </h3>
                     <div className="grid grid-cols-3 gap-1 rounded-lg bg-muted p-1">
@@ -550,7 +578,7 @@ export function VideoMakerView() {
                           <div className="mb-1 text-[10px] text-muted-foreground">
                             TTS 供应商
                           </div>
-                          <div className="grid grid-cols-3 gap-1 rounded-lg bg-muted p-1">
+                          <div className="grid grid-cols-2 gap-1 rounded-lg bg-muted p-1">
                             {TTS_PROVIDERS.map((p) => (
                               <button
                                 key={p.value}
@@ -562,7 +590,10 @@ export function VideoMakerView() {
                                     ? "bg-background text-foreground shadow"
                                     : "text-muted-foreground hover:text-foreground",
                                 )}
-                                onClick={() => setTtsProvider(p.value)}
+                                onClick={() => {
+                                  setTtsProvider(p.value);
+                                  setTtsVoice("");
+                                }}
                                 disabled={phase === "generating"}
                               >
                                 {p.label}
@@ -570,18 +601,105 @@ export function VideoMakerView() {
                             ))}
                           </div>
                         </div>
-                        <div>
-                          <div className="mb-1 text-[10px] text-muted-foreground">
-                            音色 ID
-                          </div>
-                          <Input
-                            value={ttsVoice}
-                            onChange={(e) => setTtsVoice(e.target.value)}
-                            placeholder="zh-CN-XiaoyiNeural"
-                            className="h-8 rounded-lg text-[12px]"
-                            disabled={phase === "generating"}
-                          />
-                        </div>
+
+                        {ttsProvider === "edge" ? (
+                          <>
+                            <div>
+                              <div className="mb-1 text-[10px] text-muted-foreground">
+                                音色
+                              </div>
+                              <select
+                                className="w-full rounded-lg border border-border/70 bg-transparent px-3 py-1.5 text-[12px] outline-none focus:border-primary"
+                                value={
+                                  EDGE_VOICES.some((v) => v.value === ttsVoice)
+                                    ? ttsVoice
+                                    : ttsVoice
+                                      ? "__custom__"
+                                      : ""
+                                }
+                                onChange={(e) => {
+                                  const v = e.target.value;
+                                  if (v === "__custom__") {
+                                    setTtsVoice("");
+                                  } else {
+                                    setTtsVoice(v);
+                                  }
+                                }}
+                                disabled={phase === "generating"}
+                              >
+                                <option value="">选择音色...</option>
+                                {EDGE_VOICES.map((v) => (
+                                  <option key={v.value} value={v.value}>
+                                    {v.label}
+                                  </option>
+                                ))}
+                                <option value="__custom__">自定义 ID...</option>
+                              </select>
+                              {(!EDGE_VOICES.some((v) => v.value === ttsVoice) || ttsVoice === "") && (
+                                <Input
+                                  value={ttsVoice}
+                                  onChange={(e) => setTtsVoice(e.target.value)}
+                                  placeholder="zh-CN-XiaoyiNeural"
+                                  className="mt-1.5 h-8 rounded-lg text-[12px]"
+                                  disabled={phase === "generating"}
+                                />
+                              )}
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <div>
+                              <div className="mb-1 text-[10px] text-muted-foreground">
+                                API Base
+                              </div>
+                              <Input
+                                value={ttsApiBase}
+                                onChange={(e) => setTtsApiBase(e.target.value)}
+                                placeholder={CUSTOM_API_BASE_PLACEHOLDER}
+                                className="h-8 rounded-lg text-[12px]"
+                                disabled={phase === "generating"}
+                              />
+                            </div>
+                            <div>
+                              <div className="mb-1 text-[10px] text-muted-foreground">
+                                API Key
+                              </div>
+                              <Input
+                                value={ttsApiKey}
+                                onChange={(e) => setTtsApiKey(e.target.value)}
+                                placeholder="sk-..."
+                                type="password"
+                                className="h-8 rounded-lg text-[12px]"
+                                disabled={phase === "generating"}
+                              />
+                            </div>
+                            <div>
+                              <div className="mb-1 text-[10px] text-muted-foreground">
+                                Model
+                              </div>
+                              <Input
+                                value={ttsModel}
+                                onChange={(e) => setTtsModel(e.target.value)}
+                                placeholder={CUSTOM_MODEL_PLACEHOLDER}
+                                className="h-8 rounded-lg text-[12px]"
+                                disabled={phase === "generating"}
+                              />
+                            </div>
+                            <div>
+                              <div className="mb-1 text-[10px] text-muted-foreground">
+                                Voice ID
+                              </div>
+                              <Input
+                                value={ttsVoice}
+                                onChange={(e) => setTtsVoice(e.target.value)}
+                                placeholder={CUSTOM_VOICE_PLACEHOLDER}
+                                className="h-8 rounded-lg text-[12px]"
+                                disabled={phase === "generating"}
+                              />
+                            </div>
+                          </>
+                        )}
+
                         <div>
                           <div className="mb-1 text-[10px] text-muted-foreground">
                             语速
@@ -610,7 +728,19 @@ export function VideoMakerView() {
                   ) : null}
                 </div>
 
-                <div className="shrink-0 border-t border-border/70 p-3">
+                <div className="shrink-0 space-y-2 border-t border-border/70 p-3">
+                  <div>
+                    <h3 className="mb-1.5 text-[12px] font-medium text-foreground">
+                      视频主题
+                    </h3>
+                    <Textarea
+                      className="min-h-[80px] resize-none text-[12px]"
+                      placeholder="描述你想制作的视频内容..."
+                      value={topic}
+                      onChange={(e) => setTopic(e.target.value)}
+                      disabled={phase === "generating"}
+                    />
+                  </div>
                   <Button
                     className="w-full"
                     disabled={!topic.trim() || phase === "generating"}
@@ -689,6 +819,51 @@ export function VideoMakerView() {
             <div className="flex flex-1 items-center justify-center text-[13px] text-muted-foreground">
               输入主题后开始生成视频
             </div>
+          ) : phase === "storyboard" ? (
+            <div className="flex min-h-0 flex-1">
+              <div className="min-w-0 flex-1">
+                <StoryboardPhase
+                  projectName={projectName ?? ""}
+                  onLocked={() => setPhase("producing")}
+                />
+              </div>
+              <div className="w-[400px] shrink-0 border-l border-border/70">
+                <DocChatPanel
+                  chatId={chatId}
+                  onSend={handleSendMessage}
+                  placeholder="与视频助手对话调整分镜..."
+                />
+              </div>
+            </div>
+          ) : phase === "producing" ? (
+            <div className="flex min-h-0 flex-1">
+              <div className="min-w-0 flex-1">
+                <ProducingPhase
+                  projectName={projectName ?? ""}
+                  onAllConfirmed={() => setPhase("export")}
+                />
+              </div>
+              <div className="w-[400px] shrink-0 border-l border-border/70">
+                <DocChatPanel
+                  chatId={chatId}
+                  onSend={handleSendMessage}
+                  placeholder="与视频助手对话..."
+                />
+              </div>
+            </div>
+          ) : phase === "export" ? (
+            <div className="flex min-h-0 flex-1">
+              <div className="min-w-0 flex-1">
+                <ExportPhase projectName={projectName ?? ""} />
+              </div>
+              <div className="w-[400px] shrink-0 border-l border-border/70">
+                <DocChatPanel
+                  chatId={chatId}
+                  onSend={handleSendMessage}
+                  placeholder="与视频助手对话..."
+                />
+              </div>
+            </div>
           ) : (
             <ResizablePanelGroup direction="vertical" className="min-h-0 flex-1">
               <ResizablePanel defaultSize={55} minSize={20}>
@@ -742,6 +917,9 @@ function buildVideoPrompt(opts: {
     provider: TtsProvider;
     voice: string;
     rate: string;
+    apiBase?: string;
+    apiKey?: string;
+    model?: string;
   };
 }): string {
   const parts: string[] = [];
@@ -756,9 +934,13 @@ function buildVideoPrompt(opts: {
     parts.push(`旁白：启用`);
     parts.push(`TTS供应商：${opts.narration.provider}`);
     parts.push(
-      `音色：${opts.narration.voice || "zh-CN-XiaoyiNeural"}（留空用默认）`,
+      `音色：${opts.narration.voice || (opts.narration.provider === "custom" ? CUSTOM_VOICE_PLACEHOLDER : "zh-CN-XiaoyiNeural")}（留空用默认）`,
     );
     parts.push(`语速：${opts.narration.rate || "+0%"}（留空用默认）`);
+    if (opts.narration.provider === "custom") {
+      parts.push(`TTS API Base：${opts.narration.apiBase || "(未填)"}`);
+      parts.push(`TTS Model：${opts.narration.model || CUSTOM_MODEL_PLACEHOLDER}`);
+    }
   } else {
     parts.push(`旁白：未启用`);
   }
@@ -766,18 +948,17 @@ function buildVideoPrompt(opts: {
     parts.push(`主题：${opts.topic.trim()}`);
   }
   parts.push("");
+  parts.push("请按照 mona-video SKILL 的流程执行 Step 1-4：源文件分析 → 项目初始化 → 内容分析 → 生成分镜草稿（storyboard.md）。");
   if (opts.narration) {
-    parts.push(
-      "请按照 mona-video SKILL 的流程执行：编写 HTML 场景 → lint → validate → inspect → render → 生成旁白音频(Step 6.5) → 导出含音轨的最终视频。",
-    );
     parts.push(
       "每个场景的 storyboard.md 必须包含 - Narration: <纯文本> 字段，文本字数应与 Duration 匹配（中文约 4 字/秒）。",
     );
-  } else {
-    parts.push(
-      "请按照 mona-video SKILL 的流程执行：编写 HTML 场景 → lint → validate → inspect → render。",
-    );
   }
-  parts.push("完成后将最终视频文件输出到项目目录。");
+  parts.push("");
+  parts.push("重要：生成分镜草稿后必须停止。告知用户\"分镜草稿已就绪，请在右侧分镜审阅界面编辑确认\"，然后等待用户操作。");
+  parts.push("- 不要主动写 storyboard_lock.md");
+  parts.push("- 不要主动进入 Step 5 编写 HTML");
+  parts.push("- 不要主动调用任何渲染脚本");
+  parts.push("用户会在 UI 上编辑/增删/重排场景，确认后系统会自动解锁后续步骤。");
   return parts.join("\n");
 }
