@@ -78,10 +78,6 @@ export function resetDns() {
   return invoke<DnsApplyResult>("system_reset_dns");
 }
 
-export function flushDns() {
-  return invoke<DnsFlushResult>("system_flush_dns");
-}
-
 export function listHostsEntries() {
   return invoke<HostsListResult>("system_list_hosts_entries");
 }

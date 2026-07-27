@@ -64,17 +64,6 @@ export interface BlockResult {
   detail: string;
 }
 
-export interface FileLockHolder {
-  pid: number;
-  name: string;
-  path?: string | null;
-}
-
-export interface FileLockResult {
-  holders: FileLockHolder[];
-  detail: string;
-}
-
 export function listBlockedProcesses() {
   return invoke<BlockedProcess[]>("system_list_blocked_processes");
 }
@@ -85,41 +74,6 @@ export function blockProcess(exeName: string) {
 
 export function unblockProcess(exeName: string) {
   return invoke<BlockResult>("system_unblock_process", { exeName });
-}
-
-export function findFileLocks(filePath: string) {
-  return invoke<FileLockResult>("system_find_file_locks", { filePath });
-}
-
-export function terminateLockHolder(pid: number) {
-  return invoke<string>("system_terminate_lock_holder", { pid });
-}
-
-// ===== P5 注册表修复 =====
-export interface RepairItem {
-  id: string;
-  label: string;
-  description: string;
-  isBroken: boolean;
-  risk: string;
-  requiresAdministrator: boolean;
-  canRepair: boolean;
-  currentDetail: string;
-}
-
-export interface RepairResult {
-  itemId: string;
-  success: boolean;
-  detail: string;
-  requiresRestart: boolean;
-}
-
-export function checkSystemIntegrity() {
-  return invoke<RepairItem[]>("system_check_system_integrity");
-}
-
-export function repairItem(itemId: string) {
-  return invoke<RepairResult>("system_repair_item", { itemId });
 }
 
 // ===== P6 Defender =====

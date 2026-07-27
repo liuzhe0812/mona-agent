@@ -48,13 +48,6 @@ pub struct DnsApplyResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DnsFlushResult {
-    pub success: bool,
-    pub detail: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct HostsEntry {
     pub ip: String,
     pub domains: Vec<String>,
@@ -178,30 +171,6 @@ fn hosts_path() -> PathBuf {
         .join("drivers")
         .join("etc")
         .join("hosts")
-}
-
-#[cfg(windows)]
-fn run_hidden(program: &str, args: &[&str]) -> Result<String, String> {
-    use std::os::windows::process::CommandExt;
-    use std::process::Command;
-    const CREATE_NO_WINDOW: u32 = 0x08000000;
-    let output = Command::new(program)
-        .args(args)
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-        .map_err(|error| format!("启动 {program} 失败：{error}"))?;
-    let stdout = super::decode_windows_output(&output.stdout).trim().to_string();
-    let stderr = super::decode_windows_output(&output.stderr).trim().to_string();
-    if output.status.success() {
-        Ok(if stdout.is_empty() { "操作已完成".into() } else { stdout })
-    } else {
-        Err(if !stderr.is_empty() { stderr } else if !stdout.is_empty() { stdout } else { format!("{program} 返回错误码 {}", output.status.code().unwrap_or(-1)) })
-    }
-}
-
-#[cfg(not(windows))]
-fn run_hidden(_program: &str, _args: &[&str]) -> Result<String, String> {
-    Err("仅支持 Windows".into())
 }
 
 #[cfg(windows)]
@@ -439,26 +408,6 @@ pub async fn system_reset_dns(state: State<'_, SystemState>) -> Result<DnsApplyR
 
     if status == "成功" {
         Ok(DnsApplyResult { applied_adapters: applied, detail })
-    } else {
-        Err(detail)
-    }
-}
-
-#[tauri::command]
-pub async fn system_flush_dns(state: State<'_, SystemState>) -> Result<DnsFlushResult, String> {
-    let result = tokio::task::spawn_blocking(|| run_hidden("ipconfig.exe", &["/flushdns"]))
-        .await
-        .map_err(|error| format!("DNS 缓存刷新任务失败：{error}"))?;
-
-    let (success, detail, status) = match result {
-        Ok(msg) => (true, if msg.is_empty() { "DNS 解析缓存已刷新".into() } else { msg }, "成功"),
-        Err(error) => (false, error.clone(), "失败"),
-    };
-
-    record_network_event(&state, "刷新 DNS 缓存", status, &detail);
-
-    if success {
-        Ok(DnsFlushResult { success, detail })
     } else {
         Err(detail)
     }

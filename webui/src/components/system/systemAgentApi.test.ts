@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { describe, expect, it, vi } from "vitest";
 
-import { collectSystemDiagnosticEvidence, collectSystemEvidence, executeSystemAction, type SystemAgentAction } from "./systemAgentApi";
+import { collectSystemEvidence, executeSystemAction, type SystemAgentAction } from "./systemAgentApi";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn((command: string) => {
@@ -95,20 +95,4 @@ describe("collectSystemEvidence", () => {
   });
 });
 
-describe("collectSystemDiagnosticEvidence", () => {
-  it("uses symptom-specific native checks instead of repeating dashboard collection", async () => {
-    vi.mocked(invoke).mockClear();
-    const progress: string[] = [];
 
-    const evidence = await collectSystemDiagnosticEvidence("network", (stage, state) => {
-      progress.push(`${stage}:${state}`);
-    });
-
-    expect(evidence.checks.map((check) => check.id)).toEqual(["network_configuration", "pending_reboot", "component_health"]);
-    expect(invoke).toHaveBeenCalledWith("system_check_network_configuration");
-    expect(invoke).toHaveBeenCalledWith("system_check_pending_reboot");
-    expect(invoke).toHaveBeenCalledWith("system_check_component_health");
-    expect(invoke).not.toHaveBeenCalledWith("system_get_overview");
-    expect(progress.filter((item) => item.endsWith(":completed"))).toHaveLength(3);
-  });
-});

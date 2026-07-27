@@ -93,15 +93,6 @@ export function StatusPill({
   return <span className={cn("inline-flex rounded-md px-2 py-0.5 text-[10px] font-medium", tones[tone])}>{children}</span>;
 }
 
-export function Sparkline({ color = "#3b82f6", points }: { color?: string; points: string }) {
-  return (
-    <svg viewBox="0 0 160 48" className="h-12 w-full" preserveAspectRatio="none" aria-hidden>
-      <path d="M0 40H160" stroke="currentColor" className="text-border/70" />
-      <polyline points={points} fill="none" stroke={color} strokeWidth="2" vectorEffect="non-scaling-stroke" />
-    </svg>
-  );
-}
-
 export function ProgressBar({ value, color = "bg-blue-500" }: { value: number; color?: string }) {
   return (
     <div className="h-2 overflow-hidden rounded-full bg-muted">

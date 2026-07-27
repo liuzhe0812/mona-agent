@@ -10,7 +10,6 @@ pub mod network;
 pub mod performance;
 pub mod context_menu;
 pub mod process_control;
-pub mod repair;
 pub mod defender;
 
 use crate::settings::app_data_dir;

@@ -29,21 +29,6 @@ pub struct BlockResult {
     pub detail: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FileLockHolder {
-    pub pid: u32,
-    pub name: String,
-    pub path: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FileLockResult {
-    pub holders: Vec<FileLockHolder>,
-    pub detail: String,
-}
-
 fn now_ts() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
@@ -209,68 +194,6 @@ pub async fn system_unblock_process(state: State<'_, SystemState>, exe_name: Str
     } else {
         Err(detail)
     }
-}
-
-#[tauri::command]
-pub async fn system_find_file_locks(file_path: String) -> Result<FileLockResult, String> {
-    if file_path.trim().is_empty() {
-        return Err("文件路径不能为空".into());
-    }
-    let path = file_path.clone();
-    let result = tokio::task::spawn_blocking(move || -> Result<Vec<FileLockHolder>, String> {
-        let path_norm = path.replace('\'', "''");
-        let script = format!(
-            "$target='{path_norm}'; $targetFull=(Resolve-Path -LiteralPath $target -ErrorAction SilentlyContinue).Path; if(-not $targetFull){{ $targetFull=$target }}; $holders=@(); Get-Process -ErrorAction SilentlyContinue | ForEach-Object {{ $proc=$_; try {{ $_.Modules | Where-Object {{ $_.FileName -like \"$targetFull*\" -or $_.FileName -eq $targetFull }} | Select-Object -First 1 | ForEach-Object {{ $holders += [PSCustomObject]@{{Pid=$proc.Id;Name=$proc.ProcessName;Path=$_.FileName}} }} }} catch {{}} }}; $holders | ForEach-Object {{ \"$($_.Pid)|$($_.Name)|$($_.Path)\" }}",
-        );
-        let output = run_hidden_powershell(&script).unwrap_or_default();
-        let holders = output.lines().filter_map(|line| {
-            let parts: Vec<&str> = line.splitn(3, '|').collect();
-            if parts.len() >= 2 {
-                let pid: u32 = parts[0].parse().ok()?;
-                Some(FileLockHolder {
-                    pid,
-                    name: parts[1].to_string(),
-                    path: parts.get(2).map(|s| s.to_string()),
-                })
-            } else {
-                None
-            }
-        }).collect();
-        Ok(holders)
-    })
-    .await
-    .map_err(|e| format!("查询文件锁失败：{e}"))?;
-
-    match result {
-        Ok(holders) => {
-            let detail = if holders.is_empty() {
-                "没有找到占用该文件的进程".into()
-            } else {
-                format!("找到 {} 个占用进程", holders.len())
-            };
-            Ok(FileLockResult { holders, detail })
-        }
-        Err(e) => Err(e),
-    }
-}
-
-#[tauri::command]
-pub async fn system_terminate_lock_holder(state: State<'_, SystemState>, pid: u32) -> Result<String, String> {
-    let pid_str = pid.to_string();
-    let result = tokio::task::spawn_blocking(move || {
-        run_hidden_powershell(&format!("Stop-Process -Id {pid_str} -Force -ErrorAction Stop; 'OK'"))
-    })
-    .await
-    .map_err(|e| format!("终止进程失败：{e}"))?;
-
-    let (success, detail) = match result {
-        Ok(_) => (true, format!("已终止进程 PID={pid}")),
-        Err(ref e) => (false, e.clone()),
-    };
-    let status = if success { "成功" } else { "失败" };
-    record_event(&state, &format!("终止进程 PID={pid}"), status, &detail);
-
-    if success { Ok(detail) } else { Err(detail) }
 }
 
 #[cfg(test)]
