@@ -1,6 +1,5 @@
 pub mod commands;
 pub mod downloads;
-pub mod suggestions;
 pub mod storage;
 pub mod tab;
 

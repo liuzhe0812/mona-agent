@@ -76,7 +76,6 @@ describe("BrowserToolbar", () => {
 
       render(
         <BrowserToolbar
-          tabId="tab-1"
           url="https://example.com"
           title="Example"
           isAiControlled={false}
@@ -114,7 +113,6 @@ describe("BrowserToolbar", () => {
 
     render(
       <BrowserToolbar
-        tabId="tab-1"
         url="https://example.com"
         title="Example"
         isAiControlled={false}
@@ -151,7 +149,6 @@ describe("BrowserToolbar", () => {
 
     render(
       <BrowserToolbar
-        tabId="tab-1"
         url="https://example.com"
         title="Example"
         isAiControlled={false}
@@ -184,7 +181,6 @@ describe("BrowserToolbar", () => {
 
     render(
       <BrowserToolbar
-        tabId="tab-1"
         url="https://example.com"
         title="Example"
         isAiControlled={false}

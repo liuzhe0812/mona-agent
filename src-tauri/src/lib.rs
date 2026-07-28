@@ -13,6 +13,7 @@ mod notification_window;
 mod python;
 mod quick_ask;
 mod schedule_notifier;
+mod services;
 mod settings;
 mod system;
 mod terminal;
@@ -20,6 +21,7 @@ mod tray;
 mod updater;
 
 use gateway::GatewayManager;
+use services::ServicesManager;
 use settings::AppSettings;
 use std::sync::{Arc, Mutex};
 use tauri::webview::{DownloadEvent, WebviewWindowBuilder};
@@ -28,6 +30,7 @@ use tauri::utils::config::Color;
 use tauri_plugin_global_shortcut::ShortcutState;
 
 const GATEWAY_START_TIMEOUT_SECS: u64 = 90;
+const SERVICES_START_TIMEOUT_SECS: u64 = 90;
 
 #[cfg(test)]
 mod browser_ipc_tests {
@@ -68,9 +71,7 @@ mod browser_ipc_tests {
     fn browser_popup_capabilities_use_window_labels() {
         let capabilities = include_str!("../capabilities/default.json");
 
-        assert!(capabilities.contains("browser-address-suggestions"));
         assert!(capabilities.contains("browser-downloads"));
-        assert!(!capabilities.contains("\"browser-suggestions\""));
     }
 }
 
@@ -93,6 +94,51 @@ impl GatewayState {
         Self {
             inner: Arc::new(GatewayStateInner {
                 manager: GatewayManager::new(),
+                port: std::sync::Mutex::new(None),
+            }),
+        }
+    }
+
+    pub fn start(&self, settings: &AppSettings, app_handle: &tauri::AppHandle) -> Result<u16, String> {
+        let port = self.inner.manager.start(settings, app_handle)?;
+        *self.inner.port.lock().map_err(|e| e.to_string())? = Some(port);
+        Ok(port)
+    }
+
+    pub fn stop(&self) -> Result<(), String> {
+        self.inner.manager.stop()?;
+        *self.inner.port.lock().map_err(|e| e.to_string())? = None;
+        Ok(())
+    }
+
+    pub fn is_running(&self) -> bool {
+        self.inner.manager.is_running()
+    }
+
+    pub fn exit_message(&self) -> Option<String> {
+        self.inner.manager.exit_message()
+    }
+
+    pub fn port(&self) -> Option<u16> {
+        self.inner.port.lock().ok()?.as_ref().copied()
+    }
+}
+
+#[derive(Clone)]
+pub struct ServicesState {
+    inner: Arc<ServicesStateInner>,
+}
+
+struct ServicesStateInner {
+    manager: ServicesManager,
+    port: std::sync::Mutex<Option<u16>>,
+}
+
+impl ServicesState {
+    pub fn new() -> Self {
+        Self {
+            inner: Arc::new(ServicesStateInner {
+                manager: ServicesManager::new(),
                 port: std::sync::Mutex::new(None),
             }),
         }
@@ -158,7 +204,7 @@ async fn start_gateway(
     app_handle: tauri::AppHandle,
 ) -> Result<u16, String> {
     let settings = settings::load_settings();
-    settings::ensure_desktop_config(settings.gateway_port)?;
+    settings::ensure_desktop_config(settings.gateway_port, settings.services_port)?;
     let port = state.start(&settings, &app_handle)?;
     let wait_state = state.inner().clone();
     gateway::wait_for_gateway(port, GATEWAY_START_TIMEOUT_SECS, move || {
@@ -182,6 +228,37 @@ async fn gateway_status(state: tauri::State<'_, GatewayState>) -> Result<serde_j
         "running": running,
         "port": port,
         "ws_port": ws_port,
+    }))
+}
+
+#[tauri::command]
+async fn start_services(
+    state: tauri::State<'_, ServicesState>,
+    app_handle: tauri::AppHandle,
+) -> Result<u16, String> {
+    let settings = settings::load_settings();
+    settings::ensure_desktop_config(settings.gateway_port, settings.services_port)?;
+    let port = state.start(&settings, &app_handle)?;
+    let wait_state = state.inner().clone();
+    services::wait_for_services(port, SERVICES_START_TIMEOUT_SECS, move || {
+        wait_state.exit_message()
+    })
+    .await?;
+    Ok(port)
+}
+
+#[tauri::command]
+async fn stop_services(state: tauri::State<'_, ServicesState>) -> Result<(), String> {
+    state.stop()
+}
+
+#[tauri::command]
+async fn services_status(state: tauri::State<'_, ServicesState>) -> Result<serde_json::Value, String> {
+    let running = state.is_running();
+    let port = state.port();
+    Ok(serde_json::json!({
+        "running": running,
+        "port": port,
     }))
 }
 
@@ -479,13 +556,13 @@ pub fn run() {
                 .build())
         .plugin(tauri_plugin_notification::init())
         .manage(gateway_state.clone())
+        .manage(ServicesState::new())
         .manage(terminal_state)
         .manage(db_state)
         .manage(email_state)
         .manage(contacts_state)
         .manage(quick_ask::QuickAskShortcutState::default())
         .manage(browser::BrowserState::new())
-        .manage(browser::suggestions::AddressSuggestionWindowState::new())
         .manage(PendingMdFiles::default())
         .manage(tray::PendingMailNavigation::default())
         .manage(notification_window::NotificationWindowState::new())
@@ -496,6 +573,9 @@ pub fn run() {
             start_gateway,
             stop_gateway,
             gateway_status,
+            start_services,
+            stop_services,
+            services_status,
             diagnose_gateway,
             gateway::read_gateway_log,
             local_http_request,
@@ -762,10 +842,6 @@ pub fn run() {
             browser::commands::browser_open_devtools,
             browser::commands::browser_set_dark_mode,
             browser::commands::browser_get_page_info,
-            browser::suggestions::browser_show_address_suggestions,
-            browser::suggestions::show_browser_address_suggestions_window,
-            browser::suggestions::browser_hide_address_suggestions,
-            browser::suggestions::browser_select_address_suggestion,
             browser::downloads::browser_show_downloads,
             browser::downloads::browser_toggle_downloads,
             browser::downloads::browser_hide_downloads,
@@ -1006,7 +1082,7 @@ pub fn run() {
             if settings.auto_start_gateway {
                 let config_status = settings::check_mona_config();
                 if config_status.has_provider {
-                    if let Err(e) = settings::ensure_desktop_config(settings.gateway_port) {
+                    if let Err(e) = settings::ensure_desktop_config(settings.gateway_port, settings.services_port) {
                         log::error!("Failed to ensure desktop config: {}", e);
                     }
                     let state = gateway_state.clone();
@@ -1029,12 +1105,12 @@ pub fn run() {
                                         // native system toasts independent of webview state.
                                         schedule_notifier::start_polling(
                                             app_handle_clone.clone(),
-                                            actual_port,
+                                            settings_clone.services_port,
                                         );
                                         // 启动邮箱后台静默同步引擎：30s 后首次执行，之后每 5 分钟一次
                                         email::start_background_sync(
                                             app_handle_clone.clone(),
-                                            actual_port,
+                                            settings_clone.services_port,
                                         );
                                     }
                                     Err(e) => {

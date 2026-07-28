@@ -1,4 +1,4 @@
-import { ArrowLeft, ArrowRight, RotateCw, Star, Lock, Globe, Search, Maximize, Minimize, Settings2, Trash2, HardDrive, Download, FileText, Loader2, BookmarkPlus, Upload, ZoomIn, ZoomOut, Printer, Code, Search as FindIcon, Clock, Cookie, Volume2, VolumeX, Shield, ShieldOff, Eye, Terminal, Moon, Sun, Share2 } from "lucide-react";
+import { ArrowLeft, ArrowRight, RotateCw, Star, Search, Maximize, Minimize, Settings2, Trash2, HardDrive, Download, FileText, Loader2, BookmarkPlus, Upload, ZoomIn, ZoomOut, Printer, Code, Search as FindIcon, Clock, Cookie, Volume2, VolumeX, Shield, ShieldOff, Eye, Terminal, Moon, Sun, Share2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { AgentLogo } from "@/components/AgentLogo";
@@ -19,7 +19,6 @@ import {
   browserClearHistory,
   browserClearCache,
   browserImportBookmarks,
-  browserListenAddressSuggestionSelected,
   type AddressBarSuggestion,
   type ImportBookmarkItem,
 } from "@/lib/browser-ipc";
@@ -91,7 +90,6 @@ function normalizeUrlOrSearch(input: string): string {
 }
 
 interface BrowserToolbarProps {
-  tabId?: string;
   url: string;
   title: string;
   isAiControlled: boolean;
@@ -108,6 +106,7 @@ interface BrowserToolbarProps {
   onReload: () => void;
   onToggleAiPanel: () => void;
   onToggleBookmarkBar: () => void;
+  onEditorOpenChange?: (open: boolean) => void;
   onToggleFullscreen?: () => void;
   onExitFullscreen?: () => void;
   onFind?: () => void;
@@ -128,7 +127,6 @@ interface BrowserToolbarProps {
 }
 
 export function BrowserToolbar({
-  tabId,
   url,
   title,
   isAiControlled,
@@ -145,6 +143,7 @@ export function BrowserToolbar({
   onReload,
   onToggleAiPanel,
   onToggleBookmarkBar,
+  onEditorOpenChange,
   onToggleFullscreen,
   onExitFullscreen,
   onFind,
@@ -167,11 +166,13 @@ export function BrowserToolbar({
   const [isFocused, setIsFocused] = useState(false);
   const [isBookmarked, setIsBookmarked] = useState(false);
   const [suggestions, setSuggestions] = useState<AddressBarSuggestion[]>([]);
-  const [showSuggestions, setShowSuggestions] = useState(false);
   const [selectedIdx, setSelectedIdx] = useState(-1);
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [editorValue, setEditorValue] = useState("");
   const suggestionsRef = useRef<HTMLDivElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>();
   const inputRef = useRef<HTMLInputElement>(null);
+  const editorInputRef = useRef<HTMLInputElement>(null);
   const downloadButtonRef = useRef<HTMLButtonElement>(null);
   const { downloads, hasActiveDownloads } = useDownloads();
   const autoHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -248,12 +249,12 @@ export function BrowserToolbar({
     return () => window.removeEventListener("mona-focus-address-bar", handleFocusAddressBar);
   }, []);
 
-  // 同步外部 url 到输入框（仅未聚焦时）
+  // 同步外部 url 到输入框（仅未聚焦且编辑器未打开时）
   useEffect(() => {
-    if (!isFocused) {
+    if (!isFocused && !editorOpen) {
       setInputUrl(url);
     }
-  }, [url, isFocused]);
+  }, [url, isFocused, editorOpen]);
 
   // 检查收藏状态
   useEffect(() => {
@@ -264,104 +265,122 @@ export function BrowserToolbar({
     }
   }, [url]);
 
-  // 点击外部关闭下拉
+  // 点击外部关闭编辑器
   useEffect(() => {
+    if (!editorOpen) return;
     const handleClickOutside = (e: MouseEvent) => {
+      if (suggestionsRef.current?.contains(e.target as Node)) return;
       if (inputRef.current?.contains(e.target as Node)) return;
-      if (suggestionsRef.current && !suggestionsRef.current.contains(e.target as Node)) {
-        setShowSuggestions(false);
-      } else if (!suggestionsRef.current) {
-        setShowSuggestions(false);
-      }
+      closeEditor();
     };
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [tabId]);
-
-  useEffect(() => {
-    if (!isTauri() || !tabId) return;
-    let unlisten: (() => void) | undefined;
-    void browserListenAddressSuggestionSelected(({ tabId: selectedTabId, url: selectedUrl }) => {
-      if (selectedTabId !== tabId) return;
-      setInputUrl(selectedUrl);
-      setShowSuggestions(false);
-      onNavigate(selectedUrl);
-    }).then((dispose) => { unlisten = dispose; });
-    return () => {
-      unlisten?.();
-    };
-  }, [onNavigate, tabId]);
+  }, [editorOpen]);
 
   // 搜索建议（防抖）
   const fetchSuggestions = useCallback((query: string) => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
     if (!query.trim()) {
       setSuggestions([]);
-      setShowSuggestions(false);
       return;
     }
     debounceRef.current = setTimeout(async () => {
       try {
         const results = await browserSearchSuggestions(query, 8);
         setSuggestions(results);
-        setShowSuggestions(results.length > 0);
         setSelectedIdx(-1);
       } catch {
         setSuggestions([]);
-        setShowSuggestions(false);
       }
     }, 150);
   }, []);
 
   const handleFocus = () => {
     setIsFocused(true);
-    if (inputUrl.trim()) {
-      fetchSuggestions(inputUrl);
-    }
+    requestAnimationFrame(() => inputRef.current?.select());
   };
 
   const handleBlur = () => {
-    // 延迟关闭，让 onMouseDown 类事件先触发选中
     setTimeout(() => {
       setIsFocused(false);
-      setShowSuggestions(false);
     }, 150);
   };
 
   const handleInputChange = (value: string) => {
     setInputUrl(value);
+    openEditor(value);
+  };
+
+  // 打开内联编辑器浮层（输入第一个字符时触发）
+  const openEditor = (initialValue: string) => {
+    if (editorOpen) return;
+    setEditorValue(initialValue);
+    setEditorOpen(true);
+    setSelectedIdx(-1);
+    onEditorOpenChange?.(true);
+    // 请求建议
+    fetchSuggestions(initialValue);
+    // 同步建议到编辑器
+    requestAnimationFrame(() => {
+      editorInputRef.current?.focus();
+      const len = initialValue.length;
+      editorInputRef.current?.setSelectionRange(len, len);
+    });
+  };
+
+  const closeEditor = () => {
+    setEditorOpen(false);
+    setEditorValue("");
+    setSuggestions([]);
+    setSelectedIdx(-1);
+    setInputUrl(url);
+    onEditorOpenChange?.(false);
+  };
+
+  const commitEditor = (value: string) => {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      closeEditor();
+      return;
+    }
+    const finalUrl = normalizeUrlOrSearch(trimmed);
+    setInputUrl(finalUrl);
+    setEditorOpen(false);
+    setEditorValue("");
+    setSuggestions([]);
+    setSelectedIdx(-1);
+    onEditorOpenChange?.(false);
+    if (finalUrl) onNavigate(finalUrl);
+  };
+
+  const handleEditorChange = (value: string) => {
+    setEditorValue(value);
     fetchSuggestions(value);
+  };
+
+  const handleEditorKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setSelectedIdx((prev) => (suggestions.length > 0 ? (prev < suggestions.length - 1 ? prev + 1 : prev) : -1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setSelectedIdx((prev) => (prev > 0 ? prev - 1 : -1));
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      commitEditor(selectedIdx >= 0 ? suggestions[selectedIdx].url : editorValue);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      closeEditor();
+    }
   };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (editorOpen) return;
     const trimmed = inputUrl.trim();
     if (!trimmed) return;
     const finalUrl = normalizeUrlOrSearch(trimmed);
     onNavigate(finalUrl);
-    setShowSuggestions(false);
-  };
-
-  const handleSelectSuggestion = (suggestion: AddressBarSuggestion) => {
-    setInputUrl(suggestion.url);
-    onNavigate(suggestion.url);
-    setShowSuggestions(false);
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (!showSuggestions || suggestions.length === 0) return;
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      setSelectedIdx((prev) => (prev < suggestions.length - 1 ? prev + 1 : prev));
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault();
-      setSelectedIdx((prev) => (prev > 0 ? prev - 1 : -1));
-    } else if (e.key === "Enter" && selectedIdx >= 0) {
-      e.preventDefault();
-      handleSelectSuggestion(suggestions[selectedIdx]);
-    } else if (e.key === "Escape") {
-      setShowSuggestions(false);
-    }
   };
 
   const toggleBookmark = async () => {
@@ -527,7 +546,7 @@ export function BrowserToolbar({
   };
 
   return (
-    <div className="flex h-8 items-center gap-1.5 border-b border-border/50 bg-background/95 px-2">
+    <div className="relative z-50 flex h-8 items-center gap-1.5 border-b border-border/50 bg-background/95 px-2">
       <Button variant="ghost" size="icon" className="h-6 w-6" title="后退" onClick={onGoBack}>
         <ArrowLeft className="h-3 w-3" />
       </Button>
@@ -538,54 +557,72 @@ export function BrowserToolbar({
         <RotateCw className="h-3 w-3" />
       </Button>
       <form onSubmit={handleSubmit} className="flex-1 relative">
-        <div className="flex items-center gap-1.5">
-          {url.startsWith("https://") ? (
-            <Lock className="h-3 w-3 shrink-0 text-muted-foreground" />
-          ) : (
-            <Globe className="h-3 w-3 shrink-0 text-muted-foreground" />
-          )}
+        {/* 地址栏（非编辑态） */}
+        {!editorOpen && (
           <Input
             ref={inputRef}
             value={inputUrl}
             onChange={(e) => handleInputChange(e.target.value)}
             onFocus={handleFocus}
             onBlur={handleBlur}
-            onKeyDown={handleKeyDown}
-            className="h-6 rounded-full border-0 bg-muted/50 text-[12px] px-2"
+            className="h-6 rounded-full border-0 bg-muted/50 text-[12px] px-2 focus-visible:ring-2 focus-visible:ring-blue-500/50 focus-visible:ring-offset-0"
             placeholder="输入网址或搜索..."
           />
-        </div>
+        )}
 
-        {/* 地址栏下拉建议 */}
-        {showSuggestions && suggestions.length > 0 && (
+        {/* 整体浮层：输入框 + 历史记录（编辑态，覆盖地址栏区域） */}
+        {editorOpen && (
           <div
             ref={suggestionsRef}
-            className="absolute left-0 right-0 top-full z-50 mt-1 overflow-hidden rounded-lg border border-border bg-popover shadow-md scrollbar-thin max-h-[80vh]"
+            className="absolute left-0 right-0 top-0 z-50 -translate-y-4 rounded-lg border border-border bg-popover shadow-lg overflow-hidden"
           >
-            {suggestions.map((s, i) => (
-              <button
-                key={s.url}
-                type="button"
-                className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] hover:bg-accent transition-colors ${
-                  i === selectedIdx ? "bg-accent" : ""
-                }`}
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  handleSelectSuggestion(s);
+            <div className="flex items-center gap-1.5 px-2 h-8 border-b border-border/50">
+              <Search className="h-3 w-3 shrink-0 text-muted-foreground" />
+              <input
+                ref={editorInputRef}
+                value={editorValue}
+                onChange={(e) => handleEditorChange(e.target.value)}
+                onKeyDown={handleEditorKeyDown}
+                onBlur={() => {
+                  // 延迟关闭，让 onMouseDown 类事件先触发
+                  setTimeout(() => {
+                    if (!editorOpen) return;
+                    closeEditor();
+                  }, 150);
                 }}
-                onMouseEnter={() => setSelectedIdx(i)}
-              >
-                {s.isBookmark ? (
-                  <Star className="h-3 w-3 shrink-0 fill-yellow-500 text-yellow-500" />
-                ) : (
-                  <Search className="h-3 w-3 shrink-0 text-muted-foreground" />
-                )}
-                <div className="flex-1 min-w-0">
-                  <div className="truncate font-medium">{s.title || s.url}</div>
-                  <div className="truncate text-muted-foreground">{s.url}</div>
-                </div>
-              </button>
-            ))}
+                autoFocus
+                className="h-6 flex-1 bg-transparent text-[12px] outline-none border-0 px-0"
+                placeholder="输入网址或搜索..."
+              />
+            </div>
+            {suggestions.length > 0 && (
+              <div className="overflow-y-auto scrollbar-thin max-h-[60vh]">
+                {suggestions.map((s, i) => (
+                  <button
+                    key={s.url}
+                    type="button"
+                    className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] hover:bg-accent transition-colors ${
+                      i === selectedIdx ? "bg-accent" : ""
+                    }`}
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      commitEditor(s.url);
+                    }}
+                    onMouseEnter={() => setSelectedIdx(i)}
+                  >
+                    {s.isBookmark ? (
+                      <Star className="h-3 w-3 shrink-0 fill-yellow-500 text-yellow-500" />
+                    ) : (
+                      <Search className="h-3 w-3 shrink-0 text-muted-foreground" />
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <div className="truncate font-medium">{s.title || s.url}</div>
+                      <div className="truncate text-muted-foreground">{s.url}</div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </form>

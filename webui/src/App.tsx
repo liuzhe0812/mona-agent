@@ -49,7 +49,7 @@ import { deriveTitle } from "@/lib/format";
 import { MonaClient } from "@/lib/mona-client";
 import { ClientProvider, useClientOptional, type RuntimeStatus } from "@/providers/ClientProvider";
 import type { ChatSummary } from "@/lib/types";
-import { isTauri, getGatewayStatus, startGateway, getDesktopSettings, readGatewayLog, createNoteFromChat, revealItemInDir, type GatewayLog, type SidebarShortcuts, type UpdateCheckResult } from "@/lib/tauri";
+import { isTauri, getGatewayStatus, startGateway, getServicesStatus, startServices, getDesktopSettings, readGatewayLog, createNoteFromChat, revealItemInDir, type GatewayLog, type SidebarShortcuts, type UpdateCheckResult } from "@/lib/tauri";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -153,12 +153,6 @@ const NotificationWindow = lazy(() =>
   })),
 );
 
-const AddressSuggestionsWindow = lazy(() =>
-  import("@/components/browser/AddressSuggestionsWindow").then((module) => ({
-    default: module.AddressSuggestionsWindow,
-  })),
-);
-
 const DownloadsWindow = lazy(() =>
   import("@/components/browser/DownloadsWindow").then((module) => ({
     default: module.DownloadsWindow,
@@ -192,10 +186,6 @@ function isMailPreviewRoute(): boolean {
 
 function isNotificationRoute(): boolean {
   return typeof window !== "undefined" && window.location.hash.startsWith("#/notification");
-}
-
-function isAddressSuggestionsRoute(): boolean {
-  return typeof window !== "undefined" && window.location.hash.startsWith("#/browser-suggestions");
 }
 
 function isDownloadsRoute(): boolean {
@@ -475,7 +465,6 @@ export default function App() {
   const composeRoute = isComposeRoute();
   const mailPreviewRoute = isMailPreviewRoute();
   const notificationRoute = isNotificationRoute();
-  const addressSuggestionsRoute = isAddressSuggestionsRoute();
   const downloadsRoute = isDownloadsRoute();
 
   return (
@@ -489,10 +478,6 @@ export default function App() {
       {downloadsRoute ? (
         <Suspense fallback={null}>
           <DownloadsWindow />
-        </Suspense>
-      ) : addressSuggestionsRoute ? (
-        <Suspense fallback={null}>
-          <AddressSuggestionsWindow />
         </Suspense>
       ) : notificationRoute ? (
         <Suspense fallback={null}>
@@ -703,11 +688,19 @@ function Shell({
 
     void (async () => {
       try {
-        // 轮询等待 gateway HTTP 端口就绪（gateway 启动可能比 Shell 挂载晚）
+        // 轮询等待 services HTTP 端口就绪（services 启动可能比 Shell 挂载晚）
         let gatewayUrl = "";
         for (let i = 0; i < 60; i++) {
           if (cancelled) return;
-          const status = await getGatewayStatus();
+          let status = await getServicesStatus();
+          if (!status.running && i === 0) {
+            try {
+              await startServices();
+              status = await getServicesStatus();
+            } catch {
+              // fall through — 继续轮询等待
+            }
+          }
           if (status.port) {
             gatewayUrl = `http://127.0.0.1:${status.port}`;
             break;
@@ -748,7 +741,7 @@ function Shell({
       // 停止所有 IDLE 监听
       void (async () => {
         try {
-          const status = await getGatewayStatus();
+          const status = await getServicesStatus();
           if (status.port) {
             await stopAllIdle(`http://127.0.0.1:${status.port}`);
           }
@@ -1450,6 +1443,9 @@ function Shell({
   const isBrowserTabActive = activeBrowserTab.type !== "mona";
   const browserSurfaceVisible =
     view === "chat" && activeBrowserTab.type === "browser" && !loginDialogOpen;
+  // 主内容表面：非浏览器原生 WebView 模式时启用圆角裁切与画布边缘。
+  // browser 类型标签走原生 WebView，必须边到边布局（见 redesign-plan §4.7）。
+  const showContentSurface = !browserFullscreen && activeBrowserTab.type !== "browser";
 
   useEffect(() => {
     if (!isTauri()) return;
@@ -1513,7 +1509,13 @@ function Shell({
 
   return (
     <ThemeProvider theme={theme}>
-      <div className="relative flex h-full w-full flex-col overflow-hidden bg-background">
+      <div
+        className="relative flex h-full w-full flex-col overflow-hidden text-foreground"
+        style={{
+          background:
+            "linear-gradient(180deg, hsl(var(--canvas-top)) 0%, hsl(var(--canvas-bottom)) 100%)",
+        }}
+      >
         {/* 标题栏在最顶部，全宽（浏览器全屏时隐藏） */}
         {!browserFullscreen && (
           <AppTitleBar
@@ -1568,7 +1570,7 @@ function Shell({
               }}
             >
               <div
-                className="absolute inset-y-0 left-0 h-full w-full overflow-hidden bg-sidebar shadow-inner-right"
+                className="absolute inset-y-0 left-0 h-full w-full overflow-hidden"
               >
                 <Sidebar
                   {...sidebarProps}
@@ -1612,7 +1614,15 @@ function Shell({
           ) : null}
 
           <div className="flex min-w-0 flex-1 flex-col">
-            <div className="flex min-h-0 flex-1 overflow-hidden">
+            <div
+              className={cn(
+                "flex min-h-0 flex-1 overflow-hidden",
+                // 主内容表面（redesign-plan §4.6）：非浏览器模式时启用圆角裁切 + 画布边缘 + 发丝边 + 极轻阴影。
+                // 浏览器原生 WebView 模式保持边到边布局（§4.7）。
+                showContentSurface &&
+                  "m-px mr-2 mb-2 rounded-2xl border border-border/60 shadow-sm",
+              )}
+            >
               <main className="relative flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-background">
               <div
                 className={cn(
@@ -1991,7 +2001,7 @@ function GatewayLogDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[80vh] w-[680px] max-w-[92vw] flex-col gap-0 overflow-hidden rounded-[22px] border-border/70 bg-popover p-0 shadow-2xl">
+      <DialogContent className="flex max-h-[80vh] w-[680px] max-w-[92vw] flex-col gap-0 overflow-hidden rounded-2xl border-border/70 bg-popover p-0 shadow-lg">
         <DialogHeader className="border-b border-border/60 px-5 py-4 text-left">
           <DialogTitle className="flex items-center gap-2 text-base">
             <FileText className="h-4 w-4 text-muted-foreground" />

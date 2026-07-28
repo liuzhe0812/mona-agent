@@ -15,7 +15,6 @@ import {
   browserSetZoom,
   browserGetZoom,
   browserSetTabBounds,
-  browserHideAddressSuggestions,
   browserPrintPage,
   browserEvalScriptResult,
 } from "@/lib/browser-ipc";
@@ -93,7 +92,8 @@ export function BrowserTabView({
   // 全屏模式下鼠标悬停顶部时显示工具栏
   const [showFullscreenToolbar, setShowFullscreenToolbar] = useState(false);
   const toolbarHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const modalSurfaceOpen = cookieManagerOpen || shareDialogOpen;
+  const [editorOpen, setEditorOpen] = useState(false);
+  const modalSurfaceOpen = cookieManagerOpen || shareDialogOpen || editorOpen;
 
   const applyWebviewBounds = useCallback((bounds: WebviewBounds) => {
     if (sameWebviewBounds(lastAppliedBoundsRef.current, bounds)) return;
@@ -164,7 +164,10 @@ export function BrowserTabView({
   ]);
 
   useEffect(() => {
-    if (!isVisible) void browserHideAddressSuggestions(tab.id).catch(() => {});
+    // 切换 tab 或隐藏时重置地址栏编辑器状态，避免其他 tab 的 WebView 被误隐藏
+    if (!isVisible) {
+      setEditorOpen(false);
+    }
   }, [tab.id, isVisible]);
 
   // 监听容器大小变化
@@ -415,7 +418,6 @@ export function BrowserTabView({
             onMouseLeave={handleFullscreenToolbarLeave}
           >
             <BrowserToolbar
-              tabId={tab.id}
               url={tab.url ?? ""}
               title={tab.title ?? ""}
               isAiControlled={tab.isAiControlled}
@@ -428,6 +430,7 @@ export function BrowserTabView({
               onReload={onReload}
               onToggleAiPanel={() => setIsAiPanelOpen((prev) => !prev)}
               onToggleBookmarkBar={() => setBookmarkBarVisible((prev) => !prev)}
+              onEditorOpenChange={setEditorOpen}
               onToggleFullscreen={onToggleFullscreen}
               onExitFullscreen={onExitFullscreen}
               onCreateNote={handleCreateNote}
@@ -446,7 +449,6 @@ export function BrowserTabView({
       style={{ display: isVisible ? "flex" : "none" }}
     >
       <BrowserToolbar
-        tabId={tab.id}
         url={tab.url ?? ""}
         title={tab.title ?? ""}
         isAiControlled={tab.isAiControlled}
@@ -462,6 +464,7 @@ export function BrowserTabView({
         onReload={onReload}
         onToggleAiPanel={() => setIsAiPanelOpen((prev) => !prev)}
         onToggleBookmarkBar={() => setBookmarkBarVisible((prev) => !prev)}
+        onEditorOpenChange={setEditorOpen}
         onToggleFullscreen={onToggleFullscreen}
         onFind={() => setFindBarVisible(true)}
         onPrint={handlePrint}

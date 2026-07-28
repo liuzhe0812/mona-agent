@@ -117,14 +117,6 @@ export interface AddressBarSuggestion {
   lastVisitedAt: string;
 }
 
-export interface AddressSuggestionPopup {
-  tabId: string;
-  left: number;
-  top: number;
-  width: number;
-  suggestions: AddressBarSuggestion[];
-}
-
 /** 添加收藏 */
 export async function browserAddBookmark(url: string, title: string, folder?: string): Promise<Bookmark> {
   return invoke<Bookmark>("browser_add_bookmark", { url, title, folder: folder || null });
@@ -192,25 +184,6 @@ export async function browserClearCache(): Promise<void> {
 /** 搜索地址栏建议（收藏+历史） */
 export async function browserSearchSuggestions(query: string, limit?: number): Promise<AddressBarSuggestion[]> {
   return invoke<AddressBarSuggestion[]>("browser_search_suggestions", { query, limit });
-}
-
-export async function browserShowAddressSuggestions(popup: AddressSuggestionPopup): Promise<void> {
-  return invoke<void>("browser_show_address_suggestions", { popup });
-}
-
-export async function browserHideAddressSuggestions(tabId: string): Promise<void> {
-  return invoke<void>("browser_hide_address_suggestions", { tabId });
-}
-
-export async function browserSelectAddressSuggestion(tabId: string, url: string): Promise<void> {
-  return invoke<void>("browser_select_address_suggestion", { tabId, url });
-}
-
-export async function browserListenAddressSuggestionSelected(
-  callback: (payload: { tabId: string; url: string }) => void,
-): Promise<() => void> {
-  const { listen } = await import("@tauri-apps/api/event");
-  return listen<{ tabId: string; url: string }>("browser-address-suggestion-selected", (event) => callback(event.payload));
 }
 
 export interface DownloadPopupAnchor {
