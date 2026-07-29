@@ -1,25 +1,22 @@
-import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Database, Eraser, FolderSearch, HardDrive, Loader2, PieChart, RefreshCw } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import { MetricCard, PanelCard, ProgressBar, primaryButtonClass, secondaryButtonClass } from "./SystemUi";
 import type { SystemAgentHandoffTask } from "./systemAgentHandoff";
+import { DirectoryTreeView } from "./storage/DirectoryTreeView";
+import { LargeFileTable } from "./storage/LargeFileTable";
+import { TreemapView } from "./storage/TreemapView";
 import {
-  formatGb,
   formatPercent,
+  formatStorage,
   useStorageScan,
   useSystemOverview,
   type CleanupItem,
   type DirectorySize,
   type FileTypeSize,
   type ScanProgress,
-  type StorageDiskInfo,
   type StorageScanResult,
 } from "./useSystemData";
-
-function formatStorage(gb: number): string {
-  return gb >= 1024 ? `${(gb / 1024).toFixed(1)} TB` : `${formatGb(gb)} GB`;
-}
 
 function formatRelativeTime(ts: number | null): string {
   if (!ts) return "尚未扫描";
@@ -146,70 +143,29 @@ function ScanStatusBar({
   );
 }
 
-function DiskPartitionList({ disks }: { disks: StorageDiskInfo[] }) {
+function HotspotPanel({ hotspots }: { hotspots: DirectorySize[] }) {
+  const max = Math.max(...hotspots.map((h) => h.sizeGb), 0);
   return (
-    <PanelCard title="磁盘分区" className="h-full">
-      {disks.length === 0 ? (
-        <div className="flex h-[154px] items-center justify-center text-xs text-muted-foreground">正在读取磁盘信息</div>
+    <PanelCard title="重点路径占用" className="h-full">
+      {hotspots.length === 0 ? (
+        <div className="py-8 text-center text-xs text-muted-foreground">扫描后展示 AppData、桌面、下载等路径占用</div>
       ) : (
-        <div className="space-y-5 text-xs">
-          {disks.map((disk) => (
-            <div key={disk.driveLetter}>
-              <div className="mb-2 flex justify-between gap-2">
-                <span className="truncate font-medium" title={disk.driveLetter}>{disk.driveLetter}</span>
-                <span className="shrink-0 text-muted-foreground">{formatPercent(disk.usagePercent)} 已使用</span>
+        <div className="space-y-2.5 text-xs">
+          {hotspots.map((item) => {
+            const [label, ...rest] = item.path.split(" · ");
+            const fullPath = rest.join(" · ");
+            const percent = max > 0 ? (item.sizeGb / max) * 100 : 0;
+            return (
+              <div key={item.path}>
+                <div className="mb-1 flex items-center justify-between gap-2">
+                  <span className="truncate font-medium" title={fullPath}>{label}</span>
+                  <span className="shrink-0 text-muted-foreground">{formatStorage(item.sizeGb)}</span>
+                </div>
+                <ProgressBar value={percent} color="bg-blue-500" />
+                <p className="mt-0.5 truncate text-[10px] text-muted-foreground" title={fullPath}>{fullPath}</p>
               </div>
-              <ProgressBar value={disk.usagePercent} color={disk.usagePercent >= 90 ? "bg-red-500" : disk.usagePercent >= 80 ? "bg-orange-500" : "bg-blue-500"} />
-              <p className="mt-1 text-[10px] text-muted-foreground">{formatStorage(disk.usedGb)} / {formatStorage(disk.totalGb)}</p>
-            </div>
-          ))}
-        </div>
-      )}
-    </PanelCard>
-  );
-}
-
-const TREEMAP_TONES = [
-  "bg-blue-500/75",
-  "bg-violet-500/70",
-  "bg-emerald-500/65",
-  "bg-amber-400/70",
-  "bg-cyan-500/60",
-  "bg-indigo-400/60",
-];
-
-function SpaceDistribution({
-  directories,
-  status,
-  progress,
-  error,
-}: {
-  directories: DirectorySize[];
-  status: string;
-  progress: ScanProgress | null;
-  error: string | null;
-}) {
-  const handleOpen = (path: string) => {
-    revealItemInDir(path).catch((err) => console.error("revealItemInDir failed:", err));
-  };
-  return (
-    <PanelCard title="空间分布（扫描区域）" className="h-full">
-      {directories.length === 0 ? (
-        <AnalysisPlaceholder status={status} progress={progress} error={error} />
-      ) : (
-        <div className="grid h-[200px] grid-cols-2 grid-rows-3 gap-1 overflow-hidden rounded-lg text-white">
-          {directories.slice(0, 4).map((directory, index) => (
-            <button
-              type="button"
-              key={directory.path}
-              onClick={() => handleOpen(directory.path)}
-              title={`${directory.path} · ${formatStorage(directory.sizeGb)}（点击打开目录）`}
-              className={`${TREEMAP_TONES[index]} flex min-w-0 cursor-pointer flex-col items-center justify-center gap-0.5 overflow-hidden rounded-md p-1.5 text-center transition hover:brightness-110 hover:ring-2 hover:ring-white/60 ${index === 0 ? "row-span-3" : index === 1 ? "row-span-2" : ""}`}
-            >
-              <span className="max-w-full truncate text-[11px] font-medium leading-tight">{directory.path.split("\\").filter(Boolean).pop() ?? directory.path}</span>
-              <span className="text-[10px] leading-tight text-white/90">{formatStorage(directory.sizeGb)}</span>
-            </button>
-          ))}
+            );
+          })}
         </div>
       )}
     </PanelCard>
@@ -248,45 +204,6 @@ function FileTypePanel({
   );
 }
 
-function DirectoryTable({
-  directories,
-  status,
-  progress,
-  error,
-  onAnalyze,
-}: {
-  directories: DirectorySize[];
-  status: string;
-  progress: ScanProgress | null;
-  error: string | null;
-  onAnalyze?: (goal: string) => void;
-}) {
-  return (
-    <PanelCard title="占用最大的目录（扫描区域）" className="h-full">
-      {directories.length === 0 ? (
-        <AnalysisPlaceholder status={status} progress={progress} error={error} />
-      ) : (
-        <div className="overflow-x-hidden">
-          <table className="w-full table-fixed text-left text-[11px]">
-            <colgroup><col /><col className="w-16" /><col className="w-16" /><col className="w-12" /></colgroup>
-            <thead className="text-muted-foreground"><tr><th className="pb-2 font-medium">路径</th><th>大小</th><th>文件数</th><th>操作</th></tr></thead>
-            <tbody>
-              {directories.slice(0, 8).map((directory) => (
-                <tr key={directory.path} className="border-t border-border/50">
-                  <td className="truncate py-2.5 pr-3 font-medium" title={directory.path}>{directory.path}</td>
-                  <td>{formatStorage(directory.sizeGb)}</td>
-                  <td>{directory.fileCount.toLocaleString()}</td>
-                  <td><button className="text-blue-600 hover:underline" onClick={() => onAnalyze?.(`分析目录「${directory.path}」的空间使用情况（当前占用 ${formatStorage(directory.sizeGb)}，共 ${directory.fileCount.toLocaleString()} 个文件）。请识别可安全清理的子目录、大文件类型、临时缓存和冗余数据，评估每项可释放的空间与风险等级，给出具体的空间优化建议。`)}>分析</button></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </PanelCard>
-  );
-}
-
 function CleanupPanel({
   items,
   status,
@@ -304,11 +221,11 @@ function CleanupPanel({
   cleaning: boolean;
   onHandoff: (task: SystemAgentHandoffTask) => void;
 }) {
-  const [selected, setSelected] = useState<Set<string>>(() => new Set(items.filter((item) => item.cleanable && item.recommended && item.sizeGb > 0).map((item) => item.id)));
+  const [selected, setSelected] = useState<Set<string>>(() => new Set(items.filter((item) => item.cleanable && item.recommended).map((item) => item.id)));
   const [confirming, setConfirming] = useState(false);
   const [notice, setNotice] = useState("");
   const [failedTask, setFailedTask] = useState<SystemAgentHandoffTask | null>(null);
-  const selectedItems = items.filter((item) => selected.has(item.id) && item.cleanable && item.sizeGb > 0);
+  const selectedItems = items.filter((item) => selected.has(item.id) && item.cleanable);
   const selectedSize = selectedItems.reduce((sum, item) => sum + item.sizeGb, 0);
 
   const toggle = (id: string) => setSelected((current) => {
@@ -359,9 +276,9 @@ function CleanupPanel({
               <tbody>
                 {items.map((item) => (
                   <tr key={item.id} className="border-t border-border/50">
-                    <td className="py-2.5"><input aria-label={`选择 ${item.name}`} type="checkbox" checked={selected.has(item.id)} disabled={!item.cleanable || item.sizeGb <= 0} onChange={() => toggle(item.id)} /></td>
+                    <td className="py-2.5"><input aria-label={`选择 ${item.name}`} type="checkbox" checked={selected.has(item.id)} disabled={!item.cleanable} onChange={() => toggle(item.id)} /></td>
                     <td className="truncate pr-2 font-medium" title={`${item.path} · ${item.reason}`}>{item.name}</td>
-                    <td>{formatStorage(item.sizeGb)}</td>
+                    <td>{item.sizeGb > 0 ? formatStorage(item.sizeGb) : "权限受限"}</td>
                     <td className={item.cleanable ? "text-emerald-600" : "text-muted-foreground"}>{item.cleanable ? "可直接清理" : "交由 Windows"}</td>
                   </tr>
                 ))}
@@ -394,18 +311,70 @@ function CleanupPanel({
   );
 }
 
+interface DrilldownPathEntry {
+  path: string;
+  name: string;
+}
+
+/** 在嵌套树中按完整路径查找节点 */
+function findNodeByPath(nodes: DirectorySize[], target: string): DirectorySize | null {
+  for (const node of nodes) {
+    if (node.path === target) return node;
+    if (target.startsWith(node.path) && node.children) {
+      const found = findNodeByPath(node.children, target);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
 export function StoragePanel({ scan, onHandoff, onAnalyze }: { scan: ReturnType<typeof useStorageScan>; onHandoff: (task: SystemAgentHandoffTask) => void; onAnalyze?: (goal: string) => void }) {
   const { status, result, lastScanAt, progress, error, cleaning, start, clean } = scan;
   const { data: overview, error: overviewError } = useSystemOverview();
+
+  // 下钻路径：数组形式，每项 {path, name}。空数组表示根。
+  // 下钻直接从 result.directories 的 children 切片，无需再次调用后端。
+  const [drilldownPath, setDrilldownPath] = useState<DrilldownPathEntry[]>([]);
+
   const disks = result?.disks ?? overview?.disks ?? [];
-  const directories = result?.directories ?? [];
+  const rootDirectories = result?.directories ?? [];
   const fileTypes = result?.fileTypes ?? [];
   const cleanupItems = result?.cleanupItems ?? [];
+  const topFiles = result?.topFiles ?? [];
+  const hotspots = result?.hotspots ?? [];
+
+  // 根据下钻路径在内存树中切片当前层级的目录列表
+  const { currentPath, displayDirs } = useMemo(() => {
+    if (drilldownPath.length === 0) {
+      return { currentPath: null, displayDirs: rootDirectories };
+    }
+    const target = drilldownPath[drilldownPath.length - 1].path;
+    const node = findNodeByPath(rootDirectories, target);
+    return { currentPath: target, displayDirs: node?.children ?? [] };
+  }, [drilldownPath, rootDirectories]);
+
   const totalUsed = disks.reduce((sum, disk) => sum + disk.usedGb, 0);
   const totalCapacity = disks.reduce((sum, disk) => sum + disk.totalGb, 0);
   const totalAvailable = disks.reduce((sum, disk) => sum + disk.availableGb, 0);
   const usedPercent = totalCapacity > 0 ? (totalUsed / totalCapacity) * 100 : 0;
   const cleanupTotal = cleanupItems.filter((item) => item.cleanable).reduce((sum, item) => sum + item.sizeGb, 0);
+
+  const handleDrillDown = (path: string) => {
+    const name = path.split("\\").filter(Boolean).pop() ?? path;
+    setDrilldownPath((prev) => [...prev, { path, name }]);
+  };
+
+  const handleNavigate = (targetPath: string | null) => {
+    if (targetPath === null) {
+      setDrilldownPath([]);
+      return;
+    }
+    const index = drilldownPath.findIndex((entry) => entry.path === targetPath);
+    if (index < 0) return;
+    setDrilldownPath((prev) => prev.slice(0, index + 1));
+  };
+
+  const hasScanData = rootDirectories.length > 0;
 
   return (
     <div className="space-y-3">
@@ -420,14 +389,42 @@ export function StoragePanel({ scan, onHandoff, onAnalyze }: { scan: ReturnType<
 
       {overviewError && <p role="alert" className="rounded-lg border border-orange-500/30 bg-orange-500/5 p-3 text-xs text-orange-700">实时磁盘信息读取失败：{overviewError}</p>}
 
-      <div className="grid gap-3 lg:grid-cols-[0.72fr_1.08fr_1.05fr]">
-        <DiskPartitionList disks={disks} />
-        <SpaceDistribution directories={directories} status={status} progress={progress} error={error} />
-        <FileTypePanel items={fileTypes} status={status} progress={progress} error={error} />
-      </div>
+      {/* WizTree 核心可视化：左目录列表树 + 右 Treemap，扫描后内存秒下钻 */}
+      {hasScanData ? (
+        // 固定高度的网格容器：左侧目录列表限制最大高度并内部滚动，右侧 Treemap 同步
+        <div className="grid gap-3 lg:grid-cols-[300px_1fr]">
+          <div className="h-[420px]">
+            <DirectoryTreeView
+              directories={rootDirectories}
+              currentPath={currentPath}
+              onDrillDown={handleDrillDown}
+            />
+          </div>
+          <TreemapView
+            directories={displayDirs}
+            breadcrumb={drilldownPath}
+            loading={false}
+            error={null}
+            onDrillDown={handleDrillDown}
+            onNavigate={handleNavigate}
+          />
+        </div>
+      ) : (
+        <PanelCard title="空间分布" className="h-full">
+          <AnalysisPlaceholder status={status} progress={progress} error={error} />
+        </PanelCard>
+      )}
 
-      <div className="grid gap-3 lg:grid-cols-[1.08fr_1fr]">
-        <DirectoryTable directories={directories} status={status} progress={progress} error={error} onAnalyze={onAnalyze} />
+      {/* 大文件列表 + 文件类型分布 */}
+      {hasScanData && (
+        <div className="grid gap-3 lg:grid-cols-[1.3fr_1fr]">
+          <LargeFileTable files={topFiles} onAnalyze={onAnalyze} />
+          <FileTypePanel items={fileTypes} status={status} progress={progress} error={error} />
+        </div>
+      )}
+
+      <div className="grid gap-3 lg:grid-cols-[1fr_1fr]">
+        <HotspotPanel hotspots={hotspots} />
         <CleanupPanel items={cleanupItems} status={status} progress={progress} error={error} onClean={clean} cleaning={cleaning} onHandoff={onHandoff} />
       </div>
     </div>

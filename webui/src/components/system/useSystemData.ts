@@ -128,6 +128,10 @@ export function formatGb(v: number): string {
   return v.toFixed(1);
 }
 
+export function formatStorage(gb: number): string {
+  return gb >= 1024 ? `${(gb / 1024).toFixed(1)} TB` : `${formatGb(gb)} GB`;
+}
+
 export function formatMbps(v: number): string {
   if (v < 1) return `${(v * 1000).toFixed(0)} Kbps`;
   return `${v.toFixed(1)} Mbps`;
@@ -307,6 +311,8 @@ export interface DirectorySize {
   path: string;
   sizeGb: number;
   fileCount: number;
+  /** 嵌套子目录（后端递归扫描时填充，前端下钻直接从内存切片） */
+  children?: DirectorySize[];
 }
 
 export interface CleanupItem {
@@ -324,18 +330,51 @@ export interface FileTypeSize {
   sizeGb: number;
 }
 
+export interface TopFileInfo {
+  extension: string;
+  parentDirName: string;
+  sizeGb: number;
+  modifiedBucket: string;
+}
+
+export interface ScanSummary {
+  totalFiles: number;
+  totalDirs: number;
+  scanDurationSecs: number;
+  scannedDisk: string;
+}
+
+export interface FileExtensionBucket {
+  extension: string;
+  count: number;
+  sizeGb: number;
+}
+
 export interface StorageScanResult {
   disks: StorageDiskInfo[];
   directories: DirectorySize[];
   cleanupItems: CleanupItem[];
   fileTypes: FileTypeSize[];
   totalScannedGb: number;
+  topFiles?: TopFileInfo[];
+  scanSummary?: ScanSummary;
+  extensionBuckets?: FileExtensionBucket[];
+  /** 重点路径占用（AppData/ProgramData/家目录/桌面/下载等） */
+  hotspots?: DirectorySize[];
+}
+
+export interface CleanupVerification {
+  id: string;
+  path: string;
+  beforeBytes: number;
+  afterBytes: number;
 }
 
 export interface StorageCleanupResult {
   freedGb: number;
   cleanedIds: string[];
   failures: string[];
+  verification?: CleanupVerification[];
 }
 
 export interface ScanProgress {
@@ -347,8 +386,11 @@ export interface ScanProgress {
 export type ScanStatus = "idle" | "scanning" | "done" | "error";
 
 const STORAGE_CACHE_KEY = "system.storageScan";
+// 缓存版本：StorageScanResult 结构或 cleanable 语义变化时递增，旧缓存自动失效
+const STORAGE_CACHE_VERSION = 2;
 
 interface StorageCache {
+  version: number;
   result: StorageScanResult;
   lastScanAt: number;
 }
@@ -358,18 +400,37 @@ function loadStorageCache(): StorageCache | null {
     const raw = localStorage.getItem(STORAGE_CACHE_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as StorageCache;
+    if (parsed.version !== STORAGE_CACHE_VERSION) return null;
     if (!parsed.result || typeof parsed.lastScanAt !== "number") return null;
+    // 检测降级缓存：根目录有 sizeGb 但 children 被剥离，下钻会失效，不使用
+    const degraded = parsed.result.directories.some(
+      (d) => d.sizeGb > 0.1 && (!d.children || d.children.length === 0),
+    );
+    if (degraded) return null;
     return parsed;
   } catch {
     return null;
   }
 }
 
-function saveStorageCache(cache: StorageCache) {
+function saveStorageCache(cache: Omit<StorageCache, "version">) {
   try {
-    localStorage.setItem(STORAGE_CACHE_KEY, JSON.stringify(cache));
+    localStorage.setItem(STORAGE_CACHE_KEY, JSON.stringify({ ...cache, version: STORAGE_CACHE_VERSION }));
   } catch {
-    // 配额不足或序列化失败时静默跳过，不影响功能
+    // 配额不足时降级：只保留顶层目录元数据（不包含 children），下次加载会因降级检测而忽略缓存
+    try {
+      const trimmed: StorageCache = {
+        version: STORAGE_CACHE_VERSION,
+        lastScanAt: cache.lastScanAt,
+        result: {
+          ...cache.result,
+          directories: cache.result.directories.map((d) => ({ ...d, children: [] })),
+        },
+      };
+      localStorage.setItem(STORAGE_CACHE_KEY, JSON.stringify(trimmed));
+    } catch {
+      // 仍失败则静默放弃，不影响功能
+    }
   }
 }
 
@@ -383,6 +444,7 @@ export function useStorageScan() {
   const [cleaning, setCleaning] = useState(false);
 
   const start = async () => {
+    // 保留上次扫描结果显示，扫描完成后才覆盖
     setStatus("scanning");
     setProgress(null);
     setError(null);
@@ -408,11 +470,20 @@ export function useStorageScan() {
       const cleanup = await invoke<StorageCleanupResult>("clean_storage", { ids });
       setResult((current) => {
         if (!current) return current;
+        // 基于 verification 数组的 afterBytes 更新真实剩余大小，避免虚报为 0
+        const afterBytesById = new Map(
+          (cleanup.verification ?? []).map((v) => [v.id, v.afterBytes]),
+        );
         const next: StorageScanResult = {
           ...current,
-          cleanupItems: current.cleanupItems.map((item) =>
-            cleanup.cleanedIds.includes(item.id) ? { ...item, sizeGb: 0 } : item,
-          ),
+          cleanupItems: current.cleanupItems.map((item) => {
+            if (!cleanup.cleanedIds.includes(item.id)) return item;
+            const afterBytes = afterBytesById.get(item.id);
+            const sizeGb = afterBytes !== undefined
+              ? afterBytes / 1_073_741_824
+              : 0;
+            return { ...item, sizeGb };
+          }),
         };
         saveStorageCache({ result: next, lastScanAt: lastScanAt ?? Date.now() });
         return next;
