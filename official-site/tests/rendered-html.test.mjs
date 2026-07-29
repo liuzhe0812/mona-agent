@@ -31,7 +31,7 @@ test("server-renders Mona's playable landing page", async () => {
   const html = await response.text();
   assert.match(html, /<title>Mona — 真正的 Work Buddy<\/title>/i);
   assert.match(html, /工作，/);
-  assert.match(html, /什么是真正的 Work Buddy？/);
+  assert.match(html, /什么是真正的 Work(?: |&nbsp;|\u00a0)Buddy？/);
   assert.match(html, /快速入门/);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton/i);
 });

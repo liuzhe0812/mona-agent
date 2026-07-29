@@ -9,7 +9,7 @@ import {
 } from "react";
 
 const menuItems = [
-  { label: "快速入门", tag: "START", href: "#work-buddy" },
+  { label: "快速入门", tag: "START", href: "#intro" },
   { label: "免费模型", tag: "FREE", href: "#models" },
   { label: "Agent", tag: "CORE", href: "#agent" },
   { label: "模块", tag: "MODULES", href: "#modules" },
@@ -151,7 +151,7 @@ export default function Home() {
 
   return (
     <>
-      <a className="skip-link" href="#work-buddy">
+      <a className="skip-link" href="#intro">
         跳到产品介绍
       </a>
 
@@ -170,18 +170,18 @@ export default function Home() {
             <img src="/img/mona-logo.png" alt="" />
             <div>
               <strong>MONA</strong>
-              <span>WORK BUDDY // ONLINE</span>
+              <span>ONLINE</span>
             </div>
           </header>
 
           <div className="hero-copy">
             <span className="chapter-label">CHAPTER 00 / WAKE UP</span>
             <h1 id="hero-title">
-              工作，
-              <br />
-              不该从
-              <br />
-              <em>重新解释</em>开始。
+              工作，<br />
+              不该从<br />
+              <span style={{ whiteSpace: "nowrap" }}>
+                <em>重新解释</em>开始。
+              </span>
             </h1>
           </div>
 
@@ -217,15 +217,15 @@ export default function Home() {
             <span>MONA IS WATCHING</span>
           </div>
 
-          <a className="continue-hint" href="#work-buddy">
+          <a className="continue-hint" href="#intro">
             <kbd>SPACE</kbd>
-            <span>开始对话</span>
+            <span>对话Mona</span>
           </a>
         </section>
 
         <section
           ref={dialogueRef}
-          id="work-buddy"
+          id="intro"
           className="dialogue-scene"
           aria-labelledby="dialogue-heading"
         >
@@ -234,27 +234,33 @@ export default function Home() {
 
           <div className="dialogue-heading">
             <span>CASE FILE / 001</span>
-            <h2 id="dialogue-heading">什么是真正的 Work Buddy？</h2>
+            <h2 id="dialogue-heading">什么是真正的 Work&nbsp;Buddy？</h2>
           </div>
 
-          <button
-            className="dialogue-box"
-            type="button"
-            aria-label="下一页对话"
-            onClick={() =>
-              setDialogueIndex((index) => (index + 1) % dialogue.length)
-            }
-          >
+          <div className="dialogue-portrait" aria-hidden="true">
+            <img src="/img/mona-logo.png" alt="" />
+          </div>
+
+          <div className="dialogue-panel">
             <span className="speaker">MONA</span>
-            <span className="dialogue-copy" aria-live="polite">
-              {dialogue[dialogueIndex]}
-            </span>
-            <span className="dialogue-progress">
-              {String(dialogueIndex + 1).padStart(2, "0")} /{" "}
-              {String(dialogue.length).padStart(2, "0")}
-            </span>
-            <span className="dialogue-next">SPACE / CLICK ↗</span>
-          </button>
+            <button
+              className="dialogue-box"
+              type="button"
+              aria-label="下一页对话"
+              onClick={() =>
+                setDialogueIndex((index) => (index + 1) % dialogue.length)
+              }
+            >
+              <span className="dialogue-copy" aria-live="polite">
+                {dialogue[dialogueIndex]}
+              </span>
+              <span className="dialogue-progress">
+                {String(dialogueIndex + 1).padStart(2, "0")} /{" "}
+                {String(dialogue.length).padStart(2, "0")}
+              </span>
+              <span className="dialogue-next">SPACE / CLICK ↗</span>
+            </button>
+          </div>
         </section>
 
         <section
