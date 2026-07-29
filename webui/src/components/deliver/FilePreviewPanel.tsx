@@ -13,6 +13,7 @@ import { isTauri, openPathWithSystemApp, revealItemInDir } from "@/lib/tauri";
 import { useClient } from "@/providers/ClientProvider";
 import { fetchFilePreviewBlob } from "@/lib/api";
 import { OfficePreview, isOfficePreviewable } from "@/components/common/OfficePreview";
+import MarkdownTextRenderer from "@/components/MarkdownTextRenderer";
 import type { DeliveredFile } from "@/lib/types";
 
 const PREVIEWABLE_TEXT_EXTS = new Set([
@@ -24,6 +25,7 @@ const PREVIEWABLE_TEXT_EXTS = new Set([
 
 const IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"]);
 const HTML_EXTS = new Set([".html", ".htm"]);
+const MARKDOWN_EXTS = new Set([".md", ".markdown"]);
 
 function extOf(name: string): string {
   const dot = name.lastIndexOf(".");
@@ -34,6 +36,11 @@ function isPreviewableText(file: DeliveredFile): boolean {
   return PREVIEWABLE_TEXT_EXTS.has(extOf(file.name))
     || file.mime.startsWith("text/")
     || file.mime === "application/json";
+}
+
+function isMarkdown(file: DeliveredFile): boolean {
+  return MARKDOWN_EXTS.has(extOf(file.name))
+    || file.mime === "text/markdown";
 }
 
 function isPreviewableImage(file: DeliveredFile): boolean {
@@ -95,8 +102,13 @@ export function FilePreviewPanel() {
           sessionKey: scope === "project" ? sessionKey : null,
         });
         if (cancelled) return;
-        // HTML 用 sandboxed iframe 渲染；其他文本走 <pre> 源码展示
+        // HTML / Markdown / 文本走 textSource；其他二进制走 Blob URL
         if (isHtml(file)) {
+          const text = await blob.text();
+          if (cancelled) return;
+          setTextSource(text);
+          setBlobUrl(null);
+        } else if (isMarkdown(file)) {
           const text = await blob.text();
           if (cancelled) return;
           setTextSource(text);
@@ -199,9 +211,9 @@ export function FilePreviewPanel() {
       />
     </div>
   ) : (
-    <div className="flex-1 overflow-auto p-4">
+    <div className="flex min-h-0 flex-1 flex-col">
       {blobError ? (
-        <div className="flex h-full flex-col items-center justify-center gap-2 text-xs text-destructive">
+        <div className="flex h-full flex-col items-center justify-center gap-2 p-4 text-xs text-destructive">
           <File className="h-10 w-10 opacity-40" />
           <span>加载预览失败：{blobError}</span>
         </div>
@@ -212,12 +224,16 @@ export function FilePreviewPanel() {
           title="File preview"
           sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads"
         />
+      ) : isMarkdown(file) && textSource !== null ? (
+        <div className="markdown-content scrollbar-hover h-full w-full overflow-auto px-4 py-2 text-sm">
+          <MarkdownTextRenderer>{textSource}</MarkdownTextRenderer>
+        </div>
       ) : isPreviewableText(file) && textSource !== null ? (
-        <pre className="h-full w-full overflow-auto whitespace-pre-wrap break-words font-mono text-xs text-foreground">
+        <pre className="scrollbar-thin h-full w-full overflow-auto whitespace-pre-wrap break-words p-4 font-mono text-xs text-foreground">
           {textSource}
         </pre>
       ) : isPreviewableImage(file) && blobUrl ? (
-        <div className="flex h-full items-center justify-center">
+        <div className="flex h-full items-center justify-center p-4">
           <img
             src={blobUrl}
             alt={file.name}

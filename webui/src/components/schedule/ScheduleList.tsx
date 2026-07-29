@@ -96,7 +96,7 @@ function ScheduleListRow({
   return (
     <div
       className={cn(
-        "px-4 py-3 flex items-start gap-3 hover:bg-accent/40 transition-colors cursor-pointer",
+        "px-4 py-3 flex items-start gap-3 hover:bg-accent transition-colors cursor-pointer",
         item.done && "opacity-60",
         !item.enabled && "opacity-60",
       )}

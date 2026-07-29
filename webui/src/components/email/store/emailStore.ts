@@ -81,6 +81,9 @@ interface EmailState {
   // 正文缓存：key = `${uid}:${accountId}:${folder}`，value = { bodyText, bodyHtml, attachments }
   // 避免切换邮件/刷新列表时重复调 gateway 解析 .eml（SQLite 不存正文，每次 reload 都是空）
   bodyCache: Record<string, { bodyText: string; bodyHtml: string | null; attachments?: EmailAttachment[] }>;
+  // 正文加载阶段：'local'=读本地 .eml（毫秒级），'network'=本地未命中走邮件服务器
+  // 用于 UI 区分提示文案："正在加载正文" vs "正在请求邮件"
+  bodyLoadingStage: Record<string, "local" | "network">;
   analysisLoading: boolean;
   analysisError: string | null;
   // AI 对话会话 ID（email agent panel 的对话模式）
@@ -127,8 +130,8 @@ interface EmailState {
   // 停止所有账号的 IDLE 监听
   stopAllIdle: (gatewayUrl: string) => Promise<void>;
   selectMessage: (message: EmailMessage | null) => void;
-  // 按需拉取邮件正文（同步时只拉头部，点击邮件时调用）
-  fetchBody: (gatewayUrl: string, message: EmailMessage) => Promise<void>;
+  // 按需拉取邮件正文：纯本地 Tauri IPC（读 .eml + mailparse），不依赖 HTTP 服务
+  fetchBody: (message: EmailMessage) => Promise<void>;
   toggleRead: (gatewayUrl: string, message: EmailMessage) => Promise<void>;
   toggleStarred: (gatewayUrl: string, message: EmailMessage) => Promise<void>;
   deleteMessage: (gatewayUrl: string, message: EmailMessage) => Promise<void>;
@@ -156,6 +159,29 @@ interface EmailState {
   batchOperate: (gatewayUrl: string, action: EmailBatchAction, destFolder?: string) => Promise<void>;
 }
 
+// 监听 Rust 端 email-body-stage 事件：本地 .eml 未命中时切为 'network' 阶段
+// UI 据此切换提示文案："正在加载正文" → "正在请求邮件"
+void (async () => {
+  try {
+    const { listen } = await import("@tauri-apps/api/event");
+    await listen<{
+      accountId: string;
+      uid: string;
+      mailbox: string;
+      stage: "local" | "network";
+    }>("email-body-stage", (event) => {
+      const p = event.payload;
+      if (!p || p.stage !== "network") return;
+      const cacheKey = `${p.uid}:${p.accountId}:${p.mailbox}`;
+      useEmailStore.setState((state) => ({
+        bodyLoadingStage: { ...state.bodyLoadingStage, [cacheKey]: "network" },
+      }));
+    });
+  } catch {
+    // 非桌面环境无 listen API，静默忽略
+  }
+})();
+
 export const useEmailStore = create<EmailState>((set, get) => ({
   accounts: [],
   selectedAccountId: null,
@@ -173,6 +199,7 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   gatewayUrl: "",
   analysisCache: {},
   bodyCache: {},
+  bodyLoadingStage: {},
   analysisLoading: false,
   analysisError: null,
   agentChatId: null,
@@ -472,12 +499,13 @@ export const useEmailStore = create<EmailState>((set, get) => ({
     try {
       const PAGE_SIZE = 50;
       const messages = await api.getMessages(accountId, folder, null, PAGE_SIZE);
-      // 从内存缓存恢复正文（SQLite 不存正文，但 bodyCache 有已解析过的）
+      // 从内存缓存恢复正文（SQLite 不存正文，bodyCache 缓存已解析过的）
+      // Offline-First：缓存 key 存在即视为已加载，合法空正文邮件也命中（与 fetchBody 内部判断一致）
       const bodyCache = get().bodyCache;
       const messagesWithBody = messages.map((m) => {
         const key = `${m.uid}:${m.accountId}:${m.folder}`;
         const cached = bodyCache[key];
-        if (cached && (cached.bodyText || cached.bodyHtml)) {
+        if (cached) {
           return { ...m, bodyText: cached.bodyText, bodyHtml: cached.bodyHtml, bodyFetched: true };
         }
         return m;
@@ -718,10 +746,11 @@ export const useEmailStore = create<EmailState>((set, get) => ({
     // 单选清空多选
     const key = `${message.uid}:${message.accountId}`;
     // 命中内存缓存时直接带正文，MailView 首次渲染即显示（零加载）
+    // Offline-First：缓存 key 存在即视为已加载，合法空正文邮件也命中（与 fetchBody 内部判断一致）
     const cacheKey = `${message.uid}:${message.accountId}:${message.folder}`;
     const cached = get().bodyCache[cacheKey];
     const next = new Set<string>([key]);
-    if (cached && (cached.bodyText || cached.bodyHtml)) {
+    if (cached) {
       set({
         selectedMessage: {
           ...message,
@@ -736,21 +765,16 @@ export const useEmailStore = create<EmailState>((set, get) => ({
       });
       return;
     }
-    set({ selectedMessage: message, selectedUids: next, anchorUid: key });
+    set({ selectedMessage: { ...message, bodyError: null }, selectedUids: next, anchorUid: key });
     // 预取正文：不等 MailView 的 useEffect，省一个渲染周期
-    const gw = get().gatewayUrl;
-    if (gw && !message.bodyFetched) {
-      void get().fetchBody(gw, message);
-    }
+    // email_fetch_body 是纯本地 Tauri IPC（读 .eml + mailparse），不依赖任何 HTTP 服务
+    // 无条件预取，bodyCache 命中即直显，否则毫秒级 IPC 解析本地 .eml
+    void get().fetchBody(message);
   },
 
   selectSingle: (message) => {
-    const key = `${message.uid}:${message.accountId}`;
-    set({
-      selectedMessage: message,
-      selectedUids: new Set<string>([key]),
-      anchorUid: key,
-    });
+    // 复用 selectMessage 的逻辑（含 bodyCache 命中直显 + 预取正文）
+    get().selectMessage(message);
   },
 
   toggleSelect: (message) => {
@@ -763,10 +787,11 @@ export const useEmailStore = create<EmailState>((set, get) => ({
       next.add(key);
     }
     // 多选时清空单邮件预览；恢复单选时预览该项
+    // 走 selectMessage 以复用 bodyCache 命中直显 + 预取正文逻辑
     if (next.size === 0) {
       set({ selectedUids: next, selectedMessage: null, anchorUid: null });
     } else if (next.size === 1) {
-      set({ selectedUids: next, selectedMessage: message, anchorUid: key });
+      get().selectMessage(message);
     } else {
       set({ selectedUids: next, selectedMessage: null, anchorUid: key });
     }
@@ -777,22 +802,14 @@ export const useEmailStore = create<EmailState>((set, get) => ({
     const targetKey = `${message.uid}:${message.accountId}`;
     if (!anchorKey) {
       // 无锚点，退化为单选
-      set({
-        selectedUids: new Set<string>([targetKey]),
-        selectedMessage: message,
-        anchorUid: targetKey,
-      });
+      get().selectMessage(message);
       return;
     }
     const keys = orderedList.map((m) => `${m.uid}:${m.accountId}`);
     const anchorIdx = keys.indexOf(anchorKey);
     const targetIdx = keys.indexOf(targetKey);
     if (anchorIdx < 0 || targetIdx < 0) {
-      set({
-        selectedUids: new Set<string>([targetKey]),
-        selectedMessage: message,
-        anchorUid: targetKey,
-      });
+      get().selectMessage(message);
       return;
     }
     const [start, end] = anchorIdx <= targetIdx ? [anchorIdx, targetIdx] : [targetIdx, anchorIdx];
@@ -872,11 +889,21 @@ export const useEmailStore = create<EmailState>((set, get) => ({
     }
   },
 
-  fetchBody: async (gatewayUrl, message) => {
+  fetchBody: async (message) => {
     const cacheKey = `${message.uid}:${message.accountId}:${message.folder}`;
+    // 邮件服务 URL（用于本地 .eml 失败时回退到 HTTP 拉取，变量名历史遗留叫 gatewayUrl）
+    const serviceUrl = get().gatewayUrl;
     // 1. 先查内存缓存（SQLite 不存正文，但解析过的正文缓存在 store 中）
+    //    P0-4: 缓存 key 存在即视为本次正文请求已完成，不再要求 bodyText||bodyHtml，
+    //    合法空正文邮件也只调用一次，避免无限重试
+    //    bodyCache 命中时不设置 stage，避免 loading 闪烁
     const cached = get().bodyCache[cacheKey];
-    if (cached && (cached.bodyText || cached.bodyHtml)) {
+    if (cached) {
+      // bodyCache 命中且 body 都空：合法空正文，已尝试过，不再更新 selectedMessage
+      // 避免引用变化触发 useEffect 死循环；UI 通过 stage 不存在判断为"无可显示正文"
+      if (!cached.bodyText && !cached.bodyHtml) {
+        return;
+      }
       set((state) => ({
         messages: state.messages.map((m) =>
           m.uid === message.uid && m.accountId === message.accountId
@@ -904,49 +931,49 @@ export const useEmailStore = create<EmailState>((set, get) => ({
       }));
       return;
     }
-    // 2. 已缓存且有内容才跳过（兼容旧数据 body_fetched 默认 1 但正文为空的情况）
-    //    但有附件未加载时不跳过，需要拉取附件列表
-    if (
-      message.bodyFetched &&
-      (message.bodyText || message.bodyHtml) &&
-      (!message.hasAttachments || (message.attachments && message.attachments.length > 0))
-    ) {
-      return;
-    }
-    // 3. in-flight 去重：selectMessage 预取和 useEffect 可能同时触发，避免重复 IPC
+    // 2. in-flight 去重：selectMessage 预取和 useEffect 可能同时触发，避免重复 IPC
+    //    bodyCache 命中已负责去重，到这里说明需要从本地 .eml 解析或走 gateway 拉取
     if (inflightBodyLoads.has(cacheKey)) return;
     inflightBodyLoads.add(cacheKey);
-    // 4. 标记为正在加载：把 bodyFetched 置 false，触发 UI 显示 spinner
-    //    避免 bodyFetched=true 但正文为空时显示"(无正文)"的闪烁
+    // 标记进入本地加载阶段；Rust 本地未命中时会 emit email-body-stage 切换为 'network'
+    // 只在真正需要 IPC 时设置 stage，避免 bodyCache 命中时闪烁
     set((state) => ({
-      messages: state.messages.map((m) =>
-        m.uid === message.uid && m.accountId === message.accountId
-          ? { ...m, bodyFetched: false, bodyError: null }
-          : m,
-      ),
-      selectedMessage:
-        state.selectedMessage?.uid === message.uid
-          ? { ...state.selectedMessage, bodyFetched: false, bodyError: null }
-          : state.selectedMessage,
+      bodyLoadingStage: { ...state.bodyLoadingStage, [cacheKey]: "local" },
     }));
+    // 3. 不把 bodyFetched 置 false：保留 true 让邮件框架立即显示，
+    //    正文区域由 MailView 根据空 bodyText/bodyHtml 显示极小 loading（不是全屏 spinner），
+    //    IPC 返回后立即填充正文，避免"点击→spinner→正文"的闪烁感
     try {
       const result = await api.fetchEmailBody(
-        gatewayUrl,
         message.accountId,
         message.uid,
         message.folder,
+        serviceUrl,
       );
       // 写入内存缓存 + 更新本地消息对象
       const header = result.header;
+      // Rust 端自动修复：若本地 uid 与服务器不一致（存量分裂邮件），Rust 会触发 sync_folder_internal
+      // 用 message_id 去重把本地旧 uid 替换为新 uid，并通过 _resolvedUid 字段返回新 uid。
+      // 前端需要把 store 中此消息的 uid 更新为新值，否则下次重试会用旧 uid 查不到本地记录。
+      const resolvedUid: string | undefined = (result as { _resolvedUid?: string })._resolvedUid;
+      const finalUid = resolvedUid && resolvedUid !== message.uid ? resolvedUid : message.uid;
+      const finalCacheKey = `${finalUid}:${message.accountId}:${message.folder}`;
+      // 合法空正文（纯附件、日历邀请、加密内容）也可能是 bodyText=空+bodyHtml=null
+      // 此时不应再走 HTTP 重试，直接缓存（含空 body）让下次点击命中缓存
+      // skill 第四节：合法空正文不得反复请求网络
+      const shouldCache = true;
       set((state) => ({
-        bodyCache: {
-          ...state.bodyCache,
-          [cacheKey]: { bodyText: result.bodyText, bodyHtml: result.bodyHtml, attachments: result.attachments },
-        },
+        bodyCache: shouldCache
+          ? {
+              ...state.bodyCache,
+              [finalCacheKey]: { bodyText: result.bodyText, bodyHtml: result.bodyHtml, attachments: result.attachments },
+            }
+          : state.bodyCache,
         messages: state.messages.map((m) =>
           m.uid === message.uid && m.accountId === message.accountId
             ? {
                 ...m,
+                uid: finalUid,
                 bodyText: result.bodyText,
                 bodyHtml: result.bodyHtml,
                 bodyFetched: true,
@@ -969,6 +996,7 @@ export const useEmailStore = create<EmailState>((set, get) => ({
           state.selectedMessage?.uid === message.uid
             ? {
                 ...state.selectedMessage,
+                uid: finalUid,
                 bodyText: result.bodyText,
                 bodyHtml: result.bodyHtml,
                 bodyFetched: true,
@@ -1001,9 +1029,14 @@ export const useEmailStore = create<EmailState>((set, get) => ({
             ? { ...state.selectedMessage, bodyError: errMsg }
             : state.selectedMessage,
       }));
-      throw e;
     } finally {
       inflightBodyLoads.delete(cacheKey);
+      // 清除加载阶段标记
+      set((state) => {
+        const next = { ...state.bodyLoadingStage };
+        delete next[cacheKey];
+        return { bodyLoadingStage: next };
+      });
     }
   },
 
@@ -1217,56 +1250,6 @@ export const useEmailStore = create<EmailState>((set, get) => ({
     }
   },
 }));
-
-/**
- * 解析地址字符串，用通讯录名称替换邮箱显示。
- * 支持 "Name <email>" 和纯 email 两种格式，逗号分隔多个地址。
- * 有名称（含通讯录）时只显示名称，否则显示邮箱。
- */
-export function resolveAddressDisplay(
-  raw: string | null | undefined,
-  contactsByEmail: Record<string, string>,
-): string {
-  if (!raw) return "";
-  // 按逗号分割，但不分割尖括号内的逗号
-  const parts: string[] = [];
-  let current = "";
-  let inAngle = false;
-  for (const ch of raw) {
-    if (ch === "<") inAngle = true;
-    else if (ch === ">") inAngle = false;
-    if (ch === "," && !inAngle) {
-      if (current.trim()) parts.push(current.trim());
-      current = "";
-    } else {
-      current += ch;
-    }
-  }
-  if (current.trim()) parts.push(current.trim());
-
-  const resolved = parts.map((part) => {
-    // 提取 Name <email> 格式
-    const match = part.match(/^([^<]*?)\s*<([^>]+)>$/);
-    if (match) {
-      const name = match[1].trim().replace(/^["']|["']$/g, "");
-      if (name) return name;
-      const email = match[2].trim();
-      const contactName = contactsByEmail[email.toLowerCase()];
-      if (contactName) return contactName;
-      return email;
-    }
-    // 纯 email
-    const email = part.trim();
-    if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      const contactName = contactsByEmail[email.toLowerCase()];
-      if (contactName) return contactName;
-      return email;
-    }
-    return part;
-  });
-
-  return resolved.join(", ");
-}
 
 /** 解析单个地址，返回显示名（优先 fromName，其次通讯录，最后 email） */
 export function resolveSenderDisplay(

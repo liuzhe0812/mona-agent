@@ -86,7 +86,6 @@ export function SystemAssistant({ tab, requestId, storage, onNavigate, collapsed
   const [results, setResults] = useState<SystemActionResult[]>([]);
   const [error, setError] = useState("");
   const requestVersion = useRef(0);
-  const wasCollapsed = useRef(collapsed);
 
   const startGoal = async (nextGoal: string) => {
     const normalizedGoal = nextGoal.trim();
@@ -128,11 +127,6 @@ export function SystemAssistant({ tab, requestId, storage, onNavigate, collapsed
       void startGoal(analysisRequest.goal);
     }
   }, [analysisRequest?.nonce]);
-
-  useEffect(() => {
-    if (wasCollapsed.current && !collapsed && window.innerWidth < 1280) setDrawerOpen(true);
-    wasCollapsed.current = collapsed;
-  }, [collapsed]);
 
   useEffect(() => {
     if (!handoffTask) return;
@@ -193,19 +187,19 @@ export function SystemAssistant({ tab, requestId, storage, onNavigate, collapsed
 
   return (
     <>
-      {drawerOpen && <button type="button" aria-label="关闭 Mona 系统管家" onClick={closeAssistant} className="absolute inset-0 z-40 bg-slate-950/20 backdrop-blur-[1px] xl:hidden" />}
+      {drawerOpen && <button type="button" aria-label="关闭 Mona 系统管家" onClick={closeAssistant} className="absolute inset-0 z-40 bg-slate-950/20 backdrop-blur-[1px] sm:hidden" />}
 
       <aside
         aria-label="Mona 系统管家"
         aria-hidden={collapsed}
-        className={`absolute inset-y-0 right-0 z-50 flex min-h-0 w-full flex-col border-l border-border/70 bg-card shadow-2xl transition-transform duration-200 sm:w-[360px] xl:static xl:z-auto xl:w-auto xl:translate-x-0 xl:shadow-none ${collapsed ? "xl:pointer-events-none xl:bg-transparent" : "xl:bg-card"} ${drawerOpen ? "translate-x-0" : "translate-x-full xl:translate-x-0"}`}
+        className={`absolute inset-y-0 right-0 z-50 flex min-h-0 w-full flex-col border-l border-border/70 bg-card shadow-lg transition-transform duration-200 sm:static sm:z-auto sm:w-auto sm:translate-x-0 sm:shadow-none ${collapsed ? "sm:pointer-events-none sm:bg-transparent sm:hidden" : "sm:bg-card"} ${drawerOpen ? "translate-x-0" : "translate-x-full sm:translate-x-0"}`}
       >
-        <div className={`flex min-h-0 flex-1 flex-col ${collapsed ? "xl:hidden" : ""}`}>
+        <div className="flex min-h-0 flex-1 flex-col">
         <header className="flex h-16 shrink-0 items-center gap-3 border-b border-border/70 px-4">
           <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-500/10 text-blue-600 dark:text-blue-400"><Sparkles className="h-4 w-4" /></span>
           <div className="min-w-0"><h2 className="truncate text-sm font-semibold">Mona 系统管家</h2><p className="mt-0.5 text-[10px] text-muted-foreground">跨模块诊断与受控处置</p></div>
           {viewMode === "agent" && <button type="button" onClick={() => setViewMode("planner")} className="ml-auto text-xs text-blue-600 hover:underline">返回系统方案</button>}
-          <button type="button" aria-label="关闭 Mona 系统管家" onClick={closeAssistant} className={`flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground xl:hidden ${viewMode === "agent" ? "" : "ml-auto"}`}><X className="h-4 w-4" /></button>
+          <button type="button" aria-label="关闭 Mona 系统管家" onClick={closeAssistant} className={`flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground sm:hidden ${viewMode === "agent" ? "" : "ml-auto"}`}><X className="h-4 w-4" /></button>
         </header>
 
         <div className="flex min-h-0 flex-1 flex-col">

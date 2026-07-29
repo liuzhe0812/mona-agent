@@ -26,7 +26,6 @@ import {
   Maximize2,
   List,
   Network,
-  Pencil,
   Copy,
   Download,
   Loader2,
@@ -38,6 +37,9 @@ import {
   Search,
   Scissors,
   ClipboardPaste,
+  GitBranch,
+  Brackets,
+  Square,
 } from "lucide-react";
 
 import type { OperationNote } from "../notes-data";
@@ -57,6 +59,25 @@ import {
 import { FindReplacePanel } from "./FindReplacePanel";
 import { useMindMapSelection } from "./MindMapSelectionContext";
 import { downloadMediaUrl } from "@/lib/tauri";
+import {
+  readDecorations,
+  writeDecorations,
+  cleanupDanglingDecorations,
+  storedArrowToNative,
+  nativeArrowToStored,
+  summaryToNativeRange,
+  groupSelectionByBranch,
+  validateSelection,
+  generateDecorationId,
+  findNodeById,
+  EMPTY_DECORATIONS,
+  type MonaMapDecorations,
+  type StoredArrow,
+  type StoredSummary,
+  type StoredBoundary,
+  type StoredBoundaryLink,
+  type BoundaryLinkEndpoint,
+} from "./mindmap-decorations";
 
 export interface MindMapSelection {
   nodeId: string;
@@ -257,6 +278,42 @@ export function MindMapDocumentEditor({
   const mindRef = useRef<MindElixirInstance | null>(null);
   const isRefreshingRef = useRef(false);
   const lastContentRef = useRef(note.contentMarkdown);
+  const contextMenuCleanupRef = useRef<(() => void) | null>(null);
+  // 当前装饰数据（arrows / summaries / boundaries），与 Mind Elixir 内部状态同步
+  const decorationsRef = useRef<MonaMapDecorations>({ ...EMPTY_DECORATIONS });
+  // 右键点击目标类型：节点 / 空白区域
+  const [contextMenuTarget, setContextMenuTarget] = useState<"node" | "empty">("node");
+  // 右键打开菜单时的选区快照（节点 ID 列表），避免菜单打开后选区被清空
+  const selectionSnapshotRef = useRef<string[]>([]);
+  // 联系模式：根据已有选区，从起始主题或目标主题继续选择
+  const [linkingState, setLinkingState] = useState<{
+    active: boolean;
+    phase: "first" | "second";
+    first: BoundaryLinkEndpoint | null;
+  }>({ active: false, phase: "first", first: null });
+  // 无现有选区时，外框 / 概要进入补充框选模式
+  const [marqueeState, setMarqueeState] = useState<{
+    active: boolean;
+    mode: "boundary" | "summary" | null;
+  }>({ active: false, mode: null });
+  // 当前选中外框 ID（用于 Delete 删除）
+  const [selectedBoundaryId, setSelectedBoundaryId] = useState<string | null>(null);
+  const [selectedBoundaryLinkId, setSelectedBoundaryLinkId] = useState<string | null>(null);
+  // 外框 SVG 层元素
+  const boundaryLayerRef = useRef<SVGSVGElement | null>(null);
+  // 框选矩形元素（覆盖层）
+  const marqueeRectRef = useRef<HTMLDivElement | null>(null);
+  // 保存最新的 redrawBoundaries 函数，供 init useEffect 中的 listener 调用
+  const redrawBoundariesRef = useRef<() => void>(() => {});
+  const boundaryResizeCleanupRef = useRef<(() => void) | null>(null);
+  // 保存事件监听所需的最新回调
+  const cancelLinkingRef = useRef<() => void>(() => {});
+  const createRelationshipRef = useRef<
+    (from: BoundaryLinkEndpoint, to: BoundaryLinkEndpoint) => void
+  >(() => {});
+  const handleDeleteBoundaryRef = useRef<() => void>(() => {});
+  const handleDeleteBoundaryLinkRef = useRef<() => void>(() => {});
+  const finishMarqueeRef = useRef<(rect: DOMRect) => void>(() => {});
   const { setSelection, updateBaseHash } = useMindMapSelection();
 
   const [viewMode, setViewMode] = useState<ViewMode>("map");
@@ -309,24 +366,37 @@ export function MindMapDocumentEditor({
 
     if (mindRef.current) {
       const cloned = cloneNode(result.root);
+      // 读取新的装饰数据（外部内容变化时，如 AI Patch）
+      const newDecorations = readDecorations(result.root);
+      decorationsRef.current = newDecorations;
+      const arrows = newDecorations.arrows.map((a) => storedArrowToNative(a));
+      const summaries = newDecorations.summaries
+        .map((s) => {
+          const range = summaryToNativeRange(s, result.root);
+          if (!range) return null;
+          return { id: s.id, label: s.label, ...range, style: s.style };
+        })
+        .filter((s): s is NonNullable<typeof s> => s !== null);
       // 容器可见时立即 refresh；否则延迟到下一帧（等 viewMode 切换完成）
       if (viewMode === "map") {
         isRefreshingRef.current = true;
         try {
-          mindRef.current.refresh({ nodeData: cloned });
+          mindRef.current.refresh({ nodeData: cloned, arrows, summaries });
         } finally {
           isRefreshingRef.current = false;
         }
+        requestAnimationFrame(() => redrawBoundariesRef.current());
       } else {
         requestAnimationFrame(() => {
           const mind = mindRef.current;
           if (!mind) return;
           isRefreshingRef.current = true;
           try {
-            mind.refresh({ nodeData: cloned });
+            mind.refresh({ nodeData: cloned, arrows, summaries });
           } finally {
             isRefreshingRef.current = false;
           }
+          requestAnimationFrame(() => redrawBoundariesRef.current());
         });
       }
     }
@@ -343,6 +413,9 @@ export function MindMapDocumentEditor({
       setViewMode("outline");
       return;
     }
+
+    // 读取地图级装饰数据（arrows / summaries / boundaries）
+    decorationsRef.current = readDecorations(result.root);
 
     const mind = new MindElixir({
       el: containerRef.current,
@@ -375,7 +448,17 @@ export function MindMapDocumentEditor({
       },
     });
 
-    mind.init({ nodeData: cloneNode(result.root) });
+    mind.init({
+      nodeData: cloneNode(result.root),
+      arrows: decorationsRef.current.arrows.map((a) => storedArrowToNative(a)),
+      summaries: decorationsRef.current.summaries
+        .map((s) => {
+          const range = summaryToNativeRange(s, result.root);
+          if (!range) return null;
+          return { id: s.id, label: s.label, ...range, style: s.style };
+        })
+        .filter((s): s is NonNullable<typeof s> => s !== null),
+    });
     // 应用保存的配色方案（非 auto 时立即覆盖默认 Latte 主题）
     const savedKey = themeKeyRef.current;
     if (savedKey !== "auto") {
@@ -394,20 +477,31 @@ export function MindMapDocumentEditor({
       mind.scaleFit();
     });
 
+    // 创建外框 SVG 层：插入到 mind.map 内部，作为第一个子元素
+    // mind.map 的 transform 会自动应用到子元素，外框跟随平移和缩放
+    const boundaryLayer = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    boundaryLayer.style.position = "absolute";
+    boundaryLayer.style.top = "0";
+    boundaryLayer.style.left = "0";
+    boundaryLayer.style.width = "100%";
+    boundaryLayer.style.height = "100%";
+    boundaryLayer.style.pointerEvents = "none";
+    boundaryLayer.style.overflow = "visible";
+    boundaryLayer.style.zIndex = "0";
+    boundaryLayerRef.current = boundaryLayer;
+    if (mind.map) {
+      mind.map.insertBefore(boundaryLayer, mind.map.firstChild);
+    }
+
     mind.bus.addListener("operation", () => {
       if (isRefreshingRef.current) return;
-      const data = mind.getData();
-      const md = serializeMindMap(stripParent(data.nodeData));
-      lastContentRef.current = md;
-      setOutlineText(md);
-      const parsed = parseMindMap(md);
-      onContentChange({
-        contentMarkdown: md,
-        plainText: parsed.ok ? parsed.plainText : md,
-      });
-      // 同步最新 baseHash 到 Context，确保下次 AI patch 校验基于最新内容
-      const newBaseHash = computeBaseHash(md);
-      updateBaseHash(note.id, newBaseHash);
+      persistCurrentMap();
+      requestAnimationFrame(() => redrawBoundariesRef.current());
+    });
+
+    // linkDiv 事件后也要重绘外框（节点位置变化）
+    mind.bus.addListener("linkDiv", () => {
+      requestAnimationFrame(() => redrawBoundariesRef.current());
     });
 
     mind.bus.addListener("selectNewNode", (nodeObj: NodeObj) => {
@@ -432,22 +526,100 @@ export function MindMapDocumentEditor({
       setSelection(note.id, sel, baseHash);
       // 单选时更新选中计数
       setSelectedCount(1);
+      selectionSnapshotRef.current = [nodeObj.id];
+      setSelectedBoundaryId(null);
+      setSelectedBoundaryLinkId(null);
     });
 
     // 多选事件：追踪当前选中节点数
-    mind.bus.addListener("selectNodes", (nodes: NodeObj[]) => {
-      setSelectedCount(nodes.length);
+    mind.bus.addListener("selectNodes", () => {
+      const ids = mind.currentNodes.map((node) => node.nodeObj.id);
+      selectionSnapshotRef.current = ids;
+      setSelectedCount(ids.length);
     });
-    mind.bus.addListener("unselectNodes", (nodes: NodeObj[]) => {
-      const mind = mindRef.current;
-      if (!mind) return;
-      const remaining = mind.currentNodes.length - nodes.length;
-      setSelectedCount(Math.max(0, remaining));
+    mind.bus.addListener("unselectNodes", () => {
+      const ids = mind.currentNodes.map((node) => node.nodeObj.id);
+      selectionSnapshotRef.current = ids;
+      setSelectedCount(ids.length);
     });
+
+    // Mind Elixir 的 contextmenu 处理器调用了 preventDefault() 阻止原生菜单，
+    // 同时导致 event.defaultPrevented = true。
+    // Radix 的 composeEventHandlers 检查 defaultPrevented，为 true 时跳过菜单打开。
+    //
+    // 修复：在捕获阶段用 Object.defineProperty 覆盖 defaultPrevented 的 getter，
+    // 让它始终返回 false。preventDefault 本身保持原始行为不变：
+    //   - Mind Elixir 调用 preventDefault → 浏览器原生菜单被阻止（符合预期）
+    //   - defaultPrevented getter 返回 false → Radix 检查通过，打开自定义菜单
+    const container = containerRef.current;
+    if (container) {
+      const captureHandler = (e: MouseEvent) => {
+        if (e.button !== 2) return; // 仅处理右键
+        // 只有实际主题算节点；me-map / me-wrapper 等仍属于空白区域
+        const target = e.target as Element | null;
+        const topic = target?.closest?.("me-tpc") as Topic | null;
+        const boundary = target?.closest?.("[data-boundary-id]") as SVGElement | null;
+        const isNode = topic !== null;
+        setContextMenuTarget(isNode ? "node" : "empty");
+        // 快照当前选区（菜单打开后 Mind Elixir 可能清空选区）
+        const mind = mindRef.current;
+        if (mind) {
+          if (boundary?.dataset.boundaryId) {
+            mind.clearSelection();
+            selectionSnapshotRef.current = [];
+            setSelectedBoundaryId(boundary.dataset.boundaryId);
+            setSelectedBoundaryLinkId(null);
+          } else {
+            if (topic && !mind.currentNodes.some((node) => node.nodeObj.id === topic.nodeObj.id)) {
+              mind.selectNode(topic, false);
+            }
+            selectionSnapshotRef.current = mind.currentNodes.map((n) => n.nodeObj.id);
+            if (topic) {
+              setSelectedBoundaryId(null);
+              setSelectedBoundaryLinkId(null);
+            }
+          }
+        }
+        try {
+          Object.defineProperty(e, "defaultPrevented", {
+            get: () => false,
+            configurable: true,
+          });
+        } catch {
+          e.preventDefault = () => {};
+        }
+      };
+      const clearDecorationSelection = (e: MouseEvent) => {
+        if (
+          e.button !== 0 ||
+          (e.target as Element | null)?.closest?.(
+            "[data-boundary-id], [data-boundary-handle], [data-boundary-link-id]",
+          )
+        ) {
+          return;
+        }
+        setSelectedBoundaryId(null);
+        setSelectedBoundaryLinkId(null);
+      };
+      container.addEventListener("contextmenu", captureHandler, true);
+      container.addEventListener("mousedown", clearDecorationSelection, true);
+      contextMenuCleanupRef.current = () => {
+        container.removeEventListener("contextmenu", captureHandler, true);
+        container.removeEventListener("mousedown", clearDecorationSelection, true);
+      };
+    }
 
     mindRef.current = mind;
 
     return () => {
+      contextMenuCleanupRef.current?.();
+      contextMenuCleanupRef.current = null;
+      boundaryResizeCleanupRef.current?.();
+      boundaryResizeCleanupRef.current = null;
+      if (boundaryLayerRef.current) {
+        boundaryLayerRef.current.remove();
+        boundaryLayerRef.current = null;
+      }
       if (containerRef.current) {
         containerRef.current.innerHTML = "";
       }
@@ -455,6 +627,251 @@ export function MindMapDocumentEditor({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // 联系模式对齐 XMind：
+  // 0 个选区时依次点击起始/目标主题，1 个选区时只补选目标主题。
+  // 因产品已移除自由主题，点击空白只取消，不在空白处创建主题。
+  useEffect(() => {
+    if (!linkingState.active) return;
+    const container = containerRef.current;
+    if (!container) return;
+
+    const handleTargetClick = (e: MouseEvent) => {
+      const target = e.target as Element | null;
+      const topic = target?.closest?.("me-tpc") as Topic | null;
+      const boundary = target?.closest?.("[data-boundary-id]") as SVGElement | null;
+      const endpoint: BoundaryLinkEndpoint | null = topic?.nodeObj?.id
+        ? { kind: "node", id: topic.nodeObj.id }
+        : boundary?.dataset.boundaryId
+          ? { kind: "boundary", id: boundary.dataset.boundaryId }
+          : null;
+      if (!endpoint) {
+        cancelLinkingRef.current();
+        return;
+      }
+      const mind = mindRef.current;
+      if (!mind) return;
+      e.preventDefault();
+      e.stopPropagation();
+
+      if (linkingState.phase === "first") {
+        if (endpoint.kind === "node" && topic) {
+          mind.selectNode(topic, false);
+          selectionSnapshotRef.current = [endpoint.id];
+          setSelectedBoundaryId(null);
+        } else {
+          mind.clearSelection();
+          selectionSnapshotRef.current = [];
+          setSelectedBoundaryId(endpoint.id);
+        }
+        setSelectedBoundaryLinkId(null);
+        setLinkingState({ active: true, phase: "second", first: endpoint });
+      } else if (linkingState.phase === "second") {
+        const first = linkingState.first;
+        if (!first) {
+          cancelLinkingRef.current();
+          return;
+        }
+        // 不允许连接自身
+        if (endpoint.kind === first.kind && endpoint.id === first.id) {
+          return;
+        }
+        createRelationshipRef.current(first, endpoint);
+        cancelLinkingRef.current();
+      }
+    };
+
+    const handleKeydown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        cancelLinkingRef.current();
+      }
+    };
+
+    // 右键空白也取消
+    const handleContextmenu = (e: MouseEvent) => {
+      if (e.button !== 2) return;
+      const target = e.target as Element | null;
+      const isTarget = !!target?.closest?.("me-tpc, [data-boundary-id]");
+      if (!isTarget) {
+        cancelLinkingRef.current();
+      }
+    };
+
+    container.addEventListener("click", handleTargetClick, true);
+    window.addEventListener("keydown", handleKeydown);
+    container.addEventListener("contextmenu", handleContextmenu, true);
+    return () => {
+      container.removeEventListener("click", handleTargetClick, true);
+      window.removeEventListener("keydown", handleKeydown);
+      container.removeEventListener("contextmenu", handleContextmenu, true);
+    };
+  }, [linkingState]);
+
+  // 框选模式：鼠标拖动框选节点。Esc / 右键取消。
+  useEffect(() => {
+    if (!marqueeState.active || !marqueeState.mode) return;
+    const container = containerRef.current;
+    if (!container) return;
+
+    // 创建框选矩形元素
+    const marqueeRect = document.createElement("div");
+    marqueeRect.style.position = "absolute";
+    marqueeRect.style.border = "1px solid hsl(var(--primary))";
+    marqueeRect.style.backgroundColor = "hsl(var(--primary) / 0.1)";
+    marqueeRect.style.pointerEvents = "none";
+    marqueeRect.style.zIndex = "20";
+    marqueeRect.style.display = "none";
+    container.appendChild(marqueeRect);
+    marqueeRectRef.current = marqueeRect;
+
+    let isDragging = false;
+    let startX = 0;
+    let startY = 0;
+
+    const handleMousedown = (e: MouseEvent) => {
+      if (e.button !== 0) return;
+      // 在主题或已有外框上按下时不启动框选；其他 me-* 容器仍属于画布空白。
+      const target = e.target as Element | null;
+      if (target?.closest?.("me-tpc, [data-boundary-id]")) return;
+      isDragging = true;
+      const rect = container.getBoundingClientRect();
+      startX = e.clientX - rect.left;
+      startY = e.clientY - rect.top;
+      marqueeRect.style.left = `${startX}px`;
+      marqueeRect.style.top = `${startY}px`;
+      marqueeRect.style.width = "0px";
+      marqueeRect.style.height = "0px";
+      marqueeRect.style.display = "block";
+      e.preventDefault();
+    };
+
+    const handleMousemove = (e: MouseEvent) => {
+      if (!isDragging) return;
+      const rect = container.getBoundingClientRect();
+      const curX = e.clientX - rect.left;
+      const curY = e.clientY - rect.top;
+      const left = Math.min(startX, curX);
+      const top = Math.min(startY, curY);
+      const width = Math.abs(curX - startX);
+      const height = Math.abs(curY - startY);
+      marqueeRect.style.left = `${left}px`;
+      marqueeRect.style.top = `${top}px`;
+      marqueeRect.style.width = `${width}px`;
+      marqueeRect.style.height = `${height}px`;
+    };
+
+    const handleMouseup = (e: MouseEvent) => {
+      if (!isDragging) return;
+      isDragging = false;
+      marqueeRect.style.display = "none";
+      // 计算框选矩形的屏幕坐标
+      const containerRect = container.getBoundingClientRect();
+      const left = Math.min(startX, e.clientX - containerRect.left);
+      const top = Math.min(startY, e.clientY - containerRect.top);
+      const right = Math.max(startX, e.clientX - containerRect.left);
+      const bottom = Math.max(startY, e.clientY - containerRect.top);
+      // 转为屏幕坐标
+      const screenRect = new DOMRect(
+        containerRect.left + left,
+        containerRect.top + top,
+        right - left,
+        bottom - top,
+      );
+      finishMarqueeRef.current(screenRect);
+    };
+
+    const handleKeydown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setMarqueeState({ active: false, mode: null });
+      }
+    };
+
+    const handleContextmenu = (e: MouseEvent) => {
+      if (e.button !== 2) return;
+      e.preventDefault();
+      setMarqueeState({ active: false, mode: null });
+    };
+
+    container.addEventListener("mousedown", handleMousedown, true);
+    window.addEventListener("mousemove", handleMousemove);
+    window.addEventListener("mouseup", handleMouseup);
+    window.addEventListener("keydown", handleKeydown);
+    container.addEventListener("contextmenu", handleContextmenu, true);
+    return () => {
+      container.removeEventListener("mousedown", handleMousedown, true);
+      window.removeEventListener("mousemove", handleMousemove);
+      window.removeEventListener("mouseup", handleMouseup);
+      window.removeEventListener("keydown", handleKeydown);
+      container.removeEventListener("contextmenu", handleContextmenu, true);
+      if (marqueeRectRef.current) {
+        marqueeRectRef.current.remove();
+        marqueeRectRef.current = null;
+      }
+    };
+  }, [marqueeState]);
+
+  // 统一保存：把 Mind Elixir 当前数据（nodeData + arrows + summaries）
+  // 写回根节点 metadata.monaMap，再序列化为 Markdown 通知外部。
+  // boundaries 是 Mona 自定义数据，不在 Mind Elixir 内部状态中，直接从 decorationsRef 读取。
+  const persistCurrentMap = useCallback(() => {
+    const mind = mindRef.current;
+    if (!mind) return;
+    const data = mind.getData();
+    const rootMd = stripParent(data.nodeData);
+
+    // 同步 arrows 和 summaries 到 decorationsRef
+    const arrows: StoredArrow[] = (data.arrows ?? []).map(nativeArrowToStored);
+    const summaries: StoredSummary[] = (data.summaries ?? []).map((s) => {
+      // 原生 summary 用 parent + start + end，需转回稳定 nodeIds
+      const parentNode = findNodeById(data.nodeData, s.parent);
+      if (!parentNode || !parentNode.children) {
+        // 无法还原 nodeIds，保留原 nodeIds（若已存在）
+        const existing = decorationsRef.current.summaries.find((x) => x.id === s.id);
+        return (
+          existing ?? {
+            id: s.id,
+            label: s.label,
+            nodeIds: [],
+          }
+        );
+      }
+      const nodeIds: string[] = [];
+      for (let i = s.start; i <= s.end; i++) {
+        const child = parentNode.children[i];
+        if (child) nodeIds.push(child.id);
+      }
+      return {
+        id: s.id,
+        label: s.label,
+        nodeIds,
+        style: s.style,
+      } satisfies StoredSummary;
+    });
+
+    // 保留 boundaries（Mind Elixir 不管理）
+    const boundaries = decorationsRef.current.boundaries;
+    const boundaryLinks = decorationsRef.current.boundaryLinks;
+
+    // 清理引用失效的装饰
+    const cleaned = cleanupDanglingDecorations(
+      { version: 1, arrows, summaries, boundaries, boundaryLinks },
+      rootMd,
+    );
+    decorationsRef.current = cleaned;
+
+    // 写回根节点 metadata.monaMap
+    const rootWithDecorations = writeDecorations(rootMd, cleaned);
+    const md = serializeMindMap(rootWithDecorations);
+    lastContentRef.current = md;
+    setOutlineText(md);
+    const parsed = parseMindMap(md);
+    onContentChange({
+      contentMarkdown: md,
+      plainText: parsed.ok ? parsed.plainText : md,
+    });
+    const newBaseHash = computeBaseHash(md);
+    updateBaseHash(note.id, newBaseHash);
+  }, [note.id, onContentChange, updateBaseHash]);
 
   // 主题切换：通过 changeTheme 应用 palette + cssVar，refresh 重绘连线
   // auto 模式跟随系统明暗；其他模式使用预置配色（深空固定深色，其余固定浅色）
@@ -470,12 +887,54 @@ export function MindMapDocumentEditor({
       isRefreshingRef.current = false;
     }
     // 主题切换后重新适应画布，避免连线偏移
-    requestAnimationFrame(() => mind.scaleFit());
+    requestAnimationFrame(() => {
+      mind.scaleFit();
+      redrawBoundariesRef.current();
+    });
   }, []);
 
   useEffect(() => {
     applyTheme(themeKey, isDark);
   }, [themeKey, isDark, applyTheme]);
+
+  // 外框或其联系选中状态变化时重绘
+  useEffect(() => {
+    redrawBoundariesRef.current();
+  }, [selectedBoundaryId, selectedBoundaryLinkId]);
+
+  // 外框层 ResizeObserver + Delete 键删除 + 初始重绘
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    // 初始重绘（等节点布局完成）
+    requestAnimationFrame(() => redrawBoundariesRef.current());
+    // 容器尺寸变化时重绘
+    const ro = new ResizeObserver(() => {
+      requestAnimationFrame(() => redrawBoundariesRef.current());
+    });
+    ro.observe(container);
+    // Delete/Backspace 删除选中的外框或外框联系
+    const handleKeydown = (e: KeyboardEvent) => {
+      if (
+        (e.key === "Delete" || e.key === "Backspace") &&
+        (selectedBoundaryId || selectedBoundaryLinkId)
+      ) {
+        // 避免在编辑文本时触发
+        const active = document.activeElement;
+        if (active && ((active as HTMLElement).isContentEditable || active.tagName === "INPUT" || active.tagName === "TEXTAREA")) {
+          return;
+        }
+        e.preventDefault();
+        if (selectedBoundaryLinkId) handleDeleteBoundaryLinkRef.current();
+        else handleDeleteBoundaryRef.current();
+      }
+    };
+    window.addEventListener("keydown", handleKeydown);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("keydown", handleKeydown);
+    };
+  }, [selectedBoundaryId, selectedBoundaryLinkId]);
 
   const handleThemeChange = useCallback((key: MindMapThemeKey) => {
     setThemeKey(key);
@@ -600,17 +1059,31 @@ export function MindMapDocumentEditor({
     setViewMode("map");
     if (mindRef.current) {
       const cloned = cloneNode(result.root);
+      // 大纲编辑可能修改了节点结构，重新读取装饰数据
+      const newDecorations = readDecorations(result.root);
+      decorationsRef.current = newDecorations;
+      const arrows = newDecorations.arrows.map((a) => storedArrowToNative(a));
+      const summaries = newDecorations.summaries
+        .map((s) => {
+          const range = summaryToNativeRange(s, result.root);
+          if (!range) return null;
+          return { id: s.id, label: s.label, ...range, style: s.style };
+        })
+        .filter((s): s is NonNullable<typeof s> => s !== null);
       requestAnimationFrame(() => {
         const mind = mindRef.current;
         if (!mind) return;
         isRefreshingRef.current = true;
         try {
-          mind.refresh({ nodeData: cloned });
+          mind.refresh({ nodeData: cloned, arrows, summaries });
         } finally {
           isRefreshingRef.current = false;
         }
         // 适应画布尺寸
-        requestAnimationFrame(() => mind.scaleFit());
+        requestAnimationFrame(() => {
+          mind.scaleFit();
+          redrawBoundariesRef.current();
+        });
       });
     }
 
@@ -704,6 +1177,753 @@ export function MindMapDocumentEditor({
     if (!current) return;
     mind.expandNode(current, false);
   }, []);
+
+  // ========== 空白区域右键菜单功能 ==========
+
+  // 全部展开：遍历所有父节点元素，递归展开
+  const handleExpandAll = useCallback(() => {
+    const mind = mindRef.current;
+    if (!mind) return;
+    const container = containerRef.current;
+    if (!container) return;
+    const parents = container.querySelectorAll("me-parent");
+    parents.forEach((p) => {
+      try {
+        mind.expandNodeAll?.(p as unknown as Topic, true);
+      } catch {
+        // 忽略单个节点展开失败
+      }
+    });
+  }, []);
+
+  // 全部折叠：遍历所有父节点元素，折叠（保留根节点可见）
+  const handleCollapseAll = useCallback(() => {
+    const mind = mindRef.current;
+    if (!mind) return;
+    const container = containerRef.current;
+    if (!container) return;
+    const parents = container.querySelectorAll("me-parent");
+    parents.forEach((p) => {
+      try {
+        mind.expandNode?.(p as unknown as Topic, false);
+      } catch {
+        // 忽略
+      }
+    });
+  }, []);
+
+  // ========== 装饰功能（联系 / 外框 / 概要） ==========
+  const getCommandSelectionIds = useCallback(() => {
+    const mind = mindRef.current;
+    if (!mind) return [];
+    const current = mind.currentNodes.map((node) => node.nodeObj.id);
+    const source = selectionSnapshotRef.current.length > 0
+      ? selectionSnapshotRef.current
+      : current;
+    return [...new Set(source)];
+  }, []);
+
+  const createRelationship = useCallback(
+    (from: BoundaryLinkEndpoint, to: BoundaryLinkEndpoint) => {
+      const mind = mindRef.current;
+      if (!mind || (from.kind === to.kind && from.id === to.id)) return;
+      if (from.kind === "node" && to.kind === "node") {
+        try {
+          mind.createArrowFrom({ label: "联系", from: from.id, to: to.id });
+          requestAnimationFrame(() => {
+            const arrow = mind.currentArrow;
+            if (arrow) mind.editArrowLabel(arrow);
+          });
+        } catch {
+          // 节点可能已被并发删除，保持导图可继续编辑
+        }
+        return;
+      }
+      if (from.kind === to.kind) return;
+
+      const link: StoredBoundaryLink = {
+        id: generateDecorationId("boundary-link"),
+        label: "联系",
+        from,
+        to,
+      };
+      decorationsRef.current = {
+        ...decorationsRef.current,
+        boundaryLinks: [...decorationsRef.current.boundaryLinks, link],
+      };
+      setSelectedBoundaryId(null);
+      setSelectedBoundaryLinkId(link.id);
+      persistCurrentMap();
+      requestAnimationFrame(() => redrawBoundariesRef.current());
+    },
+    [persistCurrentMap],
+  );
+  createRelationshipRef.current = createRelationship;
+
+  // 取消联系模式
+  const cancelLinking = useCallback(() => {
+    setLinkingState({ active: false, phase: "first", first: null });
+  }, []);
+  cancelLinkingRef.current = cancelLinking;
+
+  // XMind：选中两个主题时直接创建；选中一个时补选目标；无选区时依次选择两个主题。
+  const handleCreateLink = useCallback(() => {
+    setMarqueeState({ active: false, mode: null });
+    cancelLinking();
+    const mind = mindRef.current;
+    if (!mind) return;
+    if (selectedBoundaryId) {
+      mind.clearSelection();
+      selectionSnapshotRef.current = [];
+      setLinkingState({
+        active: true,
+        phase: "second",
+        first: { kind: "boundary", id: selectedBoundaryId },
+      });
+      return;
+    }
+    const ids = getCommandSelectionIds();
+    if (ids.length === 2) {
+      createRelationship(
+        { kind: "node", id: ids[0] },
+        { kind: "node", id: ids[1] },
+      );
+      return;
+    }
+    if (ids.length === 1) {
+      const source = mind.findEle(ids[0]);
+      if (source) mind.selectNode(source, false);
+      setLinkingState({
+        active: true,
+        phase: "second",
+        first: { kind: "node", id: ids[0] },
+      });
+      return;
+    }
+    mind.clearSelection();
+    selectionSnapshotRef.current = [];
+    setLinkingState({ active: true, phase: "first", first: null });
+  }, [
+    cancelLinking,
+    createRelationship,
+    getCommandSelectionIds,
+    selectedBoundaryId,
+  ]);
+
+  const createBoundariesForSelection = useCallback(
+    (nodeIds: string[]) => {
+      const mind = mindRef.current;
+      if (!mind) return false;
+      const root = stripParent(mind.getData().nodeData);
+      const groups = groupSelectionByBranch(nodeIds, root);
+      if (groups.length === 0) return false;
+
+      const additions = groups.map((group) => ({
+        id: generateDecorationId("boundary"),
+        nodeIds: group.nodeIds,
+      } satisfies StoredBoundary));
+
+      decorationsRef.current = {
+        ...decorationsRef.current,
+        boundaries: [...decorationsRef.current.boundaries, ...additions],
+      };
+      persistCurrentMap();
+      mind.clearSelection();
+      selectionSnapshotRef.current = [];
+      setSelectedBoundaryLinkId(null);
+      setSelectedBoundaryId(additions[additions.length - 1].id);
+      return true;
+    },
+    [persistCurrentMap],
+  );
+
+  const createSummariesForSelection = useCallback((nodeIds: string[]) => {
+    const mind = mindRef.current;
+    if (!mind) return false;
+    const root = stripParent(mind.getData().nodeData);
+    const groups = groupSelectionByBranch(nodeIds, root);
+    if (groups.length === 0) return false;
+
+    for (const group of groups) {
+      const topics = group.nodeIds
+        .map((id) => mind.findEle(id))
+        .filter((topic): topic is Topic => topic !== null);
+      if (topics.length === 0) continue;
+      mind.clearSelection();
+      mind.selectNodes(topics);
+      selectionSnapshotRef.current = group.nodeIds;
+      try {
+        mind.createSummary();
+      } catch {
+        // 该分组可能在创建前已被并发修改，继续处理其他分组
+      }
+    }
+    return true;
+  }, []);
+
+  // 已有选区时立即创建；无有效选区时再进入黑色十字框选模式。
+  const handleCreateBoundary = useCallback(() => {
+    cancelLinking();
+    const ids = getCommandSelectionIds();
+    if (createBoundariesForSelection(ids)) return;
+    setMarqueeState({ active: true, mode: "boundary" });
+  }, [cancelLinking, createBoundariesForSelection, getCommandSelectionIds]);
+
+  const handleCreateSummary = useCallback(() => {
+    cancelLinking();
+    const ids = getCommandSelectionIds();
+    if (createSummariesForSelection(ids)) return;
+    setMarqueeState({ active: true, mode: "summary" });
+  }, [cancelLinking, createSummariesForSelection, getCommandSelectionIds]);
+
+  // 删除当前选中的外框
+  const handleDeleteBoundary = useCallback(() => {
+    if (!selectedBoundaryId) return;
+    decorationsRef.current = {
+      ...decorationsRef.current,
+      boundaries: decorationsRef.current.boundaries.filter(
+        (b) => b.id !== selectedBoundaryId,
+      ),
+    };
+    setSelectedBoundaryId(null);
+    setSelectedBoundaryLinkId(null);
+    persistCurrentMap();
+  }, [selectedBoundaryId, persistCurrentMap]);
+  // 保持 ref 最新，供 boundary useEffect 中的 keydown listener 调用
+  handleDeleteBoundaryRef.current = handleDeleteBoundary;
+
+  const handleDeleteBoundaryLink = useCallback(() => {
+    if (!selectedBoundaryLinkId) return;
+    decorationsRef.current = {
+      ...decorationsRef.current,
+      boundaryLinks: decorationsRef.current.boundaryLinks.filter(
+        (link) => link.id !== selectedBoundaryLinkId,
+      ),
+    };
+    setSelectedBoundaryLinkId(null);
+    persistCurrentMap();
+  }, [selectedBoundaryLinkId, persistCurrentMap]);
+  handleDeleteBoundaryLinkRef.current = handleDeleteBoundaryLink;
+
+  // 根据框选矩形收集主题；不能使用 wrapper，否则父主题的子树区域会被误选。
+  const collectNodesInRect = useCallback((rect: DOMRect): string[] => {
+    const container = containerRef.current;
+    if (!container) return [];
+    const topics = container.querySelectorAll("me-tpc");
+    const ids: string[] = [];
+    topics.forEach((topic) => {
+      const topicRect = topic.getBoundingClientRect();
+      const intersects =
+        topicRect.left < rect.right &&
+        topicRect.right > rect.left &&
+        topicRect.top < rect.bottom &&
+        topicRect.bottom > rect.top;
+      if (!intersects) return;
+      const id = (topic as unknown as { nodeObj?: { id: string } }).nodeObj?.id;
+      if (id) ids.push(id);
+    });
+    return ids;
+  }, []);
+
+  // 框选完成后，根据模式创建外框或概要
+  const finishMarquee = useCallback(
+    (rect: DOMRect) => {
+      const mind = mindRef.current;
+      if (!mind) return;
+      const mode = marqueeState.mode;
+      const ids = collectNodesInRect(rect);
+      setMarqueeState({ active: false, mode: null });
+      if (ids.length === 0) return;
+      if (mode === "boundary") {
+        createBoundariesForSelection(ids);
+      } else if (mode === "summary") {
+        createSummariesForSelection(ids);
+      }
+    },
+    [
+      marqueeState.mode,
+      collectNodesInRect,
+      createBoundariesForSelection,
+      createSummariesForSelection,
+    ],
+  );
+  // 保持 ref 最新，供 marquee useEffect 中的事件 listener 调用
+  finishMarqueeRef.current = finishMarquee;
+
+  // XMind 快捷键：联系 Ctrl/Cmd+Shift+R；外框 Windows Ctrl+B、macOS Cmd+Shift+B。
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || viewMode !== "map") return;
+    const handleKeydown = (e: KeyboardEvent) => {
+      const target = e.target as Element | null;
+      if (target?.closest?.("input, textarea, [contenteditable='true']")) return;
+      const key = e.key.toLowerCase();
+      const isMac = navigator.userAgent.includes("Mac");
+      const relationshipShortcut =
+        key === "r" && e.shiftKey && (isMac ? e.metaKey : e.ctrlKey);
+      const boundaryShortcut =
+        key === "b" &&
+        (isMac ? e.metaKey && e.shiftKey : e.ctrlKey && !e.shiftKey);
+      if (!relationshipShortcut && !boundaryShortcut) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (relationshipShortcut) handleCreateLink();
+      else handleCreateBoundary();
+    };
+    container.addEventListener("keydown", handleKeydown, true);
+    return () => container.removeEventListener("keydown", handleKeydown, true);
+  }, [handleCreateBoundary, handleCreateLink, viewMode]);
+
+  const startBoundaryResize = useCallback(
+    (boundaryId: string, edge: "top" | "bottom", event: PointerEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      boundaryResizeCleanupRef.current?.();
+
+      const mind = mindRef.current;
+      const boundary = decorationsRef.current.boundaries.find((b) => b.id === boundaryId);
+      if (!mind || !boundary) return;
+      const root = stripParent(mind.getData().nodeData);
+      const range = validateSelection(boundary.nodeIds, root);
+      if (!range.valid || !range.parentId || range.indices.length === 0) return;
+      const parent = findNodeById(root, range.parentId);
+      if (!parent) return;
+
+      const candidates = parent.children
+        .map((node, index) => {
+          const topic = mind.findEle(node.id);
+          if (!topic) return null;
+          const rect = topic.getBoundingClientRect();
+          return { index, centerY: rect.top + rect.height / 2 };
+        })
+        .filter((item): item is { index: number; centerY: number } => item !== null);
+      if (candidates.length === 0) return;
+
+      let start = range.indices[0];
+      let end = range.indices[range.indices.length - 1];
+      let changed = false;
+      const pointerId = event.pointerId;
+      const handleMove = (moveEvent: PointerEvent) => {
+        if (moveEvent.pointerId !== pointerId) return;
+        moveEvent.preventDefault();
+        const nearest = candidates.reduce((best, candidate) =>
+          Math.abs(candidate.centerY - moveEvent.clientY) <
+          Math.abs(best.centerY - moveEvent.clientY)
+            ? candidate
+            : best,
+        );
+        const nextStart = edge === "top" ? Math.min(nearest.index, end) : start;
+        const nextEnd = edge === "bottom" ? Math.max(nearest.index, start) : end;
+        if (nextStart === start && nextEnd === end) return;
+        start = nextStart;
+        end = nextEnd;
+        changed = true;
+        decorationsRef.current = {
+          ...decorationsRef.current,
+          boundaries: decorationsRef.current.boundaries.map((item) =>
+            item.id === boundaryId
+              ? {
+                  ...item,
+                  nodeIds: parent.children.slice(start, end + 1).map((node) => node.id),
+                }
+              : item,
+          ),
+        };
+        redrawBoundariesRef.current();
+      };
+      const cleanup = () => {
+        window.removeEventListener("pointermove", handleMove);
+        window.removeEventListener("pointerup", handleUp);
+        window.removeEventListener("pointercancel", handleUp);
+        boundaryResizeCleanupRef.current = null;
+      };
+      const handleUp = (upEvent: PointerEvent) => {
+        if (upEvent.pointerId !== pointerId) return;
+        cleanup();
+        if (changed) persistCurrentMap();
+      };
+      window.addEventListener("pointermove", handleMove, { passive: false });
+      window.addEventListener("pointerup", handleUp);
+      window.addEventListener("pointercancel", handleUp);
+      boundaryResizeCleanupRef.current = cleanup;
+    },
+    [persistCurrentMap],
+  );
+
+  const startBoundaryLinkReshape = useCallback(
+    (
+      linkId: string,
+      field: "delta1" | "delta2",
+      endpointCenter: { x: number; y: number },
+      event: PointerEvent,
+    ) => {
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      boundaryResizeCleanupRef.current?.();
+      const pointerId = event.pointerId;
+      let changed = false;
+      const handleMove = (moveEvent: PointerEvent) => {
+        if (moveEvent.pointerId !== pointerId) return;
+        moveEvent.preventDefault();
+        const layer = boundaryLayerRef.current;
+        const mind = mindRef.current;
+        if (!layer || !mind) return;
+        const layerRect = layer.getBoundingClientRect();
+        const scale = mind.scaleVal || 1;
+        const point = {
+          x: (moveEvent.clientX - layerRect.left) / scale,
+          y: (moveEvent.clientY - layerRect.top) / scale,
+        };
+        changed = true;
+        decorationsRef.current = {
+          ...decorationsRef.current,
+          boundaryLinks: decorationsRef.current.boundaryLinks.map((link) =>
+            link.id === linkId
+              ? {
+                  ...link,
+                  [field]: {
+                    x: point.x - endpointCenter.x,
+                    y: point.y - endpointCenter.y,
+                  },
+                }
+              : link,
+          ),
+        };
+        redrawBoundariesRef.current();
+      };
+      const cleanup = () => {
+        window.removeEventListener("pointermove", handleMove);
+        window.removeEventListener("pointerup", handleUp);
+        window.removeEventListener("pointercancel", handleUp);
+        boundaryResizeCleanupRef.current = null;
+      };
+      const handleUp = (upEvent: PointerEvent) => {
+        if (upEvent.pointerId !== pointerId) return;
+        cleanup();
+        if (changed) persistCurrentMap();
+      };
+      window.addEventListener("pointermove", handleMove, { passive: false });
+      window.addEventListener("pointerup", handleUp);
+      window.addEventListener("pointercancel", handleUp);
+      boundaryResizeCleanupRef.current = cleanup;
+    },
+    [persistCurrentMap],
+  );
+
+  // 外框重绘：绘制外框、上下范围手柄，以及外框—节点联系
+  const redrawBoundaries = useCallback(() => {
+    const mind = mindRef.current;
+    const layer = boundaryLayerRef.current;
+    if (!mind || !layer) return;
+    const boundaries = decorationsRef.current.boundaries;
+    while (layer.firstChild) layer.removeChild(layer.firstChild);
+
+    const layerRect = layer.getBoundingClientRect();
+    const scale = mind.scaleVal || 1;
+    const padding = 8;
+    const boundaryRects = new Map<string, DOMRect>();
+
+    for (const b of boundaries) {
+      const rects: DOMRect[] = [];
+      for (const id of b.nodeIds) {
+        try {
+          const tpc = mind.findEle(id);
+          const wrapper = tpc.parentElement?.parentElement;
+          if (!wrapper) continue;
+          rects.push(wrapper.getBoundingClientRect());
+        } catch {
+          // 节点可能刚被删除，下一次保存会清理引用
+        }
+      }
+      if (rects.length === 0) continue;
+
+      const minX = Math.min(...rects.map((r) => r.left));
+      const minY = Math.min(...rects.map((r) => r.top));
+      const maxX = Math.max(...rects.map((r) => r.right));
+      const maxY = Math.max(...rects.map((r) => r.bottom));
+      boundaryRects.set(
+        b.id,
+        new DOMRect(
+          minX - padding * scale,
+          minY - padding * scale,
+          maxX - minX + padding * 2 * scale,
+          maxY - minY + padding * 2 * scale,
+        ),
+      );
+    }
+
+    const edgePoint = (rect: DOMRect, toward: { x: number; y: number }) => {
+      const center = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+      const dx = toward.x - center.x;
+      const dy = toward.y - center.y;
+      const factor =
+        1 /
+        Math.max(
+          Math.abs(dx) / Math.max(rect.width / 2, 1),
+          Math.abs(dy) / Math.max(rect.height / 2, 1),
+          1e-6,
+        );
+      return { x: center.x + dx * factor, y: center.y + dy * factor };
+    };
+    const toLayer = (point: { x: number; y: number }) => ({
+      x: (point.x - layerRect.left) / scale,
+      y: (point.y - layerRect.top) / scale,
+    });
+
+    for (const link of decorationsRef.current.boundaryLinks) {
+      const endpointRect = (endpoint: BoundaryLinkEndpoint): DOMRect | null => {
+        if (endpoint.kind === "boundary") return boundaryRects.get(endpoint.id) ?? null;
+        return mind.findEle(endpoint.id)?.getBoundingClientRect() ?? null;
+      };
+      const fromRect = endpointRect(link.from);
+      const toRect = endpointRect(link.to);
+      if (!fromRect || !toRect) continue;
+      const fromCenter = {
+        x: fromRect.left + fromRect.width / 2,
+        y: fromRect.top + fromRect.height / 2,
+      };
+      const toCenter = {
+        x: toRect.left + toRect.width / 2,
+        y: toRect.top + toRect.height / 2,
+      };
+      const fromCenterInLayer = toLayer(fromCenter);
+      const toCenterInLayer = toLayer(toCenter);
+      const dx = toCenterInLayer.x - fromCenterInLayer.x;
+      const dy = toCenterInLayer.y - fromCenterInLayer.y;
+      const distance = Math.hypot(dx, dy);
+      const bend = Math.max(45, Math.min(100, distance * 0.2));
+      const normal =
+        Math.abs(dx) >= Math.abs(dy) ? { x: 0, y: -1 } : { x: 1, y: 0 };
+      const defaultControl1 = {
+        x: fromCenterInLayer.x + dx * 0.25 + normal.x * bend,
+        y: fromCenterInLayer.y + dy * 0.25 + normal.y * bend,
+      };
+      const defaultControl2 = {
+        x: toCenterInLayer.x - dx * 0.25 + normal.x * bend,
+        y: toCenterInLayer.y - dy * 0.25 + normal.y * bend,
+      };
+      const control1 = link.delta1
+        ? {
+            x: fromCenterInLayer.x + link.delta1.x,
+            y: fromCenterInLayer.y + link.delta1.y,
+          }
+        : defaultControl1;
+      const control2 = link.delta2
+        ? {
+            x: toCenterInLayer.x + link.delta2.x,
+            y: toCenterInLayer.y + link.delta2.y,
+          }
+        : defaultControl2;
+      const toScreen = (point: { x: number; y: number }) => ({
+        x: layerRect.left + point.x * scale,
+        y: layerRect.top + point.y * scale,
+      });
+      const from = toLayer(edgePoint(fromRect, toScreen(control1)));
+      const to = toLayer(edgePoint(toRect, toScreen(control2)));
+      const pathData =
+        `M ${from.x} ${from.y} ` +
+        `C ${control1.x} ${control1.y} ${control2.x} ${control2.y} ${to.x} ${to.y}`;
+      const angle = Math.atan2(to.y - control2.y, to.x - control2.x);
+      const arrowLength = 10;
+      const arrowSpread = Math.PI / 6;
+      const arrowStart = {
+        x: to.x - arrowLength * Math.cos(angle - arrowSpread),
+        y: to.y - arrowLength * Math.sin(angle - arrowSpread),
+      };
+      const arrowEnd = {
+        x: to.x - arrowLength * Math.cos(angle + arrowSpread),
+        y: to.y - arrowLength * Math.sin(angle + arrowSpread),
+      };
+      const arrowData =
+        `M ${arrowStart.x} ${arrowStart.y} ` +
+        `L ${to.x} ${to.y} L ${arrowEnd.x} ${arrowEnd.y}`;
+      const selected = selectedBoundaryLinkId === link.id;
+      const selectLink = (event: PointerEvent) => {
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        mind.clearSelection();
+        selectionSnapshotRef.current = [];
+        setSelectedBoundaryId(null);
+        setSelectedBoundaryLinkId(link.id);
+      };
+      const group = document.createElementNS("http://www.w3.org/2000/svg", "g");
+      group.dataset.boundaryLinkId = link.id;
+      group.style.cursor = "pointer";
+      group.style.pointerEvents = "stroke";
+      group.addEventListener("pointerdown", selectLink);
+
+      const addPath = (
+        d: string,
+        stroke: string,
+        strokeWidth: string,
+        dash?: string,
+        opacity?: string,
+      ) => {
+        const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        path.setAttribute("d", d);
+        path.setAttribute("fill", "none");
+        path.setAttribute("stroke", stroke);
+        path.setAttribute("stroke-width", strokeWidth);
+        path.setAttribute("stroke-linecap", "round");
+        path.setAttribute("stroke-linejoin", "round");
+        if (dash) path.setAttribute("stroke-dasharray", dash);
+        if (opacity) path.setAttribute("opacity", opacity);
+        group.appendChild(path);
+      };
+      if (selected) {
+        addPath(pathData, "#4dc4ff", "6", undefined, "0.45");
+        addPath(arrowData, "#4dc4ff", "6", undefined, "0.45");
+        addPath(
+          `M ${from.x} ${from.y} L ${control1.x} ${control1.y}`,
+          "#4dc4ff",
+          "2",
+          undefined,
+          "0.45",
+        );
+        addPath(
+          `M ${control2.x} ${control2.y} L ${to.x} ${to.y}`,
+          "#4dc4ff",
+          "2",
+          undefined,
+          "0.45",
+        );
+      }
+      addPath(pathData, "transparent", "15");
+      addPath(arrowData, "transparent", "15");
+      addPath(pathData, "rgb(227, 125, 116)", "2", "8,2");
+      addPath(arrowData, "rgb(227, 125, 116)", "2");
+      layer.appendChild(group);
+
+      if (link.label) {
+        const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
+        const labelX =
+          from.x / 8 + control1.x * 3 / 8 + control2.x * 3 / 8 + to.x / 8;
+        const labelY =
+          from.y / 8 + control1.y * 3 / 8 + control2.y * 3 / 8 + to.y / 8;
+        label.setAttribute("x", String(labelX));
+        label.setAttribute("y", String(labelY - 5));
+        label.setAttribute("text-anchor", "middle");
+        label.setAttribute("font-size", "14");
+        label.setAttribute("fill", "rgb(235, 95, 82)");
+        label.setAttribute("stroke", "var(--main-bgcolor-transparent)");
+        label.setAttribute("stroke-width", "5");
+        label.setAttribute("paint-order", "stroke");
+        label.textContent = link.label;
+        label.dataset.boundaryLinkId = link.id;
+        label.style.cursor = "pointer";
+        label.style.pointerEvents = "all";
+        label.addEventListener("pointerdown", selectLink);
+        group.appendChild(label);
+      }
+      if (selected) {
+        for (const [field, point, center] of [
+          ["delta1", control1, fromCenterInLayer],
+          ["delta2", control2, toCenterInLayer],
+        ] as const) {
+          const handle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+          handle.setAttribute("cx", String(point.x));
+          handle.setAttribute("cy", String(point.y));
+          handle.setAttribute("r", "5");
+          handle.setAttribute("fill", "#757575");
+          handle.setAttribute("stroke", "#fff");
+          handle.setAttribute("stroke-width", "2");
+          handle.dataset.boundaryLinkHandle = field;
+          handle.style.cursor = "move";
+          handle.style.pointerEvents = "all";
+          handle.style.touchAction = "none";
+          handle.addEventListener("pointerdown", (event) =>
+            startBoundaryLinkReshape(link.id, field, center, event),
+          );
+          group.appendChild(handle);
+        }
+      }
+    }
+
+    for (const b of boundaries) {
+      const screenRect = boundaryRects.get(b.id);
+      if (!screenRect) continue;
+      const x = (screenRect.left - layerRect.left) / scale;
+      const y = (screenRect.top - layerRect.top) / scale;
+      const width = screenRect.width / scale;
+      const height = screenRect.height / scale;
+      const selected = selectedBoundaryId === b.id;
+
+      const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+      rect.setAttribute("x", String(x));
+      rect.setAttribute("y", String(y));
+      rect.setAttribute("width", String(width));
+      rect.setAttribute("height", String(height));
+      rect.setAttribute("rx", "6");
+      rect.setAttribute("ry", "6");
+      rect.setAttribute("fill", selected ? "hsl(var(--primary) / 0.06)" : "none");
+      rect.setAttribute(
+        "stroke",
+        selected ? "hsl(var(--primary))" : "hsl(var(--muted-foreground) / 0.5)",
+      );
+      rect.setAttribute("stroke-width", selected ? "2" : "1.5");
+      rect.setAttribute("stroke-dasharray", "4 3");
+      rect.style.cursor = "pointer";
+      rect.style.pointerEvents = selected ? "all" : "stroke";
+      rect.dataset.boundaryId = b.id;
+      rect.addEventListener("mousedown", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      });
+      rect.addEventListener("click", (e) => {
+        e.stopPropagation();
+        mind.clearSelection();
+        selectionSnapshotRef.current = [];
+        setSelectedBoundaryLinkId(null);
+        setSelectedBoundaryId(b.id);
+      });
+      layer.appendChild(rect);
+
+      const range = validateSelection(b.nodeIds, stripParent(mind.getData().nodeData));
+      if (!selected || !range.valid) continue;
+      for (const edge of ["top", "bottom"] as const) {
+        const edgeY = edge === "top" ? y : y + height;
+        const hitArea = document.createElementNS("http://www.w3.org/2000/svg", "line");
+        hitArea.setAttribute("x1", String(x + 6));
+        hitArea.setAttribute("x2", String(x + width - 6));
+        hitArea.setAttribute("y1", String(edgeY));
+        hitArea.setAttribute("y2", String(edgeY));
+        hitArea.setAttribute("stroke", "transparent");
+        hitArea.setAttribute("stroke-width", "14");
+        hitArea.dataset.boundaryId = b.id;
+        hitArea.dataset.boundaryHandle = edge;
+        hitArea.style.cursor = "ns-resize";
+        hitArea.style.pointerEvents = "stroke";
+        hitArea.style.touchAction = "none";
+        hitArea.addEventListener("pointerdown", (event) =>
+          startBoundaryResize(b.id, edge, event),
+        );
+        layer.appendChild(hitArea);
+
+        const handle = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+        handle.setAttribute("x", String(x + width / 2 - 12));
+        handle.setAttribute("y", String(edge === "top" ? y - 3 : y + height - 2));
+        handle.setAttribute("width", "24");
+        handle.setAttribute("height", "5");
+        handle.setAttribute("rx", "2.5");
+        handle.setAttribute("fill", "hsl(var(--primary))");
+        handle.dataset.boundaryId = b.id;
+        handle.dataset.boundaryHandle = edge;
+        handle.style.cursor = "ns-resize";
+        handle.style.pointerEvents = "none";
+        layer.appendChild(handle);
+      }
+    }
+  }, [
+    selectedBoundaryId,
+    selectedBoundaryLinkId,
+    startBoundaryLinkReshape,
+    startBoundaryResize,
+  ]);
+  // 保持 ref 最新，供 init useEffect 中的事件 listener 调用
+  redrawBoundariesRef.current = redrawBoundaries;
 
   // ========== 剪贴板操作（复制 / 剪切 / 粘贴） ==========
   // 内部剪贴板：保存最近一次复制/剪切的子树（Markdown 文本）
@@ -803,15 +2023,6 @@ export function MindMapDocumentEditor({
     for (const child of parsed.root.children) {
       void mind.addChild(current, cloneNode(child));
     }
-  }, []);
-
-  // 进入节点文本编辑模式（Mind Elixir 内置双击编辑的编程触发方式）
-  const handleEdit = useCallback(() => {
-    const mind = mindRef.current;
-    if (!mind) return;
-    const current = mind.currentNode;
-    if (!current) return;
-    mind.beginEdit?.(current);
   }, []);
 
   // 撤销 / 重做
@@ -1148,63 +2359,107 @@ export function MindMapDocumentEditor({
           <ContextMenuTrigger asChild>
             <div
               ref={containerRef}
-              className={`mindmap-container absolute inset-0 overflow-auto bg-background scrollbar-hover ${viewMode === "map" ? "" : "hidden"}`}
+              className={`mindmap-container absolute inset-0 overflow-auto bg-background scrollbar-hover ${viewMode === "map" ? "" : "hidden"} ${marqueeState.active ? "mindmap-marquee-active" : ""}`}
             />
           </ContextMenuTrigger>
           <ContextMenuContent>
-            <ContextMenuItem onClick={handleEdit}>
-              <Pencil className="mr-2 h-4 w-4" />
-              编辑节点文本
-            </ContextMenuItem>
-            <ContextMenuSeparator />
-            <ContextMenuItem onClick={handleAddChild}>
-              <CornerDownRight className="mr-2 h-4 w-4" />
-              插入子节点
-            </ContextMenuItem>
-            <ContextMenuItem onClick={handleAddSibling}>
-              <Plus className="mr-2 h-4 w-4" />
-              插入同级节点
-            </ContextMenuItem>
-            <ContextMenuSeparator />
-            <ContextMenuItem onClick={handleCopy}>
-              <Copy className="mr-2 h-4 w-4" />
-              复制
-            </ContextMenuItem>
-            <ContextMenuItem onClick={handleCut}>
-              <Scissors className="mr-2 h-4 w-4" />
-              剪切
-            </ContextMenuItem>
-            <ContextMenuItem onClick={handlePaste}>
-              <ClipboardPaste className="mr-2 h-4 w-4" />
-              粘贴
-            </ContextMenuItem>
-            <ContextMenuSeparator />
-            <ContextMenuItem onClick={handleExpandNode}>
-              <ChevronsUpDown className="mr-2 h-4 w-4" />
-              展开此节点
-            </ContextMenuItem>
-            <ContextMenuItem onClick={handleCollapseNode}>
-              <ChevronsDownUp className="mr-2 h-4 w-4" />
-              折叠此节点
-            </ContextMenuItem>
-            <ContextMenuSeparator />
-            <ContextMenuItem onClick={handleFocusNode}>
-              <Focus className="mr-2 h-4 w-4" />
-              聚焦此分支
-            </ContextMenuItem>
-            {isFocusMode ? (
-              <ContextMenuItem onClick={handleCancelFocus}>
-                <Minimize2 className="mr-2 h-4 w-4" />
-                返回完整导图
-              </ContextMenuItem>
-            ) : null}
-            <ContextMenuSeparator />
-            <ContextMenuItem onClick={handleDelete} className="text-destructive focus:text-destructive">
-              <Trash2 className="mr-2 h-4 w-4" />
-              删除节点
-            </ContextMenuItem>
+            {contextMenuTarget === "node" ? (
+              <>
+                <ContextMenuItem onClick={handleAddChild}>
+                  <CornerDownRight className="mr-2 h-4 w-4" />
+                  插入子节点
+                </ContextMenuItem>
+                <ContextMenuItem onClick={handleAddSibling}>
+                  <Plus className="mr-2 h-4 w-4" />
+                  插入同级节点
+                </ContextMenuItem>
+                <ContextMenuSeparator />
+                <ContextMenuItem onClick={handleCopy}>
+                  <Copy className="mr-2 h-4 w-4" />
+                  复制
+                </ContextMenuItem>
+                <ContextMenuItem onClick={handleCut}>
+                  <Scissors className="mr-2 h-4 w-4" />
+                  剪切
+                </ContextMenuItem>
+                <ContextMenuItem onClick={handlePaste}>
+                  <ClipboardPaste className="mr-2 h-4 w-4" />
+                  粘贴
+                </ContextMenuItem>
+                <ContextMenuSeparator />
+                <ContextMenuItem onClick={handleExpandNode}>
+                  <ChevronsUpDown className="mr-2 h-4 w-4" />
+                  展开此节点
+                </ContextMenuItem>
+                <ContextMenuItem onClick={handleCollapseNode}>
+                  <ChevronsDownUp className="mr-2 h-4 w-4" />
+                  折叠此节点
+                </ContextMenuItem>
+                <ContextMenuSeparator />
+                <ContextMenuItem onClick={handleFocusNode}>
+                  <Focus className="mr-2 h-4 w-4" />
+                  聚焦此分支
+                </ContextMenuItem>
+                {isFocusMode ? (
+                  <ContextMenuItem onClick={handleCancelFocus}>
+                    <Minimize2 className="mr-2 h-4 w-4" />
+                    返回完整导图
+                  </ContextMenuItem>
+                ) : null}
+                <ContextMenuSeparator />
+                <ContextMenuItem onClick={handleDelete} className="text-destructive focus:text-destructive">
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  删除节点
+                </ContextMenuItem>
+              </>
+            ) : (
+              <>
+                <ContextMenuItem onClick={handleCreateLink}>
+                  <GitBranch className="mr-2 h-4 w-4" />
+                  联系
+                </ContextMenuItem>
+                <ContextMenuItem onClick={handleCreateBoundary}>
+                  <Square className="mr-2 h-4 w-4" />
+                  外框
+                </ContextMenuItem>
+                <ContextMenuItem onClick={handleCreateSummary}>
+                  <Brackets className="mr-2 h-4 w-4" />
+                  概要
+                </ContextMenuItem>
+                <ContextMenuSeparator />
+                <ContextMenuItem onClick={handlePaste}>
+                  <ClipboardPaste className="mr-2 h-4 w-4" />
+                  粘贴
+                </ContextMenuItem>
+                <ContextMenuSeparator />
+                <ContextMenuItem onClick={handleExpandAll}>
+                  <ChevronsUpDown className="mr-2 h-4 w-4" />
+                  全部展开
+                </ContextMenuItem>
+                <ContextMenuItem onClick={handleCollapseAll}>
+                  <ChevronsDownUp className="mr-2 h-4 w-4" />
+                  全部收起
+                </ContextMenuItem>
+              </>
+            )}
           </ContextMenuContent>
         </ContextMenu>
+        {/* 联系模式提示 */}
+        {linkingState.active && (
+          <div className="pointer-events-none absolute left-1/2 top-4 z-10 -translate-x-1/2 rounded-full bg-primary px-4 py-1.5 text-xs text-primary-foreground shadow-md">
+            {linkingState.phase === "first"
+              ? "请选择起始主题或外框，Esc 取消"
+              : linkingState.first?.kind === "boundary"
+                ? "请选择目标主题，Esc 取消"
+                : "请选择目标主题或外框，Esc 取消"}
+          </div>
+        )}
+        {/* 框选模式提示 */}
+        {marqueeState.active && (
+          <div className="pointer-events-none absolute left-1/2 top-4 z-10 -translate-x-1/2 rounded-full bg-primary px-4 py-1.5 text-xs text-primary-foreground shadow-md">
+            {marqueeState.mode === "boundary" ? "拖拽框选要包围的主题，Esc 取消" : "拖拽框选要概要的主题，Esc 取消"}
+          </div>
+        )}
         {/* 查找替换浮动面板 */}
         {showFindPanel && viewMode === "map" ? (
           <FindReplacePanel

@@ -31,6 +31,7 @@ class ToolContext:
     subagent_manager: Any | None = None
     cron_service: Any | None = None
     schedule_service: Any | None = None
+    todo_service: Any | None = None
     sessions: Any | None = None
     file_state_store: Any = field(default=None)
     provider_snapshot_loader: Callable[[], Any] | None = None

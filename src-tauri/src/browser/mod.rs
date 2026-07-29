@@ -16,6 +16,13 @@ use url::Url;
 
 pub const CDP_PORT: u16 = 9300;
 
+/// 打开内置页面（下载记录/历史记录），由浏览器 WebView 内的快捷键调用
+#[tauri::command]
+pub async fn browser_open_internal_page(app: AppHandle, kind: String) -> Result<(), String> {
+    app.emit("browser-open-internal-page", kind)
+        .map_err(|e| e.to_string())
+}
+
 pub fn configure_webview2_cdp() {
     #[cfg(target_os = "windows")]
     if std::env::var_os("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").is_none() {
@@ -50,6 +57,19 @@ fn browser_initialization_script(id: &str) -> String {
   style.setAttribute('data-mona-scrollbar', 'true');
   style.textContent = css;
   (document.head || document.documentElement).appendChild(style);
+
+  // 拦截 Ctrl+J（下载记录）和 Ctrl+H（历史记录），避免 WebView2 弹出原生界面
+  window.addEventListener('keydown', function (e) {{
+    if (!(e.ctrlKey || e.metaKey)) return;
+    var key = e.key.toLowerCase();
+    if (key === 'j' || key === 'h') {{
+      e.preventDefault();
+      e.stopPropagation();
+      if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+        window.__TAURI_INTERNALS__.invoke('browser_open_internal_page', {{ kind: key === 'j' ? 'downloads' : 'history' }});
+      }}
+    }}
+  }}, true);
 }})();
 "#
     )

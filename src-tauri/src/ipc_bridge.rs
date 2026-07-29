@@ -557,8 +557,8 @@ impl IpcBridge {
                 Ok(Value::Bool(has_access))
             }
             "email_fetch_body" => {
-                // AI 读取邮件时，若本地 .eml 只有 HEADER（同步时省流量未拉正文），
-                // 通过此 bridge 命令触发 IMAP 拉取完整 RFC822 并落盘。
+                // 纯本地 Tauri IPC：读 SQLite + 读 .eml + mailparse 解析。
+                // 仅在本地 .eml 不存在或解析失败时，才回退到 gateway 拉取（gatewayUrl 可选）。
                 let gateway_url = args
                     .get("gatewayUrl")
                     .and_then(|v| v.as_str())
@@ -582,12 +582,63 @@ impl IpcBridge {
                 let email_state = self.app_handle.state::<crate::email::EmailState>();
                 crate::email::email_fetch_body(
                     email_state,
-                    gateway_url,
+                    self.app_handle.clone(),
                     account_id,
                     uid,
                     mailbox,
+                    Some(gateway_url),
                 )
                 .await
+            }
+            "write_mona_provider_config" => {
+                let provider = args
+                    .get("provider")
+                    .and_then(|v| v.as_str())
+                    .ok_or("Missing provider")?;
+                let api_key = args
+                    .get("apiKey")
+                    .and_then(|v| v.as_str())
+                    .ok_or("Missing apiKey")?;
+                let api_base = args.get("apiBase").and_then(|v| v.as_str());
+                crate::settings::write_mona_provider_config(provider, api_key, api_base)
+                    .map(|_| Value::Null)
+            }
+            "write_mona_model_config" => {
+                let model = args
+                    .get("model")
+                    .and_then(|v| v.as_str())
+                    .ok_or("Missing model")?;
+                let provider = args
+                    .get("provider")
+                    .and_then(|v| v.as_str())
+                    .ok_or("Missing provider")?;
+                crate::settings::write_mona_model_config(model, provider).map(|_| Value::Null)
+            }
+            "write_mona_image_gen_config" => {
+                let provider = args
+                    .get("provider")
+                    .and_then(|v| v.as_str())
+                    .ok_or("Missing provider")?;
+                let model = args
+                    .get("model")
+                    .and_then(|v| v.as_str())
+                    .ok_or("Missing model")?;
+                let enabled = args.get("enabled").and_then(|v| v.as_bool());
+                crate::settings::write_mona_image_gen_config(provider, model, enabled)
+                    .map(|_| Value::Null)
+            }
+            "write_mona_video_gen_config" => {
+                let provider = args
+                    .get("provider")
+                    .and_then(|v| v.as_str())
+                    .ok_or("Missing provider")?;
+                let model = args
+                    .get("model")
+                    .and_then(|v| v.as_str())
+                    .ok_or("Missing model")?;
+                let enabled = args.get("enabled").and_then(|v| v.as_bool());
+                crate::settings::write_mona_video_gen_config(provider, model, enabled)
+                    .map(|_| Value::Null)
             }
             _ => Err(format!("Unknown command: {}", cmd)),
         }

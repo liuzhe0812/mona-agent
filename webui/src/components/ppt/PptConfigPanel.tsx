@@ -20,12 +20,13 @@ import type {
   PptPageTransition,
   PptEntranceAnimation,
   PptAnimationTrigger,
+  PptPhase,
 } from "./PptMakerView";
 
 interface PptConfigPanelProps {
   config: PptConfig;
   setConfig: React.Dispatch<React.SetStateAction<PptConfig>>;
-  phase: "config" | "generating" | "done";
+  phase: PptPhase;
   onStart: () => void;
 }
 

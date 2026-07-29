@@ -233,27 +233,28 @@ export function MailComposer({
       setShowBcc(false);
     }
 
-    // 设置引用正文：优先用已有的 bodyHtml/bodyText，没有则异步拉取
-    const hasBody = baseMessage.bodyHtml || baseMessage.bodyText;
+    // 设置引用正文：Offline-First 下 SQLite 不存正文，统一走 fetchEmailBody
+    // （fetchEmailBody 内部会先读本地 .eml，命中则毫秒级返回，不命中才走 gateway）
     if (mode === "reply" || mode === "replyAll" || mode === "forward") {
-      if (hasBody) {
+      if (baseMessage.bodyHtml || baseMessage.bodyText) {
+        // 内存缓存命中（之前已加载过）：直接用
         const replyHtml = formatReplyHeaderHtml(baseMessage);
         setBodyHtml(replyHtml);
         setBodyText("");
-        // initialHtml 只在首次挂载生效，需额外调 setHtml 确保内容更新
         editorRef.current?.setHtml(replyHtml);
-      } else if (gatewayUrl) {
+      } else {
         // 原邮件正文未加载（用户未点开过），异步拉取后再格式化
+        // fetchEmailBody 是纯本地 Tauri IPC，不依赖 gatewayUrl
         const loadingHtml = '<div style="color:#999;">正在加载原邮件...</div>';
         setBodyHtml(loadingHtml);
         setBodyText("");
         (async () => {
           try {
             const result = await fetchEmailBody(
-              gatewayUrl,
               baseMessage.accountId,
               baseMessage.uid,
               baseMessage.folder,
+              gatewayUrl,
             );
             const enriched: EmailMessage = {
               ...baseMessage,
@@ -271,7 +272,7 @@ export function MailComposer({
         })();
       }
     }
-  }, [open, mode, baseMessage, account?.fromAddress, gatewayUrl]);
+  }, [open, mode, baseMessage, account?.fromAddress]);
 
   if (!open) return null;
 

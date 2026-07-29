@@ -275,7 +275,7 @@ export function ScheduleDialog({
                     "px-2.5 py-1 rounded-full text-xs transition-colors",
                     recurrence === opt.value
                       ? "bg-primary text-primary-foreground"
-                      : "bg-accent text-accent-foreground hover:bg-accent/80",
+                      : "bg-accent text-accent-foreground hover:bg-accent",
                   )}
                 >
                   {opt.label}

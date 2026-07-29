@@ -116,11 +116,6 @@ export async function addAccount(account: EmailAccount): Promise<void> {
   return invoke("email_add_account", { account });
 }
 
-export async function updateAccount(account: EmailAccount): Promise<void> {
-  // email_add_account 使用 INSERT OR REPLACE，可直接用于更新
-  return invoke("email_add_account", { account });
-}
-
 /**
  * 更新账号设置（不会双重加密密码）。
  *
@@ -457,18 +452,20 @@ export async function downloadAttachmentToFile(
   return invoke<number>("email_download_attachment_to_file", { gatewayUrl, req, savePath });
 }
 
-/// 按需拉取单封邮件的完整正文（同步时只拉头部，点击邮件时调用此命令拉取正文）
+/// 按需拉取单封邮件的完整正文
+/// 优先走本地 Tauri IPC（读 .eml + mailparse，毫秒级）
+/// 本地 .eml 不存在或解析失败时，回退到邮件服务 HTTP 拉取（需传 serviceUrl）
 export async function fetchEmailBody(
-  gatewayUrl: string,
   accountId: string,
   uid: string,
   mailbox: string,
+  serviceUrl?: string,
 ): Promise<FetchEmailBodyResult> {
   return invoke<FetchEmailBodyResult>("email_fetch_body", {
-    gatewayUrl,
     accountId,
     uid,
     mailbox,
+    gatewayUrl: serviceUrl ?? "",
   });
 }
 

@@ -10,12 +10,15 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
+from filelock import FileLock
 from loguru import logger
 
 from mona.email_intel.analyze import _build_sender, _clean_body, _extract_json
@@ -27,8 +30,10 @@ from mona.schedule.types import ScheduleItem
 # source_module 标识，用于去重
 SOURCE_MODULE = "email_schedule_ai"
 
-# 待确认队列：进程内内存，前端轮询 GET /api/email/schedule/pending
+# 待确认队列：内存镜像，由 _PENDING_STORE_PATH 指向的 JSON 文件持久化
 _pending_confirmations: list[PendingConfirmation] = []
+_PENDING_STORE_PATH: Path | None = None
+_PENDING_LOCK: FileLock | None = None
 
 # LLM 解析 prompt
 EXTRACT_PROMPT = """你是一个日程提取助手。从下面这封邮件中识别"用户需要记住并按时处理的时间相关事件"。
@@ -95,6 +100,79 @@ class PendingConfirmation:
     email_folder: str
     created_at_ms: int = field(default_factory=lambda: int(time.time() * 1000))
 
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "item": self.item.to_dict(),
+            "email_subject": self.email_subject,
+            "email_from": self.email_from,
+            "email_uid": self.email_uid,
+            "email_account_id": self.email_account_id,
+            "email_folder": self.email_folder,
+            "created_at_ms": self.created_at_ms,
+        }
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any]) -> "PendingConfirmation":
+        return cls(
+            id=str(raw["id"]),
+            item=ScheduleItem.from_dict(raw["item"]),
+            email_subject=str(raw.get("email_subject", "")),
+            email_from=str(raw.get("email_from", "")),
+            email_uid=str(raw.get("email_uid", "")),
+            email_account_id=str(raw.get("email_account_id", "")),
+            email_folder=str(raw.get("email_folder", "")),
+            created_at_ms=int(raw.get("created_at_ms", 0)),
+        )
+
+
+def init_pending_store(store_path: Path) -> None:
+    """初始化 pending 持久化路径并从磁盘加载已有数据。由 services 进程启动时调用。"""
+    global _PENDING_STORE_PATH, _PENDING_LOCK
+    _PENDING_STORE_PATH = store_path
+    _PENDING_LOCK = FileLock(str(store_path) + ".lock")
+    _load_pending_from_disk()
+
+
+def _load_pending_from_disk() -> None:
+    """从磁盘加载 pending 列表到内存（启动时调用）。"""
+    if _PENDING_STORE_PATH is None or not _PENDING_STORE_PATH.exists():
+        return
+    if _PENDING_LOCK is None:
+        return
+    try:
+        with _PENDING_LOCK:
+            data = json.loads(_PENDING_STORE_PATH.read_text(encoding="utf-8"))
+            raw_list = data.get("items", []) if isinstance(data, dict) else []
+            _pending_confirmations.clear()
+            for raw in raw_list:
+                try:
+                    _pending_confirmations.append(PendingConfirmation.from_dict(raw))
+                except Exception:
+                    logger.exception("Skipping malformed pending confirmation: {}", raw)
+    except (json.JSONDecodeError, OSError):
+        logger.exception("Failed to load pending confirmations; starting empty")
+
+
+def _save_pending_to_disk() -> None:
+    """原子写入 pending 列表到磁盘。失败仅记日志，不阻塞业务。"""
+    if _PENDING_STORE_PATH is None or _PENDING_LOCK is None:
+        return
+    try:
+        with _PENDING_LOCK:
+            _PENDING_STORE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "version": 1,
+                "items": [p.to_dict() for p in _pending_confirmations],
+            }
+            tmp = _PENDING_STORE_PATH.with_suffix(".tmp")
+            tmp.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            tmp.replace(_PENDING_STORE_PATH)
+    except Exception:
+        logger.exception("Failed to persist pending confirmations")
+
 
 async def extract_schedule_from_email(
     provider: LLMProvider,
@@ -126,7 +204,9 @@ async def extract_schedule_from_email(
         timeout_seconds: LLM 调用超时秒数
 
     Returns:
-        ExtractedSchedule 或 None（解析失败或无日程信号）
+        ExtractedSchedule 或 None。None 表示超时、网络错误或模型输出无法解析
+        （调用方应计为 error 并可重试）；has_schedule=False 表示 AI 正常完成
+        但邮件没有日程信号（调用方应计为 skipped，不重试）。
     """
     sender = _build_sender(from_name, from_address)
     body = _clean_body(body_text, body_html)
@@ -312,6 +392,8 @@ async def process_email_for_schedule(
         return "skipped"
 
     # LLM 解析
+    # None 表示超时、网络错误或模型输出无法解析（计为 error，调用方重试）
+    # has_schedule=False 表示 AI 正常完成但邮件没有日程信号（计为 skipped，不重试）
     extracted = await extract_schedule_from_email(
         provider,
         subject=subject,
@@ -326,7 +408,9 @@ async def process_email_for_schedule(
         timeout_seconds=config.parse_timeout_seconds,
     )
 
-    if not extracted or not extracted.has_schedule:
+    if extracted is None:
+        return "error"
+    if not extracted.has_schedule:
         return "skipped"
 
     # 构造 ScheduleItem
@@ -359,6 +443,7 @@ async def process_email_for_schedule(
             email_folder=folder,
         )
         _pending_confirmations.append(pending)
+        _save_pending_to_disk()
         logger.info("Schedule pending confirmation: title={!r} uid={}", item.title, uid)
         return "pending"
 
@@ -387,6 +472,7 @@ async def confirm_pending_confirmation(svc: ScheduleService, confirmation_id: st
             try:
                 await svc.add_item(p.item)
                 _pending_confirmations.pop(i)
+                _save_pending_to_disk()
                 logger.info("Schedule confirmed and created: title={!r}", p.item.title)
                 return True
             except Exception as e:
@@ -400,6 +486,7 @@ def discard_pending_confirmation(confirmation_id: str) -> bool:
     for i, p in enumerate(_pending_confirmations):
         if p.id == confirmation_id:
             _pending_confirmations.pop(i)
+            _save_pending_to_disk()
             logger.info("Schedule discarded: title={!r}", p.item.title)
             return True
     return False

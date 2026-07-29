@@ -365,7 +365,7 @@ export function DbAgentPanel({
       </div>
 
       <div className="shrink-0 p-2">
-        <div className="flex min-h-[52px] items-end gap-1.5 rounded-xl border border-border/75 bg-background px-2.5 py-1.5 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
+        <div className="flex min-h-[52px] items-end gap-1.5 rounded-xl border border-border/75 bg-background px-2.5 py-1.5 shadow-sm">
           <textarea
             value={draft}
             onChange={(event) => setDraft(event.target.value)}

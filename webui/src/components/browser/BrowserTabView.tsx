@@ -33,6 +33,7 @@ interface BrowserTabViewProps {
   onReload: () => void;
   onUrlChange?: (url: string) => void;
   onOpenHistory?: () => void;
+  onOpenDownloads?: () => void;
   onToggleMute?: () => void;
   onToggleAdBlock?: () => void;
   onToggleDarkMode?: () => void;
@@ -70,6 +71,7 @@ export function BrowserTabView({
   onReload,
   onUrlChange,
   onOpenHistory,
+  onOpenDownloads,
   onToggleMute,
   onToggleAdBlock,
   onToggleDarkMode,
@@ -241,18 +243,26 @@ export function BrowserTabView({
     };
   }, [tab.id, tab.webviewCreated, onUrlChange]);
 
-  // Ctrl+F 切换查找栏
+  // Ctrl+F 切换查找栏；Ctrl+J/Ctrl+H 打开下载/历史记录页面
   useEffect(() => {
     if (!isVisible) return;
     const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === "f") {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const key = e.key.toLowerCase();
+      if (key === "f") {
         e.preventDefault();
         setFindBarVisible((prev) => !prev);
+      } else if (key === "j") {
+        e.preventDefault();
+        onOpenDownloads?.();
+      } else if (key === "h") {
+        e.preventDefault();
+        onOpenHistory?.();
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isVisible]);
+  }, [isVisible, onOpenDownloads, onOpenHistory]);
 
   // 同步当前标签的缩放值
   useEffect(() => {
@@ -473,6 +483,7 @@ export function BrowserTabView({
         onZoomOut={handleZoomOut}
         onZoomReset={handleZoomReset}
         onOpenHistory={onOpenHistory}
+        onOpenDownloads={onOpenDownloads}
         onOpenCookieManager={() => setCookieManagerOpen(true)}
         onToggleMute={onToggleMute}
         onToggleAdBlock={onToggleAdBlock}

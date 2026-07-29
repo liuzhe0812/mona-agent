@@ -15,6 +15,7 @@ export default defineConfig(({ mode }) => {
       },
     },
     optimizeDeps: {
+      include: ["@xyflow/react", "@dagrejs/dagre", "html-to-image"],
       exclude: ["@radix-ui/react-dialog", "@novnc/novnc"],
     },
     build: {

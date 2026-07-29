@@ -8,6 +8,7 @@ import { NoteTabBar } from "./NoteTabBar";
 import { NoteEditor } from "./NoteEditor";
 import { GraphViewDialog } from "./GraphViewDialog";
 import type { OperationNote, Notebook } from "./notes-data";
+import type { FlowchartSemanticWarning } from "./flowchart/flowchart-document";
 import type { EditorMode } from "@/components/common/MarkdownEditor";
 
 export type SplitDirection = "horizontal" | "vertical";
@@ -125,6 +126,8 @@ interface WorkspaceProps {
       contentMarkdown: string;
       contentJson?: JSONContent;
       plainText: string;
+      /** 流程图专用：提交时的 baseRevision */
+      baseRevision?: number;
     },
   ) => void;
   onMoveSelectionToNote?: (selectedText: string) => void;
@@ -134,6 +137,20 @@ interface WorkspaceProps {
   onOpenNoteByTitle: (title: string) => void;
   toolbarTrailing?: ReactNode;
   tabMenuCallbacks?: NoteTabMenuCallbacks;
+  /** 流程图多标签页写者租约：noteId → writerInstanceId */
+  flowchartWriterByNote?: Record<string, string>;
+  /** 申请成为写者（用户点击"在此编辑"） */
+  onFlowchartRequestLease?: (noteId: string, editorInstanceId: string) => void;
+  /** 流程图 revision：noteId → revision（用于多标签页校验） */
+  flowchartRevisionByNote?: Record<string, number>;
+  /** 流程图强制同步计数器：noteId → counter（NotesView 拒绝提交时递增） */
+  flowchartForceSyncByNote?: Record<string, number>;
+  /** Resolve embed target content by title (`![[...]]`). Returns null if not found. */
+  resolveEmbedContent?: (title: string) => string | null;
+  /** Whether the embed target is a flowchart note. */
+  isEmbedFlowchart?: (title: string) => boolean;
+  /** 流程图：用户点击"让 AI 修复"时把 warnings 上抛到 NotesView */
+  onFlowchartFixWithAI?: (noteId: string, warnings: FlowchartSemanticWarning[]) => void;
 }
 
 interface PaneLeafProps {
@@ -151,6 +168,8 @@ interface PaneLeafProps {
       contentMarkdown: string;
       contentJson?: JSONContent;
       plainText: string;
+      /** 流程图专用：提交时的 baseRevision */
+      baseRevision?: number;
     },
   ) => void;
   onMoveSelectionToNote?: (selectedText: string) => void;
@@ -168,6 +187,20 @@ interface PaneLeafProps {
   toolbarTrailing?: ReactNode;
   isPrimary?: boolean;
   tabMenuCallbacks?: NoteTabMenuCallbacks;
+  /** 流程图多标签页写者租约：noteId → writerInstanceId */
+  flowchartWriterByNote?: Record<string, string>;
+  /** 申请成为写者（用户点击"在此编辑"） */
+  onFlowchartRequestLease?: (noteId: string, editorInstanceId: string) => void;
+  /** 流程图 revision：noteId → revision */
+  flowchartRevisionByNote?: Record<string, number>;
+  /** 流程图强制同步计数器：noteId → counter */
+  flowchartForceSyncByNote?: Record<string, number>;
+  /** Resolve embed target content by title (`![[...]]`). Returns null if not found. */
+  resolveEmbedContent?: (title: string) => string | null;
+  /** Whether the embed target is a flowchart note. */
+  isEmbedFlowchart?: (title: string) => boolean;
+  /** 流程图：用户点击"让 AI 修复"时把 warnings 上抛到 NotesView */
+  onFlowchartFixWithAI?: (noteId: string, warnings: FlowchartSemanticWarning[]) => void;
 }
 
 function PaneLeafView({
@@ -195,6 +228,13 @@ function PaneLeafView({
   toolbarTrailing,
   isPrimary,
   tabMenuCallbacks,
+  flowchartWriterByNote,
+  onFlowchartRequestLease,
+  flowchartRevisionByNote,
+  flowchartForceSyncByNote,
+  resolveEmbedContent,
+  isEmbedFlowchart,
+  onFlowchartFixWithAI,
 }: PaneLeafProps) {
   const tabs = useMemo(
     () => leaf.tabIds.map((id) => notes.find((n) => n.id === id)).filter((n): n is OperationNote => n !== null),
@@ -276,6 +316,21 @@ function PaneLeafView({
             onOpenNoteByTitle={onOpenNoteByTitle}
             toolbarExtra={toolbarExtra?.(activeNote.id)}
             toolbarLeadingExtra={toolbarLeadingExtra?.(activeNote.id)}
+            flowchartWriterId={flowchartWriterByNote?.[activeNote.id]}
+            onFlowchartRequestLease={
+              onFlowchartRequestLease
+                ? (editorInstanceId) => onFlowchartRequestLease(activeNote.id, editorInstanceId)
+                : undefined
+            }
+            flowchartRevision={flowchartRevisionByNote?.[activeNote.id]}
+            flowchartForceSync={flowchartForceSyncByNote?.[activeNote.id]}
+            resolveEmbedContent={resolveEmbedContent}
+            isEmbedFlowchart={isEmbedFlowchart}
+            onFlowchartFixWithAI={
+              onFlowchartFixWithAI
+                ? (warnings) => onFlowchartFixWithAI(activeNote.id, warnings)
+                : undefined
+            }
           />
         ) : (
           <div className="flex flex-1 flex-col items-center justify-center text-muted-foreground">
@@ -302,6 +357,8 @@ interface SplitViewProps {
       contentMarkdown: string;
       contentJson?: JSONContent;
       plainText: string;
+      /** 流程图专用：提交时的 baseRevision */
+      baseRevision?: number;
     },
   ) => void;
   onMoveSelectionToNote?: (selectedText: string) => void;
@@ -318,6 +375,20 @@ interface SplitViewProps {
   toolbarTrailing?: ReactNode;
   primaryLeafId?: string | null;
   tabMenuCallbacks?: NoteTabMenuCallbacks;
+  /** 流程图多标签页写者租约：noteId → writerInstanceId */
+  flowchartWriterByNote?: Record<string, string>;
+  /** 申请成为写者（用户点击"在此编辑"） */
+  onFlowchartRequestLease?: (noteId: string, editorInstanceId: string) => void;
+  /** 流程图 revision：noteId → revision */
+  flowchartRevisionByNote?: Record<string, number>;
+  /** 流程图强制同步计数器：noteId → counter */
+  flowchartForceSyncByNote?: Record<string, number>;
+  /** Resolve embed target content by title (`![[...]]`). Returns null if not found. */
+  resolveEmbedContent?: (title: string) => string | null;
+  /** Whether the embed target is a flowchart note. */
+  isEmbedFlowchart?: (title: string) => boolean;
+  /** 流程图：用户点击"让 AI 修复"时把 warnings 上抛到 NotesView */
+  onFlowchartFixWithAI?: (noteId: string, warnings: FlowchartSemanticWarning[]) => void;
 }
 
 function SplitView({
@@ -344,6 +415,13 @@ function SplitView({
   toolbarTrailing,
   primaryLeafId,
   tabMenuCallbacks,
+  flowchartWriterByNote,
+  onFlowchartRequestLease,
+  flowchartRevisionByNote,
+  flowchartForceSyncByNote,
+  resolveEmbedContent,
+  isEmbedFlowchart,
+  onFlowchartFixWithAI,
 }: SplitViewProps) {
   const isHorizontal = node.direction === "horizontal";
   const containerRef = useRef<HTMLDivElement>(null);
@@ -449,6 +527,13 @@ function SplitView({
               toolbarTrailing={toolbarTrailing}
               isPrimary={child.id === primaryLeafId}
               tabMenuCallbacks={tabMenuCallbacks}
+              flowchartWriterByNote={flowchartWriterByNote}
+              onFlowchartRequestLease={onFlowchartRequestLease}
+              flowchartRevisionByNote={flowchartRevisionByNote}
+              flowchartForceSyncByNote={flowchartForceSyncByNote}
+              resolveEmbedContent={resolveEmbedContent}
+              isEmbedFlowchart={isEmbedFlowchart}
+              onFlowchartFixWithAI={onFlowchartFixWithAI}
             />
             ) : (
               <SplitView
@@ -475,6 +560,13 @@ function SplitView({
                 toolbarTrailing={toolbarTrailing}
                 primaryLeafId={primaryLeafId}
                 tabMenuCallbacks={tabMenuCallbacks}
+                flowchartWriterByNote={flowchartWriterByNote}
+                onFlowchartRequestLease={onFlowchartRequestLease}
+                flowchartRevisionByNote={flowchartRevisionByNote}
+                flowchartForceSyncByNote={flowchartForceSyncByNote}
+                resolveEmbedContent={resolveEmbedContent}
+                isEmbedFlowchart={isEmbedFlowchart}
+                onFlowchartFixWithAI={onFlowchartFixWithAI}
               />
             )}
           </div>,
@@ -514,6 +606,13 @@ export function Workspace({
   onOpenNoteByTitle,
   toolbarTrailing,
   tabMenuCallbacks,
+  flowchartWriterByNote,
+  onFlowchartRequestLease,
+  flowchartRevisionByNote,
+  flowchartForceSyncByNote,
+  resolveEmbedContent,
+  isEmbedFlowchart,
+  onFlowchartFixWithAI,
 }: WorkspaceProps) {
   const handleLeafChange = useCallback(
     (leafId: string, updater: (leaf: LeafPane) => LeafPane) => {
@@ -667,6 +766,13 @@ export function Workspace({
     onOpenNoteByTitle,
     toolbarTrailing,
     tabMenuCallbacks,
+    flowchartWriterByNote,
+    onFlowchartRequestLease,
+    flowchartRevisionByNote,
+    flowchartForceSyncByNote,
+    resolveEmbedContent,
+    isEmbedFlowchart,
+    onFlowchartFixWithAI,
   };
 
   // 主 leaf：视觉上最右最上的 leaf，用于固定显示工具栏按钮
@@ -740,6 +846,12 @@ export function Workspace({
       toolbarTrailing={toolbarTrailing}
       primaryLeafId={primaryLeafId}
       tabMenuCallbacks={tabMenuCallbacks}
+      flowchartWriterByNote={flowchartWriterByNote}
+      onFlowchartRequestLease={onFlowchartRequestLease}
+      flowchartRevisionByNote={flowchartRevisionByNote}
+      flowchartForceSyncByNote={flowchartForceSyncByNote}
+      resolveEmbedContent={resolveEmbedContent}
+      isEmbedFlowchart={isEmbedFlowchart}
     />
   );
 }

@@ -36,17 +36,24 @@ pub async fn browser_show_downloads(
     app: AppHandle,
     anchor: DownloadPopupAnchor,
 ) -> Result<(), String> {
-    // 与地址栏建议窗一致：不可聚焦的悬浮窗，不抢焦点、无焦点事件，避免失焦即隐藏
+    log::info!("[browser_downloads] show_downloads called, anchor={:?}", anchor);
     let app_handle = app.clone();
     app.run_on_main_thread(move || {
         let app = &app_handle;
         if let Some(window) = app.get_webview_window(WINDOW_LABEL) {
-            let _ = place_window(app, &anchor);
-            let _ = window.show();
+            log::info!("[browser_downloads] reusing existing window, placing and showing");
+            if let Err(e) = place_window(app, &anchor) {
+                log::error!("[browser_downloads] place_window failed: {}", e);
+            }
+            if let Err(e) = window.show() {
+                log::error!("[browser_downloads] window.show failed: {}", e);
+            }
             return;
         }
 
+        log::info!("[browser_downloads] creating new window");
         let Some(main) = app.get_webview_window("main") else {
+            log::error!("[browser_downloads] main window not found");
             return;
         };
         let builder = WebviewWindowBuilder::new(
@@ -61,12 +68,24 @@ pub async fn browser_show_downloads(
         .focusable(false)
         .visible(false)
         .shadow(false);
-        let Ok(window) = builder.parent(&main).and_then(|builder| builder.build()) else {
-            return;
+        let window = match builder.parent(&main).and_then(|builder| builder.build()) {
+            Ok(w) => w,
+            Err(e) => {
+                log::error!("[browser_downloads] build window failed: {}", e);
+                return;
+            }
         };
-        let _ = window.set_size(LogicalSize::new(WIDTH, HEIGHT));
-        let _ = place_window(app, &anchor);
-        let _ = window.show();
+        if let Err(e) = window.set_size(LogicalSize::new(WIDTH, HEIGHT)) {
+            log::error!("[browser_downloads] set_size failed: {}", e);
+        }
+        if let Err(e) = place_window(app, &anchor) {
+            log::error!("[browser_downloads] place_window failed: {}", e);
+        }
+        if let Err(e) = window.show() {
+            log::error!("[browser_downloads] window.show failed: {}", e);
+        } else {
+            log::info!("[browser_downloads] window shown successfully");
+        }
     })
     .map_err(|e| e.to_string())
 }

@@ -117,6 +117,12 @@ export class MonaClient {
     error?: string;
   }) => void>();
   private pptDeleteNativeHandlers = new Set<(result: { ok: boolean; templateId?: string; error?: string }) => void>();
+  private docUploadHandlers = new Set<(result: {
+    ok: boolean;
+    files?: { name: string; path: string; size?: number; mime?: string }[];
+    chatId?: string;
+    error?: string;
+  }) => void>();
   // chat_id -> handlers listening on it
   private chatHandlers = new Map<string, Set<EventHandler>>();
   /** Inbound frames received while no subscriber is registered (e.g. user switched away). */
@@ -259,6 +265,30 @@ export class MonaClient {
 
   sendPptUpload(files: { name: string; data_url: string }[]): void {
     this.queueSend({ type: "ppt_upload", files });
+  }
+
+  /**
+   * Upload documents for the "文档加工" workbench. Files are written to
+   * ``workspace/uploads/<chat_id>/`` on the server. The returned relative
+   * paths should be passed back via ``sendMessage``'s ``doc_paths`` field so
+   * the backend can extract their text into the user message.
+   */
+  sendDocUpload(chatId: string, files: { name: string; data_url: string }[]): void {
+    this.queueSend({ type: "doc_upload", chat_id: chatId, files });
+  }
+
+  onDocUploadResult(
+    handler: (result: {
+      ok: boolean;
+      files?: { name: string; path: string; size?: number; mime?: string }[];
+      chatId?: string;
+      error?: string;
+    }) => void,
+  ): Unsubscribe {
+    this.docUploadHandlers.add(handler);
+    return () => {
+      this.docUploadHandlers.delete(handler);
+    };
   }
 
   sendPptDeleteBrand(data: { brandId: string }): void {
@@ -423,6 +453,11 @@ export class MonaClient {
       dbTable?: string;
       browserPageUrl?: string;
       browserPageTitle?: string;
+      /** Workspace-relative paths of documents uploaded via sendDocUpload.
+       *  The backend resolves them to absolute paths and passes them to
+       *  extract_documents(), which injects the extracted text into the user
+       *  message so the agent can answer questions about the documents. */
+      docPaths?: string[];
     },
   ): void {
     this.knownChats.add(chatId);
@@ -439,6 +474,7 @@ export class MonaClient {
       ...(options?.dbTable ? { db_table: options.dbTable } : {}),
       ...(options?.browserPageUrl ? { browser_page_url: options.browserPageUrl } : {}),
       ...(options?.browserPageTitle ? { browser_page_title: options.browserPageTitle } : {}),
+      ...(options?.docPaths && options.docPaths.length > 0 ? { doc_paths: options.docPaths } : {}),
       webui: true,
     };
     this.queueSend(frame);
@@ -515,6 +551,18 @@ export class MonaClient {
         handler({
           ok: !!parsed.ok,
           files: parsed.files,
+          error: parsed.error,
+        });
+      }
+      return;
+    }
+
+    if (parsed.event === "doc_upload_result") {
+      for (const handler of this.docUploadHandlers) {
+        handler({
+          ok: !!parsed.ok,
+          files: parsed.files,
+          chatId: parsed.chat_id,
           error: parsed.error,
         });
       }

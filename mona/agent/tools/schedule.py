@@ -19,6 +19,7 @@ from mona.agent.tools.schema import (
     StringSchema,
     tool_parameters_schema,
 )
+from mona.schedule import ScheduleServiceUnavailableError
 
 _SCHEDULE_PARAMETERS = tool_parameters_schema(
     action=StringSchema(
@@ -145,21 +146,24 @@ class ScheduleTool(Tool, ContextAware):
         item_id: str | None = None,
         **kwargs: Any,
     ) -> str:
-        if action == "add":
-            return await self._add(
-                title, start_at, end_at, all_day, recurrence, cron_expr, tz,
-                kind, ai_message, ai_deliver, description, color,
-            )
-        elif action == "list":
-            return await self._list()
-        elif action == "update":
-            return await self._update(
-                item_id, title, start_at, end_at, all_day, recurrence, cron_expr,
-                tz, kind, ai_message, ai_deliver, description, color, done,
-            )
-        elif action == "remove":
-            return await self._remove(item_id)
-        return f"Unknown action: {action}"
+        try:
+            if action == "add":
+                return await self._add(
+                    title, start_at, end_at, all_day, recurrence, cron_expr, tz,
+                    kind, ai_message, ai_deliver, description, color,
+                )
+            elif action == "list":
+                return await self._list()
+            elif action == "update":
+                return await self._update(
+                    item_id, title, start_at, end_at, all_day, recurrence, cron_expr,
+                    tz, kind, ai_message, ai_deliver, description, color, done,
+                )
+            elif action == "remove":
+                return await self._remove(item_id)
+            return f"Unknown action: {action}"
+        except ScheduleServiceUnavailableError as exc:
+            return f"Error: {exc}"
 
     def _parse_iso_to_ms(self, iso_str: str | None, tz: str | None) -> tuple[int | None, str | None]:
         """Parse an ISO datetime string to ms. Returns (ms, error_message)."""

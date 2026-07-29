@@ -12,7 +12,7 @@ import { Button } from "@/components/ui/button";
 import { AgentLogo } from "@/components/AgentLogo";
 import { cn } from "@/lib/utils";
 import { useLicense } from "@/hooks/useLicense";
-import { getGatewayHttpBase } from "@/lib/api";
+import { getServicesHttpBase } from "@/lib/api";
 import { useEmailStore } from "./store/emailStore";
 import { FolderTree } from "./FolderTree";
 import { MailListView } from "./MailListView";
@@ -20,6 +20,7 @@ import { MailView } from "./MailView";
 import { MailAgentPanel } from "./MailAgentPanel";
 import { ContactsView } from "./contacts/ContactsView";
 import { openComposeWindow } from "./lib/emailApi";
+import { useTodoStore } from "@/components/schedule/todoStore";
 import type { EmailAccount, EmailMessage } from "./lib/types";
 
 const LIST_WIDTH_KEY = "mona:email:listWidth";
@@ -64,7 +65,7 @@ export function EmailClientView({ onOpenSubscribe }: { onOpenSubscribe?: () => v
   useEffect(() => {
     void loadAccounts();
     void loadContacts();
-    void getGatewayHttpBase().then((url) => {
+    void getServicesHttpBase().then((url) => {
       setGatewayUrl(url);
       setStoreGatewayUrl(url);
     });
@@ -152,6 +153,19 @@ export function EmailClientView({ onOpenSubscribe }: { onOpenSubscribe?: () => v
     const account = getCurrentAccount();
     if (!account) return;
     void openComposeWindow({ mode: "forward", accountId: account.id, baseMessage: message });
+  };
+
+  const addFromEmail = useTodoStore((s) => s.addFromEmail);
+  const handleAddToPlan = async (message: EmailMessage) => {
+    try {
+      await addFromEmail({
+        accountId: message.accountId,
+        folder: message.folder,
+        uid: message.uid,
+      });
+    } catch (err) {
+      console.error("加入计划失败:", err);
+    }
   };
 
   // 键盘快捷键
@@ -318,11 +332,12 @@ export function EmailClientView({ onOpenSubscribe }: { onOpenSubscribe?: () => v
                 onReply={(m) => openReply(m, "reply")}
                 onReplyAll={(m) => openReply(m, "replyAll")}
                 onForward={(m) => openForward(m)}
+                onAddToPlan={(m) => void handleAddToPlan(m)}
               />
             </div>
             <div
               className={cn(
-                "w-1 shrink-0 cursor-col-resize bg-border transition-colors hover:bg-primary/40 active:bg-primary/60",
+                "w-px shrink-0 cursor-col-resize bg-border transition-colors hover:bg-primary/40 active:bg-primary/60",
                 resizing && "bg-primary/60",
               )}
               onMouseDown={() => setResizing(true)}

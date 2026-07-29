@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from mona.agent.tools.document import DocumentToolConfig
     from mona.agent.tools.http import HttpToolConfig
     from mona.agent.tools.image_generation import ImageGenerationToolConfig
+    from mona.agent.tools.office import OfficeToolConfig
     from mona.agent.tools.self import MyToolConfig
     from mona.agent.tools.shell import ExecToolConfig
     from mona.agent.tools.video_generation import VideoGenerationToolConfig
@@ -74,6 +75,16 @@ class DreamConfig(Base):
     # on — set to False to feed MEMORY.md raw if a specific LLM reacts poorly
     # to the `← Nd` suffix or you want deterministic, git-independent prompts.
     annotate_line_ages: bool = True
+
+    # Skill lifecycle (see docs/design/skill-lifecycle-design.md).
+    # Automatic archival is OFF by default — users opt in after a dry-run.
+    # Stats, capacity cap, manual archive/restore and `mona skill prune`
+    # (dry-run) work regardless of this flag.
+    skill_prune_enabled: bool = False
+    archive_after_days: int = Field(default=90, ge=1)
+    # Hard cap on active user skills (agent-created + unknown). Builtin
+    # skills live in a separate read-only directory and are not counted.
+    max_active_user_skills: int = Field(default=100, ge=1)
 
     def build_schedule(self, timezone: str) -> CronSchedule:
         """Build the runtime schedule, preferring the legacy cron override if present."""
@@ -265,6 +276,13 @@ class GatewayConfig(Base):
     heartbeat: HeartbeatConfig = Field(default_factory=HeartbeatConfig)
 
 
+class ServicesConfig(Base):
+    """Services process configuration (business services split from gateway)."""
+
+    host: str = "127.0.0.1"  # Safer default: local-only bind.
+    port: int = 17174
+
+
 class MCPServerConfig(Base):
     """MCP server connection configuration (stdio or HTTP)."""
 
@@ -378,6 +396,9 @@ class ToolsConfig(Base):
     document: DocumentToolConfig = Field(
         default_factory=lambda: _lazy_default("mona.agent.tools.document", "DocumentToolConfig"),
     )
+    office: OfficeToolConfig = Field(
+        default_factory=lambda: _lazy_default("mona.agent.tools.office", "OfficeToolConfig"),
+    )
     http: HttpToolConfig = Field(
         default_factory=lambda: _lazy_default("mona.agent.tools.http", "HttpToolConfig"),
     )
@@ -409,6 +430,7 @@ class Config(BaseSettings):
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     api: ApiConfig = Field(default_factory=ApiConfig)
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
+    services: ServicesConfig = Field(default_factory=ServicesConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     model_presets: dict[str, ModelPresetConfig] = Field(
         default_factory=dict,
@@ -592,6 +614,7 @@ def _resolve_tool_config_refs() -> None:
     from mona.agent.tools.document import DocumentToolConfig
     from mona.agent.tools.http import HttpToolConfig
     from mona.agent.tools.image_generation import ImageGenerationToolConfig
+    from mona.agent.tools.office import OfficeToolConfig
     from mona.agent.tools.self import MyToolConfig
     from mona.agent.tools.shell import ExecToolConfig
     from mona.agent.tools.video_generation import VideoGenerationToolConfig
@@ -612,6 +635,7 @@ def _resolve_tool_config_refs() -> None:
     mod.DataframeToolConfig = DataframeToolConfig  # type: ignore[attr-defined]
     mod.ChartToolConfig = ChartToolConfig  # type: ignore[attr-defined]
     mod.CryptoToolConfig = CryptoToolConfig  # type: ignore[attr-defined]
+    mod.OfficeToolConfig = OfficeToolConfig  # type: ignore[attr-defined]
     mod.EmailIntelConfig = EmailIntelConfig  # type: ignore[attr-defined]
 
     ToolsConfig.model_rebuild()

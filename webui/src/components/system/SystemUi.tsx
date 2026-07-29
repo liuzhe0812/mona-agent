@@ -1,6 +1,7 @@
 import { AlertTriangle } from "lucide-react";
 import type { ReactNode } from "react";
 
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 export function MetricCard({
@@ -57,11 +58,13 @@ export function PanelCard({
   title,
   children,
   className,
+  bodyClassName,
   action,
 }: {
   title: string;
   children: ReactNode;
   className?: string;
+  bodyClassName?: string;
   action?: ReactNode;
 }) {
   return (
@@ -70,7 +73,7 @@ export function PanelCard({
         <h2 className="text-sm font-semibold">{title}</h2>
         {action}
       </div>
-      <div className="p-4">{children}</div>
+      <div className={cn("p-4", bodyClassName)}>{children}</div>
     </section>
   );
 }
@@ -127,9 +130,9 @@ export function TaskFailureNotice({
         <p className="font-medium text-red-700 dark:text-red-400">{title}</p>
         <p className="mt-1 break-words text-muted-foreground">{detail}</p>
       </div>
-      {onRetry && <button type="button" className={secondaryButtonClass} onClick={onRetry}>重试</button>}
-      {onHandoff && <button type="button" className={secondaryButtonClass} onClick={onHandoff}>交给 Mona</button>}
-      {onDismiss && <button type="button" className={`${secondaryButtonClass} text-muted-foreground`} onClick={onDismiss}>关闭</button>}
+      {onRetry && <Button type="button" variant="outline" size="sm" onClick={onRetry}>重试</Button>}
+      {onHandoff && <Button type="button" variant="outline" size="sm" onClick={onHandoff}>交给 Mona</Button>}
+      {onDismiss && <Button type="button" variant="ghost" size="sm" onClick={onDismiss}>关闭</Button>}
     </div>
   );
 }

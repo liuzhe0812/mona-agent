@@ -166,7 +166,7 @@ export function GlobalSearchDialog({
                     onClick={() => handleSelect(result)}
                     className={cn(
                       "flex w-full flex-col gap-1 px-3 py-2 text-left transition-colors",
-                      index === activeIndex ? "bg-accent" : "hover:bg-accent/50",
+                      index === activeIndex ? "bg-accent" : "hover:bg-accent",
                     )}
                   >
                     <div className="flex items-center gap-2">

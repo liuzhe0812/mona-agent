@@ -53,7 +53,7 @@ documents the general tool contract and non-obvious usage patterns.
 
 - `terminal_exec` and `terminal_output` automatically target the user's current active terminal session — you do NOT need to discover or specify a session_id.
 - Simply call `terminal_exec` with the `command` parameter; the session is resolved from the user's current terminal view.
-- Call `terminal_output` (without session_id) to read the current terminal buffer and see command results.
+- Call `terminal_output` (without session_id) to read the current terminal buffer and see command results. It returns the last N lines (default 200); pass `lines` (1-10000) to control how much to read — smaller values save tokens, larger values (e.g. 1000) are useful for inspecting logs. When output is truncated, a `[showing last N of M lines]` header is prepended so you know there is more history above.
 - Commands are risk-classified: dangerous commands (e.g. `rm -rf /`, `mkfs`, `dd`) always require user approval; safe commands (e.g. `ls`, `cat`, `df`) may execute directly depending on configuration; unknown commands default to requiring approval.
 - Commands execute in the user's visible terminal, so the user can see AI actions in real time.
 - `terminal_exec` operates on already-connected sessions; it does not create new SSH connections. The user must have an active terminal session open.

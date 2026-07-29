@@ -14,7 +14,7 @@
 
 import { streamChat, type LlmConfig } from "@/lib/llm-client"
 import { httpFetch } from "@/lib/tauri"
-import { getGatewayHttpBase } from "@/lib/api"
+import { getServicesHttpBase } from "@/lib/api"
 import {
   getMaterialsText,
   writeWikiPage,
@@ -50,7 +50,7 @@ export interface MaterialsIngestResult extends MaterialsIngestProgress {
 // ─── LLM config ────────────────────────────────────────────────────────
 
 async function fetchLlmConfig(): Promise<LlmConfig> {
-  const base = await getGatewayHttpBase()
+  const base = await getServicesHttpBase()
   const resp = await httpFetch(`${base}/api/materials/llm-config`)
   if (!resp.ok) throw new Error(`Failed to fetch LLM config: ${resp.status}`)
   const data = await resp.json()

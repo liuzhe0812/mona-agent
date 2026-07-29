@@ -36,6 +36,7 @@ When the prompt says "模版编辑模式" or names `references/template-edit-mod
 8. Normal SVG path: run `svg_quality_checker.py <project_path>` on `svg_output/`; all errors must be fixed before export.
 9. Normal SVG path: speaker notes must be real Markdown under `notes/`; SVG `<metadata>` does not count.
 10. Export discipline: PPTX export must use `${SKILL_DIR}/scripts/svg_to_pptx.py`. For custom PPTX templates, add `--template-underlay <native_template_dir>/template.pptx`. Never create custom export scripts, never use Node/pptxgenjs, never install PPTX-generation npm packages.
+11. When `PPT_UI_CHECKPOINTS=1`: Step 4 generates outline draft and stops; Step 6 writes `.review_ready` and stops before Step 7. Both checkpoints require explicit user confirmation via UI before proceeding.
 
 ## Mona Defaults
 
@@ -139,6 +140,29 @@ Mandatory:
 
 Checkpoint: Strategist deliverables complete; continue automatically to Step 5 or Step 6 unless the user chose split mode.
 
+---
+
+#### V2 UI Checkpoints (when PPT_UI_CHECKPOINTS=1)
+
+当启动 Prompt 包含 `PPT_UI_CHECKPOINTS=1` 标记时，Step 4 行为变更如下：
+
+1. 完成八项确认分析。
+2. 写完整 `design_spec.md` 草稿。
+3. 写 `page_visual_plan.json`（包含 schemaVersion=2, revision=0, pages 数组）。
+4. **不写 `spec_lock.md`**。
+5. **不进入 Step 5/6**。
+6. 明确告知用户"大纲草稿已生成，请在 PPT 页面确认"，然后结束当前 turn。
+
+用户会在 UI 上编辑/增删/重排页面，确认后系统会自动锁定大纲。收到大纲确认消息后，Agent 必须：
+1. 读取最终 `page_visual_plan.json`。
+2. 按其内容同步重建 `design_spec.md`。
+3. 按 `templates/spec_lock_reference.md` 生成完整 `spec_lock.md`。
+4. 继续执行 Step 5 和 Step 6。
+5. 全部 SVG 通过质量检查且备注齐全后写入 `.review_ready` 文件。
+6. **停止在 Step 7 之前**，等待用户逐页确认。
+
+未带 `PPT_UI_CHECKPOINTS=1` 标记的 CLI、普通聊天调用继续执行现有自动管线。
+
 ### Step 5: Image Acquisition Phase
 
 Gate: Step 4 complete.
@@ -173,6 +197,16 @@ Mandatory:
 - Run `workflows/visual-review.md` only when the user explicitly requested visual review.
 
 Checkpoint: live preview started, all SVGs generated, quality gate has 0 errors, notes exist, chart verification was run or skipped.
+
+#### V2 Review Gate (when PPT_UI_CHECKPOINTS=1)
+
+当 `PPT_UI_CHECKPOINTS=1` 时，Step 6 完成后：
+- 写 `.review_ready` 文件（JSON 格式，包含 outlineRevision 和 checkedAt）
+- **不执行 Step 7 导出**
+- 告知用户"所有页面已生成，请在右侧逐页确认"
+- 等待用户在 UI 上逐页确认
+
+收到"所有 PPT 页面已确认"消息后，才执行 Step 7 后处理与导出。
 
 ### Step 7: Post-processing & Export
 

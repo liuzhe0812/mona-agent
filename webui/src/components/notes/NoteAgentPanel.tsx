@@ -91,6 +91,7 @@ export function NoteAgentPanel({
   const [replaceConfirmMessage, setReplaceConfirmMessage] = useState<UIMessage | null>(null);
   const pendingPromptRef = useRef<string | null>(null);
   const pendingDisplayContentRef = useRef<string | null>(null);
+  // 普通笔记 action 中只有 translate 自动应用
   const pendingActionRef = useRef<Exclude<NoteAiActionId, "freeform"> | null>(null);
   const autoAppliedMessageIdsRef = useRef<Set<string>>(new Set());
   const lastNoteIdRef = useRef<string | null | undefined>(note?.id);
@@ -211,11 +212,11 @@ export function NoteAgentPanel({
       .pop();
     if (!completedMessage) return;
 
-    const markdown = buildAgentResultMarkdown(completedMessage.content);
-    if (!markdown) return;
-
     autoAppliedMessageIdsRef.current.add(completedMessage.id);
     pendingActionRef.current = null;
+
+    const markdown = buildAgentResultMarkdown(completedMessage.content);
+    if (!markdown) return;
 
     onApplyResult("replace", markdown, completedMessage.id);
     setNotice("已替换笔记正文");
@@ -463,6 +464,7 @@ export function NoteAgentPanel({
           appliedMessageIds={note?.appliedAgentMessageIds ?? []}
           autoAppliedMessageIds={autoAppliedMessageIdsRef.current}
           canSaveAsNote={!!onSaveAsNote}
+          canAppend={true}
           onAppend={(message) => applyResult("append", message)}
           onReplace={(message) => applyResult("replace", message)}
           onCopy={copyResult}
@@ -472,7 +474,7 @@ export function NoteAgentPanel({
       </div>
 
       <div className="shrink-0 p-2">
-        <div className="flex min-h-[52px] items-end gap-1.5 rounded-xl border border-border/75 bg-background px-2.5 py-1.5 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
+        <div className="flex min-h-[52px] items-end gap-1.5 rounded-xl border border-border/75 bg-background px-2.5 py-1.5 shadow-sm">
           <textarea
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
@@ -548,7 +550,7 @@ export function NoteAgentPanel({
   );
 }
 
-function AgentChat({
+export function AgentChat({
   messages,
   loading,
   historyError,
@@ -558,6 +560,7 @@ function AgentChat({
   appliedMessageIds,
   autoAppliedMessageIds,
   canSaveAsNote,
+  canAppend,
   onAppend,
   onReplace,
   onCopy,
@@ -573,6 +576,7 @@ function AgentChat({
   appliedMessageIds: string[];
   autoAppliedMessageIds: Set<string>;
   canSaveAsNote: boolean;
+  canAppend: boolean;
   onAppend: (message: UIMessage) => void;
   onReplace: (message: UIMessage) => void;
   onCopy: (message: UIMessage) => void;
@@ -616,6 +620,7 @@ function AgentChat({
                 appliedMessageIds={appliedMessageIds}
                 autoAppliedMessageIds={autoAppliedMessageIds}
                 canSaveAsNote={canSaveAsNote}
+                canAppend={canAppend}
                 onAppend={onAppend}
                 onReplace={onReplace}
                 onCopy={onCopy}
@@ -637,6 +642,7 @@ function SingleMessageWithActions({
   appliedMessageIds,
   autoAppliedMessageIds,
   canSaveAsNote,
+  canAppend,
   onAppend,
   onReplace,
   onCopy,
@@ -646,6 +652,7 @@ function SingleMessageWithActions({
   appliedMessageIds: string[];
   autoAppliedMessageIds: Set<string>;
   canSaveAsNote: boolean;
+  canAppend: boolean;
   onAppend: (message: UIMessage) => void;
   onReplace: (message: UIMessage) => void;
   onCopy: (message: UIMessage) => void;
@@ -659,6 +666,7 @@ function SingleMessageWithActions({
         applied={appliedMessageIds.includes(message.id)}
         autoApplied={autoAppliedMessageIds.has(message.id)}
         canSaveAsNote={canSaveAsNote}
+        canAppend={canAppend}
         onAppend={onAppend}
         onReplace={onReplace}
         onCopy={onCopy}
@@ -704,6 +712,9 @@ function QuickActionSection({
   disabled: boolean;
   onAction: (actionId: Exclude<NoteAiActionId, "freeform">) => void;
 }) {
+  const btnClass =
+    "flex h-9 items-center gap-2 rounded-lg border border-border/70 bg-background px-2.5 text-left text-[11.5px] font-medium text-foreground/82 transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50";
+
   return (
     <div className="shrink-0 border-b border-border/65 px-2.5 py-2.5">
       <div className="grid grid-cols-2 gap-1.5">
@@ -711,7 +722,7 @@ function QuickActionSection({
           type="button"
           disabled={!note || disabled}
           onClick={() => onAction("summary")}
-          className="flex h-9 items-center gap-2 rounded-lg border border-border/70 bg-background px-2.5 text-left text-[11.5px] font-medium text-foreground/82 transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+          className={btnClass}
         >
           <Sparkles className="h-4 w-4 shrink-0 text-muted-foreground" />
           <span className="min-w-0 truncate">总结当前笔记</span>
@@ -720,7 +731,7 @@ function QuickActionSection({
           type="button"
           disabled={!note || disabled}
           onClick={() => onAction("translate")}
-          className="flex h-9 items-center gap-2 rounded-lg border border-border/70 bg-background px-2.5 text-left text-[11.5px] font-medium text-foreground/82 transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+          className={btnClass}
         >
           <Languages className="h-4 w-4 shrink-0 text-muted-foreground" />
           <span className="min-w-0 truncate">翻译</span>
@@ -729,7 +740,7 @@ function QuickActionSection({
           type="button"
           disabled={!note || disabled}
           onClick={() => onAction("generateTags")}
-          className="flex h-9 items-center gap-2 rounded-lg border border-border/70 bg-background px-2.5 text-left text-[11.5px] font-medium text-foreground/82 transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+          className={btnClass}
         >
           <Tag className="h-4 w-4 shrink-0 text-muted-foreground" />
           <span className="min-w-0 truncate">生成标签</span>
@@ -738,7 +749,7 @@ function QuickActionSection({
           type="button"
           disabled={!note || disabled}
           onClick={() => onAction("generateHtml")}
-          className="flex h-9 items-center gap-2 rounded-lg border border-border/70 bg-background px-2.5 text-left text-[11.5px] font-medium text-foreground/82 transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+          className={btnClass}
         >
           <FileCode2 className="h-4 w-4 shrink-0 text-muted-foreground" />
           <span className="min-w-0 truncate">生成HTML文档</span>
@@ -859,7 +870,7 @@ function TransformationManagerDialog({
               {transformations.map((transformation) => (
                 <li
                   key={transformation.id}
-                  className="group flex items-start gap-2 px-3 py-2 hover:bg-accent/50"
+                  className="group flex items-start gap-2 px-3 py-2 hover:bg-accent"
                 >
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
@@ -1016,6 +1027,7 @@ function NoteMessageActions({
   applied,
   autoApplied,
   canSaveAsNote,
+  canAppend,
   onAppend,
   onReplace,
   onCopy,
@@ -1025,6 +1037,7 @@ function NoteMessageActions({
   applied: boolean;
   autoApplied: boolean;
   canSaveAsNote: boolean;
+  canAppend: boolean;
   onAppend: (message: UIMessage) => void;
   onReplace: (message: UIMessage) => void;
   onCopy: (message: UIMessage) => void;
@@ -1061,9 +1074,11 @@ function NoteMessageActions({
       ) : null}
       {canApply ? (
         <>
-          <MiniAction label={applied ? "已追加" : "追加"} disabled={applied} onClick={() => onAppend(message)}>
-            <Clipboard className="h-3.5 w-3.5" />
-          </MiniAction>
+          {canAppend ? (
+            <MiniAction label={applied ? "已追加" : "追加"} disabled={applied} onClick={() => onAppend(message)}>
+              <Clipboard className="h-3.5 w-3.5" />
+            </MiniAction>
+          ) : null}
           <MiniAction label="替换" onClick={() => onReplace(message)}>
             <Replace className="h-3.5 w-3.5" />
           </MiniAction>

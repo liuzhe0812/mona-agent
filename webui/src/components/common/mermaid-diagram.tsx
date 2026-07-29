@@ -140,7 +140,7 @@ export function MermaidDiagram({ code }: MermaidDiagramProps) {
           onClick={() => { setExpanded(false); setScale(1) }}
         >
           <div
-            className="relative h-[90vh] w-[90vw] overflow-auto rounded-lg bg-background border border-border shadow-2xl p-6"
+            className="relative h-[90vh] w-[90vw] overflow-auto rounded-lg bg-background border border-border shadow-lg p-6"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="absolute top-3 right-3 z-10 flex items-center gap-1">

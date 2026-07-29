@@ -12,6 +12,7 @@ import StarterKit from "@tiptap/starter-kit";
 import { NodeSelection, TextSelection } from "@tiptap/pm/state";
 
 import { WikiLink } from "./WikiLinkExtension";
+import { NoteEmbed } from "./NoteEmbedExtension";
 import { MermaidCodeBlock } from "./MermaidCodeBlock";
 import { FindReplaceBar, setActiveFindApi, useFindBarHotkey } from "./FindReplaceBar";
 import {
@@ -21,6 +22,8 @@ import {
   Code2,
   Code,
   ClipboardPaste,
+  Columns3,
+  Combine,
   Copy,
   ExternalLink,
   FileCode2,
@@ -37,8 +40,10 @@ import {
   MoveRight,
   Quote,
   Redo2,
+  Rows3,
   Scissors,
   Search,
+  Split,
   Strikethrough,
   Table2,
   TextSelect,
@@ -100,6 +105,10 @@ export interface MarkdownEditorProps {
   enableSelectionAi?: boolean;
   /** Returns the current note title for selection AI context. */
   getNoteTitle?: () => string;
+  /** Resolve embed target content by title (`![[...]]`). Returns null if not found. */
+  resolveEmbedContent?: (title: string) => string | null;
+  /** Whether the embed target is a flowchart note. */
+  isEmbedFlowchart?: (title: string) => boolean;
 }
 
 // Custom Image extension that serializes `assets/xxx.png` from title/alt instead of data URL
@@ -152,6 +161,8 @@ export function MarkdownEditor({
   noteTitles,
   enableSelectionAi = false,
   getNoteTitle,
+  resolveEmbedContent,
+  isEmbedFlowchart,
 }: MarkdownEditorProps) {
   const settingContentRef = useRef(false);
   const lastMarkdownRef = useRef(content);
@@ -175,6 +186,10 @@ export function MarkdownEditor({
   const insertWikiLinkRef = useRef<(title: string) => void>(() => {});
   const onOpenNoteByTitleRef = useRef(onOpenNoteByTitle);
   onOpenNoteByTitleRef.current = onOpenNoteByTitle;
+  const resolveEmbedContentRef = useRef(resolveEmbedContent);
+  resolveEmbedContentRef.current = resolveEmbedContent;
+  const isEmbedFlowchartRef = useRef(isEmbedFlowchart);
+  isEmbedFlowchartRef.current = isEmbedFlowchart;
   const visualEditorRef = useRef<HTMLDivElement | null>(null);
   const [visualPopupPos, setVisualPopupPos] = useState<{ top: number; left: number } | null>(
     null,
@@ -554,6 +569,13 @@ export function MarkdownEditor({
       Markdown.configure({
         indentation: { style: "space", size: 2 },
       }),
+      // NoteEmbed 必须在 WikiLink 之前注册，因为 `![[...]]` 的 `[[` 会被
+      // WikiLink 的 tokenizer 捕获。NoteEmbed 的 start 检测 `![[` 先匹配。
+      NoteEmbed.configure({
+        resolveContent: (title: string) => resolveEmbedContentRef.current?.(title) ?? null,
+        isFlowchart: (title: string) => isEmbedFlowchartRef.current?.(title) ?? false,
+        onOpen: (title: string) => onOpenNoteByTitleRef.current?.(title),
+      }),
       WikiLink.configure({
         onOpenNote: (title: string) => onOpenNoteByTitleRef.current?.(title),
       }),
@@ -706,6 +728,22 @@ export function MarkdownEditor({
   // Keep editorRef in sync so wiki-link callbacks can access the editor
   // without being in its useCallback dependency array (avoids TDZ).
   editorRef.current = editor;
+
+  // 强制设置光标颜色：WebView2 对 caret-color 的 CSS 变量/currentColor 支持不稳定，
+  // 直接用 JS 操作 DOM 读取计算后的 color 值再赋给 caretColor，确保可见。
+  useEffect(() => {
+    if (!editor) return;
+    const el = editor.view.dom as HTMLElement;
+    const applyCaretColor = () => {
+      const computedColor = window.getComputedStyle(el).color;
+      el.style.caretColor = computedColor;
+    };
+    applyCaretColor();
+    // 主题切换时重新应用
+    const observer = new MutationObserver(applyCaretColor);
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+    return () => observer.disconnect();
+  }, [editor]);
 
   // Compute visual-mode wiki-link popup position relative to the editor wrapper.
   useEffect(() => {
@@ -897,14 +935,14 @@ export function MarkdownEditor({
             <div
               ref={visualEditorRef}
               className={cn(
-                "relative mx-auto w-full max-w-[700px] px-5 py-5",
+                "relative mx-auto flex h-full w-full flex-col px-6 py-5",
                 editorClassName,
               )}
             >
               {children}
               <EditorContent
                 editor={editor}
-                className="mt-4 text-[13.5px] leading-6 text-foreground [&_.ProseMirror]:min-h-[380px] [&_.ProseMirror]:outline-none [&_.ProseMirror]:caret-[--foreground] [&_.ProseMirror_blockquote]:border-l-2 [&_.ProseMirror_blockquote]:border-border [&_.ProseMirror_blockquote]:pl-3 [&_.ProseMirror_code]:rounded [&_.ProseMirror_code]:bg-muted [&_.ProseMirror_code]:px-1 [&_.ProseMirror_h1]:mb-2 [&_.ProseMirror_h1]:mt-5 [&_.ProseMirror_h1]:text-[22px] [&_.ProseMirror_h1]:font-bold [&_.ProseMirror_h2]:mb-2 [&_.ProseMirror_h2]:mt-5 [&_.ProseMirror_h2]:text-[18px] [&_.ProseMirror_h2]:font-semibold [&_.ProseMirror_h3]:mb-2 [&_.ProseMirror_h3]:mt-4 [&_.ProseMirror_h3]:text-[15px] [&_.ProseMirror_h3]:font-semibold [&_.ProseMirror_h4]:mb-1.5 [&_.ProseMirror_h4]:mt-3 [&_.ProseMirror_h4]:text-[14px] [&_.ProseMirror_h4]:font-semibold [&_.ProseMirror_img]:max-w-full [&_.ProseMirror_img]:h-auto [&_.ProseMirror_img]:rounded-lg [&_.ProseMirror_img]:my-2 [&_.ProseMirror_li]:my-0.5 [&_.ProseMirror_ol]:ml-5 [&_.ProseMirror_ol]:list-decimal [&_.ProseMirror_p]:my-1.5 [&_.ProseMirror_pre]:my-2.5 [&_.ProseMirror_pre]:overflow-x-auto [&_.ProseMirror_pre]:rounded-lg [&_.ProseMirror_pre]:border [&_.ProseMirror_pre]:border-border/70 [&_.ProseMirror_pre]:bg-muted/45 [&_.ProseMirror_pre]:p-2.5 [&_.ProseMirror_s]:line-through [&_.ProseMirror_s]:text-muted-foreground [&_.ProseMirror_table]:my-2.5 [&_.ProseMirror_table]:w-full [&_.ProseMirror_table]:border-collapse [&_.ProseMirror_td]:border [&_.ProseMirror_td]:border-border [&_.ProseMirror_td]:px-2 [&_.ProseMirror_td]:py-1.5 [&_.ProseMirror_th]:border [&_.ProseMirror_th]:border-border [&_.ProseMirror_th]:bg-muted/45 [&_.ProseMirror_th]:px-2 [&_.ProseMirror_th]:py-1.5 [&_.ProseMirror_ul]:ml-5 [&_.ProseMirror_ul]:list-disc"
+                className="mt-4 flex min-h-0 flex-1 flex-col text-[13.5px] leading-6 text-foreground [&_.ProseMirror]:min-h-[380px] [&_.ProseMirror]:flex-1 [&_.ProseMirror]:outline-none [&_.ProseMirror_blockquote]:border-l-2 [&_.ProseMirror_blockquote]:border-border [&_.ProseMirror_blockquote]:pl-3 [&_.ProseMirror_code]:rounded [&_.ProseMirror_code]:bg-muted [&_.ProseMirror_code]:px-1 [&_.ProseMirror_h1]:mb-2 [&_.ProseMirror_h1]:mt-5 [&_.ProseMirror_h1]:text-[22px] [&_.ProseMirror_h1]:font-bold [&_.ProseMirror_h2]:mb-2 [&_.ProseMirror_h2]:mt-5 [&_.ProseMirror_h2]:text-[18px] [&_.ProseMirror_h2]:font-semibold [&_.ProseMirror_h3]:mb-2 [&_.ProseMirror_h3]:mt-4 [&_.ProseMirror_h3]:text-[15px] [&_.ProseMirror_h3]:font-semibold [&_.ProseMirror_h4]:mb-1.5 [&_.ProseMirror_h4]:mt-3 [&_.ProseMirror_h4]:text-[14px] [&_.ProseMirror_h4]:font-semibold [&_.ProseMirror_img]:max-w-full [&_.ProseMirror_img]:h-auto [&_.ProseMirror_img]:rounded-lg [&_.ProseMirror_img]:my-2 [&_.ProseMirror_li]:my-0.5 [&_.ProseMirror_ol]:ml-5 [&_.ProseMirror_ol]:list-decimal [&_.ProseMirror_p]:my-1.5 [&_.ProseMirror_pre]:my-2.5 [&_.ProseMirror_pre]:overflow-x-auto [&_.ProseMirror_pre]:rounded-lg [&_.ProseMirror_pre]:border [&_.ProseMirror_pre]:border-border/70 [&_.ProseMirror_pre]:bg-muted/45 [&_.ProseMirror_pre]:p-2.5 [&_.ProseMirror_s]:line-through [&_.ProseMirror_s]:text-muted-foreground [&_.ProseMirror_table]:my-2.5 [&_.ProseMirror_table]:w-full [&_.ProseMirror_table]:border-collapse [&_.ProseMirror_td]:border [&_.ProseMirror_td]:border-border [&_.ProseMirror_td]:px-2 [&_.ProseMirror_td]:py-1.5 [&_.ProseMirror_th]:border [&_.ProseMirror_th]:border-border [&_.ProseMirror_th]:bg-muted/45 [&_.ProseMirror_th]:px-2 [&_.ProseMirror_th]:py-1.5 [&_.ProseMirror_ul]:ml-5 [&_.ProseMirror_ul]:list-disc"
               />
               {wikiLinkState?.open && wikiLinkSuggestions.length > 0 && visualPopupPos && (
                 <div
@@ -923,7 +961,7 @@ export function MarkdownEditor({
                         "flex w-full items-center px-2.5 py-1 text-left text-[12px]",
                         idx === wikiLinkState.selectedIndex
                           ? "bg-accent text-foreground"
-                          : "text-foreground/85 hover:bg-accent/60",
+                          : "text-foreground/85 hover:bg-accent",
                       )}
                     >
                       <span className="truncate">{title}</span>
@@ -943,9 +981,9 @@ export function MarkdownEditor({
         </EditorContextMenu>
       ) : (
         <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin">
-          <div className={cn("mx-auto flex h-full w-full max-w-[700px] flex-col px-5 py-5", editorClassName)}>
+          <div className={cn("mx-auto flex h-full w-full flex-col px-6 py-5", editorClassName)}>
             {children}
-            <div className="relative mt-4 flex-1">
+            <div className="relative mt-4 flex min-h-0 flex-1 flex-col">
               <textarea
                 ref={textareaRef}
                 value={content}
@@ -956,7 +994,7 @@ export function MarkdownEditor({
                 }}
                 onKeyDown={handleTextareaKeyDown}
                 onBlur={() => setTimeout(() => setWikiLinkState(null), 200)}
-                className="min-h-[380px] w-full flex-1 resize-none rounded-lg border border-border/70 bg-background px-3 py-2.5 font-mono text-[12.5px] leading-6 text-foreground outline-none scrollbar-thin focus:border-[#6aa7ff]/65"
+                className="block h-full w-full flex-1 resize-none rounded-lg px-3 py-2.5 font-mono text-[12.5px] leading-6 text-foreground outline-none scrollbar-thin focus:bg-muted/30"
                 spellCheck={false}
               />
               {wikiLinkState?.open && wikiLinkSuggestions.length > 0 && (
@@ -973,7 +1011,7 @@ export function MarkdownEditor({
                         "flex w-full items-center px-2.5 py-1 text-left text-[12px]",
                         idx === wikiLinkState.selectedIndex
                           ? "bg-accent text-foreground"
-                          : "text-foreground/85 hover:bg-accent/60",
+                          : "text-foreground/85 hover:bg-accent",
                       )}
                     >
                       <span className="truncate">{title}</span>
@@ -1004,6 +1042,10 @@ function EditorContextMenu({ editor, children, onMoveSelectionToNote }: { editor
   const [isImageSelected, setIsImageSelected] = useState(false);
   const [imageNodePos, setImageNodePos] = useState<number | null>(null);
   const [imageFileName, setImageFileName] = useState<string | null>(null);
+  // 表格状态：光标是否在表格内 / 是否可合并 / 是否可拆分
+  const [isInTable, setIsInTable] = useState(false);
+  const [canMergeCells, setCanMergeCells] = useState(false);
+  const [canSplitCell, setCanSplitCell] = useState(false);
 
   const updateSelection = () => {
     if (!editor) return;
@@ -1037,6 +1079,16 @@ function EditorContextMenu({ editor, children, onMoveSelectionToNote }: { editor
     } else {
       setImageNodePos(null);
       setImageFileName(null);
+    }
+    // 表格状态检测：光标是否在表格内、是否可合并/拆分单元格
+    const inTable = editor.isActive("table");
+    setIsInTable(inTable);
+    if (inTable) {
+      try { setCanMergeCells(editor.can().mergeCells()); } catch { setCanMergeCells(false); }
+      try { setCanSplitCell(editor.can().splitCell()); } catch { setCanSplitCell(false); }
+    } else {
+      setCanMergeCells(false);
+      setCanSplitCell(false);
     }
   };
 
@@ -1351,6 +1403,76 @@ function EditorContextMenu({ editor, children, onMoveSelectionToNote }: { editor
             </ContextMenuItem>
           </ContextMenuSubContent>
         </ContextMenuSub>
+
+        {/* 表格操作 submenu：仅在光标位于表格内时显示 */}
+        {isInTable ? (
+          <ContextMenuSub>
+            <ContextMenuSubTrigger className="text-[13px]">
+              <Table2 className="mr-2 h-3.5 w-3.5" />
+              表格操作
+            </ContextMenuSubTrigger>
+            <ContextMenuSubContent className="w-44">
+              <ContextMenuItem onSelect={() => editor?.chain().focus().addRowBefore().run()}>
+                <Rows3 className="mr-2 h-3.5 w-3.5" />
+                在上方插入行
+              </ContextMenuItem>
+              <ContextMenuItem onSelect={() => editor?.chain().focus().addRowAfter().run()}>
+                <Rows3 className="mr-2 h-3.5 w-3.5" />
+                在下方插入行
+              </ContextMenuItem>
+              <ContextMenuSeparator />
+              <ContextMenuItem onSelect={() => editor?.chain().focus().addColumnBefore().run()}>
+                <Columns3 className="mr-2 h-3.5 w-3.5" />
+                在左侧插入列
+              </ContextMenuItem>
+              <ContextMenuItem onSelect={() => editor?.chain().focus().addColumnAfter().run()}>
+                <Columns3 className="mr-2 h-3.5 w-3.5" />
+                在右侧插入列
+              </ContextMenuItem>
+              <ContextMenuSeparator />
+              <ContextMenuItem onSelect={() => editor?.chain().focus().deleteRow().run()}>
+                <Trash2 className="mr-2 h-3.5 w-3.5" />
+                删除行
+              </ContextMenuItem>
+              <ContextMenuItem onSelect={() => editor?.chain().focus().deleteColumn().run()}>
+                <Trash2 className="mr-2 h-3.5 w-3.5" />
+                删除列
+              </ContextMenuItem>
+              <ContextMenuSeparator />
+              <ContextMenuItem
+                onSelect={() => editor?.chain().focus().mergeCells().run()}
+                disabled={!canMergeCells}
+              >
+                <Combine className="mr-2 h-3.5 w-3.5" />
+                合并单元格
+              </ContextMenuItem>
+              <ContextMenuItem
+                onSelect={() => editor?.chain().focus().splitCell().run()}
+                disabled={!canSplitCell}
+              >
+                <Split className="mr-2 h-3.5 w-3.5" />
+                拆分单元格
+              </ContextMenuItem>
+              <ContextMenuSeparator />
+              <ContextMenuItem onSelect={() => editor?.chain().focus().toggleHeaderRow().run()}>
+                <Rows3 className="mr-2 h-3.5 w-3.5" />
+                切换表头行
+              </ContextMenuItem>
+              <ContextMenuItem onSelect={() => editor?.chain().focus().toggleHeaderColumn().run()}>
+                <Columns3 className="mr-2 h-3.5 w-3.5" />
+                切换表头列
+              </ContextMenuItem>
+              <ContextMenuSeparator />
+              <ContextMenuItem
+                onSelect={() => editor?.chain().focus().deleteTable().run()}
+                className="text-destructive focus:text-destructive"
+              >
+                <Trash2 className="mr-2 h-3.5 w-3.5" />
+                删除表格
+              </ContextMenuItem>
+            </ContextMenuSubContent>
+          </ContextMenuSub>
+        ) : null}
 
         <ContextMenuSeparator />
         {hasSelection ? (

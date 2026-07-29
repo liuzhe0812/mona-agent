@@ -108,7 +108,7 @@ export function SessionSearchDialog({
         showCloseButton={false}
         className={cn(
           "max-h-[min(34rem,calc(100vh-2rem))] w-[calc(100vw-2rem)] max-w-[42rem] gap-0 overflow-hidden p-0",
-          "rounded-2xl border border-border/70 bg-popover/95 text-popover-foreground shadow-2xl backdrop-blur-xl",
+          "rounded-2xl border border-border/70 bg-popover/95 text-popover-foreground shadow-lg backdrop-blur-xl",
           "sm:rounded-2xl",
         )}
       >
@@ -172,7 +172,7 @@ export function SessionSearchDialog({
                           "flex min-h-12 w-full min-w-0 rounded-xl px-3 py-2.5 text-left transition-colors",
                           highlighted
                             ? "bg-accent text-accent-foreground"
-                            : "text-popover-foreground hover:bg-accent/75 hover:text-accent-foreground",
+                            : "text-popover-foreground hover:bg-accent hover:text-accent-foreground",
                         )}
                       >
                         <span className="min-w-0 flex-1">

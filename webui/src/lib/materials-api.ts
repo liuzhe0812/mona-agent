@@ -1,15 +1,15 @@
 /** Materials API client — talks to Mona gateway HTTP server.
  *
  * 资料库 HTTP 接口：目录、读取、删除、后台提取状态、Wiki 读写、搜索。
- * 路由注册在 gateway aiohttp app（端口 17173），按项目端口架构规则使用
- * `getGatewayHttpBase()`。
+ * 路由注册在 services 进程（端口 17174），按项目端口架构规则使用
+ * `getServicesHttpBase()`。
  */
 
-import { getGatewayHttpBase } from "./api";
+import { getServicesHttpBase } from "./api";
 import { httpFetch } from "./tauri";
 
 async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
-  const base = await getGatewayHttpBase();
+  const base = await getServicesHttpBase();
   const resp = await httpFetch(`${base}${url}`, {
     headers: { "Content-Type": "application/json" },
     ...init,

@@ -159,7 +159,7 @@ export function ContactPicker({
                 "flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px]",
                 idx === activeIndex
                   ? "bg-accent text-accent-foreground"
-                  : "hover:bg-accent/60",
+                  : "hover:bg-accent",
               )}
             >
               <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-blue-500/10 text-[10px] font-medium text-blue-600">

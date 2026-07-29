@@ -36,6 +36,9 @@ _log_handler_id = logger.add(
     level="INFO",
     colorize=None,
     filter=lambda record: record["extra"].setdefault("channel", "-") or True,
+    # P0-5: 关闭异常诊断，避免 logger.exception 把请求局部变量（含解密后的 IMAP/SMTP 凭据）写入日志
+    backtrace=False,
+    diagnose=False,
 )
 
 from prompt_toolkit import PromptSession, print_formatted_text
@@ -706,6 +709,9 @@ def gateway(
             level="DEBUG",
             colorize=None,
             filter=lambda record: record["extra"].setdefault("channel", "-") or True,
+            # P0-5: verbose 模式同样关闭异常诊断，避免凭据泄露
+            backtrace=False,
+            diagnose=False,
         )
     cfg = _load_runtime_config(config, workspace)
     _run_gateway(cfg, port=port)
@@ -756,31 +762,13 @@ def _run_gateway(
     cron_store_path = config.workspace_path / "cron" / "jobs.json"
     cron = CronService(cron_store_path)
 
-    # Create schedule service (personal reminders + AI tasks) sharing the cron service
-    from mona.schedule import ScheduleService
+    # ScheduleService now lives in the services process. The gateway's agent
+    # accesses it via an HTTP client (ScheduleServiceClient) so the tool works
+    # identically whether services is local or remote.
+    from mona.schedule import ScheduleServiceClient, TodoServiceClient
 
-    schedule_store_path = config.workspace_path / "schedule" / "items.json"
-
-    async def _on_schedule_due(item):
-        """Forward personal reminder fires to the message bus."""
-        from mona.bus.events import OutboundMessage
-
-        await _deliver_to_channel(
-            OutboundMessage(
-                channel="api",
-                chat_id=item.source_chat_id or "direct",
-                content=f"⏰ {item.title}"
-                + (f"\n\n{item.description}" if item.description else ""),
-                metadata={"_schedule_reminder": True, "schedule_item_id": item.id},
-            ),
-            record=True,
-        )
-
-    schedule_service = ScheduleService(
-        schedule_store_path,
-        cron_service=cron,
-        notify_callback=_on_schedule_due,
-    )
+    schedule_client = ScheduleServiceClient.from_port(config.services.port)
+    todo_client = TodoServiceClient.from_port(config.services.port)
 
     # Create agent with cron service
     agent = AgentLoop.from_config(
@@ -789,7 +777,8 @@ def _run_gateway(
         model=provider_snapshot.model,
         context_window_tokens=provider_snapshot.context_window_tokens,
         cron_service=cron,
-        schedule_service=schedule_service,
+        schedule_service=schedule_client,
+        todo_service=todo_client,
         session_manager=session_manager,
         image_generation_provider_configs=image_gen_provider_configs(config),
         video_generation_provider_configs=video_gen_provider_configs(config),
@@ -1051,15 +1040,12 @@ def _run_gateway(
             agent,
             model_name=_model_display(config)[0],
             request_timeout=120.0,
-            schedule_service=schedule_service,
         )
 
         async def on_startup(_app):
             await agent._connect_mcp()
-            await schedule_service.start()
 
         async def on_cleanup(_app):
-            schedule_service.stop()
             await agent.close_mcp()
 
         app.on_startup.append(on_startup)
@@ -1082,6 +1068,13 @@ def _run_gateway(
     agent.dream.max_batch_size = dream_cfg.max_batch_size
     agent.dream.max_iterations = dream_cfg.max_iterations
     agent.dream.annotate_line_ages = dream_cfg.annotate_line_ages
+    # Skill lifecycle: stats/cap/manual ops always on; automatic archival
+    # is opt-in via skillPruneEnabled (default False). See
+    # docs/design/skill-lifecycle-design.md.
+    agent.dream.skill_prune_enabled = dream_cfg.skill_prune_enabled
+    agent.dream.archive_after_days = dream_cfg.archive_after_days
+    agent.dream.max_active_user_skills = dream_cfg.max_active_user_skills
+    agent.dream.disabled_skills = list(config.agents.defaults.disabled_skills or [])
     from mona.cron.types import CronJob, CronPayload
     cron.register_system_job(CronJob(
         id="dream",
@@ -1152,6 +1145,166 @@ def _run_gateway(
                 logger.info("Shutdown: flushed {} session(s) to disk", flushed)
 
     asyncio.run(run())
+
+
+# ============================================================================
+# Services Command (business services split from the Agent runtime)
+# ============================================================================
+
+
+@app.command()
+def services(
+    port: int | None = typer.Option(None, "--port", "-p", help="Services port"),
+    workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+    config: str | None = typer.Option(None, "--config", "-c", help="Path to config file"),
+):
+    """Start the mona services process (email/contacts/video/materials/profile/schedule)."""
+    if verbose:
+        logger.remove(_log_handler_id)
+        logger.add(
+            sys.stderr,
+            format=(
+                "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
+                "<level>{level: <5}</level> | "
+                "<cyan>{extra[channel]}</cyan> | "
+                "<level>{message}</level>"
+            ),
+            level="DEBUG",
+            colorize=None,
+            filter=lambda record: record["extra"].setdefault("channel", "-") or True,
+            backtrace=False,
+            diagnose=False,
+        )
+    cfg = _load_runtime_config(config, workspace)
+    _run_services(cfg, port=port)
+
+
+def _run_services(config: Config, *, port: int | None = None) -> None:
+    """Run the services process: business HTTP routes without an AgentLoop.
+
+    Owns the ScheduleService and a dedicated CronService (separate store from
+    the gateway's cron/jobs.json so mirrored AI-task jobs never double-fire).
+    AI tasks execute by calling the gateway's /v1/chat/completions as a
+    regular API client — no private protocol between the two processes.
+    """
+    import httpx
+
+    from mona.cron.service import CronService
+    from mona.cron.types import CronJob
+    from mona.email_intel.schedule_extract import init_pending_store
+    from mona.schedule import ScheduleService, TodoService
+    from mona.services import create_services_app
+
+    port = port if port is not None else config.services.port
+    host = config.services.host or "127.0.0.1"
+    console.print(f"{__logo__} Starting mona services version {__version__} on port {port}...")
+    run_startup_migrations()
+
+    schedule_dir = config.workspace_path / "schedule"
+    cron = CronService(schedule_dir / "cron_jobs.json")
+
+    # 初始化邮件日程提取的 pending 持久化（避免 services 重启丢失数据）
+    init_pending_store(schedule_dir / "pending_confirmations.json")
+
+    # 一次性迁移：旧架构下 schedule AI 任务的镜像 job 持久化在 gateway 的
+    # cron/jobs.json 中。items.json 是唯一事实源（services 启动时会重新镜像），
+    # 直接从旧 store 删除这些镜像，避免 gateway 与 services 双触发。
+    legacy_cron = CronService(config.workspace_path / "cron" / "jobs.json")
+    removed = 0
+    for job in legacy_cron.list_jobs(include_disabled=True):
+        if job.name.startswith("schedule:"):
+            legacy_cron.remove_job(job.id)
+            removed += 1
+    if removed:
+        logger.info("Migrated {} schedule mirror job(s) out of gateway cron store", removed)
+
+    schedule_service = ScheduleService(
+        schedule_dir / "items.json",
+        cron_service=cron,
+        # 个人提醒的通知经 _pending_notifications 队列由 Rust 轮询弹出，
+        # 本进程没有 message bus，不再投递聊天流。
+        notify_callback=None,
+    )
+
+    todo_service = TodoService(schedule_dir / "todos.json")
+
+    gateway_base = f"http://{config.gateway.host or '127.0.0.1'}:{config.gateway.port}"
+
+    async def on_cron_job(job: CronJob) -> str | None:
+        """Execute a schedule AI task through the gateway as a regular API client."""
+        reminder_note = (
+            "The scheduled time has arrived. Deliver this reminder to the user now, "
+            "as a brief and natural message in their language. Speak directly to them — "
+            "do not narrate progress, summarize, include user IDs, or add status reports "
+            "like 'Done' or 'Reminded'.\n\n"
+            f"Reminder: {job.payload.message}"
+        )
+        content = ""
+        try:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(300.0, connect=5.0)
+            ) as client:
+                resp = await client.post(
+                    f"{gateway_base}/v1/chat/completions",
+                    json={
+                        "messages": [{"role": "user", "content": reminder_note}],
+                        "session_id": job.payload.session_key or f"schedule:{job.id}",
+                        "stream": False,
+                    },
+                )
+            if resp.status_code == 200:
+                choices = (resp.json() or {}).get("choices") or []
+                if choices:
+                    content = (choices[0].get("message") or {}).get("content") or ""
+            else:
+                logger.warning(
+                    "Schedule AI task '{}' gateway call failed: HTTP {}",
+                    job.name,
+                    resp.status_code,
+                )
+        except Exception:
+            logger.exception("Schedule AI task '{}' gateway call failed", job.name)
+
+        if job.payload.deliver and content:
+            item_id = (job.payload.channel_meta or {}).get("schedule_item_id", "")
+            schedule_service._pending_notifications.append(
+                {"title": "日程任务", "body": content[:500], "item_id": item_id}
+            )
+        return content or None
+
+    cron.on_job = on_cron_job
+
+    async def run():
+        from aiohttp import web
+
+        await cron.start()
+        await schedule_service.start()
+        await todo_service.start()
+
+        app = create_services_app(schedule_service, todo_service)
+
+        async def on_cleanup(_app):
+            schedule_service.stop()
+            todo_service.stop()
+            cron.stop()
+
+        app.on_cleanup.append(on_cleanup)
+
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, host, port)
+        await site.start()
+        console.print(f"[green]✓[/green] services endpoint: http://{host}:{port}/health")
+        try:
+            await app["shutdown_event"].wait()
+        finally:
+            await runner.cleanup()
+
+    try:
+        asyncio.run(run())
+    except KeyboardInterrupt:
+        console.print("\nShutting down services...")
 
 
 # ============================================================================
@@ -1589,6 +1742,196 @@ def status():
                     console.print(f"{spec.label}: [green]✓[/green]")
                 else:
                     console.print(f"{spec.label}: [dim]not set[/dim]")
+
+
+# ============================================================================
+# Skill — lifecycle management (stats, pin, archive, restore, prune)
+# ============================================================================
+
+
+skill_app = typer.Typer(help="Manage skills: list, pin, archive, restore, prune.")
+app.add_typer(skill_app, name="skill")
+
+
+def _fmt_iso_short(value: str | None) -> str:
+    if not value:
+        return "—"
+    try:
+        from datetime import datetime
+        dt = datetime.fromisoformat(value)
+        if dt.tzinfo is None:
+            from datetime import timezone
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone().strftime("%Y-%m-%d %H:%M")
+    except (TypeError, ValueError):
+        return value
+
+
+@skill_app.command("list")
+def skill_list(
+    archived: bool = typer.Option(
+        False, "--archived", help="Show archived skills instead of active ones."
+    ),
+    all_: bool = typer.Option(False, "--all", help="Show both active and archived skills."),
+):
+    """List skills with provenance and last access time."""
+    from mona.agent import skill_usage
+
+    rows = skill_usage.usage_report()
+    if not all_ and not archived:
+        rows = [r for r in rows if r["location"] == "active"]
+    elif archived and not all_:
+        rows = [r for r in rows if r["location"] == "archived"]
+
+    if not rows:
+        console.print("[dim]No skills found.[/dim]")
+        return
+
+    console.print(f"{'Name':<28} {'Prov':<8} {'State':<10} {'Access':<8} {'Last':<17} {'Pinned'}")
+    console.print("-" * 80)
+    for r in rows:
+        console.print(
+            f"{r['name'][:28]:<28} "
+            f"{r['provenance']:<8} "
+            f"{r['location']:<10} "
+            f"{r.get('access_count', 0):<8} "
+            f"{_fmt_iso_short(r.get('last_accessed_at')):<17} "
+            f"{'📌' if r.get('pinned') else ''}"
+        )
+
+
+@skill_app.command("usage")
+def skill_usage_cmd(
+    sort: str = typer.Option("recent", "--sort", help="Sort by: recent | access | name."),
+):
+    """Show skill usage statistics."""
+    from mona.agent import skill_usage
+
+    rows = skill_usage.usage_report()
+    if not rows:
+        console.print("[dim]No skills found.[/dim]")
+        return
+
+    if sort == "access":
+        rows.sort(key=lambda r: -(r.get("access_count") or 0))
+    elif sort == "name":
+        rows.sort(key=lambda r: r["name"])
+    else:  # recent
+        rows.sort(key=lambda r: r.get("last_accessed_at") or "", reverse=True)
+
+    console.print(f"{'Name':<28} {'Prov':<8} {'Access':<8} {'Last':<17} {'Created':<17}")
+    console.print("-" * 80)
+    for r in rows:
+        console.print(
+            f"{r['name'][:28]:<28} "
+            f"{r['provenance']:<8} "
+            f"{r.get('access_count', 0):<8} "
+            f"{_fmt_iso_short(r.get('last_accessed_at')):<17} "
+            f"{_fmt_iso_short(r.get('created_at')):<17}"
+        )
+
+
+@skill_app.command("pin")
+def skill_pin(name: str = typer.Argument(..., help="Skill name.")):
+    """Pin a skill so it is never auto-archived."""
+    from mona.agent import skill_usage
+    skill_usage.set_pinned(name, True)
+    console.print(f"[green]✓[/green] Pinned '{name}'.")
+
+
+@skill_app.command("unpin")
+def skill_unpin(name: str = typer.Argument(..., help="Skill name.")):
+    """Remove the pin from a skill."""
+    from mona.agent import skill_usage
+    skill_usage.set_pinned(name, False)
+    console.print(f"[green]✓[/green] Unpinned '{name}'.")
+
+
+@skill_app.command("archive")
+def skill_archive(name: str = typer.Argument(..., help="Skill name to archive.")):
+    """Manually archive a skill (moves to ~/.mona/skills/.archive/)."""
+    from mona.agent import skill_usage
+    ok, msg = skill_usage.archive_skill(name, automatic=False)
+    if ok:
+        console.print(f"[green]✓[/green] {msg}")
+    else:
+        console.print(f"[red]✗[/red] {msg}")
+        raise typer.Exit(code=1)
+
+
+@skill_app.command("restore")
+def skill_restore(name: str = typer.Argument(..., help="Archived skill name to restore.")):
+    """Restore an archived skill back to active."""
+    from mona.agent import skill_usage
+    ok, msg = skill_usage.restore_skill(name)
+    if ok:
+        console.print(f"[green]✓[/green] {msg}")
+    else:
+        console.print(f"[red]✗[/red] {msg}")
+        raise typer.Exit(code=1)
+
+
+@skill_app.command("prune")
+def skill_prune(
+    apply: bool = typer.Option(
+        False, "--apply",
+        help="Actually archive. Without this flag, only prints candidates.",
+    ),
+    days: int | None = typer.Option(
+        None, "--days", help="Override archive_after_days for this run."
+    ),
+):
+    """Archive (or dry-run) skills inactive for archive_after_days.
+
+    Default is dry-run. The actual archival only happens with --apply.
+    Automatic archival is gated by dream.skillPruneEnabled config — this
+    command is a manual escape hatch that respects the same rules.
+    """
+    from mona.agent import skill_usage
+    from mona.config.loader import load_config
+
+    try:
+        config = load_config()
+    except Exception:
+        config = None
+
+    if days is None:
+        if config is not None:
+            days = config.agents.defaults.dream.archive_after_days
+        else:
+            days = 90
+
+    disabled: set[str] = set()
+    if config is not None:
+        disabled = set(config.agents.defaults.disabled_skills or [])
+
+    try:
+        candidates = skill_usage.plan_automatic_archives(
+            archive_after_days=days,
+            disabled_skills=disabled,
+        )
+    except ValueError as e:
+        console.print(f"[red]✗[/red] {e}")
+        raise typer.Exit(code=1)
+
+    if not candidates:
+        console.print(f"[dim]No skills inactive for {days} days.[/dim]")
+        return
+
+    label = "Archiving" if apply else "Would archive"
+    for name in candidates:
+        if apply:
+            ok, msg = skill_usage.archive_skill(name, automatic=True)
+            tag = "[green]✓[/green]" if ok else "[red]✗[/red]"
+            console.print(f"{tag} {name}: {msg}")
+        else:
+            console.print(f"[yellow]·[/yellow] {label} {name}")
+
+    if not apply:
+        console.print(
+            f"\n[dim]Dry-run only. {len(candidates)} candidate(s). "
+            f"Re-run with --apply to archive.[/dim]"
+        )
 
 
 # ============================================================================

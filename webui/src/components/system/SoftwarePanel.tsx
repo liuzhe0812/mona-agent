@@ -6,6 +6,27 @@ import type { SystemAgentHandoffTask } from "./systemAgentHandoff";
 import { useMaintenanceHistory, useSoftwareManagement, type SoftwareFailure } from "./useSystemData";
 import { WindowsAppsPanel } from "./WindowsAppsPanel";
 
+const DISMISSED_FAILURES_KEY = "system.softwareDismissedFailures";
+
+function loadDismissedFailures(): Set<string> {
+  try {
+    const raw = localStorage.getItem(DISMISSED_FAILURES_KEY);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? new Set(parsed) : new Set();
+  } catch {
+    return new Set();
+  }
+}
+
+function saveDismissedFailures(set: Set<string>) {
+  try {
+    localStorage.setItem(DISMISSED_FAILURES_KEY, JSON.stringify([...set]));
+  } catch {
+    // 配额不足或序列化失败时静默跳过，不影响功能
+  }
+}
+
 type SoftwareSection = "updates" | "installed" | "windows-apps" | "uninstall-history";
 
 const softwareSections: { id: SoftwareSection; label: string }[] = [
@@ -48,6 +69,10 @@ function failureKey(failure: SoftwareFailure): string {
   return `${failure.packageId}:${failure.action}:${failure.ts}`;
 }
 
+function dismissKey(failure: SoftwareFailure): string {
+  return `${failure.packageId}:${failure.action}`;
+}
+
 interface SoftwarePanelProps {
   onHandoff: (task: SystemAgentHandoffTask) => void;
 }
@@ -60,9 +85,17 @@ export function SoftwarePanel({ onHandoff }: SoftwarePanelProps) {
   const [selectedInstalledId, setSelectedInstalledId] = useState("");
   const [installedQuery, setInstalledQuery] = useState("");
   const [confirmingUninstall, setConfirmingUninstall] = useState(false);
-  const [handedOffFailures, setHandedOffFailures] = useState<Set<string>>(new Set());
+  const [handedOffFailures, setHandedOffFailures] = useState<Set<string>>(() => loadDismissedFailures());
   const [uninstallHandedOff, setUninstallHandedOff] = useState(false);
   const [uninstallDismissed, setUninstallDismissed] = useState(false);
+
+  const dismissFailure = (failure: SoftwareFailure) => {
+    setHandedOffFailures((current) => {
+      const next = new Set(current).add(dismissKey(failure));
+      saveDismissedFailures(next);
+      return next;
+    });
+  };
 
   const updates = data?.updates ?? [];
   const installed = data?.installed ?? [];
@@ -75,7 +108,7 @@ export function SoftwarePanel({ onHandoff }: SoftwarePanelProps) {
   }, [installed, installedQuery]);
   const uninstallEvents = (maintenance.data?.events ?? []).filter((event) => event.category === "卸载");
   const busy = workingIds.size > 0;
-  const visibleFailures = (data?.failures ?? []).filter((failure) => !handedOffFailures.has(failureKey(failure)));
+  const visibleFailures = (data?.failures ?? []).filter((failure) => !handedOffFailures.has(dismissKey(failure)));
   const handedOffFailureCount = (data?.failures.length ?? 0) - visibleFailures.length;
 
   const toggle = (id: string) => setSelected((current) => {
@@ -174,7 +207,7 @@ export function SoftwarePanel({ onHandoff }: SoftwarePanelProps) {
                       detail={`${failure.message || "安装器未返回详细原因"} · ${formatRecordTime(failure.ts)}`}
                       onRetry={update ? () => void upgrade([update]) : undefined}
                       onHandoff={() => {
-                        setHandedOffFailures((current) => new Set(current).add(failureKey(failure)));
+                        dismissFailure(failure);
                         onHandoff({
                           id: crypto.randomUUID(),
                           title: `${failure.action === "uninstall" ? "卸载" : "更新"} ${failure.name}`,
@@ -184,7 +217,7 @@ export function SoftwarePanel({ onHandoff }: SoftwarePanelProps) {
                           error: failure.message || "安装器未返回详细原因",
                         });
                       }}
-                      onDismiss={() => setHandedOffFailures((current) => new Set(current).add(failureKey(failure)))}
+                      onDismiss={() => dismissFailure(failure)}
                     />
                   );
                 })}

@@ -6,9 +6,12 @@ import {
   Clipboard,
   Copy,
   FilePlus2,
+  FileText,
+  FileType,
   FolderInput,
   FolderOpen,
   GitMerge,
+  Network,
   Pencil,
   Plus,
   PlusSquare,
@@ -16,6 +19,7 @@ import {
   Star,
   Tags,
   Trash2,
+  Workflow,
   X,
 } from "lucide-react";
 
@@ -85,6 +89,9 @@ interface NoteListProps {
   onSetContextLevel?: (note: OperationNote, level: NoteContextLevel) => void;
   onToggleFavorite?: (note: OperationNote) => void;
   onCreateNote?: (sourceKind: NoteSourceKind) => void;
+  onConvertToMindMap?: (note: OperationNote) => void;
+  onExportDocx?: (note: OperationNote) => void;
+  onConvertToFlowchart?: (note: OperationNote) => void;
   notebooks?: Notebook[];
   allNotes?: OperationNote[];
 }
@@ -164,6 +171,9 @@ export function NoteList({
   onSetContextLevel,
   onToggleFavorite,
   onCreateNote,
+  onConvertToMindMap,
+  onExportDocx,
+  onConvertToFlowchart,
   notebooks = [],
   allNotes = [],
 }: NoteListProps) {
@@ -273,6 +283,9 @@ export function NoteList({
                   allNotes={allNotes}
                   onSetContextLevel={onSetContextLevel}
                   onToggleFavorite={onToggleFavorite}
+                  onConvertToMindMap={onConvertToMindMap}
+                  onExportDocx={onExportDocx}
+                  onConvertToFlowchart={onConvertToFlowchart}
                 />
               ))}
             </div>
@@ -423,6 +436,9 @@ export function NoteRow({
   allNotes = [],
   onSetContextLevel,
   onToggleFavorite,
+  onConvertToMindMap,
+  onExportDocx,
+  onConvertToFlowchart,
 }: {
   note: OperationNote;
   active: boolean;
@@ -442,6 +458,9 @@ export function NoteRow({
   allNotes?: OperationNote[];
   onSetContextLevel?: (note: OperationNote, level: NoteContextLevel) => void;
   onToggleFavorite?: (note: OperationNote) => void;
+  onConvertToMindMap?: (note: OperationNote) => void;
+  onExportDocx?: (note: OperationNote) => void;
+  onConvertToFlowchart?: (note: OperationNote) => void;
 }) {
   const currentLevel: NoteContextLevel = note.contextLevel ?? "full";
 
@@ -465,9 +484,16 @@ export function NoteRow({
               ? "bg-primary/15 text-foreground"
               : selected
                 ? "bg-primary/8 text-foreground"
-                : "text-foreground/85 hover:bg-accent/60",
+                : "text-foreground/85 hover:bg-accent",
           )}
         >
+          {note.type === "mindmap" ? (
+            <Network className="shrink-0 h-3 w-3 text-muted-foreground" />
+          ) : note.type === "flowchart" ? (
+            <Workflow className="shrink-0 h-3 w-3 text-muted-foreground" />
+          ) : (
+            <FileText className="shrink-0 h-3 w-3 text-muted-foreground" />
+          )}
           <span className="min-w-0 flex-1 truncate text-[12.5px] leading-none">
             {note.title || "未命名笔记"}
           </span>
@@ -525,7 +551,7 @@ export function NoteRow({
               ))}
           </ContextMenuSubContent>
         </ContextMenuSub>
-        {onMergeNote ? (
+        {onMergeNote && note.type !== "mindmap" && note.type !== "flowchart" ? (
           <ContextMenuSub>
             <ContextMenuSubTrigger
               disabled={allNotes.filter((n) => n.id !== note.id).length === 0}
@@ -562,8 +588,26 @@ export function NoteRow({
         <ContextMenuSeparator />
         <ContextMenuItem onSelect={() => onCopyMarkdown?.(note)}>
           <Copy className="mr-2 h-3.5 w-3.5" />
-          复制 Markdown
+          {note.type === "mindmap" || note.type === "flowchart" ? "复制大纲" : "复制 Markdown"}
         </ContextMenuItem>
+        {onExportDocx && note.type !== "mindmap" && note.type !== "flowchart" ? (
+          <ContextMenuItem onSelect={() => onExportDocx(note)}>
+            <FileType className="mr-2 h-3.5 w-3.5" />
+            导出为 Word
+          </ContextMenuItem>
+        ) : null}
+        {onConvertToMindMap && note.type !== "mindmap" && note.type !== "flowchart" ? (
+          <ContextMenuItem onSelect={() => onConvertToMindMap(note)}>
+            <Network className="mr-2 h-3.5 w-3.5" />
+            转为思维导图
+          </ContextMenuItem>
+        ) : null}
+        {onConvertToFlowchart && note.type !== "mindmap" && note.type !== "flowchart" ? (
+          <ContextMenuItem onSelect={() => onConvertToFlowchart(note)}>
+            <Workflow className="mr-2 h-3.5 w-3.5" />
+            用 AI 生成流程图
+          </ContextMenuItem>
+        ) : null}
         {onCopyPath ? (
           <ContextMenuItem onSelect={() => onCopyPath(note)}>
             <Clipboard className="mr-2 h-3.5 w-3.5" />

@@ -154,7 +154,7 @@ fn check_cpu_unlock() -> (bool, String) {
     }
 }
 
-fn catalog_items() -> Vec<PerformanceItem> {
+pub fn catalog_items() -> Vec<PerformanceItem> {
     let (svchost_applied, svchost_detail) = check_svchost_split();
     let (hpet_applied, hpet_detail) = check_hpet();
     let (cpu_applied, cpu_detail) = check_cpu_unlock();
@@ -244,6 +244,15 @@ pub async fn system_list_performance_items() -> Result<Vec<PerformanceItem>, Str
     Ok(items)
 }
 
+pub fn apply_performance(feature_id: &str, mode: &str) -> Result<(String, bool), String> {
+    match feature_id {
+        "SvchostSplitDisable" => Ok((apply_svchost_split(mode)?, false)),
+        "DisableHPET" => Ok((apply_hpet(mode)?, true)),
+        "UnlockCpuCores" => Ok((apply_cpu_unlock(mode)?, true)),
+        _ => Err(format!("未知的性能项：{feature_id}")),
+    }
+}
+
 #[tauri::command]
 pub async fn system_apply_performance_item(
     state: State<'_, SystemState>,
@@ -256,16 +265,9 @@ pub async fn system_apply_performance_item(
 
     let item_id_for_task = item_id.clone();
     let mode_for_task = mode.clone();
-    let result = tokio::task::spawn_blocking(move || -> Result<(String, bool), String> {
-        match item_id_for_task.as_str() {
-            "SvchostSplitDisable" => Ok((apply_svchost_split(&mode_for_task)?, false)),
-            "DisableHPET" => Ok((apply_hpet(&mode_for_task)?, true)),
-            "UnlockCpuCores" => Ok((apply_cpu_unlock(&mode_for_task)?, true)),
-            _ => Err(format!("未知的性能项：{item_id_for_task}")),
-        }
-    })
-    .await
-    .map_err(|error| format!("性能操作失败：{error}"))?;
+    let result = tokio::task::spawn_blocking(move || apply_performance(&item_id_for_task, &mode_for_task))
+        .await
+        .map_err(|error| format!("性能操作失败：{error}"))?;
 
     let success = result.is_ok();
     let (detail, requires_restart) = result.clone().map_or_else(|e| (e, false), |(d, r)| (d, r));

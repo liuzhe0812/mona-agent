@@ -31,7 +31,7 @@ import {
 } from "@/components/ui/context-menu";
 import { cn } from "@/lib/utils";
 import { OfficePreview, isOfficePreviewable } from "@/components/common/OfficePreview";
-import { getGatewayHttpBase } from "@/lib/api";
+import { getServicesHttpBase } from "@/lib/api";
 import {
   isTauri,
   materialsImportFiles,
@@ -606,7 +606,7 @@ function TreeRow(props: TreeRowProps) {
             }}
             className={cn(
               "flex cursor-default items-center gap-1 px-2 py-[3px] text-[13px] outline-none",
-              "hover:bg-accent/60",
+              "hover:bg-accent",
               isSelected && "bg-accent text-foreground",
             )}
             style={{ paddingLeft: `${depth * 12 + 8}px` }}
@@ -718,7 +718,7 @@ function WikiRow({
           onClick={onSelect}
           className={cn(
             "flex cursor-default items-center gap-1 px-3 py-[3px] text-[13px] outline-none",
-            "hover:bg-accent/60",
+            "hover:bg-accent",
             selected && "bg-accent text-foreground",
           )}
         >
@@ -786,7 +786,7 @@ function RawPreview({ path }: { path: string }) {
 function OfficeRawPreview({ path }: { path: string }) {
   const rawRel = path.replace(/^raw\//, "");
   const fetchBuffer = useCallback(async () => {
-    const base = await getGatewayHttpBase();
+    const base = await getServicesHttpBase();
     const resp = await fetch(`${base}/api/materials/raw-binary/${encodeURIComponent(rawRel)}`);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     return resp.arrayBuffer();

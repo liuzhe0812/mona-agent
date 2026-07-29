@@ -3,15 +3,15 @@
  * Hoard is Agent's URL memory layer: browser star → auto-ingest (fetch + LLM summary/tags).
  * No management UI — hoard runs transparently. Only add/delete-by-url are exposed to frontend.
  *
- * Routes are registered on the gateway aiohttp app (port 17173), so we use
- * `getGatewayHttpBase()` per the project's port architecture rules.
+ * Routes are registered on the services process (port 17174), so we use
+ * `getServicesHttpBase()` per the project's port architecture rules.
  */
 
-import { getGatewayHttpBase } from "./api";
+import { getServicesHttpBase } from "./api";
 import { httpFetch } from "./tauri";
 
 async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
-  const base = await getGatewayHttpBase();
+  const base = await getServicesHttpBase();
   const resp = await httpFetch(`${base}${url}`, {
     headers: { "Content-Type": "application/json" },
     ...init,

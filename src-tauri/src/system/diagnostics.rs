@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::State;
 
-use super::{win11debloat, SystemState};
+use super::{performance, uac, win11debloat, windows_update, SystemState};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -139,7 +139,7 @@ fn configuration_audit() -> Result<ConfigurationAudit, String> {
         }
     }).collect::<Vec<_>>();
     let statuses = items.iter().map(|item| (item.id.as_str(), item.status.as_str())).collect::<std::collections::HashMap<_, _>>();
-    let groups = catalog.ui_groups.iter().map(|group| {
+    let groups: Vec<ConfigurationGroup> = catalog.ui_groups.iter().map(|group| {
         let active_feature_id = group.values.iter().find(|value| {
             value.feature_ids.iter().all(|id| statuses.get(id.as_str()) == Some(&"configured"))
         }).and_then(|value| value.feature_ids.first()).cloned();
@@ -155,15 +155,73 @@ fn configuration_audit() -> Result<ConfigurationAudit, String> {
             active_feature_id,
         }
     }).collect();
-    let categories = catalog.categories.iter().map(|category| ConfigurationCategory {
+    let categories: Vec<ConfigurationCategory> = catalog.categories.iter().map(|category| ConfigurationCategory {
         id: category.name.clone(),
         label: win11debloat::category_label(&category.name).into(),
         count: items.iter().filter(|item| item.category == win11debloat::category_label(&category.name)).count(),
     }).collect();
+    let mut all_items = items;
+    let performance_items = performance::catalog_items().into_iter().map(|item| ConfigurationAuditItem {
+        id: item.id,
+        category: "性能与响应".into(),
+        title: item.label.clone(),
+        description: item.description.clone(),
+        current_value: item.current_detail.clone(),
+        recommended_value: "应用推荐设置".into(),
+        status: if item.is_applied { "configured" } else { "available" }.into(),
+        risk: item.risk,
+        impact: item.description.clone(),
+        reversible: item.can_restore,
+        requires_restart: item.requires_reboot,
+        requires_administrator: item.requires_administrator,
+        can_apply: true,
+        can_restore: item.can_restore,
+        note: "适用于受支持的 Windows 10/11 版本。来源：Mona 性能微调。".into(),
+        group_id: None,
+        min_version: None,
+        max_version: None,
+        operation_kind: "registry".into(),
+        source_title: item.label,
+        disable_when_applied: false,
+    }).collect::<Vec<_>>();
+    let performance_count = performance_items.len();
+    all_items.extend(performance_items);
+    let uac_items = uac::catalog_items();
+    let uac_count = uac_items.len();
+    all_items.extend(uac_items);
+    let wu_items = windows_update::catalog_items();
+    let wu_count = wu_items.len();
+    all_items.extend(wu_items);
+    let mut all_categories = categories;
+    // 性能与响应：catalog 没有，新增分类
+    all_categories.push(ConfigurationCategory {
+        id: "Performance".into(),
+        label: "性能与响应".into(),
+        count: performance_count,
+    });
+    // 安全与防护：catalog 没有，新增分类
+    all_categories.push(ConfigurationCategory {
+        id: "Security".into(),
+        label: "安全与防护".into(),
+        count: uac_count,
+    });
+    // Windows 更新：catalog 已有该分类，累加计数
+    if let Some(existing) = all_categories.iter_mut().find(|category| category.label == "Windows 更新") {
+        existing.count += wu_count;
+    } else {
+        all_categories.push(ConfigurationCategory {
+            id: "WindowsUpdate".into(),
+            label: "Windows 更新".into(),
+            count: wu_count,
+        });
+    }
+    let mut all_groups = groups;
+    all_groups.push(uac::catalog_group());
+    all_groups.push(windows_update::catalog_group());
     Ok(ConfigurationAudit {
-        items,
-        categories,
-        groups,
+        items: all_items,
+        categories: all_categories,
+        groups: all_groups,
         windows_build: build,
         source_version: catalog.version,
         source_commit: win11debloat::UPSTREAM_COMMIT.into(),
@@ -176,6 +234,15 @@ pub async fn system_get_configuration_audit() -> Result<ConfigurationAudit, Stri
 }
 
 fn is_supported_change(item_id: &str, mode: &str) -> bool {
+    if matches!(item_id, "SvchostSplitDisable" | "DisableHPET" | "UnlockCpuCores") {
+        return matches!(mode, "recommended" | "restore");
+    }
+    if matches!(item_id, "UacDefaultSecureDesktop" | "UacNoSecureDesktop" | "UacDisabled") {
+        return matches!(mode, "recommended" | "restore");
+    }
+    if matches!(item_id, "WuAutoDefault" | "WuNotifyOnly" | "WuDisabled") {
+        return matches!(mode, "recommended" | "restore");
+    }
     configuration_catalog().is_ok_and(|catalog| win11debloat::is_supported_change(&catalog, item_id, mode))
 }
 
@@ -382,6 +449,56 @@ pub async fn system_apply_configuration_item(
     if !is_supported_change(&item_id, &mode) {
         return Err("不支持的系统优化操作".into());
     }
+
+    if matches!(item_id.as_str(), "SvchostSplitDisable" | "DisableHPET" | "UnlockCpuCores") {
+        let item_id_for_task = item_id.clone();
+        let mode_for_task = mode.clone();
+        let result = tokio::task::spawn_blocking(move || performance::apply_performance(&item_id_for_task, &mode_for_task))
+            .await.map_err(|error| format!("系统优化任务中断：{error}"))?;
+        return match result {
+            Ok((detail, requires_restart)) => {
+                record_configuration_operation(&state, &item_id, &mode, true, &detail)?;
+                Ok(ConfigurationActionResult { item_id, success: true, detail, requires_restart })
+            }
+            Err(error) => {
+                let _ = record_configuration_operation(&state, &item_id, &mode, false, &error);
+                Err(error)
+            }
+        };
+    }
+
+    if matches!(item_id.as_str(), "UacDefaultSecureDesktop" | "UacNoSecureDesktop" | "UacDisabled") {
+        let item_id_for_task = item_id.clone();
+        let result = tokio::task::spawn_blocking(move || uac::apply_uac(&item_id_for_task))
+            .await.map_err(|error| format!("系统优化任务中断：{error}"))?;
+        return match result {
+            Ok((detail, requires_restart)) => {
+                record_configuration_operation(&state, &item_id, &mode, true, &detail)?;
+                Ok(ConfigurationActionResult { item_id, success: true, detail, requires_restart })
+            }
+            Err(error) => {
+                let _ = record_configuration_operation(&state, &item_id, &mode, false, &error);
+                Err(error)
+            }
+        };
+    }
+
+    if matches!(item_id.as_str(), "WuAutoDefault" | "WuNotifyOnly" | "WuDisabled") {
+        let item_id_for_task = item_id.clone();
+        let result = tokio::task::spawn_blocking(move || windows_update::apply_windows_update(&item_id_for_task))
+            .await.map_err(|error| format!("系统优化任务中断：{error}"))?;
+        return match result {
+            Ok((detail, requires_restart)) => {
+                record_configuration_operation(&state, &item_id, &mode, true, &detail)?;
+                Ok(ConfigurationActionResult { item_id, success: true, detail, requires_restart })
+            }
+            Err(error) => {
+                let _ = record_configuration_operation(&state, &item_id, &mode, false, &error);
+                Err(error)
+            }
+        };
+    }
+
     let catalog = configuration_catalog()?;
     let feature = catalog.features.into_iter().find(|feature| feature.feature_id == item_id)
         .ok_or_else(|| "系统优化项目不存在".to_string())?;

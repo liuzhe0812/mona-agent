@@ -130,7 +130,7 @@ export function RightSidebar({
               aria-label={tab.label}
               onClick={() => onTabChange(tab.id)}
               className={cn(
-                "flex flex-1 items-center justify-center text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+                "flex flex-1 items-center justify-center text-muted-foreground hover:bg-accent hover:text-foreground",
                 active && "bg-accent text-foreground",
               )}
             >
@@ -172,7 +172,7 @@ export function RightSidebar({
                       }
                     }
                   }}
-                  className="truncate rounded px-1 py-0.5 text-left text-[12px] text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+                  className="truncate rounded px-1 py-0.5 text-left text-[12px] text-muted-foreground hover:bg-accent hover:text-foreground"
                   style={{ paddingLeft: `${4 + (h.level - 1) * 10}px` }}
                   title={h.text}
                 >
@@ -209,7 +209,7 @@ export function RightSidebar({
                             onOpenNoteByTitle?.(title);
                           }
                         }}
-                        className="group flex items-center gap-1.5 rounded px-1.5 py-1 text-left hover:bg-accent/60"
+                        className="group flex items-center gap-1.5 rounded px-1.5 py-1 text-left hover:bg-accent"
                       >
                         <Link2
                           className={cn(
@@ -252,7 +252,7 @@ export function RightSidebar({
                   key={tag}
                   type="button"
                   onClick={() => setSearchTag(tag)}
-                  className="rounded-full bg-accent px-2 py-0.5 text-[11px] text-foreground/90 hover:bg-accent/80"
+                  className="rounded-full bg-accent px-2 py-0.5 text-[11px] text-foreground/90 hover:bg-accent"
                 >
                   #{tag}
                 </button>

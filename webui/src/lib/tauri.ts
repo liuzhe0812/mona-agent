@@ -174,6 +174,23 @@ export async function stopGateway(): Promise<void> {
   return invoke<void>("stop_gateway");
 }
 
+export interface ServicesStatus {
+  running: boolean;
+  port: number | null;
+}
+
+export async function getServicesStatus(): Promise<ServicesStatus> {
+  return invoke<ServicesStatus>("services_status");
+}
+
+export async function startServices(): Promise<number> {
+  return invoke<number>("start_services");
+}
+
+export async function stopServices(): Promise<void> {
+  return invoke<void>("stop_services");
+}
+
 export interface GatewayLog {
   path: string;
   exists: boolean;

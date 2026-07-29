@@ -92,7 +92,7 @@ export function MdOutlinePanel({ content, editorContainerRef, width }: MdOutline
                 key={idx}
                 type="button"
                 onClick={() => scrollToHeading(idx, h.lineIndex)}
-                className="truncate rounded px-1.5 py-1 text-left text-[12px] text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+                className="truncate rounded px-1.5 py-1 text-left text-[12px] text-muted-foreground hover:bg-accent hover:text-foreground"
                 style={{ paddingLeft: `${4 + (h.level - 1) * 10}px` }}
                 title={h.text}
               >

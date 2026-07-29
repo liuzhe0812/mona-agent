@@ -197,7 +197,7 @@ export function AiAssistantPanel({
       </div>
 
       {/* Messages */}
-      <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-2.5 py-2 scrollbar-thin">
+      <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-2.5 py-2 scrollbar-hover">
         {streamError ? (
           <div className="flex items-start gap-2 rounded-lg border border-border/70 bg-background px-3 py-2 text-xs leading-relaxed text-muted-foreground mb-2">
             <span className="min-w-0 flex-1">消息过大或连接异常，请缩短内容后重试。</span>
@@ -251,7 +251,7 @@ export function AiAssistantPanel({
 
       {/* Input */}
       <div className="shrink-0 p-2">
-        <div className="flex min-h-9 items-end gap-1.5 rounded-xl border border-border/75 bg-background px-2.5 py-1.5 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
+        <div className="flex min-h-9 items-end gap-1.5 rounded-xl border border-border/75 bg-background px-2.5 py-1.5 shadow-sm">
           <Input
             value={draft}
             onChange={(e) => setDraft(e.target.value)}

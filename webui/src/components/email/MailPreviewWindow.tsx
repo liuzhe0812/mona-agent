@@ -10,7 +10,7 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { getGatewayStatus, openPathWithSystemApp, isTauri } from "@/lib/tauri";
+import { getServicesStatus, openPathWithSystemApp, isTauri } from "@/lib/tauri";
 import { fetchEmailBody, listAccounts, downloadAttachmentToFile } from "./lib/emailApi";
 import type { EmailAccount, EmailAttachment, EmailMessage } from "./lib/types";
 import { SafeHtmlFrame } from "./MailView";
@@ -50,8 +50,35 @@ export function MailPreviewWindow() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [downloadingAtt, setDownloadingAtt] = useState<string | null>(null);
+  // 正文加载阶段：'local'=读本地，'network'=走邮件服务器
+  const [bodyStage, setBodyStage] = useState<"local" | "network">("local");
+  const bodyLoadingText = bodyStage === "network" ? "正在请求邮件..." : "正在加载正文...";
 
   const params = parsePreviewParams();
+
+  // 监听 Rust 端 email-body-stage 事件：本地未命中时切为 'network'，切换提示文案
+  useEffect(() => {
+    if (!params) return;
+    let unlisten: (() => void) | null = null;
+    void (async () => {
+      try {
+        const { listen } = await import("@tauri-apps/api/event");
+        unlisten = await listen<{ stage: "local" | "network" }>(
+          "email-body-stage",
+          (event) => {
+            if (event.payload?.stage === "network") {
+              setBodyStage("network");
+            }
+          },
+        );
+      } catch {
+        // 非桌面环境忽略
+      }
+    })();
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, [params]);
 
   useEffect(() => {
     if (!params) {
@@ -67,7 +94,7 @@ export function MailPreviewWindow() {
         // 并行：gateway 状态 + 账号列表（互不依赖）
         // listAccounts 仅用于附件下载，可延迟；getMessages 去掉：fetchEmailBody 会返回 header
         const [gw, accounts] = await Promise.all([
-          getGatewayStatus().catch(() => null),
+          getServicesStatus().catch(() => null),
           listAccounts().catch(() => []),
         ]);
         const url =
@@ -78,15 +105,26 @@ export function MailPreviewWindow() {
           setAccount(acc ?? null);
         }
 
-        // fetchEmailBody 优先读本地 .eml（毫秒级），返回 body + header
-        // 不再先调 getMessages 拿 header——fetchEmailBody 的返回值包含 header
+        // fetchEmailBody 优先读本地 .eml（毫秒级），本地失败时回退到邮件服务 HTTP 拉取
+        // 本地 .eml 是 HEADER-only 时 body 为空，自动重试一次（fetchEmailBody 会走 HTTP fallback）
         try {
-          const body = await fetchEmailBody(
-            url,
+          let body = await fetchEmailBody(
             params.accountId,
             params.uid,
             params.folder,
+            url,
           );
+          // 空 body 自动重试一次（本地 .eml 是 HEADER-only 或解析失败）
+          if (!body.bodyText && !body.bodyHtml) {
+            console.warn("[MailPreviewWindow] 本地 body 为空，自动重试一次");
+            await new Promise((r) => setTimeout(r, 200));
+            body = await fetchEmailBody(
+              params.accountId,
+              params.uid,
+              params.folder,
+              url,
+            );
+          }
           if (!cancelled) {
             setMessage(() => ({
               uid: params.uid,
@@ -107,7 +145,6 @@ export function MailPreviewWindow() {
               bodyText: body.bodyText,
               bodyHtml: body.bodyHtml,
               bodyFetched: true,
-              emlPath: "",
             }));
           }
         } catch (e) {
@@ -283,21 +320,29 @@ export function MailPreviewWindow() {
       </div>
 
       {/* 正文区域 */}
-      <div className="min-h-0 flex-1 overflow-auto px-6 py-4">
+      <div className="min-h-0 flex-1 overflow-auto px-6 py-4 scrollbar-hover">
         {message.bodyError ? (
-          <div className="flex h-full items-center justify-center">
-            <p className="text-sm text-destructive">{message.bodyError}</p>
+          <div className="flex h-full min-h-[200px] flex-col items-center justify-center gap-2 text-muted-foreground">
+            <span className="text-[13px] text-destructive">正文加载失败</span>
+            <span className="max-w-md text-center text-[12px] text-muted-foreground">{message.bodyError}</span>
           </div>
         ) : !message.bodyFetched ? (
-          <div className="flex h-full items-center justify-center">
-            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+          <div className="flex h-full min-h-[200px] items-center justify-center text-muted-foreground">
+            <Loader2 className="h-5 w-5 animate-spin" />
+            <span className="ml-2 text-[13px]">{bodyLoadingText}</span>
           </div>
         ) : message.bodyHtml ? (
           <SafeHtmlFrame html={message.bodyHtml} />
-        ) : (
+        ) : message.bodyText ? (
           <pre className="whitespace-pre-wrap break-words font-sans text-sm leading-relaxed">
-            {message.bodyText || "(无正文)"}
+            {message.bodyText}
           </pre>
+        ) : (
+          // fetchEmailBody 已完成但 bodyText/bodyHtml 都空：合法空正文
+          // skill 第四节：合法空正文不得反复请求网络
+          <div className="flex h-full min-h-[200px] items-center justify-center text-muted-foreground">
+            <span className="text-[13px]">此邮件无可显示正文</span>
+          </div>
         )}
       </div>
     </div>

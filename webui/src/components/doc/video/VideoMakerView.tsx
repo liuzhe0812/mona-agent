@@ -5,11 +5,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import {
-  ResizableHandle,
-  ResizablePanel,
-  ResizablePanelGroup,
-} from "@/components/ui/resizable";
-import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
@@ -34,14 +29,13 @@ import { isTauri, openPathWithSystemApp } from "@/lib/tauri";
 import { useWorkspaceStore } from "@/lib/workspace-store";
 import { cn } from "@/lib/utils";
 import { DocChatPanel } from "../DocChatPanel";
-import { VideoPreview } from "./VideoPreview";
 import { VideoRuntimeDialog } from "./VideoRuntimeDialog";
 import { StoryboardPhase } from "./StoryboardPhase";
 import { ProducingPhase } from "./ProducingPhase";
 import { ExportPhase } from "./ExportPhase";
 
 type SidebarTab = "config" | "history";
-type VideoPhase = "config" | "generating" | "storyboard" | "producing" | "export" | "done";
+type VideoPhase = "config" | "storyboard" | "producing" | "export" | "done";
 type VideoRatio = "16:9" | "9:16" | "1:1";
 type VideoFps = 30 | 60;
 type VideoQuality = "draft" | "standard" | "high";
@@ -99,6 +93,8 @@ const DEFAULT_RUNTIME_STATUS: VideoRuntimeStatus = {
   chrome: { ok: false },
 };
 
+const ACTIVE_PROJECT_KEY = "mona.video.activeProject";
+
 export function VideoMakerView() {
   const { client, token } = useClient();
   const workspacePath = useWorkspaceStore((s) => s.workspacePath);
@@ -117,7 +113,8 @@ export function VideoMakerView() {
   const [phase, setPhase] = useState<VideoPhase>("config");
   const [chatId, setChatId] = useState<string | null>(null);
   const [projectName, setProjectName] = useState<string | null>(null);
-  const [historyKey, setHistoryKey] = useState(0);
+  const configDisabled = !!projectName;
+
   const [historyProjects, setHistoryProjects] = useState<VideoProject[]>([]);
   const [runtimeStatus, setRuntimeStatus] = useState<VideoRuntimeStatus>(DEFAULT_RUNTIME_STATUS);
   const [runtimeOk, setRuntimeOk] = useState(true);
@@ -126,22 +123,15 @@ export function VideoMakerView() {
     component: string;
     progress: number;
   } | null>(null);
-  const [previewPort, setPreviewPort] = useState<number | null>(null);
-  const [videoUrl, setVideoUrl] = useState<string | null>(null);
-  const [renderStatus, setRenderStatus] = useState<{
-    stage: "idle" | "lint" | "validate" | "inspect" | "render" | "complete" | "error";
-    progress: number;
-    message?: string;
-  }>({ stage: "idle", progress: 0 });
   const [deleting, setDeleting] = useState<string | null>(null);
   const generatingRef = useRef(false);
 
-  // Auto-switch to history tab when generation starts or completes
+  // Auto-switch to history tab when a project is active
   useEffect(() => {
-    if (phase === "generating" || phase === "export" || phase === "done") {
+    if (projectName) {
       setSidebarTab("history");
     }
-  }, [phase]);
+  }, [projectName]);
 
   // Initial video runtime status check
   useEffect(() => {
@@ -174,11 +164,11 @@ export function VideoMakerView() {
     return () => {
       cancelled = true;
     };
-  }, [sidebarTab, token, historyKey]);
+  }, [sidebarTab, token]);
 
-  // Poll project status during generation
+  // Poll project status during storyboard phase (AI is generating storyboard.md)
   useEffect(() => {
-    if (phase !== "generating" || !projectName) return;
+    if (phase !== "storyboard" || !projectName) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout>;
 
@@ -187,34 +177,15 @@ export function VideoMakerView() {
       try {
         const res = await fetchVideoProject(token, projectName!);
         if (cancelled) return;
-        setPreviewPort(res.previewPort ?? null);
-        setVideoUrl(res.videoUrl ?? null);
-        if (res.status === "done" && res.hasVideo) {
-          setPhase("export");
-          setRenderStatus({ stage: "complete", progress: 100 });
-          setHistoryKey((k) => k + 1);
-          generatingRef.current = false;
+        if (res.hasStoryboard) {
+          // Storyboard is ready — StoryboardPhase will load and display it
           return;
         }
-        if (res.status === "error") {
-          setRenderStatus({
-            stage: "error",
-            progress: 0,
-            message: "渲染失败",
-          });
-          generatingRef.current = false;
-          return;
-        }
-        setRenderStatus((prev) => ({
-          stage: prev.stage === "idle" ? "lint" : "render",
-          progress: Math.min(prev.progress + 5, 95),
-          message: prev.message,
-        }));
       } catch {
         // ignore transient errors
       }
       if (!cancelled) {
-        timer = setTimeout(poll, 3000);
+        timer = setTimeout(poll, 2000);
       }
     }
 
@@ -327,7 +298,6 @@ export function VideoMakerView() {
       // 5. Send prompt
       client.sendMessage(newChatId, prompt, undefined, { displayContent: displayText });
       setPhase("storyboard");
-      setRenderStatus({ stage: "lint", progress: 0 });
     } catch (e) {
       console.error("Failed to start video generation", e);
       generatingRef.current = false;
@@ -364,18 +334,55 @@ export function VideoMakerView() {
       const isDone = project.status === "done" || project.hasVideo;
       if (isDone) {
         setPhase("export");
-        setRenderStatus({ stage: "complete", progress: 100 });
-      } else if (project.hasStoryboard) {
-        // 旧项目有 storyboard 但未渲染 → 进入分镜阶段
-        setPhase("storyboard");
-        setRenderStatus({ stage: "idle", progress: 0 });
+      } else if (project.hasStoryboard && (project.sceneCount ?? 0) > 0) {
+        // 分镜已锁定且已有场景 HTML → 进入逐场景制作
+        setPhase("producing");
       } else {
-        setPhase("generating");
-        setRenderStatus({ stage: "lint", progress: 0 });
+        // 分镜存在但未锁定/无场景 → 进入分镜审阅；无 storyboard → 等待 AI 生成
+        setPhase("storyboard");
       }
     },
     [],
   );
+
+  // Persist active project name for cross-page restoration
+  useEffect(() => {
+    try {
+      if (projectName) {
+        localStorage.setItem(ACTIVE_PROJECT_KEY, projectName);
+      } else {
+        localStorage.removeItem(ACTIVE_PROJECT_KEY);
+      }
+    } catch {
+      // ignore
+    }
+  }, [projectName]);
+
+  // Restore active project on mount (handles page switching)
+  useEffect(() => {
+    let cancelled = false;
+    try {
+      const saved = localStorage.getItem(ACTIVE_PROJECT_KEY);
+      if (!saved) return;
+      fetchVideoProjects(token)
+        .then((res) => {
+          if (cancelled) return;
+          const project = res.projects?.find((p) => p.name === saved);
+          if (project) {
+            handleSelectHistory(project);
+          } else {
+            localStorage.removeItem(ACTIVE_PROJECT_KEY);
+          }
+        })
+        .catch(() => {});
+    } catch {
+      // ignore
+    }
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleDownloadVideo = useCallback(
     async (name: string) => {
@@ -496,7 +503,7 @@ export function VideoMakerView() {
                               : "text-muted-foreground hover:text-foreground",
                           )}
                           onClick={() => setRatio(r.value)}
-                          disabled={phase === "generating"}
+                          disabled={configDisabled}
                         >
                           {r.label}
                         </button>
@@ -520,7 +527,7 @@ export function VideoMakerView() {
                               : "text-muted-foreground hover:text-foreground",
                           )}
                           onClick={() => setFps(f.value)}
-                          disabled={phase === "generating"}
+                          disabled={configDisabled}
                         >
                           {f.label}
                         </button>
@@ -544,7 +551,7 @@ export function VideoMakerView() {
                               : "text-muted-foreground hover:text-foreground",
                           )}
                           onClick={() => setQuality(q.value)}
-                          disabled={phase === "generating"}
+                          disabled={configDisabled}
                         >
                           {q.label}
                         </button>
@@ -567,7 +574,7 @@ export function VideoMakerView() {
                             : "text-muted-foreground hover:text-foreground hover:bg-muted/50",
                         )}
                         onClick={() => setNarrationEnabled((v) => !v)}
-                        disabled={phase === "generating"}
+                        disabled={configDisabled}
                       >
                         {narrationEnabled ? "已启用" : "未启用"}
                       </button>
@@ -594,7 +601,7 @@ export function VideoMakerView() {
                                   setTtsProvider(p.value);
                                   setTtsVoice("");
                                 }}
-                                disabled={phase === "generating"}
+                                disabled={configDisabled}
                               >
                                 {p.label}
                               </button>
@@ -625,7 +632,7 @@ export function VideoMakerView() {
                                     setTtsVoice(v);
                                   }
                                 }}
-                                disabled={phase === "generating"}
+                                disabled={configDisabled}
                               >
                                 <option value="">选择音色...</option>
                                 {EDGE_VOICES.map((v) => (
@@ -641,7 +648,7 @@ export function VideoMakerView() {
                                   onChange={(e) => setTtsVoice(e.target.value)}
                                   placeholder="zh-CN-XiaoyiNeural"
                                   className="mt-1.5 h-8 rounded-lg text-[12px]"
-                                  disabled={phase === "generating"}
+                                  disabled={configDisabled}
                                 />
                               )}
                             </div>
@@ -657,7 +664,7 @@ export function VideoMakerView() {
                                 onChange={(e) => setTtsApiBase(e.target.value)}
                                 placeholder={CUSTOM_API_BASE_PLACEHOLDER}
                                 className="h-8 rounded-lg text-[12px]"
-                                disabled={phase === "generating"}
+                                disabled={configDisabled}
                               />
                             </div>
                             <div>
@@ -670,7 +677,7 @@ export function VideoMakerView() {
                                 placeholder="sk-..."
                                 type="password"
                                 className="h-8 rounded-lg text-[12px]"
-                                disabled={phase === "generating"}
+                                disabled={configDisabled}
                               />
                             </div>
                             <div>
@@ -682,7 +689,7 @@ export function VideoMakerView() {
                                 onChange={(e) => setTtsModel(e.target.value)}
                                 placeholder={CUSTOM_MODEL_PLACEHOLDER}
                                 className="h-8 rounded-lg text-[12px]"
-                                disabled={phase === "generating"}
+                                disabled={configDisabled}
                               />
                             </div>
                             <div>
@@ -694,7 +701,7 @@ export function VideoMakerView() {
                                 onChange={(e) => setTtsVoice(e.target.value)}
                                 placeholder={CUSTOM_VOICE_PLACEHOLDER}
                                 className="h-8 rounded-lg text-[12px]"
-                                disabled={phase === "generating"}
+                                disabled={configDisabled}
                               />
                             </div>
                           </>
@@ -709,7 +716,7 @@ export function VideoMakerView() {
                             onChange={(e) => setTtsRate(e.target.value)}
                             placeholder="+0%"
                             className="h-8 rounded-lg text-[12px]"
-                            disabled={phase === "generating"}
+                            disabled={configDisabled}
                           />
                         </div>
                       </div>
@@ -738,16 +745,16 @@ export function VideoMakerView() {
                       placeholder="描述你想制作的视频内容..."
                       value={topic}
                       onChange={(e) => setTopic(e.target.value)}
-                      disabled={phase === "generating"}
+                      disabled={configDisabled}
                     />
                   </div>
                   <Button
                     className="w-full"
-                    disabled={!topic.trim() || phase === "generating"}
+                    disabled={!topic.trim() || configDisabled}
                     onClick={handleStartGeneration}
                   >
                     <Play className="mr-1.5 h-4 w-4" />
-                    {phase === "generating" ? "生成中..." : "开始生成"}
+                    {projectName ? "项目进行中" : "开始生成"}
                   </Button>
                 </div>
               </div>
@@ -836,53 +843,16 @@ export function VideoMakerView() {
               </div>
             </div>
           ) : phase === "producing" ? (
-            <div className="flex min-h-0 flex-1">
-              <div className="min-w-0 flex-1">
-                <ProducingPhase
-                  projectName={projectName ?? ""}
-                  onAllConfirmed={() => setPhase("export")}
-                />
-              </div>
-              <div className="w-[400px] shrink-0 border-l border-border/70">
-                <DocChatPanel
-                  chatId={chatId}
-                  onSend={handleSendMessage}
-                  placeholder="与视频助手对话..."
-                />
-              </div>
-            </div>
+            <ProducingPhase
+              projectName={projectName ?? ""}
+              onAllConfirmed={() => setPhase("export")}
+            />
           ) : phase === "export" ? (
-            <div className="flex min-h-0 flex-1">
-              <div className="min-w-0 flex-1">
-                <ExportPhase projectName={projectName ?? ""} />
-              </div>
-              <div className="w-[400px] shrink-0 border-l border-border/70">
-                <DocChatPanel
-                  chatId={chatId}
-                  onSend={handleSendMessage}
-                  placeholder="与视频助手对话..."
-                />
-              </div>
-            </div>
+            <ExportPhase projectName={projectName ?? ""} />
           ) : (
-            <ResizablePanelGroup direction="vertical" className="min-h-0 flex-1">
-              <ResizablePanel defaultSize={55} minSize={20}>
-                <VideoPreview
-                  projectName={projectName ?? ""}
-                  previewPort={previewPort}
-                  renderStatus={renderStatus}
-                  videoUrl={videoUrl}
-                />
-              </ResizablePanel>
-              <ResizableHandle withHandle />
-              <ResizablePanel defaultSize={45} minSize={15}>
-                <DocChatPanel
-                  chatId={chatId}
-                  onSend={handleSendMessage}
-                  placeholder="输入消息与视频助手对话..."
-                />
-              </ResizablePanel>
-            </ResizablePanelGroup>
+            <div className="flex flex-1 items-center justify-center text-[13px] text-muted-foreground">
+              未知状态
+            </div>
           )}
         </div>
       </div>

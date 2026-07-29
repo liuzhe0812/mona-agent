@@ -79,7 +79,7 @@ export function QuickAskWindow() {
 
   const actionClass = cn(
     "h-9 rounded-full border border-border/65 bg-card px-3 text-[12px] font-medium",
-    "text-foreground/80 shadow-[0_2px_8px_rgba(15,23,42,0.05)] hover:bg-accent hover:text-foreground",
+    "text-foreground/80 hover:bg-accent hover:text-foreground",
     "disabled:pointer-events-none disabled:opacity-55",
   );
 

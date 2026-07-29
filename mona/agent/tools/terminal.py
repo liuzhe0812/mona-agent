@@ -8,7 +8,7 @@ from loguru import logger
 
 from mona.agent.tools.base import Tool, tool_parameters
 from mona.agent.tools.context import RequestContext
-from mona.agent.tools.schema import StringSchema, tool_parameters_schema
+from mona.agent.tools.schema import IntegerSchema, StringSchema, tool_parameters_schema
 from mona.agent.tools.tauri_ipc import tauri_invoke as _shared_tauri_invoke
 from mona.config.schema import TerminalToolConfig
 
@@ -190,10 +190,22 @@ class TerminalExecTool(Tool):
         return f"Command executed: {command}"
 
 
+_DEFAULT_OUTPUT_LINES = 200
+
 @tool_parameters(
     tool_parameters_schema(
         session_id=StringSchema(
             "Terminal session ID to get output from",
+            nullable=True,
+        ),
+        lines=IntegerSchema(
+            description=(
+                "Number of recent lines to read from the end of the terminal buffer. "
+                "Default 200. Increase for log inspection (e.g. 1000), decrease for quick "
+                "status checks (e.g. 20). Hard cap 10000."
+            ),
+            minimum=1,
+            maximum=10000,
             nullable=True,
         ),
         required=[],
@@ -215,9 +227,11 @@ class TerminalOutputTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Get the current terminal output buffer. "
+            "Get the terminal output buffer, returning the last N lines (default 200). "
             "If session_id is not provided, uses the user's current active terminal session. "
-            "Returns the visible terminal content so you can read command results."
+            "Pass `lines` to control how much to read — smaller values save tokens, "
+            "larger values (e.g. 1000) are useful for inspecting logs. "
+            "When output is truncated, a `[showing last N of M lines]` header is prepended."
         )
 
     @property
@@ -227,6 +241,7 @@ class TerminalOutputTool(Tool):
     async def execute(
         self,
         session_id: str | None = None,
+        lines: int | None = None,
         **kwargs: Any,
     ) -> str:
         effective_session = session_id or (
@@ -246,14 +261,21 @@ class TerminalOutputTool(Tool):
             if session_id:
                 output = str(result)
                 return output[-4000:] if len(output) > 4000 else output
-            lines = []
+            session_lines = []
             for s in result:
-                lines.append(
+                session_lines.append(
                     f"  {s.get('id', '?')[:8]}... | {s.get('sessionType', '?')} | {s.get('status', '?')}"
                 )
-            return "Active sessions:\n" + "\n".join(lines)
+            return "Active sessions:\n" + "\n".join(session_lines)
 
-        return str(result)
+        buffer_str = str(result)
+        n = lines if isinstance(lines, int) and lines > 0 else _DEFAULT_OUTPUT_LINES
+        n = min(n, 10000)
+        all_lines = buffer_str.split("\n")
+        if len(all_lines) <= n:
+            return buffer_str
+        tail = "\n".join(all_lines[-n:])
+        return f"[showing last {n} of {len(all_lines)} lines]\n{tail}"
 
 
 @tool_parameters(

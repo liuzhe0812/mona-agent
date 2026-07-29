@@ -31,7 +31,7 @@ export function ThreadHeader({
           aria-label={t("thread.header.toggleSidebar")}
           onClick={onToggleSidebar}
           className={cn(
-            "h-7 w-7 rounded-md text-muted-foreground hover:bg-accent/35 hover:text-foreground",
+            "h-7 w-7 rounded-md text-muted-foreground hover:bg-accent hover:text-foreground",
             hideSidebarToggleOnDesktop && "lg:hidden",
           )}
         >
@@ -56,7 +56,7 @@ export function ThreadHeader({
           aria-label={t("thread.header.toggleSidebar")}
           onClick={onToggleSidebar}
           className={cn(
-            "h-7 w-7 rounded-md text-muted-foreground hover:bg-accent/35 hover:text-foreground",
+            "h-7 w-7 rounded-md text-muted-foreground hover:bg-accent hover:text-foreground",
             hideSidebarToggleOnDesktop && "lg:hidden",
           )}
         >
@@ -97,7 +97,7 @@ function ThemeButton({
       aria-label={label}
       onClick={onToggleTheme}
       className={cn(
-        "h-8 w-8 rounded-full text-muted-foreground/85 hover:bg-accent/40 hover:text-foreground",
+        "h-8 w-8 rounded-full text-muted-foreground/85 hover:bg-accent hover:text-foreground",
         className,
       )}
     >

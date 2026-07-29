@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { History, SlidersHorizontal } from "lucide-react";
+import { History, PanelLeft, SlidersHorizontal } from "lucide-react";
 
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { useClient } from "@/providers/ClientProvider";
@@ -12,8 +12,10 @@ import { PptChatPanel } from "./PptChatPanel";
 import type { PptChatPanelHandle } from "./PptChatPanel";
 import { PptPreview } from "./PptPreview";
 import { PptHistory } from "./PptHistory";
+import { PptOutlinePhase } from "./PptOutlinePhase";
+import { PptReviewPhase } from "./PptReviewPhase";
 
-type PptPhase = "config" | "generating" | "done";
+export type PptPhase = "config" | "generating" | "outline" | "producing" | "review" | "exporting" | "done";
 export type PptMode = "design" | "template";
 export type PptImageMode = "none" | "key-pages" | "rich";
 export type PptVisualMode = "auto" | "data" | "process";
@@ -87,6 +89,14 @@ export const DEFAULT_CONFIG: PptConfig = {
   mergeParagraphs: false,
 };
 
+const ACTIVE_PROJECT_KEY = "mona.ppt.activeProject";
+
+interface ActiveProjectState {
+  name: string;
+  chatId: string | null;
+  phase: PptPhase;
+}
+
 export function PptMakerView() {
   const { client, token } = useClient();
   const [phase, setPhase] = useState<PptPhase>("config");
@@ -100,12 +110,13 @@ export function PptMakerView() {
   const [hasPptxOutput, setHasPptxOutput] = useState(false);
   const [pipelineStage, setPipelineStage] = useState<string>("init");
   const [sidebarTab, setSidebarTab] = useState<"config" | "history">("config");
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const chatPanelRef = useRef<PptChatPanelHandle>(null);
   const [displayContentMap, setDisplayContentMap] = useState<Record<string, string>>({});
 
   // Auto-switch to history tab when generation starts or completes
   useEffect(() => {
-    if (phase === "generating" || phase === "done") {
+    if (phase === "generating" || phase === "done" || phase === "producing" || phase === "exporting") {
       setSidebarTab("history");
     }
   }, [phase]);
@@ -114,18 +125,49 @@ export function PptMakerView() {
     chatIdRef.current = chatId;
   }, [chatId]);
 
+  // V2 §7.4: persist active project to localStorage for cross-session recovery
+  useEffect(() => {
+    if (projectName && phase !== "config") {
+      const state: ActiveProjectState = { name: projectName, chatId, phase };
+      try {
+        localStorage.setItem(ACTIVE_PROJECT_KEY, JSON.stringify(state));
+      } catch {}
+    } else if (phase === "config" && !projectName) {
+      try {
+        localStorage.removeItem(ACTIVE_PROJECT_KEY);
+      } catch {}
+    }
+  }, [projectName, chatId, phase]);
+
+  // V2 §7.4: restore active project on mount
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(ACTIVE_PROJECT_KEY);
+      if (!raw) return;
+      const state = JSON.parse(raw) as ActiveProjectState;
+      if (!state?.name) return;
+      setProjectName(state.name);
+      setChatId(state.chatId ?? null);
+      setPhase(state.phase);
+      setHistoryKey((k) => k + 1);
+    } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // NOTE: Do NOT delete the chat on unmount. PPT chats are persistent
   // and should remain accessible from the history panel.
 
+  // V2 polling: detect phase transitions from backend status
   useEffect(() => {
-    if (phase !== "generating" || !projectName) return;
+    if (!projectName) return;
+    if (phase !== "generating" && phase !== "producing" && phase !== "exporting") return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout>;
 
     async function poll() {
       if (cancelled) return;
 
-      if (generationStartRef.current) {
+      if (generationStartRef.current && phase === "generating") {
         const elapsed = Date.now() - generationStartRef.current;
         if (elapsed > 30 * 60 * 1000) {
           return;
@@ -137,6 +179,29 @@ export function PptMakerView() {
         if (cancelled) return;
         setHasPptxOutput(res.hasPptxOutput);
         setPipelineStage(res.pipelineStage ?? "init");
+
+        // V2 phase transitions
+        const v2Phase = (res as { phase?: string }).phase;
+        if (v2Phase) {
+          if (v2Phase === "outline" && phase === "generating") {
+            setPhase("outline");
+            generationStartRef.current = null;
+            return;
+          }
+          if (v2Phase === "review" && phase === "producing") {
+            setPhase("review");
+            return;
+          }
+          if (v2Phase === "done") {
+            await markPptGenerating(token, projectName!, "finish").catch(() => {});
+            setPhase("done");
+            setHistoryKey((k) => k + 1);
+            generationStartRef.current = null;
+            return;
+          }
+        }
+
+        // Fallback: legacy done detection
         if (res.status === "done" && res.hasExport) {
           await markPptGenerating(token, projectName!, "finish").catch(() => {});
           setPhase("done");
@@ -179,6 +244,49 @@ export function PptMakerView() {
     }
   }, [client, config, token]);
 
+  // V2: Outline locked → wake up Agent to continue with spec_lock generation
+  const handleOutlineLocked = useCallback(async () => {
+    if (!projectName || !chatId) return;
+    setPhase("producing");
+    const wakeMsg = [
+      "PPT 大纲已在 UI 中确认。",
+      "请读取当前项目 page_visual_plan.json，按其页面顺序和内容同步重建 design_spec.md，",
+      "再按 templates/spec_lock_reference.md 生成完整 spec_lock.md。",
+      "随后继续 Step 5 和 Step 6；全部 SVG 通过质量检查且备注齐全后写入 .review_ready，",
+      "停止在 Step 7 之前，等待逐页确认。",
+    ].join("");
+    client.sendMessage(chatId, wakeMsg);
+    generationStartRef.current = Date.now();
+  }, [projectName, chatId, client]);
+
+  // V2 §5.4: single page regenerate → wake up Agent
+  const handlePageRegenerate = useCallback(
+    async (file: string) => {
+      if (!projectName || !chatId) return;
+      setPhase("producing");
+      const wakeMsg = [
+        `请重新生成当前 PPT 项目的 ${file}。`,
+        "只修改该页，保留其他页面；完成后重新运行 SVG 质量检查，",
+        "通过后更新 .review_ready，并再次停止在 Step 7 之前。",
+      ].join("");
+      client.sendMessage(chatId, wakeMsg);
+      generationStartRef.current = Date.now();
+    },
+    [projectName, chatId, client],
+  );
+
+  // V2 §5.5: all pages confirmed → request export via Agent
+  const handleAllConfirmed = useCallback(async () => {
+    if (!projectName || !chatId) return;
+    setPhase("exporting");
+    const wakeMsg = [
+      "所有 PPT 页面已在 UI 中确认。请执行 Step 7 后处理与导出，",
+      "保持现有模版、动画、音频和导出参数约束。完成后报告导出文件。",
+    ].join("");
+    client.sendMessage(chatId, wakeMsg);
+    generationStartRef.current = Date.now();
+  }, [projectName, chatId, client]);
+
   const handleDownload = useCallback(async (name?: string) => {
     const project = name ?? projectName;
     if (!project) return;
@@ -215,7 +323,13 @@ export function PptMakerView() {
     setChatId(project.chatId);
     setHasPptxOutput(project.hasPptxOutput);
     const isDone = project.status === "done" || project.hasExport;
-    setPhase(isDone ? "done" : "generating");
+    // V2: use backend phase if available, otherwise fallback to legacy
+    const v2Phase = (project as PptProject & { phase?: string }).phase;
+    if (v2Phase) {
+      setPhase(v2Phase as PptPhase);
+    } else {
+      setPhase(isDone ? "done" : "generating");
+    }
     // Set displayContent for historical project's chat
     if (project.chatId && !displayContentMap[project.chatId]) {
       setDisplayContentMap((prev) => ({
@@ -230,70 +344,115 @@ export function PptMakerView() {
       setPhase("config");
       setChatId(null);
       setProjectName(null);
+      try {
+        localStorage.removeItem(ACTIVE_PROJECT_KEY);
+      } catch {}
     };
   }, [projectName]);
 
   return (
     <div className="flex h-full flex-col bg-background">
       <div className="flex min-h-0 flex-1">
-        <aside className="flex w-[260px] shrink-0 flex-col border-r border-border/70">
-          <div className="flex shrink-0 border-b border-border/70">
+        {sidebarCollapsed ? (
+          <div className="flex w-[40px] shrink-0 flex-col items-center border-r border-border/70 bg-muted/30 py-2">
             <button
-              className={cn(
-                "flex flex-1 items-center justify-center gap-1.5 py-2 text-[11px] font-medium transition-colors",
-                sidebarTab === "config"
-                  ? "text-foreground border-b-2 border-primary"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-              onClick={() => setSidebarTab("config")}
+              className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              onClick={() => setSidebarCollapsed(false)}
+              title="展开侧栏"
             >
-              <SlidersHorizontal className="h-3 w-3" />
-              配置
-            </button>
-            <button
-              className={cn(
-                "flex flex-1 items-center justify-center gap-1.5 py-2 text-[11px] font-medium transition-colors",
-                sidebarTab === "history"
-                  ? "text-foreground border-b-2 border-primary"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-              onClick={() => setSidebarTab("history")}
-            >
-              <History className="h-3 w-3" />
-              历史
+              <PanelLeft className="h-3.5 w-3.5" />
             </button>
           </div>
-          <div className="min-h-0 flex-1">
-            {sidebarTab === "config" ? (
-              <PptConfigPanel
-                config={config}
-                setConfig={setConfig}
-                phase={phase}
-                onStart={handleStartGeneration}
-              />
-            ) : (
-              <PptHistory
-                key={historyKey}
-                onSelect={handleSelectProject}
-                onDownload={handleDownload}
-                onDelete={handleDeleteProject}
-              />
-            )}
-          </div>
-        </aside>
+        ) : (
+          <aside className="flex w-[260px] shrink-0 flex-col border-r border-border/70">
+            <div className="flex shrink-0 border-b border-border/70">
+              <button
+                className={cn(
+                  "flex flex-1 items-center justify-center gap-1.5 py-2 text-[11px] font-medium transition-colors",
+                  sidebarTab === "config"
+                    ? "text-foreground border-b-2 border-primary"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+                onClick={() => setSidebarTab("config")}
+              >
+                <SlidersHorizontal className="h-3 w-3" />
+                配置
+              </button>
+              <button
+                className={cn(
+                  "flex flex-1 items-center justify-center gap-1.5 py-2 text-[11px] font-medium transition-colors",
+                  sidebarTab === "history"
+                    ? "text-foreground border-b-2 border-primary"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+                onClick={() => setSidebarTab("history")}
+              >
+                <History className="h-3 w-3" />
+                历史
+              </button>
+            </div>
+            <div className="min-h-0 flex-1">
+              {sidebarTab === "config" ? (
+                <PptConfigPanel
+                  config={config}
+                  setConfig={setConfig}
+                  phase={phase}
+                  onStart={handleStartGeneration}
+                />
+              ) : (
+                <PptHistory
+                  key={historyKey}
+                  onSelect={handleSelectProject}
+                  onDownload={handleDownload}
+                  onDelete={handleDeleteProject}
+                />
+              )}
+            </div>
+          </aside>
+        )}
 
         <div className="flex min-h-0 flex-1 flex-col">
           {phase === "config" ? (
             <div className="flex flex-1 items-center justify-center text-[13px] text-muted-foreground">
               选择模板和输入主题后开始生成
             </div>
+          ) : phase === "outline" && projectName ? (
+            <div className="flex min-h-0 flex-1">
+              <div className="min-w-0 flex-1">
+                <PptOutlinePhase
+                  projectName={projectName}
+                  token={token}
+                  onLocked={handleOutlineLocked}
+                />
+              </div>
+              <div className="w-[400px] shrink-0 border-l border-border/70">
+                <PptChatPanel
+                  key={chatId ?? "empty"}
+                  chatId={chatId}
+                  onStreamingChange={setIsStreaming}
+                  displayContentMap={displayContentMap}
+                  ref={chatPanelRef}
+                />
+              </div>
+            </div>
+          ) : phase === "review" && projectName ? (
+            <PptReviewPhase
+              projectName={projectName}
+              token={token}
+              chatId={chatId}
+              displayContentMap={displayContentMap}
+              isStreaming={isStreaming}
+              onStreamingChange={setIsStreaming}
+              onRegenerate={handlePageRegenerate}
+              onAllConfirmed={handleAllConfirmed}
+            />
           ) : (
-            <ResizablePanelGroup direction="vertical" className="min-h-0 flex-1">
-              <ResizablePanel defaultSize={55} minSize={20}>
+            <ResizablePanelGroup direction="horizontal" className="min-h-0 flex-1">
+              <ResizablePanel defaultSize={60} minSize={25}>
                 <PptPreview projectName={projectName} isStreaming={isStreaming} hasPptxOutput={hasPptxOutput} pipelineStage={pipelineStage} />
               </ResizablePanel>
               <ResizableHandle withHandle />
-              <ResizablePanel defaultSize={45} minSize={15}>
+              <ResizablePanel defaultSize={40} minSize={20}>
                 <PptChatPanel key={chatId ?? "empty"} chatId={chatId} onStreamingChange={setIsStreaming} displayContentMap={displayContentMap} ref={chatPanelRef} />
               </ResizablePanel>
             </ResizablePanelGroup>

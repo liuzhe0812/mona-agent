@@ -11,6 +11,8 @@ pub mod performance;
 pub mod context_menu;
 pub mod process_control;
 pub mod defender;
+pub mod uac;
+pub mod windows_update;
 
 use crate::settings::app_data_dir;
 use rusqlite::{params, Connection};
@@ -521,6 +523,10 @@ pub struct DirectorySize {
     pub path: String,
     pub size_gb: f64,
     pub file_count: u64,
+    /// 嵌套子目录（仅递归扫描时填充，按大小降序）。
+    /// 顶层扫描结果中该字段为空数组或省略；下钻时由前端从内存切片。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub children: Vec<DirectorySize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -542,6 +548,37 @@ pub struct FileTypeSize {
     pub size_gb: f64,
 }
 
+/// 大文件信息（脱敏：仅目录名 + 扩展名 + 大小 + 修改时间桶，不含完整路径和文件名）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TopFileInfo {
+    pub extension: String,
+    pub parent_dir_name: String,
+    pub size_gb: f64,
+    pub modified_bucket: String,
+    /// 完整文件路径（用于右键菜单"在资源管理器中打开"和"复制路径"）
+    pub path: String,
+}
+
+/// 扫描统计摘要
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanSummary {
+    pub total_files: u64,
+    pub total_dirs: u64,
+    pub scan_duration_secs: f64,
+    pub scanned_disk: String,
+}
+
+/// 按扩展名聚合的大文件桶（用于发送给 AI 做归因，脱敏）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileExtensionBucket {
+    pub extension: String,
+    pub count: u64,
+    pub size_gb: f64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StorageScanResult {
@@ -550,6 +587,24 @@ pub struct StorageScanResult {
     pub cleanup_items: Vec<CleanupItem>,
     pub file_types: Vec<FileTypeSize>,
     pub total_scanned_gb: f64,
+    #[serde(default)]
+    pub top_files: Vec<TopFileInfo>,
+    #[serde(default)]
+    pub scan_summary: Option<ScanSummary>,
+    #[serde(default)]
+    pub extension_buckets: Vec<FileExtensionBucket>,
+    /// 重点路径占用（AppData/ProgramData/家目录/桌面/下载等），从嵌套树提取
+    #[serde(default)]
+    pub hotspots: Vec<DirectorySize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CleanupVerification {
+    pub id: String,
+    pub path: String,
+    pub before_bytes: u64,
+    pub after_bytes: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -558,6 +613,8 @@ pub struct StorageCleanupResult {
     pub freed_gb: f64,
     pub cleaned_ids: Vec<String>,
     pub failures: Vec<String>,
+    #[serde(default)]
+    pub verification: Vec<CleanupVerification>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -614,11 +671,61 @@ fn file_type_category(path: &Path) -> &'static str {
     }
 }
 
-fn dir_size_with_types(path: &Path, type_bytes: &mut HashMap<&'static str, u64>) -> (u64, u64) {
+const TOP_FILE_THRESHOLD_GB: f64 = 0.5;
+const MAX_TOP_FILES: usize = 100;
+const MAX_EXTENSION_BUCKETS: usize = 20;
+
+/// 大小桶：将修改时间映射为粗粒度时间段，避免泄露精确时间戳
+fn modified_bucket(metadata: &fs::Metadata) -> String {
+    let Some(modified) = metadata.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()) else {
+        return "unknown".to_string();
+    };
+    let days = modified.as_secs() / 86_400;
+    if days < 30 {
+        "30d".to_string()
+    } else if days < 90 {
+        "90d".to_string()
+    } else if days < 180 {
+        "180d".to_string()
+    } else if days < 365 {
+        "1y".to_string()
+    } else {
+        "old".to_string()
+    }
+}
+
+fn extension_of(path: &Path) -> String {
+    path.extension()
+        .and_then(|v| v.to_str())
+        .map(|v| v.to_ascii_lowercase())
+        .filter(|v| !v.is_empty() && v.len() <= 16)
+        .unwrap_or_else(|| "(none)".to_string())
+}
+
+fn parent_dir_name(path: &Path) -> String {
+    path.parent()
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str())
+        .map(|n| {
+            // 截断避免泄露完整路径，仅保留最末段目录名
+            n.chars().take(32).collect::<String>()
+        })
+        .unwrap_or_else(|| "(root)".to_string())
+}
+
+/// 递归扫描目录：累计大小、文件数，同时收集 Top 大文件（脱敏）和扩展名桶
+fn scan_directory_for_insights(
+    path: &Path,
+    type_bytes: &mut HashMap<&'static str, u64>,
+    top_files: &mut Vec<TopFileInfo>,
+    extension_stats: &mut HashMap<String, (u64, u64)>,
+) -> (u64, u64, u64) {
     let mut total = 0u64;
-    let mut count = 0u64;
+    let mut file_count = 0u64;
+    let mut dir_count = 0u64;
     let mut stack = vec![path.to_path_buf()];
     while let Some(dir) = stack.pop() {
+        dir_count += 1;
         let Ok(entries) = fs::read_dir(&dir) else { continue };
         for entry in entries.flatten() {
             let Ok(file_type) = entry.file_type() else { continue };
@@ -628,25 +735,212 @@ fn dir_size_with_types(path: &Path, type_bytes: &mut HashMap<&'static str, u64>)
             if file_type.is_dir() {
                 stack.push(entry.path());
             } else if file_type.is_file() {
-                if let Ok(meta) = entry.metadata() {
-                    let size = meta.len();
-                    total += size;
-                    count += 1;
-                    *type_bytes.entry(file_type_category(&entry.path())).or_default() += size;
+                let Ok(meta) = entry.metadata() else { continue };
+                let size = meta.len();
+                total += size;
+                file_count += 1;
+                let category = file_type_category(&entry.path());
+                *type_bytes.entry(category).or_default() += size;
+
+                let ext = extension_of(&entry.path());
+                let entry_stats = extension_stats.entry(ext.clone()).or_insert((0, 0));
+                entry_stats.0 += 1;
+                entry_stats.1 += size;
+
+                let size_gb = size as f64 / 1_073_741_824.0;
+                if size_gb >= TOP_FILE_THRESHOLD_GB {
+                    top_files.push(TopFileInfo {
+                        extension: ext.clone(),
+                        parent_dir_name: parent_dir_name(&entry.path()),
+                        size_gb,
+                        modified_bucket: modified_bucket(&meta),
+                        path: entry.path().to_string_lossy().into_owned(),
+                    });
                 }
             }
         }
     }
-    (total, count)
+    (total, file_count, dir_count)
+}
+
+/// 递归扫描目录并构建嵌套树（WizTree 风格：一次扫描，前端秒下钻）。
+/// - `depth` 当前深度（从 0 开始）
+/// - `MAX_TREE_DEPTH` 达到此深度后不再展开 children，但仍累加大小
+/// - `MIN_SIZE_TO_KEEP_CHILDREN_GB` 小于此阈值的目录剪掉 children，减少内存
+const MAX_TREE_DEPTH: usize = 5;
+const MIN_SIZE_TO_KEEP_CHILDREN_GB: f64 = 0.05;
+
+fn scan_directory_tree(
+    path: &Path,
+    depth: usize,
+    dir_counter: &mut u64,
+    type_bytes: &mut HashMap<&'static str, u64>,
+    top_files: &mut Vec<TopFileInfo>,
+    extension_stats: &mut HashMap<String, (u64, u64)>,
+) -> DirectorySize {
+    *dir_counter += 1;
+    let mut total = 0u64;
+    let mut file_count = 0u64;
+    let mut children: Vec<DirectorySize> = Vec::new();
+
+    let Ok(entries) = fs::read_dir(path) else {
+        return DirectorySize {
+            path: path.to_string_lossy().to_string(),
+            size_gb: 0.0,
+            file_count: 0,
+            children: Vec::new(),
+        };
+    };
+
+    let can_recurse = depth < MAX_TREE_DEPTH;
+
+    for entry in entries.flatten() {
+        let Ok(file_type) = entry.file_type() else { continue };
+        if file_type.is_symlink() { continue; }
+
+        if file_type.is_dir() {
+            let child_path = entry.path();
+            let child = if can_recurse {
+                scan_directory_tree(&child_path, depth + 1, dir_counter, type_bytes, top_files, extension_stats)
+            } else {
+                // 达到深度上限：用迭代版只算大小，不展开
+                let mut tmp_type: HashMap<&'static str, u64> = HashMap::new();
+                let (size, files, _dirs) = scan_directory_for_insights(
+                    &child_path, &mut tmp_type, top_files, extension_stats,
+                );
+                *dir_counter += _dirs;
+                for (k, v) in tmp_type { *type_bytes.entry(k).or_default() += v; }
+                DirectorySize {
+                    path: child_path.to_string_lossy().to_string(),
+                    size_gb: size as f64 / 1_073_741_824.0,
+                    file_count: files,
+                    children: Vec::new(),
+                }
+            };
+            total += (child.size_gb * 1_073_741_824.0) as u64;
+            file_count += child.file_count;
+            children.push(child);
+        } else if file_type.is_file() {
+            let Ok(meta) = entry.metadata() else { continue };
+            let size = meta.len();
+            total += size;
+            file_count += 1;
+
+            let category = file_type_category(&entry.path());
+            *type_bytes.entry(category).or_default() += size;
+
+            let ext = extension_of(&entry.path());
+            let entry_stats = extension_stats.entry(ext.clone()).or_insert((0, 0));
+            entry_stats.0 += 1;
+            entry_stats.1 += size;
+
+            let size_gb = size as f64 / 1_073_741_824.0;
+            if size_gb >= TOP_FILE_THRESHOLD_GB {
+                top_files.push(TopFileInfo {
+                    extension: ext.clone(),
+                    parent_dir_name: parent_dir_name(&entry.path()),
+                    size_gb,
+                    modified_bucket: modified_bucket(&meta),
+                    path: entry.path().to_string_lossy().into_owned(),
+                });
+            }
+        }
+    }
+
+    children.sort_by(|a, b| b.size_gb.partial_cmp(&a.size_gb).unwrap_or(std::cmp::Ordering::Equal));
+
+    let size_gb = total as f64 / 1_073_741_824.0;
+    // 小目录剪枝：低于阈值的目录丢弃 children，减少内存和前端渲染压力
+    if size_gb < MIN_SIZE_TO_KEEP_CHILDREN_GB {
+        children.clear();
+    }
+
+    DirectorySize {
+        path: path.to_string_lossy().to_string(),
+        size_gb,
+        file_count,
+        children,
+    }
+}
+
+/// 从 top_files 和 extension_stats 生成最终的扩展名桶（按大小降序）
+fn build_extension_buckets(extension_stats: HashMap<String, (u64, u64)>) -> Vec<FileExtensionBucket> {
+    let mut buckets: Vec<FileExtensionBucket> = extension_stats
+        .into_iter()
+        .map(|(ext, (count, bytes))| FileExtensionBucket {
+            extension: ext,
+            count,
+            size_gb: bytes as f64 / 1_073_741_824.0,
+        })
+        .collect();
+    buckets.sort_by(|a, b| b.size_gb.partial_cmp(&a.size_gb).unwrap_or(std::cmp::Ordering::Equal));
+    buckets.truncate(MAX_EXTENSION_BUCKETS);
+    buckets
+}
+
+/// 从 top_files 生成最终的 Top N 大文件列表（按大小降序）
+fn build_top_files(mut top_files: Vec<TopFileInfo>) -> Vec<TopFileInfo> {
+    top_files.sort_by(|a, b| b.size_gb.partial_cmp(&a.size_gb).unwrap_or(std::cmp::Ordering::Equal));
+    top_files.truncate(MAX_TOP_FILES);
+    top_files
+}
+
+/// 在嵌套树中按完整路径查找节点
+fn find_node_in_tree<'a>(nodes: &'a [DirectorySize], target: &Path) -> Option<&'a DirectorySize> {
+    for node in nodes {
+        let node_path = PathBuf::from(&node.path);
+        if node_path == target {
+            return Some(node);
+        }
+        if target.starts_with(&node_path) && !node.children.is_empty() {
+            if let Some(found) = find_node_in_tree(&node.children, target) {
+                return Some(found);
+            }
+        }
+    }
+    None
+}
+
+/// 从已扫描的嵌套树提取重点路径占用（不重复扫描磁盘）
+fn extract_hotspots(directories: &[DirectorySize]) -> Vec<DirectorySize> {
+    let mut hotspots = Vec::new();
+
+    let user_profile = std::env::var_os("USERPROFILE").map(PathBuf::from);
+    let hotspot_paths: Vec<(String, PathBuf)> = {
+        let mut paths: Vec<(String, PathBuf)> = Vec::new();
+        if let Some(home) = &user_profile {
+            paths.push(("用户家目录".to_string(), home.clone()));
+            paths.push(("AppData\\Local".to_string(), home.join("AppData\\Local")));
+            paths.push(("AppData\\Roaming".to_string(), home.join("AppData\\Roaming")));
+            paths.push(("桌面".to_string(), home.join("Desktop")));
+            paths.push(("下载".to_string(), home.join("Downloads")));
+        }
+        paths.push(("ProgramData".to_string(), PathBuf::from("C:\\ProgramData")));
+        paths
+    };
+
+    for (label, path) in hotspot_paths {
+        if let Some(node) = find_node_in_tree(directories, &path) {
+            // 复制节点但清空 children（热点卡片只展示大小，不需要嵌套）
+            hotspots.push(DirectorySize {
+                path: format!("{} · {}", label, node.path),
+                size_gb: node.size_gb,
+                file_count: node.file_count,
+                children: Vec::new(),
+            });
+        }
+    }
+    hotspots
 }
 
 fn cleanup_is_allowed(id: &str) -> bool {
-    matches!(id, "temp" | "chrome" | "edge")
+    matches!(id, "temp" | "chrome" | "edge" | "trash" | "updates" | "wer" | "delivery_optimization")
 }
 
 /// 计算清理项大小
 fn scan_cleanup_items() -> Vec<CleanupItem> {
     let mut items = Vec::new();
+    let local_app = std::env::var("LOCALAPPDATA").unwrap_or_default();
     let temp_dir = std::env::temp_dir();
     let (size, _) = dir_size(&temp_dir);
     items.push(CleanupItem {
@@ -667,9 +961,9 @@ fn scan_cleanup_items() -> Vec<CleanupItem> {
             name: "回收站".to_string(),
             size_gb: size as f64 / 1_073_741_824.0,
             path: recycle_bin.to_string_lossy().to_string(),
-            cleanable: false,
-            recommended: false,
-            reason: "请使用 Windows 回收站确认后清空".to_string(),
+            cleanable: true,
+            recommended: true,
+            reason: "通过 PowerShell Clear-RecycleBin 清空所有用户的回收站".to_string(),
         });
     }
 
@@ -681,14 +975,45 @@ fn scan_cleanup_items() -> Vec<CleanupItem> {
             name: "Windows 更新缓存".to_string(),
             size_gb: size as f64 / 1_073_741_824.0,
             path: win_update.to_string_lossy().to_string(),
-            cleanable: false,
-            recommended: false,
-            reason: "交由 Windows 存储感知清理".to_string(),
+            cleanable: true,
+            recommended: true,
+            reason: "已下载的更新安装包，删除后 Windows 会按需重新下载".to_string(),
+        });
+    }
+
+    // Windows 错误报告（WER）归档
+    if !local_app.is_empty() {
+        let wer = PathBuf::from(&local_app).join("Microsoft\\Windows\\WER");
+        if wer.exists() {
+            let (size, _) = dir_size(&wer);
+            items.push(CleanupItem {
+                id: "wer".to_string(),
+                name: "Windows 错误报告".to_string(),
+                size_gb: size as f64 / 1_073_741_824.0,
+                path: wer.to_string_lossy().to_string(),
+                cleanable: true,
+                recommended: true,
+                reason: "崩溃转储和错误报告归档，应用和 Windows 不会依赖这些文件运行".to_string(),
+            });
+        }
+    }
+
+    // 传递优化缓存（Windows Update 的 P2P 缓存）
+    let delivery_opt = PathBuf::from("C:\\Windows\\ServiceProfiles\\NetworkService\\AppData\\Local\\Microsoft\\Windows\\DeliveryOptimization");
+    if delivery_opt.exists() {
+        let (size, _) = dir_size(&delivery_opt);
+        items.push(CleanupItem {
+            id: "delivery_optimization".to_string(),
+            name: "传递优化缓存".to_string(),
+            size_gb: size as f64 / 1_073_741_824.0,
+            path: delivery_opt.to_string_lossy().to_string(),
+            cleanable: true,
+            recommended: true,
+            reason: "Windows 更新的 P2P 下载缓存，删除后不影响已安装的更新".to_string(),
         });
     }
 
     // 浏览器缓存
-    let local_app = std::env::var("LOCALAPPDATA").unwrap_or_default();
     if !local_app.is_empty() {
         let caches = [
             ("chrome", "Google\\Chrome\\User Data\\Default\\Cache"),
@@ -758,10 +1083,12 @@ fn scan_storage_inner(app: AppHandle) -> StorageScanResult {
     let mut directories = Vec::new();
     let mut total_scanned = 0u64;
     let mut dir_count = 0u64;
+    let mut total_files = 0u64;
     let mut type_bytes = HashMap::new();
+    let mut top_files: Vec<TopFileInfo> = Vec::new();
+    let mut extension_stats: HashMap<String, (u64, u64)> = HashMap::new();
 
     for target in &scan_targets {
-        dir_count += 1;
         let _ = app.emit(
             "storage-scan-progress",
             ScanProgress {
@@ -770,13 +1097,10 @@ fn scan_storage_inner(app: AppHandle) -> StorageScanResult {
                 elapsed_secs: start.elapsed().as_secs_f64(),
             },
         );
-        let (size, count) = dir_size_with_types(target, &mut type_bytes);
-        total_scanned += size;
-        directories.push(DirectorySize {
-            path: target.to_string_lossy().to_string(),
-            size_gb: size as f64 / 1_073_741_824.0,
-            file_count: count,
-        });
+        let node = scan_directory_tree(target, 0, &mut dir_count, &mut type_bytes, &mut top_files, &mut extension_stats);
+        total_scanned += (node.size_gb * 1_073_741_824.0) as u64;
+        total_files += node.file_count;
+        directories.push(node);
     }
 
     // 按大小降序
@@ -800,12 +1124,26 @@ fn scan_storage_inner(app: AppHandle) -> StorageScanResult {
         })
         .collect();
 
+    let extension_buckets = build_extension_buckets(extension_stats);
+    let top_files = build_top_files(top_files);
+    let scan_summary = ScanSummary {
+        total_files,
+        total_dirs: dir_count,
+        scan_duration_secs: start.elapsed().as_secs_f64(),
+        scanned_disk: "C:".to_string(),
+    };
+    let hotspots = extract_hotspots(&directories);
+
     StorageScanResult {
         disks,
         directories,
         cleanup_items,
         file_types,
         total_scanned_gb: total_scanned as f64 / 1_073_741_824.0,
+        top_files,
+        scan_summary: Some(scan_summary),
+        extension_buckets,
+        hotspots,
     }
 }
 
@@ -814,6 +1152,44 @@ pub async fn scan_storage(app: AppHandle) -> Result<StorageScanResult, String> {
     tokio::task::spawn_blocking(move || scan_storage_inner(app))
         .await
         .map_err(|error| format!("存储扫描任务失败: {error}"))
+}
+
+/// 在 Windows 资源管理器中打开指定目录（绕过 Tauri opener 权限限制）
+#[tauri::command]
+pub async fn system_open_in_explorer(path: String) -> Result<bool, String> {
+    tokio::task::spawn_blocking(move || -> Result<bool, String> {
+        let target = PathBuf::from(&path);
+        if !target.exists() {
+            return Err(format!("路径不存在: {path}"));
+        }
+        // explorer.exe 直接打开，支持任意路径（包括 C:\Windows、C:\Program Files 等）
+        std::process::Command::new("explorer.exe")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("打开资源管理器失败: {e}"))?;
+        Ok(true)
+    })
+    .await
+    .map_err(|e| format!("任务失败: {e}"))?
+}
+
+/// 在 Windows 资源管理器中选中并显示指定项（绕过 Tauri opener 权限限制）
+#[tauri::command]
+pub async fn system_reveal_in_explorer(path: String) -> Result<bool, String> {
+    tokio::task::spawn_blocking(move || -> Result<bool, String> {
+        let target = PathBuf::from(&path);
+        if !target.exists() {
+            return Err(format!("路径不存在: {path}"));
+        }
+        // /select,<path> 让资源管理器打开父目录并选中该项
+        std::process::Command::new("explorer.exe")
+            .arg(format!("/select,{}", path))
+            .spawn()
+            .map_err(|e| format!("打开资源管理器失败: {e}"))?;
+        Ok(true)
+    })
+    .await
+    .map_err(|e| format!("任务失败: {e}"))?
 }
 
 fn cleanup_path(id: &str) -> Option<PathBuf> {
@@ -825,13 +1201,50 @@ fn cleanup_path(id: &str) -> Option<PathBuf> {
         "edge" => std::env::var_os("LOCALAPPDATA")
             .map(PathBuf::from)
             .map(|root| root.join("Microsoft\\Edge\\User Data\\Default\\Cache")),
+        "updates" => Some(PathBuf::from("C:\\Windows\\SoftwareDistribution\\Download")),
+        "wer" => std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .map(|root| root.join("Microsoft\\Windows\\WER")),
+        "delivery_optimization" => Some(PathBuf::from(
+            "C:\\Windows\\ServiceProfiles\\NetworkService\\AppData\\Local\\Microsoft\\Windows\\DeliveryOptimization",
+        )),
+        // trash 走 PowerShell，不走目录删除路径
         _ => None,
     }
 }
 
-fn clear_directory_contents(path: &Path) -> Result<u64, String> {
-    let before = dir_size(path).0;
-    let entries = fs::read_dir(path).map_err(|error| format!("{}: {error}", path.display()))?;
+/// 清理单个候选目录并返回 before/after 真实测量值
+fn clear_directory_with_verification(id: &str) -> Result<CleanupVerification, String> {
+    // 回收站走 PowerShell Clear-RecycleBin
+    if id == "trash" {
+        let recycle_bin = PathBuf::from("C:\\$Recycle.Bin");
+        let before = if recycle_bin.exists() { dir_size(&recycle_bin).0 } else { 0 };
+        let _ = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", "Clear-RecycleBin -Force -ErrorAction SilentlyContinue"])
+            .output();
+        let after = if recycle_bin.exists() { dir_size(&recycle_bin).0 } else { 0 };
+        return Ok(CleanupVerification {
+            id: id.to_string(),
+            path: recycle_bin.to_string_lossy().to_string(),
+            before_bytes: before,
+            after_bytes: after,
+        });
+    }
+
+    let Some(path) = cleanup_path(id) else {
+        return Err(format!("{id}: 路径不可用"));
+    };
+    let path_str = path.to_string_lossy().to_string();
+    if !path.exists() {
+        return Ok(CleanupVerification {
+            id: id.to_string(),
+            path: path_str,
+            before_bytes: 0,
+            after_bytes: 0,
+        });
+    }
+    let before = dir_size(&path).0;
+    let entries = fs::read_dir(&path).map_err(|error| format!("{}: {error}", path.display()))?;
     for entry in entries.flatten() {
         let entry_path = entry.path();
         let Ok(file_type) = entry.file_type() else { continue };
@@ -846,7 +1259,13 @@ fn clear_directory_contents(path: &Path) -> Result<u64, String> {
             log::warn!("storage cleanup skipped {}: {error}", entry_path.display());
         }
     }
-    Ok(before.saturating_sub(dir_size(path).0))
+    let after = dir_size(&path).0;
+    Ok(CleanupVerification {
+        id: id.to_string(),
+        path: path_str,
+        before_bytes: before,
+        after_bytes: after,
+    })
 }
 
 #[tauri::command]
@@ -857,28 +1276,22 @@ pub async fn clean_storage(
     if ids.iter().any(|id| !cleanup_is_allowed(id)) {
         return Err("包含不允许由 Mona 直接删除的清理项".to_string());
     }
-    let (freed, cleaned_ids, failures) = tokio::task::spawn_blocking(move || {
+    let (freed, cleaned_ids, failures, verification) = tokio::task::spawn_blocking(move || {
         let mut freed = 0u64;
         let mut cleaned_ids = Vec::new();
         let mut failures = Vec::new();
+        let mut verification: Vec<CleanupVerification> = Vec::new();
         for id in ids {
-            let Some(path) = cleanup_path(&id) else {
-                failures.push(format!("{id}: 路径不可用"));
-                continue;
-            };
-            if !path.exists() {
-                cleaned_ids.push(id);
-                continue;
-            }
-            match clear_directory_contents(&path) {
-                Ok(bytes) => {
-                    freed += bytes;
+            match clear_directory_with_verification(&id) {
+                Ok(v) => {
+                    freed += v.before_bytes.saturating_sub(v.after_bytes);
                     cleaned_ids.push(id);
+                    verification.push(v);
                 }
                 Err(error) => failures.push(error),
             }
         }
-        (freed, cleaned_ids, failures)
+        (freed, cleaned_ids, failures, verification)
     })
     .await
     .map_err(|error| format!("清理任务失败: {error}"))?;
@@ -916,5 +1329,6 @@ pub async fn clean_storage(
         freed_gb: freed as f64 / 1_073_741_824.0,
         cleaned_ids,
         failures,
+        verification,
     })
 }

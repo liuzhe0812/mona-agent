@@ -123,7 +123,7 @@ export function FileReferenceChip({
           sideOffset={8}
           collisionPadding={12}
           className={cn(
-            "max-w-[min(38rem,calc(100vw-2rem))] rounded-[10px]",
+            "max-w-[min(38rem,calc(100vw-2rem))] rounded-md",
             "border-border/60 bg-popover/95 px-2.5 py-1.5",
             "break-all font-mono text-[11px] leading-snug text-popover-foreground",
             "shadow-lg backdrop-blur",
@@ -244,7 +244,7 @@ function FileReferenceIcon({ kind }: { kind: FileReferenceKind }) {
       aria-hidden
       className={cn(
         "inline-flex h-[1.05em] min-w-[1.05em] shrink-0 items-center justify-center",
-        "rounded-[4px] bg-sky-500/12 px-[0.22em] text-[0.58em] font-bold uppercase leading-none",
+        "rounded-sm bg-sky-500/12 px-[0.22em] text-[0.58em] font-bold uppercase leading-none",
         "text-sky-600 dark:bg-sky-400/15 dark:text-sky-300",
       )}
     >

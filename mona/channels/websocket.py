@@ -328,6 +328,23 @@ _PPT_DOC_MIME_ALLOWED: frozenset[str] = frozenset({
 })
 _PPT_DOC_MAX_BYTES = 20 * 1024 * 1024
 
+# Document MIME whitelist for the "文档加工" workbench (doc_upload envelope).
+# Superset of _PPT_DOC_MIME_ALLOWED: adds Excel (xlsx/xls) and legacy PPT.
+_DOC_MIME_ALLOWED: frozenset[str] = frozenset({
+    "application/pdf",
+    "text/plain",
+    "text/markdown",
+    "text/csv",
+    "application/json",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.ms-powerpoint",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+})
+_DOC_MAX_BYTES = 20 * 1024 * 1024
+
 _DATA_URL_MIME_RE = re.compile(r"^data:([^;]+);base64,", re.DOTALL)
 _DATA_URL_RE = re.compile(r"^data:([^;]+);base64,(.+)$", re.DOTALL)
 
@@ -508,6 +525,8 @@ def _get_ppt_project_status(project_dir: Path) -> dict:
     design_spec = project_dir / "design_spec.md"
     notes_dir = project_dir / "notes"
     images_dir = project_dir / "images"
+    visual_plan = project_dir / "page_visual_plan.json"
+    review_ready = project_dir / ".review_ready"
 
     svg_count = (
         len(list(svg_output_dir.glob("*.svg"))) if svg_output_dir.is_dir() else 0
@@ -538,6 +557,38 @@ def _get_ppt_project_status(project_dir: Path) -> dict:
         else []
     )
 
+    # --- V2 phase derivation (with meta.json) ---
+    import json as _json
+
+    meta: dict = {}
+    meta_file = project_dir / "meta.json"
+    if meta_file.is_file():
+        try:
+            meta = _json.loads(meta_file.read_text(encoding="utf-8"))
+        except Exception:
+            meta = {}
+
+    has_outline = visual_plan.is_file()
+    outline_locked = meta.get("outlineLocked", False)
+    export_requested = meta.get("exportRequestedAt") is not None
+    has_review_ready = review_ready.is_file()
+
+    if pptx_files or has_output_pptx:
+        v2_phase = "done"
+    elif export_requested:
+        v2_phase = "exporting"
+    elif has_review_ready and svg_count > 0:
+        v2_phase = "review"
+    elif spec_lock.exists() or outline_locked:
+        v2_phase = "producing"
+    elif has_outline:
+        v2_phase = "outline"
+    elif generating_marker.exists():
+        v2_phase = "generating"
+    else:
+        v2_phase = "config"
+
+    # Legacy status (backward compat)
     if pptx_files or has_output_pptx:
         project_status = "done"
     elif generating_marker.exists():
@@ -566,6 +617,11 @@ def _get_ppt_project_status(project_dir: Path) -> dict:
 
     return {
         "status": project_status,
+        "phase": v2_phase,
+        "hasOutline": has_outline,
+        "outlineLocked": outline_locked,
+        "reviewReady": has_review_ready,
+        "hasDesignSpec": design_spec.exists(),
         "slideCount": max(svg_count, svg_final_count, output_image_count),
         "hasExport": len(pptx_files) > 0 or has_output_pptx,
         "hasSvgOutput": svg_count > 0 or svg_final_count > 0,
@@ -3164,6 +3220,78 @@ class WebSocketChannel(BaseChannel):
             logger.exception("ppt_upload error")
             await self._send_event(connection, "ppt_upload_result", ok=False, error=str(e))
 
+    async def _handle_doc_upload_envelope(
+        self,
+        connection: Any,
+        envelope: dict[str, Any],
+    ) -> None:
+        """Handle document uploads for the "文档加工" workbench.
+
+        Envelope shape: {type: "doc_upload", chat_id: str, files: [{name, data_url}]}
+        Files are written to ``workspace/uploads/<chat_id>/`` and the relative
+        paths are returned to the caller. The original user file is never
+        modified — only the working copy under uploads/ is written.
+        """
+        files = envelope.get("files")
+        if not isinstance(files, list) or not files:
+            await self._send_event(connection, "doc_upload_result", ok=False, error="no files")
+            return
+        chat_id = envelope.get("chat_id")
+        if not _is_valid_chat_id(chat_id):
+            await self._send_event(connection, "doc_upload_result", ok=False, error="invalid chat_id")
+            return
+        try:
+            from mona.config.paths import get_workspace_path
+
+            workspace = get_workspace_path()
+            # Sanitize chat_id for folder name: strip "ephemeral:" prefix and
+            # keep only filesystem-safe characters.
+            safe_chat = str(chat_id).replace("ephemeral:", "eph_")
+            uploads_dir = workspace / "uploads" / safe_chat
+            uploads_dir.mkdir(parents=True, exist_ok=True)
+
+            added: list[dict[str, str]] = []
+            for item in files:
+                if not isinstance(item, dict):
+                    continue
+                name = item.get("name")
+                data_url = item.get("data_url")
+                if not isinstance(name, str) or not isinstance(data_url, str):
+                    continue
+                mime = _extract_data_url_mime(data_url)
+                if mime is None or mime not in _DOC_MIME_ALLOWED:
+                    continue
+                try:
+                    raw = _decode_data_url_payload(data_url, _DOC_MAX_BYTES)
+                except FileSizeExceeded:
+                    continue
+                except Exception:
+                    continue
+                if raw is None:
+                    continue
+                safe_name = safe_filename(name)
+                # Prefix with a short uuid to avoid collisions when the same
+                # filename is uploaded twice in the same chat session.
+                short_id = uuid.uuid4().hex[:8]
+                dest = uploads_dir / f"{short_id}-{safe_name}"
+                dest.write_bytes(raw)
+                rel = dest.relative_to(workspace)
+                added.append({
+                    "name": safe_name,
+                    "path": str(rel).replace("\\", "/"),
+                    "size": len(raw),
+                    "mime": mime,
+                })
+
+            await self._send_event(
+                connection, "doc_upload_result", ok=len(added) > 0, files=added,
+                chat_id=chat_id,
+                error=None if added else "no valid files",
+            )
+        except Exception as e:
+            logger.exception("doc_upload error")
+            await self._send_event(connection, "doc_upload_result", ok=False, error=str(e))
+
     async def _dispatch_envelope(
         self,
         connection: Any,
@@ -3217,6 +3345,9 @@ class WebSocketChannel(BaseChannel):
         if t == "ppt_upload":
             await self._handle_ppt_upload_envelope(connection, envelope)
             return
+        if t == "doc_upload":
+            await self._handle_doc_upload_envelope(connection, envelope)
+            return
         if t == "ppt_import_native":
             await self._handle_ppt_import_native_envelope(connection, envelope)
             return
@@ -3249,6 +3380,34 @@ class WebSocketChannel(BaseChannel):
                         detail="image_rejected", reason=reason,
                     )
                     return
+
+            # Document paths uploaded via the "doc_upload" envelope. These are
+            # workspace-relative paths returned by _handle_doc_upload_envelope.
+            # Resolve them to absolute paths so extract_documents() can read
+            # them and inject the extracted text into the user message.
+            raw_doc_paths = envelope.get("doc_paths")
+            if raw_doc_paths is not None:
+                if not isinstance(raw_doc_paths, list):
+                    raw_doc_paths = None
+            if raw_doc_paths:
+                from mona.config.paths import get_workspace_path
+
+                workspace = get_workspace_path()
+                for dp in raw_doc_paths:
+                    if not isinstance(dp, str) or not dp:
+                        continue
+                    # Defensive: reject absolute paths and parent traversal to
+                    # prevent escaping the workspace.
+                    if dp.startswith("/") or ".." in Path(dp).parts:
+                        continue
+                    abs_path = (workspace / dp).resolve()
+                    try:
+                        # Ensure the resolved path stays inside workspace.
+                        abs_path.relative_to(workspace.resolve())
+                    except ValueError:
+                        continue
+                    if abs_path.is_file():
+                        media_paths.append(str(abs_path))
 
             # Allow image-only turns (content may be empty when media is attached).
             if not content.strip() and not media_paths:
@@ -3300,6 +3459,28 @@ class WebSocketChannel(BaseChannel):
                 # aspect_ratio / duration and treats attached images as
                 # image-to-video references via the generate_video tool.
                 metadata["video_generation"] = {"enabled": True}
+            # Persist doc references for history replay: the front-end renders
+            # document chips from this list. Only name and relative path are
+            # stored — file bytes live in workspace/uploads/.
+            if raw_doc_paths:
+                doc_meta: list[dict[str, str]] = []
+                from mona.config.paths import get_workspace_path as _gwp
+
+                ws = _gwp()
+                for dp in raw_doc_paths:
+                    if not isinstance(dp, str) or not dp:
+                        continue
+                    if dp.startswith("/") or ".." in Path(dp).parts:
+                        continue
+                    abs_p = (ws / dp).resolve()
+                    try:
+                        abs_p.relative_to(ws.resolve())
+                    except ValueError:
+                        continue
+                    if abs_p.is_file():
+                        doc_meta.append({"name": abs_p.name, "path": dp})
+                if doc_meta:
+                    metadata["doc_paths"] = doc_meta
             await self._handle_message(
                 sender_id=client_id,
                 chat_id=cid,

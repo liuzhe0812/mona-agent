@@ -339,7 +339,7 @@ export function ContactsView({ gatewayUrl }: ContactsViewProps) {
                       }}
                       className={cn(
                         "flex items-center gap-2 border-b border-border/40 px-3 py-2 text-left",
-                        isSelected ? "bg-blue-500/10" : "hover:bg-accent/40",
+                        isSelected ? "bg-blue-500/10" : "hover:bg-accent",
                       )}
                     >
                       <Avatar name={c.displayName} />

@@ -21,6 +21,7 @@ import {
 import { AppTitleBar } from "@/components/workspace/AppTitleBar";
 import { BrowserTabView } from "@/components/browser/BrowserTabView";
 import { HistoryPage } from "@/components/browser/HistoryPage";
+import { DownloadsPage } from "@/components/browser/DownloadsPage";
 import { useBrowserTabs } from "@/hooks/useBrowserTabs";
 import { TerminalView } from "@/components/terminal/TerminalView";
 import { useTerminalStore } from "@/components/terminal/store/terminalStore";
@@ -35,6 +36,7 @@ import { LicenseProvider, useLicense } from "@/hooks/useLicense";
 import { LoginDialog } from "@/components/LoginDialog";
 import { UpdateNotification } from "@/components/UpdateNotification";
 import { useEmailStore } from "@/components/email/store/emailStore";
+import { useTodoStore } from "@/components/schedule/todoStore";
 import { cn } from "@/lib/utils";
 import {
   deriveWsUrl,
@@ -117,9 +119,9 @@ const EmailClientView = lazy(() =>
   })),
 );
 
-const ScheduleView = lazy(() =>
-  import("@/components/schedule/ScheduleView").then((module) => ({
-    default: module.ScheduleView,
+const PlanningView = lazy(() =>
+  import("@/components/schedule/PlanningView").then((module) => ({
+    default: module.PlanningView,
   })),
 );
 
@@ -555,6 +557,11 @@ function Shell({
   const [view, setView] = useState<ShellView>(
     new URLSearchParams(window.location.search).get("noteId") ? "note" : "chat",
   );
+  // 首次进入 system 后保持挂载，避免存储扫描过程中切走再切回丢失状态
+  const [systemMounted, setSystemMounted] = useState(view === "system");
+  useEffect(() => {
+    if (view === "system") setSystemMounted(true);
+  }, [view]);
   const [settingsInitialSection, setSettingsInitialSection] = useState<string | undefined>(undefined);
   const {
     tabs: browserTabs,
@@ -578,6 +585,7 @@ function Shell({
     closeTabsToRight,
     duplicateTab,
     openHistoryPage,
+    openDownloadsPage,
     toggleMute,
     toggleAdBlock,
     toggleDarkMode,
@@ -749,6 +757,41 @@ function Shell({
           // 忽略
         }
       })();
+    };
+  }, []);
+
+  // 全局初始化计划收集箱数量（用于主菜单“计划”角标）
+  // 策略：services 就绪后加载 todos + 待确认邮件日程，并每 5 分钟轮询刷新
+  useEffect(() => {
+    let cancelled = false;
+    let intervalId = 0;
+    const { loadAll, loadPendingSchedules } = useTodoStore.getState();
+
+    const refresh = async () => {
+      try {
+        await Promise.all([loadAll(), loadPendingSchedules()]);
+      } catch {
+        // silent — 角标非关键功能
+      }
+    };
+
+    void (async () => {
+      // 轮询等待 services HTTP 端口就绪
+      for (let i = 0; i < 60; i++) {
+        if (cancelled) return;
+        const status = await getServicesStatus();
+        if (status.port) break;
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+      if (cancelled) return;
+      await refresh();
+      // 每 5 分钟兜底刷新一次，保证收集箱数量同步
+      intervalId = window.setInterval(refresh, 5 * 60 * 1000);
+    })();
+
+    return () => {
+      cancelled = true;
+      if (intervalId) window.clearInterval(intervalId);
     };
   }, []);
 
@@ -1282,6 +1325,25 @@ function Shell({
     };
   }, [onOpenNote, onOpenSSHAndNew, refresh, addMdReaderTab, onOpenEmail, onOpenSchedule]);
 
+  // 监听浏览器 WebView 内的 Ctrl+J/Ctrl+H 快捷键，打开下载/历史记录页面
+  useEffect(() => {
+    if (!isTauri()) return;
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    (async () => {
+      const { listen } = await import("@tauri-apps/api/event");
+      unlisten = await listen<string>("browser-open-internal-page", (event) => {
+        if (event.payload === "downloads") openDownloadsPage();
+        else if (event.payload === "history") openHistoryPage();
+      });
+      if (cancelled) unlisten();
+    })();
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [openHistoryPage, openDownloadsPage]);
+
   // 启动时拉取 pending 的 md 文件（首次启动场景）
   const addMdReaderTabRef = useRef(addMdReaderTab);
   addMdReaderTabRef.current = addMdReaderTab;
@@ -1728,8 +1790,8 @@ function Shell({
               {view === "schedule" && (
                 <div className={cn("absolute inset-0 flex flex-col", isBrowserTabActive && "hidden")}>
                   {client ? (
-                    <Suspense fallback={<ModuleLoading title="正在打开日程" />}>
-                      <ScheduleView />
+                    <Suspense fallback={<ModuleLoading title="正在打开计划" />}>
+                      <PlanningView />
                     </Suspense>
                   ) : (
                     <RuntimePlaceholder
@@ -1747,8 +1809,11 @@ function Shell({
                   </Suspense>
                 </div>
               )}
-              {view === "system" && (
-                <div className={cn("absolute inset-0 flex flex-col", isBrowserTabActive && "hidden")}>
+              {systemMounted && (
+                <div className={cn(
+                  "absolute inset-0 flex flex-col",
+                  (view !== "system" || isBrowserTabActive) && "invisible pointer-events-none",
+                )}>
                   <Suspense fallback={<ModuleLoading title="正在打开系统" />}>
                     <SystemView />
                   </Suspense>
@@ -1797,6 +1862,17 @@ function Shell({
                   </div>
                 ))}
               {browserTabs
+                .filter((t) => t.type === "downloads")
+                .map((tab) => (
+                  <div
+                    key={tab.id}
+                    className="absolute inset-0 flex flex-col bg-background"
+                    style={{ display: tab.id === activeBrowserTabId ? "flex" : "none" }}
+                  >
+                    <DownloadsPage onBack={() => void closeBrowserTab(tab.id)} />
+                  </div>
+                ))}
+              {browserTabs
                 .filter((t) => t.type === "browser")
                 .map((tab) => (
                   <div
@@ -1818,6 +1894,7 @@ function Shell({
                       onReload={() => reload(tab.id)}
                       onUrlChange={(url) => updateTabUrl(tab.id, url)}
                       onOpenHistory={openHistoryPage}
+                      onOpenDownloads={openDownloadsPage}
                       onToggleMute={() => toggleMute(tab.id)}
                       onToggleAdBlock={() => toggleAdBlock(tab.id)}
                       onToggleDarkMode={() => toggleDarkMode(tab.id)}

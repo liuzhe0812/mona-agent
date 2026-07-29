@@ -148,7 +148,7 @@ export function MessageBubble({
         {hasText ? (
           <p
             className={cn(
-              "ml-auto max-w-full rounded-[18px] bg-secondary/70 px-4 py-2",
+              "ml-auto max-w-full rounded-2xl bg-secondary/70 px-4 py-2",
               "text-left text-[16px]/[1.75] whitespace-pre-wrap break-words select-text",
             )}
           >
@@ -303,7 +303,7 @@ function MediaCell({ media }: { media: UIMediaAttachment }) {
 
   if (media.kind === "video" && hasUrl) {
     return (
-      <figure className="max-w-[min(100%,32rem)] overflow-hidden rounded-[14px] border border-border/60 bg-muted/40">
+      <figure className="max-w-[min(100%,32rem)] overflow-hidden rounded-xl border border-border/60 bg-muted/40">
         <video
           src={media.url}
           controls
@@ -340,7 +340,7 @@ function MediaCell({ media }: { media: UIMediaAttachment }) {
         download={media.name ?? label}
         title={media.name ?? undefined}
         aria-label={label}
-        className="flex max-w-[18rem] items-center gap-2 rounded-[14px] border border-border/60 bg-muted/40 px-3 py-2 text-xs text-muted-foreground hover:underline"
+        className="flex max-w-[18rem] items-center gap-2 rounded-xl border border-border/60 bg-muted/40 px-3 py-2 text-xs text-muted-foreground hover:underline"
       >
         {inner}
       </a>
@@ -349,7 +349,7 @@ function MediaCell({ media }: { media: UIMediaAttachment }) {
 
   return (
     <div
-      className="flex max-w-[18rem] items-center gap-2 rounded-[14px] border border-border/60 bg-muted/40 px-3 py-2 text-xs text-muted-foreground"
+      className="flex max-w-[18rem] items-center gap-2 rounded-xl border border-border/60 bg-muted/40 px-3 py-2 text-xs text-muted-foreground"
       title={media.name ?? undefined}
       aria-label={label}
     >
@@ -450,9 +450,9 @@ function UserImageCell({
   const tileClasses = cn(
     "relative overflow-hidden border border-border/60 bg-muted/40",
     size === "large"
-      ? "w-[min(100%,34rem)] rounded-[20px] bg-transparent"
-      : "h-24 w-24 rounded-[14px]",
-    "shadow-[0_6px_18px_-14px_rgba(0,0,0,0.45)]",
+      ? "w-[min(100%,34rem)] rounded-2xl bg-transparent"
+      : "h-24 w-24 rounded-xl",
+    "shadow-sm",
   );
 
   const handleSave = useCallback(

@@ -222,7 +222,7 @@ export const ChatList = memo(function ChatList({
                     <button
                       type="button"
                       onClick={(e) => e.stopPropagation()}
-                      className="ml-auto flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground/60 opacity-0 transition-opacity hover:bg-sidebar-accent/60 hover:text-sidebar-foreground group-hover/header:opacity-100"
+                      className="ml-auto flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground/60 opacity-0 transition-opacity hover:bg-[hsl(var(--sidebar-hover-surface)/0.04)] hover:text-sidebar-foreground group-hover/header:opacity-100"
                       aria-label={t("common.more", "更多")}
                     >
                       <MoreHorizontal className="h-3.5 w-3.5" />
@@ -293,8 +293,8 @@ export const ChatList = memo(function ChatList({
                             "group flex min-w-0 max-w-full items-center gap-2 rounded-xl px-2 text-[13px] transition-colors",
                             compact ? "min-h-7" : "min-h-8",
                             active
-                              ? "bg-sidebar-accent/70 text-sidebar-accent-foreground shadow-[inset_0_0_0_1px_hsl(var(--sidebar-border)/0.28)]"
-                              : "text-sidebar-foreground/82 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground",
+                              ? "bg-[hsl(var(--sidebar-active-surface)/0.07)] text-sidebar-foreground"
+                              : "text-sidebar-foreground/82 hover:bg-[hsl(var(--sidebar-hover-surface)/0.04)] hover:text-sidebar-foreground",
                           )}
                         >
                       <button
@@ -378,7 +378,7 @@ export const ChatList = memo(function ChatList({
                   Math.min(totalSessionCount, limit + VISIBLE_SESSIONS_INCREMENT),
                 )
               }
-              className="h-8 w-full rounded-full text-[12px] font-medium text-muted-foreground transition-colors hover:bg-sidebar-accent/65 hover:text-sidebar-foreground"
+              className="h-8 w-full rounded-full text-[12px] font-medium text-muted-foreground transition-colors hover:bg-[hsl(var(--sidebar-hover-surface)/0.04)] hover:text-sidebar-foreground"
             >
               {t("chat.showMore", { count: hiddenSessionCount })}
             </button>

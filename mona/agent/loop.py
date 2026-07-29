@@ -201,6 +201,7 @@ class AgentLoop:
         tool_hint_max_length: int | None = None,
         cron_service: CronService | None = None,
         schedule_service: Any | None = None,
+        todo_service: Any | None = None,
         restrict_to_workspace: bool = False,
         session_manager: SessionManager | None = None,
         mcp_servers: dict | None = None,
@@ -262,6 +263,7 @@ class AgentLoop:
         self._video_generation_provider_configs = dict(video_generation_provider_configs or {})
         self.cron_service = cron_service
         self.schedule_service = schedule_service
+        self.todo_service = todo_service
         self.restrict_to_workspace = restrict_to_workspace
         self._start_time = time.time()
         self._last_usage: dict[str, int] = {}
@@ -547,6 +549,7 @@ class AgentLoop:
             subagent_manager=self.subagents,
             cron_service=self.cron_service,
             schedule_service=self.schedule_service,
+            todo_service=self.todo_service,
             sessions=self.sessions,
             provider_snapshot_loader=self._provider_snapshot_loader,
             image_generation_provider_configs=self._image_generation_provider_configs,
@@ -1100,6 +1103,125 @@ class AgentLoop:
             except (RuntimeError, BaseExceptionGroup):
                 logger.debug("MCP server '{}' cleanup error (can be ignored)", name)
         self._mcp_stacks.clear()
+
+    # ------------------------------------------------------------------
+    # MCP server runtime management (settings panel)
+    # ------------------------------------------------------------------
+
+    def _unregister_mcp_server_tools(self, name: str) -> None:
+        """Unregister all tools/resources/prompts belonging to a MCP server."""
+        prefix = f"mcp_{name}_"
+        for tool_name in list(self.tools.tool_names):
+            if tool_name.startswith(prefix):
+                self.tools.unregister(tool_name)
+
+    def get_mcp_status(self) -> list[dict[str, Any]]:
+        """Return per-server status: name / connected / transport / tool_count / ..."""
+        from mona.agent.tools.mcp import list_mcp_server_tools
+
+        rows: list[dict[str, Any]] = []
+        for name, cfg in self._mcp_servers.items():
+            connected = name in self._mcp_stacks
+            transport = cfg.type
+            if not transport:
+                if cfg.command:
+                    transport = "stdio"
+                elif cfg.url:
+                    transport = (
+                        "sse" if cfg.url.rstrip("/").endswith("/sse") else "streamableHttp"
+                    )
+                else:
+                    transport = "unknown"
+            tool_count = (
+                len(list_mcp_server_tools(self.tools, name)) if connected else 0
+            )
+            rows.append({
+                "name": name,
+                "connected": connected,
+                "transport": transport,
+                "toolCount": tool_count,
+                "toolTimeout": cfg.tool_timeout,
+                "enabledTools": list(cfg.enabled_tools) if cfg.enabled_tools else ["*"],
+            })
+        return rows
+
+    async def restart_mcp_server(self, name: str) -> dict[str, Any]:
+        """Close + reconnect a single MCP server without touching others."""
+        from mona.agent.tools.mcp import connect_single_mcp_server, list_mcp_server_tools
+
+        if name not in self._mcp_servers:
+            return {"ok": False, "name": name, "error": "Server not configured"}
+        cfg = self._mcp_servers[name]
+
+        # 1. Close existing stack (if any)
+        old_stack = self._mcp_stacks.pop(name, None)
+        if old_stack is not None:
+            try:
+                await old_stack.aclose()
+            except (RuntimeError, BaseExceptionGroup):
+                logger.debug("MCP server '{}' old stack cleanup error on restart", name)
+        # 2. Unregister tools
+        self._unregister_mcp_server_tools(name)
+        # 3. Reconnect
+        try:
+            stack = await connect_single_mcp_server(name, cfg, self.tools)
+        except Exception as e:
+            logger.exception("[mcp] restart '{}' failed", name)
+            return {"ok": False, "name": name, "error": str(e)}
+        if stack is None:
+            return {"ok": False, "name": name, "error": "Connection failed (see logs)"}
+        self._mcp_stacks[name] = stack
+        self._mcp_connected = True
+        tool_count = len(list_mcp_server_tools(self.tools, name))
+        return {
+            "ok": True,
+            "name": name,
+            "connected": True,
+            "toolCount": tool_count,
+        }
+
+    async def reload_mcp(self) -> dict[str, Any]:
+        """Close all MCP stacks and reconnect from current config."""
+        # 1. Close all stacks
+        for name, stack in list(self._mcp_stacks.items()):
+            try:
+                await stack.aclose()
+            except (RuntimeError, BaseExceptionGroup):
+                logger.debug("MCP server '{}' cleanup error on reload", name)
+        self._mcp_stacks.clear()
+        # 2. Unregister all MCP tools
+        for tool_name in list(self.tools.tool_names):
+            if tool_name.startswith("mcp_"):
+                self.tools.unregister(tool_name)
+        # 3. Reconnect
+        self._mcp_connected = False
+        await self._connect_mcp()
+        return {
+            "ok": True,
+            "connectedCount": len(self._mcp_stacks),
+            "totalConfigured": len(self._mcp_servers),
+        }
+
+    async def add_mcp_server(self, name: str, cfg) -> dict[str, Any]:
+        """Add a new MCP server to runtime config and connect it immediately."""
+        if name in self._mcp_servers:
+            return {"ok": False, "name": name, "error": "Server already exists"}
+        self._mcp_servers[name] = cfg
+        return await self.restart_mcp_server(name)
+
+    async def remove_mcp_server(self, name: str) -> dict[str, Any]:
+        """Disconnect + unregister + remove a MCP server from runtime config."""
+        if name not in self._mcp_servers:
+            return {"ok": False, "name": name, "error": "Server not configured"}
+        stack = self._mcp_stacks.pop(name, None)
+        if stack is not None:
+            try:
+                await stack.aclose()
+            except (RuntimeError, BaseExceptionGroup):
+                logger.debug("MCP server '{}' cleanup error on remove", name)
+        self._unregister_mcp_server_tools(name)
+        del self._mcp_servers[name]
+        return {"ok": True, "name": name}
 
     def _schedule_background(self, coro) -> None:
         """Schedule a coroutine as a tracked background task (drained on shutdown)."""

@@ -20,6 +20,10 @@ hardware/
 # 清理：根目录非代码/项目配置文件
 CONTACTS_DEV_PLAN.md
 logo.png
+EMAIL_BODY_LOADING_*.md
+
+# PPT 项目运行时数据（用户生成的 PPT 产物）
+ppt_projects/
 
 # 清理：禁止代码目录散落设计文档（仅允许模块 README.md 和运行时模板）
 webui/src/components/system/*.md

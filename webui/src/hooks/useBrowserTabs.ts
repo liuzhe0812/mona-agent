@@ -23,7 +23,7 @@ const SESSION_RESTORE_DELAY = 800; // ms，等待主窗口初始化完成
 
 export interface Tab {
   id: string;
-  type: "mona" | "browser" | "md-reader" | "history";
+  type: "mona" | "browser" | "md-reader" | "history" | "downloads";
   title: string;
   url?: string;
   favicon?: string;
@@ -716,6 +716,25 @@ export function useBrowserTabs() {
     setActiveTabId(id);
   }, [tabs]);
 
+  // 打开下载记录页面
+  const openDownloadsPage = useCallback(() => {
+    const existing = tabs.find((t) => t.type === "downloads");
+    if (existing) {
+      setActiveTabId(existing.id);
+      return;
+    }
+    const id = createTabId("downloads");
+    const newTab: Tab = {
+      id,
+      type: "downloads",
+      title: "下载记录",
+      isAiControlled: false,
+      webviewCreated: false,
+    };
+    setTabs((prev) => [...prev, newTab]);
+    setActiveTabId(id);
+  }, [tabs]);
+
   // ── 标签管理增强 ──
 
   // 重排标签（拖拽排序）
@@ -991,6 +1010,7 @@ export function useBrowserTabs() {
     addEmptyTab,
     addMdReaderTab,
     openHistoryPage,
+    openDownloadsPage,
     navigateToUrl,
     closeTab,
     switchTab,

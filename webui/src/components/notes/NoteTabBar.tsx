@@ -85,7 +85,7 @@ export function NoteTabBar({
                   "group relative flex h-full w-[140px] shrink-0 items-center gap-1.5 border-r border-border/40 px-3 text-[12px] transition-colors",
                   isActive
                     ? "bg-background text-foreground"
-                    : "bg-transparent text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+                    : "bg-transparent text-muted-foreground hover:bg-accent hover:text-foreground",
                 )}
               >
                 {isActive ? (

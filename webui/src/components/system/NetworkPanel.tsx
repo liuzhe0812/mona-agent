@@ -124,7 +124,7 @@ function DnsSection() {
                       disabled={isActing}
                       className={cn(
                         "flex flex-col items-start gap-1 rounded-lg border p-2.5 text-left transition",
-                        isActive ? "border-blue-500/60 bg-blue-500/5 ring-1 ring-blue-500/20" : "border-border/70 bg-card hover:border-blue-500/40 hover:bg-accent/40",
+                        isActive ? "border-blue-500/60 bg-blue-500/5 ring-1 ring-blue-500/20" : "border-border/70 bg-card hover:border-blue-500/40 hover:bg-accent",
                         isActing && "opacity-60",
                       )}
                     >

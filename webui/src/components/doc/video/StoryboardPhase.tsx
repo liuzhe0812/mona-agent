@@ -4,7 +4,6 @@ import {
   ArrowUp,
   Check,
   Loader2,
-  Play,
   Plus,
   Trash2,
   Volume2,
@@ -41,9 +40,9 @@ export function StoryboardPhase({ projectName, onLocked }: StoryboardPhaseProps)
   const [playingIndex, setPlayingIndex] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Load storyboard on mount
-  const loadScenes = useCallback(async () => {
-    setLoading(true);
+  // Load storyboard. Pass silent=true to skip loading indicator (used by polling).
+  const loadScenes = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     setError(null);
     try {
       const res = await fetchVideoStoryboard(token, projectName);
@@ -52,13 +51,13 @@ export function StoryboardPhase({ projectName, onLocked }: StoryboardPhaseProps)
         if (res.scenes.length > 0 && !res.scenes.some((s) => s.index === selectedIndex)) {
           setSelectedIndex(res.scenes[0].index);
         }
-      } else {
+      } else if (!silent) {
         setError(res.error || "无法加载分镜");
       }
     } catch (e) {
-      setError(String(e));
+      if (!silent) setError(String(e));
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [token, projectName, selectedIndex]);
 
@@ -69,12 +68,12 @@ export function StoryboardPhase({ projectName, onLocked }: StoryboardPhaseProps)
 
   // Poll storyboard while empty (AI is generating draft)
   useEffect(() => {
-    if (scenes.length > 0 || !loading) return;
+    if (scenes.length > 0) return;
     const timer = setInterval(() => {
-      loadScenes();
-    }, 5000);
+      loadScenes(true);
+    }, 2000);
     return () => clearInterval(timer);
-  }, [scenes.length, loading, loadScenes]);
+  }, [scenes.length, loadScenes]);
 
   const selectedScene = scenes.find((s) => s.index === selectedIndex) ?? null;
 
@@ -232,7 +231,7 @@ export function StoryboardPhase({ projectName, onLocked }: StoryboardPhaseProps)
                 "mb-1 w-full rounded-md border px-2.5 py-2 text-left transition-colors",
                 s.index === selectedIndex
                   ? "border-primary bg-accent"
-                  : "border-border/60 hover:bg-accent/50",
+                  : "border-border/60 hover:bg-accent",
               )}
             >
               <div className="flex items-center gap-1.5">

@@ -886,6 +886,14 @@ class Dream:
         max_iterations: int = 10,
         max_tool_result_chars: int = 16_000,
         annotate_line_ages: bool = True,
+        # Skill lifecycle (see docs/design/skill-lifecycle-design.md).
+        # Automatic archival is OFF by default; CLI injects these from
+        # DreamConfig so the same config drives both Phase 1/2 and the
+        # maintenance sweep at the top of run().
+        skill_prune_enabled: bool = False,
+        archive_after_days: int = 90,
+        max_active_user_skills: int = 100,
+        disabled_skills: list[str] | None = None,
     ):
         self.store = store
         self.provider = provider
@@ -897,6 +905,10 @@ class Dream:
         # Default True keeps the #3212 behavior; set False to feed MEMORY.md raw
         # (e.g. if a specific LLM reacts poorly to the `← Nd` suffix).
         self.annotate_line_ages = annotate_line_ages
+        self.skill_prune_enabled = skill_prune_enabled
+        self.archive_after_days = archive_after_days
+        self.max_active_user_skills = max_active_user_skills
+        self.disabled_skills = tuple(disabled_skills or ())
         self._runner = AgentRunner(provider)
         self._tools = self._build_tools()
 
@@ -930,9 +942,12 @@ class Dream:
         tools.register(MemoryReadTool())
         tools.register(MemoryEditTool())
         tools.register(MemorySearchTool())
-        # Skill access (read existing + create new)
-        tools.register(SkillReadTool())
-        tools.register(SkillCreateTool())
+        # Skill access (read existing + create new). Dream's maintenance
+        # reads must NOT bump access counters — otherwise the inactivity
+        # clock would reset on every Dream cycle and archival would never
+        # happen. Pass track_usage=False to opt out of telemetry.
+        tools.register(SkillReadTool(track_usage=False))
+        tools.register(SkillCreateTool(max_active_user_skills=self.max_active_user_skills))
         # Heartbeat (Dream may add recurring tasks discovered from memory)
         tools.register(HeartbeatUpdateTool())
         return tools
@@ -1016,7 +1031,33 @@ class Dream:
 
     async def run(self) -> bool:
         """Process unprocessed history entries. Returns True if work was done."""
+        from mona.agent import skill_usage
         from mona.agent.skills import BUILTIN_SKILLS_DIR
+
+        # Skill lifecycle maintenance (zero-LLM deterministic path).
+        # Runs at the top of every Dream cycle:
+        #   1. Reconcile archived_at with actual directory location (in case
+        #      the user manually moved a skill in / out of .archive/).
+        #   2. If skill_prune_enabled, compute the archive candidate list
+        #      and move each to .archive/. Builtin and unknown user skills
+        #      are never auto-archived.
+        # Failures here are non-fatal — Dream proceeds with Phase 1/2.
+        try:
+            skill_usage.reconcile_archived_at()
+            if self.skill_prune_enabled:
+                disabled = set(self.disabled_skills)
+                candidates = skill_usage.plan_automatic_archives(
+                    archive_after_days=self.archive_after_days,
+                    disabled_skills=disabled,
+                )
+                for name in candidates:
+                    ok, msg = skill_usage.archive_skill(name, automatic=True)
+                    if ok:
+                        logger.info("Dream: auto-archived skill '{}' ({})", name, msg)
+                    else:
+                        logger.warning("Dream: auto-archive '{}' skipped: {}", name, msg)
+        except Exception as e:
+            logger.warning("Dream: skill lifecycle sweep failed: {}", e, exc_info=True)
 
         last_cursor = self.store.get_last_dream_cursor()
         entries = self.store.read_unprocessed_history(since_cursor=last_cursor)

@@ -288,7 +288,7 @@ export function FolderTree({ gatewayUrl, view = "mail", onViewChange }: FolderTr
                 "group flex items-center gap-1.5 rounded-md px-1.5 py-1.5 cursor-pointer",
                 isUnifiedInbox
                   ? "bg-accent text-foreground"
-                  : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+                  : "text-muted-foreground hover:bg-accent hover:text-foreground",
               )}
               onClick={() => void selectUnifiedInbox()}
               title="聚合所有账号收件箱"
@@ -333,7 +333,7 @@ export function FolderTree({ gatewayUrl, view = "mail", onViewChange }: FolderTr
                       <div
                         className={cn(
                           "group flex items-center gap-1.5 rounded-md px-1.5 py-1.5 cursor-pointer",
-                          "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+                          "text-muted-foreground hover:bg-accent hover:text-foreground",
                         )}
                         onClick={() => handleAccountClick(account.id)}
                       >
@@ -436,7 +436,7 @@ export function FolderTree({ gatewayUrl, view = "mail", onViewChange }: FolderTr
                                     "flex items-center gap-2 rounded-md px-2 py-1.5 cursor-pointer",
                                     isFolderSelected
                                       ? "bg-blue-500/10 text-foreground"
-                                      : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+                                      : "text-muted-foreground hover:bg-accent hover:text-foreground",
                                   )}
                                   onClick={() => {
                                     if (!isRenaming) handleFolderClick(account.id, folder.name);
@@ -554,7 +554,7 @@ export function FolderTree({ gatewayUrl, view = "mail", onViewChange }: FolderTr
               "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[12px] transition-colors",
               view === "contacts"
                 ? "bg-blue-500/10 text-blue-600 dark:text-blue-400"
-                : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+                : "text-muted-foreground hover:bg-accent hover:text-foreground",
             )}
             title={view === "contacts" ? "返回邮件" : "通讯录"}
           >

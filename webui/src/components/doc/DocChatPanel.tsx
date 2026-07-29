@@ -10,7 +10,9 @@ import type { UIMessage } from "@/lib/types";
 
 interface DocChatPanelProps {
   chatId: string | null;
-  onSend: (content: string) => void;
+  /** Send the user's draft. May return a displayContent string to override
+   *  the optimistic message's text (e.g. an "[已附文档: ...]" suffix). */
+  onSend: (content: string) => string | void;
   placeholder?: string;
 }
 
@@ -66,18 +68,23 @@ export function DocChatPanel({ chatId, onSend, placeholder }: DocChatPanelProps)
     const trimmed = draft.trim();
     if (!trimmed || !chatId || busy) return;
     setDraft("");
-    // Optimistic user message — the parent's onSend handles the actual WS send
+    // Parent's onSend handles the actual WS send and may return a displayContent
+    // string (e.g. with an "[已附文档: ...]" suffix) to show in the optimistic
+    // user message. Falls back to the trimmed draft.
+    const displayContent = onSend(trimmed);
     setMessages((prev: UIMessage[]) => [
       ...prev,
       {
         id: crypto.randomUUID(),
         role: "user",
         content: trimmed,
+        ...(typeof displayContent === "string" && displayContent !== trimmed
+          ? { displayContent }
+          : {}),
         createdAt: Date.now(),
       },
     ]);
     setAwaitingResponse(true);
-    onSend(trimmed);
   }, [chatId, draft, busy, setMessages, onSend]);
 
   if (!chatId) {
@@ -123,7 +130,7 @@ export function DocChatPanel({ chatId, onSend, placeholder }: DocChatPanelProps)
       </div>
 
       <div className="shrink-0 p-2">
-        <div className="flex min-h-[52px] items-end gap-1.5 rounded-xl border border-border/75 bg-background px-2.5 py-1.5 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
+        <div className="flex min-h-[52px] items-end gap-1.5 rounded-xl border border-border/75 bg-background px-2.5 py-1.5 shadow-sm">
           <Textarea
             value={draft}
             onChange={(event) => setDraft(event.target.value)}

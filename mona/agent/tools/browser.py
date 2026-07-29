@@ -22,7 +22,7 @@ from urllib.parse import urlparse
 from loguru import logger
 
 from mona.agent.tools.base import Tool, tool_parameters
-from mona.agent.tools.schema import StringSchema, tool_parameters_schema
+from mona.agent.tools.schema import IntegerSchema, StringSchema, tool_parameters_schema
 from mona.agent.tools.tauri_ipc import tauri_invoke as _tauri_invoke
 from mona.config.schema import Base
 
@@ -524,6 +524,15 @@ class BrowserNavigateTool(Tool):
             "Element reference from the page snapshot. Use ref=e12 (from browser_snapshot), "
             "text=登录, role=button/name=确定, placeholder=请输入, label=密码, or CSS selector"
         ),
+        nth=IntegerSchema(
+            description=(
+                "Optional 0-based index to disambiguate when target matches multiple elements. "
+                "Use this to avoid 'strict mode violation' errors when several elements share "
+                "the same text/role/label (e.g. multiple '创建新的密钥' buttons). "
+                "Prefer ref= from browser_snapshot when possible."
+            ),
+            minimum=0,
+        ),
         required=["tabId", "target"],
     )
 )
@@ -536,7 +545,9 @@ class BrowserClickTool(Tool):
     description = (
         "Click an element on the page. Use ref= from browser_snapshot for the most "
         "reliable targeting. Also supports text=, role=, placeholder=, label=, "
-        "or CSS selectors as fallback."
+        "or CSS selectors as fallback. When the selector matches multiple elements "
+        "and you cannot get a unique ref, pass nth (0-based) to pick one — this "
+        "avoids 'strict mode violation' errors."
     )
     config_key = "browser"
 
@@ -553,6 +564,7 @@ class BrowserClickTool(Tool):
         return False
 
     async def execute(self, tabId: str, target: str, **kwargs: Any) -> str:
+        nth = kwargs.get("nth")
         mgr = await _get_connection_manager()
         try:
             # Record tabs before click to detect new tabs opened by target="_blank"
@@ -564,6 +576,8 @@ class BrowserClickTool(Tool):
 
             page = await mgr.get_page(tabId)
             locator = _resolve_locator(page, target)
+            if nth is not None:
+                locator = locator.nth(int(nth))
             await locator.click(timeout=10000, force=True)
 
             # Wait briefly for new tab to appear
@@ -602,6 +616,14 @@ class BrowserClickTool(Tool):
             "placeholder=请输入, label=密码, role=textbox/name=邮箱, or CSS selector"
         ),
         text=StringSchema("Text to type"),
+        nth=IntegerSchema(
+            description=(
+                "Optional 0-based index to disambiguate when target matches multiple elements. "
+                "Use this to avoid 'strict mode violation' errors when several inputs share "
+                "the same placeholder/label. Prefer ref= from browser_snapshot when possible."
+            ),
+            minimum=0,
+        ),
         required=["tabId", "target", "text"],
     )
 )
@@ -613,7 +635,9 @@ class BrowserTypeTool(Tool):
     name = "browser_type"
     description = (
         "Type text into an input field. Use ref= from browser_snapshot for the most "
-        "reliable targeting. Also supports placeholder=, label=, role=, or CSS selectors."
+        "reliable targeting. Also supports placeholder=, label=, role=, or CSS selectors. "
+        "When the selector matches multiple inputs, pass nth (0-based) to pick one — "
+        "this avoids 'strict mode violation' errors."
     )
     config_key = "browser"
 
@@ -630,10 +654,13 @@ class BrowserTypeTool(Tool):
         return False
 
     async def execute(self, tabId: str, target: str, text: str, **kwargs: Any) -> str:
+        nth = kwargs.get("nth")
         mgr = await _get_connection_manager()
         try:
             page = await mgr.get_page(tabId)
             locator = _resolve_locator(page, target)
+            if nth is not None:
+                locator = locator.nth(int(nth))
             await locator.fill(text, timeout=10000, force=True)
             return f"Typed '{text}' into: {target}"
         except Exception as e:
@@ -648,6 +675,14 @@ class BrowserTypeTool(Tool):
             "Use ref=e12 (from browser_snapshot), text=..., role=..., placeholder=..., label=..., "
             "or CSS selector. If omitted, captures the full visible page."
         ),
+        nth=IntegerSchema(
+            description=(
+                "Optional 0-based index to disambiguate when target matches multiple elements. "
+                "Use this to avoid 'strict mode violation' errors. "
+                "Prefer ref= from browser_snapshot when possible."
+            ),
+            minimum=0,
+        ),
         required=["tabId"],
     )
 )
@@ -661,7 +696,8 @@ class BrowserScreenshotTool(Tool):
         "Take a screenshot of the current page or a specific element/region and save to a temp file. "
         "To capture a region/element, use ref= from browser_snapshot (e.g. ref=e12). "
         "Also supports text=, role=, placeholder=, label=, or CSS selectors. "
-        "If no target is provided, captures the full visible page."
+        "If no target is provided, captures the full visible page. "
+        "When the selector matches multiple elements, pass nth (0-based) to pick one."
     )
     config_key = "browser"
 
@@ -678,6 +714,7 @@ class BrowserScreenshotTool(Tool):
         return True
 
     async def execute(self, tabId: str, target: str | None = None, **kwargs: Any) -> str:
+        nth = kwargs.get("nth")
         mgr = await _get_connection_manager()
         try:
             page = await mgr.get_page(tabId)
@@ -691,8 +728,12 @@ class BrowserScreenshotTool(Tool):
                 # full-page CDP screenshot on failure.
                 try:
                     locator = _resolve_locator(page, target)
+                    if nth is not None:
+                        locator = locator.nth(int(nth))
                     screenshot_bytes = await locator.screenshot(timeout=8000)
                     region_label = f"region: {target}"
+                    if nth is not None:
+                        region_label += f" [nth={nth}]"
                 except Exception as loc_err:
                     logger.warning(
                         "Locator screenshot failed ({}), falling back to full page CDP",
@@ -753,12 +794,24 @@ async def _cdp_screenshot(page: Any) -> bytes:
     )
 )
 class BrowserReadTool(Tool):
-    """Read the text content of the current page."""
+    """Read the text content of the current page.
+
+    Note: ``inner_text`` cannot read input/textarea values (they are IDL
+    attributes, not text nodes). We append a "Form field values" section
+    so disabled/readonly fields (e.g. a generated API key in a disabled
+    textbox) are visible to the agent. Password fields are skipped for
+    security.
+    """
 
     _scopes = {"core", "subagent"}
 
     name = "browser_read"
-    description = "Read and return the visible text content of the current page."
+    description = (
+        "Read and return the visible text content of the current page. "
+        "Also appends input/textarea values (except password fields) so that "
+        "disabled/readonly fields like a generated API key are readable — "
+        "inner_text alone cannot capture input values."
+    )
     config_key = "browser"
 
     @classmethod
@@ -778,6 +831,49 @@ class BrowserReadTool(Tool):
         try:
             page = await mgr.get_page(tabId)
             text = await page.inner_text("body", timeout=10000)
+
+            # inner_text cannot read input/textarea values (they are IDL
+            # attributes, not text nodes). Append form control values so the
+            # agent can see disabled/readonly fields like generated API keys.
+            # Skip password fields for security. Cap each value at 500 chars.
+            try:
+                form_values = await page.eval_on_selector_all(
+                    "input, textarea",
+                    """els => els
+                      .filter(e => e.type !== 'password' && e.value)
+                      .map(e => ({
+                        id: e.id || '',
+                        name: e.name || '',
+                        type: e.type || '',
+                        placeholder: e.placeholder || '',
+                        disabled: e.disabled,
+                        readOnly: e.readOnly,
+                        value: String(e.value).slice(0, 500)
+                      }))""",
+                )
+                if form_values:
+                    lines = ["\n\n--- Form field values ---"]
+                    for fv in form_values:
+                        label = (
+                            fv.get("id")
+                            or fv.get("name")
+                            or fv.get("placeholder")
+                            or fv.get("type")
+                            or "field"
+                        )
+                        state_parts = []
+                        if fv.get("disabled"):
+                            state_parts.append("disabled")
+                        if fv.get("readOnly"):
+                            state_parts.append("readonly")
+                        state = (
+                            f" [{', '.join(state_parts)}]" if state_parts else ""
+                        )
+                        lines.append(f"{label}{state}: {fv['value']}")
+                    text = text + "\n".join(lines)
+            except Exception as form_err:
+                logger.debug("Failed to read form field values: {}", form_err)
+
             return text[:50000] if len(text) > 50000 else text
         except Exception as e:
             return f"Error reading page: {e}"

@@ -335,7 +335,7 @@ export function WorkspacePanel({
         open={!!deleteTarget}
         onOpenChange={(o) => (!o ? setDeleteTarget(null) : undefined)}
       >
-        <AlertDialogContent className="w-[min(calc(100vw-2rem),22.75rem)] gap-0 rounded-[28px] border border-white/70 bg-card/95 p-5 text-center shadow-[0_24px_80px_rgba(15,23,42,0.20)] backdrop-blur-xl sm:rounded-[28px]">
+        <AlertDialogContent className="w-[min(calc(100vw-2rem),22.75rem)] gap-0 rounded-2xl border border-border/60 bg-card/95 p-5 text-center shadow-lg backdrop-blur-xl sm:rounded-2xl">
           <AlertDialogHeader className="items-center space-y-0 text-center">
             <div className="mb-5 grid h-16 w-16 place-items-center rounded-full bg-destructive/10 text-destructive">
               <div className="grid h-9 w-9 place-items-center rounded-full border border-destructive/20 bg-destructive/5">
@@ -355,7 +355,7 @@ export function WorkspacePanel({
             </AlertDialogCancel>
             <AlertDialogAction
               onClick={handleDeleteConfirm}
-              className="h-11 rounded-full bg-destructive px-5 text-[15px] font-semibold text-destructive-foreground shadow-[0_10px_25px_rgba(239,68,68,0.28)] hover:bg-destructive/90"
+              className="h-11 rounded-full bg-destructive px-5 text-[15px] font-semibold text-destructive-foreground shadow-none hover:bg-destructive/90"
             >
               删除
             </AlertDialogAction>

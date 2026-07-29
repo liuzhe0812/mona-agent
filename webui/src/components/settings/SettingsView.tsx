@@ -42,6 +42,7 @@ import {
   Orbit,
   Palette,
   Pencil,
+  Plug,
   Plus,
   QrCode,
   Radio,
@@ -132,6 +133,8 @@ import type {
   WeixinLoginStatus,
 } from "@/lib/types";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { SkillManagementPanel } from "@/components/settings/SkillManagementPanel";
+import { McpManagementPanel } from "@/components/settings/McpManagementPanel";
 
 type SettingsSectionKey =
   | "overview"
@@ -144,6 +147,8 @@ type SettingsSectionKey =
   | "desktop"
   | "shortcuts"
   | "agent_scope"
+  | "skills"
+  | "mcp"
   | "advanced"
   | "about";
 
@@ -884,6 +889,10 @@ export function SettingsView({
         return <ShortcutsSettings />;
       case "agent_scope":
         return <AgentScopeSettings />;
+      case "skills":
+        return <SkillManagementPanel />;
+      case "mcp":
+        return <McpManagementPanel />;
       case "advanced":
         return <AdvancedSettings settings={settings} />;
       case "about":
@@ -913,7 +922,7 @@ export function SettingsView({
           </div>
 
           {loading ? (
-            <div className="flex h-48 items-center justify-center rounded-[24px] border border-border/50 bg-card/75 text-sm text-muted-foreground shadow-[0_20px_70px_rgba(15,23,42,0.07)]">
+            <div className="flex h-48 items-center justify-center rounded-2xl border border-border/50 bg-card/75 text-sm text-muted-foreground shadow-sm">
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               {t("settings.status.loading")}
             </div>
@@ -926,7 +935,7 @@ export function SettingsView({
           ) : settings ? (
             <div className="space-y-5">
               {error ? (
-                <div className="rounded-[18px] border border-destructive/20 bg-destructive/5 px-4 py-3 text-[13px] text-destructive">
+                <div className="rounded-2xl border border-destructive/20 bg-destructive/5 px-4 py-3 text-[13px] text-destructive">
                   {error}
                 </div>
               ) : null}
@@ -949,6 +958,8 @@ const SETTINGS_NAV_ITEMS: Array<{ key: SettingsSectionKey; icon: LucideIcon; fal
   { key: "desktop", icon: Monitor, fallback: "桌面", desktopOnly: true },
   { key: "shortcuts", icon: Keyboard, fallback: "快捷键", desktopOnly: true },
   { key: "agent_scope", icon: Search, fallback: "Agent 搜索范围", desktopOnly: true },
+  { key: "skills", icon: Hexagon, fallback: "技能", desktopOnly: true },
+  { key: "mcp", icon: Plug, fallback: "扩展能力", desktopOnly: true },
   { key: "advanced", icon: ShieldCheck, fallback: "Advanced" },
   { key: "about", icon: Info, fallback: "关于" },
 ];
@@ -996,9 +1007,9 @@ function SettingsSidebar({
               aria-current={active ? "page" : undefined}
               onClick={() => onSelectSection(key)}
               className={cn(
-                "flex h-9 w-auto shrink-0 items-center gap-2 rounded-full px-3 text-left text-[13px] font-medium transition-colors md:w-full md:rounded-[10px] md:px-2.5",
+                "flex h-9 w-auto shrink-0 items-center gap-2 rounded-full px-3 text-left text-[13px] font-medium transition-colors md:w-full md:rounded-md md:px-2.5",
                 active
-                  ? "bg-muted/90 text-foreground shadow-[inset_0_0_0_1px_rgba(0,0,0,0.025)]"
+                  ? "bg-muted/90 text-foreground"
                   : "text-muted-foreground/78 hover:bg-muted/45 hover:text-foreground",
               )}
             >
@@ -1052,10 +1063,10 @@ function OverviewSettings({
   return (
     <div className="space-y-7">
       <section>
-        <div className="overflow-hidden rounded-[22px] border border-border/45 bg-card/86 shadow-[0_18px_65px_rgba(15,23,42,0.075)] backdrop-blur-xl dark:border-white/10 dark:shadow-[0_18px_65px_rgba(0,0,0,0.24)]">
+        <div className="overflow-hidden rounded-2xl border border-border/45 bg-card/86 shadow-sm backdrop-blur-xl dark:border-white/10">
           <div className="flex flex-col gap-4 px-5 py-5 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex min-w-0 items-center gap-3">
-              <span className="grid h-12 w-12 shrink-0 place-items-center rounded-[16px] bg-muted text-foreground/82 shadow-[inset_0_0_0_1px_rgba(0,0,0,0.025)] dark:bg-muted/70">
+              <span className="grid h-12 w-12 shrink-0 place-items-center rounded-lg bg-muted text-foreground/82 dark:bg-muted/70">
                 <Bot className="h-6 w-6" aria-hidden />
               </span>
               <div className="min-w-0">
@@ -1541,7 +1552,7 @@ function ModelsProvidersSettings({
       `3. 触发验证码后告诉我已发送到 ${email}，等我在对话中回复 6 位验证码再继续。`,
       "4. 用户回复验证码后，用 browser_type 填入验证码，点提交按钮。用 browser_snapshot 检查是否注册成功：跳转到控制台首页即成功；若出现“验证码错误”/“邮箱已注册”等错误，截图告诉我并停止；若出现图片/滑块验证码，截图让我在浏览器窗口手动完成，等我说“继续”再 snapshot。",
       "5. 注册成功后用 browser_navigate 打开 https://platform.agnes-ai.com/apiKey（或从控制台菜单找 API Keys / 密钥管理进入）。找“创建 API Key”/“Create Key”按钮点击，弹窗需要名称就填 Mona 或留默认。",
-      "6. 用 browser_snapshot 抓取新生成的 API Key（通常是 sk- 开头字符串）。如果被遮罩，用 browser_read 读取输入框 value。拿到 key 后立即在内存保留，不要在回复正文里复述完整 key。",
+      "6. 用 browser_snapshot 抓取新生成的 API Key（通常是 sk- 开头字符串，显示在 disabled/readonly 的 textbox 里，snapshot 形如 `textbox [disabled] [ref=eXXX]: sk-...`）。也可用 browser_read 读取页面（会附带 Form field values 段，包含 disabled/readonly input 的 value；注意 password 类型字段会被跳过）。拿到 key 后立即在内存保留，不要在回复正文里复述完整 key。",
       "7. 用 browser_close 关闭浏览器。",
       "8. 调用 config_set_provider 一次性写入所有配置：provider=\"agnes\", api_key=\"<抓到的 key>\", set_as_default=true, default_model=\"agnes-2.0-flash\", image_model=\"agnes-image-2.1-flash\", video_model=\"agnes-video-v2.0\"。",
       "9. 报告完成：账号已注册（邮箱 xxx）、API key 已写入 ~/.mona/config.json、三个模型已启用，并提示我重启 Mona 让配置生效。如果密码是我替你填的，建议尽快去 Agnes 平台改密码。",
@@ -1613,7 +1624,7 @@ function ModelsProvidersSettings({
         ref={highlighted ? highlightRef : undefined}
         className={cn(
           "divide-y divide-border/45",
-          highlighted && "ring-2 ring-inset ring-primary/40 rounded-[18px]",
+          highlighted && "ring-2 ring-inset ring-primary/40 rounded-2xl",
         )}
       >
         <button
@@ -1938,7 +1949,7 @@ function AgnesSetupDialog({
         if (!next) onClose();
       }}
     >
-      <DialogContent className="max-w-md rounded-2xl border-border/70 bg-popover p-6 shadow-2xl">
+      <DialogContent className="max-w-md rounded-2xl border-border/70 bg-popover p-6 shadow-lg">
         <form
           className="grid gap-4"
           onSubmit={(event) => {
@@ -4117,7 +4128,7 @@ function AgentScopeSettings() {
 
   if (!loaded || !scope) {
     return (
-      <div className="flex h-48 items-center justify-center rounded-[24px] border border-border/50 bg-card/75 text-sm text-muted-foreground shadow-[0_20px_70px_rgba(15,23,42,0.07)]">
+      <div className="flex h-48 items-center justify-center rounded-2xl border border-border/50 bg-card/75 text-sm text-muted-foreground shadow-sm">
         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
         {tx("settings.status.loading", "Loading…")}
       </div>
@@ -4352,7 +4363,7 @@ function ProviderPicker({
           disabled={disabled}
           className={cn(
             "h-8 w-[210px] justify-between rounded-full border-input bg-background px-3 text-[13px] font-normal shadow-none",
-            "hover:bg-accent/55 focus-visible:ring-2 focus-visible:ring-ring",
+            "hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring",
             disabled && "text-muted-foreground",
           )}
         >
@@ -4362,7 +4373,7 @@ function ProviderPicker({
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="end"
-        className="max-h-[18rem] w-[240px] overflow-y-auto rounded-[18px] border-border/65 bg-popover p-1.5 text-popover-foreground shadow-[0_18px_55px_rgba(15,23,42,0.18)] dark:border-white/10 dark:shadow-[0_22px_55px_rgba(0,0,0,0.45)]"
+        className="max-h-[18rem] w-[240px] overflow-y-auto rounded-md border-border/65 bg-popover p-1.5 text-popover-foreground shadow-lg dark:border-white/10"
       >
         {providers.map((provider) => {
           const selected = provider.name === value;
@@ -4371,7 +4382,7 @@ function ProviderPicker({
               key={provider.name}
               onSelect={() => onChange(provider.name)}
               className={cn(
-                "flex cursor-default items-center justify-between gap-2 rounded-[12px] px-3 py-2 text-[13px]",
+                "flex cursor-default items-center justify-between gap-2 rounded-lg px-3 py-2 text-[13px]",
                 "focus:bg-muted focus:text-foreground",
                 selected && "bg-primary/10 text-primary focus:bg-primary/12 focus:text-primary",
               )}
@@ -4443,7 +4454,7 @@ function ImageModelInput({
         </DropdownMenuTrigger>
         <DropdownMenuContent
           align="end"
-          className="max-h-[18rem] w-[min(300px,70vw)] overflow-y-auto rounded-[18px] border-border/65 bg-popover p-1.5 text-popover-foreground shadow-[0_18px_55px_rgba(15,23,42,0.18)] dark:border-white/10 dark:shadow-[0_22px_55px_rgba(0,0,0,0.45)]"
+          className="max-h-[18rem] w-[min(300px,70vw)] overflow-y-auto rounded-md border-border/65 bg-popover p-1.5 text-popover-foreground shadow-lg dark:border-white/10"
         >
           {filtered.length === 0 ? (
             <div className="px-3 py-2 text-[13px] text-muted-foreground">{noMatchLabel}</div>
@@ -4455,7 +4466,7 @@ function ImageModelInput({
                   key={model}
                   onSelect={() => onChange(model)}
                   className={cn(
-                    "flex cursor-default items-center justify-between gap-2 rounded-[12px] px-3 py-2 text-[13px]",
+                    "flex cursor-default items-center justify-between gap-2 rounded-lg px-3 py-2 text-[13px]",
                     "focus:bg-muted focus:text-foreground",
                     selected && "bg-primary/10 text-primary focus:bg-primary/12 focus:text-primary",
                   )}
@@ -4472,7 +4483,7 @@ function ImageModelInput({
               <DropdownMenuItem
                 onSelect={onAddModel}
                 className={cn(
-                  "flex cursor-default items-center gap-2 rounded-[12px] px-3 py-2 text-[13px]",
+                  "flex cursor-default items-center gap-2 rounded-lg px-3 py-2 text-[13px]",
                   "focus:bg-muted focus:text-foreground text-primary",
                 )}
               >
@@ -4501,7 +4512,7 @@ function ProviderSection({
   return (
     <section className="space-y-3">
       <ByokSectionHeader title={title} count={count} />
-      <div className="overflow-hidden rounded-[22px] border border-border/45 bg-card/86 shadow-[0_18px_65px_rgba(15,23,42,0.07)] backdrop-blur-xl dark:border-white/10 dark:shadow-[0_18px_65px_rgba(0,0,0,0.22)]">
+      <div className="overflow-hidden rounded-2xl border border-border/45 bg-card/86 shadow-sm backdrop-blur-xl dark:border-white/10">
         {count > 0 ? (
           <div className="divide-y divide-border/45">{children}</div>
         ) : (
@@ -4527,7 +4538,7 @@ function ByokSectionHeader({ title, count }: { title: string; count: number }) {
 
 function ByokEmptyState({ children }: { children: ReactNode }) {
   return (
-    <div className="rounded-[18px] border border-dashed border-border/65 bg-card/45 px-4 py-5 text-[13px] text-muted-foreground">
+    <div className="rounded-2xl border border-dashed border-border/65 bg-card/45 px-4 py-5 text-[13px] text-muted-foreground">
       {children}
     </div>
   );
@@ -4619,7 +4630,7 @@ const PROVIDER_ICONS: Record<string, LucideIcon> = {
 function ProviderIcon({ provider }: { provider: string }) {
   const Icon = PROVIDER_ICONS[provider] ?? Hexagon;
   return (
-    <span className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl bg-muted text-foreground/82 shadow-[inset_0_0_0_1px_rgba(0,0,0,0.025)] dark:bg-muted/70">
+    <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-muted text-foreground/82 dark:bg-muted/70">
       <Icon className="h-5 w-5" strokeWidth={2} aria-hidden />
     </span>
   );
@@ -4644,7 +4655,7 @@ function OverviewListRow({
       onClick={onClick}
       className="group flex min-h-[68px] w-full items-center gap-3 px-4 py-3.5 text-left transition-colors hover:bg-muted/30 sm:px-5"
     >
-      <span className="grid h-9 w-9 shrink-0 place-items-center rounded-[12px] bg-muted text-foreground/82 transition-colors group-hover:bg-muted/80 dark:bg-muted/70">
+      <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-muted text-foreground/82 transition-colors group-hover:bg-muted/80 dark:bg-muted/70">
         <Icon className="h-4 w-4" aria-hidden />
       </span>
       <span className="min-w-0 flex-1">
@@ -4674,7 +4685,7 @@ function SettingsSectionTitle({ children }: { children: ReactNode }) {
 
 function SettingsGroup({ children }: { children: ReactNode }) {
   return (
-    <div className="overflow-hidden rounded-[22px] border border-border/45 bg-card/86 shadow-[0_18px_65px_rgba(15,23,42,0.075)] backdrop-blur-xl dark:border-white/10 dark:shadow-[0_18px_65px_rgba(0,0,0,0.24)]">
+    <div className="overflow-hidden rounded-2xl border border-border/45 bg-card/86 shadow-sm backdrop-blur-xl dark:border-white/10">
       <div className="divide-y divide-border/45">{children}</div>
     </div>
   );

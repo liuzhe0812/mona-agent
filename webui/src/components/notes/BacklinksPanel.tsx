@@ -88,7 +88,7 @@ export function BacklinksPanel({ noteId, onSelectNote, className }: BacklinksPan
               key={item.noteId}
               type="button"
               onClick={() => onSelectNote?.(item.noteId)}
-              className="group flex items-center gap-1.5 rounded px-1.5 py-1 text-left hover:bg-accent/60"
+              className="group flex items-center gap-1.5 rounded px-1.5 py-1 text-left hover:bg-accent"
             >
               <Link2 className="h-3 w-3 shrink-0 text-muted-foreground/60" />
               <span

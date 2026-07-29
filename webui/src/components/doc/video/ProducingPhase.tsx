@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   Check,
   Code2,
+  Eye,
   Loader2,
   RefreshCw,
   Volume2,
@@ -9,7 +10,6 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import {
   Dialog,
   DialogContent,
@@ -50,6 +50,7 @@ export function ProducingPhase({ projectName, onAllConfirmed }: ProducingPhasePr
   const [rewriteText, setRewriteText] = useState("");
   const [rewriteLoading, setRewriteLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [fullscreen, setFullscreen] = useState(false);
 
   const loadScenes = useCallback(async () => {
     try {
@@ -73,6 +74,12 @@ export function ProducingPhase({ projectName, onAllConfirmed }: ProducingPhasePr
   }, [token, projectName]);
 
   const selectedScene = scenes.find((s) => s.index === selectedIndex) ?? null;
+
+  // Reset HTML view when switching scenes
+  useEffect(() => {
+    setShowHtml(false);
+    setError(null);
+  }, [selectedIndex]);
 
   // Load preview HTML when selected scene changes
   const loadPreview = useCallback(async () => {
@@ -265,7 +272,7 @@ export function ProducingPhase({ projectName, onAllConfirmed }: ProducingPhasePr
                   "mb-1 w-full rounded-md border px-2.5 py-2 text-left transition-colors",
                   s.index === selectedIndex
                     ? "border-primary bg-accent"
-                    : "border-border/60 hover:bg-accent/50",
+                    : "border-border/60 hover:bg-accent",
                 )}
               >
                 <div className="flex items-center gap-1.5">
@@ -317,15 +324,28 @@ export function ProducingPhase({ projectName, onAllConfirmed }: ProducingPhasePr
                     {selectedScene.duration}s · {statusLabel(selectedScene.htmlStatus ?? "pending")}
                   </span>
                 </div>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-7 px-2 text-[11px]"
-                  onClick={() => setShowHtml((v) => !v)}
-                >
-                  <Code2 className="mr-1 h-3 w-3" />
-                  {showHtml ? "预览" : "查看 HTML"}
-                </Button>
+                <div className="flex items-center gap-1">
+                  {previewHtml && !showHtml && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 w-7 p-0"
+                      onClick={() => setFullscreen(true)}
+                      title="全屏预览"
+                    >
+                      <Eye className="h-3.5 w-3.5" />
+                    </Button>
+                  )}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 px-2 text-[11px]"
+                    onClick={() => setShowHtml((v) => !v)}
+                  >
+                    <Code2 className="mr-1 h-3 w-3" />
+                    {showHtml ? "预览" : "查看 HTML"}
+                  </Button>
+                </div>
               </div>
             </div>
 
@@ -340,12 +360,15 @@ export function ProducingPhase({ projectName, onAllConfirmed }: ProducingPhasePr
                   <code>{previewHtml || "(无 HTML)"}</code>
                 </pre>
               ) : previewHtml ? (
-                <iframe
-                  title={`scene-${selectedIndex}-preview`}
-                  srcDoc={previewHtml}
-                  className="h-full w-full border-0"
-                  sandbox="allow-scripts"
-                />
+                <div className="flex h-full w-full items-center justify-center p-4">
+                  <iframe
+                    title={`scene-${selectedIndex}-preview`}
+                    srcDoc={previewHtml}
+                    className="aspect-video max-h-full max-w-full border-0 shadow-lg"
+                    sandbox="allow-scripts"
+                    style={{ width: "min(100%, calc((100vh - 200px) * 16 / 9))" }}
+                  />
+                </div>
               ) : (
                 <div className="flex h-full flex-col items-center justify-center gap-2 text-[13px] text-muted-foreground">
                   <div>该场景尚未生成 HTML</div>
@@ -369,7 +392,7 @@ export function ProducingPhase({ projectName, onAllConfirmed }: ProducingPhasePr
               {error && (
                 <div className="mb-2 text-[11px] text-destructive">{error}</div>
               )}
-              <div className="flex items-center gap-1.5">
+              <div className="grid grid-cols-2 gap-1.5">
                 <Button
                   variant="ghost"
                   size="sm"
@@ -393,7 +416,6 @@ export function ProducingPhase({ projectName, onAllConfirmed }: ProducingPhasePr
                   <Wand2 className="mr-1.5 h-3.5 w-3.5" />
                   重写分镜
                 </Button>
-                <div className="flex-1" />
                 <Button
                   variant="ghost"
                   size="sm"
@@ -462,6 +484,37 @@ export function ProducingPhase({ projectName, onAllConfirmed }: ProducingPhasePr
               提交重写
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 全屏预览 */}
+      <Dialog open={fullscreen} onOpenChange={setFullscreen}>
+        <DialogContent className="h-[90vh] max-w-[95vw] gap-0 p-0">
+          <div className="flex h-full flex-col">
+            <div className="flex shrink-0 items-center justify-between border-b border-border/70 px-4 py-2">
+              <div className="text-[13px] font-medium">
+                场景 {selectedScene?.index} 全屏预览
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 px-2 text-[11px]"
+                onClick={() => setFullscreen(false)}
+              >
+                关闭
+              </Button>
+            </div>
+            <div className="min-h-0 flex-1 bg-muted/30">
+              {previewHtml && (
+                <iframe
+                  title="scene-fullscreen-preview"
+                  srcDoc={previewHtml}
+                  className="h-full w-full border-0"
+                  sandbox="allow-scripts"
+                />
+              )}
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

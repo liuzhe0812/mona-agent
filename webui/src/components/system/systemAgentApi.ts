@@ -35,11 +35,19 @@ export interface SystemAgentPlan {
 
 type StartupEvidenceItem = Omit<StartupListResult["items"][number], "command" | "targetPath">;
 
+export interface StorageEvidence {
+  cleanupItems: Array<Pick<StorageScanResult["cleanupItems"][number], "id" | "name" | "sizeGb" | "cleanable" | "recommended" | "reason">>;
+  scanSummary?: StorageScanResult["scanSummary"];
+  topFileBuckets?: Array<{ extension: string; count: number; sizeGb: number }>;
+  fileTypes?: StorageScanResult["fileTypes"];
+  totalScannedGb?: number;
+}
+
 export interface SystemEvidence {
   overview: Pick<SystemOverview, "cpu" | "memory" | "disks" | "network" | "topProcesses">;
   software: Pick<SoftwareCheckResult, "updates" | "wingetAvailable" | "failedCount">;
   startup: Omit<StartupListResult, "items"> & { items: StartupEvidenceItem[] };
-  storage: { cleanupItems: Array<Pick<StorageScanResult["cleanupItems"][number], "id" | "name" | "sizeGb" | "cleanable" | "recommended" | "reason">> };
+  storage: StorageEvidence;
   maintenance: MaintenanceHistory;
 }
 
@@ -87,13 +95,25 @@ export async function collectSystemEvidence(
       ...startup,
       items: startup.items.slice(0, 80).map(({ id, name, publisher, source, scope, added, enabled, signed, firstSeenAt, isNew }) => ({ id, name, publisher, source, scope, added, enabled, signed, firstSeenAt, isNew })),
     },
-    storage: {
-      cleanupItems: storage?.cleanupItems
-        .filter((item) => item.cleanable)
-        .slice(0, 20)
-        .map(({ id, name, sizeGb, cleanable, recommended, reason }) => ({ id, name, sizeGb, cleanable, recommended, reason })) ?? [],
-    },
+    storage: buildStorageEvidence(storage),
     maintenance: { events: maintenance.events.slice(0, 20) },
+  };
+}
+
+/** 从扫描结果构造脱敏的存储证据（不含完整路径和文件名，仅含统计与扩展名桶） */
+export function buildStorageEvidence(storage: StorageScanResult | null): StorageEvidence {
+  if (!storage) {
+    return { cleanupItems: [] };
+  }
+  return {
+    cleanupItems: storage.cleanupItems
+      .filter((item) => item.cleanable)
+      .slice(0, 20)
+      .map(({ id, name, sizeGb, cleanable, recommended, reason }) => ({ id, name, sizeGb, cleanable, recommended, reason })),
+    scanSummary: storage.scanSummary,
+    topFileBuckets: storage.extensionBuckets?.slice(0, 20),
+    fileTypes: storage.fileTypes,
+    totalScannedGb: storage.totalScannedGb,
   };
 }
 
@@ -120,11 +140,21 @@ export async function executeSystemAction(action: SystemAgentAction): Promise<Sy
   if (action.type === "storage_clean") {
     const result = await invoke<StorageCleanupResult>("clean_storage", { ids: action.targetIds });
     const success = result.failures.length === 0;
+    // 优先使用 verification 数组的真实测量值，避免 freedGb 虚报（文件被占用时 before/after 差为 0）
+    const verifiedFreedBytes = result.verification?.reduce(
+      (sum, v) => sum + Math.max(0, v.beforeBytes - v.afterBytes),
+      0,
+    ) ?? null;
+    const freedGb = verifiedFreedBytes !== null
+      ? verifiedFreedBytes / 1_073_741_824
+      : result.freedGb;
     return {
       actionId: action.id,
       success,
       verified: success,
-      detail: success ? `实际释放 ${result.freedGb.toFixed(2)} GB` : `实际释放 ${result.freedGb.toFixed(2)} GB；${result.failures.join("；")}`,
+      detail: success
+        ? `实际释放 ${freedGb.toFixed(2)} GB`
+        : `实际释放 ${freedGb.toFixed(2)} GB；${result.failures.join("；")}`,
     };
   }
 

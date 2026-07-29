@@ -118,7 +118,7 @@ export function EmailStatisticsDialog({
               rows.map((row) => (
                 <div
                   key={row.name}
-                  className="grid grid-cols-[1fr_80px_90px] gap-2 px-4 py-1.5 text-[12px] hover:bg-accent/30"
+                  className="grid grid-cols-[1fr_80px_90px] gap-2 px-4 py-1.5 text-[12px] hover:bg-accent"
                 >
                   <span className="truncate text-foreground">{row.name}</span>
                   <span className="text-right tabular-nums text-muted-foreground">

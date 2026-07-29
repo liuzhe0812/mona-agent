@@ -41,7 +41,7 @@ import {
   type ConfigurationRisk,
   type ConfigurationStatus,
 } from "./systemOptimizationApi";
-import { ContextMenuSection, DefenderSection, PerformanceSection } from "./AdvancedOptimizationPanel";
+import { ContextMenuSection, DefenderSection } from "./AdvancedOptimizationPanel";
 import { NetworkPanel } from "./NetworkPanel";
 import { ProcessBlacklistPanel } from "./SystemToolsPanel";
 import { fallbackCategories, featureImpact, featureTitle, groupTitle, optionLabel } from "./systemOptimizationCatalog";
@@ -67,12 +67,15 @@ const categoryIcons: Record<string, typeof ShieldCheck> = {
 };
 
 const configurationCategories = [
-  "性能与响应",
-  ...fallbackCategories,
-  "网络与解析",
   "安全与防护",
+  "Windows 更新",
+  "性能与响应",
+  ...fallbackCategories.filter((category) => category !== "Windows 更新"),
+  "网络与解析",
   "应用与进程",
 ];
+
+const catalogCategories = new Set([...fallbackCategories, "性能与响应", "安全与防护", "Windows 更新"]);
 
 const statusMeta: Record<ConfigurationStatus, { label: string; tone: "green" | "blue" | "orange" | "red" | "neutral" }> = {
   configured: { label: "已生效", tone: "green" },
@@ -168,7 +171,7 @@ export function SystemOptimizationPanel() {
   const itemById = useMemo(() => new Map(items.map((item) => [item.id, item])), [items]);
   const categoryCounts = useMemo(() => new Map((audit?.categories ?? []).map((item) => [item.label, item.count])), [audit]);
   const categories = configurationCategories;
-  const showCatalogSettings = category === "全部设置" || fallbackCategories.includes(category);
+  const showCatalogSettings = category === "全部设置" || catalogCategories.has(category);
   const normalizedQuery = query.trim().toLocaleLowerCase();
   const visibleItems = useMemo(() => items.filter((item) => {
     if (!showCatalogSettings) return false;
@@ -250,7 +253,7 @@ export function SystemOptimizationPanel() {
           <nav aria-label="Windows 设置分类" className="hidden border-r border-border/60 bg-muted/[0.18] p-2 lg:block">
             {["全部设置", ...categories].map((label) => {
               const Icon = label === "全部设置" ? SlidersHorizontal : (categoryIcons[label] ?? CircleHelp);
-              const count = label === "全部设置" ? items.length : fallbackCategories.includes(label) ? (categoryCounts.get(label) ?? items.filter((item) => item.category === label).length) : null;
+              const count = label === "全部设置" ? items.length : catalogCategories.has(label) ? (categoryCounts.get(label) ?? items.filter((item) => item.category === label).length) : null;
               return <button key={label} type="button" aria-label={label} onClick={() => setCategory(label)} className={`mb-0.5 flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs transition ${category === label ? "bg-blue-600 text-white shadow-sm" : "text-muted-foreground hover:bg-background hover:text-foreground"}`}><Icon className="h-3.5 w-3.5 shrink-0" /><span className="min-w-0 flex-1 truncate">{label}</span>{count !== null && <span className={`text-[10px] ${category === label ? "text-blue-100" : "text-muted-foreground/70"}`}>{count}</span>}</button>;
             })}
           </nav>
@@ -292,10 +295,9 @@ export function SystemOptimizationPanel() {
                 })}
               </div>
             )}
-            {category === "性能与响应" && <PerformanceSection />}
             {category === "文件资源管理器" && <div className="mt-3"><ContextMenuSection /></div>}
             {category === "网络与解析" && <NetworkPanel />}
-            {category === "安全与防护" && <DefenderSection />}
+            {category === "安全与防护" && <div className="mt-3"><DefenderSection /></div>}
             {category === "应用与进程" && <ProcessBlacklistPanel />}
           </div>
         </div>

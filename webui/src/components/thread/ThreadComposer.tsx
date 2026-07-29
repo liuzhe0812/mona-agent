@@ -315,8 +315,8 @@ function RunElapsedStrip({
           tabIndex={-1}
           className={cn(
             "absolute bottom-[calc(100%+8px)] left-3 right-3 z-[50] flex max-w-none flex-col overflow-hidden",
-            "rounded-2xl border border-black/[0.08] bg-card shadow-[0_12px_40px_rgba(15,23,42,0.14)]",
-            "backdrop-blur-sm dark:border-white/[0.1] dark:shadow-[0_16px_48px_rgba(0,0,0,0.45)]",
+            "rounded-2xl border border-border/60 bg-card shadow-lg",
+            "backdrop-blur-sm dark:border-white/10",
           )}
           style={{ maxHeight: `${Math.round(panelMaxPx)}px` }}
         >
@@ -778,8 +778,8 @@ export function ThreadComposer({
         className={cn(
           "relative mx-auto flex w-full flex-col overflow-visible transition-all duration-200",
           isHero
-            ? "max-w-[58rem] rounded-[28px] border border-black/[0.035] bg-card shadow-[0_20px_55px_rgba(15,23,42,0.08)] dark:border-white/[0.06] dark:shadow-[0_24px_55px_rgba(0,0,0,0.34)]"
-            : "max-w-[49.5rem] rounded-[22px] border border-black/[0.035] bg-card shadow-[0_12px_30px_rgba(15,23,42,0.07)] dark:border-white/[0.06] dark:shadow-[0_16px_34px_rgba(0,0,0,0.28)]",
+            ? "max-w-[58rem] rounded-2xl border border-border/60 bg-card shadow-sm dark:border-white/10"
+            : "max-w-[49.5rem] rounded-2xl border border-border/60 bg-card shadow-sm dark:border-white/10",
           "focus-within:ring-1 focus-within:ring-foreground/8",
           disabled && "opacity-60",
           isDragging && "ring-2 ring-primary/40 motion-reduce:ring-0 motion-reduce:border-primary",
@@ -893,8 +893,8 @@ export function ThreadComposer({
               className={cn(
                 "rounded-full text-muted-foreground hover:text-foreground",
                 isHero
-                  ? "h-7 w-7 border border-border/55 bg-card shadow-[0_2px_8px_rgba(15,23,42,0.05)] hover:bg-card"
-                  : "h-6 w-6 border border-border/55 bg-card shadow-[0_2px_8px_rgba(15,23,42,0.05)] hover:bg-card",
+                  ? "h-7 w-7 border border-border/55 bg-card hover:bg-card"
+                  : "h-6 w-6 border border-border/55 bg-card hover:bg-card",
               )}
             >
               <Plus className={cn(isHero ? "h-4 w-4" : "h-3.5 w-3.5")} />
@@ -921,8 +921,8 @@ export function ThreadComposer({
                         "border-foreground/10 bg-foreground/[0.035] font-medium text-foreground/80",
                         "hover:bg-foreground/[0.07] transition-colors cursor-pointer",
                         isHero
-                          ? "h-7 max-w-[13rem] text-[12px] shadow-[0_2px_8px_rgba(15,23,42,0.04)]"
-                          : "h-6 max-w-[10rem] text-[10.5px] shadow-[0_2px_8px_rgba(15,23,42,0.035)]",
+                          ? "h-7 max-w-[13rem] text-[12px]"
+                          : "h-6 max-w-[10rem] text-[10.5px]",
                       )}
                     >
                       <span
@@ -997,8 +997,8 @@ export function ThreadComposer({
                     "inline-flex min-w-0 items-center gap-1.5 rounded-full border px-2.5",
                     "border-foreground/10 bg-foreground/[0.035] font-medium text-foreground/80",
                     isHero
-                      ? "h-7 max-w-[13rem] text-[12px] shadow-[0_2px_8px_rgba(15,23,42,0.04)]"
-                      : "h-6 max-w-[10rem] text-[10.5px] shadow-[0_2px_8px_rgba(15,23,42,0.035)]",
+                      ? "h-7 max-w-[13rem] text-[12px]"
+                      : "h-6 max-w-[10rem] text-[10.5px]",
                   )}
                 >
                   <span
@@ -1025,10 +1025,10 @@ export function ThreadComposer({
             className={cn(
               "rounded-full transition-transform",
               showStopButton
-                ? "border border-border/70 bg-card text-foreground/85 shadow-[0_3px_10px_rgba(15,23,42,0.08)] hover:bg-muted/65 hover:text-foreground disabled:text-muted-foreground/50"
+                ? "border border-border/70 bg-card text-foreground/85 hover:bg-muted/65 hover:text-foreground disabled:text-muted-foreground/50"
                 : isHero
-                  ? "border border-foreground bg-foreground text-background shadow-[0_4px_12px_rgba(15,23,42,0.20)] hover:bg-foreground/90 disabled:border-foreground/35 disabled:bg-foreground/35 disabled:text-background/80"
-                  : "border border-foreground bg-foreground text-background shadow-[0_3px_10px_rgba(15,23,42,0.18)] hover:bg-foreground/90 disabled:border-foreground/35 disabled:bg-foreground/35 disabled:text-background/80",
+                  ? "border border-foreground bg-foreground text-background hover:bg-foreground/90 disabled:border-foreground/35 disabled:bg-foreground/35 disabled:text-background/80"
+                  : "border border-foreground bg-foreground text-background hover:bg-foreground/90 disabled:border-foreground/35 disabled:bg-foreground/35 disabled:text-background/80",
               isHero ? "" : "h-7.5 w-7.5",
               (canSend || showStopButton) && "hover:scale-[1.03] active:scale-95",
             )}
@@ -1164,10 +1164,10 @@ function SlashCommandPalette({
       aria-label={t("thread.composer.slash.ariaLabel")}
       style={{ maxHeight: layout.maxHeight }}
       className={cn(
-        "absolute left-1/2 z-30 w-[calc(100%-0.5rem)] -translate-x-1/2 overflow-hidden rounded-[18px] border",
+        "absolute left-1/2 z-30 w-[calc(100%-0.5rem)] -translate-x-1/2 overflow-hidden rounded-md border",
         layout.placement === "above" ? "bottom-full mb-2" : "top-full mt-2",
-        "border-border/65 bg-popover p-1.5 text-popover-foreground shadow-[0_18px_55px_rgba(15,23,42,0.18)]",
-        "dark:border-white/10 dark:shadow-[0_22px_55px_rgba(0,0,0,0.45)]",
+        "border-border/65 bg-popover p-1.5 text-popover-foreground shadow-lg",
+        "dark:border-white/10",
         isHero ? "max-w-[58rem]" : "max-w-[49.5rem]",
       )}
     >
@@ -1197,15 +1197,15 @@ function SlashCommandPalette({
                 onChoose(command);
               }}
               className={cn(
-                "flex w-full items-center gap-3 rounded-[13px] px-3 py-2.5 text-left transition-colors",
+                "flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors",
                 selected
                   ? "bg-primary/10 text-foreground"
-                  : "text-foreground/86 hover:bg-accent/55",
+                  : "text-foreground/86 hover:bg-accent",
               )}
             >
               <span
                 className={cn(
-                  "flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px] border",
+                  "flex h-8 w-8 shrink-0 items-center justify-center rounded-md border",
                   selected
                     ? "border-primary/25 bg-primary/12 text-primary"
                     : "border-border/65 bg-muted/45 text-muted-foreground",
@@ -1277,7 +1277,7 @@ function AttachmentChip({
   return (
     <div
       className={cn(
-        "group relative flex items-center gap-2 rounded-[12px] border px-2 py-1.5",
+        "group relative flex items-center gap-2 rounded-lg border px-2 py-1.5",
         "transition-colors motion-reduce:transition-none",
         tone,
       )}

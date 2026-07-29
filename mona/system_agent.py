@@ -30,9 +30,15 @@ _PLAN_PROMPT = """你是 Mona 的 Windows 系统维护规划助手。只依据�
 - software_update：更新证据中 updates 的软件 ID。
 - startup_disable：禁用证据中 scope 为 user 且 enabled 为 true 的启动项 ID；此动作可恢复。
 
+存储空间分析能力（基于证据中的 storage 字段）：
+- 识别异常占用：参考 scanSummary 中的 totalFiles/totalDirs/scanDurationSecs，结合 cleanupItems 中可清理项的 sizeGb 给出可释放空间总量
+- 归因分析：基于 topFileBuckets（按扩展名聚合，不含路径和文件名）识别文件类型分布，如某扩展名占比过高可指出
+- 风险判断：可清理项（cleanable=true）属于低风险，可放心建议；不可清理项（cleanable=false）只能提及，不能放入 actions
+- 优先级：将可释放空间最大的可清理项排在 actions 前面
+
 返回且只返回 JSON：
 {{
-  "summary": "一句诊断结论",
+  "summary": "一句诊断结论，包含可释放空间总量（如适用）",
   "findings": ["最多 5 条、每条包含可追溯的证据"],
   "actions": [
     {{"type": "storage_clean | software_update | startup_disable", "targets": ["证据中的 ID"], "title": "简短操作名", "reason": "基于证据的原因", "risk": "low | medium"}}

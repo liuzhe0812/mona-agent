@@ -328,7 +328,7 @@ export function SessionManagerDialog({
                 filteredConnections.map((conn) => (
                   <div
                     key={conn.id}
-                    className="group flex items-center gap-1 rounded-md border px-2 py-1.5 hover:bg-accent/50 transition-colors cursor-pointer"
+                    className="group flex items-center gap-1 rounded-md border px-2 py-1.5 hover:bg-accent transition-colors cursor-pointer"
                     onClick={() => {
                       if (!deleteConfirmId) {
                         handleConnect(conn);

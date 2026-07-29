@@ -15,6 +15,7 @@ import {
   FolderInput,
   Sparkles,
   Paperclip,
+  ClipboardList,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
@@ -62,9 +63,10 @@ interface MailListViewProps {
   onReply?: (message: EmailMessage) => void;
   onReplyAll?: (message: EmailMessage) => void;
   onForward?: (message: EmailMessage) => void;
+  onAddToPlan?: (message: EmailMessage) => void;
 }
 
-export function MailListView({ onReply, onReplyAll, onForward }: MailListViewProps) {
+export function MailListView({ onReply, onReplyAll, onForward, onAddToPlan }: MailListViewProps) {
   const messages = useEmailStore((s) => s.messages);
   const selectedMessage = useEmailStore((s) => s.selectedMessage);
   const selectMessage = useEmailStore((s) => s.selectMessage);
@@ -128,12 +130,13 @@ export function MailListView({ onReply, onReplyAll, onForward }: MailListViewPro
     let result = messages;
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
+      // Offline-First：SQLite 不存正文，未打开过的邮件 bodyText 为空，因此本地搜索仅匹配标题/发件人。
+      // 全文搜索走顶部工具栏的全局搜索（调用 email_search_messages 命令查询本地数据库索引）。
       result = result.filter(
         (m) =>
           m.subject.toLowerCase().includes(q) ||
           m.fromAddress.toLowerCase().includes(q) ||
-          (m.fromName ?? "").toLowerCase().includes(q) ||
-          m.bodyText.toLowerCase().includes(q),
+          (m.fromName ?? "").toLowerCase().includes(q),
       );
     }
     if (filterKey !== "all") {
@@ -400,6 +403,7 @@ export function MailListView({ onReply, onReplyAll, onForward }: MailListViewPro
                     onReplyAll={() => onReplyAll?.(message)}
                     onForward={() => onForward?.(message)}
                     onAnalyze={() => void handleAnalyze(message)}
+                    onAddToPlan={onAddToPlan ? () => onAddToPlan(message) : undefined}
                     accountColor={
                       isUnifiedInbox
                         ? getAccountColor(message.accountId, accounts)
@@ -444,6 +448,7 @@ interface MailListItemProps {
   onReplyAll: () => void;
   onForward: () => void;
   onAnalyze: () => void;
+  onAddToPlan?: () => void;
   // 统一收件箱模式下的账号颜色标识（为空表示非统一模式）
   accountColor?: string;
 }
@@ -470,6 +475,7 @@ function MailListItem({
   onReplyAll,
   onForward,
   onAnalyze,
+  onAddToPlan,
   accountColor,
 }: MailListItemProps) {
   const moveTargets = sortFolders(
@@ -492,8 +498,8 @@ function MailListItem({
               : active
                 ? "border-l-blue-500 bg-blue-500/10"
                 : message.isRead
-                  ? "border-l-transparent hover:bg-accent/60"
-                  : "border-l-blue-400/60 hover:bg-accent/60",
+                  ? "border-l-transparent hover:bg-accent"
+                  : "border-l-blue-400/60 hover:bg-accent",
           )}
           onClick={onClick}
         >
@@ -648,6 +654,15 @@ function MailListItem({
               <Sparkles className="h-3.5 w-3.5" />
               AI 内容分析
             </ContextMenuItem>
+            {onAddToPlan && (
+              <>
+                <ContextMenuSeparator />
+                <ContextMenuItem onClick={onAddToPlan} className="flex items-center gap-2 text-[12px]">
+                  <ClipboardList className="h-3.5 w-3.5" />
+                  加入计划
+                </ContextMenuItem>
+              </>
+            )}
             <ContextMenuSeparator />
             <ContextMenuItem onClick={onToggleRead} className="flex items-center gap-2 text-[12px]">
               <MailOpen className="h-3.5 w-3.5" />

@@ -14,6 +14,10 @@ import type {
 } from "./notes-data";
 import { nowTimestamp } from "./notes-data";
 import { applyTemplate, type TemplateContext } from "./template-engine";
+import {
+  createBlankFlowchartDocument,
+  serializeFlowchartMarkdown,
+} from "./flowchart/flowchart-document";
 
 export interface NotesStorageState {
   notebooks: Notebook[];
@@ -64,6 +68,48 @@ export function createBlankNote(
 
 export function createNoteId(): string {
   return createId("note");
+}
+
+export function createBlankMindMapNote(
+  notebookId: string,
+): OperationNote {
+  return {
+    id: createId("note"),
+    notebookId,
+    title: "未命名思维导图",
+    preview: "思维导图",
+    createdAt: nowTimestamp(),
+    updatedAt: nowTimestamp(),
+    source: { kind: "manual", label: "手动记录" },
+    tags: [],
+    contentMarkdown: "# 未命名思维导图",
+    appliedAgentMessageIds: [],
+    contextLevel: "full",
+    type: "mindmap",
+  };
+}
+
+export function createBlankFlowchartNote(
+  notebookId: string,
+): OperationNote {
+  // 流程图笔记：contentMarkdown 由 serializer 生成（标题 + 文本投影 + JSON 围栏）。
+  // 这里直接构造一个最简文档（仅开始和结束节点），保证首次打开即可编辑。
+  const doc = createBlankFlowchartDocument();
+  const md = serializeFlowchartMarkdown("未命名流程图", doc);
+  return {
+    id: createId("note"),
+    notebookId,
+    title: "未命名流程图",
+    preview: "流程图",
+    createdAt: nowTimestamp(),
+    updatedAt: nowTimestamp(),
+    source: { kind: "manual", label: "手动记录" },
+    tags: [],
+    contentMarkdown: md,
+    appliedAgentMessageIds: [],
+    contextLevel: "full",
+    type: "flowchart",
+  };
 }
 
 export function createNoteFromTemplate(

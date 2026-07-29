@@ -1,6 +1,6 @@
 //! Schedule reminder notifier.
 //!
-//! Polls the Python gateway's ``/api/schedule/notifications`` endpoint on a
+//! Polls the Python services process's ``/api/schedule/notifications`` endpoint on a
 //! background tokio task and fires the same in-app notification windows used
 //! by mail notifications. These are independent Tauri windows (borderless,
 //! always-on-top, skip taskbar) so they pop up even when the main window is
@@ -58,7 +58,7 @@ pub fn start_polling(app: tauri::AppHandle, port: u16) {
                     }
                 },
                 Err(e) => {
-                    // Gateway might be temporarily unavailable; retry next cycle.
+                    // Services might be temporarily unavailable; retry next cycle.
                     log::debug!("Schedule notifications poll failed: {}", e);
                 }
             }

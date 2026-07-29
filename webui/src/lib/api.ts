@@ -14,7 +14,7 @@ import type {
   WeixinLoginStatus,
   WebuiThreadPersistedPayload,
 } from "./types";
-import { isTauri, getGatewayStatus, httpFetch } from "./tauri";
+import { isTauri, getGatewayStatus, getServicesStatus, httpFetch } from "./tauri";
 
 export class ApiError extends Error {
   status: number;
@@ -27,6 +27,7 @@ export class ApiError extends Error {
 
 let _apiBase: string | null = null;
 let _gatewayHttpBase: string | null = null;
+let _servicesHttpBase: string | null = null;
 
 export async function getApiBase(): Promise<string> {
   if (_apiBase) return _apiBase;
@@ -67,9 +68,37 @@ export async function getGatewayHttpBase(): Promise<string> {
   return "";
 }
 
+/** Return the services HTTP base URL (e.g. ``http://127.0.0.1:17174``).
+ *
+ * The services process serves business-domain routes (email / schedule /
+ * video / materials / profile / hoard / contacts). Mirrors
+ * ``getGatewayHttpBase()``: caches the base and lazily starts the services
+ * process when it is not running. */
+export async function getServicesHttpBase(): Promise<string> {
+  if (_servicesHttpBase) return _servicesHttpBase;
+  if (isTauri()) {
+    let status = await getServicesStatus();
+    if (!status.running) {
+      try {
+        const { startServices } = await import("./tauri");
+        await startServices();
+        status = await getServicesStatus();
+      } catch {
+        // fall through — return empty if services cannot be started
+      }
+    }
+    if (status.port) {
+      _servicesHttpBase = `http://127.0.0.1:${status.port}`;
+      return _servicesHttpBase;
+    }
+  }
+  return "";
+}
+
 export function resetApiBase(): void {
   _apiBase = null;
   _gatewayHttpBase = null;
+  _servicesHttpBase = null;
 }
 
 /** Return the cached API base synchronously (empty string if not yet resolved).
@@ -621,6 +650,168 @@ export async function downloadPptOfficeCli(
   return request(`${effectiveBase}/api/ppt/officecli-download`, token);
 }
 
+// --- PPT V2 outline APIs (services port) ---
+
+export interface PptOutlinePage {
+  page: string;
+  file: string;
+  title: string;
+  bullets: string[];
+  visual_type: string;
+  chart_template: string | null;
+  layout_template: string;
+  has_ai_image: boolean;
+  layout: string;
+  notes: string;
+}
+
+export interface PptOutlineResponse {
+  ok: boolean;
+  pages: PptOutlinePage[];
+  revision: number;
+  schemaVersion: number;
+  locked: boolean;
+}
+
+export async function fetchPptOutline(
+  token: string,
+  name: string,
+  base?: string,
+): Promise<PptOutlineResponse> {
+  const effectiveBase = base ?? (await getServicesHttpBase());
+  const query = new URLSearchParams();
+  query.set("name", name);
+  return request<PptOutlineResponse>(
+    `${effectiveBase}/api/ppt/project/outline?${query}`,
+    token,
+  );
+}
+
+export async function savePptOutline(
+  token: string,
+  name: string,
+  expectedRevision: number,
+  pages: PptOutlinePage[],
+  base?: string,
+): Promise<{ ok: boolean; revision: number; pages: PptOutlinePage[] }> {
+  const effectiveBase = base ?? (await getServicesHttpBase());
+  return request<{ ok: boolean; revision: number; pages: PptOutlinePage[] }>(
+    `${effectiveBase}/api/ppt/project/outline`,
+    token,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, expectedRevision, pages }),
+    },
+  );
+}
+
+export async function lockPptOutline(
+  token: string,
+  name: string,
+  base?: string,
+): Promise<{ ok: boolean; revision: number }> {
+  const effectiveBase = base ?? (await getServicesHttpBase());
+  return request<{ ok: boolean; revision: number }>(
+    `${effectiveBase}/api/ppt/project/lock-outline`,
+    token,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    },
+  );
+}
+
+// --- PPT V2 review APIs (services port) ---
+
+export type PptPageState = "pending" | "previewing" | "confirmed";
+
+export interface PptPageInfo {
+  page: string;
+  file: string;
+  title: string;
+  mtime: number | null;
+  state: PptPageState;
+}
+
+export interface PptPagesResponse {
+  ok: boolean;
+  pages: PptPageInfo[];
+  reviewReady: boolean;
+  outlineRevision: number;
+  confirmedCount: number;
+  totalCount: number;
+}
+
+export async function fetchPptPages(
+  token: string,
+  name: string,
+  base?: string,
+): Promise<PptPagesResponse> {
+  const effectiveBase = base ?? (await getServicesHttpBase());
+  const query = new URLSearchParams();
+  query.set("name", name);
+  return request<PptPagesResponse>(
+    `${effectiveBase}/api/ppt/project/pages?${query}`,
+    token,
+  );
+}
+
+export async function confirmPptPage(
+  token: string,
+  name: string,
+  file: string,
+  expectedMtime: number,
+  base?: string,
+): Promise<{ ok: boolean; file: string; mtime: number; confirmedAt: string }> {
+  const effectiveBase = base ?? (await getServicesHttpBase());
+  return request<{ ok: boolean; file: string; mtime: number; confirmedAt: string }>(
+    `${effectiveBase}/api/ppt/project/page/confirm`,
+    token,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, file, expectedMtime }),
+    },
+  );
+}
+
+export async function regeneratePptPage(
+  token: string,
+  name: string,
+  file: string,
+  base?: string,
+): Promise<{ ok: boolean; file: string }> {
+  const effectiveBase = base ?? (await getServicesHttpBase());
+  return request<{ ok: boolean; file: string }>(
+    `${effectiveBase}/api/ppt/project/page/regenerate`,
+    token,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, file }),
+    },
+  );
+}
+
+export async function requestPptExport(
+  token: string,
+  name: string,
+  base?: string,
+): Promise<{ ok: boolean; exportRequestedAt: string }> {
+  const effectiveBase = base ?? (await getServicesHttpBase());
+  return request<{ ok: boolean; exportRequestedAt: string }>(
+    `${effectiveBase}/api/ppt/project/request-export`,
+    token,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    },
+  );
+}
+
 export async function savePptChatId(
   token: string,
   project: string,
@@ -701,7 +892,7 @@ export async function fetchVideoRuntimeCheck(
   token: string,
   base?: string,
 ): Promise<VideoRuntimeStatus> {
-  const effectiveBase = base ?? (await getGatewayHttpBase());
+  const effectiveBase = base ?? (await getServicesHttpBase());
   return request<VideoRuntimeStatus>(
     `${effectiveBase}/api/video/runtime-check`,
     token,
@@ -713,7 +904,7 @@ export async function downloadVideoRuntime(
   component: string,
   base?: string,
 ): Promise<{ ok: boolean; error?: string }> {
-  const effectiveBase = base ?? (await getGatewayHttpBase());
+  const effectiveBase = base ?? (await getServicesHttpBase());
   return request<{ ok: boolean; error?: string }>(
     `${effectiveBase}/api/video/runtime-download`,
     token,
@@ -722,6 +913,37 @@ export async function downloadVideoRuntime(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ component }),
     },
+  );
+}
+
+export interface OfficeHealthStatus {
+  ok: boolean;
+  version: string | null;
+  path: string | null;
+  error?: string;
+  supported: boolean;
+}
+
+export async function fetchOfficeHealth(
+  token: string,
+  base?: string,
+): Promise<OfficeHealthStatus> {
+  const effectiveBase = base ?? (await getServicesHttpBase());
+  return request<OfficeHealthStatus>(
+    `${effectiveBase}/api/office/health`,
+    token,
+  );
+}
+
+export async function downloadOfficeRuntime(
+  token: string,
+  base?: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const effectiveBase = base ?? (await getServicesHttpBase());
+  return request<{ ok: boolean; error?: string }>(
+    `${effectiveBase}/api/office/runtime-download`,
+    token,
+    { method: "POST" },
   );
 }
 
@@ -737,7 +959,7 @@ export async function extractUrl2Note(
   url: string,
   base?: string,
 ): Promise<Url2NoteSource> {
-  const effectiveBase = base ?? (await getGatewayHttpBase());
+  const effectiveBase = base ?? (await getServicesHttpBase());
   return request<Url2NoteSource>(
     `${effectiveBase}/api/url2note/extract`,
     token,
@@ -753,7 +975,7 @@ export async function fetchVideoProjects(
   token: string,
   base?: string,
 ): Promise<{ projects: VideoProject[] }> {
-  const effectiveBase = base ?? (await getGatewayHttpBase());
+  const effectiveBase = base ?? (await getServicesHttpBase());
   return request(`${effectiveBase}/api/video/projects`, token);
 }
 
@@ -771,7 +993,7 @@ export async function createVideoProject(
   tts?: VideoTtsConfig,
   base?: string,
 ): Promise<{ ok: boolean; error?: string }> {
-  const effectiveBase = base ?? (await getGatewayHttpBase());
+  const effectiveBase = base ?? (await getServicesHttpBase());
   return request<{ ok: boolean; error?: string }>(
     `${effectiveBase}/api/video/project/create`,
     token,
@@ -788,7 +1010,7 @@ export async function fetchVideoProject(
   name: string,
   base?: string,
 ): Promise<VideoProject & { previewPort?: number | null; videoUrl?: string | null }> {
-  const effectiveBase = base ?? (await getGatewayHttpBase());
+  const effectiveBase = base ?? (await getServicesHttpBase());
   const query = new URLSearchParams();
   query.set("name", name);
   return request(`${effectiveBase}/api/video/project?${query}`, token);
@@ -800,7 +1022,7 @@ export async function fetchVideoProjectFile(
   path: string,
   base?: string,
 ): Promise<{ ok: boolean; content?: string; error?: string }> {
-  const effectiveBase = base ?? (await getGatewayHttpBase());
+  const effectiveBase = base ?? (await getServicesHttpBase());
   const query = new URLSearchParams();
   query.set("name", name);
   query.set("path", path);
@@ -835,7 +1057,7 @@ export async function saveVideoChatId(
   chatId: string,
   base?: string,
 ): Promise<{ ok: boolean }> {
-  const effectiveBase = base ?? (await getGatewayHttpBase());
+  const effectiveBase = base ?? (await getServicesHttpBase());
   return request<{ ok: boolean }>(
     `${effectiveBase}/api/video/project-save-chat-id`,
     token,
@@ -873,7 +1095,7 @@ export async function exportVideoProject(
   opts?: { fps?: number; quality?: "draft" | "standard" | "high" },
   base?: string,
 ): Promise<{ ok: boolean; stage?: string; message?: string; error?: string }> {
-  const effectiveBase = base ?? (await getGatewayHttpBase());
+  const effectiveBase = base ?? (await getServicesHttpBase());
   return request(
     `${effectiveBase}/api/video/project/export`,
     token,
@@ -890,7 +1112,7 @@ export async function fetchVideoExportStatus(
   name: string,
   base?: string,
 ): Promise<VideoExportStatus> {
-  const effectiveBase = base ?? (await getGatewayHttpBase());
+  const effectiveBase = base ?? (await getServicesHttpBase());
   const query = new URLSearchParams();
   query.set("name", name);
   return request(`${effectiveBase}/api/video/project/export-status?${query}`, token);
@@ -923,7 +1145,7 @@ export async function fetchVideoStoryboard(
   name: string,
   base?: string,
 ): Promise<{ ok: boolean; scenes?: VideoScene[]; source?: string; error?: string }> {
-  const effectiveBase = base ?? (await getGatewayHttpBase());
+  const effectiveBase = base ?? (await getServicesHttpBase());
   const query = new URLSearchParams();
   query.set("name", name);
   return request(`${effectiveBase}/api/video/project/storyboard?${query}`, token);
@@ -935,7 +1157,7 @@ export async function updateVideoScene(
   scene: Partial<VideoScene> & { index: number },
   base?: string,
 ): Promise<{ ok: boolean; scene?: VideoScene; error?: string }> {
-  const effectiveBase = base ?? (await getGatewayHttpBase());
+  const effectiveBase = base ?? (await getServicesHttpBase());
   return request(`${effectiveBase}/api/video/project/scene`, token, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
@@ -949,7 +1171,7 @@ export async function deleteVideoScene(
   index: number,
   base?: string,
 ): Promise<{ ok: boolean; scenes?: VideoScene[]; error?: string }> {
-  const effectiveBase = base ?? (await getGatewayHttpBase());
+  const effectiveBase = base ?? (await getServicesHttpBase());
   const query = new URLSearchParams();
   query.set("name", name);
   query.set("index", String(index));
@@ -964,7 +1186,7 @@ export async function addVideoScene(
   scene?: Partial<VideoScene>,
   base?: string,
 ): Promise<{ ok: boolean; scene?: VideoScene; error?: string }> {
-  const effectiveBase = base ?? (await getGatewayHttpBase());
+  const effectiveBase = base ?? (await getServicesHttpBase());
   return request(`${effectiveBase}/api/video/project/scene/add`, token, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -978,7 +1200,7 @@ export async function reorderVideoScenes(
   indices: number[],
   base?: string,
 ): Promise<{ ok: boolean; scenes?: VideoScene[]; error?: string }> {
-  const effectiveBase = base ?? (await getGatewayHttpBase());
+  const effectiveBase = base ?? (await getServicesHttpBase());
   return request(`${effectiveBase}/api/video/project/scene/reorder`, token, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -991,23 +1213,12 @@ export async function lockVideoStoryboard(
   name: string,
   base?: string,
 ): Promise<{ ok: boolean; phase?: string; error?: string }> {
-  const effectiveBase = base ?? (await getGatewayHttpBase());
+  const effectiveBase = base ?? (await getServicesHttpBase());
   return request(`${effectiveBase}/api/video/project/lock-storyboard`, token, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name }),
   });
-}
-
-export function buildSceneNarrationUrl(
-  base: string,
-  token: string,
-  name: string,
-  index: number,
-): string {
-  // narration API is POST with JSON body; for <audio> we can't use POST directly.
-  // Frontend will fetch bytes and create blob URL instead.
-  return "";
 }
 
 export async function fetchSceneNarrationBytes(
@@ -1016,7 +1227,7 @@ export async function fetchSceneNarrationBytes(
   index: number,
   base?: string,
 ): Promise<Blob | null> {
-  const effectiveBase = base ?? (await getGatewayHttpBase());
+  const effectiveBase = base ?? (await getServicesHttpBase());
   const res = await fetch(`${effectiveBase}/api/video/project/scene/narration`, {
     method: "POST",
     headers: {
@@ -1047,7 +1258,7 @@ export async function generateSceneHtml(
   index: number,
   base?: string,
 ): Promise<{ ok: boolean; scene?: VideoSceneWithHtml; htmlPath?: string; error?: string }> {
-  const effectiveBase = base ?? (await getGatewayHttpBase());
+  const effectiveBase = base ?? (await getServicesHttpBase());
   return request(`${effectiveBase}/api/video/ai/scene-html`, token, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1074,7 +1285,7 @@ export async function fetchScenePreviewHtml(
   index: number,
   base?: string,
 ): Promise<{ html: string | null; needsGeneration: boolean }> {
-  const effectiveBase = base ?? (await getGatewayHttpBase());
+  const effectiveBase = base ?? (await getServicesHttpBase());
   const query = new URLSearchParams();
   query.set("name", name);
   query.set("index", String(index));
@@ -1095,12 +1306,249 @@ export async function confirmVideoScene(
   index: number,
   base?: string,
 ): Promise<{ ok: boolean; scene?: VideoSceneWithHtml; allConfirmed?: boolean; phase?: string; error?: string }> {
-  const effectiveBase = base ?? (await getGatewayHttpBase());
+  const effectiveBase = base ?? (await getServicesHttpBase());
   return request(`${effectiveBase}/api/video/project/scene/confirm`, token, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name, index }),
   });
+}
+
+// ---------------------------------------------------------------------------
+// Skill lifecycle (settings panel)
+// ---------------------------------------------------------------------------
+
+export interface SkillUsageRow {
+  name: string;
+  created_by: string | null;
+  created_at: string | null;
+  access_count: number;
+  last_accessed_at: string | null;
+  pinned: boolean;
+  archived_at: string | null;
+  provenance: "agent" | "bundled" | "unknown";
+  location: "active" | "archived";
+}
+
+export interface SkillLifecycleConfig {
+  skillPruneEnabled: boolean;
+  archiveAfterDays: number;
+  maxActiveUserSkills: number;
+  activeCount: number;
+  archivedCount: number;
+}
+
+export async function listSkills(
+  token: string,
+  base?: string,
+): Promise<{ skills: SkillUsageRow[] }> {
+  const effectiveBase = base ?? (await getGatewayHttpBase());
+  return request(`${effectiveBase}/api/skills/list`, token);
+}
+
+export async function setSkillPinned(
+  token: string,
+  name: string,
+  pinned: boolean,
+  base?: string,
+): Promise<{ ok: boolean; name: string; pinned: boolean }> {
+  const effectiveBase = base ?? (await getGatewayHttpBase());
+  return request(`${effectiveBase}/api/skills/set_pinned`, token, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, pinned }),
+  });
+}
+
+export async function archiveSkill(
+  token: string,
+  name: string,
+  base?: string,
+): Promise<{ ok: boolean; name: string; message: string }> {
+  const effectiveBase = base ?? (await getGatewayHttpBase());
+  return request(`${effectiveBase}/api/skills/archive`, token, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+}
+
+export async function restoreSkill(
+  token: string,
+  name: string,
+  base?: string,
+): Promise<{ ok: boolean; name: string; message: string }> {
+  const effectiveBase = base ?? (await getGatewayHttpBase());
+  return request(`${effectiveBase}/api/skills/restore`, token, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+}
+
+export async function pruneSkills(
+  token: string,
+  opts: { apply?: boolean; days?: number },
+  base?: string,
+): Promise<{
+  candidates: string[];
+  archived: { name: string; ok: boolean; message: string }[];
+  applied: boolean;
+  days: number;
+}> {
+  const effectiveBase = base ?? (await getGatewayHttpBase());
+  return request(`${effectiveBase}/api/skills/prune`, token, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      apply: opts.apply ?? false,
+      ...(opts.days !== undefined ? { days: opts.days } : {}),
+    }),
+  });
+}
+
+export async function getSkillLifecycleConfig(
+  token: string,
+  base?: string,
+): Promise<SkillLifecycleConfig> {
+  const effectiveBase = base ?? (await getGatewayHttpBase());
+  return request(`${effectiveBase}/api/skills/config`, token);
+}
+
+export async function updateSkillLifecycleConfig(
+  token: string,
+  update: Partial<{
+    skillPruneEnabled: boolean;
+    archiveAfterDays: number;
+    maxActiveUserSkills: number;
+  }>,
+  base?: string,
+): Promise<{ ok: boolean }> {
+  const effectiveBase = base ?? (await getGatewayHttpBase());
+  return request(`${effectiveBase}/api/skills/update_config`, token, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(update),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// MCP server lifecycle (settings panel)
+// ---------------------------------------------------------------------------
+
+export type McpTransport = "stdio" | "sse" | "streamableHttp" | "unknown";
+
+export interface McpServerConfig {
+  type: McpTransport | null;
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+  url: string;
+  headers: Record<string, string>;
+  toolTimeout: number;
+  enabledTools: string[];
+}
+
+export interface McpServerStatus {
+  name: string;
+  connected: boolean;
+  transport: McpTransport;
+  toolCount: number;
+  toolTimeout: number;
+  enabledTools: string[];
+  config?: McpServerConfig;
+}
+
+export interface McpToolInfo {
+  name: string;
+  description: string;
+  kind: "tool" | "resource" | "prompt";
+}
+
+export async function listMcpServers(
+  token: string,
+  base?: string,
+): Promise<{ servers: McpServerStatus[] }> {
+  const effectiveBase = base ?? (await getGatewayHttpBase());
+  return request(`${effectiveBase}/api/mcp/servers`, token);
+}
+
+export async function listMcpServerTools(
+  token: string,
+  name: string,
+  base?: string,
+): Promise<{ name: string; tools: McpToolInfo[] }> {
+  const effectiveBase = base ?? (await getGatewayHttpBase());
+  return request(
+    `${effectiveBase}/api/mcp/servers/${encodeURIComponent(name)}/tools`,
+    token,
+  );
+}
+
+export async function createMcpServer(
+  token: string,
+  name: string,
+  config: Partial<McpServerConfig>,
+  base?: string,
+): Promise<{ ok: boolean; name: string; connected?: boolean; toolCount?: number; error?: string }> {
+  const effectiveBase = base ?? (await getGatewayHttpBase());
+  return request(`${effectiveBase}/api/mcp/servers`, token, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, ...config }),
+  });
+}
+
+export async function updateMcpServer(
+  token: string,
+  name: string,
+  config: Partial<McpServerConfig>,
+  base?: string,
+): Promise<{ ok: boolean; name: string; connected?: boolean; toolCount?: number; error?: string }> {
+  const effectiveBase = base ?? (await getGatewayHttpBase());
+  return request(
+    `${effectiveBase}/api/mcp/servers/${encodeURIComponent(name)}`,
+    token,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(config),
+    },
+  );
+}
+
+export async function deleteMcpServer(
+  token: string,
+  name: string,
+  base?: string,
+): Promise<{ ok: boolean; name: string; error?: string }> {
+  const effectiveBase = base ?? (await getGatewayHttpBase());
+  return request(
+    `${effectiveBase}/api/mcp/servers/${encodeURIComponent(name)}`,
+    token,
+    { method: "DELETE" },
+  );
+}
+
+export async function restartMcpServer(
+  token: string,
+  name: string,
+  base?: string,
+): Promise<{ ok: boolean; name: string; connected?: boolean; toolCount?: number; error?: string }> {
+  const effectiveBase = base ?? (await getGatewayHttpBase());
+  return request(
+    `${effectiveBase}/api/mcp/servers/${encodeURIComponent(name)}/restart`,
+    token,
+    { method: "POST" },
+  );
+}
+
+export async function reloadMcpServers(
+  token: string,
+  base?: string,
+): Promise<{ ok: boolean; connectedCount?: number; totalConfigured?: number; error?: string }> {
+  const effectiveBase = base ?? (await getGatewayHttpBase());
+  return request(`${effectiveBase}/api/mcp/reload`, token, { method: "POST" });
 }
 
 export async function regenerateVideoScene(
@@ -1109,7 +1557,7 @@ export async function regenerateVideoScene(
   index: number,
   base?: string,
 ): Promise<{ ok: boolean; scene?: VideoSceneWithHtml; error?: string }> {
-  const effectiveBase = base ?? (await getGatewayHttpBase());
+  const effectiveBase = base ?? (await getServicesHttpBase());
   return request(`${effectiveBase}/api/video/project/scene/regenerate`, token, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1124,7 +1572,7 @@ export async function rewriteVideoScene(
   requirement: string,
   base?: string,
 ): Promise<{ ok: boolean; scene?: VideoSceneWithHtml; error?: string }> {
-  const effectiveBase = base ?? (await getGatewayHttpBase());
+  const effectiveBase = base ?? (await getServicesHttpBase());
   return request(`${effectiveBase}/api/video/ai/scene-rewrite`, token, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

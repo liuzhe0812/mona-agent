@@ -25,6 +25,7 @@ import { useTranslation } from "react-i18next";
 import { AgentLogo } from "@/components/AgentLogo";
 import { ChatList } from "@/components/ChatList";
 import { useEmailStore } from "@/components/email/store/emailStore";
+import { useTodoStore } from "@/components/schedule/todoStore";
 
 import sidebarMonaIcon from "@/assets/icons/sidebar-mona.png";
 import sidebarNoteIcon from "@/assets/icons/sidebar-note.png";
@@ -115,12 +116,15 @@ export function Sidebar(props: SidebarProps) {
   const agentLogoState = props.runningChatIds?.length ? "working" : "idle";
   // 订阅邮件总未读数，用于邮件图标角标（全局初始化时已从 SQLite 加载）
   const emailUnreadCount = useEmailStore((s) => s.totalUnreadCount);
+  // 订阅计划收集箱数量（待确认建议 + 未分类待办 + 待确认邮件日程）
+  const planInboxCount = useTodoStore((s) => s.inboxCount);
 
   return (
+    <TooltipProvider delayDuration={0}>
     <nav
       ref={props.containActionMenus ? setMenuPortalContainer : undefined}
       aria-label={t("sidebar.navigation")}
-      className="flex h-full w-full min-w-0 flex-col border-r border-sidebar-border/60 bg-sidebar text-sidebar-foreground"
+      className="flex h-full w-full min-w-0 flex-col bg-transparent text-sidebar-foreground"
     >
       <div
         className={cn(
@@ -128,29 +132,30 @@ export function Sidebar(props: SidebarProps) {
           collapsed ? "w-14 justify-start" : "justify-between",
         )}
       >
-        <button
-          type="button"
-          aria-label={collapsed ? toggleLabel : undefined}
-          aria-hidden={collapsed ? undefined : true}
-          title={collapsed ? toggleLabel : undefined}
-          onClick={collapsed ? props.onExpand : undefined}
-          tabIndex={collapsed ? 0 : -1}
-          className={cn(
-            "flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-xl transition-colors",
-            collapsed
-              ? "-ml-0.5 hover:bg-sidebar-accent/75"
-              : "-ml-0.5",
-          )}
-        >
-          <AgentLogo state={agentLogoState} className="h-8 w-8" />
-        </button>
+        <CollapsedTooltip label={toggleLabel} collapsed={collapsed}>
+          <button
+            type="button"
+            aria-label={collapsed ? toggleLabel : undefined}
+            aria-hidden={collapsed ? undefined : true}
+            onClick={collapsed ? props.onExpand : undefined}
+            tabIndex={collapsed ? 0 : -1}
+            className={cn(
+              "flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-xl transition-colors",
+              collapsed
+                ? "-ml-0.5 hover:bg-[hsl(var(--sidebar-hover-surface)/0.04)]"
+                : "-ml-0.5",
+            )}
+          >
+            <AgentLogo state={agentLogoState} className="h-8 w-8" />
+          </button>
+        </CollapsedTooltip>
         {!collapsed && (
           <Button
             variant="ghost"
             size="icon"
             aria-label={t("sidebar.collapse")}
             onClick={props.onCollapse}
-            className="h-7 w-7 rounded-lg text-muted-foreground/85 hover:bg-sidebar-accent/75 hover:text-sidebar-foreground"
+            className="h-7 w-7 rounded-lg text-muted-foreground/85 hover:bg-[hsl(var(--sidebar-hover-surface)/0.04)] hover:text-sidebar-foreground"
           >
             <Menu className="h-3.5 w-3.5" />
           </Button>
@@ -170,6 +175,7 @@ export function Sidebar(props: SidebarProps) {
         onOpenProfile={props.onOpenProfile ?? (() => {})}
         onGoHome={props.onGoHome ?? (() => {})}
         emailUnreadCount={emailUnreadCount}
+        planInboxCount={planInboxCount}
       />
       <Separator className="mx-2 mb-2 bg-sidebar-border/50" />
 
@@ -252,49 +258,49 @@ export function Sidebar(props: SidebarProps) {
         {loggedIn ? (
           <div className={cn("flex items-center gap-1", collapsed ? "w-14 flex-col px-0" : "w-full")}>
             <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button
-                  type="button"
-                  aria-label={licenseInfo?.account ?? licenseInfo?.email ?? t("sidebar.account", "账号")}
-                  title={collapsed ? (licenseInfo?.account ?? licenseInfo?.email ?? t("sidebar.account", "账号")) : undefined}
-                  className={cn(
-                    "group relative h-8 min-w-0 gap-2 overflow-hidden rounded-full font-medium text-sidebar-foreground/85 hover:bg-sidebar-accent/75 hover:text-sidebar-foreground",
-                    "transition-[width,padding,border-radius,color,background-color] duration-300 ease-out",
-                    collapsed
-                      ? "flex w-9 shrink-0 items-center justify-center gap-0 rounded-xl px-0"
-                      : "flex w-full shrink-0 items-center justify-start gap-2 px-3 text-[12.5px]",
-                  )}
-                >
-                  <span className="flex shrink-0 items-center justify-center" aria-hidden>
-                    <User className="h-4 w-4" />
-                  </span>
-                  <span
+              <CollapsedTooltip label={licenseInfo?.account ?? licenseInfo?.email ?? t("sidebar.account", "账号")} collapsed={collapsed}>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    aria-label={licenseInfo?.account ?? licenseInfo?.email ?? t("sidebar.account", "账号")}
                     className={cn(
-                      "min-w-0 overflow-hidden truncate whitespace-nowrap transition-[max-width,opacity,transform] duration-200 ease-out",
+                      "group relative h-8 min-w-0 gap-2 overflow-hidden rounded-full font-medium text-sidebar-foreground/85 hover:bg-[hsl(var(--sidebar-hover-surface)/0.04)] hover:text-sidebar-foreground",
+                      "transition-[width,padding,border-radius,color,background-color] duration-300 ease-out",
                       collapsed
-                        ? "max-w-0 -translate-x-0 opacity-0"
-                        : "max-w-[10rem] translate-x-0 opacity-100",
+                        ? "flex w-9 shrink-0 items-center justify-center gap-0 rounded-xl px-0"
+                        : "flex w-full shrink-0 items-center justify-start gap-2 px-3 text-[12.5px]",
                     )}
                   >
-                    {licenseInfo?.account ?? licenseInfo?.email ?? t("sidebar.account", "账号")}
-                  </span>
-                  {collapsed && props.updateAvailable && (
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        props.onStartUpdate?.();
-                      }}
-                      className="absolute -right-0.5 -top-0.5 flex h-3 w-3 items-center justify-center rounded-full bg-blue-500 text-white shadow-sm ring-2 ring-sidebar transition-colors hover:bg-blue-600"
-                      title="发现新版本，点击立即更新"
-                      aria-label="发现新版本，点击立即更新"
+                    <span className="flex shrink-0 items-center justify-center" aria-hidden>
+                      <User className="h-4 w-4" />
+                    </span>
+                    <span
+                      className={cn(
+                        "min-w-0 overflow-hidden truncate whitespace-nowrap transition-[max-width,opacity,transform] duration-200 ease-out",
+                        collapsed
+                          ? "max-w-0 -translate-x-0 opacity-0"
+                          : "max-w-[10rem] translate-x-0 opacity-100",
+                      )}
                     >
-                      <Download className="h-2 w-2" />
-                    </button>
-                  )}
-                </button>
-              </DropdownMenuTrigger>
+                      {licenseInfo?.account ?? licenseInfo?.email ?? t("sidebar.account", "账号")}
+                    </span>
+                    {collapsed && props.updateAvailable && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          props.onStartUpdate?.();
+                        }}
+                        className="absolute -right-0.5 -top-0.5 flex h-3 w-3 items-center justify-center rounded-full bg-blue-500 text-white shadow-sm ring-2 ring-sidebar transition-colors hover:bg-blue-600"
+                        aria-label="发现新版本，点击立即更新"
+                      >
+                        <Download className="h-2 w-2" />
+                      </button>
+                    )}
+                  </button>
+                </DropdownMenuTrigger>
+              </CollapsedTooltip>
               <DropdownMenuContent
                 side="top"
                 align={collapsed ? "center" : "start"}
@@ -362,7 +368,6 @@ export function Sidebar(props: SidebarProps) {
                 type="button"
                 onClick={() => props.onStartUpdate?.()}
                 className="group flex h-5 shrink-0 items-center gap-1 rounded-full bg-gradient-to-r from-blue-500 to-blue-400 px-2 text-[10px] font-medium text-white shadow-sm transition-colors hover:from-blue-600 hover:to-blue-500"
-                title="发现新版本，点击立即更新"
               >
                 <Sparkles className="h-2.5 w-2.5 animate-pulse [animation-duration:2s] [animation-timing-function:ease-in-out]" />
                 更新
@@ -386,43 +391,77 @@ export function Sidebar(props: SidebarProps) {
                 icon={<Settings className="h-4 w-4" />}
               />
             ) : (
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label="设置"
-                title="设置"
-                onClick={() => props.onOpenSettings()}
-                className="h-8 w-8 shrink-0 rounded-full text-sidebar-foreground/85 hover:bg-sidebar-accent/75 hover:text-sidebar-foreground"
-              >
-                <Settings className="h-4 w-4" />
-              </Button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label="设置"
+                    onClick={() => props.onOpenSettings()}
+                    className="h-8 w-8 shrink-0 rounded-full text-sidebar-foreground/85 hover:bg-[hsl(var(--sidebar-hover-surface)/0.04)] hover:text-sidebar-foreground"
+                  >
+                    <Settings className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="right">设置</TooltipContent>
+              </Tooltip>
             )}
           </div>
         )}
       </div>
     </nav>
+    </TooltipProvider>
+  );
+}
+
+function CollapsedTooltip({
+  label,
+  collapsed,
+  side = "right",
+  children,
+}: {
+  label: string;
+  collapsed: boolean;
+  side?: "top" | "bottom" | "left" | "right";
+  children: React.ReactElement;
+}) {
+  if (!collapsed || !label) return <>{children}</>;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{children}</TooltipTrigger>
+      <TooltipContent side={side} className="max-w-[200px] truncate">
+        {label}
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
 type ToolboxItem = {
   label: string;
   icon: ReactNode;
+  windowsOnly?: boolean;
 };
+
+function isMacOS() {
+  if (typeof navigator === "undefined") return false;
+  const platform = navigator.platform.toLowerCase();
+  return platform.includes("mac") || platform.includes("iphone") || platform.includes("ipad");
+}
 
 // 一级主入口（始终展示在侧边栏）
 const PRIMARY_ITEMS: ToolboxItem[] = [
-  { label: "Mona", icon: <img src={sidebarMonaIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
+  { label: "新会话", icon: <img src={sidebarMonaIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
   { label: "笔记", icon: <img src={sidebarNoteIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
+  { label: "AI文档", icon: <img src={sidebarDocIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
   { label: "终端", icon: <img src={sidebarTerminalIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
   { label: "邮件", icon: <img src={sidebarEmailIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
-  { label: "日程", icon: <img src={sidebarScheduleIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
-  { label: "系统", icon: <img src={sidebarSystemIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
+  { label: "计划", icon: <img src={sidebarScheduleIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
 ];
 
 // 二级入口（收纳在"更多"菜单中）
 const SECONDARY_ITEMS: ToolboxItem[] = [
   { label: "数据库", icon: <img src={sidebarDatabaseIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
-  { label: "AI文档", icon: <img src={sidebarDocIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
+  { label: "系统", icon: <img src={sidebarSystemIcon} className="h-5 w-5 object-contain" alt="" draggable={false} />, windowsOnly: true },
   { label: "画像", icon: <img src={sidebarProfileIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
 ];
 
@@ -439,13 +478,13 @@ function getToolboxHandler(label: string, handlers: {
   onGoHome: () => void;
 }): () => void {
   switch (label) {
-    case "Mona": return handlers.onNewChat;
+    case "新会话": return handlers.onNewChat;
     case "笔记": return handlers.onOpenNote;
     case "AI文档": return handlers.onOpenDoc;
     case "终端": return handlers.onOpenSSH;
     case "数据库": return handlers.onOpenDb;
     case "邮件": return handlers.onOpenEmail;
-    case "日程": return handlers.onOpenSchedule;
+    case "计划": return handlers.onOpenSchedule;
     case "系统": return handlers.onOpenSystem;
     case "画像": return handlers.onOpenProfile;
     default: return handlers.onGoHome;
@@ -465,6 +504,7 @@ function ToolboxNavigation({
   onOpenProfile,
   onGoHome,
   emailUnreadCount,
+  planInboxCount,
 }: {
   collapsed: boolean;
   onNewChat: () => void;
@@ -478,6 +518,7 @@ function ToolboxNavigation({
   onOpenProfile: () => void;
   onGoHome: () => void;
   emailUnreadCount: number;
+  planInboxCount: number;
 }) {
   const { licenseActive } = useLicense();
   const LICENSE_REQUIRED = new Set(["AI文档"]);
@@ -493,6 +534,9 @@ function ToolboxNavigation({
     onOpenProfile,
     onGoHome,
   };
+  const visiblePrimary = isMacOS()
+    ? PRIMARY_ITEMS.filter((item) => !item.windowsOnly)
+    : PRIMARY_ITEMS;
   const visibleSecondary = SECONDARY_ITEMS;
 
   return (
@@ -502,10 +546,15 @@ function ToolboxNavigation({
         collapsed && "flex w-14 flex-col items-center px-0",
       )}
     >
-      {PRIMARY_ITEMS.map((item) => {
+      {visiblePrimary.map((item) => {
         const onClick = getToolboxHandler(item.label, handlers);
-        // 邮件图标显示未读数角标
-        const badge = item.label === "邮件" && emailUnreadCount > 0 ? emailUnreadCount : undefined;
+        // 邮件图标显示未读数角标；计划图标显示收集箱数量（待确认建议+未分类待办+待确认邮件日程）
+        const badge =
+          item.label === "邮件" && emailUnreadCount > 0
+            ? emailUnreadCount
+            : item.label === "计划" && planInboxCount > 0
+              ? planInboxCount
+              : undefined;
         return (
           <SidebarActionButton
             key={item.label}
@@ -519,35 +568,36 @@ function ToolboxNavigation({
       })}
       {visibleSecondary.length > 0 && (
         <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              type="button"
-              variant="ghost"
-              aria-label="更多"
-              title={collapsed ? "更多" : undefined}
-              className={cn(
-                "group relative h-8 min-w-0 gap-2 overflow-hidden rounded-full font-medium text-sidebar-foreground/85 hover:bg-sidebar-accent/75 hover:text-sidebar-foreground",
-                "transition-[width,padding,border-radius,color,background-color] duration-300 ease-out",
-                collapsed
-                  ? "w-9 justify-center gap-0 rounded-xl px-0"
-                  : "w-full justify-start gap-2 px-3 text-[12.5px]",
-              )}
-            >
-              <span className="flex shrink-0 items-center justify-center" aria-hidden>
-                <MoreHorizontal className="h-5 w-5" />
-              </span>
-              <span
+          <CollapsedTooltip label="更多" collapsed={collapsed}>
+            <DropdownMenuTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                aria-label="更多"
                 className={cn(
-                  "min-w-0 overflow-hidden truncate whitespace-nowrap transition-[max-width,opacity,transform] duration-200 ease-out",
+                  "group relative h-8 min-w-0 gap-2 overflow-hidden rounded-full font-medium text-sidebar-foreground/85 hover:bg-[hsl(var(--sidebar-hover-surface)/0.04)] hover:text-sidebar-foreground",
+                  "transition-[width,padding,border-radius,color,background-color] duration-300 ease-out",
                   collapsed
-                    ? "max-w-0 -translate-x-1 opacity-0"
-                    : "max-w-[12rem] translate-x-0 opacity-100",
+                    ? "w-9 justify-center gap-0 rounded-xl px-0"
+                    : "w-full justify-start gap-2 px-3 text-[12.5px]",
                 )}
               >
-                更多
-              </span>
-            </Button>
-          </DropdownMenuTrigger>
+                <span className="flex shrink-0 items-center justify-center" aria-hidden>
+                  <MoreHorizontal className="h-5 w-5" />
+                </span>
+                <span
+                  className={cn(
+                    "min-w-0 overflow-hidden truncate whitespace-nowrap transition-[max-width,opacity,transform] duration-200 ease-out",
+                    collapsed
+                      ? "max-w-0 -translate-x-1 opacity-0"
+                      : "max-w-[12rem] translate-x-0 opacity-100",
+                  )}
+                >
+                  更多
+                </span>
+              </Button>
+            </DropdownMenuTrigger>
+          </CollapsedTooltip>
           <DropdownMenuContent
             side={collapsed ? "right" : "right"}
             align={collapsed ? "center" : "start"}
@@ -595,23 +645,23 @@ function SidebarActionButton({
 }) {
   const badgeText = badge != null && badge > 0 ? (badge > 99 ? "99+" : String(badge)) : null;
   return (
-    <Button
-      type="button"
-      variant="ghost"
-      aria-label={label}
-      title={collapsed ? label : undefined}
-      onClick={onClick}
-      className={cn(
-        "group relative h-8 min-w-0 gap-2 overflow-hidden rounded-full font-medium text-sidebar-foreground/85 hover:bg-sidebar-accent/75 hover:text-sidebar-foreground",
-        "transition-[width,padding,border-radius,color,background-color] duration-300 ease-out",
-        active &&
-          "bg-sidebar-accent/80 text-sidebar-foreground shadow-[inset_0_0_0_1px_hsl(var(--sidebar-border)/0.35)]",
-        collapsed
-          ? "w-9 justify-center gap-0 rounded-xl px-0"
-          : "w-full justify-start gap-2 px-3 text-[12.5px]",
-        className,
-      )}
-    >
+    <CollapsedTooltip label={label} collapsed={collapsed}>
+      <Button
+        type="button"
+        variant="ghost"
+        aria-label={label}
+        onClick={onClick}
+        className={cn(
+          "group relative h-8 min-w-0 gap-2 overflow-hidden rounded-full font-medium text-sidebar-foreground/85 hover:bg-[hsl(var(--sidebar-hover-surface)/0.04)] hover:text-sidebar-foreground",
+          "transition-[width,padding,border-radius,color,background-color] duration-300 ease-out",
+          active &&
+            "bg-[hsl(var(--sidebar-active-surface)/0.07)] text-sidebar-foreground",
+          collapsed
+            ? "w-9 justify-center gap-0 rounded-xl px-0"
+            : "w-full justify-start gap-2 px-3 text-[12.5px]",
+          className,
+        )}
+      >
       {icon && (
         <span
           className={cn(
@@ -646,7 +696,8 @@ function SidebarActionButton({
           {badgeText}
         </span>
       )}
-    </Button>
+      </Button>
+    </CollapsedTooltip>
   );
 }
 
@@ -711,14 +762,13 @@ function CollapsedChatList({
   };
 
   return (
-    <TooltipProvider delayDuration={300}>
-      <div className="relative flex h-full min-h-0 flex-col items-center">
+    <div className="relative flex h-full min-h-0 flex-col items-center">
         {canScrollUp && (
           <button
             type="button"
             onClick={() => scrollBy(-108)}
             aria-label={t("common.scrollUp", "向上滚动")}
-            className="absolute top-0 z-10 flex h-5 w-9 items-center justify-center rounded-full bg-sidebar/90 text-muted-foreground shadow-sm backdrop-blur-sm transition-opacity hover:text-sidebar-foreground"
+            className="absolute top-0 z-10 flex h-5 w-9 items-center justify-center rounded-full bg-background/80 text-muted-foreground shadow-sm backdrop-blur-sm transition-opacity hover:text-sidebar-foreground"
           >
             <ChevronUp className="h-3.5 w-3.5" />
           </button>
@@ -769,8 +819,8 @@ function CollapsedChatList({
                           className={cn(
                             "flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[13px] font-medium transition-colors",
                             active
-                              ? "bg-sidebar-accent/80 text-sidebar-foreground shadow-[inset_0_0_0_1px_hsl(var(--sidebar-border)/0.35)]"
-                              : "text-muted-foreground/70 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground",
+                              ? "bg-[hsl(var(--sidebar-active-surface)/0.07)] text-sidebar-foreground"
+                              : "text-muted-foreground/70 hover:bg-[hsl(var(--sidebar-hover-surface)/0.04)] hover:text-sidebar-foreground",
                           )}
                         >
                           {initial}
@@ -812,12 +862,11 @@ function CollapsedChatList({
             type="button"
             onClick={() => scrollBy(108)}
             aria-label={t("common.scrollDown", "向下滚动")}
-            className="absolute bottom-0 z-10 flex h-5 w-9 items-center justify-center rounded-full bg-sidebar/90 text-muted-foreground shadow-sm backdrop-blur-sm transition-opacity hover:text-sidebar-foreground"
+            className="absolute bottom-0 z-10 flex h-5 w-9 items-center justify-center rounded-full bg-background/80 text-muted-foreground shadow-sm backdrop-blur-sm transition-opacity hover:text-sidebar-foreground"
           >
             <ChevronDown className="h-3.5 w-3.5" />
           </button>
         )}
       </div>
-    </TooltipProvider>
   );
 }

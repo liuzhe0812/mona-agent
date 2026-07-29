@@ -56,7 +56,7 @@ export function AppTitleBar({
   return (
     <header
       data-tauri-drag-region="deep"
-      className="flex h-9 shrink-0 items-center border-b border-border/70 bg-sidebar/95 text-sidebar-foreground"
+      className="flex h-9 shrink-0 items-center bg-transparent text-sidebar-foreground"
     >
       {/* 标签栏 */}
       <div className="flex items-center gap-0.5 overflow-x-auto px-2 scrollbar-none">
@@ -82,7 +82,7 @@ export function AppTitleBar({
           variant="ghost"
           size="icon"
           onClick={onNewTab}
-          className="h-6 w-6 rounded-md text-muted-foreground hover:bg-sidebar-accent/50 hover:text-foreground"
+          className="h-6 w-6 rounded-md text-muted-foreground hover:bg-[hsl(var(--sidebar-hover-surface)/0.04)] hover:text-foreground"
         >
           <Plus className="h-3 w-3" />
         </Button>
@@ -140,7 +140,7 @@ function TitleBarButton({
       title={label}
       onClick={onClick}
       className={cn(
-        "relative h-9 w-11 rounded-none text-muted-foreground hover:bg-sidebar-accent/80 hover:text-foreground",
+        "relative h-9 w-11 rounded-none text-muted-foreground hover:bg-[hsl(var(--sidebar-hover-surface)/0.04)] hover:text-foreground",
         danger && "hover:bg-red-500 hover:text-white",
       )}
     >

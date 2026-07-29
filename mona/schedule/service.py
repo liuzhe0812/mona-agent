@@ -234,6 +234,15 @@ class ScheduleService:
         old_job_id = self._cron_job_ids.pop(item.id, None)
         if old_job_id:
             self._cron.remove_job(old_job_id)
+        # Mirror jobs are persisted by CronService, so after a process restart the
+        # in-memory _cron_job_ids map is empty but a stale mirror may still exist
+        # on disk. Remove any previous mirror of this item to avoid duplicates.
+        try:
+            for j in self._cron.list_jobs(include_disabled=True):
+                if j.name == f"schedule:{item.id}":
+                    self._cron.remove_job(j.id)
+        except Exception:
+            logger.exception("Schedule: failed to dedupe mirror jobs for '{}'", item.title)
 
         job = self._cron.add_job(
             name=f"schedule:{item.id}",

@@ -8,6 +8,7 @@ these tools.
 from __future__ import annotations
 
 import shutil
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +33,12 @@ class SkillReadTool(Tool):
     """Read a skill's SKILL.md content by name."""
 
     _scopes = {"core", "subagent", "memory"}
+
+    def __init__(self, *, track_usage: bool = True) -> None:
+        # When Dream reads skills for dedup/maintenance, it must NOT bump
+        # access counters — otherwise maintenance would reset the inactivity
+        # clock and archival would never happen.
+        self._track_usage = track_usage
 
     @classmethod
     def create(cls, ctx: Any) -> Tool:
@@ -69,6 +76,9 @@ class SkillReadTool(Tool):
         content = loader.load_skill(name)
         if content is None:
             return f"Error: skill '{name}' not found."
+        if self._track_usage:
+            from mona.agent import skill_usage
+            skill_usage.bump_access(name)
         return content
 
 
@@ -76,6 +86,18 @@ class SkillCreateTool(Tool):
     """Create a new user skill (Dream agent only)."""
 
     _scopes = {"memory"}
+
+    # Hard cap on active user skills. Applies to all active user skills
+    # (agent-created + unknown); builtin skills live in a separate read-only
+    # directory and are not counted. Caller can override via constructor.
+    DEFAULT_MAX_ACTIVE_USER_SKILLS = 100
+
+    def __init__(self, *, max_active_user_skills: int | None = None) -> None:
+        self._max_active = (
+            max_active_user_skills
+            if max_active_user_skills is not None
+            else self.DEFAULT_MAX_ACTIVE_USER_SKILLS
+        )
 
     @classmethod
     def create(cls, ctx: Any) -> Tool:
@@ -90,7 +112,8 @@ class SkillCreateTool(Tool):
         return (
             "Create a new user skill under ~/.mona/skills/<name>/SKILL.md. "
             "Dream agent only. "
-            "Fails if the skill already exists (use skill_read to inspect first)."
+            "Fails if the skill already exists (use skill_read to inspect first) "
+            "or if the active user skill count has reached the configured cap."
         )
 
     @property
@@ -118,14 +141,52 @@ class SkillCreateTool(Tool):
         # Sanitize skill name
         if not all(c.isalnum() or c in "-_" for c in name):
             return f"Error: invalid skill name '{name}' (only alphanumeric, dash, underscore allowed)."
+        from mona.agent import skill_usage
         from mona.config.paths import get_skills_dir
+
         skill_dir = get_skills_dir() / name
         skill_file = skill_dir / "SKILL.md"
         if skill_file.exists():
             return f"Error: skill '{name}' already exists at {skill_file}."
+
+        # Capacity check: count active user skills before creating. Hold the
+        # lifecycle lock through directory creation + provenance write so two
+        # concurrent Dream forks cannot both pass the cap and overshoot.
         try:
-            skill_dir.mkdir(parents=True, exist_ok=True)
-            skill_file.write_text(content, encoding="utf-8")
+            with skill_usage._lifecycle_lock():  # noqa: SLF001 — same-module lock
+                active = skill_usage.list_active_user_skill_names()
+                if name not in active and len(active) >= self._max_active:
+                    return (
+                        f"Error: active user skill count ({len(active)}) has "
+                        f"reached the cap ({self._max_active}). Archive or "
+                        f"merge existing skills before creating new ones "
+                        f"(use `mona skill prune --apply` or `mona skill archive <name>`)."
+                    )
+                # Only create the directory if it does not yet exist (the
+                # earlier skill_file.exists() check covered SKILL.md; the
+                # directory itself might exist as an empty stub from a failed
+                # prior run — only rmtree if WE created it this call).
+                created_dir = False
+                if not skill_dir.exists():
+                    skill_dir.mkdir(parents=True, exist_ok=True)
+                    created_dir = True
+                try:
+                    skill_file.write_text(content, encoding="utf-8")
+                    # Provenance write is part of the same critical section.
+                    # If it fails, roll back the directory we just created
+                    # so the next attempt starts clean.
+                    skill_usage.record_agent_created(name)
+                except Exception as provenance_err:
+                    if created_dir:
+                        import shutil as _shutil
+                        try:
+                            _shutil.rmtree(skill_dir)
+                        except OSError:
+                            pass
+                    return (
+                        f"Error creating skill '{name}': provenance write failed "
+                        f"and directory was rolled back: {provenance_err}"
+                    )
             return f"Successfully created skill '{name}' ({len(content)} chars) at {skill_file}."
         except Exception as e:
             return f"Error creating skill '{name}': {e}"
@@ -135,6 +196,9 @@ class SkillScriptRunTool(Tool):
     """Execute a script from a skill's scripts/ directory."""
 
     _scopes = {"core", "subagent", "memory"}
+
+    def __init__(self, *, track_usage: bool = True) -> None:
+        self._track_usage = track_usage
 
     @classmethod
     def create(cls, ctx: Any) -> Tool:
@@ -191,7 +255,6 @@ class SkillScriptRunTool(Tool):
         if not script_path.exists():
             return f"Error: script '{script}' not found in skill '{skill}' (expected at {script_path})."
         try:
-            import subprocess
             cmd = ["python", str(script_path)]
             if args:
                 cmd.extend(args.split())
@@ -206,6 +269,9 @@ class SkillScriptRunTool(Tool):
             if result.stderr:
                 output += f"\n[stderr]\n{result.stderr}"
             output += f"\n[exit code: {result.returncode}]"
+            if self._track_usage:
+                from mona.agent import skill_usage
+                skill_usage.bump_access(skill)
             return output.strip() or f"(script completed with exit code {result.returncode})"
         except subprocess.TimeoutExpired:
             return f"Error: script '{script}' timed out after 120s."
@@ -217,6 +283,9 @@ class SkillReferenceReadTool(Tool):
     """Read a reference file from a skill's references/ directory."""
 
     _scopes = {"core", "subagent", "memory"}
+
+    def __init__(self, *, track_usage: bool = True) -> None:
+        self._track_usage = track_usage
 
     @classmethod
     def create(cls, ctx: Any) -> Tool:
@@ -272,7 +341,11 @@ class SkillReferenceReadTool(Tool):
         if not ref_file.exists():
             return f"Error: reference '{ref_path}' not found in skill '{skill}' (expected at {ref_file})."
         try:
-            return ref_file.read_text(encoding="utf-8")
+            content = ref_file.read_text(encoding="utf-8")
+            if self._track_usage:
+                from mona.agent import skill_usage
+                skill_usage.bump_access(skill)
+            return content
         except Exception as e:
             return f"Error reading reference '{ref_path}': {e}"
 
@@ -281,6 +354,9 @@ class SkillAssetCopyTool(Tool):
     """Copy an asset file from a skill's assets/ directory to a destination."""
 
     _scopes = {"core", "subagent", "memory"}
+
+    def __init__(self, *, track_usage: bool = True) -> None:
+        self._track_usage = track_usage
 
     @classmethod
     def create(cls, ctx: Any) -> Tool:
@@ -345,6 +421,9 @@ class SkillAssetCopyTool(Tool):
         try:
             dest_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(asset_file, dest_path)
+            if self._track_usage:
+                from mona.agent import skill_usage
+                skill_usage.bump_access(skill)
             return f"Successfully copied {asset_file} to {dest_path}."
         except Exception as e:
             return f"Error copying asset '{asset}': {e}"

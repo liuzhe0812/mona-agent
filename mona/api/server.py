@@ -24,6 +24,7 @@ from email.parser import BytesParser
 from email.utils import formataddr, formatdate, getaddresses, parseaddr
 from pathlib import Path
 from typing import Any, Callable, TypeVar
+from urllib.parse import quote
 
 from aiohttp import web
 from loguru import logger
@@ -53,7 +54,7 @@ from mona.materials.api import (
     handle_materials_write_wiki_page,
 )
 from mona.security.network import validate_host
-from mona.system_agent import handle_system_diagnose, handle_system_plan
+from mona.system_agent import handle_system_plan
 from mona.utils.helpers import safe_filename
 from mona.utils.media_decode import (
     MAX_FILE_SIZE,
@@ -72,11 +73,50 @@ __all__ = (
     "_save_base64_data_url",
     "create_app",
     "handle_chat_completions",
+    # Re-exported for mona.services.server (services process imports these
+    # handlers from here rather than reaching into each source module).
+    "handle_hoard_add",
+    "handle_hoard_delete_by_url",
+    "handle_materials_create_directory",
+    "handle_materials_delete",
+    "handle_materials_delete_wiki_page",
+    "handle_materials_extract",
+    "handle_materials_get_raw",
+    "handle_materials_get_raw_binary",
+    "handle_materials_get_text",
+    "handle_materials_get_wiki_page",
+    "handle_materials_list_files",
+    "handle_materials_list_wiki",
+    "handle_materials_llm_config",
+    "handle_materials_move",
+    "handle_materials_search",
+    "handle_materials_status",
+    "handle_materials_write_wiki_page",
 )
 
 
 API_SESSION_KEY = "api:default"
 API_CHAT_ID = "default"
+
+
+def _resolve_llm_provider(request: web.Request) -> Any | None:
+    """Resolve an LLM provider for non-agent business handlers.
+
+    Prefers the gateway AgentLoop's live provider; falls back to building one
+    from config.json so the services process (no AgentLoop) can serve the
+    same routes autonomously.
+    """
+    agent_loop = request.app.get("agent_loop")
+    provider = getattr(agent_loop, "provider", None)
+    if provider is not None:
+        return provider
+    try:
+        from mona.providers.factory import load_provider_snapshot
+
+        return load_provider_snapshot().provider
+    except Exception:
+        logger.debug("could not build provider from config snapshot")
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -1596,7 +1636,8 @@ def _encode_imap_utf7(s: str) -> str:
         while j < n and ord(s[j]) >= 0x80:
             j += 1
         raw = s[i:j].encode("utf-16-be")
-        encoded = base64.b64encode(raw).decode("ascii").rstrip("=")
+        # RFC 3501 §5.1.3 Modified BASE64：标准 base64 中的 '/' 必须替换为 ','，且去掉填充 '='
+        encoded = base64.b64encode(raw).decode("ascii").rstrip("=").replace("/", ",")
         result.append(f"&{encoded}-")
         i = j
     return "".join(result)
@@ -1634,17 +1675,21 @@ def _validate_mail_host(imap_host: str, smtp_host: str = "") -> None:
             raise ValueError(f"SMTP 服务器地址不被允许: {err}")
 
 
-def _imap_fetch_recent(body: dict[str, Any]) -> list[dict[str, Any]]:
-    """连接 IMAP 并拉取邮件。
+def _imap_fetch_recent(body: dict[str, Any]) -> dict[str, Any]:
+    """连接 IMAP 并拉取邮件（Offline-First：同步时全量拉取 RFC822）。
 
+    - 校验 UIDVALIDITY：变化时返回 uidValidityChanged=true，调用方废弃旧 UID 映射
     - 支持 lastUid 增量同步：只拉取 UID > lastUid 的新邮件
-    - 按需拉取模式：只拉取 HEADER + FLAGS，不下载正文/附件
-      正文在用户点击邮件时通过 /email/fetch_body 按需拉取，避免同步超时和 DB 膨胀
+    - FETCH BODY.PEEK[] 拉完整 RFC822，落盘后用户点击可毫秒级显示
+    - 不按大小降级（skill 第三节：不得用 RFC822 大小推断正文是否值得缓存）
     - 首次同步限制为最近 20 封，增量同步单次最多 50 封
     - 复用持久连接池，避免频繁 login 触发邮箱风控
+    - 返回 dict：{"messages": [...], "uidValidity": str, "uidValidityChanged": bool}
     """
     mailbox = str(body.get("mailbox", "INBOX") or "INBOX").strip() or "INBOX"
     last_uid_raw = body.get("lastUid")
+    # 调用方传入的本地已知 UIDVALIDITY（用于检测变化）
+    known_uid_validity = str(body.get("uidValidity", "") or "").strip()
 
     # 解析 lastUid（前端传字符串或 null）
     last_uid: int | None = None
@@ -1660,10 +1705,23 @@ def _imap_fetch_recent(body: dict[str, Any]) -> list[dict[str, Any]]:
         raise ValueError("imapHost and imapUsername are required")
     _validate_mail_host(imap_host)
 
-    def op(client: imaplib.IMAP4) -> list[dict[str, Any]]:
-        status, _ = client.select(_imap_quote_mailbox(mailbox))
+    def op(client: imaplib.IMAP4) -> dict[str, Any]:
+        status, data = client.select(_imap_quote_mailbox(mailbox))
         if status != "OK":
             raise RuntimeError(f"Mailbox select failed: {status} ({mailbox})")
+        # 解析 SELECT 响应中的 UIDVALIDITY
+        uid_validity = ""
+        for item in data or []:
+            if isinstance(item, bytes) and b"UIDVALIDITY" in item:
+                text = item.decode("utf-8", errors="ignore")
+                m = re.search(r"UIDVALIDITY\s+(\d+)", text)
+                if m:
+                    uid_validity = m.group(1)
+                    break
+        # UIDVALIDITY 变化：调用方负责废弃旧 UID 映射并重建文件夹索引
+        uid_validity_changed = bool(
+            uid_validity and known_uid_validity and uid_validity != known_uid_validity
+        )
 
         # 增量同步：只拉取 UID > last_uid 的邮件
         uids: list[bytes] = []
@@ -1712,26 +1770,47 @@ def _imap_fetch_recent(body: dict[str, Any]) -> list[dict[str, Any]]:
                 f"[imap-sync] no new uids "
                 f"(mailbox={mailbox}, last_uid={last_uid})"
             )
-            return []
+            return {"messages": [], "uidValidity": uid_validity, "uidValidityChanged": uid_validity_changed}
 
         messages: list[dict[str, Any]] = []
         for uid in uids:
-            # 同步时只拉 HEADER（BODY.PEEK[HEADER]），保证新邮件同步毫秒级完成、通知即时弹出。
-            # 正文和附件由 fetch_body 按需拉取完整 RFC822 并落盘（用户点击或 AI 读取时触发）。
-            # fetch_raw_and_cache 已修复：检查 body_fetched 而非 eml_path，确保落盘不被跳过。
-            status, fetched = client.uid(
-                "FETCH", uid, "(BODY.PEEK[HEADER] UID FLAGS)"
-            )
-            if status != "OK" or not fetched:
+            # Offline-First: 同步时直接 FETCH BODY.PEEK[] 拉完整 RFC822，
+            # 落盘后用户点击可毫秒级返回，无需再走 gateway。
+            # 不按大小降级（skill 第三节：不得用 RFC822 大小推断正文是否值得缓存）
+            uid_str = uid.decode("utf-8", errors="ignore")
+            fetch_cmd = "(BODY.PEEK[] UID FLAGS)"
+            raw_bytes: bytes | None = None
+            fetched: list[Any] = []
+
+            try:
+                status, fetched = client.uid("FETCH", uid, fetch_cmd)
+                if status != "OK" or not fetched:
+                    continue
+                raw_bytes = _email_extract_message_bytes(fetched)
+            except imaplib.IMAP4.error as e:
+                logger.warning(f"[imap-sync] FETCH uid={uid_str} failed: {e}")
                 continue
 
-            raw_bytes = _email_extract_message_bytes(fetched)
+            # body_fetched 默认为 true；仅在 FETCH 失败回退到 HEADER-only 时置 false
+            body_fetched = True
+
             if raw_bytes is None:
-                continue
+                # 拉完整 RFC822 失败，回退到 HEADER-only（body_fetched=false 触发后台补拉）
+                logger.warning(
+                    f"[imap-sync] FETCH full RFC822 returned empty for uid={uid_str}, "
+                    f"falling back to HEADER-only"
+                )
+                status, fetched = client.uid(
+                    "FETCH", uid, "(BODY.PEEK[HEADER] UID FLAGS)"
+                )
+                if status != "OK" or not fetched:
+                    continue
+                raw_bytes = _email_extract_message_bytes(fetched)
+                if raw_bytes is None:
+                    continue
+                body_fetched = False
 
-            uid_str = _email_extract_uid(fetched)
-            if not uid_str:
-                uid_str = uid.decode("utf-8", errors="ignore")
+            uid_str = _email_extract_uid(fetched) or uid_str
 
             parsed = BytesParser(policy=policy.default).parsebytes(_normalize_mime_charset(raw_bytes))
 
@@ -1760,24 +1839,25 @@ def _imap_fetch_recent(body: dict[str, Any]) -> list[dict[str, Any]]:
                     "date": date_value,
                     "bodyText": "",
                     "bodyHtml": None,
-                    "bodyFetched": False,
+                    "bodyFetched": body_fetched,
                     "hasAttachments": _email_has_attachments(parsed),
                     "rawSize": len(raw_bytes),
                     "isRead": _email_extract_seen_flag(fetched),
                     "isStarred": _email_extract_flagged_flag(fetched),
                     "messageId": message_id,
                     "attachments": _email_extract_attachments(parsed),
-                    # HEADER 原始字节（base64），落盘为 .eml；fetch_body 时用完整 RFC822 覆盖
+                    # 完整 RFC822（base64）；HEADER-only 回退时为信头
                     "rawBytes": base64.b64encode(raw_bytes).decode("ascii"),
                 }
             )
 
-        return messages
+        return {"messages": messages, "uidValidity": uid_validity, "uidValidityChanged": uid_validity_changed}
 
     result = imap_pool_manager.run(body, op)
     logger.debug(
         f"[imap-sync] mailbox={mailbox} "
-        f"last_uid={last_uid} fetched={len(result)} new messages"
+        f"last_uid={last_uid} fetched={len(result['messages'])} new messages "
+        f"uid_validity={result['uidValidity']} changed={result['uidValidityChanged']}"
     )
     return result
 
@@ -1807,8 +1887,7 @@ def _imap_list_uids(body: dict[str, Any]) -> dict[str, Any]:
             if isinstance(item, bytes) and b"UIDVALIDITY" in item:
                 # 格式 b')]' 或 b' (UIDVALIDITY 12345)'
                 text = item.decode("utf-8", errors="ignore")
-                import re as _re
-                m = _re.search(r"UIDVALIDITY\s+(\d+)", text)
+                m = re.search(r"UIDVALIDITY\s+(\d+)", text)
                 if m:
                     uid_validity = m.group(1)
                     break
@@ -2404,13 +2483,21 @@ async def handle_email_send(request: web.Request) -> web.Response:
         # 3. 提取 Message-Id 和 Date，供 Rust 侧落盘 .eml + 写本地索引
         message_id = ""
         date_str = ""
+        in_reply_to = ""
         try:
             import email as email_lib
             msg = email_lib.message_from_bytes(raw_bytes)
             message_id = (msg.get("Message-Id") or "").strip()
             date_str = (msg.get("Date") or "").strip()
+            in_reply_to = (msg.get("In-Reply-To") or "").strip()
         except Exception:
             logger.debug("[email-send] 提取 Message-Id/Date 失败", exc_info=True)
+
+        # 4. 异步检查是否回复了某封关联待办的邮件，若是则给待办加"已回复"备注
+        if in_reply_to:
+            asyncio.create_task(
+                _mark_todos_replied(request.app, in_reply_to, date_str or message_id)
+            )
 
         return web.json_response({
             "status": "ok",
@@ -2435,6 +2522,35 @@ def _append_sent_done_callback(task: asyncio.Task) -> None:
         logger.warning(f"[email-send] 保存已发送副本异步任务失败: {e}")
 
 
+async def _mark_todos_replied(app: web.Application, in_reply_to: str, ref: str) -> None:
+    """邮件回复成功后，给来源邮件的关联待办加"已回复"备注。
+
+    匹配条件：todo.source_type == 'email' 且 source_locator.messageId == in_reply_to。
+    非阻塞：任何异常只记日志，不影响发送主流程。
+    """
+    todo_svc = app.get("todo_service")
+    if todo_svc is None:
+        return
+    try:
+        items = await todo_svc.list_items(state="open", source_type="email")
+        matched = [
+            it for it in items
+            if it.source_locator.get("messageId") == in_reply_to
+        ]
+        if not matched:
+            return
+        for it in matched:
+            existing_notes = it.notes or ""
+            reply_tag = f"[已回复 {ref}]"
+            if reply_tag in existing_notes:
+                continue
+            new_notes = f"{existing_notes}\n{reply_tag}".strip()
+            await todo_svc.update_item(it.id, {"notes": new_notes})
+            logger.debug("[todo-reply] 已为待办 {} 标注已回复", it.id)
+    except Exception:
+        logger.warning("[todo-reply] 标注已回复失败", exc_info=True)
+
+
 async def _safe_append_sent(body: dict[str, Any], raw_bytes: bytes) -> None:
     """异步保存已发送邮件副本，任何异常只记日志不影响主流程。
 
@@ -2442,15 +2558,10 @@ async def _safe_append_sent(body: dict[str, Any], raw_bytes: bytes) -> None:
     """
     try:
         logger.debug("[append-sent] 开始保存已发送邮件副本")
-        await _run_imap_locked(body, lambda b: _imap_append_sent_sync(b, raw_bytes))
+        await _run_imap_locked(body, lambda b: _imap_append_sent(b, raw_bytes))
         logger.debug("[append-sent] 保存已发送邮件副本流程结束")
     except Exception:
         logger.warning("保存已发送邮件副本失败", exc_info=True)
-
-
-def _imap_append_sent_sync(body: dict[str, Any], raw_bytes: bytes) -> None:
-    """同步版的 IMAP APPEND（通过 _run_imap_locked 调用，已获得锁）。"""
-    _imap_append_sent(body, raw_bytes)
 
 
 def _format_smtp_error(e: Exception) -> str:
@@ -2902,6 +3013,511 @@ async def handle_email_idle_stop(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "accountId": account_id})
 
 
+# ---------------------------------------------------------------------------
+# Skill lifecycle routes (settings panel)
+# ---------------------------------------------------------------------------
+
+
+async def handle_skills_list(request: web.Request) -> web.Response:
+    """GET /api/skills/list - 列出所有 skill（active + archived）及使用统计。
+
+    返回：{ skills: [{ name, provenance, location, access_count,
+                      last_accessed_at, created_at, pinned, archived_at }] }
+    """
+    from mona.agent import skill_usage
+
+    try:
+        rows = skill_usage.usage_report()
+    except Exception as e:
+        logger.exception("[skills] list failed")
+        return web.json_response({"error": str(e)}, status=500)
+    return web.json_response({"skills": rows})
+
+
+async def handle_skills_set_pinned(request: web.Request) -> web.Response:
+    """POST /api/skills/set_pinned - 设置/取消置顶。
+
+    请求体：{ name, pinned }
+    """
+    from mona.agent import skill_usage
+
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+
+    name = str(body.get("name", "") or "").strip()
+    pinned = bool(body.get("pinned", False))
+    if not name:
+        return web.json_response({"error": "name is required"}, status=400)
+    try:
+        skill_usage.set_pinned(name, pinned)
+    except Exception as e:
+        logger.exception("[skills] set_pinned failed")
+        return web.json_response({"error": str(e)}, status=500)
+    return web.json_response({"ok": True, "name": name, "pinned": pinned})
+
+
+async def handle_skills_archive(request: web.Request) -> web.Response:
+    """POST /api/skills/archive - 手动归档（可恢复）。
+
+    请求体：{ name }
+    """
+    from mona.agent import skill_usage
+
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+
+    name = str(body.get("name", "") or "").strip()
+    if not name:
+        return web.json_response({"error": "name is required"}, status=400)
+    try:
+        ok, msg = skill_usage.archive_skill(name, automatic=False)
+    except Exception as e:
+        logger.exception("[skills] archive failed")
+        return web.json_response({"error": str(e)}, status=500)
+    if not ok:
+        return web.json_response({"error": msg}, status=400)
+    return web.json_response({"ok": True, "name": name, "message": msg})
+
+
+async def handle_skills_restore(request: web.Request) -> web.Response:
+    """POST /api/skills/restore - 从归档恢复。
+
+    请求体：{ name }
+    """
+    from mona.agent import skill_usage
+
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+
+    name = str(body.get("name", "") or "").strip()
+    if not name:
+        return web.json_response({"error": "name is required"}, status=400)
+    try:
+        ok, msg = skill_usage.restore_skill(name)
+    except Exception as e:
+        logger.exception("[skills] restore failed")
+        return web.json_response({"error": str(e)}, status=500)
+    if not ok:
+        return web.json_response({"error": msg}, status=400)
+    return web.json_response({"ok": True, "name": name, "message": msg})
+
+
+async def handle_skills_prune(request: web.Request) -> web.Response:
+    """POST /api/skills/prune - dry-run 或实际归档闲置 skill。
+
+    请求体：{ apply?, days? }
+    返回：{ candidates: [...], archived: [{name, ok, message}]? }
+    """
+    from mona.agent import skill_usage
+    from mona.config.loader import load_config
+
+    try:
+        body = await request.json() if request.can_read_body else {}
+    except Exception:
+        body = {}
+
+    apply = bool(body.get("apply", False))
+    days = body.get("days")
+    if days is None:
+        try:
+            config = load_config()
+            days = config.agents.defaults.dream.archive_after_days
+        except Exception:
+            days = 90
+    try:
+        days = int(days)
+        if days < 1:
+            days = 90
+    except (TypeError, ValueError):
+        days = 90
+
+    disabled: set[str] = set()
+    try:
+        config = load_config()
+        disabled = set(config.agents.defaults.disabled_skills or [])
+    except Exception:
+        pass
+
+    try:
+        candidates = skill_usage.plan_automatic_archives(
+            archive_after_days=days,
+            disabled_skills=disabled,
+        )
+    except ValueError as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+    archived: list[dict[str, Any]] = []
+    if apply:
+        for name in candidates:
+            ok, msg = skill_usage.archive_skill(name, automatic=True)
+            archived.append({"name": name, "ok": ok, "message": msg})
+
+    return web.json_response({
+        "candidates": candidates,
+        "archived": archived,
+        "applied": apply,
+        "days": days,
+    })
+
+
+async def handle_skills_config(request: web.Request) -> web.Response:
+    """GET /api/skills/config - 读取 skill 生命周期配置。
+
+    返回：{ skillPruneEnabled, archiveAfterDays, maxActiveUserSkills,
+            activeCount, archivedCount }
+    """
+    from mona.agent import skill_usage
+    from mona.config.loader import load_config
+
+    try:
+        config = load_config()
+        dream = config.agents.defaults.dream
+    except Exception:
+        dream = None
+
+    skill_prune_enabled = bool(getattr(dream, "skill_prune_enabled", False))
+    archive_after_days = int(getattr(dream, "archive_after_days", 90))
+    max_active = int(getattr(dream, "max_active_user_skills", 100))
+
+    try:
+        active_count = len(skill_usage.list_active_user_skill_names())
+        archived_count = len(skill_usage.list_archived_skill_names())
+    except Exception:
+        active_count = 0
+        archived_count = 0
+
+    return web.json_response({
+        "skillPruneEnabled": skill_prune_enabled,
+        "archiveAfterDays": archive_after_days,
+        "maxActiveUserSkills": max_active,
+        "activeCount": active_count,
+        "archivedCount": archived_count,
+    })
+
+
+async def handle_skills_update_config(request: web.Request) -> web.Response:
+    """POST /api/skills/update_config - 更新 skill 生命周期配置。
+
+    请求体：{ skillPruneEnabled?, archiveAfterDays?, maxActiveUserSkills? }
+    """
+    from mona.config.loader import load_config, save_config
+
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+
+    try:
+        config = load_config()
+        dream = config.agents.defaults.dream
+        if "skillPruneEnabled" in body:
+            dream.skill_prune_enabled = bool(body["skillPruneEnabled"])
+        if "archiveAfterDays" in body:
+            days = int(body["archiveAfterDays"])
+            if days < 1:
+                return web.json_response(
+                    {"error": "archiveAfterDays must be >= 1"}, status=400
+                )
+            dream.archive_after_days = days
+        if "maxActiveUserSkills" in body:
+            cap = int(body["maxActiveUserSkills"])
+            if cap < 1:
+                return web.json_response(
+                    {"error": "maxActiveUserSkills must be >= 1"}, status=400
+                )
+            dream.max_active_user_skills = cap
+        save_config(config)
+    except Exception as e:
+        logger.exception("[skills] update_config failed")
+        return web.json_response({"error": str(e)}, status=500)
+
+    return web.json_response({"ok": True})
+
+
+# ---------------------------------------------------------------------------
+# MCP server lifecycle routes (settings panel)
+# ---------------------------------------------------------------------------
+
+_SENSITIVE_MASK = "****"
+
+
+def _mask_mcp_server_config(cfg) -> dict[str, Any]:
+    """Return a JSON-safe view of MCPServerConfig with sensitive fields masked."""
+    return {
+        "type": cfg.type,
+        "command": cfg.command,
+        "args": list(cfg.args),
+        "env": {k: (_SENSITIVE_MASK if v else "") for k, v in (cfg.env or {}).items()},
+        "url": cfg.url,
+        "headers": {
+            k: (_SENSITIVE_MASK if v else "") for k, v in (cfg.headers or {}).items()
+        },
+        "toolTimeout": cfg.tool_timeout,
+        "enabledTools": list(cfg.enabled_tools) if cfg.enabled_tools else ["*"],
+    }
+
+
+def _merge_sensitive(
+    new_vals: dict[str, str] | None,
+    old_vals: dict[str, str] | None,
+) -> dict[str, str]:
+    """Merge submitted env/headers with existing values.
+
+    If a submitted value equals the mask placeholder, keep the existing value.
+    Empty string is treated as "clear this entry".
+    """
+    if new_vals is None:
+        return dict(old_vals or {})
+    old = old_vals or {}
+    out: dict[str, str] = {}
+    for k, v in new_vals.items():
+        if v == _SENSITIVE_MASK:
+            if k in old:
+                out[k] = old[k]
+            # else: drop the entry (no existing value to preserve)
+        elif v == "":
+            # explicit clear
+            continue
+        else:
+            out[k] = v
+    return out
+
+
+def _build_mcp_config_from_request(
+    body: dict[str, Any],
+    existing=None,
+) -> dict[str, Any]:
+    """Build a MCPServerConfig-compatible dict from request body.
+
+    If `existing` (a MCPServerConfig) is provided, masked sensitive fields
+    not overridden by the request are preserved from it.
+    """
+    from mona.config.schema import MCPServerConfig
+
+    old_env = getattr(existing, "env", None) if existing else None
+    old_headers = getattr(existing, "headers", None) if existing else None
+
+    raw_type = body.get("type")
+    if raw_type not in ("stdio", "sse", "streamableHttp", None, ""):
+        raise ValueError(f"Invalid transport type: {raw_type}")
+    transport = raw_type if raw_type else None
+
+    cfg_dict: dict[str, Any] = {
+        "type": transport,
+        "command": str(body.get("command", "") or ""),
+        "args": [str(a) for a in body.get("args", []) if a is not None],
+        "env": _merge_sensitive(body.get("env"), old_env),
+        "url": str(body.get("url", "") or ""),
+        "headers": _merge_sensitive(body.get("headers"), old_headers),
+        "tool_timeout": int(body.get("toolTimeout", 30) or 30),
+        "enabled_tools": (
+            [str(t) for t in body.get("enabledTools", ["*"])]
+            if body.get("enabledTools") is not None
+            else ["*"]
+        ),
+    }
+    # Validate via Pydantic
+    MCPServerConfig(**cfg_dict)
+    return cfg_dict
+
+
+async def handle_mcp_list_servers(request: web.Request) -> web.Response:
+    """GET /api/mcp/servers - list configured servers with runtime status + masked config."""
+    agent_loop = request.app.get("agent_loop")
+    if agent_loop is None:
+        return web.json_response({"error": "Agent loop not ready"}, status=503)
+
+    try:
+        statuses = agent_loop.get_mcp_status()
+        # Attach masked config for each server
+        out: list[dict[str, Any]] = []
+        for row in statuses:
+            cfg = agent_loop._mcp_servers.get(row["name"])
+            if cfg is not None:
+                row["config"] = _mask_mcp_server_config(cfg)
+            out.append(row)
+        return web.json_response({"servers": out})
+    except Exception as e:
+        logger.exception("[mcp] list failed")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_mcp_list_tools(request: web.Request) -> web.Response:
+    """GET /api/mcp/servers/{name}/tools - list tools registered by a server."""
+    from mona.agent.tools.mcp import list_mcp_server_tools
+
+    agent_loop = request.app.get("agent_loop")
+    if agent_loop is None:
+        return web.json_response({"error": "Agent loop not ready"}, status=503)
+    name = request.match_info.get("name", "")
+    if not name:
+        return web.json_response({"error": "name is required"}, status=400)
+    try:
+        tools = list_mcp_server_tools(agent_loop.tools, name)
+        return web.json_response({"name": name, "tools": tools})
+    except Exception as e:
+        logger.exception("[mcp] list tools failed")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_mcp_create_server(request: web.Request) -> web.Response:
+    """POST /api/mcp/servers - add a new server (persist to config + connect)."""
+    from mona.config.loader import load_config, save_config
+    from mona.config.schema import MCPServerConfig
+
+    agent_loop = request.app.get("agent_loop")
+    if agent_loop is None:
+        return web.json_response({"error": "Agent loop not ready"}, status=503)
+
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+
+    name = str(body.get("name", "") or "").strip()
+    if not name:
+        return web.json_response({"error": "name is required"}, status=400)
+    if name in agent_loop._mcp_servers:
+        return web.json_response(
+            {"error": f"Server '{name}' already exists"}, status=400
+        )
+
+    try:
+        cfg_dict = _build_mcp_config_from_request(body)
+    except ValueError as e:
+        return web.json_response({"error": str(e)}, status=400)
+
+    try:
+        cfg = MCPServerConfig(**cfg_dict)
+        # 1. Persist to config.json
+        config = load_config()
+        config.tools.mcp_servers[name] = cfg
+        save_config(config)
+        # 2. Add to runtime + connect
+        result = await agent_loop.add_mcp_server(name, cfg)
+        return web.json_response(result, status=201 if result.get("ok") else 500)
+    except Exception as e:
+        logger.exception("[mcp] create failed")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_mcp_update_server(request: web.Request) -> web.Response:
+    """PUT /api/mcp/servers/{name} - update a server (persist + restart)."""
+    from mona.config.loader import load_config, save_config
+    from mona.config.schema import MCPServerConfig
+
+    agent_loop = request.app.get("agent_loop")
+    if agent_loop is None:
+        return web.json_response({"error": "Agent loop not ready"}, status=503)
+
+    name = request.match_info.get("name", "")
+    if not name:
+        return web.json_response({"error": "name is required"}, status=400)
+
+    existing = agent_loop._mcp_servers.get(name)
+    if existing is None:
+        return web.json_response(
+            {"error": f"Server '{name}' not configured"}, status=404
+        )
+
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+
+    try:
+        cfg_dict = _build_mcp_config_from_request(body, existing=existing)
+    except ValueError as e:
+        return web.json_response({"error": str(e)}, status=400)
+
+    try:
+        cfg = MCPServerConfig(**cfg_dict)
+        # 1. Persist to config.json
+        config = load_config()
+        config.tools.mcp_servers[name] = cfg
+        save_config(config)
+        # 2. Update runtime config + restart
+        agent_loop._mcp_servers[name] = cfg
+        result = await agent_loop.restart_mcp_server(name)
+        return web.json_response(result)
+    except Exception as e:
+        logger.exception("[mcp] update failed")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_mcp_delete_server(request: web.Request) -> web.Response:
+    """DELETE /api/mcp/servers/{name} - remove a server (persist + disconnect)."""
+    from mona.config.loader import load_config, save_config
+
+    agent_loop = request.app.get("agent_loop")
+    if agent_loop is None:
+        return web.json_response({"error": "Agent loop not ready"}, status=503)
+
+    name = request.match_info.get("name", "")
+    if not name:
+        return web.json_response({"error": "name is required"}, status=400)
+    if name not in agent_loop._mcp_servers:
+        return web.json_response(
+            {"error": f"Server '{name}' not configured"}, status=404
+        )
+
+    try:
+        # 1. Disconnect + remove from runtime
+        result = await agent_loop.remove_mcp_server(name)
+        if not result.get("ok"):
+            return web.json_response(result, status=400)
+        # 2. Persist to config.json
+        config = load_config()
+        if name in config.tools.mcp_servers:
+            del config.tools.mcp_servers[name]
+            save_config(config)
+        return web.json_response(result)
+    except Exception as e:
+        logger.exception("[mcp] delete failed")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_mcp_restart_server(request: web.Request) -> web.Response:
+    """POST /api/mcp/servers/{name}/restart - reconnect a single server."""
+    agent_loop = request.app.get("agent_loop")
+    if agent_loop is None:
+        return web.json_response({"error": "Agent loop not ready"}, status=503)
+
+    name = request.match_info.get("name", "")
+    if not name:
+        return web.json_response({"error": "name is required"}, status=400)
+    try:
+        result = await agent_loop.restart_mcp_server(name)
+        return web.json_response(result)
+    except Exception as e:
+        logger.exception("[mcp] restart failed")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_mcp_reload(request: web.Request) -> web.Response:
+    """POST /api/mcp/reload - close all stacks and reconnect from config.json."""
+    from mona.config.loader import load_config
+
+    agent_loop = request.app.get("agent_loop")
+    if agent_loop is None:
+        return web.json_response({"error": "Agent loop not ready"}, status=503)
+    try:
+        # Re-sync runtime config from disk (in case user edited config.json manually)
+        config = load_config()
+        agent_loop._mcp_servers = dict(config.tools.mcp_servers)
+        result = await agent_loop.reload_mcp()
+        return web.json_response(result)
+    except Exception as e:
+        logger.exception("[mcp] reload failed")
+        return web.json_response({"error": str(e)}, status=500)
+
+
 async def handle_email_account_removed(request: web.Request) -> web.Response:
     """POST /email/account_removed - 账号被删除时清理 IDLE 和连接池。
 
@@ -3254,8 +3870,62 @@ async def handle_email_empty_folder(request: web.Request) -> web.Response:
         return web.json_response({"error": str(e)}, status=500)
 
 
-def _imap_move_message(body: dict[str, Any]) -> None:
-    """连接 IMAP 并将指定 UID 的邮件移动到目标文件夹。复用持久连接池。"""
+def _parse_copyuid_response(client: imaplib.IMAP4) -> str | None:
+    """从 IMAP 响应中解析 COPYUID/MOVEUID，返回目标 UID（RFC 4315 / RFC 6851）。
+
+    响应格式：
+      - COPY:   `OK [COPYUID <uidvalidity> <source-uid> <dest-uid>]`
+      - MOVE:   `OK [COPYUID <uidvalidity> <source-uid> <dest-uid>]`（RFC 6851 复用 COPYUID）
+    单 UID 时直接返回；UID 范围（如 123:123）取首尾推算单 UID 场景下的目标值。
+    imaplib 将 untagged 响应存入 `client.untagged_responses`， tagged OK 中的 response code
+    可能出现在 `client.response('COPYUID')` 或最近一次 completion 响应里。
+    """
+    candidates: list[str] = []
+    # 1. 从 untagged_responses 抓 `* OK [COPYUID ...]` 或 `* [COPYUID ...]`
+    for key in ("COPYUID", "MOVEUID"):
+        values = client.untagged_responses.pop(key, []) or []
+        candidates.extend(v.decode("utf-8", "ignore") if isinstance(v, bytes) else str(v) for v in values)
+    # 2. 从 tagged completion 抓（部分服务器把 COPYUID 放在 OK 响应码里）
+    for key in ("COPYUID", "MOVEUID"):
+        try:
+            typ, data = client.response(key)
+        except Exception:
+            typ, data = None, None
+        if typ == "OK" and data:
+            for item in data:
+                candidates.append(item.decode("utf-8", "ignore") if isinstance(item, bytes) else str(item))
+    for text in candidates:
+        # 形如 "123 123 456" 或 "123 123:123 456:456"
+        m = re.search(r"COPYUID\s+\d+\s+(\S+)\s+(\S+)", text)
+        if not m:
+            # 也可能 candidates 已经是纯数字串 "123 123 456"
+            m = re.match(r"\s*\d+\s+(\S+)\s+(\S+)\s*$", text)
+        if not m:
+            continue
+        dest_uid_range = m.group(2)
+        # 单 UID 直接返回；UID 范围取第一个值（MOVE 单封邮件时范围退化为单值）
+        if ":" in dest_uid_range:
+            first = dest_uid_range.split(":")[0]
+            try:
+                _ = int(first)  # 校验是数字
+                return first
+            except ValueError:
+                continue
+        try:
+            int(dest_uid_range)
+            return dest_uid_range
+        except ValueError:
+            continue
+    return None
+
+
+def _imap_move_message(body: dict[str, Any]) -> dict[str, Any]:
+    """连接 IMAP 并将指定 UID 的邮件移动到目标文件夹。复用持久连接池。
+
+    返回 ``{"destUid": str | None}``：
+      - 服务器返回 COPYUID/MOVEUID 时给出目标文件夹的新 UID，调用方可直接 UPDATE 本地 uid
+      - 服务器未返回时为 None，调用方需依赖 message_id 去重回退策略
+    """
     imap_host = str(body.get("imapHost", "") or "").strip()
     imap_username = str(body.get("imapUsername", "") or "").strip()
     mailbox = str(body.get("mailbox", "INBOX") or "INBOX")
@@ -3272,19 +3942,32 @@ def _imap_move_message(body: dict[str, Any]) -> None:
     if not dest_mailbox:
         raise ValueError("destMailbox is required")
 
-    def op(client: imaplib.IMAP4) -> None:
-        client.select(_imap_quote_mailbox(mailbox))
-        # 优先尝试 IMAP MOVE（RFC 6851），失败则回退到 COPY+STORE+EXPUNGE
-        try:
-            client.uid("MOVE", uid, _imap_quote_mailbox(dest_mailbox))
-        except imaplib.IMAP4.error:
-            client.uid("COPY", uid, _imap_quote_mailbox(dest_mailbox))
-            client.uid("STORE", uid, "+FLAGS", "(\\Deleted)")
-            client.expunge()
+    def op(client: imaplib.IMAP4) -> dict[str, Any]:
+        status, _ = client.select(_imap_quote_mailbox(mailbox))
+        if status != "OK":
+            raise RuntimeError(f"select {mailbox} failed: {status}")
+        # 优先尝试 IMAP MOVE（RFC 6851）。imaplib 对业务拒绝（NO/BAD）通常不抛异常，
+        # 必须显式检查 status，否则服务器返回 NO 时本地仍会当作成功移动
+        status, _ = client.uid("MOVE", uid, _imap_quote_mailbox(dest_mailbox))
+        if status == "OK":
+            # skill 第八章：优先解析 COPYUID/MOVEUID 关联源 UID 与目标 UID
+            dest_uid = _parse_copyuid_response(client)
+            return {"destUid": dest_uid}
+        # MOVE 不被支持或被服务器拒绝，回退到 COPY+STORE+EXPUNGE
+        status, _ = client.uid("COPY", uid, _imap_quote_mailbox(dest_mailbox))
+        if status != "OK":
+            raise RuntimeError(f"COPY uid {uid} to {dest_mailbox} failed: {status}")
+        # COPY 成功后解析 COPYUID（RFC 4315），再做 STORE+EXPUNGE
+        dest_uid = _parse_copyuid_response(client)
+        status, _ = client.uid("STORE", uid, "+FLAGS", "(\\Deleted)")
+        if status != "OK":
+            raise RuntimeError(f"STORE uid {uid} failed: {status}")
+        client.expunge()
+        return {"destUid": dest_uid}
 
     # 注意：MOVE/EXPUNGE 后部分服务器会立即关闭连接，
     # 连接池会自动重连，不影响下次操作
-    imap_pool_manager.run(body, op)
+    return imap_pool_manager.run(body, op)
 
 
 async def handle_email_move(request: web.Request) -> web.Response:
@@ -3295,8 +3978,8 @@ async def handle_email_move(request: web.Request) -> web.Response:
         return web.json_response({"error": "Invalid JSON body"}, status=400)
 
     try:
-        await _run_imap_locked(body, _imap_move_message)
-        return web.json_response({"status": "ok"})
+        result = await _run_imap_locked(body, _imap_move_message)
+        return web.json_response(result)
     except Exception as e:
         logger.exception("Email move message failed")
         return web.json_response({"error": str(e)}, status=500)
@@ -3328,8 +4011,7 @@ async def handle_email_analyze(request: web.Request) -> web.Response:
     if not body_text and not body_html and not subject:
         return web.json_response({"error": "subject 或 bodyText/bodyHtml 至少需要一个"}, status=400)
 
-    agent_loop = request.app["agent_loop"]
-    provider = getattr(agent_loop, "provider", None)
+    provider = _resolve_llm_provider(request)
     if provider is None:
         return web.json_response({"error": "LLM provider 不可用"}, status=503)
 
@@ -3375,8 +4057,8 @@ async def handle_email_schedule_extract(request: web.Request) -> web.Response:
     if svc is None:
         return web.json_response({"error": "Schedule service not available"}, status=503)
 
-    agent_loop = request.app["agent_loop"]
-    provider = getattr(agent_loop, "provider", None)
+    agent_loop = request.app.get("agent_loop")
+    provider = _resolve_llm_provider(request)
     if provider is None:
         return web.json_response({"error": "LLM provider 不可用"}, status=503)
 
@@ -3417,6 +4099,7 @@ async def handle_email_schedule_extract(request: web.Request) -> web.Response:
     model = getattr(config, "model", None) or getattr(agent_loop, "model_name", None)
 
     results: dict[str, int] = {"created": 0, "pending": 0, "skipped": 0, "error": 0}
+    failed_uids: list[str] = []
     for uid in uids:
         uid_str = str(uid)
         try:
@@ -3442,6 +4125,33 @@ async def handle_email_schedule_extract(request: web.Request) -> web.Response:
                 tz=tz,
                 model=model,
             )
+            # error 表示 LLM 超时、网络错误或非法 JSON，等待 1 秒后重试一次
+            if result == "error":
+                await asyncio.sleep(1)
+                try:
+                    result = await process_email_for_schedule(
+                        provider,
+                        svc,
+                        schedule_config,
+                        account_id=account_id,
+                        uid=uid_str,
+                        folder=folder,
+                        subject=msg.get("subject") or "",
+                        from_address=msg.get("fromAddress") or "",
+                        from_name=msg.get("fromName"),
+                        date=msg.get("date") or "",
+                        body_text=msg.get("bodyText") or "",
+                        body_html=msg.get("bodyHtml"),
+                        now_iso=now_iso,
+                        tz=tz,
+                        model=model,
+                    )
+                except Exception:
+                    logger.exception("Schedule extract retry failed: uid={}", uid_str)
+                    result = "error"
+                if result == "error":
+                    failed_uids.append(uid_str)
+
             if result in results:
                 results[result] += 1
             else:
@@ -3449,8 +4159,11 @@ async def handle_email_schedule_extract(request: web.Request) -> web.Response:
         except Exception:
             logger.exception("Schedule extract failed: uid={}", uid_str)
             results["error"] += 1
+            failed_uids.append(uid_str)
 
-    return web.json_response({"processed": len(uids), **results})
+    return web.json_response(
+        {"processed": len(uids), **results, "failedUids": failed_uids}
+    )
 
 
 async def handle_email_schedule_pending(request: web.Request) -> web.Response:
@@ -3512,12 +4225,19 @@ async def handle_email_schedule_extract_manual(request: web.Request) -> web.Resp
     if svc is None:
         return web.json_response({"error": "Schedule service not available"}, status=503)
 
-    agent_loop = request.app["agent_loop"]
-    provider = getattr(agent_loop, "provider", None)
+    agent_loop = request.app.get("agent_loop")
+    provider = _resolve_llm_provider(request)
     if provider is None:
         return web.json_response({"error": "LLM provider 不可用"}, status=503)
 
     config = getattr(agent_loop, "config", None)
+    if config is None:
+        try:
+            from mona.config.loader import load_config
+
+            config = load_config()
+        except Exception:
+            config = None
     tz = "Asia/Shanghai"
     model = getattr(agent_loop, "model_name", None)
     if config is not None:
@@ -3561,7 +4281,6 @@ async def handle_email_schedule_extract_manual(request: web.Request) -> web.Resp
 
 def _imap_fetch_attachment(body: dict[str, Any]) -> dict[str, Any]:
     """连接 IMAP，FETCH 完整邮件，按 filename 提取附件并返回 base64 编码。复用持久连接池。"""
-    import base64
 
     imap_host = str(body.get("imapHost", "") or "").strip()
     imap_username = str(body.get("imapUsername", "") or "").strip()
@@ -3669,7 +4388,11 @@ def _imap_fetch_body(body: dict[str, Any]) -> dict[str, Any]:
 
         raw_bytes = _email_extract_message_bytes(fetched)
         if raw_bytes is None:
-            raise RuntimeError("Failed to extract message bytes")
+            # 区分"UID 在当前文件夹不存在"与其他提取失败。
+            # 存量分裂邮件（本地 folder 已是目标文件夹但 uid 仍是源文件夹的旧 uid）会落到这里：
+            # SELECT 成功，FETCH 返回 OK 但内容为空。
+            # Rust 端识别此错误后会触发 sync_folder_internal 用 message_id 去重替换 uid 后重试。
+            raise RuntimeError(f"UID not found in mailbox: {mailbox} uid={uid}")
 
         parsed = BytesParser(policy=policy.default).parsebytes(_normalize_mime_charset(raw_bytes))
         body_text, body_html = _email_extract_bodies(parsed)
@@ -3709,42 +4432,6 @@ async def handle_email_fetch_body(request: web.Request) -> web.Response:
         return web.json_response(result)
     except Exception as e:
         logger.exception("Failed to fetch email body")
-        return web.json_response({"error": str(e)}, status=500)
-
-
-async def handle_email_parse_body(request: web.Request) -> web.Response:
-    """POST /email/parse_body - 从 RFC822 字节解析邮件正文（不走 IMAP）。
-
-    Foxmail 风格：Rust 侧已将 .eml 文件落盘，点击邮件时优先读本地 .eml 并调用此路由解析，
-    避免每次点击都走 IMAP。
-
-    请求体：{ rawBytes: string (base64 编码的 RFC822) }
-    返回：{ bodyText, bodyHtml, hasAttachments, attachments }
-    """
-    try:
-        body = await request.json()
-    except Exception:
-        return web.json_response({"error": "Invalid JSON body"}, status=400)
-
-    try:
-        raw_b64 = str(body.get("rawBytes", "") or "")
-        if not raw_b64:
-            return web.json_response({"error": "rawBytes is required"}, status=400)
-
-        raw_bytes = base64.b64decode(raw_b64)
-        parsed = BytesParser(policy=policy.default).parsebytes(_normalize_mime_charset(raw_bytes))
-        body_text, body_html = _email_extract_bodies(parsed)
-        if body_text:
-            body_text = body_text[:50000]
-
-        return web.json_response({
-            "bodyText": body_text,
-            "bodyHtml": body_html,
-            "hasAttachments": _email_has_attachments(parsed),
-            "attachments": _email_extract_attachments(parsed),
-        })
-    except Exception as e:
-        logger.exception("Failed to parse email body from raw bytes")
         return web.json_response({"error": str(e)}, status=500)
 
 
@@ -3833,7 +4520,11 @@ def _imap_fetch_raw(body: dict[str, Any]) -> dict[str, Any]:
 
         raw_bytes = _email_extract_message_bytes(fetched)
         if raw_bytes is None:
-            raise RuntimeError("Failed to extract message bytes")
+            # 区分"UID 在当前文件夹不存在"与其他提取失败。
+            # 存量分裂邮件（本地 folder 已是目标文件夹但 uid 仍是源文件夹的旧 uid）会落到这里：
+            # SELECT 成功，FETCH 返回 OK 但内容为空。
+            # Rust 端识别此错误后会触发 sync_folder_internal 用 message_id 去重替换 uid 后重试。
+            raise RuntimeError(f"UID not found in mailbox: {mailbox} uid={uid}")
 
         return {
             "rawBase64": base64.b64encode(raw_bytes).decode("ascii"),
@@ -3996,6 +4687,701 @@ async def handle_schedule_notifications(request: web.Request) -> web.Response:
 
 
 # ---------------------------------------------------------------------------
+# Todo routes (/api/schedule/todos/*, /api/schedule/briefing)
+# ---------------------------------------------------------------------------
+
+
+def _require_todo_service(request: web.Request) -> Any:
+    svc = request.app.get("todo_service")
+    if svc is None:
+        raise web.HTTPBadRequest(reason="Todo service not available")
+    return svc
+
+
+async def handle_todo_list(request: web.Request) -> web.Response:
+    """GET /api/schedule/todos - list todos with optional filters."""
+    svc = _require_todo_service(request)
+    state = request.query.get("state")
+    bucket = request.query.get("bucket")
+    source_type = request.query.get("sourceType")
+    items = await svc.list_items(state=state, bucket=bucket, source_type=source_type)
+    return web.json_response({"items": [it.to_dict() for it in items]})
+
+
+async def handle_todo_get(request: web.Request) -> web.Response:
+    """GET /api/schedule/todos/{id} - read a single todo."""
+    svc = _require_todo_service(request)
+    item = await svc.get_item(request.match_info["id"])
+    if item is None:
+        return web.json_response({"error": "not found"}, status=404)
+    return web.json_response(item.to_dict())
+
+
+async def handle_todo_create(request: web.Request) -> web.Response:
+    """POST /api/schedule/todos - create a todo or suggestion."""
+    svc = _require_todo_service(request)
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+    try:
+        from mona.schedule import TodoItem, create_todo_id
+
+        item_id = body.get("id") or create_todo_id()
+        item = TodoItem.from_dict({**body, "id": item_id})
+        saved = await svc.add_item(item)
+        return web.json_response(saved.to_dict())
+    except ValueError as e:
+        return web.json_response({"error": str(e)}, status=400)
+    except Exception as e:
+        logger.exception("Todo create failed")
+        return web.json_response({"error": str(e)}, status=400)
+
+
+async def handle_todo_update(request: web.Request) -> web.Response:
+    """POST /api/schedule/todos/{id}/update - edit, confirm, move, complete.
+
+    The body is a partial patch. State transitions are enforced by the service:
+    - state=done → completed_at_ms set, focus_rank cleared
+    - focus_rank set → displaces existing holder within today bucket
+    """
+    svc = _require_todo_service(request)
+    item_id = request.match_info["id"]
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+    try:
+        saved = await svc.update_item(item_id, body)
+        return web.json_response(saved.to_dict())
+    except KeyError:
+        return web.json_response({"error": "not found"}, status=404)
+    except ValueError as e:
+        return web.json_response({"error": str(e)}, status=400)
+    except Exception as e:
+        logger.exception("Todo update failed")
+        return web.json_response({"error": str(e)}, status=400)
+
+
+async def handle_todo_remove(request: web.Request) -> web.Response:
+    """POST /api/schedule/todos/{id}/remove - delete or discard."""
+    svc = _require_todo_service(request)
+    ok = await svc.remove_item(request.match_info["id"])
+    if not ok:
+        return web.json_response({"error": "not found"}, status=404)
+    return web.json_response({"ok": True})
+
+
+async def handle_todo_to_schedule(request: web.Request) -> web.Response:
+    """POST /api/schedule/todos/{id}/to-schedule - arrange on calendar.
+
+    Creates a ScheduleItem from the todo and writes schedule_id back.
+    """
+    todo_svc = _require_todo_service(request)
+    sched_svc = _require_schedule_service(request)
+    item_id = request.match_info["id"]
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    todo = await todo_svc.get_item(item_id)
+    if todo is None:
+        return web.json_response({"error": "not found"}, status=404)
+    try:
+        from mona.schedule import ScheduleItem, create_schedule_item_id
+
+        start_at = int(body.get("startAtMs", 0))
+        if start_at == 0:
+            return web.json_response({"error": "startAtMs required"}, status=400)
+        sched_item = ScheduleItem(
+            id=create_schedule_item_id(),
+            title=todo.title,
+            start_at_ms=start_at,
+            description=todo.notes,
+            end_at_ms=int(body["endAtMs"]) if body.get("endAtMs") else None,
+            all_day=bool(body.get("allDay", False)),
+            kind="personal",
+            source_module="todo",
+            source_chat_id=todo.id,
+            created_at_ms=0,
+            updated_at_ms=0,
+        )
+        saved_sched = await sched_svc.add_item(sched_item)
+        await todo_svc.update_item(item_id, {"scheduleId": saved_sched.id})
+        return web.json_response({"scheduleId": saved_sched.id, "todoId": item_id})
+    except Exception as e:
+        logger.exception("Todo to-schedule failed")
+        return web.json_response({"error": str(e)}, status=400)
+
+
+async def handle_todo_from_email(request: web.Request) -> web.Response:
+    """POST /api/schedule/todos/from-email - create a todo from an email.
+
+    Body: {accountId, folder, uid, title?}
+    Reads the email via email_intel.db and stores a minimal snapshot.
+    """
+    todo_svc = _require_todo_service(request)
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+    account_id = body.get("accountId")
+    folder = body.get("folder")
+    uid = body.get("uid")
+    if not account_id or not folder or not uid:
+        return web.json_response(
+            {"error": "accountId, folder, uid required"}, status=400
+        )
+    try:
+        from mona.email_intel.db import get_message
+        from mona.schedule import TodoItem, create_todo_id
+
+        msg = get_message(uid=str(uid), account_id=str(account_id), folder=str(folder))
+        if msg is None:
+            return web.json_response({"error": "email not found"}, status=404)
+        subject = msg.get("subject") or "(无主题)"
+        from_name = msg.get("from_name") or msg.get("from_address") or ""
+        body_text = msg.get("bodyText") or ""
+        # Snapshot evidence: subject + first 240 chars of body
+        evidence = body_text[:240].strip()
+        title = body.get("title") or subject
+        item = TodoItem(
+            id=create_todo_id(),
+            title=title,
+            created_at_ms=0,
+            updated_at_ms=0,
+            state="open",
+            bucket="inbox",
+            source_type="email",
+            source_locator={
+                "accountId": str(account_id),
+                "folder": str(folder),
+                "uid": str(uid),
+                "messageId": msg.get("message_id") or "",
+            },
+            source_snapshot={
+                "title": subject,
+                "evidence": evidence,
+                "from": from_name,
+            },
+        )
+        saved = await todo_svc.add_item(item)
+        return web.json_response(saved.to_dict())
+    except Exception as e:
+        logger.exception("Todo from-email failed")
+        return web.json_response({"error": str(e)}, status=400)
+
+
+async def handle_todo_briefing(request: web.Request) -> web.Response:
+    """GET /api/schedule/briefing - today's top3, overdue and suggestion counts."""
+    svc = _require_todo_service(request)
+    return web.json_response(await svc.get_briefing())
+
+
+# ---------------------------------------------------------------------------
+# PPT project V2 routes (/api/ppt/project/outline, /lock-outline, /pages, ...)
+# ---------------------------------------------------------------------------
+
+
+def _ppt_projects_dir() -> Path:
+    return get_workspace_path() / "ppt_projects"
+
+
+def _ppt_project_dir_or_404(name: str) -> tuple[Path | None, web.Response | None]:
+    """Validate PPT project name and return (project_dir, None) or (None, error)."""
+    if not name or "/" in name or "\\" in name or ".." in name:
+        return None, web.json_response({"error": "invalid project name"}, status=400)
+    project_dir = _ppt_projects_dir() / name
+    if not project_dir.is_dir():
+        return None, web.json_response({"error": "project not found"}, status=404)
+    return project_dir, None
+
+
+def _load_ppt_meta(project_dir: Path) -> dict:
+    """Load meta.json, return empty dict if missing."""
+    meta_file = project_dir / "meta.json"
+    if not meta_file.is_file():
+        return {}
+    try:
+        return _json.loads(meta_file.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _save_ppt_meta_atomic(project_dir: Path, meta: dict) -> None:
+    """Atomically write meta.json via temp file + os.replace."""
+    import os
+
+    meta_file = project_dir / "meta.json"
+    tmp_file = project_dir / ".meta.json.tmp"
+    tmp_file.write_text(
+        _json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    os.replace(tmp_file, meta_file)
+
+
+def _load_ppt_outline(project_dir: Path) -> dict | None:
+    """Load page_visual_plan.json, return None if missing."""
+    outline_file = project_dir / "page_visual_plan.json"
+    if not outline_file.is_file():
+        return None
+    try:
+        return _json.loads(outline_file.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _save_ppt_outline_atomic(project_dir: Path, outline: dict) -> None:
+    """Atomically write page_visual_plan.json."""
+    import os
+
+    outline_file = project_dir / "page_visual_plan.json"
+    tmp_file = project_dir / ".page_visual_plan.json.tmp"
+    tmp_file.write_text(
+        _json.dumps(outline, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    os.replace(tmp_file, outline_file)
+
+
+def _validate_outline_pages(pages: list[dict]) -> str | None:
+    """Validate outline pages, return error message or None if valid."""
+    if not pages:
+        return "大纲不能为空"
+    for i, page in enumerate(pages):
+        if not page.get("title"):
+            return f"第 {i + 1} 页缺少标题"
+        if not isinstance(page.get("bullets"), list):
+            return f"第 {i + 1} 页 bullets 必须是数组"
+        file_name = page.get("file", "")
+        if file_name and ("/" in file_name or "\\" in file_name or ".." in file_name):
+            return f"第 {i + 1} 页 file 包含非法路径字符"
+    return None
+
+
+def _renumber_outline_pages(pages: list[dict]) -> list[dict]:
+    """Renumber page fields to P01..PNN and sync file names."""
+    result = []
+    for i, page in enumerate(pages):
+        page_num = f"P{i + 1:02d}"
+        new_page = {**page, "page": page_num}
+        if page.get("file"):
+            ext = ".svg" if not page["file"].endswith(".svg") else ""
+            new_page["file"] = f"{i + 1:02d}_{page['file'].split('_', 1)[-1]}" if "_" in page["file"] else f"{i + 1:02d}{ext}"
+        else:
+            new_page["file"] = f"{i + 1:02d}.svg"
+        result.append(new_page)
+    return result
+
+
+def _load_review_ready(project_dir: Path) -> dict | None:
+    """Load .review_ready JSON, return None if missing or invalid."""
+    rr_file = project_dir / ".review_ready"
+    if not rr_file.is_file():
+        return None
+    try:
+        return _json.loads(rr_file.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _svg_mtime(project_dir: Path, file_name: str) -> float | None:
+    """Return mtime of svg_output/<file_name>, or None if missing."""
+    svg_path = project_dir / "svg_output" / file_name
+    if not svg_path.is_file():
+        return None
+    return svg_path.stat().st_mtime
+
+
+def _is_review_ready(project_dir: Path, meta: dict, outline: dict | None) -> bool:
+    """V2 §5.1: reviewReady is true only when all three conditions hold:
+    - .review_ready exists
+    - outlineRevision equals meta.outlineRevision
+    - every file in outline.pages exists in svg_output/
+    """
+    rr = _load_review_ready(project_dir)
+    if rr is None:
+        return False
+    if meta.get("outlineRevision") != rr.get("outlineRevision"):
+        return False
+    if outline is None:
+        return False
+    for page in outline.get("pages", []):
+        file_name = page.get("file", "")
+        if not file_name:
+            return False
+        if _svg_mtime(project_dir, file_name) is None:
+            return False
+    return True
+
+
+def _page_state(file_name: str, project_dir: Path, meta: dict) -> str:
+    """V2 §5.2: pending / previewing / confirmed."""
+    mtime = _svg_mtime(project_dir, file_name)
+    if mtime is None:
+        return "pending"
+    confirmed = meta.get("confirmedPages", {}).get(file_name)
+    if confirmed and abs(float(confirmed.get("mtime", 0)) - mtime) < 0.001:
+        return "confirmed"
+    return "previewing"
+
+
+def _all_pages_confirmed(project_dir: Path, meta: dict, outline: dict) -> bool:
+    """V2 §5.5: every planned page's current mtime is confirmed."""
+    confirmed_pages = meta.get("confirmedPages", {})
+    for page in outline.get("pages", []):
+        file_name = page.get("file", "")
+        if not file_name:
+            return False
+        mtime = _svg_mtime(project_dir, file_name)
+        if mtime is None:
+            return False
+        confirmed = confirmed_pages.get(file_name)
+        if not confirmed or abs(float(confirmed.get("mtime", 0)) - mtime) >= 0.001:
+            return False
+    return True
+
+
+def _no_extra_svgs(project_dir: Path, outline: dict) -> bool:
+    """V2 §5.5: no SVGs in svg_output/ that are not in the outline."""
+    planned = {p.get("file", "") for p in outline.get("pages", []) if p.get("file")}
+    svg_dir = project_dir / "svg_output"
+    if not svg_dir.is_dir():
+        return True
+    for entry in svg_dir.iterdir():
+        if entry.is_file() and entry.suffix == ".svg" and entry.name not in planned:
+            return False
+    return True
+
+
+async def handle_ppt_outline_get(request: web.Request) -> web.Response:
+    """GET /api/ppt/project/outline?name=<n> - read outline JSON."""
+    try:
+        name = request.query.get("name") or ""
+        project_dir, err = _ppt_project_dir_or_404(name)
+        if err is not None:
+            return err
+        assert project_dir is not None
+        outline = _load_ppt_outline(project_dir)
+        meta = _load_ppt_meta(project_dir)
+        spec_lock = (project_dir / "spec_lock.md").exists()
+        if outline is None:
+            return web.json_response({"ok": False, "pages": [], "locked": False})
+        return web.json_response({
+            "ok": True,
+            "pages": outline.get("pages", []),
+            "revision": outline.get("revision", 0),
+            "schemaVersion": outline.get("schemaVersion", 1),
+            "locked": meta.get("outlineLocked", False) or spec_lock,
+        })
+    except Exception as e:
+        logger.exception("ppt outline get error")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_ppt_outline_put(request: web.Request) -> web.Response:
+    """PUT /api/ppt/project/outline  body: {"name", "expectedRevision", "pages"}."""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+    try:
+        name = str(body.get("name", "") or "").strip()
+        project_dir, err = _ppt_project_dir_or_404(name)
+        if err is not None:
+            return err
+        assert project_dir is not None
+
+        # Block edits when locked
+        meta = _load_ppt_meta(project_dir)
+        spec_lock = (project_dir / "spec_lock.md").exists()
+        if meta.get("outlineLocked", False) or spec_lock:
+            return web.json_response(
+                {"error": "大纲已锁定，无法编辑"}, status=409
+            )
+
+        expected_revision = int(body.get("expectedRevision", 0) or 0)
+        pages = body.get("pages", [])
+        if not isinstance(pages, list):
+            return web.json_response({"error": "pages 必须是数组"}, status=400)
+
+        validation_error = _validate_outline_pages(pages)
+        if validation_error:
+            return web.json_response({"error": validation_error}, status=400)
+
+        # Check revision
+        existing = _load_ppt_outline(project_dir)
+        current_revision = existing.get("revision", 0) if existing else 0
+        if expected_revision != current_revision:
+            return web.json_response(
+                {
+                    "error": "revision mismatch",
+                    "currentRevision": current_revision,
+                    "expectedRevision": expected_revision,
+                },
+                status=409,
+            )
+
+        # Renumber and save
+        pages = _renumber_outline_pages(pages)
+        new_revision = current_revision + 1
+        outline = {
+            "schemaVersion": 2,
+            "revision": new_revision,
+            "pages": pages,
+        }
+        _save_ppt_outline_atomic(project_dir, outline)
+
+        return web.json_response({
+            "ok": True,
+            "revision": new_revision,
+            "pages": pages,
+        })
+    except Exception as e:
+        logger.exception("ppt outline put error")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_ppt_lock_outline(request: web.Request) -> web.Response:
+    """POST /api/ppt/project/lock-outline  body: {"name"}."""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+    try:
+        name = str(body.get("name", "") or "").strip()
+        project_dir, err = _ppt_project_dir_or_404(name)
+        if err is not None:
+            return err
+        assert project_dir is not None
+
+        outline = _load_ppt_outline(project_dir)
+        if outline is None:
+            return web.json_response({"error": "大纲不存在"}, status=400)
+
+        pages = outline.get("pages", [])
+        validation_error = _validate_outline_pages(pages)
+        if validation_error:
+            return web.json_response({"error": validation_error}, status=400)
+
+        # Lock: only update meta.json, do NOT write spec_lock.md
+        meta = _load_ppt_meta(project_dir)
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc).isoformat()
+        meta["outlineLocked"] = True
+        meta["outlineRevision"] = outline.get("revision", 0)
+        meta["outlineLockedAt"] = now
+        meta["updatedAt"] = now
+        if "createdAt" not in meta:
+            meta["createdAt"] = now
+        if "projectName" not in meta:
+            meta["projectName"] = name
+        meta.setdefault("confirmedPages", {})
+        meta.setdefault("schemaVersion", 2)
+        _save_ppt_meta_atomic(project_dir, meta)
+
+        return web.json_response({
+            "ok": True,
+            "revision": outline.get("revision", 0),
+        })
+    except Exception as e:
+        logger.exception("ppt lock outline error")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_ppt_pages_get(request: web.Request) -> web.Response:
+    """GET /api/ppt/project/pages?name=<n> - return page files, mtime, state, reviewReady."""
+    try:
+        name = request.query.get("name") or ""
+        project_dir, err = _ppt_project_dir_or_404(name)
+        if err is not None:
+            return err
+        assert project_dir is not None
+        meta = _load_ppt_meta(project_dir)
+        outline = _load_ppt_outline(project_dir)
+        if outline is None:
+            return web.json_response({
+                "ok": False,
+                "pages": [],
+                "reviewReady": False,
+                "outlineRevision": meta.get("outlineRevision", 0),
+            })
+        pages_out = []
+        for page in outline.get("pages", []):
+            file_name = page.get("file", "")
+            mtime = _svg_mtime(project_dir, file_name) if file_name else None
+            pages_out.append({
+                "page": page.get("page", ""),
+                "file": file_name,
+                "title": page.get("title", ""),
+                "mtime": mtime,
+                "state": _page_state(file_name, project_dir, meta) if file_name else "pending",
+            })
+        return web.json_response({
+            "ok": True,
+            "pages": pages_out,
+            "reviewReady": _is_review_ready(project_dir, meta, outline),
+            "outlineRevision": meta.get("outlineRevision", 0),
+            "confirmedCount": sum(
+                1 for p in pages_out if p["state"] == "confirmed"
+            ),
+            "totalCount": len(pages_out),
+        })
+    except Exception as e:
+        logger.exception("ppt pages get error")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_ppt_page_confirm(request: web.Request) -> web.Response:
+    """POST /api/ppt/project/page/confirm  body: {"name", "file", "expectedMtime"}.
+
+    V2 §5.3: confirm a specific mtime of an SVG. 409 if disk mtime changed.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+    try:
+        name = str(body.get("name", "") or "").strip()
+        project_dir, err = _ppt_project_dir_or_404(name)
+        if err is not None:
+            return err
+        assert project_dir is not None
+        file_name = str(body.get("file", "") or "").strip()
+        if not file_name or "/" in file_name or "\\" in file_name or ".." in file_name:
+            return web.json_response({"error": "invalid file"}, status=400)
+        expected_mtime = float(body.get("expectedMtime", 0) or 0)
+
+        current_mtime = _svg_mtime(project_dir, file_name)
+        if current_mtime is None:
+            return web.json_response({"error": "SVG 文件不存在"}, status=404)
+        if abs(current_mtime - expected_mtime) >= 0.001:
+            return web.json_response(
+                {
+                    "error": "mtime mismatch",
+                    "currentMtime": current_mtime,
+                    "expectedMtime": expected_mtime,
+                },
+                status=409,
+            )
+
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc).isoformat()
+        meta = _load_ppt_meta(project_dir)
+        confirmed_pages = meta.setdefault("confirmedPages", {})
+        confirmed_pages[file_name] = {"mtime": current_mtime, "confirmedAt": now}
+        meta["updatedAt"] = now
+        if "createdAt" not in meta:
+            meta["createdAt"] = now
+        if "projectName" not in meta:
+            meta["projectName"] = name
+        meta.setdefault("schemaVersion", 2)
+        _save_ppt_meta_atomic(project_dir, meta)
+
+        return web.json_response({
+            "ok": True,
+            "file": file_name,
+            "mtime": current_mtime,
+            "confirmedAt": now,
+        })
+    except Exception as e:
+        logger.exception("ppt page confirm error")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_ppt_page_regenerate(request: web.Request) -> web.Response:
+    """POST /api/ppt/project/page/regenerate  body: {"name", "file"}.
+
+    V2 §5.4: clear confirmation for the file and delete .review_ready.
+    Does NOT send Agent message — frontend handles that.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+    try:
+        name = str(body.get("name", "") or "").strip()
+        project_dir, err = _ppt_project_dir_or_404(name)
+        if err is not None:
+            return err
+        assert project_dir is not None
+        file_name = str(body.get("file", "") or "").strip()
+        if not file_name or "/" in file_name or "\\" in file_name or ".." in file_name:
+            return web.json_response({"error": "invalid file"}, status=400)
+
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc).isoformat()
+        meta = _load_ppt_meta(project_dir)
+        confirmed_pages = meta.setdefault("confirmedPages", {})
+        if file_name in confirmed_pages:
+            del confirmed_pages[file_name]
+        meta["updatedAt"] = now
+        _save_ppt_meta_atomic(project_dir, meta)
+
+        # Invalidate review gate
+        rr_file = project_dir / ".review_ready"
+        if rr_file.is_file():
+            try:
+                rr_file.unlink()
+            except Exception:
+                pass
+
+        return web.json_response({"ok": True, "file": file_name})
+    except Exception as e:
+        logger.exception("ppt page regenerate error")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_ppt_request_export(request: web.Request) -> web.Response:
+    """POST /api/ppt/project/request-export  body: {"name"}.
+
+    V2 §5.5: record export request after all pages confirmed.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+    try:
+        name = str(body.get("name", "") or "").strip()
+        project_dir, err = _ppt_project_dir_or_404(name)
+        if err is not None:
+            return err
+        assert project_dir is not None
+
+        meta = _load_ppt_meta(project_dir)
+        outline = _load_ppt_outline(project_dir)
+        if outline is None:
+            return web.json_response({"error": "大纲不存在"}, status=400)
+
+        if not _is_review_ready(project_dir, meta, outline):
+            return web.json_response(
+                {"error": "review gate 未通过"}, status=409
+            )
+        if not _all_pages_confirmed(project_dir, meta, outline):
+            return web.json_response(
+                {"error": "存在未确认的页面"}, status=409
+            )
+        if not _no_extra_svgs(project_dir, outline):
+            return web.json_response(
+                {"error": "存在计划外的 SVG 文件"}, status=409
+            )
+
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc).isoformat()
+        meta["exportRequestedAt"] = now
+        meta["updatedAt"] = now
+        _save_ppt_meta_atomic(project_dir, meta)
+
+        return web.json_response({"ok": True, "exportRequestedAt": now})
+    except Exception as e:
+        logger.exception("ppt request export error")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+# ---------------------------------------------------------------------------
 # Video project routes (/api/video/*)
 # ---------------------------------------------------------------------------
 
@@ -4086,6 +5472,103 @@ async def handle_video_runtime_download(request: web.Request) -> web.Response:
     except Exception as e:
         logger.exception("video runtime-download error")
         return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_office_health(request: web.Request) -> web.Response:
+    """GET /api/office/health - detect OfficeCLI availability and version.
+
+    Pure health check used by the "文档加工" workbench to decide whether
+    AI-driven document modification (阶段 B) is available. Does not start
+    a download — call /api/office/runtime-download to provision the binary.
+    """
+    try:
+        from mona.api.officecli_runtime import OfficeCliRuntime
+
+        result = OfficeCliRuntime().check()
+        return web.json_response(result)
+    except Exception as e:
+        logger.exception("office health error")
+        return web.json_response({"ok": False, "error": str(e)}, status=500)
+
+
+async def handle_office_runtime_download(request: web.Request) -> web.Response:
+    """POST /api/office/runtime-download - download the OfficeCLI binary."""
+    try:
+        from mona.api.officecli_runtime import OfficeCliRuntime
+
+        result = await OfficeCliRuntime().ensure()
+        return web.json_response(result)
+    except Exception as e:
+        logger.exception("office runtime-download error")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_notes_export_docx(request: web.Request) -> web.Response:
+    """POST /api/notes/export-docx — convert a markdown note to a .docx file.
+
+    Body: ``{"markdown": str, "vaultPath"?: str, "mermaidImages"?: {src: dataUrl}}``
+    Response: binary ``application/vnd.openxmlformats-officedocument.wordprocessingml.document``.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+
+    if not isinstance(body, dict):
+        return web.json_response({"error": "Invalid body"}, status=400)
+
+    markdown = body.get("markdown")
+    if not isinstance(markdown, str) or not markdown.strip():
+        return web.json_response({"error": "markdown is required"}, status=400)
+
+    vault_path = body.get("vaultPath")
+    if not isinstance(vault_path, str):
+        vault_path = None
+
+    mermaid_raw = body.get("mermaidImages")
+    mermaid_images = mermaid_raw if isinstance(mermaid_raw, dict) else None
+
+    title = str(body.get("title") or "").strip()
+    if not title:
+        title = "未命名笔记"
+
+    try:
+        from mona.notes.export_docx import markdown_to_docx_bytes
+
+        # The converter is CPU-bound (parsing + docx assembly); run it in a
+        # thread so the event loop stays responsive for other requests.
+        data = await asyncio.to_thread(
+            markdown_to_docx_bytes,
+            markdown,
+            vault_path,
+            mermaid_images,
+        )
+    except Exception as exc:
+        logger.exception("notes export-docx error")
+        return web.json_response({"error": str(exc)}, status=500)
+
+    # Build a safe ASCII filename with a URL-encoded fallback for non-ASCII
+    # characters (RFC 5987 / RFC 6266).
+    safe_title = safe_filename(title) or "note"
+    ascii_name = safe_title.encode("ascii", "ignore").decode("ascii") or "note"
+    utf8_name = quote(f"{safe_title}.docx", safe="")
+
+    return web.Response(
+        body=data,
+        status=200,
+        headers={
+            "Content-Type": (
+                "application/vnd.openxmlformats-officedocument"
+                ".wordprocessingml.document"
+            ),
+            "Content-Disposition": (
+                f'attachment; filename="{ascii_name}.docx"; '
+                f"filename*=UTF-8''{utf8_name}"
+            ),
+            "Content-Length": str(len(data)),
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 async def handle_video_projects(request: web.Request) -> web.Response:
@@ -5233,15 +6716,12 @@ async def _cors_middleware(request: web.Request, handler: Callable) -> web.Strea
 
 def create_app(
     agent_loop, model_name: str = "mona", request_timeout: float = 120.0,
-    schedule_service: Any | None = None,
 ) -> web.Application:
-    """Create the aiohttp application.
+    """Create the gateway aiohttp application (Agent runtime only).
 
-    Args:
-        agent_loop: An initialized AgentLoop instance.
-        model_name: Model name reported in responses.
-        request_timeout: Per-request timeout in seconds.
-        schedule_service: Optional ScheduleService for /api/schedule/* routes.
+    Business routes (email, contacts, video, materials, profile, schedule,
+    hoard, url2note) are served by the services process — see
+    ``mona.services.server.create_services_app``.
     """
     app = web.Application(client_max_size=20 * 1024 * 1024, middlewares=[_cors_middleware])
     app["agent_loop"] = agent_loop
@@ -5250,8 +6730,8 @@ def create_app(
     app["session_locks"] = {}  # per-user locks, keyed by session_key
     # Event used by POST /shutdown to unwind the gateway's main loop cleanly.
     app["shutdown_event"] = asyncio.Event()
-    app["schedule_service"] = schedule_service
 
+    # --- Agent runtime routes ---
     app.router.add_post("/v1/chat/completions", handle_chat_completions)
     app.router.add_get("/v1/models", handle_models)
     app.router.add_post("/v1/audio/transcriptions", handle_audio_transcriptions)
@@ -5260,163 +6740,29 @@ def create_app(
     app.router.add_post("/shutdown", handle_shutdown)
     app.router.add_post("/api/tauri/invoke", handle_tauri_invoke)
     app.router.add_post("/api/system/plan", handle_system_plan)
-    app.router.add_post("/api/system/diagnose", handle_system_diagnose)
 
-    # Materials routes (资料库：用户上传文档 → 提取文本 → AI 编译 wiki)
-    app.router.add_get("/api/materials/files", handle_materials_list_files)
-    app.router.add_post("/api/materials/directory", handle_materials_create_directory)
-    app.router.add_delete("/api/materials/files/{path:.*}", handle_materials_delete)
-    app.router.add_post("/api/materials/move", handle_materials_move)
-    app.router.add_post("/api/materials/extract", handle_materials_extract)
-    app.router.add_get("/api/materials/text/{path:.*}", handle_materials_get_text)
-    app.router.add_get("/api/materials/raw/{path:.*}", handle_materials_get_raw)
-    app.router.add_get("/api/materials/raw-binary/{path:.*}", handle_materials_get_raw_binary)
-    app.router.add_get("/api/materials/wiki", handle_materials_list_wiki)
-    app.router.add_get("/api/materials/wiki/{path:.*}", handle_materials_get_wiki_page)
-    app.router.add_post("/api/materials/wiki/write", handle_materials_write_wiki_page)
-    app.router.add_delete("/api/materials/wiki/{path:.*}", handle_materials_delete_wiki_page)
-    app.router.add_get("/api/materials/search", handle_materials_search)
-    app.router.add_get("/api/materials/status", handle_materials_status)
-    app.router.add_get("/api/materials/llm-config", handle_materials_llm_config)
+    # --- Skill lifecycle routes ---
+    app.router.add_get("/api/skills/list", handle_skills_list)
+    app.router.add_post("/api/skills/set_pinned", handle_skills_set_pinned)
+    app.router.add_post("/api/skills/archive", handle_skills_archive)
+    app.router.add_post("/api/skills/restore", handle_skills_restore)
+    app.router.add_post("/api/skills/prune", handle_skills_prune)
+    app.router.add_get("/api/skills/config", handle_skills_config)
+    app.router.add_post("/api/skills/update_config", handle_skills_update_config)
 
-    # Hoard routes (Agent URL memory: browser star sync)
-    app.router.add_post("/api/hoard", handle_hoard_add)
-    app.router.add_delete("/api/hoard-by-url", handle_hoard_delete_by_url)
+    # --- MCP server lifecycle routes ---
+    app.router.add_get("/api/mcp/servers", handle_mcp_list_servers)
+    app.router.add_post("/api/mcp/servers", handle_mcp_create_server)
+    app.router.add_put("/api/mcp/servers/{name}", handle_mcp_update_server)
+    app.router.add_delete("/api/mcp/servers/{name}", handle_mcp_delete_server)
+    app.router.add_post("/api/mcp/servers/{name}/restart", handle_mcp_restart_server)
+    app.router.add_post("/api/mcp/reload", handle_mcp_reload)
+    app.router.add_get("/api/mcp/servers/{name}/tools", handle_mcp_list_tools)
 
-    # Email routes
-    app.router.add_post("/email/folders", handle_email_folders)
-    app.router.add_post("/email/create_folder", handle_email_create_folder)
-    app.router.add_post("/email/rename_folder", handle_email_rename_folder)
-    app.router.add_post("/email/delete_folder", handle_email_delete_folder)
-    app.router.add_post("/email/sync", handle_email_sync)
-    app.router.add_post("/email/list_uids", handle_email_list_uids)
-    app.router.add_post("/email/send", handle_email_send)
-    app.router.add_post("/email/delete", handle_email_delete)
-    app.router.add_post("/email/set_flag", handle_email_set_flag)
-    app.router.add_post("/email/mark_all_read", handle_email_mark_all_read)
-    app.router.add_post("/email/empty_folder", handle_email_empty_folder)
-    app.router.add_post("/email/move", handle_email_move)
-    app.router.add_post("/email/analyze", handle_email_analyze)
-    app.router.add_post("/email/fetch_attachment", handle_email_fetch_attachment)
-    app.router.add_post("/email/fetch_body", handle_email_fetch_body)
-    app.router.add_post("/email/parse_body", handle_email_parse_body)
-    app.router.add_post("/email/parse_attachment", handle_email_parse_attachment)
-    app.router.add_post("/email/fetch_raw", handle_email_fetch_raw)
-    app.router.add_post("/email/save_draft", handle_email_save_draft)
-    app.router.add_post("/email/test_connection", handle_email_test_connection)
-    app.router.add_post("/email/reset_pool", handle_email_reset_pool)
-    app.router.add_get("/email/pool_status", handle_email_pool_status)
-
-    # Email schedule AI extract routes
-    app.router.add_post("/email/schedule/extract", handle_email_schedule_extract)
-    app.router.add_post("/email/schedule/extract-manual", handle_email_schedule_extract_manual)
-    app.router.add_get("/api/email/schedule/pending", handle_email_schedule_pending)
-    app.router.add_post("/api/email/schedule/confirm", handle_email_schedule_confirm)
-    app.router.add_post("/api/email/schedule/discard", handle_email_schedule_discard)
-
-    # Contacts (CardDAV) routes
-    app.router.add_post("/contacts/sync", handle_contacts_sync)
-    app.router.add_post("/contacts/test_carddav", handle_contacts_test_carddav)
-    app.router.add_post("/contacts/sync_eas", handle_contacts_sync_eas)
-    app.router.add_post("/contacts/test_eas", handle_contacts_test_eas)
-
-    # Email IDLE routes（实时推送）
-    app.router.add_post("/email/idle/start", handle_email_idle_start)
-    app.router.add_post("/email/idle/stop", handle_email_idle_stop)
-    app.router.add_get("/email/idle/status", handle_email_idle_status)
-    app.router.add_get("/email/idle/ws", handle_email_idle_ws)
-
-    # Email account lifecycle routes
-    app.router.add_post("/email/account_removed", handle_email_account_removed)
-
-    # Schedule routes
-    app.router.add_get("/api/schedule/items", handle_schedule_list)
-    app.router.add_get("/api/schedule/items/{id}", handle_schedule_get)
-    app.router.add_post("/api/schedule/items", handle_schedule_create)
-    app.router.add_post("/api/schedule/items/{id}/update", handle_schedule_update)
-    app.router.add_post("/api/schedule/items/{id}/remove", handle_schedule_remove)
-    app.router.add_post("/api/schedule/items/{id}/toggle", handle_schedule_toggle)
-    app.router.add_get("/api/schedule/notifications", handle_schedule_notifications)
-
-    # Session-project binding routes (Phase 3)
+    # --- Session-project binding routes ---
     app.router.add_post("/api/sessions/{key}/set-workspace", handle_session_set_workspace)
     app.router.add_post("/api/sessions/{key}/clear-workspace", handle_session_clear_workspace)
     app.router.add_get("/api/projects", handle_projects_list)
     app.router.add_post("/api/projects/remove", handle_project_remove)
-
-    # Profile (user distillation) routes
-    app.router.add_get("/api/profile", handle_profile_get)
-    app.router.add_get("/api/profile/user", handle_profile_user_get)
-    app.router.add_patch("/api/profile/user", handle_profile_user_update)
-    app.router.add_post("/api/profile/distill", handle_profile_distill)
-    app.router.add_get("/api/profile/snapshots", handle_profile_snapshots)
-    app.router.add_get("/api/profile/comparison", handle_profile_comparison)
-
-    # Video project routes
-    app.router.add_get("/api/video/runtime-check", handle_video_runtime_check)
-    app.router.add_post("/api/video/runtime-download", handle_video_runtime_download)
-    app.router.add_post("/api/url2note/extract", handle_url2note_extract)
-    app.router.add_get("/api/video/projects", handle_video_projects)
-    app.router.add_post("/api/video/project/create", handle_video_project_create)
-    app.router.add_get("/api/video/project", handle_video_project)
-    app.router.add_get("/api/video/project-file", handle_video_project_file)
-    app.router.add_post(
-        "/api/video/project-save-chat-id", handle_video_project_save_chat_id
-    )
-    app.router.add_get(
-        "/api/video/project/storyboard", handle_video_project_storyboard
-    )
-    app.router.add_put("/api/video/project/scene", handle_video_project_scene_update)
-    app.router.add_delete(
-        "/api/video/project/scene", handle_video_project_scene_delete
-    )
-    app.router.add_post("/api/video/project/scene/add", handle_video_project_scene_add)
-    app.router.add_post(
-        "/api/video/project/scene/reorder", handle_video_project_scene_reorder
-    )
-    app.router.add_post(
-        "/api/video/project/lock-storyboard", handle_video_project_lock_storyboard
-    )
-    app.router.add_post(
-        "/api/video/project/scene/narration", handle_video_project_scene_narration
-    )
-    app.router.add_post("/api/video/ai/scene-html", handle_video_ai_scene_html)
-    app.router.add_get(
-        "/api/video/project/scene/preview", handle_video_project_scene_preview
-    )
-    app.router.add_post(
-        "/api/video/project/scene/confirm", handle_video_project_scene_confirm
-    )
-    app.router.add_post(
-        "/api/video/project/scene/regenerate", handle_video_project_scene_regenerate
-    )
-    app.router.add_post("/api/video/ai/scene-rewrite", handle_video_ai_scene_rewrite)
-    app.router.add_post("/api/video/project/export", handle_video_project_export)
-    app.router.add_get(
-        "/api/video/project/export-status", handle_video_project_export_status
-    )
-    app.router.add_get(
-        "/api/video/project/preview-full", handle_video_project_preview_full
-    )
-
-    # 设置 IDLE 管理器的事件循环
-    _idle_manager.set_loop(asyncio.get_event_loop())
-
-    # 启动 IMAP 连接池后台保活线程（每 2 分钟 NOOP 一次），
-    # 避免长时间不操作后连接被服务器关闭、下次操作被迫重新 login 触发风控。
-    keepalive_thread = threading.Thread(
-        target=imap_pool_manager.keepalive,
-        args=(120.0,),
-        name="imap-pool-keepalive",
-        daemon=True,
-    )
-    keepalive_thread.start()
-
-    async def _on_cleanup(_app: web.Application) -> None:
-        _idle_manager.stop_all()
-        # 关闭所有 IMAP 连接池，释放持久连接
-        await asyncio.to_thread(imap_pool_manager.close_all)
-
-    app.on_cleanup.append(_on_cleanup)
 
     return app

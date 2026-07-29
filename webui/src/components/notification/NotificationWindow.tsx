@@ -157,7 +157,7 @@ export function NotificationWindow() {
     >
       <div
         className={cn(
-          "relative flex h-full w-full flex-col gap-1.5 overflow-hidden rounded-2xl border border-border/60 bg-popover/95 p-3.5 shadow-[0_18px_55px_rgba(15,23,42,0.18)] backdrop-blur-xl dark:border-white/10 dark:shadow-[0_22px_55px_rgba(0,0,0,0.45)]",
+          "relative flex h-full w-full flex-col gap-1.5 overflow-hidden rounded-2xl border border-border/60 bg-popover/95 p-3.5 shadow-lg backdrop-blur-xl dark:border-white/10",
           payload.clickAction && "cursor-pointer hover:bg-popover",
         )}
         onClick={handleCardClick}

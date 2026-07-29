@@ -335,6 +335,8 @@ export interface TopFileInfo {
   parentDirName: string;
   sizeGb: number;
   modifiedBucket: string;
+  /** 完整文件路径（用于右键菜单） */
+  path: string;
 }
 
 export interface ScanSummary {
@@ -385,9 +387,12 @@ export interface ScanProgress {
 
 export type ScanStatus = "idle" | "scanning" | "done" | "error";
 
-const STORAGE_CACHE_KEY = "system.storageScan";
-// 缓存版本：StorageScanResult 结构或 cleanable 语义变化时递增，旧缓存自动失效
-const STORAGE_CACHE_VERSION = 2;
+// 缓存版本：StorageScanResult 结构变化时递增，旧缓存自动失效
+// v2 → v3: TopFileInfo 增加 path 字段
+const STORAGE_CACHE_VERSION = 3;
+const STORAGE_DB_NAME = "mona-system";
+const STORAGE_DB_STORE = "storage-scan";
+const STORAGE_DB_KEY = "latest";
 
 interface StorageCache {
   version: number;
@@ -395,53 +400,83 @@ interface StorageCache {
   lastScanAt: number;
 }
 
-function loadStorageCache(): StorageCache | null {
+// IndexedDB 异步操作封装
+function openStorageDb(): Promise<IDBDatabase | null> {
+  return new Promise((resolve) => {
+    try {
+      const req = indexedDB.open(STORAGE_DB_NAME, 1);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(STORAGE_DB_STORE)) {
+          db.createObjectStore(STORAGE_DB_STORE);
+        }
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => resolve(null);
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+async function loadStorageCache(): Promise<StorageCache | null> {
   try {
-    const raw = localStorage.getItem(STORAGE_CACHE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as StorageCache;
-    if (parsed.version !== STORAGE_CACHE_VERSION) return null;
-    if (!parsed.result || typeof parsed.lastScanAt !== "number") return null;
-    // 检测降级缓存：根目录有 sizeGb 但 children 被剥离，下钻会失效，不使用
-    const degraded = parsed.result.directories.some(
-      (d) => d.sizeGb > 0.1 && (!d.children || d.children.length === 0),
-    );
-    if (degraded) return null;
-    return parsed;
+    const db = await openStorageDb();
+    if (!db) return null;
+    return await new Promise<StorageCache | null>((resolve) => {
+      const tx = db.transaction(STORAGE_DB_STORE, "readonly");
+      const req = tx.objectStore(STORAGE_DB_STORE).get(STORAGE_DB_KEY);
+      req.onsuccess = () => {
+        const parsed = req.result as StorageCache | undefined;
+        if (!parsed || parsed.version !== STORAGE_CACHE_VERSION || !parsed.result) {
+          resolve(null);
+          return;
+        }
+        resolve(parsed);
+      };
+      req.onerror = () => resolve(null);
+    });
   } catch {
     return null;
   }
 }
 
-function saveStorageCache(cache: Omit<StorageCache, "version">) {
+async function saveStorageCache(cache: Omit<StorageCache, "version">): Promise<void> {
   try {
-    localStorage.setItem(STORAGE_CACHE_KEY, JSON.stringify({ ...cache, version: STORAGE_CACHE_VERSION }));
+    const db = await openStorageDb();
+    if (!db) return;
+    await new Promise<void>((resolve) => {
+      const tx = db.transaction(STORAGE_DB_STORE, "readwrite");
+      tx.objectStore(STORAGE_DB_STORE).put({ ...cache, version: STORAGE_CACHE_VERSION }, STORAGE_DB_KEY);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    });
   } catch {
-    // 配额不足时降级：只保留顶层目录元数据（不包含 children），下次加载会因降级检测而忽略缓存
-    try {
-      const trimmed: StorageCache = {
-        version: STORAGE_CACHE_VERSION,
-        lastScanAt: cache.lastScanAt,
-        result: {
-          ...cache.result,
-          directories: cache.result.directories.map((d) => ({ ...d, children: [] })),
-        },
-      };
-      localStorage.setItem(STORAGE_CACHE_KEY, JSON.stringify(trimmed));
-    } catch {
-      // 仍失败则静默放弃，不影响功能
-    }
+    // 静默放弃，不影响功能
   }
 }
 
 export function useStorageScan() {
-  const initial = loadStorageCache();
-  const [status, setStatus] = useState<ScanStatus>(initial ? "done" : "idle");
-  const [result, setResult] = useState<StorageScanResult | null>(initial?.result ?? null);
-  const [lastScanAt, setLastScanAt] = useState<number | null>(initial?.lastScanAt ?? null);
+  const [status, setStatus] = useState<ScanStatus>("idle");
+  const [result, setResult] = useState<StorageScanResult | null>(null);
+  const [lastScanAt, setLastScanAt] = useState<number | null>(null);
   const [progress, setProgress] = useState<ScanProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [cleaning, setCleaning] = useState(false);
+
+  // 应用启动时从 IndexedDB 异步恢复上次扫描结果
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      const cached = await loadStorageCache();
+      if (active && cached) {
+        setResult(cached.result);
+        setLastScanAt(cached.lastScanAt);
+        setStatus("done");
+      }
+    })();
+    return () => { active = false; };
+  }, []);
 
   const start = async () => {
     // 保留上次扫描结果显示，扫描完成后才覆盖
@@ -455,7 +490,7 @@ export function useStorageScan() {
       setLastScanAt(now);
       setStatus("done");
       setProgress(null);
-      saveStorageCache({ result: res, lastScanAt: now });
+      void saveStorageCache({ result: res, lastScanAt: now });
       return res;
     } catch (e) {
       setError(String(e));
@@ -485,7 +520,7 @@ export function useStorageScan() {
             return { ...item, sizeGb };
           }),
         };
-        saveStorageCache({ result: next, lastScanAt: lastScanAt ?? Date.now() });
+        void saveStorageCache({ result: next, lastScanAt: lastScanAt ?? Date.now() });
         return next;
       });
       return cleanup;

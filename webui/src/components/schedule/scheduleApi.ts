@@ -1,6 +1,6 @@
-/** Schedule API client — calls /api/schedule/* on the gateway HTTP server. */
+/** Schedule API client — calls /api/schedule/* on the services process. */
 
-import { getGatewayHttpBase } from "@/lib/api";
+import { getServicesHttpBase } from "@/lib/api";
 import { httpFetch } from "@/lib/tauri";
 import type { ScheduleItem, ScheduleItemInput, ScheduleItemListResponse } from "./types";
 
@@ -8,7 +8,7 @@ async function _jsonRequest<T>(
   path: string,
   init: RequestInit,
 ): Promise<T> {
-  const base = await getGatewayHttpBase();
+  const base = await getServicesHttpBase();
   if (!base) {
     throw new Error("Gateway 未就绪，请稍后重试");
   }

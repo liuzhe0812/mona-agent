@@ -42,7 +42,7 @@ export function ExecApprovalDialog() {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="w-96 rounded-lg border bg-background p-5 shadow-xl">
+      <div className="w-96 rounded-lg border bg-background p-5 shadow-lg">
         <div className="flex items-center gap-2 mb-3">
           <AlertTriangle className="h-5 w-5 text-amber-500" />
           <h3 className="text-sm font-semibold">AI 请求执行命令</h3>

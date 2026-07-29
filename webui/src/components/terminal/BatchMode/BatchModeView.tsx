@@ -1422,7 +1422,7 @@ export function BatchModeView() {
                           <div key={session.id} className="rounded border bg-card w-full min-w-0">
                             <button
                               onClick={() => setCollapsedTransfer((prev) => { const next = new Set(prev); next.has(session.id) ? next.delete(session.id) : next.add(session.id); return next; })}
-                              className="flex w-full items-center gap-2 px-2 py-1 text-xs hover:bg-accent/20 min-w-0"
+                              className="flex w-full items-center gap-2 px-2 py-1 text-xs hover:bg-accent min-w-0"
                             >
                               {collapsedTransfer.has(session.id) ? <ChevronRight className="h-3 w-3 shrink-0" /> : <ChevronDown className="h-3 w-3 shrink-0" />}
                               {getStatusIcon(session.status)}

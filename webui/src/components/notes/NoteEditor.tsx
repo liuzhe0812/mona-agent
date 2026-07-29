@@ -2,6 +2,9 @@ import { useCallback, useRef, type ReactNode } from "react";
 import type { JSONContent } from "@tiptap/core";
 
 import { MarkdownEditor, type EditorMode } from "@/components/common/MarkdownEditor";
+import { MindMapDocumentEditor } from "./mindmap/MindMapDocumentEditor";
+import { FlowchartDocumentEditor } from "./flowchart/FlowchartDocumentEditor";
+import type { FlowchartSemanticWarning } from "./flowchart/flowchart-document";
 
 import type { OperationNote } from "./notes-data";
 
@@ -35,11 +38,27 @@ interface NoteEditorProps {
     contentMarkdown: string;
     contentJson?: JSONContent;
     plainText: string;
+    /** 流程图专用：提交时的 baseRevision */
+    baseRevision?: number;
   }) => void;
   onMoveSelectionToNote?: (selectedText: string) => void;
   onOpenNoteByTitle?: (title: string) => void;
   toolbarExtra?: ReactNode;
   toolbarLeadingExtra?: ReactNode;
+  /** 流程图多标签页写者租约：当前 note 的 writerInstanceId */
+  flowchartWriterId?: string;
+  /** 申请成为写者（用户点击"在此编辑"） */
+  onFlowchartRequestLease?: (editorInstanceId: string) => void;
+  /** 流程图当前 revision（来自 NotesView） */
+  flowchartRevision?: number;
+  /** NotesView 拒绝提交时的强制同步计数器 */
+  flowchartForceSync?: number;
+  /** 用户点击"让 AI 修复"时触发，把当前本地 warnings 交给父组件 */
+  onFlowchartFixWithAI?: (warnings: FlowchartSemanticWarning[]) => void;
+  /** Resolve embed target content by title (`![[...]]`). Returns null if not found. */
+  resolveEmbedContent?: (title: string) => string | null;
+  /** Whether the embed target is a flowchart note. */
+  isEmbedFlowchart?: (title: string) => boolean;
 }
 
 export function NoteEditor({
@@ -53,6 +72,13 @@ export function NoteEditor({
   onOpenNoteByTitle,
   toolbarExtra,
   toolbarLeadingExtra,
+  flowchartWriterId,
+  onFlowchartRequestLease,
+  flowchartRevision,
+  flowchartForceSync,
+  onFlowchartFixWithAI,
+  resolveEmbedContent,
+  isEmbedFlowchart,
 }: NoteEditorProps) {
   const saveLabel =
     saveStatus === "saving"
@@ -89,10 +115,40 @@ export function NoteEditor({
     onContentChange(next);
   };
 
+  if (note.type === "mindmap") {
+    return (
+      <div className="flex h-full min-w-0 flex-1 flex-col">
+        <MindMapDocumentEditor
+          note={note}
+          onContentChange={handleContentChange}
+          toolbarExtra={toolbarExtra}
+        />
+      </div>
+    );
+  }
+
+  if (note.type === "flowchart") {
+    return (
+      <div className="flex h-full min-w-0 flex-1 flex-col">
+        <FlowchartDocumentEditor
+          note={note}
+          onContentChange={handleContentChange}
+          toolbarExtra={toolbarExtra}
+          writerInstanceId={flowchartWriterId}
+          onRequestWriteLease={onFlowchartRequestLease}
+          revision={flowchartRevision}
+          forceSync={flowchartForceSync}
+          onFixWithAI={onFlowchartFixWithAI}
+        />
+      </div>
+    );
+  }
+
   return (
     <MarkdownEditor
       content={note.contentMarkdown}
       mode={mode}
+      editorClassName="note-editor-cursor"
       noteTitles={noteTitles}
       onContentChange={handleContentChange}
       onMoveSelectionToNote={onMoveSelectionToNote}
@@ -101,6 +157,8 @@ export function NoteEditor({
       toolbarLeadingExtra={toolbarLeadingExtra}
       enableSelectionAi
       getNoteTitle={getNoteTitle}
+      resolveEmbedContent={resolveEmbedContent}
+      isEmbedFlowchart={isEmbedFlowchart}
       statsExtra={
         <span className={saveStatus === "error" ? "text-destructive" : undefined}>
           {saveLabel}

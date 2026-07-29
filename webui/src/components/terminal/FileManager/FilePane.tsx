@@ -927,7 +927,7 @@ function FileRow({
           draggable={draggable}
           onDragStart={onDragStart}
           className={`group cursor-pointer border-b border-transparent transition-colors ${
-            selected ? "bg-accent/70" : "hover:bg-accent/50"
+            selected ? "bg-accent" : "hover:bg-accent"
           }`}
           onClick={onSelect}
           onDoubleClick={() => onOpen(file)}

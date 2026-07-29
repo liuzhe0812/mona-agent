@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { X, ZoomIn, ZoomOut, Maximize2 } from "lucide-react";
+import { X, ZoomIn, ZoomOut, Maximize2, Loader2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -57,7 +57,10 @@ export function GraphViewDialog({
     moved: false,
   });
   const animationRef = useRef<number>(0);
-  const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const hoveredIdRef = useRef<string | null>(null);
+  const alphaRef = useRef(1);
+  const activeNoteIdRef = useRef<string | null>(activeNoteId ?? null);
+  activeNoteIdRef.current = activeNoteId ?? null;
   const [dimensions, setDimensions] = useState({ w: 800, h: 600 });
   const [retryCount, setRetryCount] = useState(0);
 
@@ -122,6 +125,7 @@ export function GraphViewDialog({
             degree: degreeMap.get(n.id) ?? 0,
           };
         });
+        alphaRef.current = 1;
       })
       .catch((err) => {
         if (cancelled) return;
@@ -191,17 +195,47 @@ export function GraphViewDialog({
       const scale = scaleRef.current;
       const cx = dimensions.w / 2;
       const cy = dimensions.h / 2;
+      const hoveredId = hoveredIdRef.current;
+      const activeId = activeNoteIdRef.current;
 
-      // Apply repulsion between all nodes.
-      for (let i = 0; i < nodes.length; i++) {
-        const a = nodes[i];
-        for (let j = i + 1; j < nodes.length; j++) {
-          const b = nodes[j];
-          const dx = a.x - b.x;
-          const dy = a.y - b.y;
-          const distSq = Math.max(dx * dx + dy * dy, 1);
-          const force = REPULSION / distSq;
-          const dist = Math.sqrt(distSq);
+      // Alpha decay: skip expensive O(n²) physics when simulation has settled.
+      const alpha = alphaRef.current;
+      const physicsActive = alpha > 0.005;
+
+      // Build node lookup (used for both spring forces and rendering).
+      const nodeMap = new Map(nodes.map((n) => [n.id, n]));
+
+      if (physicsActive) {
+        alphaRef.current *= 0.985;
+
+        // Apply repulsion between all nodes.
+        for (let i = 0; i < nodes.length; i++) {
+          const a = nodes[i];
+          for (let j = i + 1; j < nodes.length; j++) {
+            const b = nodes[j];
+            const dx = a.x - b.x;
+            const dy = a.y - b.y;
+            const distSq = Math.max(dx * dx + dy * dy, 1);
+            const force = REPULSION / distSq;
+            const dist = Math.sqrt(distSq);
+            const fx = (dx / dist) * force;
+            const fy = (dy / dist) * force;
+            a.vx += fx;
+            a.vy += fy;
+            b.vx -= fx;
+            b.vy -= fy;
+          }
+        }
+
+        // Apply spring forces along edges.
+        for (const e of edges) {
+          const a = nodeMap.get(e.source);
+          const b = nodeMap.get(e.target);
+          if (!a || !b) continue;
+          const dx = b.x - a.x;
+          const dy = b.y - a.y;
+          const dist = Math.max(Math.sqrt(dx * dx + dy * dy), 1);
+          const force = SPRING_K * (dist - SPRING_LENGTH);
           const fx = (dx / dist) * force;
           const fy = (dy / dist) * force;
           a.vx += fx;
@@ -209,39 +243,21 @@ export function GraphViewDialog({
           b.vx -= fx;
           b.vy -= fy;
         }
-      }
 
-      // Apply spring forces along edges.
-      const nodeMap = new Map(nodes.map((n) => [n.id, n]));
-      for (const e of edges) {
-        const a = nodeMap.get(e.source);
-        const b = nodeMap.get(e.target);
-        if (!a || !b) continue;
-        const dx = b.x - a.x;
-        const dy = b.y - a.y;
-        const dist = Math.max(Math.sqrt(dx * dx + dy * dy), 1);
-        const force = SPRING_K * (dist - SPRING_LENGTH);
-        const fx = (dx / dist) * force;
-        const fy = (dy / dist) * force;
-        a.vx += fx;
-        a.vy += fy;
-        b.vx -= fx;
-        b.vy -= fy;
-      }
-
-      // Apply centering and integrate.
-      for (const n of nodes) {
-        n.vx += (cx - n.x) * CENTERING_K;
-        n.vy += (cy - n.y) * CENTERING_K;
-        n.vx *= DAMPING;
-        n.vy *= DAMPING;
-        const v = Math.sqrt(n.vx * n.vx + n.vy * n.vy);
-        if (v > MAX_VELOCITY) {
-          n.vx = (n.vx / v) * MAX_VELOCITY;
-          n.vy = (n.vy / v) * MAX_VELOCITY;
+        // Apply centering and integrate.
+        for (const n of nodes) {
+          n.vx += (cx - n.x) * CENTERING_K;
+          n.vy += (cy - n.y) * CENTERING_K;
+          n.vx *= DAMPING;
+          n.vy *= DAMPING;
+          const v = Math.sqrt(n.vx * n.vx + n.vy * n.vy);
+          if (v > MAX_VELOCITY) {
+            n.vx = (n.vx / v) * MAX_VELOCITY;
+            n.vy = (n.vy / v) * MAX_VELOCITY;
+          }
+          n.x += n.vx;
+          n.y += n.vy;
         }
-        n.x += n.vx;
-        n.y += n.vy;
       }
 
       // Compute connected set when hovering.
@@ -289,7 +305,7 @@ export function GraphViewDialog({
 
       // Draw nodes.
       for (const n of nodes) {
-        const isActive = n.id === activeNoteId;
+        const isActive = n.id === activeId;
         const isHovered = n.id === hoveredId;
         const baseR = NODE_RADIUS + Math.min(n.degree * 1.2, 6);
         const r = isHovered ? baseR * 1.6 : baseR;
@@ -327,7 +343,7 @@ export function GraphViewDialog({
         ctx.textBaseline = "bottom";
         for (const n of nodes) {
           const isHovered = n.id === hoveredId;
-          const isActive = n.id === activeNoteId;
+          const isActive = n.id === activeId;
           const isConnected = hoveredId ? connectedSet?.has(n.id) : false;
           const shouldShow = isHovered || isActive || (showAllLabels && n.degree > 0) || (hoveredId && isConnected);
           if (!shouldShow) continue;
@@ -355,7 +371,7 @@ export function GraphViewDialog({
 
     animationRef.current = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(animationRef.current);
-  }, [open, dimensions, activeNoteId, hoveredId]);
+  }, [open, dimensions]);
 
   // Mouse interactions.
   const handleMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -367,6 +383,9 @@ export function GraphViewDialog({
     const node = nodesRef.current.find(
       (n) => Math.sqrt((n.x - x) ** 2 + (n.y - y) ** 2) < NODE_RADIUS + 6,
     );
+    if (node) {
+      alphaRef.current = Math.max(alphaRef.current, 0.3);
+    }
     dragRef.current = {
       nodeId: node?.id ?? null,
       lastX: e.clientX,
@@ -385,7 +404,7 @@ export function GraphViewDialog({
     const node = nodesRef.current.find(
       (n) => Math.sqrt((n.x - x) ** 2 + (n.y - y) ** 2) < NODE_RADIUS + 6,
     );
-    setHoveredId(node?.id ?? null);
+    hoveredIdRef.current = node?.id ?? null;
     canvas.style.cursor = node ? "pointer" : dragRef.current.panning ? "grabbing" : "grab";
 
     const drag = dragRef.current;
@@ -411,6 +430,11 @@ export function GraphViewDialog({
 
   const handleMouseUp = useCallback(() => {
     dragRef.current = { nodeId: null, lastX: 0, lastY: 0, panning: false, moved: false };
+  }, []);
+
+  const handleMouseLeave = useCallback(() => {
+    dragRef.current = { nodeId: null, lastX: 0, lastY: 0, panning: false, moved: false };
+    hoveredIdRef.current = null;
   }, []);
 
   const handleClick = useCallback(
@@ -531,8 +555,9 @@ export function GraphViewDialog({
       </div>
       <div ref={containerRef} className={cn("relative min-h-0 flex-1")}>
         {loading && (
-          <div className="absolute inset-0 flex items-center justify-center text-[13px] text-muted-foreground">
-            正在加载关系图...
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
+            <Loader2 className="h-7 w-7 animate-spin text-muted-foreground" />
+            <span className="text-[13px] text-muted-foreground">正在加载关系图...</span>
           </div>
         )}
         {error && (
@@ -567,7 +592,7 @@ export function GraphViewDialog({
             onMouseDown={handleMouseDown}
             onMouseMove={handleMouseMove}
             onMouseUp={handleMouseUp}
-            onMouseLeave={handleMouseUp}
+            onMouseLeave={handleMouseLeave}
             onClick={handleClick}
           />
         )}

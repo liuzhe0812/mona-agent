@@ -204,34 +204,25 @@ describe("SystemView", () => {
     expect(screen.getByText("系统概览读取失败")).toBeTruthy();
   });
 
-  it("only shows the header Mona button after the assistant auto-collapses", () => {
-    const originalWidth = window.innerWidth;
+  it("toggles the Mona assistant entirely through the header Mona button", () => {
     localStorage.removeItem("system.assistantCollapsed");
-    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1440 });
     render(<SystemView />);
 
     const pageHeader = screen.getByRole("heading", { name: "系统" }).closest("header")!;
-    expect(within(pageHeader).queryByRole("button", { name: /Mona 系统管家/ })).toBeNull();
+    const toggleButton = within(pageHeader).getByRole("button", { name: "收起 Mona 系统管家" });
+    fireEvent.click(toggleButton);
 
-    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1279 });
-    fireEvent(window, new Event("resize"));
-    expect(document.querySelector('aside[aria-label="Mona 系统管家"]')?.getAttribute("aria-hidden")).toBe("true");
-    const expandButton = within(pageHeader).getByRole("button", { name: "展开 Mona 系统管家" });
-    fireEvent.click(expandButton);
-
-    const assistant = screen.getByRole("complementary", { name: "Mona 系统管家" });
-    expect(assistant.className).toMatch(/(?:^|\s)translate-x-0(?:\s|$)/);
-    expect(within(pageHeader).queryByRole("button", { name: /Mona 系统管家/ })).toBeNull();
-    fireEvent.click(within(assistant).getByRole("button", { name: "关闭 Mona 系统管家" }));
+    const assistant = document.querySelector('aside[aria-label="Mona 系统管家"]')!;
+    expect(assistant.getAttribute("aria-hidden")).toBe("true");
     expect(within(pageHeader).getByRole("button", { name: "展开 Mona 系统管家" })).toBeTruthy();
+    expect(screen.getByTestId("system-layout").className).toContain("grid-cols-[minmax(0,1fr)]");
+    expect(screen.getByTestId("system-layout").className).not.toContain("grid-cols-[minmax(0,1fr)_360px]");
 
-    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1280 });
-    fireEvent(window, new Event("resize"));
-    expect(screen.getByRole("complementary", { name: "Mona 系统管家" }).getAttribute("aria-hidden")).toBe("false");
-    expect(screen.getByRole("heading", { name: "Mona 系统管家" })).toBeTruthy();
-    expect(within(pageHeader).queryByRole("button", { name: /Mona 系统管家/ })).toBeNull();
+    fireEvent.click(within(pageHeader).getByRole("button", { name: "展开 Mona 系统管家" }));
+    expect(document.querySelector('aside[aria-label="Mona 系统管家"]')?.getAttribute("aria-hidden")).toBe("false");
+    expect(within(pageHeader).getByRole("button", { name: "收起 Mona 系统管家" })).toBeTruthy();
+    expect(screen.getByTestId("system-layout").className).toContain("grid-cols-[minmax(0,1fr)_360px]");
 
-    Object.defineProperty(window, "innerWidth", { configurable: true, value: originalWidth });
     localStorage.removeItem("system.assistantCollapsed");
   });
 
@@ -269,7 +260,10 @@ describe("SystemView", () => {
     expect(screen.getByRole("button", { name: "减少不必要的开机启动项" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "调整系统配置提升响应速度" })).toBeTruthy();
     expect(screen.getByTestId("system-layout").className).toContain(
-      "xl:grid-cols-[minmax(0,1fr)_360px]",
+      "grid-cols-[minmax(0,1fr)_360px]",
+    );
+    expect(screen.getByTestId("system-layout").className).not.toContain(
+      "grid-cols-[minmax(0,1fr)]",
     );
   });
 
@@ -306,7 +300,7 @@ describe("SystemView", () => {
       expect(await screen.findByRole("heading", { name: "现在值得处理" })).toBeTruthy();
       expect(screen.getByRole("heading", { name: "C 盘空间紧张" })).toBeTruthy();
       fireEvent.click(screen.getByRole("button", { name: "查看并扫描" }));
-      expect(await screen.findByRole("heading", { name: "磁盘分区" })).toBeTruthy();
+      expect(await screen.findByRole("heading", { name: "重点路径占用" })).toBeTruthy();
 
   } finally {
       localStorage.removeItem("system.storageScan");
@@ -454,10 +448,8 @@ describe("SystemView", () => {
   it("keeps the complete storage prototype structure visible before scanning", async () => {
     render(<SystemView initialTab="storage" />);
 
-    expect(await screen.findByRole("heading", { name: "磁盘分区" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "重点路径占用" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: /空间分布/ })).toBeTruthy();
-    expect(screen.getByRole("heading", { name: /文件类型/ })).toBeTruthy();
-    expect(screen.getByRole("heading", { name: /占用最大的目录/ })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "安全清理" })).toBeTruthy();
     expect(screen.getByText("待分析")).toBeTruthy();
   });
@@ -483,7 +475,8 @@ describe("SystemView", () => {
       totalScannedGb: 20,
     }));
     fireEvent.click(screen.getByRole("tab", { name: "存储空间" }));
-    expect(await screen.findByText("C:\\Users\\Mona")).toBeTruthy();
+    // WizTree 布局：CleanupPanel 中的清理项 + FileTypePanel 中的类型
+    expect((await screen.findAllByText("1.5 GB")).length).toBeGreaterThan(0);
     expect(screen.getByText("应用")).toBeTruthy();
   });
 

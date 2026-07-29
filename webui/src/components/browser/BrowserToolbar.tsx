@@ -116,6 +116,7 @@ interface BrowserToolbarProps {
   onZoomOut?: () => void;
   onZoomReset?: () => void;
   onOpenHistory?: () => void;
+  onOpenDownloads?: () => void;
   onOpenCookieManager?: () => void;
   onToggleMute?: () => void;
   onToggleAdBlock?: () => void;
@@ -153,6 +154,7 @@ export function BrowserToolbar({
   onZoomOut,
   onZoomReset,
   onOpenHistory,
+  onOpenDownloads,
   onOpenCookieManager,
   onToggleMute,
   onToggleAdBlock,
@@ -497,9 +499,14 @@ export function BrowserToolbar({
 
   const handleOpenDownloads = () => {
     const anchor = getDownloadAnchor();
-    if (!anchor) return;
+    if (!anchor) {
+      console.warn("[BrowserToolbar] download anchor is null");
+      return;
+    }
     clearAutoHideTimer();
-    void browserToggleDownloads(anchor);
+    void browserToggleDownloads(anchor).catch((e) => {
+      console.error("[BrowserToolbar] browserToggleDownloads failed:", e);
+    });
   };
 
   const handleOpenOptions = async () => {
@@ -521,7 +528,7 @@ export function BrowserToolbar({
           { item: "Separator" },
           { text: "清理历史记录", action: handleClearHistory },
           ...(onOpenHistory ? [{ text: "历史记录", action: onOpenHistory }] : []),
-          { text: "下载记录", action: handleOpenDownloads },
+          ...(onOpenDownloads ? [{ text: "下载记录", action: onOpenDownloads }] : []),
           { text: "清理缓存", action: handleClearCache },
           { item: "Separator" },
           ...(onToggleMute ? [{ text: isMuted ? "取消静音" : "静音标签", action: onToggleMute }] : []),
@@ -645,7 +652,7 @@ export function BrowserToolbar({
         size="icon"
         className="relative h-6 w-6"
         title="下载"
-        onClick={handleOpenDownloads}
+        onClick={() => onOpenDownloads?.() ?? handleOpenDownloads()}
       >
         <Download className="h-3 w-3" />
         {hasActiveDownloads && <DownloadProgressRing progress={activeProgress} />}
@@ -758,10 +765,12 @@ export function BrowserToolbar({
               历史记录
             </DropdownMenuItem>
           )}
-          <DropdownMenuItem onClick={handleOpenDownloads}>
-            <Download className="mr-2 h-3.5 w-3.5" />
-            下载记录
-          </DropdownMenuItem>
+          {onOpenDownloads && (
+            <DropdownMenuItem onClick={onOpenDownloads}>
+              <Download className="mr-2 h-3.5 w-3.5" />
+              下载记录
+            </DropdownMenuItem>
+          )}
           <DropdownMenuItem onClick={handleClearCache}>
             <HardDrive className="mr-2 h-3.5 w-3.5" />
             清理缓存

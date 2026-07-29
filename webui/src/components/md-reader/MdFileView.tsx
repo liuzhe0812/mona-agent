@@ -98,7 +98,7 @@ export function MdFileView({ filePath }: MdFileViewProps) {
                 "grid h-7 w-7 place-items-center rounded-md transition-colors",
                 outlineOpen
                   ? "bg-accent text-foreground"
-                  : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+                  : "text-muted-foreground hover:bg-accent hover:text-foreground",
               )}
             >
               <PanelRight className="h-4 w-4" />

@@ -9,6 +9,7 @@ import {
   Download,
   FileCode2,
   FileText,
+  FileType,
   FolderInput,
   FolderOpen,
   FolderPlus,
@@ -18,12 +19,14 @@ import {
   Mic,
   MicOff,
   MoreHorizontal,
+  Network,
   Pencil,
   Plus,
   Printer,
   Search,
   Star,
   Trash2,
+  Workflow,
   X,
 } from "lucide-react";
 
@@ -49,6 +52,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
+import { markdownToHtml } from "@/lib/markdown-to-html";
+import { exportNoteToDocx } from "@/lib/notes-export";
 import {
   getNotesVaultPath,
   isTauri,
@@ -64,6 +69,8 @@ import { useLicense } from "@/hooks/useLicense";
 import { GlobalSearchDialog } from "./GlobalSearchDialog";
 import { ConfirmDialog, PromptDialog, TemplatePickerDialog } from "./NotesDialogs";
 import { NoteAgentPanel } from "./NoteAgentPanel";
+import { MindMapAgentPanel } from "./mindmap/MindMapAgentPanel";
+import { FlowchartAgentPanel } from "./flowchart/FlowchartAgentPanel";
 import { MaterialsSidebar, MaterialsPreview, type MaterialsSelection } from "./materials/MaterialsView";
 import type { EditorMode } from "@/components/common/MarkdownEditor";
 import { openActiveEditorFind, openActiveEditorReplace } from "@/components/common/FindReplaceBar";
@@ -74,6 +81,19 @@ import { TasksPanel } from "./TasksPanel";
 import { toggleTaskInMarkdown } from "./tasks-extract";
 import { deriveNotePreview } from "./notes-ai";
 import { useSpeechRecognition } from "./useSpeechRecognition";
+import { MindMapSelectionProvider } from "./mindmap/MindMapSelectionContext";
+import {
+  FlowchartSelectionProvider,
+} from "./flowchart/FlowchartSelectionContext";
+import type { MindMapSelectionContext as MindMapSelectionCtx } from "./notes-ai";
+import type { FlowchartSelectionContext as FlowchartSelectionCtx } from "./notes-ai";
+import type { FlowchartSemanticWarning } from "./flowchart/flowchart-document";
+import {
+  createBlankFlowchartDocument,
+  serializeFlowchartMarkdown,
+  computeFlowchartSemanticHash,
+} from "./flowchart/flowchart-document";
+import { buildFlowchartFromSourcePrompt } from "./notes-ai";
 import {
   Workspace,
   createInitialWorkspace,
@@ -92,6 +112,8 @@ import type {
 } from "./notes-data";
 import { nowTimestamp } from "./notes-data";
 import {
+  createBlankFlowchartNote,
+  createBlankMindMapNote,
   createBlankNote,
   createCustomNotebook,
   createNoteFromTemplate,
@@ -142,16 +164,90 @@ export function NotesView({
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [agentPanelCollapsed, setAgentPanelCollapsed] = useState(true);
   const [agentPanelWidth, setAgentPanelWidth] = useState(AGENT_PANEL_DEFAULT_WIDTH);
+  // 流程图多标签页写者租约：noteId → writerInstanceId（设计文档 §8.5）
+  const [flowchartWriterByNote, setFlowchartWriterByNote] = useState<Record<string, string>>({});
+  // 流程图多标签页 revision：noteId → revision（设计文档 §8.5-3）
+  // 每次 onContentChange 或 applyAiResult 成功提交后递增；过期 baseRevision 提交被拒绝。
+  const [flowchartRevisionByNote, setFlowchartRevisionByNote] = useState<Record<string, number>>({});
+  // 流程图强制同步计数器：NotesView 拒绝提交时递增，触发 editor re-sync
+  const [flowchartForceSyncByNote, setFlowchartForceSyncByNote] = useState<Record<string, number>>({});
+  // 流程图：来自画布"让 AI 修复"入口的修复请求（设计文档 §7.9）
+  // 交给 FlowchartAgentPanel 监听 requestId 变化触发 prompt 发送
+  const [flowchartFixRequest, setFlowchartFixRequest] = useState<{
+    noteId: string;
+    warnings: FlowchartSemanticWarning[];
+    requestId: number;
+  } | null>(null);
+  const flowchartFixRequestCounterRef = useRef(0);
+  // 流程图：从普通笔记生成流程图时的初始 prompt（设计文档 §7.10）
+  // convertNoteToFlowchart 创建新笔记后写入，FlowchartAgentPanel 加载后自动发送
+  const [flowchartInitialPrompt, setFlowchartInitialPrompt] = useState<{
+    noteId: string;
+    prompt: string;
+    displayContent: string;
+    requestId: number;
+  } | null>(null);
+  const flowchartInitialPromptRef = useRef(flowchartInitialPrompt);
   const [agentStreaming, setAgentStreaming] = useState(false);
   const [workspace, setWorkspace] = useState<WorkspaceState>(() => createInitialWorkspace(null));
   const [rightSidebarOpen, setRightSidebarOpen] = useState(false);
   const [rightSidebarWidth, setRightSidebarWidth] = useState(RIGHT_SIDEBAR_DEFAULT_WIDTH);
   const [rightActiveTab, setRightActiveTab] = useState<RightTab>("outline");
   const [tasksPanelOpen, setTasksPanelOpen] = useState(false);
+  const [mindMapSelection, setMindMapSelection] = useState<MindMapSelectionCtx | null>(null);
+  const [mindMapSelectionNoteId, setMindMapSelectionNoteId] = useState<string | null>(null);
+  const [mindMapBaseHash, setMindMapBaseHash] = useState<string | null>(null);
+  const [flowchartSelection, setFlowchartSelection] = useState<FlowchartSelectionCtx | null>(null);
+  const [flowchartSelectionNoteId, setFlowchartSelectionNoteId] = useState<string | null>(null);
+  const [flowchartBaseHash, setFlowchartBaseHash] = useState<string | null>(null);
   const dragRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const rightDragRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const lastSavedSnapshotRef = useRef<string | null>(null);
   const latestSnapshotRef = useRef<string | null>(null);
+
+  // 思维导图选中上下文 Provider value（避免每次渲染都创建新对象）
+  const mindMapSelectionValue = useMemo<{
+    selection: MindMapSelectionCtx | null;
+    noteId: string | null;
+    baseHash: string | null;
+    setSelection: (noteId: string, selection: MindMapSelectionCtx | null, baseHash: string | null) => void;
+    updateBaseHash: (noteId: string, baseHash: string) => void;
+  }>(() => ({
+    selection: mindMapSelectionNoteId === activeNoteId ? mindMapSelection : null,
+    noteId: mindMapSelectionNoteId,
+    baseHash: mindMapBaseHash,
+    setSelection: (noteId, selection, baseHash) => {
+      setMindMapSelectionNoteId(noteId);
+      setMindMapSelection(selection);
+      if (baseHash !== null) setMindMapBaseHash(baseHash);
+    },
+    updateBaseHash: (noteId, baseHash) => {
+      setMindMapSelectionNoteId(noteId);
+      setMindMapBaseHash(baseHash);
+    },
+  }), [mindMapSelection, mindMapSelectionNoteId, mindMapBaseHash, activeNoteId]);
+
+  // 流程图选中上下文 Provider value（结构同 mindMap，但 selection 是 nodeIds/edgeIds）
+  const flowchartSelectionValue = useMemo<{
+    selection: FlowchartSelectionCtx | null;
+    noteId: string | null;
+    baseHash: string | null;
+    setSelection: (noteId: string, selection: FlowchartSelectionCtx | null, baseHash: string | null) => void;
+    updateBaseHash: (noteId: string, baseHash: string) => void;
+  }>(() => ({
+    selection: flowchartSelectionNoteId === activeNoteId ? flowchartSelection : null,
+    noteId: flowchartSelectionNoteId,
+    baseHash: flowchartBaseHash,
+    setSelection: (noteId, selection, baseHash) => {
+      setFlowchartSelectionNoteId(noteId);
+      setFlowchartSelection(selection);
+      if (baseHash !== null) setFlowchartBaseHash(baseHash);
+    },
+    updateBaseHash: (noteId, baseHash) => {
+      setFlowchartSelectionNoteId(noteId);
+      setFlowchartBaseHash(baseHash);
+    },
+  }), [flowchartSelection, flowchartSelectionNoteId, flowchartBaseHash, activeNoteId]);
 
   // 录音转写状态。当前正在录音的笔记 id 和已确定的文字。
   // 用 ref 避免回调闭包陈旧问题，state 仅用于按钮 UI 反馈。
@@ -225,6 +321,7 @@ export function NotesView({
   const [expandedNotebookIds, setExpandedNotebookIds] = useState<Set<string>>(new Set());
   const [sortMode, setSortMode] = useState<SortMode>("updated-desc");
   const [viewMode, setViewMode] = useState<"all" | "favorite">("all");
+  const [contentTypeFilter, setContentTypeFilter] = useState<"all" | "note" | "mindmap" | "flowchart">("all");
 
   const deleteManyNotes = useCallback(
     (notesToDelete: OperationNote[]) => {
@@ -290,6 +387,17 @@ export function NotesView({
       });
     },
     [],
+  );
+
+  // 类型筛选匹配：all 全部；note 排除 mindmap/flowchart；mindmap/flowchart 精确匹配。
+  const matchesContentType = useCallback(
+    (note: OperationNote) => {
+      if (contentTypeFilter === "all") return true;
+      if (contentTypeFilter === "note") return note.type !== "mindmap" && note.type !== "flowchart";
+      if (contentTypeFilter === "mindmap") return note.type === "mindmap";
+      return note.type === "flowchart";
+    },
+    [contentTypeFilter],
   );
 
   const updateLeaf = useCallback(
@@ -745,8 +853,11 @@ export function NotesView({
         });
       });
       setSearchQuery("");
+      if (contentTypeFilter === "mindmap" || contentTypeFilter === "flowchart") {
+        setContentTypeFilter("all");
+      }
     },
-    [updateLeaf],
+    [updateLeaf, contentTypeFilter],
   );
 
   useEffect(() => {
@@ -756,6 +867,84 @@ export function NotesView({
     onCreateOnOpenHandled?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [createOnOpen, storageReady]);
+
+  // 新建思维导图：和 createNote 同样的工作台接入逻辑，但走 mindmap 数据模型
+  // 如果当前类型筛选会隐藏新建内容，自动切换到对应类型筛选
+  const createMindMapNote = useCallback(
+    (overrideNotebookId?: string) => {
+      const notebookId = overrideNotebookId !== undefined ? overrideNotebookId : "";
+      let nextNote: OperationNote;
+      try {
+        nextNote = createBlankMindMapNote(notebookId);
+      } catch (error) {
+        notifyError(error instanceof Error ? error.message : "新建思维导图失败");
+        return;
+      }
+      setNotes((current) => [nextNote, ...current]);
+      setActiveNoteId(nextNote.id);
+      setWorkspace((prev) => {
+        const leafId = prev.activeLeafId;
+        return updateLeaf(prev, leafId, (leaf) => {
+          const activeIdx = leaf.activeTabId ? leaf.tabIds.indexOf(leaf.activeTabId) : -1;
+          if (activeIdx >= 0) {
+            const nextTabIds = [...leaf.tabIds];
+            nextTabIds[activeIdx] = nextNote.id;
+            return { ...leaf, tabIds: nextTabIds, activeTabId: nextNote.id, graphOpen: false };
+          }
+          return {
+            ...leaf,
+            tabIds: [...leaf.tabIds, nextNote.id],
+            activeTabId: nextNote.id,
+            graphOpen: false,
+          };
+        });
+      });
+      setSearchQuery("");
+      if (contentTypeFilter === "note" || contentTypeFilter === "flowchart") {
+        setContentTypeFilter("all");
+      }
+    },
+    [updateLeaf, contentTypeFilter],
+  );
+
+  // 新建流程图：和 createMindMapNote 同样的工作台接入逻辑，但走 flowchart 数据模型。
+  // 如果当前类型筛选会隐藏新建内容，自动切换到对应类型筛选。
+  const createFlowchartNote = useCallback(
+    (overrideNotebookId?: string) => {
+      const notebookId = overrideNotebookId !== undefined ? overrideNotebookId : "";
+      let nextNote: OperationNote;
+      try {
+        nextNote = createBlankFlowchartNote(notebookId);
+      } catch (error) {
+        notifyError(error instanceof Error ? error.message : "新建流程图失败");
+        return;
+      }
+      setNotes((current) => [nextNote, ...current]);
+      setActiveNoteId(nextNote.id);
+      setWorkspace((prev) => {
+        const leafId = prev.activeLeafId;
+        return updateLeaf(prev, leafId, (leaf) => {
+          const activeIdx = leaf.activeTabId ? leaf.tabIds.indexOf(leaf.activeTabId) : -1;
+          if (activeIdx >= 0) {
+            const nextTabIds = [...leaf.tabIds];
+            nextTabIds[activeIdx] = nextNote.id;
+            return { ...leaf, tabIds: nextTabIds, activeTabId: nextNote.id, graphOpen: false };
+          }
+          return {
+            ...leaf,
+            tabIds: [...leaf.tabIds, nextNote.id],
+            activeTabId: nextNote.id,
+            graphOpen: false,
+          };
+        });
+      });
+      setSearchQuery("");
+      if (contentTypeFilter === "note" || contentTypeFilter === "mindmap") {
+        setContentTypeFilter("all");
+      }
+    },
+    [updateLeaf, contentTypeFilter],
+  );
 
   const createNoteFromTemplateAction = useCallback(
     (templateId: string, title: string) => {
@@ -815,6 +1004,90 @@ export function NotesView({
       setActiveNoteId(nextNote.id);
     },
     [],
+  );
+
+  // 流程图多标签页写者租约转移（设计文档 §8.5-4）
+  // 用户点击"在此编辑"时，把租约转移到当前 editor 实例。
+  // 单写者模型保证同一时刻只有一个 editor 能编辑，非写者进入只读模式。
+  const handleFlowchartRequestLease = useCallback(
+    (noteId: string, editorInstanceId: string) => {
+      setFlowchartWriterByNote((current) => ({ ...current, [noteId]: editorInstanceId }));
+    },
+    [],
+  );
+
+  // 处理画布"让 AI 修复"入口：把 warnings 包装成请求对象交给 FlowchartAgentPanel
+  const handleFlowchartFixWithAI = useCallback(
+    (noteId: string, warnings: FlowchartSemanticWarning[]) => {
+      flowchartFixRequestCounterRef.current += 1;
+      setFlowchartFixRequest({
+        noteId,
+        warnings,
+        requestId: flowchartFixRequestCounterRef.current,
+      });
+    },
+    [],
+  );
+
+  const handleFlowchartFixHandled = useCallback(() => {
+    setFlowchartFixRequest(null);
+  }, []);
+
+  const handleFlowchartInitialPromptHandled = useCallback(() => {
+    setFlowchartInitialPrompt(null);
+  }, []);
+
+  // 清理已删除流程图的写者租约和 revision，避免内存泄漏
+  useEffect(() => {
+    const noteIds = new Set(notes.map((n) => n.id));
+    const nextWriter: Record<string, string> = {};
+    const nextRevision: Record<string, number> = {};
+    const nextForceSync: Record<string, number> = {};
+    for (const id of noteIds) {
+      if (flowchartWriterByNote[id] !== undefined) nextWriter[id] = flowchartWriterByNote[id];
+      if (flowchartRevisionByNote[id] !== undefined) nextRevision[id] = flowchartRevisionByNote[id];
+      if (flowchartForceSyncByNote[id] !== undefined) nextForceSync[id] = flowchartForceSyncByNote[id];
+    }
+    if (Object.keys(nextWriter).length < Object.keys(flowchartWriterByNote).length) {
+      setFlowchartWriterByNote(nextWriter);
+    }
+    if (Object.keys(nextRevision).length < Object.keys(flowchartRevisionByNote).length) {
+      setFlowchartRevisionByNote(nextRevision);
+    }
+    if (Object.keys(nextForceSync).length < Object.keys(flowchartForceSyncByNote).length) {
+      setFlowchartForceSyncByNote(nextForceSync);
+    }
+  }, [notes, flowchartWriterByNote, flowchartRevisionByNote, flowchartForceSyncByNote]);
+
+  // 内嵌预览 resolver：根据标题查找流程图笔记的 contentMarkdown（设计文档 §10.4）
+  // 查找时同时匹配 title 和 aliases，忽略大小写。
+  const resolveEmbedContent = useCallback(
+    (title: string): string | null => {
+      if (!title) return null;
+      const lower = title.toLowerCase();
+      const target = notes.find(
+        (n) =>
+          n.title.toLowerCase() === lower ||
+          (n.aliases?.some((a) => a.toLowerCase() === lower) ?? false),
+      );
+      return target ? target.contentMarkdown : null;
+    },
+    [notes],
+  );
+
+  // 判断标题对应的笔记是否为流程图类型（用于决定是否渲染 FlowchartEmbedView）
+  const isEmbedFlowchart = useCallback(
+    (title: string): boolean => {
+      if (!title) return false;
+      const lower = title.toLowerCase();
+      const target = notes.find(
+        (n) =>
+          n.title.toLowerCase() === lower ||
+          (n.aliases?.some((a) => a.toLowerCase() === lower) ?? false),
+      );
+      return target?.type === "flowchart";
+    },
+    [notes],
   );
 
   const createNotebook = useCallback(() => {
@@ -957,9 +1230,60 @@ export function NotesView({
     }
   }, [activeNote]);
 
-  const exportActiveNotePdf = useCallback(() => {
+  const exportActiveNoteDocx = useCallback(async () => {
     if (!activeNote) return;
-    const printable = `<html><head><meta charset="utf-8"><title>${activeNote.title}</title><style>body{font-family:system-ui,sans-serif;max-width:720px;margin:40px auto;padding:0 20px;line-height:1.6;color:#222}h1,h2,h3{line-height:1.3}pre{background:#f5f5f5;padding:12px;border-radius:6px;overflow-x:auto}code{font-family:monospace}blockquote{border-left:3px solid #ccc;margin:0;padding-left:16px;color:#666}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:8px}img{max-width:100%}</style></head><body>${activeNote.contentMarkdown}</body></html>`;
+    try {
+      await exportNoteToDocx(activeNote.title || "未命名笔记", activeNote.contentMarkdown);
+    } catch (err) {
+      notifyError(err instanceof Error ? err.message : "导出 Word 失败");
+    }
+  }, [activeNote]);
+
+  const exportNoteToDocxFromList = useCallback(
+    async (note: OperationNote) => {
+      try {
+        await exportNoteToDocx(note.title || "未命名笔记", note.contentMarkdown);
+      } catch (err) {
+        notifyError(err instanceof Error ? err.message : "导出 Word 失败");
+      }
+    },
+    [],
+  );
+
+  const exportActiveNotePdf = useCallback(async () => {
+    if (!activeNote) return;
+    // Tauri 环境下把 assets/ 相对路径转成可访问的 asset:// URL
+    let content = activeNote.contentMarkdown;
+    if (isTauri()) {
+      try {
+        const { convertFileSrc } = await import("@tauri-apps/api/core");
+        const vaultPath = await getNotesVaultPath();
+        if (vaultPath) {
+          content = content.replace(
+            /(!\[[^\]]*\]\()(assets\/[^)]+)\)/g,
+            (_m, prefix: string, path: string) =>
+              `${prefix}${convertFileSrc(`${vaultPath}/${path}`)})`,
+          );
+        }
+      } catch (e) {
+        console.warn("convert assets paths failed", e);
+      }
+    }
+    const bodyHtml = markdownToHtml(content);
+    const printable = `<html><head><meta charset="utf-8"><title>${activeNote.title}</title><style>
+      body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;max-width:720px;margin:40px auto;padding:0 24px;line-height:1.7;color:#1f2328;font-size:14px}
+      h1,h2,h3,h4,h5,h6{line-height:1.3;margin:24px 0 12px;font-weight:600}h1{font-size:1.8em;border-bottom:1px solid #d0d7de;padding-bottom:.3em}h2{font-size:1.4em;border-bottom:1px solid #d0d7de;padding-bottom:.3em}h3{font-size:1.2em}h4{font-size:1em}
+      p{margin:8px 0}
+      a{color:#0969da;text-decoration:none}a:hover{text-decoration:underline}
+      ul,ol{padding-left:2em;margin:8px 0}li{margin:4px 0}
+      blockquote{border-left:3px solid #d0d7de;margin:12px 0;padding:4px 16px;color:#57606a}blockquote p{margin:4px 0}
+      pre{background:#f6f8fa;padding:12px 16px;border-radius:6px;overflow-x:auto;font-size:13px;line-height:1.5}pre code{background:none;padding:0;font-size:inherit}
+      code{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;font-size:90%}code:not(pre code){background:#f6f8fa;padding:2px 6px;border-radius:4px}
+      table{border-collapse:collapse;width:100%;margin:16px 0;display:block;overflow-x:auto}th,td{border:1px solid #d0d7de;padding:6px 12px}th{background:#f6f8fa;font-weight:600}tr:nth-child(2n){background:#f6f8fa}
+      img{max-width:100%;height:auto;border-radius:6px}
+      hr{border:none;border-top:1px solid #d0d7de;margin:20px 0}
+      input[type="checkbox"]{margin-right:6px}
+    </style></head><body>${bodyHtml}</body></html>`;
     const existing = document.getElementById("__pdf_print_frame__");
     if (existing) existing.remove();
     const iframe = document.createElement("iframe");
@@ -979,6 +1303,17 @@ export function NotesView({
     iframe.onload = () => {
       try {
         iframe.contentWindow?.focus();
+        // 打印对话框的"另存为 PDF"默认文件名取自主窗口 document.title，
+        // 临时切换为笔记标题，打印结束后恢复。
+        const prevTitle = document.title;
+        document.title = activeNote.title;
+        const restore = () => {
+          document.title = prevTitle;
+          iframe.remove();
+        };
+        iframe.contentWindow?.addEventListener("afterprint", restore, { once: true });
+        // afterprint 在某些环境不可靠，加超时兜底
+        setTimeout(restore, 1000);
         iframe.contentWindow?.print();
       } catch (e) {
         console.error("print failed", e);
@@ -1107,6 +1442,161 @@ export function NotesView({
     },
     [],
   );
+
+  // 普通笔记 → 思维导图：保留原标题作为根节点，正文按段落/列表项拆分为子节点
+  const convertNoteToMindMap = useCallback((note: OperationNote) => {
+    if (note.type === "mindmap" || note.type === "flowchart") return;
+    const title = note.title || "未命名笔记";
+    const body = note.contentMarkdown ?? "";
+
+    // 提取首个一级标题作为根节点（若有），否则用 note.title
+    const lines = body.split("\n");
+    let rootTopic = title;
+    let bodyStart = 0;
+    for (let i = 0; i < lines.length; i++) {
+      const trimmed = lines[i].trim();
+      if (trimmed === "") continue;
+      const m = trimmed.match(/^#\s+(.+)$/);
+      if (m) {
+        rootTopic = m[1].trim();
+        bodyStart = i + 1;
+      }
+      break;
+    }
+
+    // 收集正文行：已有的列表项保留原样，段落按双换行切分后转为一级子节点
+    const bodyLines = lines.slice(bodyStart);
+    const outlineLines: string[] = [`# ${rootTopic}`];
+    const paragraphs: string[] = [];
+    let current: string[] = [];
+    for (const raw of bodyLines) {
+      if (raw.trim() === "") {
+        if (current.length > 0) {
+          paragraphs.push(current.join("\n").trim());
+          current = [];
+        }
+      } else {
+        current.push(raw);
+      }
+    }
+    if (current.length > 0) paragraphs.push(current.join("\n").trim());
+
+    for (const p of paragraphs) {
+      const firstLine = p.split("\n")[0] ?? "";
+      // 已是列表项：保留原缩进
+      if (/^\s*[-*+]\s+/.test(firstLine)) {
+        outlineLines.push(p.split("\n").map((l) => l).join("\n"));
+      } else if (/^#{2,}\s+/.test(firstLine)) {
+        // 二级及以上标题 → 一级子节点
+        const t = firstLine.replace(/^#{2,}\s+/, "").trim();
+        outlineLines.push(`- ${t}`);
+      } else {
+        // 普通段落 → 一级子节点（取首行，避免多行节点）
+        const t = firstLine.trim().slice(0, 80);
+        if (t) outlineLines.push(`- ${t}`);
+      }
+    }
+
+    const nextMarkdown = outlineLines.join("\n");
+    const now = nowTimestamp();
+    // 非破坏式：创建新导图笔记，保留原笔记内容和类型不变
+    const newNote: OperationNote = {
+      id: createNoteId(),
+      notebookId: note.notebookId,
+      title: `${title} - 导图`,
+      preview: nextMarkdown.slice(0, 46) || "思维导图",
+      createdAt: now,
+      updatedAt: now,
+      source: { kind: "manual", label: "从笔记生成" },
+      tags: [...note.tags],
+      contentMarkdown: nextMarkdown,
+      plainText: nextMarkdown,
+      appliedAgentMessageIds: [],
+      contextLevel: note.contextLevel,
+      type: "mindmap",
+    };
+    setNotes((current) => [newNote, ...current]);
+    setActiveNoteId(newNote.id);
+    setWorkspace((prev) => {
+      const leafId = prev.activeLeafId;
+      return updateLeaf(prev, leafId, (leaf) => {
+        const activeIdx = leaf.activeTabId ? leaf.tabIds.indexOf(leaf.activeTabId) : -1;
+        if (activeIdx >= 0) {
+          const nextTabIds = [...leaf.tabIds];
+          nextTabIds[activeIdx] = newNote.id;
+          return { ...leaf, tabIds: nextTabIds, activeTabId: newNote.id, graphOpen: false };
+        }
+        return {
+          ...leaf,
+          tabIds: [...leaf.tabIds, newNote.id],
+          activeTabId: newNote.id,
+          graphOpen: false,
+        };
+      });
+    });
+    // 自动切换到导图筛选，避免被"笔记"筛选隐藏
+    setContentTypeFilter("mindmap");
+  }, []);
+
+  // 把普通笔记转为流程图：创建独立流程图笔记，保留原笔记不变（设计文档 §7.10）
+  // 新流程图初始化为空白骨架（start + end），并自动触发 AI 基于源笔记内容生成。
+  const convertNoteToFlowchart = useCallback((note: OperationNote) => {
+    if (note.type === "mindmap" || note.type === "flowchart") return;
+    const title = note.title || "未命名笔记";
+    const sourceContent = note.contentMarkdown ?? "";
+
+    // 创建空白流程图笔记，初始文档只有 start 和 end 节点
+    const blankDoc = createBlankFlowchartDocument();
+    const newTitle = `${title} - 流程图`;
+    const initMarkdown = serializeFlowchartMarkdown(newTitle, blankDoc);
+    const now = nowTimestamp();
+    const newNote: OperationNote = {
+      id: createNoteId(),
+      notebookId: note.notebookId,
+      title: newTitle,
+      preview: "流程图",
+      createdAt: now,
+      updatedAt: now,
+      source: { kind: "manual", label: "从笔记生成" },
+      tags: [...note.tags],
+      contentMarkdown: initMarkdown,
+      plainText: initMarkdown,
+      appliedAgentMessageIds: [],
+      contextLevel: note.contextLevel,
+      type: "flowchart",
+    };
+    setNotes((current) => [newNote, ...current]);
+    setActiveNoteId(newNote.id);
+    setWorkspace((prev) => {
+      const leafId = prev.activeLeafId;
+      return updateLeaf(prev, leafId, (leaf) => {
+        const activeIdx = leaf.activeTabId ? leaf.tabIds.indexOf(leaf.activeTabId) : -1;
+        if (activeIdx >= 0) {
+          const nextTabIds = [...leaf.tabIds];
+          nextTabIds[activeIdx] = newNote.id;
+          return { ...leaf, tabIds: nextTabIds, activeTabId: newNote.id, graphOpen: false };
+        }
+        return {
+          ...leaf,
+          tabIds: [...leaf.tabIds, newNote.id],
+          activeTabId: newNote.id,
+          graphOpen: false,
+        };
+      });
+    });
+    setContentTypeFilter("flowchart");
+
+    // 计算空白图的 baseHash，构造初始 prompt，交给 FlowchartAgentPanel 自动发送
+    const blankHash = computeFlowchartSemanticHash(blankDoc);
+    const prompt = buildFlowchartFromSourcePrompt(newNote, title, sourceContent, blankHash);
+    flowchartInitialPromptRef.current = {
+      noteId: newNote.id,
+      prompt,
+      displayContent: `从笔记 "${title}" 生成流程图`,
+      requestId: Date.now(),
+    };
+    setFlowchartInitialPrompt({ ...flowchartInitialPromptRef.current });
+  }, []);
 
   const toggleTaskInNote = useCallback(
     (noteId: string, line: number) => {
@@ -1374,6 +1864,15 @@ export function NotesView({
         preview: deriveNotePreview(nextMarkdown),
         appliedAgentMessageIds,
       });
+
+      // 流程图 AI patch 应用后递增 revision（设计文档 §8.5：AI 应用也走中心状态）
+      if (activeNote.type === "flowchart") {
+        const noteId = activeNote.id;
+        setFlowchartRevisionByNote((prev) => ({
+          ...prev,
+          [noteId]: (prev[noteId] ?? 0) + 1,
+        }));
+      }
     },
     [activeNote, updateActiveNote],
   );
@@ -1552,6 +2051,8 @@ export function NotesView({
   }, [confirmState, handleDeleteNotebook, handleDeleteNote, handleDeleteManyNotes]);
 
   return (
+    <MindMapSelectionProvider value={mindMapSelectionValue}>
+    <FlowchartSelectionProvider value={flowchartSelectionValue}>
     <div className="relative flex h-full min-h-0 bg-background">
       <section className="flex min-w-0 flex-1 flex-col">
 
@@ -1582,9 +2083,36 @@ export function NotesView({
                 {moduleView === "notes" ? (
                 <>
                 <div className="flex h-9 shrink-0 items-center justify-center gap-0.5 px-2">
-                  <IconButton label="新建笔记" onClick={() => createNote("manual", "")}>
-                    <Plus className="h-3.5 w-3.5" />
-                  </IconButton>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <button
+                        type="button"
+                        title="新建"
+                        className="grid h-7 w-7 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+                      >
+                        <Plus className="h-3.5 w-3.5" />
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start" className="w-44">
+                      <DropdownMenuItem onSelect={() => createNote("manual", "")}>
+                        <FileText className="mr-2 h-3.5 w-3.5" />
+                        新建笔记
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onSelect={() => createMindMapNote("")}>
+                        <Network className="mr-2 h-3.5 w-3.5" />
+                        新建思维导图
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onSelect={() => createFlowchartNote("")}>
+                        <Workflow className="mr-2 h-3.5 w-3.5" />
+                        新建流程图
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onSelect={createNotebook}>
+                        <FolderPlus className="mr-2 h-3.5 w-3.5" />
+                        新建文件夹
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                   <IconButton
                     label="从模板创建"
                     disabled={templateNotes.length === 0}
@@ -1698,6 +2226,27 @@ export function NotesView({
                     </button>
                   ) : null}
                 </div>
+                <div className="flex h-7 shrink-0 items-center gap-1 px-3 pb-1">
+                  {(["all", "note", "mindmap", "flowchart"] as const).map((t) => {
+                    const active = contentTypeFilter === t;
+                    const label = t === "all" ? "全部" : t === "note" ? "笔记" : t === "mindmap" ? "导图" : "流程图";
+                    return (
+                      <button
+                        key={t}
+                        type="button"
+                        onClick={() => setContentTypeFilter(t)}
+                        className={cn(
+                          "h-5 rounded-full px-2 text-[11px] transition-colors",
+                          active
+                            ? "bg-accent text-foreground"
+                            : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+                        )}
+                      >
+                        {label}
+                      </button>
+                    );
+                  })}
+                </div>
                 <ContextMenu>
                   <ContextMenuTrigger asChild>
                     <div
@@ -1712,7 +2261,7 @@ export function NotesView({
                       {viewMode === "favorite" ? (
                         <FavoriteNotesList
                           notes={filterNotesByKeyword(
-                            notes.filter((n) => n.favorite),
+                            notes.filter((n) => n.favorite && matchesContentType(n)),
                             searchQuery,
                           )}
                           activeNoteId={activeNoteId}
@@ -1742,6 +2291,9 @@ export function NotesView({
                           }}
                           onToggleFavorite={toggleFavorite}
                           onCreateNote={createNote}
+                          onConvertToMindMap={convertNoteToMindMap}
+                          onExportDocx={exportNoteToDocxFromList}
+                          onConvertToFlowchart={convertNoteToFlowchart}
                           notebooks={notebooks}
                           allNotes={notes}
                         />
@@ -1755,7 +2307,11 @@ export function NotesView({
                       {notebooks.map((notebook) => {
                         const isActive = notebook.id === activeNotebookId;
                         const isExpanded = expandedNotebookIds.has(notebook.id) || Boolean(searchQuery);
-                        const notebookNotesAll = notes.filter((n) => n.notebookId === notebook.id);
+                        const notebookNotesAll = notes.filter(
+                          (n) =>
+                            n.notebookId === notebook.id &&
+                            matchesContentType(n),
+                        );
                         const filteredNotes = filterNotesByKeyword(notebookNotesAll, searchQuery);
                         return (
                           <NotebookSection
@@ -1794,7 +2350,11 @@ export function NotesView({
                             }}
                             onToggleFavorite={toggleFavorite}
                             onCreateNote={createNote}
+                            onCreateMindMap={createMindMapNote}
+                            onCreateFlowchart={createFlowchartNote}
                             onCreateNotebook={createNotebook}
+                            onConvertToMindMap={convertNoteToMindMap}
+                            onExportDocx={exportNoteToDocxFromList}
                             notebooks={notebooks}
                             allNotes={notes}
                             onDropNote={dropNoteById}
@@ -1805,10 +2365,18 @@ export function NotesView({
                       })}
                       <RootNotesList
                         notes={filterNotesByKeyword(
-                          notes.filter((n) => n.notebookId === ""),
+                          notes.filter(
+                            (n) =>
+                              n.notebookId === "" &&
+                              matchesContentType(n),
+                          ),
                           searchQuery,
                         )}
-                        totalCount={notes.filter((n) => n.notebookId === "").length}
+                        totalCount={notes.filter(
+                          (n) =>
+                            n.notebookId === "" &&
+                            matchesContentType(n),
+                        ).length}
                         activeNoteId={activeNoteId}
                         selectedIds={activeNotebookId === "" ? selectedNoteIds : undefined}
                         searchQuery={searchQuery}
@@ -1836,6 +2404,7 @@ export function NotesView({
                         }}
                         onToggleFavorite={toggleFavorite}
                         onCreateNote={createNote}
+                        onExportDocx={exportNoteToDocxFromList}
                         notebooks={notebooks}
                         allNotes={notes}
                       />
@@ -1847,6 +2416,14 @@ export function NotesView({
                     <ContextMenuItem onSelect={() => createNote("manual", "")}>
                       <FileText className="mr-2 h-3.5 w-3.5" />
                       新建笔记
+                    </ContextMenuItem>
+                    <ContextMenuItem onSelect={() => createMindMapNote("")}>
+                      <Network className="mr-2 h-3.5 w-3.5" />
+                      新建思维导图
+                    </ContextMenuItem>
+                    <ContextMenuItem onSelect={() => createFlowchartNote("")}>
+                      <Workflow className="mr-2 h-3.5 w-3.5" />
+                      新建流程图
                     </ContextMenuItem>
                     <ContextMenuItem onSelect={createNotebook}>
                       <FolderPlus className="mr-2 h-3.5 w-3.5" />
@@ -1922,6 +2499,13 @@ export function NotesView({
                   noteTitles={noteTitles}
                   saveStatus={saveStatus}
                   tabMenuCallbacks={tabMenuCallbacks}
+                  flowchartWriterByNote={flowchartWriterByNote}
+                  onFlowchartRequestLease={handleFlowchartRequestLease}
+                  flowchartRevisionByNote={flowchartRevisionByNote}
+                  flowchartForceSyncByNote={flowchartForceSyncByNote}
+                  resolveEmbedContent={resolveEmbedContent}
+                  isEmbedFlowchart={isEmbedFlowchart}
+                  onFlowchartFixWithAI={handleFlowchartFixWithAI}
                   onTitleChange={(noteId, title) => {
                     setNotes((current) =>
                       current.map((n) =>
@@ -1930,6 +2514,25 @@ export function NotesView({
                     );
                   }}
                   onContentChange={(noteId, next) => {
+                    // 流程图多标签页 revision 校验（设计文档 §8.5-3）
+                    const targetNote = notes.find((n) => n.id === noteId);
+                    if (targetNote?.type === "flowchart" && next.baseRevision !== undefined) {
+                      const currentRevision = flowchartRevisionByNote[noteId] ?? 0;
+                      if (next.baseRevision !== currentRevision) {
+                        // 过期提交：拒绝并触发 editor re-sync
+                        setFlowchartForceSyncByNote((prev) => ({
+                          ...prev,
+                          [noteId]: (prev[noteId] ?? 0) + 1,
+                        }));
+                        notifyError("该流程图已被其他标签页修改，请刷新后重试");
+                        return;
+                      }
+                      // 接受提交：递增 revision
+                      setFlowchartRevisionByNote((prev) => ({
+                        ...prev,
+                        [noteId]: currentRevision + 1,
+                      }));
+                    }
                     setNotes((current) =>
                       current.map((n) =>
                         n.id === noteId
@@ -1974,30 +2577,6 @@ export function NotesView({
                       >
                         <GitFork className="h-4 w-4" />
                       </button>
-                      {licenseActive ? (
-                        <button
-                          type="button"
-                          title={agentPanelCollapsed ? "展开 Agent 联动" : "收起 Agent 联动"}
-                          aria-label={agentPanelCollapsed ? "展开 Agent 联动" : "收起 Agent 联动"}
-                          onClick={() => setAgentPanelCollapsed((current) => !current)}
-                          className={cn(
-                            "grid h-8 w-8 place-items-center hover:bg-accent hover:text-foreground",
-                            !agentPanelCollapsed ? "bg-accent text-foreground" : "text-muted-foreground",
-                          )}
-                        >
-                          <AgentLogo state={agentStreaming ? "working" : "idle"} className="h-5 w-5" />
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          title="升级 Pro 解锁笔记 AI"
-                          aria-label="升级 Pro 解锁笔记 AI"
-                          onClick={onOpenSubscribe}
-                          className="grid h-8 w-8 place-items-center text-muted-foreground hover:bg-accent hover:text-foreground"
-                        >
-                          <LockKeyhole className="h-4 w-4" />
-                        </button>
-                      )}
                       <button
                         type="button"
                         title={rightSidebarOpen ? "收起右侧面板" : "展开右侧面板"}
@@ -2012,8 +2591,12 @@ export function NotesView({
                   toolbarExtra={(noteId) => {
                     const note = notes.find((n) => n.id === noteId);
                     const isRecordingThis = recordingActive && recordingNoteRef.current === noteId;
+                    const isMindMap = note?.type === "mindmap";
+                    const isFlowchart = note?.type === "flowchart";
+                    const isStructuredDoc = isMindMap || isFlowchart;
                     return (
                       <div className="flex items-center gap-1">
+                        {!isStructuredDoc && (
                         <button
                           type="button"
                           title={
@@ -2041,6 +2624,9 @@ export function NotesView({
                             <Mic className="h-4 w-4" />
                           )}
                         </button>
+                        )}
+                        {!isStructuredDoc && (
+                        <>
                         <button
                           type="button"
                           title={editorMode === "visual" ? "切换为 MD 源码" : "切换为可视化编辑"}
@@ -2112,6 +2698,13 @@ export function NotesView({
                             </DropdownMenuItem>
                             <DropdownMenuItem
                               disabled={!note}
+                              onClick={() => note && exportActiveNoteDocx()}
+                            >
+                              <FileType className="mr-2 h-3.5 w-3.5" />
+                              导出为 Word
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              disabled={!note}
                               onClick={() => note && exportActiveNotePdf()}
                             >
                               <Printer className="mr-2 h-3.5 w-3.5" />
@@ -2136,6 +2729,32 @@ export function NotesView({
                             </DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
+                        </>
+                        )}
+                        {licenseActive ? (
+                          <button
+                            type="button"
+                            title={agentPanelCollapsed ? "展开 Agent 联动" : "收起 Agent 联动"}
+                            aria-label={agentPanelCollapsed ? "展开 Agent 联动" : "收起 Agent 联动"}
+                            onClick={() => setAgentPanelCollapsed((current) => !current)}
+                            className={cn(
+                              "grid h-7 w-7 place-items-center rounded-md hover:bg-accent hover:text-foreground",
+                              !agentPanelCollapsed ? "bg-accent text-foreground" : "text-muted-foreground",
+                            )}
+                          >
+                            <AgentLogo state={agentStreaming ? "working" : "idle"} className="h-4 w-4" />
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            title="升级 Pro 解锁 AI"
+                            aria-label="升级 Pro 解锁 AI"
+                            onClick={onOpenSubscribe}
+                            className="grid h-7 w-7 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+                          >
+                            <LockKeyhole className="h-4 w-4" />
+                          </button>
+                        )}
                       </div>
                     );
                   }}
@@ -2171,20 +2790,58 @@ export function NotesView({
         />
       )}
 
-      <NoteAgentPanel
-        note={activeNote}
-        notebook={activeNotebook}
-        transformations={transformations}
-        collapsed={agentPanelCollapsed}
-        width={agentPanelWidth}
-        onAgentChatIdChange={(agentChatId) => updateActiveNote({ agentChatId })}
-        onApplyResult={applyAiResult}
-        onApplyTags={(tags) => activeNote && editNoteTags(activeNote, tags)}
-        onSaveAsNote={saveAgentResultAsNote}
-        onTransformationsChange={setTransformations}
-        onClearChat={() => updateActiveNote({ agentChatId: undefined })}
-        onStreamingChange={setAgentStreaming}
-      />
+      {activeNote?.type === "mindmap" ? (
+        <MindMapAgentPanel
+          note={activeNote}
+          collapsed={agentPanelCollapsed}
+          width={agentPanelWidth}
+          onAgentChatIdChange={(agentChatId) => updateActiveNote({ agentChatId })}
+          onApplyResult={applyAiResult}
+          onClearChat={() => updateActiveNote({ agentChatId: undefined })}
+          onStreamingChange={setAgentStreaming}
+        />
+      ) : activeNote?.type === "flowchart" ? (
+        <FlowchartAgentPanel
+          note={activeNote}
+          collapsed={agentPanelCollapsed}
+          width={agentPanelWidth}
+          onAgentChatIdChange={(agentChatId) => updateActiveNote({ agentChatId })}
+          onApplyResult={applyAiResult}
+          onClearChat={() => updateActiveNote({ agentChatId: undefined })}
+          onStreamingChange={setAgentStreaming}
+          fixWarningsRequest={
+            flowchartFixRequest && flowchartFixRequest.noteId === activeNote?.id
+              ? { warnings: flowchartFixRequest.warnings, requestId: flowchartFixRequest.requestId }
+              : null
+          }
+          onFixWarningsHandled={handleFlowchartFixHandled}
+          initialPrompt={
+            flowchartInitialPrompt && flowchartInitialPrompt.noteId === activeNote?.id
+              ? {
+                  prompt: flowchartInitialPrompt.prompt,
+                  displayContent: flowchartInitialPrompt.displayContent,
+                  requestId: flowchartInitialPrompt.requestId,
+                }
+              : null
+          }
+          onInitialPromptHandled={handleFlowchartInitialPromptHandled}
+        />
+      ) : (
+        <NoteAgentPanel
+          note={activeNote}
+          notebook={activeNotebook}
+          transformations={transformations}
+          collapsed={agentPanelCollapsed}
+          width={agentPanelWidth}
+          onAgentChatIdChange={(agentChatId) => updateActiveNote({ agentChatId })}
+          onApplyResult={applyAiResult}
+          onApplyTags={(tags) => activeNote && editNoteTags(activeNote, tags)}
+          onSaveAsNote={saveAgentResultAsNote}
+          onTransformationsChange={setTransformations}
+          onClearChat={() => updateActiveNote({ agentChatId: undefined })}
+          onStreamingChange={setAgentStreaming}
+        />
+      )}
 
       <PromptDialog
         open={promptState !== null}
@@ -2230,6 +2887,8 @@ export function NotesView({
         </div>
       ) : null}
     </div>
+    </FlowchartSelectionProvider>
+    </MindMapSelectionProvider>
   );
 }
 
@@ -2322,6 +2981,9 @@ interface RootNotesListProps {
   onSetContextLevel?: (note: OperationNote, level: NoteContextLevel) => void;
   onToggleFavorite?: (note: OperationNote) => void;
   onCreateNote?: (sourceKind: NoteSourceKind) => void;
+  onConvertToMindMap?: (note: OperationNote) => void;
+  onExportDocx?: (note: OperationNote) => void;
+  onConvertToFlowchart?: (note: OperationNote) => void;
   notebooks: Notebook[];
   allNotes?: OperationNote[];
 }
@@ -2345,6 +3007,9 @@ function RootNotesList({
   onDelete,
   onSetContextLevel,
   onToggleFavorite,
+  onConvertToMindMap,
+  onExportDocx,
+  onConvertToFlowchart,
   notebooks,
   allNotes = [],
 }: RootNotesListProps) {
@@ -2410,6 +3075,9 @@ function RootNotesList({
             allNotes={allNotes}
             onSetContextLevel={onSetContextLevel}
             onToggleFavorite={onToggleFavorite}
+            onConvertToMindMap={onConvertToMindMap}
+            onExportDocx={onExportDocx}
+            onConvertToFlowchart={onConvertToFlowchart}
           />
         ))}
       </div>
@@ -2436,6 +3104,9 @@ function FavoriteNotesList({
   onDelete,
   onSetContextLevel,
   onToggleFavorite,
+  onConvertToMindMap,
+  onExportDocx,
+  onConvertToFlowchart,
   notebooks,
   allNotes = [],
 }: RootNotesListProps) {
@@ -2489,6 +3160,9 @@ function FavoriteNotesList({
             allNotes={allNotes}
             onSetContextLevel={onSetContextLevel}
             onToggleFavorite={onToggleFavorite}
+            onConvertToMindMap={onConvertToMindMap}
+            onExportDocx={onExportDocx}
+            onConvertToFlowchart={onConvertToFlowchart}
           />
         ))}
       </div>
@@ -2523,7 +3197,11 @@ interface NotebookSectionProps {
   onSetContextLevel?: (note: OperationNote, level: NoteContextLevel) => void;
   onToggleFavorite?: (note: OperationNote) => void;
   onCreateNote?: (sourceKind: NoteSourceKind, notebookId?: string) => void;
+  onCreateMindMap?: (notebookId: string) => void;
+  onCreateFlowchart?: (notebookId: string) => void;
   onCreateNotebook?: () => void;
+  onConvertToMindMap?: (note: OperationNote) => void;
+  onExportDocx?: (note: OperationNote) => void;
   notebooks: Notebook[];
   allNotes?: OperationNote[];
   onDropNote?: (noteId: string, notebookId: string) => void;
@@ -2558,7 +3236,11 @@ function NotebookSection({
   onSetContextLevel,
   onToggleFavorite,
   onCreateNote,
+  onCreateMindMap,
+  onCreateFlowchart,
   onCreateNotebook,
+  onConvertToMindMap,
+  onExportDocx,
   notebooks,
   allNotes = [],
   onDropNote,
@@ -2618,6 +3300,14 @@ function NotebookSection({
             <FileText className="mr-2 h-3.5 w-3.5" />
             新建笔记
           </ContextMenuItem>
+          <ContextMenuItem onSelect={() => onCreateMindMap?.(notebook.id)}>
+            <Network className="mr-2 h-3.5 w-3.5" />
+            新建思维导图
+          </ContextMenuItem>
+          <ContextMenuItem onSelect={() => onCreateFlowchart?.(notebook.id)}>
+            <Workflow className="mr-2 h-3.5 w-3.5" />
+            新建流程图
+          </ContextMenuItem>
           <ContextMenuItem onSelect={() => onCreateNotebook?.()}>
             <FolderPlus className="mr-2 h-3.5 w-3.5" />
             新建文件夹
@@ -2669,6 +3359,8 @@ function NotebookSection({
             onSetContextLevel={onSetContextLevel}
             onToggleFavorite={onToggleFavorite}
             onCreateNote={(sourceKind) => onCreateNote?.(sourceKind, notebook.id)}
+            onConvertToMindMap={onConvertToMindMap}
+            onExportDocx={onExportDocx}
             notebooks={notebooks}
             allNotes={allNotes}
           />

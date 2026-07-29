@@ -1,4 +1,4 @@
-import { AlertTriangle, CheckCircle2, Cpu, Loader2, Menu, RotateCcw, Shield, ShieldOff, Zap } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Loader2, Menu, RotateCcw, Shield, ShieldOff, Zap } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
 import { Checkbox } from "@/components/ui/checkbox";
@@ -39,8 +39,9 @@ export function PerformanceSection() {
 
   useEffect(() => { void refresh(); }, [refresh]);
 
-  const handleApply = async (item: PerformanceItem, mode: string) => {
-    setActing(`${item.id}-${mode}`);
+  const handleToggle = async (item: PerformanceItem) => {
+    const mode = item.isApplied ? "restore" : "recommended";
+    setActing(item.id);
     try {
       const result = await applyPerformanceItem(item.id, mode);
       setMessage({
@@ -59,56 +60,55 @@ export function PerformanceSection() {
     <PanelCard title="性能微调" action={<Zap className="h-4 w-4" />}>
       {loading ? (
         <div className="flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />正在读取...</div>
+      ) : items.length === 0 ? (
+        <p className="text-xs text-muted-foreground">暂无可优化的性能项。</p>
       ) : (
-        <div className="flex flex-col gap-2">
-          {items.map((item) => (
-            <div key={item.id} className={cn(
-              "rounded-lg border p-3",
-              item.isApplied ? "border-blue-500/40 bg-blue-500/5" : "border-border/60",
-            )}>
-              <div className="flex items-start justify-between gap-3">
+        <div className="flex flex-col gap-1.5">
+          {items.map((item) => {
+            const isLoading = acting === item.id;
+            const enabled = item.isApplied;
+            return (
+              <div
+                key={item.id}
+                className={cn(
+                  "flex items-center justify-between gap-3 rounded-lg border px-3 py-2.5 transition",
+                  enabled ? "border-blue-500/30 bg-blue-500/[0.04]" : "border-border/60",
+                  isLoading && "opacity-70",
+                )}
+              >
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <Cpu className="h-3.5 w-3.5 text-muted-foreground" />
+                  <div className="flex flex-wrap items-center gap-1.5">
                     <span className="text-xs font-semibold">{item.label}</span>
                     {item.risk === "medium" && <StatusPill tone="orange">中风险</StatusPill>}
-                    {item.isApplied && <CheckCircle2 className="h-3.5 w-3.5 text-blue-600" />}
+                    {item.risk === "high" && <StatusPill tone="red">高风险</StatusPill>}
+                    {item.requiresReboot && <StatusPill tone="violet">需重启</StatusPill>}
+                    {item.requiresAdministrator && <StatusPill tone="orange">管理员</StatusPill>}
                   </div>
                   <p className="mt-1 text-[11px] text-muted-foreground">{item.description}</p>
-                  <p className="mt-0.5 text-[10px] text-muted-foreground/70">{item.currentDetail}</p>
+                  {item.currentDetail && <p className="mt-0.5 text-[10px] text-muted-foreground/70">{item.currentDetail}</p>}
                 </div>
-                <div className="flex shrink-0 gap-1.5">
-                  {item.isApplied ? (
-                    <button
-                      type="button"
-                      className={secondaryButtonClass}
-                      onClick={() => void handleApply(item, "restore")}
-                      disabled={acting === `${item.id}-restore`}
-                    >
-                      {acting === `${item.id}-restore"` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
-                      恢复
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      className={primaryButtonClass}
-                      onClick={() => void handleApply(item, "recommended")}
-                      disabled={acting === `${item.id}-recommended`}
-                    >
-                      {acting === `${item.id}-recommended` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Zap className="h-3.5 w-3.5" />}
-                      应用
-                    </button>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={enabled}
+                  aria-label={`${enabled ? "恢复" : "应用"}${item.label}`}
+                  disabled={isLoading}
+                  onClick={() => void handleToggle(item)}
+                  className={cn(
+                    "relative inline-flex h-6 w-11 shrink-0 items-center rounded-full p-0.5 transition-all duration-300 disabled:cursor-not-allowed disabled:opacity-40",
+                    enabled ? "bg-blue-600 shadow-sm shadow-blue-500/25" : "bg-muted-foreground/25",
                   )}
-                </div>
+                >
+                  {isLoading
+                    ? <Loader2 className="h-5 w-5 animate-spin text-white" />
+                    : <span className={cn("h-5 w-5 rounded-full bg-white shadow-sm transition-transform duration-300", enabled ? "translate-x-5" : "translate-x-0")} />}
+                </button>
               </div>
-              {item.requiresReboot && (
-                <p className="mt-1.5 text-[10px] text-amber-600 dark:text-amber-400">需要重启生效</p>
-              )}
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
-      {message && <p className={cn("text-xs", message.tone === "ok" ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400")}>{message.text}</p>}
+      {message && <p className={cn("mt-2 text-xs", message.tone === "ok" ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400")}>{message.text}</p>}
     </PanelCard>
   );
 }

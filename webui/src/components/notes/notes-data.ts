@@ -15,10 +15,19 @@ export const NOTE_CONTEXT_LEVEL_LABELS: Record<NoteContextLevel, string> = {
 };
 
 /** Note type controls the role of a note in the vault. */
-export type NoteType = "note" | "moc" | "daily" | "template" | "agent-experience";
+export type NoteType =
+  | "note"
+  | "mindmap"
+  | "flowchart"
+  | "moc"
+  | "daily"
+  | "template"
+  | "agent-experience";
 
 export const NOTE_TYPE_LABELS: Record<NoteType, string> = {
   note: "笔记",
+  mindmap: "思维导图",
+  flowchart: "流程图",
   moc: "MOC 索引",
   daily: "每日笔记",
   template: "模板",

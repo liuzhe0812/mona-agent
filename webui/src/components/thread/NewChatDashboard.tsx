@@ -119,7 +119,7 @@ export function NewChatDashboard({
                 <li
                   key={item.id}
                   className={cn(
-                    "flex items-center gap-3 rounded-md px-1.5 py-1.5 transition-colors hover:bg-accent/60",
+                    "flex items-center gap-3 rounded-md px-1.5 py-1.5 transition-colors hover:bg-accent",
                     isNext && "bg-[#4f9de8]/[0.07] hover:bg-[#4f9de8]/[0.1]",
                   )}
                 >

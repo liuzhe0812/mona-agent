@@ -31,6 +31,17 @@
     --sidebar-accent-foreground: 0 0% 9%;
     --sidebar-border: 0 0% 89.8%;
     --theme: 217 91% 60%;
+
+    /* 阶段 1 画布样板色（待视觉评审固定）：
+       基于 --theme 217° 蓝调的低饱和暖中性渐变，不复制 Buzz 黄绿/浅蓝组合。
+       画布仅在根容器、标题栏、侧栏透出；主内容表面仍用 --background。 */
+    --canvas-top: 220 30% 96%;
+    --canvas-bottom: 215 22% 91%;
+    --content-surface: 0 0% 100%;
+    --content-surface-foreground: 240 3% 12%;
+    /* 侧栏交互表面：HSL 三元组，使用时配 alpha（hover 0.04，active 0.07） */
+    --sidebar-hover-surface: 0 0% 0%;
+    --sidebar-active-surface: 0 0% 0%;
   }
 
   .dark {
@@ -59,6 +70,14 @@
     --sidebar-accent-foreground: 0 0% 98%;
     --sidebar-border: 0 0% 18%;
     --theme: 213 94% 68%;
+
+    /* 深色画布：深石板蓝渐变，不使用纯黑，保持与浅色相同的品牌关系 */
+    --canvas-top: 220 20% 13%;
+    --canvas-bottom: 215 25% 9%;
+    --content-surface: 0 0% 12%;
+    --content-surface-foreground: 240 4% 96%;
+    --sidebar-hover-surface: 0 0% 100%;
+    --sidebar-active-surface: 0 0% 100%;
   }
 }
 
@@ -93,6 +112,9 @@
   body,
   #root {
     @apply h-full overflow-hidden;
+    /* App Shell：文档自身永不滚动，所有滚动内化到子容器；
+       阻止滚动链传递到窗口（桌面应用标准，禁止橡皮筋效果）。 */
+    overscroll-behavior: none;
   }
 
   body {
@@ -386,6 +408,18 @@
    Kept OUT of @layer utilities so Tailwind's purge does not strip these
    complex attribute selectors, and so they outrank the base preflight
    (`ol, ul { list-style: none }`) without needing `!important`. */
+/* 光标颜色由 MarkdownEditor.tsx 的 useEffect 用 JS 读取 computed color 后强制设置，
+   CSS 变量/currentColor 在 WebView2 的 caret-color 上不稳定，弃用。 */
+.note-editor-cursor input,
+.note-editor-cursor textarea,
+.note-editor-cursor .ProseMirror,
+.note-editor-cursor .wiki-link[data-cursor-boundary] {
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='22' viewBox='0 0 16 22'%3E%3Cpath d='M4 2h8M8 2v18M4 20h8' fill='none' stroke='%23fff' stroke-width='3' stroke-linecap='square'/%3E%3Cpath d='M4 2h8M8 2v18M4 20h8' fill='none' stroke='%23000' stroke-width='1.4' stroke-linecap='square'/%3E%3C/svg%3E") 8 11, text;
+}
+.mindmap-container.mindmap-marquee-active,
+.mindmap-container.mindmap-marquee-active * {
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M12 1v22M1 12h22' fill='none' stroke='%23fff' stroke-width='3'/%3E%3Cpath d='M12 1v22M1 12h22' fill='none' stroke='%23000' stroke-width='1.5'/%3E%3C/svg%3E") 12 12, crosshair !important;
+}
 .notes-prosemirror ul:not([data-type="taskList"]) {
   list-style-type: disc !important;
   padding-left: 1.4rem !important;
@@ -444,4 +478,420 @@
 }
 .notes-prosemirror li[data-type="taskItem"][data-checked="true"] > div p {
   text-decoration: line-through !important;
+}
+
+/* ─── Notes editor: table column resize handle + cell selection ─────
+   prosemirror-tables 注入 .column-resize-handle (widget div) 和
+   .selectedCell (cell decoration class)，但不提供默认可见样式，
+   必须项目自己写。resizable:true 已在 MarkdownEditor.tsx 启用。 */
+.notes-prosemirror .tableWrapper {
+  overflow-x: auto;
+  position: relative;
+}
+.notes-prosemirror table {
+  table-layout: fixed;
+  overflow: hidden;
+}
+.notes-prosemirror th,
+.notes-prosemirror td {
+  position: relative;
+}
+/* 选中单元格：使用 --accent 辅助色（与 UI 规范"选中后的背景色用辅助色"一致） */
+.notes-prosemirror .selectedCell {
+  background: hsl(var(--accent)) !important;
+}
+/* 列宽拖拽手柄：默认不可见，cell hover 或拖拽中时显示品牌色提示 */
+.notes-prosemirror .column-resize-handle {
+  position: absolute;
+  right: -2px;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background: transparent;
+  cursor: col-resize;
+  z-index: 5;
+  pointer-events: auto;
+  transition: background-color 150ms ease;
+}
+.notes-prosemirror td:hover .column-resize-handle,
+.notes-prosemirror th:hover .column-resize-handle {
+  background: hsl(var(--primary) / 0.35);
+}
+.notes-prosemirror .column-resize-dragging .column-resize-handle {
+  background: hsl(var(--primary) / 0.6);
+}
+
+/* ─── 流程图主题 token（design §8.4）──────────────────────────────────
+   流程图根容器统一通过 .flowchart-surface 类消费主题，
+   节点/边/控制点/网格只引用 --flowchart-* token，不硬编码浅色/深色值。
+   主题只影响显示，不写入 JSON、不进入语义哈希。
+   WPS 风格基色：开始/结束/处理/子流程用品牌蓝，判断用琥珀金，注释用 muted。 */
+.flowchart-surface {
+  /* 画布与网格 */
+  --flowchart-canvas: hsl(var(--background));
+  --flowchart-grid: hsl(var(--border) / 0.55);
+  /* 通用语义色 */
+  --flowchart-node-bg: hsl(var(--card));
+  --flowchart-node-text: hsl(var(--foreground));
+  --flowchart-node-border: hsl(var(--border));
+  --flowchart-edge: hsl(var(--muted-foreground));
+  --flowchart-edge-selected: hsl(var(--theme));
+  --flowchart-active: hsl(var(--theme));
+  --flowchart-danger: hsl(var(--destructive));
+  --flowchart-handle: hsl(var(--theme));
+  /* 成功状态：变更卡片"已应用"色（HSL 三元组，配 alpha 使用） */
+  --flowchart-success: 152 60% 40%;
+  /* 开始 / 结束：品牌蓝椭圆 */
+  --flowchart-start-fill: hsl(var(--theme));
+  --flowchart-start-text: hsl(0 0% 100%);
+  --flowchart-start-border: hsl(var(--theme) / 0.85);
+  --flowchart-end-fill: hsl(var(--theme));
+  --flowchart-end-text: hsl(0 0% 100%);
+  --flowchart-end-border: hsl(var(--theme) / 0.85);
+  /* 处理 / 子流程 / 文档：浅蓝边、卡片填充 */
+  --flowchart-process-fill: hsl(var(--card));
+  --flowchart-process-text: hsl(var(--foreground));
+  --flowchart-process-border: hsl(var(--theme) / 0.7);
+  --flowchart-subprocess-fill: hsl(var(--card));
+  --flowchart-subprocess-text: hsl(var(--foreground));
+  --flowchart-subprocess-border: hsl(var(--theme) / 0.7);
+  --flowchart-document-fill: hsl(var(--card));
+  --flowchart-document-text: hsl(var(--foreground));
+  --flowchart-document-border: hsl(var(--theme) / 0.7);
+  /* 数据库：浅蓝底 */
+  --flowchart-database-fill: hsl(var(--theme) / 0.12);
+  --flowchart-database-text: hsl(var(--foreground));
+  --flowchart-database-border: hsl(var(--theme) / 0.7);
+  /* 判断：琥珀金 */
+  --flowchart-decision-fill: hsl(45 96% 60%);
+  --flowchart-decision-text: hsl(40 80% 15%);
+  --flowchart-decision-border: hsl(40 90% 45%);
+  /* 注释：muted 灰 */
+  --flowchart-annotation-fill: hsl(var(--muted));
+  --flowchart-annotation-text: hsl(var(--muted-foreground));
+  --flowchart-annotation-border: hsl(var(--muted-foreground) / 0.5);
+}
+
+/* 深色主题：保留 WPS 风格语义，但调整为深色画布可见的对比度 */
+.dark .flowchart-surface {
+  --flowchart-canvas: hsl(var(--background));
+  --flowchart-grid: hsl(var(--border) / 0.7);
+  --flowchart-node-bg: hsl(var(--card));
+  --flowchart-node-text: hsl(var(--foreground));
+  --flowchart-node-border: hsl(var(--border));
+  --flowchart-edge: hsl(var(--muted-foreground));
+  --flowchart-edge-selected: hsl(var(--theme));
+  --flowchart-active: hsl(var(--theme));
+  --flowchart-danger: hsl(var(--destructive));
+  --flowchart-handle: hsl(var(--theme));
+  /* 成功状态：变更卡片"已应用"色（HSL 三元组，配 alpha 使用） */
+  --flowchart-success: 152 55% 60%;
+  /* 开始 / 结束：品牌蓝椭圆，深色下调亮 */
+  --flowchart-start-fill: hsl(var(--theme));
+  --flowchart-start-text: hsl(0 0% 8%);
+  --flowchart-start-border: hsl(var(--theme) / 0.85);
+  --flowchart-end-fill: hsl(var(--theme));
+  --flowchart-end-text: hsl(0 0% 8%);
+  --flowchart-end-border: hsl(var(--theme) / 0.85);
+  /* 处理 / 子流程 / 文档：深色卡片 + 亮蓝边 */
+  --flowchart-process-fill: hsl(var(--card));
+  --flowchart-process-text: hsl(var(--foreground));
+  --flowchart-process-border: hsl(var(--theme) / 0.8);
+  --flowchart-subprocess-fill: hsl(var(--card));
+  --flowchart-subprocess-text: hsl(var(--foreground));
+  --flowchart-subprocess-border: hsl(var(--theme) / 0.8);
+  --flowchart-document-fill: hsl(var(--card));
+  --flowchart-document-text: hsl(var(--foreground));
+  --flowchart-document-border: hsl(var(--theme) / 0.8);
+  /* 数据库：深色下使用品牌蓝半透明 */
+  --flowchart-database-fill: hsl(var(--theme) / 0.2);
+  --flowchart-database-text: hsl(var(--foreground));
+  --flowchart-database-border: hsl(var(--theme) / 0.8);
+  /* 判断：琥珀金，深色下保持饱和度，文字用深棕 */
+  --flowchart-decision-fill: hsl(45 90% 50%);
+  --flowchart-decision-text: hsl(40 80% 12%);
+  --flowchart-decision-border: hsl(42 90% 55%);
+  /* 注释：muted 灰 */
+  --flowchart-annotation-fill: hsl(var(--muted));
+  --flowchart-annotation-text: hsl(var(--muted-foreground));
+  --flowchart-annotation-border: hsl(var(--muted-foreground) / 0.55);
+}
+
+/* React Flow 光标：强制使用系统默认箭头 */
+.flowchart-surface .react-flow,
+.flowchart-surface .react-flow__pane,
+.flowchart-surface .react-flow__node,
+.flowchart-surface .react-flow__node.flowchart,
+.flowchart-surface .react-flow__handle,
+.flowchart-surface .react-flow__edge,
+.flowchart-surface .react-flow__edge.selected {
+  cursor: default !important;
+}
+
+/* WPS 风格节点 */
+.flowchart-node-wps {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  font-size: var(--node-font-size, 13px);
+  line-height: 1.4;
+  font-family: var(--node-font-family, inherit);
+  font-weight: var(--node-font-weight, 400);
+  font-style: var(--node-font-style, normal);
+  user-select: none;
+  transition: box-shadow 0.15s;
+}
+
+.flowchart-node-wps.start,
+.flowchart-node-wps.end {
+  width: 140px;
+  min-height: 40px;
+  border-radius: 999px;
+  padding: 6px 16px;
+  background: var(--node-fill, var(--flowchart-start-fill));
+  color: var(--node-text, var(--flowchart-start-text));
+  border: var(--node-border-width, 1.5px) var(--node-border-style, solid) var(--node-border, var(--flowchart-start-border));
+  font-weight: var(--node-font-weight, 600);
+}
+
+.flowchart-node-wps.process {
+  width: 140px;
+  min-height: 40px;
+  border-radius: 2px;
+  padding: 6px 12px;
+  background: var(--node-fill, var(--flowchart-process-fill));
+  color: var(--node-text, var(--flowchart-process-text));
+  border: var(--node-border-width, 1.5px) var(--node-border-style, solid) var(--node-border, var(--flowchart-process-border));
+}
+
+.flowchart-node-wps.decision {
+  width: 160px;
+  height: 80px;
+  background: transparent;
+  border: none;
+  padding: 0;
+}
+
+.flowchart-node-wps.decision .decision-shape {
+  position: absolute;
+  inset: 0;
+}
+
+.flowchart-node-wps.decision .decision-label {
+  position: relative;
+  z-index: 1;
+  color: var(--node-text, var(--flowchart-decision-text));
+  font-weight: 500;
+  max-width: 120px;
+}
+
+/* 文档形状 */
+.flowchart-node-wps.document {
+  width: 140px;
+  height: 60px;
+  background: transparent;
+  border: none;
+  padding: 0;
+}
+.flowchart-node-wps.document .document-shape {
+  position: absolute;
+  inset: 0;
+}
+.flowchart-node-wps.document .document-label {
+  position: relative;
+  z-index: 1;
+  color: var(--node-text, var(--flowchart-document-text));
+  max-width: 120px;
+  padding: 6px 10px;
+}
+
+/* 数据库圆柱形 */
+.flowchart-node-wps.database {
+  width: 140px;
+  height: 70px;
+  background: transparent;
+  border: none;
+  padding: 0;
+}
+.flowchart-node-wps.database .database-shape {
+  position: absolute;
+  inset: 0;
+}
+.flowchart-node-wps.database .database-label {
+  position: relative;
+  z-index: 1;
+  color: var(--node-text, var(--flowchart-database-text));
+  max-width: 110px;
+  padding: 14px 10px 0;
+}
+
+/* 注释：左边方括号 + 虚线边框 */
+.flowchart-node-wps.annotation {
+  width: 140px;
+  min-height: 40px;
+  border-radius: 2px;
+  padding: 6px 10px 6px 14px;
+  background: var(--node-fill, var(--flowchart-annotation-fill));
+  color: var(--node-text, var(--flowchart-annotation-text));
+  border: var(--node-border-width, 1px) var(--node-border-style, dashed) var(--node-border, var(--flowchart-annotation-border));
+  position: relative;
+}
+.flowchart-node-wps.annotation .annotation-bracket {
+  position: absolute;
+  left: 4px;
+  top: 4px;
+  bottom: 4px;
+  width: 4px;
+  border-left: 2px solid var(--node-border, var(--flowchart-annotation-border));
+  border-top: 2px solid var(--node-border, var(--flowchart-annotation-border));
+  border-bottom: 2px solid var(--node-border, var(--flowchart-annotation-border));
+}
+.flowchart-node-wps.annotation .annotation-label {
+  color: var(--node-text, var(--flowchart-annotation-text));
+  font-style: italic;
+  max-width: 110px;
+}
+
+/* 子流程：双边框矩形 */
+.flowchart-node-wps.subprocess {
+  width: 140px;
+  min-height: 40px;
+  border-radius: 2px;
+  padding: 6px 12px;
+  background: var(--node-fill, var(--flowchart-subprocess-fill));
+  color: var(--node-text, var(--flowchart-subprocess-text));
+  border: var(--node-border-width, 1.5px) var(--node-border-style, solid) var(--node-border, var(--flowchart-subprocess-border));
+  position: relative;
+}
+.flowchart-node-wps.subprocess .subprocess-inner-border {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  top: 4px;
+  bottom: 4px;
+  border: 1px solid var(--node-border, var(--flowchart-subprocess-border));
+  pointer-events: none;
+}
+
+/* 输入输出：平行四边形（与处理节点同色系，通过 SVG polygon 表达斜边） */
+.flowchart-node-wps.input-output {
+  width: 140px;
+  min-height: 40px;
+  padding: 6px 18px;
+  background: transparent;
+  border: none;
+}
+.flowchart-node-wps.input-output .input-output-shape {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.flowchart-node-wps.input-output .input-output-label {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  word-break: break-word;
+}
+
+/* 多行 label 默认样式：节点宽度受 size 控制，文字按 textAlign 对齐 */
+.flowchart-node-wps .flowchart-node-label {
+  width: 100%;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.flowchart-node-wps.selected {
+  box-shadow: 0 0 0 2px var(--flowchart-edge-selected);
+}
+
+/* NodeResizer 控制点：与 Handle 区分，方形 6px，品牌色 */
+.flowchart-surface .react-flow__resize-control.handle {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+
+/* WPS 风格连线标签 */
+.flowchart-surface .react-flow__edge-text {
+  font-size: 11px;
+  font-weight: 500;
+}
+.flowchart-surface .react-flow__edge-textbg {
+  fill: hsl(var(--card));
+}
+
+/* WPS 风格箭头 */
+.flowchart-surface .react-flow__edge-path {
+  stroke: var(--flowchart-edge);
+  stroke-width: 1.5;
+}
+.flowchart-surface .react-flow__edge.selected .react-flow__edge-path {
+  stroke: var(--flowchart-edge-selected);
+  stroke-width: 2;
+}
+.flowchart-surface .react-flow__handle {
+  width: 8px;
+  height: 8px;
+  background: var(--flowchart-handle);
+  border: 1.5px solid hsl(var(--card));
+  opacity: 0;
+  transition: opacity 150ms ease;
+  pointer-events: none;
+}
+/* 节点选中或 hover 时显示连接点 */
+.flowchart-surface .react-flow__node.selected .react-flow__handle,
+.flowchart-surface .react-flow__node:hover .react-flow__handle {
+  opacity: 1;
+  pointer-events: auto;
+}
+/* 只读模式：完全隐藏连接点 */
+.flowchart-surface.flowchart-readonly .react-flow__handle {
+  display: none !important;
+}
+
+/* ─── 流程图导出模式（design §7.12）──────────────────────────────────
+   导出 PNG/SVG/PDF 时，通过添加 .flowchart-exporting 类隐藏所有编辑 UI：
+   - Controls（缩放控制按钮）
+   - MiniMap（小地图）
+   - Handle（连接点）
+   - NodeResizer（节点缩放手柄）
+   - Selection（框选/选中框）
+   - 信息条、问题面板等浮层
+   保留节点、边、标签和背景网格。 */
+.flowchart-surface.flowchart-exporting .react-flow__controls,
+.flowchart-surface.flowchart-exporting .react-flow__minimap,
+.flowchart-surface.flowchart-exporting .react-flow__handle,
+.flowchart-surface.flowchart-exporting .react-flow__resize-control,
+.flowchart-surface.flowchart-exporting .react-flow__selection,
+.flowchart-surface.flowchart-exporting .flowchart-info-bar,
+.flowchart-surface.flowchart-exporting .flowchart-issues-panel {
+  display: none !important;
+}
+/* 导出时移除节点选中状态的视觉反馈 */
+.flowchart-surface.flowchart-exporting .react-flow__node.selected,
+.flowchart-surface.flowchart-exporting .react-flow__edge.selected .react-flow__edge-path {
+  box-shadow: none !important;
+  stroke: var(--flowchart-edge) !important;
+  stroke-width: 1.5 !important;
+}
+
+/* ─── Reduced motion（阶段 2 全局落地，redesign-plan §3.4 / §5.6）──────
+   用户系统启用 prefers-reduced-motion: reduce 时，取消所有非必要动画：
+   - Radix 浮层 animate-in/out、fade、zoom、slide
+   - Tailwind 自定义 keyframe 动画（streaming-text-sheen、goal-shell-glow 已单独处理）
+   - transition 中的位移与缩放
+   保留颜色、透明度的 transition 以维持基础反馈。
+   注意：不影响 xterm、video、prosemirror 等有自身动画体系的组件。 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
 }

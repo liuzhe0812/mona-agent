@@ -382,8 +382,9 @@ export function AccountSettingsDialog({
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-5">
           <Tabs defaultValue="basic" className="w-full">
-            <TabsList className="grid w-full grid-cols-4">
+            <TabsList className="grid w-full grid-cols-5">
               <TabsTrigger value="basic" className="text-[12px]">基础</TabsTrigger>
+              <TabsTrigger value="password" className="text-[12px]">密码</TabsTrigger>
               <TabsTrigger value="signatures" className="text-[12px]">签名</TabsTrigger>
               <TabsTrigger value="rules" className="text-[12px]">规则</TabsTrigger>
               <TabsTrigger value="schedule" className="text-[12px]">AI日程</TabsTrigger>
@@ -508,7 +509,7 @@ export function AccountSettingsDialog({
             </div>
           </section>
             </TabsContent>
-            <TabsContent value="contacts" className="mt-4 max-h-[60vh] space-y-5 overflow-y-auto pr-1">
+            <TabsContent value="password" className="mt-4 max-h-[60vh] space-y-5 overflow-y-auto pr-1">
           {/* 密码 */}
           <section className="space-y-3">
             <h3 className="text-[12px] font-medium text-muted-foreground">登录密码</h3>

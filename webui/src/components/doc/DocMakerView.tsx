@@ -2,6 +2,11 @@ import { lazy, Suspense, useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 
+// 文档加工 tab 暂隐藏，对应的 lazy import 一并注释。
+// const OfficeWorkbenchView = lazy(() =>
+//   import("@/components/doc/office/OfficeWorkbenchView").then((m) => ({ default: m.OfficeWorkbenchView })),
+// );
+
 const PptMakerView = lazy(() =>
   import("@/components/ppt/PptMakerView").then((m) => ({ default: m.PptMakerView })),
 );
@@ -10,9 +15,12 @@ const VideoMakerView = lazy(() =>
   import("@/components/doc/video/VideoMakerView").then((m) => ({ default: m.VideoMakerView })),
 );
 
-type DocTab = "ppt" | "video";
+type DocTab = "doc" | "ppt" | "video";
 
-const TABS: Array<{ key: DocTab; label: string }> = [
+// 文档加工（doc）tab 暂隐藏：内嵌 Office 协作编辑体验未达预期，
+// 待引入 OnlyOffice/Univer 后恢复。TABS 里保留条目仅为类型兼容，
+// 实际不渲染。
+const VISIBLE_TABS: Array<{ key: DocTab; label: string }> = [
   { key: "ppt", label: "PPT" },
   { key: "video", label: "视频" },
 ];
@@ -44,7 +52,7 @@ export function DocMakerView() {
     <div className="flex h-full flex-col">
       {/* 顶部 tab 栏 */}
       <div className="flex h-10 items-center gap-1 border-b border-border/40 px-3">
-        {TABS.map((tab) => (
+        {VISIBLE_TABS.map((tab) => (
           <Button
             key={tab.key}
             variant={activeTab === tab.key ? "secondary" : "ghost"}

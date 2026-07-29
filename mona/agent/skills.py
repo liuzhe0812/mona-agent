@@ -41,6 +41,13 @@ class SkillsLoader:
         for skill_dir in base.iterdir():
             if not skill_dir.is_dir():
                 continue
+            # Skill lifecycle artifacts live alongside user skills under
+            # ~/.mona/skills/ but must never be enumerated as skills:
+            #   .archive/     — archived skills (moved here by archive_skill)
+            #   .snapshots/   — reserved for future backup/rollback
+            # Any other dotfile directory (lock files etc.) is also skipped.
+            if skill_dir.name.startswith("."):
+                continue
             skill_file = skill_dir / "SKILL.md"
             if not skill_file.exists():
                 continue
@@ -103,11 +110,19 @@ class SkillsLoader:
         Returns:
             Formatted skills content.
         """
-        parts = [
-            f"### Skill: {name}\n\n{self._strip_frontmatter(markdown)}"
-            for name in skill_names
-            if (markdown := self.load_skill(name))
-        ]
+        # Bump access telemetry for skills actually injected into a session
+        # context. This is the only summary-style call that counts as a real
+        # access: list_skills / get_skill_metadata / build_skills_summary only
+        # read frontmatter and must NOT bump, otherwise every system prompt
+        # refresh would reset the inactivity clock.
+        from mona.agent import skill_usage
+        parts: list[str] = []
+        for name in skill_names:
+            markdown = self.load_skill(name)
+            if markdown is None:
+                continue
+            skill_usage.bump_access(name)
+            parts.append(f"### Skill: {name}\n\n{self._strip_frontmatter(markdown)}")
         return "\n\n---\n\n".join(parts)
 
     def build_skills_summary(self, exclude: set[str] | None = None) -> str:

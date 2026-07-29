@@ -509,6 +509,13 @@ export type InboundEvent =
       ok: boolean;
       templateId?: string;
       error?: string;
+    }
+  | {
+      event: "doc_upload_result";
+      ok: boolean;
+      files?: { name: string; path: string; size?: number; mime?: string }[];
+      chat_id?: string;
+      error?: string;
     };
 
 /** Base64-encoded image attached to an outbound ``message`` envelope.
@@ -570,6 +577,11 @@ export type Outbound =
   | {
       type: "ppt_delete_native";
       data: { templateId: string };
+    }
+  | {
+      type: "doc_upload";
+      chat_id: string;
+      files: { name: string; data_url: string }[];
     };
 
 export interface PptTemplate {

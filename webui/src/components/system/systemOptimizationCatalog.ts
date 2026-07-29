@@ -235,6 +235,9 @@ const featureImpacts: Record<string, string> = {
   DisableBraveBloat: "关闭 Brave 浏览器的 AI、加密货币和资讯功能。",
   EnableWindowsSandbox: "启用 Windows 沙盒，可在隔离环境中运行不可信应用。需要管理员权限。",
   EnableWindowsSubsystemForLinux: "启用 Windows Subsystem for Linux（WSL），可在 Windows 上运行 Linux 发行版。需要管理员权限。",
+  SvchostSplitDisable: "设置 svchost 拆分数等于物理内存 GB，减少 svchost.exe 进程数量，降低低配机器的内存占用。恢复后回到系统默认的拆分策略。",
+  DisableHPET: "禁用高精度事件计时器（HPET），在游戏场景下可降低输入延迟。部分老旧硬件可能不稳定，恢复后需重启。",
+  UnlockCpuCores: "解除系统对 CPU 核心使用的限制，释放全部物理核心性能。恢复后回到系统默认的能耗策略，需重启生效。",
 };
 
 export function featureTitle(id: string, source: string) { return featureTitles[id] ?? source; }

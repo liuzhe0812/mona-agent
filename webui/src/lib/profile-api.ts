@@ -1,8 +1,8 @@
-/** 用户画像 API 客户端 — 调用 gateway HTTP server 的 /api/profile/* 路由。
+/** 用户画像 API 客户端 — 调用 services 进程的 /api/profile/* 路由。
  *
  * 这些路由为公开路由（无鉴权），与 scheduleApi 一致，使用 httpFetch 不带 token。 */
 
-import { getGatewayHttpBase } from "@/lib/api";
+import { getServicesHttpBase } from "@/lib/api";
 import { httpFetch } from "@/lib/tauri";
 
 /** profile.rich.json 顶层结构。 */
@@ -146,7 +146,7 @@ async function _jsonRequest<T>(
   path: string,
   init: RequestInit,
 ): Promise<T> {
-  const base = await getGatewayHttpBase();
+  const base = await getServicesHttpBase();
   const res = await httpFetch(`${base}${path}`, init);
   if (!res.ok) {
     let msg = `HTTP ${res.status}`;

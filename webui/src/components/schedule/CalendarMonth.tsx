@@ -64,7 +64,7 @@ export function CalendarMonth({
   return (
     <div className="flex flex-col h-full">
       {/* Toolbar */}
-      <div className="flex items-center justify-between px-3 py-1.5 border-b">
+      <div className="flex items-center justify-between px-3 py-1.5 border-b border-border/40">
         <div className="flex items-center gap-1">
           <Button variant="ghost" size="icon" onClick={goPrev} className="h-6 w-6">
             <ChevronLeft className="h-3.5 w-3.5" />
@@ -79,14 +79,6 @@ export function CalendarMonth({
             今天
           </Button>
         </div>
-        <Button
-          size="sm"
-          className="h-6 rounded-full text-xs px-2"
-          onClick={() => onCreateAt(new Date())}
-        >
-          <Plus className="h-3 w-3 mr-0.5" />
-          新建
-        </Button>
       </div>
 
       {/* Weekday header */}
@@ -111,10 +103,9 @@ export function CalendarMonth({
               key={date.toISOString()}
               onClick={() => {
                 onSelectDate(date);
-                onCreateAt(date);
               }}
               className={cn(
-                "border-r border-b border-border/50 min-h-[80px] p-1 cursor-pointer hover:bg-accent/40 transition-colors overflow-hidden",
+                "group border-r border-b border-border/50 min-h-[80px] p-1 cursor-pointer hover:bg-accent transition-colors overflow-hidden",
                 !inMonth && "bg-muted/30 text-muted-foreground",
                 isWeekend && "bg-muted/20",
               )}
@@ -138,7 +129,7 @@ export function CalendarMonth({
                     e.stopPropagation();
                     onCreateAt(date);
                   }}
-                  className="opacity-0 hover:opacity-100 group-hover:opacity-100 text-muted-foreground hover:text-foreground transition-opacity"
+                  className="text-muted-foreground/60 opacity-0 hover:opacity-100 group-hover:opacity-100 hover:text-foreground transition-opacity"
                   title="新建日程"
                 >
                   <Plus className="h-3 w-3" />

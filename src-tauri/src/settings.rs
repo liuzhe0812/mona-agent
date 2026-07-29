@@ -48,6 +48,8 @@ pub struct AppSettings {
     pub auto_start_gateway: bool,
     #[serde(default = "default_gateway_port")]
     pub gateway_port: u16,
+    #[serde(default = "default_services_port")]
+    pub services_port: u16,
     #[serde(default = "default_quick_ask_shortcut")]
     pub quick_ask_shortcut: String,
     #[serde(default = "default_quick_ask_mode")]
@@ -67,6 +69,9 @@ fn default_auto_start_gateway() -> bool {
 fn default_gateway_port() -> u16 {
     17173
 }
+fn default_services_port() -> u16 {
+    17174
+}
 fn default_quick_ask_shortcut() -> String {
     crate::quick_ask::DEFAULT_QUICK_ASK_SHORTCUT.to_string()
 }
@@ -80,6 +85,7 @@ impl Default for AppSettings {
             run_in_background: default_run_in_background(),
             auto_start_gateway: default_auto_start_gateway(),
             gateway_port: default_gateway_port(),
+            services_port: default_services_port(),
             quick_ask_shortcut: default_quick_ask_shortcut(),
             quick_ask_mode: default_quick_ask_mode(),
             sidebar_shortcuts: SidebarShortcuts::default(),
@@ -385,7 +391,7 @@ pub fn write_email_schedule_config(schedule: &serde_json::Value) -> Result<(), S
     Ok(())
 }
 
-pub fn ensure_desktop_config(gateway_port: u16) -> Result<(), String> {
+pub fn ensure_desktop_config(gateway_port: u16, services_port: u16) -> Result<(), String> {
     let config_path = mona_config_path();
     let parent = config_path.parent().ok_or("Invalid config path")?;
     fs::create_dir_all(parent).map_err(|e| format!("Failed to create config dir: {}", e))?;
@@ -408,6 +414,13 @@ pub fn ensure_desktop_config(gateway_port: u16) -> Result<(), String> {
     gateway.insert("port".to_string(), serde_json::json!(gateway_port));
     gateway.insert("host".to_string(), serde_json::json!("127.0.0.1"));
 
+    let services = root
+        .entry("services")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .ok_or("services is not an object")?;
+    services.insert("port".to_string(), serde_json::json!(services_port));
+
     let channels = root
         .entry("channels")
         .or_insert_with(|| serde_json::json!({}))
@@ -429,7 +442,11 @@ pub fn ensure_desktop_config(gateway_port: u16) -> Result<(), String> {
         .map_err(|e| format!("Failed to serialize config: {}", e))?;
     fs::write(&config_path, content).map_err(|e| format!("Failed to write config: {}", e))?;
 
-    log::info!("Ensured desktop config: websocket enabled, gateway port {}", gateway_port);
+    log::info!(
+        "Ensured desktop config: websocket enabled, gateway port {}, services port {}",
+        gateway_port,
+        services_port
+    );
     Ok(())
 }
 

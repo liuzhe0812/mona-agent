@@ -14,7 +14,6 @@ import {
   Link as LinkIcon,
   Flag,
   AlertCircle,
-  Eye,
   X,
   FileDown,
   FolderArchive,
@@ -54,7 +53,7 @@ import {
   getCachedIcon,
 } from "../terminal/FileManager/iconCache";
 import { openPathWithSystemApp, isTauri, httpFetch } from "@/lib/tauri";
-import { getGatewayHttpBase } from "@/lib/api";
+import { getServicesHttpBase } from "@/lib/api";
 import { SenderPopover } from "./SenderPopover";
 
 interface ParsedAddress {
@@ -124,6 +123,7 @@ export function MailView() {
   const loadAnalysis = useEmailStore((s) => s.loadAnalysis);
   const runAnalysis = useEmailStore((s) => s.runAnalysis);
   const fetchBody = useEmailStore((s) => s.fetchBody);
+  const bodyLoadingStage = useEmailStore((s) => s.bodyLoadingStage);
   const contactsByEmail = useEmailStore((s) => s.contactsByEmail);
   const loadContacts = useEmailStore((s) => s.loadContacts);
   const selectedAccountId = useEmailStore((s) => s.selectedAccountId);
@@ -140,7 +140,6 @@ export function MailView() {
   }, [loadContacts]);
   const [downloading, setDownloading] = useState<string | null>(null);
   const [analysisCollapsed, setAnalysisCollapsed] = useState(false);
-  const [previewing, setPreviewing] = useState<{ filename: string; dataUrl: string; contentType: string } | null>(null);
   const [exporting, setExporting] = useState(false);
   // 提取日程中（手动触发单封邮件 AI 日程提取）
   const [extractingSchedule, setExtractingSchedule] = useState(false);
@@ -233,20 +232,33 @@ export function MailView() {
   }, [selectedMessage, loadAnalysis]);
 
   // 按需拉取正文：选中邮件且正文未拉取时，调用 fetchBody 加载完整正文
-  // 兼容旧数据：bodyFetched=true 但 bodyText/bodyHtml 都空（Foxmail 模式 SQLite 不存正文），也需要拉取
+  // Offline-First：SQLite 不存 bodyText/bodyHtml（正文完全在 .eml 文件），
+  // 因此只看 bodyFetched 标志判断是否需要拉取，不再检查 bodyText/bodyHtml
+  // （否则这两个字段永远为空会触发无限循环）
   // 有附件但未加载附件列表时也需要拉取（fetchBody 会顺带返回附件元信息）
   // Rust 侧 email_fetch_body 会先读本地 .eml 文件，读不到才走 gateway IMAP，无需检查 isOnline
+  // bodyError 存在时不自动重试（selectMessage 已清除 bodyError，此处 bodyError 表示同一次选中内彻底失败）
   useEffect(() => {
+    // email_fetch_body 是纯本地 Tauri IPC，不依赖 gatewayUrl
+    // bodyCache 未命中时触发（selectMessage 已预取，这里是兜底）
+    // 触发条件：
+    //   1. bodyFetched=false：本地 .eml 不完整，需走网络拉取
+    //   2. bodyFetched=true 但 bodyText/bodyHtml 都空：本地 .eml 完整但未解析过，
+    //      需触发 fetchBody 解析本地 .eml（毫秒级，不走网络）
+    //      若解析后仍空（合法空正文），bodyCache 会填空 body 命中，下次切换不再重复请求
+    //   3. 有附件但附件列表未加载：需触发 fetchBody 解析附件
     if (
       selectedMessage &&
-      gatewayUrl &&
+      !selectedMessage.bodyError &&
       (!selectedMessage.bodyFetched ||
-        (!selectedMessage.bodyText && !selectedMessage.bodyHtml && !selectedMessage.bodyError) ||
-        (selectedMessage.hasAttachments && !selectedMessage.attachments))
+        (selectedMessage.hasAttachments && !selectedMessage.attachments) ||
+        (!selectedMessage.bodyText &&
+          !selectedMessage.bodyHtml &&
+          selectedMessage.bodyFetched))
     ) {
-      void fetchBody(gatewayUrl, selectedMessage);
+      void fetchBody(selectedMessage);
     }
-  }, [selectedMessage, gatewayUrl, fetchBody]);
+  }, [selectedMessage, fetchBody]);
 
   const analysisKey = selectedMessage
     ? `${selectedMessage.uid}:${selectedMessage.accountId}:${selectedMessage.folder}`
@@ -377,6 +389,13 @@ export function MailView() {
   }
 
   const m = selectedMessage;
+  // 正文加载阶段：区分"正在加载正文"（读本地）和"正在请求邮件"（走邮件服务器）
+  const stageKey = m ? `${m.uid}:${m.accountId}:${m.folder}` : null;
+  const stage = stageKey ? bodyLoadingStage[stageKey] : undefined;
+  const bodyLoadingText = stage === "network" ? "正在请求邮件..." : "正在加载正文...";
+  // fetchBody 进行中（stage 存在）才显示 loading；stage 已清除说明加载完成
+  // 此时 bodyText/bodyHtml 都空属于合法空正文（纯附件、日历邀请、加密内容）
+  const isBodyLoading = Boolean(stage);
 
   const handleDownloadAttachment = async (filename: string) => {
     if (!gatewayUrl) return;
@@ -510,7 +529,7 @@ export function MailView() {
   const handleExtractSchedule = async () => {
     setExtractingSchedule(true);
     try {
-      const base = await getGatewayHttpBase();
+      const base = await getServicesHttpBase();
       if (!base) {
         window.alert("Gateway 未就绪，请稍后重试");
         return;
@@ -866,43 +885,15 @@ export function MailView() {
         </div>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3 scrollbar-hover">
-        {!m.bodyFetched ? (
+        {m.bodyError ? (
           <div className="flex h-full min-h-[200px] flex-col items-center justify-center gap-2 text-muted-foreground">
-            {m.bodyError ? (
-              <>
-                <span className="text-[13px] text-destructive">正文加载失败</span>
-                <span className="max-w-md text-center text-[12px] text-muted-foreground">{m.bodyError}</span>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="mt-2 h-7 text-[12px]"
-                  onClick={() => {
-                    if (gatewayUrl) {
-                      // 清除错误状态后重试
-                      useEmailStore.setState((state) => ({
-                        messages: state.messages.map((mm) =>
-                          mm.uid === m.uid && mm.accountId === m.accountId
-                            ? { ...mm, bodyError: null }
-                            : mm,
-                        ),
-                        selectedMessage:
-                          state.selectedMessage?.uid === m.uid
-                            ? { ...state.selectedMessage, bodyError: null }
-                            : state.selectedMessage,
-                      }));
-                      void fetchBody(gatewayUrl, m);
-                    }
-                  }}
-                >
-                  重试
-                </Button>
-              </>
-            ) : (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin" />
-                <span className="ml-2 text-[13px]">正在加载正文...</span>
-              </>
-            )}
+            <span className="text-[13px] text-destructive">正文加载失败</span>
+            <span className="max-w-md text-center text-[12px] text-muted-foreground">{m.bodyError}</span>
+          </div>
+        ) : !m.bodyFetched ? (
+          <div className="flex h-full min-h-[200px] flex-col items-center justify-center gap-2 text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            <span className="ml-2 text-[13px]">{bodyLoadingText}</span>
           </div>
         ) : m.bodyHtml ? (
           <SafeHtmlFrame
@@ -911,10 +902,22 @@ export function MailView() {
             onImageMenu={handleImageMenu}
             onLinkClick={handleLinkClick}
           />
-        ) : (
+        ) : m.bodyText ? (
           <pre className="whitespace-pre-wrap break-words font-sans text-[13px] leading-relaxed text-foreground">
-            {m.bodyText || "(无正文)"}
+            {m.bodyText}
           </pre>
+        ) : isBodyLoading ? (
+          // fetchBody 进行中：本地 .eml HEADER-only 或解析失败，store 已自动重试走 HTTP 拉取
+          <div className="flex h-full min-h-[200px] items-center justify-center gap-2 text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            <span className="ml-2 text-[13px]">{bodyLoadingText}</span>
+          </div>
+        ) : (
+          // fetchBody 已完成但 bodyText/bodyHtml 都空：合法空正文（纯附件、日历邀请、加密内容）
+          // skill 第四节：合法空正文不得反复请求网络
+          <div className="flex h-full min-h-[200px] items-center justify-center text-muted-foreground">
+            <span className="text-[13px]">此邮件无可显示正文</span>
+          </div>
         )}
       </div>
       {analysis || analysisLoading || analysisError ? (
@@ -927,14 +930,6 @@ export function MailView() {
           onRun={handleRunAnalysis}
         />
       ) : null}
-      {previewing && (
-        <AttachmentPreviewModal
-          filename={previewing.filename}
-          dataUrl={previewing.dataUrl}
-          contentType={previewing.contentType}
-          onClose={() => setPreviewing(null)}
-        />
-      )}
       {imagePreviewSrc && (
         <BodyImagePreviewModal src={imagePreviewSrc} onClose={() => setImagePreviewSrc(null)} />
       )}
@@ -950,71 +945,6 @@ export function MailView() {
           onClose={() => setImageContextMenu(null)}
         />
       )}
-    </div>
-  );
-}
-
-/**
- * 附件预览模态框：图片直接显示，PDF 用 iframe 内嵌。
- */
-function AttachmentPreviewModal({
-  filename,
-  dataUrl,
-  contentType,
-  onClose,
-}: {
-  filename: string;
-  dataUrl: string;
-  contentType: string;
-  onClose: () => void;
-}) {
-  const isImage = contentType.toLowerCase().startsWith("image/");
-  const isPdf = contentType.toLowerCase() === "application/pdf";
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
-      onClick={onClose}
-    >
-      <div
-        className="flex h-[90vh] w-[90vw] max-w-[1000px] flex-col rounded-lg bg-background shadow-xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3">
-          <Eye className="h-4 w-4 text-muted-foreground" />
-          <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{filename}</span>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7"
-            onClick={onClose}
-            aria-label="关闭"
-          >
-            <X className="h-4 w-4" />
-          </Button>
-        </div>
-        <div className="min-h-0 flex-1 overflow-auto p-4">
-          {isImage ? (
-            <div className="flex h-full items-center justify-center">
-              <img
-                src={dataUrl}
-                alt={filename}
-                className="max-h-full max-w-full object-contain"
-              />
-            </div>
-          ) : isPdf ? (
-            <iframe
-              src={dataUrl}
-              className="h-full w-full border-0"
-              title={filename}
-            />
-          ) : (
-            <div className="flex h-full items-center justify-center text-muted-foreground">
-              <span className="text-[13px]">不支持预览此文件类型</span>
-            </div>
-          )}
-        </div>
-      </div>
     </div>
   );
 }

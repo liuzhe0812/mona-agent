@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { getGatewayStatus } from "@/lib/tauri";
+import { getServicesStatus } from "@/lib/tauri";
 import { MailComposer, type ComposerMode } from "./MailComposer";
 import { listAccounts } from "./lib/emailApi";
 import type { EmailAccount, EmailMessage } from "./lib/types";
@@ -52,7 +52,7 @@ export function ComposeWindow() {
       try {
         const [accounts, gw] = await Promise.all([
           listAccounts(),
-          getGatewayStatus().catch(() => null),
+          getServicesStatus().catch(() => null),
         ]);
         setAccounts(accounts);
         if (gw?.running && gw?.port) {

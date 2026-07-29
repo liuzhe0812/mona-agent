@@ -1296,6 +1296,12 @@ pub async fn notes_load_state() -> Result<NotesState, String> {
                 .map(|n| n.id.clone())
         });
 
+    // Pre-warm the link graph cache in the background so the first graph view
+    // is fast. Fire-and-forget: does not block the state return.
+    if let Some(vault) = vault_path.clone() {
+        notes_links::refresh_cache_background(vault);
+    }
+
     Ok(NotesState {
         notebooks,
         notes,

@@ -252,7 +252,7 @@ export function PortsPanel({ sessionId }: Props) {
               {filteredPorts.map((port, index) => (
                 <tr
                   key={`${port.protocol}-${port.localAddr}-${port.localPort}-${index}`}
-                  className="border-b border-border/50 hover:bg-accent/50"
+                  className="border-b border-border/50 hover:bg-accent"
                 >
                   <td className="px-2 py-1.5 font-mono">{port.localPort}</td>
                   <td className="px-1 py-1.5">

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 import { AgentLogo } from "@/components/AgentLogo";
@@ -17,6 +17,7 @@ import { useSoftwareManagement, useStorageScan } from "./useSystemData";
 
 export function SystemView({ initialTab = "overview" }: { initialTab?: SystemTab }) {
   const [activeTab, setActiveTab] = useState<SystemTab>(initialTab);
+  const [storageMounted, setStorageMounted] = useState(initialTab === "storage");
   const [softwareMounted, setSoftwareMounted] = useState(initialTab === "software");
   const [handoffTask, setHandoffTask] = useState<SystemAgentHandoffTask | null>(null);
   const [analysisRequest, setAnalysisRequest] = useState<{ goal: string; nonce: number } | null>(null);
@@ -30,6 +31,7 @@ export function SystemView({ initialTab = "overview" }: { initialTab?: SystemTab
   const handleTabChange = (tab: SystemTab) => {
     setActiveTab(tab);
     if (tab === "software") setSoftwareMounted(true);
+    if (tab === "storage") setStorageMounted(true);
   };
 
   const ActivePanel = activeTab === "overview"
@@ -52,18 +54,18 @@ export function SystemView({ initialTab = "overview" }: { initialTab?: SystemTab
     localStorage.setItem("system.assistantCollapsed", "1");
   };
 
-  useEffect(() => {
-    const collapseOnNarrowResize = () => {
-      setAssistantCollapsed(window.innerWidth < 1280);
-    };
-    window.addEventListener("resize", collapseOnNarrowResize);
-    return () => window.removeEventListener("resize", collapseOnNarrowResize);
-  }, []);
+  const toggleAssistant = () => {
+    if (assistantCollapsed) {
+      expandAssistant();
+    } else {
+      collapseAssistant();
+    }
+  };
 
   return (
     <section
       data-testid="system-layout"
-      className="relative grid h-full min-h-0 overflow-hidden bg-background xl:grid-cols-[minmax(0,1fr)_360px]"
+      className={`relative grid h-full min-h-0 overflow-hidden bg-background ${assistantCollapsed ? "grid-cols-[minmax(0,1fr)]" : "grid-cols-[minmax(0,1fr)_360px]"}`}
     >
       <div className="flex min-h-0 min-w-0 flex-col">
         <header className="shrink-0 border-b border-border/70 bg-card/70 px-4 pt-4 lg:px-5">
@@ -71,7 +73,7 @@ export function SystemView({ initialTab = "overview" }: { initialTab?: SystemTab
             <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-sky-400 to-blue-600 p-1.5 shadow-sm"><img src={sidebarSystemIcon} className="h-full w-full object-contain" alt="" draggable={false} /></span>
             <div className="min-w-0"><h1 className="text-xl font-semibold tracking-tight">系统</h1><p className="text-xs text-muted-foreground">管理电脑配置与日常维护</p></div>
             <div className="ml-auto flex items-center gap-2">
-              {assistantCollapsed && <button type="button" aria-label="展开 Mona 系统管家" onClick={expandAssistant} className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition hover:bg-accent hover:text-foreground"><AgentLogo state="welcome" className="h-5 w-5" /></button>}
+              <button type="button" aria-label={assistantCollapsed ? "展开 Mona 系统管家" : "收起 Mona 系统管家"} onClick={toggleAssistant} className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition hover:bg-accent hover:text-foreground"><AgentLogo state="welcome" className="h-5 w-5" /></button>
             </div>
           </div>
           <div role="tablist" aria-label="系统功能" className="mt-3 flex gap-1 overflow-x-auto scrollbar-none">
@@ -97,7 +99,12 @@ export function SystemView({ initialTab = "overview" }: { initialTab?: SystemTab
                 <SoftwarePanel onHandoff={setHandoffTask} />
               </div>
             )}
-            {activeTab === "storage" ? <StoragePanel scan={storageScan} onHandoff={setHandoffTask} onAnalyze={(goal) => setAnalysisRequest({ goal, nonce: Date.now() })} /> : ActivePanel}
+            {storageMounted && (
+              <div className={activeTab === "storage" ? "" : "hidden"}>
+                <StoragePanel scan={storageScan} onHandoff={setHandoffTask} onAnalyze={(goal) => setAnalysisRequest({ goal, nonce: Date.now() })} />
+              </div>
+            )}
+            {activeTab !== "software" && activeTab !== "storage" && ActivePanel}
           </div>
         </div>
       </div>

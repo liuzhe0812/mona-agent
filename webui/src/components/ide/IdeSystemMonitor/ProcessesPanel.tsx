@@ -249,7 +249,7 @@ export function ProcessesPanel({ sessionId }: Props) {
               {filteredProcesses.map((proc) => (
                 <tr
                   key={proc.pid}
-                  className="border-b border-border/50 hover:bg-accent/50"
+                  className="border-b border-border/50 hover:bg-accent"
                 >
                   <td className="px-2 py-1.5 font-mono">{proc.pid}</td>
                   <td

@@ -94,7 +94,7 @@ export function ProfileTab({
         <div className="grid gap-5 lg:grid-cols-[1fr_260px]">
           <div className="flex min-w-0 items-center gap-5">
             <div
-              className="relative flex h-24 w-24 shrink-0 items-center justify-center rounded-[28px] text-white shadow-lg"
+              className="relative flex h-24 w-24 shrink-0 items-center justify-center rounded-2xl text-white shadow-lg"
               style={{ background: `linear-gradient(145deg, ${PROFILE_COLORS.coralSoft}, ${PROFILE_COLORS.coral})` }}
             >
               <UserRound className="h-12 w-12" />
