@@ -377,8 +377,8 @@ export function PptConfigPanel({ config, setConfig, phase, onStart }: PptConfigP
           <div className="grid grid-cols-2 gap-1">
             {(
               [
-                { value: "design", label: "AI 设计", title: "从 0 生成高视觉质量 PPT" },
-                { value: "template", label: "我的模版", title: "上传 .pptx 模版，保留原有母版样式填充内容" },
+                { value: "design", label: "AI 生成", title: "从 0 生成高视觉质量 PPT" },
+                { value: "template", label: "AI 编辑", title: "上传 .pptx 模版，保留原有母版样式填充内容" },
               ] as Array<{ value: PptMode; label: string; title: string }>
             ).map((item) => (
               <button
@@ -970,7 +970,21 @@ export function PptConfigPanel({ config, setConfig, phase, onStart }: PptConfigP
         )}
 
         <section>
-          <h3 className="mb-2 text-[12px] font-medium text-foreground">输入来源</h3>
+          <h3 className="mb-2 text-[12px] font-medium text-foreground">
+            {isTemplateMode ? "主题" : "输入来源"}
+          </h3>
+          {isTemplateMode ? (
+            <Textarea
+              className="min-h-[80px] resize-none text-[12px]"
+              placeholder="描述你想在模版上制作的内容..."
+              value={config.topic}
+              onChange={(e) =>
+                setConfig((prev) => ({ ...prev, topic: e.target.value }))
+              }
+              disabled={readOnly}
+            />
+          ) : (
+          <>
           <div className="mb-2 flex gap-1 rounded-lg bg-muted p-1">
             <button
               className={cn(
@@ -1174,6 +1188,8 @@ export function PptConfigPanel({ config, setConfig, phase, onStart }: PptConfigP
                 </div>
               )}
             </div>
+          )}
+          </>
           )}
         </section>
 
