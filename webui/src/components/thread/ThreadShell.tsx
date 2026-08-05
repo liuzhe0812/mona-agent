@@ -10,7 +10,7 @@ import { ThreadViewport } from "@/components/thread/ThreadViewport";
 import { NewChatDashboard } from "@/components/thread/NewChatDashboard";
 import { SplitPane } from "@/components/deliver/SplitPane";
 import { FilePreviewPanel } from "@/components/deliver/FilePreviewPanel";
-import { WorkspacePanel } from "@/components/deliver/WorkspacePanel";
+import { WorkspacePanel, flattenFilesForDisplay } from "@/components/deliver/WorkspacePanel";
 import { useFilePreviewStore, type PreviewScope } from "@/components/deliver/filePreviewStore";
 import { useMonaStream, type SendImage, type SendOptions } from "@/hooks/useMonaStream";
 import { usePendingQueue } from "@/hooks/usePendingQueue";
@@ -617,6 +617,10 @@ export function ThreadShell({
   const toggleWorkspaceCollapsed = useFilePreviewStore(
     (s) => s.toggleWorkspaceCollapsed,
   );
+  const setWorkspaceCollapsed = useFilePreviewStore(
+    (s) => s.setWorkspaceCollapsed,
+  );
+  const workspacePath = useWorkspaceStore((s) => s.workspacePath);
 
   // Session type: project sessions read the bound ``metadata.workspace`` as
   // their effective workspace; non-project sessions (and the home screen)
@@ -633,6 +637,15 @@ export function ThreadShell({
     !isProjectSession && !isHome ? token : null,
     `${historyKey ?? "home"}-${artifactsRefreshSignal}`,
   );
+
+  // Rescan when the server pushes ``artifacts_changed`` — the shared output
+  // directory changed on disk (possibly from another channel), so the panel
+  // tracks reality without a manual refresh click.
+  const { refresh: refreshArtifacts } = artifacts;
+  useEffect(() => {
+    if (isProjectSession || isHome) return;
+    return client.onArtifactsChanged(() => refreshArtifacts());
+  }, [client, isProjectSession, isHome, refreshArtifacts]);
 
   // Aggregate all delivered files produced during the session.
   // Includes both explicit deliver_file calls and files written/edited by AI
@@ -695,10 +708,54 @@ export function ThreadShell({
   }, [isProjectSession, artifacts.files, messageFiles]);
 
   const hasFiles = workspaceFiles.length > 0;
+  // Preview prev/next cycles in the same visual order the workspace panel
+  // displays: flat session section first, then the sorted artifact tree.
+  const previewNavFiles = useMemo(
+    () =>
+      flattenFilesForDisplay(
+        isProjectSession ? messageFiles : artifacts.files,
+        isProjectSession ? [] : messageFiles,
+      ),
+    [isProjectSession, artifacts.files, messageFiles],
+  );
   // Right panel shows the file list by default, or the in-pane preview
-  // when a file is selected. Hidden entirely for empty sessions.
-  const rightVisible = !isHome && (hasFiles || !!previewFile) && !workspaceCollapsed;
-  const showWorkspaceToggle = !isHome && hasFiles && workspaceCollapsed;
+  // when a file is selected. Empty sessions hide the panel by default but
+  // keep the collapsed edge button as an always-reachable entry; expanding
+  // it reveals the panel's empty state ("还没有产物" + open output dir).
+  const [emptyPanelExpanded, setEmptyPanelExpanded] = useState(false);
+  useEffect(() => setEmptyPanelExpanded(false), [historyKey]);
+  const hasPreviewTarget = hasFiles || !!previewFile;
+  const rightVisible =
+    !isHome && !workspaceCollapsed && (hasPreviewTarget || emptyPanelExpanded);
+  const showWorkspaceToggle = !isHome && !rightVisible;
+
+  // New-artifact feedback while collapsed: when the deliverable count
+  // grows and the panel is hidden, highlight the edge button until the
+  // user expands the panel again. Session switches reset the baseline so
+  // a different chat's inventory is not mistaken for new deliveries.
+  const [edgeHighlight, setEdgeHighlight] = useState(false);
+  const prevWorkspaceCountRef = useRef({ key: historyKey, count: 0 });
+  useEffect(() => {
+    const count = workspaceFiles.length;
+    const prev = prevWorkspaceCountRef.current;
+    if (prev.key !== historyKey) {
+      prevWorkspaceCountRef.current = { key: historyKey, count };
+      setEdgeHighlight(false);
+      return;
+    }
+    if (count > prev.count && !rightVisible) setEdgeHighlight(true);
+    prevWorkspaceCountRef.current = { key: historyKey, count };
+  }, [workspaceFiles.length, rightVisible, historyKey]);
+  useEffect(() => {
+    if (rightVisible) setEdgeHighlight(false);
+  }, [rightVisible]);
+
+  // Absolute path of the shared output directory (``<workspace>/output``),
+  // used by the workspace panel's "open output directory" affordances.
+  const sharedOutputDir = useMemo(() => {
+    const ws = workspacePath.replace(/\\/g, "/").replace(/\/+$/, "");
+    return ws ? `${ws}/output` : null;
+  }, [workspacePath]);
 
   // Delete a shared-output artifact from disk and trigger a scan refresh so
   // the workspace panel re-reads the directory and drops the row.
@@ -706,13 +763,10 @@ export function ThreadShell({
     async (file: DeliveredFile) => {
       const target = file.absolute_path || file.path;
       if (!target) return;
-      try {
-        const { remove } = await import("@tauri-apps/plugin-fs");
-        await remove(target);
-      } catch (err) {
-        console.error("[artifact] delete failed:", err);
-        return;
-      }
+      // 删除一律进系统回收站（可恢复）；失败时抛给 WorkspacePanel 在确认
+      // 弹窗中展示原因，绝不静默回退为永久删除。
+      const { moveToTrash } = await import("@/lib/tauri");
+      await moveToTrash(target);
       artifacts.refresh();
     },
     [artifacts],
@@ -744,7 +798,14 @@ export function ThreadShell({
           {showWorkspaceToggle ? (
             <button
               type="button"
-              onClick={toggleWorkspaceCollapsed}
+              onClick={() => {
+                if (hasPreviewTarget) {
+                  toggleWorkspaceCollapsed();
+                } else {
+                  setEmptyPanelExpanded(true);
+                  setWorkspaceCollapsed(false);
+                }
+              }}
               title="展开工作区"
               className={cn(
                 "absolute right-0 top-1/2 z-10 -translate-y-1/2",
@@ -752,20 +813,24 @@ export function ThreadShell({
                 "border border-r-0 border-border/60 bg-popover/95 px-1.5 py-2 shadow-md",
                 "text-muted-foreground hover:bg-muted hover:text-foreground",
                 "transition-colors",
+                edgeHighlight && "text-primary",
               )}
             >
               <PanelRightOpen className="h-4 w-4" />
-              <span className="text-[10px] font-medium">{workspaceFiles.length}</span>
+              {workspaceFiles.length > 0 ? (
+                <span className="text-[10px] font-medium">{workspaceFiles.length}</span>
+              ) : null}
             </button>
           ) : null}
         </section>
       }
       right={
         previewFile ? (
-          <FilePreviewPanel />
+          <FilePreviewPanel files={previewNavFiles} />
         ) : (
           <WorkspacePanel
-            files={workspaceFiles}
+            files={isProjectSession ? messageFiles : artifacts.files}
+            sessionFiles={!isProjectSession ? messageFiles : undefined}
             scope={workspaceScope}
             sessionKey={isProjectSession ? sessionKey : null}
             loading={!isProjectSession ? artifacts.loading : false}
@@ -773,6 +838,7 @@ export function ThreadShell({
             truncated={!isProjectSession ? artifacts.truncated : false}
             onRefresh={!isProjectSession ? artifacts.refresh : undefined}
             onDelete={!isProjectSession ? handleDeleteArtifact : undefined}
+            outputDir={!isProjectSession ? sharedOutputDir : null}
           />
         )
       }

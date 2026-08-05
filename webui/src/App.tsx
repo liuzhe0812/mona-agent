@@ -6,6 +6,7 @@ import { Check, Copy, FileText, X } from "lucide-react";
 import { DeleteConfirm } from "@/components/DeleteConfirm";
 import { RenameChatDialog } from "@/components/RenameChatDialog";
 import { Sidebar } from "@/components/Sidebar";
+import { useMaterialsOpenStore } from "@/lib/materials-open-store";
 import { SessionSearchDialog } from "@/components/SessionSearchDialog";
 import { QuickAskWindow } from "@/components/quick/QuickAskWindow";
 import { SettingsView } from "@/components/settings/SettingsView";
@@ -51,7 +52,7 @@ import { deriveTitle } from "@/lib/format";
 import { MonaClient } from "@/lib/mona-client";
 import { ClientProvider, useClientOptional, type RuntimeStatus } from "@/providers/ClientProvider";
 import type { ChatSummary } from "@/lib/types";
-import { isTauri, getGatewayStatus, startGateway, getServicesStatus, startServices, getDesktopSettings, readGatewayLog, createNoteFromChat, revealItemInDir, type GatewayLog, type SidebarShortcuts, type UpdateCheckResult } from "@/lib/tauri";
+import { isTauri, getGatewayStatus, startGateway, getServicesStatus, startServices, getDesktopSettings, readGatewayLog, createNoteFromChat, revealItemInDir, type GatewayLog, type SidebarShortcuts, type SidebarModuleConfig, type UpdateCheckResult } from "@/lib/tauri";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -630,6 +631,7 @@ function Shell({
   const [loginDialogSubscribeIntent, setLoginDialogSubscribeIntent] = useState(false);
   const [updateAvailable, setUpdateAvailable] = useState<UpdateCheckResult | null>(null);
   const [updateDialogTrigger, setUpdateDialogTrigger] = useState(0);
+  const [sidebarModules, setSidebarModules] = useState<SidebarModuleConfig[] | null>(null);
   const runningChatIdsRef = useRef<Set<string>>(new Set());
   const sidebarShortcutsRef = useRef<SidebarShortcuts>({
     mona: "Alt+1",
@@ -949,6 +951,16 @@ function Shell({
     setMobileSidebarOpen(false);
   }, [switchToMonaTab]);
 
+  // 聊天中的资料引用链接（mona:material?...）被点击：切到笔记模块，
+  // 由 NotesView/MaterialsPreview 继续消费请求并定位到引用位置。
+  const pendingMaterialOpen = useMaterialsOpenStore((s) => s.pending);
+  useEffect(() => {
+    if (!pendingMaterialOpen) return;
+    setCreateNoteOnOpen(false);
+    setView("note");
+    switchToMonaTab();
+  }, [pendingMaterialOpen, switchToMonaTab]);
+
   const onCreateNote = useCallback(() => {
     setCreateNoteOnOpen(true);
     setView("note");
@@ -1219,6 +1231,17 @@ function Shell({
     getDesktopSettings().then((s) => {
       if (s.sidebar_shortcuts) {
         sidebarShortcutsRef.current = s.sidebar_shortcuts;
+      }
+      if (s.sidebar_modules) {
+        setSidebarModules(s.sidebar_modules);
+      }
+      // 启动默认模块：仅在初次启动且没有 ?noteId 深链时应用
+      if (!new URLSearchParams(window.location.search).get("noteId")) {
+        const dv = typeof s.default_view === "string" ? s.default_view : "";
+        const VALID_VIEWS: ShellView[] = ["chat", "note", "doc", "ssh", "email", "schedule", "db", "system", "profile", "settings"];
+        if (dv && VALID_VIEWS.includes(dv as ShellView)) {
+          setView(dv as ShellView);
+        }
       }
     }).catch(() => {});
   }, []);
@@ -1566,6 +1589,7 @@ function Shell({
     archivedCount: sidebarState.archived_keys.length,
     onRemoveProject,
     onCreateTask,
+    modules: sidebarModules ?? undefined,
   };
   const showMainSidebar = true;
 
@@ -1678,17 +1702,15 @@ function Shell({
           <div className="flex min-w-0 flex-1 flex-col">
             <div
               className={cn(
-                "flex min-h-0 flex-1 overflow-hidden",
-                // 主内容表面（redesign-plan §4.6）：非浏览器模式时启用圆角裁切 + 画布边缘 + 发丝边 + 极轻阴影。
-                // 浏览器原生 WebView 模式保持边到边布局（§4.7）。
+                "flex min-h-0 flex-1 overflow-hidden bg-background",
                 showContentSurface &&
                   "m-px mr-2 mb-2 rounded-2xl border border-border/60 shadow-sm",
               )}
             >
-              <main className="relative flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-background">
+              <main className="relative isolate flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-background">
               <div
                 className={cn(
-                  "absolute inset-0 flex flex-col",
+                  "absolute inset-0 flex flex-col bg-background",
                   (view === "settings" || view === "note" || view === "ssh" || view === "db" || view === "doc" || view === "email" || view === "schedule" || view === "system" || view === "profile" || activeBrowserTab.type !== "mona") &&
                     "invisible pointer-events-none",
                 )}
@@ -1751,7 +1773,7 @@ function Shell({
               )}
               <div
                 className={cn(
-                  "absolute inset-0 flex flex-col",
+                  "absolute inset-0 flex flex-col bg-background",
                   (view !== "ssh" || isBrowserTabActive) && "invisible pointer-events-none",
                 )}
               >
@@ -1811,7 +1833,7 @@ function Shell({
               )}
               {systemMounted && (
                 <div className={cn(
-                  "absolute inset-0 flex flex-col",
+                  "absolute inset-0 flex flex-col bg-background",
                   (view !== "system" || isBrowserTabActive) && "invisible pointer-events-none",
                 )}>
                   <Suspense fallback={<ModuleLoading title="正在打开系统" />}>
@@ -1820,7 +1842,7 @@ function Shell({
                 </div>
               )}
               {client ? (
-                <div className={cn("absolute inset-0 flex flex-col", (view !== "doc" || isBrowserTabActive) && "hidden")}>
+                <div className={cn("absolute inset-0 flex flex-col bg-background", (view !== "doc" || isBrowserTabActive) && "invisible pointer-events-none")}>
                   <Suspense fallback={<ModuleLoading title="正在打开 AI 文档" />}>
                     <DocMakerView />
                   </Suspense>

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import mimetypes
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,6 +12,10 @@ from pathlib import Path
 MAX_ARTIFACT_FILES = 1000
 
 _TEMP_EXTENSIONS = {".tmp", ".part"}
+
+# Generated media sidecar metadata (img_<hash12>.json / vid_<slug>_<hash12>.json
+# etc.) is internal bookkeeping, not a user deliverable — hidden from the panel.
+_SIDECAR_RE = re.compile(r"^(?:img|vid)_(?:.*_)?[0-9a-f]{12}\.json$")
 
 
 @dataclass
@@ -82,6 +88,8 @@ def _scan_files(root: Path) -> list[tuple[Path, str, float, int]]:
                 continue
             if _is_temp_file(entry.name):
                 continue
+            if _SIDECAR_RE.match(entry.name):
+                continue
             try:
                 stat = entry.stat()
             except (FileNotFoundError, OSError):
@@ -129,3 +137,24 @@ def list_artifacts(output_dir: Path) -> ArtifactListResult:
             )
         )
     return ArtifactListResult(files=files, truncated=truncated)
+
+
+def artifact_signature(output_dir: Path) -> str:
+    """Cheap change-detection signature over the shared output directory.
+
+    Aggregates relative path + mtime + size of every deliverable file
+    (same filtering as ``list_artifacts``: symlinks, dotfiles, temp files
+    and generated-media sidecars are skipped) into a stable hex digest.
+    File content is never read, so polling stays inexpensive.
+    """
+    root = Path(output_dir).resolve(strict=False)
+    scanned = _scan_files(root)
+    digest = hashlib.blake2b(digest_size=16)
+    for _entry, rel_posix, mtime, size in sorted(scanned, key=lambda item: item[1]):
+        digest.update(rel_posix.encode("utf-8", "surrogateescape"))
+        digest.update(b"\0")
+        digest.update(str(size).encode("ascii"))
+        digest.update(b"\0")
+        digest.update(str(mtime).encode("ascii"))
+        digest.update(b"\0")
+    return digest.hexdigest()

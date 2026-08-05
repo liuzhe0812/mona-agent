@@ -120,6 +120,7 @@ pub fn show_notification_inner(app: &AppHandle, payload: NotificationPayload) ->
         .shadow(false)
         .build()
         .map_err(|e| e.to_string())?;
+    crate::attach_permission_allower(&window);
 
     // 计算右下角位置（考虑堆叠）
     place_notification_window(app, &window)?;

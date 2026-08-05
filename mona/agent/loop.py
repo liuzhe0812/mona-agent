@@ -77,7 +77,7 @@ _FREE_TIER_CAPABILITY_NOTE = (
     "email_action)\n"
     "- Searching the unified memory (hoard_search) for note or email sources\n\n"
     "You **may still**:\n"
-    "- Create new notes (notes_create) and edit existing notes (notes_edit)\n"
+    "- Create new notes (notes_create)\n"
     "- Search the unified memory (hoard_search) for browser and chat sources\n"
     "- Use all other tools normally\n\n"
     "Rules:\n"
@@ -486,9 +486,9 @@ class AgentLoop:
 
         - Session with ``metadata.workspace`` set to an absolute path: that
           path (resolved) — project session keeps its own root.
-        - Session with ``metadata.agent_kind`` in ``{"ppt", "video"}``: the
+        - Session with ``metadata.agent_kind`` in ``DOCUMENT_PROFILES``: the
           configured workspace root — dedicated agents keep their existing
-          workspace semantics (ppt_projects/, video_projects/).
+          workspace semantics (ppt_projects/, video_projects/, three_projects/).
         - Default session or no session: ``<workspace>/output`` — the shared
           artifacts directory for non-project sessions.
         """
@@ -499,8 +499,9 @@ class AgentLoop:
         ws_override = session.metadata.get("workspace")
         if isinstance(ws_override, str) and ws_override.strip():
             return Path(ws_override).expanduser().resolve()
+        from mona.agent.document_loop import DOCUMENT_PROFILES
         agent_kind = session.metadata.get("agent_kind")
-        if isinstance(agent_kind, str) and agent_kind in {"ppt", "video"}:
+        if isinstance(agent_kind, str) and agent_kind in DOCUMENT_PROFILES:
             return self.workspace
         return get_shared_output_dir(self.workspace)
 

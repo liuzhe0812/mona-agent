@@ -4,6 +4,7 @@ import TiptapImage from "@tiptap/extension-image";
 import Link from "@tiptap/extension-link";
 import Placeholder from "@tiptap/extension-placeholder";
 import { Table, TableCell, TableHeader, TableRow } from "@tiptap/extension-table";
+import TextAlign from "@tiptap/extension-text-align";
 import TaskItem from "@tiptap/extension-task-item";
 import TaskList from "@tiptap/extension-task-list";
 import { Markdown } from "@tiptap/markdown";
@@ -15,10 +16,16 @@ import { WikiLink } from "./WikiLinkExtension";
 import { NoteEmbed } from "./NoteEmbedExtension";
 import { MermaidCodeBlock } from "./MermaidCodeBlock";
 import { FindReplaceBar, setActiveFindApi, useFindBarHotkey } from "./FindReplaceBar";
+import { InlineMath, BlockMath } from "./editor-extensions/math-extension";
+import { MermaidDiagram } from "./editor-extensions/mermaid-extension";
+import { SlashCommand } from "./editor-extensions/slash-command";
+import { SlashCommandPortal } from "./editor-extensions/slash-command/slash-command-portal";
+import { TableBubbleMenu } from "./editor-extensions/table-bubble-menu";
+import { ImageBubbleMenu } from "./editor-extensions/image-bubble-menu";
+import { renderTableToMarkdown } from "./editor-extensions/table-markdown";
 import {
   Bold,
   CheckSquare,
-  ChevronDown,
   Code2,
   Code,
   ClipboardPaste,
@@ -64,13 +71,6 @@ import {
   ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 
 export type EditorMode = "visual" | "markdown";
@@ -136,6 +136,13 @@ const NoteImage = TiptapImage.extend({
 }).configure({
   inline: false,
   allowBase64: false,
+  resize: {
+    enabled: true,
+    directions: ["top-left", "top-right", "bottom-left", "bottom-right", "left", "right"],
+    minWidth: 80,
+    minHeight: 80,
+    alwaysPreserveAspectRatio: true,
+  },
   HTMLAttributes: {
     class: "max-w-full h-auto rounded-lg my-2",
   },
@@ -561,14 +568,28 @@ export function MarkdownEditor({
           class: "text-[#2f7fca] underline underline-offset-2",
         },
       }),
-      Table.configure({ resizable: true }),
+      Table.extend({
+        renderMarkdown: (node, h) => renderTableToMarkdown(node, h),
+      }).configure({ resizable: true }),
       TableRow,
       TableHeader,
       TableCell,
+      // 文字对齐：支持段落、标题、表格单元格
+      TextAlign.configure({
+        types: ["paragraph", "heading", "tableCell"],
+      }),
       Placeholder.configure({ placeholder }),
       Markdown.configure({
         indentation: { style: "space", size: 2 },
+        markedOptions: { breaks: true },
       }),
+      // 数学公式扩展（行内 + 块级），输入 $...$ 或 $$...$$ 自动识别
+      InlineMath,
+      BlockMath,
+      // Mermaid 图表扩展（独立节点，支持流程图/时序图/类图等）
+      MermaidDiagram,
+      // SlashCommand（/ 命令面板）
+      SlashCommand,
       // NoteEmbed 必须在 WikiLink 之前注册，因为 `![[...]]` 的 `[[` 会被
       // WikiLink 的 tokenizer 捕获。NoteEmbed 的 start 检测 `![[` 先匹配。
       NoteEmbed.configure({
@@ -829,6 +850,13 @@ export function MarkdownEditor({
   const charCount = content.replace(/\s/g, "").length;
   const lineCount = content.split(/\r?\n/).length;
 
+  // 源码模式行号：与 textarea 行数一致，保证滚动同步
+  const lineNumbersRef = useRef<HTMLDivElement>(null);
+  const lineNumbers = useMemo(
+    () => Array.from({ length: content.split(/\r?\n/).length }, (_, i) => i + 1),
+    [content],
+  );
+
   return (
     <section
       data-note-editor="true"
@@ -931,6 +959,241 @@ export function MarkdownEditor({
               .ProseMirror li[data-type="taskItem"][data-checked="true"] > div > p {
                 text-decoration: line-through !important;
               }
+              /* 表格斑马纹（对齐 notegen） */
+              .ProseMirror .tableWrapper {
+                margin: 1em 0;
+                overflow-x: auto;
+                max-width: 100%;
+              }
+              .ProseMirror table {
+                border-collapse: collapse;
+                width: max-content;
+                min-width: 100%;
+                max-width: none;
+                margin: 0;
+                table-layout: auto;
+              }
+              .ProseMirror table th,
+              .ProseMirror table td {
+                min-width: 100px;
+                empty-cells: hide;
+                white-space: normal;
+                overflow-wrap: break-word;
+                word-break: normal;
+              }
+              .ProseMirror table tbody tr:nth-child(2n) {
+                background-color: hsl(var(--muted) / 0.15);
+              }
+              .ProseMirror table thead tr:first-child th {
+                background-color: hsl(var(--muted) / 0.4);
+              }
+              .ProseMirror table th {
+                font-weight: 600;
+              }
+              /* 选中单元格 */
+              .ProseMirror .selectedCell {
+                background-color: hsl(var(--primary) / 0.15) !important;
+              }
+              /* 列对齐 */
+              .ProseMirror table td[data-align="center"],
+              .ProseMirror table th[data-align="center"] {
+                text-align: center;
+              }
+              .ProseMirror table td[data-align="right"],
+              .ProseMirror table th[data-align="right"] {
+                text-align: right;
+              }
+              .ProseMirror table td[data-align="left"],
+              .ProseMirror table th[data-align="left"] {
+                text-align: left;
+              }
+              /* 空单元格占位，防止塌陷 */
+              .ProseMirror table td:has(p:empty)::before,
+              .ProseMirror table th:has(p:empty)::before {
+                content: " ";
+                visibility: hidden;
+              }
+              /* 列宽调整手柄 */
+              .ProseMirror .tableResizeHandle {
+                position: absolute;
+                right: -4px;
+                top: 0;
+                bottom: 0;
+                width: 8px;
+                cursor: col-resize;
+                background-color: transparent;
+              }
+              .ProseMirror .tableResizeHandle:hover {
+                background-color: hsl(var(--primary) / 0.5);
+              }
+              .ProseMirror .tableResizeHandle::before {
+                content: '';
+                position: absolute;
+                left: 50%;
+                top: 50%;
+                transform: translate(-50%, -50%);
+                width: 4px;
+                height: 20px;
+                background-color: hsl(var(--primary) / 0.3);
+                border-radius: 2px;
+              }
+              /* 暗色模式表格适配 */
+              .dark .ProseMirror table tbody tr:nth-child(2n) {
+                background-color: hsl(var(--muted) / 0.1);
+              }
+              .dark .ProseMirror .selectedCell {
+                background-color: hsl(var(--primary) / 0.25) !important;
+              }
+              /* 暗色模式代码块 */
+              .dark .ProseMirror pre {
+                background-color: hsl(var(--muted) / 0.3);
+              }
+              .dark .ProseMirror code {
+                background-color: hsl(var(--muted) / 0.3);
+              }
+              /* 图片拖动缩放手柄（对齐 notegen） */
+              .ProseMirror [data-resize-container] {
+                display: inline-flex !important;
+                position: relative;
+                max-width: 100%;
+                vertical-align: middle;
+                line-height: 0;
+              }
+              .ProseMirror [data-resize-container].ProseMirror-selectednode {
+                outline: none;
+              }
+              .ProseMirror [data-resize-wrapper] {
+                position: relative;
+                max-width: 100%;
+                line-height: 0;
+              }
+              .ProseMirror [data-resize-wrapper] > img {
+                display: block;
+                margin: 0;
+                max-width: 100%;
+                border-radius: 8px;
+              }
+              /* 选中边框（wrapper::after 实现，跨在图片上） */
+              .ProseMirror [data-resize-wrapper]::after {
+                content: '';
+                position: absolute;
+                inset: 0;
+                pointer-events: none;
+                border: 2px solid hsl(var(--primary) / 0.35);
+                border-radius: 8px;
+                opacity: 0;
+                transition: opacity 0.12s ease;
+              }
+              .ProseMirror [data-resize-container]:hover [data-resize-wrapper]::after,
+              .ProseMirror [data-resize-container].ProseMirror-selectednode [data-resize-wrapper]::after,
+              .ProseMirror [data-resize-container][data-resize-state="true"] [data-resize-wrapper]::after {
+                opacity: 1;
+              }
+              /* 手柄默认隐藏 */
+              .ProseMirror [data-resize-handle] {
+                position: absolute;
+                z-index: 2;
+                opacity: 0;
+                background-color: transparent;
+                transition: opacity 0.12s ease;
+              }
+              .ProseMirror [data-resize-container]:hover [data-resize-handle],
+              .ProseMirror [data-resize-container].ProseMirror-selectednode [data-resize-handle],
+              .ProseMirror [data-resize-container][data-resize-state="true"] [data-resize-handle] {
+                opacity: 1;
+              }
+              .ProseMirror [data-resize-handle]:hover {
+                opacity: 1;
+              }
+              /* 左右：12px 宽竖条，用 ::after 画 2×28px 圆角竖线 */
+              .ProseMirror [data-resize-handle="left"],
+              .ProseMirror [data-resize-handle="right"] {
+                width: 12px;
+                cursor: ew-resize;
+              }
+              .ProseMirror [data-resize-handle="left"]::after,
+              .ProseMirror [data-resize-handle="right"]::after {
+                content: '';
+                position: absolute;
+                width: 2px;
+                height: 28px;
+                background-color: hsl(var(--primary) / 0.42);
+                border-radius: 999px;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+              }
+              .ProseMirror [data-resize-handle="left"] {
+                transform: translateX(-50%);
+              }
+              .ProseMirror [data-resize-handle="right"] {
+                transform: translateX(50%);
+              }
+              /* 上下：12px 高横条，用 ::after 画 28×2px 圆角横线 */
+              .ProseMirror [data-resize-handle="top"],
+              .ProseMirror [data-resize-handle="bottom"] {
+                height: 12px;
+                cursor: ns-resize;
+              }
+              .ProseMirror [data-resize-handle="top"]::after,
+              .ProseMirror [data-resize-handle="bottom"]::after {
+                content: '';
+                position: absolute;
+                width: 28px;
+                height: 2px;
+                background-color: hsl(var(--primary) / 0.42);
+                border-radius: 999px;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+              }
+              .ProseMirror [data-resize-handle="top"] {
+                transform: translateY(-50%);
+              }
+              .ProseMirror [data-resize-handle="bottom"] {
+                transform: translateY(50%);
+              }
+              /* 四角：9×9 圆点，2px primary 半透明边框 + 阴影 */
+              .ProseMirror [data-resize-handle="top-left"],
+              .ProseMirror [data-resize-handle="top-right"],
+              .ProseMirror [data-resize-handle="bottom-left"],
+              .ProseMirror [data-resize-handle="bottom-right"] {
+                width: 9px;
+                height: 9px;
+                background-color: hsl(var(--background));
+                border: 2px solid hsl(var(--primary) / 0.55);
+                border-radius: 999px;
+                box-shadow: 0 1px 3px hsl(var(--foreground) / 0.14);
+              }
+              .ProseMirror [data-resize-handle="top-left"]::after,
+              .ProseMirror [data-resize-handle="top-right"]::after,
+              .ProseMirror [data-resize-handle="bottom-left"]::after,
+              .ProseMirror [data-resize-handle="bottom-right"]::after {
+                display: none;
+              }
+              .ProseMirror [data-resize-handle="top-left"]:hover,
+              .ProseMirror [data-resize-handle="top-right"]:hover,
+              .ProseMirror [data-resize-handle="bottom-left"]:hover,
+              .ProseMirror [data-resize-handle="bottom-right"]:hover {
+                background-color: hsl(var(--primary));
+                border-color: hsl(var(--primary));
+              }
+              .ProseMirror [data-resize-handle="top-left"] {
+                cursor: nwse-resize;
+                transform: translate(-50%, -50%);
+              }
+              .ProseMirror [data-resize-handle="top-right"] {
+                cursor: nesw-resize;
+                transform: translate(50%, -50%);
+              }
+              .ProseMirror [data-resize-handle="bottom-left"] {
+                cursor: nesw-resize;
+                transform: translate(-50%, 50%);
+              }
+              .ProseMirror [data-resize-handle="bottom-right"] {
+                cursor: nwse-resize;
+                transform: translate(50%, 50%);
+              }
             `}</style>
             <div
               ref={visualEditorRef}
@@ -942,7 +1205,7 @@ export function MarkdownEditor({
               {children}
               <EditorContent
                 editor={editor}
-                className="mt-4 flex min-h-0 flex-1 flex-col text-[13.5px] leading-6 text-foreground [&_.ProseMirror]:min-h-[380px] [&_.ProseMirror]:flex-1 [&_.ProseMirror]:outline-none [&_.ProseMirror_blockquote]:border-l-2 [&_.ProseMirror_blockquote]:border-border [&_.ProseMirror_blockquote]:pl-3 [&_.ProseMirror_code]:rounded [&_.ProseMirror_code]:bg-muted [&_.ProseMirror_code]:px-1 [&_.ProseMirror_h1]:mb-2 [&_.ProseMirror_h1]:mt-5 [&_.ProseMirror_h1]:text-[22px] [&_.ProseMirror_h1]:font-bold [&_.ProseMirror_h2]:mb-2 [&_.ProseMirror_h2]:mt-5 [&_.ProseMirror_h2]:text-[18px] [&_.ProseMirror_h2]:font-semibold [&_.ProseMirror_h3]:mb-2 [&_.ProseMirror_h3]:mt-4 [&_.ProseMirror_h3]:text-[15px] [&_.ProseMirror_h3]:font-semibold [&_.ProseMirror_h4]:mb-1.5 [&_.ProseMirror_h4]:mt-3 [&_.ProseMirror_h4]:text-[14px] [&_.ProseMirror_h4]:font-semibold [&_.ProseMirror_img]:max-w-full [&_.ProseMirror_img]:h-auto [&_.ProseMirror_img]:rounded-lg [&_.ProseMirror_img]:my-2 [&_.ProseMirror_li]:my-0.5 [&_.ProseMirror_ol]:ml-5 [&_.ProseMirror_ol]:list-decimal [&_.ProseMirror_p]:my-1.5 [&_.ProseMirror_pre]:my-2.5 [&_.ProseMirror_pre]:overflow-x-auto [&_.ProseMirror_pre]:rounded-lg [&_.ProseMirror_pre]:border [&_.ProseMirror_pre]:border-border/70 [&_.ProseMirror_pre]:bg-muted/45 [&_.ProseMirror_pre]:p-2.5 [&_.ProseMirror_s]:line-through [&_.ProseMirror_s]:text-muted-foreground [&_.ProseMirror_table]:my-2.5 [&_.ProseMirror_table]:w-full [&_.ProseMirror_table]:border-collapse [&_.ProseMirror_td]:border [&_.ProseMirror_td]:border-border [&_.ProseMirror_td]:px-2 [&_.ProseMirror_td]:py-1.5 [&_.ProseMirror_th]:border [&_.ProseMirror_th]:border-border [&_.ProseMirror_th]:bg-muted/45 [&_.ProseMirror_th]:px-2 [&_.ProseMirror_th]:py-1.5 [&_.ProseMirror_ul]:ml-5 [&_.ProseMirror_ul]:list-disc"
+                className="mt-4 flex min-h-0 flex-1 flex-col text-[13.5px] leading-6 text-foreground [&_.ProseMirror]:min-h-[380px] [&_.ProseMirror]:flex-1 [&_.ProseMirror]:outline-none [&_.ProseMirror_blockquote]:border-l-2 [&_.ProseMirror_blockquote]:border-border [&_.ProseMirror_blockquote]:pl-3 [&_.ProseMirror_code]:rounded [&_.ProseMirror_code]:bg-muted/50 [&_.ProseMirror_code]:px-1 [&_.ProseMirror_code]:py-0.5 [&_.ProseMirror_code]:text-[0.9em] [&_.ProseMirror_h1]:mb-2 [&_.ProseMirror_h1]:mt-5 [&_.ProseMirror_h1]:text-[22px] [&_.ProseMirror_h1]:font-bold [&_.ProseMirror_h2]:mb-2 [&_.ProseMirror_h2]:mt-5 [&_.ProseMirror_h2]:text-[18px] [&_.ProseMirror_h2]:font-semibold [&_.ProseMirror_h3]:mb-2 [&_.ProseMirror_h3]:mt-4 [&_.ProseMirror_h3]:text-[15px] [&_.ProseMirror_h3]:font-semibold [&_.ProseMirror_h4]:mb-1.5 [&_.ProseMirror_h4]:mt-3 [&_.ProseMirror_h4]:text-[14px] [&_.ProseMirror_h4]:font-semibold [&_.ProseMirror_img]:max-w-full [&_.ProseMirror_img]:h-auto [&_.ProseMirror_img]:rounded-lg [&_.ProseMirror_img]:my-2 [&_.ProseMirror_li]:my-0.5 [&_.ProseMirror_ol]:ml-5 [&_.ProseMirror_ol]:list-decimal [&_.ProseMirror_p]:my-1.5 [&_.ProseMirror_pre_code]:bg-transparent [&_.ProseMirror_pre_code]:p-0 [&_.ProseMirror_pre_code]:text-[13px] [&_.ProseMirror_s]:line-through [&_.ProseMirror_s]:text-muted-foreground [&_.ProseMirror_table]:my-2.5 [&_.ProseMirror_table]:border-collapse [&_.ProseMirror_td]:border [&_.ProseMirror_td]:border-border [&_.ProseMirror_td]:px-3 [&_.ProseMirror_td]:py-2 [&_.ProseMirror_th]:border [&_.ProseMirror_th]:border-border [&_.ProseMirror_th]:bg-muted/30 [&_.ProseMirror_th]:px-3 [&_.ProseMirror_th]:py-2 [&_.ProseMirror_ul]:ml-5 [&_.ProseMirror_ul]:list-disc"
               />
               {wikiLinkState?.open && wikiLinkSuggestions.length > 0 && visualPopupPos && (
                 <div
@@ -976,6 +1239,8 @@ export function MarkdownEditor({
                   wrapperRef={visualEditorRef}
                 />
               ) : null}
+              {editor ? <ImageBubbleMenu editor={editor} /> : null}
+              {editor ? <TableBubbleMenu editor={editor} wrapperRef={visualEditorRef} /> : null}
             </div>
           </div>
         </EditorContextMenu>
@@ -984,19 +1249,35 @@ export function MarkdownEditor({
           <div className={cn("mx-auto flex h-full w-full flex-col px-6 py-5", editorClassName)}>
             {children}
             <div className="relative mt-4 flex min-h-0 flex-1 flex-col">
-              <textarea
-                ref={textareaRef}
-                value={content}
-                onChange={(event) => {
-                  handleMarkdownChange(event.target.value);
-                  const ta = event.target;
-                  detectWikiLinkTrigger(ta.value, ta.selectionStart);
-                }}
-                onKeyDown={handleTextareaKeyDown}
-                onBlur={() => setTimeout(() => setWikiLinkState(null), 200)}
-                className="block h-full w-full flex-1 resize-none rounded-lg px-3 py-2.5 font-mono text-[12.5px] leading-6 text-foreground outline-none scrollbar-thin focus:bg-muted/30"
-                spellCheck={false}
-              />
+              <div className="flex min-h-0 flex-1 overflow-hidden">
+                <div
+                  ref={lineNumbersRef}
+                  aria-hidden="true"
+                  className="select-none overflow-hidden whitespace-nowrap px-2 py-2.5 text-right font-mono text-[12.5px] leading-6 text-muted-foreground/50"
+                >
+                  {lineNumbers.map((n) => (
+                    <div key={n}>{n}</div>
+                  ))}
+                </div>
+                <textarea
+                  ref={textareaRef}
+                  value={content}
+                  onChange={(event) => {
+                    handleMarkdownChange(event.target.value);
+                    const ta = event.target;
+                    detectWikiLinkTrigger(ta.value, ta.selectionStart);
+                  }}
+                  onKeyDown={handleTextareaKeyDown}
+                  onScroll={(e) => {
+                    if (lineNumbersRef.current) {
+                      lineNumbersRef.current.scrollTop = e.currentTarget.scrollTop;
+                    }
+                  }}
+                  onBlur={() => setTimeout(() => setWikiLinkState(null), 200)}
+                  className="block h-full w-full flex-1 resize-none border-0 bg-transparent px-3 py-2.5 font-mono text-[12.5px] leading-6 text-foreground outline-none scrollbar-thin"
+                  spellCheck={false}
+                />
+              </div>
               {wikiLinkState?.open && wikiLinkSuggestions.length > 0 && (
                 <div className="absolute z-50 min-w-[200px] max-w-[320px] rounded-md border border-border/70 bg-popover py-1 shadow-lg">
                   {wikiLinkSuggestions.map((title, idx) => (
@@ -1032,6 +1313,7 @@ export function MarkdownEditor({
           </span>
         </div>
       ) : null}
+      {mode === "visual" && editor ? <SlashCommandPortal /> : null}
     </section>
   );
 }
@@ -1046,9 +1328,34 @@ function EditorContextMenu({ editor, children, onMoveSelectionToNote }: { editor
   const [isInTable, setIsInTable] = useState(false);
   const [canMergeCells, setCanMergeCells] = useState(false);
   const [canSplitCell, setCanSplitCell] = useState(false);
+  // 右键打开前保存的选区，用于在表格多选时恢复
+  const savedSelectionRef = useRef<{ from: number; to: number } | null>(null);
+
+  useEffect(() => {
+    if (!editor) return;
+    const editorElement = editor.view.dom;
+
+    const handleContextMenu = (event: MouseEvent) => {
+      const target = event.target as HTMLElement;
+      const inTable = target.closest("table") !== null || editor.isActive("table");
+      if (!inTable) return;
+      const { from, to } = editor.state.selection;
+      if (from !== to) {
+        savedSelectionRef.current = { from, to };
+      }
+    };
+
+    editorElement.addEventListener("contextmenu", handleContextMenu);
+    return () => editorElement.removeEventListener("contextmenu", handleContextMenu);
+  }, [editor]);
 
   const updateSelection = () => {
     if (!editor) return;
+    // 如果右键前保存了表格多选选区，先恢复它
+    if (savedSelectionRef.current) {
+      editor.chain().focus().setTextSelection(savedSelectionRef.current).run();
+      savedSelectionRef.current = null;
+    }
     const selection = editor.state.selection;
     const { from, to } = selection;
     const hasSel = from !== to;
@@ -1273,7 +1580,7 @@ function EditorContextMenu({ editor, children, onMoveSelectionToNote }: { editor
           </>
         ) : (
           <>
-        {hasSelection ? (
+        {hasSelection && !isInTable ? (
           <>
             <ContextMenuItem onSelect={handleAddInternalLink}>
               <Link2 className="mr-2 h-3.5 w-3.5" />
@@ -1297,48 +1604,50 @@ function EditorContextMenu({ editor, children, onMoveSelectionToNote }: { editor
           </>
         ) : null}
 
-        {hasSelection ? <ContextMenuSeparator /> : null}
-        {/* 段落设置 submenu */}
-        <ContextMenuSub>
-          <ContextMenuSubTrigger className="text-[13px]">
-            <Type className="mr-2 h-3.5 w-3.5" />
-            段落设置
-          </ContextMenuSubTrigger>
-          <ContextMenuSubContent className="w-44">
-            <ContextMenuItem onSelect={() => editor?.chain().focus().toggleHeading({ level: 1 }).run()}>
-              <Heading1 className="mr-2 h-3.5 w-3.5" />
-              标题 1
-            </ContextMenuItem>
-            <ContextMenuItem onSelect={() => editor?.chain().focus().toggleHeading({ level: 2 }).run()}>
-              <Heading2 className="mr-2 h-3.5 w-3.5" />
-              标题 2
-            </ContextMenuItem>
-            <ContextMenuItem onSelect={() => editor?.chain().focus().toggleHeading({ level: 3 }).run()}>
-              <Heading3 className="mr-2 h-3.5 w-3.5" />
-              标题 3
-            </ContextMenuItem>
-            <ContextMenuItem onSelect={() => editor?.chain().focus().toggleHeading({ level: 4 }).run()}>
-              <Heading4 className="mr-2 h-3.5 w-3.5" />
-              标题 4
-            </ContextMenuItem>
-            <ContextMenuSeparator />
-            <ContextMenuItem onSelect={() => editor?.chain().focus().setParagraph().run()}>
+        {hasSelection && !isInTable ? <ContextMenuSeparator /> : null}
+        {/* 段落设置 submenu（表格内不显示） */}
+        {!isInTable ? (
+          <ContextMenuSub>
+            <ContextMenuSubTrigger className="text-[13px]">
               <Type className="mr-2 h-3.5 w-3.5" />
-              正文
-            </ContextMenuItem>
-            <ContextMenuItem onSelect={() => editor?.chain().focus().toggleBlockquote().run()}>
-              <Quote className="mr-2 h-3.5 w-3.5" />
-              引用
-            </ContextMenuItem>
-            <ContextMenuItem onSelect={() => editor?.chain().focus().toggleCodeBlock().run()}>
-              <Code2 className="mr-2 h-3.5 w-3.5" />
-              代码块
-            </ContextMenuItem>
-          </ContextMenuSubContent>
-        </ContextMenuSub>
+              段落设置
+            </ContextMenuSubTrigger>
+            <ContextMenuSubContent className="w-44">
+              <ContextMenuItem onSelect={() => editor?.chain().focus().toggleHeading({ level: 1 }).run()}>
+                <Heading1 className="mr-2 h-3.5 w-3.5" />
+                标题 1
+              </ContextMenuItem>
+              <ContextMenuItem onSelect={() => editor?.chain().focus().toggleHeading({ level: 2 }).run()}>
+                <Heading2 className="mr-2 h-3.5 w-3.5" />
+                标题 2
+              </ContextMenuItem>
+              <ContextMenuItem onSelect={() => editor?.chain().focus().toggleHeading({ level: 3 }).run()}>
+                <Heading3 className="mr-2 h-3.5 w-3.5" />
+                标题 3
+              </ContextMenuItem>
+              <ContextMenuItem onSelect={() => editor?.chain().focus().toggleHeading({ level: 4 }).run()}>
+                <Heading4 className="mr-2 h-3.5 w-3.5" />
+                标题 4
+              </ContextMenuItem>
+              <ContextMenuSeparator />
+              <ContextMenuItem onSelect={() => editor?.chain().focus().setParagraph().run()}>
+                <Type className="mr-2 h-3.5 w-3.5" />
+                正文
+              </ContextMenuItem>
+              <ContextMenuItem onSelect={() => editor?.chain().focus().toggleBlockquote().run()}>
+                <Quote className="mr-2 h-3.5 w-3.5" />
+                引用
+              </ContextMenuItem>
+              <ContextMenuItem onSelect={() => editor?.chain().focus().toggleCodeBlock().run()}>
+                <Code2 className="mr-2 h-3.5 w-3.5" />
+                代码块
+              </ContextMenuItem>
+            </ContextMenuSubContent>
+          </ContextMenuSub>
+        ) : null}
 
-        {hasSelection ? (
-          /* 文本格式 submenu */
+        {hasSelection && !isInTable ? (
+          /* 文本格式 submenu（表格内不显示） */
           <ContextMenuSub>
             <ContextMenuSubTrigger className="text-[13px]">
               <Bold className="mr-2 h-3.5 w-3.5" />
@@ -1377,32 +1686,34 @@ function EditorContextMenu({ editor, children, onMoveSelectionToNote }: { editor
           </ContextMenuSub>
         ) : null}
 
-        {/* 插入 submenu */}
-        <ContextMenuSub>
-          <ContextMenuSubTrigger className="text-[13px]">
-            <ListChecks className="mr-2 h-3.5 w-3.5" />
-            插入
-          </ContextMenuSubTrigger>
-          <ContextMenuSubContent className="w-44">
-            <ContextMenuItem onSelect={() => editor?.chain().focus().toggleTaskList().run()}>
-              <CheckSquare className="mr-2 h-3.5 w-3.5" />
-              任务清单
-            </ContextMenuItem>
-            <ContextMenuItem onSelect={() => editor?.chain().focus().toggleBulletList().run()}>
+        {/* 插入 submenu（表格内不显示） */}
+        {!isInTable ? (
+          <ContextMenuSub>
+            <ContextMenuSubTrigger className="text-[13px]">
               <ListChecks className="mr-2 h-3.5 w-3.5" />
-              项目列表
-            </ContextMenuItem>
-            <ContextMenuItem onSelect={() => editor?.chain().focus().toggleOrderedList().run()}>
-              <ListOrdered className="mr-2 h-3.5 w-3.5" />
-              编号列表
-            </ContextMenuItem>
-            <ContextMenuSeparator />
-            <ContextMenuItem onSelect={() => editor?.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()}>
-              <Table2 className="mr-2 h-3.5 w-3.5" />
-              表格
-            </ContextMenuItem>
-          </ContextMenuSubContent>
-        </ContextMenuSub>
+              插入
+            </ContextMenuSubTrigger>
+            <ContextMenuSubContent className="w-44">
+              <ContextMenuItem onSelect={() => editor?.chain().focus().toggleTaskList().run()}>
+                <CheckSquare className="mr-2 h-3.5 w-3.5" />
+                任务清单
+              </ContextMenuItem>
+              <ContextMenuItem onSelect={() => editor?.chain().focus().toggleBulletList().run()}>
+                <ListChecks className="mr-2 h-3.5 w-3.5" />
+                项目列表
+              </ContextMenuItem>
+              <ContextMenuItem onSelect={() => editor?.chain().focus().toggleOrderedList().run()}>
+                <ListOrdered className="mr-2 h-3.5 w-3.5" />
+                编号列表
+              </ContextMenuItem>
+              <ContextMenuSeparator />
+              <ContextMenuItem onSelect={() => editor?.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()}>
+                <Table2 className="mr-2 h-3.5 w-3.5" />
+                表格
+              </ContextMenuItem>
+            </ContextMenuSubContent>
+          </ContextMenuSub>
+        ) : null}
 
         {/* 表格操作 submenu：仅在光标位于表格内时显示 */}
         {isInTable ? (
@@ -1507,66 +1818,6 @@ function EditorContextMenu({ editor, children, onMoveSelectionToNote }: { editor
   );
 }
 
-type HeadingLevel = 1 | 2 | 3 | 4;
-
-const HEADING_OPTIONS: { value: "paragraph" | `heading${HeadingLevel}`; label: string }[] = [
-  { value: "paragraph", label: "正文" },
-  { value: "heading1", label: "标题 1" },
-  { value: "heading2", label: "标题 2" },
-  { value: "heading3", label: "标题 3" },
-  { value: "heading4", label: "标题 4" },
-];
-
-function getCurrentStyle(editor: Editor | null): "paragraph" | `heading${HeadingLevel}` {
-  if (!editor) return "paragraph";
-  if (editor.isActive("heading", { level: 1 })) return "heading1";
-  if (editor.isActive("heading", { level: 2 })) return "heading2";
-  if (editor.isActive("heading", { level: 3 })) return "heading3";
-  if (editor.isActive("heading", { level: 4 })) return "heading4";
-  return "paragraph";
-}
-
-function HeadingStyleDropdown({ editor }: { editor: Editor | null }) {
-  const currentStyle = getCurrentStyle(editor);
-  const currentLabel = HEADING_OPTIONS.find((o) => o.value === currentStyle)?.label ?? "正文";
-
-  const handleSelect = (value: string) => {
-    if (!editor) return;
-    if (value === "paragraph") {
-      editor.chain().focus().setParagraph().run();
-      return;
-    }
-    const level = Number(value.replace("heading", "")) as HeadingLevel;
-    editor.chain().focus().toggleHeading({ level }).run();
-  };
-
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          disabled={!editor}
-          className="h-[26px] gap-1 px-2 text-[12px] text-muted-foreground hover:bg-accent hover:text-foreground"
-        >
-          <span className="min-w-[3.5em] text-left">{currentLabel}</span>
-          <ChevronDown className="h-3 w-3 shrink-0" />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-28">
-        <DropdownMenuRadioGroup value={currentStyle} onValueChange={handleSelect}>
-          {HEADING_OPTIONS.map((option) => (
-            <DropdownMenuRadioItem key={option.value} value={option.value} className="text-[13px]">
-              {option.label}
-            </DropdownMenuRadioItem>
-          ))}
-        </DropdownMenuRadioGroup>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
-
 function EditorToolbar({
   editor,
   leadingExtra,
@@ -1577,131 +1828,6 @@ function EditorToolbar({
   return (
     <div className="flex min-w-0 items-center gap-1 overflow-x-auto scrollbar-thin">
       {leadingExtra ? <>{leadingExtra}</> : null}
-      <HeadingStyleDropdown editor={editor} />
-      <ToolbarButton
-        label="加粗"
-        active={editor?.isActive("bold") ?? false}
-        disabled={!editor}
-        onClick={() => editor?.chain().focus().toggleBold().run()}
-      >
-        <Bold className="h-3.5 w-3.5" />
-      </ToolbarButton>
-      <ToolbarButton
-        label="斜体"
-        active={editor?.isActive("italic") ?? false}
-        disabled={!editor}
-        onClick={() => editor?.chain().focus().toggleItalic().run()}
-      >
-        <Italic className="h-3.5 w-3.5" />
-      </ToolbarButton>
-      <ToolbarButton
-        label="任务清单"
-        active={editor?.isActive("taskList") ?? false}
-        disabled={!editor}
-        onClick={() => editor?.chain().focus().toggleTaskList().run()}
-      >
-        <CheckSquare className="h-3.5 w-3.5" />
-      </ToolbarButton>
-      <ToolbarButton
-        label="项目列表"
-        active={editor?.isActive("bulletList") ?? false}
-        disabled={!editor}
-        onClick={() => editor?.chain().focus().toggleBulletList().run()}
-      >
-        <ListChecks className="h-3.5 w-3.5" />
-      </ToolbarButton>
-      <ToolbarButton
-        label="编号列表"
-        active={editor?.isActive("orderedList") ?? false}
-        disabled={!editor}
-        onClick={() => editor?.chain().focus().toggleOrderedList().run()}
-      >
-        <ListOrdered className="h-3.5 w-3.5" />
-      </ToolbarButton>
-      <ToolbarButton
-        label="引用"
-        active={editor?.isActive("blockquote") ?? false}
-        disabled={!editor}
-        onClick={() => editor?.chain().focus().toggleBlockquote().run()}
-      >
-        <Quote className="h-3.5 w-3.5" />
-      </ToolbarButton>
-      <ToolbarButton
-        label="代码块"
-        active={editor?.isActive("codeBlock") ?? false}
-        disabled={!editor}
-        onClick={() => editor?.chain().focus().toggleCodeBlock().run()}
-      >
-        <Code2 className="h-3.5 w-3.5" />
-      </ToolbarButton>
-      <ToolbarButton
-        label="表格"
-        disabled={!editor}
-        onClick={() => editor?.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()}
-      >
-        <Table2 className="h-3.5 w-3.5" />
-      </ToolbarButton>
-      <ToolbarButton
-        label="链接"
-        active={editor?.isActive("link") ?? false}
-        disabled={!editor}
-        onClick={() => {
-          const url = window.prompt("输入链接地址");
-          if (!url) return;
-          editor?.chain().focus().extendMarkRange("link").setLink({ href: url }).run();
-        }}
-      >
-        <Link2 className="h-3.5 w-3.5" />
-      </ToolbarButton>
-      <ToolbarButton
-        label="图片"
-        disabled={!editor}
-        onClick={async () => {
-          try {
-            const { open } = await import("@tauri-apps/plugin-dialog");
-            const selected = await open({
-              multiple: false,
-              filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp"] }],
-            });
-            if (!selected) return;
-            const filePath = selected;
-            if (!filePath) return;
-            const { copyFile } = await import("@tauri-apps/plugin-fs");
-            const { convertFileSrc } = await import("@tauri-apps/api/core");
-            const { getNotesVaultPath } = await import("@/lib/tauri");
-            const vaultPath = await getNotesVaultPath();
-            if (!vaultPath) return;
-            const ext = filePath.split(".").pop() || "png";
-            const id = crypto.randomUUID().replace(/-/g, "").slice(0, 16);
-            const fileName = `${id}.${ext}`;
-            const absPath = `${vaultPath}/assets/${fileName}`;
-            await copyFile(filePath, absPath);
-            const url = convertFileSrc(absPath);
-            const markdownSrc = `assets/${fileName}`;
-            const dpr = window.devicePixelRatio || 1;
-            const displayWidth = await new Promise<number | null>((resolve) => {
-              if (dpr <= 1) { resolve(null); return; }
-              const img = new Image();
-              img.onload = () => {
-                resolve(img.naturalWidth > 0 ? Math.round(img.naturalWidth / dpr) : null);
-              };
-              img.onerror = () => resolve(null);
-              img.src = url;
-            });
-            editor?.chain().focus().setImage({
-              src: url,
-              alt: markdownSrc,
-              title: markdownSrc,
-              ...(displayWidth != null ? { width: displayWidth } : {}),
-            }).run();
-          } catch (err) {
-            console.warn("[MarkdownEditor] Failed to insert image:", err);
-          }
-        }}
-      >
-        <ImageIcon className="h-3.5 w-3.5" />
-      </ToolbarButton>
-      <span className="mx-1 h-4 w-px bg-border/70" />
       <ToolbarButton
         label="撤销"
         disabled={!editor || !editor.can().chain().focus().undo().run()}
@@ -1719,7 +1845,6 @@ function EditorToolbar({
     </div>
   );
 }
-
 function ToolbarButton({
   label,
   active = false,

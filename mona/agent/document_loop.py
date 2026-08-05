@@ -58,6 +58,24 @@ _VIDEO_TOOLS: frozenset[str] = frozenset({
     "memory_read",
 })
 
+# 3D 复用 PPT 的通用工具集。3D 建模需要读图（多模态内容）、文件操作、
+# 执行上游脚本（skill_script_run / exec）。generate_image 用于场景素材生成。
+_THREE_D_TOOLS: frozenset[str] = frozenset({
+    "read_file",
+    "write_file",
+    "edit_file",
+    "list_files",
+    "exec",
+    "web_search",
+    "web_fetch",
+    "generate_image",
+    "skill_read",
+    "skill_script_run",
+    "skill_reference_read",
+    "skill_asset_copy",
+    "memory_read",
+})
+
 @dataclass(frozen=True)
 class DocumentProfile:
     """单个文档子类型的声明式配置。"""
@@ -80,6 +98,12 @@ DOCUMENT_PROFILES: dict[str, DocumentProfile] = {
         soul_template="agent/video_soul.md",
         skill_name="mona-video",
         tools_whitelist=_VIDEO_TOOLS,
+    ),
+    "3d": DocumentProfile(
+        agent_kind="3d",
+        soul_template="agent/three_soul.md",
+        skill_name="img2threejs",
+        tools_whitelist=_THREE_D_TOOLS,
     ),
 }
 

@@ -20,8 +20,6 @@ from typing import Any
 
 from mona.agent.tools.base import Tool, tool_parameters
 from mona.agent.tools.schema import (
-    ArraySchema,
-    IntegerSchema,
     StringSchema,
     tool_parameters_schema,
 )
@@ -94,7 +92,6 @@ _CREATE_PARAMETERS = tool_parameters_schema(
         "Notebook (folder) name to place the note in. Defaults to the vault root "
         "when omitted. The folder is created if it does not exist."
     ),
-    tags=ArraySchema(StringSchema(""), description="Optional list of tags."),
     required=["content_markdown"],
 )
 
@@ -145,7 +142,6 @@ class NotesCreateTool(Tool):
             else:
                 return "Error: unable to derive a title from content. Please provide a title."
         notebook_name = kwargs.get("notebook_name")
-        tags = kwargs.get("tags") or []
 
         if not _vault_ready():
             return "Error: Notes vault is not configured. Ask the user to set up a vault first."
@@ -156,8 +152,6 @@ class NotesCreateTool(Tool):
         }
         if notebook_name:
             args["notebookId"] = str(notebook_name)
-        if tags:
-            args["tags"] = [str(t) for t in tags]
 
         try:
             note_id = tauri_invoke("notes_create_from_chat", args)
@@ -219,7 +213,6 @@ class NotesReadTool(Tool):
 
         title = result.get("title", "(untitled)")
         content = result.get("contentMarkdown", "")
-        tags = result.get("tags", [])
         notebook = result.get("notebookName", "")
         updated = result.get("updatedAt", "")
         context_level = result.get("contextLevel", "full")
@@ -228,141 +221,12 @@ class NotesReadTool(Tool):
         meta_parts = [f"id={note_id}"]
         if notebook:
             meta_parts.append(f"notebook={notebook}")
-        if tags:
-            meta_parts.append(f"tags={', '.join(tags)}")
         if updated:
             meta_parts.append(f"updated={updated}")
         meta_parts.append(f"contextLevel={context_level}")
         lines.append(f"({'; '.join(meta_parts)})")
         lines.append("")
         lines.append(content)
-        return "\n".join(lines)
-
-
-# ---------------------------------------------------------------------------
-# notes_edit
-# ---------------------------------------------------------------------------
-
-_EDIT_PARAMETERS = tool_parameters_schema(
-    note_id=StringSchema(
-        "The note ID returned by notes_search or notes_create. Required."
-    ),
-    operation=StringSchema(
-        "Edit operation, one of: 'replace_text' | 'set_title' | 'set_tags'. "
-        "Only one operation per call."
-    ),
-    old_string=StringSchema(
-        "For replace_text: exact substring to find in the note body. "
-        "Must match exactly once (unique); include surrounding context if the "
-        "text appears multiple times. Whitespace and line breaks must match exactly."
-    ),
-    new_string=StringSchema(
-        "For replace_text: replacement text. Pass empty string to delete the match."
-    ),
-    title=StringSchema("For set_title: new note title (non-empty after trim)."),
-    tags=ArraySchema(
-        StringSchema(""),
-        description="For set_tags: new tags list. Pass [] to clear all tags.",
-    ),
-    required=["note_id", "operation"],
-)
-
-
-@tool_parameters(_EDIT_PARAMETERS)
-class NotesEditTool(Tool):
-    """Edit an existing note in place. Supports targeted text replacement and
-    metadata edits without rewriting the whole note."""
-
-    _scopes = {"core"}
-    _plugin_discoverable = True
-
-    @classmethod
-    def enabled(cls, ctx: Any) -> bool:
-        cfg = _notes_config(ctx)
-        if cfg is None:
-            return True
-        return bool(getattr(cfg, "enabled", True)) and bool(
-            getattr(cfg, "allow_create", True)
-        )
-
-    @property
-    def name(self) -> str:
-        return "notes_edit"
-
-    @property
-    def description(self) -> str:
-        return (
-            "Edit an existing note by ID. Supports three atomic operations:\n"
-            "- replace_text: replace one unique substring in the body (old_string "
-            "must match exactly once). Use this for surgical edits; prefer it over "
-            "rewriting the whole note to preserve formatting.\n"
-            "- set_title: change the note title (also renames the .md file).\n"
-            "- set_tags: replace the tags list.\n"
-            "Returns the new title, preview, and first 200 chars of content for "
-            "verification. Read the note first with notes_read if you need to "
-            "locate exact text to replace."
-        )
-
-    async def execute(self, **kwargs: Any) -> Any:
-        note_id = str(kwargs.get("note_id", "")).strip()
-        if not note_id:
-            return "Error: note_id is required."
-        operation = str(kwargs.get("operation", "")).strip()
-        if not operation:
-            return "Error: operation is required."
-        if operation not in {"replace_text", "set_title", "set_tags"}:
-            return (
-                "Error: operation must be one of: replace_text, set_title, set_tags. "
-                f"Got '{operation}'."
-            )
-
-        if not _vault_ready():
-            return "Error: Notes vault is not configured."
-
-        # Validate operation-specific args before IPC to give clear errors.
-        if operation == "replace_text":
-            old = kwargs.get("old_string")
-            if not isinstance(old, str) or not old:
-                return "Error: old_string is required for replace_text."
-        elif operation == "set_title":
-            title = kwargs.get("title")
-            if not isinstance(title, str) or not title.strip():
-                return "Error: title is required for set_title."
-        # set_tags allows empty list to clear tags.
-
-        args: dict[str, Any] = {"noteId": note_id, "operation": operation}
-        if operation == "replace_text":
-            args["oldString"] = str(kwargs["old_string"])
-            new = kwargs.get("new_string")
-            args["newString"] = str(new) if new is not None else ""
-        elif operation == "set_title":
-            args["title"] = str(kwargs["title"])
-        elif operation == "set_tags":
-            tags = kwargs.get("tags") or []
-            args["tags"] = [str(t) for t in tags]
-
-        try:
-            result = tauri_invoke("notes_edit_note", args)
-        except RuntimeError as e:
-            return f"Error editing note: {e}"
-
-        if not isinstance(result, dict):
-            return f"Unexpected response: {result}"
-
-        new_title = result.get("title", "(untitled)")
-        preview = result.get("preview", "")
-        content_head = result.get("contentHead", "")
-        updated = result.get("updatedAt", "")
-
-        lines = [f"Edited note {note_id} ({operation})."]
-        lines.append(f"Title: {new_title}")
-        if updated:
-            lines.append(f"Updated: {updated}")
-        if preview:
-            lines.append(f"Preview: {preview}")
-        if content_head:
-            lines.append("Content head:")
-            lines.append(content_head)
         return "\n".join(lines)
 
 

@@ -26,7 +26,7 @@ async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
 // ---------------------------------------------------------------------------
 
 export interface MaterialsExtractStatus {
-  status: "pending" | "ok" | "error";
+  status: "queued" | "running" | "ok" | "error" | "unsupported" | "stale";
   truncated?: boolean;
   chars?: number;
   error?: string;
@@ -55,6 +55,8 @@ export interface WikiPageSummary {
   title: string;
   id: string;
   sources?: string[];
+  /** 引用的原始资料已缺失或内容已变化（由 reconcile 标记） */
+  stale?: boolean;
   mtime: number;
 }
 
@@ -64,7 +66,7 @@ export interface WikiPageDetail {
 }
 
 export interface MaterialsSearchResult {
-  kind: "material_text" | "material_wiki";
+  kind: "material_source" | "material_wiki";
   title: string;
   path: string;
   snippet: string;
@@ -81,6 +83,7 @@ export interface MaterialsStatus {
     ok: number;
     error: number;
   };
+  rawRoot?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -135,6 +138,15 @@ export function extractMaterialsText(path: string): Promise<{
   });
 }
 
+/** 轻量对账 raw/text/wiki 一致性并同步检索索引（进入资料页/手动刷新时调用）。 */
+export function reconcileMaterials(): Promise<{
+  requeued: string[];
+  removedOrphans: string[];
+  staleWiki: string[];
+}> {
+  return fetchJSON(`/api/materials/reconcile`, { method: "POST" });
+}
+
 /** 读取提取的文本内容。 */
 export function getMaterialsText(path: string): Promise<MaterialsTextContent> {
   return fetchJSON<MaterialsTextContent>(`/api/materials/text/${encodeURIComponent(path)}`);
@@ -175,6 +187,46 @@ export function writeWikiPage(payload: {
 export function deleteWikiPage(path: string): Promise<{ deleted: string }> {
   return fetchJSON(`/api/materials/wiki/${encodeURIComponent(path)}`, {
     method: "DELETE",
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Wiki compile（后端任务：候选化 → 合并 → 事务写入）
+// ---------------------------------------------------------------------------
+
+export interface WikiCompileStatus {
+  taskId: string;
+  /** running | done | error | cancelled */
+  state: "running" | "done" | "error" | "cancelled";
+  currentFile: string;
+  totalFiles: number;
+  completedFiles: number;
+  errors: string[];
+  pagesWritten: number;
+  writtenPaths: string[];
+}
+
+/** 启动 Wiki 编译任务。paths 相对 raw/，可为文件或目录（目录递归展开）。 */
+export function startWikiCompile(
+  paths: string[],
+): Promise<{ taskId: string; totalFiles: number }> {
+  return fetchJSON(`/api/materials/wiki/compile`, {
+    method: "POST",
+    body: JSON.stringify({ paths }),
+  });
+}
+
+/** 查询编译任务状态。 */
+export function getWikiCompileStatus(taskId: string): Promise<WikiCompileStatus> {
+  return fetchJSON<WikiCompileStatus>(
+    `/api/materials/wiki/compile/${encodeURIComponent(taskId)}`,
+  );
+}
+
+/** 取消编译任务。 */
+export function cancelWikiCompile(taskId: string): Promise<{ cancelled: boolean }> {
+  return fetchJSON(`/api/materials/wiki/compile/${encodeURIComponent(taskId)}/cancel`, {
+    method: "POST",
   });
 }
 

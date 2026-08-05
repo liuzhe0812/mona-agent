@@ -1,7 +1,26 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Editor } from "@tiptap/react";
 import { TextSelection } from "@tiptap/pm/state";
-import { Loader2, Languages, Minimize2, Wand2, Check, X } from "lucide-react";
+import {
+  Loader2,
+  Languages,
+  Minimize2,
+  Wand2,
+  Check,
+  X,
+  Bold,
+  Italic,
+  Strikethrough,
+  Code,
+  Link2,
+  Sparkles,
+  Quote,
+  List,
+  ListOrdered,
+  CheckSquare,
+  Code2,
+  ExternalLink,
+} from "lucide-react";
 import { useMonaStream, type SendOptions } from "@/hooks/useMonaStream";
 import { useClientOptional } from "@/providers/ClientProvider";
 
@@ -58,6 +77,11 @@ export function SelectionAiToolbar({ editor, getNoteTitle, wrapperRef }: Props) 
   const [chatId, setChatId] = useState<string | null>(null);
   const [creatingChat, setCreatingChat] = useState(false);
   const [applied, setApplied] = useState(false);
+  const [showAISubmenu, setShowAISubmenu] = useState(false);
+  const [showLinkInput, setShowLinkInput] = useState(false);
+  const [linkUrl, setLinkUrl] = useState("");
+  const aiSubmenuRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const pendingPromptRef = useRef<string | null>(null);
   const pendingDisplayRef = useRef<string | null>(null);
   const pendingActionRef = useRef<SelectionAction | null>(null);
@@ -75,7 +99,6 @@ export function SelectionAiToolbar({ editor, getNoteTitle, wrapperRef }: Props) 
         setToolbarPos(null);
         return;
       }
-      // Only show for text selections (not node selections like images)
       if (!(editor.state.selection instanceof TextSelection)) {
         setSelection(null);
         setToolbarPos(null);
@@ -89,14 +112,13 @@ export function SelectionAiToolbar({ editor, getNoteTitle, wrapperRef }: Props) 
       }
       setSelection({ text, from, to });
 
-      // Compute toolbar position relative to wrapper
       const wrapper = wrapperRef.current;
       if (!wrapper) return;
       try {
         const coords = editor.view.coordsAtPos(from);
         const rect = wrapper.getBoundingClientRect();
         setToolbarPos({
-          top: coords.top - rect.top - 40,
+          top: coords.top - rect.top - 48,
           left: coords.left - rect.left,
         });
       } catch {
@@ -109,7 +131,7 @@ export function SelectionAiToolbar({ editor, getNoteTitle, wrapperRef }: Props) 
     };
   }, [editor, wrapperRef]);
 
-  // Hide toolbar when editor loses focus (slight delay to allow button clicks)
+  // Hide toolbar when editor loses focus
   useEffect(() => {
     if (!editor) return;
     const handleBlur = () => {
@@ -125,6 +147,18 @@ export function SelectionAiToolbar({ editor, getNoteTitle, wrapperRef }: Props) 
       editor.off("blur", handleBlur);
     };
   }, [editor]);
+
+  // Close AI submenu on outside click
+  useEffect(() => {
+    if (!showAISubmenu) return;
+    const handleClickOutside = (event: MouseEvent) => {
+      if (aiSubmenuRef.current && !aiSubmenuRef.current.contains(event.target as Node)) {
+        setShowAISubmenu(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [showAISubmenu]);
 
   // Send pending prompt when chatId becomes available
   useEffect(() => {
@@ -173,6 +207,7 @@ export function SelectionAiToolbar({ editor, getNoteTitle, wrapperRef }: Props) 
       setPendingAction(action);
       setResult(null);
       setApplied(false);
+      setShowAISubmenu(false);
 
       if (chatId) {
         const opts: SendOptions = { displayContent: pendingDisplayRef.current };
@@ -200,11 +235,9 @@ export function SelectionAiToolbar({ editor, getNoteTitle, wrapperRef }: Props) 
 
   const handleReplace = useCallback(() => {
     if (!editor || !result) return;
-    // Validate current selection still matches
     const { from, to } = result;
     const currentText = editor.state.doc.textBetween(from, to, "\n");
     if (currentText !== result.originalText) {
-      // Selection changed, don't replace
       return;
     }
     editor
@@ -253,37 +286,184 @@ export function SelectionAiToolbar({ editor, getNoteTitle, wrapperRef }: Props) 
     pendingSelectionRef.current = null;
   }, []);
 
-  // Don't render anything if no selection or editor missing
+  const handleToggleLink = useCallback(() => {
+    if (!editor) return;
+    if (showLinkInput) {
+      if (linkUrl === "") {
+        editor.chain().focus().extendMarkRange("link").unsetLink().run();
+      } else {
+        editor.chain().focus().extendMarkRange("link").setLink({ href: linkUrl }).run();
+      }
+      setShowLinkInput(false);
+      setLinkUrl("");
+    } else {
+      const previousUrl = editor.getAttributes("link").href;
+      setLinkUrl(previousUrl || "");
+      setShowLinkInput(true);
+    }
+  }, [editor, linkUrl, showLinkInput]);
+
   if (!editor || (!selection && !pendingAction && !result)) return null;
   if (!toolbarPos && !pendingAction && !result) return null;
 
   const showResult = result && !pendingAction;
   const showActions = selection && !pendingAction && !result && !isStreaming;
+  const currentLinkHref = editor.getAttributes("link").href as string | undefined;
 
   return (
     <>
       {/* Floating action toolbar */}
       {showActions && toolbarPos ? (
         <div
+          ref={menuRef}
           style={{ top: toolbarPos.top, left: toolbarPos.left }}
-          className="absolute z-50 flex items-center gap-0.5 rounded-lg border border-border/70 bg-popover p-0.5 shadow-lg"
+          className="absolute z-50 flex items-center gap-1 rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10"
           onMouseDown={(e) => e.preventDefault()}
         >
-          <ToolbarActionButton
-            label="润色"
-            icon={<Wand2 className="h-3.5 w-3.5" />}
-            onClick={() => void runAction("polish")}
+          {/* AI 按钮 + 子菜单 */}
+          <div className="relative">
+            <FormatToggleButton
+              label="AI"
+              icon={<Sparkles className="h-4 w-4" />}
+              active={showAISubmenu}
+              onClick={() => setShowAISubmenu((v) => !v)}
+              accent
+            />
+            {showAISubmenu ? (
+              <div
+                ref={aiSubmenuRef}
+                className="absolute left-0 top-full mt-1 min-w-36 rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10"
+              >
+                <SubmenuItem
+                  icon={<Wand2 className="h-4 w-4" />}
+                  label={ACTION_LABELS.polish}
+                  onClick={() => void runAction("polish")}
+                />
+                <SubmenuItem
+                  icon={<Minimize2 className="h-4 w-4" />}
+                  label={ACTION_LABELS.shorten}
+                  onClick={() => void runAction("shorten")}
+                />
+                <SubmenuItem
+                  icon={<Languages className="h-4 w-4" />}
+                  label={ACTION_LABELS.translate}
+                  onClick={() => void runAction("translate")}
+                />
+              </div>
+            ) : null}
+          </div>
+
+          <ToolbarSeparator />
+
+          {/* 文本格式化 */}
+          <FormatToggleButton
+            label="加粗"
+            icon={<Bold className="h-4 w-4" />}
+            active={editor.isActive("bold")}
+            onClick={() => editor.chain().focus().toggleBold().run()}
           />
-          <ToolbarActionButton
-            label="缩写"
-            icon={<Minimize2 className="h-3.5 w-3.5" />}
-            onClick={() => void runAction("shorten")}
+          <FormatToggleButton
+            label="斜体"
+            icon={<Italic className="h-4 w-4" />}
+            active={editor.isActive("italic")}
+            onClick={() => editor.chain().focus().toggleItalic().run()}
           />
-          <ToolbarActionButton
-            label="翻译"
-            icon={<Languages className="h-3.5 w-3.5" />}
-            onClick={() => void runAction("translate")}
+          <FormatToggleButton
+            label="删除线"
+            icon={<Strikethrough className="h-4 w-4" />}
+            active={editor.isActive("strike")}
+            onClick={() => editor.chain().focus().toggleStrike().run()}
           />
+          <FormatToggleButton
+            label="行内代码"
+            icon={<Code className="h-4 w-4" />}
+            active={editor.isActive("code")}
+            onClick={() => editor.chain().focus().toggleCode().run()}
+          />
+
+          <ToolbarSeparator />
+
+          {/* 链接输入框 */}
+          {showLinkInput ? (
+            <div className="flex items-center gap-1 px-1">
+              <input
+                type="url"
+                autoFocus
+                value={linkUrl}
+                onChange={(e) => setLinkUrl(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleToggleLink();
+                  else if (e.key === "Escape") {
+                    setShowLinkInput(false);
+                    setLinkUrl("");
+                  }
+                }}
+                placeholder="链接地址"
+                className="h-7 w-32 rounded-md border border-border/70 bg-background px-2 text-[11.5px] outline-none focus:border-primary"
+              />
+              <LinkConfirmButton onClick={handleToggleLink} />
+              <LinkCancelButton
+                onClick={() => {
+                  setShowLinkInput(false);
+                  setLinkUrl("");
+                }}
+              />
+            </div>
+          ) : (
+            <FormatToggleButton
+              label="链接"
+              icon={<Link2 className="h-4 w-4" />}
+              active={editor.isActive("link")}
+              onClick={handleToggleLink}
+            />
+          )}
+
+          <ToolbarSeparator />
+
+          {/* 块级元素 */}
+          <FormatToggleButton
+            label="引用"
+            icon={<Quote className="h-4 w-4" />}
+            active={editor.isActive("blockquote")}
+            onClick={() => editor.chain().focus().toggleBlockquote().run()}
+          />
+          <FormatToggleButton
+            label="项目列表"
+            icon={<List className="h-4 w-4" />}
+            active={editor.isActive("bulletList")}
+            onClick={() => editor.chain().focus().toggleBulletList().run()}
+          />
+          <FormatToggleButton
+            label="编号列表"
+            icon={<ListOrdered className="h-4 w-4" />}
+            active={editor.isActive("orderedList")}
+            onClick={() => editor.chain().focus().toggleOrderedList().run()}
+          />
+          <FormatToggleButton
+            label="任务清单"
+            icon={<CheckSquare className="h-4 w-4" />}
+            active={editor.isActive("taskList")}
+            onClick={() => editor.chain().focus().toggleTaskList().run()}
+          />
+          <FormatToggleButton
+            label="代码块"
+            icon={<Code2 className="h-4 w-4" />}
+            active={editor.isActive("codeBlock")}
+            onClick={() => editor.chain().focus().toggleCodeBlock().run()}
+          />
+
+          {currentLinkHref ? (
+            <>
+              <ToolbarSeparator />
+              <FormatToggleButton
+                label="打开链接"
+                icon={<ExternalLink className="h-4 w-4" />}
+                onClick={() => {
+                  if (currentLinkHref) window.open(currentLinkHref, "_blank");
+                }}
+              />
+            </>
+          ) : null}
         </div>
       ) : null}
 
@@ -345,15 +525,32 @@ export function SelectionAiToolbar({ editor, getNoteTitle, wrapperRef }: Props) 
   );
 }
 
-function ToolbarActionButton({
+function ToolbarSeparator() {
+  return <div className="mx-0.5 h-5 w-px bg-border/70" />;
+}
+
+function FormatToggleButton({
   label,
   icon,
+  active = false,
   onClick,
+  accent = false,
 }: {
   label: string;
   icon: React.ReactNode;
+  active?: boolean;
   onClick: () => void;
+  accent?: boolean;
 }) {
+  const base =
+    "inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors";
+  const activeCls = active
+    ? accent
+      ? "bg-primary/15 text-primary"
+      : "bg-accent text-foreground"
+    : accent
+      ? "text-primary hover:bg-accent hover:text-primary"
+      : "text-foreground/82 hover:bg-accent hover:text-foreground";
   return (
     <button
       type="button"
@@ -361,10 +558,59 @@ function ToolbarActionButton({
       aria-label={label}
       onClick={onClick}
       onMouseDown={(e) => e.preventDefault()}
-      className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-[11px] font-medium text-foreground/82 transition-colors hover:bg-accent hover:text-foreground"
+      className={`${base} ${activeCls}`}
+    >
+      {icon}
+    </button>
+  );
+}
+
+function SubmenuItem({
+  icon,
+  label,
+  onClick,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      onMouseDown={(e) => e.preventDefault()}
+      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12.5px] text-foreground/90 transition-colors hover:bg-accent hover:text-foreground"
     >
       {icon}
       <span>{label}</span>
+    </button>
+  );
+}
+
+function LinkConfirmButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      title="确认"
+      onClick={onClick}
+      onMouseDown={(e) => e.preventDefault()}
+      className="inline-flex h-7 w-7 items-center justify-center rounded-md text-foreground/82 hover:bg-accent hover:text-foreground"
+    >
+      <Check className="h-3.5 w-3.5" />
+    </button>
+  );
+}
+
+function LinkCancelButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      title="取消"
+      onClick={onClick}
+      onMouseDown={(e) => e.preventDefault()}
+      className="inline-flex h-7 w-7 items-center justify-center rounded-md text-foreground/82 hover:bg-accent hover:text-foreground"
+    >
+      <X className="h-3.5 w-3.5" />
     </button>
   );
 }

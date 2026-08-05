@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronLeft, ChevronRight, ExternalLink, Loader2, RefreshCw } from "lucide-react";
+import { AlertTriangle, ChevronLeft, ChevronRight, ExternalLink, Loader2, RefreshCw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -36,6 +36,10 @@ export function PptPreview({ projectName, isStreaming, hasPptxOutput, pipelineSt
   const [apiBase, setApiBase] = useState("");
   const [visualPlan, setVisualPlan] = useState<PptVisualPlanPage[]>([]);
   const slidesFoundRef = useRef(false);
+  const [svgObjectUrls, setSvgObjectUrls] = useState<Record<string, string>>({});
+  const [svgLoadStates, setSvgLoadStates] = useState<Record<string, "idle" | "loading" | "loaded" | "error">>({});
+  const svgRequestedRef = useRef<Set<string>>(new Set());
+  const objectUrlsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     getApiBase().then(setApiBase);
@@ -126,38 +130,31 @@ export function PptPreview({ projectName, isStreaming, hasPptxOutput, pipelineSt
     }).finally(() => setLoading(false));
   }, [projectName, token, loadSlides]);
 
-  // Auto-refresh: keep polling until slides are found.
-  // During generation: poll every 4s.
-  // After generation (slides still empty): poll every 3s to catch finalize delay.
-  // Once slides are found: stop auto-refresh.
+  // Auto-refresh: keep polling as long as a project is open.
+  // During generation (isStreaming) poll every 2s so new pages appear quickly.
+  // Otherwise poll every 4s. The moment streaming stops we also do an immediate
+  // refresh in the effect below.
   useEffect(() => {
     if (!projectName) return;
 
     let timer: ReturnType<typeof setTimeout>;
     let stopped = false;
 
-    function schedule() {
-      const interval = slidesFoundRef.current ? 30000 : 4000;
-      timer = setTimeout(async () => {
-        if (stopped) return;
-        const found = await loadSlides();
-        if (!stopped && !found) {
-          schedule(); // keep trying
-        }
-        // if found, stop auto-refresh
-      }, interval);
+    async function tick() {
+      if (stopped) return;
+      await loadSlides();
+      if (stopped) return;
+      const interval = isStreaming ? 2000 : 4000;
+      timer = setTimeout(tick, interval);
     }
 
-    // Start polling if slides haven't been found yet
-    if (!slidesFoundRef.current) {
-      schedule();
-    }
+    tick();
 
     return () => {
       stopped = true;
       clearTimeout(timer);
     };
-  }, [projectName, loadSlides]);
+  }, [projectName, loadSlides, isStreaming]);
 
   // When streaming stops, immediately check for slides.
   // This is the most reliable moment — the agent just finished writing files.
@@ -170,6 +167,89 @@ export function PptPreview({ projectName, isStreaming, hasPptxOutput, pipelineSt
       loadSlides();
     }
   }, [isStreaming, projectName, loadSlides]);
+
+  // Fetch SVG contents, sanitize XML entity errors, and serve them through
+  // object URLs so the browser treats them as replaced elements (<img>). This
+  // gives us the same scaling behaviour as raster images and isolates the SVG
+  // from page-level CSS, while still allowing our defensive sanitizer to run
+  // even if a cached URL bypasses the backend fix.
+  useEffect(() => {
+    if (!apiBase || !token || slides.length === 0) return;
+
+    let cancelled = false;
+
+    function sanitizeSvgXml(text: string): string {
+      const XML_BUILTIN = new Set(["amp", "lt", "gt", "quot", "apos"]);
+      // 1. Fix well-formed entity references (named/numeric).
+      text = text.replace(
+        /&([A-Za-z_][A-Za-z0-9_]*|#[0-9]+|#x[0-9A-Fa-f]+);/g,
+        (match, ref) => {
+          if (XML_BUILTIN.has(ref)) return match;
+          if (/^#[0-9]+$/.test(ref) || /^#x[0-9A-Fa-f]+$/i.test(ref)) return match;
+          const textarea = document.createElement("textarea");
+          textarea.innerHTML = match;
+          const expanded = textarea.value;
+          if (expanded !== match) return expanded;
+          return `&amp;${ref};`;
+        },
+      );
+      // 2. Escape any remaining bare ampersands (e.g. "R&D", "A & B", "&&",
+      // malformed numeric refs without a semicolon).
+      text = text.replace(
+        /&(?!amp;|lt;|gt;|quot;|apos;|#[0-9]+;|#x[0-9A-Fa-f]+;)/g,
+        "&amp;",
+      );
+      // 3. Escape bare '<' in text content (not tag starts).
+      text = text.replace(/<(?![A-Za-z/!?])/g, "&lt;");
+      // 4. Escape ']]>' sequences.
+      text = text.replace(/]]>/g, "]]&gt;");
+      return text;
+    }
+
+    async function fetchSvgs() {
+      for (const slide of slides) {
+        if (cancelled) break;
+        if (slide.type !== "svg") continue;
+        if (svgRequestedRef.current.has(slide.url)) continue;
+        svgRequestedRef.current.add(slide.url);
+        setSvgLoadStates((prev) => ({ ...prev, [slide.url]: "loading" }));
+        try {
+          const sep = slide.url.includes("?") ? "&" : "?";
+          const url = `${apiBase}${slide.url}${sep}token=${encodeURIComponent(token)}`;
+          const res = await fetch(url);
+          if (!res.ok) {
+            throw new Error(`HTTP ${res.status}`);
+          }
+          let text = await res.text();
+          text = sanitizeSvgXml(text);
+          const blob = new Blob([text], { type: "image/svg+xml;charset=utf-8" });
+          const objectUrl = URL.createObjectURL(blob);
+          objectUrlsRef.current.add(objectUrl);
+          // Always update state — functional updates are safe even after the
+          // effect has been cleaned up (React 18 ignores updates to unmounted
+          // components). If we skip these updates, a slide whose fetch
+          // completed right after cleanup would be stuck in "loading" forever:
+          // svgRequestedRef keeps the URL marked as requested, so fetchSvgs
+          // won't retry it on the next run.
+          setSvgObjectUrls((prev) => {
+            const old = prev[slide.url];
+            if (old) URL.revokeObjectURL(old);
+            return { ...prev, [slide.url]: objectUrl };
+          });
+          setSvgLoadStates((prev) => ({ ...prev, [slide.url]: "loaded" }));
+        } catch {
+          svgRequestedRef.current.delete(slide.url);
+          setSvgLoadStates((prev) => ({ ...prev, [slide.url]: "error" }));
+        }
+      }
+    }
+
+    fetchSvgs();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [slides, apiBase, token]);
 
   // Auto-generate preview when PPTX exists but no slides are found.
   const previewGeneratedRef = useRef(false);
@@ -194,9 +274,25 @@ export function PptPreview({ projectName, isStreaming, hasPptxOutput, pipelineSt
     };
   }, [projectName, hasPptxOutput, isStreaming, slides.length, token, loadSlides]);
 
-  // Reset previewGeneratedRef when project changes
+  // Reset all preview state when project changes so we never render stale
+  // slides with empty/mismatched object URLs (which looks like a broken image).
   useEffect(() => {
     previewGeneratedRef.current = false;
+    slidesFoundRef.current = false;
+    setSlides([]);
+    setIndex(0);
+    setSvgLoadStates({});
+    svgRequestedRef.current.clear();
+    setSvgObjectUrls((prev) => {
+      for (const url of Object.values(prev)) {
+        URL.revokeObjectURL(url);
+      }
+      return {};
+    });
+    for (const url of objectUrlsRef.current) {
+      URL.revokeObjectURL(url);
+    }
+    objectUrlsRef.current.clear();
   }, [projectName]);
 
   // Check if Flask editor is running
@@ -381,6 +477,10 @@ export function PptPreview({ projectName, isStreaming, hasPptxOutput, pipelineSt
   const sep = slide.url.includes("?") ? "&" : "?";
   const slideUrl = `${apiBase}${slide.url}${sep}token=${encodeURIComponent(token)}`;
   const isImage = slide.type === "image";
+  const svgObjectUrl = svgObjectUrls[slide.url];
+  const svgLoadState = svgLoadStates[slide.url] ?? "idle";
+  const isSvgLoading = !isImage && svgLoadState !== "loaded" && svgLoadState !== "error";
+  const isSvgError = !isImage && svgLoadState === "error";
 
   return (
     <div className="flex h-full flex-col">
@@ -393,19 +493,28 @@ export function PptPreview({ projectName, isStreaming, hasPptxOutput, pipelineSt
             className="max-h-full max-w-full rounded shadow-md"
             draggable={false}
           />
+        ) : isSvgLoading ? (
+          <div className="flex flex-col items-center justify-center gap-2 text-[13px] text-muted-foreground">
+            <Loader2 className="h-5 w-5 animate-spin" />
+            <span>正在加载幻灯片…</span>
+          </div>
+        ) : isSvgError || !svgObjectUrl ? (
+          <div className="flex flex-col items-center justify-center gap-2 text-[13px] text-muted-foreground">
+            <AlertTriangle className="h-5 w-5 text-destructive" />
+            <span>幻灯片加载失败</span>
+            <Button variant="ghost" size="sm" onClick={handleRefresh} className="h-6 gap-1 text-[11px]">
+              <RefreshCw className="h-3 w-3" />
+              重试
+            </Button>
+          </div>
         ) : (
-          <object
-            data={slideUrl}
-            type="image/svg+xml"
+          <img
+            src={svgObjectUrl}
+            alt={slide.name}
             className="max-h-full max-w-full rounded shadow-md"
-          >
-            <img
-              src={slideUrl}
-              alt={slide.name}
-              className="max-h-full max-w-full rounded shadow-md"
-              draggable={false}
-            />
-          </object>
+            draggable={false}
+            onError={() => setSvgLoadStates((prev) => ({ ...prev, [slide.url]: "error" }))}
+          />
         )}
       </div>
 

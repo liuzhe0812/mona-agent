@@ -14,6 +14,11 @@ scripts/
 design-assets/
 tests/
 docs/
+!docs/
+docs/*
+!docs/design/
+docs/design/*
+!docs/design/2026-08-04-notes-materials-implementation-assessment-and-plan.md
 hardware/
 %TEMP%/
 

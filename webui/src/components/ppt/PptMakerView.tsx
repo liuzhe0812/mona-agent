@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { History, PanelLeft, SlidersHorizontal } from "lucide-react";
+import { Check, CheckCircle2, Download, FolderOpen, Loader2, MessageSquareText, PanelLeft } from "lucide-react";
 
+import { Button } from "@/components/ui/button";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { useClient } from "@/providers/ClientProvider";
 import { fetchPptExportStatus, markPptGenerating, savePptChatId, getApiBase } from "@/lib/api";
 import { isTauri, httpFetch } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
+import { useBreakpoint } from "@/hooks/useBreakpoint";
 import type { PptProject } from "@/lib/types";
 import { PptConfigPanel } from "./PptConfigPanel";
 import { PptChatPanel } from "./PptChatPanel";
@@ -13,17 +16,12 @@ import type { PptChatPanelHandle } from "./PptChatPanel";
 import { PptPreview } from "./PptPreview";
 import { PptHistory } from "./PptHistory";
 import { PptOutlinePhase } from "./PptOutlinePhase";
-import { PptReviewPhase } from "./PptReviewPhase";
+import { PptProducingPhase } from "./PptProducingPhase";
 
-export type PptPhase = "config" | "generating" | "outline" | "producing" | "review" | "exporting" | "done";
+export type PptPhase = "config" | "generating" | "outline" | "producing" | "exporting" | "done";
 export type PptMode = "design" | "template";
-export type PptImageMode = "none" | "key-pages" | "rich";
-export type PptVisualMode = "auto" | "data" | "process";
-export type PptStyleMode = "general" | "consulting" | "top-consulting";
-export type PptIconApproach = "emoji" | "ai" | "builtin" | "custom";
-export type PptIconLibrary = "chunk-filled" | "tabler-filled" | "tabler-outline" | "phosphor-duotone";
-export type PptFormulaPolicy = "mixed" | "render-all" | "text-only";
-export type PptImageApproach = "none" | "user" | "ai" | "web" | "placeholder";
+
+// Export options — collected at export time, not at startup.
 export type PptPageTransition = "fade" | "push" | "wipe" | "split" | "strips" | "cover" | "random" | "none";
 export type PptEntranceAnimation = "auto" | "none" | "fade" | "fly" | "zoom" | "wipe" | "mixed";
 export type PptAnimationTrigger = "after-previous" | "with-previous" | "on-click";
@@ -34,24 +32,14 @@ export interface PptConfig {
   templateKey: string | null;
   templateKind: "layout" | "brand" | "native" | null;
   templateFile: string | null;
-  canvasFormat: string;
-  imageMode: PptImageMode;
-  visualMode: PptVisualMode;
   sourceFiles: string[];
   topic: string;
 
-  // --- Design Preferences ---
-  styleMode: PptStyleMode | null;
-  styleDescriptor: string;
+  // --- Design Preferences (minimal — AI recommends the rest) ---
   pageCount: number | null;
-  audience: string;
-  primaryColor: string;
-  iconApproach: PptIconApproach | null;
-  iconLibrary: PptIconLibrary | null;
-  formulaPolicy: PptFormulaPolicy | null;
-  imageApproach: PptImageApproach | null;
+}
 
-  // --- Animation & Export ---
+export interface PptExportOptions {
   pageTransition: PptPageTransition;
   entranceAnimation: PptEntranceAnimation;
   animationTrigger: PptAnimationTrigger;
@@ -65,22 +53,13 @@ export const DEFAULT_CONFIG: PptConfig = {
   templateKey: null,
   templateKind: null,
   templateFile: null,
-  canvasFormat: "ppt169",
-  imageMode: "key-pages",
-  visualMode: "auto",
   sourceFiles: [],
   topic: "",
 
-  styleMode: null,
-  styleDescriptor: "",
   pageCount: null,
-  audience: "",
-  primaryColor: "",
-  iconApproach: null,
-  iconLibrary: null,
-  formulaPolicy: null,
-  imageApproach: null,
+};
 
+export const DEFAULT_EXPORT_OPTIONS: PptExportOptions = {
   pageTransition: "fade",
   entranceAnimation: "auto",
   animationTrigger: "after-previous",
@@ -97,36 +76,83 @@ interface ActiveProjectState {
   phase: PptPhase;
 }
 
+/** Valid phase transitions. Stale responses must not regress the phase. */
+const PHASE_ORDER: Record<PptPhase, number> = {
+  config: 0, generating: 1, outline: 2, producing: 3, exporting: 4, done: 5,
+};
+
+/** Return the next phase, or null if the transition is invalid/regressive.
+ *  Exported for unit tests (phase machine regression locks). */
+export function resolveNextPhase(current: PptPhase, backend: string): PptPhase | null {
+  const target = backend as PptPhase;
+  if (!(target in PHASE_ORDER)) return null;
+  // Only allow forward transitions (or staying at the same phase)
+  if (PHASE_ORDER[target] < PHASE_ORDER[current]) return null;
+  return target;
+}
+
+const STEPS: ReadonlyArray<{ label: string; phases: PptPhase[] }> = [
+  { label: "准备内容", phases: ["config", "generating"] },
+  { label: "确认大纲", phases: ["outline"] },
+  { label: "逐页设计", phases: ["producing"] },
+  { label: "导出交付", phases: ["exporting", "done"] },
+];
+
+function getStepStatus(stepIndex: number, currentPhase: PptPhase): "completed" | "current" | "pending" {
+  const currentStepIndex = STEPS.findIndex((s) => s.phases.includes(currentPhase));
+  if (currentStepIndex === -1) return "pending";
+  if (stepIndex < currentStepIndex) return "completed";
+  if (stepIndex === currentStepIndex) return "current";
+  return "pending";
+}
+
 export function PptMakerView() {
   const { client, token } = useClient();
+  const bp = useBreakpoint();
   const [phase, setPhase] = useState<PptPhase>("config");
   const [config, setConfig] = useState<PptConfig>(DEFAULT_CONFIG);
+  const [exportOptions, setExportOptions] = useState<PptExportOptions>(DEFAULT_EXPORT_OPTIONS);
   const [chatId, setChatId] = useState<string | null>(null);
   const [projectName, setProjectName] = useState<string | null>(null);
+  const [startError, setStartError] = useState<string | null>(null);
   const [historyKey, setHistoryKey] = useState(0);
   const chatIdRef = useRef<string | null>(null);
   const generationStartRef = useRef<number | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const [hasPptxOutput, setHasPptxOutput] = useState(false);
   const [pipelineStage, setPipelineStage] = useState<string>("init");
-  const [sidebarTab, setSidebarTab] = useState<"config" | "history">("config");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [chatSheetOpen, setChatSheetOpen] = useState(false);
   const chatPanelRef = useRef<PptChatPanelHandle>(null);
   const [displayContentMap, setDisplayContentMap] = useState<Record<string, string>>({});
+  const [downloading, setDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
 
-  // Auto-switch to history tab when generation starts or completes
-  useEffect(() => {
-    if (phase === "generating" || phase === "done" || phase === "producing" || phase === "exporting") {
-      setSidebarTab("history");
+  // V3 streaming→refresh trigger: increments when AI finishes a reply
+  // (streaming transitions from true → false). PptOutlinePhase and
+  // PptProducingPhase subscribe to this counter to refresh their data
+  // immediately, mirroring the VideoMakerView pattern.
+  const wasStreamingRef = useRef(false);
+  const [aiTurnComplete, setAiTurnComplete] = useState(0);
+  const handleStreamingChange = useCallback((streaming: boolean) => {
+    setIsStreaming(streaming);
+    if (wasStreamingRef.current && !streaming) {
+      // AI just finished a reply — trigger refresh in outline/producing phases
+      setAiTurnComplete((n) => n + 1);
     }
-  }, [phase]);
+    wasStreamingRef.current = streaming;
+  }, []);
 
   useEffect(() => {
     chatIdRef.current = chatId;
   }, [chatId]);
 
   // V2 §7.4: persist active project to localStorage for cross-session recovery
+  // 必须等恢复流程完成后才开始持久化：挂载时本 effect 先于恢复 effect 执行，
+  // 若此时 projectName/phase 还是初始值，会把待恢复的存储状态提前清空。
+  const restoredRef = useRef(false);
   useEffect(() => {
+    if (!restoredRef.current) return;
     if (projectName && phase !== "config") {
       const state: ActiveProjectState = { name: projectName, chatId, phase };
       try {
@@ -139,18 +165,37 @@ export function PptMakerView() {
     }
   }, [projectName, chatId, phase]);
 
-  // V2 §7.4: restore active project on mount
+  // Auto-collapse project sidebar on medium/narrow screens
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(ACTIVE_PROJECT_KEY);
-      if (!raw) return;
-      const state = JSON.parse(raw) as ActiveProjectState;
-      if (!state?.name) return;
-      setProjectName(state.name);
-      setChatId(state.chatId ?? null);
-      setPhase(state.phase);
-      setHistoryKey((k) => k + 1);
-    } catch {}
+    if (bp !== "wide") setSidebarCollapsed(true);
+  }, [bp]);
+
+  // V2 §7.4: restore active project on mount
+  // 校验项目在后端实际存在，避免恢复已删除的项目导致后续 API 持续 404
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const raw = localStorage.getItem(ACTIVE_PROJECT_KEY);
+        if (!raw) return;
+        const state = JSON.parse(raw) as ActiveProjectState;
+        if (!state?.name) return;
+        // 校验项目存在性：fetchPptExportStatus 在项目不存在时抛 ApiError(404)
+        try {
+          await fetchPptExportStatus(token, state.name);
+        } catch {
+          // 项目不存在，清理 localStorage 并回到 config
+          try { localStorage.removeItem(ACTIVE_PROJECT_KEY); } catch {}
+          return;
+        }
+        if (cancelled) return;
+        setProjectName(state.name);
+        setChatId(state.chatId ?? null);
+        setPhase(state.phase);
+        setHistoryKey((k) => k + 1);
+      } catch {}
+    })();
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -167,38 +212,25 @@ export function PptMakerView() {
     async function poll() {
       if (cancelled) return;
 
-      if (generationStartRef.current && phase === "generating") {
-        const elapsed = Date.now() - generationStartRef.current;
-        if (elapsed > 30 * 60 * 1000) {
-          return;
-        }
-      }
-
       try {
         const res = await fetchPptExportStatus(token, projectName!);
         if (cancelled) return;
         setHasPptxOutput(res.hasPptxOutput);
         setPipelineStage(res.pipelineStage ?? "init");
 
-        // V2 phase transitions
         const v2Phase = (res as { phase?: string }).phase;
-        if (v2Phase) {
-          if (v2Phase === "outline" && phase === "generating") {
-            setPhase("outline");
-            generationStartRef.current = null;
-            return;
-          }
-          if (v2Phase === "review" && phase === "producing") {
-            setPhase("review");
-            return;
-          }
-          if (v2Phase === "done") {
-            await markPptGenerating(token, projectName!, "finish").catch(() => {});
-            setPhase("done");
-            setHistoryKey((k) => k + 1);
-            generationStartRef.current = null;
-            return;
-          }
+        // 通过 resolveNextPhase 校验迁移方向，过期的轮询响应不得回退阶段
+        const next = v2Phase ? resolveNextPhase(phase, v2Phase) : null;
+        if (next === "done") {
+          await markPptGenerating(token, projectName!, "finish").catch(() => {});
+          setPhase("done");
+          setHistoryKey((k) => k + 1);
+          generationStartRef.current = null;
+          return;
+        }
+        // 前进迁移：generating → outline / producing 等，由后端阶段驱动
+        if (next && next !== phase) {
+          setPhase(next);
         }
 
         // Fallback: legacy done detection
@@ -223,9 +255,25 @@ export function PptMakerView() {
     };
   }, [phase, projectName, token]);
 
-  const handleStartGeneration = useCallback(async () => {
+  const handleNewProject = useCallback(() => {
+    setPhase("config");
+    setProjectName(null);
+    setChatId(null);
+    setStartError(null);
+    setDownloadError(null);
+    setDownloading(false);
+    setConfig(DEFAULT_CONFIG);
+    setHasPptxOutput(false);
+    setPipelineStage("init");
     try {
-      const name = generateProjectName();
+      localStorage.removeItem(ACTIVE_PROJECT_KEY);
+    } catch {}
+  }, []);
+
+  const handleStartGeneration = useCallback(async () => {
+    setStartError(null);
+    const name = generateProjectName();
+    try {
       setProjectName(name);
       const prompt = buildPptPrompt(config, name);
       const displayText = config.mode === "template"
@@ -241,55 +289,184 @@ export function PptMakerView() {
       generationStartRef.current = Date.now();
     } catch (e) {
       console.error("Failed to start PPT generation", e);
+      // 启动失败：清理项目状态，尽力结束后端 generating 标记，保留配置并展示错误
+      setProjectName(null);
+      setChatId(null);
+      await markPptGenerating(token, name, "finish").catch(() => {});
+      setStartError(e instanceof Error ? e.message : "启动生成失败，请重试");
     }
   }, [client, config, token]);
 
-  // V2: Outline locked → wake up Agent to continue with spec_lock generation
+  // V3: Outline locked → wake up Agent to generate spec_lock + first page
+  // 用户在大纲阶段可编辑页面内容（增删/重排/每页规格）和全局设计规格
+  // （8 项确认在规格面板中直接修改，写回 design_spec_summary.json）。
+  // [OUTLINE_CONFIRMED] 告知 AI 读取最新的 design_spec_summary.json 同步
+  // design_spec.md，再生成 spec_lock.md。
   const handleOutlineLocked = useCallback(async () => {
     if (!projectName || !chatId) return;
     setPhase("producing");
     const wakeMsg = [
-      "PPT 大纲已在 UI 中确认。",
-      "请读取当前项目 page_visual_plan.json，按其页面顺序和内容同步重建 design_spec.md，",
-      "再按 templates/spec_lock_reference.md 生成完整 spec_lock.md。",
-      "随后继续 Step 5 和 Step 6；全部 SVG 通过质量检查且备注齐全后写入 .review_ready，",
-      "停止在 Step 7 之前，等待逐页确认。",
-    ].join("");
+      "[OUTLINE_CONFIRMED]",
+      `project_path: ppt_projects/${projectName}`,
+      "next_action: rebuild_spec_lock_and_generate_first_page",
+      "",
+      "用户已在 UI 上确认大纲。请按以下顺序继续：",
+      "1. 读取最终 page_visual_plan.json 和 design_spec_summary.json（用户可能在 UI 规格面板中修改了 8 项确认，以 design_spec_summary.json 当前状态为准），同步重建 design_spec.md。",
+      "2. 按 templates/spec_lock_reference.md 生成完整 spec_lock.md。",
+      "3. 如需 Step 5 图片获取，执行完毕。",
+      "4. 启动 Flask live preview。",
+      "5. 仅生成第 1 页 SVG，写入 svg_output/，输出 required trace line。",
+      "6. 对该页运行 svg_quality_checker.py，修复 error。",
+      "7. 写该页备注到 notes/。",
+      "8. 停止，告知用户第 1 页已生成，请预览确认。",
+      "9. 不要生成其他页，不要进入 Step 7，不要写 .review_ready。",
+    ].join("\n");
     client.sendMessage(chatId, wakeMsg);
     generationStartRef.current = Date.now();
   }, [projectName, chatId, client]);
 
-  // V2 §5.4: single page regenerate → wake up Agent
-  const handlePageRegenerate = useCallback(
-    async (file: string) => {
+  // V3: page confirmed → request next page generation
+  const handlePageConfirmed = useCallback(
+    async (confirmedPageId: string, confirmedPageIndex: number, nextPageId: string, nextPageIndex: number) => {
       if (!projectName || !chatId) return;
-      setPhase("producing");
       const wakeMsg = [
-        `请重新生成当前 PPT 项目的 ${file}。`,
-        "只修改该页，保留其他页面；完成后重新运行 SVG 质量检查，",
-        "通过后更新 .review_ready，并再次停止在 Step 7 之前。",
-      ].join("");
+        "[PAGE_CONFIRMED_NEXT]",
+        `project_path: ppt_projects/${projectName}`,
+        `confirmed_page: ${confirmedPageId}`,
+        `confirmed_page_index: ${confirmedPageIndex}`,
+        `next_page_index: ${nextPageIndex}`,
+        `next_page_id: ${nextPageId}`,
+        "next_action: generate_next_page",
+        "",
+        `第 ${confirmedPageIndex} 页已确认。请生成第 ${nextPageIndex} 页：`,
+        "1. 读取 spec_lock.md，确认锁定参数未变。",
+        `2. 手写 svg_output/${nextPageId}.svg，输出 required trace line。`,
+        "3. 对该页运行 svg_quality_checker.py，修复 error。",
+        "4. 写该页备注到 notes/。",
+        `5. 仅生成这一页，停止并告知用户第 ${nextPageIndex} 页已生成，请预览确认。`,
+      ].join("\n");
       client.sendMessage(chatId, wakeMsg);
       generationStartRef.current = Date.now();
     },
     [projectName, chatId, client],
   );
 
-  // V2 §5.5: all pages confirmed → request export via Agent
+  // V3: page redo (with optional spec edit) → wake up Agent
+  const handlePageRegenerate = useCallback(
+    async (pageIndex: number, pageId: string, feedback?: string, pageSpec?: Record<string, unknown>) => {
+      if (!projectName || !chatId) return;
+      const lines = [
+        "[PAGE_REDO_REQUESTED]",
+        `project_path: ppt_projects/${projectName}`,
+        `page_index: ${pageIndex}`,
+        `page_id: ${pageId}`,
+      ];
+      if (pageSpec && Object.keys(pageSpec).length > 0) {
+        lines.push("page_spec:");
+        for (const [k, v] of Object.entries(pageSpec)) {
+          lines.push(`  ${k}: ${JSON.stringify(v)}`);
+        }
+      }
+      lines.push(`feedback: ${feedback ?? ""}`);
+      lines.push("next_action: redo_single_page");
+      lines.push("");
+      lines.push(`用户要求重做第 ${pageIndex} 页，规格可能已修改。`);
+      lines.push("请按以下顺序处理：");
+      lines.push("1. 如消息携带 page_spec，读取 page_visual_plan.json 中该页的最新规格（UI 已更新）。");
+      lines.push("2. 重新读取 spec_lock.md，确认锁定的颜色/字体/图标/版式未变。");
+      lines.push("3. 如规格涉及内容或数据修改，先同步 design_spec.md 和 notes/ 中该页备注。");
+      lines.push(`4. 按新规格手写 svg_output/${pageId}.svg，输出 required trace line。`);
+      lines.push("5. 对该页运行 svg_quality_checker.py，修复 error。");
+      lines.push(`6. 停止，告知用户第 ${pageIndex} 页已重做，请预览确认。`);
+      lines.push("7. 不要重新进入 Step 7 导出，不要改写其他页。");
+      client.sendMessage(chatId, lines.join("\n"));
+      generationStartRef.current = Date.now();
+    },
+    [projectName, chatId, client],
+  );
+
+  // V3: skip to generate a specific page
+  const handlePageGenerate = useCallback(
+    async (pageIndex: number, pageId: string) => {
+      if (!projectName || !chatId) return;
+      const wakeMsg = [
+        "[PAGE_GENERATE_REQUESTED]",
+        `project_path: ppt_projects/${projectName}`,
+        `page_index: ${pageIndex}`,
+        `page_id: ${pageId}`,
+        "next_action: generate_single_page",
+        "",
+        `请生成第 ${pageIndex} 页 svg_output/${pageId}.svg。`,
+        "1. 读取 spec_lock.md，确认锁定参数未变。",
+        "2. 手写该页 SVG，输出 required trace line。",
+        "3. 对该页运行 svg_quality_checker.py，修复 error。",
+        "4. 写该页备注到 notes/。",
+        `5. 完成后停止，告知用户第 ${pageIndex} 页已生成，请预览确认。`,
+      ].join("\n");
+      client.sendMessage(chatId, wakeMsg);
+      generationStartRef.current = Date.now();
+    },
+    [projectName, chatId, client],
+  );
+
+  // V3: all pages confirmed → request export via Agent
   const handleAllConfirmed = useCallback(async () => {
     if (!projectName || !chatId) return;
     setPhase("exporting");
+
+    // Build export options string from user-selected export settings
+    const exportOpts: string[] = [];
+    if (exportOptions.pageTransition !== "fade") {
+      exportOpts.push(`页面过渡：${exportOptions.pageTransition}`);
+    }
+    if (exportOptions.entranceAnimation !== "auto") {
+      exportOpts.push(`入场动画：${exportOptions.entranceAnimation}`);
+    }
+    if (exportOptions.animationTrigger !== "after-previous") {
+      exportOpts.push(`动画触发：${exportOptions.animationTrigger}`);
+    }
+    if (exportOptions.autoAdvance != null) {
+      exportOpts.push(`自动翻页：${exportOptions.autoAdvance} 秒`);
+    }
+    if (exportOptions.enableNarration) {
+      exportOpts.push("为演示生成旁白音频");
+    }
+    if (exportOptions.mergeParagraphs) {
+      exportOpts.push("合并连续文本段落");
+    }
+
     const wakeMsg = [
-      "所有 PPT 页面已在 UI 中确认。请执行 Step 7 后处理与导出，",
-      "保持现有模版、动画、音频和导出参数约束。完成后报告导出文件。",
-    ].join("");
+      "[ALL_PAGES_CONFIRMED]",
+      `project_path: ppt_projects/${projectName}`,
+      "next_action: run_step_7_export",
+      "",
+      "用户已逐页确认所有页面。请执行 Step 7 后处理与导出：",
+      "1. 运行全量 svg_quality_checker.py 作为最终门控。",
+      "2. 依次运行：total_md_split.py → finalize_svg.py → svg_to_pptx.py。",
+      "3. 报告完整项目相对路径。",
+      ...(exportOpts.length > 0 ? ["", `导出选项：${exportOpts.join("；")}`] : []),
+    ].join("\n");
     client.sendMessage(chatId, wakeMsg);
     generationStartRef.current = Date.now();
-  }, [projectName, chatId, client]);
+  }, [projectName, chatId, client, exportOptions]);
+
+  const handleOpenProjectDir = useCallback(async () => {
+    if (!projectName) return;
+    try {
+      const { openPath } = await import("@tauri-apps/plugin-opener");
+      const baseDir = await import("@tauri-apps/api/path");
+      const dir = await baseDir.join(await baseDir.appDataDir(), "ppt_projects", projectName);
+      await openPath(dir);
+    } catch {
+      // silently fail
+    }
+  }, [projectName]);
 
   const handleDownload = useCallback(async (name?: string) => {
     const project = name ?? projectName;
     if (!project) return;
+    setDownloading(true);
+    setDownloadError(null);
     const base = await getApiBase();
     const url = `${base}/api/ppt/download?project=${encodeURIComponent(project)}&token=${encodeURIComponent(token)}`;
 
@@ -301,35 +478,46 @@ export function PptMakerView() {
           defaultPath: `${project}.pptx`,
           filters: [{ name: "PowerPoint", extensions: ["pptx"] }],
         });
-        if (!filePath) return;
+        if (!filePath) {
+          setDownloading(false);
+          return;
+        }
         const res = await httpFetch(url);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const blob = await res.arrayBuffer();
         await writeFile(filePath, new Uint8Array(blob));
       } catch (e) {
         console.error("PPT download failed", e);
+        setDownloadError(e instanceof Error ? e.message : "下载失败");
+      } finally {
+        setDownloading(false);
       }
       return;
     }
 
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `${project}.pptx`;
-    link.click();
+    try {
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${project}.pptx`;
+      link.click();
+    } catch (e) {
+      console.error("PPT download failed", e);
+      setDownloadError(e instanceof Error ? e.message : "下载失败");
+    } finally {
+      setDownloading(false);
+    }
   }, [projectName, token]);
 
   const handleSelectProject = useCallback((project: PptProject) => {
     setProjectName(project.name);
     setChatId(project.chatId);
     setHasPptxOutput(project.hasPptxOutput);
+    setDownloadError(null);
     const isDone = project.status === "done" || project.hasExport;
-    // V2: use backend phase if available, otherwise fallback to legacy
     const v2Phase = (project as PptProject & { phase?: string }).phase;
-    if (v2Phase) {
-      setPhase(v2Phase as PptPhase);
-    } else {
-      setPhase(isDone ? "done" : "generating");
-    }
+    // 从 config 基线解析后端阶段：校验阶段名合法，非法值回退到 done/outline 推断
+    const restored = v2Phase ? resolveNextPhase("config", v2Phase) : null;
+    setPhase(restored ?? (isDone ? "done" : "outline"));
     // Set displayContent for historical project's chat
     if (project.chatId && !displayContentMap[project.chatId]) {
       setDisplayContentMap((prev) => ({
@@ -347,7 +535,7 @@ export function PptMakerView() {
       try {
         localStorage.removeItem(ACTIVE_PROJECT_KEY);
       } catch {}
-    };
+    }
   }, [projectName]);
 
   return (
@@ -359,106 +547,305 @@ export function PptMakerView() {
               className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
               onClick={() => setSidebarCollapsed(false)}
               title="展开侧栏"
+              aria-label="展开侧栏"
             >
               <PanelLeft className="h-3.5 w-3.5" />
             </button>
           </div>
         ) : (
           <aside className="flex w-[260px] shrink-0 flex-col border-r border-border/70">
-            <div className="flex shrink-0 border-b border-border/70">
-              <button
-                className={cn(
-                  "flex flex-1 items-center justify-center gap-1.5 py-2 text-[11px] font-medium transition-colors",
-                  sidebarTab === "config"
-                    ? "text-foreground border-b-2 border-primary"
-                    : "text-muted-foreground hover:text-foreground",
-                )}
-                onClick={() => setSidebarTab("config")}
+            <div className="flex shrink-0 flex-col gap-2 border-b border-border/70 p-3">
+              <Button
+                className="h-8 w-full text-[13px]"
+                onClick={handleNewProject}
               >
-                <SlidersHorizontal className="h-3 w-3" />
-                配置
-              </button>
-              <button
-                className={cn(
-                  "flex flex-1 items-center justify-center gap-1.5 py-2 text-[11px] font-medium transition-colors",
-                  sidebarTab === "history"
-                    ? "text-foreground border-b-2 border-primary"
-                    : "text-muted-foreground hover:text-foreground",
-                )}
-                onClick={() => setSidebarTab("history")}
-              >
-                <History className="h-3 w-3" />
-                历史
-              </button>
+                新建演示文稿
+              </Button>
             </div>
-            <div className="min-h-0 flex-1">
-              {sidebarTab === "config" ? (
+            <div className="min-h-0 flex-1 overflow-y-auto scrollbar-hover">
+              <PptHistory
+                key={historyKey}
+                currentProjectName={projectName}
+                onSelect={handleSelectProject}
+                onDownload={handleDownload}
+                onDelete={handleDeleteProject}
+              />
+            </div>
+          </aside>
+        )}
+
+        <div className="flex min-h-0 flex-1 flex-col">
+          {/* Step bar */}
+          <div className="flex shrink-0 items-center justify-center gap-1 border-b border-border/70 bg-background px-4 py-3">
+            {STEPS.map((step, i) => {
+              const status = getStepStatus(i, phase);
+              return (
+                <div key={step.label} className="flex items-center">
+                  {i > 0 && (
+                    <div
+                      className={cn(
+                        "mx-2 h-px w-5",
+                        getStepStatus(i - 1, phase) !== "pending" ? "bg-primary/40" : "bg-border",
+                      )}
+                    />
+                  )}
+                  <div className="flex items-center gap-1.5">
+                    <div
+                      className={cn(
+                        "flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-medium",
+                        status === "completed" && "bg-emerald-500/15 text-emerald-600",
+                        status === "current" && "bg-primary text-primary-foreground",
+                        status === "pending" && "border border-border bg-background text-muted-foreground",
+                      )}
+                    >
+                      {status === "completed" ? (
+                        <Check className="h-3 w-3" />
+                      ) : (
+                        <span>{i + 1}</span>
+                      )}
+                    </div>
+                    <span
+                      className={cn(
+                        "text-[11px] font-medium",
+                        status === "completed" && "text-muted-foreground",
+                        status === "current" && "text-foreground",
+                        status === "pending" && "text-muted-foreground/50",
+                      )}
+                    >
+                      {step.label}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {phase === "config" ? (
+            <div className="flex min-h-0 flex-1 flex-col items-center overflow-y-auto scrollbar-hover px-4 py-8">
+              <div className="w-full max-w-[640px]">
+                <h2 className="mb-6 text-lg font-medium">新建演示文稿</h2>
                 <PptConfigPanel
                   config={config}
                   setConfig={setConfig}
                   phase={phase}
                   onStart={handleStartGeneration}
                 />
-              ) : (
-                <PptHistory
-                  key={historyKey}
-                  onSelect={handleSelectProject}
-                  onDownload={handleDownload}
-                  onDelete={handleDeleteProject}
-                />
-              )}
-            </div>
-          </aside>
-        )}
-
-        <div className="flex min-h-0 flex-1 flex-col">
-          {phase === "config" ? (
-            <div className="flex flex-1 items-center justify-center text-[13px] text-muted-foreground">
-              选择模板和输入主题后开始生成
-            </div>
-          ) : phase === "outline" && projectName ? (
-            <div className="flex min-h-0 flex-1">
-              <div className="min-w-0 flex-1">
-                <PptOutlinePhase
-                  projectName={projectName}
-                  token={token}
-                  onLocked={handleOutlineLocked}
-                />
+                {startError && (
+                  <div className="mt-4 text-[13px] text-destructive">
+                    启动失败：{startError}
+                  </div>
+                )}
               </div>
-              <div className="w-[400px] shrink-0 border-l border-border/70">
+            </div>
+          ) : phase === "generating" && projectName ? (
+            <ResponsiveChatLayout
+              bp={bp}
+              chatOpen={chatSheetOpen}
+              onChatOpenChange={setChatSheetOpen}
+              chat={
                 <PptChatPanel
                   key={chatId ?? "empty"}
                   chatId={chatId}
-                  onStreamingChange={setIsStreaming}
+                  onStreamingChange={handleStreamingChange}
                   displayContentMap={displayContentMap}
                   ref={chatPanelRef}
                 />
+              }
+            >
+              <div className="flex min-h-0 flex-1 items-center justify-center bg-muted/20">
+                <div className="flex flex-col items-center gap-3 text-[13px] text-muted-foreground">
+                  <Loader2 className="h-6 w-6 animate-spin text-primary" />
+                  <span className="font-medium">正在准备内容</span>
+                  <span className="text-[11px] text-muted-foreground/70">
+                    AI 正在分析素材并生成大纲，请稍候…
+                  </span>
+                </div>
               </div>
-            </div>
-          ) : phase === "review" && projectName ? (
-            <PptReviewPhase
+            </ResponsiveChatLayout>
+          ) : phase === "outline" && projectName ? (
+            <ResponsiveChatLayout
+              bp={bp}
+              chatOpen={chatSheetOpen}
+              onChatOpenChange={setChatSheetOpen}
+              chat={
+                <PptChatPanel
+                  key={chatId ?? "empty"}
+                  chatId={chatId}
+                  onStreamingChange={handleStreamingChange}
+                  displayContentMap={displayContentMap}
+                  ref={chatPanelRef}
+                />
+              }
+            >
+              <PptOutlinePhase
+                projectName={projectName}
+                token={token}
+                onLocked={handleOutlineLocked}
+                refreshTrigger={aiTurnComplete}
+                bp={bp}
+              />
+            </ResponsiveChatLayout>
+          ) : phase === "producing" && projectName ? (
+            <PptProducingPhase
               projectName={projectName}
               token={token}
               chatId={chatId}
               displayContentMap={displayContentMap}
               isStreaming={isStreaming}
-              onStreamingChange={setIsStreaming}
-              onRegenerate={handlePageRegenerate}
+              onStreamingChange={handleStreamingChange}
+              onPageConfirmed={handlePageConfirmed}
+              onPageRegenerate={handlePageRegenerate}
+              onPageGenerate={handlePageGenerate}
               onAllConfirmed={handleAllConfirmed}
+              exportOptions={exportOptions}
+              setExportOptions={setExportOptions}
+              bp={bp}
             />
+          ) : phase === "exporting" && projectName ? (
+            <ResponsiveChatLayout
+              bp={bp}
+              chatOpen={chatSheetOpen}
+              onChatOpenChange={setChatSheetOpen}
+              chat={
+                <PptChatPanel
+                  key={chatId ?? "empty"}
+                  chatId={chatId}
+                  onStreamingChange={handleStreamingChange}
+                  displayContentMap={displayContentMap}
+                  ref={chatPanelRef}
+                />
+              }
+            >
+              <div className="flex min-h-0 flex-1 items-center justify-center bg-muted/20">
+                <div className="flex flex-col items-center gap-3 text-[13px] text-muted-foreground">
+                  <Loader2 className="h-6 w-6 animate-spin text-primary" />
+                  <span className="font-medium">正在导出 PPTX 文件</span>
+                  <span className="text-[11px] text-muted-foreground/70">
+                    正在整理页面并生成 PPTX，请稍候…
+                  </span>
+                </div>
+              </div>
+            </ResponsiveChatLayout>
           ) : (
-            <ResizablePanelGroup direction="horizontal" className="min-h-0 flex-1">
-              <ResizablePanel defaultSize={60} minSize={25}>
-                <PptPreview projectName={projectName} isStreaming={isStreaming} hasPptxOutput={hasPptxOutput} pipelineStage={pipelineStage} />
-              </ResizablePanel>
-              <ResizableHandle withHandle />
-              <ResizablePanel defaultSize={40} minSize={20}>
-                <PptChatPanel key={chatId ?? "empty"} chatId={chatId} onStreamingChange={setIsStreaming} displayContentMap={displayContentMap} ref={chatPanelRef} />
-              </ResizablePanel>
-            </ResizablePanelGroup>
+            <>
+              {phase === "done" && (
+                <div className="flex shrink-0 items-center justify-between border-b border-border/70 bg-background px-4 py-2">
+                  <div className="flex items-center gap-2 text-[13px]">
+                    <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+                    <span className="font-medium">PPT 已生成</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {isTauri() && (
+                      <Button variant="outline" size="sm" onClick={handleOpenProjectDir} className="h-7 text-[11px]">
+                        <FolderOpen className="mr-1 h-3 w-3" />
+                        打开项目目录
+                      </Button>
+                    )}
+                    <Button size="sm" onClick={() => handleDownload()} disabled={downloading} className="h-7 text-[11px]">
+                      {downloading ? (
+                        <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                      ) : (
+                        <Download className="mr-1 h-3 w-3" />
+                      )}
+                      下载 PPTX
+                    </Button>
+                  </div>
+                </div>
+              )}
+              {phase === "done" && downloadError && (
+                <div className="flex shrink-0 items-center justify-between border-b border-destructive/20 bg-destructive/5 px-4 py-1.5 text-[11px] text-destructive">
+                  <span>下载失败：{downloadError}</span>
+                  <button
+                    type="button"
+                    className="ml-2 rounded px-1.5 py-0.5 text-primary hover:bg-primary/10"
+                    onClick={() => handleDownload()}
+                  >
+                    重新下载
+                  </button>
+                </div>
+              )}
+              {bp === "wide" ? (
+                <ResizablePanelGroup direction="horizontal" className="min-h-0 flex-1">
+                  <ResizablePanel defaultSize={60} minSize={25}>
+                    <PptPreview projectName={projectName} isStreaming={isStreaming} hasPptxOutput={hasPptxOutput} pipelineStage={pipelineStage} />
+                  </ResizablePanel>
+                  <ResizableHandle withHandle />
+                  <ResizablePanel defaultSize={40} minSize={20}>
+                    <PptChatPanel key={chatId ?? "empty"} chatId={chatId} onStreamingChange={handleStreamingChange} displayContentMap={displayContentMap} ref={chatPanelRef} />
+                  </ResizablePanel>
+                </ResizablePanelGroup>
+              ) : (
+                <div className="relative flex min-h-0 flex-1 flex-col">
+                  <div className="min-h-0 flex-1">
+                    <PptPreview projectName={projectName} isStreaming={isStreaming} hasPptxOutput={hasPptxOutput} pipelineStage={pipelineStage} />
+                  </div>
+                  <Sheet open={chatSheetOpen} onOpenChange={setChatSheetOpen}>
+                    <SheetContent side="right" className="w-[400px] p-0 sm:max-w-[400px]">
+                      <SheetHeader className="sr-only">
+                        <SheetTitle>与 AI 讨论</SheetTitle>
+                      </SheetHeader>
+                      <PptChatPanel key={chatId ?? "empty"} chatId={chatId} onStreamingChange={handleStreamingChange} displayContentMap={displayContentMap} ref={chatPanelRef} />
+                    </SheetContent>
+                  </Sheet>
+                </div>
+              )}
+            </>
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+/** Responsive layout wrapper: wide = split with chat panel, medium/narrow = full main + Sheet chat. */
+function ResponsiveChatLayout({
+  bp,
+  chatOpen,
+  onChatOpenChange,
+  chat,
+  children,
+}: {
+  bp: import("@/hooks/useBreakpoint").Breakpoint;
+  chatOpen: boolean;
+  onChatOpenChange: (open: boolean) => void;
+  chat: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  const showChatInline = bp === "wide";
+  return (
+    <div className="flex min-h-0 flex-1">
+      <div className="relative flex min-w-0 flex-1 flex-col">
+        {children}
+        {!showChatInline && (
+          <div className="absolute bottom-4 right-4 z-10">
+            <Button
+              size="sm"
+              variant="secondary"
+              className="h-8 gap-1 rounded-full shadow-md text-[11px]"
+              onClick={() => onChatOpenChange(true)}
+              aria-label="与 AI 讨论"
+            >
+              <MessageSquareText className="h-3.5 w-3.5" />
+              与 AI 讨论
+            </Button>
+          </div>
+        )}
+      </div>
+      {showChatInline && (
+        <div className="w-[400px] shrink-0 border-l border-border/70">
+          {chat}
+        </div>
+      )}
+      {!showChatInline && (
+        <Sheet open={chatOpen} onOpenChange={onChatOpenChange}>
+          <SheetContent side="right" className="w-[400px] p-0 sm:max-w-[400px]">
+            <SheetHeader className="sr-only">
+              <SheetTitle>与 AI 讨论</SheetTitle>
+            </SheetHeader>
+            {chat}
+          </SheetContent>
+        </Sheet>
+      )}
     </div>
   );
 }
@@ -492,13 +879,16 @@ function buildPptPrompt(config: PptConfig, projectName: string): string {
     parts.push("请制作一份 PPT。");
   }
 
+  // 激活 V3 UI 检查点模式：Agent 在 Step 4 生成大纲后停止等待 UI 确认，
+  // 在 Step 6 逐页生成 SVG 后停止等待 UI 确认。前端会发送
+  // [OUTLINE_CONFIRMED] / [PAGE_CONFIRMED_NEXT] 等消息恢复执行。
+  parts.push("PPT_UI_CHECKPOINTS=1");
+
   // Project identity
   parts.push(`项目名：${projectName}`);
   parts.push(`项目目录：ppt_projects/（init 时加 --dir ppt_projects）`);
 
   // --- Mandatory reference reads ---
-  // The SKILL.md is already injected as an always-skill. These reminders
-  // reinforce the most frequently violated rules — keep them short.
   parts.push("");
   parts.push("⚠️ 关键规则提醒（详见 mona-ppt SKILL.md）：");
   parts.push("- Step 5：当 design_spec 有需要图片的行时，用 web_search 搜图，用 web_fetch 下载一张到 <project_path>/images/，然后审查图片质量和内容相关性；如果不符合要求，继续下载其他搜索结果；如果 web_search 不可用，再用 generate_image 工具生图");
@@ -509,117 +899,41 @@ function buildPptPrompt(config: PptConfig, projectName: string): string {
     parts.push("- SVG 颜色用 #RRGGBB 格式，不要用 rgba()，渐变透明度用 stop-opacity 属性");
   }
 
-  // --- Eight Confirmations pre-fill ---
-  // User has already configured preferences in the UI. Present these as
-  // the confirmed Eight Confirmations — the AI should output the full
-  // confirmation block and auto-proceed (user already confirmed via UI).
-
+  // --- User preferences (minimal — AI recommends the rest) ---
   const confirmations: string[] = [];
 
-  // a. Canvas format
-  confirmations.push(`画布格式：${config.canvasFormat}`);
-
-  // b. Page count
+  // Page count (only if user specified)
   if (config.pageCount != null) {
     confirmations.push(`页数：${config.pageCount} 页`);
   } else {
     confirmations.push("页数：AI 推荐");
   }
 
-  // c. Audience
-  if (config.audience.trim()) {
-    confirmations.push(`目标受众：${config.audience.trim()}`);
-  } else {
-    confirmations.push("目标受众：AI 推荐");
-  }
-
-  // d. Style mode + descriptor
-  if (config.styleMode) {
-    const modeLabel: Record<PptStyleMode, string> = {
-      general: "General Versatile（视觉冲击优先）",
-      consulting: "General Consulting（数据清晰优先）",
-      "top-consulting": "Top Consulting（逻辑说服优先）",
-    };
-    confirmations.push(`风格模式：${modeLabel[config.styleMode]}`);
-  } else {
-    confirmations.push("风格模式：AI 推荐");
-  }
-  if (config.styleDescriptor.trim()) {
-    confirmations.push(`视觉风格描述：${config.styleDescriptor.trim()}`);
-  }
-
-  // e. Color scheme
-  if (config.primaryColor.trim()) {
-    confirmations.push(`主色调：${config.primaryColor.trim()}`);
-  } else {
-    confirmations.push("主色调：AI 推荐");
-  }
-
-  // f. Icon approach + library
-  if (config.iconApproach) {
-    const iconLabel: Record<PptIconApproach, string> = {
-      emoji: "Emoji",
-      ai: "AI 生成图标",
-      builtin: "内置图标库",
-      custom: "自定义图标",
-    };
-    confirmations.push(`图标方案：${iconLabel[config.iconApproach]}`);
-    if (config.iconApproach === "builtin" && config.iconLibrary) {
-      confirmations.push(`图标库：${config.iconLibrary}`);
-    }
-  } else {
-    confirmations.push("图标方案：AI 推荐");
-  }
-
-  // g. Formula policy
-  if (config.formulaPolicy) {
-    const formulaLabel: Record<PptFormulaPolicy, string> = {
-      mixed: "混合（复杂公式渲染为图片，简单公式保留文本）",
-      "render-all": "全部渲染为图片",
-      "text-only": "全部保留为可编辑文本",
-    };
-    confirmations.push(`公式渲染策略：${formulaLabel[config.formulaPolicy]}`);
-  } else {
-    confirmations.push("公式渲染策略：AI 推荐（默认 mixed）");
-  }
-
-  // h. Image approach
-  const effectiveImageApproach = config.imageApproach ?? (
-    config.imageMode === "none" ? "none"
-    : config.imageMode === "rich" ? "ai"
-    : null
-  );
-  if (effectiveImageApproach) {
-    const imgLabel: Record<PptImageApproach, string> = {
-      none: "不使用图片",
-      user: "仅使用用户提供的图片",
-      ai: "AI 生成图片",
-      web: "网络搜索图片",
-      placeholder: "使用占位图",
-    };
-    confirmations.push(`图片方案：${imgLabel[effectiveImageApproach]}`);
-  } else if (config.imageMode === "key-pages") {
-    confirmations.push("图片方案：仅在关键页使用 AI 图片（必须执行 Step 5 Image Acquisition Phase，为封面页和关键内容页生成 AI 图片）");
-  } else {
-    confirmations.push("图片方案：AI 推荐");
-  }
-
-  // Visual mode
-  if (config.visualMode !== "auto") {
-    const visualModeText: Record<Exclude<PptVisualMode, "auto">, string> = {
-      data: "数据图表优先",
-      process: "流程图/架构图优先",
-    };
-    confirmations.push(`表达策略：${visualModeText[config.visualMode]}`);
-  }
+  // All other 8-item confirmations are left to AI recommendation
+  confirmations.push("风格模式：AI 推荐");
+  confirmations.push("画布格式：AI 推荐（默认 ppt169）");
+  confirmations.push("目标受众：AI 推荐");
+  confirmations.push("主色调：AI 推荐");
+  confirmations.push("图标方案：AI 推荐");
+  confirmations.push("字体方案：AI 推荐");
+  confirmations.push("图片方案：AI 推荐");
 
   parts.push("");
-  parts.push("以下为用户在 UI 中已确认的八项确认内容，请在 Step 4 展示完整确认结果后自动推进（用户已确认，无需再询问）：");
+  parts.push("以下为用户在 UI 中已预填的偏好（值为「AI 推荐」的项由你按内容分析选定具体值）：");
   parts.push(confirmations.map((c) => `- ${c}`).join("\n"));
+  parts.push("");
+  parts.push("⚠️ V3 UI 检查点模式（PPT_UI_CHECKPOINTS=1）执行纪律：");
+  parts.push("- Step 4：基于上述用户偏好完成八项确认分析，**不要把 8 项推荐作为聊天消息发出来等待用户回复**（这会阻塞 UI 流程）。");
+  parts.push("- Step 4 必须写以下三个文件后停止：");
+  parts.push("  1. design_spec.md（完整草稿，按 templates/design_spec_reference.md 结构）");
+  parts.push("  2. page_visual_plan.json（schemaVersion=2, revision=0, pages 数组；每页必须含中文 title/summary/bullets/visual_type/layout/image_plan/notes/file/page 字段）");
+  parts.push("  3. design_spec_summary.json（八项确认的结构化摘要，schema 见 SKILL.md V3 章节；用户偏好已明确的项直接填入，「AI 推荐」项由你选定具体值，不要写「AI 推荐」字符串到 JSON）");
+  parts.push("- Step 4 禁止：不写 spec_lock.md；不进入 Step 5 图片获取；不进入 Step 6 SVG 生成；不写 .review_ready。");
+  parts.push("- Step 4 结束时输出一行简短提示（不超过 2 句话）告知用户「大纲草稿已生成，请在 PPT 页面编辑每页内容后确认；如需调整全局设计规格请在规格面板中直接修改」，然后结束当前 turn。**不要在 chat 中重复 8 项推荐内容**——它们已经写入 design_spec_summary.json，UI 会读取展示。");
+  parts.push("- 用户会在 UI 上编辑/增删/重排页面、编辑每页内容，确认后系统会自动锁定大纲并发送 [OUTLINE_CONFIRMED] 消息。收到该消息后才生成 spec_lock.md 并进入 Step 6 逐页生成 SVG。");
+  parts.push("- 用户可在 UI 的规格面板中直接修改全局 8 项规格（修改写回 design_spec_summary.json）。收到 [OUTLINE_CONFIRMED] 时务必重新读取 design_spec_summary.json，以其中最新值为准同步 design_spec.md 和 spec_lock.md。");
 
   // --- Template selection ---
-  // Important: no template selected means no template instructions at all.
-  // This preserves the existing PPT generation path.
   if (config.templateKey && config.templateKind) {
     if (usesNativeTemplate) {
       parts.push(`使用自定义模板：${config.templateKey}（路径：mona/skills/mona-ppt/templates/native/${config.templateKey}）`);
@@ -647,30 +961,6 @@ function buildPptPrompt(config: PptConfig, projectName: string): string {
     parts.push(`主题：${config.topic}`);
   }
 
-  // --- Export options ---
-  const exportOpts: string[] = [];
-  if (config.pageTransition !== "fade") {
-    exportOpts.push(`页面过渡：${config.pageTransition}`);
-  }
-  if (config.entranceAnimation !== "auto") {
-    exportOpts.push(`入场动画：${config.entranceAnimation}`);
-  }
-  if (config.animationTrigger !== "after-previous") {
-    exportOpts.push(`动画触发：${config.animationTrigger}`);
-  }
-  if (config.autoAdvance != null) {
-    exportOpts.push(`自动翻页：${config.autoAdvance} 秒`);
-  }
-  if (config.enableNarration) {
-    exportOpts.push("启用朗读：是（导出时运行 generate-audio 工作流）");
-  }
-  if (config.mergeParagraphs) {
-    exportOpts.push("合并段落：是（--merge-paragraphs）");
-  }
-  if (exportOpts.length > 0) {
-    parts.push(`导出选项：${exportOpts.join("；")}`);
-  }
-
   return parts.join("\n");
 }
 
@@ -692,9 +982,6 @@ function buildTemplateModePrompt(config: PptConfig, projectName: string): string
 
   if (config.pageCount != null) {
     parts.push(`页数：${config.pageCount} 页`);
-  }
-  if (config.audience.trim()) {
-    parts.push(`目标受众：${config.audience.trim()}`);
   }
 
   if (config.sourceFiles.length > 0) {

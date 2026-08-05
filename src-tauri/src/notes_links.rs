@@ -23,6 +23,9 @@ pub struct LinkNode {
     pub path: String,
     pub aliases: Vec<String>,
     pub note_type: String,
+    /// "note"（笔记库）或 "wiki"（资料库 wiki 页面），前端用于区分颜色/点击行为。
+    #[serde(default)]
+    pub source_kind: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -105,7 +108,10 @@ struct CachedGraph {
     positions: HashMap<String, [f64; 2]>,
 }
 
-const CACHE_VERSION: u32 = 4;
+const CACHE_VERSION: u32 = 5;
+
+/// Wiki 页面在 vault 内的相对路径前缀（POSIX 分隔符）。
+const WIKI_REL_PREFIX: &str = ".mona/materials/wiki/";
 
 fn links_cache_path(vault: &Path) -> PathBuf {
     vault.join(".mona").join("links.json")
@@ -378,6 +384,11 @@ fn build_graph(vault: &Path) -> LinkGraph {
             path: sn.relative_path.clone(),
             aliases: sn.note.aliases.clone(),
             note_type: sn.note.note_type.clone(),
+            source_kind: if sn.relative_path.starts_with(WIKI_REL_PREFIX) {
+                "wiki".to_string()
+            } else {
+                "note".to_string()
+            },
         })
         .collect();
 
@@ -489,6 +500,35 @@ fn vault_mtime_newer_than(vault: &Path, threshold: i64) -> bool {
             }
         }
     }
+
+    // Wiki 目录递归检查：wiki 页面参与图谱，其变更必须让缓存失效。
+    let wiki_dir = vault.join(".mona").join("materials").join("wiki");
+    if wiki_dir.is_dir() && dir_mtime_newer_than(&wiki_dir, threshold) {
+        return true;
+    }
+
+    false
+}
+
+/// Recursively check whether any .md file under `dir` is newer than `threshold`.
+fn dir_mtime_newer_than(dir: &Path, threshold: i64) -> bool {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let p = entry.path();
+        if p.is_dir() {
+            if dir_mtime_newer_than(&p, threshold) {
+                return true;
+            }
+        } else if p.extension().and_then(|e| e.to_str()) == Some("md") {
+            if let Some(mtime) = file_mtime(&p) {
+                if mtime > threshold {
+                    return true;
+                }
+            }
+        }
+    }
     false
 }
 
@@ -550,6 +590,14 @@ pub fn refresh_cache_background(vault: PathBuf) {
 // Mentions (plain-text occurrences not wrapped in [[ ]])
 // ---------------------------------------------------------------------------
 
+/// 判断 body 是否为结构化文档（流程图/思维导图）。
+/// 结构化文档以 ```mona-flowchart / ```mona-mindmap fence 存储权威数据，
+/// fence 之前的 Markdown 文本投影是结构化数据的派生品，不应参与 plain
+/// mention 扫描。wiki link 仍由 extract_wiki_links 正常识别。
+fn is_structured_note(body: &str) -> bool {
+    body.contains("```mona-flowchart") || body.contains("```mona-mindmap")
+}
+
 fn find_plain_mentions(
     scanned: &[ScannedNote],
     query: &str,
@@ -563,6 +611,13 @@ fn find_plain_mentions(
     let mut out = Vec::new();
     for sn in scanned {
         if sn.note.id == exclude_id {
+            continue;
+        }
+        // 跳过结构化文档（流程图/思维导图）：它们的 Markdown 文本投影含节点
+        // label 原文（如"开始"/"处理"），是结构化数据而非正文，全文参与
+        // plain mention 扫描会大量误报。wiki link 由 extract_wiki_links 单独
+        // 处理，结构化文档中的 [[wiki link]] 仍会进入反链。
+        if is_structured_note(&sn.note.body) {
             continue;
         }
         // to_lowercase may change byte length for some Unicode chars, so all

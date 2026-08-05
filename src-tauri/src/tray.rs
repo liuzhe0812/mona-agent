@@ -109,15 +109,12 @@ impl Default for PendingMailNavigation {
 
 pub fn setup_tray(app: &App) -> Result<(), Box<dyn std::error::Error>> {
     let new_note_item = MenuItem::with_id(app, "new_note", "新建笔记", true, None::<&str>)?;
-    let new_ssh_item =
-        MenuItem::with_id(app, "new_ssh", "新建 SSH 会话", true, None::<&str>)?;
-    let show_item = MenuItem::with_id(app, "show", "显示窗口", true, None::<&str>)?;
     let restart_item = MenuItem::with_id(app, "restart_gateway", "重启服务", true, None::<&str>)?;
     let quit_item = MenuItem::with_id(app, "quit", "退出 Mona", true, None::<&str>)?;
 
     let menu = Menu::with_items(
         app,
-        &[&new_note_item, &new_ssh_item, &show_item, &restart_item, &quit_item],
+        &[&new_note_item, &restart_item, &quit_item],
     )?;
 
     TrayIconBuilder::with_id(TRAY_ID)
@@ -133,21 +130,6 @@ pub fn setup_tray(app: &App) -> Result<(), Box<dyn std::error::Error>> {
                     let _ = window.set_focus();
                 }
                 let _ = app.emit("tray-new-note", ());
-            }
-            "new_ssh" => {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.show();
-                    let _ = window.unminimize();
-                    let _ = window.set_focus();
-                }
-                let _ = app.emit("tray-new-ssh", ());
-            }
-            "show" => {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.show();
-                    let _ = window.unminimize();
-                    let _ = window.set_focus();
-                }
             }
             "restart_gateway" => {
                 if let Some(gateway) = app.try_state::<crate::GatewayState>() {

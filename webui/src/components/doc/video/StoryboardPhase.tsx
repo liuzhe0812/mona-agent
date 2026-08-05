@@ -1,14 +1,26 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  AlertCircle,
   ArrowDown,
   ArrowUp,
   Check,
   Loader2,
   Plus,
+  RefreshCw,
   Trash2,
   Volume2,
 } from "lucide-react";
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -28,36 +40,124 @@ import { cn } from "@/lib/utils";
 interface StoryboardPhaseProps {
   projectName: string;
   onLocked: () => void;
+  /** Incremented by parent when AI finishes a reply (streaming → false). */
+  refreshTrigger?: number;
 }
 
-export function StoryboardPhase({ projectName, onLocked }: StoryboardPhaseProps) {
+export function StoryboardPhase({ projectName, onLocked, refreshTrigger }: StoryboardPhaseProps) {
   const { token } = useClient();
   const [scenes, setScenes] = useState<VideoScene[]>([]);
-  const [loading, setLoading] = useState(true);
   const [selectedIndex, setSelectedIndex] = useState(1);
-  const [saving, setSaving] = useState(false);
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [locking, setLocking] = useState(false);
   const [playingIndex, setPlayingIndex] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  // null = unknown, true = storyboard.md exists, false = not yet
+  const [storyboardExists, setStoryboardExists] = useState<boolean | null>(null);
+  const [parseError, setParseError] = useState<string | null>(null);
 
-  // Load storyboard. Pass silent=true to skip loading indicator (used by polling).
+  // Save queue: per-scene pending field edits, merged and sent serially.
+  const pendingRef = useRef<Map<number, Partial<VideoScene>>>(new Map());
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const drainPromiseRef = useRef<Promise<boolean> | null>(null);
+  const savedHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  // Drain pending edits serially. New edits arriving during the drain are
+  // merged into the map and picked up by the loop. Returns true when all
+  // pending edits were persisted.
+  const flushSaves = useCallback((): Promise<boolean> => {
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+    if (drainPromiseRef.current) return drainPromiseRef.current;
+    if (pendingRef.current.size === 0) return Promise.resolve(true);
+    const p = (async (): Promise<boolean> => {
+      setSaveState("saving");
+      let ok = true;
+      while (pendingRef.current.size > 0) {
+        const [index, fields] = pendingRef.current.entries().next().value as [
+          number,
+          Partial<VideoScene>,
+        ];
+        pendingRef.current.delete(index);
+        try {
+          const res = await updateVideoScene(token, projectName, { index, ...fields });
+          if (!res.ok) throw new Error(res.error || "save failed");
+        } catch (e) {
+          console.error("Failed to save scene", e);
+          // Restore failed fields, keeping newer edits (they win on conflict)
+          const newer = pendingRef.current.get(index) ?? {};
+          pendingRef.current.set(index, { ...fields, ...newer });
+          ok = false;
+          break;
+        }
+      }
+      drainPromiseRef.current = null;
+      if (!mountedRef.current) return ok && pendingRef.current.size === 0;
+      if (ok && pendingRef.current.size === 0) {
+        setSaveState("saved");
+        if (savedHideTimerRef.current) clearTimeout(savedHideTimerRef.current);
+        savedHideTimerRef.current = setTimeout(() => {
+          if (mountedRef.current) setSaveState("idle");
+        }, 1500);
+      } else {
+        setSaveState("error");
+      }
+      return ok && pendingRef.current.size === 0;
+    })();
+    drainPromiseRef.current = p;
+    return p;
+  }, [token, projectName]);
+
+  // Flush pending saves when switching away or unmounting (best effort).
+  useEffect(() => {
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+      if (pendingRef.current.size > 0) void flushSaves();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectName]);
+
+  // Load storyboard. Pass silent=true to skip error UI (used by polling).
+  // Errors are always logged to console for diagnosis — never silently swallowed.
+  // Server truth is merged with unsaved local edits so a reload never clobbers input.
   const loadScenes = useCallback(async (silent = false) => {
-    if (!silent) setLoading(true);
-    setError(null);
+    if (!silent) setError(null);
     try {
       const res = await fetchVideoStoryboard(token, projectName);
+      setStoryboardExists(res.storyboardExists ?? null);
+      setParseError(res.parseError ?? null);
       if (res.ok && res.scenes) {
-        setScenes(res.scenes);
-        if (res.scenes.length > 0 && !res.scenes.some((s) => s.index === selectedIndex)) {
-          setSelectedIndex(res.scenes[0].index);
+        let next = res.scenes;
+        if (pendingRef.current.size > 0) {
+          next = next.map((s) => {
+            const pending = pendingRef.current.get(s.index);
+            return pending ? { ...s, ...pending } : s;
+          });
         }
-      } else if (!silent) {
-        setError(res.error || "无法加载分镜");
+        setScenes(next);
+        if (next.length > 0 && !next.some((s) => s.index === selectedIndex)) {
+          setSelectedIndex(next[0].index);
+        }
+      } else if (!silent && res.error) {
+        setError(res.error);
+      }
+      if (!res.ok) {
+        console.warn("[StoryboardPhase] API returned error:", res.error);
       }
     } catch (e) {
+      console.warn("[StoryboardPhase] loadScenes failed:", e);
       if (!silent) setError(String(e));
-    } finally {
-      if (!silent) setLoading(false);
     }
   }, [token, projectName, selectedIndex]);
 
@@ -66,40 +166,79 @@ export function StoryboardPhase({ projectName, onLocked }: StoryboardPhaseProps)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, projectName]);
 
-  // Poll storyboard while empty (AI is generating draft)
+  // AI turn completion trigger — parent increments refreshTrigger when
+  // streaming transitions from true → false. This is the primary sync mechanism:
+  // when AI finishes its reply, any storyboard.md it wrote is now on disk.
+  // 双重刷新：立即刷新 + 800ms 后兜底（应对文件系统 flush 延迟）
+  useEffect(() => {
+    if (refreshTrigger === undefined || refreshTrigger === 0) return;
+    loadScenes(true);
+    const t = setTimeout(() => loadScenes(true), 800);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshTrigger]);
+
+  // Fallback polling — only as backup in case the streaming event is missed
+  // (e.g. component remount while AI is streaming).
+  // Stops once scenes appear or a parse error is detected.
   useEffect(() => {
     if (scenes.length > 0) return;
+    if (storyboardExists && parseError) return;
     const timer = setInterval(() => {
       loadScenes(true);
     }, 2000);
     return () => clearInterval(timer);
-  }, [scenes.length, loadScenes]);
+  }, [scenes.length, storyboardExists, parseError, loadScenes]);
+
+  // Diagnostic: AI finished (refreshTrigger > 0) but scenes still empty after 2s
+  // → likely AI failed/refused/was interrupted. Surface this to the user.
+  const [aiFinishedEmpty, setAiFinishedEmpty] = useState(false);
+  useEffect(() => {
+    if (!refreshTrigger || refreshTrigger === 0) return;
+    if (scenes.length > 0) {
+      setAiFinishedEmpty(false);
+      return;
+    }
+    setAiFinishedEmpty(false);
+    const t = setTimeout(() => {
+      if (scenes.length === 0) setAiFinishedEmpty(true);
+    }, 2000);
+    return () => clearTimeout(t);
+  }, [refreshTrigger, scenes.length]);
 
   const selectedScene = scenes.find((s) => s.index === selectedIndex) ?? null;
 
+  // Debounced merge-save: update UI immediately, queue the field, and send
+  // one merged request per scene 600ms after typing stops.
   const handleFieldChange = useCallback(
-    async <K extends keyof VideoScene>(field: K, value: VideoScene[K]) => {
+    <K extends keyof VideoScene>(field: K, value: VideoScene[K]) => {
       if (!selectedScene) return;
-      // Optimistic update
+      const idx = selectedIndex;
       setScenes((prev) =>
         prev.map((s) =>
-          s.index === selectedIndex ? { ...s, [field]: value } : s,
+          s.index === idx ? { ...s, [field]: value } : s,
         ),
       );
-      // Persist
-      setSaving(true);
-      try {
-        await updateVideoScene(token, projectName, {
-          index: selectedIndex,
-          [field]: value,
-        });
-      } catch (e) {
-        console.error("Failed to save scene", e);
-      } finally {
-        setSaving(false);
-      }
+      const existing = pendingRef.current.get(idx) ?? {};
+      pendingRef.current.set(idx, { ...existing, [field]: value });
+      setSaveState("saving");
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = setTimeout(() => {
+        saveTimerRef.current = null;
+        void flushSaves();
+      }, 600);
     },
-    [selectedScene, selectedIndex, token, projectName],
+    [selectedScene, selectedIndex, flushSaves],
+  );
+
+  // Switching scenes flushes pending edits for the previous scene first.
+  const handleSelectScene = useCallback(
+    (index: number) => {
+      if (index === selectedIndex) return;
+      void flushSaves();
+      setSelectedIndex(index);
+    },
+    [selectedIndex, flushSaves],
   );
 
   const handleMove = useCallback(
@@ -108,6 +247,9 @@ export function StoryboardPhase({ projectName, onLocked }: StoryboardPhaseProps)
       if (currentIdx < 0) return;
       const targetIdx = direction === "up" ? currentIdx - 1 : currentIdx + 1;
       if (targetIdx < 0 || targetIdx >= scenes.length) return;
+      // Indices shift on reorder — persist pending edits first, then drop leftovers.
+      await flushSaves();
+      pendingRef.current.clear();
       const newOrder = [...scenes];
       [newOrder[currentIdx], newOrder[targetIdx]] = [newOrder[targetIdx], newOrder[currentIdx]];
       const indices = newOrder.map((s) => s.index);
@@ -117,27 +259,38 @@ export function StoryboardPhase({ projectName, onLocked }: StoryboardPhaseProps)
         const res = await reorderVideoScenes(token, projectName, indices);
         if (res.ok && res.scenes) {
           setScenes(res.scenes);
+        } else {
+          throw new Error(res.error || "reorder failed");
         }
       } catch (e) {
         console.error("Failed to reorder", e);
+        setError("排序保存失败，已重新加载分镜");
+        void loadScenes(true);
       }
     },
-    [scenes, selectedIndex, token, projectName],
+    [scenes, selectedIndex, token, projectName, loadScenes, flushSaves],
   );
 
   const handleDelete = useCallback(async () => {
     if (scenes.length <= 1) return;
     if (!selectedScene) return;
+    // Indices shift on delete — persist pending edits first, then drop leftovers.
+    await flushSaves();
+    pendingRef.current.clear();
     try {
       const res = await deleteVideoScene(token, projectName, selectedIndex);
       if (res.ok && res.scenes) {
         setScenes(res.scenes);
         setSelectedIndex(res.scenes[0].index);
+      } else {
+        throw new Error(res.error || "delete failed");
       }
     } catch (e) {
       console.error("Failed to delete scene", e);
+      setError("删除失败，已重新加载分镜");
+      void loadScenes(true);
     }
-  }, [scenes.length, selectedScene, token, projectName, selectedIndex]);
+  }, [scenes.length, selectedScene, token, projectName, selectedIndex, loadScenes, flushSaves]);
 
   const handleAdd = useCallback(async () => {
     try {
@@ -145,11 +298,15 @@ export function StoryboardPhase({ projectName, onLocked }: StoryboardPhaseProps)
       if (res.ok && res.scene) {
         setScenes((prev) => [...prev, res.scene!]);
         setSelectedIndex(res.scene.index);
+      } else {
+        throw new Error(res.error || "add failed");
       }
     } catch (e) {
       console.error("Failed to add scene", e);
+      setError("新增场景失败，已重新加载分镜");
+      void loadScenes(true);
     }
-  }, [token, projectName]);
+  }, [token, projectName, loadScenes]);
 
   const handlePlayNarration = useCallback(
     async (index: number) => {
@@ -182,7 +339,14 @@ export function StoryboardPhase({ projectName, onLocked }: StoryboardPhaseProps)
 
   const handleLock = useCallback(async () => {
     setLocking(true);
+    setError(null);
     try {
+      // Flush pending saves before locking; block when any edit failed.
+      const saved = await flushSaves();
+      if (!saved || pendingRef.current.size > 0) {
+        setError("有修改尚未保存成功，请先重试保存再锁定分镜");
+        return;
+      }
       const res = await lockVideoStoryboard(token, projectName);
       if (res.ok) {
         onLocked();
@@ -194,27 +358,10 @@ export function StoryboardPhase({ projectName, onLocked }: StoryboardPhaseProps)
     } finally {
       setLocking(false);
     }
-  }, [token, projectName, onLocked]);
+  }, [token, projectName, onLocked, flushSaves]);
 
-  if (loading) {
-    return (
-      <div className="flex h-full items-center justify-center text-[13px] text-muted-foreground">
-        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-        加载分镜...
-      </div>
-    );
-  }
-
-  if (scenes.length === 0) {
-    return (
-      <div className="flex h-full flex-col items-center justify-center gap-2 text-[13px] text-muted-foreground">
-        <Loader2 className="h-5 w-5 animate-spin" />
-        <div>AI 正在生成分镜草稿...</div>
-        <div className="text-[11px]">完成后会自动显示在此处</div>
-      </div>
-    );
-  }
-
+  // Always render the full layout — empty state shows placeholder inside each pane
+  // instead of a full-screen "loading" overlay. AI-generated scenes flow in smoothly.
   return (
     <div className="flex h-full min-h-0">
       {/* 左:场景卡片列表 */}
@@ -223,30 +370,44 @@ export function StoryboardPhase({ projectName, onLocked }: StoryboardPhaseProps)
           场景列表 · {scenes.length} 场
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto scrollbar-hover p-2">
-          {scenes.map((s) => (
-            <button
-              key={s.index}
-              onClick={() => setSelectedIndex(s.index)}
-              className={cn(
-                "mb-1 w-full rounded-md border px-2.5 py-2 text-left transition-colors",
-                s.index === selectedIndex
-                  ? "border-primary bg-accent"
-                  : "border-border/60 hover:bg-accent",
-              )}
-            >
-              <div className="flex items-center gap-1.5">
-                <span className="text-[10px] font-mono text-muted-foreground">
-                  {String(s.index).padStart(2, "0")}
-                </span>
-                <span className="truncate text-[12px] font-medium">
-                  {s.title || `场景 ${s.index}`}
-                </span>
-              </div>
-              <div className="mt-0.5 text-[10px] text-muted-foreground">
-                {s.duration}s
-              </div>
-            </button>
-          ))}
+          {scenes.length === 0 ? (
+            <div className="flex h-full flex-col items-center justify-center gap-1.5 px-2 text-center text-[11px] text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              <div>AI 正在生成分镜...</div>
+            </div>
+          ) : (
+            scenes.map((s) => (
+              <button
+                key={s.index}
+                onClick={() => handleSelectScene(s.index)}
+                aria-pressed={s.index === selectedIndex}
+                aria-label={`场景 ${s.index} ${s.title || ""}`}
+                className={cn(
+                  "mb-1 w-full rounded-md border px-2.5 py-2 text-left transition-colors",
+                  s.index === selectedIndex
+                    ? "border-primary bg-accent"
+                    : "border-border/60 hover:bg-accent",
+                )}
+              >
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[11px] font-mono text-muted-foreground">
+                    {String(s.index).padStart(2, "0")}
+                  </span>
+                  <span
+                    className={cn(
+                      "truncate text-[12px]",
+                      s.index === selectedIndex ? "font-semibold" : "font-medium",
+                    )}
+                  >
+                    {s.title || `场景 ${s.index}`}
+                  </span>
+                </div>
+                <div className="mt-0.5 text-[11px] text-muted-foreground">
+                  {s.duration}s
+                </div>
+              </button>
+            ))
+          )}
         </div>
         <div className="shrink-0 border-t border-border/70 p-2">
           <Button
@@ -254,6 +415,7 @@ export function StoryboardPhase({ projectName, onLocked }: StoryboardPhaseProps)
             size="sm"
             className="w-full justify-start text-[12px]"
             onClick={handleAdd}
+            disabled={scenes.length === 0}
           >
             <Plus className="mr-1.5 h-3.5 w-3.5" />
             新增场景
@@ -266,11 +428,29 @@ export function StoryboardPhase({ projectName, onLocked }: StoryboardPhaseProps)
         {selectedScene ? (
           <>
             <div className="flex shrink-0 items-center justify-between border-b border-border/70 px-4 py-2">
-              <div className="text-[13px] font-medium">
+              <div className="flex items-center text-[13px] font-medium">
                 场景 {selectedScene.index} / {scenes.length}
-                {saving && (
-                  <span className="ml-2 text-[10px] text-muted-foreground">
-                    保存中...
+                {saveState === "saving" && (
+                  <span className="ml-2 text-[11px] font-normal text-muted-foreground">
+                    保存中…
+                  </span>
+                )}
+                {saveState === "saved" && (
+                  <span className="ml-2 text-[11px] font-normal text-muted-foreground">
+                    已保存
+                  </span>
+                )}
+                {saveState === "error" && (
+                  <span className="ml-2 flex items-center gap-1 text-[11px] font-normal text-destructive" role="alert">
+                    保存失败
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-5 px-1.5 text-[11px] text-destructive hover:text-destructive"
+                      onClick={() => void flushSaves()}
+                    >
+                      重试
+                    </Button>
                   </span>
                 )}
               </div>
@@ -299,9 +479,10 @@ export function StoryboardPhase({ projectName, onLocked }: StoryboardPhaseProps)
                   variant="ghost"
                   size="sm"
                   className="h-7 w-7 p-0 text-destructive hover:text-destructive"
-                  onClick={handleDelete}
+                  onClick={() => setDeleteConfirmOpen(true)}
                   disabled={scenes.length <= 1}
                   title="删除场景"
+                  aria-label="删除场景"
                 >
                   <Trash2 className="h-3.5 w-3.5" />
                 </Button>
@@ -399,12 +580,31 @@ export function StoryboardPhase({ projectName, onLocked }: StoryboardPhaseProps)
 
             <div className="shrink-0 border-t border-border/70 p-3">
               {error && (
-                <div className="mb-2 text-[11px] text-destructive">{error}</div>
+                <div className="mb-2 text-[11px] text-destructive" role="alert">{error}</div>
+              )}
+              {parseError && (
+                <div className="mb-2 flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 p-2 text-[11px] text-destructive" role="alert">
+                  <AlertCircle className="mt-0.5 h-3 w-3 shrink-0" />
+                  <span className="flex-1">{parseError}</span>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-5 px-1.5 text-[11px]"
+                    onClick={() => {
+                      setParseError(null);
+                      setStoryboardExists(null);
+                      loadScenes();
+                    }}
+                    aria-label="重试加载分镜"
+                  >
+                    <RefreshCw className="h-3 w-3" />
+                  </Button>
+                </div>
               )}
               <Button
                 className="w-full"
                 onClick={handleLock}
-                disabled={locking}
+                disabled={locking || saveState === "saving" || saveState === "error" || scenes.length === 0}
               >
                 {locking ? (
                   <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
@@ -414,10 +614,76 @@ export function StoryboardPhase({ projectName, onLocked }: StoryboardPhaseProps)
                 确认分镜，进入制作
               </Button>
             </div>
+
+            <AlertDialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>删除场景</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    确定删除「{selectedScene.title || `场景 ${selectedScene.index}`}」吗？
+                    删除后所有场景将重新编号，已生成的预览和导出结果会失效。
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>取消</AlertDialogCancel>
+                  <AlertDialogAction
+                    onClick={() => {
+                      setDeleteConfirmOpen(false);
+                      void handleDelete();
+                    }}
+                  >
+                    删除
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           </>
         ) : (
-          <div className="flex flex-1 items-center justify-center text-[13px] text-muted-foreground">
-            选择左侧场景查看详情
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center text-[13px] text-muted-foreground">
+            {parseError ? (
+              <>
+                <AlertCircle className="h-6 w-6 text-destructive" />
+                <div className="font-medium text-foreground">分镜解析失败</div>
+                <div className="max-w-md text-[12px] leading-relaxed">{parseError}</div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="mt-1 h-8 text-[12px]"
+                  onClick={() => {
+                    setParseError(null);
+                    setStoryboardExists(null);
+                    loadScenes();
+                  }}
+                >
+                  <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+                  重新加载
+                </Button>
+              </>
+            ) : aiFinishedEmpty ? (
+              <>
+                <AlertCircle className="h-6 w-6 text-amber-500" />
+                <div className="font-medium text-foreground">AI 已完成回复，但未检测到分镜文件</div>
+                <div className="max-w-md text-[12px] leading-relaxed">
+                  请检查右侧对话内容，确认 AI 是否成功执行了分镜生成任务。
+                  若 AI 拒绝或失败，可在对话框中重试。
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="mt-1 h-8 text-[12px]"
+                  onClick={() => loadScenes()}
+                >
+                  <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+                  重新加载
+                </Button>
+              </>
+            ) : (
+              <>
+                <Loader2 className="h-5 w-5 animate-spin" />
+                <div>AI 正在生成分镜草稿...</div>
+                <div className="text-[11px]">完成后会自动显示在此处</div>
+              </>
+            )}
           </div>
         )}
       </div>

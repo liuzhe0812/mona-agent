@@ -313,6 +313,25 @@
     }
   }
 
+  /* 笔记列表「处理中」呼吸标识：录音中 / AI 处理中。
+     全局 reduced-motion 规则会自动把 animation-duration 降到 0.001ms，
+     这里不重复写降级分支。 */
+  @keyframes note-processing-breathe {
+    0%,
+    100% {
+      transform: scale(1);
+      opacity: 0.55;
+    }
+    50% {
+      transform: scale(1.35);
+      opacity: 1;
+    }
+  }
+  .note-processing-dot {
+    animation: note-processing-breathe 1.4s ease-in-out infinite;
+    will-change: transform, opacity;
+  }
+
   /* Subtle scrollbar that doesn't fight the dark background.
      Lighter color + hover-reveal: thumb is hidden until the container is hovered,
      keeping the UI calm by default. See frontend spec skill for the full rule. */
@@ -419,6 +438,30 @@
 .mindmap-container.mindmap-marquee-active,
 .mindmap-container.mindmap-marquee-active * {
   cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M12 1v22M1 12h22' fill='none' stroke='%23fff' stroke-width='3'/%3E%3Cpath d='M12 1v22M1 12h22' fill='none' stroke='%23000' stroke-width='1.5'/%3E%3C/svg%3E") 12 12, crosshair !important;
+}
+/* 思维导图容器：
+   Mind Elixir 初始化时会设置 el.style.position = "relative"（inline style），
+   覆盖 Tailwind 的 `absolute` class，导致 inset-0 失效，容器不再占满父元素，
+   高度塌缩为内容高度。这里用 !important 强制恢复 absolute 定位。 */
+.mindmap-container {
+  position: absolute !important;
+}
+/* 让内部 map-container 的内容可见，避免 transform 移动后右侧被裁剪 */
+.mindmap-container .map-container {
+  overflow: visible !important;
+}
+/* 思维导图查找高亮：包裹匹配文本的 span */
+.mindmap-find-highlight {
+  background-color: #fde047;
+  color: #1f2937;
+  border-radius: 2px;
+  padding: 0 1px;
+  box-shadow: 0 0 0 1px rgba(250, 204, 21, 0.5);
+}
+.dark .mindmap-find-highlight {
+  background-color: #ca8a04;
+  color: #1f1300;
+  box-shadow: 0 0 0 1px rgba(202, 138, 4, 0.6);
 }
 .notes-prosemirror ul:not([data-type="taskList"]) {
   list-style-type: disc !important;
@@ -628,7 +671,9 @@
   cursor: default !important;
 }
 
-/* WPS 风格节点 */
+/* WPS 风格节点：外层 div 只负责布局尺寸，视觉由 SVG 承担。
+ * 对齐 NoteGen FlowchartShapeNode：无 CSS border/background，统一用 SVG + fill-card stroke-border。
+ * 选中状态用 drop-shadow 跟随形状轮廓，而非 box-shadow 矩形外环。 */
 .flowchart-node-wps {
   position: relative;
   display: flex;
@@ -641,159 +686,57 @@
   font-weight: var(--node-font-weight, 400);
   font-style: var(--node-font-style, normal);
   user-select: none;
-  transition: box-shadow 0.15s;
+  background: transparent;
+  border: none;
+  filter: drop-shadow(0 1px 2px rgb(0 0 0 / 0.08));
+  transition: filter 0.15s;
+}
+
+.flowchart-node-wps.selected {
+  filter: drop-shadow(0 4px 8px rgb(0 0 0 / 0.18));
 }
 
 .flowchart-node-wps.start,
-.flowchart-node-wps.end {
+.flowchart-node-wps.end,
+.flowchart-node-wps.terminator {
   width: 140px;
   min-height: 40px;
-  border-radius: 999px;
-  padding: 6px 16px;
-  background: var(--node-fill, var(--flowchart-start-fill));
-  color: var(--node-text, var(--flowchart-start-text));
-  border: var(--node-border-width, 1.5px) var(--node-border-style, solid) var(--node-border, var(--flowchart-start-border));
-  font-weight: var(--node-font-weight, 600);
 }
 
 .flowchart-node-wps.process {
   width: 140px;
   min-height: 40px;
-  border-radius: 2px;
-  padding: 6px 12px;
-  background: var(--node-fill, var(--flowchart-process-fill));
-  color: var(--node-text, var(--flowchart-process-text));
-  border: var(--node-border-width, 1.5px) var(--node-border-style, solid) var(--node-border, var(--flowchart-process-border));
 }
 
 .flowchart-node-wps.decision {
   width: 160px;
   height: 80px;
-  background: transparent;
-  border: none;
-  padding: 0;
 }
 
-.flowchart-node-wps.decision .decision-shape {
-  position: absolute;
-  inset: 0;
-}
-
-.flowchart-node-wps.decision .decision-label {
-  position: relative;
-  z-index: 1;
-  color: var(--node-text, var(--flowchart-decision-text));
-  font-weight: 500;
-  max-width: 120px;
-}
-
-/* 文档形状 */
 .flowchart-node-wps.document {
   width: 140px;
   height: 60px;
-  background: transparent;
-  border: none;
-  padding: 0;
-}
-.flowchart-node-wps.document .document-shape {
-  position: absolute;
-  inset: 0;
-}
-.flowchart-node-wps.document .document-label {
-  position: relative;
-  z-index: 1;
-  color: var(--node-text, var(--flowchart-document-text));
-  max-width: 120px;
-  padding: 6px 10px;
 }
 
-/* 数据库圆柱形 */
 .flowchart-node-wps.database {
   width: 140px;
   height: 70px;
-  background: transparent;
-  border: none;
-  padding: 0;
-}
-.flowchart-node-wps.database .database-shape {
-  position: absolute;
-  inset: 0;
-}
-.flowchart-node-wps.database .database-label {
-  position: relative;
-  z-index: 1;
-  color: var(--node-text, var(--flowchart-database-text));
-  max-width: 110px;
-  padding: 14px 10px 0;
 }
 
-/* 注释：左边方括号 + 虚线边框 */
 .flowchart-node-wps.annotation {
   width: 140px;
   min-height: 40px;
-  border-radius: 2px;
-  padding: 6px 10px 6px 14px;
-  background: var(--node-fill, var(--flowchart-annotation-fill));
-  color: var(--node-text, var(--flowchart-annotation-text));
-  border: var(--node-border-width, 1px) var(--node-border-style, dashed) var(--node-border, var(--flowchart-annotation-border));
-  position: relative;
-}
-.flowchart-node-wps.annotation .annotation-bracket {
-  position: absolute;
-  left: 4px;
-  top: 4px;
-  bottom: 4px;
-  width: 4px;
-  border-left: 2px solid var(--node-border, var(--flowchart-annotation-border));
-  border-top: 2px solid var(--node-border, var(--flowchart-annotation-border));
-  border-bottom: 2px solid var(--node-border, var(--flowchart-annotation-border));
-}
-.flowchart-node-wps.annotation .annotation-label {
-  color: var(--node-text, var(--flowchart-annotation-text));
-  font-style: italic;
-  max-width: 110px;
 }
 
-/* 子流程：双边框矩形 */
-.flowchart-node-wps.subprocess {
+.flowchart-node-wps.subprocess,
+.flowchart-node-wps.predefined-process {
   width: 140px;
   min-height: 40px;
-  border-radius: 2px;
-  padding: 6px 12px;
-  background: var(--node-fill, var(--flowchart-subprocess-fill));
-  color: var(--node-text, var(--flowchart-subprocess-text));
-  border: var(--node-border-width, 1.5px) var(--node-border-style, solid) var(--node-border, var(--flowchart-subprocess-border));
-  position: relative;
-}
-.flowchart-node-wps.subprocess .subprocess-inner-border {
-  position: absolute;
-  left: 4px;
-  right: 4px;
-  top: 4px;
-  bottom: 4px;
-  border: 1px solid var(--node-border, var(--flowchart-subprocess-border));
-  pointer-events: none;
 }
 
-/* 输入输出：平行四边形（与处理节点同色系，通过 SVG polygon 表达斜边） */
 .flowchart-node-wps.input-output {
   width: 140px;
   min-height: 40px;
-  padding: 6px 18px;
-  background: transparent;
-  border: none;
-}
-.flowchart-node-wps.input-output .input-output-shape {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-}
-.flowchart-node-wps.input-output .input-output-label {
-  position: relative;
-  z-index: 1;
-  width: 100%;
-  word-break: break-word;
 }
 
 /* 多行 label 默认样式：节点宽度受 size 控制，文字按 textAlign 对齐 */
@@ -801,10 +744,6 @@
   width: 100%;
   word-break: break-word;
   overflow-wrap: anywhere;
-}
-
-.flowchart-node-wps.selected {
-  box-shadow: 0 0 0 2px var(--flowchart-edge-selected);
 }
 
 /* NodeResizer 控制点：与 Handle 区分，方形 6px，品牌色 */
@@ -825,8 +764,11 @@
 
 /* WPS 风格箭头 */
 .flowchart-surface .react-flow__edge-path {
+  fill: none;
   stroke: var(--flowchart-edge);
   stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 .flowchart-surface .react-flow__edge.selected .react-flow__edge-path {
   stroke: var(--flowchart-edge-selected);
@@ -873,9 +815,19 @@
 /* 导出时移除节点选中状态的视觉反馈 */
 .flowchart-surface.flowchart-exporting .react-flow__node.selected,
 .flowchart-surface.flowchart-exporting .react-flow__edge.selected .react-flow__edge-path {
-  box-shadow: none !important;
+  filter: none !important;
   stroke: var(--flowchart-edge) !important;
   stroke-width: 1.5 !important;
+}
+
+/* ─── jit-viewer 预览自适应父窗口 ──────────────────────────────────
+   SDK 自身 .jv-viewer 是 flex column 容器，但未设 flex:1，
+   在 block 父容器中高度会塌缩。OfficePreview 的 host 容器
+   已改为 flex column，这里让 .jv-viewer 在其中 flex 撑满。 */
+.office-preview-host > .jv-viewer {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
 }
 
 /* ─── Reduced motion（阶段 2 全局落地，redesign-plan §3.4 / §5.6）──────

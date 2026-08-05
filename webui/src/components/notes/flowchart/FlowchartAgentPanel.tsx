@@ -1,55 +1,38 @@
 /**
- * 流程图 AI 面板：快捷操作、连续会话、patch 预览后确认应用。
+ * 流程图 AI 面板：连续会话、patch 预览后确认应用。
  *
- * 设计依据：docs/design/2026-07-29-ai-flowchart-notes-feature-design.md §9.3, §9.10, §9.11
+ * 设计依据：docs/design/2026-07-29-ai-flowchart-notes-feature-design.md §9.10, §9.11
  *           docs/design/2026-07-29-wps-flowchart-gap-development-plan.md §7.1, §7.2
  *
  * 主要职责：
- * 1. 提供 5 个快捷操作（生成/续写/补全判断/优化/审查）；
- * 2. AI 回答完成后仅做 parse + dry-run，生成 PendingFlowchartPatch；
- * 3. 在变更卡片上展示变更摘要，用户点击"应用到流程图"后才修改文档；
- * 4. 生成期间语义变化（baseHash 不匹配）时标记 stale，禁止应用；
- * 5. 拖动节点或改样式不改变 semantic hash，不会使 patch 过期。
+ * 1. AI 回答完成后仅做 parse + dry-run，生成 PendingFlowchartPatch；
+ * 2. 在变更卡片上展示变更摘要，用户点击"应用到流程图"后才修改文档；
+ * 3. 生成期间语义变化（baseHash 不匹配）时标记 stale，禁止应用；
+ * 4. 拖动节点或改样式不改变 semantic hash，不会使 patch 过期。
  *
  * 与 MindMapAgentPanel 的差异：
  * - 流程图只有 patch 一种 fenced block（没有 mindmap 那种 replace + patch 双契约）；
  * - 选区是 nodeIds/edgeIds，不是 path；
- * - 所有 AI 修改（含 audit）都不自动应用，必须经过变更卡片确认。
+ * - 所有 AI 修改都不自动应用，必须经过变更卡片确认。
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  AlertCircle,
   AlertTriangle,
   Check,
-  GitFork,
-  HelpCircle,
-  ListChecks,
-  Loader2,
-  Minimize2,
-  Plus,
   RotateCcw,
-  Send,
-  ShieldCheck,
-  Square,
-  Workflow,
   X,
 } from "lucide-react";
 
-import { useMonaStream } from "@/hooks/useMonaStream";
+import { useMonaStream, type SendImage } from "@/hooks/useMonaStream";
 import { useSessionHistory } from "@/hooks/useSessions";
 import type { UIMessage } from "@/lib/types";
 import { useClientOptional } from "@/providers/ClientProvider";
 import {
-  FLOWCHART_ACTIONS,
-  buildFlowchartActionPrompt,
-  buildFlowchartFixWarningsPrompt,
   buildFlowchartFreeformPrompt,
   inferNoteActionDisplayLabel,
-  type FlowchartActionId,
 } from "../notes-ai";
 import type { OperationNote } from "../notes-data";
-import type { FlowchartSemanticWarning } from "./flowchart-document";
 import {
   applyPendingPatch,
   prepareFlowchartPatch,
@@ -57,6 +40,7 @@ import {
 } from "./flowchart-apply";
 import { useFlowchartSelection } from "./FlowchartSelectionContext";
 import { AgentChat } from "../NoteAgentPanel";
+import { AgentComposer } from "../AgentComposer";
 
 interface FlowchartAgentPanelProps {
   note: OperationNote | null;
@@ -66,17 +50,6 @@ interface FlowchartAgentPanelProps {
   onApplyResult: (mode: "append" | "replace", markdown: string, messageId: string) => void;
   onClearChat?: () => void;
   onStreamingChange?: (streaming: boolean) => void;
-  /**
-   * 来自画布"让 AI 修复"入口的修复请求（设计文档 §7.9）。
-   * NotesView 维护一个 requestId 单调递增的对象；FlowchartAgentPanel 监听
-   * requestId 变化，触发 buildFlowchartFixWarningsPrompt + sendPromptToAgent。
-   * 处理完成后调用 onFixWarningsHandled 通知 NotesView 清空请求。
-   */
-  fixWarningsRequest?: {
-    warnings: FlowchartSemanticWarning[];
-    requestId: number;
-  } | null;
-  onFixWarningsHandled?: () => void;
   /**
    * 初始 prompt：用于"从笔记生成流程图"等场景（设计文档 §7.10）。
    * 当 note 切换到对应 noteId 且 requestId 是新的时，自动调用 sendPromptToAgent。
@@ -98,8 +71,6 @@ export function FlowchartAgentPanel({
   onApplyResult,
   onClearChat,
   onStreamingChange,
-  fixWarningsRequest,
-  onFixWarningsHandled,
   initialPrompt,
   onInitialPromptHandled,
 }: FlowchartAgentPanelProps) {
@@ -109,6 +80,7 @@ export function FlowchartAgentPanel({
   const [creatingChat, setCreatingChat] = useState(false);
   const pendingPromptRef = useRef<string | null>(null);
   const pendingDisplayContentRef = useRef<string | null>(null);
+  const pendingImagesRef = useRef<SendImage[] | null>(null);
   /** 发起请求时记录的 baseHash，用于检测生成期间语义变化 */
   const requestBaseHashRef = useRef<string | null>(null);
   /** 已 prepare 过的 message ID，避免重复 dry-run */
@@ -173,11 +145,17 @@ export function FlowchartAgentPanel({
   useEffect(() => {
     if (!chatId || loading || creatingChat) return;
     const pendingPrompt = pendingPromptRef.current;
-    if (!pendingPrompt) return;
+    if (!pendingPrompt && !pendingImagesRef.current) return;
     const pendingDisplay = pendingDisplayContentRef.current;
+    const pendingImages = pendingImagesRef.current;
     pendingPromptRef.current = null;
     pendingDisplayContentRef.current = null;
-    send(pendingPrompt, undefined, pendingDisplay ? { displayContent: pendingDisplay } : undefined);
+    pendingImagesRef.current = null;
+    send(
+      pendingPrompt ?? "",
+      pendingImages ?? undefined,
+      pendingDisplay ? { displayContent: pendingDisplay } : undefined,
+    );
   }, [chatId, creatingChat, loading, send]);
 
   useEffect(() => {
@@ -269,10 +247,10 @@ export function FlowchartAgentPanel({
   }, [currentBaseHash]);
 
   const sendPromptToAgent = useCallback(
-    async (prompt: string, displayContent?: string) => {
+    async (prompt: string, images?: SendImage[], displayContent?: string) => {
       if (!note) return false;
       const trimmed = prompt.trim();
-      if (!trimmed || creatingChat) return false;
+      if ((!trimmed && (!images || images.length === 0)) || creatingChat) return false;
       if (isStreaming) {
         setNotice("Agent 正在处理，先停止或等它完成");
         return false;
@@ -282,7 +260,7 @@ export function FlowchartAgentPanel({
       requestBaseHashRef.current = flowchartSelectionCtx.baseHash ?? null;
 
       if (chatId) {
-        send(trimmed, undefined, displayContent ? { displayContent } : undefined);
+        send(trimmed, images, displayContent ? { displayContent } : undefined);
         return true;
       }
 
@@ -295,6 +273,7 @@ export function FlowchartAgentPanel({
       setNotice("正在创建流程图专属会话");
       pendingPromptRef.current = trimmed;
       pendingDisplayContentRef.current = displayContent ?? null;
+      pendingImagesRef.current = images ?? null;
       try {
         const nextChatId = await client.newChat(5_000, true);
         onAgentChatIdChange(nextChatId);
@@ -302,6 +281,7 @@ export function FlowchartAgentPanel({
       } catch {
         pendingPromptRef.current = null;
         pendingDisplayContentRef.current = null;
+        pendingImagesRef.current = null;
         setNotice("创建会话失败");
         return false;
       } finally {
@@ -311,60 +291,19 @@ export function FlowchartAgentPanel({
     [chatId, client, creatingChat, isStreaming, note, onAgentChatIdChange, send, flowchartSelectionCtx.baseHash],
   );
 
-  const runFlowchartAction = useCallback(
-    async (actionId: FlowchartActionId) => {
-      if (!note) return;
-      const meta = FLOWCHART_ACTIONS.find((a) => a.id === actionId);
-      if (!meta) return;
-      if (meta.requiresSelection) {
-        if (flowchartSelectionCtx.noteId !== note.id || !flowchartSelectionCtx.selection || flowchartSelectionCtx.selection.nodeIds.length === 0) {
-          setNotice("请先在画布上选中一个节点");
-          return;
-        }
-      }
-      const baseHash = flowchartSelectionCtx.baseHash ?? "";
-      const prompt = buildFlowchartActionPrompt(
-        actionId,
-        note,
-        flowchartSelectionCtx.noteId === note.id ? flowchartSelectionCtx.selection : null,
-        baseHash,
-      );
-      void sendPromptToAgent(prompt, meta.label);
-    },
-    [note, flowchartSelectionCtx, sendPromptToAgent],
-  );
-
-  const sendDraft = useCallback(() => {
+  const sendDraft = useCallback((text: string, images?: SendImage[]) => {
     if (!note) return;
-    const question = draft.trim();
-    if (!question) return;
-    setDraft("");
+    const question = text.trim();
+    if (!question && (!images || images.length === 0)) return;
     const baseHash = flowchartSelectionCtx.baseHash ?? "";
     const selection =
       flowchartSelectionCtx.noteId === note.id ? flowchartSelectionCtx.selection : null;
     void sendPromptToAgent(
       buildFlowchartFreeformPrompt(note, question, selection, baseHash),
+      images,
       question,
     );
-  }, [draft, note, flowchartSelectionCtx, sendPromptToAgent]);
-
-  // 来自画布"让 AI 修复"入口的修复请求（设计文档 §7.9）
-  const lastHandledFixRequestIdRef = useRef<number | null>(null);
-  useEffect(() => {
-    if (!fixWarningsRequest) return;
-    if (lastHandledFixRequestIdRef.current === fixWarningsRequest.requestId) return;
-    if (!note || note.type !== "flowchart") return;
-    if (fixWarningsRequest.warnings.length === 0) {
-      onFixWarningsHandled?.();
-      return;
-    }
-    lastHandledFixRequestIdRef.current = fixWarningsRequest.requestId;
-    const baseHash = flowchartSelectionCtx.baseHash ?? "";
-    const prompt = buildFlowchartFixWarningsPrompt(note, fixWarningsRequest.warnings, baseHash);
-    void sendPromptToAgent(prompt, "让 AI 修复流程问题").then((ok) => {
-      if (ok) onFixWarningsHandled?.();
-    });
-  }, [fixWarningsRequest, note, flowchartSelectionCtx.baseHash, sendPromptToAgent, onFixWarningsHandled]);
+  }, [note, flowchartSelectionCtx, sendPromptToAgent]);
 
   // 从普通笔记生成流程图时的初始 prompt（设计文档 §7.10）
   const lastHandledInitialPromptIdRef = useRef<number | null>(null);
@@ -373,9 +312,11 @@ export function FlowchartAgentPanel({
     if (lastHandledInitialPromptIdRef.current === initialPrompt.requestId) return;
     if (!note) return;
     lastHandledInitialPromptIdRef.current = initialPrompt.requestId;
-    void sendPromptToAgent(initialPrompt.prompt, initialPrompt.displayContent).then((ok) => {
-      if (ok) onInitialPromptHandled?.();
-    });
+    void sendPromptToAgent(initialPrompt.prompt, undefined, initialPrompt.displayContent).then(
+      (ok) => {
+        if (ok) onInitialPromptHandled?.();
+      },
+    );
   }, [initialPrompt, note, sendPromptToAgent, onInitialPromptHandled]);
 
   const copyResult = useCallback(async (message: UIMessage) => {
@@ -434,11 +375,6 @@ export function FlowchartAgentPanel({
     return null;
   }
 
-  const hasSelection =
-    flowchartSelectionCtx.noteId === note?.id &&
-    !!flowchartSelectionCtx.selection &&
-    flowchartSelectionCtx.selection.nodeIds.length > 0;
-
   return (
     <aside className="flex h-full shrink-0 flex-col border-l border-border/70 bg-background" style={{ width }}>
       <div className="flex h-12 shrink-0 items-center justify-between border-b border-border/65 px-3">
@@ -466,12 +402,6 @@ export function FlowchartAgentPanel({
           ) : null}
         </div>
       </div>
-
-      <FlowchartQuickActions
-        disabled={!note || creatingChat || isStreaming}
-        hasSelection={hasSelection}
-        onAction={runFlowchartAction}
-      />
 
       <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden p-3 scrollbar-thin">
         <AgentChat
@@ -517,41 +447,16 @@ export function FlowchartAgentPanel({
       </div>
 
       <div className="shrink-0 p-2">
-        <div className="flex min-h-[52px] items-end gap-1.5 rounded-xl border border-border/75 bg-background px-2.5 py-1.5 shadow-sm">
-          <textarea
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
-                event.preventDefault();
-                sendDraft();
-              }
-            }}
-            disabled={!note || creatingChat}
-            className="min-h-[36px] flex-1 resize-none bg-transparent text-[12px] leading-5 outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
-            rows={2}
-            placeholder="让 AI 生成、续写或优化流程图..."
-          />
-          <button
-            type="button"
-            aria-label={isStreaming ? "停止生成" : "发送"}
-            disabled={!isStreaming && (!note || !draft.trim() || creatingChat)}
-            onClick={isStreaming ? stop : sendDraft}
-            className={`grid h-6 w-6 shrink-0 place-items-center rounded-lg transition-colors ${
-              isStreaming
-                ? "text-destructive hover:bg-destructive/10"
-                : "bg-foreground text-background hover:bg-foreground/90 disabled:bg-muted disabled:text-muted-foreground"
-            }`}
-          >
-            {isStreaming ? (
-              <Square className="h-3 w-3" />
-            ) : creatingChat ? (
-              <Loader2 className="h-3 w-3 animate-spin" />
-            ) : (
-              <Send className="h-3 w-3" />
-            )}
-          </button>
-        </div>
+        <AgentComposer
+          value={draft}
+          onChange={setDraft}
+          onSend={sendDraft}
+          disabled={!note || creatingChat}
+          placeholder="让 AI 生成、续写或优化流程图..."
+          isStreaming={isStreaming}
+          creatingChat={creatingChat}
+          onStop={stop}
+        />
       </div>
     </aside>
   );
@@ -657,94 +562,3 @@ function FlowchartPatchCard({
   );
 }
 
-function FlowchartQuickActions({
-  disabled,
-  hasSelection,
-  onAction,
-}: {
-  disabled: boolean;
-  hasSelection: boolean;
-  onAction: (actionId: FlowchartActionId) => void;
-}) {
-  const btnClass =
-    "flex h-9 items-center gap-2 rounded-lg border border-border/70 bg-background px-2.5 text-left text-[11.5px] font-medium text-foreground/82 transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50";
-
-  return (
-    <div className="shrink-0 border-b border-border/65 px-2.5 py-2.5">
-      <div className="grid grid-cols-2 gap-1.5">
-        <button
-          type="button"
-          disabled={disabled}
-          onClick={() => onAction("flowchart-generate")}
-          className={btnClass}
-        >
-          <Workflow className="h-4 w-4 shrink-0 text-muted-foreground" />
-          <span className="min-w-0 truncate">从主题生成流程图</span>
-        </button>
-        <button
-          type="button"
-          disabled={disabled}
-          onClick={() => onAction("flowchart-optimize")}
-          className={btnClass}
-        >
-          <ShieldCheck className="h-4 w-4 shrink-0 text-muted-foreground" />
-          <span className="min-w-0 truncate">优化流程</span>
-        </button>
-        <button
-          type="button"
-          disabled={disabled || !hasSelection}
-          onClick={() => onAction("flowchart-continue")}
-          className={btnClass}
-        >
-          <Plus className="h-4 w-4 shrink-0 text-muted-foreground" />
-          <span className="min-w-0 truncate">续写选中步骤</span>
-        </button>
-        <button
-          type="button"
-          disabled={disabled || !hasSelection}
-          onClick={() => onAction("flowchart-complete-decision")}
-          className={btnClass}
-        >
-          <GitFork className="h-4 w-4 shrink-0 text-muted-foreground" />
-          <span className="min-w-0 truncate">补全判断分支</span>
-        </button>
-        <button
-          type="button"
-          disabled={disabled || !hasSelection}
-          onClick={() => onAction("flowchart-explain")}
-          className={btnClass}
-        >
-          <HelpCircle className="h-4 w-4 shrink-0 text-muted-foreground" />
-          <span className="min-w-0 truncate">解释选中步骤</span>
-        </button>
-        <button
-          type="button"
-          disabled={disabled || !hasSelection}
-          onClick={() => onAction("flowchart-add-exception")}
-          className={btnClass}
-        >
-          <AlertCircle className="h-4 w-4 shrink-0 text-muted-foreground" />
-          <span className="min-w-0 truncate">补异常路径</span>
-        </button>
-        <button
-          type="button"
-          disabled={disabled || !hasSelection}
-          onClick={() => onAction("flowchart-simplify")}
-          className={btnClass}
-        >
-          <Minimize2 className="h-4 w-4 shrink-0 text-muted-foreground" />
-          <span className="min-w-0 truncate">简化选中子图</span>
-        </button>
-        <button
-          type="button"
-          disabled={disabled}
-          onClick={() => onAction("flowchart-audit")}
-          className={btnClass}
-        >
-          <ListChecks className="h-4 w-4 shrink-0 text-muted-foreground" />
-          <span className="min-w-0 truncate">检查流程问题</span>
-        </button>
-      </div>
-    </div>
-  );
-}

@@ -14,9 +14,11 @@ interface DocChatPanelProps {
    *  the optimistic message's text (e.g. an "[已附文档: ...]" suffix). */
   onSend: (content: string) => string | void;
   placeholder?: string;
+  /** Notified when streaming state changes (true = AI replying, false = idle). */
+  onStreamingChange?: (streaming: boolean) => void;
 }
 
-export function DocChatPanel({ chatId, onSend, placeholder }: DocChatPanelProps) {
+export function DocChatPanel({ chatId, onSend, placeholder, onStreamingChange }: DocChatPanelProps) {
   const [draft, setDraft] = useState("");
   const [awaitingResponse, setAwaitingResponse] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -44,6 +46,11 @@ export function DocChatPanel({ chatId, onSend, placeholder }: DocChatPanelProps)
   useEffect(() => {
     if (isStreaming) setAwaitingResponse(false);
   }, [isStreaming]);
+
+  // Notify parent of streaming state changes
+  useEffect(() => {
+    onStreamingChange?.(isStreaming);
+  }, [isStreaming, onStreamingChange]);
 
   useEffect(() => {
     if (!chatId) {

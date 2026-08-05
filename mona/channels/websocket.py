@@ -54,6 +54,7 @@ from mona.webui.settings_api import (
     update_channel_settings,
     update_image_generation_settings,
     update_provider_settings,
+    update_tts_settings,
     update_video_generation_settings,
     update_web_search_settings,
 )
@@ -164,6 +165,9 @@ def _http_json_response(data: dict[str, Any], *, status: int = 200) -> Response:
             ("Connection", "close"),
             ("Content-Length", str(len(body))),
             ("Content-Type", "application/json; charset=utf-8"),
+            ("Access-Control-Allow-Origin", "*"),
+            ("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS"),
+            ("Access-Control-Allow-Headers", "Content-Type, Authorization"),
         ]
     )
     reason = http.HTTPStatus(status).phrase
@@ -299,6 +303,10 @@ _MAX_IMAGE_BYTES = 8 * 1024 * 1024
 _MAX_VIDEOS_PER_MESSAGE = 1
 _MAX_VIDEO_BYTES = 20 * 1024 * 1024
 
+# Shared output directory watch cadence: the signature scan is metadata-
+# only (path + mtime + size), so a 2s poll is cheap and still feels live.
+_ARTIFACT_WATCH_INTERVAL_S = 2.0
+
 # Image MIME whitelist — matches the Composer's ``accept`` list. SVG is
 # explicitly excluded to avoid the XSS surface inside embedded scripts.
 _IMAGE_MIME_ALLOWED: frozenset[str] = frozenset({
@@ -416,6 +424,9 @@ def _http_response(
         ("Connection", "close"),
         ("Content-Length", str(len(body))),
         ("Content-Type", content_type),
+        ("Access-Control-Allow-Origin", "*"),
+        ("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS"),
+        ("Access-Control-Allow-Headers", "Content-Type, Authorization"),
     ]
     if extra_headers:
         headers.extend(extra_headers)
@@ -526,7 +537,6 @@ def _get_ppt_project_status(project_dir: Path) -> dict:
     notes_dir = project_dir / "notes"
     images_dir = project_dir / "images"
     visual_plan = project_dir / "page_visual_plan.json"
-    review_ready = project_dir / ".review_ready"
 
     svg_count = (
         len(list(svg_output_dir.glob("*.svg"))) if svg_output_dir.is_dir() else 0
@@ -571,14 +581,11 @@ def _get_ppt_project_status(project_dir: Path) -> dict:
     has_outline = visual_plan.is_file()
     outline_locked = meta.get("outlineLocked", False)
     export_requested = meta.get("exportRequestedAt") is not None
-    has_review_ready = review_ready.is_file()
 
     if pptx_files or has_output_pptx:
         v2_phase = "done"
     elif export_requested:
         v2_phase = "exporting"
-    elif has_review_ready and svg_count > 0:
-        v2_phase = "review"
     elif spec_lock.exists() or outline_locked:
         v2_phase = "producing"
     elif has_outline:
@@ -620,7 +627,6 @@ def _get_ppt_project_status(project_dir: Path) -> dict:
         "phase": v2_phase,
         "hasOutline": has_outline,
         "outlineLocked": outline_locked,
-        "reviewReady": has_review_ready,
         "hasDesignSpec": design_spec.exists(),
         "slideCount": max(svg_count, svg_final_count, output_image_count),
         "hasExport": len(pptx_files) > 0 or has_output_pptx,
@@ -667,6 +673,7 @@ class WebSocketChannel(BaseChannel):
         self._api_tokens: dict[str, float] = {}
         self._stop_event: asyncio.Event | None = None
         self._server_task: asyncio.Task[None] | None = None
+        self._artifact_watch_task: asyncio.Task[None] | None = None
         self._session_manager = session_manager
         self._static_dist_path: Path | None = (
             static_dist_path.resolve() if static_dist_path is not None else None
@@ -866,6 +873,9 @@ class WebSocketChannel(BaseChannel):
         if got == "/api/settings/channels/update":
             return self._handle_settings_channels_update(request)
 
+        if got == "/api/settings/tts/update":
+            return self._handle_settings_tts_update(request)
+
         if got == "/api/channels/weixin/login/start":
             return self._handle_weixin_login_start(request)
 
@@ -1061,18 +1071,22 @@ class WebSocketChannel(BaseChannel):
         # Sidebar/chat listing for WS-backed sessions only — CLI / Slack / etc.
         # keys are not intended for resume over this HTTP surface.
         #
-        # Collect chat IDs owned by PPT projects so they can be hidden from
-        # the sidebar (PPT has its own history panel).
-        ppt_chat_ids: set[str] = set()
+        # Collect chat IDs owned by video / PPT projects so they can be hidden
+        # from the sidebar (each maker view has its own history panel).
+        hidden_chat_ids: set[str] = set()
         try:
             from mona.config.paths import get_workspace_path
 
-            ppt_dir = get_workspace_path() / "ppt_projects"
-            if ppt_dir.is_dir():
-                for dot in ppt_dir.glob("*/.chat_id"):
-                    cid = dot.read_text(encoding="utf-8").strip()
-                    if cid:
-                        ppt_chat_ids.add(cid)
+            workspace_path = get_workspace_path()
+            # Video and PPT sessions are hidden from the main sidebar — each
+            # has its own history panel inside the dedicated maker view.
+            for kind in ("video_projects", "ppt_projects"):
+                kind_dir = workspace_path / kind
+                if kind_dir.is_dir():
+                    for dot in kind_dir.glob("*/.chat_id"):
+                        cid = dot.read_text(encoding="utf-8").strip()
+                        if cid:
+                            hidden_chat_ids.add(cid)
         except Exception:
             pass
         cleaned = []
@@ -1083,7 +1097,7 @@ class WebSocketChannel(BaseChannel):
             if key.startswith("websocket:ephemeral:"):
                 continue
             chat_id = key.split(":", 1)[1]
-            if chat_id in ppt_chat_ids:
+            if chat_id in hidden_chat_ids:
                 continue
             row = {k: v for k, v in s.items() if k != "path"}
             started_at = websocket_turn_wall_started_at(chat_id)
@@ -1214,6 +1228,16 @@ class WebSocketChannel(BaseChannel):
         except WebUISettingsError as e:
             return _http_error(e.status, e.message)
         return _http_json_response(self._with_settings_restart_state(payload, section="channels"))
+
+    def _handle_settings_tts_update(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        query = _parse_query(request.path)
+        try:
+            payload = update_tts_settings(query)
+        except WebUISettingsError as e:
+            return _http_error(e.status, e.message)
+        return _http_json_response(self._with_settings_restart_state(payload))
 
     def _get_weixin_config(self) -> Any:
         """Load the current WeChat channel config (or defaults)."""
@@ -1493,6 +1517,9 @@ class WebSocketChannel(BaseChannel):
                 ".jpeg": "image/jpeg",
             }.get(suffix, "application/octet-stream")
 
+            if suffix == ".svg":
+                content = self._sanitize_svg_xml(content)
+
             return _http_response(
                 content,
                 content_type=content_type,
@@ -1650,6 +1677,12 @@ class WebSocketChannel(BaseChannel):
                     continue
                 if d.name.startswith("_"):
                     continue
+                # 过滤前端 markPptGenerating 预创建的占位目录：
+                # 只有 .generating / .chat_id 标记文件而无 README.md / meta.json 的目录不算已初始化项目
+                existing = {p.name for p in d.iterdir()}
+                real_files = existing - {".generating", ".chat_id"}
+                if not real_files:
+                    continue
                 status_info = _get_ppt_project_status(d)
                 stat = d.stat()
                 chat_id_file = d / ".chat_id"
@@ -1668,6 +1701,7 @@ class WebSocketChannel(BaseChannel):
                     "hasPptxOutput": status_info["hasPptxOutput"],
                     "hasSpecLock": status_info["hasSpecLock"],
                     "status": status_info["status"],
+                    "phase": status_info.get("phase"),
                     "chatId": chat_id,
                 })
 
@@ -1778,6 +1812,7 @@ class WebSocketChannel(BaseChannel):
             status_info = _get_ppt_project_status(project_dir)
             return _http_json_response({
                 "status": status_info["status"],
+                "phase": status_info["phase"],
                 "slideCount": status_info["slideCount"],
                 "hasExport": status_info["hasExport"],
                 "hasSvgOutput": status_info["hasSvgOutput"],
@@ -2196,10 +2231,18 @@ class WebSocketChannel(BaseChannel):
 
             # For svg_output files, rewrite external references to use the
             # project-file API so the browser can resolve images/icons.
+            # Must happen BEFORE _sanitize_svg_xml, because _rewrite_svg_refs
+            # introduces '&' in URL query params that need XML escaping.
             if svg_dir == "output" or (
                 not svg_dir and svg_path.parent.name == "svg_output"
             ):
                 content = self._rewrite_svg_refs(content, project_name)
+
+            # Sanitize XML after all transformations: AI-generated SVGs
+            # frequently contain bare '&' or HTML named entities, and
+            # _rewrite_svg_refs adds '&' in URL query params — all of which
+            # must be well-formed XML before serving to the browser.
+            content = self._sanitize_svg_xml(content)
 
             return _http_response(
                 content,
@@ -2211,11 +2254,74 @@ class WebSocketChannel(BaseChannel):
             return _http_error(500, "internal error")
 
     @staticmethod
+    def _sanitize_svg_xml(content: bytes) -> bytes:
+        """Defensively fix common XML entity errors in AI-generated SVGs.
+
+        SVG served to the browser must be well-formed XML. AI frequently emits:
+        - Bare ``&`` in text (e.g. "R&D", "A&B") which the browser parses as an
+          entity reference and fails with ``EntityRef``.
+        - HTML named entities (``&nbsp;``, ``&mdash;``, ``&copy;``…) which are
+          not predefined in XML.
+
+        We preserve existing XML builtin entities (``&amp;``, ``&lt;``, ``&gt;``,
+        ``&quot;``, ``&apos;``) and numeric character references, convert known
+        HTML named entities to raw Unicode, and escape any remaining bare ``&``.
+        """
+        import html
+        import re
+
+        text = content.decode("utf-8", errors="replace")
+
+        # XML builtin entities and numeric refs must be preserved verbatim.
+        xml_builtin = {"amp", "lt", "gt", "quot", "apos"}
+        entity_re = re.compile(
+            r"&([A-Za-z_][A-Za-z0-9_]*|#[0-9]+|#x[0-9A-Fa-f]+);"
+        )
+
+        def _fix_entity(m: re.Match) -> str:
+            ref = m.group(1)
+            # Preserve XML builtin entities and numeric refs.
+            if ref in xml_builtin:
+                return m.group(0)
+            if re.fullmatch(r"#[0-9]+|#x[0-9A-Fa-f]+", ref):
+                return m.group(0)
+            # Convert known HTML named entities (e.g. nbsp, mdash, copy) to
+            # raw Unicode. Unknown/malformed entities are escaped as bare
+            # ampersands so the document remains well-formed.
+            expanded = html.unescape(m.group(0))
+            if expanded != m.group(0):
+                return expanded
+            return "&amp;" + ref + ";"
+
+        text = entity_re.sub(_fix_entity, text)
+
+        # Escape any remaining bare ampersands (e.g. "R&D", "A & B", "&&",
+        # malformed "&#160" without semicolon, or a trailing "&"). The
+        # negative lookahead avoids double-escaping valid builtin/numeric
+        # entities that were preserved above.
+        text = re.sub(
+            r"&(?!amp;|lt;|gt;|quot;|apos;|#[0-9]+;|#x[0-9A-Fa-f]+;)",
+            "&amp;",
+            text,
+        )
+
+        # Escape bare '<' that is not the start of a tag/declaration/comment.
+        # In XML text content, '<' must be '&lt;'. A '<' followed by a
+        # letter, '/', '!', or '?' is a tag/comment/PI start; anything else
+        # (digit, space, '<', '&', end-of-string…) is a bare '<' in text.
+        text = re.sub(r"<(?![A-Za-z/!?])", "&lt;", text)
+
+        # Escape ']]>' sequences (illegal in XML text outside CDATA).
+        text = re.sub("]]>", "]]&gt;", text)
+        return text.encode("utf-8")
+
+    @staticmethod
     def _rewrite_svg_refs(content: bytes, project_name: str) -> bytes:
         """Rewrite external file references in SVG content to use the project-file API.
 
         Handles patterns like:
-        - ``href="../images/photo.jpg"`` → ``href="/api/ppt/project-file?project=X&path=images/photo.jpg"``
+        - ``href="../images/photo.jpg"`` →
+          ``href="/api/ppt/project-file?project=X&path=images/photo.jpg"``
         - ``xlink:href="../images/photo.jpg"`` → same
         """
         import re
@@ -2232,7 +2338,10 @@ class WebSocketChannel(BaseChannel):
             # Only rewrite paths that look like file references (not data: or http)
             if clean.startswith("data:") or clean.startswith("http"):
                 return m.group(0)
-            api_url = f"/api/ppt/project-file?project={encoded_project}&path={quote(clean, safe='')}"
+            # Use &amp; for XML attribute safety — the '&' in URL query
+            # params must be escaped in XML attribute values.
+            encoded_path = quote(clean, safe="")
+            api_url = f"/api/ppt/project-file?project={encoded_project}&amp;path={encoded_path}"
             return f'{prefix}{api_url}"'
 
         # Match href="..." and xlink:href="..." with relative paths
@@ -2812,7 +2921,39 @@ class WebSocketChannel(BaseChannel):
                 await self._stop_event.wait()
 
         self._server_task = asyncio.create_task(runner())
+        self._artifact_watch_task = asyncio.create_task(self._watch_artifacts())
         await self._server_task
+
+    async def _watch_artifacts(self) -> None:
+        """Poll the shared output dir signature; broadcast on change.
+
+        Runs only while at least one websocket connection is open; the
+        scan is a metadata-only aggregate hash (no file content reads).
+        The first observation after startup (or after all clients went
+        away) becomes the baseline and is not broadcast.
+        """
+        from mona.config.paths import get_shared_output_dir, get_workspace_path
+        from mona.utils.artifact_listing import artifact_signature
+
+        last: str | None = None
+        while True:
+            await asyncio.sleep(_ARTIFACT_WATCH_INTERVAL_S)
+            if not self._conn_chats:
+                continue
+            try:
+                signature = await asyncio.to_thread(
+                    artifact_signature,
+                    get_shared_output_dir(get_workspace_path()),
+                )
+            except Exception:
+                logger.exception("artifact watch scan failed")
+                continue
+            if last is None:
+                last = signature
+                continue
+            if signature != last:
+                last = signature
+                await self.send_artifacts_changed()
 
     async def _connection_loop(self, connection: Any) -> None:
         request = connection.request
@@ -3315,13 +3456,15 @@ class WebSocketChannel(BaseChannel):
             if isinstance(workspace, str):
                 workspace = workspace.strip() or None
             # ``agent_kind`` marks the session for a dedicated document agent loop.
-            # Supported kinds: ppt / video — each routes to a
-            # DocumentAgentLoop with its own tool whitelist + soul prompt.
+            # Supported kinds are resolved dynamically from DOCUMENT_PROFILES
+            # (ppt / video / 3d / ...), each routing to a DocumentAgentLoop
+            # with its own tool whitelist + soul prompt.
+            from mona.agent.document_loop import DOCUMENT_PROFILES
             agent_kind = envelope.get("agent_kind")
             if not isinstance(agent_kind, str):
                 agent_kind = None
             agent_kind = agent_kind.strip() if agent_kind else None
-            if agent_kind not in ("ppt", "video", None):
+            if agent_kind not in (*DOCUMENT_PROFILES.keys(), None):
                 agent_kind = None
             if (workspace is not None or agent_kind is not None) and self._session_manager is not None:
                 session = self._session_manager.get_or_create(f"websocket:{new_id}")
@@ -3513,6 +3656,13 @@ class WebSocketChannel(BaseChannel):
             except Exception as e:
                 self.logger.warning("server task error during shutdown: {}", e)
             self._server_task = None
+        if self._artifact_watch_task:
+            self._artifact_watch_task.cancel()
+            try:
+                await self._artifact_watch_task
+            except asyncio.CancelledError:
+                pass
+            self._artifact_watch_task = None
         self._subs.clear()
         self._conn_chats.clear()
         self._conn_default.clear()
@@ -3812,6 +3962,15 @@ class WebSocketChannel(BaseChannel):
         raw = json.dumps(body, ensure_ascii=False)
         for connection in conns:
             await self._safe_send_to(connection, raw, label=" session_updated ")
+
+    async def send_artifacts_changed(self) -> None:
+        """Broadcast a shared-output change hint to every open websocket connection."""
+        conns = list(self._conn_chats)
+        if not conns:
+            return
+        raw = json.dumps({"event": "artifacts_changed"}, ensure_ascii=False)
+        for connection in conns:
+            await self._safe_send_to(connection, raw, label=" artifacts_changed ")
 
     async def send_runtime_model_updated(
         self,

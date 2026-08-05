@@ -72,6 +72,12 @@ class DocumentContextBuilder(ContextBuilder):
         """Return the document agent identity from profile.soul_template."""
         import platform
 
+        # Resolve the session-bound workspace (contextvar-aware) so document
+        # agents can hand absolute project paths to controlled pipeline scripts.
+        from mona.agent.tools.path_utils import get_current_workspace
+
+        ws = get_current_workspace(self.workspace)
+        workspace_path = str(ws.expanduser().resolve())
         system = platform.system()
         runtime = (
             f"{'macOS' if system == 'Darwin' else system} "
@@ -81,6 +87,7 @@ class DocumentContextBuilder(ContextBuilder):
             self._profile.soul_template,
             runtime=runtime,
             channel=channel or "",
+            workspace_path=workspace_path,
         )
 
     def _load_bootstrap_files(self) -> str:

@@ -51,8 +51,16 @@ export interface MindMapPatch {
 }
 
 export type ApplyPatchResult =
-  | { ok: true; markdown: string; appliedCount: number }
+  | { ok: true; markdown: string; appliedCount: number; summary: MindMapPatchSummary }
   | { ok: false; message: string; failedOpIndex?: number };
+
+/** patch 应用摘要：按操作类型统计 */
+export interface MindMapPatchSummary {
+  added: number;
+  updated: number;
+  removed: number;
+  moved: number;
+}
 
 /**
  * 解析 AI 返回的 mindmap-patch fenced block 内容。
@@ -252,7 +260,8 @@ export function applyPatch(
   // 3. 深拷贝树，避免修改原对象
   const root: MindMapNode = deepClone(parsed.root);
 
-  // 4. 逐个应用 ops
+  // 4. 逐个应用 ops，统计各类型操作数
+  const summary: MindMapPatchSummary = { added: 0, updated: 0, removed: 0, moved: 0 };
   for (let i = 0; i < patch.ops.length; i++) {
     const op = patch.ops[i];
     const result = applyOp(root, op);
@@ -263,11 +272,16 @@ export function applyPatch(
         failedOpIndex: i,
       };
     }
+    // 按操作名累加统计
+    if (op.name === "addChild" || op.name === "insertSibling") summary.added++;
+    else if (op.name === "updateTopic") summary.updated++;
+    else if (op.name === "removeNode") summary.removed++;
+    else if (op.name === "moveNode") summary.moved++;
   }
 
   // 5. 序列化
   const newMarkdown = serializeMindMap(root);
-  return { ok: true, markdown: newMarkdown, appliedCount: patch.ops.length };
+  return { ok: true, markdown: newMarkdown, appliedCount: patch.ops.length, summary };
 }
 
 type ApplyOpResult = { ok: true } | { ok: false; message: string };

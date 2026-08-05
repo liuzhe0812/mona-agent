@@ -1282,7 +1282,7 @@ def _run_services(config: Config, *, port: int | None = None) -> None:
         await schedule_service.start()
         await todo_service.start()
 
-        app = create_services_app(schedule_service, todo_service)
+        app = create_services_app(schedule_service, todo_service, workspace=config.workspace_path)
 
         async def on_cleanup(_app):
             schedule_service.stop()

@@ -102,6 +102,7 @@ export class MonaClient {
   private statusHandlers = new Set<StatusHandler>();
   private runtimeModelHandlers = new Set<RuntimeModelHandler>();
   private sessionUpdateHandlers = new Set<SessionUpdateHandler>();
+  private artifactsChangedHandlers = new Set<() => void>();
   private runStatusHandlers = new Set<RunStatusHandler>();
   private errorHandlers = new Set<ErrorHandler>();
   private pptUploadHandlers = new Set<(result: { ok: boolean; files?: { name: string; path: string }[]; error?: string }) => void>();
@@ -189,6 +190,15 @@ export class MonaClient {
     this.sessionUpdateHandlers.add(handler);
     return () => {
       this.sessionUpdateHandlers.delete(handler);
+    };
+  }
+
+  /** Subscribe to server-pushed ``artifacts_changed`` broadcasts: the shared
+   *  output directory changed on disk, listeners should rescan it. */
+  onArtifactsChanged(handler: () => void): Unsubscribe {
+    this.artifactsChangedHandlers.add(handler);
+    return () => {
+      this.artifactsChangedHandlers.delete(handler);
     };
   }
 
@@ -543,6 +553,13 @@ export class MonaClient {
 
     if (parsed.event === "session_updated") {
       this.emitSessionUpdate(parsed.chat_id, parsed.scope);
+      return;
+    }
+
+    if (parsed.event === "artifacts_changed") {
+      for (const handler of this.artifactsChangedHandlers) {
+        handler();
+      }
       return;
     }
 

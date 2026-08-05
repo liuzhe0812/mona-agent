@@ -140,6 +140,12 @@ export interface SidebarShortcuts {
   db: string;
 }
 
+export interface SidebarModuleConfig {
+  key: string;
+  visible: boolean;
+  order: number;
+}
+
 export interface DesktopAppSettings {
   run_in_background: boolean;
   auto_start_gateway: boolean;
@@ -147,6 +153,8 @@ export interface DesktopAppSettings {
   quick_ask_shortcut: string;
   quick_ask_mode: string;
   sidebar_shortcuts: SidebarShortcuts;
+  default_view: string;
+  sidebar_modules: SidebarModuleConfig[];
   config_path: string | null;
 }
 
@@ -295,6 +303,8 @@ export interface LinkNode {
   path: string;
   aliases: string[];
   noteType: string;
+  /** "note"（笔记库）或 "wiki"（资料库 wiki 页面），Rust 侧 5 版缓存起返回。 */
+  sourceKind?: string;
 }
 
 export interface LinkEdge {
@@ -445,6 +455,14 @@ export async function revealItemInDir(path: string): Promise<void> {
   if (!isTauri()) return;
   const { revealItemInDir } = await import("@tauri-apps/plugin-opener");
   await revealItemInDir(path);
+}
+
+/** Move a file to the OS recycle bin (recoverable). Throws when the trash
+ *  is unavailable — callers must surface the error, never fall back to a
+ *  permanent delete. */
+export async function moveToTrash(path: string): Promise<void> {
+  if (!isTauri()) return;
+  return invoke<void>("move_to_trash", { path });
 }
 
 /** Open an external http(s) URL in the user's default web browser.

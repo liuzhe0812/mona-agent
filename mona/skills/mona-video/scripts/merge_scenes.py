@@ -20,12 +20,6 @@ import re
 import sys
 from pathlib import Path
 
-# Windows terminals default to a non-UTF-8 codepage; force UTF-8 so Chinese
-# paths and storyboard text survive round-tripping through stdout.
-if os.name == "nt" and hasattr(sys.stdout, "buffer"):
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
-
 __all__ = ("main", "parse_storyboard", "list_scenes", "build_index_html")
 
 # scene_01.html -> 1
@@ -203,6 +197,12 @@ def main(project_path: str | Path) -> dict:
 
 
 def _cli() -> None:
+    # Only redirect stdout/stderr when run as a CLI script — never when imported
+    # as a module (would corrupt the host process's stdout and deadlock aiohttp).
+    if os.name == "nt" and hasattr(sys.stdout, "buffer"):
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+
     parser = argparse.ArgumentParser(
         description="Merge scene HTML files into a root Hyperframes index.html",
     )

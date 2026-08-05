@@ -1,225 +1,318 @@
 /**
- * 流程图图形库面板（左侧可折叠）。
- *
- * 分类展示 8 种标准节点形状，支持：
- * 1. 点击形状 → 添加到画布中心；
- * 2. 拖拽形状 → 放置到画布指定位置（onDropShape 回调）；
- * 3. 折叠/展开切换；
- * 4. 顶部搜索过滤。
- *
- * 设计依据：draw.io / WPS 流程图左侧形状面板的交互模式。
+ * 流程图画布左侧工具栏（浮动 Rail + 抽屉模式）。
+ * 100% 对齐 NoteGen canvas-tools-sidebar 的交互与视觉：
+ * - 浮动 Rail（absolute inset-y-3 left-3，rounded-xl border p-1 shadow-sm）
+ * - 使用 Button 组件 + Tooltip
+ * - 工具按钮顺序：select → hand → separator → pen → highlighter → eraser → separator → shapes → image
+ * - 抽屉：浮动 rounded-xl border bg-background shadow-lg，宽度 w-[min(18rem,calc(100vw-5.5rem))]
+ * - 形状项：Button variant="outline" h-10 justify-start gap-2 px-3 font-normal，支持点击和拖拽
  */
 
 import { useMemo, useState } from "react";
 import {
   ChevronLeft,
-  ChevronRight,
-  Play,
-  CircleEllipsis,
-  ArrowDownToLine,
+  MousePointer2,
+  Hand,
+  Shapes,
+  ImagePlus,
+  Pen,
+  Highlighter,
+  Eraser,
+  RectangleHorizontal,
+  Diamond,
   Square,
+  Type,
+  ArrowRightLeft,
   FileText,
+  FileStack,
+  PanelTop,
+  Keyboard,
+  Hexagon,
+  Timer,
+  Monitor,
+  Circle,
+  Pentagon,
+  Box,
   Database,
-  MessageSquareText,
+  HardDrive,
   Blocks,
-  Search,
-  ArrowLeftRight,
+  MessageSquareText,
+  type LucideIcon,
 } from "lucide-react";
 
 import type { FlowchartNodeKind } from "./flowchart-document";
+import { Button } from "@/components/ui/button";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Separator } from "@/components/ui/separator";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
+
+export type CanvasTool = "select" | "hand" | "pen" | "highlighter" | "eraser";
 
 interface ShapeMeta {
   kind: FlowchartNodeKind;
   label: string;
-  icon: typeof Play;
-  /** 分类：basic / extended */
-  group: "basic" | "extended";
+  icon: LucideIcon;
+  group: "common" | "flowchart" | "data";
 }
 
-const SHAPES: ShapeMeta[] = [
-  { kind: "start", label: "开始/结束", icon: Play, group: "basic" },
-  { kind: "process", label: "处理", icon: CircleEllipsis, group: "basic" },
-  { kind: "decision", label: "判断", icon: ArrowDownToLine, group: "basic" },
-  { kind: "end", label: "结束", icon: Square, group: "basic" },
-  { kind: "input-output", label: "输入/输出", icon: ArrowLeftRight, group: "basic" },
-  { kind: "document", label: "文档", icon: FileText, group: "extended" },
-  { kind: "database", label: "数据库", icon: Database, group: "extended" },
-  { kind: "annotation", label: "注释", icon: MessageSquareText, group: "extended" },
-  { kind: "subprocess", label: "子流程", icon: Blocks, group: "extended" },
+/** 形状定义表：对齐 NoteGen CANVAS_SHAPE_DEFINITIONS，并补充流程图常用子流程/注释
+ *  - common: process, decision, terminator, text
+ *  - flowchart: input-output, document, multi-document, predefined-process, subprocess, annotation, manual-input, preparation, delay, display, connector, off-page-connector
+ *  - data: internal-storage, database, stored-data
+ */
+export const SHAPES: ShapeMeta[] = [
+  // common
+  { kind: "process", label: "处理", icon: RectangleHorizontal, group: "common" },
+  { kind: "decision", label: "判断", icon: Diamond, group: "common" },
+  { kind: "terminator", label: "起止", icon: Square, group: "common" },
+  { kind: "text", label: "文本", icon: Type, group: "common" },
+  // flowchart
+  { kind: "input-output", label: "输入/输出", icon: ArrowRightLeft, group: "flowchart" },
+  { kind: "document", label: "文档", icon: FileText, group: "flowchart" },
+  { kind: "multi-document", label: "多文档", icon: FileStack, group: "flowchart" },
+  { kind: "predefined-process", label: "预定义流程", icon: PanelTop, group: "flowchart" },
+  { kind: "subprocess", label: "子流程", icon: Blocks, group: "flowchart" },
+  { kind: "annotation", label: "注释", icon: MessageSquareText, group: "flowchart" },
+  { kind: "manual-input", label: "手动输入", icon: Keyboard, group: "flowchart" },
+  { kind: "preparation", label: "准备", icon: Hexagon, group: "flowchart" },
+  { kind: "delay", label: "延迟", icon: Timer, group: "flowchart" },
+  { kind: "display", label: "显示", icon: Monitor, group: "flowchart" },
+  { kind: "connector", label: "连接圆", icon: Circle, group: "flowchart" },
+  { kind: "off-page-connector", label: "跨页连接", icon: Pentagon, group: "flowchart" },
+  // data
+  { kind: "internal-storage", label: "内部存储", icon: Box, group: "data" },
+  { kind: "database", label: "数据库", icon: Database, group: "data" },
+  { kind: "stored-data", label: "存储数据", icon: HardDrive, group: "data" },
+];
+
+const SHAPE_GROUPS: { key: ShapeMeta["group"]; title: string }[] = [
+  { key: "common", title: "常用形状" },
+  { key: "flowchart", title: "流程图" },
+  { key: "data", title: "数据" },
 ];
 
 export interface FlowchartShapePanelProps {
-  /** 点击形状时触发，添加到画布中心 */
   onAddShape: (kind: FlowchartNodeKind) => void;
-  /** 拖拽形状到画布时触发（可选） */
   onDropShape?: (kind: FlowchartNodeKind, x: number, y: number) => void;
-  /** 只读模式禁用 */
+  /** 点击 Rail 底部图片按钮 */
+  onAddImage?: () => void;
   readOnly?: boolean;
+  /** 当前激活工具 */
+  activeTool?: CanvasTool;
+  /** 工具切换回调 */
+  onToolChange?: (tool: CanvasTool) => void;
+  /** 面板打开状态变化回调（用于通知父组件关闭其他浮层） */
+  onPanelOpenChange?: (open: boolean) => void;
 }
 
 export function FlowchartShapePanel({
   onAddShape,
   onDropShape,
+  onAddImage,
   readOnly = false,
+  activeTool = "select",
+  onToolChange,
+  onPanelOpenChange,
 }: FlowchartShapePanelProps) {
-  const [collapsed, setCollapsed] = useState(false);
-  const [query, setQuery] = useState("");
+  const [panelOpen, setPanelOpen] = useState(false);
   const [draggingKind, setDraggingKind] = useState<FlowchartNodeKind | null>(null);
 
-  const filtered = useMemo(() => {
-    if (!query.trim()) return SHAPES;
-    const q = query.trim().toLowerCase();
-    return SHAPES.filter((s) => s.label.toLowerCase().includes(q) || s.kind.includes(q));
-  }, [query]);
+  const groupedShapes = useMemo(() => {
+    return SHAPE_GROUPS.map((g) => ({
+      ...g,
+      shapes: SHAPES.filter((s) => s.group === g.key),
+    })).filter((g) => g.shapes.length > 0);
+  }, []);
 
-  const basicShapes = filtered.filter((s) => s.group === "basic");
-  const extendedShapes = filtered.filter((s) => s.group === "extended");
+  const selectTool = (next: CanvasTool) => {
+    onToolChange?.(next);
+    setPanelOpen(false);
+    onPanelOpenChange?.(false);
+  };
 
-  if (collapsed) {
-    return (
-      <div className="flex h-full w-9 shrink-0 flex-col items-center border-r border-border/60 bg-background py-2">
-        <button
-          type="button"
-          onClick={() => setCollapsed(false)}
-          title="展开图形库"
-          className="grid h-7 w-7 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
-        >
-          <ChevronRight className="h-4 w-4" />
-        </button>
-        <div className="mt-2 flex flex-col items-center gap-1">
-          {SHAPES.map((s) => {
-            const Icon = s.icon;
-            return (
-              <button
-                key={s.kind}
-                type="button"
-                disabled={readOnly}
-                onClick={() => onAddShape(s.kind)}
-                title={s.label}
-                className="grid h-7 w-7 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
-              >
-                <Icon className="h-3.5 w-3.5" />
-              </button>
-            );
-          })}
-        </div>
-      </div>
-    );
-  }
+  const togglePanel = () => {
+    const next = !panelOpen;
+    setPanelOpen(next);
+    onPanelOpenChange?.(next);
+  };
+
+  const insertShape = (kind: FlowchartNodeKind) => {
+    onAddShape(kind);
+    setPanelOpen(false);
+    onPanelOpenChange?.(false);
+  };
 
   return (
-    <div className="flex h-full w-[200px] shrink-0 flex-col border-r border-border/60 bg-background">
-      {/* 顶部标题 + 折叠按钮 */}
-      <div className="flex h-9 shrink-0 items-center justify-between border-b border-border/60 px-2.5">
-        <span className="text-[12px] font-medium text-foreground">图形库</span>
-        <button
-          type="button"
-          onClick={() => setCollapsed(true)}
-          title="折叠图形库"
-          className="grid h-6 w-6 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+    <div className="absolute inset-y-3 left-3 z-30 flex max-w-[calc(100%-1.5rem)] items-start">
+      <TooltipProvider delayDuration={300}>
+        {/* Rail：100% 对齐 NoteGen 桌面端 w-12 flex-col gap-1 rounded-xl border p-1 shadow-sm */}
+        <div
+          role="toolbar"
+          aria-label="流程图工具"
+          className="flex w-10 shrink-0 flex-col items-center gap-1 rounded-xl border border-border/60 bg-background p-1 shadow-sm"
         >
-          <ChevronLeft className="h-3.5 w-3.5" />
-        </button>
-      </div>
-
-      {/* 搜索框 */}
-      <div className="shrink-0 border-b border-border/60 p-2">
-        <div className="flex items-center gap-1.5 rounded-md border border-border/70 bg-background px-2 py-1">
-          <Search className="h-3 w-3 shrink-0 text-muted-foreground" />
-          <input
-            type="text"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="搜索形状"
-            className="w-full bg-transparent text-[11px] outline-none placeholder:text-muted-foreground"
+          {/* 1. 选择 */}
+          <RailButton
+            label="选择"
+            active={activeTool === "select"}
+            icon={MousePointer2}
+            disabled={readOnly}
+            onClick={() => selectTool("select")}
+          />
+          {/* 2. 平移 */}
+          <RailButton
+            label="平移"
+            active={activeTool === "hand"}
+            icon={Hand}
+            disabled={readOnly}
+            onClick={() => selectTool("hand")}
+          />
+          <Separator className="my-0.5 w-full" />
+          {/* 3. 钢笔 */}
+          <RailButton
+            label="钢笔"
+            active={activeTool === "pen"}
+            icon={Pen}
+            disabled={readOnly}
+            onClick={() => selectTool("pen")}
+          />
+          {/* 4. 荧光笔 */}
+          <RailButton
+            label="荧光笔"
+            active={activeTool === "highlighter"}
+            icon={Highlighter}
+            disabled={readOnly}
+            onClick={() => selectTool("highlighter")}
+          />
+          {/* 5. 橡皮 */}
+          <RailButton
+            label="橡皮"
+            active={activeTool === "eraser"}
+            icon={Eraser}
+            disabled={readOnly}
+            onClick={() => selectTool("eraser")}
+          />
+          <Separator className="my-0.5 w-full" />
+          {/* 6. 形状库 */}
+          <RailButton
+            label="形状库"
+            active={panelOpen}
+            icon={Shapes}
+            onClick={togglePanel}
+          />
+          {/* 7. 图片 */}
+          <RailButton
+            label="插入图片"
+            icon={ImagePlus}
+            disabled={readOnly || !onAddImage}
+            onClick={() => {
+              setPanelOpen(false);
+              onPanelOpenChange?.(false);
+              onAddImage?.();
+            }}
           />
         </div>
-      </div>
+      </TooltipProvider>
 
-      {/* 形状列表 */}
-      <div className="min-h-0 flex-1 overflow-y-auto p-2 scrollbar-thin">
-        {basicShapes.length > 0 && (
-          <ShapeGroup
-            title="基本形状"
-            shapes={basicShapes}
-            readOnly={readOnly}
-            onAddShape={onAddShape}
-            draggingKind={draggingKind}
-            setDraggingKind={setDraggingKind}
-            onDropShape={onDropShape}
-          />
-        )}
-        {extendedShapes.length > 0 && (
-          <ShapeGroup
-            title="扩展形状"
-            shapes={extendedShapes}
-            readOnly={readOnly}
-            onAddShape={onAddShape}
-            draggingKind={draggingKind}
-            setDraggingKind={setDraggingKind}
-            onDropShape={onDropShape}
-          />
-        )}
-        {filtered.length === 0 && (
-          <div className="py-6 text-center text-[11px] text-muted-foreground">
-            未找到匹配的形状
+      {/* 抽屉面板：100% 对齐 NoteGen ml-2 w-[min(18rem,calc(100vw-5.5rem))] rounded-xl border shadow-lg */}
+      {panelOpen && (
+        <div className="ml-2 flex max-h-full w-[min(18rem,calc(100vw-5.5rem))] flex-col overflow-hidden rounded-xl border border-border/60 bg-background shadow-lg">
+          {/* Header h-12 */}
+          <div className="flex h-12 shrink-0 items-center justify-between gap-3 px-4">
+            <span className="text-sm font-medium text-foreground">形状库</span>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              aria-label="关闭"
+              className="h-7 w-7"
+              onClick={() => {
+                setPanelOpen(false);
+                onPanelOpenChange?.(false);
+              }}
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </Button>
           </div>
-        )}
-      </div>
+          <Separator />
+          {/* 形状列表：flex flex-col gap-4 p-3 */}
+          <ScrollArea className="min-h-0 flex-1">
+            <div className="flex flex-col gap-4 p-3">
+              {groupedShapes.map((g) => (
+                <section key={g.key} className="flex flex-col gap-1.5">
+                  <h3 className="px-1 text-xs font-medium text-muted-foreground">{g.title}</h3>
+                  {/* grid grid-cols-2 gap-1.5 */}
+                  <div className="grid grid-cols-2 gap-1.5">
+                    {g.shapes.map((s) => {
+                      const Icon = s.icon;
+                      const isDragging = draggingKind === s.kind;
+                      return (
+                        <Button
+                          key={s.kind}
+                          type="button"
+                          variant="outline"
+                          disabled={readOnly}
+                          draggable={!readOnly && !!onDropShape}
+                          onDragStart={(e) => {
+                            setDraggingKind(s.kind);
+                            e.dataTransfer.setData("application/x-flowchart-kind", s.kind);
+                            e.dataTransfer.effectAllowed = "copy";
+                          }}
+                          onDragEnd={() => setDraggingKind(null)}
+                          onClick={() => insertShape(s.kind)}
+                          title={`添加${s.label}（点击或拖拽到画布）`}
+                          className={cn(
+                            "h-10 min-w-0 justify-start gap-2 px-3 font-normal",
+                            isDragging && "opacity-50",
+                          )}
+                        >
+                          <Icon className="h-4 w-4 shrink-0 text-foreground/80" />
+                          <span className="truncate text-[11px] leading-tight text-foreground/80">{s.label}</span>
+                        </Button>
+                      );
+                    })}
+                  </div>
+                </section>
+              ))}
+            </div>
+          </ScrollArea>
+        </div>
+      )}
     </div>
   );
 }
 
-function ShapeGroup({
-  title,
-  shapes,
-  readOnly,
-  onAddShape,
-  draggingKind,
-  setDraggingKind,
-  onDropShape,
+function RailButton({
+  icon: Icon,
+  label,
+  active,
+  disabled,
+  onClick,
 }: {
-  title: string;
-  shapes: ShapeMeta[];
-  readOnly: boolean;
-  onAddShape: (kind: FlowchartNodeKind) => void;
-  draggingKind: FlowchartNodeKind | null;
-  setDraggingKind: (kind: FlowchartNodeKind | null) => void;
-  onDropShape?: (kind: FlowchartNodeKind, x: number, y: number) => void;
+  icon: LucideIcon;
+  label: string;
+  active?: boolean;
+  disabled?: boolean;
+  onClick?: () => void;
 }) {
   return (
-    <div className="mb-3">
-      <div className="mb-1.5 px-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-        {title}
-      </div>
-      <div className="grid grid-cols-2 gap-1.5">
-        {shapes.map((s) => {
-          const Icon = s.icon;
-          const isDragging = draggingKind === s.kind;
-          return (
-            <button
-              key={s.kind}
-              type="button"
-              disabled={readOnly}
-              draggable={!readOnly && !!onDropShape}
-              onDragStart={(e) => {
-                setDraggingKind(s.kind);
-                e.dataTransfer.setData("application/x-flowchart-kind", s.kind);
-                e.dataTransfer.effectAllowed = "copy";
-              }}
-              onDragEnd={() => setDraggingKind(null)}
-              onClick={() => onAddShape(s.kind)}
-              title={`添加${s.label}（点击或拖拽到画布）`}
-              className={`flex flex-col items-center gap-1 rounded-md border border-border/60 bg-background px-1.5 py-2 text-center transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-40 ${
-                isDragging ? "opacity-50" : ""
-              }`}
-            >
-              <Icon className="h-5 w-5 text-foreground/80" />
-              <span className="text-[10.5px] leading-tight text-foreground/80">{s.label}</span>
-            </button>
-          );
-        })}
-      </div>
-    </div>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          type="button"
+          variant={active ? "secondary" : "ghost"}
+          size="icon"
+          aria-label={label}
+          aria-pressed={active}
+          disabled={disabled}
+          onClick={onClick}
+          className="h-8 w-8"
+        >
+          <Icon className="h-4 w-4" />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="right">{label}</TooltipContent>
+    </Tooltip>
   );
 }

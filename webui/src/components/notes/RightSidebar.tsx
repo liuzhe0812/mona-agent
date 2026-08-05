@@ -1,19 +1,20 @@
-import { useEffect, useMemo, useState } from "react";
-import { List, Link2, Tag } from "lucide-react";
+import { useMemo } from "react";
+import { List, Link2 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
 import { BacklinksPanel } from "./BacklinksPanel";
+import { parseMindMap, type MindMapNode } from "./mindmap/mindmap-outline";
+import { useMindMapBridge } from "./mindmap/MindMapBridge";
 import type { OperationNote } from "./notes-data";
 
-export type RightTab = "outline" | "links" | "tags";
+export type RightTab = "outline" | "links";
 
 interface RightSidebarProps {
   note: OperationNote | null;
   activeTab: RightTab;
   onTabChange: (tab: RightTab) => void;
   onSelectNote?: (noteId: string) => void;
-  onSearchTag?: (tag: string) => void;
   onOpenNoteByTitle?: (title: string) => void;
   allNotes?: OperationNote[];
   width: number;
@@ -28,7 +29,6 @@ interface OutlineHeading {
 const TABS: { id: RightTab; label: string; icon: typeof List }[] = [
   { id: "outline", label: "大纲", icon: List },
   { id: "links", label: "链接", icon: Link2 },
-  { id: "tags", label: "标签", icon: Tag },
 ];
 
 /** Strip common inline markdown markers from a heading text. */
@@ -79,17 +79,24 @@ export function RightSidebar({
   activeTab,
   onTabChange,
   onSelectNote,
-  onSearchTag,
   onOpenNoteByTitle,
   allNotes,
   width,
 }: RightSidebarProps) {
-  const [searchTag, setSearchTag] = useState<string | null>(null);
+  const isMindMap = note?.type === "mindmap";
+  const mindMapBridge = useMindMapBridge();
 
   const outline = useMemo(
-    () => (note ? parseOutline(note.contentMarkdown) : []),
-    [note?.contentMarkdown],
+    () => (note && !isMindMap ? parseOutline(note.contentMarkdown) : []),
+    [note?.contentMarkdown, isMindMap],
   );
+
+  // 思维导图大纲：从 markdown 解析节点树
+  const mindMapTree = useMemo(() => {
+    if (!note || !isMindMap) return null;
+    const result = parseMindMap(note.contentMarkdown);
+    return result.ok ? result.root : null;
+  }, [note?.contentMarkdown, isMindMap]);
 
   const outgoingLinks = useMemo(
     () => (note ? parseOutgoingLinks(note.contentMarkdown) : []),
@@ -105,13 +112,6 @@ export function RightSidebar({
     }
     return map;
   }, [allNotes]);
-
-  useEffect(() => {
-    if (searchTag && onSearchTag) {
-      onSearchTag(searchTag);
-      setSearchTag(null);
-    }
-  }, [searchTag, onSearchTag]);
 
   return (
     <div
@@ -141,7 +141,7 @@ export function RightSidebar({
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto p-2 scrollbar-thin">
-        {activeTab === "outline" && (
+        {activeTab === "outline" && !isMindMap && (
           <div className="flex flex-col gap-0.5">
             {outline.length === 0 ? (
               <div className="px-1 py-2 text-[11.5px] text-muted-foreground/70">
@@ -179,6 +179,22 @@ export function RightSidebar({
                   {h.text}
                 </button>
               ))
+            )}
+          </div>
+        )}
+
+        {activeTab === "outline" && isMindMap && (
+          <div className="flex flex-col gap-0.5">
+            {!mindMapTree ? (
+              <div className="px-1 py-2 text-[11.5px] text-muted-foreground/70">
+                暂无节点
+              </div>
+            ) : (
+              <MindMapOutlineTree
+                node={mindMapTree}
+                level={0}
+                onSelectNode={(nodeId) => mindMapBridge?.current?.(nodeId)}
+              />
             )}
           </div>
         )}
@@ -243,28 +259,47 @@ export function RightSidebar({
             <BacklinksPanel noteId={note.id} onSelectNote={onSelectNote} />
           </div>
         )}
-
-        {activeTab === "tags" && (
-          <div className="flex flex-wrap gap-1.5">
-            {note && note.tags.length > 0 ? (
-              note.tags.map((tag) => (
-                <button
-                  key={tag}
-                  type="button"
-                  onClick={() => setSearchTag(tag)}
-                  className="rounded-full bg-accent px-2 py-0.5 text-[11px] text-foreground/90 hover:bg-accent"
-                >
-                  #{tag}
-                </button>
-              ))
-            ) : (
-              <div className="px-1 py-2 text-[11.5px] text-muted-foreground/70">
-                当前笔记没有标签
-              </div>
-            )}
-          </div>
-        )}
       </div>
     </div>
+  );
+}
+
+/** 思维导图大纲：递归渲染节点树，点击定位到导图节点 */
+function MindMapOutlineTree({
+  node,
+  level,
+  onSelectNode,
+}: {
+  node: MindMapNode;
+  level: number;
+  onSelectNode?: (nodeId: string) => void;
+}) {
+  const hasChildren = node.children && node.children.length > 0;
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => onSelectNode?.(node.id)}
+        className={cn(
+          "truncate rounded px-1 py-0.5 text-left text-[12px] hover:bg-accent hover:text-foreground",
+          level === 0
+            ? "font-medium text-foreground"
+            : "text-muted-foreground",
+        )}
+        style={{ paddingLeft: `${4 + level * 12}px` }}
+        title={node.topic}
+      >
+        {node.topic || "（空节点）"}
+      </button>
+      {hasChildren &&
+        node.children.map((child) => (
+          <MindMapOutlineTree
+            key={child.id}
+            node={child}
+            level={level + 1}
+            onSelectNode={onSelectNode}
+          />
+        ))}
+    </>
   );
 }

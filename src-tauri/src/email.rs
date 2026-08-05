@@ -6053,6 +6053,7 @@ pub async fn email_open_compose_window(
         .visible(false)
         .build()
         .map_err(|e| e.to_string())?;
+    crate::attach_permission_allower(&window);
     let _ = window.show();
     let _ = window.set_focus();
 
@@ -6100,6 +6101,7 @@ pub async fn email_open_view_window(
         .visible(false)
         .build()
         .map_err(|e| e.to_string())?;
+    crate::attach_permission_allower(&window);
     let _ = window.show();
     let _ = window.set_focus();
 

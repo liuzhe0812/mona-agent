@@ -26,19 +26,21 @@ Field format: ``- <FieldName>: <value>`` (FieldName case-insensitive, value to E
 from __future__ import annotations
 
 import argparse
-import io
 import json
-import os
 import re
-import sys
 from pathlib import Path
 
-if os.name == "nt" and hasattr(sys.stdout, "buffer"):
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
-
-SCENE_HEADING_RE = re.compile(r"^###\s+Scene\s+(\d+)\s*:\s*(.+?)\s*$", re.IGNORECASE)
-FIELD_RE = re.compile(r"^-\s*([A-Za-z][A-Za-z\s]*?)\s*:\s*(.+?)\s*$")
+# Loose scene heading: 2-4 leading #'s, "Scene"/"场景"/"镜头" keyword (optional),
+# number, separator (:｜：｜-｜－｜——), title. Examples accepted:
+#   ### Scene 1: 开场
+#   ## 场景 1：开场
+#   ### 1. 开场
+#   ### Scene 1 - 开场
+SCENE_HEADING_RE = re.compile(
+    r"^#{2,4}\s+(?:Scene|场景|镜头)?\s*(\d+)\s*[:：\-－—。\.\s]\s*(.+?)\s*$",
+    re.IGNORECASE,
+)
+FIELD_RE = re.compile(r"^-\s*([A-Za-z\u4e00-\u9fa5][A-Za-z\s\u4e00-\u9fa5]*?)\s*[:：]\s*(.+?)\s*$")
 
 
 def _parse_duration(raw: str) -> int:
@@ -89,16 +91,16 @@ def parse_storyboard(storyboard_path: Path) -> list[dict]:
             continue
         field = m.group(1).strip().lower()
         value = m.group(2).strip()
-        if field == "duration":
+        if field in ("duration", "时长", "长度"):
             current["durationRaw"] = value
             current["duration"] = _parse_duration(value)
-        elif field == "visual":
+        elif field in ("visual", "画面", "视觉", "画面描述"):
             current["visual"] = value
-        elif field == "animation":
+        elif field in ("animation", "动画", "动画说明"):
             current["animation"] = value
-        elif field == "narration":
+        elif field in ("narration", "旁白", "旁白文本", "解说"):
             current["narration"] = value
-        elif field == "assets":
+        elif field in ("assets", "素材", "资源", "资产"):
             current["assets"] = _split_assets(value)
 
     if current is not None:
@@ -111,6 +113,16 @@ def parse_storyboard(storyboard_path: Path) -> list[dict]:
 
 
 def _cli() -> None:
+    # Only redirect stdout/stderr when run as a CLI script — never when imported
+    # as a module (would corrupt the host process's stdout and deadlock aiohttp).
+    import io
+    import os
+    import sys
+
+    if os.name == "nt" and hasattr(sys.stdout, "buffer"):
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+
     parser = argparse.ArgumentParser(description="Parse storyboard.md into JSON")
     parser.add_argument("project_path", type=Path, help="Video project directory")
     args = parser.parse_args()

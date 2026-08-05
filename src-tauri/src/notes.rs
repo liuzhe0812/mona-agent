@@ -26,7 +26,7 @@ pub struct NotesState {
 
 /// A user-defined AI transformation template for notes.
 /// The prompt template supports variables: {{note_title}}, {{note_content}},
-/// {{note_tags}}, {{note_source}}.
+/// {{note_source}}.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NoteTransformation {
@@ -60,8 +60,6 @@ pub struct OperationNote {
     pub created_at: String,
     pub updated_at: String,
     pub source: NoteSource,
-    #[serde(default)]
-    pub tags: Vec<String>,
     pub content_markdown: String,
     #[serde(default)]
     pub content_json: Option<Value>,
@@ -429,7 +427,7 @@ fn migrate_legacy_sqlite_to_vault(vault: &Path) -> Result<Option<usize>, String>
         let mut stmt = conn
             .prepare(
                 "SELECT id, notebook_id, title, preview, updated_at_label, source_kind,
-                        source_label, tags_json, content_markdown, agent_chat_id,
+                        source_label, content_markdown, agent_chat_id,
                         applied_agent_message_ids_json, context_level
                  FROM notes",
             )
@@ -443,11 +441,10 @@ fn migrate_legacy_sqlite_to_vault(vault: &Path) -> Result<Option<usize>, String>
                 let updated_at: String = row.get(4)?;
                 let source_kind: String = row.get(5)?;
                 let source_label: String = row.get(6)?;
-                let tags_json: String = row.get(7)?;
-                let content_markdown: String = row.get(8)?;
-                let agent_chat_id: Option<String> = row.get(9)?;
-                let applied_ids_json: String = row.get(10)?;
-                let context_level: String = row.get(11)?;
+                let content_markdown: String = row.get(7)?;
+                let agent_chat_id: Option<String> = row.get(8)?;
+                let applied_ids_json: String = row.get(9)?;
+                let context_level: String = row.get(10)?;
                 Ok((
                     id,
                     notebook_id,
@@ -455,7 +452,6 @@ fn migrate_legacy_sqlite_to_vault(vault: &Path) -> Result<Option<usize>, String>
                     updated_at,
                     source_kind,
                     source_label,
-                    tags_json,
                     content_markdown,
                     agent_chat_id,
                     applied_ids_json,
@@ -472,7 +468,6 @@ fn migrate_legacy_sqlite_to_vault(vault: &Path) -> Result<Option<usize>, String>
                 updated_at,
                 source_kind,
                 source_label,
-                tags_json,
                 content_markdown,
                 agent_chat_id,
                 applied_ids_json,
@@ -487,7 +482,6 @@ fn migrate_legacy_sqlite_to_vault(vault: &Path) -> Result<Option<usize>, String>
             fs::create_dir_all(&folder_path)
                 .map_err(|e| format!("Failed to create notebook folder: {}", e))?;
 
-            let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
             let applied_ids: Vec<String> =
                 serde_json::from_str(&applied_ids_json).unwrap_or_default();
             let note = OperationNote {
@@ -501,7 +495,6 @@ fn migrate_legacy_sqlite_to_vault(vault: &Path) -> Result<Option<usize>, String>
                     kind: source_kind,
                     label: source_label,
                 },
-                tags,
                 content_markdown,
                 content_json: None,
                 plain_text: None,
@@ -650,7 +643,6 @@ struct ParsedFrontmatter {
     title: Option<String>,
     source_kind: Option<String>,
     source_label: Option<String>,
-    tags: Vec<String>,
     context_level: Option<String>,
     agent_chat_id: Option<String>,
     applied_agent_message_ids: Vec<String>,
@@ -798,9 +790,8 @@ fn parse_frontmatter_lines(lines: &[String]) -> ParsedFrontmatter {
                     }
                 }
             }
-            "tags" | "appliedAgentMessageIds" | "aliases" => {
+            "appliedAgentMessageIds" | "aliases" => {
                 let target = match key {
-                    "tags" => &mut fm.tags,
                     "aliases" => &mut fm.aliases,
                     _ => &mut fm.applied_agent_message_ids,
                 };
@@ -872,14 +863,6 @@ fn serialize_frontmatter(note: &OperationNote) -> String {
     out.push_str("source:\n");
     out.push_str(&format!("  kind: {}\n", yaml_scalar(&note.source.kind)));
     out.push_str(&format!("  label: {}\n", yaml_scalar(&note.source.label)));
-    if note.tags.is_empty() {
-        out.push_str("tags: []\n");
-    } else {
-        out.push_str("tags:\n");
-        for tag in &note.tags {
-            out.push_str(&format!("  - {}\n", yaml_scalar(tag)));
-        }
-    }
     out.push_str(&format!(
         "contextLevel: {}\n",
         yaml_scalar(if note.context_level.is_empty() {
@@ -1080,7 +1063,6 @@ pub(crate) fn parse_note_file(path: &Path, notebook_name: &str) -> Result<Operat
         created_at,
         updated_at,
         source,
-        tags: fm.tags,
         content_markdown: body.clone(),
         content_json: None,
         plain_text: Some(strip_markdown(&body)),
@@ -1543,7 +1525,6 @@ pub async fn notes_create_from_chat(
     title: String,
     content_markdown: String,
     notebook_id: Option<String>,
-    tags: Option<Vec<String>>,
 ) -> Result<String, String> {
     let vault = read_vault_path()
         .ok_or_else(|| "Notes vault is not configured".to_string())?;
@@ -1572,7 +1553,6 @@ pub async fn notes_create_from_chat(
             kind: "agent".to_string(),
             label: "聊天保存".to_string(),
         },
-        tags: tags.unwrap_or_default(),
         content_markdown,
         content_json: None,
         plain_text: None,
@@ -1610,7 +1590,6 @@ pub struct NoteContent {
     pub note_id: String,
     pub title: String,
     pub content_markdown: String,
-    pub tags: Vec<String>,
     pub notebook_id: String,
     pub notebook_name: String,
     pub updated_at: String,
@@ -1651,223 +1630,11 @@ pub async fn notes_read_note_content(note_id: String) -> Result<NoteContent, Str
         note_id: note.id.clone(),
         title: note.title.clone(),
         content_markdown,
-        tags: note.tags.clone(),
         notebook_id: note.notebook_id.clone(),
         notebook_name: note.notebook_id.clone(),
         updated_at: note.updated_at.clone(),
         context_level,
     })
-}
-
-// ---------------------------------------------------------------------------
-// Edit note (for agent notes_edit tool)
-// ---------------------------------------------------------------------------
-
-/// Request body for `notes_edit_note`. Only one operation per call.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct NotesEditRequest {
-    pub note_id: String,
-    /// "replace_text" | "set_title" | "set_tags"
-    pub operation: String,
-    /// For replace_text: exact substring to find (must be unique in the body).
-    #[serde(default)]
-    pub old_string: Option<String>,
-    /// For replace_text: replacement text.
-    #[serde(default)]
-    pub new_string: Option<String>,
-    /// For set_title.
-    #[serde(default)]
-    pub title: Option<String>,
-    /// For set_tags.
-    #[serde(default)]
-    pub tags: Option<Vec<String>>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct NotesEditResult {
-    pub note_id: String,
-    pub title: String,
-    pub preview: String,
-    pub updated_at: String,
-    /// First 200 chars of the new content, for the agent to verify the change.
-    pub content_head: String,
-}
-
-/// Edit an existing note by id. Supports three atomic operations:
-/// - replace_text: find old_string in the body and replace with new_string.
-///   old_string must match exactly once (unique), otherwise returns an error.
-/// - set_title: change the note title (also updates frontmatter).
-/// - set_tags: replace the tags list.
-///
-/// The note file is rewritten in place. Other frontmatter fields are preserved.
-#[tauri::command]
-pub async fn notes_edit_note(req: NotesEditRequest) -> Result<NotesEditResult, String> {
-    let vault = read_vault_path()
-        .ok_or_else(|| "Notes vault is not configured".to_string())?;
-
-    // Locate the note file by id.
-    let files = scan_existing_note_files(&vault)?;
-    let file_path = files
-        .get(&req.note_id)
-        .ok_or_else(|| format!("Note not found: {}", req.note_id))?
-        .clone();
-
-    // Read current file content and split into frontmatter + body.
-    let raw = fs::read_to_string(&file_path)
-        .map_err(|e| format!("Failed to read note file: {}", e))?;
-    let (fm_opt, body) = split_frontmatter(&raw);
-    let mut fm = fm_opt
-        .as_ref()
-        .map(|lines| parse_frontmatter_lines(lines))
-        .unwrap_or_default();
-
-    // For replace_text we operate on the body only; for set_title/set_tags
-    // we update the parsed frontmatter and leave the body untouched.
-    let op = req.operation.as_str();
-    let new_body = match op {
-        "replace_text" => {
-            let old = req
-                .old_string
-                .as_deref()
-                .ok_or_else(|| "old_string is required for replace_text".to_string())?;
-            let new = req.new_string.as_deref().unwrap_or("");
-            if old.is_empty() {
-                return Err("old_string must not be empty".to_string());
-            }
-            // Count matches; require exactly one to avoid ambiguous edits.
-            let count = body.matches(old).count();
-            if count == 0 {
-                return Err(format!(
-                    "old_string not found in note {}. Provide the exact text to replace.",
-                    req.note_id
-                ));
-            }
-            if count > 1 {
-                return Err(format!(
-                    "old_string matches {} locations in note {}. Include more surrounding context so the match is unique.",
-                    count, req.note_id
-                ));
-            }
-            body.replacen(old, new, 1)
-        }
-        "set_title" => {
-            let title = req
-                .title
-                .as_deref()
-                .ok_or_else(|| "title is required for set_title".to_string())?
-                .trim()
-                .to_string();
-            if title.is_empty() {
-                return Err("title must not be empty".to_string());
-            }
-            fm.title = Some(title);
-            // Body unchanged.
-            body
-        }
-        "set_tags" => {
-            let tags = req.tags.clone().unwrap_or_default();
-            // Validate each tag is non-empty after trimming; drop empties.
-            let cleaned: Vec<String> = tags
-                .into_iter()
-                .map(|t| t.trim().to_string())
-                .filter(|t| !t.is_empty())
-                .collect();
-            fm.tags = cleaned;
-            body
-        }
-        other => {
-            return Err(format!(
-                "Unknown operation '{}'. Supported: replace_text, set_title, set_tags.",
-                other
-            ));
-        }
-    };
-
-    // Rebuild the note struct from parsed frontmatter + new body so we can
-    // reuse serialize_note_to_file, which preserves all frontmatter fields
-    // and computes the file layout consistently.
-    let notebook_name = file_path
-        .parent()
-        .and_then(|p| p.file_name())
-        .and_then(|s| s.to_str())
-        .map(|s| s.to_string())
-        .unwrap_or_default();
-    let notebook_id = if file_path.parent() == Some(vault.as_path()) {
-        String::new()
-    } else {
-        notebook_name.clone()
-    };
-
-    let now_iso = chrono::Utc::now().to_rfc3339();
-    let note = OperationNote {
-        id: req.note_id.clone(),
-        notebook_id,
-        title: fm.title.clone().unwrap_or_else(|| {
-            file_path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("untitled")
-                .to_string()
-        }),
-        preview: make_preview(&new_body),
-        created_at: fm.created_at.clone().unwrap_or_else(|| now_iso.clone()),
-        updated_at: now_iso.clone(),
-        source: NoteSource {
-            kind: fm.source_kind.unwrap_or_else(|| "manual".to_string()),
-            label: fm.source_label.unwrap_or_else(|| "手动记录".to_string()),
-        },
-        tags: fm.tags.clone(),
-        content_markdown: new_body.clone(),
-        content_json: None,
-        plain_text: Some(strip_markdown(&new_body)),
-        agent_chat_id: fm.agent_chat_id.filter(|s| !s.is_empty()),
-        applied_agent_message_ids: fm.applied_agent_message_ids.clone(),
-        context_level: fm
-            .context_level
-            .clone()
-            .unwrap_or_else(|| default_context_level()),
-        note_type: fm.note_type.clone().unwrap_or_else(default_note_type),
-        aliases: fm.aliases.clone(),
-        favorite: fm.favorite.unwrap_or(false),
-    };
-
-    // set_title may rename the file on disk to match the new title, mirroring
-    // how the UI renames .md files when the title changes. For replace_text
-    // and set_tags we keep the existing filename to avoid surprising moves.
-    if op == "set_title" {
-        let base = sanitize_filename(&note.title);
-        let mut filename = format!("{}.md", base);
-        let mut target = file_path.with_file_name(&filename);
-        let mut counter = 1;
-        while target.exists() && target != file_path {
-            filename = format!("{}_{}.md", base, counter);
-            target = file_path.with_file_name(&filename);
-            counter += 1;
-        }
-        fs::write(&file_path, serialize_note_to_file(&note))
-            .map_err(|e| format!("Failed to write note: {}", e))?;
-        if target != file_path {
-            let _ = fs::rename(&file_path, &target);
-        }
-    } else {
-        fs::write(&file_path, serialize_note_to_file(&note))
-            .map_err(|e| format!("Failed to write note: {}", e))?;
-    }
-
-    // Refresh graph cache in background (links may have changed).
-    crate::notes_links::refresh_cache_background(vault.clone());
-
-    let content_head: String = note.content_markdown.chars().take(200).collect();
-    let result = NotesEditResult {
-        note_id: note.id.clone(),
-        title: note.title.clone(),
-        preview: note.preview.clone(),
-        updated_at: note.updated_at.clone(),
-        content_head,
-    };
-    Ok(result)
 }
 
 // ---------------------------------------------------------------------------
@@ -1894,7 +1661,7 @@ fn search_notes_in_memory(
     limit: usize,
 ) -> Vec<NoteSearchResult> {
     // Multi-token LIKE search: split query on whitespace into tokens,
-    // each token independently matches (title +3, tags +2, content +1).
+    // each token independently matches (title +3, content +1).
     // Total score is summed across tokens.
     let tokens: Vec<String> = query
         .split_whitespace()
@@ -1912,14 +1679,10 @@ fn search_notes_in_memory(
         }
         let title_l = note.title.to_lowercase();
         let content_l = note.content_markdown.to_lowercase();
-        let tags_l = note.tags.join(" ").to_lowercase();
         let mut score = 0.0;
         for tok in &tokens {
             if title_l.contains(tok) {
                 score += 3.0;
-            }
-            if tags_l.contains(tok) {
-                score += 2.0;
             }
             if content_l.contains(tok) {
                 score += 1.0;

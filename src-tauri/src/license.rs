@@ -9,7 +9,7 @@ use tauri::{AppHandle, Emitter};
 use std::os::windows::process::CommandExt;
 
 const LICENSE_FILENAME: &str = "license.jwt";
-const AUTH_SERVER_URL: &str = "https://mona.lzfun.vip";
+const AUTH_SERVER_URL: &str = "https://www.mona-ai.cn";
 
 fn license_dir() -> Result<PathBuf, String> {
     let base = dirs::data_local_dir()

@@ -75,6 +75,7 @@ pub async fn browser_show_downloads(
                 return;
             }
         };
+        crate::attach_permission_allower(&window);
         if let Err(e) = window.set_size(LogicalSize::new(WIDTH, HEIGHT)) {
             log::error!("[browser_downloads] set_size failed: {}", e);
         }

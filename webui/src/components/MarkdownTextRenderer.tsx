@@ -11,6 +11,7 @@ import remarkMath from "remark-math";
 import { CodeBlock } from "@/components/CodeBlock";
 import { FileReferenceChip, isLikelyFilePath } from "@/components/FileReferenceChip";
 import { isTauri, openPathWithSystemApp, openExternalUrl, revealItemInDir } from "@/lib/tauri";
+import { useMaterialsOpenStore } from "@/lib/materials-open-store";
 import { useWorkspaceStore, resolveToAbsolutePath } from "@/lib/workspace-store";
 import { cn } from "@/lib/utils";
 
@@ -132,6 +133,11 @@ export default function MarkdownTextRenderer({
             <FileLink href={href}>{markdownChildren}</FileLink>
           );
         }
+        if (href && href.startsWith("mona:material?")) {
+          return (
+            <MonaMaterialLink href={href}>{markdownChildren}</MonaMaterialLink>
+          );
+        }
         if (href && (href.startsWith("mona:email?") || href.startsWith("#mona-email:"))) {
           return (
             <MonaEmailLink href={href}>{markdownChildren}</MonaEmailLink>
@@ -215,6 +221,35 @@ function FileLink({ href, children }: { href: string; children: React.ReactNode 
       onContextMenu={handleContextMenu}
       className="cursor-pointer text-primary underline underline-offset-2 hover:opacity-80"
       title={isTauri() ? `${absPath} · 点击打开，右键在文件夹中显示` : absPath}
+    >
+      {children}
+    </span>
+  );
+}
+
+function MonaMaterialLink({ href, children }: { href: string; children: React.ReactNode }) {
+  const handleClick = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    // 格式：mona:material?path=<urlencoded raw/...|wiki/...>&location=<label>
+    const params = new URLSearchParams(href.slice("mona:material?".length));
+    const linkPath = params.get("path");
+    if (!linkPath) return;
+    const location = params.get("location") ?? undefined;
+    const { request } = useMaterialsOpenStore.getState();
+    if (linkPath.startsWith("wiki/")) {
+      request({ kind: "wiki", path: linkPath.slice("wiki/".length), location });
+    } else {
+      request({ kind: "raw", path: linkPath, location });
+    }
+  };
+  return (
+    <span
+      role="button"
+      tabIndex={0}
+      onClick={handleClick}
+      className="cursor-pointer text-primary underline underline-offset-2 hover:opacity-80"
+      title="点击打开资料对应位置"
     >
       {children}
     </span>

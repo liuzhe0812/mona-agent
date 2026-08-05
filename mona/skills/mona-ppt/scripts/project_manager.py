@@ -22,10 +22,12 @@ from urllib.parse import urlparse
 try:
     from project_utils import (
         CANVAS_FORMATS,
-        get_project_info as get_project_info_common,
         normalize_canvas_format,
         validate_project_structure,
         validate_svg_viewbox,
+    )
+    from project_utils import (
+        get_project_info as get_project_info_common,
     )
 except ImportError:
     tools_dir = Path(__file__).resolve().parent
@@ -33,10 +35,12 @@ except ImportError:
         sys.path.insert(0, str(tools_dir))
     from project_utils import (  # type: ignore
         CANVAS_FORMATS,
-        get_project_info as get_project_info_common,
         normalize_canvas_format,
         validate_project_structure,
         validate_svg_viewbox,
+    )
+    from project_utils import (
+        get_project_info as get_project_info_common,
     )
 
 TOOLS_DIR = Path(__file__).resolve().parent
@@ -140,8 +144,16 @@ class ProjectManager:
             project_dir_name = f"{project_name}_{normalized_format}_{date_str}"
         project_path = base_path / project_dir_name
 
+        # 容忍前端 markPptGenerating 预创建的"占位目录"：
+        # 如果目录已存在但只含 .generating / .chat_id 之类的标记文件（无 README.md / meta.json），
+        # 视为占位目录，跳过 FileExistsError 并补建子目录与 README。
+        placeholder_markers = {".generating", ".chat_id"}
         if project_path.exists():
-            raise FileExistsError(f"Project directory already exists: {project_path}")
+            existing = {p.name for p in project_path.iterdir()} if project_path.is_dir() else set()
+            real_initialized = existing - placeholder_markers
+            if real_initialized:
+                raise FileExistsError(f"Project directory already exists and is initialized: {project_path}")
+            # 占位目录：继续后续补建流程
 
         for rel_path in (
             "output",

@@ -5,6 +5,8 @@ import path from "node:path";
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
   const target = env.mona_API_URL ?? "http://127.0.0.1:8765";
+  const gatewayTarget = env.mona_GATEWAY_URL ?? "http://127.0.0.1:18790";
+  const servicesTarget = env.mona_SERVICES_URL ?? "http://127.0.0.1:17174";
   const isTauriBuild = mode === "tauri";
 
   return {
@@ -62,6 +64,7 @@ export default defineConfig(({ mode }) => {
       strictPort: true,
       proxy: {
         "/webui": { target, changeOrigin: true },
+        "/api/three": { target: servicesTarget, changeOrigin: true },
         "/api": { target, changeOrigin: true },
         "/auth": { target, changeOrigin: true },
       },

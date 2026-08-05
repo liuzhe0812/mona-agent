@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import html
 import imaplib
 import json as _json
 import re
@@ -49,6 +50,7 @@ from mona.materials.api import (
     handle_materials_list_wiki,
     handle_materials_llm_config,
     handle_materials_move,
+    handle_materials_reconcile,
     handle_materials_search,
     handle_materials_status,
     handle_materials_write_wiki_page,
@@ -89,6 +91,7 @@ __all__ = (
     "handle_materials_list_wiki",
     "handle_materials_llm_config",
     "handle_materials_move",
+    "handle_materials_reconcile",
     "handle_materials_search",
     "handle_materials_status",
     "handle_materials_write_wiki_page",
@@ -1746,7 +1749,11 @@ def _imap_fetch_recent(body: dict[str, Any]) -> dict[str, Any]:
             # 首次同步：拉取全部 UID，后续取最后 20 封
             status, data = client.uid("SEARCH", "ALL")
             if status != "OK" or not data or not data[0]:
-                return []
+                return {
+                    "messages": [],
+                    "uidValidity": uid_validity,
+                    "uidValidityChanged": uid_validity_changed,
+                }
             all_uids = data[0].split()
             uids = all_uids[-20:]
 
@@ -4728,6 +4735,11 @@ async def handle_todo_create(request: web.Request) -> web.Response:
         from mona.schedule import TodoItem, create_todo_id
 
         item_id = body.get("id") or create_todo_id()
+        # createdAtMs/updatedAtMs are server-generated; default to 0 so
+        # TodoItem.from_dict doesn't KeyError when clients omit them.
+        # add_item fills 0 with the current time.
+        body.setdefault("createdAtMs", 0)
+        body.setdefault("updatedAtMs", 0)
         item = TodoItem.from_dict({**body, "id": item_id})
         saved = await svc.add_item(item)
         return web.json_response(saved.to_dict())
@@ -4973,45 +4985,12 @@ def _renumber_outline_pages(pages: list[dict]) -> list[dict]:
     return result
 
 
-def _load_review_ready(project_dir: Path) -> dict | None:
-    """Load .review_ready JSON, return None if missing or invalid."""
-    rr_file = project_dir / ".review_ready"
-    if not rr_file.is_file():
-        return None
-    try:
-        return _json.loads(rr_file.read_text(encoding="utf-8"))
-    except Exception:
-        return None
-
-
 def _svg_mtime(project_dir: Path, file_name: str) -> float | None:
     """Return mtime of svg_output/<file_name>, or None if missing."""
     svg_path = project_dir / "svg_output" / file_name
     if not svg_path.is_file():
         return None
     return svg_path.stat().st_mtime
-
-
-def _is_review_ready(project_dir: Path, meta: dict, outline: dict | None) -> bool:
-    """V2 §5.1: reviewReady is true only when all three conditions hold:
-    - .review_ready exists
-    - outlineRevision equals meta.outlineRevision
-    - every file in outline.pages exists in svg_output/
-    """
-    rr = _load_review_ready(project_dir)
-    if rr is None:
-        return False
-    if meta.get("outlineRevision") != rr.get("outlineRevision"):
-        return False
-    if outline is None:
-        return False
-    for page in outline.get("pages", []):
-        file_name = page.get("file", "")
-        if not file_name:
-            return False
-        if _svg_mtime(project_dir, file_name) is None:
-            return False
-    return True
 
 
 def _page_state(file_name: str, project_dir: Path, meta: dict) -> str:
@@ -5041,18 +5020,6 @@ def _all_pages_confirmed(project_dir: Path, meta: dict, outline: dict) -> bool:
     return True
 
 
-def _no_extra_svgs(project_dir: Path, outline: dict) -> bool:
-    """V2 §5.5: no SVGs in svg_output/ that are not in the outline."""
-    planned = {p.get("file", "") for p in outline.get("pages", []) if p.get("file")}
-    svg_dir = project_dir / "svg_output"
-    if not svg_dir.is_dir():
-        return True
-    for entry in svg_dir.iterdir():
-        if entry.is_file() and entry.suffix == ".svg" and entry.name not in planned:
-            return False
-    return True
-
-
 async def handle_ppt_outline_get(request: web.Request) -> web.Response:
     """GET /api/ppt/project/outline?name=<n> - read outline JSON."""
     try:
@@ -5065,7 +5032,7 @@ async def handle_ppt_outline_get(request: web.Request) -> web.Response:
         meta = _load_ppt_meta(project_dir)
         spec_lock = (project_dir / "spec_lock.md").exists()
         if outline is None:
-            return web.json_response({"ok": False, "pages": [], "locked": False})
+            return web.json_response({"ok": False, "pages": [], "locked": False, "revision": 0})
         return web.json_response({
             "ok": True,
             "pages": outline.get("pages", []),
@@ -5189,8 +5156,96 @@ async def handle_ppt_lock_outline(request: web.Request) -> web.Response:
         return web.json_response({"error": str(e)}, status=500)
 
 
+async def handle_ppt_design_spec_summary_get(request: web.Request) -> web.Response:
+    """GET /api/ppt/project/design-spec-summary?name=<n> - read design_spec_summary.json.
+
+    Returns the AI-generated eight confirmations summary as structured JSON.
+    Returns {"ok": false} when the file is not yet present (AI hasn't reached
+    Step 4 yet, or hasn't written the summary file).
+    """
+    try:
+        name = request.query.get("name") or ""
+        project_dir, err = _ppt_project_dir_or_404(name)
+        if err is not None:
+            return err
+        assert project_dir is not None
+
+        summary_file = project_dir / "design_spec_summary.json"
+        if not summary_file.is_file():
+            return web.json_response({"ok": False, "summary": None})
+
+        try:
+            summary = _json.loads(summary_file.read_text(encoding="utf-8"))
+        except Exception as e:
+            return web.json_response(
+                {"ok": False, "error": f"failed to parse summary: {e}"},
+                status=500,
+            )
+
+        return web.json_response({"ok": True, "summary": summary})
+    except Exception as e:
+        logger.exception("ppt design spec summary get error")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_ppt_design_spec_summary_put(request: web.Request) -> web.Response:
+    """PUT /api/ppt/project/design-spec-summary?name=<n> - update design_spec_summary.json.
+
+    Accepts a partial JSON body and merges it into the existing summary file.
+    This lets the UI edit individual fields (e.g. primaryColor) without
+    rewriting the entire file. The Agent is notified via a
+    [DESIGN_SPEC_UPDATED] message sent by the frontend chat panel.
+    """
+    try:
+        name = request.query.get("name") or ""
+        project_dir, err = _ppt_project_dir_or_404(name)
+        if err is not None:
+            return err
+        assert project_dir is not None
+
+        body = await request.json()
+        if not isinstance(body, dict):
+            return web.json_response(
+                {"ok": False, "error": "body must be a JSON object"}, status=400
+            )
+
+        summary_file = project_dir / "design_spec_summary.json"
+
+        # Load existing or start from empty dict
+        existing: dict = {}
+        if summary_file.is_file():
+            try:
+                existing = _json.loads(summary_file.read_text(encoding="utf-8"))
+            except Exception:
+                existing = {}
+
+        # Merge user edits into existing
+        existing.update(body)
+        existing["updatedAt"] = _datetime.now().isoformat() + "Z"
+
+        # Atomic write
+        import tempfile
+        import os as _os
+
+        tmp_fd, tmp_path = tempfile.mkstemp(
+            dir=str(project_dir), suffix=".tmp", prefix=".design_spec_summary_"
+        )
+        try:
+            with _os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+                _json.dump(existing, f, ensure_ascii=False, indent=2)
+            _os.replace(tmp_path, str(summary_file))
+        except Exception:
+            _os.unlink(tmp_path)
+            raise
+
+        return web.json_response({"ok": True, "summary": existing})
+    except Exception as e:
+        logger.exception("ppt design spec summary put error")
+        return web.json_response({"error": str(e)}, status=500)
+
+
 async def handle_ppt_pages_get(request: web.Request) -> web.Response:
-    """GET /api/ppt/project/pages?name=<n> - return page files, mtime, state, reviewReady."""
+    """GET /api/ppt/project/pages?name=<n> - return page files, mtime, state."""
     try:
         name = request.query.get("name") or ""
         project_dir, err = _ppt_project_dir_or_404(name)
@@ -5203,7 +5258,6 @@ async def handle_ppt_pages_get(request: web.Request) -> web.Response:
             return web.json_response({
                 "ok": False,
                 "pages": [],
-                "reviewReady": False,
                 "outlineRevision": meta.get("outlineRevision", 0),
             })
         pages_out = []
@@ -5217,15 +5271,23 @@ async def handle_ppt_pages_get(request: web.Request) -> web.Response:
                 "mtime": mtime,
                 "state": _page_state(file_name, project_dir, meta) if file_name else "pending",
             })
+        # V3: currentPageIndex = first non-confirmed page index (0-based)
+        current_page_index = None
+        for i, p in enumerate(pages_out):
+            if p["state"] != "confirmed":
+                current_page_index = i
+                break
+        if current_page_index is None:
+            current_page_index = len(pages_out)  # all confirmed
         return web.json_response({
             "ok": True,
             "pages": pages_out,
-            "reviewReady": _is_review_ready(project_dir, meta, outline),
             "outlineRevision": meta.get("outlineRevision", 0),
             "confirmedCount": sum(
                 1 for p in pages_out if p["state"] == "confirmed"
             ),
             "totalCount": len(pages_out),
+            "currentPageIndex": current_page_index,
         })
     except Exception as e:
         logger.exception("ppt pages get error")
@@ -5290,54 +5352,10 @@ async def handle_ppt_page_confirm(request: web.Request) -> web.Response:
         return web.json_response({"error": str(e)}, status=500)
 
 
-async def handle_ppt_page_regenerate(request: web.Request) -> web.Response:
-    """POST /api/ppt/project/page/regenerate  body: {"name", "file"}.
-
-    V2 §5.4: clear confirmation for the file and delete .review_ready.
-    Does NOT send Agent message — frontend handles that.
-    """
-    try:
-        body = await request.json()
-    except Exception:
-        return web.json_response({"error": "Invalid JSON body"}, status=400)
-    try:
-        name = str(body.get("name", "") or "").strip()
-        project_dir, err = _ppt_project_dir_or_404(name)
-        if err is not None:
-            return err
-        assert project_dir is not None
-        file_name = str(body.get("file", "") or "").strip()
-        if not file_name or "/" in file_name or "\\" in file_name or ".." in file_name:
-            return web.json_response({"error": "invalid file"}, status=400)
-
-        from datetime import datetime, timezone
-
-        now = datetime.now(timezone.utc).isoformat()
-        meta = _load_ppt_meta(project_dir)
-        confirmed_pages = meta.setdefault("confirmedPages", {})
-        if file_name in confirmed_pages:
-            del confirmed_pages[file_name]
-        meta["updatedAt"] = now
-        _save_ppt_meta_atomic(project_dir, meta)
-
-        # Invalidate review gate
-        rr_file = project_dir / ".review_ready"
-        if rr_file.is_file():
-            try:
-                rr_file.unlink()
-            except Exception:
-                pass
-
-        return web.json_response({"ok": True, "file": file_name})
-    except Exception as e:
-        logger.exception("ppt page regenerate error")
-        return web.json_response({"error": str(e)}, status=500)
-
-
 async def handle_ppt_request_export(request: web.Request) -> web.Response:
     """POST /api/ppt/project/request-export  body: {"name"}.
 
-    V2 §5.5: record export request after all pages confirmed.
+    V3: record export request after all pages confirmed.
     """
     try:
         body = await request.json()
@@ -5355,17 +5373,9 @@ async def handle_ppt_request_export(request: web.Request) -> web.Response:
         if outline is None:
             return web.json_response({"error": "大纲不存在"}, status=400)
 
-        if not _is_review_ready(project_dir, meta, outline):
-            return web.json_response(
-                {"error": "review gate 未通过"}, status=409
-            )
         if not _all_pages_confirmed(project_dir, meta, outline):
             return web.json_response(
                 {"error": "存在未确认的页面"}, status=409
-            )
-        if not _no_extra_svgs(project_dir, outline):
-            return web.json_response(
-                {"error": "存在计划外的 SVG 文件"}, status=409
             )
 
         from datetime import datetime, timezone
@@ -5390,9 +5400,50 @@ def _video_projects_dir() -> Path:
     return get_workspace_path() / "video_projects"
 
 
+def _normalize_video_meta(project_dir: Path, meta: dict) -> dict:
+    """Normalize video project meta.json by inferring missing fields from disk state.
+
+    Only fills missing fields; never overwrites existing values.
+    """
+    result = dict(meta)
+    output_mp4 = project_dir / "renders" / "output.mp4"
+    has_render = output_mp4.is_file()
+    # phase
+    if "phase" not in result:
+        render_status_file = project_dir / ".render_status.json"
+        render_running = False
+        if render_status_file.is_file():
+            try:
+                rs = _json.loads(render_status_file.read_text(encoding="utf-8"))
+                render_running = rs.get("stage") == "rendering"
+            except Exception:
+                pass
+        scenes = result.get("scenes") or []
+        scenes_dir = project_dir / "scenes"
+        has_scene_html = scenes_dir.is_dir() and any(scenes_dir.glob("scene_*.html"))
+        if has_render and not result.get("outputStale"):
+            result["phase"] = "done"
+        elif render_running:
+            result["phase"] = "rendering"
+        elif scenes and all(
+            _video_scene_confirmed_current(project_dir, s) for s in scenes
+        ):
+            result["phase"] = "exportable"
+        elif result.get("storyboardLocked") or scenes or has_scene_html:
+            result["phase"] = "producing"
+        else:
+            result["phase"] = "storyboard"
+    # outputStale — old projects have no staleness info; trust existing output.
+    if "outputStale" not in result:
+        result["outputStale"] = False
+    # hasVideo
+    if "hasVideo" not in result:
+        result["hasVideo"] = has_render
+    return result
+
+
 def _get_video_project_status(project_dir: Path) -> dict:
     """Inspect a video project directory and return its status."""
-    generating_marker = project_dir / ".generating"
     output_mp4 = project_dir / "renders" / "output.mp4"
     storyboard = project_dir / "storyboard.md"
     index_html = project_dir / "index.html"
@@ -5401,19 +5452,22 @@ def _get_video_project_status(project_dir: Path) -> dict:
         len(list(scenes_dir.glob("scene_*.html"))) if scenes_dir.is_dir() else 0
     )
     has_render = output_mp4.is_file()
-    if has_render:
-        status = "done"
-    elif generating_marker.exists():
-        status = "generating"
-    elif index_html.exists() or scene_count > 0:
-        status = "generating"
-    elif storyboard.exists():
-        status = "planning"
-    else:
-        status = "init"
+
+    meta_file = project_dir / "meta.json"
+    meta = {}
+    if meta_file.is_file():
+        try:
+            meta = _json.loads(meta_file.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    meta = _normalize_video_meta(project_dir, meta)
+
     return {
-        "status": status,
-        "hasRender": has_render,
+        "status": meta.get("phase", "storyboard"),
+        "phase": meta.get("phase", "storyboard"),
+        "resolution": meta.get("resolution", "1920x1080"),
+        "hasVideo": meta.get("hasVideo", has_render),
+        "outputStale": meta.get("outputStale", False),
         "sceneCount": scene_count,
         "hasStoryboard": storyboard.exists(),
         "hasIndex": index_html.exists(),
@@ -5602,7 +5656,7 @@ async def handle_video_projects(request: web.Request) -> web.Response:
 
 
 async def handle_video_project_create(request: web.Request) -> web.Response:
-    """POST /api/video/project/create  body: {"name", "resolution", "fps", "quality",
+    """POST /api/video/project/create  body: {"name", "resolution",
     optional "narrationEnabled", "ttsProvider", "ttsVoice", "ttsRate"}.
     """
     try:
@@ -5614,17 +5668,12 @@ async def handle_video_project_create(request: web.Request) -> web.Response:
         if not name or "/" in name or "\\" in name or ".." in name:
             return web.json_response({"error": "invalid project name"}, status=400)
         resolution = str(body.get("resolution", "landscape") or "landscape")
-        fps = int(body.get("fps", 30) or 30)
-        quality = str(body.get("quality", "standard") or "standard")
 
         # Optional narration/TTS config — defaults to edge TTS when narrationEnabled=true.
         narration_enabled = bool(body.get("narrationEnabled", False))
         tts_provider = str(body.get("ttsProvider", "") or "").strip()
         tts_voice = str(body.get("ttsVoice", "") or "").strip()
         tts_rate = str(body.get("ttsRate", "") or "").strip()
-        tts_api_base = str(body.get("ttsApiBase", "") or "").strip()
-        tts_api_key = str(body.get("ttsApiKey", "") or "").strip()
-        tts_model = str(body.get("ttsModel", "") or "").strip()
 
         project_dir = _video_projects_dir() / name
         if project_dir.exists():
@@ -5638,18 +5687,14 @@ async def handle_video_project_create(request: web.Request) -> web.Response:
         meta: dict[str, object] = {
             "name": name,
             "resolution": resolution,
-            "fps": fps,
-            "quality": quality,
+            "phase": "storyboard",
+            "outputStale": False,
         }
         if narration_enabled:
             meta["narrationEnabled"] = True
             meta["ttsProvider"] = tts_provider or "edge"
             meta["ttsVoice"] = tts_voice or "zh-CN-XiaoyiNeural"
             meta["ttsRate"] = tts_rate or "+0%"
-            if tts_provider == "custom":
-                meta["ttsApiBase"] = tts_api_base
-                meta["ttsApiKey"] = tts_api_key
-                meta["ttsModel"] = tts_model or "tts-1"
         (project_dir / "meta.json").write_text(
             _json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
         )
@@ -5770,6 +5815,76 @@ def _video_project_dir_or_404(name: str) -> tuple[Path | None, web.Response | No
     return project_dir, None
 
 
+def _video_scene_confirmed_current(project_dir: Path, scene: dict) -> bool:
+    """A scene counts as confirmed only when its confirmation is bound to the
+    current HTML file version (confirmedMtime == disk mtime)."""
+    if scene.get("htmlStatus") != "confirmed":
+        return False
+    idx = scene.get("index")
+    if idx is None:
+        return False
+    scene_path = project_dir / "scenes" / f"scene_{int(idx):02d}.html"
+    if not scene_path.is_file():
+        return False
+    confirmed_mtime = scene.get("confirmedMtime")
+    if confirmed_mtime is None:
+        return False
+    try:
+        return scene_path.stat().st_mtime == float(confirmed_mtime)
+    except (OSError, TypeError, ValueError):
+        return False
+
+
+def _all_video_scenes_confirmed(project_dir: Path, scenes: list[dict]) -> bool:
+    """True when there is at least one scene and every scene's confirmation
+    is bound to the current HTML file version."""
+    if not scenes:
+        return False
+    return all(_video_scene_confirmed_current(project_dir, s) for s in scenes)
+
+
+def _invalidate_video_outputs(
+    project_dir: Path,
+    meta: dict,
+    scene_indexes: set[int] | None,
+    *,
+    reset_html: bool,
+) -> None:
+    """Invalidate video outputs after content changes.
+
+    Args:
+        scene_indexes: None means all scenes; otherwise only the given scenes.
+        reset_html: If True, also reset htmlStatus to pending for affected scenes.
+    """
+    scenes = meta.get("scenes") or []
+    if scene_indexes is None:
+        scene_indexes = {s.get("index") for s in scenes if s.get("index") is not None}
+    else:
+        scene_indexes = set(scene_indexes)
+
+    for scene in scenes:
+        idx = scene.get("index")
+        if idx is None or idx not in scene_indexes:
+            continue
+        # Clear confirmation
+        scene.pop("confirmedAt", None)
+        scene.pop("confirmedMtime", None)
+        if reset_html:
+            scene["htmlStatus"] = "pending"
+        else:
+            # Keep htmlStatus but mark as needing re-confirmation
+            if scene.get("htmlStatus") == "confirmed":
+                scene["htmlStatus"] = "previewing"
+
+    # Update project phase
+    if meta.get("phase") not in ("storyboard",):
+        meta["phase"] = "producing"
+    # Mark output as stale if it exists
+    output_mp4 = project_dir / "renders" / "output.mp4"
+    if output_mp4.is_file():
+        meta["outputStale"] = True
+
+
 def _load_video_meta(project_dir: Path) -> dict:
     """Load meta.json, return empty dict if missing."""
     meta_file = project_dir / "meta.json"
@@ -5811,11 +5926,33 @@ async def handle_video_project_storyboard(request: web.Request) -> web.Response:
             return err
         assert project_dir is not None
 
+        storyboard_path = project_dir / "storyboard.md"
+        storyboard_exists = storyboard_path.is_file()
+
         # Prefer meta.json scenes (source of truth); fallback to parsing storyboard.md
         meta = _load_video_meta(project_dir)
         scenes = meta.get("scenes")
         if isinstance(scenes, list) and scenes:
-            return web.json_response({"ok": True, "scenes": scenes, "source": "meta"})
+            # Attach current HTML file mtime so the client can bind confirmation
+            # to the exact previewed version (expectedMtime on confirm).
+            for scene in scenes:
+                idx = scene.get("index")
+                if idx is None:
+                    continue
+                scene_html = project_dir / "scenes" / f"scene_{int(idx):02d}.html"
+                if scene_html.is_file():
+                    try:
+                        scene["htmlMtime"] = scene_html.stat().st_mtime
+                    except OSError:
+                        scene.pop("htmlMtime", None)
+                else:
+                    scene.pop("htmlMtime", None)
+            return web.json_response({
+                "ok": True,
+                "scenes": scenes,
+                "source": "meta",
+                "storyboardExists": storyboard_exists,
+            })
 
         # Parse from storyboard.md and cache into meta.json
         import importlib.util
@@ -5827,12 +5964,25 @@ async def handle_video_project_storyboard(request: web.Request) -> web.Response:
             return web.json_response({"ok": False, "error": "parse script missing"})
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
-        scenes = mod.parse_storyboard(project_dir / "storyboard.md")
+        scenes = mod.parse_storyboard(storyboard_path)
         if scenes:
             meta["scenes"] = scenes
             meta.setdefault("phase", "storyboard")
             _save_video_meta(project_dir, meta)
-        return web.json_response({"ok": True, "scenes": scenes, "source": "storyboard"})
+        # Diagnostic: storyboard.md exists but no scenes parsed → format mismatch
+        parse_error = None
+        if storyboard_exists and not scenes:
+            parse_error = (
+                "storyboard.md 已生成但格式无法解析。请检查文件内容是否符合 "
+                "'### Scene N: <title>' 格式，或手动编辑后刷新。"
+            )
+        return web.json_response({
+            "ok": True,
+            "scenes": scenes,
+            "source": "storyboard",
+            "storyboardExists": storyboard_exists,
+            "parseError": parse_error,
+        })
     except Exception as e:
         logger.exception("video project storyboard error")
         return web.json_response({"error": str(e)}, status=500)
@@ -5886,6 +6036,7 @@ async def handle_video_project_scene_update(request: web.Request) -> web.Respons
             target["assets"] = assets if isinstance(assets, list) else []
 
         meta["scenes"] = scenes
+        _invalidate_video_outputs(project_dir, meta, {index}, reset_html=True)
         _save_video_meta(project_dir, meta)
         _sync_storyboard(project_dir, scenes)
         return web.json_response({"ok": True, "scene": target})
@@ -5916,6 +6067,7 @@ async def handle_video_project_scene_delete(request: web.Request) -> web.Respons
         for i, s in enumerate(scenes, start=1):
             s["index"] = i
         meta["scenes"] = scenes
+        _invalidate_video_outputs(project_dir, meta, None, reset_html=True)
         _save_video_meta(project_dir, meta)
         _sync_storyboard(project_dir, scenes)
         return web.json_response({"ok": True, "scenes": scenes})
@@ -5952,6 +6104,7 @@ async def handle_video_project_scene_add(request: web.Request) -> web.Response:
         }
         scenes.append(new_scene)
         meta["scenes"] = scenes
+        _invalidate_video_outputs(project_dir, meta, None, reset_html=True)
         _save_video_meta(project_dir, meta)
         _sync_storyboard(project_dir, scenes)
         return web.json_response({"ok": True, "scene": new_scene})
@@ -5995,6 +6148,7 @@ async def handle_video_project_scene_reorder(request: web.Request) -> web.Respon
             s["index"] = new_pos
             new_scenes.append(s)
         meta["scenes"] = new_scenes
+        _invalidate_video_outputs(project_dir, meta, None, reset_html=True)
         _save_video_meta(project_dir, meta)
         _sync_storyboard(project_dir, new_scenes)
         return web.json_response({"ok": True, "scenes": new_scenes})
@@ -6086,12 +6240,37 @@ async def handle_video_project_scene_narration(request: web.Request) -> web.Resp
                 voice=voice or "zh-CN-XiaoyiNeural", rate=rate
             )
         elif provider_name == "custom":
-            api_base = str(meta.get("ttsApiBase") or "").strip()
-            api_key = str(meta.get("ttsApiKey") or "").strip()
-            model = str(meta.get("ttsModel") or "tts-1").strip() or "tts-1"
+            # Project-level credentials (legacy) take precedence; otherwise fall
+            # back to the global ChannelsConfig TTS settings so new projects
+            # never store API keys in meta.json.
+            try:
+                from mona.config.loader import load_config
+
+                channels_cfg = load_config().channels
+            except Exception:
+                channels_cfg = None
+            api_base = str(meta.get("ttsApiBase") or "").strip() or (
+                str(getattr(channels_cfg, "tts_api_base", "") or "").strip()
+                if channels_cfg is not None
+                else ""
+            )
+            api_key = str(meta.get("ttsApiKey") or "").strip() or (
+                str(getattr(channels_cfg, "tts_api_key", "") or "").strip()
+                if channels_cfg is not None
+                else ""
+            )
+            model = (
+                str(meta.get("ttsModel") or "").strip()
+                or (
+                    str(getattr(channels_cfg, "tts_model", "") or "").strip()
+                    if channels_cfg is not None
+                    else ""
+                )
+                or "tts-1"
+            )
             if not api_base or not api_key:
                 return web.json_response(
-                    {"error": "custom TTS requires ttsApiBase and ttsApiKey"},
+                    {"error": "custom TTS requires apiBase/apiKey — 请在设置页配置语音合成"},
                     status=409,
                 )
             provider = get_tts_provider(
@@ -6178,7 +6357,6 @@ async def _generate_scene_html_via_llm(
             {"role": "user", "content": user_msg},
         ],
         model=model,
-        max_tokens=4096,
         temperature=0.4,
     )
     html = (resp.content or "").strip()
@@ -6190,6 +6368,19 @@ async def _generate_scene_html_via_llm(
         if lines and lines[-1].startswith("```"):
             lines = lines[:-1]
         html = "\n".join(lines).strip()
+
+    # 检测截断:LLM 因 max_tokens 不足被强制截断时 finish_reason="length"
+    if getattr(resp, "finish_reason", "") == "length":
+        raise RuntimeError(
+            f"LLM 输出被截断 (finish_reason=length)，当前 max_tokens 不足生成完整 HTML。"
+            f"请在 config.json 中提高 generation.max_tokens (建议 ≥16384)。"
+        )
+    # 校验 HTML 完整性:必须包含闭合标签,避免写入残缺文件导致预览空白
+    if not re.search(r"</(html|body)>", html, re.IGNORECASE):
+        raise RuntimeError(
+            "LLM 返回的 HTML 不完整 (缺少 </body> 或 </html> 闭合标签)，"
+            "可能是输出被截断或模型未生成完整内容。"
+        )
     return html
 
 
@@ -6219,6 +6410,8 @@ async def handle_video_ai_scene_html(request: web.Request) -> web.Response:
         if target is None:
             return web.json_response({"error": "scene not found"}, status=404)
 
+        # Clear stale confirmation / mark outputs before regenerating
+        _invalidate_video_outputs(project_dir, meta, {index}, reset_html=False)
         # Mark as generating
         target["htmlStatus"] = "generating"
         _save_video_meta(project_dir, meta)
@@ -6269,9 +6462,21 @@ async def handle_video_project_scene_preview(request: web.Request) -> web.Respon
                 {"error": "scene HTML not generated yet", "needsGeneration": True},
                 status=404,
             )
-        html = scene_path.read_text(encoding="utf-8")
+        scene_html = scene_path.read_text(encoding="utf-8")
+
+        meta = _load_video_meta(project_dir)
+        resolution = str(meta.get("resolution") or "1920x1080@30fps")
+        res_match = re.match(r"(\d+)\s*x\s*(\d+)", resolution)
+        if res_match:
+            width, height = int(res_match.group(1)), int(res_match.group(2))
+        else:
+            width, height = 1920, 1080
+
+        preview_html = _prepare_scene_html_for_preview(
+            scene_html, name, width, height
+        )
         return web.Response(
-            body=html.encode("utf-8"),
+            body=preview_html.encode("utf-8"),
             content_type="text/html",
             charset="utf-8",
         )
@@ -6281,9 +6486,10 @@ async def handle_video_project_scene_preview(request: web.Request) -> web.Respon
 
 
 async def handle_video_project_scene_confirm(request: web.Request) -> web.Response:
-    """POST /api/video/project/scene/confirm  body: {name, index}.
+    """POST /api/video/project/scene/confirm  body: {name, index, expectedMtime?}.
 
     Mark a scene as confirmed. If all scenes confirmed, update meta.phase to 'exportable'.
+    Validates that the scene HTML exists and its mtime matches expectedMtime.
     """
     try:
         body = await request.json()
@@ -6298,6 +6504,9 @@ async def handle_video_project_scene_confirm(request: web.Request) -> web.Respon
         index = int(body.get("index", 0) or 0)
         if index < 1:
             return web.json_response({"error": "invalid index"}, status=400)
+        expected_mtime = body.get("expectedMtime")
+        if expected_mtime is not None:
+            expected_mtime = float(expected_mtime)
 
         meta = _load_video_meta(project_dir)
         scenes = meta.get("scenes") or []
@@ -6305,10 +6514,31 @@ async def handle_video_project_scene_confirm(request: web.Request) -> web.Respon
         if target is None:
             return web.json_response({"error": "scene not found"}, status=404)
 
+        # 1. Check htmlStatus is previewing
+        if target.get("htmlStatus") != "previewing":
+            return web.json_response(
+                {"error": "SCENE_NOT_PREVIEWABLE"}, status=409
+            )
+
+        # 2. Check HTML file exists
+        scene_path = project_dir / "scenes" / f"scene_{index:02d}.html"
+        if not scene_path.is_file():
+            return web.json_response(
+                {"error": "SCENE_NOT_PREVIEWABLE"}, status=409
+            )
+
+        # 3. Check mtime matches expected
+        actual_mtime = scene_path.stat().st_mtime
+        if expected_mtime is not None and actual_mtime != expected_mtime:
+            return web.json_response(
+                {"error": "SCENE_VERSION_CHANGED"}, status=409
+            )
+
         target["htmlStatus"] = "confirmed"
         target["confirmedAt"] = datetime.now().isoformat()
+        target["confirmedMtime"] = actual_mtime
 
-        all_confirmed = all(s.get("htmlStatus") == "confirmed" for s in scenes)
+        all_confirmed = _all_video_scenes_confirmed(project_dir, scenes)
         if all_confirmed:
             meta["phase"] = "exportable"
 
@@ -6350,6 +6580,9 @@ async def handle_video_project_scene_regenerate(request: web.Request) -> web.Res
         if target is None:
             return web.json_response({"error": "scene not found"}, status=404)
 
+        # Clear stale confirmation, mark output stale and roll phase back before
+        # regenerating (same contract as the scene-html endpoint).
+        _invalidate_video_outputs(project_dir, meta, {index}, reset_html=True)
         # Reset status and regenerate
         target["htmlStatus"] = "generating"
         _save_video_meta(project_dir, meta)
@@ -6477,6 +6710,7 @@ async def handle_video_ai_scene_rewrite(request: web.Request) -> web.Response:
                 scenes[i] = new_scene
                 break
         meta["scenes"] = scenes
+        _invalidate_video_outputs(project_dir, meta, {index}, reset_html=True)
         _save_video_meta(project_dir, meta)
         _sync_storyboard(project_dir, scenes)
 
@@ -6565,6 +6799,7 @@ async def _run_render_task(project_dir: Path, fps: int, quality: str) -> None:
             meta = _load_video_meta(project_dir)
             meta["phase"] = "done"
             meta["hasVideo"] = True
+            meta["outputStale"] = False
             _save_video_meta(project_dir, meta)
         else:
             _write_render_status(project_dir, {
@@ -6574,6 +6809,10 @@ async def _run_render_task(project_dir: Path, fps: int, quality: str) -> None:
                 "need_download": result.get("need_download", False),
                 "finished_at": datetime.now().isoformat(),
             })
+            # Restore phase to exportable on failure
+            meta = _load_video_meta(project_dir)
+            meta["phase"] = "exportable"
+            _save_video_meta(project_dir, meta)
     except Exception as e:
         logger.exception("video render task error")
         _write_render_status(project_dir, {
@@ -6582,14 +6821,19 @@ async def _run_render_task(project_dir: Path, fps: int, quality: str) -> None:
             "message": str(e)[:500],
             "finished_at": datetime.now().isoformat(),
         })
+        # Restore phase to exportable on failure
+        meta = _load_video_meta(project_dir)
+        meta["phase"] = "exportable"
+        _save_video_meta(project_dir, meta)
     finally:
         _video_render_tasks.pop(name, None)
 
 
 async def handle_video_project_export(request: web.Request) -> web.Response:
-    """POST /api/video/project/export  body: {name, fps?, quality?}.
+    """POST /api/video/project/export  body: {name, quality?}.
 
     Triggers MP4 rendering in background. Returns immediately with status.
+    Validates all scenes are confirmed before allowing export.
     """
     try:
         body = await request.json()
@@ -6611,13 +6855,25 @@ async def handle_video_project_export(request: web.Request) -> web.Response:
             )
 
         meta = _load_video_meta(project_dir)
-        fps = int(body.get("fps", 0) or 0)
+        scenes = meta.get("scenes") or []
+        if not scenes:
+            return web.json_response(
+                {"error": "SCENES_NOT_CONFIRMED", "detail": "No scenes found"}, status=409
+            )
+        # Check all scenes are confirmed against their current HTML version
+        for scene in scenes:
+            if not _video_scene_confirmed_current(project_dir, scene):
+                return web.json_response(
+                    {"error": "SCENES_NOT_CONFIRMED", "detail": f"Scene {scene.get('index')} not confirmed"},
+                    status=409,
+                )
+
         quality = str(body.get("quality", "standard") or "standard")
         if quality not in ("draft", "standard", "high"):
             quality = "standard"
-        # Use meta fps as fallback
-        if fps <= 0:
-            fps = int(meta.get("fps", 30) or 30)
+
+        # fps=0 lets render.py apply the quality preset (draft=24, standard=30, high=60)
+        fps = 0
 
         # Clear any previous render status
         _write_render_status(project_dir, {
@@ -6626,6 +6882,10 @@ async def handle_video_project_export(request: web.Request) -> web.Response:
             "message": "准备渲染...",
             "started_at": datetime.now().isoformat(),
         })
+
+        # Mark project as rendering
+        meta["phase"] = "rendering"
+        _save_video_meta(project_dir, meta)
 
         task = asyncio.create_task(_run_render_task(project_dir, fps, quality))
         _video_render_tasks[name] = task
@@ -6649,19 +6909,36 @@ async def handle_video_project_export_status(request: web.Request) -> web.Respon
             return err
         assert project_dir is not None
         status = _read_render_status(project_dir)
-        # Include output.mp4 existence flag
-        output_mp4 = project_dir / "renders" / "output.mp4"
-        status["hasVideo"] = output_mp4.is_file()
-        return web.json_response({"ok": True, **status})
+        # Map snake_case to camelCase for API boundary
+        result = {
+            "stage": status.get("stage", "idle"),
+            "progress": status.get("progress", 0),
+            "message": status.get("message"),
+            "output": status.get("output"),
+            "duration": status.get("duration"),
+            "fps": status.get("fps"),
+            "resolution": status.get("resolution"),
+            "audio": status.get("audio"),
+            "totalFrames": status.get("total_frames"),
+            "needDownload": status.get("need_download"),
+            "startedAt": status.get("started_at"),
+            "finishedAt": status.get("finished_at"),
+            "hasVideo": (project_dir / "renders" / "output.mp4").is_file(),
+        }
+        # Remove None values
+        result = {k: v for k, v in result.items() if v is not None}
+        return web.json_response({"ok": True, **result})
     except Exception as e:
         logger.exception("video export status error")
         return web.json_response({"error": str(e)}, status=500)
 
 
 async def handle_video_project_preview_full(request: web.Request) -> web.Response:
-    """GET /api/video/project/preview-full?name=  → returns index.html content.
+    """GET /api/video/project/preview-full?name=  → returns inline preview HTML.
 
-    If index.html does not exist, attempts to generate it from scenes/.
+    Builds a self-contained preview page that plays every scene in sequence by
+    creating per-scene iframes from blob URLs. This avoids 404s caused by
+    relative ``scenes/scene_*.html`` paths inside a standalone ``index.html``.
     """
     try:
         name = str(request.query.get("name", "") or "").strip()
@@ -6670,42 +6947,301 @@ async def handle_video_project_preview_full(request: web.Request) -> web.Respons
             return err
         assert project_dir is not None
 
-        index_html = project_dir / "index.html"
-        if not index_html.is_file():
-            # Try to generate via merge_scenes.py
-            import importlib.util
+        skill_dir = Path(__file__).parent.parent / "skills" / "mona-video"
+        script = skill_dir / "scripts" / "merge_scenes.py"
+        if not script.is_file():
+            return web.json_response(
+                {"error": "merge_scenes.py not found"},
+                status=500,
+            )
 
-            skill_dir = Path(__file__).parent.parent / "skills" / "mona-video"
-            script = skill_dir / "scripts" / "merge_scenes.py"
-            if script.is_file():
-                spec = importlib.util.spec_from_file_location("merge_scenes", script)
-                if spec is not None and spec.loader is not None:
-                    mod = importlib.util.module_from_spec(spec)
-                    spec.loader.exec_module(mod)
-                    mod.main(str(project_dir))
-            if not index_html.is_file():
-                return web.json_response(
-                    {"error": "index.html not found and no scenes to merge"},
-                    status=404,
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("merge_scenes", script)
+        if spec is None or spec.loader is None:
+            return web.json_response(
+                {"error": "failed to load merge_scenes.py"},
+                status=500,
+            )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        scenes_dir = project_dir / "scenes"
+        if not scenes_dir.is_dir():
+            return web.json_response(
+                {"error": "scenes directory not found"},
+                status=404,
+            )
+
+        scenes = mod.list_scenes(scenes_dir)
+        if not scenes:
+            return web.json_response(
+                {"error": "no scene files found"},
+                status=404,
+            )
+
+        storyboard = mod.parse_storyboard(project_dir / "storyboard.md")
+        timeline, total_duration = mod.compute_timeline(scenes, storyboard)
+        width, height = storyboard.get("resolution") or (
+            mod.DEFAULT_WIDTH,
+            mod.DEFAULT_HEIGHT,
+        )
+
+        scene_entries: list[tuple[int, float, str]] = []
+        for num, path, _start, duration in timeline:
+            try:
+                scene_html = path.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            scene_entries.append(
+                (
+                    num,
+                    duration,
+                    _prepare_scene_html_for_preview(scene_html, name, width, height),
                 )
+            )
 
-        content = index_html.read_text(encoding="utf-8")
-        return web.Response(body=content, content_type="text/html")
+        if not scene_entries:
+            return web.json_response(
+                {"error": "no scene content could be read"},
+                status=404,
+            )
+
+        preview_html = _build_video_preview_html(
+            width, height, total_duration, scene_entries
+        )
+        return web.Response(body=preview_html, content_type="text/html")
     except Exception as e:
         logger.exception("video preview full error")
         return web.json_response({"error": str(e)}, status=500)
 
 
+def _prepare_scene_html_for_preview(
+    html: str,
+    project_name: str,
+    width: int,
+    height: int,
+) -> str:
+    """Make a scene HTML safe and responsive inside an iframe preview.
+
+    - Rewrites relative asset paths (``../assets/`` / ``./assets/``) to absolute
+      ``/api/video/project-file`` URLs so they resolve when the scene is shown
+      via ``srcdoc`` or a data URL.
+    - Injects a small script that scales the scene body to fit the iframe while
+      preserving the original design aspect ratio.
+    """
+    base_url = f"/api/video/project-file?name={project_name}&path="
+
+    # src="../assets/foo.png" / url(../assets/foo.png) / url("../assets/foo.png")
+    html = re.sub(
+        r'(?i)(src\s*=\s*["\']|url\(\s*["\']?)\.\.?/assets/(.+?)(["\']?\))',
+        lambda m: f'{m.group(1)}{base_url}assets/{m.group(2)}{m.group(3)}',
+        html,
+    )
+
+    fit_script = f"""
+<script>
+(function() {{
+  const designW = {width};
+  const designH = {height};
+  function fit() {{
+    const scale = Math.min(window.innerWidth / designW, window.innerHeight / designH);
+    document.body.style.width = designW + 'px';
+    document.body.style.height = designH + 'px';
+    document.body.style.transform = 'scale(' + scale + ')';
+    document.body.style.transformOrigin = 'center center';
+    document.body.style.position = 'absolute';
+    document.body.style.left = '50%';
+    document.body.style.top = '50%';
+    document.body.style.marginLeft = (-designW / 2) + 'px';
+    document.body.style.marginTop = (-designH / 2) + 'px';
+    document.documentElement.style.overflow = 'hidden';
+  }}
+  if (document.readyState === 'loading') {{
+    document.addEventListener('DOMContentLoaded', fit);
+  }} else {{
+    fit();
+  }}
+  window.addEventListener('resize', fit);
+}})();
+</script>
+"""
+    if "</body>" in html:
+        html = html.replace("</body>", f"{fit_script}</body>", 1)
+    else:
+        html += fit_script
+    return html
+
+
+def _build_video_preview_html(
+    width: int,
+    height: int,
+    total_duration: float,
+    scene_entries: list[tuple[int, float, str]],
+) -> str:
+    """Return a self-contained HTML page that plays scenes sequentially.
+
+    Each scene is injected as an iframe ``srcdoc`` so relative paths inside the
+    scene HTML can be rewritten to absolute project-file URLs.
+    """
+    entries_json = _json.dumps(
+        [
+            [num, duration, html.escape(srcdoc, quote=True)]
+            for num, duration, srcdoc in scene_entries
+        ],
+        ensure_ascii=False,
+    )
+    return f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>Video Preview</title>
+  <style>
+    html, body {{
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #000;
+    }}
+    #stage {{
+      position: relative;
+      width: 100%;
+      height: 100%;
+    }}
+    .scene-frame {{
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      border: 0;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s ease;
+    }}
+    .scene-frame.active {{
+      opacity: 1;
+      pointer-events: auto;
+    }}
+    #progress {{
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      height: 3px;
+      background: rgba(255,255,255,0.6);
+      width: 0%;
+      z-index: 10;
+    }}
+  </style>
+</head>
+<body>
+  <div id="stage"></div>
+  <div id="progress"></div>
+  <script>
+    const entries = {entries_json};
+    const stage = document.getElementById('stage');
+    const progress = document.getElementById('progress');
+    const totalDuration = {total_duration};
+
+    entries.forEach(([num, duration, srcdoc], index) => {{
+      const iframe = document.createElement('iframe');
+      iframe.className = 'scene-frame';
+      iframe.srcdoc = srcdoc;
+      iframe.title = 'scene-' + num;
+      iframe.sandbox = 'allow-scripts allow-same-origin';
+      if (index === 0) iframe.classList.add('active');
+      stage.appendChild(iframe);
+    }});
+
+    const frames = Array.from(stage.querySelectorAll('.scene-frame'));
+    let currentIndex = 0;
+    const startTime = performance.now();
+
+    function tick(now) {{
+      const elapsed = (now - startTime) / 1000;
+      progress.style.width = Math.min(100, (elapsed / totalDuration) * 100) + '%';
+
+      let acc = 0;
+      let nextIndex = -1;
+      for (let i = 0; i < entries.length; i++) {{
+        const dur = Math.max(0.1, entries[i][1]);
+        if (elapsed >= acc && elapsed < acc + dur) {{
+          nextIndex = i;
+          break;
+        }}
+        acc += dur;
+      }}
+      if (nextIndex === -1 && elapsed >= totalDuration) {{
+        nextIndex = entries.length - 1;
+      }}
+      if (nextIndex >= 0 && nextIndex !== currentIndex) {{
+        frames[currentIndex].classList.remove('active');
+        frames[nextIndex].classList.add('active');
+        currentIndex = nextIndex;
+      }}
+      if (elapsed < totalDuration) {{
+        requestAnimationFrame(tick);
+      }}
+    }}
+    requestAnimationFrame(tick);
+  </script>
+</body>
+</html>"""
+
+
+_CORS_ALLOWED_HEADERS = "Content-Type, Authorization, X-Mona-Token"
+
+
+def _cors_allow_origin(request_origin: str | None) -> str | None:
+    """Return the origin to echo back, or None when not allowed.
+
+    私有本地 API 不使用 `Access-Control-Allow-Origin: *`：只允许 Tauri
+    webview 源与 loopback 开发源，其余 Origin 不下发 CORS 头（浏览器会拦截）。
+    非浏览器消费者（Rust 本地桥、令牌调用方）不携带 Origin，不受影响。
+    """
+    if not request_origin:
+        return None
+    if request_origin in (
+        "tauri://localhost",
+        "http://tauri.localhost",
+        "https://tauri.localhost",
+    ):
+        return request_origin
+    try:
+        from urllib.parse import urlparse
+
+        parsed = urlparse(request_origin)
+    except ValueError:
+        return None
+    if parsed.scheme != "http":
+        return None
+    host = parsed.hostname or ""
+    if host == "localhost":
+        return request_origin
+    try:
+        import ipaddress
+
+        if ipaddress.ip_address(host).is_loopback:
+            return request_origin
+    except ValueError:
+        return None
+    return None
+
+
 @web.middleware
 async def _cors_middleware(request: web.Request, handler: Callable) -> web.StreamResponse:
-    """Add permissive CORS headers so browser apps can call the API directly."""
+    """Add CORS headers for the Tauri webview / loopback dev origins only."""
+    allow_origin = _cors_allow_origin(request.headers.get("Origin"))
     if request.method == "OPTIONS":
         resp = web.Response(status=204)
     else:
         resp = await handler(request)
-    resp.headers["Access-Control-Allow-Origin"] = "*"
-    resp.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
-    resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+    if allow_origin is not None:
+        resp.headers["Access-Control-Allow-Origin"] = allow_origin
+        resp.headers["Vary"] = "Origin"
+    resp.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+    resp.headers["Access-Control-Allow-Headers"] = _CORS_ALLOWED_HEADERS
     return resp
 
 

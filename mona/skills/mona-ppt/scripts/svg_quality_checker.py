@@ -185,8 +185,9 @@ class SVGQualityChecker:
         "04_ending": (),  # ending pages legitimately use varied vocabularies
     }
 
-    def __init__(self, *, template_mode: bool = False):
+    def __init__(self, *, template_mode: bool = False, fix_mode: bool = False):
         self.template_mode = template_mode
+        self.fix_mode = fix_mode
         self.results = []
         self.summary = {
             'total': 0,
@@ -250,7 +251,33 @@ class SVGQualityChecker:
             # 0. Check XML well-formedness — every other check assumes the file
             # is valid XML.  Bail early on failure so the regex-based checks
             # below don't produce misleading errors on a broken document.
-            if self._check_xml_well_formed(content, result):
+            xml_ok = self._check_xml_well_formed(content, result)
+            if not xml_ok and self.fix_mode:
+                fixed = self._fix_xml_entities(content)
+                try:
+                    ET.fromstring(fixed)
+                    with open(svg_path, 'w', encoding='utf-8') as f:
+                        f.write(fixed)
+                    content = fixed
+                    # Drop the XML error we just recorded; the file is now valid.
+                    result['errors'] = [
+                        e for e in result['errors']
+                        if not e.startswith("Invalid XML:")
+                    ]
+                    result['warnings'].append(
+                        "Malformed XML entities were automatically repaired and saved."
+                    )
+                    xml_ok = True
+                except ET.ParseError as e:
+                    result['errors'].append(
+                        f"Automatic XML repair failed: {e}"
+                    )
+                except OSError as e:
+                    result['errors'].append(
+                        f"Automatic XML repair failed to write file: {e}"
+                    )
+
+            if xml_ok:
                 # 1. Check viewBox
                 self._check_viewbox(content, result, expected_format)
 
@@ -333,6 +360,41 @@ class SVGQualityChecker:
                 f"(see references/shared-standards.md §1)."
             )
             return False
+
+    @staticmethod
+    def _fix_xml_entities(content: str) -> str:
+        """Repair common XML entity errors so the SVG parses as well-formed XML.
+
+        Mirrors the defensive sanitizer used when serving SVGs to the browser:
+        preserve XML builtin entities and numeric character references, convert
+        known HTML named entities to raw Unicode, and escape any remaining bare
+        ``&`` characters.
+        """
+        xml_builtin = {"amp", "lt", "gt", "quot", "apos"}
+        entity_re = re.compile(r"&([A-Za-z_][A-Za-z0-9_]*|#[0-9]+|#x[0-9A-Fa-f]+);")
+
+        def _replace_entity(m: re.Match) -> str:
+            ref = m.group(1)
+            if ref in xml_builtin:
+                return m.group(0)
+            if re.fullmatch(r"#[0-9]+|#x[0-9A-Fa-f]+", ref):
+                return m.group(0)
+            expanded = html.unescape(m.group(0))
+            if expanded != m.group(0):
+                return expanded
+            return "&amp;" + ref + ";"
+
+        content = entity_re.sub(_replace_entity, content)
+        content = re.sub(
+            r"&(?!amp;|lt;|gt;|quot;|apos;|#[0-9]+;|#x[0-9A-Fa-f]+;)",
+            "&amp;",
+            content,
+        )
+        # Escape bare '<' in text content (not tag/comment/PI starts).
+        content = re.sub(r"<(?![A-Za-z/!?])", "&lt;", content)
+        # Escape ']]>' sequences (illegal in XML text outside CDATA).
+        content = re.sub("]]>", "]]&gt;", content)
+        return content
 
     def _check_viewbox(self, content: str, result: Dict, expected_format: str = None):
         """Check viewBox attribute"""
@@ -1419,6 +1481,7 @@ def print_usage() -> None:
     print("  python3 scripts/svg_quality_checker.py templates/decks/招商银行 --template-mode")
     print("\nOptions:")
     print("  --format <ppt169|ppt43|...>   Expected canvas format")
+    print("  --fix                         Repair common XML entity errors in-place")
     print("  --template-mode               Validate a templates/{layouts,decks}/<id> directory:")
     print("                                  glob *.svg directly, skip spec_lock checks,")
     print("                                  enforce roster ↔ design_spec.md Page Roster consistency,")
@@ -1441,7 +1504,8 @@ def main() -> None:
         sys.exit(1)
 
     template_mode = '--template-mode' in sys.argv
-    checker = SVGQualityChecker(template_mode=template_mode)
+    fix_mode = '--fix' in sys.argv
+    checker = SVGQualityChecker(template_mode=template_mode, fix_mode=fix_mode)
 
     # Parse arguments
     target = sys.argv[1]

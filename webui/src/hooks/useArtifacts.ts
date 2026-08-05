@@ -17,6 +17,9 @@ interface UseArtifactsResult {
  *  - Re-fetches when ``token`` changes, when the caller bumps ``refreshSignal``
  *    (e.g. on ``turn_end`` or after settings/restart), or when the user
  *    clicks the manual refresh button.
+ *  - A refresh that arrives mid-flight is never dropped: it is recorded as
+ *    pending and coalesced into exactly one trailing run once the current
+ *    request settles (shared ``controlRef`` survives effect re-runs).
  *  - Mid-turn ``deliver_file`` / ``file_edit`` events are merged by the
  *    caller (ThreadShell); this hook only owns the authoritative on-disk
  *    snapshot.
@@ -30,15 +33,19 @@ export function useArtifacts(
   const [error, setError] = useState<string | null>(null);
   const [truncated, setTruncated] = useState(false);
   const [refreshTick, setRefreshTick] = useState(0);
-  const inFlight = useRef(false);
+  const controlRef = useRef({ running: false, pending: false });
 
   const refresh = useCallback(() => setRefreshTick((t) => t + 1), []);
 
   useEffect(() => {
     if (!token) return;
-    if (inFlight.current) return;
+    const control = controlRef.current;
+    if (control.running) {
+      control.pending = true;
+      return;
+    }
     let cancelled = false;
-    inFlight.current = true;
+    control.running = true;
     setLoading(true);
     setError(null);
     (async () => {
@@ -51,8 +58,12 @@ export function useArtifacts(
         if (cancelled) return;
         setError(err instanceof Error ? err.message : String(err));
       } finally {
+        control.running = false;
         if (!cancelled) setLoading(false);
-        inFlight.current = false;
+        if (control.pending) {
+          control.pending = false;
+          setRefreshTick((t) => t + 1);
+        }
       }
     })();
     return () => {

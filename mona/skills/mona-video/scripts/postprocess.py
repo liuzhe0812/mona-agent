@@ -20,10 +20,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-if os.name == "nt" and hasattr(sys.stdout, "buffer"):
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
-
 
 def _resolve_ffmpeg() -> str | None:
     for candidate in ("ffmpeg",):
@@ -161,6 +157,12 @@ def postprocess_project(
 
 
 def _cli() -> None:
+    # Only redirect stdout/stderr when run as a CLI script — never when imported
+    # as a module (would corrupt the host process's stdout and deadlock aiohttp).
+    if os.name == "nt" and hasattr(sys.stdout, "buffer"):
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+
     parser = argparse.ArgumentParser(
         description="Postprocess video: mix narration + BGM and mux into silent MP4",
     )

@@ -21,7 +21,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
-import io
 import json
 import os
 import re
@@ -30,10 +29,6 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-
-if os.name == "nt" and hasattr(sys.stdout, "buffer"):
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 sys.path.insert(0, str(Path(__file__).parent))
 from check_edge import find_browser  # noqa: E402
@@ -163,32 +158,31 @@ def _start_chrome(browser: str, port: int, width: int, height: int, user_data_di
 
 
 def _read_devtools_url(proc: subprocess.Popen, port: int, *, timeout: float = 15.0) -> str:
-    """Read the DevTools WebSocket URL from Chrome stderr or via HTTP."""
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        # Try HTTP first (more reliable)
-        try:
-            import urllib.request
+    """Read the DevTools WebSocket URL for a **page-level** target.
 
+    ``/json/version`` returns the browser-level ``webSocketDebuggerUrl``,
+    which does NOT support page domains (Page, Runtime, Emulation, etc.).
+    We must connect to a page-level target from ``/json/list`` instead.
+    """
+    deadline = time.monotonic() + timeout
+    import urllib.request
+
+    while time.monotonic() < deadline:
+        # Query /json/list to find page-level targets
+        try:
             with urllib.request.urlopen(
-                f"http://127.0.0.1:{port}/json/version", timeout=2
+                f"http://127.0.0.1:{port}/json/list", timeout=2
             ) as r:
-                data = json.loads(r.read().decode("utf-8"))
-                ws_url = data.get("webSocketDebuggerUrl")
-                if ws_url:
-                    return ws_url
+                targets = json.loads(r.read().decode("utf-8"))
+                for target in targets:
+                    if target.get("type") == "page":
+                        ws_url = target.get("webSocketDebuggerUrl")
+                        if ws_url:
+                            return ws_url
         except Exception:
             pass
-        # Try stderr
-        if proc.stderr is not None:
-            line = proc.stderr.readline()
-            if line:
-                text = line.decode("utf-8", errors="replace")
-                m = re.search(r"ws://[^\s]+", text)
-                if m:
-                    return m.group(0)
         time.sleep(0.2)
-    raise RuntimeError(f"Chrome DevTools URL not found on port {port}")
+    raise RuntimeError(f"Chrome DevTools page target not found on port {port}")
 
 
 # ---------------------------------------------------------------------------
@@ -245,15 +239,58 @@ async def _render_scene(
 ) -> int:
     """Render one scene to a sequence of PNGs. Returns frame count."""
     file_url = scene_path.resolve().as_uri()
-    await _cdp_call(ws, "Page.enable")
-    await _cdp_call(ws, "Emulation.setDeviceMetricsOverride", {
-        "width": width,
-        "height": height,
-        "deviceScaleFactor": 1,
-        "mobile": False,
-    })
-    await _cdp_call(ws, "Page.navigate", {"url": file_url})
-    await _wait_for_event(ws, "Page.loadEventFired", timeout=30.0)
+
+    # Some Chromium builds (e.g. chrome-headless-shell) do not expose the Page
+    # domain. Enable it when available and fall back to ready-state polling.
+    page_enabled = False
+    try:
+        await _cdp_call(ws, "Page.enable")
+        page_enabled = True
+    except RuntimeError as e:
+        if "wasn't found" in str(e):
+            print(f"Warning: Page.enable not supported, using polling fallback", file=sys.stderr)
+        else:
+            raise
+
+    # chrome-headless-shell may not expose the Emulation domain either.
+    try:
+        await _cdp_call(ws, "Emulation.setDeviceMetricsOverride", {
+            "width": width,
+            "height": height,
+            "deviceScaleFactor": 1,
+            "mobile": False,
+        })
+    except RuntimeError as e:
+        if "wasn't found" in str(e):
+            print("Warning: Emulation.setDeviceMetricsOverride not supported, relying on --window-size", file=sys.stderr)
+        else:
+            raise
+
+    # Page.navigate is also missing from chrome-headless-shell. Fall back to
+    # a Runtime.evaluate navigation via window.location.
+    try:
+        await _cdp_call(ws, "Page.navigate", {"url": file_url})
+    except RuntimeError as e:
+        if "wasn't found" in str(e):
+            print("Warning: Page.navigate not supported, using window.location fallback", file=sys.stderr)
+            await _cdp_call(ws, "Runtime.evaluate", {
+                "expression": f"window.location.href = {json.dumps(file_url)}",
+                "returnByValue": True,
+            })
+        else:
+            raise
+
+    if page_enabled:
+        await _wait_for_event(ws, "Page.loadEventFired", timeout=30.0)
+    else:
+        for _ in range(300):
+            result = await _cdp_call(ws, "Runtime.evaluate", {
+                "expression": "document.readyState === 'complete'",
+                "returnByValue": True,
+            })
+            if result.get("result", {}).get("value") is True:
+                break
+            await asyncio.sleep(0.1)
 
     # Wait for GSAP to be ready (poll up to 5s)
     for _ in range(50):
@@ -360,6 +397,32 @@ def _mux_audio(silent_mp4: Path, narration_mp3: Path, output_mp4: Path) -> bool:
         raise RuntimeError(f"FFmpeg mux failed: {stderr.strip()[:500]}") from e
 
 
+def _concat_scene_audio(scene_mp3s: list[Path], output_mp3: Path) -> bool:
+    """Concatenate per-scene MP3s into a single narration.mp3 via FFmpeg concat demuxer."""
+    ffmpeg = _resolve_ffmpeg()
+    if ffmpeg is None or not scene_mp3s:
+        return False
+    concat_list = output_mp3.parent / "concat_list.txt"
+    # 用绝对路径避免 ffmpeg concat demuxer 的相对路径解析问题
+    concat_lines = [f"file '{p.resolve().as_posix()}'" for p in scene_mp3s]
+    concat_list.write_text("\n".join(concat_lines) + "\n", encoding="utf-8")
+    cmd = [
+        ffmpeg,
+        "-y",
+        "-f", "concat",
+        "-safe", "0",
+        "-i", str(concat_list),
+        "-c", "copy",
+        str(output_mp3),
+    ]
+    try:
+        subprocess.run(cmd, check=True, capture_output=True)
+        return True
+    except subprocess.CalledProcessError as e:
+        stderr = e.stderr.decode("utf-8", errors="replace") if e.stderr else ""
+        raise RuntimeError(f"FFmpeg audio concat failed: {stderr.strip()[:500]}") from e
+
+
 # ---------------------------------------------------------------------------
 # Main render entry
 # ---------------------------------------------------------------------------
@@ -400,7 +463,10 @@ async def render_project_async(
     if not browser:
         return {
             "ok": False,
-            "error": "No browser found. Please install Edge/Chrome or download Chrome Headless Shell.",
+            "error": (
+                "未找到可用于视频渲染的浏览器。"
+                "请安装完整版 Google Chrome 或 Microsoft Edge（chrome-headless-shell 不支持所需 CDP 命令）。"
+            ),
             "need_download": True,
         }
 
@@ -456,11 +522,19 @@ async def render_project_async(
 
         # Mux audio if narration exists
         narration_mp3 = project / "audio" / "narration.mp3"
+        # 若 narration.mp3 不存在但已有分镜音频,自动拼接(synthesize_narration
+        # 可能因单场景失败中断而未执行 concat)
+        if not narration_mp3.is_file():
+            scene_mp3s = sorted((project / "audio").glob("scene_*.mp3"))
+            if scene_mp3s:
+                _concat_scene_audio(scene_mp3s, narration_mp3)
         if narration_mp3.is_file():
             _mux_audio(silent_mp4, narration_mp3, output_mp4)
         else:
             # Rename silent.mp4 to output.mp4
-            silent_mp4.rename(output_mp4)
+            # Windows 上 Path.rename 不会覆盖已存在文件(抛 WinError 183),
+            # 用 Path.replace 保证覆盖
+            silent_mp4.replace(output_mp4)
 
         return {
             "ok": True,

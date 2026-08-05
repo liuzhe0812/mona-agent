@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 // 文档加工 tab 暂隐藏，对应的 lazy import 一并注释。
 // const OfficeWorkbenchView = lazy(() =>
@@ -15,7 +16,11 @@ const VideoMakerView = lazy(() =>
   import("@/components/doc/video/VideoMakerView").then((m) => ({ default: m.VideoMakerView })),
 );
 
-type DocTab = "doc" | "ppt" | "video";
+const ThreeDMakerView = lazy(() =>
+  import("@/components/doc/three/ThreeDMakerView").then((m) => ({ default: m.ThreeDMakerView })),
+);
+
+type DocTab = "doc" | "ppt" | "video" | "3d";
 
 // 文档加工（doc）tab 暂隐藏：内嵌 Office 协作编辑体验未达预期，
 // 待引入 OnlyOffice/Univer 后恢复。TABS 里保留条目仅为类型兼容，
@@ -23,6 +28,7 @@ type DocTab = "doc" | "ppt" | "video";
 const VISIBLE_TABS: Array<{ key: DocTab; label: string }> = [
   { key: "ppt", label: "PPT" },
   { key: "video", label: "视频" },
+  { key: "3d", label: "3D" },
 ];
 
 const STORAGE_KEY = "mona.doc.activeTab";
@@ -30,7 +36,7 @@ const STORAGE_KEY = "mona.doc.activeTab";
 function loadActiveTab(): DocTab {
   try {
     const v = localStorage.getItem(STORAGE_KEY);
-    if (v === "ppt" || v === "video") return v;
+    if (v === "ppt" || v === "video" || v === "3d") return v;
   } catch {
     // ignore
   }
@@ -39,6 +45,16 @@ function loadActiveTab(): DocTab {
 
 export function DocMakerView() {
   const [activeTab, setActiveTab] = useState<DocTab>(loadActiveTab);
+
+  // 首次进入对应 tab 后保持挂载，切换 tab 时仅隐藏，避免制作过程中断
+  const [pptMounted, setPptMounted] = useState(activeTab === "ppt");
+  const [videoMounted, setVideoMounted] = useState(activeTab === "video");
+  const [threeMounted, setThreeMounted] = useState(activeTab === "3d");
+  useEffect(() => {
+    if (activeTab === "ppt") setPptMounted(true);
+    if (activeTab === "video") setVideoMounted(true);
+    if (activeTab === "3d") setThreeMounted(true);
+  }, [activeTab]);
 
   useEffect(() => {
     try {
@@ -65,17 +81,28 @@ export function DocMakerView() {
         ))}
       </div>
 
-      {/* tab 内容区 */}
-      <div className="relative flex-1 overflow-hidden">
-        {activeTab === "ppt" && (
-          <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-muted-foreground">正在打开 PPT 制作...</div>}>
-            <PptMakerView />
-          </Suspense>
+      {/* tab 内容区：已挂载的视图保持挂载，切换 tab 时仅隐藏 */}
+      <div className="relative isolate flex-1 overflow-hidden">
+        {pptMounted && (
+          <div className={cn("absolute inset-0 flex flex-col bg-background", activeTab !== "ppt" && "invisible pointer-events-none")}>
+            <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-muted-foreground">正在打开 PPT 制作...</div>}>
+              <PptMakerView />
+            </Suspense>
+          </div>
         )}
-        {activeTab === "video" && (
-          <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-muted-foreground">正在打开视频制作...</div>}>
-            <VideoMakerView />
-          </Suspense>
+        {videoMounted && (
+          <div className={cn("absolute inset-0 flex flex-col bg-background", activeTab !== "video" && "invisible pointer-events-none")}>
+            <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-muted-foreground">正在打开视频制作...</div>}>
+              <VideoMakerView />
+            </Suspense>
+          </div>
+        )}
+        {threeMounted && (
+          <div className={cn("absolute inset-0 flex flex-col bg-background", activeTab !== "3d" && "invisible pointer-events-none")}>
+            <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-muted-foreground">正在打开 3D 制作...</div>}>
+              <ThreeDMakerView />
+            </Suspense>
+          </div>
         )}
       </div>
     </div>

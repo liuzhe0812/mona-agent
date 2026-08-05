@@ -27,7 +27,22 @@ export type FlowchartNodeKind =
   | "database"
   | "annotation"
   | "subprocess"
-  | "input-output";
+  | "input-output"
+  // 对齐 NoteGen 的 11 种扩展形状
+  | "terminator"          // 胶囊（起止）
+  | "multi-document"      // 多文档
+  | "predefined-process"  // 预定义流程（带竖线）
+  | "manual-input"        // 手动输入（斜顶）
+  | "preparation"         // 准备（六边形）
+  | "delay"               // 延迟（半圆）
+  | "display"             // 显示（左弧平行四边形）
+  | "connector"           // 连接圆
+  | "off-page-connector"  // 跨页连接（五边形）
+  | "internal-storage"    // 内部存储
+  | "stored-data"         // 存储数据（横胶囊）
+  | "text"                // 文本节点（对齐 NoteGen text 节点）
+  | "image"               // 图片（对齐 NoteGen image 节点）
+  | "freehand";           // 自由手绘（钢笔/荧光笔笔触）
 
 export const FLOWCHART_NODE_KINDS: readonly FlowchartNodeKind[] = [
   "start",
@@ -39,6 +54,20 @@ export const FLOWCHART_NODE_KINDS: readonly FlowchartNodeKind[] = [
   "annotation",
   "subprocess",
   "input-output",
+  "terminator",
+  "multi-document",
+  "predefined-process",
+  "manual-input",
+  "preparation",
+  "delay",
+  "display",
+  "connector",
+  "off-page-connector",
+  "internal-storage",
+  "stored-data",
+  "text",
+  "image",
+  "freehand",
 ];
 
 export const FLOWCHART_DIRECTIONS: readonly FlowchartDirection[] = ["TB", "LR"];
@@ -77,8 +106,9 @@ export interface FlowchartEdgeStyle {
   strokeWidth?: number;
   /** 线条样式 */
   strokeDasharray?: "solid" | "dashed" | "dotted";
-  /** 路由类型；不参与语义哈希，仅影响渲染 */
-  route?: "straight" | "step" | "smoothstep";
+  /** 路由类型；不参与语义哈希，仅影响渲染。
+   *  对齐 NoteGen：bezier=贝塞尔曲线、smoothstep=圆角折线、straight=直线 */
+  route?: "bezier" | "smoothstep" | "straight";
   /** 起点箭头 */
   markerStart?: "none" | "arrow" | "arrowclosed";
   /** 终点箭头 */
@@ -97,6 +127,20 @@ export interface FlowchartNode {
   size?: { width: number; height: number };
   /** 节点级样式覆盖；不参与语义哈希，但会写入 JSON 与渲染 */
   style?: FlowchartNodeStyle;
+  /** 图片节点：相对于 vault 根目录的图片路径（如 assets/xxx.png） */
+  imagePath?: string;
+  /** freehand 节点：原始笔触点（含压感），不参与语义哈希 */
+  points?: Array<{ x: number; y: number; pressure: number }>;
+  /** freehand 节点：本地化后的 SVG path（相对节点左上角），不参与语义哈希 */
+  path?: string;
+  /** freehand 节点：笔触工具类型，不参与语义哈希 */
+  drawingTool?: "pen" | "highlighter";
+  /** freehand 节点：笔触颜色，不参与语义哈希 */
+  color?: string;
+  /** freehand 节点：不透明度（0-1，荧光笔默认 0.28），不参与语义哈希 */
+  opacity?: number;
+  /** freehand 节点：笔触宽度（参考 perfect-freehand size），不参与语义哈希 */
+  strokeWidth?: number;
 }
 
 export interface FlowchartEdge {
@@ -527,7 +571,8 @@ function normalizeNodeStyle(raw: unknown): FlowchartNodeStyle | undefined {
   return Object.keys(out).length === 0 ? undefined : out;
 }
 
-/** 规范化边样式：只保留已知字段且值为合法类型的键；全部缺失则返回 undefined。 */
+/** 规范化边样式：只保留已知字段且值为合法类型的键；全部缺失则返回 undefined。
+ *  兼容旧 route 值：step → smoothstep、default → bezier */
 function normalizeEdgeStyle(raw: unknown): FlowchartEdgeStyle | undefined {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return undefined;
   const s = raw as Record<string, unknown>;
@@ -535,6 +580,15 @@ function normalizeEdgeStyle(raw: unknown): FlowchartEdgeStyle | undefined {
   if (typeof s.stroke === "string" && s.stroke.length > 0) out.stroke = s.stroke;
   if (typeof s.strokeWidth === "number" && Number.isFinite(s.strokeWidth) && s.strokeWidth > 0) out.strokeWidth = s.strokeWidth;
   if (s.strokeDasharray === "solid" || s.strokeDasharray === "dashed" || s.strokeDasharray === "dotted") out.strokeDasharray = s.strokeDasharray;
+  if (s.route === "bezier" || s.route === "smoothstep" || s.route === "straight") {
+    out.route = s.route;
+  } else if (s.route === "default") {
+    out.route = "bezier";
+  } else if (s.route === "step") {
+    out.route = "smoothstep";
+  }
+  if (s.markerStart === "none" || s.markerStart === "arrow" || s.markerStart === "arrowclosed") out.markerStart = s.markerStart;
+  if (s.markerEnd === "none" || s.markerEnd === "arrow" || s.markerEnd === "arrowclosed") out.markerEnd = s.markerEnd;
   return Object.keys(out).length === 0 ? undefined : out;
 }
 
@@ -556,6 +610,34 @@ function normalizeFlowchartDocument(input: unknown): FlowchartDocument {
     };
     const s = normalizeNodeStyle(n.style);
     if (s) node.style = s;
+    // 图片节点
+    if (typeof n.imagePath === "string" && n.imagePath.length > 0) node.imagePath = n.imagePath;
+    // freehand 节点：保留笔触数据
+    if (n.kind === "freehand") {
+      if (Array.isArray(n.points)) {
+        node.points = (n.points as Array<Record<string, unknown>>).map((p) => ({
+          x: Number(p.x) || 0,
+          y: Number(p.y) || 0,
+          pressure: Number(p.pressure) ?? 0.5,
+        }));
+      }
+      if (typeof n.path === "string") node.path = n.path;
+      if (n.drawingTool === "pen" || n.drawingTool === "highlighter") node.drawingTool = n.drawingTool;
+      if (typeof n.color === "string" && n.color.length > 0) node.color = n.color;
+      if (typeof n.opacity === "number" && Number.isFinite(n.opacity)) node.opacity = n.opacity;
+      if (typeof n.strokeWidth === "number" && Number.isFinite(n.strokeWidth) && n.strokeWidth > 0) {
+        node.strokeWidth = n.strokeWidth;
+      }
+    }
+    // 节点尺寸
+    if (n.size && typeof n.size === "object" && !Array.isArray(n.size)) {
+      const sz = n.size as Record<string, unknown>;
+      const w = Number(sz.width);
+      const h = Number(sz.height);
+      if (Number.isFinite(w) && w > 0 && Number.isFinite(h) && h > 0) {
+        node.size = { width: w, height: h };
+      }
+    }
     return node;
   });
   const edges = (raw.edges as Array<Record<string, unknown>>).map((e) => {
@@ -565,6 +647,9 @@ function normalizeFlowchartDocument(input: unknown): FlowchartDocument {
       target: e.target as string,
     };
     if (typeof e.label === "string") edge.label = e.label;
+    // 解析 sourceHandle/targetHandle，避免节点移动时 React Flow 切换 Handle
+    if (typeof e.sourceHandle === "string") edge.sourceHandle = e.sourceHandle;
+    if (typeof e.targetHandle === "string") edge.targetHandle = e.targetHandle;
     const s = normalizeEdgeStyle(e.style);
     if (s) edge.style = s;
     return edge;
@@ -640,13 +725,19 @@ export function buildFlowchartIndexMarkdown(title: string, doc: FlowchartDocumen
 }
 
 /**
- * 生成纯文本投影：标题、节点 label、边 label。
- * 用于知识库 plainText 索引，不包含 JSON 字段名、ID、坐标。
+ * 生成 plainText：用于前端 preview 显示。
+ *
+ * 注意：plainText 字段不参与后端 backlink/mention 扫描——后端直接扫描
+ * .md 文件 body 原文，并在 `find_plain_mentions` 中跳过结构化文档
+ * （见 notes_links.rs 的 `is_structured_note`）。这里生成的内容仅用于
+ * preview 等前端展示场景，需要包含节点/边 label 原文以保证可读性。
  */
 export function buildFlowchartPlainText(title: string, doc: FlowchartDocument): string {
   const parts: string[] = [];
   if (title) parts.push(title);
-  for (const n of doc.nodes) parts.push(n.label);
+  for (const n of doc.nodes) {
+    if (n.label) parts.push(n.label);
+  }
   for (const e of doc.edges) {
     if (e.label) parts.push(e.label);
   }
@@ -746,13 +837,26 @@ export function cloneFlowchartDocument(doc: FlowchartDocument): FlowchartDocumen
   return {
     version: doc.version,
     direction: doc.direction,
-    nodes: doc.nodes.map((n) => ({
-      id: n.id,
-      kind: n.kind,
-      label: n.label,
-      position: { x: n.position.x, y: n.position.y },
-      ...(n.style ? { style: { ...n.style } } : {}),
-    })),
+    nodes: doc.nodes.map((n) => {
+      const clone: FlowchartNode = {
+        id: n.id,
+        kind: n.kind,
+        label: n.label,
+        position: { x: n.position.x, y: n.position.y },
+        ...(n.style ? { style: { ...n.style } } : {}),
+      };
+      if (n.size) clone.size = { width: n.size.width, height: n.size.height };
+      if (n.imagePath) clone.imagePath = n.imagePath;
+      if (n.kind === "freehand") {
+        if (n.points) clone.points = n.points.map((p) => ({ x: p.x, y: p.y, pressure: p.pressure }));
+        if (n.path) clone.path = n.path;
+        if (n.drawingTool) clone.drawingTool = n.drawingTool;
+        if (n.color) clone.color = n.color;
+        if (typeof n.opacity === "number") clone.opacity = n.opacity;
+        if (typeof n.strokeWidth === "number") clone.strokeWidth = n.strokeWidth;
+      }
+      return clone;
+    }),
     edges: doc.edges.map((e) => {
       const edge: FlowchartEdge = {
         id: e.id,
@@ -760,6 +864,9 @@ export function cloneFlowchartDocument(doc: FlowchartDocument): FlowchartDocumen
         target: e.target,
       };
       if (e.label !== undefined) edge.label = e.label;
+      // 保留 sourceHandle/targetHandle，避免节点移动时 React Flow 自动切换端点
+      if (typeof e.sourceHandle === "string") edge.sourceHandle = e.sourceHandle;
+      if (typeof e.targetHandle === "string") edge.targetHandle = e.targetHandle;
       if (e.style) edge.style = { ...e.style };
       return edge;
     }),

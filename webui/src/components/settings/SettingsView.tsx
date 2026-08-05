@@ -17,6 +17,7 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
   Cloud,
   Cpu,
   Database,
@@ -29,6 +30,7 @@ import {
   Globe2,
   Copy,
   Grid3X3,
+  GripVertical,
   HardDrive,
   Hexagon,
   ImageIcon,
@@ -100,10 +102,17 @@ import {
   updateImageGenerationSettings,
   updateProviderSettings,
   updateSettings,
+  updateTtsSettings,
   updateVideoGenerationSettings,
   updateWebSearchSettings,
 } from "@/lib/api";
+import { EDGE_TTS_VOICES } from "@/lib/constants";
 import { cn } from "@/lib/utils";
+import {
+  MODULE_DEFS,
+  DEFAULT_SIDEBAR_MODULES,
+  mergeSidebarModules,
+} from "@/components/Sidebar";
 import {
   isTauri,
   getDesktopSettings,
@@ -118,6 +127,7 @@ import {
   type UpdateProgress,
   type DesktopAppSettings,
   type SidebarShortcuts,
+  type SidebarModuleConfig,
   type AgentSearchScope,
 } from "@/lib/tauri";
 import { listAccounts, getFolders } from "@/components/email/lib/emailApi";
@@ -128,6 +138,7 @@ import type {
   ChannelInfo,
   ImageGenerationSettingsUpdate,
   SettingsPayload,
+  TtsSettingsUpdate,
   VideoGenerationSettingsUpdate,
   WebSearchSettingsUpdate,
   WeixinLoginStatus,
@@ -300,6 +311,15 @@ export function SettingsView({
     defaultAspectRatio: "16:9",
     defaultDuration: 5,
   });
+  const [ttsForm, setTtsForm] = useState<TtsSettingsUpdate>({
+    provider: "edge",
+    voice: "",
+    apiBase: "",
+    model: "",
+  });
+  const [ttsSaving, setTtsSaving] = useState(false);
+  const [ttsApiKeyDraft, setTtsApiKeyDraft] = useState("");
+  const [ttsKeyVisible, setTtsKeyVisible] = useState(false);
   const [webSearchKeyVisible, setWebSearchKeyVisible] = useState(false);
   const [webSearchKeyEditing, setWebSearchKeyEditing] = useState(false);
   const [form, setForm] = useState<AgentSettingsDraft>({
@@ -355,8 +375,15 @@ export function SettingsView({
       defaultAspectRatio: payload.video_generation.default_aspect_ratio,
       defaultDuration: payload.video_generation.default_duration,
     });
+    setTtsForm({
+      provider: payload.tts.provider,
+      voice: payload.tts.voice,
+      apiBase: payload.tts.api_base ?? "",
+      model: payload.tts.model ?? "",
+    });
     setImageApiKeyDraft("");
     setVideoApiKeyDraft("");
+    setTtsApiKeyDraft("");
     if (payload.restart_required_sections) {
       setPendingRestartSections({
         runtime: payload.restart_required_sections.includes("runtime"),
@@ -445,6 +472,16 @@ export function SettingsView({
     return formDirty || videoApiKeyDraft.trim().length > 0;
   }, [videoGenerationForm, settings, videoApiKeyDraft]);
 
+  const ttsDirty = useMemo(() => {
+    if (!settings) return false;
+    const formDirty =
+      (ttsForm.provider ?? "edge") !== settings.tts.provider ||
+      (ttsForm.voice ?? "") !== settings.tts.voice ||
+      (ttsForm.apiBase ?? "") !== (settings.tts.api_base ?? "") ||
+      (ttsForm.model ?? "") !== (settings.tts.model ?? "");
+    return formDirty || ttsApiKeyDraft.trim().length > 0;
+  }, [ttsForm, settings, ttsApiKeyDraft]);
+
   const hasPendingRestart = useMemo(
     () =>
       !!settings?.requires_restart ||
@@ -527,6 +564,27 @@ export function SettingsView({
       setError((err as Error).message);
     } finally {
       setVideoGenerationSaving(false);
+    }
+  };
+
+  const saveTtsSettings = async () => {
+    if (!settings || !ttsDirty || ttsSaving) return;
+    setTtsSaving(true);
+    try {
+      const payload = await updateTtsSettings(token, {
+        provider: ttsForm.provider,
+        voice: ttsForm.voice?.trim() ?? "",
+        apiBase: ttsForm.apiBase?.trim() ?? "",
+        model: ttsForm.model?.trim() ?? "",
+        apiKey: ttsApiKeyDraft.trim() || undefined,
+      });
+      applyPayload(payload);
+      setTtsApiKeyDraft("");
+      setError(null);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setTtsSaving(false);
     }
   };
 
@@ -825,6 +883,16 @@ export function SettingsView({
             onVideoApiKeyDraftChange={setVideoApiKeyDraft}
             videoKeyVisible={videoKeyVisible}
             onToggleVideoKeyVisible={() => setVideoKeyVisible((v) => !v)}
+            // tts tab props
+            ttsForm={ttsForm}
+            ttsDirty={ttsDirty}
+            ttsSaving={ttsSaving}
+            onTtsFormChange={setTtsForm}
+            onTtsSave={saveTtsSettings}
+            ttsApiKeyDraft={ttsApiKeyDraft}
+            onTtsApiKeyDraftChange={setTtsApiKeyDraft}
+            ttsKeyVisible={ttsKeyVisible}
+            onToggleTtsKeyVisible={() => setTtsKeyVisible((v) => !v)}
             onRestart={onRestart}
             isRestarting={isRestarting}
             onTriggerAgent={onTriggerAgent}
@@ -1286,6 +1354,251 @@ function AppearanceSettings({
           </SettingsRow>
         </SettingsGroup>
       </section>
+
+      <section>
+        <SettingsSectionTitle>{tx("settings.sections.sidebarModules", "侧边栏模块")}</SettingsSectionTitle>
+        <SidebarModulesSettings />
+      </section>
+    </div>
+  );
+}
+
+function SidebarModulesSettings() {
+  const { t } = useTranslation();
+  const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
+  const [settings, setSettings] = useState<DesktopAppSettings | null>(null);
+  const [drafts, setDrafts] = useState<SidebarModuleConfig[]>(DEFAULT_SIDEBAR_MODULES);
+  const [defaultView, setDefaultView] = useState<string>("chat");
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadSettings = useCallback(async () => {
+    try {
+      const s = await getDesktopSettings();
+      setSettings(s);
+      const merged = mergeSidebarModules(s.sidebar_modules);
+      setDrafts(merged);
+      setDefaultView(s.default_view || "chat");
+    } catch (e) {
+      console.error("Failed to load sidebar module settings:", e);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadSettings();
+  }, [loadSettings]);
+
+  // 比较草稿与已保存值，判断是否有改动
+  const dirty = useMemo(() => {
+    if (!settings) return false;
+    const savedMerged = mergeSidebarModules(settings.sidebar_modules);
+    if (mergeSidebarModules(drafts).length !== savedMerged.length) return true;
+    const norm = (arr: SidebarModuleConfig[]) =>
+      arr
+        .slice()
+        .sort((a, b) => a.order - b.order || a.key.localeCompare(b.key))
+        .map((m) => `${m.key}:${m.visible ? 1 : 0}:${m.order}`)
+        .join("|");
+    return norm(mergeSidebarModules(drafts)) !== norm(savedMerged) || defaultView !== (settings.default_view || "chat");
+  }, [settings, drafts, defaultView]);
+
+  const moveItem = (index: number, delta: -1 | 1) => {
+    setDrafts((prev) => {
+      const next = [...prev];
+      const target = index + delta;
+      if (target < 0 || target >= next.length) return prev;
+      // 交换两元素 order
+      const a = next[index];
+      const b = next[target];
+      next[index] = { ...b, order: a.order };
+      next[target] = { ...a, order: b.order };
+      return next.sort((x, y) => x.order - y.order);
+    });
+  };
+
+  const toggleVisible = (key: string) => {
+    setDrafts((prev) =>
+      prev.map((m) => (m.key === key ? { ...m, visible: !m.visible } : m)),
+    );
+  };
+
+  const handleSave = async () => {
+    if (!settings || saving || !dirty) return;
+    setSaving(true);
+    setError(null);
+    setSaved(false);
+    try {
+      const updated = await updateDesktopSettings({
+        ...settings,
+        default_view: defaultView,
+        sidebar_modules: drafts,
+      });
+      setSettings(updated);
+      setDrafts(mergeSidebarModules(updated.sidebar_modules));
+      setDefaultView(updated.default_view || "chat");
+      setSaved(true);
+      window.setTimeout(() => setSaved(false), 2400);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleReset = () => {
+    setDrafts(DEFAULT_SIDEBAR_MODULES.map((m, i) => ({ ...m, order: i })));
+    setDefaultView("chat");
+  };
+
+  if (!settings) {
+    return (
+      <div className="flex h-32 items-center justify-center text-sm text-muted-foreground">
+        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+        {tx("settings.status.loading", "Loading...")}
+      </div>
+    );
+  }
+
+  const defMap = new Map(MODULE_DEFS.map((d) => [d.key, d]));
+  // 默认模块下拉选项：与侧栏实际可见性解耦，包含全部已定义模块
+  const viewOptions = MODULE_DEFS.map((d) => ({ key: d.key, label: d.label }));
+  const currentDefaultLabel = defMap.get(defaultView)?.label ?? defaultView;
+
+  return (
+    <div className="space-y-3">
+      <SettingsGroup>
+        <SettingsRow
+          title={tx("settings.rows.defaultModule", "启动时默认显示")}
+          description={tx("settings.help.defaultModule", "应用启动时默认打开的模块。")}
+        >
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8 min-w-[140px] justify-between rounded-full px-3 text-[12px] font-medium"
+              >
+                <span className="truncate">{currentDefaultLabel}</span>
+                <ChevronDown className="ml-2 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="min-w-[160px]">
+              {viewOptions.map((opt) => (
+                <DropdownMenuItem
+                  key={opt.key}
+                  className="gap-2 px-2.5 py-1.5 text-[13px]"
+                  onSelect={() => setDefaultView(opt.key)}
+                >
+                  <span className="flex-1 truncate">{opt.label}</span>
+                  {opt.key === defaultView && <Check className="h-3.5 w-3.5 text-muted-foreground" />}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </SettingsRow>
+      </SettingsGroup>
+
+      <SettingsGroup>
+        {drafts.map((m, idx) => {
+          const def = defMap.get(m.key);
+          if (!def) return null;
+          const locked = m.key === "chat";
+          return (
+            <div
+              key={m.key}
+              className="flex min-h-[52px] items-center gap-3 px-4 py-2.5 sm:px-5"
+            >
+              <GripVertical className="h-4 w-4 shrink-0 text-muted-foreground/60" aria-hidden />
+              <span className="flex h-7 w-7 shrink-0 items-center justify-center">
+                {def.icon}
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="text-[14px] font-medium leading-5 text-foreground">
+                  {def.label}
+                  {locked && (
+                    <span className="ml-2 text-[11px] font-normal text-muted-foreground">
+                      {tx("settings.values.locked", "固定")}
+                    </span>
+                  )}
+                </div>
+                {def.windowsOnly && (
+                  <div className="mt-0.5 text-[11px] text-muted-foreground">Windows</div>
+                )}
+              </div>
+              <div className="flex shrink-0 items-center gap-1">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  aria-label={tx("settings.actions.moveUp", "上移")}
+                  disabled={idx === 0}
+                  onClick={() => moveItem(idx, -1)}
+                  className="h-7 w-7 rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+                >
+                  <ChevronUp className="h-3.5 w-3.5" />
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  aria-label={tx("settings.actions.moveDown", "下移")}
+                  disabled={idx === drafts.length - 1}
+                  onClick={() => moveItem(idx, 1)}
+                  className="h-7 w-7 rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+                >
+                  <ChevronDown className="h-3.5 w-3.5" />
+                </Button>
+                <Checkbox
+                  checked={m.visible}
+                  disabled={locked}
+                  onCheckedChange={() => toggleVisible(m.key)}
+                  aria-label={tx("settings.actions.toggleVisible", "显示/隐藏")}
+                  className="ml-1"
+                />
+              </div>
+            </div>
+          );
+        })}
+      </SettingsGroup>
+
+      <div className="flex items-center justify-between px-1">
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={handleReset}
+          disabled={saving || !dirty}
+          className="h-8 rounded-full text-[12px] text-muted-foreground hover:text-foreground"
+        >
+          <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
+          {tx("settings.actions.reset", "恢复默认")}
+        </Button>
+        <div className="flex items-center gap-2">
+          {saved && (
+            <span className="text-[12px] text-emerald-600 dark:text-emerald-400">
+              <Check className="mr-1 inline h-3.5 w-3.5" />
+              {tx("settings.status.saved", "已保存")}
+            </span>
+          )}
+          {error && (
+            <span className="text-[12px] text-destructive">{error}</span>
+          )}
+          <Button
+            type="button"
+            size="sm"
+            onClick={handleSave}
+            disabled={!dirty || saving}
+            className="h-8 rounded-full px-4 text-[12px]"
+          >
+            {saving ? (
+              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+            ) : null}
+            {tx("settings.actions.save", "保存")}
+          </Button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1332,6 +1645,16 @@ function AiModelsSettings({
   onVideoApiKeyDraftChange,
   videoKeyVisible,
   onToggleVideoKeyVisible,
+  // tts tab
+  ttsForm,
+  ttsDirty,
+  ttsSaving,
+  onTtsFormChange,
+  onTtsSave,
+  ttsApiKeyDraft,
+  onTtsApiKeyDraftChange,
+  ttsKeyVisible,
+  onToggleTtsKeyVisible,
   // shared
   onRestart,
   isRestarting,
@@ -1378,6 +1701,16 @@ function AiModelsSettings({
   onVideoApiKeyDraftChange: Dispatch<SetStateAction<string>>;
   videoKeyVisible: boolean;
   onToggleVideoKeyVisible: () => void;
+  // tts tab
+  ttsForm: TtsSettingsUpdate;
+  ttsDirty: boolean;
+  ttsSaving: boolean;
+  onTtsFormChange: Dispatch<SetStateAction<TtsSettingsUpdate>>;
+  onTtsSave: () => void;
+  ttsApiKeyDraft: string;
+  onTtsApiKeyDraftChange: Dispatch<SetStateAction<string>>;
+  ttsKeyVisible: boolean;
+  onToggleTtsKeyVisible: () => void;
   // shared
   onRestart?: () => void;
   isRestarting?: boolean;
@@ -1393,6 +1726,7 @@ function AiModelsSettings({
         <TabsTrigger value="chat">{tx("settings.aiModels.chat", "聊天模型")}</TabsTrigger>
         <TabsTrigger value="image">{tx("settings.aiModels.image", "图片模型")}</TabsTrigger>
         <TabsTrigger value="video">{tx("settings.aiModels.video", "视频模型")}</TabsTrigger>
+        <TabsTrigger value="tts">{tx("settings.aiModels.tts", "语音合成")}</TabsTrigger>
       </TabsList>
 
       <TabsContent value="chat">
@@ -1463,6 +1797,21 @@ function AiModelsSettings({
           onApiKeyDraftChange={onVideoApiKeyDraftChange}
           keyVisible={videoKeyVisible}
           onToggleKeyVisible={onToggleVideoKeyVisible}
+        />
+      </TabsContent>
+
+      <TabsContent value="tts">
+        <TtsSettings
+          settings={settings}
+          form={ttsForm}
+          dirty={ttsDirty}
+          saving={ttsSaving}
+          onChangeForm={onTtsFormChange}
+          onSave={onTtsSave}
+          apiKeyDraft={ttsApiKeyDraft}
+          onApiKeyDraftChange={onTtsApiKeyDraftChange}
+          keyVisible={ttsKeyVisible}
+          onToggleKeyVisible={onToggleTtsKeyVisible}
         />
       </TabsContent>
     </Tabs>
@@ -2493,6 +2842,212 @@ function VideoGenerationSettings({
             onSave={onSave}
             onRestart={onRestart}
             isRestarting={isRestarting}
+          />
+        </SettingsGroup>
+      </section>
+    </div>
+  );
+}
+
+const TTS_PROVIDER_OPTIONS = [
+  { name: "edge", label: "Edge TTS（免费）" },
+  { name: "custom", label: "自定义（OpenAI 兼容接口）" },
+];
+
+function TtsSettings({
+  settings,
+  form,
+  dirty,
+  saving,
+  onChangeForm,
+  onSave,
+  apiKeyDraft,
+  onApiKeyDraftChange,
+  keyVisible,
+  onToggleKeyVisible,
+}: {
+  settings: SettingsPayload;
+  form: TtsSettingsUpdate;
+  dirty: boolean;
+  saving: boolean;
+  onChangeForm: Dispatch<SetStateAction<TtsSettingsUpdate>>;
+  onSave: () => void;
+  apiKeyDraft: string;
+  onApiKeyDraftChange: Dispatch<SetStateAction<string>>;
+  keyVisible: boolean;
+  onToggleKeyVisible: () => void;
+}) {
+  const { t } = useTranslation();
+  const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
+  const [keyEditing, setKeyEditing] = useState(false);
+  const isCustom = form.provider === "custom";
+  const keyConfigured = settings.tts.api_key_configured;
+  const showKeyInput = !keyConfigured || keyEditing || apiKeyDraft.length > 0;
+  const missingCredential = isCustom && !keyConfigured && apiKeyDraft.trim().length === 0;
+  const edgeVoiceOptions = useMemo(
+    () => EDGE_TTS_VOICES.map((voice) => voice.value),
+    [],
+  );
+
+  return (
+    <div className="space-y-7">
+      <section>
+        <SettingsSectionTitle>{tx("settings.sections.tts", "语音合成")}</SettingsSectionTitle>
+        <SettingsGroup>
+          <SettingsRow
+            title={tx("settings.rows.ttsProvider", "合成引擎")}
+            description={tx(
+              "settings.help.ttsProvider",
+              "视频旁白和语音朗读共用的全局语音合成配置。",
+            )}
+          >
+            <ProviderPicker
+              providers={TTS_PROVIDER_OPTIONS}
+              value={form.provider ?? "edge"}
+              emptyLabel={tx("settings.tts.selectProvider", "选择合成引擎")}
+              onChange={(provider) => {
+                onChangeForm((prev) => ({ ...prev, provider }));
+                onApiKeyDraftChange("");
+                setKeyEditing(false);
+              }}
+            />
+          </SettingsRow>
+          <SettingsRow
+            title={tx("settings.rows.ttsVoice", "音色")}
+            description={
+              isCustom
+                ? tx("settings.help.ttsVoiceCustom", "自定义接口的 Voice ID，例如 alloy。")
+                : tx("settings.help.ttsVoiceEdge", "Edge TTS 音色 ID，可输入列表外的其他音色。")
+            }
+          >
+            {isCustom ? (
+              <Input
+                value={form.voice ?? ""}
+                onChange={(event) =>
+                  onChangeForm((prev) => ({ ...prev, voice: event.target.value }))
+                }
+                placeholder="alloy"
+                aria-label={tx("settings.tts.voiceId", "Voice ID")}
+                className="h-8 w-[min(300px,70vw)] rounded-full text-[13px]"
+              />
+            ) : (
+              <ImageModelInput
+                value={form.voice ?? ""}
+                onChange={(voice) => onChangeForm((prev) => ({ ...prev, voice }))}
+                options={edgeVoiceOptions}
+                placeholder="zh-CN-XiaoyiNeural"
+                selectLabel={tx("settings.tts.selectVoice", "选择音色")}
+                noMatchLabel={tx("settings.tts.noVoiceMatch", "无匹配项，可继续输入音色 ID")}
+                addModelLabel=""
+              />
+            )}
+          </SettingsRow>
+          {isCustom ? (
+            <>
+              <SettingsRow
+                title={tx("settings.rows.ttsApiBase", "API 地址")}
+                description={tx(
+                  "settings.help.ttsApiBase",
+                  "OpenAI 兼容的语音合成接口地址，例如 https://api.openai.com/v1。",
+                )}
+              >
+                <Input
+                  value={form.apiBase ?? ""}
+                  onChange={(event) =>
+                    onChangeForm((prev) => ({ ...prev, apiBase: event.target.value }))
+                  }
+                  placeholder="https://api.openai.com/v1"
+                  aria-label={tx("settings.tts.apiBase", "API 地址")}
+                  className="h-8 w-[min(300px,70vw)] rounded-full text-[13px]"
+                />
+              </SettingsRow>
+              <SettingsRow
+                title={tx("settings.rows.ttsModel", "模型")}
+                description={tx("settings.help.ttsModel", "语音合成模型名，例如 tts-1。")}
+              >
+                <Input
+                  value={form.model ?? ""}
+                  onChange={(event) =>
+                    onChangeForm((prev) => ({ ...prev, model: event.target.value }))
+                  }
+                  placeholder="tts-1"
+                  aria-label={tx("settings.tts.model", "模型")}
+                  className="h-8 w-[min(300px,70vw)] rounded-full text-[13px]"
+                />
+              </SettingsRow>
+              {keyConfigured && !showKeyInput ? (
+                <SettingsRow
+                  title={tx("settings.rows.ttsApiKey", "API 密钥")}
+                  description={tx("settings.help.ttsApiKeyConfigured", "密钥已保存，仅用于语音合成请求。")}
+                >
+                  <div className="flex flex-wrap items-center justify-end gap-2">
+                    <StatusPill tone="success">
+                      {tx("settings.values.configured", "已配置")}
+                    </StatusPill>
+                    {settings.tts.api_key_hint ? (
+                      <span className="text-[13px] text-muted-foreground">
+                        {settings.tts.api_key_hint}
+                      </span>
+                    ) : null}
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => {
+                        onApiKeyDraftChange("");
+                        setKeyEditing(true);
+                      }}
+                      className="rounded-full text-[13px] text-muted-foreground"
+                    >
+                      {tx("settings.tts.changeKey", "修改")}
+                    </Button>
+                  </div>
+                </SettingsRow>
+              ) : (
+                <SettingsRow
+                  title={tx("settings.rows.ttsApiKey", "API 密钥")}
+                  description={tx(
+                    "settings.help.ttsApiKey",
+                    "自定义语音合成接口的 API 密钥，保存后不会回显完整内容。",
+                  )}
+                >
+                  <div className="flex items-center gap-2">
+                    <Input
+                      type={keyVisible ? "text" : "password"}
+                      value={apiKeyDraft}
+                      onChange={(event) => onApiKeyDraftChange(event.target.value)}
+                      placeholder={
+                        settings.tts.api_key_hint ??
+                        tx("settings.tts.apiKeyPlaceholder", "输入 API Key")
+                      }
+                      aria-label={tx("settings.rows.ttsApiKey", "API 密钥")}
+                      className="h-8 w-[min(300px,70vw)] rounded-full text-[13px]"
+                    />
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={onToggleKeyVisible}
+                      aria-label={keyVisible ? "隐藏密钥" : "显示密钥"}
+                      className="rounded-full"
+                    >
+                      {keyVisible ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                    </Button>
+                  </div>
+                </SettingsRow>
+              )}
+            </>
+          ) : null}
+          <RestartSettingsFooter
+            dirty={dirty}
+            saving={saving}
+            pendingRestart={false}
+            disabled={missingCredential}
+            message={
+              missingCredential
+                ? tx("settings.tts.missingCredential", "使用自定义引擎前请先配置 API 密钥。")
+                : undefined
+            }
+            onSave={onSave}
           />
         </SettingsGroup>
       </section>

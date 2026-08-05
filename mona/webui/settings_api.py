@@ -326,6 +326,24 @@ def _channels_payload(config: Any) -> dict[str, Any]:
     return {"available": available}
 
 
+def _tts_payload(config: Any) -> dict[str, Any]:
+    """Build the ``tts`` section of the settings payload.
+
+    Never returns the full API key — only whether one is configured plus a
+    masked hint, matching the provider settings convention.
+    """
+    channels = config.channels
+    api_key = str(getattr(channels, "tts_api_key", "") or "")
+    return {
+        "provider": str(getattr(channels, "tts_provider", "edge") or "edge"),
+        "voice": str(getattr(channels, "tts_voice", "") or ""),
+        "api_base": str(getattr(channels, "tts_api_base", "") or "") or None,
+        "model": str(getattr(channels, "tts_model", "") or "") or None,
+        "api_key_configured": bool(api_key),
+        "api_key_hint": _mask_secret_hint(api_key),
+    }
+
+
 def _parse_allow_from(value: str | None) -> list[str]:
     """Parse a comma/newline separated allowlist into a clean list."""
     if not value:
@@ -625,6 +643,7 @@ def settings_payload(*, requires_restart: bool = False) -> dict[str, Any]:
             "exec_path_append_set": bool(exec_config.path_append),
         },
         "channels": _channels_payload(config),
+        "tts": _tts_payload(config),
         "requires_restart": requires_restart,
     }
 
@@ -1075,6 +1094,73 @@ def update_video_generation_settings(query: QueryParams) -> dict[str, Any]:
     if changed:
         save_config(config)
     return settings_payload(requires_restart=changed)
+
+
+_TTS_PROVIDERS = {"edge", "custom"}
+
+
+def update_tts_settings(query: QueryParams) -> dict[str, Any]:
+    """Update global TTS (语音合成) settings stored on ChannelsConfig.
+
+    The API key is write-only: a non-empty value replaces the stored key,
+    ``clearKey=true`` removes it, and omitted leaves it unchanged.
+    """
+    config = load_config()
+    channels = config.channels
+    changed = False
+
+    provider = _query_first(query, "provider")
+    if provider is not None:
+        provider = provider.strip().lower()
+        if provider not in _TTS_PROVIDERS:
+            raise WebUISettingsError("unsupported TTS provider")
+        if channels.tts_provider != provider:
+            channels.tts_provider = provider
+            changed = True
+
+    voice = _query_first(query, "voice")
+    if voice is not None:
+        voice = voice.strip()
+        if len(voice) > 200:
+            raise WebUISettingsError("TTS voice is too long")
+        if channels.tts_voice != voice:
+            channels.tts_voice = voice
+            changed = True
+
+    api_base = _query_first_alias(query, "api_base", "apiBase")
+    if api_base is not None:
+        api_base = api_base.strip()
+        if len(api_base) > 500:
+            raise WebUISettingsError("TTS api base is too long")
+        if channels.tts_api_base != api_base:
+            channels.tts_api_base = api_base
+            changed = True
+
+    model = _query_first(query, "model")
+    if model is not None:
+        model = model.strip()
+        if len(model) > 200:
+            raise WebUISettingsError("TTS model is too long")
+        if channels.tts_model != model:
+            channels.tts_model = model
+            changed = True
+
+    api_key = _query_first_alias(query, "api_key", "apiKey")
+    if api_key is not None and api_key.strip():
+        key = api_key.strip()
+        if channels.tts_api_key != key:
+            channels.tts_api_key = key
+            changed = True
+
+    clear_key = _query_first_alias(query, "clear_key", "clearKey")
+    if clear_key is not None and _parse_bool(clear_key, "clearKey"):
+        if channels.tts_api_key:
+            channels.tts_api_key = ""
+            changed = True
+
+    if changed:
+        save_config(config)
+    return settings_payload(requires_restart=False)
 
 
 _ZEN_MODELS_URL = "https://opencode.ai/zen/v1/models"

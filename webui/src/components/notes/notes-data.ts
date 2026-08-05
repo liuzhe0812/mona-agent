@@ -1,7 +1,7 @@
 import type { JSONContent } from "@tiptap/core";
 
 export type NoteSourceKind = "agent" | "manual" | "ssh" | "windows";
-export type NoteAiActionId = "summary" | "freeform" | "translate" | "generateHtml" | "generateTags";
+export type NoteAiActionId = "summary" | "freeform" | "translate" | "generateHtml";
 
 /** Context level controls how a note participates in knowledge-base retrieval. */
 export type NoteContextLevel = "full" | "summary" | "none";
@@ -19,6 +19,7 @@ export type NoteType =
   | "note"
   | "mindmap"
   | "flowchart"
+  | "diagram"
   | "moc"
   | "daily"
   | "template"
@@ -28,6 +29,7 @@ export const NOTE_TYPE_LABELS: Record<NoteType, string> = {
   note: "笔记",
   mindmap: "思维导图",
   flowchart: "流程图",
+  diagram: "图表",
   moc: "MOC 索引",
   daily: "每日笔记",
   template: "模板",
@@ -39,7 +41,6 @@ export const NOTE_TYPE_LABELS: Record<NoteType, string> = {
  * The prompt template supports variables:
  * - {{note_title}}   - note title
  * - {{note_content}} - note markdown content
- * - {{note_tags}}    - comma-separated tags
  * - {{note_source}}  - source label
  */
 export interface NoteTransformation {
@@ -56,7 +57,6 @@ export interface NoteTransformation {
 export const TRANSFORMATION_VARIABLES: Array<{ token: string; label: string; description: string }> = [
   { token: "{{note_title}}", label: "笔记标题", description: "当前笔记的标题" },
   { token: "{{note_content}}", label: "笔记内容", description: "笔记的 Markdown 全文" },
-  { token: "{{note_tags}}", label: "笔记标签", description: "笔记的标签，逗号分隔" },
   { token: "{{note_source}}", label: "笔记来源", description: "笔记的来源标签" },
 ];
 
@@ -102,7 +102,6 @@ export interface OperationNote {
     kind: NoteSourceKind;
     label: string;
   };
-  tags: string[];
   contentMarkdown: string;
   contentJson?: JSONContent;
   plainText?: string;
@@ -171,48 +170,4 @@ export interface MocItem {
   path: string;
   outgoingCount: number;
   incomingCount: number;
-}
-
-/** Build a nested tag tree from a flat list of tags (e.g. "工作/项目A"). */
-export interface TagTreeNode {
-  name: string;
-  fullPath: string;
-  count: number;
-  children: TagTreeNode[];
-}
-
-export function buildTagTree(tags: Array<string | { tag: string; count?: number }>): TagTreeNode[] {
-  const root: TagTreeNode[] = [];
-  const map = new Map<string, TagTreeNode>();
-
-  for (const entry of tags) {
-    const tag = typeof entry === "string" ? entry : entry.tag;
-    const count = typeof entry === "string" ? 1 : entry.count ?? 1;
-    const parts = tag.split("/").map((p) => p.trim()).filter(Boolean);
-    if (parts.length === 0) continue;
-
-    let currentPath = "";
-    let currentLevel = root;
-    for (let i = 0; i < parts.length; i++) {
-      const part = parts[i];
-      currentPath = i === 0 ? part : `${currentPath}/${part}`;
-      let node = map.get(currentPath);
-      if (!node) {
-        node = { name: part, fullPath: currentPath, count: 0, children: [] };
-        map.set(currentPath, node);
-        currentLevel.push(node);
-      }
-      if (i === parts.length - 1) {
-        node.count += count;
-      }
-      currentLevel = node.children;
-    }
-  }
-
-  const sortTree = (nodes: TagTreeNode[]): TagTreeNode[] => {
-    nodes.sort((a, b) => a.name.localeCompare(b.name, "zh-Hans"));
-    for (const n of nodes) sortTree(n.children);
-    return nodes;
-  };
-  return sortTree(root);
 }

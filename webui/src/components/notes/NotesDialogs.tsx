@@ -18,6 +18,7 @@ interface PromptDialogProps {
   title: string;
   defaultValue?: string;
   placeholder?: string;
+  loading?: boolean;
   onConfirm: (value: string) => void;
   onOpenChange: (open: boolean) => void;
 }
@@ -27,12 +28,14 @@ export function PromptDialog({
   title,
   defaultValue = "",
   placeholder = "",
+  loading = false,
   onConfirm,
   onOpenChange,
 }: PromptDialogProps) {
   const [value, setValue] = useState(defaultValue);
 
   const handleOpenChange = (nextOpen: boolean) => {
+    if (loading && !nextOpen) return;
     if (nextOpen) {
       setValue(defaultValue);
     }
@@ -43,7 +46,7 @@ export function PromptDialog({
     const trimmed = value.trim();
     if (!trimmed) return;
     onConfirm(trimmed);
-    onOpenChange(false);
+    if (!loading) onOpenChange(false);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -66,7 +69,8 @@ export function PromptDialog({
             onKeyDown={handleKeyDown}
             placeholder={placeholder}
             autoFocus
-            className="h-8 w-full rounded-lg border border-border/70 bg-background px-2.5 text-[12px] outline-none placeholder:text-muted-foreground focus:border-border"
+            disabled={loading}
+            className="h-8 w-full rounded-lg border border-border/70 bg-background px-2.5 text-[12px] outline-none placeholder:text-muted-foreground focus:border-border disabled:opacity-50"
           />
         </div>
         <DialogFooter className="border-t border-border/65 px-4 py-2.5">
@@ -75,6 +79,7 @@ export function PromptDialog({
             variant="ghost"
             size="sm"
             className="h-7 px-2.5 text-[12px]"
+            disabled={loading}
             onClick={() => onOpenChange(false)}
           >
             取消
@@ -83,10 +88,10 @@ export function PromptDialog({
             type="button"
             size="sm"
             className="h-7 px-2.5 text-[12px]"
-            disabled={!value.trim()}
+            disabled={!value.trim() || loading}
             onClick={handleSubmit}
           >
-            确定
+            {loading ? "生成中..." : "确定"}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -204,11 +209,6 @@ export function TemplatePickerDialog({
                   >
                     <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                     <span className="min-w-0 flex-1 truncate">{tpl.title || "未命名模板"}</span>
-                    {tpl.tags.length > 0 ? (
-                      <span className="shrink-0 text-[10.5px] text-muted-foreground">
-                        {tpl.tags.slice(0, 3).join(" · ")}
-                      </span>
-                    ) : null}
                   </button>
                 ))}
               </div>

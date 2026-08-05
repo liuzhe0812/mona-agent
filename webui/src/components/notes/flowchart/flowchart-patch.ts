@@ -20,6 +20,8 @@ import {
   cloneFlowchartDocument,
   computeFlowchartSemanticHash,
   extractFlowchartFence,
+  FLOWCHART_NODE_KINDS,
+  FLOWCHART_PATCH_FENCE_LANG,
   generateFlowchartEdgeId,
   generateFlowchartNodeId,
   validateFlowchartDocument,
@@ -90,14 +92,14 @@ export type ParsePatchResult =
  * 找不到返回错误，不抛异常。
  */
 export function parseFlowchartPatch(text: string): ParsePatchResult {
-  const re = /```mona-flowchart-patch\s*\n([\s\S]*?)```/g;
+  const re = new RegExp("```" + FLOWCHART_PATCH_FENCE_LANG + "\\s*\\n([\\s\\S]*?)```", "g");
   let last: string | null = null;
   let m: RegExpExecArray | null;
   while ((m = re.exec(text)) !== null) {
     last = m[1].trim();
   }
   if (last === null) {
-    return { ok: false, message: "AI 未返回 mona-flowchart-patch fenced block" };
+    return { ok: false, message: `AI 未返回 ${FLOWCHART_PATCH_FENCE_LANG} fenced block` };
   }
 
   if (last.length > FLOWCHART_PATCH_MAX_PAYLOAD_BYTES) {
@@ -190,7 +192,7 @@ function validateSemanticNode(op: Record<string, unknown>, key: string, ctx: str
   if (typeof op[key] !== "object" || op[key] === null) return `${ctx}.${key} 不是对象`;
   const n = op[key] as Record<string, unknown>;
   if (typeof n.id !== "string") return `${ctx}.${key}.id 不是字符串`;
-  if (!["start", "process", "decision", "end"].includes(n.kind as string)) {
+  if (!FLOWCHART_NODE_KINDS.includes(n.kind as FlowchartNodeKind)) {
     return `${ctx}.${key}.kind 不合法`;
   }
   if (typeof n.label !== "string") return `${ctx}.${key}.label 不是字符串`;
@@ -862,20 +864,36 @@ function median(xs: number[]): number {
 /**
  * 对整个文档运行 Dagre 布局，覆盖所有节点坐标。
  * 用于 replaceGraph 和"重新布局"按钮。
+ *
+ * 关键：dagre 返回的节点坐标是中心点，但 ReactFlow 的 position 是左上角，
+ * 需要减去节点宽高的一半进行转换。使用节点实际 size（NodeResizer 写入），
+ * 没有时回退到默认尺寸。
  */
 export function layoutEntireGraph(doc: FlowchartDocument): void {
   if (doc.nodes.length === 0) return;
+  // 默认节点尺寸（与 NODE_WIDTH/NODE_HEIGHT 一致）
+  const DEFAULT_W = 140;
+  const DEFAULT_H = 48;
+  // 间距：同层节点间距、层间距、边间距均加大，避免节点/连线拥挤重叠
+  const NODE_SEP = 90;
+  const RANK_SEP = 110;
+  const EDGE_SEP = 30;
+
   const g = new dagre.graphlib.Graph();
   g.setGraph({
     rankdir: doc.direction === "TB" ? "TB" : "LR",
-    nodesep: NODE_SPACING_Y,
-    ranksep: NODE_SPACING_Y,
-    marginx: 20,
-    marginy: 20,
+    nodesep: NODE_SEP,
+    ranksep: RANK_SEP,
+    edgesep: EDGE_SEP,
+    marginx: 24,
+    marginy: 24,
   });
   g.setDefaultEdgeLabel(() => ({}));
+  // 使用实际尺寸，没有时回退默认值
   for (const n of doc.nodes) {
-    g.setNode(n.id, { width: NODE_WIDTH, height: NODE_HEIGHT });
+    const w = n.size?.width ?? DEFAULT_W;
+    const h = n.size?.height ?? DEFAULT_H;
+    g.setNode(n.id, { width: w, height: h });
   }
   for (const e of doc.edges) {
     if (doc.nodes.some((n) => n.id === e.source) && doc.nodes.some((n) => n.id === e.target)) {
@@ -883,9 +901,180 @@ export function layoutEntireGraph(doc: FlowchartDocument): void {
     }
   }
   dagre.layout(g);
+  // dagre 返回中心点，转换为 ReactFlow 左上角坐标
   for (const n of doc.nodes) {
     const ln = g.node(n.id);
-    if (ln) n.position = { x: ln.x, y: ln.y };
+    if (ln) {
+      const w = n.size?.width ?? DEFAULT_W;
+      const h = n.size?.height ?? DEFAULT_H;
+      n.position = { x: ln.x - w / 2, y: ln.y - h / 2 };
+    }
+  }
+  // 根据源/目标相对位置为边分配连接点，减少连线重叠
+  assignEdgeHandles(doc, DEFAULT_W, DEFAULT_H);
+}
+
+/**
+ * 根据布局后的节点相对位置为边分配合适的 source/target handle。
+ * 同一节点有多条出边/入边时，按目标/来源的相对方位排序后分配不同侧面，
+ * 避免所有连线都从底部正中出发/到达导致的重叠。
+ */
+function assignEdgeHandles(
+  doc: FlowchartDocument,
+  defaultW: number,
+  defaultH: number,
+): void {
+  const isTB = doc.direction === "TB";
+  const nodeMap = new Map(doc.nodes.map((n) => [n.id, n]));
+
+  const nodeCenter = (n: FlowchartNode) => ({
+    x: n.position.x + (n.size?.width ?? defaultW) / 2,
+    y: n.position.y + (n.size?.height ?? defaultH) / 2,
+  });
+
+  // 按源节点分组的出边
+  const outEdges = new Map<string, FlowchartEdge[]>();
+  // 按目标节点分组的入边
+  const inEdges = new Map<string, FlowchartEdge[]>();
+  for (const e of doc.edges) {
+    if (!outEdges.has(e.source)) outEdges.set(e.source, []);
+    outEdges.get(e.source)!.push(e);
+    if (!inEdges.has(e.target)) inEdges.set(e.target, []);
+    inEdges.get(e.target)!.push(e);
+  }
+
+  // 根据方位选择 handle：TB 方向优先用 top/bottom，侧向连接用 left/right
+  const chooseHandles = (
+    source: FlowchartNode,
+    target: FlowchartNode,
+  ): { source: string; target: string } => {
+    const s = nodeCenter(source);
+    const t = nodeCenter(target);
+    const dx = t.x - s.x;
+    const dy = t.y - s.y;
+    const absDx = Math.abs(dx);
+    const absDy = Math.abs(dy);
+
+    if (isTB) {
+      // 目标在下方：默认 bottom -> top
+      if (dy > 0 && absDy >= absDx) return { source: "bottom-source", target: "top-target" };
+      // 目标在上方：反馈边，从侧面绕回（根据水平相对位置选 left/right）
+      if (dy < 0 && absDy >= absDx) {
+        return dx >= 0
+          ? { source: "right-source", target: "right-target" }
+          : { source: "left-source", target: "left-target" };
+      }
+      // 目标在右侧：right -> left
+      if (dx > 0) return { source: "right-source", target: "left-target" };
+      // 目标在左侧：left -> right
+      return { source: "left-source", target: "right-target" };
+    }
+    // LR 方向
+    // 目标在右侧：right -> left
+    if (dx > 0 && absDx >= absDy) return { source: "right-source", target: "left-target" };
+    // 目标在左侧：反馈边，从顶部或底部绕回
+    if (dx < 0 && absDx >= absDy) {
+      return dy >= 0
+        ? { source: "bottom-source", target: "bottom-target" }
+        : { source: "top-source", target: "top-target" };
+    }
+    // 目标在下方
+    if (dy > 0) return { source: "bottom-source", target: "top-target" };
+    return { source: "top-source", target: "bottom-target" };
+  };
+
+  // 对同一源节点的多条出边，按目标相对方位排序后，若多个目标在同一主方向则错开 handle
+  for (const [, edges] of outEdges) {
+    if (edges.length <= 1) continue;
+    const source = nodeMap.get(edges[0]!.source);
+    if (!source) continue;
+    // 按目标中心相对源中心的角度排序
+    const sorted = [...edges].sort((a, b) => {
+      const ca = nodeCenter(nodeMap.get(a.target)!);
+      const cb = nodeCenter(nodeMap.get(b.target)!);
+      const sa = nodeCenter(source);
+      const angleA = Math.atan2(ca.y - sa.y, ca.x - sa.x);
+      const angleB = Math.atan2(cb.y - sa.y, cb.x - sa.x);
+      return angleA - angleB;
+    });
+    // 统计各主方向数量并分配
+    const counts = { bottom: 0, top: 0, left: 0, right: 0 };
+    for (const e of sorted) {
+      const target = nodeMap.get(e.target);
+      if (!target) continue;
+      const handles = chooseHandles(source, target);
+      // 若该方向已用过，尝试换到相邻方向以错开连线
+      const mainDir = handles.source.replace("-source", "") as "bottom" | "top" | "left" | "right";
+      counts[mainDir]++;
+      if (counts[mainDir] > 1) {
+        // 尝试根据目标位置选择次优方向
+        const s = nodeCenter(source);
+        const t = nodeCenter(target);
+        const dx = t.x - s.x;
+        const dy = t.y - s.y;
+        if (isTB) {
+          if (mainDir === "bottom" || mainDir === "top") {
+            handles.source = dx >= 0 ? "right-source" : "left-source";
+          }
+        } else {
+          if (mainDir === "right" || mainDir === "left") {
+            handles.source = dy >= 0 ? "bottom-source" : "top-source";
+          }
+        }
+      }
+      e.sourceHandle = handles.source;
+      if (!e.targetHandle) e.targetHandle = handles.target;
+    }
+  }
+
+  // 对同一目标节点的多条入边做类似处理
+  for (const [, edges] of inEdges) {
+    if (edges.length <= 1) continue;
+    const target = nodeMap.get(edges[0]!.target);
+    if (!target) continue;
+    const sorted = [...edges].sort((a, b) => {
+      const ca = nodeCenter(nodeMap.get(a.source)!);
+      const cb = nodeCenter(nodeMap.get(b.source)!);
+      const ta = nodeCenter(target);
+      const angleA = Math.atan2(ca.y - ta.y, ca.x - ta.x);
+      const angleB = Math.atan2(cb.y - ta.y, cb.x - ta.x);
+      return angleA - angleB;
+    });
+    const counts = { bottom: 0, top: 0, left: 0, right: 0 };
+    for (const e of sorted) {
+      const source = nodeMap.get(e.source);
+      if (!source) continue;
+      const handles = chooseHandles(source, target);
+      const mainDir = handles.target.replace("-target", "") as "bottom" | "top" | "left" | "right";
+      counts[mainDir]++;
+      if (counts[mainDir] > 1) {
+        const s = nodeCenter(source);
+        const t = nodeCenter(target);
+        const dx = t.x - s.x;
+        const dy = t.y - s.y;
+        if (isTB) {
+          if (mainDir === "top" || mainDir === "bottom") {
+            handles.target = dx >= 0 ? "left-target" : "right-target";
+          }
+        } else {
+          if (mainDir === "left" || mainDir === "right") {
+            handles.target = dy >= 0 ? "top-target" : "bottom-target";
+          }
+        }
+      }
+      e.targetHandle = handles.target;
+      if (!e.sourceHandle) e.sourceHandle = handles.source;
+    }
+  }
+
+  // 处理未被上面覆盖的边
+  for (const e of doc.edges) {
+    const source = nodeMap.get(e.source);
+    const target = nodeMap.get(e.target);
+    if (!source || !target) continue;
+    const handles = chooseHandles(source, target);
+    if (!e.sourceHandle) e.sourceHandle = handles.source;
+    if (!e.targetHandle) e.targetHandle = handles.target;
   }
 }
 

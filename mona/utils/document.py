@@ -1,11 +1,26 @@
-﻿"""Document text extraction utilities for mona."""
+"""Document text extraction utilities for mona."""
 
 import mimetypes
+import re
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from loguru import logger
 
 from mona.utils.helpers import detect_image_mime
+
+# 提取器输出版本：frontmatter 中记录，版本不一致时 reconciliation 重新提取
+EXTRACTOR_VERSION = 2
+
+# 图片扩展名：无可提取文本，资料入库标记为 unsupported
+IMAGE_EXTENSIONS: set[str] = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+
+# 结构化 segment 的最大字符数：超过则二次切分，避免单个 chunk 过大
+_MAX_SEGMENT_CHARS = 50_000
+
+# XLSX 每个 segment 的最大行数
+_XLSX_ROWS_PER_SEGMENT = 200
 
 
 # Supported file extensions for text extraction
@@ -281,3 +296,226 @@ def extract_documents(
         text = text + "\n\n" + "\n\n".join(doc_texts)
 
     return text, image_paths
+
+
+# ---------------------------------------------------------------------------
+# Structured extraction: segments with location metadata (materials pipeline)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ExtractedSegment:
+    """结构化提取单元：携带位置信息（页/幻灯片/工作表/标题）的文本块。"""
+
+    kind: str  # "page" | "slide" | "sheet" | "heading" | "block"
+    label: str  # 展示标签，如 "Page 3" / "Slide 2" / "Sheet: 营收 (行 1-200)"
+    text: str
+    meta: dict[str, Any] = field(default_factory=dict)
+
+
+def extract_segments(path: Path) -> list[ExtractedSegment] | str | None:
+    """按文档结构提取 segment 列表（资料入库用，不做整体截断）。
+
+    Returns:
+        - list[ExtractedSegment]: 成功（元素可能为空文本，如扫描件 PDF）
+        - str: 以 ``[error:`` 开头的失败说明
+        - None: 不支持的类型
+    """
+    if not isinstance(path, Path):
+        path = Path(path)
+
+    if not path.exists():
+        return f"[error: file not found: {path}]"
+
+    ext = path.suffix.lower()
+
+    if ext == ".pdf":
+        return _segments_pdf(path)
+    elif ext == ".docx":
+        return _segments_docx(path)
+    elif ext == ".xlsx":
+        return _segments_xlsx(path)
+    elif ext == ".pptx":
+        return _segments_pptx(path)
+    elif _is_text_extension(ext):
+        return _segments_text_file(path)
+    elif ext in IMAGE_EXTENSIONS:
+        return []
+    else:
+        return None
+
+
+def _segments_pdf(path: Path) -> list[ExtractedSegment] | str:
+    try:
+        from pypdf import PdfReader
+    except ImportError:
+        return "[error: pypdf not installed]"
+    try:
+        reader = PdfReader(path)
+        segments: list[ExtractedSegment] = []
+        for i, page in enumerate(reader.pages, 1):
+            text = page.extract_text() or ""
+            segments.append(ExtractedSegment(
+                kind="page",
+                label=f"Page {i}",
+                text=text,
+                meta={"page": i},
+            ))
+        return segments
+    except Exception as e:
+        logger.exception("Failed to extract PDF {}", path)
+        return f"[error: failed to extract PDF: {e!s}]"
+
+
+def _segments_pptx(path: Path) -> list[ExtractedSegment] | str:
+    try:
+        from pptx import Presentation as PptxPresentation
+    except ImportError:
+        return "[error: python-pptx not installed]"
+    try:
+        prs = PptxPresentation(path)
+        segments: list[ExtractedSegment] = []
+        for i, slide in enumerate(prs.slides, 1):
+            slide_text: list[str] = []
+            for shape in slide.shapes:
+                _collect_pptx_shape_text(shape, slide_text)
+            segments.append(ExtractedSegment(
+                kind="slide",
+                label=f"Slide {i}",
+                text="\n".join(slide_text),
+                meta={"slide": i},
+            ))
+        return segments
+    except Exception as e:
+        logger.exception("Failed to extract PPTX {}", path)
+        return f"[error: failed to extract PPTX: {e!s}]"
+
+
+def _segments_xlsx(path: Path) -> list[ExtractedSegment] | str:
+    try:
+        from openpyxl import load_workbook
+    except ImportError:
+        return "[error: openpyxl not installed]"
+    try:
+        wb = load_workbook(path, read_only=True, data_only=True)
+        try:
+            segments: list[ExtractedSegment] = []
+            for sheet_name in wb.sheetnames:
+                ws = wb[sheet_name]
+                rows: list[str] = []
+                row_numbers: list[int] = []
+                for row_idx, row in enumerate(ws.iter_rows(values_only=True), 1):
+                    row_text = "\t".join(
+                        str(cell) if cell is not None else "" for cell in row
+                    )
+                    if row_text.strip():
+                        rows.append(row_text)
+                        row_numbers.append(row_idx)
+                for start in range(0, len(rows), _XLSX_ROWS_PER_SEGMENT):
+                    chunk_rows = rows[start : start + _XLSX_ROWS_PER_SEGMENT]
+                    chunk_nums = row_numbers[start : start + _XLSX_ROWS_PER_SEGMENT]
+                    row_start, row_end = chunk_nums[0], chunk_nums[-1]
+                    segments.append(ExtractedSegment(
+                        kind="sheet",
+                        label=f"Sheet: {sheet_name} (行 {row_start}-{row_end})",
+                        text="\n".join(chunk_rows),
+                        meta={
+                            "sheet": sheet_name,
+                            "rowStart": row_start,
+                            "rowEnd": row_end,
+                        },
+                    ))
+            return segments
+        finally:
+            wb.close()
+    except Exception as e:
+        logger.exception("Failed to extract XLSX {}", path)
+        return f"[error: failed to extract XLSX: {e!s}]"
+
+
+_HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
+
+
+def _segments_from_heading_blocks(
+    blocks: list[tuple[str | None, list[str]]],
+) -> list[ExtractedSegment]:
+    """把 (heading, lines) 块转成 segments，超长块按字符数二次切分。"""
+    segments: list[ExtractedSegment] = []
+    for heading, lines in blocks:
+        text = "\n".join(lines)
+        label = heading or "正文"
+        meta: dict[str, Any] = {"heading": heading} if heading else {}
+        kind = "heading" if heading else "block"
+        if len(text) <= _MAX_SEGMENT_CHARS:
+            segments.append(ExtractedSegment(kind=kind, label=label, text=text, meta=meta))
+            continue
+        for offset in range(0, len(text), _MAX_SEGMENT_CHARS):
+            piece = text[offset : offset + _MAX_SEGMENT_CHARS]
+            piece_meta = dict(meta)
+            if offset:
+                piece_meta["continued"] = True
+            segments.append(ExtractedSegment(
+                kind=kind, label=label, text=piece, meta=piece_meta,
+            ))
+    return segments
+
+
+def _segments_docx(path: Path) -> list[ExtractedSegment] | str:
+    try:
+        from docx import Document as DocxDocument
+    except ImportError:
+        return "[error: python-docx not installed]"
+    try:
+        doc = DocxDocument(path)
+        blocks: list[tuple[str | None, list[str]]] = []
+        current_heading: str | None = None
+        current_lines: list[str] = []
+        for para in doc.paragraphs:
+            style_name = (para.style.name or "") if para.style else ""
+            if style_name.startswith("Heading") and para.text.strip():
+                if current_lines or current_heading is not None:
+                    blocks.append((current_heading, current_lines))
+                current_heading = para.text.strip()
+                current_lines = []
+            elif para.text.strip():
+                current_lines.append(para.text)
+        if current_lines or current_heading is not None:
+            blocks.append((current_heading, current_lines))
+        return _segments_from_heading_blocks(blocks)
+    except Exception as e:
+        logger.exception("Failed to extract DOCX {}", path)
+        return f"[error: failed to extract DOCX: {e!s}]"
+
+
+def _segments_text_file(path: Path) -> list[ExtractedSegment] | str:
+    try:
+        try:
+            content = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            content = path.read_text(encoding="latin-1")
+    except Exception as e:
+        logger.exception("Failed to read text file {}", path)
+        return f"[error: failed to read file: {e!s}]"
+
+    if path.suffix.lower() not in (".md", ".markdown"):
+        # 纯文本/数据文件：按字符数切成 block segments
+        if not content:
+            return []
+        return _segments_from_heading_blocks([(None, [content])])
+
+    # Markdown：按标题切分
+    blocks: list[tuple[str | None, list[str]]] = []
+    current_heading: str | None = None
+    current_lines: list[str] = []
+    for line in content.split("\n"):
+        m = _HEADING_RE.match(line)
+        if m:
+            if current_lines or current_heading is not None:
+                blocks.append((current_heading, current_lines))
+            current_heading = m.group(2).strip()
+            current_lines = []
+        else:
+            current_lines.append(line)
+    if current_lines or current_heading is not None:
+        blocks.append((current_heading, current_lines))
+    return _segments_from_heading_blocks(blocks)

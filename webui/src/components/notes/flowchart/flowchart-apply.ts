@@ -55,7 +55,7 @@ export type PrepareResult =
 export function prepareFlowchartPatch(
   aiContent: string,
   currentMarkdown: string,
-  noteTitle: string,
+  _noteTitle: string,
   messageId: string,
   requestBaseHash: string,
 ): PrepareResult {
@@ -90,7 +90,6 @@ export function prepareFlowchartPatch(
   }
 
   // 4. dry-run 成功，保留 proposedDocument 供应用时使用
-  void noteTitle; // title 在 apply 时使用
   return {
     ok: true,
     pending: {

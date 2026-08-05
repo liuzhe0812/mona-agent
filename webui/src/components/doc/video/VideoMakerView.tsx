@@ -1,16 +1,26 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Download, FolderOpen, History, Play, SlidersHorizontal, Trash2, Volume2 } from "lucide-react";
+import { Download, FolderOpen, History, MoreHorizontal, Play, SlidersHorizontal, Trash2, Volume2 } from "lucide-react";
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuSeparator,
-  ContextMenuTrigger,
-} from "@/components/ui/context-menu";
 import { useClient } from "@/providers/ClientProvider";
 import {
   buildVideoDownloadUrl,
@@ -23,22 +33,21 @@ import {
   getApiBase,
   saveVideoChatId,
   type VideoProject,
+  type VideoProjectPhase,
   type VideoRuntimeStatus,
 } from "@/lib/api";
-import { isTauri, openPathWithSystemApp } from "@/lib/tauri";
+import { downloadMediaUrl, isTauri, openPathWithSystemApp } from "@/lib/tauri";
+import { EDGE_TTS_VOICES } from "@/lib/constants";
 import { useWorkspaceStore } from "@/lib/workspace-store";
 import { cn } from "@/lib/utils";
 import { DocChatPanel } from "../DocChatPanel";
-import { VideoRuntimeDialog } from "./VideoRuntimeDialog";
 import { StoryboardPhase } from "./StoryboardPhase";
 import { ProducingPhase } from "./ProducingPhase";
-import { ExportPhase } from "./ExportPhase";
+import { VideoRuntimeDialog, type RuntimeDepKey } from "./VideoRuntimeDialog";
 
 type SidebarTab = "config" | "history";
-type VideoPhase = "config" | "storyboard" | "producing" | "export" | "done";
+type VideoPhase = "config" | "storyboard" | "producing";
 type VideoRatio = "16:9" | "9:16" | "1:1";
-type VideoFps = 30 | 60;
-type VideoQuality = "draft" | "standard" | "high";
 type TtsProvider = "edge" | "custom";
 
 const RATIOS: Array<{ value: VideoRatio; label: string; resolution: string }> = [
@@ -47,39 +56,20 @@ const RATIOS: Array<{ value: VideoRatio; label: string; resolution: string }> = 
   { value: "1:1", label: "方形", resolution: "1080×1080" },
 ];
 
-const FPS_OPTIONS: Array<{ value: VideoFps; label: string }> = [
-  { value: 30, label: "30fps" },
-  { value: 60, label: "60fps" },
-];
-
-const QUALITY_OPTIONS: Array<{ value: VideoQuality; label: string }> = [
-  { value: "draft", label: "Draft" },
-  { value: "standard", label: "Standard" },
-  { value: "high", label: "High" },
-];
-
 const TTS_PROVIDERS: Array<{ value: TtsProvider; label: string; hint: string }> = [
   { value: "edge", label: "Edge", hint: "免费" },
-  { value: "custom", label: "自定义", hint: "OpenAI 兼容" },
+  { value: "custom", label: "自定义", hint: "使用设置页的全局语音合成配置" },
 ];
 
-const EDGE_VOICES: Array<{ value: string; label: string }> = [
-  { value: "zh-CN-XiaoyiNeural", label: "晓伊（女·温柔）" },
-  { value: "zh-CN-YunxiNeural", label: "云希（男·成熟）" },
-  { value: "zh-CN-YunyangNeural", label: "云扬（男·新闻）" },
-  { value: "zh-CN-XiaoxiaoNeural", label: "晓晓（女·标准）" },
-  { value: "zh-CN-XiaohanNeural", label: "晓涵（女·温暖）" },
-  { value: "zh-CN-XiaomengNeural", label: "晓梦（女·亲切）" },
-  { value: "zh-CN-XiaomoNeural", label: "晓墨（女·知性）" },
-  { value: "zh-CN-XiaoqiuNeural", label: "晓秋（女·沉稳）" },
-  { value: "zh-CN-YunfengNeural", label: "云枫（男·磁性）" },
-  { value: "zh-CN-YunhaoNeural", label: "云皓（男·活力）" },
-  { value: "zh-CN-YunjianNeural", label: "云健（男·运动）" },
-];
+const PHASE_LABELS: Record<VideoProjectPhase, string> = {
+  storyboard: "分镜中",
+  producing: "制作中",
+  exportable: "待导出",
+  rendering: "导出中",
+  done: "已完成",
+};
 
 const CUSTOM_VOICE_PLACEHOLDER = "alloy";
-const CUSTOM_API_BASE_PLACEHOLDER = "https://api.example.com/v1";
-const CUSTOM_MODEL_PLACEHOLDER = "tts-1";
 
 const RATIO_RESOLUTION_MAP: Record<VideoRatio, string> = {
   "16:9": "1920x1080",
@@ -93,6 +83,8 @@ const DEFAULT_RUNTIME_STATUS: VideoRuntimeStatus = {
   chrome: { ok: false },
 };
 
+// Only the most-recent project name is persisted locally. The authoritative
+// phase always comes from the server — never restore a stale local phase.
 const ACTIVE_PROJECT_KEY = "mona.video.activeProject";
 
 export function VideoMakerView() {
@@ -101,30 +93,28 @@ export function VideoMakerView() {
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>("config");
   const [topic, setTopic] = useState("");
   const [ratio, setRatio] = useState<VideoRatio>("16:9");
-  const [fps, setFps] = useState<VideoFps>(30);
-  const [quality, setQuality] = useState<VideoQuality>("standard");
   const [narrationEnabled, setNarrationEnabled] = useState(false);
   const [ttsProvider, setTtsProvider] = useState<TtsProvider>("edge");
   const [ttsVoice, setTtsVoice] = useState("");
   const [ttsRate, setTtsRate] = useState("");
-  const [ttsApiBase, setTtsApiBase] = useState("");
-  const [ttsApiKey, setTtsApiKey] = useState("");
-  const [ttsModel, setTtsModel] = useState("");
   const [phase, setPhase] = useState<VideoPhase>("config");
   const [chatId, setChatId] = useState<string | null>(null);
   const [projectName, setProjectName] = useState<string | null>(null);
-  const configDisabled = !!projectName;
+  const [createError, setCreateError] = useState<string | null>(null);
 
   const [historyProjects, setHistoryProjects] = useState<VideoProject[]>([]);
   const [runtimeStatus, setRuntimeStatus] = useState<VideoRuntimeStatus>(DEFAULT_RUNTIME_STATUS);
   const [runtimeOk, setRuntimeOk] = useState(true);
   const [runtimeDialogOpen, setRuntimeDialogOpen] = useState(false);
-  const [downloadProgress, setDownloadProgress] = useState<{
-    component: string;
-    progress: number;
-  } | null>(null);
+  const [installing, setInstalling] = useState<RuntimeDepKey | null>(null);
+  const [installErrors, setInstallErrors] = useState<Partial<Record<RuntimeDepKey, string>>>({});
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [historyError, setHistoryError] = useState<string | null>(null);
   const generatingRef = useRef(false);
+  // Incremented when AI finishes a reply (streaming → false) to trigger storyboard refresh
+  const [aiTurnComplete, setAiTurnComplete] = useState(0);
+  const wasStreamingRef = useRef(false);
 
   // Auto-switch to history tab when a project is active
   useEffect(() => {
@@ -133,7 +123,8 @@ export function VideoMakerView() {
     }
   }, [projectName]);
 
-  // Initial video runtime status check
+  // Passive runtime status check — only drives the hint banner. Storyboard
+  // generation does not depend on FFmpeg/Chrome, so this never blocks creation.
   useEffect(() => {
     let cancelled = false;
     fetchVideoRuntimeCheck(token)
@@ -209,71 +200,60 @@ export function VideoMakerView() {
     }
   }, [token]);
 
-  const handleDownloadRuntime = useCallback(async () => {
-    const status = runtimeStatus;
-    const missing: Array<{ key: "node" | "ffmpeg" | "chrome"; label: string }> = [];
-    if (!status.node.ok) missing.push({ key: "node", label: "Node.js" });
-    if (!status.ffmpeg.ok) missing.push({ key: "ffmpeg", label: "FFmpeg" });
-    if (!status.chrome.ok) missing.push({ key: "chrome", label: "Chrome" });
-    if (missing.length === 0) return;
+  const handleInstallRuntime = useCallback(
+    async (component?: RuntimeDepKey) => {
+      const targets: RuntimeDepKey[] = component
+        ? [component]
+        : (["node", "ffmpeg", "chrome"] as RuntimeDepKey[]).filter(
+            (k) => !runtimeStatus[k].ok,
+          );
+      if (targets.length === 0) return;
 
-    for (const dep of missing) {
-      setDownloadProgress({ component: dep.label, progress: 0 });
-      // Simulate incremental progress while download runs
-      const progressTimer = setInterval(() => {
-        setDownloadProgress((prev) =>
-          prev && prev.component === dep.label
-            ? { ...prev, progress: Math.min(prev.progress + 10, 90) }
-            : prev,
-        );
-      }, 500);
-      try {
-        await downloadVideoRuntime(token, dep.key);
-      } catch (e) {
-        console.error(`Failed to download ${dep.label}`, e);
+      for (const dep of targets) {
+        setInstalling(dep);
+        setInstallErrors((prev) => {
+          const next = { ...prev };
+          delete next[dep];
+          return next;
+        });
+        try {
+          const res = await downloadVideoRuntime(token, dep);
+          if (!res.ok) {
+            setInstallErrors((prev) => ({
+              ...prev,
+              [dep]: res.error || "安装失败",
+            }));
+          }
+        } catch (e) {
+          setInstallErrors((prev) => ({ ...prev, [dep]: String(e) }));
+        }
       }
-      clearInterval(progressTimer);
-      setDownloadProgress({ component: dep.label, progress: 100 });
-    }
 
-    setDownloadProgress(null);
-    await refreshRuntimeStatus();
-  }, [runtimeStatus, token, refreshRuntimeStatus]);
+      setInstalling(null);
+      await refreshRuntimeStatus();
+    },
+    [runtimeStatus, token, refreshRuntimeStatus],
+  );
 
   const handleStartGeneration = useCallback(async () => {
     if (generatingRef.current) return;
-    // 1. Check runtime dependencies
-    const ready = await refreshRuntimeStatus();
-    if (!ready) {
-      setRuntimeDialogOpen(true);
-      return;
-    }
-
+    setCreateError(null);
+    generatingRef.current = true;
     try {
-      generatingRef.current = true;
-      const name = generateProjectName();
+      const name = generateProjectName(topic);
       setProjectName(name);
-      const resolution = `${RATIO_RESOLUTION_MAP[ratio]}@${fps}fps`;
+      const resolution = RATIO_RESOLUTION_MAP[ratio];
       const ttsConfig = narrationEnabled
         ? {
             narrationEnabled: true,
             ttsProvider,
             ttsVoice: ttsVoice.trim(),
             ttsRate: ttsRate.trim(),
-            ...(ttsProvider === "custom"
-              ? {
-                  ttsApiBase: ttsApiBase.trim(),
-                  ttsApiKey: ttsApiKey.trim(),
-                  ttsModel: ttsModel.trim(),
-                }
-              : {}),
           }
         : undefined;
       const prompt = buildVideoPrompt({
         topic,
         ratio,
-        fps,
-        quality,
         name,
         resolution,
         narration: narrationEnabled
@@ -281,41 +261,38 @@ export function VideoMakerView() {
               provider: ttsProvider,
               voice: ttsVoice.trim(),
               rate: ttsRate.trim(),
-              apiBase: ttsProvider === "custom" ? ttsApiBase.trim() : undefined,
-              apiKey: ttsProvider === "custom" ? ttsApiKey.trim() : undefined,
-              model: ttsProvider === "custom" ? ttsModel.trim() : undefined,
             }
           : undefined,
       });
-      const displayText = `请生成视频。\n项目名：${name}`;
-      // 2. Create project
-      await createVideoProject(token, name, resolution, ttsConfig);
-      // 3. Create session
+      const displayText = topic.trim() || "请生成视频。";
+      // 1. Create project
+      const created = await createVideoProject(token, name, resolution, ttsConfig);
+      if (!created.ok) {
+        throw new Error(created.error || "创建项目失败");
+      }
+      // 2. Create session
       const newChatId = await client.newChat(5_000, false, null, "video");
       setChatId(newChatId);
-      // 4. Save chat_id
+      // 3. Save chat_id
       await saveVideoChatId(token, name, newChatId);
-      // 5. Send prompt
+      // 4. Send prompt
       client.sendMessage(newChatId, prompt, undefined, { displayContent: displayText });
       setPhase("storyboard");
     } catch (e) {
       console.error("Failed to start video generation", e);
+      setProjectName(null);
+      setCreateError(e instanceof Error ? e.message : String(e));
+    } finally {
       generatingRef.current = false;
     }
   }, [
-    refreshRuntimeStatus,
     client,
     topic,
     ratio,
-    fps,
-    quality,
     narrationEnabled,
     ttsProvider,
     ttsVoice,
     ttsRate,
-    ttsApiBase,
-    ttsApiKey,
-    ttsModel,
     token,
   ]);
 
@@ -327,25 +304,29 @@ export function VideoMakerView() {
     [chatId, client],
   );
 
+  // Detect AI turn completion: streaming transitions from true → false.
+  // This is more reliable than polling storyboard.md — the AI has finished
+  // its reply (and any tool calls), so any storyboard.md it wrote is now on disk.
+  const handleStreamingChange = useCallback((streaming: boolean) => {
+    if (wasStreamingRef.current && !streaming) {
+      // AI just finished a reply — trigger storyboard refresh
+      setAiTurnComplete((n) => n + 1);
+    }
+    wasStreamingRef.current = streaming;
+  }, []);
+
   const handleSelectHistory = useCallback(
     (project: VideoProject) => {
       setProjectName(project.name);
       setChatId(project.chatId);
-      const isDone = project.status === "done" || project.hasVideo;
-      if (isDone) {
-        setPhase("export");
-      } else if (project.hasStoryboard && (project.sceneCount ?? 0) > 0) {
-        // 分镜已锁定且已有场景 HTML → 进入逐场景制作
-        setPhase("producing");
-      } else {
-        // 分镜存在但未锁定/无场景 → 进入分镜审阅；无 storyboard → 等待 AI 生成
-        setPhase("storyboard");
-      }
+      // Route by the server-recorded phase: storyboard → 分镜页,其他均进入制作页
+      setPhase(project.phase === "storyboard" ? "storyboard" : "producing");
     },
     [],
   );
 
-  // Persist active project name for cross-page restoration
+  // Persist only the active project name; the authoritative phase is always
+  // read back from the server on restore.
   useEffect(() => {
     try {
       if (projectName) {
@@ -358,16 +339,17 @@ export function VideoMakerView() {
     }
   }, [projectName]);
 
-  // Restore active project on mount (handles page switching)
+  // Restore active project on mount (handles page switching). The server
+  // project record decides which phase to enter — local state is only a pointer.
   useEffect(() => {
     let cancelled = false;
     try {
-      const saved = localStorage.getItem(ACTIVE_PROJECT_KEY);
-      if (!saved) return;
+      const savedName = localStorage.getItem(ACTIVE_PROJECT_KEY);
+      if (!savedName) return;
       fetchVideoProjects(token)
         .then((res) => {
           if (cancelled) return;
-          const project = res.projects?.find((p) => p.name === saved);
+          const project = res.projects?.find((p) => p.name === savedName);
           if (project) {
             handleSelectHistory(project);
           } else {
@@ -386,32 +368,15 @@ export function VideoMakerView() {
 
   const handleDownloadVideo = useCallback(
     async (name: string) => {
-      const base = await getApiBase();
-      const url = buildVideoDownloadUrl(base, token, name);
-
-      if (isTauri()) {
-        try {
-          const { save } = await import("@tauri-apps/plugin-dialog");
-          const { writeFile } = await import("@tauri-apps/plugin-fs");
-          const filePath = await save({
-            defaultPath: `${name}.mp4`,
-            filters: [{ name: "MP4 Video", extensions: ["mp4"] }],
-          });
-          if (!filePath) return;
-          const res = await fetch(url);
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          const blob = await res.arrayBuffer();
-          await writeFile(filePath, new Uint8Array(blob));
-        } catch (e) {
-          console.error("Video download failed", e);
-        }
-        return;
+      setHistoryError(null);
+      try {
+        const base = await getApiBase();
+        const url = buildVideoDownloadUrl(base, token, name);
+        await downloadMediaUrl(url, `${name}.mp4`);
+      } catch (e) {
+        console.error("Video download failed", e);
+        setHistoryError(`下载失败: ${e instanceof Error ? e.message : String(e)}`);
       }
-
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = `${name}.mp4`;
-      link.click();
     },
     [token],
   );
@@ -424,6 +389,7 @@ export function VideoMakerView() {
         await openPathWithSystemApp(dirPath);
       } catch (e) {
         console.error("Failed to open project directory", e);
+        setHistoryError(`打开目录失败: ${e instanceof Error ? e.message : String(e)}`);
       }
     },
     [workspacePath],
@@ -433,6 +399,7 @@ export function VideoMakerView() {
     async (name: string) => {
       if (deleting) return;
       setDeleting(name);
+      setHistoryError(null);
       try {
         await deleteVideoProject(token, name);
         setHistoryProjects((prev) => prev.filter((p) => p.name !== name));
@@ -443,6 +410,7 @@ export function VideoMakerView() {
         }
       } catch (e) {
         console.error("Failed to delete video project", e);
+        setHistoryError(`删除失败: ${e instanceof Error ? e.message : String(e)}`);
       } finally {
         setDeleting(null);
       }
@@ -453,12 +421,14 @@ export function VideoMakerView() {
   return (
     <div className="flex h-full flex-col bg-background">
       <div className="flex min-h-0 flex-1">
-        {/* 左侧:配置 / 历史 */}
+        {/* 左侧:新建 / 历史 */}
         <aside className="flex w-[260px] shrink-0 flex-col border-r border-border/70">
-          <div className="flex shrink-0 border-b border-border/70">
+          <div className="flex shrink-0 border-b border-border/70" role="tablist">
             <button
+              role="tab"
+              aria-selected={sidebarTab === "config"}
               className={cn(
-                "flex flex-1 items-center justify-center gap-1.5 py-2 text-[11px] font-medium transition-colors",
+                "flex flex-1 items-center justify-center gap-1.5 py-2 text-[12px] font-medium transition-colors",
                 sidebarTab === "config"
                   ? "text-foreground border-b-2 border-primary"
                   : "text-muted-foreground hover:text-foreground",
@@ -466,11 +436,13 @@ export function VideoMakerView() {
               onClick={() => setSidebarTab("config")}
             >
               <SlidersHorizontal className="h-3 w-3" />
-              配置
+              新建
             </button>
             <button
+              role="tab"
+              aria-selected={sidebarTab === "history"}
               className={cn(
-                "flex flex-1 items-center justify-center gap-1.5 py-2 text-[11px] font-medium transition-colors",
+                "flex flex-1 items-center justify-center gap-1.5 py-2 text-[12px] font-medium transition-colors",
                 sidebarTab === "history"
                   ? "text-foreground border-b-2 border-primary"
                   : "text-muted-foreground hover:text-foreground",
@@ -496,64 +468,16 @@ export function VideoMakerView() {
                           key={r.value}
                           type="button"
                           title={r.resolution}
+                          aria-pressed={ratio === r.value}
                           className={cn(
-                            "rounded-md px-1.5 py-1 text-[11px] font-medium transition-all",
+                            "rounded-md px-1.5 py-1 text-[12px] font-medium transition-all",
                             ratio === r.value
                               ? "bg-background text-foreground shadow"
                               : "text-muted-foreground hover:text-foreground",
                           )}
                           onClick={() => setRatio(r.value)}
-                          disabled={configDisabled}
                         >
                           {r.label}
-                        </button>
-                      ))}
-                    </div>
-                  </section>
-
-                  <section>
-                    <h3 className="mb-1.5 text-[12px] font-medium text-foreground">
-                      帧率
-                    </h3>
-                    <div className="grid grid-cols-2 gap-1 rounded-lg bg-muted p-1">
-                      {FPS_OPTIONS.map((f) => (
-                        <button
-                          key={f.value}
-                          type="button"
-                          className={cn(
-                            "rounded-md px-1.5 py-1 text-[11px] font-medium transition-all",
-                            fps === f.value
-                              ? "bg-background text-foreground shadow"
-                              : "text-muted-foreground hover:text-foreground",
-                          )}
-                          onClick={() => setFps(f.value)}
-                          disabled={configDisabled}
-                        >
-                          {f.label}
-                        </button>
-                      ))}
-                    </div>
-                  </section>
-
-                  <section>
-                    <h3 className="mb-1.5 text-[12px] font-medium text-foreground">
-                      质量
-                    </h3>
-                    <div className="grid grid-cols-3 gap-1 rounded-lg bg-muted p-1">
-                      {QUALITY_OPTIONS.map((q) => (
-                        <button
-                          key={q.value}
-                          type="button"
-                          className={cn(
-                            "rounded-md px-1.5 py-1 text-[11px] font-medium transition-all",
-                            quality === q.value
-                              ? "bg-background text-foreground shadow"
-                              : "text-muted-foreground hover:text-foreground",
-                          )}
-                          onClick={() => setQuality(q.value)}
-                          disabled={configDisabled}
-                        >
-                          {q.label}
                         </button>
                       ))}
                     </div>
@@ -567,14 +491,14 @@ export function VideoMakerView() {
                       </h3>
                       <button
                         type="button"
+                        aria-pressed={narrationEnabled}
                         className={cn(
-                          "rounded-full px-2 py-0.5 text-[11px] font-medium transition-colors",
+                          "rounded-full px-2 py-0.5 text-[12px] font-medium transition-colors",
                           narrationEnabled
                             ? "bg-primary/10 text-foreground"
                             : "text-muted-foreground hover:text-foreground hover:bg-muted/50",
                         )}
                         onClick={() => setNarrationEnabled((v) => !v)}
-                        disabled={configDisabled}
                       >
                         {narrationEnabled ? "已启用" : "未启用"}
                       </button>
@@ -582,7 +506,7 @@ export function VideoMakerView() {
                     {narrationEnabled ? (
                       <div className="mt-2 space-y-3">
                         <div>
-                          <div className="mb-1 text-[10px] text-muted-foreground">
+                          <div className="mb-1 text-[11px] text-muted-foreground">
                             TTS 供应商
                           </div>
                           <div className="grid grid-cols-2 gap-1 rounded-lg bg-muted p-1">
@@ -591,8 +515,9 @@ export function VideoMakerView() {
                                 key={p.value}
                                 type="button"
                                 title={p.hint}
+                                aria-pressed={ttsProvider === p.value}
                                 className={cn(
-                                  "rounded-md px-1 py-1 text-[11px] font-medium transition-all",
+                                  "rounded-md px-1 py-1 text-[12px] font-medium transition-all",
                                   ttsProvider === p.value
                                     ? "bg-background text-foreground shadow"
                                     : "text-muted-foreground hover:text-foreground",
@@ -601,7 +526,6 @@ export function VideoMakerView() {
                                   setTtsProvider(p.value);
                                   setTtsVoice("");
                                 }}
-                                disabled={configDisabled}
                               >
                                 {p.label}
                               </button>
@@ -610,113 +534,75 @@ export function VideoMakerView() {
                         </div>
 
                         {ttsProvider === "edge" ? (
-                          <>
-                            <div>
-                              <div className="mb-1 text-[10px] text-muted-foreground">
-                                音色
-                              </div>
-                              <select
-                                className="w-full rounded-lg border border-border/70 bg-transparent px-3 py-1.5 text-[12px] outline-none focus:border-primary"
-                                value={
-                                  EDGE_VOICES.some((v) => v.value === ttsVoice)
-                                    ? ttsVoice
-                                    : ttsVoice
-                                      ? "__custom__"
-                                      : ""
+                          <div>
+                            <div className="mb-1 text-[11px] text-muted-foreground">
+                              音色
+                            </div>
+                            <select
+                              aria-label="Edge 音色"
+                              className="w-full rounded-lg border border-border/70 bg-transparent px-3 py-1.5 text-[12px] outline-none focus:border-primary"
+                              value={
+                                EDGE_TTS_VOICES.some((v) => v.value === ttsVoice)
+                                  ? ttsVoice
+                                  : ttsVoice
+                                    ? "__custom__"
+                                    : ""
+                              }
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                if (v === "__custom__") {
+                                  setTtsVoice("");
+                                } else {
+                                  setTtsVoice(v);
                                 }
-                                onChange={(e) => {
-                                  const v = e.target.value;
-                                  if (v === "__custom__") {
-                                    setTtsVoice("");
-                                  } else {
-                                    setTtsVoice(v);
-                                  }
-                                }}
-                                disabled={configDisabled}
-                              >
-                                <option value="">选择音色...</option>
-                                {EDGE_VOICES.map((v) => (
-                                  <option key={v.value} value={v.value}>
-                                    {v.label}
-                                  </option>
-                                ))}
-                                <option value="__custom__">自定义 ID...</option>
-                              </select>
-                              {(!EDGE_VOICES.some((v) => v.value === ttsVoice) || ttsVoice === "") && (
-                                <Input
-                                  value={ttsVoice}
-                                  onChange={(e) => setTtsVoice(e.target.value)}
-                                  placeholder="zh-CN-XiaoyiNeural"
-                                  className="mt-1.5 h-8 rounded-lg text-[12px]"
-                                  disabled={configDisabled}
-                                />
-                              )}
-                            </div>
-                          </>
-                        ) : (
-                          <>
-                            <div>
-                              <div className="mb-1 text-[10px] text-muted-foreground">
-                                API Base
-                              </div>
-                              <Input
-                                value={ttsApiBase}
-                                onChange={(e) => setTtsApiBase(e.target.value)}
-                                placeholder={CUSTOM_API_BASE_PLACEHOLDER}
-                                className="h-8 rounded-lg text-[12px]"
-                                disabled={configDisabled}
-                              />
-                            </div>
-                            <div>
-                              <div className="mb-1 text-[10px] text-muted-foreground">
-                                API Key
-                              </div>
-                              <Input
-                                value={ttsApiKey}
-                                onChange={(e) => setTtsApiKey(e.target.value)}
-                                placeholder="sk-..."
-                                type="password"
-                                className="h-8 rounded-lg text-[12px]"
-                                disabled={configDisabled}
-                              />
-                            </div>
-                            <div>
-                              <div className="mb-1 text-[10px] text-muted-foreground">
-                                Model
-                              </div>
-                              <Input
-                                value={ttsModel}
-                                onChange={(e) => setTtsModel(e.target.value)}
-                                placeholder={CUSTOM_MODEL_PLACEHOLDER}
-                                className="h-8 rounded-lg text-[12px]"
-                                disabled={configDisabled}
-                              />
-                            </div>
-                            <div>
-                              <div className="mb-1 text-[10px] text-muted-foreground">
-                                Voice ID
-                              </div>
+                              }}
+                            >
+                              <option value="">选择音色...</option>
+                              {EDGE_TTS_VOICES.map((v) => (
+                                <option key={v.value} value={v.value}>
+                                  {v.label}
+                                </option>
+                              ))}
+                              <option value="__custom__">自定义 ID...</option>
+                            </select>
+                            {(!EDGE_TTS_VOICES.some((v) => v.value === ttsVoice) || ttsVoice === "") && (
                               <Input
                                 value={ttsVoice}
                                 onChange={(e) => setTtsVoice(e.target.value)}
-                                placeholder={CUSTOM_VOICE_PLACEHOLDER}
-                                className="h-8 rounded-lg text-[12px]"
-                                disabled={configDisabled}
+                                placeholder="zh-CN-XiaoyiNeural"
+                                aria-label="自定义音色 ID"
+                                className="mt-1.5 h-8 rounded-lg text-[12px]"
                               />
+                            )}
+                          </div>
+                        ) : (
+                          <div>
+                            <div className="mb-1 text-[11px] text-muted-foreground">
+                              Voice ID
                             </div>
-                          </>
+                            <Input
+                              value={ttsVoice}
+                              onChange={(e) => setTtsVoice(e.target.value)}
+                              placeholder={CUSTOM_VOICE_PLACEHOLDER}
+                              aria-label="自定义 TTS Voice ID"
+                              className="h-8 rounded-lg text-[12px]"
+                            />
+                            <div className="mt-1 text-[11px] text-muted-foreground">
+                              API 凭据使用「设置 → 语音合成」中的全局配置。
+                            </div>
+                          </div>
                         )}
 
                         <div>
-                          <div className="mb-1 text-[10px] text-muted-foreground">
+                          <div className="mb-1 text-[11px] text-muted-foreground">
                             语速
                           </div>
                           <Input
                             value={ttsRate}
                             onChange={(e) => setTtsRate(e.target.value)}
                             placeholder="+0%"
+                            aria-label="语速"
                             className="h-8 rounded-lg text-[12px]"
-                            disabled={configDisabled}
                           />
                         </div>
                       </div>
@@ -727,7 +613,7 @@ export function VideoMakerView() {
                     <button
                       type="button"
                       onClick={() => setRuntimeDialogOpen(true)}
-                      className="flex w-full items-center gap-1.5 rounded-lg border border-destructive/40 bg-destructive/5 px-2.5 py-2 text-[11px] font-normal text-destructive transition-colors hover:bg-destructive/10 hover:text-destructive"
+                      className="flex w-full items-center gap-1.5 rounded-lg border border-destructive/40 bg-destructive/5 px-2.5 py-2 text-[12px] font-normal text-destructive transition-colors hover:bg-destructive/10 hover:text-destructive"
                     >
                       <Play className="h-3.5 w-3.5 shrink-0" />
                       <span>视频依赖未安装,点击此处下载</span>
@@ -745,73 +631,110 @@ export function VideoMakerView() {
                       placeholder="描述你想制作的视频内容..."
                       value={topic}
                       onChange={(e) => setTopic(e.target.value)}
-                      disabled={configDisabled}
                     />
                   </div>
+                  {createError ? (
+                    <div
+                      className="flex items-center justify-between gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-2.5 py-2 text-[12px] text-destructive"
+                      role="alert"
+                    >
+                      <span className="min-w-0 flex-1 break-words">{createError}</span>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 shrink-0 px-2 text-[12px] text-destructive hover:text-destructive"
+                        onClick={() => void handleStartGeneration()}
+                        disabled={!topic.trim()}
+                      >
+                        重试
+                      </Button>
+                    </div>
+                  ) : null}
                   <Button
                     className="w-full"
-                    disabled={!topic.trim() || configDisabled}
+                    disabled={!topic.trim()}
                     onClick={handleStartGeneration}
                   >
                     <Play className="mr-1.5 h-4 w-4" />
-                    {projectName ? "项目进行中" : "开始生成"}
+                    开始生成
                   </Button>
                 </div>
               </div>
             ) : (
               <div className="flex h-full flex-col">
+                {historyError ? (
+                  <div className="shrink-0 px-2 pt-2" role="alert">
+                    <div className="rounded-md border border-destructive/30 bg-destructive/5 px-2.5 py-2 text-[12px] text-destructive">
+                      {historyError}
+                    </div>
+                  </div>
+                ) : null}
                 {historyProjects.length === 0 ? (
                   <div className="flex flex-1 items-center justify-center text-[12px] text-muted-foreground">
                     暂无历史项目
                   </div>
                 ) : (
-                  <div className="min-h-0 flex-1 overflow-y-auto p-2">
+                  <div className="min-h-0 flex-1 overflow-y-auto scrollbar-hover p-2">
                     {historyProjects.map((p) => (
-                      <ContextMenu key={p.name}>
-                        <ContextMenuTrigger asChild>
-                          <button
-                            className={cn(
-                              "mb-1.5 w-full rounded-lg border border-border/60 px-2.5 py-2 text-left transition-colors hover:bg-accent",
-                              p.name === projectName ? "border-primary bg-accent" : "",
-                            )}
-                            onClick={() => handleSelectHistory(p)}
-                          >
-                            <div className="truncate text-[12px] font-medium">
-                              {p.name}
-                            </div>
-                            <div className="mt-0.5 text-[10px] text-muted-foreground">
-                              {p.resolution} · {p.status}
-                            </div>
-                          </button>
-                        </ContextMenuTrigger>
-                        <ContextMenuContent className="w-40">
-                          {p.hasVideo ? (
-                            <ContextMenuItem
-                              onClick={() => handleDownloadVideo(p.name)}
+                      <div
+                        key={p.name}
+                        className={cn(
+                          "group mb-1.5 flex items-center rounded-lg border border-border/60 transition-colors hover:bg-accent",
+                          p.name === projectName ? "border-primary bg-accent" : "",
+                        )}
+                      >
+                        <button
+                          className="min-w-0 flex-1 px-2.5 py-2 text-left"
+                          onClick={() => handleSelectHistory(p)}
+                        >
+                          <div className="truncate text-[12px] font-medium">
+                            {p.name}
+                          </div>
+                          <div className="mt-0.5 text-[11px] text-muted-foreground">
+                            {p.resolution} · {PHASE_LABELS[p.phase] ?? p.phase}
+                            {p.outputStale ? " · 内容已变化" : ""}
+                          </div>
+                        </button>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="mr-1 h-7 w-7 shrink-0"
+                              aria-label={`项目 ${p.name} 更多操作`}
+                            >
+                              <MoreHorizontal className="h-3.5 w-3.5" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent className="w-40" align="end">
+                            {p.hasVideo && !p.outputStale ? (
+                              <DropdownMenuItem
+                                onClick={() => void handleDownloadVideo(p.name)}
+                                className="text-[12px]"
+                              >
+                                <Download className="mr-2 h-3.5 w-3.5" />
+                                下载 MP4
+                              </DropdownMenuItem>
+                            ) : null}
+                            <DropdownMenuItem
+                              onClick={() => void handleOpenProjectDir(p.name)}
                               className="text-[12px]"
                             >
-                              <Download className="mr-2 h-3.5 w-3.5" />
-                              下载 MP4
-                            </ContextMenuItem>
-                          ) : null}
-                          <ContextMenuItem
-                            onClick={() => handleOpenProjectDir(p.name)}
-                            className="text-[12px]"
-                          >
-                            <FolderOpen className="mr-2 h-3.5 w-3.5" />
-                            打开任务目录
-                          </ContextMenuItem>
-                          <ContextMenuSeparator />
-                          <ContextMenuItem
-                            onClick={() => handleDeleteProject(p.name)}
-                            disabled={deleting === p.name}
-                            className="text-[12px] text-destructive focus:text-destructive"
-                          >
-                            <Trash2 className="mr-2 h-3.5 w-3.5" />
-                            {deleting === p.name ? "删除中..." : "删除项目"}
-                          </ContextMenuItem>
-                        </ContextMenuContent>
-                      </ContextMenu>
+                              <FolderOpen className="mr-2 h-3.5 w-3.5" />
+                              打开任务目录
+                            </DropdownMenuItem>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem
+                              onClick={() => setDeleteTarget(p.name)}
+                              disabled={deleting === p.name}
+                              className="text-[12px] text-destructive focus:text-destructive"
+                            >
+                              <Trash2 className="mr-2 h-3.5 w-3.5" />
+                              {deleting === p.name ? "删除中..." : "删除项目"}
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </div>
                     ))}
                   </div>
                 )}
@@ -832,23 +755,20 @@ export function VideoMakerView() {
                 <StoryboardPhase
                   projectName={projectName ?? ""}
                   onLocked={() => setPhase("producing")}
+                  refreshTrigger={aiTurnComplete}
                 />
               </div>
               <div className="w-[400px] shrink-0 border-l border-border/70">
                 <DocChatPanel
                   chatId={chatId}
                   onSend={handleSendMessage}
+                  onStreamingChange={handleStreamingChange}
                   placeholder="与视频助手对话调整分镜..."
                 />
               </div>
             </div>
           ) : phase === "producing" ? (
-            <ProducingPhase
-              projectName={projectName ?? ""}
-              onAllConfirmed={() => setPhase("export")}
-            />
-          ) : phase === "export" ? (
-            <ExportPhase projectName={projectName ?? ""} />
+            <ProducingPhase projectName={projectName ?? ""} />
           ) : (
             <div className="flex flex-1 items-center justify-center text-[13px] text-muted-foreground">
               未知状态
@@ -861,35 +781,77 @@ export function VideoMakerView() {
         open={runtimeDialogOpen}
         onClose={() => setRuntimeDialogOpen(false)}
         runtimeStatus={runtimeStatus}
-        onDownload={handleDownloadRuntime}
-        downloadProgress={downloadProgress}
+        installing={installing}
+        installErrors={installErrors}
+        onInstall={(component) => void handleInstallRuntime(component)}
       />
+
+      <AlertDialog
+        open={deleteTarget !== null}
+        onOpenChange={(open) => {
+          if (!open && deleting === null) setDeleteTarget(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>删除项目</AlertDialogTitle>
+            <AlertDialogDescription>
+              确定删除项目「{deleteTarget}」吗？项目目录及其全部分镜、预览和导出结果将被删除，此操作不可撤销。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                const name = deleteTarget;
+                setDeleteTarget(null);
+                if (name) void handleDeleteProject(name);
+              }}
+            >
+              删除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
 
-function generateProjectName(): string {
+function generateProjectName(topic: string): string {
   const now = new Date();
   const pad = (n: number) => String(n).padStart(2, "0");
   const ts = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}`;
   const rand = Math.random().toString(36).slice(2, 6);
-  return `video-${ts}-${rand}`;
+
+  const raw = topic.trim();
+  if (!raw) {
+    return `video-${ts}-${rand}`;
+  }
+
+  // 基于主题生成语义化目录名：保留中英文/数字/空格/连字符，空格转连字符，限制长度
+  const slug = raw
+    .toLowerCase()
+    .replace(/[^\w\u4e00-\u9fa5\s-]/g, "")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 30);
+
+  if (!slug) {
+    return `video-${ts}-${rand}`;
+  }
+  return `${slug}-${ts}-${rand}`;
 }
 
 function buildVideoPrompt(opts: {
   topic: string;
   ratio: VideoRatio;
-  fps: VideoFps;
-  quality: VideoQuality;
   name: string;
   resolution: string;
   narration?: {
     provider: TtsProvider;
     voice: string;
     rate: string;
-    apiBase?: string;
-    apiKey?: string;
-    model?: string;
   };
 }): string {
   const parts: string[] = [];
@@ -898,8 +860,6 @@ function buildVideoPrompt(opts: {
   parts.push(`项目目录：video_projects/${opts.name}`);
   parts.push(`分辨率：${opts.resolution}`);
   parts.push(`画面比例：${opts.ratio}`);
-  parts.push(`帧率：${opts.fps}fps`);
-  parts.push(`质量：${opts.quality}`);
   if (opts.narration) {
     parts.push(`旁白：启用`);
     parts.push(`TTS供应商：${opts.narration.provider}`);
@@ -907,10 +867,6 @@ function buildVideoPrompt(opts: {
       `音色：${opts.narration.voice || (opts.narration.provider === "custom" ? CUSTOM_VOICE_PLACEHOLDER : "zh-CN-XiaoyiNeural")}（留空用默认）`,
     );
     parts.push(`语速：${opts.narration.rate || "+0%"}（留空用默认）`);
-    if (opts.narration.provider === "custom") {
-      parts.push(`TTS API Base：${opts.narration.apiBase || "(未填)"}`);
-      parts.push(`TTS Model：${opts.narration.model || CUSTOM_MODEL_PLACEHOLDER}`);
-    }
   } else {
     parts.push(`旁白：未启用`);
   }

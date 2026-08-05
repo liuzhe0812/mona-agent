@@ -1,10 +1,10 @@
-import { useCallback, useRef, type ReactNode } from "react";
+import { useCallback, useRef, forwardRef, useImperativeHandle, type ReactNode } from "react";
 import type { JSONContent } from "@tiptap/core";
 
 import { MarkdownEditor, type EditorMode } from "@/components/common/MarkdownEditor";
-import { MindMapDocumentEditor } from "./mindmap/MindMapDocumentEditor";
+import { MindMapDocumentEditor, type MindMapDocumentEditorHandle } from "./mindmap/MindMapDocumentEditor";
 import { FlowchartDocumentEditor } from "./flowchart/FlowchartDocumentEditor";
-import type { FlowchartSemanticWarning } from "./flowchart/flowchart-document";
+import { DiagramDocumentEditor } from "./diagram/DiagramDocumentEditor";
 
 import type { OperationNote } from "./notes-data";
 
@@ -53,15 +53,18 @@ interface NoteEditorProps {
   flowchartRevision?: number;
   /** NotesView 拒绝提交时的强制同步计数器 */
   flowchartForceSync?: number;
-  /** 用户点击"让 AI 修复"时触发，把当前本地 warnings 交给父组件 */
-  onFlowchartFixWithAI?: (warnings: FlowchartSemanticWarning[]) => void;
   /** Resolve embed target content by title (`![[...]]`). Returns null if not found. */
   resolveEmbedContent?: (title: string) => string | null;
   /** Whether the embed target is a flowchart note. */
   isEmbedFlowchart?: (title: string) => boolean;
 }
 
-export function NoteEditor({
+export interface NoteEditorHandle {
+  /** 选中并居中到思维导图节点（仅 mindmap 类型有效） */
+  selectMindMapNode?: (nodeId: string) => void;
+}
+
+export const NoteEditor = forwardRef<NoteEditorHandle, NoteEditorProps>(function NoteEditor({
   note,
   saveStatus = "idle",
   mode,
@@ -76,10 +79,9 @@ export function NoteEditor({
   onFlowchartRequestLease,
   flowchartRevision,
   flowchartForceSync,
-  onFlowchartFixWithAI,
   resolveEmbedContent,
   isEmbedFlowchart,
-}: NoteEditorProps) {
+}, ref) {
   const saveLabel =
     saveStatus === "saving"
       ? "正在保存..."
@@ -93,6 +95,12 @@ export function NoteEditor({
   const noteTitleRef = useRef(note.title);
   noteTitleRef.current = note.title;
   const getNoteTitle = useCallback(() => noteTitleRef.current, []);
+
+  // 思维导图实例 ref，透传给父组件用于右侧大纲面板定位节点
+  const mindMapRef = useRef<MindMapDocumentEditorHandle>(null);
+  useImperativeHandle(ref, () => ({
+    selectMindMapNode: (nodeId: string) => mindMapRef.current?.selectNode(nodeId),
+  }), []);
 
   const handleContentChange = (next: {
     contentMarkdown: string;
@@ -119,6 +127,7 @@ export function NoteEditor({
     return (
       <div className="flex h-full min-w-0 flex-1 flex-col">
         <MindMapDocumentEditor
+          ref={mindMapRef}
           note={note}
           onContentChange={handleContentChange}
           toolbarExtra={toolbarExtra}
@@ -138,7 +147,18 @@ export function NoteEditor({
           onRequestWriteLease={onFlowchartRequestLease}
           revision={flowchartRevision}
           forceSync={flowchartForceSync}
-          onFixWithAI={onFlowchartFixWithAI}
+        />
+      </div>
+    );
+  }
+
+  if (note.type === "diagram") {
+    return (
+      <div className="flex h-full min-w-0 flex-1 flex-col">
+        <DiagramDocumentEditor
+          note={note}
+          onContentChange={handleContentChange}
+          toolbarExtra={toolbarExtra}
         />
       </div>
     );
@@ -171,7 +191,7 @@ export function NoteEditor({
       />
     </MarkdownEditor>
   );
-}
+});
 
 function NoteTitleBlock({
   note,

@@ -255,7 +255,11 @@ class SkillScriptRunTool(Tool):
         if not script_path.exists():
             return f"Error: script '{script}' not found in skill '{skill}' (expected at {script_path})."
         try:
-            cmd = ["python", str(script_path)]
+            import os
+            import sys
+            env = os.environ.copy()
+            env["PYTHONUTF8"] = "1"
+            cmd = [sys.executable, str(script_path)]
             if args:
                 cmd.extend(args.split())
             result = subprocess.run(
@@ -264,6 +268,7 @@ class SkillScriptRunTool(Tool):
                 text=True,
                 timeout=120,
                 cwd=str(skill_dir),
+                env=env,
             )
             output = result.stdout
             if result.stderr:

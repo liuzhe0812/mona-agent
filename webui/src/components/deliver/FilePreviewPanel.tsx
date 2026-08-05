@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  X,
+  ChevronDown,
+  ChevronLeft,
+  ChevronUp,
   FileText,
   Image as ImageIcon,
   FileCode,
@@ -32,6 +34,12 @@ function extOf(name: string): string {
   return dot < 0 ? "" : name.slice(dot).toLowerCase();
 }
 
+/** Stable identity of a delivered file across scan results and live
+ *  deliver events (absolute path preferred). */
+function fileKey(f: DeliveredFile): string {
+  return f.absolute_path || f.path || f.name;
+}
+
 function isPreviewableText(file: DeliveredFile): boolean {
   return PREVIEWABLE_TEXT_EXTS.has(extOf(file.name))
     || file.mime.startsWith("text/")
@@ -59,11 +67,12 @@ function FileIcon({ file }: { file: DeliveredFile }) {
   return <FileText className="h-4 w-4" />;
 }
 
-export function FilePreviewPanel() {
+export function FilePreviewPanel({ files = [] }: { files?: DeliveredFile[] }) {
   const file = useFilePreviewStore((s) => s.file);
   const scope = useFilePreviewStore((s) => s.scope);
   const sessionKey = useFilePreviewStore((s) => s.sessionKey);
   const close = useFilePreviewStore((s) => s.close);
+  const open = useFilePreviewStore((s) => s.open);
   const fullscreen = useFilePreviewStore((s) => s.fullscreen);
   const toggleFullscreen = useFilePreviewStore((s) => s.toggleFullscreen);
   const { token } = useClient();
@@ -169,11 +178,49 @@ export function FilePreviewPanel() {
 
   if (!file) return null;
 
+  // Prev/next cycles within the current scope's file list, in the same
+  // visual order the workspace panel displays (session section + tree).
+  const navIndex = files.findIndex((f) => fileKey(f) === fileKey(file));
+  const canNav = files.length > 1 && navIndex !== -1;
+  const navTo = (delta: number) => {
+    if (!canNav) return;
+    const next = files[(navIndex + delta + files.length) % files.length];
+    open(next, scope, sessionKey);
+  };
+
   const header = (
     <div className="flex items-center gap-2 border-b border-border/60 px-3 py-2">
+      <button
+        type="button"
+        onClick={close}
+        title="返回列表"
+        className="rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+      >
+        <ChevronLeft className="h-4 w-4" />
+      </button>
       <FileIcon file={file} />
       <span className="flex-1 truncate text-sm font-medium">{file.name}</span>
       <span className="shrink-0 text-[11px] text-muted-foreground">{file.size_human}</span>
+      {canNav ? (
+        <>
+          <button
+            type="button"
+            onClick={() => navTo(-1)}
+            title="上一个文件"
+            className="rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+          >
+            <ChevronUp className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            onClick={() => navTo(1)}
+            title="下一个文件"
+            className="rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+          >
+            <ChevronDown className="h-4 w-4" />
+          </button>
+        </>
+      ) : null}
       <button
         type="button"
         onClick={toggleFullscreen}
@@ -181,14 +228,6 @@ export function FilePreviewPanel() {
         className="ml-1 rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
       >
         {fullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
-      </button>
-      <button
-        type="button"
-        onClick={close}
-        title="返回列表"
-        className="rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-      >
-        <X className="h-4 w-4" />
       </button>
     </div>
   );
@@ -222,7 +261,9 @@ export function FilePreviewPanel() {
           srcDoc={textSource}
           className="h-full w-full border-0"
           title="File preview"
-          sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads"
+          // allow-scripts + allow-same-origin would let the AI-generated
+          // page remove its own sandbox — keep the origin opaque.
+          sandbox="allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads"
         />
       ) : isMarkdown(file) && textSource !== null ? (
         <div className="markdown-content scrollbar-hover h-full w-full overflow-auto px-4 py-2 text-sm">

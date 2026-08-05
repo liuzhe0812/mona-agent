@@ -58,15 +58,24 @@ fn browser_initialization_script(id: &str) -> String {
   style.textContent = css;
   (document.head || document.documentElement).appendChild(style);
 
-  // 拦截 Ctrl+J（下载记录）和 Ctrl+H（历史记录），避免 WebView2 弹出原生界面
+  // 拦截 Ctrl+J（下载记录）、Ctrl+H（历史记录）、Ctrl+R / F5（刷新），避免 WebView2 弹出原生界面或绕过标签刷新逻辑
   window.addEventListener('keydown', function (e) {{
-    if (!(e.ctrlKey || e.metaKey)) return;
+    var ctrl = e.ctrlKey || e.metaKey;
     var key = e.key.toLowerCase();
-    if (key === 'j' || key === 'h') {{
+    if (ctrl && (key === 'j' || key === 'h')) {{
       e.preventDefault();
       e.stopPropagation();
       if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
         window.__TAURI_INTERNALS__.invoke('browser_open_internal_page', {{ kind: key === 'j' ? 'downloads' : 'history' }});
+      }}
+      return;
+    }}
+    // 屏蔽网页默认的 Ctrl+R / F5 刷新，改由 Mona 标签级 reload 接管
+    if ((ctrl && key === 'r' && !e.shiftKey) || e.key === 'F5') {{
+      e.preventDefault();
+      e.stopPropagation();
+      if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {{
+        window.__TAURI_INTERNALS__.invoke('browser_reload', {{ id: window.__mona_tab_id }});
       }}
     }}
   }}, true);
@@ -882,7 +891,7 @@ impl BrowserState {
                 let mut token: i64 = 0;
                 unsafe { let _ = core_webview.add_HistoryChanged(&hist_handler, &mut token); }
 
-                // PermissionRequested — 权限管理（地理位置、通知、摄像头等默认拒绝，剪贴板允许）
+                // PermissionRequested — 桌面应用全部放行权限请求，不弹 WebView2 默认权限提示
                 // DownloadStarting is the single download owner. Its COM
                 // operation outlives the source tab, matching browser behavior.
                 let dl_emit = download_event_app.clone();
@@ -991,23 +1000,15 @@ impl BrowserState {
                 use webview2_com::PermissionRequestedEventHandler;
                 use webview2_com::Microsoft::Web::WebView2::Win32::{
                     ICoreWebView2PermissionRequestedEventArgs,
-                    COREWEBVIEW2_PERMISSION_KIND,
                     COREWEBVIEW2_PERMISSION_STATE,
                 };
+                // 桌面应用全部放行权限请求，不弹 WebView2 默认权限提示
                 let perm_handler = PermissionRequestedEventHandler::create(Box::new(
                     move |_sender: Option<ICoreWebView2>,
                           args: Option<ICoreWebView2PermissionRequestedEventArgs>| {
                         if let Some(args) = args {
-                            let mut kind = COREWEBVIEW2_PERMISSION_KIND::default();
                             unsafe {
-                                let _ = args.PermissionKind(&mut kind);
-                                // 剪贴板读取权限允许，其他默认拒绝
-                                let state = if kind.0 == 4 { // COREWEBVIEW2_PERMISSION_KIND_CLIPBOARD_READ = 4
-                                    COREWEBVIEW2_PERMISSION_STATE(1) // ALLOW = 1
-                                } else {
-                                    COREWEBVIEW2_PERMISSION_STATE(2) // DENY = 2
-                                };
-                                let _ = args.SetState(state);
+                                let _ = args.SetState(COREWEBVIEW2_PERMISSION_STATE(1)); // ALLOW
                             }
                         }
                         Ok(())

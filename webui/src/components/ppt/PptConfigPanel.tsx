@@ -1,27 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { CheckCircle2, ChevronDown, ChevronRight, Download, FileText, FolderOpen, Loader2, Presentation, Upload, Wand2, X } from "lucide-react";
+import { AlertCircle, CheckCircle2, Download, FileText, FolderOpen, LayoutTemplate, Loader2, Presentation, Upload, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { downloadPptOfficeCli, fetchPptOfficeCliCheck, fetchPptTemplates, pptAddSources, type PptOfficeCliStatus } from "@/lib/api";
+import { downloadPptOfficeCli, fetchPptOfficeCliCheck, getApiBase, pptAddSources, type PptOfficeCliStatus } from "@/lib/api";
 import { isTauri } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 import { useClient } from "@/providers/ClientProvider";
-import type { PptCanvasFormat } from "@/lib/types";
+import type { PptTemplate } from "@/lib/types";
 import type {
   PptConfig,
   PptMode,
-  PptImageMode,
-  PptVisualMode,
-  PptStyleMode,
-  PptIconApproach,
-  PptIconLibrary,
-  PptFormulaPolicy,
-  PptPageTransition,
-  PptEntranceAnimation,
-  PptAnimationTrigger,
   PptPhase,
 } from "./PptMakerView";
+import { PptTemplateDialog } from "./PptTemplateDialog";
 
 interface PptConfigPanelProps {
   config: PptConfig;
@@ -32,86 +24,29 @@ interface PptConfigPanelProps {
 
 type SourceTab = "topic" | "files";
 
-const IMAGE_MODE_OPTIONS: Array<{ value: PptImageMode; label: string; title: string }> = [
-  { value: "none", label: "不用", title: "不主动生成 AI 图片" },
-  { value: "key-pages", label: "关键页", title: "只在封面、章节页、关键概念页使用 AI 图片" },
-  { value: "rich", label: "丰富", title: "允许更积极使用 AI 图片" },
-];
+/** 配置页统一错误区域：携带原动作的重试入口 */
+interface ActionError {
+  message: string;
+  retry: (() => void) | null;
+}
 
-const VISUAL_MODE_OPTIONS: Array<{ value: PptVisualMode; label: string; title: string }> = [
-  { value: "auto", label: "自动", title: "按内容自动选择图表、流程图、架构图等表达方式" },
-  { value: "data", label: "数据优先", title: "指标、趋势、对比内容优先做图表" },
-  { value: "process", label: "流程架构", title: "业务链路、系统关系、方案结构优先做流程图或架构图" },
-];
-
-const STYLE_MODE_OPTIONS: Array<{ value: string; label: string; title: string }> = [
-  { value: "", label: "自动", title: "AI 根据内容推荐风格模式" },
-  { value: "general", label: "通用", title: "视觉冲击优先，适合公众/客户" },
-  { value: "consulting", label: "咨询", title: "数据清晰优先，适合团队/管理层" },
-  { value: "top-consulting", label: "顶级咨询", title: "逻辑说服优先，适合高管/董事会" },
-];
-
-const ICON_APPROACH_OPTIONS: Array<{ value: string; label: string; title: string }> = [
-  { value: "", label: "自动", title: "AI 推荐图标方案" },
-  { value: "emoji", label: "Emoji", title: "轻松活泼，社交媒体风格" },
-  { value: "ai", label: "AI 生成", title: "自定义风格图标" },
-  { value: "builtin", label: "内置图标库", title: "专业场景推荐" },
-  { value: "custom", label: "自定义", title: "有品牌图标资源" },
-];
-
-const ICON_LIBRARY_OPTIONS: Array<{ value: string; label: string; title: string }> = [
-  { value: "tabler-filled", label: "Tabler 填充", title: "圆角曲线，亲和力强" },
-  { value: "chunk-filled", label: "Chunk 填充", title: "直角几何，厚重建筑感" },
-  { value: "tabler-outline", label: "Tabler 线条", title: "轻盈精致，适合屏幕" },
-  { value: "phosphor-duotone", label: "Phosphor 双色", title: "双层质感，现代感" },
-];
-
-const FORMULA_POLICY_OPTIONS: Array<{ value: string; label: string; title: string }> = [
-  { value: "", label: "自动", title: "AI 推荐公式渲染策略" },
-  { value: "mixed", label: "混合", title: "复杂公式渲染为图片，简单保留文本" },
-  { value: "render-all", label: "全部渲染", title: "所有公式渲染为图片" },
-  { value: "text-only", label: "纯文本", title: "公式保留为可编辑文本" },
-];
-
-const PAGE_TRANSITION_OPTIONS: Array<{ value: string; label: string }> = [
-  { value: "fade", label: "淡入" },
-  { value: "push", label: "推送" },
-  { value: "wipe", label: "擦除" },
-  { value: "split", label: "分割" },
-  { value: "strips", label: "条带" },
-  { value: "cover", label: "覆盖" },
-  { value: "random", label: "随机" },
-  { value: "none", label: "无" },
-];
-
-const ENTRANCE_ANIMATION_OPTIONS: Array<{ value: string; label: string }> = [
-  { value: "auto", label: "自动（推荐）" },
-  { value: "fade", label: "淡入" },
-  { value: "fly", label: "飞入" },
-  { value: "zoom", label: "缩放" },
-  { value: "wipe", label: "擦除" },
-  { value: "mixed", label: "混合轮换" },
-  { value: "none", label: "无" },
-];
-
-const ANIMATION_TRIGGER_OPTIONS: Array<{ value: string; label: string }> = [
-  { value: "after-previous", label: "自动级联" },
-  { value: "with-previous", label: "同时" },
-  { value: "on-click", label: "点击触发" },
-];
+const TEMPLATE_KIND_LABELS: Record<string, string> = {
+  layout: "内置版式",
+  brand: "品牌模板",
+  native: "自定义模板",
+};
 
 export function PptConfigPanel({ config, setConfig, phase, onStart }: PptConfigPanelProps) {
   const { client, token } = useClient();
   const readOnly = phase !== "config";
 
-  const [canvasFormats, setCanvasFormats] = useState<PptCanvasFormat[]>([]);
   const [sourceTab, setSourceTab] = useState<SourceTab>("topic");
   const [uploading, setUploading] = useState(false);
-  const [designExpanded, setDesignExpanded] = useState(false);
-  const [exportExpanded, setExportExpanded] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // 统一错误区域：上传、选择文件和模板加载失败都写入这里
+  const [actionError, setActionError] = useState<ActionError | null>(null);
 
-  // --- Template mode (officecli engine) ---
+  // --- Template mode (PPT 编辑组件) ---
   const [engineStatus, setEngineStatus] = useState<PptOfficeCliStatus | null>(null);
   const [engineChecking, setEngineChecking] = useState(false);
   const [engineDownloading, setEngineDownloading] = useState(false);
@@ -119,8 +54,17 @@ export function PptConfigPanel({ config, setConfig, phase, onStart }: PptConfigP
   const [templateUploading, setTemplateUploading] = useState(false);
   const templateInputRef = useRef<HTMLInputElement>(null);
 
+  // --- 从内容生成：内置版式 / 品牌 / 自定义模板选择 ---
+  const [templateDialogOpen, setTemplateDialogOpen] = useState(false);
+  const [selectedTemplate, setSelectedTemplate] = useState<PptTemplate | null>(null);
+  const [apiBase, setApiBase] = useState("");
+
   const isTemplateMode = config.mode === "template";
   const engineOk = Boolean(engineStatus?.ok);
+
+  useEffect(() => {
+    getApiBase().then(setApiBase).catch(() => {});
+  }, []);
 
   const refreshEngineStatus = useCallback(async (): Promise<boolean> => {
     setEngineChecking(true);
@@ -136,7 +80,6 @@ export function PptConfigPanel({ config, setConfig, phase, onStart }: PptConfigP
     }
   }, [token]);
 
-  // Check the engine the first time template mode is entered
   useEffect(() => {
     if (!isTemplateMode || readOnly || engineStatus || engineChecking) return;
     refreshEngineStatus();
@@ -146,8 +89,6 @@ export function PptConfigPanel({ config, setConfig, phase, onStart }: PptConfigP
     if (engineDownloading) return;
     setEngineDownloading(true);
     setEngineProgress(0);
-    // Simulate incremental progress while the download runs (same pattern
-    // as the video runtime download).
     const timer = setInterval(() => {
       setEngineProgress((prev) => Math.min(prev + 4, 90));
     }, 300);
@@ -181,6 +122,7 @@ export function PptConfigPanel({ config, setConfig, phase, onStart }: PptConfigP
       const pptx = paths.find((p) => p.toLowerCase().endsWith(".pptx"));
       if (!pptx) return;
       setTemplateUploading(true);
+      setActionError(null);
       try {
         const res = await pptAddSources(token, [pptx]);
         const uploaded = res.files.find((f) => f.path.toLowerCase().endsWith(".pptx"));
@@ -188,7 +130,10 @@ export function PptConfigPanel({ config, setConfig, phase, onStart }: PptConfigP
           setConfig((prev) => ({ ...prev, templateFile: uploaded.path }));
         }
       } catch (e) {
-        console.error("Failed to upload template", e);
+        setActionError({
+          message: `模版上传失败：${e instanceof Error ? e.message : "未知错误"}`,
+          retry: () => void addTemplateFile(paths),
+        });
       } finally {
         setTemplateUploading(false);
       }
@@ -210,26 +155,38 @@ export function PptConfigPanel({ config, setConfig, phase, onStart }: PptConfigP
         if (!selected) return;
         await addTemplateFile([String(selected)]);
       } catch (e) {
-        console.error("Failed to pick template via Tauri dialog", e);
+        setActionError({
+          message: `选择模版失败：${e instanceof Error ? e.message : "未知错误"}`,
+          retry: () => void handlePickTemplate(),
+        });
       }
     } else {
       templateInputRef.current?.click();
     }
   }, [readOnly, templateUploading, addTemplateFile]);
 
-  useEffect(() => {
-    let cancelled = false;
-    fetchPptTemplates(token)
-      .then((res) => {
-        if (!cancelled) {
-          setCanvasFormats(res.canvasFormats);
-        }
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [token]);
+  const uploadSourcePaths = useCallback(
+    async (paths: string[]) => {
+      setUploading(true);
+      setActionError(null);
+      try {
+        const res = await pptAddSources(token, paths);
+        const newPaths = res.files.map((f) => f.path);
+        setConfig((prev) => ({
+          ...prev,
+          sourceFiles: [...prev.sourceFiles, ...newPaths.filter((p) => !prev.sourceFiles.includes(p))],
+        }));
+      } catch (e) {
+        setActionError({
+          message: `文件上传失败：${e instanceof Error ? e.message : "未知错误"}`,
+          retry: () => void uploadSourcePaths(paths),
+        });
+      } finally {
+        setUploading(false);
+      }
+    },
+    [token, setConfig],
+  );
 
   const handlePickFiles = useCallback(async () => {
     if (readOnly || uploading) return;
@@ -253,23 +210,17 @@ export function PptConfigPanel({ config, setConfig, phase, onStart }: PptConfigP
           ? selected.map(String)
           : [String(selected)];
         if (paths.length === 0) return;
-
-        setUploading(true);
-        const res = await pptAddSources(token, paths);
-        const newPaths = res.files.map((f) => f.path);
-        setConfig((prev) => ({
-          ...prev,
-          sourceFiles: [...prev.sourceFiles, ...newPaths.filter((p) => !prev.sourceFiles.includes(p))],
-        }));
+        await uploadSourcePaths(paths);
       } catch (e) {
-        console.error("Failed to pick files via Tauri dialog", e);
-      } finally {
-        setUploading(false);
+        setActionError({
+          message: `选择文件失败：${e instanceof Error ? e.message : "未知错误"}`,
+          retry: () => void handlePickFiles(),
+        });
       }
     } else {
       fileInputRef.current?.click();
     }
-  }, [readOnly, uploading, token, setConfig]);
+  }, [readOnly, uploading, uploadSourcePaths]);
 
   const handleDropFiles = useCallback(
     async (e: React.DragEvent) => {
@@ -288,20 +239,10 @@ export function PptConfigPanel({ config, setConfig, phase, onStart }: PptConfigP
           }
         }
         if (paths.length === 0) return;
-        try {
-          setUploading(true);
-          const res = await pptAddSources(token, paths);
-          const newPaths = res.files.map((f) => f.path);
-          setConfig((prev) => ({
-            ...prev,
-            sourceFiles: [...prev.sourceFiles, ...newPaths.filter((p) => !prev.sourceFiles.includes(p))],
-          }));
-        } catch {
-        } finally {
-          setUploading(false);
-        }
+        await uploadSourcePaths(paths);
       } else {
         setUploading(true);
+        setActionError(null);
         const mimeMap: Record<string, string> = {
           ".pdf": "application/pdf",
           ".txt": "text/plain",
@@ -340,12 +281,16 @@ export function PptConfigPanel({ config, setConfig, phase, onStart }: PptConfigP
           return;
         }
         let handled = false;
-        const timeout = setTimeout(() => {
+        const fail = (message: string) => {
           if (handled) return;
           handled = true;
+          clearTimeout(timeout);
           unsub();
           setUploading(false);
-          console.error("PPT upload timed out");
+          setActionError({ message, retry: null });
+        };
+        const timeout = setTimeout(() => {
+          fail("文件上传超时，请重试");
         }, 30_000);
         const unsub = client.onPptUploadResult((result) => {
           if (handled) return;
@@ -360,31 +305,46 @@ export function PptConfigPanel({ config, setConfig, phase, onStart }: PptConfigP
               sourceFiles: [...prev.sourceFiles, ...newPaths.filter((p) => !prev.sourceFiles.includes(p))],
             }));
           } else {
-            console.error("PPT upload failed", result.error);
+            setActionError({
+              message: `文件上传失败：${result.error ?? "未知错误"}`,
+              retry: null,
+            });
           }
         });
         client.sendPptUpload(results);
       }
     },
-    [readOnly, uploading, token, setConfig, client],
+    [readOnly, uploading, uploadSourcePaths, setConfig, client],
   );
+
+  // 主按钮禁用原因（PPT-102：不可用必须给出原因）
+  const missingContent = !config.topic.trim() && config.sourceFiles.length === 0;
+  const startDisabledReason = missingContent
+    ? "请先填写主题或添加源文件"
+    : isTemplateMode && !engineOk
+      ? "请先下载 PPT 编辑组件"
+      : isTemplateMode && !config.templateFile
+        ? "请先上传 PPT 模版"
+        : null;
 
   return (
     <div className="flex h-full flex-col">
       <div className="min-h-0 flex-1 overflow-y-auto p-3 space-y-4">
+        {/* 制作方式 */}
         <section>
           <h3 className="mb-2 text-[12px] font-medium text-foreground">制作方式</h3>
           <div className="grid grid-cols-2 gap-1">
             {(
               [
-                { value: "design", label: "AI 生成", title: "从 0 生成高视觉质量 PPT" },
-                { value: "template", label: "AI 编辑", title: "上传 .pptx 模版，保留原有母版样式填充内容" },
+                { value: "design", label: "从内容生成", title: "输入主题或上传素材，AI 从 0 生成高质量 PPT，可选内置版式" },
+                { value: "template", label: "沿用现有 PPT", title: "上传 .pptx，保留原有母版样式填充内容" },
               ] as Array<{ value: PptMode; label: string; title: string }>
             ).map((item) => (
               <button
                 key={item.value}
                 type="button"
                 title={item.title}
+                aria-pressed={config.mode === item.value}
                 className={cn(
                   "rounded-md px-2 py-1 text-[11px] font-medium transition-colors",
                   config.mode === item.value
@@ -400,27 +360,28 @@ export function PptConfigPanel({ config, setConfig, phase, onStart }: PptConfigP
           </div>
         </section>
 
+        {/* PPT 编辑组件 + PPT 模版（仅沿用现有 PPT 模式） */}
         {isTemplateMode && (
           <section>
-            <h3 className="mb-2 text-[12px] font-medium text-foreground">模版引擎</h3>
+            <h3 className="mb-2 text-[12px] font-medium text-foreground">PPT 编辑组件</h3>
             {engineChecking && !engineStatus ? (
               <div className="flex items-center gap-1.5 rounded-lg border border-border/70 p-2 text-[11px] text-muted-foreground">
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                正在检测 OfficeCLI 引擎...
+                正在检测 PPT 编辑组件...
               </div>
             ) : engineOk ? (
               <div className="flex items-center gap-1.5 rounded-lg border border-border/70 bg-muted/30 p-2 text-[11px]">
                 <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
                 <span className="min-w-0 flex-1 truncate text-foreground">
-                  引擎已就绪{engineStatus?.version ? `（${engineStatus.version}）` : ""}
+                  PPT 编辑组件已就绪{engineStatus?.version ? `（${engineStatus.version}）` : ""}
                 </span>
               </div>
             ) : (
               <div className="space-y-2 rounded-lg border border-border/70 p-2">
                 <div className="text-[11px] text-muted-foreground">
                   {engineStatus && !engineStatus.supported
-                    ? "当前系统平台暂不支持模版模式"
-                    : "模版模式需要 OfficeCLI 引擎（约 33 MB，仅首次下载）"}
+                    ? "当前系统平台暂不支持沿用现有 PPT"
+                    : "沿用现有 PPT 需要 PPT 编辑组件（约 33 MB，仅首次下载）"}
                 </div>
                 {engineStatus?.error && engineStatus.supported && (
                   <div className="text-[10px] text-destructive">{engineStatus.error}</div>
@@ -450,7 +411,7 @@ export function PptConfigPanel({ config, setConfig, phase, onStart }: PptConfigP
                       ) : (
                         <>
                           <Download className="mr-1.5 h-3.5 w-3.5" />
-                          {engineStatus?.error ? "重试下载" : "下载引擎"}
+                          {engineStatus?.error ? "重试下载" : "下载 PPT 编辑组件"}
                         </>
                       )}
                     </Button>
@@ -478,15 +439,21 @@ export function PptConfigPanel({ config, setConfig, phase, onStart }: PptConfigP
                   await addTemplateFile([path]);
                 } else {
                   setTemplateUploading(true);
+                  setActionError(null);
                   const reader = new FileReader();
                   reader.onload = () => {
                     const data_url = reader.result as string;
                     let handled = false;
-                    const timeout = setTimeout(() => {
+                    const fail = (message: string) => {
                       if (handled) return;
                       handled = true;
+                      clearTimeout(timeout);
                       unsub();
                       setTemplateUploading(false);
+                      setActionError({ message, retry: null });
+                    };
+                    const timeout = setTimeout(() => {
+                      fail("模版上传超时，请重试");
                     }, 30_000);
                     const unsub = client.onPptUploadResult((result) => {
                       if (handled) return;
@@ -499,11 +466,19 @@ export function PptConfigPanel({ config, setConfig, phase, onStart }: PptConfigP
                       );
                       if (result.ok && uploaded) {
                         setConfig((prev) => ({ ...prev, templateFile: uploaded.path }));
+                      } else {
+                        setActionError({
+                          message: `模版上传失败：${result.error ?? "未知错误"}`,
+                          retry: null,
+                        });
                       }
                     });
                     client.sendPptUpload([{ name: file.name, data_url }]);
                   };
-                  reader.onerror = () => setTemplateUploading(false);
+                  reader.onerror = () => {
+                    setTemplateUploading(false);
+                    setActionError({ message: "模版读取失败，请重试", retry: null });
+                  };
                   reader.readAsDataURL(file);
                 }
               }}
@@ -515,6 +490,7 @@ export function PptConfigPanel({ config, setConfig, phase, onStart }: PptConfigP
                 {!readOnly && (
                   <button
                     type="button"
+                    aria-label="清除已上传的模版"
                     className="shrink-0 text-muted-foreground hover:text-foreground"
                     onClick={() => setConfig((prev) => ({ ...prev, templateFile: null }))}
                   >
@@ -554,421 +530,120 @@ export function PptConfigPanel({ config, setConfig, phase, onStart }: PptConfigP
           </section>
         )}
 
+        {/* 版式选择（仅从内容生成模式） */}
         {!isTemplateMode && (
-        <section>
-          <button
-            type="button"
-            className="flex w-full items-center gap-1.5 text-[12px] font-medium text-foreground"
-            onClick={() => setDesignExpanded(!designExpanded)}
-          >
-            {designExpanded ? (
-              <ChevronDown className="h-3 w-3" />
-            ) : (
-              <ChevronRight className="h-3 w-3" />
-            )}
-            设计偏好
-            <span className="text-[10px] text-muted-foreground">（可选，不设则 AI 推荐）</span>
-          </button>
-          {designExpanded && (
-            <div className="mt-2 space-y-3">
-              <div>
-                <div className="mb-1 text-[10px] text-muted-foreground">风格模式</div>
-                <div className="grid grid-cols-4 gap-1 rounded-lg bg-muted p-1">
-                  {STYLE_MODE_OPTIONS.map((item) => (
-                    <button
-                      key={item.value}
-                      type="button"
-                      title={item.title}
-                      className={cn(
-                        "rounded-md px-1.5 py-1 text-[10px] font-medium transition-all",
-                        (config.styleMode ?? "") === item.value
-                          ? "bg-background text-foreground shadow"
-                          : "text-muted-foreground hover:text-foreground",
-                      )}
-                      onClick={() =>
-                        setConfig((prev) => ({
-                          ...prev,
-                          styleMode: (item.value || null) as PptStyleMode | null,
-                        }))
-                      }
-                      disabled={readOnly}
+          <section>
+            <h3 className="mb-2 text-[12px] font-medium text-foreground">
+              版式
+              <span className="ml-1 text-[10px] font-normal text-muted-foreground">（可选，不选则由 AI 推荐）</span>
+            </h3>
+            {config.templateKey ? (
+              <div className="flex items-center gap-2 rounded-lg border border-border/70 p-2">
+                <div className="h-10 w-[72px] shrink-0 overflow-hidden rounded-md bg-muted">
+                  {selectedTemplate?.coverSvgUrl && apiBase ? (
+                    <img
+                      src={`${apiBase}${selectedTemplate.coverSvgUrl}${selectedTemplate.coverSvgUrl.includes("?") ? "&" : "?"}token=${encodeURIComponent(token)}`}
+                      alt={selectedTemplate.name}
+                      className="h-full w-full object-cover"
+                    />
+                  ) : (
+                    <div
+                      className="flex h-full w-full items-center justify-center"
+                      style={{ backgroundColor: selectedTemplate?.primaryColor || "#e5e5e5" }}
                     >
-                      {item.label}
-                    </button>
-                  ))}
+                      <LayoutTemplate className="h-4 w-4 text-white/80" />
+                    </div>
+                  )}
                 </div>
-              </div>
-
-              <div>
-                <div className="mb-1 text-[10px] text-muted-foreground">视觉风格描述</div>
-                <input
-                  type="text"
-                  className="w-full rounded-lg border border-border/70 bg-transparent px-3 py-1.5 text-[11px] outline-none focus:border-primary"
-                  placeholder="如：极简、麦肯锡风、新中式、赛博朋克..."
-                  value={config.styleDescriptor}
-                  onChange={(e) => setConfig((prev) => ({ ...prev, styleDescriptor: e.target.value }))}
-                  disabled={readOnly}
-                />
-              </div>
-
-              <div>
-                <div className="mb-1 text-[10px] text-muted-foreground">页数</div>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="number"
-                    min={3}
-                    max={50}
-                    className="w-20 rounded-lg border border-border/70 bg-transparent px-3 py-1.5 text-[11px] outline-none focus:border-primary"
-                    placeholder="自动"
-                    value={config.pageCount ?? ""}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      setConfig((prev) => ({
-                        ...prev,
-                        pageCount: v === "" ? null : Math.max(3, Math.min(50, parseInt(v) || 3)),
-                      }));
-                    }}
-                    disabled={readOnly}
-                  />
-                  <span className="text-[10px] text-muted-foreground">3-50，留空则 AI 推荐</span>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-[12px] font-medium text-foreground">
+                    {selectedTemplate?.name ?? config.templateKey}
+                  </div>
+                  <div className="text-[10px] text-muted-foreground">
+                    {config.templateKind ? TEMPLATE_KIND_LABELS[config.templateKind] : ""}
+                  </div>
                 </div>
-              </div>
-
-              <div>
-                <div className="mb-1 text-[10px] text-muted-foreground">目标受众</div>
-                <input
-                  type="text"
-                  className="w-full rounded-lg border border-border/70 bg-transparent px-3 py-1.5 text-[11px] outline-none focus:border-primary"
-                  placeholder="如：高管、技术团队、客户..."
-                  value={config.audience}
-                  onChange={(e) => setConfig((prev) => ({ ...prev, audience: e.target.value }))}
-                  disabled={readOnly}
-                />
-              </div>
-
-              <div>
-                <div className="mb-1 text-[10px] text-muted-foreground">主色调</div>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="color"
-                    className="h-7 w-7 cursor-pointer rounded border border-border/70"
-                    value={config.primaryColor || "#1565C0"}
-                    onChange={(e) =>
-                      setConfig((prev) => ({ ...prev, primaryColor: e.target.value }))
-                    }
-                    disabled={readOnly}
-                  />
-                  <input
-                    type="text"
-                    className="w-24 rounded-lg border border-border/70 bg-transparent px-2 py-1 text-[11px] outline-none focus:border-primary"
-                    placeholder="#000000"
-                    value={config.primaryColor}
-                    onChange={(e) => setConfig((prev) => ({ ...prev, primaryColor: e.target.value }))}
-                    disabled={readOnly}
-                  />
-                  {config.primaryColor && (
+                {!readOnly && (
+                  <div className="flex shrink-0 items-center gap-1">
                     <button
                       type="button"
-                      className="text-[10px] text-muted-foreground hover:text-foreground"
-                      onClick={() => setConfig((prev) => ({ ...prev, primaryColor: "" }))}
+                      className="rounded px-1.5 py-0.5 text-[11px] text-primary hover:bg-primary/10"
+                      onClick={() => setTemplateDialogOpen(true)}
+                    >
+                      更换
+                    </button>
+                    <button
+                      type="button"
+                      className="rounded px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+                      onClick={() => {
+                        setSelectedTemplate(null);
+                        setConfig((prev) => ({ ...prev, templateKey: null, templateKind: null }));
+                      }}
                     >
                       清除
                     </button>
-                  )}
-                </div>
-              </div>
-
-              <div>
-                <div className="mb-1 text-[10px] text-muted-foreground">图标方案</div>
-                <div className="grid grid-cols-5 gap-1 rounded-lg bg-muted p-1">
-                  {ICON_APPROACH_OPTIONS.map((item) => (
-                    <button
-                      key={item.value}
-                      type="button"
-                      title={item.title}
-                      className={cn(
-                        "rounded-md px-1 py-1 text-[10px] font-medium transition-all",
-                        (config.iconApproach ?? "") === item.value
-                          ? "bg-background text-foreground shadow"
-                          : "text-muted-foreground hover:text-foreground",
-                      )}
-                      onClick={() =>
-                        setConfig((prev) => ({
-                          ...prev,
-                          iconApproach: (item.value || null) as PptIconApproach | null,
-                        }))
-                      }
-                      disabled={readOnly}
-                    >
-                      {item.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {config.iconApproach === "builtin" && (
-                <div>
-                  <div className="mb-1 text-[10px] text-muted-foreground">图标库</div>
-                  <div className="grid grid-cols-2 gap-1 rounded-lg bg-muted p-1">
-                    {ICON_LIBRARY_OPTIONS.map((item) => (
-                      <button
-                        key={item.value}
-                        type="button"
-                        title={item.title}
-                        className={cn(
-                          "rounded-md px-2 py-1 text-[10px] font-medium transition-all",
-                          (config.iconLibrary ?? "tabler-filled") === item.value
-                            ? "bg-background text-foreground shadow"
-                            : "text-muted-foreground hover:text-foreground",
-                        )}
-                        onClick={() =>
-                          setConfig((prev) => ({
-                            ...prev,
-                            iconLibrary: item.value as PptIconLibrary,
-                          }))
-                        }
-                        disabled={readOnly}
-                      >
-                        {item.label}
-                      </button>
-                    ))}
                   </div>
-                </div>
-              )}
-
-              <div>
-                <div className="mb-1 text-[10px] text-muted-foreground">公式渲染</div>
-                <div className="grid grid-cols-4 gap-1 rounded-lg bg-muted p-1">
-                  {FORMULA_POLICY_OPTIONS.map((item) => (
-                    <button
-                      key={item.value}
-                      type="button"
-                      title={item.title}
-                      className={cn(
-                        "rounded-md px-1.5 py-1 text-[10px] font-medium transition-all",
-                        (config.formulaPolicy ?? "") === item.value
-                          ? "bg-background text-foreground shadow"
-                          : "text-muted-foreground hover:text-foreground",
-                      )}
-                      onClick={() =>
-                        setConfig((prev) => ({
-                          ...prev,
-                          formulaPolicy: (item.value || null) as PptFormulaPolicy | null,
-                        }))
-                      }
-                      disabled={readOnly}
-                    >
-                      {item.label}
-                    </button>
-                  ))}
-                </div>
+                )}
               </div>
-            </div>
-          )}
-        </section>
-        )}
-
-        {!isTemplateMode && (
-        <section>
-          <button
-            type="button"
-            className="flex w-full items-center gap-1.5 text-[12px] font-medium text-foreground"
-            onClick={() => setExportExpanded(!exportExpanded)}
-          >
-            {exportExpanded ? (
-              <ChevronDown className="h-3 w-3" />
             ) : (
-              <ChevronRight className="h-3 w-3" />
+              <button
+                type="button"
+                className={cn(
+                  "flex min-h-[48px] w-full items-center justify-center rounded-lg border border-dashed text-[11px] transition-colors",
+                  "border-border/70 text-muted-foreground hover:border-border hover:bg-muted/30",
+                  readOnly && "cursor-default opacity-60",
+                )}
+                onClick={() => setTemplateDialogOpen(true)}
+                disabled={readOnly}
+              >
+                <LayoutTemplate className="mr-1.5 h-3.5 w-3.5" />
+                选择内置版式、品牌或自定义模板
+              </button>
             )}
-            动画与导出
-            <span className="text-[10px] text-muted-foreground">（可选，默认已启用入场动画）</span>
-          </button>
-          {exportExpanded && (
-            <div className="mt-2 space-y-3">
-              <div>
-                <div className="mb-1 text-[10px] text-muted-foreground">页面过渡</div>
-                <select
-                  className="w-full rounded-lg border border-border/70 bg-transparent px-3 py-1.5 text-[11px] outline-none focus:border-primary"
-                  value={config.pageTransition}
-                  onChange={(e) =>
-                    setConfig((prev) => ({ ...prev, pageTransition: e.target.value as PptPageTransition }))
-                  }
-                  disabled={readOnly}
-                >
-                  {PAGE_TRANSITION_OPTIONS.map((item) => (
-                    <option key={item.value} value={item.value}>
-                      {item.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <div className="mb-1 text-[10px] text-muted-foreground">入场动画</div>
-                <select
-                  className="w-full rounded-lg border border-border/70 bg-transparent px-3 py-1.5 text-[11px] outline-none focus:border-primary"
-                  value={config.entranceAnimation}
-                  onChange={(e) =>
-                    setConfig((prev) => ({ ...prev, entranceAnimation: e.target.value as PptEntranceAnimation }))
-                  }
-                  disabled={readOnly}
-                >
-                  {ENTRANCE_ANIMATION_OPTIONS.map((item) => (
-                    <option key={item.value} value={item.value}>
-                      {item.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <div className="mb-1 text-[10px] text-muted-foreground">动画触发方式</div>
-                <div className="grid grid-cols-3 gap-1 rounded-lg bg-muted p-1">
-                  {ANIMATION_TRIGGER_OPTIONS.map((item) => (
-                    <button
-                      key={item.value}
-                      type="button"
-                      className={cn(
-                        "rounded-md px-2 py-1 text-[10px] font-medium transition-all",
-                        config.animationTrigger === item.value
-                          ? "bg-background text-foreground shadow"
-                          : "text-muted-foreground hover:text-foreground",
-                      )}
-                      onClick={() =>
-                        setConfig((prev) => ({ ...prev, animationTrigger: item.value as PptAnimationTrigger }))
-                      }
-                      disabled={readOnly}
-                    >
-                      {item.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div>
-                <div className="mb-1 text-[10px] text-muted-foreground">自动翻页</div>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="number"
-                    min={1}
-                    max={300}
-                    className="w-20 rounded-lg border border-border/70 bg-transparent px-3 py-1.5 text-[11px] outline-none focus:border-primary"
-                    placeholder="关闭"
-                    value={config.autoAdvance ?? ""}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      setConfig((prev) => ({
-                        ...prev,
-                        autoAdvance: v === "" ? null : Math.max(1, parseInt(v) || 5),
-                      }));
-                    }}
-                    disabled={readOnly}
-                  />
-                  <span className="text-[10px] text-muted-foreground">秒，留空则关闭</span>
-                </div>
-              </div>
-
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  className="h-3.5 w-3.5 rounded border-border"
-                  checked={config.enableNarration}
-                  onChange={(e) =>
-                    setConfig((prev) => ({ ...prev, enableNarration: e.target.checked }))
-                  }
-                  disabled={readOnly}
-                />
-                <span className="text-[11px]">启用自动朗读</span>
-                <Wand2 className="h-3 w-3 text-muted-foreground" />
-              </label>
-
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  className="h-3.5 w-3.5 rounded border-border"
-                  checked={config.mergeParagraphs}
-                  onChange={(e) =>
-                    setConfig((prev) => ({ ...prev, mergeParagraphs: e.target.checked }))
-                  }
-                  disabled={readOnly}
-                />
-                <span className="text-[11px]">合并段落（可编辑优先）</span>
-              </label>
-            </div>
-          )}
-        </section>
+            <PptTemplateDialog
+              open={templateDialogOpen}
+              onOpenChange={setTemplateDialogOpen}
+              selectedKey={config.templateKey}
+              selectedKind={config.templateKind}
+              token={token}
+              onSelect={(tpl) => {
+                setSelectedTemplate(tpl);
+                setConfig((prev) => ({ ...prev, templateKey: tpl.key, templateKind: tpl.kind }));
+              }}
+            />
+          </section>
         )}
 
+        {/* 页数（仅从内容生成模式） */}
         {!isTemplateMode && (
-        <>
-        <section>
-          <h3 className="mb-2 text-[12px] font-medium text-foreground">画布格式</h3>
-          <select
-            className="w-full rounded-lg border border-border/70 bg-transparent px-3 py-2 text-[11px] outline-none focus:border-primary"
-            value={config.canvasFormat}
-            onChange={(e) => setConfig((prev) => ({ ...prev, canvasFormat: e.target.value }))}
-            disabled={readOnly}
-          >
-            {canvasFormats.map((fmt) => (
-              <option key={fmt.key} value={fmt.key}>
-                {fmt.label} — {fmt.desc}
-              </option>
-            ))}
-          </select>
-        </section>
-
-        <section>
-          <h3 className="mb-2 text-[12px] font-medium text-foreground">生成策略</h3>
-          <div className="space-y-2">
-            <div>
-              <div className="mb-1 text-[10px] text-muted-foreground">AI 图片</div>
-              <div className="grid grid-cols-3 gap-1 rounded-lg bg-muted p-1">
-                {IMAGE_MODE_OPTIONS.map((item) => (
-                  <button
-                    key={item.value}
-                    type="button"
-                    title={item.title}
-                    className={cn(
-                      "rounded-md px-2 py-1 text-[11px] font-medium transition-all",
-                      config.imageMode === item.value
-                        ? "bg-background text-foreground shadow"
-                        : "text-muted-foreground hover:text-foreground",
-                    )}
-                    onClick={() => setConfig((prev) => ({ ...prev, imageMode: item.value }))}
-                    disabled={readOnly}
-                  >
-                    {item.label}
-                  </button>
-                ))}
-              </div>
+          <section>
+            <h3 className="mb-2 text-[12px] font-medium text-foreground">
+              页数
+              <span className="ml-1 text-[10px] font-normal text-muted-foreground">（可选，留空则 AI 推荐）</span>
+            </h3>
+            <div className="flex items-center gap-2">
+              <input
+                type="number"
+                min={3}
+                max={50}
+                className="w-20 rounded-lg border border-border/70 bg-transparent px-3 py-1.5 text-[11px] outline-none focus:border-primary"
+                placeholder="自动"
+                value={config.pageCount ?? ""}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setConfig((prev) => ({
+                    ...prev,
+                    pageCount: v === "" ? null : Math.max(3, Math.min(50, parseInt(v) || 3)),
+                  }));
+                }}
+                disabled={readOnly}
+              />
+              <span className="text-[10px] text-muted-foreground">3-50 页</span>
             </div>
-            <div>
-              <div className="mb-1 text-[10px] text-muted-foreground">表达方式</div>
-              <div className="grid grid-cols-3 gap-1 rounded-lg bg-muted p-1">
-                {VISUAL_MODE_OPTIONS.map((item) => (
-                  <button
-                    key={item.value}
-                    type="button"
-                    title={item.title}
-                    className={cn(
-                      "rounded-md px-2 py-1 text-[11px] font-medium transition-all",
-                      config.visualMode === item.value
-                        ? "bg-background text-foreground shadow"
-                        : "text-muted-foreground hover:text-foreground",
-                    )}
-                    onClick={() => setConfig((prev) => ({ ...prev, visualMode: item.value }))}
-                    disabled={readOnly}
-                  >
-                    {item.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-        </section>
-        </>
+          </section>
         )}
 
+        {/* 输入来源/主题 */}
         <section>
           <h3 className="mb-2 text-[12px] font-medium text-foreground">
             {isTemplateMode ? "主题" : "输入来源"}
@@ -987,10 +662,12 @@ export function PptConfigPanel({ config, setConfig, phase, onStart }: PptConfigP
           <>
           <div className="mb-2 flex gap-1 rounded-lg bg-muted p-1">
             <button
+              type="button"
+              aria-pressed={sourceTab === "topic"}
               className={cn(
                 "flex-1 rounded-md px-3 py-1 text-[11px] font-medium transition-all",
                 sourceTab === "topic"
-                  ? "bg-background text-foreground shadow"
+                  ? "bg-background text-foreground shadow-sm"
                   : "text-muted-foreground hover:text-foreground",
               )}
               onClick={() => setSourceTab("topic")}
@@ -1000,10 +677,12 @@ export function PptConfigPanel({ config, setConfig, phase, onStart }: PptConfigP
               输入主题
             </button>
             <button
+              type="button"
+              aria-pressed={sourceTab === "files"}
               className={cn(
                 "flex-1 rounded-md px-3 py-1 text-[11px] font-medium transition-all",
                 sourceTab === "files"
-                  ? "bg-background text-foreground shadow"
+                  ? "bg-background text-foreground shadow-sm"
                   : "text-muted-foreground hover:text-foreground",
               )}
               onClick={() => setSourceTab("files")}
@@ -1042,24 +721,10 @@ export function PptConfigPanel({ config, setConfig, phase, onStart }: PptConfigP
                       .map((f) => (f as File & { path?: string }).path)
                       .filter((p): p is string => typeof p === "string");
                     if (paths.length === 0) return;
-                    try {
-                      setUploading(true);
-                      const res = await pptAddSources(token, paths);
-                      const newPaths = res.files.map((f) => f.path);
-                      setConfig((prev) => ({
-                        ...prev,
-                        sourceFiles: [
-                          ...prev.sourceFiles,
-                          ...newPaths.filter((p) => !prev.sourceFiles.includes(p)),
-                        ],
-                      }));
-                    } catch (err) {
-                      console.error("Failed to add sources", err);
-                    } finally {
-                      setUploading(false);
-                    }
+                    await uploadSourcePaths(paths);
                   } else {
                     setUploading(true);
+                    setActionError(null);
                     const mimeMap: Record<string, string> = {
                       ".pdf": "application/pdf",
                       ".txt": "text/plain",
@@ -1103,7 +768,7 @@ export function PptConfigPanel({ config, setConfig, phase, onStart }: PptConfigP
                       handled = true;
                       unsub();
                       setUploading(false);
-                      console.error("PPT upload timed out");
+                      setActionError({ message: "文件上传超时，请重试", retry: null });
                     }, 30_000);
                     const unsub = client.onPptUploadResult((result) => {
                       if (handled) return;
@@ -1121,7 +786,10 @@ export function PptConfigPanel({ config, setConfig, phase, onStart }: PptConfigP
                           ],
                         }));
                       } else {
-                        console.error("PPT upload failed", result.error);
+                        setActionError({
+                          message: `文件上传失败：${result.error ?? "未知错误"}`,
+                          retry: null,
+                        });
                       }
                     });
                     client.sendPptUpload(results);
@@ -1172,6 +840,7 @@ export function PptConfigPanel({ config, setConfig, phase, onStart }: PptConfigP
                       {!readOnly && (
                         <button
                           type="button"
+                          aria-label={`移除文件 ${path}`}
                           className="shrink-0 text-muted-foreground hover:text-foreground"
                           onClick={() =>
                             setConfig((prev) => ({
@@ -1192,25 +861,50 @@ export function PptConfigPanel({ config, setConfig, phase, onStart }: PptConfigP
           </>
           )}
         </section>
-
-
       </div>
 
       {!readOnly && (
         <div className="shrink-0 border-t border-border/70 p-3">
+          {actionError && (
+            <div className="mb-2 flex items-center gap-1.5 rounded-md bg-destructive/5 px-2 py-1.5 text-[11px] text-destructive">
+              <AlertCircle className="h-3 w-3 shrink-0" />
+              <span className="min-w-0 flex-1">{actionError.message}</span>
+              {actionError.retry && (
+                <button
+                  type="button"
+                  className="shrink-0 rounded px-1.5 py-0.5 text-primary hover:bg-primary/10"
+                  onClick={() => {
+                    const retry = actionError.retry;
+                    setActionError(null);
+                    retry?.();
+                  }}
+                >
+                  重试
+                </button>
+              )}
+              <button
+                type="button"
+                aria-label="关闭错误提示"
+                className="shrink-0 rounded px-1 hover:bg-destructive/10"
+                onClick={() => setActionError(null)}
+              >
+                ×
+              </button>
+            </div>
+          )}
           <Button
             className="w-full"
             disabled={
-              (!config.topic && config.sourceFiles.length === 0) ||
+              missingContent ||
               (isTemplateMode && (!engineOk || !config.templateFile))
             }
             onClick={onStart}
           >
             开始生成
           </Button>
-          {isTemplateMode && (!engineOk || !config.templateFile) && (
+          {startDisabledReason && (
             <p className="mt-1.5 text-center text-[10px] text-muted-foreground">
-              {!engineOk ? "请先下载模版引擎" : "请先上传 PPT 模版"}
+              {startDisabledReason}
             </p>
           )}
         </div>

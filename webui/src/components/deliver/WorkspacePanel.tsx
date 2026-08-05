@@ -43,6 +43,10 @@ import type { DeliveredFile } from "@/lib/types";
 
 interface WorkspacePanelProps {
   files: DeliveredFile[];
+  /** Files delivered during the current session (deliver_file / file_edit
+   *  events). Rendered as a dedicated flat section above the full artifact
+   *  tree so the user can answer "what did THIS conversation produce". */
+  sessionFiles?: DeliveredFile[];
   /** Preview scope passed through to file cards so previews resolve
    *  against the right root (``<workspace>/output/`` vs session project). */
   scope?: PreviewScope;
@@ -56,8 +60,13 @@ interface WorkspacePanelProps {
   truncated?: boolean;
   /** Manual refresh callback. */
   onRefresh?: () => void;
-  /** Delete a shared-output artifact. Only offered when ``scope === "shared"``. */
-  onDelete?: (file: DeliveredFile) => void;
+  /** Move a shared-output artifact to the system recycle bin. Only offered
+   *  when ``scope === "shared"``. May return a promise; rejections are shown
+   *  inside the confirmation dialog so the user can retry or cancel. */
+  onDelete?: (file: DeliveredFile) => void | Promise<void>;
+  /** Absolute path of the shared output directory. Enables the
+   *  "open output directory" affordances (empty state + truncated footer). */
+  outputDir?: string | null;
   className?: string;
 }
 
@@ -79,6 +88,12 @@ const CODE_EXTS = new Set([
 function extOf(name: string): string {
   const dot = name.lastIndexOf(".");
   return dot < 0 ? "" : name.slice(dot).toLowerCase();
+}
+
+/** Stable identity of a delivered file across scan results and live
+ *  deliver events (absolute path preferred). */
+function fileKey(f: DeliveredFile): string {
+  return f.absolute_path || f.path || f.name;
 }
 
 /** Fallback lucide icon when no system icon is available (non-Tauri or
@@ -176,8 +191,39 @@ function buildFileTree(files: DeliveredFile[]): TreeNode[] {
   return root.children!;
 }
 
+/** Flatten the panel's visual order — session section first (flat), then
+ *  the sorted artifact tree depth-first — into a single navigation list.
+ *  Used by the preview panel's prev/next cycling so "next" matches the
+ *  next visual row the user saw in the list. Deduped by absolute path. */
+export function flattenFilesForDisplay(
+  files: DeliveredFile[],
+  sessionFiles: DeliveredFile[],
+): DeliveredFile[] {
+  const out: DeliveredFile[] = [];
+  const seen = new Set<string>();
+  const push = (f: DeliveredFile) => {
+    const key = fileKey(f);
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(f);
+  };
+  for (const f of sessionFiles) push(f);
+  const walk = (nodes: TreeNode[]) => {
+    for (const node of nodes) {
+      if (node.isDir) {
+        if (node.children) walk(node.children);
+      } else if (node.file) {
+        push(node.file);
+      }
+    }
+  };
+  walk(buildFileTree(files));
+  return out;
+}
+
 export function WorkspacePanel({
   files,
+  sessionFiles: sessionFilesProp,
   scope = "shared",
   sessionKey = null,
   loading = false,
@@ -185,15 +231,70 @@ export function WorkspacePanel({
   truncated = false,
   onRefresh,
   onDelete,
+  outputDir = null,
   className,
 }: WorkspacePanelProps) {
   const toggleCollapsed = useFilePreviewStore((s) => s.toggleWorkspaceCollapsed);
   const previewFile = useFilePreviewStore((s) => s.file);
   const closePreview = useFilePreviewStore((s) => s.close);
+  const artifactBaseline = useFilePreviewStore((s) => s.artifactBaseline);
+  const viewedArtifactPaths = useFilePreviewStore((s) => s.viewedArtifactPaths);
+  const observeArtifactInventory = useFilePreviewStore(
+    (s) => s.observeArtifactInventory,
+  );
 
   const tree = useMemo(() => buildFileTree(files), [files]);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [deleteTarget, setDeleteTarget] = useState<DeliveredFile | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deletePending, setDeletePending] = useState(false);
+
+  // Session deliveries may repeat the same file across turns (dedupe by
+  // absolute path); the scan tree below stays the authoritative full list.
+  const sessionFiles = useMemo(() => {
+    const out: DeliveredFile[] = [];
+    const seen = new Set<string>();
+    for (const f of sessionFilesProp ?? []) {
+      const key = f.absolute_path || f.path || f.name;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(f);
+    }
+    return out;
+  }, [sessionFilesProp]);
+
+  const totalCount = useMemo(() => {
+    const keys = new Set<string>();
+    for (const f of files) keys.add(fileKey(f));
+    for (const f of sessionFiles) keys.add(fileKey(f));
+    return keys.size;
+  }, [files, sessionFiles]);
+
+  // New-file feedback: the first non-empty inventory is the baseline;
+  // anything arriving afterwards is flagged "new" until previewed. The
+  // state lives in the preview store because this panel unmounts while a
+  // preview is open, and local state would reset on every round-trip.
+  const allKeys = useMemo(() => {
+    const keys: string[] = [];
+    for (const f of files) keys.push(fileKey(f));
+    for (const f of sessionFiles) keys.push(fileKey(f));
+    return keys;
+  }, [files, sessionFiles]);
+
+  useEffect(() => {
+    observeArtifactInventory(allKeys);
+  }, [allKeys, observeArtifactInventory]);
+
+  const newKeys = useMemo(() => {
+    const out = new Set<string>();
+    if (!artifactBaseline) return out;
+    for (const key of allKeys) {
+      if (!artifactBaseline.has(key) && !viewedArtifactPaths.has(key)) {
+        out.add(key);
+      }
+    }
+    return out;
+  }, [allKeys, artifactBaseline, viewedArtifactPaths]);
 
   const toggle = (path: string) => {
     setCollapsed((prev) => {
@@ -205,28 +306,40 @@ export function WorkspacePanel({
   };
 
   const handleOpenOutputDir = () => {
-    if (!isTauri()) return;
-    if (files.length > 0) {
-      void openPathWithSystemApp(files[0].absolute_path);
-    }
+    if (!isTauri() || !outputDir) return;
+    void openPathWithSystemApp(outputDir);
   };
 
   const handleDeleteRequest = (file: DeliveredFile) => {
+    setDeleteError(null);
     setDeleteTarget(file);
   };
 
-  const handleDeleteConfirm = () => {
+  const handleDeleteConfirm = async (event: React.MouseEvent) => {
+    // Radix closes the dialog on Action click by default; we close it
+    // ourselves only after the trash call succeeds, so failures keep the
+    // dialog open and never read as a silent permanent delete.
+    event.preventDefault();
     if (!deleteTarget || !onDelete) return;
     const target = deleteTarget;
+    setDeletePending(true);
+    setDeleteError(null);
+    try {
+      await onDelete(target);
+    } catch (err) {
+      setDeletePending(false);
+      setDeleteError(err instanceof Error ? err.message : String(err));
+      return;
+    }
+    setDeletePending(false);
     // 若正在预览该文件，先关闭预览，避免预览面板指向已删除文件。
     if (previewFile?.absolute_path === target.absolute_path) {
       closePreview();
     }
-    onDelete(target);
     setDeleteTarget(null);
   };
 
-  const isEmpty = files.length === 0;
+  const isEmpty = files.length === 0 && sessionFiles.length === 0;
   const canDelete = scope === "shared" && !!onDelete;
 
   return (
@@ -236,7 +349,7 @@ export function WorkspacePanel({
         <span className="text-sm font-medium">产物</span>
         {!isEmpty && (
           <span className="rounded-full bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
-            {files.length}
+            {totalCount}
           </span>
         )}
         <div className="flex-1" />
@@ -286,7 +399,7 @@ export function WorkspacePanel({
               ? "还没有产物。AI 创建的文件会出现在这里。"
               : "当前项目还没有交付文件。"}
           </span>
-          {isTauri() && scope === "shared" && (
+          {isTauri() && scope === "shared" && outputDir && (
             <button
               type="button"
               onClick={handleOpenOutputDir}
@@ -297,43 +410,78 @@ export function WorkspacePanel({
           )}
         </div>
       ) : (
-        <div className="flex-1 overflow-y-auto scrollbar-hover py-1">
-          <ul className="flex flex-col text-[13px]">
-            {tree.map((node) => (
-              <TreeRow
-                key={`${node.isDir ? "d" : "f"}-${node.path}`}
-                node={node}
-                depth={0}
-                collapsed={collapsed}
-                onToggle={toggle}
-                scope={scope}
-                sessionKey={sessionKey}
-                activePath={previewFile?.absolute_path ?? null}
-                canDelete={canDelete}
-                onDelete={handleDeleteRequest}
-              />
-            ))}
-          </ul>
-          {truncated && (
-            <div className="mt-2 rounded-md border border-border/50 bg-muted/30 px-2 py-1.5 text-[11px] text-muted-foreground">
-              仅显示最近 1000 个文件。
-              {isTauri() && (
-                <button
-                  type="button"
-                  onClick={handleOpenOutputDir}
-                  className="ml-1 underline-offset-2 hover:underline"
-                >
-                  打开 output 目录查看全部
-                </button>
-              )}
+        <>
+          {sessionFiles.length > 0 && (
+            <div className="shrink-0 border-b border-border/60 px-2 py-1.5">
+              <div className="px-1 pb-1 text-[11px] font-medium text-muted-foreground">
+                本次会话
+              </div>
+              <ul className="flex flex-col text-[13px]">
+                {sessionFiles.map((f) => {
+                  const key = fileKey(f);
+                  return (
+                    <TreeRow
+                      key={`s-${key}`}
+                      node={{ name: f.name, path: key, isDir: false, file: f }}
+                      depth={0}
+                      collapsed={collapsed}
+                      onToggle={toggle}
+                      scope={scope}
+                      sessionKey={sessionKey}
+                      activePath={previewFile?.absolute_path ?? null}
+                      canDelete={canDelete}
+                      onDelete={handleDeleteRequest}
+                      newKeys={newKeys}
+                    />
+                  );
+                })}
+              </ul>
             </div>
           )}
-        </div>
+          <div className="flex-1 overflow-y-auto scrollbar-hover py-1">
+            <ul className="flex flex-col text-[13px]">
+              {tree.map((node) => (
+                <TreeRow
+                  key={`${node.isDir ? "d" : "f"}-${node.path}`}
+                  node={node}
+                  depth={0}
+                  collapsed={collapsed}
+                  onToggle={toggle}
+                  scope={scope}
+                  sessionKey={sessionKey}
+                  activePath={previewFile?.absolute_path ?? null}
+                  canDelete={canDelete}
+                  onDelete={handleDeleteRequest}
+                  newKeys={newKeys}
+                />
+              ))}
+            </ul>
+            {truncated && (
+              <div className="mt-2 rounded-md border border-border/50 bg-muted/30 px-2 py-1.5 text-[11px] text-muted-foreground">
+                仅显示最近 1000 个文件。
+                {isTauri() && outputDir && (
+                  <button
+                    type="button"
+                    onClick={handleOpenOutputDir}
+                    className="ml-1 underline-offset-2 hover:underline"
+                  >
+                    打开 output 目录查看全部
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        </>
       )}
 
       <AlertDialog
         open={!!deleteTarget}
-        onOpenChange={(o) => (!o ? setDeleteTarget(null) : undefined)}
+        onOpenChange={(o) => {
+          if (!o) {
+            setDeleteTarget(null);
+            setDeleteError(null);
+          }
+        }}
       >
         <AlertDialogContent className="w-[min(calc(100vw-2rem),22.75rem)] gap-0 rounded-2xl border border-border/60 bg-card/95 p-5 text-center shadow-lg backdrop-blur-xl sm:rounded-2xl">
           <AlertDialogHeader className="items-center space-y-0 text-center">
@@ -346,8 +494,13 @@ export function WorkspacePanel({
               删除这个文件？
             </AlertDialogTitle>
             <AlertDialogDescription className="mt-3 max-w-[17rem] text-center text-[14px] leading-6 text-muted-foreground">
-              将永久删除「{deleteTarget?.name ?? ""}」，此操作无法撤销。
+              「{deleteTarget?.name ?? ""}」将被移至系统回收站，需要时可以从回收站恢复。
             </AlertDialogDescription>
+            {deleteError ? (
+              <p className="mt-3 max-w-[17rem] text-center text-[13px] leading-5 text-destructive">
+                移至回收站失败：{deleteError}
+              </p>
+            ) : null}
           </AlertDialogHeader>
           <AlertDialogFooter className="mt-7 grid grid-cols-2 gap-3 space-x-0">
             <AlertDialogCancel className="mt-0 h-11 rounded-full border-0 bg-muted/70 px-5 text-[15px] font-semibold text-foreground shadow-none hover:bg-muted">
@@ -355,9 +508,10 @@ export function WorkspacePanel({
             </AlertDialogCancel>
             <AlertDialogAction
               onClick={handleDeleteConfirm}
+              disabled={deletePending}
               className="h-11 rounded-full bg-destructive px-5 text-[15px] font-semibold text-destructive-foreground shadow-none hover:bg-destructive/90"
             >
-              删除
+              移至回收站
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -376,6 +530,7 @@ function TreeRow({
   activePath,
   canDelete,
   onDelete,
+  newKeys,
 }: {
   node: TreeNode;
   depth: number;
@@ -386,6 +541,9 @@ function TreeRow({
   activePath: string | null;
   canDelete: boolean;
   onDelete: (file: DeliveredFile) => void;
+  /** Paths that arrived after the baseline inventory and are not yet
+   *  previewed — file rows get a leading "new" dot. */
+  newKeys: Set<string>;
 }) {
   const openPreview = useFilePreviewStore((s) => s.open);
   const indent = 8 + depth * 14;
@@ -436,6 +594,7 @@ function TreeRow({
                 activePath={activePath}
                 canDelete={canDelete}
                 onDelete={onDelete}
+                newKeys={newKeys}
               />
             ))}
           </ul>
@@ -446,9 +605,15 @@ function TreeRow({
 
   const file = node.file!;
   const isActive = activePath === file.absolute_path;
+  const isNew = newKeys.has(fileKey(file));
 
   const handleClick = () => {
     openPreview(file, scope, sessionKey);
+  };
+  const handleDoubleClick = () => {
+    // Single click stays on in-pane preview; double click hands the file
+    // to the OS default app (file-manager muscle memory).
+    if (isTauri()) void openPathWithSystemApp(file.absolute_path);
   };
   const handleOpenWithSystem = () => {
     if (isTauri()) void openPathWithSystemApp(file.absolute_path);
@@ -465,6 +630,7 @@ function TreeRow({
       <button
         type="button"
         onClick={handleClick}
+        onDoubleClick={handleDoubleClick}
         className={cn(
           "flex w-full items-center gap-1.5 rounded-sm py-1 pr-2 text-left",
           "hover:bg-muted/60",
@@ -472,6 +638,12 @@ function TreeRow({
         )}
         style={{ paddingLeft: indent + 18 }}
       >
+        {isNew ? (
+          <span
+            aria-label="新文件"
+            className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary"
+          />
+        ) : null}
         {fileIconUrl ? (
           <img
             src={fileIconUrl}

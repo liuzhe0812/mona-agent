@@ -23,10 +23,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-if os.name == "nt" and hasattr(sys.stdout, "buffer"):
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
-
 # "### Scene 1:" heading
 SCENE_HEADING_RE = re.compile(r"^###\s+Scene\s+(\d+)\s*:", re.IGNORECASE)
 # "- Narration: <text>" (may span to end of line)
@@ -135,6 +131,7 @@ async def synthesize_project(project_path: str | Path) -> dict:
     audio_dir.mkdir(parents=True, exist_ok=True)
 
     generated: list[dict] = []
+    failed: list[dict] = []
     for scene_num in sorted(narrations):
         text = narrations[scene_num]
         out_name = f"scene_{scene_num:02d}.mp3"
@@ -142,9 +139,11 @@ async def synthesize_project(project_path: str | Path) -> dict:
         try:
             result = await provider.synthesize(text, out_path, voice=voice)
         except Exception as e:
-            return {"ok": False, "error": f"Scene {scene_num} TTS failed: {e}"}
+            failed.append({"scene": scene_num, "error": str(e)})
+            continue
         if result is None:
-            return {"ok": False, "error": f"Scene {scene_num} TTS returned no audio"}
+            failed.append({"scene": scene_num, "error": "TTS returned no audio"})
+            continue
         generated.append({"scene": scene_num, "file": out_name, "chars": len(text)})
 
     if not generated:
@@ -189,12 +188,19 @@ async def synthesize_project(project_path: str | Path) -> dict:
     return {
         "ok": True,
         "scenes": generated,
+        "failed": failed,
         "narration": str(narration_path.relative_to(project)),
         "total_scenes": len(generated),
     }
 
 
 def _cli() -> None:
+    # Only redirect stdout/stderr when run as a CLI script — never when imported
+    # as a module (would corrupt the host process's stdout and deadlock aiohttp).
+    if os.name == "nt" and hasattr(sys.stdout, "buffer"):
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+
     parser = argparse.ArgumentParser(
         description="Synthesize narration audio for a video project",
     )

@@ -22,54 +22,9 @@ export const NOTE_AI_ACTIONS: Array<{
     description: "中文译英文，其他语言译中文",
   },
   {
-    id: "generateTags",
-    label: "生成标签",
-    description: "AI 自动生成 3-5 个标签",
-  },
-  {
     id: "generateHtml",
     label: "生成HTML文档",
     description: "生成精美排版的HTML文档",
-  },
-];
-
-/** 思维导图 AI 动作标识 */
-export type MindMapActionId =
-  | "mindmap-generate"
-  | "mindmap-expand"
-  | "mindmap-simplify"
-  | "mindmap-reorganize";
-
-/** 思维导图快捷操作元数据 */
-export const MINDMAP_ACTIONS: Array<{
-  id: MindMapActionId;
-  label: string;
-  description: string;
-  requiresSelection: boolean;
-}> = [
-  {
-    id: "mindmap-generate",
-    label: "从主题生成导图",
-    description: "基于当前标题生成完整思维导图",
-    requiresSelection: false,
-  },
-  {
-    id: "mindmap-expand",
-    label: "扩展选中分支",
-    description: "为选中节点追加子节点",
-    requiresSelection: true,
-  },
-  {
-    id: "mindmap-simplify",
-    label: "精简选中分支",
-    description: "替换选中子树为更精简的结构",
-    requiresSelection: true,
-  },
-  {
-    id: "mindmap-reorganize",
-    label: "重组导图",
-    description: "调整全局层级与顺序",
-    requiresSelection: false,
   },
 ];
 
@@ -96,231 +51,6 @@ const OUTLINE_SPEC = `大纲格式规范（必须严格遵守）：
 - 不允许代码块、表格、引用或普通段落；
 - 同级节点允许重名；
 - [[wiki link]] 作为普通节点文本保留。`;
-
-/**
- * 全量替换输出契约。
- * AI 在正常会话回答后附上 ```mindmap fenced block。
- */
-const REPLACE_CONTRACT = `输出格式：
-1. 先用 1-2 段简短文字说明你的设计思路；
-2. 然后输出完整的思维导图大纲，放在 \`\`\`mindmap fenced block 中；
-3. fenced block 内只包含大纲本身，不要再加其他说明。
-
-示例：
-\`\`\`mindmap
-# 根节点
-
-- 子节点 A
-  - 孙节点 A1
-- 子节点 B
-\`\`\`
-
-${OUTLINE_SPEC}`;
-
-/**
- * 局部 patch 输出契约。
- * AI 在正常会话回答后附上 ```mindmap-patch fenced block，内容为 JSON。
- */
-const PATCH_CONTRACT = (baseHash: string) => `输出格式：
-1. 先用 1-2 段简短文字说明你的修改思路；
-2. 然后输出 patch JSON，放在 \`\`\`mindmap-patch fenced block 中；
-3. JSON 必须符合以下 schema：
-   {
-     "baseHash": "${baseHash}",
-     "ops": [
-       { "name": "addChild", "path": [索引数组], "topic": "新节点文本", "expectedTopic": "原节点文本" },
-       { "name": "insertSibling", "path": [索引数组], "topic": "新节点文本", "expectedTopic": "原节点文本" },
-       { "name": "updateTopic", "path": [索引数组], "topic": "修改后文本", "expectedTopic": "原节点文本" },
-       { "name": "removeNode", "path": [索引数组], "expectedTopic": "原节点文本" },
-       { "name": "moveNode", "from": [索引数组], "to": [索引数组], "expectedTopic": "原节点文本" }
-     ]
-   }
-
-字段说明：
-- baseHash: 必须等于下方提供的 baseHash 值；
-- ops: 操作数组，按顺序应用；前一个 op 改变树结构后，后续 op 的路径在新树上计算；
-- path: 从根节点到目标节点的索引数组，根节点为 []，根的第 2 个子节点为 [1]；
-- expectedTopic: 操作前该节点的当前文本，用于校验路径未漂移；如果节点文本与预期不符，整个 patch 会被拒绝；
-- topic: 新节点的文本（addChild/insertSibling/updateTopic 必填）；
-- 单个 op 失败则整个 patch 不应用（原子性）。
-
-${OUTLINE_SPEC}`;
-
-/** 构造思维导图 AI Prompt */
-export function buildMindMapActionPrompt(
-  actionId: MindMapActionId,
-  note: OperationNote,
-  selection: MindMapSelectionContext | null,
-  baseHash: string,
-): string {
-  const title = note.title || "未命名思维导图";
-  const currentMarkdown = note.contentMarkdown;
-
-  // 从主题生成导图（全量替换）
-  if (actionId === "mindmap-generate") {
-    return `用户希望基于当前标题生成一份完整的思维导图。
-
-当前标题：${title}
-
-要求：
-- 围绕该主题设计 3-5 个一级分支，每个分支下 2-4 个二级子节点；
-- 节点文本简洁，每个节点 2-10 个字；
-- 层级清晰，覆盖主题的主要方面；
-- 保留用户已有的大纲结构（如果当前笔记非空），在其基础上补充和完善。
-
-${REPLACE_CONTRACT}`;
-  }
-
-  // 重组导图（全量替换）
-  if (actionId === "mindmap-reorganize") {
-    return `用户希望重组当前思维导图的结构。
-
-当前 Markdown 大纲：
-\`\`\`markdown
-${currentMarkdown}
-\`\`\`
-
-要求：
-- 调整分支层级和顺序，使结构更清晰；
-- 合并语义相近的分支；
-- 不要删除用户的核心内容，只做结构调整；
-- 节点文本保持简洁。
-
-${REPLACE_CONTRACT}`;
-  }
-
-  // 以下两个动作需要选中节点
-  if (actionId === "mindmap-expand" || actionId === "mindmap-simplify") {
-    if (!selection) {
-      return `用户触发了"${actionId === "mindmap-expand" ? "扩展分支" : "精简分支"}"操作，但当前未选中节点。请提示用户先在画布上选中一个节点。`;
-    }
-
-    const pathStr = selection.pathLabels.join(" > ");
-
-    if (actionId === "mindmap-expand") {
-      return `用户希望扩展思维导图中的选中分支。
-
-当前完整大纲：
-\`\`\`markdown
-${currentMarkdown}
-\`\`\`
-
-选中节点路径：${pathStr}
-选中节点路径索引：${JSON.stringify(selection.path)}
-选中子树：
-\`\`\`markdown
-${selection.subtreeMarkdown}
-\`\`\`
-
-要求：
-- 为选中节点追加 2-5 个子节点（使用 addChild 操作）；
-- 如果选中节点已有子节点，新节点追加在末尾；
-- 节点文本与选中节点的主题相关，简洁有意义；
-- 不要修改其他分支；
-- 不要修改选中节点本身的文本。
-
-${PATCH_CONTRACT(baseHash)}
-
-当前选中节点的 expectedTopic 应为：${selection.pathLabels[selection.pathLabels.length - 1] ?? ""}`;
-    }
-
-    // mindmap-simplify
-    return `用户希望精简思维导图中的选中分支。
-
-当前完整大纲：
-\`\`\`markdown
-${currentMarkdown}
-\`\`\`
-
-选中节点路径：${pathStr}
-选中节点路径索引：${JSON.stringify(selection.path)}
-选中子树：
-\`\`\`markdown
-${selection.subtreeMarkdown}
-\`\`\`
-
-要求：
-- 用更精简的子树替换选中节点的子节点（如果选中节点有子节点）；
-- 合并语义重复的子节点；
-- 保留核心信息，去除冗余；
-- 不要修改其他分支；
-- 修改方式建议：先 removeNode 删除旧子节点，再 addChild 添加新子节点；或用 updateTopic 修改文本。
-
-${PATCH_CONTRACT(baseHash)}
-
-当前选中节点的 expectedTopic 应为：${selection.pathLabels[selection.pathLabels.length - 1] ?? ""}`;
-  }
-
-  return "";
-}
-
-/** 流程图 AI 动作标识 */
-export type FlowchartActionId =
-  | "flowchart-generate"
-  | "flowchart-continue"
-  | "flowchart-complete-decision"
-  | "flowchart-optimize"
-  | "flowchart-audit"
-  | "flowchart-explain"
-  | "flowchart-add-exception"
-  | "flowchart-simplify";
-
-/** 流程图快捷操作元数据（见设计文档 §9.3, §7.11） */
-export const FLOWCHART_ACTIONS: Array<{
-  id: FlowchartActionId;
-  label: string;
-  description: string;
-  requiresSelection: boolean;
-}> = [
-  {
-    id: "flowchart-generate",
-    label: "从主题生成流程图",
-    description: "基于当前标题生成完整流程图",
-    requiresSelection: false,
-  },
-  {
-    id: "flowchart-continue",
-    label: "续写选中步骤",
-    description: "为选中节点追加后续节点和边",
-    requiresSelection: true,
-  },
-  {
-    id: "flowchart-complete-decision",
-    label: "补全判断分支",
-    description: "为选中判断节点补全带标签分支",
-    requiresSelection: true,
-  },
-  {
-    id: "flowchart-explain",
-    label: "解释选中步骤",
-    description: "解释选中节点在流程中的作用和职责",
-    requiresSelection: true,
-  },
-  {
-    id: "flowchart-add-exception",
-    label: "补异常路径",
-    description: "为选中节点补充失败/异常分支",
-    requiresSelection: true,
-  },
-  {
-    id: "flowchart-simplify",
-    label: "简化选中子图",
-    description: "把选中节点及周边合并为更短流程",
-    requiresSelection: true,
-  },
-  {
-    id: "flowchart-optimize",
-    label: "优化流程",
-    description: "调整结构、合并冗余、补全缺失路径",
-    requiresSelection: false,
-  },
-  {
-    id: "flowchart-audit",
-    label: "检查流程问题",
-    description: "审查流程并给出改进建议",
-    requiresSelection: false,
-  },
-];
 
 /** 流程图选中上下文（与 FlowchartSelectionContextValue 一致） */
 export interface FlowchartSelectionContext {
@@ -482,180 +212,6 @@ export function buildFlowchartAiContext(
   return { json: JSON.stringify(trimmedGraph, null, 2), trimmed: true };
 }
 
-/** 构造流程图 AI Prompt */
-export function buildFlowchartActionPrompt(
-  actionId: FlowchartActionId,
-  note: OperationNote,
-  selection: FlowchartSelectionContext | null,
-  baseHash: string,
-): string {
-  const title = note.title || "未命名流程图";
-  const ctx = buildFlowchartAiContext(note.contentMarkdown, selection);
-  const graphJson = ctx.json;
-  const trimNote = ctx.trimmed
-    ? "\n注意：上图已裁剪，trimmed: true 的节点仅保留 id/kind/label 供参考，不允许删除这些节点。"
-    : "";
-
-  // 从主题生成流程图（replaceGraph）
-  if (actionId === "flowchart-generate") {
-    return `用户希望基于当前标题生成一份完整的流程图。
-
-当前标题：${title}
-
-要求：
-- 设计 4-10 个节点，覆盖该主题的主要流程；
-- 必须包含一个 start 节点和一个 end 节点；
-- 节点文本简洁，每个节点 2-10 个字；
-- 判断节点有多个出边时必须为每条边提供 label（如"是"/"否"）；
-- 使用 replaceGraph op 全量输出。
-
-${FLOWCHART_PATCH_CONTRACT(baseHash)}`;
-  }
-
-  // 优化流程（patch，可选局部）
-  if (actionId === "flowchart-optimize") {
-    const selectionInfo = selection && selection.nodeIds.length > 0
-      ? `\n当前选中节点：${selection.nodeIds.join(", ")}\n请优先优化选中节点周边的结构，也可以扩展到全局。`
-      : "\n当前未选中节点，对整张图进行优化。";
-    return `用户希望优化当前流程图的结构。
-
-当前完整图（语义 JSON）：
-${graphJson}${trimNote}
-${selectionInfo}
-
-要求：
-- 合并语义重复的节点；
-- 补全缺失的关键路径（如失败分支、异常处理）；
-- 调整判断节点的分支标签使其清晰；
-- 不要删除用户的核心内容；
-- 使用 patch ops 输出，不要用 replaceGraph。
-
-${FLOWCHART_PATCH_CONTRACT(baseHash)}`;
-  }
-
-  // 检查流程问题（默认不自动应用 patch，仅分析）
-  if (actionId === "flowchart-audit") {
-    return `用户希望审查当前流程图存在的问题。
-
-当前完整图（语义 JSON）：
-${graphJson}${trimNote}
-
-要求：
-- 检查是否有开始/结束节点缺失、判断节点分支不完整、孤立节点、循环回路、缺失异常处理等问题；
-- 用清晰的列表说明每个问题和建议；
-- 如果用户后续要求修改，再输出 \`\`\`mona-flowchart-patch fenced block；
-- 本次回答只做分析，不要输出 patch block。`;
-  }
-
-  // 以下两个动作需要选中节点
-  if (actionId === "flowchart-continue" || actionId === "flowchart-complete-decision") {
-    if (!selection || selection.nodeIds.length === 0) {
-      return `用户触发了"${actionId === "flowchart-continue" ? "续写步骤" : "补全判断分支"}"操作，但当前未选中节点。请提示用户先在画布上选中一个节点。`;
-    }
-
-    if (actionId === "flowchart-continue") {
-      return `用户希望从当前选中节点续写后续步骤。
-
-当前完整图（语义 JSON）：
-${graphJson}${trimNote}
-
-选中节点 ID：${selection.nodeIds.join(", ")}
-
-要求：
-- 为选中节点追加 1-5 个后续节点和必要的边；
-- 后续节点应承接选中节点的语义，构成完整流程；
-- 不要修改选中节点本身和其他节点；
-- 判断节点续写时必须为每条出边提供 label；
-- 使用 addNode + addEdge ops 输出，不要用 replaceGraph。
-
-${FLOWCHART_PATCH_CONTRACT(baseHash)}`;
-    }
-
-    // flowchart-complete-decision
-    return `用户希望补全选中判断节点的分支。
-
-当前完整图（语义 JSON）：
-${graphJson}${trimNote}
-
-选中节点 ID：${selection.nodeIds.join(", ")}
-
-要求：
-- 为选中判断节点补全所有可能的分支（通常 2-3 条）；
-- 每条出边必须带 label（如"是"/"否"/"需要复核"等）；
-- 每条分支应有一个明确的目标节点；
-- 不要修改其他节点；
-- 使用 addNode + addEdge ops 输出，不要用 replaceGraph。
-
-${FLOWCHART_PATCH_CONTRACT(baseHash)}`;
-  }
-
-  // 解释选中步骤（不输出 patch，仅分析）
-  if (actionId === "flowchart-explain") {
-    if (!selection || selection.nodeIds.length === 0) {
-      return `用户触发了"解释选中步骤"操作，但当前未选中节点。请提示用户先在画布上选中一个或多个节点。`;
-    }
-    return `用户希望理解选中节点在整体流程中的作用。
-
-当前完整图（语义 JSON）：
-${graphJson}${trimNote}
-
-选中节点 ID：${selection.nodeIds.join(", ")}
-
-要求：
-- 解释每个选中节点在流程中的位置、职责和语义；
-- 指出它们的前驱和后继关系，以及关键路径上的作用；
-- 如果选中节点之间存在隐含的依赖或风险，明确指出；
-- 本次回答只做分析，不要输出 \`\`\`mona-flowchart-patch fenced block。`;
-  }
-
-  // 为选中节点补异常路径
-  if (actionId === "flowchart-add-exception") {
-    if (!selection || selection.nodeIds.length === 0) {
-      return `用户触发了"补异常路径"操作，但当前未选中节点。请提示用户先在画布上选中一个节点。`;
-    }
-    return `用户希望为选中节点补充失败或异常分支。
-
-当前完整图（语义 JSON）：
-${graphJson}${trimNote}
-
-选中节点 ID：${selection.nodeIds.join(", ")}
-
-要求：
-- 为选中节点追加 1-3 条异常/失败处理分支（如"失败"、"超时"、"校验不通过"）；
-- 每条异常分支应带 label，并指向一个明确的处理节点（如"重试"、"通知人工"、"记录错误"）；
-- 异常处理节点最终应汇入正常流程或终止；
-- 不要修改选中节点本身和其它已有节点；
-- 使用 addNode + addEdge ops 输出，不要用 replaceGraph。
-
-${FLOWCHART_PATCH_CONTRACT(baseHash)}`;
-  }
-
-  // 简化选中子图
-  if (actionId === "flowchart-simplify") {
-    if (!selection || selection.nodeIds.length === 0) {
-      return `用户触发了"简化选中子图"操作，但当前未选中节点。请提示用户先在画布上选中若干节点。`;
-    }
-    return `用户希望把选中节点及周边合并为更短的流程。
-
-当前完整图（语义 JSON）：
-${graphJson}${trimNote}
-
-选中节点 ID：${selection.nodeIds.join(", ")}
-
-要求：
-- 把选中节点合并为更少的节点（如 3 个合并为 1-2 个），保留核心语义；
-- 合并后的节点 label 应能概括原节点群的功能；
-- 同时调整相关边，保持整体流程可达；
-- 可以使用 removeSubgraph + addNode + addEdge 组合；
-- 不要删除未被选中的节点；
-- 不要用 replaceGraph。
-
-${FLOWCHART_PATCH_CONTRACT(baseHash)}`;
-  }
-
-  return "";
-}
-
 /** 流程图自由提问（保留流程图上下文） */
 export function buildFlowchartFreeformPrompt(
   note: OperationNote,
@@ -683,40 +239,6 @@ ${selectionInfo}
 2. 如果只是提问或讨论，正常回答即可，不要输出 fenced block；
 3. 所有修改统一用 \`\`\`mona-flowchart-patch fenced block，baseHash 必须为 "${baseHash}"；
 4. 不要追问，不要询问更多信息。
-
-${FLOWCHART_PATCH_CONTRACT(baseHash)}`;
-}
-
-/**
- * 构造"基于本地 warning 修复"的 prompt（设计文档 §7.9）。
- * 把本地检查发现的问题代码、关联节点和当前语义图一起交给 AI。
- */
-export function buildFlowchartFixWarningsPrompt(
-  note: OperationNote,
-  warnings: Array<{ code: string; message: string; nodeId?: string }>,
-  baseHash: string,
-): string {
-  const ctx = buildFlowchartAiContext(note.contentMarkdown, null);
-  const graphJson = ctx.json;
-  const trimNote = ctx.trimmed
-    ? "\n注意：上图已裁剪，trimmed: true 的节点仅保留 id/kind/label 供参考，不允许删除这些节点。"
-    : "";
-
-  const warningList = warnings.map((w) => `- [${w.code}] ${w.message}${w.nodeId ? `（关联节点：${w.nodeId}）` : ""}`).join("\n");
-
-  return `用户在流程图编辑器中运行了本地流程检查，发现以下问题，希望 AI 给出修复方案。
-
-当前完整图（语义 JSON）：
-${graphJson}${trimNote}
-
-本地检查发现的问题：
-${warningList}
-
-要求：
-- 针对上述问题逐一给出修复方案；
-- 优先修复结构问题（缺少开始/结束、孤立、不可达），再修复分支标签；
-- 不要删除用户的核心内容；
-- 使用 patch ops 输出修复方案，baseHash 必须为 "${baseHash}"。
 
 ${FLOWCHART_PATCH_CONTRACT(baseHash)}`;
 }
@@ -847,22 +369,6 @@ export function buildAgentActionPrompt(
     ].join("\n");
   }
 
-  if (actionId === "generateTags") {
-    const context = formatNoteContext(note);
-    return [
-      "请为这篇笔记生成 3-5 个标签。",
-      "",
-      context,
-      "",
-      "要求：",
-      "- 标签应概括笔记的核心主题、技术领域或关键概念",
-      "- 每个标签 2-6 个字，简洁准确",
-      "- 优先使用通用的技术或领域术语",
-      "- 不要输出 Markdown 格式，不要使用 # 号",
-      "- 只输出标签，每行一个，不要追问，不要解释",
-    ].join("\n");
-  }
-
   if (actionId === "generateHtml") {
     if (filePath) {
       return [
@@ -989,7 +495,7 @@ ${formatNoteContext(note)}`;
 
 /**
  * Build a prompt for a user-defined transformation template.
- * Replaces variables {{note_title}}, {{note_content}}, {{note_tags}}, {{note_source}}
+ * Replaces variables {{note_title}}, {{note_content}}, {{note_source}}
  * with the note's actual values. If the template contains no variables, the note
  * context is appended automatically so the agent still has access to the note.
  */
@@ -1000,7 +506,6 @@ export function buildTransformationPrompt(
   const content = note.contentMarkdown.slice(0, 12000);
   const truncated = note.contentMarkdown.length > content.length;
   const noteContent = truncated ? `${content}\n\n...内容过长，已截断` : content;
-  const tags = note.tags.join("、") || "无";
 
   let prompt = transformation.promptTemplate;
   let hasVariable = false;
@@ -1008,7 +513,6 @@ export function buildTransformationPrompt(
   const replacements: Array<[RegExp, string]> = [
     [/\{\{\s*note_title\s*\}\}/g, note.title],
     [/\{\{\s*note_content\s*\}\}/g, noteContent],
-    [/\{\{\s*note_tags\s*\}\}/g, tags],
     [/\{\{\s*note_source\s*\}\}/g, note.source.label],
   ];
 
@@ -1032,7 +536,6 @@ export function buildTransformationPrompt(
 const ACTION_PROMPT_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
   { pattern: /^请总结这篇笔记的内容/, label: "总结当前笔记" },
   { pattern: /^请翻译这篇笔记/, label: "翻译" },
-  { pattern: /^请为这篇笔记生成 3-5 个标签/, label: "生成标签" },
   { pattern: /^请基于当前笔记内容，生成一份精美的HTML文档/, label: "生成HTML文档" },
 ];
 
@@ -1055,12 +558,6 @@ export function inferNoteActionDisplayLabel(content: string): string | undefined
   if (/^用户希望补全选中判断节点的分支/.test(content)) return "补全判断分支";
   if (/^用户希望优化当前流程图的结构/.test(content)) return "优化流程";
   if (/^用户希望审查当前流程图存在的问题/.test(content)) return "检查流程问题";
-
-  // Mindmap action prompts
-  if (/^用户希望基于当前标题生成一份完整的思维导图/.test(content)) return "从主题生成导图";
-  if (/^用户希望重组当前思维导图的结构/.test(content)) return "重组导图";
-  if (/^用户希望扩展思维导图中的选中分支/.test(content)) return "扩展选中分支";
-  if (/^用户希望精简思维导图中的选中分支/.test(content)) return "精简选中分支";
 
   // Extract user question from freeform prompt
   const freeformNoteMatch = content.match(/^用户正在笔记页面里处理当前笔记[\s\S]*?用户问题：\n(.+?)(?:\n\n当前笔记：|$)/);
@@ -1088,30 +585,6 @@ export function buildAgentResultMarkdown(content: string): string {
   return trimmed.startsWith("#") ? `${trimmed}\n` : `## Agent 处理结果\n\n${trimmed}\n`;
 }
 
-/**
- * 从 AI 生成的标签输出中解析标签数组。
- * 支持每行一个标签、逗号分隔、# 前缀等格式。
- */
-export function parseGeneratedTags(content: string): string[] {
-  const lines = content
-    .split(/[\n,，;；]/)
-    .map((line) => line.trim())
-    .map((line) => line.replace(/^#+\s*/, "").replace(/^[·•\-*\[\]]+\s*/, "").trim())
-    .filter((line) => line.length > 0 && line.length <= 20);
-  // 去重，保持顺序
-  const seen = new Set<string>();
-  const tags: string[] = [];
-  for (const line of lines) {
-    const lower = line.toLowerCase();
-    if (!seen.has(lower)) {
-      seen.add(lower);
-      tags.push(line);
-    }
-    if (tags.length >= 5) break;
-  }
-  return tags;
-}
-
 export function deriveNotePreview(markdown: string): string {
   const text = stripMarkdown(markdown).replace(/\s+/g, " ").trim();
   return text.slice(0, 46) || "空白笔记";
@@ -1137,7 +610,6 @@ function formatNoteContext(note: OperationNote): string {
   return `当前笔记：
 - 标题：${note.title}
 - 来源：${note.source.label}
-- 标签：${note.tags.join("、") || "无"}
 
 Markdown 内容：
 \`\`\`markdown

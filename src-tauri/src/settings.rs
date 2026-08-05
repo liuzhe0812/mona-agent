@@ -41,6 +41,13 @@ impl Default for SidebarShortcuts {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SidebarModuleConfig {
+    pub key: String,
+    pub visible: bool,
+    pub order: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     #[serde(default = "default_run_in_background")]
     pub run_in_background: bool,
@@ -56,8 +63,30 @@ pub struct AppSettings {
     pub quick_ask_mode: String,
     #[serde(default)]
     pub sidebar_shortcuts: SidebarShortcuts,
+    #[serde(default = "default_default_view")]
+    pub default_view: String,
+    #[serde(default = "default_sidebar_modules")]
+    pub sidebar_modules: Vec<SidebarModuleConfig>,
     #[serde(default)]
     pub config_path: Option<String>,
+}
+
+fn default_default_view() -> String {
+    "chat".to_string()
+}
+
+fn default_sidebar_modules() -> Vec<SidebarModuleConfig> {
+    vec![
+        SidebarModuleConfig { key: "chat".to_string(), visible: true, order: 0 },
+        SidebarModuleConfig { key: "note".to_string(), visible: true, order: 1 },
+        SidebarModuleConfig { key: "doc".to_string(), visible: true, order: 2 },
+        SidebarModuleConfig { key: "ssh".to_string(), visible: true, order: 3 },
+        SidebarModuleConfig { key: "email".to_string(), visible: true, order: 4 },
+        SidebarModuleConfig { key: "schedule".to_string(), visible: true, order: 5 },
+        SidebarModuleConfig { key: "db".to_string(), visible: true, order: 6 },
+        SidebarModuleConfig { key: "system".to_string(), visible: true, order: 7 },
+        SidebarModuleConfig { key: "profile".to_string(), visible: true, order: 8 },
+    ]
 }
 
 fn default_run_in_background() -> bool {
@@ -89,6 +118,8 @@ impl Default for AppSettings {
             quick_ask_shortcut: default_quick_ask_shortcut(),
             quick_ask_mode: default_quick_ask_mode(),
             sidebar_shortcuts: SidebarShortcuts::default(),
+            default_view: default_default_view(),
+            sidebar_modules: default_sidebar_modules(),
             config_path: None,
         }
     }

@@ -499,19 +499,10 @@ impl IpcBridge {
                     .get("notebookId")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
-                let tags = args
-                    .get("tags")
-                    .and_then(|v| v.as_array())
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|t| t.as_str().map(|s| s.to_string()))
-                            .collect::<Vec<_>>()
-                    });
                 let note_id = crate::notes::notes_create_from_chat(
                     title,
                     content_markdown,
                     notebook_id,
-                    tags,
                 )
                 .await?;
                 Ok(Value::String(note_id))

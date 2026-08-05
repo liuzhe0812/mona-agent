@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from "react";
 import { Loader2, Send, Square } from "lucide-react";
 
 import { ThreadMessages } from "@/components/thread/ThreadMessages";
@@ -11,14 +11,16 @@ interface PptChatPanelProps {
   onStreamingChange?: (streaming: boolean) => void;
   /** Map of chatId → displayContent for the first user message in that chat. */
   displayContentMap?: Record<string, string>;
-  ref?: React.Ref<PptChatPanelHandle>;
 }
 
 export interface PptChatPanelHandle {
   send: (content: string, displayContent?: string) => void;
 }
 
-export function PptChatPanel({ chatId, onStreamingChange, displayContentMap, ref }: PptChatPanelProps) {
+export const PptChatPanel = forwardRef<PptChatPanelHandle, PptChatPanelProps>(function PptChatPanel(
+  { chatId, onStreamingChange, displayContentMap },
+  ref,
+) {
   const [draft, setDraft] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -169,4 +171,4 @@ export function PptChatPanel({ chatId, onStreamingChange, displayContentMap, ref
       </div>
     </div>
   );
-}
+});

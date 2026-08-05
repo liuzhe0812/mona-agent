@@ -34,17 +34,9 @@ def find_browser() -> str:
             Path("/usr/bin/microsoft-edge"),
         ])
 
-    # Check userData fallback
-    if sys.platform == "win32":
-        user_data = Path.home() / "AppData" / "Local" / "Mona" / "runtime" / "chrome-headless-shell"
-    else:
-        user_data = Path.home() / ".local" / "share" / "Mona" / "runtime" / "chrome-headless-shell"
-
-    if user_data.exists():
-        for exe in user_data.glob("*"):
-            if exe.is_file() and exe.suffix in (".exe", ""):
-                candidates.insert(0, exe)
-
+    # chrome-headless-shell exposes a very limited CDP surface that is
+    # insufficient for video rendering (Page/Runtime/Emulation commands are
+    # missing). Only full Chromium-based browsers (Chrome/Edge) are accepted.
     for c in candidates:
         if c.exists() and c.is_file():
             return str(c)

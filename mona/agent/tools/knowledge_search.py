@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from loguru import logger
 
@@ -78,22 +79,46 @@ def _search_materials(
     limit: int,
     scope: str,
 ) -> list[dict[str, Any]]:
-    """调用 Python 侧 search_materials 搜索资料。"""
-    try:
-        from mona.materials.search import search_materials
+    """走 FTS5 chunk 索引检索资料；索引不可用时回退到目录扫描。
 
-        include_text = scope in ("all", "materials", "text")
-        include_wiki = scope in ("all", "materials", "wiki")
-        return search_materials(
-            vault,
-            query,
-            count=limit,
-            include_text=include_text,
-            include_wiki=include_wiki,
+    索引路径返回结构化 chunk（ref/location/stale），供 materials_read 闭环；
+    回退路径返回文件级结果（无 ref），保持旧行为兼容。
+    """
+    kinds_map = {
+        "text": ("source",),
+        "wiki": ("derived",),
+    }
+    kinds = kinds_map.get(scope, ("source", "derived"))
+    try:
+        from mona.materials.index import MaterialsIndex, sync_index
+
+        index = MaterialsIndex(
+            vault / ".mona" / "materials" / "index.db", vault=vault
         )
+        try:
+            # 增量同步：raw/text/wiki 变化在搜索时即刻反映，
+            # 保证"删除或修改原文后不再返回旧 chunk"。
+            sync_index(vault, index)
+            return index.search(query, count=limit, kinds=kinds)
+        finally:
+            index.close()
     except Exception as e:
-        logger.warning("knowledge_search: search_materials failed: {}", e)
-        return []
+        logger.warning("knowledge_search: index search failed, fallback: {}", e)
+        try:
+            from mona.materials.search import search_materials
+
+            include_text = scope in ("all", "materials", "text")
+            include_wiki = scope in ("all", "materials", "wiki")
+            return search_materials(
+                vault,
+                query,
+                count=limit,
+                include_text=include_text,
+                include_wiki=include_wiki,
+            )
+        except Exception as e2:
+            logger.warning("knowledge_search: search_materials failed: {}", e2)
+            return []
 
 
 _SEARCH_PARAMETERS = tool_parameters_schema(
@@ -111,6 +136,136 @@ _SEARCH_PARAMETERS = tool_parameters_schema(
     ),
     required=["query"],
 )
+
+
+# ---------------------------------------------------------------------------
+# materials_read
+# ---------------------------------------------------------------------------
+
+_READ_PARAMETERS = tool_parameters_schema(
+    ref=StringSchema(
+        "The chunk Ref returned by knowledge_search (format: '<material-id>:<seq>')."
+    ),
+    max_chars=IntegerSchema(
+        "Maximum characters of the located chunk to return (default 4000). "
+        "Neighbor context is not affected."
+    ),
+    required=["ref"],
+)
+
+_DEFAULT_MAX_CHARS = 4000
+
+
+@tool_parameters(_READ_PARAMETERS)
+class MaterialsReadTool(Tool):
+    """Read a located materials chunk by ref, with neighbor context."""
+
+    _scopes = {"core", "subagent"}
+    _plugin_discoverable = True
+    read_only = True
+    subscription_required = True
+
+    @classmethod
+    def enabled(cls, ctx: Any) -> bool:
+        cfg = _notes_config(ctx)
+        return cfg is None or bool(getattr(cfg, "enabled", True))
+
+    @property
+    def name(self) -> str:
+        return "materials_read"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Read the full content of a materials chunk located by "
+            "knowledge_search (pass its Ref). Returns the chunk text, its "
+            "location (page/slide/sheet/section), neighbor chunks for context, "
+            "and a ready-to-use citation label like [报告.pdf, Page 12]. "
+            "Always read at least one chunk before answering factual questions "
+            "about the user's materials, and cite the label in your answer."
+        )
+
+    async def execute(self, **kwargs: Any) -> Any:
+        ref = str(kwargs.get("ref", "")).strip()
+        if not ref:
+            return "Error: ref is required."
+        max_chars = _DEFAULT_MAX_CHARS
+        raw_max = kwargs.get("max_chars")
+        if raw_max is not None:
+            try:
+                max_chars = max(200, min(50000, int(raw_max)))
+            except (TypeError, ValueError):
+                pass
+
+        vault = _get_vault_path()
+        if vault is None:
+            return "Error: Notes vault is not configured."
+
+        from mona.materials.index import MaterialsIndex
+
+        index = MaterialsIndex(
+            vault / ".mona" / "materials" / "index.db", vault=vault
+        )
+        try:
+            chunk = index.get_chunk(ref)
+            if chunk is None:
+                return (
+                    f"Error: ref '{ref}' not found. It may be stale — "
+                    "run knowledge_search again to get a fresh Ref."
+                )
+            neighbors = index.get_neighbors(ref, before=1, after=1)
+        finally:
+            index.close()
+
+        title = chunk["title"]
+        label = chunk["locationLabel"] or title
+        kind_label = "source" if chunk["kind"] == "material_source" else "wiki"
+        citation = f"[{title}, {label}]" if label != title else f"[{title}]"
+
+        lines = [f"# {title}" + (f" — {label}" if label != title else "")]
+        meta = [
+            f"ref={ref}",
+            f"kind={kind_label}",
+            f"path={chunk['rawPath']}",
+        ]
+        if chunk["kind"] == "material_wiki":
+            meta.append("derived=true")
+        if chunk["stale"]:
+            meta.append("stale=true（原文件已修改，内容可能过时）")
+        lines.append(f"({'; '.join(meta)})")
+        lines.append("")
+
+        content = chunk["content"]
+        truncated = False
+        if len(content) > max_chars:
+            content = content[:max_chars]
+            truncated = True
+        lines.append(content)
+        if truncated:
+            lines.append("")
+            lines.append(f"[truncated: 仅显示前 {max_chars} 字符]")
+
+        before = [n for n in neighbors if n["seq"] < chunk["seq"]]
+        after = [n for n in neighbors if n["seq"] > chunk["seq"]]
+        if before or after:
+            lines.append("")
+            lines.append("--- 相邻上下文 ---")
+            for n in before:
+                lines.append(f"\n[上文 {n['locationLabel'] or n['ref']}]\n{n['content']}")
+            for n in after:
+                lines.append(f"\n[下文 {n['locationLabel'] or n['ref']}]\n{n['content']}")
+
+        lines.append("")
+        lines.append(f"引用标签: {citation}")
+        # 可点击的 markdown 引用链接：前端拦截 mona:material 协议，
+        # 打开资料页并滚动到对应位置。模型在回答中原样使用此链接。
+        link_path = f"{'wiki' if chunk['kind'] == 'material_wiki' else 'raw'}/{chunk['rawPath']}"
+        cite_link = (
+            f"{citation}(mona:material?"
+            f"path={quote(link_path, safe='')}&location={quote(label, safe='')})"
+        )
+        lines.append(f"引用链接（在回答中原样使用）: {cite_link}")
+        return "\n".join(lines)
 
 
 @tool_parameters(_SEARCH_PARAMETERS)
@@ -139,7 +294,10 @@ class KnowledgeSearchTool(Tool):
             "Returns matching entries with title, snippet, and source type. "
             "Use this to find information the user has saved before answering "
             "'I don't know'. For notes, follow up with notes_read to get full "
-            "content. For materials wiki, the snippet is usually sufficient."
+            "content. For materials results with a Ref, follow up with "
+            "materials_read(ref) to read the full located chunk (page/slide/"
+            "sheet/section) before answering, and cite the material name and "
+            "location in your answer."
         )
 
     async def execute(self, **kwargs: Any) -> Any:
@@ -204,15 +362,24 @@ class KnowledgeSearchTool(Tool):
             for i, item in enumerate(materials_results, 1):
                 kind = item.get("kind", "")
                 title = item.get("title", "(untitled)")
-                path = item.get("path", "")
+                path = item.get("rawPath") or item.get("path", "")
                 snippet = item.get("snippet", "")
                 kind_label = {
                     "material_source": "source",
                     "material_wiki": "wiki",
                 }.get(kind, kind)
-                lines.append(f"\n{i}. [{kind_label}] {title}")
+                location_label = item.get("locationLabel") or ""
+                header = f"\n{i}. [{kind_label}] {title}"
+                if location_label and location_label != title:
+                    header += f" — {location_label}"
+                lines.append(header)
+                ref = item.get("ref")
+                if ref:
+                    lines.append(f"   Ref: {ref}")
                 if path:
                     lines.append(f"   Path: {path}")
+                if item.get("stale"):
+                    lines.append("   [stale: 原文件已修改，内容可能过时]")
                 if snippet:
                     lines.append(f"   {snippet}")
 

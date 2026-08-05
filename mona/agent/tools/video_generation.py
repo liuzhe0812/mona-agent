@@ -197,7 +197,7 @@ class VideoGenerationTool(Tool):
 
         HTTP(S) URLs are passed through unchanged. Local file paths must live
         under ``~/.mona/media/``; data URLs are decoded in-memory. Each source
-        is uploaded to Mona's image host (``mona.lzfun.vip``).
+        is uploaded to Mona's image host (``www.mona-ai.cn``).
         """
         if not refs:
             return refs

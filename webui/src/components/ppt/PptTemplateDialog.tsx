@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { Loader2, Plus, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { AlertCircle, Loader2, Plus, Trash2 } from "lucide-react";
 
 import {
   Dialog,
@@ -7,6 +7,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { fetchPptTemplates, getApiBase } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -33,6 +43,13 @@ interface PptTemplateDialogProps {
   onSelect: (tpl: PptTemplate) => void;
 }
 
+/** 待确认删除的模板（AlertDialog），null 表示无待确认删除 */
+interface PendingDeleteTemplate {
+  key: string;
+  kind: "brand" | "native";
+  name: string;
+}
+
 export function PptTemplateDialog({
   open,
   onOpenChange,
@@ -44,8 +61,12 @@ export function PptTemplateDialog({
   const { client } = useClient();
   const [templates, setTemplates] = useState<PptTemplate[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [apiBase, setApiBase] = useState<string | null>(null);
-  const [deletingBrand, setDeletingBrand] = useState<string | null>(null);
+  const [deletingKey, setDeletingKey] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<PendingDeleteTemplate | null>(null);
+  // 删除失败：在对应模板卡片附近展示错误与重试
+  const [deleteError, setDeleteError] = useState<{ key: string; message: string } | null>(null);
   const [kindFilter, setKindFilter] = useState<TemplateKindFilter>("all");
   const [dialogView, setDialogView] = useState<DialogView>("select");
 
@@ -53,15 +74,35 @@ export function PptTemplateDialog({
     getApiBase().then(setApiBase);
   }, []);
 
+  const loadTemplates = useCallback(() => {
+    setLoading(true);
+    setLoadError(null);
+    return fetchPptTemplates(token)
+      .then((res) => {
+        setTemplates(res.templates);
+      })
+      .catch((e) => {
+        setLoadError(e instanceof Error ? e.message : "加载模板失败");
+      })
+      .finally(() => {
+        setLoading(false);
+      });
+  }, [token]);
+
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
     setLoading(true);
+    setLoadError(null);
     fetchPptTemplates(token)
       .then((res) => {
         if (!cancelled) setTemplates(res.templates);
       })
-      .catch(() => {})
+      .catch((e) => {
+        if (!cancelled) {
+          setLoadError(e instanceof Error ? e.message : "加载模板失败");
+        }
+      })
       .finally(() => {
         if (!cancelled) setLoading(false);
       });
@@ -94,58 +135,50 @@ export function PptTemplateDialog({
     onOpenChange(false);
   }
 
-  function handleDeleteBrand(brandId: string, e: React.MouseEvent) {
-    e.stopPropagation();
-    if (deletingBrand) return;
-    setDeletingBrand(brandId);
+  /** 执行删除（确认后调用）：品牌模板与自定义模板共用同一流程 */
+  function executeDelete(key: string, kind: "brand" | "native") {
+    if (deletingKey) return;
+    setDeletingKey(key);
+    setDeleteError(null);
     let handled = false;
-    const timeout = setTimeout(() => {
-      if (handled) return;
-      handled = true;
-      setDeletingBrand(null);
-    }, 15_000);
 
-    const unsub = client.onPptDeleteBrandResult((result) => {
+    const finish = (error?: string) => {
       if (handled) return;
       handled = true;
       clearTimeout(timeout);
       unsub();
-      setDeletingBrand(null);
-      if (result.ok) {
+      setDeletingKey(null);
+      if (error) {
+        setDeleteError({ key, message: error });
+      } else {
         setTemplates((prev) =>
-          prev.filter((t) => !(t.kind === "brand" && t.key === brandId)),
+          prev.filter((t) => !(t.kind === kind && t.key === key)),
         );
       }
-    });
+    };
 
-    client.sendPptDeleteBrand({ brandId });
-  }
+    const timeout = setTimeout(() => finish("删除请求超时，请重试"), 15_000);
+    const unsub = kind === "native"
+      ? client.onPptDeleteNativeResult((result) => {
+          if (result.ok) {
+            finish();
+          } else {
+            finish(result.error ?? "删除失败，请重试");
+          }
+        })
+      : client.onPptDeleteBrandResult((result) => {
+          if (result.ok) {
+            finish();
+          } else {
+            finish(result.error ?? "删除失败，请重试");
+          }
+        });
 
-  function handleDeleteNative(templateId: string, e: React.MouseEvent) {
-    e.stopPropagation();
-    if (deletingBrand) return;
-    setDeletingBrand(templateId);
-    let handled = false;
-    const timeout = setTimeout(() => {
-      if (handled) return;
-      handled = true;
-      setDeletingBrand(null);
-    }, 15_000);
-
-    const unsub = client.onPptDeleteNativeResult((result) => {
-      if (handled) return;
-      handled = true;
-      clearTimeout(timeout);
-      unsub();
-      setDeletingBrand(null);
-      if (result.ok) {
-        setTemplates((prev) =>
-          prev.filter((t) => !(t.kind === "native" && t.key === templateId)),
-        );
-      }
-    });
-
-    client.sendPptDeleteNative({ templateId });
+    if (kind === "native") {
+      client.sendPptDeleteNative({ templateId: key });
+    } else {
+      client.sendPptDeleteBrand({ brandId: key });
+    }
   }
 
   function handleImportSaved() {
@@ -173,13 +206,27 @@ export function PptTemplateDialog({
             <div className="flex items-center justify-center py-12">
               <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
             </div>
+          ) : loadError ? (
+            <div className="flex flex-col items-center justify-center gap-2 py-12 text-[12px]">
+              <AlertCircle className="h-4 w-4 text-destructive" />
+              <span className="text-destructive">加载模板失败：{loadError}</span>
+              <button
+                type="button"
+                className="rounded px-2 py-1 text-primary hover:bg-primary/10"
+                onClick={() => void loadTemplates()}
+              >
+                重试
+              </button>
+            </div>
           ) : (
             <div className="space-y-5">
               <div className="flex items-center justify-between gap-3">
-                <div className="grid grid-cols-3 gap-1.5">
+                <div className="grid grid-cols-3 gap-1.5" role="group" aria-label="模板类型筛选">
                   {TEMPLATE_FILTERS.map((f) => (
                     <button
                       key={f.value}
+                      type="button"
+                      aria-pressed={kindFilter === f.value}
                       className={cn(
                         "rounded-full px-3 py-1 text-[11px] font-medium transition-colors",
                         kindFilter === f.value
@@ -220,6 +267,9 @@ export function PptTemplateDialog({
                         return (
                           <div key={`${tpl.kind}-${tpl.key}`} className="relative">
                             <button
+                              type="button"
+                              aria-label={`选择模板 ${tpl.name}`}
+                              aria-pressed={selected}
                               className={cn(
                                 "flex w-full flex-col overflow-hidden rounded-lg border text-left transition-colors",
                                 selected
@@ -271,20 +321,42 @@ export function PptTemplateDialog({
                             {(tpl.kind === "brand" || tpl.kind === "native") && tpl.userCreated && (
                               <button
                                 type="button"
+                                aria-label={`删除模板 ${tpl.name}`}
                                 className="absolute right-1 top-1 rounded-full bg-background/80 p-1 text-muted-foreground hover:text-destructive"
-                                onClick={(e) =>
-                                  tpl.kind === "native"
-                                    ? handleDeleteNative(tpl.key, e)
-                                    : handleDeleteBrand(tpl.key, e)
-                                }
-                                disabled={deletingBrand === tpl.key}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setPendingDelete({
+                                    key: tpl.key,
+                                    kind: tpl.kind as "brand" | "native",
+                                    name: tpl.name,
+                                  });
+                                }}
+                                disabled={deletingKey === tpl.key}
                               >
-                                {deletingBrand === tpl.key ? (
+                                {deletingKey === tpl.key ? (
                                   <Loader2 className="h-3 w-3 animate-spin" />
                                 ) : (
                                   <Trash2 className="h-3 w-3" />
                                 )}
                               </button>
+                            )}
+                            {deleteError?.key === tpl.key && (
+                              <div className="mt-1 flex items-center gap-1.5 rounded-md bg-destructive/5 px-2 py-1.5 text-[11px] text-destructive">
+                                <AlertCircle className="h-3 w-3 shrink-0" />
+                                <span className="min-w-0 flex-1">删除失败：{deleteError.message}</span>
+                                <button
+                                  type="button"
+                                  className="shrink-0 rounded px-1.5 py-0.5 text-primary hover:bg-primary/10"
+                                  onClick={() =>
+                                    executeDelete(
+                                      tpl.key,
+                                      tpl.kind === "native" ? "native" : "brand",
+                                    )
+                                  }
+                                >
+                                  重试
+                                </button>
+                              </div>
                             )}
                           </div>
                         );
@@ -296,6 +368,35 @@ export function PptTemplateDialog({
             </div>
           )}
         </div>
+
+        {/* 删除模板二次确认 */}
+        <AlertDialog
+          open={pendingDelete !== null}
+          onOpenChange={(open) => {
+            if (!open) setPendingDelete(null);
+          }}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>删除这个模板？</AlertDialogTitle>
+              <AlertDialogDescription>
+                将删除{pendingDelete?.kind === "native" ? "自定义模板" : "品牌模板"}
+                「{pendingDelete?.name}」，删除后无法恢复。
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>取消</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={() => {
+                  if (pendingDelete) executeDelete(pendingDelete.key, pendingDelete.kind);
+                  setPendingDelete(null);
+                }}
+              >
+                删除
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </DialogContent>
     </Dialog>
   );

@@ -290,16 +290,23 @@ function serializeNode(node: MindMapNode, isRoot: boolean, level: number, lines:
   }
 }
 
-/** 生成纯文本（用于知识库索引） */
+/**
+ * 生成 plainText：用于前端 preview 显示。
+ *
+ * 注意：plainText 字段不参与后端 backlink/mention 扫描——后端直接扫描
+ * .md 文件 body 原文，并在 `find_plain_mentions` 中跳过结构化文档
+ * （见 notes_links.rs 的 `is_structured_note`）。这里生成的内容仅用于
+ * preview 等前端展示场景，需要包含节点 topic 原文以保证可读性。
+ */
 function buildPlainText(root: MindMapNode): string {
   const parts: string[] = [];
-  const walk = (node: MindMapNode, depth: number) => {
-    parts.push("  ".repeat(depth) + node.topic);
+  const walk = (node: MindMapNode) => {
+    if (node.topic) parts.push(node.topic);
     for (const child of node.children) {
-      walk(child, depth + 1);
+      walk(child);
     }
   };
-  walk(root, 0);
+  walk(root);
   return parts.join("\n");
 }
 

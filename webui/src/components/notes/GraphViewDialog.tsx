@@ -3,7 +3,11 @@ import { X, ZoomIn, ZoomOut, Maximize2, Loader2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { getNotesLinkGraph, saveNotesLinkPositions, type LinkGraph, type LinkNode } from "@/lib/tauri";
+import { getNotesLinkGraph, saveNotesLinkPositions, isTauri, type LinkGraph, type LinkNode } from "@/lib/tauri";
+import { useMaterialsOpenStore } from "@/lib/materials-open-store";
+
+/** Wiki 节点 path 的 vault 相对前缀（与 Rust 侧 WIKI_REL_PREFIX 一致）。 */
+const WIKI_PATH_PREFIX = ".mona/materials/wiki/";
 
 interface GraphViewDialogProps {
   open: boolean;
@@ -25,6 +29,8 @@ interface SimEdge {
   target: string;
   kind: "link" | "embed";
 }
+
+const EMPTY_GRAPH: LinkGraph = { nodes: [], edges: [], positions: {}, lastScanAt: "" };
 
 const NODE_RADIUS = 5;
 const REPULSION = 800;
@@ -71,6 +77,14 @@ export function GraphViewDialog({
     setLoading(true);
     setError(null);
 
+    if (!isTauri()) {
+      setLoading(false);
+      setGraph(EMPTY_GRAPH);
+      nodesRef.current = [];
+      edgesRef.current = [];
+      return;
+    }
+
     const timeoutId = window.setTimeout(() => {
       if (cancelled) return;
       setError("加载关系图超时，请检查 vault 配置后重试");
@@ -81,7 +95,9 @@ export function GraphViewDialog({
       .then((data) => {
         if (cancelled) return;
         if (!data) {
-          setGraph(null);
+          setGraph(EMPTY_GRAPH);
+          nodesRef.current = [];
+          edgesRef.current = [];
           return;
         }
         setGraph(data);
@@ -178,13 +194,18 @@ export function GraphViewDialog({
     canvas.height = Math.round(dimensions.h * dpr);
   }, [dimensions, graph]);
 
-  // Force simulation + render loop.
+  // Force simulation + render loop. Restart when graph or dimensions change.
   useEffect(() => {
     if (!open) return;
+    if (!graph) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
+    if (dimensions.w <= 0 || dimensions.h <= 0) return;
+
+    // Catch any runtime errors in the render loop and surface them.
+    let errored = false;
 
     const dpr = window.devicePixelRatio || 1;
 
@@ -315,6 +336,9 @@ export function GraphViewDialog({
 
         if (isActive) {
           ctx.fillStyle = isDimmed ? "rgba(59, 130, 246, 0.2)" : "#3b82f6";
+        } else if (n.sourceKind === "wiki") {
+          // 资料库 Wiki 页面：翡翠绿，与笔记节点区分
+          ctx.fillStyle = isDimmed ? "rgba(16, 185, 129, 0.2)" : "#10b981";
         } else if (n.noteType === "template") {
           ctx.fillStyle = isDimmed ? "rgba(168, 85, 247, 0.2)" : "#a855f7";
         } else if (n.noteType === "moc") {
@@ -369,9 +393,22 @@ export function GraphViewDialog({
       animationRef.current = requestAnimationFrame(tick);
     };
 
-    animationRef.current = requestAnimationFrame(tick);
+    const wrappedTick = () => {
+      try {
+        tick();
+      } catch (err) {
+        if (errored) return;
+        errored = true;
+        cancelAnimationFrame(animationRef.current);
+        console.error("[graph view] render error", err);
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    };
+
+    animationRef.current = requestAnimationFrame(wrappedTick);
+    (tick as any)(); // one synchronous frame before first rAF so content appears instantly
     return () => cancelAnimationFrame(animationRef.current);
-  }, [open, dimensions]);
+  }, [open, graph, dimensions]);
 
   // Mouse interactions.
   const handleMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -448,7 +485,16 @@ export function GraphViewDialog({
       const node = nodesRef.current.find(
         (n) => Math.sqrt((n.x - x) ** 2 + (n.y - y) ** 2) < NODE_RADIUS + 6,
       );
-      if (node && onSelectNote) {
+      if (!node) return;
+      if (node.sourceKind === "wiki") {
+        // Wiki 节点：跳到资料库页面而非打开笔记 tab
+        const rel = node.path.startsWith(WIKI_PATH_PREFIX)
+          ? node.path.slice(WIKI_PATH_PREFIX.length)
+          : node.path;
+        useMaterialsOpenStore.getState().request({ kind: "wiki", path: rel });
+        return;
+      }
+      if (onSelectNote) {
         onSelectNote(node.id);
       }
     },
@@ -579,10 +625,21 @@ export function GraphViewDialog({
         )}
         {!loading && !error && graph && graph.nodes.length === 0 && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-center">
-            <p className="text-[13px] text-muted-foreground">暂无笔记</p>
-            <p className="text-[11px] text-muted-foreground/70">
-              先创建笔记并使用 [[双链]] 标记，关系图将自动生成
-            </p>
+            {!isTauri() ? (
+              <>
+                <p className="text-[13px] text-muted-foreground">仅桌面客户端可用</p>
+                <p className="text-[11px] text-muted-foreground/70">
+                  关系图谱依赖 Tauri 后端，请在 Mona 桌面客户端中打开此视图
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="text-[13px] text-muted-foreground">暂无笔记</p>
+                <p className="text-[11px] text-muted-foreground/70">
+                  先创建笔记并使用 [[双链]] 标记，关系图将自动生成
+                </p>
+              </>
+            )}
           </div>
         )}
         {!loading && !error && graph && graph.nodes.length > 0 && (
@@ -609,6 +666,10 @@ export function GraphViewDialog({
             <div className="flex items-center gap-1.5">
               <span className="h-2 w-2 rounded-full bg-purple-500" />
               <span>模板</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="h-2 w-2 rounded-full bg-emerald-500" />
+              <span>资料 Wiki 页</span>
             </div>
             <div className="flex items-center gap-1.5">
               <span className="h-2 w-2 rounded-full bg-gray-500" />

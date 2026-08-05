@@ -17,7 +17,6 @@ import {
   PlusSquare,
   Server,
   Star,
-  Tags,
   Trash2,
   Workflow,
   X,
@@ -34,13 +33,6 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuRadioGroup,
@@ -48,7 +40,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 import type { Notebook, NoteContextLevel, NoteSourceKind, OperationNote } from "./notes-data";
@@ -80,7 +71,6 @@ interface NoteListProps {
   onCopyPath?: (note: OperationNote) => void;
   onRevealInExplorer?: (note: OperationNote) => void;
   onDuplicate?: (note: OperationNote) => void;
-  onEditTags?: (note: OperationNote, tags: string[]) => void;
   onRename?: (note: OperationNote) => void;
   onMoveToNotebook?: (note: OperationNote, notebookId: string) => void;
   onMergeNote?: (note: OperationNote, targetNoteId: string) => void;
@@ -89,11 +79,13 @@ interface NoteListProps {
   onSetContextLevel?: (note: OperationNote, level: NoteContextLevel) => void;
   onToggleFavorite?: (note: OperationNote) => void;
   onCreateNote?: (sourceKind: NoteSourceKind) => void;
-  onConvertToMindMap?: (note: OperationNote) => void;
   onExportDocx?: (note: OperationNote) => void;
-  onConvertToFlowchart?: (note: OperationNote) => void;
   notebooks?: Notebook[];
   allNotes?: OperationNote[];
+  /** 正在录音转写的笔记 id */
+  recordingNoteId?: string | null;
+  /** 正在被 AI 处理的笔记 id */
+  aiProcessingNoteId?: string | null;
 }
 
 const CONTEXT_LEVEL_ORDER: NoteContextLevel[] = ["full", "summary", "none"];
@@ -162,7 +154,6 @@ export function NoteList({
   onCopyPath,
   onRevealInExplorer,
   onDuplicate,
-  onEditTags,
   onRename,
   onMoveToNotebook,
   onMergeNote,
@@ -171,25 +162,18 @@ export function NoteList({
   onSetContextLevel,
   onToggleFavorite,
   onCreateNote,
-  onConvertToMindMap,
   onExportDocx,
-  onConvertToFlowchart,
   notebooks = [],
   allNotes = [],
+  recordingNoteId,
+  aiProcessingNoteId,
 }: NoteListProps) {
-  const [editingNote, setEditingNote] = useState<OperationNote | null>(null);
   const [internalSortMode, setInternalSortMode] = useState<SortMode>("updated-desc");
   const sortMode = controlledSortMode ?? internalSortMode;
   const handleSortChange = onSortChange ?? setInternalSortMode;
   const selection = selectedIds ?? new Set<string>();
 
   const sortedNotes = useMemo(() => sortNotesByMode(notes, sortMode), [notes, sortMode]);
-
-  const handleSaveTags = (tags: string[]) => {
-    if (!editingNote || !onEditTags) return;
-    onEditTags(editingNote, tags);
-    setEditingNote(null);
-  };
 
   if (notes.length === 0) {
     return (
@@ -221,12 +205,6 @@ export function NoteList({
             </ContextMenuItem>
           </ContextMenuContent>
         </ContextMenu>
-        <TagEditDialog
-          open={editingNote !== null}
-          tags={editingNote?.tags ?? []}
-          onSave={handleSaveTags}
-          onOpenChange={(open) => { if (!open) setEditingNote(null); }}
-        />
       </>
     );
   }
@@ -273,7 +251,6 @@ export function NoteList({
                   onCopyPath={onCopyPath}
                   onRevealInExplorer={onRevealInExplorer}
                   onDuplicate={onDuplicate}
-                  onEditTags={onEditTags ? () => setEditingNote(note) : undefined}
                   onRename={onRename ? () => onRename(note) : undefined}
                   onOpenInNewTab={onOpenInNewTab ? () => onOpenInNewTab(note.id) : undefined}
                   onMoveToNotebook={onMoveToNotebook}
@@ -283,9 +260,9 @@ export function NoteList({
                   allNotes={allNotes}
                   onSetContextLevel={onSetContextLevel}
                   onToggleFavorite={onToggleFavorite}
-                  onConvertToMindMap={onConvertToMindMap}
                   onExportDocx={onExportDocx}
-                  onConvertToFlowchart={onConvertToFlowchart}
+                  isRecording={recordingNoteId === note.id}
+                  isAiProcessing={aiProcessingNoteId === note.id}
                 />
               ))}
             </div>
@@ -316,12 +293,6 @@ export function NoteList({
           </ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
-      <TagEditDialog
-        open={editingNote !== null}
-        tags={editingNote?.tags ?? []}
-        onSave={handleSaveTags}
-        onOpenChange={(open) => { if (!open) setEditingNote(null); }}
-      />
     </div>
   );
 }
@@ -426,7 +397,6 @@ export function NoteRow({
   onCopyPath,
   onRevealInExplorer,
   onDuplicate,
-  onEditTags,
   onRename,
   onOpenInNewTab,
   onMoveToNotebook,
@@ -436,9 +406,9 @@ export function NoteRow({
   allNotes = [],
   onSetContextLevel,
   onToggleFavorite,
-  onConvertToMindMap,
   onExportDocx,
-  onConvertToFlowchart,
+  isRecording = false,
+  isAiProcessing = false,
 }: {
   note: OperationNote;
   active: boolean;
@@ -448,7 +418,6 @@ export function NoteRow({
   onCopyPath?: (note: OperationNote) => void;
   onRevealInExplorer?: (note: OperationNote) => void;
   onDuplicate?: (note: OperationNote) => void;
-  onEditTags?: () => void;
   onRename?: () => void;
   onOpenInNewTab?: () => void;
   onMoveToNotebook?: (note: OperationNote, notebookId: string) => void;
@@ -458,9 +427,11 @@ export function NoteRow({
   allNotes?: OperationNote[];
   onSetContextLevel?: (note: OperationNote, level: NoteContextLevel) => void;
   onToggleFavorite?: (note: OperationNote) => void;
-  onConvertToMindMap?: (note: OperationNote) => void;
   onExportDocx?: (note: OperationNote) => void;
-  onConvertToFlowchart?: (note: OperationNote) => void;
+  /** 该笔记正在录音转写 */
+  isRecording?: boolean;
+  /** 该笔记正在被 AI 处理 */
+  isAiProcessing?: boolean;
 }) {
   const currentLevel: NoteContextLevel = note.contextLevel ?? "full";
 
@@ -499,6 +470,18 @@ export function NoteRow({
           </span>
           {note.favorite ? (
             <Star className="shrink-0 h-3 w-3 fill-current text-amber-500" />
+          ) : null}
+          {isRecording ? (
+            <span className="flex shrink-0 items-center gap-1 rounded-full bg-rose-500/12 px-1.5 py-px text-[10px] tabular-nums leading-none text-rose-600 dark:text-rose-400">
+              <span className="note-processing-dot inline-block h-1.5 w-1.5 rounded-full bg-rose-500" />
+              录音中
+            </span>
+          ) : null}
+          {isAiProcessing ? (
+            <span className="flex shrink-0 items-center gap-1 rounded-full bg-emerald-500/12 px-1.5 py-px text-[10px] tabular-nums leading-none text-emerald-600 dark:text-emerald-400">
+              <span className="note-processing-dot inline-block h-1.5 w-1.5 rounded-full bg-emerald-500" />
+              AI 处理中
+            </span>
           ) : null}
           <span className="shrink-0 text-[10.5px] tabular-nums text-muted-foreground/70">
             {formatRelativeTime(note.updatedAt)}
@@ -575,10 +558,6 @@ export function NoteRow({
             </ContextMenuSubContent>
           </ContextMenuSub>
         ) : null}
-        <ContextMenuItem onSelect={() => onEditTags?.()}>
-          <Tags className="mr-2 h-3.5 w-3.5" />
-          编辑标签
-        </ContextMenuItem>
         {onToggleFavorite ? (
           <ContextMenuItem onSelect={() => onToggleFavorite(note)}>
             <Star className={cn("mr-2 h-3.5 w-3.5", note.favorite && "fill-current text-amber-500")} />
@@ -594,18 +573,6 @@ export function NoteRow({
           <ContextMenuItem onSelect={() => onExportDocx(note)}>
             <FileType className="mr-2 h-3.5 w-3.5" />
             导出为 Word
-          </ContextMenuItem>
-        ) : null}
-        {onConvertToMindMap && note.type !== "mindmap" && note.type !== "flowchart" ? (
-          <ContextMenuItem onSelect={() => onConvertToMindMap(note)}>
-            <Network className="mr-2 h-3.5 w-3.5" />
-            转为思维导图
-          </ContextMenuItem>
-        ) : null}
-        {onConvertToFlowchart && note.type !== "mindmap" && note.type !== "flowchart" ? (
-          <ContextMenuItem onSelect={() => onConvertToFlowchart(note)}>
-            <Workflow className="mr-2 h-3.5 w-3.5" />
-            用 AI 生成流程图
           </ContextMenuItem>
         ) : null}
         {onCopyPath ? (
@@ -663,126 +630,5 @@ export function NoteRow({
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
-  );
-}
-
-function TagEditDialog({
-  open,
-  tags: initialTags,
-  onSave,
-  onOpenChange,
-}: {
-  open: boolean;
-  tags: string[];
-  onSave: (tags: string[]) => void;
-  onOpenChange: (open: boolean) => void;
-}) {
-  const [tags, setTags] = useState<string[]>(initialTags);
-  const [input, setInput] = useState("");
-
-  const handleOpenChange = (nextOpen: boolean) => {
-    if (nextOpen) {
-      setTags(initialTags);
-      setInput("");
-    }
-    onOpenChange(nextOpen);
-  };
-
-  const addTag = () => {
-    const newTags = input
-      .split(/[\s,，、]+/)
-      .map((t) => t.trim())
-      .filter(Boolean);
-    if (newTags.length === 0) return;
-    setTags((prev) => {
-      const merged = Array.from(new Set([...prev, ...newTags]));
-      return merged;
-    });
-    setInput("");
-  };
-
-  const removeTag = (tag: string) => {
-    setTags((prev) => prev.filter((t) => t !== tag));
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      addTag();
-    }
-  };
-
-  return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-w-[360px] gap-0 rounded-xl border-border/70 p-0">
-        <DialogHeader className="border-b border-border/65 px-4 py-3 text-left">
-          <DialogTitle className="text-[14px]">编辑标签</DialogTitle>
-        </DialogHeader>
-
-        <div className="px-4 py-3">
-          {tags.length > 0 ? (
-            <div className="flex flex-wrap gap-1.5">
-              {tags.map((tag) => (
-                <span
-                  key={tag}
-                  className="inline-flex items-center gap-1 rounded-full border border-border/65 bg-muted/25 px-2 py-0.5 text-[11.5px] text-muted-foreground"
-                >
-                  {tag}
-                  <button
-                    type="button"
-                    onClick={() => removeTag(tag)}
-                    className="grid h-3.5 w-3.5 place-items-center rounded-full text-muted-foreground hover:bg-accent hover:text-foreground"
-                  >
-                    <X className="h-2.5 w-2.5" />
-                  </button>
-                </span>
-              ))}
-            </div>
-          ) : (
-            <p className="text-[12px] text-muted-foreground">暂无标签</p>
-          )}
-
-          <div className="mt-3 flex items-center gap-1.5">
-            <input
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder="输入标签，回车添加"
-              className="h-8 flex-1 rounded-lg border border-border/70 bg-background px-2.5 text-[12px] outline-none placeholder:text-muted-foreground focus:border-border"
-            />
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="h-8 px-2.5 text-[12px]"
-              disabled={!input.trim()}
-              onClick={addTag}
-            >
-              添加
-            </Button>
-          </div>
-        </div>
-
-        <DialogFooter className="border-t border-border/65 px-4 py-2.5">
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="h-7 px-2.5 text-[12px]"
-            onClick={() => onOpenChange(false)}
-          >
-            取消
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            className="h-7 px-2.5 text-[12px]"
-            onClick={() => onSave(tags)}
-          >
-            保存
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   );
 }

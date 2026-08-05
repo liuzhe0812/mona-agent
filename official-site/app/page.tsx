@@ -9,13 +9,11 @@ import {
 } from "react";
 
 const menuItems = [
-  { label: "快速入门", tag: "START", href: "#intro" },
-  { label: "免费模型", tag: "FREE", href: "#models" },
-  { label: "Agent", tag: "CORE", href: "#agent" },
-  { label: "模块", tag: "MODULES", href: "#modules" },
-  { label: "白盒运维", tag: "VISIBLE", href: "#whitebox" },
-  { label: "桌面端", tag: "DESKTOP", href: "#desktop" },
-  { label: "更新日志", tag: "CHANGELOG", href: "#changelog" },
+  { label: "快速入门", tag: "START", href: "/manual.html" },
+  { label: "免费模型", tag: "FREE", href: "/tutorial" },
+  { label: "对话 Mona", tag: "DIALOGUE", href: "#intro" },
+  { label: "核心能力", tag: "CORE", href: "#chapters" },
+  { label: "更新日志", tag: "CHANGELOG", href: "/changelog" },
 ] as const;
 
 const dialogue = [
@@ -23,7 +21,7 @@ const dialogue = [
   "不。真正的搭档，不该等你把工作重新解释一遍。",
   "它应该和你待在同一个桌面，接住邮件、日程、笔记、浏览器、终端和数据库里的工作。",
   "每一次行动，都让工作沉淀成下一次可以继续使用的知识。",
-  "不是回答完就离开。是陪你把事情做完。这才是 Work Buddy。",
+  "不是回答完就离开。是陪你把事情做完。这才是 Mona。",
 ] as const;
 
 const chapters = [
@@ -219,7 +217,7 @@ export default function Home() {
 
           <a className="continue-hint" href="#intro">
             <kbd>SPACE</kbd>
-            <span>对话Mona</span>
+            <span>对话 Mona</span>
           </a>
         </section>
 
@@ -233,12 +231,12 @@ export default function Home() {
           <div className="dialogue-wash" aria-hidden="true" />
 
           <div className="dialogue-heading">
-            <span>CASE FILE / 001</span>
-            <h2 id="dialogue-heading">什么是真正的 Work&nbsp;Buddy？</h2>
+            <span>DIALOGUE / MONA</span>
+            <h2 id="dialogue-heading">对话 Mona</h2>
           </div>
 
           <div className="dialogue-portrait" aria-hidden="true">
-            <img src="/img/mona-logo.png" alt="" />
+            <img src="/img/mona-dialogue-profile.png" alt="" />
           </div>
 
           <div className="dialogue-panel">
@@ -269,8 +267,8 @@ export default function Home() {
           aria-labelledby="chapters-heading"
         >
           <header>
-            <span>FIELD GUIDE / MONA SYSTEM</span>
-            <h2 id="chapters-heading">进入 Mona 的工作现场</h2>
+            <span>CORE CAPABILITIES / MONA SYSTEM</span>
+            <h2 id="chapters-heading">核心能力</h2>
           </header>
 
           <div className="mission-grid">

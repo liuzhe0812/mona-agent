@@ -18,6 +18,11 @@ import {
   createBlankFlowchartDocument,
   serializeFlowchartMarkdown,
 } from "./flowchart/flowchart-document";
+import {
+  createBlankDiagramDocument,
+  type DiagramKind,
+} from "./diagram/diagram-document";
+import { serializeDiagramMarkdown } from "./diagram/diagram-serializer";
 
 export interface NotesStorageState {
   notebooks: Notebook[];
@@ -57,7 +62,6 @@ export function createBlankNote(
     source: isSsh
       ? { kind: "ssh", label: "SSH 记录" }
       : { kind: "manual", label: "手动记录" },
-    tags: isSsh ? ["SSH"] : [],
     contentMarkdown: isSsh
       ? "## SSH 会话记录\n\n```bash\n# 在这里粘贴命令和输出\n```\n\n## 判断\n\n"
       : "",
@@ -81,7 +85,6 @@ export function createBlankMindMapNote(
     createdAt: nowTimestamp(),
     updatedAt: nowTimestamp(),
     source: { kind: "manual", label: "手动记录" },
-    tags: [],
     contentMarkdown: "# 未命名思维导图",
     appliedAgentMessageIds: [],
     contextLevel: "full",
@@ -104,11 +107,31 @@ export function createBlankFlowchartNote(
     createdAt: nowTimestamp(),
     updatedAt: nowTimestamp(),
     source: { kind: "manual", label: "手动记录" },
-    tags: [],
     contentMarkdown: md,
     appliedAgentMessageIds: [],
     contextLevel: "full",
     type: "flowchart",
+  };
+}
+
+export function createBlankDiagramNote(
+  notebookId: string,
+  diagramKind: DiagramKind = "freeform",
+): OperationNote {
+  const doc = createBlankDiagramDocument(diagramKind);
+  const md = serializeDiagramMarkdown("未命名图表", doc);
+  return {
+    id: createId("note"),
+    notebookId,
+    title: "未命名图表",
+    preview: "图表",
+    createdAt: nowTimestamp(),
+    updatedAt: nowTimestamp(),
+    source: { kind: "manual", label: "手动记录" },
+    contentMarkdown: md,
+    appliedAgentMessageIds: [],
+    contextLevel: "full",
+    type: "diagram",
   };
 }
 
@@ -130,7 +153,6 @@ export function createNoteFromTemplate(
     createdAt: now,
     updatedAt: now,
     source: { kind: "manual", label: "从模板创建" },
-    tags: [...template.tags],
     contentMarkdown: content,
     appliedAgentMessageIds: [],
     contextLevel: "full",

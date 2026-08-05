@@ -1,30 +1,28 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  GitFork,
-  Loader2,
-  Network,
-  Plus,
+  AlertTriangle,
+  Check,
   RotateCcw,
-  Send,
-  Shrink,
-  Square,
+  X,
 } from "lucide-react";
 
-import { useMonaStream } from "@/hooks/useMonaStream";
+import { useMonaStream, type SendImage } from "@/hooks/useMonaStream";
 import { useSessionHistory } from "@/hooks/useSessions";
 import type { UIMessage } from "@/lib/types";
 import { useClientOptional } from "@/providers/ClientProvider";
 import {
-  MINDMAP_ACTIONS,
-  buildMindMapActionPrompt,
   buildMindMapFreeformPrompt,
   inferNoteActionDisplayLabel,
-  type MindMapActionId,
 } from "../notes-ai";
 import type { OperationNote } from "../notes-data";
-import { applyMindMapAiResult } from "./mindmap-apply";
+import {
+  applyPendingPatch,
+  prepareMindMapPatch,
+  type PendingMindMapPatch,
+} from "./mindmap-apply";
 import { useMindMapSelection } from "./MindMapSelectionContext";
 import { AgentChat } from "../NoteAgentPanel";
+import { AgentComposer } from "../AgentComposer";
 
 interface MindMapAgentPanelProps {
   note: OperationNote | null;
@@ -51,8 +49,17 @@ export function MindMapAgentPanel({
   const [creatingChat, setCreatingChat] = useState(false);
   const pendingPromptRef = useRef<string | null>(null);
   const pendingDisplayContentRef = useRef<string | null>(null);
+  const pendingImagesRef = useRef<SendImage[] | null>(null);
   const pendingActionRef = useRef<string | null>(null);
   const autoAppliedMessageIdsRef = useRef<Set<string>>(new Set());
+  /** 发起请求时记录的 baseHash，用于检测生成期间语义变化 */
+  const requestBaseHashRef = useRef<string | null>(null);
+  /** 已 prepare 过的 message ID，避免重复 dry-run */
+  const preparedMessageIdsRef = useRef<Set<string>>(new Set());
+  /** 待确认的 patch 列表（按 message ID 索引） */
+  const [pendingPatches, setPendingPatches] = useState<Map<string, PendingMindMapPatch>>(
+    () => new Map(),
+  );
   const lastNoteIdRef = useRef<string | null | undefined>(note?.id);
   const { client } = useClientOptional();
   const mindMapSelectionCtx = useMindMapSelection();
@@ -88,6 +95,9 @@ export function MindMapAgentPanel({
     setNotice(null);
     pendingActionRef.current = null;
     autoAppliedMessageIdsRef.current = new Set();
+    requestBaseHashRef.current = null;
+    preparedMessageIdsRef.current = new Set();
+    setPendingPatches(new Map());
     if (!note?.agentChatId) setMessages([]);
   }, [note?.id, note?.agentChatId, setMessages]);
 
@@ -108,11 +118,17 @@ export function MindMapAgentPanel({
   useEffect(() => {
     if (!chatId || loading || creatingChat) return;
     const pendingPrompt = pendingPromptRef.current;
-    if (!pendingPrompt) return;
+    if (!pendingPrompt && !pendingImagesRef.current) return;
     const pendingDisplay = pendingDisplayContentRef.current;
+    const pendingImages = pendingImagesRef.current;
     pendingPromptRef.current = null;
     pendingDisplayContentRef.current = null;
-    send(pendingPrompt, undefined, pendingDisplay ? { displayContent: pendingDisplay } : undefined);
+    pendingImagesRef.current = null;
+    send(
+      pendingPrompt ?? "",
+      pendingImages ?? undefined,
+      pendingDisplay ? { displayContent: pendingDisplay } : undefined,
+    );
   }, [chatId, creatingChat, loading, send]);
 
   useEffect(() => {
@@ -121,49 +137,102 @@ export function MindMapAgentPanel({
     return () => window.clearTimeout(timer);
   }, [notice]);
 
-  // 思维导图 action 自动应用
+  // AI 回答完成后，prepare 成功且 baseHash 仍匹配时自动应用；
+  // 生成期间图被修改（baseHash 不匹配）时保留手动确认。
   useEffect(() => {
-    const action = pendingActionRef.current;
-    if (!action || loading || creatingChat || isStreaming) return;
-    if (!(action as string).startsWith("mindmap-")) return;
+    if (loading || creatingChat || isStreaming) return;
+    if (!note || note.type !== "mindmap") return;
 
+    // 找到最新的、未 prepare 过的 assistant 完成消息
     const completedMessage = messages
       .filter(
         (item) =>
           item.role === "assistant" &&
           !item.isStreaming &&
           item.content.trim().length > 0 &&
-          !autoAppliedMessageIdsRef.current.has(item.id),
+          !preparedMessageIdsRef.current.has(item.id),
       )
       .pop();
     if (!completedMessage) return;
 
-    autoAppliedMessageIdsRef.current.add(completedMessage.id);
+    preparedMessageIdsRef.current.add(completedMessage.id);
     pendingActionRef.current = null;
 
-    if (note?.type === "mindmap") {
-      const result = applyMindMapAiResult(completedMessage.content, note.contentMarkdown);
-      if (!result.ok) {
-        setNotice(result.notice);
-        return;
-      }
-      onApplyResult("replace", result.markdown, completedMessage.id);
-      setNotice(result.notice);
+    const requestBaseHash = requestBaseHashRef.current ?? mindMapSelectionCtx.baseHash ?? "";
+    const result = prepareMindMapPatch(
+      completedMessage.content,
+      note.contentMarkdown,
+      completedMessage.id,
+      requestBaseHash,
+    );
+    if (!result.ok) {
+      // AI 没返回结构化 block（如纯文本回答），不展示变更卡片
+      return;
     }
-  }, [creatingChat, isStreaming, loading, messages, note, onApplyResult]);
+
+    const currentHash = mindMapSelectionCtx.baseHash ?? "";
+    if (result.pending.requestBaseHash === currentHash) {
+      // baseHash 仍匹配：直接自动应用
+      const applyResult = applyPendingPatch(result.pending, note.contentMarkdown);
+      if (applyResult.ok) {
+        autoAppliedMessageIdsRef.current.add(completedMessage.id);
+        onApplyResult("replace", applyResult.markdown, completedMessage.id);
+        setNotice(applyResult.notice);
+      } else {
+        // 应用失败（patch 校验不通过等），保留手动确认
+        setPendingPatches((prev) => {
+          const next = new Map(prev);
+          next.set(completedMessage.id, { ...result.pending, status: "stale" });
+          return next;
+        });
+      }
+    } else {
+      // baseHash 不匹配（生成期间图被修改），保留手动确认
+      setPendingPatches((prev) => {
+        const next = new Map(prev);
+        next.set(completedMessage.id, { ...result.pending, status: "stale" });
+        return next;
+      });
+    }
+    requestBaseHashRef.current = null;
+  }, [creatingChat, isStreaming, loading, messages, note, mindMapSelectionCtx.baseHash, onApplyResult]);
+
+  // stale 检测：当前文档 baseHash 与 requestBaseHash 不同时，标记 pending 为 stale
+  const currentBaseHash = mindMapSelectionCtx.baseHash;
+  useEffect(() => {
+    if (!currentBaseHash) return;
+    setPendingPatches((prev) => {
+      let changed = false;
+      const next = new Map(prev);
+      for (const [messageId, pending] of next) {
+        if (pending.status === "ready" && pending.requestBaseHash !== currentBaseHash) {
+          next.set(messageId, { ...pending, status: "stale" });
+          changed = true;
+        } else if (pending.status === "stale" && pending.requestBaseHash === currentBaseHash) {
+          // 用户撤销回原 hash，恢复 ready
+          next.set(messageId, { ...pending, status: "ready" });
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [currentBaseHash]);
 
   const sendPromptToAgent = useCallback(
-    async (prompt: string, displayContent?: string) => {
+    async (prompt: string, images?: SendImage[], displayContent?: string) => {
       if (!note) return false;
       const trimmed = prompt.trim();
-      if (!trimmed || creatingChat) return false;
+      if ((!trimmed && (!images || images.length === 0)) || creatingChat) return false;
       if (isStreaming) {
         setNotice("Agent 正在处理，先停止或等它完成");
         return false;
       }
 
+      // 记录发起请求时的 baseHash，用于后续 stale 检测
+      requestBaseHashRef.current = mindMapSelectionCtx.baseHash ?? null;
+
       if (chatId) {
-        send(trimmed, undefined, displayContent ? { displayContent } : undefined);
+        send(trimmed, images, displayContent ? { displayContent } : undefined);
         return true;
       }
 
@@ -176,6 +245,7 @@ export function MindMapAgentPanel({
       setNotice("正在创建导图专属会话");
       pendingPromptRef.current = trimmed;
       pendingDisplayContentRef.current = displayContent ?? null;
+      pendingImagesRef.current = images ?? null;
       try {
         const nextChatId = await client.newChat(5_000, true);
         onAgentChatIdChange(nextChatId);
@@ -183,47 +253,20 @@ export function MindMapAgentPanel({
       } catch {
         pendingPromptRef.current = null;
         pendingDisplayContentRef.current = null;
+        pendingImagesRef.current = null;
         setNotice("创建会话失败");
         return false;
       } finally {
         setCreatingChat(false);
       }
     },
-    [chatId, client, creatingChat, isStreaming, note, onAgentChatIdChange, send],
+    [chatId, client, creatingChat, isStreaming, note, onAgentChatIdChange, send, mindMapSelectionCtx.baseHash],
   );
 
-  const runMindMapAction = useCallback(
-    async (actionId: MindMapActionId) => {
-      if (!note) return;
-      const meta = MINDMAP_ACTIONS.find((a) => a.id === actionId);
-      if (!meta) return;
-      if (meta.requiresSelection) {
-        if (mindMapSelectionCtx.noteId !== note.id || !mindMapSelectionCtx.selection) {
-          setNotice("请先在画布上选中一个节点");
-          return;
-        }
-      }
-      const baseHash = mindMapSelectionCtx.baseHash ?? "";
-      pendingActionRef.current = actionId;
-      const prompt = buildMindMapActionPrompt(
-        actionId,
-        note,
-        mindMapSelectionCtx.noteId === note.id ? mindMapSelectionCtx.selection : null,
-        baseHash,
-      );
-      const sent = await sendPromptToAgent(prompt, meta.label);
-      if (!sent) {
-        pendingActionRef.current = null;
-      }
-    },
-    [note, mindMapSelectionCtx, sendPromptToAgent],
-  );
-
-  const sendDraft = useCallback(() => {
+  const sendDraft = useCallback((text: string, images?: SendImage[]) => {
     if (!note) return;
-    const question = draft.trim();
-    if (!question) return;
-    setDraft("");
+    const question = text.trim();
+    if (!question && (!images || images.length === 0)) return;
     const baseHash = mindMapSelectionCtx.baseHash ?? "";
     const selection =
       mindMapSelectionCtx.noteId === note.id ? mindMapSelectionCtx.selection : null;
@@ -231,9 +274,10 @@ export function MindMapAgentPanel({
     pendingActionRef.current = "mindmap-freeform";
     void sendPromptToAgent(
       buildMindMapFreeformPrompt(note, question, selection, baseHash),
+      images,
       question,
     );
-  }, [draft, note, mindMapSelectionCtx, sendPromptToAgent]);
+  }, [note, mindMapSelectionCtx, sendPromptToAgent]);
 
   const copyResult = useCallback(async (message: UIMessage) => {
     try {
@@ -244,26 +288,48 @@ export function MindMapAgentPanel({
     }
   }, []);
 
-  // 手动替换：从 AI 回答中提取 fenced block 并应用
-  const applyReplace = useCallback(
-    (message: UIMessage) => {
+  // 应用 pending patch：再次校验 baseHash，通过后提交
+  const applyPatchFromCard = useCallback(
+    (messageId: string) => {
       if (note?.type !== "mindmap") return;
-      const result = applyMindMapAiResult(message.content, note.contentMarkdown);
+      const pending = pendingPatches.get(messageId);
+      if (!pending) return;
+      const result = applyPendingPatch(pending, note.contentMarkdown);
       if (!result.ok) {
         setNotice(result.notice);
+        // 标记为 stale
+        setPendingPatches((prev) => {
+          const next = new Map(prev);
+          const p = next.get(messageId);
+          if (p) next.set(messageId, { ...p, status: "stale" });
+          return next;
+        });
         return;
       }
-      onApplyResult("replace", result.markdown, message.id);
+      onApplyResult("replace", result.markdown, messageId);
       setNotice(result.notice);
+      setPendingPatches((prev) => {
+        const next = new Map(prev);
+        const p = next.get(messageId);
+        if (p) next.set(messageId, { ...p, status: "applied" });
+        return next;
+      });
     },
-    [note, onApplyResult],
+    [note, onApplyResult, pendingPatches],
   );
+
+  const ignorePatch = useCallback((messageId: string) => {
+    setPendingPatches((prev) => {
+      const next = new Map(prev);
+      const p = next.get(messageId);
+      if (p) next.set(messageId, { ...p, status: "ignored" });
+      return next;
+    });
+  }, []);
 
   if (collapsed) {
     return null;
   }
-
-  const hasSelection = mindMapSelectionCtx.noteId === note?.id && !!mindMapSelectionCtx.selection;
 
   return (
     <aside className="flex h-full shrink-0 flex-col border-l border-border/70 bg-background" style={{ width }}>
@@ -281,6 +347,8 @@ export function MindMapAgentPanel({
               disabled={isStreaming || creatingChat}
               onClick={() => {
                 setMessages([]);
+                setPendingPatches(new Map());
+                preparedMessageIdsRef.current = new Set();
                 onClearChat?.();
               }}
               className="grid h-7 w-7 place-items-center rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
@@ -291,12 +359,6 @@ export function MindMapAgentPanel({
         </div>
       </div>
 
-      <MindMapQuickActions
-        disabled={!note || creatingChat || isStreaming}
-        hasSelection={hasSelection}
-        onAction={runMindMapAction}
-      />
-
       <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden p-3 scrollbar-thin">
         <AgentChat
           messages={messages}
@@ -306,110 +368,153 @@ export function MindMapAgentPanel({
           isStreaming={isStreaming}
           creatingChat={creatingChat}
           appliedMessageIds={note?.appliedAgentMessageIds ?? []}
-          autoAppliedMessageIds={autoAppliedMessageIdsRef.current}
+          autoAppliedMessageIds={preparedMessageIdsRef.current}
           canSaveAsNote={false}
           canAppend={false}
           onAppend={() => {}}
-          onReplace={applyReplace}
+          onReplace={() => {
+            // 不再走旧的自动应用路径；应用通过变更卡片触发
+          }}
           onCopy={copyResult}
           onSaveAsNote={() => {}}
           onDismissStreamError={dismissStreamError}
         />
+
+        {/* 待确认的变更卡片列表 */}
+        {pendingPatches.size > 0 && (
+          <div className="mt-3 flex flex-col gap-2">
+            {Array.from(pendingPatches.entries()).map(([messageId, pending]) => (
+              <MindMapPatchCard
+                key={messageId}
+                pending={pending}
+                onApply={() => applyPatchFromCard(messageId)}
+                onIgnore={() => ignorePatch(messageId)}
+              />
+            ))}
+          </div>
+        )}
+
+        {/* 生成期间提示 */}
+        {isStreaming && requestBaseHashRef.current && (
+          <div className="mt-2 rounded-md border border-blue-500/30 bg-blue-500/5 px-2.5 py-2 text-[11px] text-blue-700 dark:text-blue-300">
+            AI 正在生成。拖动节点或改样式不会使结果过期；修改文字、增删节点会使结果过期。
+          </div>
+        )}
       </div>
 
       <div className="shrink-0 p-2">
-        <div className="flex min-h-[52px] items-end gap-1.5 rounded-xl border border-border/75 bg-background px-2.5 py-1.5 shadow-sm">
-          <textarea
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
-                event.preventDefault();
-                sendDraft();
-              }
-            }}
-            disabled={!note || creatingChat}
-            className="min-h-[36px] flex-1 resize-none bg-transparent text-[12px] leading-5 outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
-            rows={2}
-            placeholder="让 AI 生成、扩展或重组思维导图..."
-          />
-          <button
-            type="button"
-            aria-label={isStreaming ? "停止生成" : "发送"}
-            disabled={!isStreaming && (!note || !draft.trim() || creatingChat)}
-            onClick={isStreaming ? stop : sendDraft}
-            className={`grid h-6 w-6 shrink-0 place-items-center rounded-lg transition-colors ${
-              isStreaming
-                ? "text-destructive hover:bg-destructive/10"
-                : "bg-foreground text-background hover:bg-foreground/90 disabled:bg-muted disabled:text-muted-foreground"
-            }`}
-          >
-            {isStreaming ? (
-              <Square className="h-3 w-3" />
-            ) : creatingChat ? (
-              <Loader2 className="h-3 w-3 animate-spin" />
-            ) : (
-              <Send className="h-3 w-3" />
-            )}
-          </button>
-        </div>
+        <AgentComposer
+          value={draft}
+          onChange={setDraft}
+          onSend={sendDraft}
+          disabled={!note || creatingChat}
+          placeholder="让 AI 生成、扩展或重组思维导图..."
+          isStreaming={isStreaming}
+          creatingChat={creatingChat}
+          onStop={stop}
+        />
       </div>
     </aside>
   );
 }
 
-function MindMapQuickActions({
-  disabled,
-  hasSelection,
-  onAction,
+/** 变更卡片：展示 patch 摘要，提供应用/忽略按钮 */
+function MindMapPatchCard({
+  pending,
+  onApply,
+  onIgnore,
 }: {
-  disabled: boolean;
-  hasSelection: boolean;
-  onAction: (actionId: MindMapActionId) => void;
+  pending: PendingMindMapPatch;
+  onApply: () => void;
+  onIgnore: () => void;
 }) {
-  const btnClass =
-    "flex h-9 items-center gap-2 rounded-lg border border-border/70 bg-background px-2.5 text-left text-[11.5px] font-medium text-foreground/82 transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50";
+  const { summary, status, error } = pending;
+
+  if (status === "applied") {
+    return (
+      <div className="rounded-md border border-emerald-500/30 bg-emerald-500/5 px-2.5 py-2 text-[11px] text-emerald-700 dark:text-emerald-300">
+        <div className="flex items-center gap-1.5 font-medium">
+          <Check className="h-3.5 w-3.5" />
+          已应用到导图
+        </div>
+      </div>
+    );
+  }
+
+  if (status === "ignored") {
+    return null;
+  }
+
+  if (status === "invalid") {
+    return (
+      <div className="rounded-md border border-destructive/30 bg-destructive/5 px-2.5 py-2 text-[11px] text-destructive">
+        <div className="flex items-center gap-1.5 font-medium">
+          <AlertTriangle className="h-3.5 w-3.5" />
+          修改无效
+        </div>
+        {error ? <div className="mt-1 text-destructive/80">{error}</div> : null}
+      </div>
+    );
+  }
+
+  const isStale = status === "stale";
+  const isReplace = "replaced" in summary && summary.replaced;
 
   return (
-    <div className="shrink-0 border-b border-border/65 px-2.5 py-2.5">
-      <div className="grid grid-cols-2 gap-1.5">
+    <div
+      className={`rounded-md border px-2.5 py-2 text-[11px] ${
+        isStale
+          ? "border-amber-500/40 bg-amber-500/5"
+          : "border-border/70 bg-muted/40"
+      }`}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <span className="font-medium text-foreground">
+          {isStale ? "导图已修改，该建议过期" : "AI 建议修改"}
+        </span>
         <button
           type="button"
-          disabled={disabled}
-          onClick={() => onAction("mindmap-generate")}
-          className={btnClass}
+          aria-label="忽略"
+          title="忽略"
+          onClick={onIgnore}
+          className="grid h-5 w-5 place-items-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
         >
-          <Network className="h-4 w-4 shrink-0 text-muted-foreground" />
-          <span className="min-w-0 truncate">从主题生成导图</span>
-        </button>
-        <button
-          type="button"
-          disabled={disabled || !hasSelection}
-          onClick={() => onAction("mindmap-expand")}
-          className={btnClass}
-        >
-          <Plus className="h-4 w-4 shrink-0 text-muted-foreground" />
-          <span className="min-w-0 truncate">扩展选中分支</span>
-        </button>
-        <button
-          type="button"
-          disabled={disabled || !hasSelection}
-          onClick={() => onAction("mindmap-simplify")}
-          className={btnClass}
-        >
-          <Shrink className="h-4 w-4 shrink-0 text-muted-foreground" />
-          <span className="min-w-0 truncate">精简选中分支</span>
-        </button>
-        <button
-          type="button"
-          disabled={disabled}
-          onClick={() => onAction("mindmap-reorganize")}
-          className={btnClass}
-        >
-          <GitFork className="h-4 w-4 shrink-0 text-muted-foreground" />
-          <span className="min-w-0 truncate">重组导图</span>
+          <X className="h-3 w-3" />
         </button>
       </div>
+
+      <div className="mt-1.5 text-muted-foreground">
+        {isReplace ? (
+          <span>将替换完整导图</span>
+        ) : (
+          <div className="flex flex-wrap gap-x-2 gap-y-0.5">
+            {"added" in summary && summary.added > 0 && <span>新增 {summary.added} 节点</span>}
+            {"updated" in summary && summary.updated > 0 && <span>修改 {summary.updated} 节点</span>}
+            {"removed" in summary && summary.removed > 0 && (
+              <span className="text-destructive/80">删除 {summary.removed} 节点</span>
+            )}
+            {"moved" in summary && summary.moved > 0 && <span>移动 {summary.moved} 节点</span>}
+          </div>
+        )}
+      </div>
+
+      {!isStale && (
+        <div className="mt-2 flex gap-1.5">
+          <button
+            type="button"
+            onClick={onApply}
+            className="inline-flex h-7 items-center gap-1 rounded-md bg-foreground px-2.5 text-[11px] font-medium text-background hover:bg-foreground/90"
+          >
+            <Check className="h-3 w-3" />
+            应用到导图
+          </button>
+        </div>
+      )}
+      {isStale && (
+        <div className="mt-1.5 text-amber-700 dark:text-amber-400">
+          请基于最新导图重新生成
+        </div>
+      )}
     </div>
   );
 }

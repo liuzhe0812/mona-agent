@@ -11,15 +11,9 @@ standard format that parse_storyboard.py can re-parse.
 from __future__ import annotations
 
 import argparse
-import io
 import json
-import os
 import sys
 from pathlib import Path
-
-if os.name == "nt" and hasattr(sys.stdout, "buffer"):
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 
 def render_storyboard(scenes: list[dict]) -> str:
@@ -59,6 +53,15 @@ def write_storyboard(project_path: Path, scenes: list[dict]) -> Path:
 
 
 def _cli() -> None:
+    # Only redirect stdout/stderr when run as a CLI script — never when imported
+    # as a module (would corrupt the host process's stdout and deadlock aiohttp).
+    import io
+    import os
+
+    if os.name == "nt" and hasattr(sys.stdout, "buffer"):
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+
     parser = argparse.ArgumentParser(description="Write structured scenes to storyboard.md")
     parser.add_argument("project_path", type=Path, help="Video project directory")
     parser.add_argument("--scenes", type=Path, default=None, help="JSON file with scenes (default: stdin)")

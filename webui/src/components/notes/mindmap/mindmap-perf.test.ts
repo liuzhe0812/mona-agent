@@ -126,12 +126,7 @@ describe("MindElixir DOM 性能基准", () => {
   });
 
   for (const size of SIZES) {
-    // 1000 节点在 happy-dom 测试环境下会触发 Mind Elixir 布局递归栈溢出
-    // （`Maximum call stack size exceeded`），这是测试环境的栈大小限制，
-    // 不代表 Tauri 真实环境。用 it.fails 标记为已知失败，保留警示，不阻塞 CI。
-    // 真实环境的 1000 节点基准应在 Tauri 端单独测试。
-    const testFn = size === 1000 ? it.fails : it;
-    testFn(`MindElixir init ${size} 节点`, async () => {
+    it(`MindElixir init ${size} 节点`, async () => {
       // 模块未加载（环境不支持）时跳过：用 expect.soft 或直接 return 跳过
       if (!MindElixir) {
         console.log(`  MindElixir init ${size}: SKIPPED（模块未加载: ${moduleLoadError ?? "未知原因"}）`);

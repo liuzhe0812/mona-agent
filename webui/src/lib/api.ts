@@ -9,6 +9,7 @@ import type {
   SettingsUpdate,
   SidebarStatePayload,
   SlashCommand,
+  TtsSettingsUpdate,
   VideoGenerationSettingsUpdate,
   WebSearchSettingsUpdate,
   WeixinLoginStatus,
@@ -418,6 +419,25 @@ export async function updateVideoGenerationSettings(
   );
 }
 
+export async function updateTtsSettings(
+  token: string,
+  update: TtsSettingsUpdate,
+  base?: string,
+): Promise<SettingsPayload> {
+  const effectiveBase = base ?? (await getApiBase());
+  const query = new URLSearchParams();
+  if (update.provider !== undefined) query.set("provider", update.provider);
+  if (update.voice !== undefined) query.set("voice", update.voice);
+  if (update.apiBase !== undefined) query.set("apiBase", update.apiBase);
+  if (update.model !== undefined) query.set("model", update.model);
+  if (update.apiKey) query.set("apiKey", update.apiKey);
+  if (update.clearKey) query.set("clearKey", "true");
+  return request<SettingsPayload>(
+    `${effectiveBase}/api/settings/tts/update?${query}`,
+    token,
+  );
+}
+
 export async function updateChannelSettings(
   token: string,
   channel: string,
@@ -544,6 +564,7 @@ export async function fetchPptPreviewPort(
 
 export interface PptExportStatus {
   status: "not_found" | "init" | "planning" | "generating" | "done";
+  phase?: "config" | "generating" | "outline" | "producing" | "exporting" | "done";
   slideCount: number;
   hasExport: boolean;
   hasSvgOutput: boolean;
@@ -663,6 +684,8 @@ export interface PptOutlinePage {
   has_ai_image: boolean;
   layout: string;
   notes: string;
+  summary: string;
+  image_plan: string;
 }
 
 export interface PptOutlineResponse {
@@ -723,7 +746,70 @@ export async function lockPptOutline(
   );
 }
 
-// --- PPT V2 review APIs (services port) ---
+// --- PPT design spec summary (eight confirmations AI recommendation) ---
+
+export interface PptDesignSpecSummary {
+  schemaVersion?: number;
+  canvasFormat?: string;
+  pageCount?: number | null;
+  audience?: string;
+  styleMode?: string | null;
+  styleDescriptor?: string;
+  primaryColor?: string;
+  colorScheme?: string;
+  iconApproach?: string | null;
+  iconLibrary?: string | null;
+  typographyPlan?: string;
+  titleFont?: string;
+  bodyFont?: string;
+  formulaPolicy?: string | null;
+  imageApproach?: string | null;
+  imageRendering?: string | null;
+  imagePalette?: string | null;
+  updatedAt?: string;
+}
+
+export interface PptDesignSpecSummaryResponse {
+  ok: boolean;
+  summary: PptDesignSpecSummary | null;
+  error?: string;
+}
+
+export async function fetchPptDesignSpecSummary(
+  token: string,
+  name: string,
+  base?: string,
+): Promise<PptDesignSpecSummaryResponse> {
+  const effectiveBase = base ?? (await getServicesHttpBase());
+  const query = new URLSearchParams();
+  query.set("name", name);
+  return request<PptDesignSpecSummaryResponse>(
+    `${effectiveBase}/api/ppt/project/design-spec-summary?${query}`,
+    token,
+  );
+}
+
+export async function updatePptDesignSpecSummary(
+  token: string,
+  name: string,
+  patch: Partial<PptDesignSpecSummary>,
+  base?: string,
+): Promise<PptDesignSpecSummaryResponse> {
+  const effectiveBase = base ?? (await getServicesHttpBase());
+  const query = new URLSearchParams();
+  query.set("name", name);
+  return request<PptDesignSpecSummaryResponse>(
+    `${effectiveBase}/api/ppt/project/design-spec-summary?${query}`,
+    token,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    },
+  );
+}
+
+// --- PPT V3 per-page APIs (services port) ---
 
 export type PptPageState = "pending" | "previewing" | "confirmed";
 
@@ -738,10 +824,10 @@ export interface PptPageInfo {
 export interface PptPagesResponse {
   ok: boolean;
   pages: PptPageInfo[];
-  reviewReady: boolean;
   outlineRevision: number;
   confirmedCount: number;
   totalCount: number;
+  currentPageIndex: number;
 }
 
 export async function fetchPptPages(
@@ -773,24 +859,6 @@ export async function confirmPptPage(
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name, file, expectedMtime }),
-    },
-  );
-}
-
-export async function regeneratePptPage(
-  token: string,
-  name: string,
-  file: string,
-  base?: string,
-): Promise<{ ok: boolean; file: string }> {
-  const effectiveBase = base ?? (await getServicesHttpBase());
-  return request<{ ok: boolean; file: string }>(
-    `${effectiveBase}/api/ppt/project/page/regenerate`,
-    token,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, file }),
     },
   );
 }
@@ -876,12 +944,20 @@ export interface VideoRuntimeStatus {
   chrome: VideoRuntimeItem;
 }
 
+export type VideoProjectPhase =
+  | "storyboard"
+  | "producing"
+  | "exportable"
+  | "rendering"
+  | "done";
+
 export interface VideoProject {
   name: string;
   createdAt: number;
   resolution: string;
-  status: "init" | "generating" | "done" | "error" | "planning";
+  phase: VideoProjectPhase;
   hasVideo: boolean;
+  outputStale: boolean;
   hasStoryboard?: boolean;
   hasIndex?: boolean;
   sceneCount?: number;
@@ -1092,7 +1168,7 @@ export interface VideoExportStatus {
 export async function exportVideoProject(
   token: string,
   name: string,
-  opts?: { fps?: number; quality?: "draft" | "standard" | "high" },
+  opts?: { quality?: "draft" | "standard" | "high" },
   base?: string,
 ): Promise<{ ok: boolean; stage?: string; message?: string; error?: string }> {
   const effectiveBase = base ?? (await getServicesHttpBase());
@@ -1144,7 +1220,14 @@ export async function fetchVideoStoryboard(
   token: string,
   name: string,
   base?: string,
-): Promise<{ ok: boolean; scenes?: VideoScene[]; source?: string; error?: string }> {
+): Promise<{
+  ok: boolean;
+  scenes?: VideoScene[];
+  source?: string;
+  error?: string;
+  storyboardExists?: boolean;
+  parseError?: string | null;
+}> {
   const effectiveBase = base ?? (await getServicesHttpBase());
   const query = new URLSearchParams();
   query.set("name", name);
@@ -1249,7 +1332,9 @@ export type SceneHtmlStatus = "pending" | "generating" | "previewing" | "confirm
 export interface VideoSceneWithHtml extends VideoScene {
   htmlStatus?: SceneHtmlStatus;
   htmlPath?: string;
+  htmlMtime?: number;
   confirmedAt?: string;
+  confirmedMtime?: number;
 }
 
 export async function generateSceneHtml(
@@ -1304,13 +1389,14 @@ export async function confirmVideoScene(
   token: string,
   name: string,
   index: number,
+  expectedMtime?: number,
   base?: string,
 ): Promise<{ ok: boolean; scene?: VideoSceneWithHtml; allConfirmed?: boolean; phase?: string; error?: string }> {
   const effectiveBase = base ?? (await getServicesHttpBase());
   return request(`${effectiveBase}/api/video/project/scene/confirm`, token, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, index }),
+    body: JSON.stringify({ name, index, ...(expectedMtime !== undefined ? { expectedMtime } : {}) }),
   });
 }
 

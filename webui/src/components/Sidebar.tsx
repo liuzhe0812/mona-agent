@@ -60,6 +60,7 @@ import type {
   ChatSummary,
   SidebarViewState,
 } from "@/lib/types";
+import type { SidebarModuleConfig } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 
 interface SidebarProps {
@@ -103,6 +104,7 @@ interface SidebarProps {
   archivedCount?: number;
   onRemoveProject?: (workspace: string) => void;
   onCreateTask?: (workspace: string) => void;
+  modules?: SidebarModuleConfig[];
 }
 
 export function Sidebar(props: SidebarProps) {
@@ -176,6 +178,7 @@ export function Sidebar(props: SidebarProps) {
         onGoHome={props.onGoHome ?? (() => {})}
         emailUnreadCount={emailUnreadCount}
         planInboxCount={planInboxCount}
+        modules={props.modules}
       />
       <Separator className="mx-2 mb-2 bg-sidebar-border/50" />
 
@@ -437,6 +440,7 @@ function CollapsedTooltip({
 }
 
 type ToolboxItem = {
+  key: string;
   label: string;
   icon: ReactNode;
   windowsOnly?: boolean;
@@ -448,24 +452,58 @@ function isMacOS() {
   return platform.includes("mac") || platform.includes("iphone") || platform.includes("ipad");
 }
 
-// 一级主入口（始终展示在侧边栏）
-const PRIMARY_ITEMS: ToolboxItem[] = [
-  { label: "新会话", icon: <img src={sidebarMonaIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
-  { label: "笔记", icon: <img src={sidebarNoteIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
-  { label: "AI文档", icon: <img src={sidebarDocIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
-  { label: "终端", icon: <img src={sidebarTerminalIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
-  { label: "邮件", icon: <img src={sidebarEmailIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
-  { label: "计划", icon: <img src={sidebarScheduleIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
+// 模块元信息表：key 与 ShellView 一致；label/icon 用于侧栏渲染和设置页展示
+export const MODULE_DEFS: ToolboxItem[] = [
+  { key: "chat", label: "新会话", icon: <img src={sidebarMonaIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
+  { key: "note", label: "笔记", icon: <img src={sidebarNoteIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
+  { key: "doc", label: "AI文档", icon: <img src={sidebarDocIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
+  { key: "ssh", label: "终端", icon: <img src={sidebarTerminalIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
+  { key: "email", label: "邮件", icon: <img src={sidebarEmailIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
+  { key: "schedule", label: "计划", icon: <img src={sidebarScheduleIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
+  { key: "db", label: "数据库", icon: <img src={sidebarDatabaseIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
+  { key: "system", label: "系统", icon: <img src={sidebarSystemIcon} className="h-5 w-5 object-contain" alt="" draggable={false} />, windowsOnly: true },
+  { key: "profile", label: "画像", icon: <img src={sidebarProfileIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
 ];
 
-// 二级入口（收纳在"更多"菜单中）
-const SECONDARY_ITEMS: ToolboxItem[] = [
-  { label: "数据库", icon: <img src={sidebarDatabaseIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
-  { label: "系统", icon: <img src={sidebarSystemIcon} className="h-5 w-5 object-contain" alt="" draggable={false} />, windowsOnly: true },
-  { label: "画像", icon: <img src={sidebarProfileIcon} className="h-5 w-5 object-contain" alt="" draggable={false} /> },
-];
+// 默认顺序与可见性（与后端 default_sidebar_modules 对齐）
+export const DEFAULT_SIDEBAR_MODULES: SidebarModuleConfig[] = MODULE_DEFS.map((m, i) => ({
+  key: m.key,
+  visible: true,
+  order: i,
+}));
 
-function getToolboxHandler(label: string, handlers: {
+// 「新会话」入口锁定不可隐藏
+const LOCKED_MODULE_KEYS = new Set(["chat"]);
+
+// 主区域直接展示的最多模块数；超出收纳到「更多」菜单
+const PRIMARY_MAX = 6;
+
+// 将用户配置与默认值合并，补齐缺失模块，过滤未知 key
+export function mergeSidebarModules(
+  userModules?: SidebarModuleConfig[] | null,
+): SidebarModuleConfig[] {
+  const userMap = new Map<string, SidebarModuleConfig>();
+  if (userModules && Array.isArray(userModules)) {
+    for (const m of userModules) {
+      if (m && typeof m.key === "string" && MODULE_DEFS.some((d) => d.key === m.key)) {
+        userMap.set(m.key, {
+          key: m.key,
+          visible: LOCKED_MODULE_KEYS.has(m.key) ? true : Boolean(m.visible),
+          order: typeof m.order === "number" ? m.order : 0,
+        });
+      }
+    }
+  }
+  const merged: SidebarModuleConfig[] = MODULE_DEFS.map((d, i) => {
+    const u = userMap.get(d.key);
+    return u
+      ? { key: d.key, visible: u.visible, order: u.order }
+      : { key: d.key, visible: true, order: i };
+  });
+  return merged.sort((a, b) => a.order - b.order);
+}
+
+function getToolboxHandler(key: string, handlers: {
   onNewChat: () => void;
   onOpenNote: () => void;
   onOpenDoc: () => void;
@@ -477,16 +515,16 @@ function getToolboxHandler(label: string, handlers: {
   onOpenProfile: () => void;
   onGoHome: () => void;
 }): () => void {
-  switch (label) {
-    case "新会话": return handlers.onNewChat;
-    case "笔记": return handlers.onOpenNote;
-    case "AI文档": return handlers.onOpenDoc;
-    case "终端": return handlers.onOpenSSH;
-    case "数据库": return handlers.onOpenDb;
-    case "邮件": return handlers.onOpenEmail;
-    case "计划": return handlers.onOpenSchedule;
-    case "系统": return handlers.onOpenSystem;
-    case "画像": return handlers.onOpenProfile;
+  switch (key) {
+    case "chat": return handlers.onNewChat;
+    case "note": return handlers.onOpenNote;
+    case "doc": return handlers.onOpenDoc;
+    case "ssh": return handlers.onOpenSSH;
+    case "db": return handlers.onOpenDb;
+    case "email": return handlers.onOpenEmail;
+    case "schedule": return handlers.onOpenSchedule;
+    case "system": return handlers.onOpenSystem;
+    case "profile": return handlers.onOpenProfile;
     default: return handlers.onGoHome;
   }
 }
@@ -505,6 +543,7 @@ function ToolboxNavigation({
   onGoHome,
   emailUnreadCount,
   planInboxCount,
+  modules,
 }: {
   collapsed: boolean;
   onNewChat: () => void;
@@ -519,9 +558,10 @@ function ToolboxNavigation({
   onGoHome: () => void;
   emailUnreadCount: number;
   planInboxCount: number;
+  modules?: SidebarModuleConfig[];
 }) {
   const { licenseActive } = useLicense();
-  const LICENSE_REQUIRED = new Set(["AI文档"]);
+  const LICENSE_REQUIRED = new Set(["doc"]);
   const handlers = {
     onNewChat,
     onOpenNote,
@@ -534,10 +574,16 @@ function ToolboxNavigation({
     onOpenProfile,
     onGoHome,
   };
-  const visiblePrimary = isMacOS()
-    ? PRIMARY_ITEMS.filter((item) => !item.windowsOnly)
-    : PRIMARY_ITEMS;
-  const visibleSecondary = SECONDARY_ITEMS;
+  const merged = mergeSidebarModules(modules);
+  const defMap = new Map(MODULE_DEFS.map((d) => [d.key, d]));
+  // 应用运行时过滤：macOS 不显示 windowsOnly 模块
+  const filtered = merged
+    .filter((m) => m.visible)
+    .map((m) => defMap.get(m.key))
+    .filter((d): d is ToolboxItem => Boolean(d))
+    .filter((d) => !isMacOS() || !d.windowsOnly);
+  const visiblePrimary = filtered.slice(0, PRIMARY_MAX);
+  const visibleSecondary = filtered.slice(PRIMARY_MAX);
 
   return (
     <div
@@ -547,17 +593,17 @@ function ToolboxNavigation({
       )}
     >
       {visiblePrimary.map((item) => {
-        const onClick = getToolboxHandler(item.label, handlers);
+        const onClick = getToolboxHandler(item.key, handlers);
         // 邮件图标显示未读数角标；计划图标显示收集箱数量（待确认建议+未分类待办+待确认邮件日程）
         const badge =
-          item.label === "邮件" && emailUnreadCount > 0
+          item.key === "email" && emailUnreadCount > 0
             ? emailUnreadCount
-            : item.label === "计划" && planInboxCount > 0
+            : item.key === "schedule" && planInboxCount > 0
               ? planInboxCount
               : undefined;
         return (
           <SidebarActionButton
-            key={item.label}
+            key={item.key}
             collapsed={collapsed}
             label={item.label}
             onClick={onClick}
@@ -605,12 +651,12 @@ function ToolboxNavigation({
             className="min-w-[160px]"
           >
             {visibleSecondary.map((item) => {
-              const locked = !licenseActive && LICENSE_REQUIRED.has(item.label);
+              const locked = !licenseActive && LICENSE_REQUIRED.has(item.key);
               return (
                 <DropdownMenuItem
-                  key={item.label}
+                  key={item.key}
                   className="gap-2 px-2.5 py-1.5 text-[13px]"
-                  onSelect={() => getToolboxHandler(item.label, handlers)()}
+                  onSelect={() => getToolboxHandler(item.key, handlers)()}
                 >
                   {item.icon}
                   <span>{item.label}</span>

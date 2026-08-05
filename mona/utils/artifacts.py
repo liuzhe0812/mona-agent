@@ -26,6 +26,29 @@ class ArtifactError(ValueError):
     """Raised when an artifact cannot be safely decoded or stored."""
 
 
+_SLUG_DROP_RE = re.compile("[^0-9a-z\\u3400-\\u9fff]+")
+_SLUG_DASH_RE = re.compile(r"-{2,}")
+
+
+def _prompt_slug(prompt: str, max_len: int = 20) -> str:
+    """Derive a filesystem-safe, human-readable slug from a prompt.
+
+    Keeps lowercase alphanumerics and CJK characters; collapses everything
+    else into single dashes. Empty result means no usable slug.
+    """
+    slug = _SLUG_DROP_RE.sub("-", prompt.lower())
+    slug = _SLUG_DASH_RE.sub("-", slug).strip("-")
+    return slug[:max_len].strip("-")
+
+
+def _artifact_stem(prefix: str, prompt: str, unique: str) -> str:
+    """Build the file stem: ``img_<slug>_<hash12>`` or plain ``img_<hash12>``."""
+    slug = _prompt_slug(prompt)
+    if slug:
+        return f"{prefix}_{slug}_{unique}"
+    return f"{prefix}_{unique}"
+
+
 def decode_image_data_url(data_url: str) -> tuple[bytes, str]:
     """Decode a base64 image data URL and return ``(bytes, mime)``."""
     match = _DATA_IMAGE_RE.match(data_url.strip())
@@ -108,7 +131,7 @@ def store_generated_image_artifact(
 
     now = created_at or datetime.now().astimezone()
     day_dir = ensure_dir(_artifact_root(save_dir, artifact_root) / now.strftime("%Y-%m-%d"))
-    artifact_id = f"img_{uuid.uuid4().hex[:12]}"
+    artifact_id = _artifact_stem("img", prompt, uuid.uuid4().hex[:12])
     image_path = day_dir / f"{artifact_id}{ext}"
     metadata_path = day_dir / f"{artifact_id}.json"
 
@@ -181,7 +204,7 @@ def store_generated_video_artifact(
 
     now = created_at or datetime.now().astimezone()
     day_dir = ensure_dir(_artifact_root(save_dir, artifact_root) / now.strftime("%Y-%m-%d"))
-    artifact_id = f"vid_{uuid.uuid4().hex[:12]}"
+    artifact_id = _artifact_stem("vid", prompt, uuid.uuid4().hex[:12])
     video_path = day_dir / f"{artifact_id}{ext}"
     metadata_path = day_dir / f"{artifact_id}.json"
 

@@ -494,7 +494,7 @@ fn copy_dir_recursive(source: &Path, dest: &Path) -> Result<(), String> {
 // Tauri commands
 // ---------------------------------------------------------------------------
 
-const MANIFEST_URL: &str = "https://mona.lzfun.vip/updates/update.json";
+const MANIFEST_URL: &str = "https://www.mona-ai.cn/updates/update.json";
 
 #[tauri::command]
 pub async fn check_for_updates() -> Result<UpdateCheckResult, String> {
@@ -537,7 +537,7 @@ pub async fn perform_update(
                 "update-download-failed",
                 UpdateDownloadError {
                     message: e,
-                    download_url: "https://mona.lzfun.vip/".to_string(),
+                    download_url: "https://www.mona-ai.cn/".to_string(),
                 },
             );
             return Err("Update download failed, user notified".to_string());

@@ -52,6 +52,24 @@ Before each page:
 
 No sub-agents. No page batches. No script or template loop may generate project SVG pages.
 
+## V3 Per-Page Mode (when PPT_UI_CHECKPOINTS=1)
+
+When `PPT_UI_CHECKPOINTS=1` is active, the executor operates in **per-page mode**:
+
+- After `[OUTLINE_CONFIRMED]`: generate spec_lock.md, then **only the first page** SVG. Stop.
+- After `[PAGE_CONFIRMED_NEXT]`: generate **only the next page** SVG. Stop.
+- After `[PAGE_REDO_REQUESTED]`: regenerate **only the specified page** SVG. Stop.
+- After `[PAGE_GENERATE_REQUESTED]`: generate **only the specified page** SVG. Stop.
+
+Key differences from batch mode:
+
+1. **One page at a time**: never generate multiple pages in a single turn.
+2. **Per-page quality check**: after writing each SVG, run `svg_quality_checker.py` and fix any errors on that page before stopping.
+3. **Per-page notes**: write the current page's speaker notes to `notes/` (or append to `notes/total.md`) before stopping. Do not wait until all pages are done.
+4. **No `.review_ready` file**: V3 does not use `.review_ready`. The review gate is replaced by per-page UI confirmation.
+5. **Stop after each page**: always stop and wait for the next UI message. Do not automatically proceed to the next page.
+6. **Final quality gate**: when `[ALL_PAGES_CONFIRMED]` is received, run a full `svg_quality_checker.py` on all SVGs as the final gate before Step 7 export.
+
 ## Quality Gate
 
 After all SVGs are generated, before annotations, notes splitting, or export:

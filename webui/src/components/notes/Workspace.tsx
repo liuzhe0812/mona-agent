@@ -8,7 +8,6 @@ import { NoteTabBar } from "./NoteTabBar";
 import { NoteEditor } from "./NoteEditor";
 import { GraphViewDialog } from "./GraphViewDialog";
 import type { OperationNote, Notebook } from "./notes-data";
-import type { FlowchartSemanticWarning } from "./flowchart/flowchart-document";
 import type { EditorMode } from "@/components/common/MarkdownEditor";
 
 export type SplitDirection = "horizontal" | "vertical";
@@ -149,8 +148,6 @@ interface WorkspaceProps {
   resolveEmbedContent?: (title: string) => string | null;
   /** Whether the embed target is a flowchart note. */
   isEmbedFlowchart?: (title: string) => boolean;
-  /** 流程图：用户点击"让 AI 修复"时把 warnings 上抛到 NotesView */
-  onFlowchartFixWithAI?: (noteId: string, warnings: FlowchartSemanticWarning[]) => void;
 }
 
 interface PaneLeafProps {
@@ -199,8 +196,6 @@ interface PaneLeafProps {
   resolveEmbedContent?: (title: string) => string | null;
   /** Whether the embed target is a flowchart note. */
   isEmbedFlowchart?: (title: string) => boolean;
-  /** 流程图：用户点击"让 AI 修复"时把 warnings 上抛到 NotesView */
-  onFlowchartFixWithAI?: (noteId: string, warnings: FlowchartSemanticWarning[]) => void;
 }
 
 function PaneLeafView({
@@ -234,10 +229,9 @@ function PaneLeafView({
   flowchartForceSyncByNote,
   resolveEmbedContent,
   isEmbedFlowchart,
-  onFlowchartFixWithAI,
 }: PaneLeafProps) {
   const tabs = useMemo(
-    () => leaf.tabIds.map((id) => notes.find((n) => n.id === id)).filter((n): n is OperationNote => n !== null),
+    () => leaf.tabIds.map((id) => notes.find((n) => n.id === id)).filter((n): n is OperationNote => n != null),
     [leaf.tabIds, notes],
   );
 
@@ -326,11 +320,6 @@ function PaneLeafView({
             flowchartForceSync={flowchartForceSyncByNote?.[activeNote.id]}
             resolveEmbedContent={resolveEmbedContent}
             isEmbedFlowchart={isEmbedFlowchart}
-            onFlowchartFixWithAI={
-              onFlowchartFixWithAI
-                ? (warnings) => onFlowchartFixWithAI(activeNote.id, warnings)
-                : undefined
-            }
           />
         ) : (
           <div className="flex flex-1 flex-col items-center justify-center text-muted-foreground">
@@ -387,8 +376,6 @@ interface SplitViewProps {
   resolveEmbedContent?: (title: string) => string | null;
   /** Whether the embed target is a flowchart note. */
   isEmbedFlowchart?: (title: string) => boolean;
-  /** 流程图：用户点击"让 AI 修复"时把 warnings 上抛到 NotesView */
-  onFlowchartFixWithAI?: (noteId: string, warnings: FlowchartSemanticWarning[]) => void;
 }
 
 function SplitView({
@@ -421,7 +408,6 @@ function SplitView({
   flowchartForceSyncByNote,
   resolveEmbedContent,
   isEmbedFlowchart,
-  onFlowchartFixWithAI,
 }: SplitViewProps) {
   const isHorizontal = node.direction === "horizontal";
   const containerRef = useRef<HTMLDivElement>(null);
@@ -533,7 +519,6 @@ function SplitView({
               flowchartForceSyncByNote={flowchartForceSyncByNote}
               resolveEmbedContent={resolveEmbedContent}
               isEmbedFlowchart={isEmbedFlowchart}
-              onFlowchartFixWithAI={onFlowchartFixWithAI}
             />
             ) : (
               <SplitView
@@ -566,7 +551,6 @@ function SplitView({
                 flowchartForceSyncByNote={flowchartForceSyncByNote}
                 resolveEmbedContent={resolveEmbedContent}
                 isEmbedFlowchart={isEmbedFlowchart}
-                onFlowchartFixWithAI={onFlowchartFixWithAI}
               />
             )}
           </div>,
@@ -612,7 +596,6 @@ export function Workspace({
   flowchartForceSyncByNote,
   resolveEmbedContent,
   isEmbedFlowchart,
-  onFlowchartFixWithAI,
 }: WorkspaceProps) {
   const handleLeafChange = useCallback(
     (leafId: string, updater: (leaf: LeafPane) => LeafPane) => {
@@ -772,7 +755,6 @@ export function Workspace({
     flowchartForceSyncByNote,
     resolveEmbedContent,
     isEmbedFlowchart,
-    onFlowchartFixWithAI,
   };
 
   // 主 leaf：视觉上最右最上的 leaf，用于固定显示工具栏按钮

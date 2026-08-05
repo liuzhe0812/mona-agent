@@ -298,6 +298,14 @@ export interface SettingsPayload {
   channels: {
     available: Array<ChannelInfo>;
   };
+  tts: {
+    provider: string;
+    voice: string;
+    api_base: string | null;
+    model: string | null;
+    api_key_configured: boolean;
+    api_key_hint: string | null;
+  };
   requires_restart: boolean;
   restart_required_sections?: Array<"runtime" | "web" | "image" | "channels">;
 }
@@ -376,6 +384,17 @@ export interface VideoGenerationSettingsUpdate {
   model: string;
   defaultAspectRatio: string;
   defaultDuration: number;
+}
+
+export interface TtsSettingsUpdate {
+  provider?: string;
+  voice?: string;
+  apiBase?: string;
+  model?: string;
+  /** Non-empty replaces the stored key; omitted leaves it unchanged. */
+  apiKey?: string;
+  /** Remove the stored API key. */
+  clearKey?: boolean;
 }
 
 export interface SlashCommand {
@@ -475,6 +494,7 @@ export type InboundEvent =
       goal_state: GoalStateWsPayload;
     }
   | { event: "session_updated"; chat_id: string; scope?: "metadata" | "thread" | string }
+  | { event: "artifacts_changed" }
   | { event: "error"; chat_id?: string; detail?: string }
   | {
       event: "ppt_upload_result";
@@ -619,6 +639,7 @@ export interface PptProject {
   hasPptxOutput: boolean;
   hasSpecLock: boolean;
   status: "init" | "planning" | "generating" | "done";
+  phase?: string;
   chatId: string | null;
 }
 

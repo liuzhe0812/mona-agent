@@ -47,10 +47,7 @@ mod browser_ipc_tests {
 
     #[test]
     fn browser_popups_are_owned_by_the_main_window() {
-        for popup in [
-            include_str!("browser/downloads.rs"),
-            include_str!("browser/suggestions.rs"),
-        ] {
+        for popup in [include_str!("browser/downloads.rs")] {
             assert!(popup.contains(".parent(&main)"));
             assert!(!popup.contains(".always_on_top(true)"));
         }
@@ -58,10 +55,7 @@ mod browser_ipc_tests {
 
     #[test]
     fn browser_popups_are_shown_when_first_created() {
-        for popup in [
-            include_str!("browser/downloads.rs"),
-            include_str!("browser/suggestions.rs"),
-        ] {
+        for popup in [include_str!("browser/downloads.rs")] {
             assert!(popup.contains(".visible(false)"));
             assert!(popup.contains("window.show()"));
         }
@@ -72,6 +66,31 @@ mod browser_ipc_tests {
         let capabilities = include_str!("../capabilities/default.json");
 
         assert!(capabilities.contains("browser-downloads"));
+    }
+}
+
+#[cfg(test)]
+mod trash_tests {
+    #[test]
+    fn trash_crate_is_declared_as_a_dependency() {
+        let cargo = include_str!("../Cargo.toml");
+
+        assert!(cargo.contains("trash = "), "trash crate must be a dependency");
+    }
+
+    #[test]
+    fn move_to_trash_command_uses_recycle_bin_and_is_registered() {
+        let lib = include_str!("lib.rs");
+        // Concat needles so the assertions don't match this test's own source.
+        let cmd_fn = ["fn move", "_to_trash"].concat();
+        let trash_call = ["trash::", "delete"].concat();
+        let registered = ["move", "_to_trash,"].concat();
+        let permanent = ["remove", "_file"].concat();
+
+        assert!(lib.contains(&cmd_fn), "move_to_trash command must exist");
+        assert!(lib.contains(&trash_call), "must delete via the trash crate");
+        assert!(!lib.contains(&permanent), "must not permanently delete files");
+        assert!(lib.contains(&registered), "command must be registered in the handler");
     }
 }
 
@@ -301,6 +320,37 @@ async fn diagnose_gateway(app_handle: tauri::AppHandle) -> Result<serde_json::Va
     }))
 }
 
+/// 为窗口注册 WebView2 PermissionRequested 处理器，
+/// 桌面应用全部放行权限请求，不弹 WebView2 默认权限提示。
+#[cfg(target_os = "windows")]
+pub(crate) fn attach_permission_allower(window: &tauri::WebviewWindow) {
+    use tauri::webview::Webview;
+    let _ = window.with_webview(|wv| {
+        use webview2_com::PermissionRequestedEventHandler;
+        use webview2_com::Microsoft::Web::WebView2::Win32::{
+            ICoreWebView2PermissionRequestedEventArgs, COREWEBVIEW2_PERMISSION_STATE,
+        };
+        unsafe {
+            let core = wv.controller().CoreWebView2().ok();
+            if let Some(core) = core {
+                let handler = PermissionRequestedEventHandler::create(Box::new(
+                    move |_sender, args: Option<ICoreWebView2PermissionRequestedEventArgs>| {
+                        if let Some(args) = args {
+                            let _ = args.SetState(COREWEBVIEW2_PERMISSION_STATE(1)); // ALLOW
+                        }
+                        Ok(())
+                    },
+                ));
+                let mut token: i64 = 0;
+                let _ = core.add_PermissionRequested(&handler, &mut token);
+            }
+        }
+    });
+}
+
+#[cfg(not(target_os = "windows"))]
+pub(crate) fn attach_permission_allower(_window: &tauri::WebviewWindow) {}
+
 fn is_loopback_http_url(url: &reqwest::Url) -> bool {
     if !matches!(url.scheme(), "http" | "https") {
         return false;
@@ -336,7 +386,23 @@ async fn local_http_request(
         .build()
         .map_err(|e| format!("Failed to create local HTTP client: {}", e))?;
 
+    // 受保护的 services 路由（/api/materials/*）自动附带本地令牌，
+    // 与 mona/materials/auth.py 的 X-Mona-Token 校验对应。
+    let needs_token = parsed.path().starts_with("/api/materials")
+        && !headers.iter().any(|(n, _)| n.eq_ignore_ascii_case("x-mona-token"));
+
     let mut request = client.request(method, parsed);
+
+    if needs_token {
+        let token_path = settings::app_data_dir().join("services.token");
+        if let Ok(token) = std::fs::read_to_string(&token_path) {
+            let token = token.trim();
+            if !token.is_empty() {
+                request = request.header("X-Mona-Token", token);
+            }
+        }
+    }
+
     for (name, value) in headers {
         let name = reqwest::header::HeaderName::from_bytes(name.as_bytes())
             .map_err(|e| format!("Invalid header name: {}", e))?;
@@ -446,6 +512,13 @@ async fn write_mona_video_gen_config(
     enabled: Option<bool>,
 ) -> Result<(), String> {
     settings::write_mona_video_gen_config(&provider, &model, enabled)
+}
+
+/// 将文件移入系统回收站（可恢复），供前端产物区删除使用。
+/// 永不执行永久删除：回收站不可用时直接报错，由前端向用户展示原因。
+#[tauri::command]
+fn move_to_trash(path: String) -> Result<(), String> {
+    trash::delete(&path).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -589,6 +662,7 @@ pub fn run() {
             write_email_schedule_config,
             get_pending_md_files,
             set_window_background_color,
+            move_to_trash,
             quick_ask::quick_ask_hide,
             quick_ask::quick_ask_show,
             quick_ask::quick_ask_focus_chat,
@@ -598,7 +672,6 @@ pub fn run() {
             notes::notes_save_state,
             notes::notes_export_temp,
             notes::notes_create_from_chat,
-            notes::notes_edit_note,
             notes::notes_read_note_content,
             notes::notes_search,
             notes::notes_search_all,
@@ -970,45 +1043,8 @@ pub fn run() {
             // 设置高分辨率窗口图标，确保任务栏在高 DPI 下清晰
             if let Some(win) = app.get_webview_window("main") {
                 let _ = win.set_icon(tray::load_icon());
-
-                // 在主窗口上注册 WebView2 PermissionRequested 处理器，
-                // 自动批准麦克风权限（用于笔记模块的录音转写功能），
-                // 避免弹出 WebView2 默认的权限请求弹窗，其他权限保持默认行为。
-                #[cfg(target_os = "windows")]
-                {
-                    use tauri::webview::Webview;
-                    let _ = win.with_webview(|wv| {
-                        use webview2_com::PermissionRequestedEventHandler;
-                        use webview2_com::Microsoft::Web::WebView2::Win32::{
-                            ICoreWebView2PermissionRequestedEventArgs, COREWEBVIEW2_PERMISSION_KIND,
-                            COREWEBVIEW2_PERMISSION_STATE,
-                        };
-                        unsafe {
-                            let core = wv.controller().CoreWebView2().ok();
-                            if let Some(core) = core {
-                                let handler = PermissionRequestedEventHandler::create(
-                                    Box::new(
-                                        move |_sender, args: Option<ICoreWebView2PermissionRequestedEventArgs>| {
-                                            if let Some(args) = args {
-                                                let mut kind = COREWEBVIEW2_PERMISSION_KIND::default();
-                                                let _ = args.PermissionKind(&mut kind);
-                                                // COREWEBVIEW2_PERMISSION_KIND_MICROPHONE = 1
-                                                if kind.0 == 1 {
-                                                    let _ = args.SetState(
-                                                        COREWEBVIEW2_PERMISSION_STATE(1), // ALLOW
-                                                    );
-                                                }
-                                            }
-                                            Ok(())
-                                        },
-                                    ),
-                                );
-                                let mut token: i64 = 0;
-                                let _ = core.add_PermissionRequested(&handler, &mut token);
-                            }
-                        }
-                    });
-                }
+                // 桌面应用全部放行权限请求，不弹 WebView2 默认权限提示。
+                attach_permission_allower(&win);
             }
 
             tray::setup_tray(app)?;
@@ -1140,7 +1176,7 @@ pub fn run() {
             let app_handle_for_update = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                match updater::fetch_manifest("https://mona.lzfun.vip/updates/update.json").await {
+                match updater::fetch_manifest("https://www.mona-ai.cn/updates/update.json").await {
                     Ok(manifest) => {
                         let current = updater::get_app_version();
                         let latest = manifest.version.clone();

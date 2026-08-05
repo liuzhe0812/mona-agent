@@ -11,6 +11,7 @@ export interface MdFileTab {
   dirty: boolean;
   loading: boolean;
   error: string | null;
+  agentChatId?: string;
 }
 
 interface MdReaderState {
@@ -22,6 +23,8 @@ interface MdReaderState {
   setActiveTab: (tabId: string) => void;
   updateTabContent: (tabId: string, content: string) => void;
   updateTabMode: (tabId: string, mode: EditorMode) => void;
+  updateTabAgentChatId: (tabId: string, chatId: string) => void;
+  reloadTab: (tabId: string) => Promise<void>;
   saveTab: (tabId: string) => Promise<void>;
   saveActiveTab: () => Promise<void>;
 }
@@ -124,6 +127,31 @@ export const useMdReaderStore = create<MdReaderState>((set, get) => ({
         t.id === tabId ? { ...t, mode } : t,
       ),
     }));
+  },
+
+  updateTabAgentChatId: (tabId: string, chatId: string) => {
+    set((state) => ({
+      tabs: state.tabs.map((t) =>
+        t.id === tabId ? { ...t, agentChatId: chatId } : t,
+      ),
+    }));
+  },
+
+  reloadTab: async (tabId: string) => {
+    const tab = get().tabs.find((t) => t.id === tabId);
+    if (!tab) return;
+    try {
+      const content = await readMdFile(tab.filePath);
+      set((state) => ({
+        tabs: state.tabs.map((t) =>
+          t.id === tabId
+            ? { ...t, content, originalContent: content, dirty: false }
+            : t,
+        ),
+      }));
+    } catch (err) {
+      console.error(`Failed to reload ${tab.filePath}:`, err);
+    }
   },
 
   saveTab: async (tabId: string) => {

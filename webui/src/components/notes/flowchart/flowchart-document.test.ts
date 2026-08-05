@@ -231,17 +231,36 @@ describe("parseFlowchartMarkdown / serializeFlowchartMarkdown", () => {
 });
 
 describe("buildFlowchartPlainText", () => {
-  it("包含标题、节点和边标签，不含 ID/坐标/字段名", () => {
+  it("包含标题、节点 label 和边 label（用于 preview 显示）", () => {
     const doc = makeDoc();
     const text = buildFlowchartPlainText("订单审批", doc);
+    // 标题、节点 label、边 label 都应保留（用于 preview）
     expect(text).toContain("订单审批");
     expect(text).toContain("开始");
     expect(text).toContain("处理");
     expect(text).toContain("结束");
+    // 结构化字段不出现
     expect(text).not.toContain("n1");
     expect(text).not.toContain("position");
     expect(text).not.toContain("kind");
     expect(text).not.toContain("version");
+  });
+
+  it("节点 label 中的 [[wiki link]] 原文保留（preview 可读性）", () => {
+    const doc: FlowchartDocument = {
+      version: 1,
+      direction: "TB",
+      nodes: [
+        { id: "n1", kind: "start", label: "读取 [[订单]]", position: { x: 0, y: 0 } },
+        { id: "n2", kind: "process", label: "调用 [[支付服务]]", position: { x: 0, y: 100 } },
+      ],
+      edges: [{ id: "e1", source: "n1", target: "n2", label: "通过 [[审批]]" }],
+    };
+    const text = buildFlowchartPlainText("流程", doc);
+    // plainText 用于 preview，需保留完整 label 原文
+    expect(text).toContain("读取 [[订单]]");
+    expect(text).toContain("调用 [[支付服务]]");
+    expect(text).toContain("通过 [[审批]]");
   });
 });
 

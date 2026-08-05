@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import MindElixir from "mind-elixir";
+import { useCallback, useEffect, useRef, useState, forwardRef, useImperativeHandle, type ReactNode } from "react";
+import MindElixir, { SIDE } from "mind-elixir";
 import type { MindElixirInstance, NodeObj, Topic } from "mind-elixir";
 import "mind-elixir/style.css";
 import {
@@ -12,6 +12,7 @@ import {
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuItem,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
@@ -23,15 +24,10 @@ import {
   Plus,
   CornerDownRight,
   Trash2,
-  Maximize2,
-  List,
-  Network,
   Copy,
   Download,
   Loader2,
   Palette,
-  Focus,
-  Minimize2,
   ChevronsDownUp,
   ChevronsUpDown,
   Search,
@@ -40,6 +36,10 @@ import {
   GitBranch,
   Brackets,
   Square,
+  Crosshair,
+  ArrowUp,
+  ArrowDown,
+  Tag,
 } from "lucide-react";
 
 import type { OperationNote } from "../notes-data";
@@ -52,12 +52,19 @@ import {
   type MindMapNodeStyle,
 } from "./mindmap-outline";
 import {
+  exportToFreemind,
+  downloadTextFile,
+  safeFileName,
+} from "./mindmap-export";
+import {
   searchInTree,
   computeReplaceAllChanges,
   type SearchMatch,
 } from "./mindmap-search";
 import { FindReplacePanel } from "./FindReplacePanel";
+import { NodePropertyDialog, type NodePropertyData } from "./NodePropertyDialog";
 import { useMindMapSelection } from "./MindMapSelectionContext";
+import { useMindMapBridge } from "./MindMapBridge";
 import { downloadMediaUrl } from "@/lib/tauri";
 import {
   readDecorations,
@@ -98,8 +105,6 @@ interface MindMapDocumentEditorProps {
   /** 注入到工具栏右侧（saveLabel 之前）的额外节点 */
   toolbarExtra?: ReactNode;
 }
-
-type ViewMode = "map" | "outline";
 
 const MIND_ELIXIR_DARK_VARS = {
   "--main-color": "#e2e8f0",
@@ -267,13 +272,18 @@ function resolveTheme(key: MindMapThemeKey, dark: boolean): MindMapTheme {
   return MINDMAP_THEME_PRESETS.find(p => p.key === key)?.theme ?? MINDMAP_LIGHT_THEME;
 }
 
-export function MindMapDocumentEditor({
+export interface MindMapDocumentEditorHandle {
+  /** 选中并居中到指定节点（供右侧大纲面板调用） */
+  selectNode: (nodeId: string) => void;
+}
+
+export const MindMapDocumentEditor = forwardRef<MindMapDocumentEditorHandle, MindMapDocumentEditorProps>(function MindMapDocumentEditor({
   note,
   onContentChange,
   onSelectionChange,
   toolbarLeading,
   toolbarExtra,
-}: MindMapDocumentEditorProps) {
+}, ref) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mindRef = useRef<MindElixirInstance | null>(null);
   const isRefreshingRef = useRef(false);
@@ -316,17 +326,16 @@ export function MindMapDocumentEditor({
   const finishMarqueeRef = useRef<(rect: DOMRect) => void>(() => {});
   const { setSelection, updateBaseHash } = useMindMapSelection();
 
-  const [viewMode, setViewMode] = useState<ViewMode>("map");
-  const [outlineText, setOutlineText] = useState(note.contentMarkdown);
   const [parseError, setParseError] = useState<string | null>(null);
   const [isDark, setIsDark] = useState(
     typeof document !== "undefined" && document.documentElement.classList.contains("dark"),
   );
   const [themeKey, setThemeKey] = useState<MindMapThemeKey>(loadThemeKey);
-  // 多选状态：当前选中的节点数（含单选），用于控制批量删除按钮可用性
-  const [selectedCount, setSelectedCount] = useState(0);
-  // 聚焦模式状态：true 时显示"返回完整导图"按钮
-  const [isFocusMode, setIsFocusMode] = useState(false);
+  // 画布缩放百分比（用于工具栏显示）
+  const [zoomPercent, setZoomPercent] = useState(100);
+  // 节点属性编辑对话框
+  const [nodePropertyOpen, setNodePropertyOpen] = useState(false);
+  const [nodePropertyData, setNodePropertyData] = useState<NodePropertyData | null>(null);
   // 查找替换面板状态
   const [showFindPanel, setShowFindPanel] = useState(false);
   const [findMatches, setFindMatches] = useState<SearchMatch[]>([]);
@@ -357,12 +366,14 @@ export function MindMapDocumentEditor({
     const result = parseMindMap(note.contentMarkdown);
     if (!result.ok) {
       setParseError(`第 ${result.line} 行：${result.message}`);
-      setViewMode("outline");
       return;
     }
     setParseError(null);
-    setOutlineText(note.contentMarkdown);
     lastContentRef.current = note.contentMarkdown;
+
+    // 外部内容更新（如 AI Patch）会触发 refresh 重建 DOM，需重置查找状态
+    setFindMatches([]);
+    setFindIndex(-1);
 
     if (mindRef.current) {
       const cloned = cloneNode(result.root);
@@ -377,30 +388,15 @@ export function MindMapDocumentEditor({
           return { id: s.id, label: s.label, ...range, style: s.style };
         })
         .filter((s): s is NonNullable<typeof s> => s !== null);
-      // 容器可见时立即 refresh；否则延迟到下一帧（等 viewMode 切换完成）
-      if (viewMode === "map") {
-        isRefreshingRef.current = true;
-        try {
-          mindRef.current.refresh({ nodeData: cloned, arrows, summaries });
-        } finally {
-          isRefreshingRef.current = false;
-        }
-        requestAnimationFrame(() => redrawBoundariesRef.current());
-      } else {
-        requestAnimationFrame(() => {
-          const mind = mindRef.current;
-          if (!mind) return;
-          isRefreshingRef.current = true;
-          try {
-            mind.refresh({ nodeData: cloned, arrows, summaries });
-          } finally {
-            isRefreshingRef.current = false;
-          }
-          requestAnimationFrame(() => redrawBoundariesRef.current());
-        });
+      isRefreshingRef.current = true;
+      try {
+        mindRef.current.refresh({ nodeData: cloned, arrows, summaries });
+      } finally {
+        isRefreshingRef.current = false;
       }
+      requestAnimationFrame(() => redrawBoundariesRef.current());
     }
-  }, [note.contentMarkdown, viewMode]);
+  }, [note.contentMarkdown]);
 
   // 初始化 Mind Elixir
   useEffect(() => {
@@ -410,7 +406,6 @@ export function MindMapDocumentEditor({
     const result = parseMindMap(note.contentMarkdown);
     if (!result.ok) {
       setParseError(`第 ${result.line} 行：${result.message}`);
-      setViewMode("outline");
       return;
     }
 
@@ -419,7 +414,7 @@ export function MindMapDocumentEditor({
 
     const mind = new MindElixir({
       el: containerRef.current,
-      direction: 1,
+      direction: SIDE,
       toolBar: false,
       keypress: true,
       contextMenu: false,
@@ -471,11 +466,19 @@ export function MindMapDocumentEditor({
         isRefreshingRef.current = false;
       }
     }
-    // 初始化后适应画布：scaleFit 内部调用 Se(this, true) 按 nodes 居中
-    // 注意：不要额外调用 toCenter()，它会按 root 居中导致画布偏移
-    requestAnimationFrame(() => {
-      mind.scaleFit();
-    });
+    // 初始化后按根节点居中（toCenter），避免 scaleFit 按 nodes 居中时
+    // 因左右子节点不对称把根节点推到容器边缘而被截断
+    const centerWhenReady = (attempts = 0) => {
+      const el = containerRef.current;
+      if (!el || attempts > 30) return; // 最多重试 30 帧（约 500ms）
+      if (el.offsetWidth === 0 || el.offsetHeight === 0) {
+        requestAnimationFrame(() => centerWhenReady(attempts + 1));
+        return;
+      }
+      mind.toCenter();
+      setZoomPercent(Math.round(mind.scaleVal * 100));
+    };
+    requestAnimationFrame(() => centerWhenReady());
 
     // 创建外框 SVG 层：插入到 mind.map 内部，作为第一个子元素
     // mind.map 的 transform 会自动应用到子元素，外框跟随平移和缩放
@@ -524,23 +527,19 @@ export function MindMapDocumentEditor({
       // 同步到 Context，供 NoteAgentPanel 消费
       const baseHash = computeBaseHash(lastContentRef.current);
       setSelection(note.id, sel, baseHash);
-      // 单选时更新选中计数
-      setSelectedCount(1);
       selectionSnapshotRef.current = [nodeObj.id];
       setSelectedBoundaryId(null);
       setSelectedBoundaryLinkId(null);
     });
 
-    // 多选事件：追踪当前选中节点数
+    // 多选事件：追踪当前选中节点
     mind.bus.addListener("selectNodes", () => {
       const ids = mind.currentNodes.map((node) => node.nodeObj.id);
       selectionSnapshotRef.current = ids;
-      setSelectedCount(ids.length);
     });
     mind.bus.addListener("unselectNodes", () => {
       const ids = mind.currentNodes.map((node) => node.nodeObj.id);
       selectionSnapshotRef.current = ids;
-      setSelectedCount(ids.length);
     });
 
     // Mind Elixir 的 contextmenu 处理器调用了 preventDefault() 阻止原生菜单，
@@ -863,7 +862,6 @@ export function MindMapDocumentEditor({
     const rootWithDecorations = writeDecorations(rootMd, cleaned);
     const md = serializeMindMap(rootWithDecorations);
     lastContentRef.current = md;
-    setOutlineText(md);
     const parsed = parseMindMap(md);
     onContentChange({
       contentMarkdown: md,
@@ -1040,60 +1038,6 @@ export function MindMapDocumentEditor({
     return () => ro.disconnect();
   }, []);
 
-  // 大纲编辑
-  const handleOutlineChange = useCallback((value: string) => {
-    setOutlineText(value);
-    setParseError(null);
-  }, []);
-
-  const handleSwitchToMap = useCallback(() => {
-    const result = parseMindMap(outlineText);
-    if (!result.ok) {
-      setParseError(`第 ${result.line} 行：${result.message}`);
-      return;
-    }
-    setParseError(null);
-    lastContentRef.current = outlineText;
-
-    // 先切换视图让容器可见，下一帧再 refresh，避免 hidden 状态下连线坐标计算为 0
-    setViewMode("map");
-    if (mindRef.current) {
-      const cloned = cloneNode(result.root);
-      // 大纲编辑可能修改了节点结构，重新读取装饰数据
-      const newDecorations = readDecorations(result.root);
-      decorationsRef.current = newDecorations;
-      const arrows = newDecorations.arrows.map((a) => storedArrowToNative(a));
-      const summaries = newDecorations.summaries
-        .map((s) => {
-          const range = summaryToNativeRange(s, result.root);
-          if (!range) return null;
-          return { id: s.id, label: s.label, ...range, style: s.style };
-        })
-        .filter((s): s is NonNullable<typeof s> => s !== null);
-      requestAnimationFrame(() => {
-        const mind = mindRef.current;
-        if (!mind) return;
-        isRefreshingRef.current = true;
-        try {
-          mind.refresh({ nodeData: cloned, arrows, summaries });
-        } finally {
-          isRefreshingRef.current = false;
-        }
-        // 适应画布尺寸
-        requestAnimationFrame(() => {
-          mind.scaleFit();
-          redrawBoundariesRef.current();
-        });
-      });
-    }
-
-    const md = serializeMindMap(result.root);
-    onContentChange({
-      contentMarkdown: md,
-      plainText: result.plainText,
-    });
-  }, [outlineText, onContentChange]);
-
   // 工具栏操作
   const handleAddChild = useCallback(() => {
     void mindRef.current?.addChild();
@@ -1111,55 +1055,8 @@ export function MindMapDocumentEditor({
     void mind.removeNodes([current]);
   }, []);
 
-  // 批量删除多选节点：
-  // 1. 过滤根节点（不允许删除根）；
-  // 2. 去重：若选中节点中包含祖先与子孙关系，只保留祖先（删除祖先时子孙一并移除）。
-  const handleBatchDelete = useCallback(() => {
-    const mind = mindRef.current;
-    if (!mind) return;
-    const selected = mind.currentNodes;
-    if (selected.length <= 1) return;
-    const rootId = mind.nodeData.id;
-    // 过滤根节点
-    const candidates = selected.filter(t => t.nodeObj.id !== rootId);
-    if (candidates.length === 0) return;
-    // 去重：移除被其他选中节点作为祖先包含的节点
-    const ids = new Set(candidates.map(t => t.nodeObj.id));
-    const deduped: Topic[] = [];
-    for (const tpc of candidates) {
-      let isDescendantOfAnother = false;
-      // 向上遍历父链，若任一祖先也在选中集合中，则跳过
-      let parent = tpc.nodeObj.parent;
-      while (parent) {
-        if (ids.has(parent.id)) {
-          isDescendantOfAnother = true;
-          break;
-        }
-        parent = parent.parent;
-      }
-      if (!isDescendantOfAnother) deduped.push(tpc);
-    }
-    if (deduped.length === 0) return;
-    void mind.removeNodes(deduped);
-    setSelectedCount(0);
-  }, []);
-
   // 上移 / 下移当前节点（Mind Elixir 内置 Alt+↑/↓、PageUp/PageDown 快捷键）
   // 注：工具栏不提供按钮，用户可通过拖拽节点或快捷键移动
-
-  // 聚焦当前节点子树 / 返回完整导图
-  const handleFocusNode = useCallback(() => {
-    const mind = mindRef.current;
-    if (!mind) return;
-    const current = mind.currentNode;
-    if (!current) return;
-    mind.focusNode(current);
-    setIsFocusMode(true);
-  }, []);
-  const handleCancelFocus = useCallback(() => {
-    mindRef.current?.cancelFocus();
-    setIsFocusMode(false);
-  }, []);
 
   // 展开当前节点
   const handleExpandNode = useCallback(() => {
@@ -1180,36 +1077,39 @@ export function MindMapDocumentEditor({
 
   // ========== 空白区域右键菜单功能 ==========
 
-  // 全部展开：遍历所有父节点元素，递归展开
+  // 全部展开：递归设置所有节点 expanded=true，然后 refresh 重新渲染
   const handleExpandAll = useCallback(() => {
     const mind = mindRef.current;
     if (!mind) return;
-    const container = containerRef.current;
-    if (!container) return;
-    const parents = container.querySelectorAll("me-parent");
-    parents.forEach((p) => {
-      try {
-        mind.expandNodeAll?.(p as unknown as Topic, true);
-      } catch {
-        // 忽略单个节点展开失败
+    const data = mind.getData().nodeData;
+    const setExpanded = (node: NodeObj) => {
+      if (node.children && node.children.length > 0) {
+        node.expanded = true;
+        node.children.forEach(setExpanded);
       }
-    });
+    };
+    setExpanded(data);
+    mind.refresh();
+    requestAnimationFrame(() => redrawBoundariesRef.current());
   }, []);
 
-  // 全部折叠：遍历所有父节点元素，折叠（保留根节点可见）
+  // 全部折叠：保留根节点展开，递归设置所有非根节点 expanded=false
   const handleCollapseAll = useCallback(() => {
     const mind = mindRef.current;
     if (!mind) return;
-    const container = containerRef.current;
-    if (!container) return;
-    const parents = container.querySelectorAll("me-parent");
-    parents.forEach((p) => {
-      try {
-        mind.expandNode?.(p as unknown as Topic, false);
-      } catch {
-        // 忽略
+    const data = mind.getData().nodeData;
+    const setCollapsed = (node: NodeObj) => {
+      if (node.children && node.children.length > 0) {
+        node.children.forEach(setCollapsed);
+        // 根节点保持展开，其他全部折叠
+        if (node !== data) {
+          node.expanded = false;
+        }
       }
-    });
+    };
+    setCollapsed(data);
+    mind.refresh();
+    requestAnimationFrame(() => redrawBoundariesRef.current());
   }, []);
 
   // ========== 装饰功能（联系 / 外框 / 概要） ==========
@@ -1453,7 +1353,7 @@ export function MindMapDocumentEditor({
   // XMind 快捷键：联系 Ctrl/Cmd+Shift+R；外框 Windows Ctrl+B、macOS Cmd+Shift+B。
   useEffect(() => {
     const container = containerRef.current;
-    if (!container || viewMode !== "map") return;
+    if (!container) return;
     const handleKeydown = (e: KeyboardEvent) => {
       const target = e.target as Element | null;
       if (target?.closest?.("input, textarea, [contenteditable='true']")) return;
@@ -1472,7 +1372,7 @@ export function MindMapDocumentEditor({
     };
     container.addEventListener("keydown", handleKeydown, true);
     return () => container.removeEventListener("keydown", handleKeydown, true);
-  }, [handleCreateBoundary, handleCreateLink, viewMode]);
+  }, [handleCreateBoundary, handleCreateLink]);
 
   const startBoundaryResize = useCallback(
     (boundaryId: string, edge: "top" | "bottom", event: PointerEvent) => {
@@ -1851,6 +1751,31 @@ export function MindMapDocumentEditor({
       const height = screenRect.height / scale;
       const selected = selectedBoundaryId === b.id;
 
+      // 透明填充层：让整个外框矩形区域都能响应点击，不受虚线间隙影响
+      const hitRect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+      hitRect.setAttribute("x", String(x));
+      hitRect.setAttribute("y", String(y));
+      hitRect.setAttribute("width", String(width));
+      hitRect.setAttribute("height", String(height));
+      hitRect.setAttribute("rx", "6");
+      hitRect.setAttribute("ry", "6");
+      hitRect.setAttribute("fill", "transparent");
+      hitRect.style.cursor = "pointer";
+      hitRect.style.pointerEvents = "all";
+      hitRect.dataset.boundaryId = b.id;
+      hitRect.addEventListener("mousedown", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      });
+      hitRect.addEventListener("click", (e) => {
+        e.stopPropagation();
+        mind.clearSelection();
+        selectionSnapshotRef.current = [];
+        setSelectedBoundaryLinkId(null);
+        setSelectedBoundaryId(b.id);
+      });
+      layer.appendChild(hitRect);
+
       const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
       rect.setAttribute("x", String(x));
       rect.setAttribute("y", String(y));
@@ -1865,20 +1790,7 @@ export function MindMapDocumentEditor({
       );
       rect.setAttribute("stroke-width", selected ? "2" : "1.5");
       rect.setAttribute("stroke-dasharray", "4 3");
-      rect.style.cursor = "pointer";
-      rect.style.pointerEvents = selected ? "all" : "stroke";
-      rect.dataset.boundaryId = b.id;
-      rect.addEventListener("mousedown", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-      });
-      rect.addEventListener("click", (e) => {
-        e.stopPropagation();
-        mind.clearSelection();
-        selectionSnapshotRef.current = [];
-        setSelectedBoundaryLinkId(null);
-        setSelectedBoundaryId(b.id);
-      });
+      rect.style.pointerEvents = "none";
       layer.appendChild(rect);
 
       const range = validateSelection(b.nodeIds, stripParent(mind.getData().nodeData));
@@ -2005,7 +1917,6 @@ export function MindMapDocumentEditor({
     }
     if (deduped.length > 0) {
       void mind.removeNodes(deduped);
-      setSelectedCount(0);
     }
   }, []);
 
@@ -2036,6 +1947,82 @@ export function MindMapDocumentEditor({
 
   const handleFit = useCallback(() => {
     mindRef.current?.scaleFit();
+    // 适应画布后同步缩放显示
+    requestAnimationFrame(() => {
+      const mind = mindRef.current;
+      if (mind) setZoomPercent(Math.round(mind.scaleVal * 100));
+    });
+  }, []);
+
+  // 缩放控制：放大 / 缩小 / 重置
+  const handleZoomIn = useCallback(() => {
+    const mind = mindRef.current;
+    if (!mind) return;
+    const next = Math.min(mind.scaleVal * 1.2, mind.scaleMax ?? 4);
+    mind.scale(next);
+    setZoomPercent(Math.round(next * 100));
+  }, []);
+
+  const handleZoomOut = useCallback(() => {
+    const mind = mindRef.current;
+    if (!mind) return;
+    const next = Math.max(mind.scaleVal / 1.2, mind.scaleMin ?? 0.2);
+    mind.scale(next);
+    setZoomPercent(Math.round(next * 100));
+  }, []);
+
+  const handleZoomReset = useCallback(() => {
+    const mind = mindRef.current;
+    if (!mind) return;
+    mind.scale(1);
+    setZoomPercent(100);
+  }, []);
+
+  // 上移 / 下移当前节点（同级排序）
+  const handleMoveUp = useCallback(() => {
+    const mind = mindRef.current;
+    if (!mind) return;
+    const current = mind.currentNode;
+    if (!current) return;
+    void mind.moveUpNode(current);
+  }, []);
+
+  const handleMoveDown = useCallback(() => {
+    const mind = mindRef.current;
+    if (!mind) return;
+    const current = mind.currentNode;
+    if (!current) return;
+    void mind.moveDownNode(current);
+  }, []);
+
+  // 编辑节点属性（标签/备注/超链接）
+  const handleEditProperty = useCallback(() => {
+    const mind = mindRef.current;
+    if (!mind) return;
+    const current = mind.currentNode;
+    if (!current) return;
+    const obj = current.nodeObj;
+    setNodePropertyData({
+      nodeId: obj.id,
+      topic: obj.topic,
+      tags: Array.isArray(obj.tags) ? obj.tags.map((t) => (typeof t === "string" ? t : t.text)) : [],
+      note: obj.note ?? "",
+      hyperLink: obj.hyperLink ?? "",
+    });
+    setNodePropertyOpen(true);
+  }, []);
+
+  // 应用节点属性变更
+  const handleApplyProperty = useCallback((nodeId: string, patch: Partial<NodePropertyData>) => {
+    const mind = mindRef.current;
+    if (!mind) return;
+    const el = mind.findEle(nodeId);
+    if (!el) return;
+    const reshape: Partial<NodeObj> = {};
+    if (patch.tags !== undefined) reshape.tags = patch.tags;
+    if (patch.note !== undefined) reshape.note = patch.note;
+    if (patch.hyperLink !== undefined) reshape.hyperLink = patch.hyperLink || undefined;
+    void mind.reshapeNode(el, reshape);
   }, []);
 
   // 导出 PNG：Mind Elixir 5.14.0 的 exportPng() 返回 Blob | null
@@ -2067,10 +2054,110 @@ export function MindMapDocumentEditor({
     }
   }, [exporting, note.title]);
 
+  // 导出 FreeMind (.mm)（FreeMind/Freeplane/XMind 可打开）
+  const handleExportFreemind = useCallback(async () => {
+    const result = parseMindMap(note.contentMarkdown);
+    if (!result.ok) {
+      setExportError("导出失败：导图内容解析错误");
+      return;
+    }
+    const xml = exportToFreemind(result.root);
+    try {
+      await downloadTextFile(xml, `${safeFileName(note.title)}.mm`, "application/x-freemind");
+    } catch (err) {
+      setExportError(err instanceof Error ? `导出失败：${err.message}` : "导出失败");
+    }
+  }, [note.contentMarkdown, note.title]);
+
+  // 监听画布列表右键菜单的导出事件（仅响应当前 noteId，format 区分格式）
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<{ noteId: string; format: string }>).detail;
+      if (detail?.noteId !== note.id) return;
+      if (detail.format === "freemind") {
+        void handleExportFreemind();
+      } else {
+        // 默认 PNG
+        void handleExportPng();
+      }
+    };
+    window.addEventListener("mona:canvas-export", handler);
+    return () => window.removeEventListener("mona:canvas-export", handler);
+  }, [note.id, handleExportPng, handleExportFreemind]);
+
   // ========== 查找与替换 ==========
+  // 清除所有查找高亮（恢复 textContent，避免残留 span）
+  const clearFindHighlight = useCallback(() => {
+    const highlights = document.querySelectorAll(".mindmap-find-highlight");
+    highlights.forEach((span) => {
+      const parent = span.parentElement;
+      if (!parent) return;
+      // 把高亮 span 的文本合并回父元素
+      const text = span.textContent || "";
+      span.replaceWith(document.createTextNode(text));
+      // normalize 合并相邻文本节点
+      parent.normalize();
+    });
+  }, []);
+
+  // 在指定节点文本上应用高亮
+  const applyHighlight = useCallback((el: Topic, match: SearchMatch) => {
+    const textEl = el.text;
+    if (!textEl) return;
+    const text = textEl.textContent || "";
+    // 校验偏移仍然有效（节点可能在替换后变化）
+    if (match.start < 0 || match.end > text.length || match.start >= match.end) return;
+    const before = text.slice(0, match.start);
+    const highlighted = document.createElement("span");
+    highlighted.className = "mindmap-find-highlight";
+    highlighted.textContent = text.slice(match.start, match.end);
+    const after = text.slice(match.end);
+    textEl.textContent = "";
+    textEl.appendChild(document.createTextNode(before));
+    textEl.appendChild(highlighted);
+    textEl.appendChild(document.createTextNode(after));
+  }, []);
+
+  // 定位到指定匹配节点：展开祖先、选中、滚动、高亮
+  const navigateToMatch = useCallback((match: SearchMatch) => {
+    const mind = mindRef.current;
+    if (!mind) return;
+
+    // 先清除所有现有高亮
+    clearFindHighlight();
+
+    // 通过路径展开所有祖先节点（折叠分支也能定位）
+    // 直接使用 NodeObj（保留 expanded 字段），无需 stripParent
+    const root = mind.getData().nodeData;
+    const path = findPathToNode(root, match.nodeId);
+    if (path && path.length > 0) {
+      let current: NodeObj = root;
+      for (let i = 0; i < path.length - 1; i++) {
+        const childIdx = path[i];
+        const child = current.children?.[childIdx];
+        if (child && !child.expanded) {
+          const childEl = mind.findEle(child.id);
+          if (childEl) mind.expandNode(childEl, true);
+        }
+        if (child) current = child;
+      }
+    }
+
+    // 等下一帧再选中、滚动、高亮，确保展开后的布局已生效
+    requestAnimationFrame(() => {
+      const el = mind.findEle(match.nodeId);
+      if (!el) return;
+      mind.selectNode(el);
+      mind.scrollIntoView(el, true);
+      // 再等一帧应用高亮，避免被 selectNode 的渲染覆盖
+      requestAnimationFrame(() => applyHighlight(el, match));
+    });
+  }, [applyHighlight, clearFindHighlight]);
+
   // 执行搜索：从当前导图数据中查找匹配节点
   const runSearch = useCallback((query: string, caseSensitive: boolean) => {
     if (!query) {
+      clearFindHighlight();
       setFindMatches([]);
       setFindIndex(-1);
       return;
@@ -2084,18 +2171,10 @@ export function MindMapDocumentEditor({
     // 定位到第一个匹配
     if (matches.length > 0) {
       navigateToMatch(matches[0]);
+    } else {
+      clearFindHighlight();
     }
-  }, []);
-
-  // 定位到指定匹配节点：选中并滚动到视图
-  const navigateToMatch = useCallback((match: SearchMatch) => {
-    const mind = mindRef.current;
-    if (!mind) return;
-    const el = mind.findEle(match.nodeId);
-    if (!el) return;
-    mind.selectNode(el);
-    mind.scrollIntoView(el, true);
-  }, []);
+  }, [clearFindHighlight, navigateToMatch]);
 
   // 上一个 / 下一个
   const handleNavigate = useCallback((direction: "prev" | "next") => {
@@ -2157,59 +2236,103 @@ export function MindMapDocumentEditor({
         void mind.setNodeTopic(el, change.newTopic);
       }
     }
-    // 清空匹配状态
+    // 清除高亮并清空匹配状态
+    clearFindHighlight();
     setFindMatches([]);
     setFindIndex(-1);
-  }, []);
+  }, [clearFindHighlight]);
 
-  // Ctrl+F 打开查找面板
+  // Ctrl+F 打开查找面板；Ctrl+/-/0 缩放控制
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === "f") {
+      const mod = e.ctrlKey || e.metaKey;
+      if (!mod) return;
+      if (e.key === "f") {
         e.preventDefault();
         e.stopPropagation();
         setShowFindPanel(true);
+      } else if (e.key === "=" || e.key === "+") {
+        e.preventDefault();
+        e.stopPropagation();
+        handleZoomIn();
+      } else if (e.key === "-") {
+        e.preventDefault();
+        e.stopPropagation();
+        handleZoomOut();
+      } else if (e.key === "0") {
+        e.preventDefault();
+        e.stopPropagation();
+        handleZoomReset();
       }
     };
     const container = containerRef.current;
     if (!container) return;
     container.addEventListener("keydown", handleKeyDown);
     return () => container.removeEventListener("keydown", handleKeyDown);
+  }, [handleZoomIn, handleZoomOut, handleZoomReset]);
+
+  // 监听滚轮缩放同步 zoomPercent（Mind Elixir 内部处理滚轮缩放，这里只读结果）
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    let raf = 0;
+    const syncZoom = () => {
+      const mind = mindRef.current;
+      if (mind) setZoomPercent(Math.round(mind.scaleVal * 100));
+    };
+    const onWheel = () => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        syncZoom();
+      });
+    };
+    container.addEventListener("wheel", onWheel, { passive: true });
+    return () => {
+      container.removeEventListener("wheel", onWheel);
+      if (raf) cancelAnimationFrame(raf);
+    };
   }, []);
 
+  const mindMapBridge = useMindMapBridge();
+
+  // 选中并居中到指定节点（供右侧大纲面板调用）
+  const handleSelectNode = useCallback((nodeId: string) => {
+    const mind = mindRef.current;
+    const container = containerRef.current;
+    if (!mind || !container) return;
+    // Mind Elixir 在 me-tpc 元素上存储 data-nodeid="me<id>"
+    const tpc = container.querySelector<HTMLElement>(`[data-nodeid="me${nodeId}"]`);
+    if (!tpc) return;
+    // selectNode 期望 Topic 类型，但通过 data-nodeid 查询得到的是 HTMLElement；
+    // Mind Elixir 运行时接受 HTMLElement，这里做类型断言绕过 TS 检查
+    mind.selectNode(tpc as unknown as Topic);
+  }, []);
+
+  // 暴露给父组件
+  useImperativeHandle(ref, () => ({ selectNode: handleSelectNode }), [handleSelectNode]);
+
+  // 注册到 bridge，供 RightSidebar 大纲面板调用
+  useEffect(() => {
+    if (!mindMapBridge) return;
+    mindMapBridge.current = handleSelectNode;
+    return () => {
+      if (mindMapBridge.current === handleSelectNode) {
+        mindMapBridge.current = null;
+      }
+    };
+  }, [mindMapBridge, handleSelectNode]);
+
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex min-h-0 flex-1 flex-col">
       {/* 工具栏 */}
-      <div className="flex items-center gap-1 border-b border-border/60 px-3 py-1.5">
+      <div className="flex shrink-0 items-center gap-1 border-b border-border/60 px-3 py-1.5">
         {toolbarLeading ? (
           <>
             {toolbarLeading}
             <div className="mx-1 h-4 w-px bg-border" />
           </>
         ) : null}
-        <div className="flex items-center rounded-md bg-muted/50 p-0.5">
-          <Button
-            variant={viewMode === "map" ? "default" : "ghost"}
-            size="sm"
-            className="h-7 px-2 text-xs"
-            onClick={() => viewMode === "outline" && handleSwitchToMap()}
-          >
-            <Network className="mr-1 h-3.5 w-3.5" />
-            导图
-          </Button>
-          <Button
-            variant={viewMode === "outline" ? "default" : "ghost"}
-            size="sm"
-            className="h-7 px-2 text-xs"
-            onClick={() => setViewMode("outline")}
-          >
-            <List className="mr-1 h-3.5 w-3.5" />
-            大纲
-          </Button>
-        </div>
-
-        <div className="mx-1 h-4 w-px bg-border" />
-
         <Button variant="ghost" size="icon" className="h-7 w-7" onClick={handleUndo} title="撤销">
           <Undo2 className="h-3.5 w-3.5" />
         </Button>
@@ -2227,51 +2350,8 @@ export function MindMapDocumentEditor({
           <Plus className="mr-1 h-3.5 w-3.5" />
           同级
         </Button>
-        <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={handleDelete}>
-          <Trash2 className="mr-1 h-3.5 w-3.5" />
-          删除
-        </Button>
-        {/* 批量删除：仅在多选（>1）时可用 */}
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-7 px-2 text-xs"
-          onClick={handleBatchDelete}
-          disabled={selectedCount <= 1 || viewMode !== "map"}
-          title="批量删除选中节点"
-        >
-          <Trash2 className="mr-1 h-3.5 w-3.5" />
-          批量删除{selectedCount > 1 ? `(${selectedCount})` : ""}
-        </Button>
 
         <div className="mx-1 h-4 w-px bg-border" />
-
-        {/* 聚焦 / 返回完整导图 */}
-        {isFocusMode ? (
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7"
-            onClick={handleCancelFocus}
-            disabled={viewMode !== "map"}
-            title="返回完整导图"
-            aria-label="返回完整导图"
-          >
-            <Minimize2 className="h-3.5 w-3.5" />
-          </Button>
-        ) : (
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7"
-            onClick={handleFocusNode}
-            disabled={viewMode !== "map"}
-            title="聚焦此分支"
-            aria-label="聚焦此分支"
-          >
-            <Focus className="h-3.5 w-3.5" />
-          </Button>
-        )}
 
         {/* 查找 */}
         <Button
@@ -2279,7 +2359,6 @@ export function MindMapDocumentEditor({
           size="icon"
           className="h-7 w-7"
           onClick={() => setShowFindPanel(true)}
-          disabled={viewMode !== "map"}
           title="查找与替换 (Ctrl+F)"
           aria-label="查找与替换"
         >
@@ -2288,13 +2367,37 @@ export function MindMapDocumentEditor({
 
         <div className="flex-1" />
 
+        {/* 缩放控制：百分比点击重置，配合滚轮缩放与 Ctrl+0 快捷键 */}
+        <div className="flex items-center gap-0.5">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 min-w-[48px] px-1 text-xs tabular-nums"
+            onClick={handleZoomReset}
+            title="重置缩放 (Ctrl+0)"
+          >
+            {zoomPercent}%
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7"
+            onClick={handleFit}
+            title="适应画布"
+            aria-label="适应画布"
+          >
+            <Crosshair className="h-3.5 w-3.5" />
+          </Button>
+        </div>
+
+        <div className="mx-1 h-4 w-px bg-border" />
+
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button
               variant="ghost"
               size="icon"
               className="h-7 w-7"
-              disabled={viewMode !== "map"}
               title="配色方案"
             >
               <Palette className="h-3.5 w-3.5" />
@@ -2321,23 +2424,31 @@ export function MindMapDocumentEditor({
             </DropdownMenuRadioGroup>
           </DropdownMenuContent>
         </DropdownMenu>
-        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={handleFit} title="适应画布">
-          <Maximize2 className="h-3.5 w-3.5" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-7 w-7"
-          onClick={handleExportPng}
-          disabled={exporting || viewMode !== "map"}
-          title="导出 PNG"
-        >
-          {exporting ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <Download className="h-3.5 w-3.5" />
-          )}
-        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7"
+              disabled={exporting}
+              title="导出"
+            >
+              {exporting ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Download className="h-3.5 w-3.5" />
+              )}
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-44">
+            <DropdownMenuItem className="text-xs" onClick={handleExportPng}>
+              导出 PNG 图片
+            </DropdownMenuItem>
+            <DropdownMenuItem className="text-xs" onClick={handleExportFreemind}>
+              导出 FreeMind (.mm)
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
         {toolbarExtra}
       </div>
 
@@ -2359,7 +2470,7 @@ export function MindMapDocumentEditor({
           <ContextMenuTrigger asChild>
             <div
               ref={containerRef}
-              className={`mindmap-container absolute inset-0 overflow-auto bg-background scrollbar-hover ${viewMode === "map" ? "" : "hidden"} ${marqueeState.active ? "mindmap-marquee-active" : ""}`}
+              className={`mindmap-container absolute inset-0 overflow-auto bg-background scrollbar-hover ${marqueeState.active ? "mindmap-marquee-active" : ""}`}
             />
           </ContextMenuTrigger>
           <ContextMenuContent>
@@ -2396,16 +2507,19 @@ export function MindMapDocumentEditor({
                   折叠此节点
                 </ContextMenuItem>
                 <ContextMenuSeparator />
-                <ContextMenuItem onClick={handleFocusNode}>
-                  <Focus className="mr-2 h-4 w-4" />
-                  聚焦此分支
+                <ContextMenuItem onClick={handleMoveUp}>
+                  <ArrowUp className="mr-2 h-4 w-4" />
+                  上移
                 </ContextMenuItem>
-                {isFocusMode ? (
-                  <ContextMenuItem onClick={handleCancelFocus}>
-                    <Minimize2 className="mr-2 h-4 w-4" />
-                    返回完整导图
-                  </ContextMenuItem>
-                ) : null}
+                <ContextMenuItem onClick={handleMoveDown}>
+                  <ArrowDown className="mr-2 h-4 w-4" />
+                  下移
+                </ContextMenuItem>
+                <ContextMenuSeparator />
+                <ContextMenuItem onClick={handleEditProperty}>
+                  <Tag className="mr-2 h-4 w-4" />
+                  属性（标签/备注/链接）
+                </ContextMenuItem>
                 <ContextMenuSeparator />
                 <ContextMenuItem onClick={handleDelete} className="text-destructive focus:text-destructive">
                   <Trash2 className="mr-2 h-4 w-4" />
@@ -2461,7 +2575,7 @@ export function MindMapDocumentEditor({
           </div>
         )}
         {/* 查找替换浮动面板 */}
-        {showFindPanel && viewMode === "map" ? (
+        {showFindPanel ? (
           <FindReplacePanel
             matchCount={findMatches.length}
             currentIndex={findIndex}
@@ -2473,27 +2587,21 @@ export function MindMapDocumentEditor({
               setShowFindPanel(false);
               setFindMatches([]);
               setFindIndex(-1);
+              clearFindHighlight();
             }}
-          />
-        ) : null}
-        {viewMode === "outline" ? (
-          <textarea
-            className="absolute inset-0 resize-none bg-background p-4 font-mono text-sm leading-relaxed outline-none scrollbar-hover"
-            value={outlineText}
-            onChange={(e) => handleOutlineChange(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-                handleSwitchToMap();
-              }
-            }}
-            placeholder="# 根节点&#10;&#10;- 子节点"
-            spellCheck={false}
           />
         ) : null}
       </div>
+      {/* 节点属性编辑对话框 */}
+      <NodePropertyDialog
+        open={nodePropertyOpen}
+        data={nodePropertyData}
+        onApply={handleApplyProperty}
+        onClose={() => setNodePropertyOpen(false)}
+      />
     </div>
   );
-}
+});
 
 /** 深拷贝节点（剥离 parent 引用，避免循环序列化），保留所有扩展字段 */
 function cloneNode(node: MindMapNode): NodeObj {

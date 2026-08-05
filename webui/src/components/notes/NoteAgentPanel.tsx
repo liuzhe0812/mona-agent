@@ -15,7 +15,6 @@ import {
   Settings2,
   Sparkles,
   Square,
-  Tag,
   Trash2,
   Wand2,
 } from "lucide-react";
@@ -44,7 +43,6 @@ import {
   buildFreeformAgentPrompt,
   buildTransformationPrompt,
   inferNoteActionDisplayLabel,
-  parseGeneratedTags,
 } from "./notes-ai";
 import { ConfirmDialog } from "./NotesDialogs";
 import {
@@ -63,7 +61,6 @@ interface NoteAgentPanelProps {
   width?: number;
   onAgentChatIdChange: (chatId: string) => void;
   onApplyResult: (mode: "append" | "replace", markdown: string, messageId: string) => void;
-  onApplyTags?: (tags: string[]) => void;
   onSaveAsNote?: (markdown: string, title: string) => void;
   onTransformationsChange: (transformations: NoteTransformation[]) => void;
   onClearChat?: () => void;
@@ -78,7 +75,6 @@ export function NoteAgentPanel({
   width = 306,
   onAgentChatIdChange,
   onApplyResult,
-  onApplyTags,
   onSaveAsNote,
   onTransformationsChange,
   onClearChat,
@@ -167,38 +163,6 @@ export function NoteAgentPanel({
   useEffect(() => {
     const action = pendingActionRef.current;
     if (!action || loading || creatingChat || isStreaming) return;
-    // generateTags 不替换正文，单独处理
-    if (action === "generateTags") {
-      const completedMessage = messages
-        .filter(
-          (item) =>
-            item.role === "assistant" &&
-            !item.isStreaming &&
-            item.content.trim().length > 0 &&
-            !autoAppliedMessageIdsRef.current.has(item.id),
-        )
-        .pop();
-      if (!completedMessage) return;
-      autoAppliedMessageIdsRef.current.add(completedMessage.id);
-      pendingActionRef.current = null;
-      const tags = parseGeneratedTags(completedMessage.content);
-      if (tags.length > 0 && onApplyTags) {
-        // 合并已有标签，去重
-        const existing = new Set((note?.tags ?? []).map((t) => t.toLowerCase()));
-        const merged = [...(note?.tags ?? [])];
-        for (const t of tags) {
-          if (!existing.has(t.toLowerCase())) {
-            merged.push(t);
-            existing.add(t.toLowerCase());
-          }
-        }
-        onApplyTags(merged);
-        setNotice(`已生成 ${tags.length} 个标签`);
-      } else {
-        setNotice("未能解析出标签");
-      }
-      return;
-    }
     if (action !== "translate") return;
 
     const completedMessage = messages
@@ -220,7 +184,7 @@ export function NoteAgentPanel({
 
     onApplyResult("replace", markdown, completedMessage.id);
     setNotice("已替换笔记正文");
-  }, [creatingChat, isStreaming, loading, messages, note, onApplyResult, onApplyTags]);
+  }, [creatingChat, isStreaming, loading, messages, note, onApplyResult]);
 
   const sendPromptToAgent = useCallback(
     async (prompt: string, displayContent?: string) => {
@@ -735,15 +699,6 @@ function QuickActionSection({
         >
           <Languages className="h-4 w-4 shrink-0 text-muted-foreground" />
           <span className="min-w-0 truncate">翻译</span>
-        </button>
-        <button
-          type="button"
-          disabled={!note || disabled}
-          onClick={() => onAction("generateTags")}
-          className={btnClass}
-        >
-          <Tag className="h-4 w-4 shrink-0 text-muted-foreground" />
-          <span className="min-w-0 truncate">生成标签</span>
         </button>
         <button
           type="button"

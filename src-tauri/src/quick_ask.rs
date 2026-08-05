@@ -122,6 +122,7 @@ fn show_quick_ask(app: &AppHandle) -> Result<(), String> {
     .visible(false)
     .build()
     .map_err(|e| e.to_string())?;
+    crate::attach_permission_allower(&window);
     show_existing_quick_ask_window(&window)
 }
 

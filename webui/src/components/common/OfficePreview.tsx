@@ -126,8 +126,8 @@ export function OfficePreview({ filename, fetchBuffer }: OfficePreviewProps) {
       ) : null}
       <div
         ref={containerRef}
-        className="min-h-0 flex-1"
-        style={{ display: error ? "none" : "block" }}
+        className="office-preview-host min-h-0 flex-1"
+        style={{ display: error ? "none" : "flex", flexDirection: "column" }}
       />
     </div>
   );

@@ -6,6 +6,7 @@ import asyncio
 import html
 import json
 import re
+import shutil
 import tempfile
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -21,6 +22,11 @@ from mona.security.network import validate_url_target
 _MAX_AUDIO_BYTES = 25 * 1024 * 1024
 _SUBTITLE_EXTENSIONS = ("*.srt", "*.vtt")
 _SUBTITLE_LANGUAGES = "zh.*,zh-Hans,zh-Hant,en.*,en-US"
+_MAX_FRAMES = 8
+_FRAME_TIMEOUT = 60
+_TIMESTAMP_PATTERN = re.compile(
+    r"^(?:(?:[0-9]{1,2}:)?[0-5]?[0-9]:)?[0-5]?[0-9](?:\.\d+)?$"
+)
 
 
 class Url2NoteError(RuntimeError):
@@ -122,6 +128,83 @@ class Url2NoteExtractor:
                 raise Url2NoteError("Audio transcription returned no text")
             return Url2NoteSource(_title_from_url(url), url, "video", text)
 
+    async def extract_frames(self, url: str, timestamps: list[str]) -> list[Path]:
+        """Download the video once and extract keyframes at the given timestamps.
+
+        Returns a list of temporary PNG file paths, one per valid timestamp.
+        Caller is responsible for moving/copying the files out before the
+        temp dir is reused; this method does not clean up the files itself.
+        """
+        url = url.strip(" \t\r\n`\"'")
+        valid, error = validate_url_target(url)
+        if not valid:
+            raise Url2NoteError(f"URL validation failed: {error}")
+        if not is_video_url(url):
+            raise Url2NoteError("Frame extraction only supports video URLs")
+        if not timestamps:
+            raise Url2NoteError("No timestamps provided")
+        if len(timestamps) > _MAX_FRAMES:
+            raise Url2NoteError(
+                f"Too many timestamps: {len(timestamps)} > {_MAX_FRAMES}. "
+                "Pass at most 8 timestamps per call."
+            )
+
+        normalized: list[str] = []
+        for ts in timestamps:
+            cleaned = str(ts).strip().replace(",", ".")
+            if not _TIMESTAMP_PATTERN.match(cleaned):
+                raise Url2NoteError(f"Invalid timestamp: {ts!r} (use HH:MM:SS or MM:SS)")
+            normalized.append(cleaned)
+
+        ytdlp = await self._ensure_component("yt_dlp")
+        ffmpeg = await self._ensure_component("ffmpeg")
+        workdir = Path(tempfile.mkdtemp(prefix="mona-frame-"))
+        try:
+            video = await self._download_video(ytdlp, url, workdir)
+            frames: list[Path] = []
+            for index, ts in enumerate(normalized, start=1):
+                output = workdir / f"frame-{index:03d}-{_sanitize_ts(ts)}.png"
+                await _run_process(
+                    [
+                        ffmpeg,
+                        "-y",
+                        "-ss",
+                        ts,
+                        "-i",
+                        str(video),
+                        "-frames:v",
+                        "1",
+                        "-q:v",
+                        "3",
+                        str(output),
+                    ],
+                    workdir,
+                    timeout=_FRAME_TIMEOUT,
+                )
+                if output.is_file() and output.stat().st_size > 0:
+                    frames.append(output)
+            if not frames:
+                raise Url2NoteError("Frame extraction produced no images")
+            return frames
+        except Exception:
+            # Best-effort cleanup on failure; on success the caller owns the files.
+            shutil.rmtree(workdir, ignore_errors=True)
+            raise
+
+    async def _download_video(self, ytdlp: str, url: str, workdir: Path) -> Path:
+        template = str(workdir / "source.%(ext)s")
+        await _run_process(
+            [ytdlp, "--no-playlist", "-f", "best", "-o", template, url],
+            workdir,
+        )
+        source = next(
+            (path for path in workdir.glob("source.*") if path.suffix not in {".part", ".ytdl"}),
+            None,
+        )
+        if source is None:
+            raise Url2NoteError("Unable to download video for frame extraction")
+        return source
+
     async def _ensure_component(self, component: str) -> str:
         path = (
             self._runtime.get_ytdlp_path()
@@ -211,7 +294,7 @@ async def _transcribe_with_config(audio: bytes, filename: str) -> str:
     return await provider.transcribe_bytes(audio, filename=filename)
 
 
-async def _run_process(command: list[str], workdir: Path) -> None:
+async def _run_process(command: list[str], workdir: Path, *, timeout: float = 600) -> None:
     try:
         process = await asyncio.create_subprocess_exec(
             *command,
@@ -222,7 +305,7 @@ async def _run_process(command: list[str], workdir: Path) -> None:
     except FileNotFoundError as exc:
         raise Url2NoteError(f"Required component is unavailable: {command[0]}") from exc
     try:
-        _stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=600)
+        _stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
     except TimeoutError as exc:
         process.kill()
         await process.wait()
@@ -230,6 +313,11 @@ async def _run_process(command: list[str], workdir: Path) -> None:
     if process.returncode != 0:
         detail = stderr.decode("utf-8", "replace").strip()
         raise Url2NoteError(detail or "URL extraction failed")
+
+
+def _sanitize_ts(ts: str) -> str:
+    """Make a timestamp safe for use in a filename."""
+    return ts.replace(":", "m").replace(".", "s")
 
 
 def _title_from_url(url: str) -> str:

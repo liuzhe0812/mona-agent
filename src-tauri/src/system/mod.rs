@@ -143,8 +143,10 @@ mod tests {
         assert!(cleanup_is_allowed("temp"));
         assert!(cleanup_is_allowed("chrome"));
         assert!(cleanup_is_allowed("edge"));
-        assert!(!cleanup_is_allowed("trash"));
-        assert!(!cleanup_is_allowed("updates"));
+        assert!(cleanup_is_allowed("trash"));
+        assert!(cleanup_is_allowed("updates"));
+        assert!(cleanup_is_allowed("wer"));
+        assert!(cleanup_is_allowed("delivery_optimization"));
         assert!(!cleanup_is_allowed("custom-path"));
     }
 }

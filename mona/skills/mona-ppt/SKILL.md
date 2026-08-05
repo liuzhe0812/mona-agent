@@ -33,10 +33,11 @@ When the prompt says "模版编辑模式" or names `references/template-edit-mod
 5. Normal SVG path: before every SVG page, read `<project_path>/spec_lock.md`; use only locked colors, fonts, icons, images, `page_rhythm`, `page_layouts`, and `page_charts`.
 6. Do not directly inspect image files. Use `analyze_images.py` output and the design spec image list.
 7. Normal SVG path: SVG image hrefs must use `../images/<filename>` for project images. Bare filenames like `cover_bg.png` are invalid unless the file is actually in `svg_output/`.
-8. Normal SVG path: run `svg_quality_checker.py <project_path>` on `svg_output/`; all errors must be fixed before export.
+8. Normal SVG path: run `svg_quality_checker.py <project_path>` on `svg_output/`; all errors must be fixed before export. Use `--fix` to auto-repair XML entity errors, then re-run to confirm.
 9. Normal SVG path: speaker notes must be real Markdown under `notes/`; SVG `<metadata>` does not count.
 10. Export discipline: PPTX export must use `${SKILL_DIR}/scripts/svg_to_pptx.py`. For custom PPTX templates, add `--template-underlay <native_template_dir>/template.pptx`. Never create custom export scripts, never use Node/pptxgenjs, never install PPTX-generation npm packages.
-11. When `PPT_UI_CHECKPOINTS=1`: Step 4 generates outline draft and stops; Step 6 writes `.review_ready` and stops before Step 7. Both checkpoints require explicit user confirmation via UI before proceeding.
+11. When `PPT_UI_CHECKPOINTS=1`: Step 4 generates outline draft and stops; Step 6 generates SVG pages **one at a time** (not batch), stopping after each page for user confirmation. No `.review_ready` file is written.
+12. SVG text must be well-formed XML: use raw Unicode for typographic symbols (em dash, ©, →, NBSP) and XML builtin entities (`&amp;`, `&lt;`, `&gt;`, `&quot;`, `&apos;`) for XML reserved characters. HTML named entities (`&nbsp;`, `&mdash;`, `&copy;`) and bare `&` characters (`R&D`) are forbidden because they abort both preview and export.
 
 ## Mona Defaults
 
@@ -142,24 +143,98 @@ Checkpoint: Strategist deliverables complete; continue automatically to Step 5 o
 
 ---
 
-#### V2 UI Checkpoints (when PPT_UI_CHECKPOINTS=1)
+#### V3 UI Checkpoints (when PPT_UI_CHECKPOINTS=1)
 
 当启动 Prompt 包含 `PPT_UI_CHECKPOINTS=1` 标记时，Step 4 行为变更如下：
 
-1. 完成八项确认分析。
-2. 写完整 `design_spec.md` 草稿。
-3. 写 `page_visual_plan.json`（包含 schemaVersion=2, revision=0, pages 数组）。
-4. **不写 `spec_lock.md`**。
-5. **不进入 Step 5/6**。
-6. 明确告知用户"大纲草稿已生成，请在 PPT 页面确认"，然后结束当前 turn。
+⛔ **禁止 BLOCKING 聊天确认**：V3 模式下，启动 Prompt 已经预先携带了用户在 UI 中确认的 8 项偏好（画布格式 / 页数 / 风格 / 主色调 / 图标 / 字体 / 公式 / 图片）。**不要再把 8 项推荐作为聊天消息发出来等待用户回复**——这会阻塞 UI 流程。直接基于用户偏好完成分析并写文件。如果某项用户偏好为 "AI 推荐"，按你的专业判断选定一个具体值并写入 `design_spec_summary.json`。
 
-用户会在 UI 上编辑/增删/重排页面，确认后系统会自动锁定大纲。收到大纲确认消息后，Agent 必须：
+1. 基于启动 Prompt 中的用户偏好完成八项确认分析（不发聊天消息）。
+2. 写完整 `design_spec.md` 草稿。
+3. 写 `page_visual_plan.json`（包含 schemaVersion=2, revision=0, pages 数组）。**每页必须包含以下中文字段**：
+   - `title`：页面标题（中文）
+   - `summary`：内容概要（中文，1-2 句话描述本页要传达的核心信息）
+   - `bullets`：核心要点数组（中文，每条一个要点）
+   - `visual_type`：视觉表达方式（如 text_layout / chart_bar / chart_line / chart_pie / diagram / process / comparison / timeline / image / cover / section_divider / quote）
+   - `layout`：布局建议（中文，描述页面布局，如"左标题右内容""上下分栏""居中大图"等）
+   - `image_plan`：图片方案（中文，描述本页图片需求，如"AI 生成科技感背景图""柱状图展示季度数据""无需图片"等）
+   - `notes`：备注（中文，演讲词或补充说明）
+   - `file`：SVG 文件名（如 page_001.svg）
+   - `page`：页面 ID（如 page_001）
+4. 写 `design_spec_summary.json` —— 八项确认的结构化摘要，供 UI 加载展示与用户修改。Schema：
+   ```json
+   {
+     "schemaVersion": 1,
+     "canvasFormat": "ppt169",
+     "pageCount": 12,
+     "audience": "技术团队",
+     "styleMode": "general|consulting|top-consulting",
+     "styleDescriptor": "minimalist tech",
+     "primaryColor": "#1565C0",
+     "colorScheme": "主色 #1565C0 / 辅助 #FF9800 / 背景 #FFFFFF / 文字 #212121（简短中文描述）",
+     "iconApproach": "emoji|ai|builtin|custom",
+     "iconLibrary": "chunk-filled|tabler-filled|tabler-outline|phosphor-duotone|null",
+     "typographyPlan": "标题：Microsoft YaHei / 正文：Microsoft YaHei（简短中文描述）",
+     "titleFont": "Microsoft YaHei",
+     "bodyFont": "Microsoft YaHei",
+     "formulaPolicy": "mixed|render-all|text-only",
+     "imageApproach": "none|user|ai|web|placeholder",
+     "imageRendering": "vector-illustration|null",
+     "imagePalette": "cool-corporate|null",
+     "updatedAt": "2026-07-31T12:00:00Z"
+   }
+   ```
+   - 用户偏好已明确指定的项，直接填入；用户偏好为 "AI 推荐" 的项，由你按内容分析选定一个具体值（不要写 "AI 推荐" 字符串到 JSON）。
+   - 所有颜色用 HEX 字符串；所有枚举值用小写英文。
+5. **不写 `spec_lock.md`**。
+6. **不进入 Step 5/6**。
+7. 输出一行简短提示（不超过 2 句话）告知用户"大纲草稿已生成，请在 PPT 页面编辑每页内容后确认；如需调整全局设计规格请直接在聊天中说明"，然后结束当前 turn。**不要在 chat 中重复 8 项推荐内容**——它们已经写入 `design_spec_summary.json`，UI 会读取展示。
+
+用户会在 UI 上编辑/增删/重排页面、编辑每页内容，确认后系统会自动锁定大纲。收到 `[OUTLINE_CONFIRMED]` 消息后，Agent 必须：
 1. 读取最终 `page_visual_plan.json`。
-2. 按其内容同步重建 `design_spec.md`。
-3. 按 `templates/spec_lock_reference.md` 生成完整 `spec_lock.md`。
-4. 继续执行 Step 5 和 Step 6。
-5. 全部 SVG 通过质量检查且备注齐全后写入 `.review_ready` 文件。
-6. **停止在 Step 7 之前**，等待用户逐页确认。
+2. 按其内容同步重建 `design_spec.md`。如用户在聊天中要求过规格调整，以调整后的 `design_spec.md` 当前状态为准，不要回退到 Step 4 初始草稿。
+3. 按 `templates/spec_lock_reference.md` 生成完整 `spec_lock.md`（使用更新后的 `design_spec.md`）。
+4. 如需 Step 5 图片获取，执行完毕。
+5. 启动 Flask live preview。
+6. **仅生成第 1 页 SVG**，写入 `svg_output/`，输出 required trace line。
+7. 对该页运行质量检查，修复 error。
+8. 写该页备注到 `notes/`。
+9. **停止**，告知用户"第 1 页已生成，请预览确认"。
+10. **不要生成其他页，不要进入 Step 7，不要写 `.review_ready`**。
+
+**关于 8 项确认**：用户在大纲阶段不编辑全局 8 项确认（UI 只读展示 AI 推荐规格）。如用户需要调整全局规格，会通过聊天直接告知 Agent（如「主色改成 #1a73e8」「用深色背景」），Agent 收到后更新 `design_spec.md` + `design_spec_summary.json`。因此 `[OUTLINE_CONFIRMED]` 不携带 8 项修改字段，Agent 直接以 `design_spec.md` 当前状态生成 `spec_lock.md`。
+
+收到 `[PAGE_CONFIRMED_NEXT]` 消息后，Agent 必须：
+1. 生成下一页 SVG，输出 required trace line。
+2. 对该页运行质量检查，修复 error。
+3. 写该页备注到 `notes/`。
+4. **停止**，告知用户"第 N 页已生成，请预览确认"。
+
+收到 `[PAGE_REDO_REQUESTED]` 消息后，Agent 必须：
+1. 如消息携带 `page_spec`，读取 `page_visual_plan.json` 中该页的最新规格（UI 已更新）。
+2. 重新读取 `spec_lock.md`，确认锁定参数未变。
+3. 如规格涉及内容修改，先同步 `design_spec.md` 和 `notes/` 中该页备注。
+4. 重新手写该页 SVG，输出 required trace line。
+5. 对该页运行质量检查，修复 error。
+6. **停止**，告知用户"第 N 页已重做，请预览确认"。
+
+收到 `[PAGE_GENERATE_REQUESTED]` 消息后，Agent 必须：
+1. 生成指定页 SVG，输出 required trace line。
+2. 对该页运行质量检查，修复 error。
+3. 写该页备注到 `notes/`。
+4. **停止**，告知用户"第 N 页已生成，请预览确认"。
+
+收到 `[ALL_PAGES_CONFIRMED]` 消息后，Agent 必须：
+1. 运行全量 `svg_quality_checker.py` 作为最终门控。
+2. 执行 Step 7 后处理与导出。
+
+收到 `[DESIGN_SPEC_UPDATED]` 消息后，Agent 必须：
+1. 读取消息中列出的更新项（风格模式/主色调/图标方案/图片方案/公式策略/目标受众/视觉风格/页数/字体/画布格式）。
+2. 更新 `design_spec.md` 中受影响的章节（颜色/字体/图标/图片/公式策略）。
+3. 同步重写 `design_spec_summary.json` 中对应字段（保留未变更字段，更新 `updatedAt`）。
+4. 如果 `spec_lock.md` 已生成，同步更新其中对应参数。
+5. 如果已有 SVG 页面生成，告知用户哪些页面需要重新生成以匹配新规格。
+6. **停止**，告知用户"设计规格已更新"。
 
 未带 `PPT_UI_CHECKPOINTS=1` 标记的 CLI、普通聊天调用继续执行现有自动管线。
 
@@ -198,15 +273,21 @@ Mandatory:
 
 Checkpoint: live preview started, all SVGs generated, quality gate has 0 errors, notes exist, chart verification was run or skipped.
 
-#### V2 Review Gate (when PPT_UI_CHECKPOINTS=1)
+#### V3 Per-Page Mode (when PPT_UI_CHECKPOINTS=1)
 
-当 `PPT_UI_CHECKPOINTS=1` 时，Step 6 完成后：
-- 写 `.review_ready` 文件（JSON 格式，包含 outlineRevision 和 checkedAt）
-- **不执行 Step 7 导出**
-- 告知用户"所有页面已生成，请在右侧逐页确认"
-- 等待用户在 UI 上逐页确认
+当 `PPT_UI_CHECKPOINTS=1` 时，Step 6 变为**逐页生成模式**：
 
-收到"所有 PPT 页面已确认"消息后，才执行 Step 7 后处理与导出。
+- 收到 `[OUTLINE_CONFIRMED]` 后，仅生成第 1 页 SVG + 质量检查 + 备注，然后停止
+- 收到 `[PAGE_CONFIRMED_NEXT]` 后，生成下一页 SVG + 质量检查 + 备注，然后停止
+- 收到 `[PAGE_REDO_REQUESTED]` 后，重做指定页 SVG + 质量检查，然后停止
+- 收到 `[PAGE_GENERATE_REQUESTED]` 后，生成指定页 SVG + 质量检查 + 备注，然后停止
+- **不写 `.review_ready` 文件**
+- **不批量生成所有页**
+- 每页生成后必须停止，等待用户在 UI 上确认后才推进
+
+消息模板详见 `references/ui-checkpoints.md`。
+
+收到 `[ALL_PAGES_CONFIRMED]` 后，运行全量质量检查作为最终门控，然后执行 Step 7 导出。
 
 ### Step 7: Post-processing & Export
 

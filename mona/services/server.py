@@ -74,17 +74,19 @@ from mona.api.server import (
     handle_materials_list_wiki,
     handle_materials_llm_config,
     handle_materials_move,
+    handle_materials_reconcile,
     handle_materials_search,
     handle_materials_status,
     handle_materials_write_wiki_page,
     handle_notes_export_docx,
     handle_office_health,
     handle_office_runtime_download,
+    handle_ppt_design_spec_summary_get,
+    handle_ppt_design_spec_summary_put,
     handle_ppt_lock_outline,
     handle_ppt_outline_get,
     handle_ppt_outline_put,
     handle_ppt_page_confirm,
-    handle_ppt_page_regenerate,
     handle_ppt_pages_get,
     handle_ppt_request_export,
     handle_profile_comparison,
@@ -133,12 +135,20 @@ from mona.api.server import (
     handle_video_runtime_check,
     handle_video_runtime_download,
 )
+from mona.api.three_projects import register_three_routes
 from mona.email.imap_pool import imap_pool_manager
+from mona.materials.auth import get_services_token, materials_auth_middleware
+from mona.materials.compile import (
+    handle_materials_wiki_compile_cancel,
+    handle_materials_wiki_compile_start,
+    handle_materials_wiki_compile_status,
+)
 
 
 def create_services_app(
     schedule_service: Any | None = None,
     todo_service: Any | None = None,
+    workspace: Any | None = None,
 ) -> web.Application:
     """Create the aiohttp application for the services process.
 
@@ -147,8 +157,17 @@ def create_services_app(
             /email/schedule/* routes (also consumes LLM schedule extraction).
         todo_service: TodoService backing /api/schedule/todos/* and
             /api/schedule/briefing routes.
+        workspace: Mona workspace root shared with the Agent runtime. 3D
+            project routes must resolve against the same directory the Agent
+            file tools see, otherwise uploads and generation diverge.
     """
-    app = web.Application(client_max_size=20 * 1024 * 1024, middlewares=[_cors_middleware])
+    app = web.Application(
+        client_max_size=20 * 1024 * 1024,
+        middlewares=[_cors_middleware, materials_auth_middleware],
+    )
+    # 启动时即解析并持久化 services 令牌，保证 Rust 本地 HTTP 桥读取
+    # services.token 时文件已存在（避免首次请求的 chicken-and-egg 401）。
+    get_services_token()
     # No agent_loop in this process; handlers that need an LLM fall back to
     # _resolve_llm_provider() (config.json snapshot).
     app["shutdown_event"] = asyncio.Event()
@@ -226,10 +245,18 @@ def create_services_app(
     app.router.add_delete("/api/materials/files/{path:.*}", handle_materials_delete)
     app.router.add_post("/api/materials/move", handle_materials_move)
     app.router.add_post("/api/materials/extract", handle_materials_extract)
+    app.router.add_post("/api/materials/reconcile", handle_materials_reconcile)
     app.router.add_get("/api/materials/text/{path:.*}", handle_materials_get_text)
     app.router.add_get("/api/materials/raw/{path:.*}", handle_materials_get_raw)
     app.router.add_get("/api/materials/raw-binary/{path:.*}", handle_materials_get_raw_binary)
     app.router.add_get("/api/materials/wiki", handle_materials_list_wiki)
+    app.router.add_post("/api/materials/wiki/compile", handle_materials_wiki_compile_start)
+    app.router.add_get(
+        "/api/materials/wiki/compile/{task_id}", handle_materials_wiki_compile_status
+    )
+    app.router.add_post(
+        "/api/materials/wiki/compile/{task_id}/cancel", handle_materials_wiki_compile_cancel
+    )
     app.router.add_get("/api/materials/wiki/{path:.*}", handle_materials_get_wiki_page)
     app.router.add_post("/api/materials/wiki/write", handle_materials_write_wiki_page)
     app.router.add_delete("/api/materials/wiki/{path:.*}", handle_materials_delete_wiki_page)
@@ -302,13 +329,21 @@ def create_services_app(
         "/api/video/project/preview-full", handle_video_project_preview_full
     )
 
+    # 3D project routes — 必须与 Agent 运行时共享同一 workspace 根目录
+    register_three_routes(app, workspace)
+
     # PPT project V2 routes (outline + lock + review + export)
     app.router.add_get("/api/ppt/project/outline", handle_ppt_outline_get)
     app.router.add_put("/api/ppt/project/outline", handle_ppt_outline_put)
     app.router.add_post("/api/ppt/project/lock-outline", handle_ppt_lock_outline)
+    app.router.add_get(
+        "/api/ppt/project/design-spec-summary", handle_ppt_design_spec_summary_get
+    )
+    app.router.add_put(
+        "/api/ppt/project/design-spec-summary", handle_ppt_design_spec_summary_put
+    )
     app.router.add_get("/api/ppt/project/pages", handle_ppt_pages_get)
     app.router.add_post("/api/ppt/project/page/confirm", handle_ppt_page_confirm)
-    app.router.add_post("/api/ppt/project/page/regenerate", handle_ppt_page_regenerate)
     app.router.add_post("/api/ppt/project/request-export", handle_ppt_request_export)
 
     # 设置 IDLE 管理器的事件循环（本进程独占）
