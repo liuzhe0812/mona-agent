@@ -358,13 +358,14 @@ class _IdleWorker:
                 if status != "OK":
                     raise RuntimeError(f"select {mailbox} failed: {status}")
                 while not self._stop_event.is_set():
-                    self._do_idle_cycle(timeout=29 * 60)
+                    has_new_mail = self._do_idle_cycle(timeout=29 * 60)
                     if self._stop_event.is_set():
                         break
-                    try:
-                        self._on_notification(self._account_id, mailbox)
-                    except Exception as e:
-                        logger.warning(f"[idle] {self._account_id} callback error: {e}")
+                    if has_new_mail:
+                        try:
+                            self._on_notification(self._account_id, mailbox)
+                        except Exception as e:
+                            logger.warning(f"[idle] {self._account_id} callback error: {e}")
             else:
                 # 多文件夹：每个文件夹一个子线程
                 sub_threads: list[threading.Thread] = []
@@ -381,13 +382,14 @@ class _IdleWorker:
                         worker._client = mb_client
                         worker._stop_event = sub_stop
                         while not sub_stop.is_set():
-                            worker._do_idle_cycle(timeout=29 * 60)
+                            has_new_mail = worker._do_idle_cycle(timeout=29 * 60)
                             if sub_stop.is_set():
                                 break
-                            try:
-                                worker._on_notification(self._account_id, mb)
-                            except Exception as e:
-                                logger.warning(f"[idle] {self._account_id} callback error for {mb}: {e}")
+                            if has_new_mail:
+                                try:
+                                    worker._on_notification(self._account_id, mb)
+                                except Exception as e:
+                                    logger.warning(f"[idle] {self._account_id} callback error for {mb}: {e}")
                     except Exception as e:
                         if not sub_stop.is_set():
                             logger.warning(f"[idle] {self._account_id} mailbox {mb} error: {e}")
@@ -415,13 +417,14 @@ class _IdleWorker:
                 if status != "OK":
                     raise RuntimeError(f"select {mailbox} failed: {status}")
                 while not self._stop_event.is_set():
-                    self._do_idle_cycle(timeout=29 * 60)
+                    has_new_mail = self._do_idle_cycle(timeout=29 * 60)
                     if self._stop_event.is_set():
                         break
-                    try:
-                        self._on_notification(self._account_id, mailbox)
-                    except Exception as e:
-                        logger.warning(f"[idle] {self._account_id} callback error: {e}")
+                    if has_new_mail:
+                        try:
+                            self._on_notification(self._account_id, mailbox)
+                        except Exception as e:
+                            logger.warning(f"[idle] {self._account_id} callback error: {e}")
 
                 # 停止子线程
                 sub_stop.set()
@@ -438,11 +441,11 @@ class _IdleWorker:
             except Exception:
                 pass
 
-    def _do_idle_cycle(self, timeout: int) -> None:
+    def _do_idle_cycle(self, timeout: int) -> bool:
         """发送 IDLE 命令，等待通知或超时，然后发送 DONE。"""
         client = self._client
         if client is None:
-            return
+            return False
 
         # 发送 IDLE 命令（手动构造，imaplib 无原生支持）
         # Python 3.14 的 _new_tag() 返回 bytes，旧版本返回 str
@@ -461,11 +464,12 @@ class _IdleWorker:
         else:
             # 未收到 continuation 响应，退出
             self._idle_tag = None
-            return
+            return False
 
         # 等待服务器推送（未标记响应）或超时
         sock = client.sock
         start = time.time()
+        has_new_mail = False
         while not self._stop_event.is_set():
             remaining = timeout - (time.time() - start)
             if remaining <= 0:
@@ -482,12 +486,18 @@ class _IdleWorker:
                 # 空行表示连接已关闭
                 if not line:
                     break
-                # 未标记响应（如 "* 5 EXISTS"）表示有新邮件或状态变化
-                if line.startswith(b"* "):
+                # 只有 EXISTS/RECENT 表示可能有新邮件；FLAGS、EXPUNGE、超时和断线
+                # 都不应触发一次全账号同步。
+                upper_line = line.upper()
+                if line.startswith(b"* ") and (
+                    b" EXISTS" in upper_line or b" RECENT" in upper_line
+                ):
+                    has_new_mail = True
                     break
 
         # 发送 DONE 结束 IDLE
         self._send_done()
+        return has_new_mail
 
     def _send_done(self) -> None:
         """发送 DONE 命令结束 IDLE 状态。"""
@@ -1399,6 +1409,28 @@ def _email_extract_uid(fetched: list[Any]) -> str:
     return ""
 
 
+def _email_extract_rfc822_size(fetched: list[Any]) -> int | None:
+    """从 IMAP FETCH 元数据中提取邮件完整大小。"""
+    for item in fetched:
+        if isinstance(item, tuple) and item and isinstance(item[0], (bytes, bytearray)):
+            head = bytes(item[0]).decode("ascii", errors="ignore")
+            match = re.search(r"RFC822\.SIZE\s+(\d+)", head, re.IGNORECASE)
+            if match:
+                return int(match.group(1))
+    return None
+
+
+def _imap_uid_validity(client: imaplib.IMAP4) -> str:
+    """读取 SELECT 后由 imaplib 缓存的 UIDVALIDITY 响应。"""
+    _name, data = client.response("UIDVALIDITY")
+    for item in data or []:
+        if isinstance(item, (bytes, bytearray)):
+            match = re.search(r"\d+", bytes(item).decode("ascii", errors="ignore"))
+            if match:
+                return match.group(0)
+    return ""
+
+
 def _email_extract_seen_flag(fetched: list[Any]) -> bool:
     """从 IMAP fetch 结果中提取 \\Seen 标记（已读状态）。"""
     return _email_extract_flag(fetched, "\\Seen")
@@ -1686,12 +1718,11 @@ def _validate_mail_host(imap_host: str, smtp_host: str = "") -> None:
 
 
 def _imap_fetch_recent(body: dict[str, Any]) -> dict[str, Any]:
-    """连接 IMAP 并拉取邮件（Offline-First：同步时全量拉取 RFC822）。
+    """连接 IMAP 并拉取邮件元数据，正文由按需读取和后台预取负责。
 
     - 校验 UIDVALIDITY：变化时返回 uidValidityChanged=true，调用方废弃旧 UID 映射
     - 支持 lastUid 增量同步：只拉取 UID > lastUid 的新邮件
-    - FETCH BODY.PEEK[] 拉完整 RFC822，落盘后用户点击可毫秒级显示
-    - 不按大小降级（skill 第三节：不得用 RFC822 大小推断正文是否值得缓存）
+    - FETCH HEADER + FLAGS，避免大附件阻塞整个同步请求
     - 首次同步限制为最近 20 封，增量同步单次最多 50 封
     - 复用持久连接池，避免频繁 login 触发邮箱风控
     - 返回 dict：{"messages": [...], "uidValidity": str, "uidValidityChanged": bool}
@@ -1716,30 +1747,24 @@ def _imap_fetch_recent(body: dict[str, Any]) -> dict[str, Any]:
     _validate_mail_host(imap_host)
 
     def op(client: imaplib.IMAP4) -> dict[str, Any]:
-        status, data = client.select(_imap_quote_mailbox(mailbox))
+        status, _data = client.select(_imap_quote_mailbox(mailbox))
         if status != "OK":
             raise RuntimeError(f"Mailbox select failed: {status} ({mailbox})")
-        # 解析 SELECT 响应中的 UIDVALIDITY
-        uid_validity = ""
-        for item in data or []:
-            if isinstance(item, bytes) and b"UIDVALIDITY" in item:
-                text = item.decode("utf-8", errors="ignore")
-                m = re.search(r"UIDVALIDITY\s+(\d+)", text)
-                if m:
-                    uid_validity = m.group(1)
-                    break
+        uid_validity = _imap_uid_validity(client)
         # UIDVALIDITY 变化：调用方负责废弃旧 UID 映射并重建文件夹索引
         uid_validity_changed = bool(
             uid_validity and known_uid_validity and uid_validity != known_uid_validity
         )
+        # UID 只在当前 UIDVALIDITY 下有效，变化后不能继续使用旧水位线。
+        sync_after_uid = None if uid_validity_changed else last_uid
 
         # 增量同步：只拉取 UID > last_uid 的邮件
         uids: list[bytes] = []
         all_uids: list[bytes] = []
-        if last_uid is not None and last_uid > 0:
-            status, data = client.uid("SEARCH", "UID", f"{last_uid + 1}:*")
+        if sync_after_uid is not None and sync_after_uid > 0:
+            status, data = client.uid("SEARCH", "UID", f"{sync_after_uid + 1}:*")
             if status == "OK" and data and data[0]:
-                uids = [u for u in data[0].split() if int(u) > last_uid]
+                uids = [u for u in data[0].split() if int(u) > sync_after_uid]
             # 部分企业邮箱对 UID n:* 范围搜索返回空，回退到 SEARCH ALL 本地过滤
             if not uids:
                 logger.debug(
@@ -1749,7 +1774,7 @@ def _imap_fetch_recent(body: dict[str, Any]) -> dict[str, Any]:
                 status, data = client.uid("SEARCH", "ALL")
                 if status == "OK" and data and data[0]:
                     all_uids = data[0].split()
-                    uids = [u for u in all_uids if int(u) > last_uid]
+                    uids = [u for u in all_uids if int(u) > sync_after_uid]
                     # 增量同步单次最多 50 封
                     uids = uids[-50:]
         else:
@@ -1768,16 +1793,18 @@ def _imap_fetch_recent(body: dict[str, Any]) -> dict[str, Any]:
         # （服务器删除了高 UID 邮件），重置并重新拉取最近 20 封，避免永远漏掉新邮件。
         # 注意：用严格小于，last_uid == server max uid 是正常已同步状态，不触发重置。
         if (
-            last_uid is not None
-            and last_uid > 0
+            sync_after_uid is not None
+            and sync_after_uid > 0
             and all_uids
-            and max(int(u) for u in all_uids) < last_uid
+            and max(int(u) for u in all_uids) < sync_after_uid
         ):
             logger.warning(
-                f"[imap-sync] local last_uid={last_uid} > server max uid, "
+                f"[imap-sync] local last_uid={sync_after_uid} > server max uid, "
                 f"resetting and fetching recent 20"
             )
             uids = all_uids[-20:]
+
+        uids.sort(key=int)
 
         if not uids:
             logger.debug(
@@ -1788,18 +1815,20 @@ def _imap_fetch_recent(body: dict[str, Any]) -> dict[str, Any]:
 
         messages: list[dict[str, Any]] = []
         for uid in uids:
-            # Offline-First: 同步时直接 FETCH BODY.PEEK[] 拉完整 RFC822，
-            # 落盘后用户点击可毫秒级返回，无需再走 gateway。
-            # 不按大小降级（skill 第三节：不得用 RFC822 大小推断正文是否值得缓存）
+            # 同步主流程只取信头和标志。正文由 /email/fetch_body 按需读取，
+            # 后台也会预取最近未读邮件，避免一个大附件拖死整批同步。
             uid_str = uid.decode("utf-8", errors="ignore")
-            fetch_cmd = "(BODY.PEEK[] UID FLAGS)"
+            fetch_cmd = "(BODY.PEEK[HEADER] UID FLAGS RFC822.SIZE)"
             raw_bytes: bytes | None = None
             fetched: list[Any] = []
 
             try:
                 status, fetched = client.uid("FETCH", uid, fetch_cmd)
                 if status != "OK" or not fetched:
-                    continue
+                    logger.warning(
+                        f"[imap-sync] FETCH header uid={uid_str} failed: status={status}"
+                    )
+                    break
                 raw_bytes = _email_extract_message_bytes(fetched)
             except imaplib.IMAP4.error as e:
                 # 连接已被服务器关闭（LOGOUT 状态）：后续 FETCH 都会失败。
@@ -1809,27 +1838,14 @@ def _imap_fetch_recent(body: dict[str, Any]) -> dict[str, Any]:
                     raise imaplib.IMAP4.error(
                         f"connection entered LOGOUT state during FETCH uid={uid_str}: {e}"
                     )
-                logger.warning(f"[imap-sync] FETCH uid={uid_str} failed: {e}")
-                continue
-
-            # body_fetched 默认为 true；仅在 FETCH 失败回退到 HEADER-only 时置 false
-            body_fetched = True
+                logger.warning(f"[imap-sync] FETCH header uid={uid_str} failed: {e}")
+                break
 
             if raw_bytes is None:
-                # 拉完整 RFC822 失败，回退到 HEADER-only（body_fetched=false 触发后台补拉）
                 logger.warning(
-                    f"[imap-sync] FETCH full RFC822 returned empty for uid={uid_str}, "
-                    f"falling back to HEADER-only"
+                    f"[imap-sync] FETCH header returned empty for uid={uid_str}"
                 )
-                status, fetched = client.uid(
-                    "FETCH", uid, "(BODY.PEEK[HEADER] UID FLAGS)"
-                )
-                if status != "OK" or not fetched:
-                    continue
-                raw_bytes = _email_extract_message_bytes(fetched)
-                if raw_bytes is None:
-                    continue
-                body_fetched = False
+                break
 
             uid_str = _email_extract_uid(fetched) or uid_str
 
@@ -1860,14 +1876,14 @@ def _imap_fetch_recent(body: dict[str, Any]) -> dict[str, Any]:
                     "date": date_value,
                     "bodyText": "",
                     "bodyHtml": None,
-                    "bodyFetched": body_fetched,
+                    "bodyFetched": False,
                     "hasAttachments": _email_has_attachments(parsed),
-                    "rawSize": len(raw_bytes),
+                    "rawSize": _email_extract_rfc822_size(fetched) or len(raw_bytes),
                     "isRead": _email_extract_seen_flag(fetched),
                     "isStarred": _email_extract_flagged_flag(fetched),
                     "messageId": message_id,
                     "attachments": _email_extract_attachments(parsed),
-                    # 完整 RFC822（base64）；HEADER-only 回退时为信头
+                    # 信头原文（base64）；正文由 /email/fetch_body 补拉
                     "rawBytes": base64.b64encode(raw_bytes).decode("ascii"),
                 }
             )
@@ -1899,19 +1915,10 @@ def _imap_list_uids(body: dict[str, Any]) -> dict[str, Any]:
     _validate_mail_host(imap_host)
 
     def op(client: imaplib.IMAP4) -> dict[str, Any]:
-        status, data = client.select(_imap_quote_mailbox(mailbox))
+        status, _data = client.select(_imap_quote_mailbox(mailbox))
         if status != "OK":
             raise RuntimeError(f"Mailbox select failed: {status} ({mailbox})")
-        # 解析 SELECT 响应中的 UIDVALIDITY
-        uid_validity = ""
-        for item in data or []:
-            if isinstance(item, bytes) and b"UIDVALIDITY" in item:
-                # 格式 b')]' 或 b' (UIDVALIDITY 12345)'
-                text = item.decode("utf-8", errors="ignore")
-                m = re.search(r"UIDVALIDITY\s+(\d+)", text)
-                if m:
-                    uid_validity = m.group(1)
-                    break
+        uid_validity = _imap_uid_validity(client)
         status, data = client.uid("SEARCH", "ALL")
         uids: list[str] = []
         if status == "OK" and data and data[0]:
@@ -2234,7 +2241,8 @@ async def handle_email_sync(request: web.Request) -> web.Response:
         return web.json_response({"error": "Invalid JSON body"}, status=400)
 
     try:
-        result = await _run_imap_locked(body, _imap_fetch_recent)
+        # 连接池内部已负责断线重连一次；不要在 HTTP 层再次重跑整个批次。
+        result = await _run_imap_locked(body, _imap_fetch_recent, max_retries=0)
         return web.json_response(result)
     except Exception as e:
         err_msg = str(e)

@@ -35,6 +35,25 @@ from loguru import logger
 
 _T = TypeVar("_T")
 
+# 腾讯邮箱（exmail.qq.com / imap.qq.com）在 IMAP 响应中插入 X-QQ-FEAT 行
+# 作为 feature 广告，不以 * / + / tag 开头，imaplib 的 _get_response 无法解析，
+# 直接抛 abort 异常，导致 FETCH 失败、连接被废弃。
+# monkey-patch _get_response：遇到 X-QQ-FEAT 行时跳过，继续读取下一行。
+_orig_get_response = imaplib.IMAP4._get_response
+
+
+def _patched_get_response(self, *args, **kwargs):
+    while True:
+        try:
+            return _orig_get_response(self, *args, **kwargs)
+        except imaplib.IMAP4.abort as e:
+            if "X-QQ-FEAT" in str(e):
+                continue
+            raise
+
+
+imaplib.IMAP4._get_response = _patched_get_response
+
 # 可重试的连接异常（断线后重连重试一次）
 _RETRYABLE_EXC: tuple[type[BaseException], ...] = (
     ConnectionError,
@@ -103,6 +122,8 @@ class _AccountImapPool:
         self._last_use: float = time.time()
         # 配置指纹，用于检测配置变更
         self._config_fingerprint = self._compute_fingerprint(body)
+        # 正在被 op 使用（keepalive 线程跳过使用中的池，避免并发访问 imaplib）
+        self._in_use: bool = False
 
     @staticmethod
     def _compute_fingerprint(body: dict[str, Any]) -> str:
@@ -139,33 +160,37 @@ class _AccountImapPool:
             logger.info("[imap-pool] failed period expired, retrying login")
 
         last_error: Exception | None = None
-        for attempt in range(2):  # 最多 2 次：原始 + 重连后重试
-            try:
-                client = self._get_or_reconnect()
-                result = op(client)
-                self._last_use = time.time()
-                return result
-            except Exception as e:
-                last_error = e
-                # 永久性认证错误：标记池失败
-                if _is_permanent_auth_error(e):
-                    self._failed_until = time.time() + 3600  # 1 小时
-                    self._invalidate()
-                    logger.error(
-                        f"[imap-pool] permanent auth error, marking pool failed for 1h: {e}"
-                    )
-                    raise
-                # 可重试的连接错误：失效连接，重连后重试一次
-                if _is_retryable(e):
-                    self._invalidate()
-                    if attempt == 0:
-                        logger.debug(
-                            f"[imap-pool] connection lost, will reconnect and retry: {e}"
+        self._in_use = True
+        try:
+            for attempt in range(2):  # 最多 2 次：原始 + 重连后重试
+                try:
+                    client = self._get_or_reconnect()
+                    result = op(client)
+                    self._last_use = time.time()
+                    return result
+                except Exception as e:
+                    last_error = e
+                    # 永久性认证错误：标记池失败
+                    if _is_permanent_auth_error(e):
+                        self._failed_until = time.time() + 3600  # 1 小时
+                        self._invalidate()
+                        logger.error(
+                            f"[imap-pool] permanent auth error, marking pool failed for 1h: {e}"
                         )
-                        continue
-                # 业务错误（如文件夹不存在）或非可重试错误：直接抛出
-                # 但仍标记连接可能已失效（部分服务器在错误后关闭连接）
-                raise
+                        raise
+                    # 可重试的连接错误：失效连接，重连后重试一次
+                    if _is_retryable(e):
+                        self._invalidate()
+                        if attempt == 0:
+                            logger.debug(
+                                f"[imap-pool] connection lost, will reconnect and retry: {e}"
+                            )
+                            continue
+                    # 业务错误（如文件夹不存在）或非可重试错误：直接抛出
+                    # 但仍标记连接可能已失效（部分服务器在错误后关闭连接）
+                    raise
+        finally:
+            self._in_use = False
 
         # 理论上不会到达
         assert last_error is not None
@@ -336,7 +361,10 @@ class ImapPoolManager:
     def keepalive(self, interval: float = 120.0) -> None:
         """后台线程：定期对空闲连接发送 NOOP 保活，避免服务器因长时间不活动关闭连接。
 
-        注意：NOOP 失败时只标记连接失效，不在此处重连 login，避免后台任务触发风控。
+        注意：
+        - NOOP 失败时只标记连接失效，不在此处重连 login，避免后台任务触发风控。
+        - 跳过正在使用中的池（_in_use=True），因为 imaplib 不是线程安全的，
+          keepalive 的 NOOP 与 op 的 FETCH 并发会导致内部状态混乱、连接被关闭。
         下次用户操作时由 run() 自动重连。
         """
         while True:
@@ -345,6 +373,8 @@ class ImapPoolManager:
                 pools = list(self._pools.values())
             for pool in pools:
                 if pool._failed_until > time.time():
+                    continue
+                if pool._in_use:
                     continue
                 client = pool._client
                 if client is None:

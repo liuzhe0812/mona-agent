@@ -14,7 +14,6 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from mona.agent.tools.web import WebFetchTool
 from mona.api.video_runtime import VideoRuntime
 from mona.providers.transcription import GroqTranscriptionProvider, OpenAITranscriptionProvider
 from mona.security.network import validate_url_target
@@ -80,7 +79,14 @@ class Url2NoteExtractor:
         transcribe: Callable[[bytes, str], Awaitable[str]] | None = None,
     ) -> None:
         self._runtime = runtime or VideoRuntime()
-        self._web_fetcher = web_fetcher or WebFetchTool()
+        # 延迟导入 WebFetchTool 避免循环导入：
+        # mona.api.url2note → mona.agent.tools.web → mona.agent.tools (包初始化)
+        # → mona.agent.tools.url2note → mona.api.url2note
+        if web_fetcher is not None:
+            self._web_fetcher = web_fetcher
+        else:
+            from mona.agent.tools.web import WebFetchTool
+            self._web_fetcher = WebFetchTool()
         self._transcribe = transcribe or _transcribe_with_config
 
     async def extract(self, url: str) -> Url2NoteSource:

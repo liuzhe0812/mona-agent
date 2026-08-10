@@ -163,28 +163,71 @@ fn find_gateway_resource_dir(app_handle: &tauri::AppHandle) -> Result<PathBuf, S
 }
 
 /// Find system Python (dev mode only — release builds never call this).
+///
+/// 项目要求 Python >= 3.11（mona/__init__.py 使用 tomllib 标准库）。
+/// PATH 里可能存在不满足要求的 Python（如 TRAE/Conda 自带的 3.10），
+/// 因此对每个候选都验证版本，跳过 < 3.11 的。
 pub fn find_system_python() -> Option<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
     let python_name = if cfg!(windows) {
         "python.exe"
     } else {
         "python3"
     };
-
     if let Ok(path) = which::which(python_name) {
-        return Some(path);
+        candidates.push(path);
     }
     if let Ok(path) = which::which("python") {
-        return Some(path);
+        candidates.push(path);
     }
 
     #[cfg(windows)]
     {
         if let Some(p) = find_windows_python() {
-            return Some(p);
+            candidates.push(p);
         }
     }
 
+    for candidate in candidates {
+        if python_version_ok(&candidate) {
+            return Some(candidate);
+        }
+        log::debug!(
+            "Skipping Python {:?}: version < 3.11 or unreachable",
+            candidate
+        );
+    }
+
     None
+}
+
+/// 验证给定 python 可执行文件版本 >= 3.11。
+/// 通过 `python -c "import sys; print(f'{sys.version_info[0]}.{sys.version_info[1]}')"`
+/// 获取版本（输出形如 "3.14"），解析后判断。
+fn python_version_ok(python: &PathBuf) -> bool {
+    let output = match std::process::Command::new(python)
+        .args([
+            "-c",
+            "import sys; print(f'{sys.version_info[0]}.{sys.version_info[1]}')",
+        ])
+        .output()
+    {
+        Ok(o) => o,
+        Err(_) => return false,
+    };
+    if !output.status.success() {
+        return false;
+    }
+    let ver_str = String::from_utf8_lossy(&output.stdout);
+    let ver_str = ver_str.trim();
+    let parts: Vec<&str> = ver_str.split('.').collect();
+    if parts.len() < 2 {
+        return false;
+    }
+    let major: u32 = parts[0].parse().unwrap_or(0);
+    let minor: u32 = parts[1].parse().unwrap_or(0);
+    major > 3 || (major == 3 && minor >= 11)
 }
 
 #[cfg(windows)]
