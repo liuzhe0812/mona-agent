@@ -1,4 +1,4 @@
-﻿"""Base LLM provider interface."""
+"""Base LLM provider interface."""
 
 import asyncio
 import json
@@ -9,11 +9,15 @@ from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from mona.providers.capabilities import ModelCapabilities, resolve_capabilities
 from mona.utils.helpers import image_placeholder_text
+
+if TYPE_CHECKING:
+    from mona.providers.registry import ProviderSpec
 
 
 @dataclass
@@ -168,6 +172,17 @@ class LLMProvider(ABC):
         self.api_key = api_key
         self.api_base = api_base
         self.generation: GenerationSettings = GenerationSettings()
+        # Set by the factory (or tests) so get_capabilities() can resolve
+        # provider-level defaults. None for ad-hoc constructed providers.
+        self.spec: ProviderSpec | None = None
+
+    def get_capabilities(self, model: str) -> ModelCapabilities:
+        """Return what this (provider, model) pair can do.
+
+        Unknown capabilities are reported as ``None`` — callers must treat
+        unknown as "not advertised", never as "supported".
+        """
+        return resolve_capabilities(self.spec, model)
 
     @staticmethod
     def _sanitize_empty_content(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:

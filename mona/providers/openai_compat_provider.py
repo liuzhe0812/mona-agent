@@ -295,6 +295,7 @@ class OpenAICompatProvider(LLMProvider):
         self.default_model = default_model
         self.extra_headers = extra_headers or {}
         self._spec = spec
+        self.spec = spec
         self._extra_body = extra_body or {}
         self._no_auth = no_auth
 

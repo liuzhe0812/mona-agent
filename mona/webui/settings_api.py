@@ -15,6 +15,7 @@ import httpx
 from loguru import logger
 
 from mona.config.loader import get_config_path, load_config, save_config
+from mona.providers.capabilities import resolve_capabilities
 from mona.providers.image_generation import get_image_gen_provider
 from mona.providers.registry import PROVIDERS, find_by_name
 from mona.providers.video_generation import get_video_gen_provider
@@ -444,6 +445,15 @@ def update_channel_settings(query: QueryParams) -> dict[str, Any]:
     return settings_payload(requires_restart=True)
 
 
+def _preset_capabilities_payload(config: Any, preset: Any) -> dict[str, Any]:
+    """Resolve model capabilities for a preset row in the settings payload."""
+    provider_name = config.get_provider_name(preset.model, preset=preset)
+    if not provider_name and preset.provider and preset.provider != "auto":
+        provider_name = preset.provider
+    spec = find_by_name(provider_name) if provider_name else None
+    return resolve_capabilities(spec, preset.model).to_dict()
+
+
 def settings_payload(*, requires_restart: bool = False) -> dict[str, Any]:
     config = load_config()
     defaults = config.agents.defaults
@@ -529,6 +539,7 @@ def settings_payload(*, requires_restart: bool = False) -> dict[str, Any]:
         ),
         None,
     )
+    default_preset_obj = config.resolve_default_preset()
     model_presets = [
         {
             "name": "default",
@@ -541,6 +552,7 @@ def settings_payload(*, requires_restart: bool = False) -> dict[str, Any]:
             "context_window_tokens": defaults.context_window_tokens,
             "temperature": defaults.temperature,
             "reasoning_effort": defaults.reasoning_effort,
+            "capabilities": _preset_capabilities_payload(config, default_preset_obj),
         }
     ]
     for name, preset in config.model_presets.items():
@@ -556,6 +568,7 @@ def settings_payload(*, requires_restart: bool = False) -> dict[str, Any]:
                 "context_window_tokens": preset.context_window_tokens,
                 "temperature": preset.temperature,
                 "reasoning_effort": preset.reasoning_effort,
+                "capabilities": _preset_capabilities_payload(config, preset),
             }
         )
 

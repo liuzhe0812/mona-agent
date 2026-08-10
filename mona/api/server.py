@@ -1136,6 +1136,12 @@ async def handle_chat_completions(request: web.Request) -> web.Response:
 async def handle_models(request: web.Request) -> web.Response:
     """GET /v1/models"""
     model_name = request.app.get("model_name", "mona")
+    provider = getattr(request.app.get("agent_loop"), "provider", None)
+    capabilities = (
+        provider.get_capabilities(model_name).to_dict()
+        if provider is not None
+        else None
+    )
     return web.json_response(
         {
             "object": "list",
@@ -1145,6 +1151,7 @@ async def handle_models(request: web.Request) -> web.Response:
                     "object": "model",
                     "created": 0,
                     "owned_by": "mona",
+                    "capabilities": capabilities,
                 }
             ],
         }
@@ -1795,6 +1802,13 @@ def _imap_fetch_recent(body: dict[str, Any]) -> dict[str, Any]:
                     continue
                 raw_bytes = _email_extract_message_bytes(fetched)
             except imaplib.IMAP4.error as e:
+                # 连接已被服务器关闭（LOGOUT 状态）：后续 FETCH 都会失败。
+                # 抛出可重试异常，让 imap_pool.run 重连并重试整个 op，
+                # 而不是 continue 到下一个 UID 重复失败。
+                if getattr(client, "state", "") == "LOGOUT" or "illegal in state" in str(e).lower():
+                    raise imaplib.IMAP4.error(
+                        f"connection entered LOGOUT state during FETCH uid={uid_str}: {e}"
+                    )
                 logger.warning(f"[imap-sync] FETCH uid={uid_str} failed: {e}")
                 continue
 

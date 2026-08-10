@@ -109,6 +109,7 @@ def _make_provider_core(
         )
 
     provider.generation = resolved.to_generation_settings()
+    provider.spec = spec
     return provider
 
 

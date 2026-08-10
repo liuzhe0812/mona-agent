@@ -95,6 +95,13 @@ class ProviderSpec:
     # Empty means the provider has no curated video model list.
     video_models: tuple[str, ...] = ()
 
+    # Provider-level capability defaults (per-model patterns in
+    # providers/capabilities.py override these). None = unknown / varies by
+    # model — callers must not treat unknown as supported.
+    supports_vision: bool | None = None
+    supports_tool_calling: bool | None = None
+    supports_json_mode: bool | None = None
+
     @property
     def label(self) -> str:
         return self.display_name or self.name.title()
@@ -319,6 +326,8 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         display_name="Anthropic",
         backend="anthropic",
         supports_prompt_caching=True,
+        supports_vision=True,
+        supports_tool_calling=True,
     ),
     # OpenAI: SDK default base URL (no override needed)
     ProviderSpec(
@@ -328,6 +337,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         display_name="OpenAI",
         backend="openai_compat",
         supports_max_completion_tokens=True,
+        supports_tool_calling=True,
         image_models=(
             "gpt-image-1",
             "dall-e-3",
@@ -365,6 +375,8 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         backend="openai_compat",
         default_api_base="https://api.deepseek.com",
         thinking_style="thinking_type",
+        supports_vision=False,
+        supports_tool_calling=True,
     ),
     # Gemini: Google's OpenAI-compatible endpoint
     ProviderSpec(
@@ -374,6 +386,8 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         display_name="Gemini",
         backend="openai_compat",
         default_api_base="https://generativelanguage.googleapis.com/v1beta/openai/",
+        supports_vision=True,
+        supports_tool_calling=True,
         image_models=(
             "gemini-2.5-flash-image",
             "gemini-2.0-flash-exp-image",
@@ -388,6 +402,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         backend="openai_compat",
         env_extras=(("ZHIPUAI_API_KEY", "{api_key}"),),
         default_api_base="https://open.bigmodel.cn/api/paas/v4",
+        supports_tool_calling=True,
     ),
     # DashScope (通义): Qwen models, OpenAI-compatible endpoint
     ProviderSpec(
@@ -398,6 +413,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         backend="openai_compat",
         default_api_base="https://dashscope.aliyuncs.com/compatible-mode/v1",
         thinking_style="enable_thinking",
+        supports_tool_calling=True,
         image_models=(
             "wan2.2-t2i-plus",
             "wan2.2-t2i-flash",
