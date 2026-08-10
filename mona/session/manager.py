@@ -8,7 +8,7 @@ from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
@@ -22,7 +22,53 @@ from mona.utils.helpers import (
 )
 from mona.utils.subagent_channel_display import scrub_subagent_announce_body
 
+if TYPE_CHECKING:
+    from mona.agent.partners import ConversationMetadata
+
 FILE_MAX_MESSAGES = 2000
+
+# Message author fields (multi-agent phase 0 — docs/design/multi-agent-development-guide.md
+# section 5.3). Messages are plain dicts; these keys are stamped on write and
+# back-filled in memory on load, so legacy JSONL files are never batch-rewritten.
+AUTHOR_TYPE_USER = "user"
+AUTHOR_TYPE_AGENT = "agent"
+AUTHOR_TYPE_SYSTEM = "system"
+MESSAGE_TYPE_MESSAGE = "message"
+
+_AUTHOR_TYPE_BY_ROLE = {
+    "user": AUTHOR_TYPE_USER,
+    "assistant": AUTHOR_TYPE_AGENT,
+    "system": AUTHOR_TYPE_SYSTEM,
+    "tool": AUTHOR_TYPE_AGENT,
+}
+
+
+def normalize_message_author(message: dict[str, Any]) -> dict[str, Any]:
+    """Back-fill author fields on a message dict in place; returns the message.
+
+    New authors pass ``author_type`` / ``author_id`` / ``message_type``
+    explicitly via ``Session.add_message`` kwargs; legacy messages without
+    them map assistant/tool roles to the reserved Mona agent, matching the
+    pre-multi-agent single-author reality. Present values are never
+    overwritten, so newer schema values survive a round-trip untouched.
+    """
+    from mona.agent.partners import MONA_AGENT_ID  # lazy: breaks the agent->session cycle
+
+    author_type = message.get("author_type")
+    if not isinstance(author_type, str) or not author_type:
+        author_type = _AUTHOR_TYPE_BY_ROLE.get(str(message.get("role") or ""))
+        if author_type:
+            message["author_type"] = author_type
+    if message.get("author_type") == AUTHOR_TYPE_AGENT:
+        author_id = message.get("author_id")
+        if not isinstance(author_id, str) or not author_id:
+            message["author_id"] = MONA_AGENT_ID
+    message_type = message.get("message_type")
+    if not isinstance(message_type, str) or not message_type:
+        message["message_type"] = MESSAGE_TYPE_MESSAGE
+    return message
+
+
 _MESSAGE_TIME_PREFIX_RE = re.compile(r"^\[Message Time: [^\]]+\]\n?")
 _LOCAL_IMAGE_BREADCRUMB_RE = re.compile(r"^\[image: (?:/|~)[^\]]+\]\s*$")
 _TOOL_CALL_ECHO_RE = re.compile(r'^\s*(?:generate_image|message)\([^)]*\)\s*$')
@@ -85,6 +131,19 @@ class Session:
     metadata: dict[str, Any] = field(default_factory=dict)
     last_consolidated: int = 0  # Number of messages already consolidated to files
 
+    @property
+    def conversation_metadata(self) -> ConversationMetadata:
+        """Conversation shape for this session (multi-agent phase 0, guide 5.2).
+
+        Legacy sessions without ``metadata["conversation"]`` map to a Mona
+        direct chat. The stored payload is validated on read but never
+        rewritten here, so old JSONL files stay untouched until the normal
+        save path runs.
+        """
+        from mona.agent.partners import conversation_from_session_metadata
+
+        return conversation_from_session_metadata(self.metadata)
+
     @staticmethod
     def _annotate_message_time(message: dict[str, Any], content: Any) -> Any:
         """Expose persisted turn timestamps to the model for relative-date reasoning.
@@ -112,6 +171,7 @@ class Session:
             "timestamp": datetime.now().isoformat(),
             **kwargs
         }
+        normalize_message_author(msg)
         self.messages.append(msg)
         self.updated_at = datetime.now()
 
@@ -373,6 +433,9 @@ class SessionManager:
                     else:
                         messages.append(data)
 
+            for message in messages:
+                normalize_message_author(message)
+
             return Session(
                 key=key,
                 messages=messages,
@@ -430,6 +493,9 @@ class SessionManager:
 
             if not messages and not metadata:
                 return None
+
+            for message in messages:
+                normalize_message_author(message)
 
             return Session(
                 key=key,
@@ -566,6 +632,8 @@ class SessionManager:
                         stored_key = data.get("key")
                     else:
                         messages.append(data)
+            for message in messages:
+                normalize_message_author(message)
             return {
                 "key": stored_key or key,
                 "created_at": created_at,

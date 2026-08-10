@@ -32,6 +32,7 @@ from websockets.exceptions import ConnectionClosed
 from websockets.http11 import Request as WsRequest
 from websockets.http11 import Response
 
+from mona.agent.partners import MONA_AGENT_ID
 from mona.bus.events import OUTBOUND_META_AGENT_UI, OutboundMessage
 from mona.bus.queue import MessageBus
 from mona.channels.base import BaseChannel
@@ -3822,6 +3823,16 @@ class WebSocketChannel(BaseChannel):
             "chat_id": msg.chat_id,
             "text": text,
         }
+        # Multi-agent phase 0: every assistant message names its author.
+        # Senders without an explicit author_id default to the reserved Mona
+        # agent; older clients simply ignore the unknown fields.
+        author_id = msg.metadata.get("author_id")
+        payload["author_id"] = (
+            author_id if isinstance(author_id, str) and author_id else MONA_AGENT_ID
+        )
+        message_type = msg.metadata.get("message_type")
+        if isinstance(message_type, str) and message_type:
+            payload["message_type"] = message_type
         # Schedule reminders carry a flag so webui clients can fire a native
         # system notification in addition to rendering the message bubble.
         if msg.metadata.get("_schedule_reminder"):
@@ -3930,6 +3941,12 @@ class WebSocketChannel(BaseChannel):
                 "chat_id": chat_id,
                 "text": delta,
             }
+            # Streaming frames carry the author too (guide 5.3); the stream
+            # cursor stays chat-scoped until parallel streams land.
+            author_id = meta.get("author_id")
+            body["author_id"] = (
+                author_id if isinstance(author_id, str) and author_id else MONA_AGENT_ID
+            )
         if meta.get("_stream_id") is not None:
             body["stream_id"] = meta["_stream_id"]
         self._try_append_webui_transcript(chat_id, body)

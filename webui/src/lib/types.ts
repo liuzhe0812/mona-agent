@@ -4,6 +4,12 @@ export type Role = "user" | "assistant" | "tool" | "system";
  * progress pings) that should not be rendered as conversational replies. */
 export type MessageKind = "message" | "trace";
 
+/** Multi-agent author kinds (phase 0, multi-agent-development-guide 5.3). */
+export type AuthorType = "user" | "agent" | "system";
+
+/** Structured message kinds; plain conversation is ``message``. */
+export type MessageType = "message" | "job_status" | "workflow_run" | "approval" | "artifact";
+
 /** One image attached to a UIMessage.
  *
  * ``url`` can arrive in three different shapes, which the bubble renders
@@ -78,6 +84,15 @@ export interface UIMessage {
    *  queue "append" action) rather than sent as a new conversational turn.
    *  Drives a subtle visual badge so the user knows it was a supplement. */
   isInjected?: boolean;
+  /** Multi-agent phase 0: who authored this message. Absent on
+   *  pre-multi-agent persisted data. */
+  authorType?: AuthorType;
+  /** Agent ID of the author (``mona``, ``com.mona.a-share-analyst``, …).
+   *  Absent on user messages and legacy data; render a missing value on
+   *  assistant messages as Mona. */
+  authorId?: string;
+  /** Structured message kind; plain conversation when absent or ``message``. */
+  messageType?: MessageType;
 }
 
 /** Structured UI blob on ``progress`` WS frames; channels may add more ``kind`` values later. */
