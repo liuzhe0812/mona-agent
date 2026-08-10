@@ -1010,6 +1010,8 @@ export function FlowchartDocumentEditor({
       if (readOnly || selectedEdgeIds.length === 0) return;
       const doc = cloneFlowchartDocument(history.present.document);
       const idSet = new Set(selectedEdgeIds);
+      // route 切换时控制点失效（不同路由类型的控制点语义不同）
+      const routeChanged = "route" in patch;
       doc.edges = doc.edges.map((e) => {
         if (!idSet.has(e.id)) return e;
         const current = e.style ?? {};
@@ -1022,7 +1024,9 @@ export function FlowchartDocumentEditor({
             (next[key] as unknown) = v;
           }
         }
-        return { ...e, style: Object.keys(next).length > 0 ? next : undefined };
+        const updated: typeof e = { ...e, style: Object.keys(next).length > 0 ? next : undefined };
+        if (routeChanged) delete updated.controlPoints;
+        return updated;
       });
       commitChange(doc, "layout");
     },
@@ -1867,6 +1871,8 @@ export function FlowchartDocumentEditor({
         target: next.target,
         sourceHandle: next.sourceHandle,
         targetHandle: next.targetHandle,
+        // 端点重连后旧控制点失效，清空
+        controlPoints: undefined,
       };
       commitChange(doc, "semantic");
     },

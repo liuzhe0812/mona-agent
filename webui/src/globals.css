@@ -811,31 +811,8 @@
    曲线（bezier）：选中边后，显示两个把手（cubic bezier 的 cp1/cp2）+ 虚线连接线。
    把手显隐由组件层根据 selected/readOnly 条件渲染控制，CSS 不处理显隐。 */
 
-/* 折线拐角控制点：空心方块 */
-.flowchart-edge-control-point {
-  width: 10px;
-  height: 10px;
-  border-radius: 1px;
-  background: var(--background);
-  border: 1.5px solid var(--flowchart-handle);
-  box-shadow: 0 0 0 1px var(--background);
-  cursor: grab;
-  transition: transform 120ms ease, box-shadow 120ms ease;
-}
-.flowchart-edge-control-point:hover {
-  transform: translate(-50%, -50%) scale(1.2);
-}
-.flowchart-edge-control-point.dragging {
-  cursor: grabbing;
-  border-color: var(--flowchart-edge-selected);
-  background: var(--flowchart-handle);
-}
-.flowchart-edge-control-point.selected {
-  border-color: var(--flowchart-edge-selected);
-}
-
-/* 折线段中点把手：实心方块（WPS 风格） */
-.flowchart-edge-segment-handle {
+/* 折线段蓝色把手（1/2 中点）：实心方块，拖动=整段平移 */
+.flowchart-edge-segment-blue {
   width: 9px;
   height: 9px;
   border-radius: 1px;
@@ -845,13 +822,26 @@
   cursor: grab;
   transition: transform 120ms ease;
 }
-.flowchart-edge-segment-handle:hover {
+.flowchart-edge-segment-blue:hover {
   transform: translate(-50%, -50%) scale(1.15);
 }
-.flowchart-edge-segment-handle.dragging {
-  cursor: grabbing;
-  background: var(--flowchart-edge-selected);
-  box-shadow: 0 0 0 1px var(--flowchart-edge-selected);
+
+/* 折线段白色把手（1/4 点）：空心方块，拖动=半段移动。
+   :hover 时空心变实心（用户要求"光标移动到空心点后，空心变实心"）。
+   不修改 transform——inline style 的 translate(-50%,-50%) translate(x,y) 负责定位，
+   :hover 若覆盖 transform 会导致把手跳位。 */
+.flowchart-edge-segment-white {
+  width: 8px;
+  height: 8px;
+  border-radius: 1px;
+  background: var(--background);
+  border: 1.5px solid var(--flowchart-handle);
+  box-shadow: 0 0 0 1px var(--background);
+  cursor: grab;
+  transition: background 120ms ease;
+}
+.flowchart-edge-segment-white:hover {
+  background: var(--flowchart-handle);
 }
 
 /* 曲线把手：空心圆点（对齐 WPS 曲线把手样式） */
@@ -880,8 +870,8 @@
   pointer-events: none;
 }
 
-.flowchart-surface.flowchart-exporting .flowchart-edge-control-point,
-.flowchart-surface.flowchart-exporting .flowchart-edge-segment-handle,
+.flowchart-surface.flowchart-exporting .flowchart-edge-segment-blue,
+.flowchart-surface.flowchart-exporting .flowchart-edge-segment-white,
 .flowchart-surface.flowchart-exporting .flowchart-edge-bezier-handle,
 .flowchart-surface.flowchart-exporting .flowchart-edge-handle-line {
   display: none !important;

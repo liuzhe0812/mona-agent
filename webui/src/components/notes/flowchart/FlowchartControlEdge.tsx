@@ -1,19 +1,18 @@
 /**
  * WPS 风格自定义边组件：支持控制点拖动调整连接线形状。
  *
- * 1. 折线（smoothstep）：选中后每条可视段中点显示拖拽方块；拖动时整段平移
- *    （垂直方向移动，平行方向锁定），段本身不分裂、不产生新中点；只有相邻段
- *    会自适应变长/变短/变向。端点是 source/target 时自动物化拐角点。
+ * 1. 折线（smoothstep）：
+ *    - 蓝色实心方块（1/2 中点）：选中后每条非 terminal 可视段中点显示；拖动后插入一个
+ *      白色真实控制点（waypoint），路径经过此点重新路由。用 insertIndex 定位插入位置。
+ *    - 白色空心方块（已有 waypoint）：可拖动调整位置（自由 x/y），双击删除。
+ *    - 拐角点不单独显示操作点。
  * 2. 曲线（bezier）：渲染两个把手（cubic bezier 的 cp1/cp2），拖动把手调整曲线形状。
  *
  * 控制点坐标使用画布流坐标系（与节点 position 同坐标系）绝对坐标，存储到 FlowchartEdge.controlPoints。
  * 不参与语义哈希，仅影响渲染。
- *
- * 自定义边通过 data 字段接收 controlPoints 和 onControlPointsChange 回调。
- * EdgeProps 中的 sourceX/Y/targetX/Y 已经是流坐标系绝对坐标，可以直接与 controlPoints 比较。
  */
 
-import { memo, useCallback, useMemo, useRef, useState } from "react";
+import { Fragment, memo, useCallback, useMemo, useRef, useState } from "react";
 import {
   BaseEdge,
   EdgeLabelRenderer,
@@ -21,6 +20,7 @@ import {
   Position,
   getBezierPath,
   useReactFlow,
+  useViewport,
 } from "@xyflow/react";
 
 // ---------------------------------------------------------------------------
@@ -55,7 +55,7 @@ export interface FlowchartControlEdgeData {
   [key: string]: unknown;
 }
 
-type Point = { x: number; y: number };
+export type Point = { x: number; y: number };
 
 // ---------------------------------------------------------------------------
 // memo 比较函数：避免 data 引用变化（每次 toFlowEdge 都创建新对象）导致的无效重渲染。
@@ -245,14 +245,23 @@ function getPairVisualPoints(
   };
   const first = points[0];
   const last = points[points.length - 1];
-  return [
+  const raw: (Point | null)[] = [
     source,
     // 与拐角重合时省略 gap 点，避免重复顶点产生多余拐弯
-    ...(first && (gappedSource.x !== first.x || gappedSource.y !== first.y) ? [gappedSource] : []),
+    first && (gappedSource.x !== first.x || gappedSource.y !== first.y) ? gappedSource : null,
     ...points,
-    ...(last && (gappedTarget.x !== last.x || gappedTarget.y !== last.y) ? [gappedTarget] : []),
+    last && (gappedTarget.x !== last.x || gappedTarget.y !== last.y) ? gappedTarget : null,
     target,
   ];
+  // 去重相邻重复点（共线点对会产生退化的重复中间点，如 (170,70),(170,70)）
+  const out: Point[] = [];
+  for (const p of raw) {
+    if (!p) continue;
+    const prev = out[out.length - 1];
+    if (prev && prev.x === p.x && prev.y === p.y) continue;
+    out.push(p);
+  }
+  return out;
 }
 
 /** 移植 xyflow getBend：在顶点 b 处生成带圆角的拐弯路径片段 */
@@ -274,40 +283,80 @@ function getBend(a: Point, b: Point, c: Point, size: number): string {
   return `L ${x},${y + bendSize * yDir}Q ${x},${y} ${x + bendSize * xDir},${y}`;
 }
 
-/** 可视折线上的一段（段中点把手的挂载单位） */
-interface VisualSegment {
+/** 可视折线上的一段（把手挂载单位） */
+export interface VisualSegment {
   from: Point;
   to: Point;
   mid: Point;
   length: number;
-  /** 拖动平移轴：垂直段沿 x 平移，水平段沿 y 平移 */
-  dragAxis: "x" | "y";
-  /** 是否可拖拽（首段贴 source、末段贴 target，不可拖） */
-  draggable: boolean;
+  /** 所属逻辑点对下标（controlPoints 的插入/移动定位用） */
+  insertIndex: number;
+  /** 贴 source/target 的 terminal stub 段不可拖 */
+  terminal: boolean;
+  /** from 端是 source 节点（不可移动，需物化为 CP） */
+  fromIsSource: boolean;
+  /** to 端是 target 节点（不可移动，需物化为 CP） */
+  toIsTarget: boolean;
 }
 
-interface EdgeGeometry {
+export interface EdgeGeometry {
   path: string;
   segments: VisualSegment[];
 }
 
+/** 合并共线的相邻段：确保一条直线上只产生一个段、一个蓝色中点。
+ *  mergeCollinear 可能因 getPairVisualPoints 生成的拐角点不共线而遗漏，
+ *  这里作为兜底：如果前一段和当前段在同一条直线上（同 x 或同 y）且端点连续，
+ *  直接扩展前一段的 to，不新增段。insertIndex 取前一段的（第一个匹配的逻辑点对）。
+ *  这样 materializeEndpoints 也能拿到正确的插入位置，避免 controlPoints 顺序错乱。 */
+export function mergeCollinearSegments(segments: VisualSegment[]): VisualSegment[] {
+  if (segments.length <= 1) return segments;
+  const result: VisualSegment[] = [{ ...segments[0] }];
+  for (let i = 1; i < segments.length; i++) {
+    const prev = result[result.length - 1];
+    const s = segments[i];
+    // 连续性：前一段的 to === 当前段的 from
+    const continuous = prev.to.x === s.from.x && prev.to.y === s.from.y;
+    if (!continuous) {
+      result.push({ ...s });
+      continue;
+    }
+    // 共线：两段都水平且 y 相同，或都垂直且 x 相同
+    const sameHorizontal =
+      prev.from.y === prev.to.y && s.from.y === s.to.y && prev.from.y === s.from.y;
+    const sameVertical =
+      prev.from.x === prev.to.x && s.from.x === s.to.x && prev.from.x === s.from.x;
+    if (sameHorizontal || sameVertical) {
+      // 合并：扩展 prev 的 to，重新计算 mid 和 length
+      prev.to = s.to;
+      prev.mid = { x: (prev.from.x + prev.to.x) / 2, y: (prev.from.y + prev.to.y) / 2 };
+      prev.length = dist(prev.from, prev.to);
+      prev.toIsTarget = s.toIsTarget;
+      prev.terminal = prev.terminal || s.terminal;
+    } else {
+      result.push({ ...s });
+    }
+  }
+  return result;
+}
+
 /** polyline 顶点：标记是否为逻辑点（source/CP/target，不可合并） */
-interface PolylineVertex {
+export interface PolylineVertex {
   point: Point;
   isLogical: boolean;
 }
 
-/** 合并共线顶点：如果 a→b→c 共线且 b 不是逻辑点，跳过 b。
- *  逻辑点（source/CP/target）是用户设定的真正拐角，不能被合并；
- *  只有 getPairVisualPoints 生成的虚拟拐角（gap 点、自动拐角）可以被合并。 */
-function mergeCollinear(vertices: PolylineVertex[]): Point[] {
+/** 合并共线顶点：如果 a→b→c 共线，跳过 b（无论是否逻辑点）。
+ *  共线的 CP 会被 normalizeControlPoints 在提交时清理，
+ *  渲染期间也应合并以保证一条直线只产生一个段、一个中点把手。 */
+export function mergeCollinear(vertices: PolylineVertex[]): Point[] {
   if (vertices.length <= 2) return vertices.map((v) => v.point);
   const result: Point[] = [vertices[0].point];
   for (let i = 1; i < vertices.length - 1; i++) {
     const a = result[result.length - 1];
     const b = vertices[i].point;
     const c = vertices[i + 1].point;
-    if (!vertices[i].isLogical && ((a.x === b.x && b.x === c.x) || (a.y === b.y && b.y === c.y))) {
+    if ((a.x === b.x && b.x === c.x) || (a.y === b.y && b.y === c.y)) {
       continue;
     }
     result.push(b);
@@ -317,10 +366,11 @@ function mergeCollinear(vertices: PolylineVertex[]): Point[] {
 }
 
 /** 计算整条边的可视几何。
- *  逐逻辑点对用 xyflow 同款算法算可视顶点，拼接后合并共线虚拟拐角，
+ *  逐逻辑点对用 xyflow 同款算法算可视顶点，拼接后合并共线虚拟拐角（仅合并非逻辑点），
  *  基于合并后的 polyline 生成 path 和 segments。
- *  合并保证一条直线只产生一个段、一个中点把手。 */
-function buildEdgeGeometry(
+ *  每个段携带 insertIndex（= 所属逻辑点对下标），蓝色点拖动时直接用此下标插入 waypoint。
+ *  stub 段（贴 source/target）标记 terminal，不显示蓝色点。 */
+export function buildEdgeGeometry(
   logicalPoints: Point[],
   sourcePos: Position,
   targetPos: Position,
@@ -341,11 +391,9 @@ function buildEdgeGeometry(
     // 拼接可视折线，标记逻辑点
     for (let j = 0; j < pairPoints.length; j++) {
       const p = pairPoints[j];
-      // 首点对的第一个点是 logicalPoints[i]（已在上一对末尾添加），去重
       if (i > 0 && j === 0) continue;
       const prev = vertices[vertices.length - 1];
       if (prev && prev.point.x === p.x && prev.point.y === p.y) continue;
-      // 逻辑点 = 每对的首尾点（pairPoints[0] 和 pairPoints[last]）
       const isLogical = j === 0 || j === pairPoints.length - 1;
       vertices.push({ point: p, isLogical });
     }
@@ -368,25 +416,169 @@ function buildEdgeGeometry(
     }
   }
 
-  // 基于合并后的 polyline 生成 segments
-  // 首段贴 source、末段贴 target，不可拖
+  // 为每个可视段计算 insertIndex 和 terminal
+  // insertIndex = 该段所属的逻辑点对下标 i，新 waypoint 插入 controlPoints[i]
+  // 通过段端点坐标匹配逻辑点对来确定
+  const numCPs = logicalPoints.length - 2; // 去掉 source 和 target
   const segments: VisualSegment[] = [];
   for (let i = 0; i < polyline.length - 1; i++) {
     const from = polyline[i];
     const to = polyline[i + 1];
     const length = dist(from, to);
     if (length === 0) continue;
+
+    // 确定该段属于哪个逻辑点对
+    // 逻辑点对 i 连接 logicalPoints[i] → logicalPoints[i+1]
+    // 段的 from/to 坐标在逻辑点对 i 的可视折线范围内时，insertIndex = i
+    let insertIndex = -1;
+    // 简单策略：遍历逻辑点对，找到第一个包含该段的范围
+    for (let pairIdx = 0; pairIdx < logicalPoints.length - 1; pairIdx++) {
+      const lpFrom = logicalPoints[pairIdx];
+      const lpTo = logicalPoints[pairIdx + 1];
+      // 段端点在逻辑点对连线方向上的投影区间内
+      const minX = Math.min(lpFrom.x, lpTo.x) - EDGE_GAP_OFFSET;
+      const maxX = Math.max(lpFrom.x, lpTo.x) + EDGE_GAP_OFFSET;
+      const minY = Math.min(lpFrom.y, lpTo.y) - EDGE_GAP_OFFSET;
+      const maxY = Math.max(lpFrom.y, lpTo.y) + EDGE_GAP_OFFSET;
+      if (from.x >= minX - 1 && from.x <= maxX + 1 && from.y >= minY - 1 && from.y <= maxY + 1 &&
+          to.x >= minX - 1 && to.x <= maxX + 1 && to.y >= minY - 1 && to.y <= maxY + 1) {
+        insertIndex = pairIdx;
+        break;
+      }
+    }
+    // fallback：用段在 polyline 中的位置估算
+    if (insertIndex < 0) {
+      insertIndex = Math.min(i, numCPs);
+    }
+
+    // fromIsSource: from 坐标等于 source 坐标
+    const fromIsSource = from.x === logicalPoints[0].x && from.y === logicalPoints[0].y;
+    // toIsTarget: to 坐标等于 target 坐标
+    const toIsTarget =
+      to.x === logicalPoints[logicalPoints.length - 1].x &&
+      to.y === logicalPoints[logicalPoints.length - 1].y;
+
+    // terminal：仅标记 target gap stub（末段贴 target 的短桩，不可拖）。
+    // 例外：如果整条折线只有 1 个段（source→target 直连），它不是 terminal，应可编辑。
+    const terminal = toIsTarget && polyline.length > 2;
+
     segments.push({
       from,
       to,
       mid: { x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 },
       length,
-      dragAxis: from.x === to.x ? "x" : "y",
-      draggable: i > 0 && i < polyline.length - 2,
+      insertIndex,
+      terminal,
+      fromIsSource,
+      toIsTarget,
     });
   }
 
-  return { path, segments };
+  // 兜底：合并共线相邻段，确保一条直线上只有一个段、一个蓝色中点。
+  // mergeCollinear 可能因 getPairVisualPoints 生成的拐角点不共线而遗漏。
+  return { path, segments: mergeCollinearSegments(segments) };
+}
+
+// ---------------------------------------------------------------------------
+// 路径归一化：三条规则
+// ---------------------------------------------------------------------------
+
+/** 归一化 controlPoints（不含 source/target）。
+ *  规则 1：删除相邻重复点
+ *  规则 2：删除三点共线的中间点（不含 source/target，因为它们不在 cps 数组里）
+ *  规则 3：发现非相邻同轴线段重叠时，删除中间折返回路
+ *  找到第一个可消除回路就合并，然后重新扫描，不做候选评分。 */
+export function normalizeControlPoints(
+  cps: Point[],
+  source: Point,
+  target: Point,
+): Point[] {
+  // 完整顶点序列 = source + cps + target
+  let pts = [source, ...cps, target];
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+
+    // 规则 1：删除相邻重复点
+    const deduped: Point[] = [];
+    for (const p of pts) {
+      const prev = deduped[deduped.length - 1];
+      if (prev && prev.x === p.x && prev.y === p.y) {
+        changed = true;
+        continue;
+      }
+      deduped.push(p);
+    }
+    pts = deduped;
+
+    // 规则 2：删除三点共线的中间点（保留 source 和 target）
+    const colCleaned: Point[] = [pts[0]];
+    for (let i = 1; i < pts.length - 1; i++) {
+      const a = colCleaned[colCleaned.length - 1];
+      const b = pts[i];
+      const c = pts[i + 1];
+      if ((a.x === b.x && b.x === c.x) || (a.y === b.y && b.y === c.y)) {
+        changed = true;
+        continue;
+      }
+      colCleaned.push(b);
+    }
+    colCleaned.push(pts[pts.length - 1]);
+    pts = colCleaned;
+
+    // 规则 3：非相邻同轴线段重叠 → 删除中间折返回路
+    // 检查段 i 和段 j（j > i+1），如果同轴（同 x 或同 y）且方向相同且投影重叠，
+    // 则删除段 i+1 到段 j 之间的所有顶点，直接连接
+    for (let i = 0; i < pts.length - 2; i++) {
+      let merged = false;
+      for (let j = i + 2; j < pts.length - 1; j++) {
+        const segA = { from: pts[i], to: pts[i + 1] };
+        const segB = { from: pts[j], to: pts[j + 1] };
+        // 同轴：两段都是水平（y 相同）或都是垂直（x 相同）
+        const aHoriz = segA.from.y === segA.to.y;
+        const bHoriz = segB.from.y === segB.to.y;
+        const aVert = segA.from.x === segA.to.x;
+        const bVert = segB.from.x === segB.to.x;
+        if (!((aHoriz && bHoriz && segA.from.y === segB.from.y) ||
+              (aVert && bVert && segA.from.x === segB.from.x))) {
+          continue;
+        }
+        // 投影重叠检查
+        const axis: "x" | "y" = aHoriz ? "x" : "y";
+        const aMin = Math.min(segA.from[axis], segA.to[axis]);
+        const aMax = Math.max(segA.from[axis], segA.to[axis]);
+        const bMin = Math.min(segB.from[axis], segB.to[axis]);
+        const bMax = Math.max(segB.from[axis], segB.to[axis]);
+        if (aMax < bMin || bMax < aMin) continue; // 无重叠
+
+        // 检查中间路径是否构成完整回路（i→i+1...j→j+1 必须形成折返回路）
+        // 简单验证：中间段的端点必须能连回
+        // 删除 pts[i+1..j]，用新点连接 pts[i] → pts[j+1]
+        // 新点取重叠区间的交点
+        const overlapMin = Math.max(aMin, bMin);
+        const overlapMax = Math.min(aMax, bMax);
+        if (aHoriz) {
+          // 水平段重叠，y 相同
+          const newPt1 = { x: overlapMin, y: segA.from.y };
+          const newPt2 = { x: overlapMax, y: segA.from.y };
+          pts = [...pts.slice(0, i + 1), newPt1, newPt2, ...pts.slice(j + 1)];
+        } else {
+          // 垂直段重叠，x 相同
+          const newPt1 = { x: segA.from.x, y: overlapMin };
+          const newPt2 = { x: segA.from.x, y: overlapMax };
+          pts = [...pts.slice(0, i + 1), newPt1, newPt2, ...pts.slice(j + 1)];
+        }
+        changed = true;
+        merged = true;
+        break;
+      }
+      if (merged) break;
+    }
+  }
+
+  // 去掉 source 和 target，返回中间点
+  return pts.slice(1, -1);
 }
 
 // ---------------------------------------------------------------------------
@@ -395,7 +587,8 @@ function buildEdgeGeometry(
 
 /** 通用拖拽逻辑：在 SVG/HTML 元素上监听 pointerdown，触发 onDragStart(startPos) → onMove(pos) → onEnd(lastPos)。
  *  使用屏幕坐标到流坐标的转换，支持画布缩放。
- *  onEnd 在 pointerup 时触发，接收最后一个 pos（用于"提交"语义）。 */
+ *  onEnd 在 pointerup 时触发，接收最后一个 pos（用于"提交"语义）。
+ *  Escape / pointercancel 取消拖拽，不触发 onEnd。 */
 function useFlowDrag(
   onMove: (pos: Point) => void,
   onEnd?: (lastPos: Point) => void,
@@ -422,17 +615,33 @@ function useFlowDrag(
         lastPosRef.current = pos;
         onMove(pos);
       };
-      const handleUp = () => {
-        if (!draggingRef.current) return;
-        draggingRef.current = false;
-        setIsDragging(false);
+      const cleanup = () => {
         window.removeEventListener("pointermove", handleMove);
         window.removeEventListener("pointerup", handleUp);
+        window.removeEventListener("pointercancel", handleCancel);
+        window.removeEventListener("keydown", handleKeyDown);
+      };
+      const handleCancel = () => {
+        cleanup();
+        draggingRef.current = false;
+        setIsDragging(false);
+        lastPosRef.current = null;
+      };
+      const handleKeyDown = (e: KeyboardEvent) => {
+        if (e.key === "Escape") handleCancel();
+      };
+      const handleUp = () => {
+        if (!draggingRef.current) return;
+        cleanup();
+        draggingRef.current = false;
+        setIsDragging(false);
         if (lastPosRef.current) onEnd?.(lastPosRef.current);
         lastPosRef.current = null;
       };
       window.addEventListener("pointermove", handleMove);
       window.addEventListener("pointerup", handleUp);
+      window.addEventListener("pointercancel", handleCancel);
+      window.addEventListener("keydown", handleKeyDown);
     },
     [screenToFlowPosition, onMove, onEnd, onDragStart],
   );
@@ -498,127 +707,196 @@ export const SmoothstepControlEdge = memo(function SmoothstepControlEdge(
       : ([(sourceX + targetX) / 2, (sourceY + targetY) / 2] as const);
   }, [segments, sourceX, sourceY, targetX, targetY]);
 
-  // 段中点拖拽需要跨渲染跟踪最新 controlPoints：
-  // 插入新拐角点后段会拆分、原把手 DOM 卸载，且 window 事件闭包捕获的是按下时的旧数组，
-  // 必须用 ref 存最新值，window 级监听在边组件层统一管理。
-  const { screenToFlowPosition } = useReactFlow();
+  // dragRef：统一管理拖拽状态
+  // 蓝色（1/2 中点）→ 整段平移（from + to 同步移动，垂直于段方向）
+  // 白色（1/4 点）→ 只移动 from 端
+  // 白色（3/4 点）→ 只移动 to 端
+  const { screenToFlowPosition, setEdges } = useReactFlow();
+  const { zoom } = useViewport();
+  const [hoveredSegmentIdx, setHoveredSegmentIdx] = useState<number | null>(null);
+  const [edgeHovered, setEdgeHovered] = useState(false);
+  const dragRef = useRef<{
+    segment: VisualSegment;
+    startFlow: Point;
+    originalCps: Point[];     // 拖拽前的 controlPoints（取消时恢复）
+    materializedCps: Point[];  // 物化后的 controlPoints（from/to 不是 CP 时插入新点）
+    fromIdx: number;          // from 端在 materializedCps 中的下标（-1 = 不移动）
+    toIdx: number;            // to 端在 materializedCps 中的下标（-1 = 不移动）
+    dragAxis: "x" | "y";      // 拖动轴（垂直于段方向）
+    fromBase: Point;          // from 端原始位置
+    toBase: Point;            // to 端原始位置
+    started: boolean;
+  } | null>(null);
   const controlPointsRef = useRef(controlPoints);
   controlPointsRef.current = controlPoints;
 
-  // 段中点把手按下：开始段拖拽。拖动的是「可视段」——沿垂直于段的方向整体平移
-  // （平行方向锁定），段保持笔直，不会产生 S 形。
-  //
-  // 核心原则：被拖的段只是平移，不会分裂、不会产生新中点。
-  // 只有两端的顶点需要处理：
-  // - 端点是已有 controlPoint → 移动它
-  // - 端点是 source/target（不可移动） → 在旁边物化一个新的拐角点
-  // - 端点是虚拟拐角（getPairVisualPoints 生成的） → 物化
-  //
-  // 坐标匹配代替 pairIndex：合并共线后顶点不再与 logicalPoints 一一对应，
-  // 用坐标精确匹配 controlPoints / source / target。
-  const handleSegmentHandlePointerDown = useCallback(
-    (segment: VisualSegment, event: React.PointerEvent) => {
+  // zoom 感知阈值
+  const zoomAwareThreshold = zoom > 0 ? SEGMENT_LENGTH_THRESHOLD / zoom : SEGMENT_LENGTH_THRESHOLD;
+
+  /** 物化段端点：如果 from/to 不是已有 CP，插入新 CP。
+   *  坐标匹配查找已有 CP；虚拟拐角插入到 insertIndex 位置
+   * （pair i 的虚拟拐角在 CP[i-1] 和 CP[i] 之间，即下标 i）。 */
+  function materializeEndpoints(
+    segment: VisualSegment,
+    cps: Point[],
+    moveFrom: boolean,
+    moveTo: boolean,
+  ): { cps: Point[]; fromIdx: number; toIdx: number } {
+    const next = [...cps];
+    let fromIdx = -1;
+    let toIdx = -1;
+    // from 插入后后续 CP 下标偏移 +1，to 的插入位置需要加这个偏移
+    let offset = 0;
+
+    const findCp = (p: Point) =>
+      next.findIndex(cp => Math.abs(cp.x - p.x) < 0.5 && Math.abs(cp.y - p.y) < 0.5);
+
+    if (moveFrom) {
+      if (segment.fromIsSource) {
+        next.unshift({ x: segment.from.x, y: segment.from.y });
+        fromIdx = 0;
+        offset = 1;
+      } else {
+        const existing = findCp(segment.from);
+        if (existing >= 0) {
+          fromIdx = existing;
+        } else {
+          // 虚拟拐角：pair insertIndex 的 from 虚拟拐角应在 CP[insertIndex-1] 之后，
+          // 即插入到 CP[insertIndex] 之前
+          const insertPos = Math.min(segment.insertIndex, next.length);
+          next.splice(insertPos, 0, { x: segment.from.x, y: segment.from.y });
+          fromIdx = insertPos;
+          offset = 1;
+        }
+      }
+    }
+
+    if (moveTo) {
+      if (segment.toIsTarget) {
+        toIdx = next.length;
+        next.push({ x: segment.to.x, y: segment.to.y });
+      } else {
+        const existing = findCp(segment.to);
+        if (existing >= 0) {
+          toIdx = existing;
+        } else {
+          // 虚拟拐角：pair insertIndex 的 to 虚拟拐角也在 CP[insertIndex] 之前，
+          // 但 from 刚插入占了 insertIndex 位置，to 插入到 insertIndex + offset
+          const insertPos = Math.min(segment.insertIndex + offset, next.length);
+          next.splice(insertPos, 0, { x: segment.to.x, y: segment.to.y });
+          toIdx = insertPos;
+        }
+      }
+    }
+
+    return { cps: next, fromIdx, toIdx };
+  }
+
+  /** 统一拖拽入口：蓝色（both）、白色 1/4（from only）、白色 3/4（to only） */
+  const handleSegmentPointerDown = useCallback(
+    (segment: VisualSegment, mode: "blue" | "white-quarter" | "white-three-quarter", event: React.PointerEvent) => {
       if (readOnly || !onControlPointsChange) return;
       event.stopPropagation();
       event.preventDefault();
+
+      // source/target 端不物化：它们固定在节点 handle 上，移动后路由仍按
+      // sourcePosition/targetPosition 生成 gap stub，会产生 S 型弯。
+      // 例外：直连线（两端都是 source/target）必须物化两端才能创建 CP。
+      const bothFixed = segment.fromIsSource && segment.toIsTarget;
+      const moveFrom = (mode === "blue" || mode === "white-quarter") && (!segment.fromIsSource || bothFixed);
+      const moveTo = (mode === "blue" || mode === "white-three-quarter") && (!segment.toIsTarget || bothFixed);
+
+      // 拖动轴：水平段 → y 轴；垂直段 → x 轴
+      const dragAxis: "x" | "y" =
+        Math.abs(segment.to.y - segment.from.y) < 0.5 ? "y" : "x";
+
+      const originalCps = [...controlPointsRef.current];
+      const startFlow = screenToFlowPosition({ x: event.clientX, y: event.clientY });
+      dragRef.current = {
+        segment,
+        startFlow,
+        originalCps,
+        materializedCps: originalCps,
+        fromIdx: -1,
+        toIdx: -1,
+        dragAxis,
+        fromBase: { x: segment.from.x, y: segment.from.y },
+        toBase: { x: segment.to.x, y: segment.to.y },
+        started: false,
+      };
+
       const startClient = { x: event.clientX, y: event.clientY };
-      const startFlow = screenToFlowPosition(startClient);
-      const { dragAxis, from, to } = segment;
-      const sourcePt: Point = { x: sourceX, y: sourceY };
-      const targetPt: Point = { x: targetX, y: targetY };
-      let started = false;
-      // 首次移动时确定要操作的 controlPoints 索引，后续移动直接复用
-      let leftIdx = -1;
-      let rightIdx = -1;
 
       const handleMove = (e: PointerEvent) => {
-        if (!started && Math.hypot(e.clientX - startClient.x, e.clientY - startClient.y) < 3)
-          return;
+        const drag = dragRef.current;
+        if (!drag) return;
+        if (!drag.started) {
+          if (Math.hypot(e.clientX - startClient.x, e.clientY - startClient.y) < 3) return;
+          drag.started = true;
+          // 首次移动：物化端点
+          const mat = materializeEndpoints(drag.segment, drag.originalCps, moveFrom, moveTo);
+          drag.materializedCps = mat.cps;
+          drag.fromIdx = mat.fromIdx;
+          drag.toIdx = mat.toIdx;
+        }
 
         const pos = screenToFlowPosition({ x: e.clientX, y: e.clientY });
-        const delta = dragAxis === "x" ? pos.x - startFlow.x : pos.y - startFlow.y;
-        const p1 =
-          dragAxis === "x" ? { x: from.x + delta, y: from.y } : { x: from.x, y: from.y + delta };
-        const p2 =
-          dragAxis === "x" ? { x: to.x + delta, y: to.y } : { x: to.x, y: to.y + delta };
+        const delta = drag.dragAxis === "x" ? pos.x - drag.startFlow.x : pos.y - drag.startFlow.y;
 
-        if (!started) {
-          started = true;
-          const cps = [...controlPointsRef.current];
-
-          // 用坐标匹配 from/to 在 controlPoints 中的位置
-          const fromCpIdx = cps.findIndex((p) => p.x === from.x && p.y === from.y);
-          const toCpIdx = cps.findIndex((p) => p.x === to.x && p.y === to.y);
-
-          if (fromCpIdx >= 0 && toCpIdx >= 0) {
-            // 两端都是已有 CP：直接移动，不插入新点
-            leftIdx = fromCpIdx;
-            rightIdx = toCpIdx;
-            cps[leftIdx] = p1;
-            cps[rightIdx] = p2;
-          } else if (fromCpIdx >= 0) {
-            // from 是 CP，to 需要物化：在 fromCpIdx 后面插入
-            leftIdx = fromCpIdx;
-            rightIdx = fromCpIdx + 1;
-            cps[leftIdx] = p1;
-            cps.splice(rightIdx, 0, p2);
-          } else if (toCpIdx >= 0) {
-            // to 是 CP，from 需要物化：在 toCpIdx 前面插入
-            rightIdx = toCpIdx;
-            leftIdx = toCpIdx;
-            cps.splice(leftIdx, 0, p1);
-            cps[rightIdx + 1] = p2;
-          } else {
-            // 两端都不是 CP（source/target/虚拟拐角），全部物化
-            // 插入位置取决于 from 是否为 source、to 是否为 target
-            const fromIsSource = from.x === sourcePt.x && from.y === sourcePt.y;
-            const toIsTarget = to.x === targetPt.x && to.y === targetPt.y;
-            if (fromIsSource && toIsTarget) {
-              // source→target 直连：两端都物化，插入在开头
-              cps.unshift(p1, p2);
-              leftIdx = 0;
-              rightIdx = 1;
-            } else if (fromIsSource) {
-              // from=source，to=虚拟拐角 → 在开头插入两个点
-              cps.unshift(p1, p2);
-              leftIdx = 0;
-              rightIdx = 1;
-            } else if (toIsTarget) {
-              // to=target，from=虚拟拐角 → 在末尾追加两个点
-              cps.push(p1, p2);
-              leftIdx = cps.length - 2;
-              rightIdx = cps.length - 1;
-            } else {
-              // 两端都是虚拟拐角（中间段），在开头插入
-              cps.unshift(p1, p2);
-              leftIdx = 0;
-              rightIdx = 1;
-            }
-          }
-          controlPointsRef.current = cps;
-          onControlPointsChange(id, cps);
-        } else {
-          const next = [...controlPointsRef.current];
-          if (leftIdx >= 0) next[leftIdx] = p1;
-          if (rightIdx >= 0) next[rightIdx] = p2;
-          controlPointsRef.current = next;
-          onControlPointsChange(id, next);
+        const cps = [...drag.materializedCps];
+        if (drag.fromIdx >= 0 && cps[drag.fromIdx]) {
+          cps[drag.fromIdx] =
+            drag.dragAxis === "x"
+              ? { x: drag.fromBase.x + delta, y: drag.fromBase.y }
+              : { x: drag.fromBase.x, y: drag.fromBase.y + delta };
         }
+        if (drag.toIdx >= 0 && cps[drag.toIdx]) {
+          cps[drag.toIdx] =
+            drag.dragAxis === "x"
+              ? { x: drag.toBase.x + delta, y: drag.toBase.y }
+              : { x: drag.toBase.x, y: drag.toBase.y + delta };
+        }
+        controlPointsRef.current = cps;
+        onControlPointsChange(id, cps);
       };
-      const handleUp = () => {
+
+      const cleanup = () => {
         window.removeEventListener("pointermove", handleMove);
         window.removeEventListener("pointerup", handleUp);
-        if (!started) return;
-        const final = controlPointsRef.current;
+        window.removeEventListener("pointercancel", handleCancel);
+        window.removeEventListener("keydown", handleKeyDown);
+      };
+      const handleCancel = () => {
+        cleanup();
+        const drag = dragRef.current;
+        dragRef.current = null;
+        if (!drag?.started) return;
+        controlPointsRef.current = drag.originalCps;
+        onControlPointsChange(id, drag.originalCps);
+      };
+      const handleKeyDown = (e: KeyboardEvent) => {
+        if (e.key === "Escape") handleCancel();
+      };
+      const handleUp = () => {
+        cleanup();
+        const drag = dragRef.current;
+        dragRef.current = null;
+        if (!drag?.started) return;
+        const final = normalizeControlPoints(
+          controlPointsRef.current,
+          { x: sourceX, y: sourceY },
+          { x: targetX, y: targetY },
+        );
+        controlPointsRef.current = final;
         onControlPointsCommit?.(id, final.length > 0 ? final : undefined);
       };
       window.addEventListener("pointermove", handleMove);
       window.addEventListener("pointerup", handleUp);
+      window.addEventListener("pointercancel", handleCancel);
+      window.addEventListener("keydown", handleKeyDown);
     },
     [readOnly, onControlPointsChange, onControlPointsCommit, id, screenToFlowPosition, sourceX, sourceY, targetX, targetY],
   );
-
-  // 控制点不再提供拖拽/双击操作（WPS 风格——拐角自动产生，无需手动操作）
 
   return (
     <>
@@ -637,22 +915,122 @@ export const SmoothstepControlEdge = memo(function SmoothstepControlEdge(
         markerEnd={markerEnd}
         markerStart={markerStart}
       />
-      {/* WPS 风格：仅在边选中时显示操作把手 */}
-      {!readOnly && selected === true && (
+      {!readOnly && (
         <EdgeLabelRenderer>
-          {/* 段中点拖拽方块：每个可拖可视段中点一个操作点，仅段长 > 阈值时显示。
-              拖拽过程中段拆分产生的新段若超过阈值，会自动渲染自己的中点把手。 */}
           {segments
-            .filter((s) => s.draggable && s.length > SEGMENT_LENGTH_THRESHOLD)
-            .map((s, idx) => (
-              <SegmentMidpointHandle
-                key={`seg-${idx}`}
-                x={s.mid.x}
-                y={s.mid.y}
-                onHandlePointerDown={(e) => handleSegmentHandlePointerDown(s, e)}
-              />
-            ))}
-          {/* 已有拐角控制点：不渲染把手（WPS 风格——拐角自动产生，无需手动操作） */}
+            .filter((s) => !s.terminal && s.length > zoomAwareThreshold)
+            .map((s, idx) => {
+              // 1/4 和 3/4 位置
+              const quarter = {
+                x: s.from.x + (s.to.x - s.from.x) * 0.25,
+                y: s.from.y + (s.to.y - s.from.y) * 0.25,
+              };
+              const threeQuarter = {
+                x: s.from.x + (s.to.x - s.from.x) * 0.75,
+                y: s.from.y + (s.to.y - s.from.y) * 0.75,
+              };
+              const isHovered = hoveredSegmentIdx === idx;
+              const showHandles = selected === true || (edgeHovered && isHovered);
+              const isHorizontal = Math.abs(s.to.y - s.from.y) < 0.5;
+              return (
+                <Fragment key={`seg-${idx}`}>
+                  {/* 蓝色 1/2 中点：选中时全部显示，hover 时显示当前段。
+                      点击拖动时自动选中边。 */}
+                  {showHandles && (
+                    <div style={{ position: "relative", zIndex: 2 }}>
+                      <SegmentHandle
+                        x={s.mid.x}
+                        y={s.mid.y}
+                        variant="blue"
+                        onPointerDown={(e) => {
+                          // 选中边 + 开始拖动
+                          if (selected !== true) {
+                            setEdges((edges) =>
+                              edges.map((ed) =>
+                                ed.id === id ? { ...ed, selected: true } : { ...ed, selected: false },
+                              ),
+                            );
+                          }
+                          handleSegmentPointerDown(s, "blue", e);
+                        }}
+                      />
+                    </div>
+                  )}
+                  {/* 白色 1/4 点：只在 hover 的那段显示。from 是 source 时不显示（除非直连线）。
+                      白色点需 onPointerEnter 重新设置 hover——光标从热区移到白色点时，
+                      热区 pointerleave 会清除 hover，导致白色点消失无法点击。 */}
+                  {showHandles && isHovered && (!s.fromIsSource || (s.fromIsSource && s.toIsTarget)) && (
+                    <div style={{ position: "relative", zIndex: 3 }}>
+                      <SegmentHandle
+                        x={quarter.x}
+                        y={quarter.y}
+                        variant="white"
+                        onPointerDown={(e) => handleSegmentPointerDown(s, "white-quarter", e)}
+                        onPointerEnter={() => {
+                          setHoveredSegmentIdx(idx);
+                          setEdgeHovered(true);
+                        }}
+                        onPointerLeave={() => {
+                          setHoveredSegmentIdx(null);
+                          setEdgeHovered(false);
+                        }}
+                      />
+                    </div>
+                  )}
+                  {/* 白色 3/4 点：只在 hover 的那段显示。to 是 target 时不显示（除非直连线） */}
+                  {showHandles && isHovered && (!s.toIsTarget || (s.fromIsSource && s.toIsTarget)) && (
+                    <div style={{ position: "relative", zIndex: 3 }}>
+                      <SegmentHandle
+                        x={threeQuarter.x}
+                        y={threeQuarter.y}
+                        variant="white"
+                        onPointerDown={(e) => handleSegmentPointerDown(s, "white-three-quarter", e)}
+                        onPointerEnter={() => {
+                          setHoveredSegmentIdx(idx);
+                          setEdgeHovered(true);
+                        }}
+                        onPointerLeave={() => {
+                          setHoveredSegmentIdx(null);
+                          setEdgeHovered(false);
+                        }}
+                      />
+                    </div>
+                  )}
+                  {/* 透明 hover 热区：沿折线方向的细长条，仅在线上才触发。
+                      水平段：宽=段长，高=14px；垂直段：宽=14px，高=段长。
+                      zIndex 低于把手，不遮挡点击。 */}
+                  <div
+                    style={{
+                      position: "absolute",
+                      transform: `translate(-50%, -50%) translate(${s.mid.x}px, ${s.mid.y}px)`,
+                      width: isHorizontal ? s.length : 14,
+                      height: isHorizontal ? 14 : s.length,
+                      pointerEvents: "all",
+                      cursor: isHorizontal ? "ns-resize" : "ew-resize",
+                      zIndex: 1,
+                    }}
+                    onPointerEnter={() => {
+                      setHoveredSegmentIdx(idx);
+                      setEdgeHovered(true);
+                    }}
+                    onPointerLeave={() => {
+                      setHoveredSegmentIdx(null);
+                      setEdgeHovered(false);
+                    }}
+                    onPointerDown={(e) => {
+                      if (selected !== true) {
+                        setEdges((edges) =>
+                          edges.map((ed) =>
+                            ed.id === id ? { ...ed, selected: true } : { ...ed, selected: false },
+                          ),
+                        );
+                      }
+                      handleSegmentPointerDown(s, "blue", e);
+                    }}
+                  />
+                </Fragment>
+              );
+            })}
         </EdgeLabelRenderer>
       )}
     </>
@@ -802,31 +1180,39 @@ export const BezierControlEdge = memo(function BezierControlEdge(props: EdgeProp
 }, areEdgePropsEqual);
 
 // ---------------------------------------------------------------------------
-// 子组件：控制点、段中点把手、bezier 把手、连接线
+// 子组件：段把手（蓝色 1/2 + 白色 1/4）、bezier 把手、连接线
 // ---------------------------------------------------------------------------
 
-/** 折线段中点把手：纯展示按钮，拖拽生命周期由边组件统一管理
- *  （window 级监听，不依赖本元素在拖拽期间保持挂载——插入拐角点后段会拆分、本元素可能卸载） */
-function SegmentMidpointHandle({
+/** 段把手：蓝色（1/2 中点，整段平移）或白色（1/4 点，半段移动）。
+ *  白色点需要 onPointerEnter/onPointerLeave 维持段 hover 状态——光标从热区
+ *  移到白色点时热区会触发 pointerleave，若不重新设置 hover，白色点会消失无法点击。 */
+function SegmentHandle({
   x,
   y,
-  onHandlePointerDown,
+  variant,
+  onPointerDown,
+  onPointerEnter,
+  onPointerLeave,
 }: {
   x: number;
   y: number;
-  onHandlePointerDown: (event: React.PointerEvent) => void;
+  variant: "blue" | "white";
+  onPointerDown: (event: React.PointerEvent) => void;
+  onPointerEnter?: (event: React.PointerEvent) => void;
+  onPointerLeave?: (event: React.PointerEvent) => void;
 }) {
-  // 仅在边选中时渲染（由父组件控制），此处始终可见
   return (
     <div
-      className="flowchart-edge-segment-handle"
+      className={variant === "blue" ? "flowchart-edge-segment-blue" : "flowchart-edge-segment-white"}
       style={{
         position: "absolute",
         transform: `translate(-50%, -50%) translate(${x}px, ${y}px)`,
         pointerEvents: "all",
       }}
-      onPointerDown={onHandlePointerDown}
-      title="拖动调整该段位置"
+      onPointerDown={onPointerDown}
+      onPointerEnter={onPointerEnter}
+      onPointerLeave={onPointerLeave}
+      title={variant === "blue" ? "拖动平移整段" : "拖动调整端点位置"}
       role="button"
       tabIndex={-1}
     />
