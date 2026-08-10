@@ -77,6 +77,9 @@ interface ThreadComposerProps {
   modelOptions?: Array<{ name: string; label: string; free_default_model?: string | null; model?: string | null }>;
   zenFreeModels?: string[];
   onModelSwitch?: (provider: string, model: string) => void;
+  /** Server-resolved capability of the active preset. When false, image
+   * attach/paste/drop is rejected with an inline hint. Default true. */
+  imageInputEnabled?: boolean;
   variant?: "thread" | "hero";
   slashCommands?: SlashCommand[];
   onStop?: () => void;
@@ -409,6 +412,7 @@ export function ThreadComposer({
   modelOptions = [],
   zenFreeModels = [],
   onModelSwitch,
+  imageInputEnabled = true,
   variant = "thread",
   slashCommands = [],
   onStop,
@@ -451,6 +455,10 @@ export function ThreadComposer({
   const addFiles = useCallback(
     (files: File[]) => {
       if (files.length === 0) return;
+      if (!imageInputEnabled) {
+        setInlineError(t("thread.composer.imageNotSupported"));
+        return;
+      }
       const { rejected } = enqueue(files);
       if (rejected.length > 0) {
         setInlineError(formatRejection(rejected[0].reason));
@@ -458,7 +466,7 @@ export function ThreadComposer({
         setInlineError(null);
       }
     },
-    [enqueue, formatRejection],
+    [enqueue, formatRejection, imageInputEnabled, t],
   );
 
   const {
@@ -725,7 +733,7 @@ export function ThreadComposer({
     [removeChip],
   );
 
-  const attachButtonDisabled = disabled || full;
+  const attachButtonDisabled = disabled || full || !imageInputEnabled;
   const showStopButton = isStreaming && !!onStop;
 
   return (
@@ -889,6 +897,11 @@ export function ThreadComposer({
               variant="ghost"
               disabled={attachButtonDisabled}
               aria-label={t("thread.composer.attachImage")}
+              title={
+                imageInputEnabled
+                  ? t("thread.composer.attachImage")
+                  : t("thread.composer.imageNotSupported")
+              }
               onClick={() => fileInputRef.current?.click()}
               className={cn(
                 "rounded-full text-muted-foreground hover:text-foreground",

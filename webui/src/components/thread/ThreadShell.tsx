@@ -159,6 +159,9 @@ export function ThreadShell({
   const [providerOptions, setProviderOptions] = useState<
     Array<{ name: string; label: string; free_default_model?: string | null; model?: string | null }>
   >([]);
+  // Whether the active model preset accepts image input. ``supports_vision``
+  // is tri-state server-side; only an explicit ``false`` disables upload.
+  const [imageInputEnabled, setImageInputEnabled] = useState(true);
   const [zenFreeModels, setZenFreeModels] = useState<string[]>([]);
   const [scrollToBottomSignal, setScrollToBottomSignal] = useState(0);
   const pendingFirstRef = useRef<PendingFirstMessage | null>(null);
@@ -355,6 +358,8 @@ export function ThreadShell({
               model: p.model,
             }));
           setProviderOptions(options);
+          const activePreset = settings.model_presets.find((p) => p.active);
+          setImageInputEnabled(activePreset?.capabilities?.supports_vision !== false);
           if (settings.runtime?.workspace_path) {
             setWorkspacePath(settings.runtime.workspace_path);
           }
@@ -395,6 +400,10 @@ export function ThreadShell({
         });
         const newModel = payload.agent.model || null;
         onModelNameChange?.(newModel);
+        const activePreset = payload.model_presets?.find(
+          (p: { active: boolean }) => p.active,
+        );
+        setImageInputEnabled(activePreset?.capabilities?.supports_vision !== false);
         // Refresh provider options from the updated settings so the dropdown
         // stays in sync (e.g. the previously-active provider now shows its
         // stored model instead of the old active-model fallback).
@@ -490,6 +499,7 @@ export function ThreadShell({
           modelOptions={activeModelOptions}
           zenFreeModels={zenFreeModels}
           onModelSwitch={handleModelSwitch}
+          imageInputEnabled={imageInputEnabled}
           variant={showHeroComposer ? "hero" : "thread"}
           slashCommands={slashCommands}
           onStop={stop}
@@ -512,6 +522,7 @@ export function ThreadShell({
           modelOptions={activeModelOptions}
           zenFreeModels={zenFreeModels}
           onModelSwitch={handleModelSwitch}
+          imageInputEnabled={imageInputEnabled}
           variant="hero"
           slashCommands={slashCommands}
           runStartedAt={runStartedAt}

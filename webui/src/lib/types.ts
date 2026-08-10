@@ -194,6 +194,12 @@ export interface SettingsPayload {
     context_window_tokens: number;
     temperature: number;
     reasoning_effort: string | null;
+    capabilities?: {
+      supports_vision: boolean | null;
+      supports_tool_calling: boolean | null;
+      supports_streaming: boolean;
+      supports_json_mode: boolean | null;
+    };
   }>;
   providers: Array<{
     name: string;

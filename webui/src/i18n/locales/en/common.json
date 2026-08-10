@@ -495,6 +495,7 @@
       "encoding": "Encoding…",
       "remove": "Remove attachment",
       "normalizedSizeHint": "{{orig}} → {{current}} (auto)",
+      "imageNotSupported": "The current model does not support image input",
       "imageRejected": {
         "unsupported_type": "Unsupported file type",
         "too_many_images": "Max {{max}} images per message",

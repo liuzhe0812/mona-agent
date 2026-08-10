@@ -400,6 +400,7 @@
       "encoding": "處理中…",
       "remove": "移除附件",
       "normalizedSizeHint": "{{orig}} → {{current}}（已自動壓縮）",
+      "imageNotSupported": "目前模型不支援圖片輸入",
       "imageRejected": {
         "unsupported_type": "不支援的檔案類型",
         "too_many_images": "每則訊息最多 {{max}} 張圖片",

@@ -507,6 +507,7 @@
       "encoding": "处理中…",
       "remove": "移除附件",
       "normalizedSizeHint": "{{orig}} → {{current}}（已自动压缩）",
+      "imageNotSupported": "当前模型不支持图片输入",
       "imageRejected": {
         "unsupported_type": "不支持的文件类型",
         "too_many_images": "每条消息最多 {{max}} 张图片",
