@@ -62,7 +62,7 @@ documents the general tool contract and non-obvious usage patterns.
 - `terminal_output` (without session_id) reads the visible terminal buffer — useful for broader context around a step. It returns the last N lines (default 200); pass `lines` (1-10000) to control how much to read. When output is truncated, a `[showing last N of M lines]` header is prepended.
 - Commands execute in the user's visible terminal, so the user can see AI actions in real time. `terminal_exec` operates on already-connected sessions; it does not create new SSH connections.
 - **Local (non-SSH) terminals**: structured maintenance is not supported yet. `terminal_exec` may run a command as an untracked passthrough (no exit-code tracking) — verify results with `terminal_output` and prefer the `exec` tool for local commands that don't need the user's visible terminal.
-- **Visibility**: `terminal_task`, `terminal_exec`, `terminal_output`, and `terminal_upload` only appear in your tool list when the user is currently viewing an active terminal session. If they are absent from your tool list this turn, the user has not opened a terminal panel. In that case, either ask the user to open the terminal panel, or fall back to the `exec` tool for shell commands that do not need a remote SSH session.
+- **Visibility**: `terminal_task`, `terminal_exec`, `terminal_output`, and `terminal_upload` are always present in your tool list. When the user is not viewing an active terminal session, calling them returns a `tool_unavailable` error explaining what to do — follow that guidance (ask the user to open the terminal panel, or fall back to the `exec` tool for shell commands that do not need a remote SSH session).
 
 ## Web and External Information
 

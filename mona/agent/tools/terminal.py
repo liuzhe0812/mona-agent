@@ -45,6 +45,15 @@ _STEP_KINDS = ("inspect", "change", "verify")
 
 def _parse_steps(raw: Any) -> list[dict[str, str]] | str:
     """Validate the steps array; returns the parsed list or an error string."""
+    # Tolerate JSON-string encoded arrays from providers that don't decode
+    # nested arrays (cast_params normally handles this, but be defensive).
+    if isinstance(raw, str) and raw.strip().startswith("["):
+        try:
+            import json
+
+            raw = json.loads(raw)
+        except (json.JSONDecodeError, ValueError):
+            pass
     if not isinstance(raw, list) or not raw:
         return "Error: steps must be a non-empty array of {title, kind} objects"
     out: list[dict[str, str]] = []
@@ -62,12 +71,43 @@ def _parse_steps(raw: Any) -> list[dict[str, str]] | str:
 
 
 def _session_type(session_id: str) -> str | None:
-    """Best-effort lookup of a session's type ('Ssh', 'Local', ...)."""
+    """Best-effort lookup of a session's type ('ssh', 'local', ...)."""
     result = _tauri_invoke("terminal_list_sessions")
     if isinstance(result, list):
         for s in result:
             if isinstance(s, dict) and s.get("id") == session_id:
-                return s.get("sessionType")
+                return s.get("sessionType") or s.get("session_type")
+    return None
+
+
+def _resolve_terminal_session(preferred_id: str | None) -> str | None:
+    """Resolve an effective terminal session ID without relying on the frontend.
+
+    If ``preferred_id`` is given and the session still exists, use it.
+    Otherwise fall back to the first connected SSH or Local session found.
+    This decouples the backend from the frontend's terminalSessionId
+    propagation, which is fragile and breaks easily when other modules change.
+    """
+    result = _tauri_invoke("terminal_list_sessions")
+    if not isinstance(result, list):
+        return None
+    sessions = [s for s in result if isinstance(s, dict)]
+    # Prefer the requested session if it's still alive.
+    if preferred_id:
+        for s in sessions:
+            if s.get("id") == preferred_id:
+                return preferred_id
+    # Fall back to the first connected ssh/local session.
+    for s in sessions:
+        stype = (s.get("sessionType") or s.get("session_type") or "").lower()
+        status = (s.get("status") or "").lower()
+        if stype in ("ssh", "local") and "connected" in status:
+            return s.get("id")
+    # Last resort: any ssh/local session regardless of status.
+    for s in sessions:
+        stype = (s.get("sessionType") or s.get("session_type") or "").lower()
+        if stype in ("ssh", "local"):
+            return s.get("id")
     return None
 
 
@@ -167,8 +207,12 @@ class TerminalTaskTool(Tool):
     _request_ctx: RequestContext | None = None
 
     def set_context(self, ctx: RequestContext) -> None:
+        # Tools stay visible to the model regardless of session state — the
+        # execute() path returns a clear "open the terminal panel" error when
+        # no session is active. Hiding tools via is_available couples backend
+        # visibility to frontend store state and breaks easily when other
+        # modules change.
         self._request_ctx = ctx
-        self.is_available = bool(ctx.terminal_session_id)
 
     @property
     def name(self) -> str:
@@ -216,20 +260,21 @@ class TerminalTaskTool(Tool):
         return f"Error: unknown action {action!r}; use start, finish or fail"
 
     def _start(self, goal: str | None, steps: Any, session_id: str | None) -> str:
-        effective_session = session_id or (
+        if not goal or not goal.strip():
+            return "Error: goal is required for start"
+        parsed = _parse_steps(steps)
+        if isinstance(parsed, str):
+            return parsed
+        preferred = session_id or (
             self._request_ctx.terminal_session_id if self._request_ctx else None
         )
+        effective_session = _resolve_terminal_session(preferred)
         if not effective_session:
             return (
                 "tool_unavailable: terminal_task requires an active terminal "
                 "session, but the user is not currently viewing a terminal. "
                 "Ask the user to open the terminal panel and try again."
             )
-        if not goal or not goal.strip():
-            return "Error: goal is required for start"
-        parsed = _parse_steps(steps)
-        if isinstance(parsed, str):
-            return parsed
         exec_mode = (
             self._request_ctx.terminal_exec_mode
             if self._request_ctx and self._request_ctx.terminal_exec_mode
@@ -321,12 +366,10 @@ class TerminalExecTool(Tool):
     _request_ctx: RequestContext | None = None
 
     def set_context(self, ctx: RequestContext) -> None:
+        # Tools stay visible to the model — execute() returns a clear error
+        # when no terminal session is active. See TerminalTaskTool.set_context
+        # for rationale.
         self._request_ctx = ctx
-        # Hide this tool from the model when no terminal session is active so
-        # the model does not attempt to call it and then misread the resulting
-        # error string as "tool does not exist". The AgentLoop refreshes the
-        # registry cache after set_context returns.
-        self.is_available = bool(ctx.terminal_session_id)
 
     @property
     def name(self) -> str:
@@ -361,9 +404,10 @@ class TerminalExecTool(Tool):
         timeout_secs: int | None = None,
         **kwargs: Any,
     ) -> str:
-        effective_session = session_id or (
+        preferred = session_id or (
             self._request_ctx.terminal_session_id if self._request_ctx else None
         )
+        effective_session = _resolve_terminal_session(preferred)
         if not effective_session:
             return (
                 "tool_unavailable: terminal_exec requires an active terminal "
@@ -377,7 +421,7 @@ class TerminalExecTool(Tool):
         if not task_id or not step_id:
             # Local shells have no structured execution yet — keep the previous
             # untracked passthrough so existing local-terminal usage still works.
-            if _session_type(effective_session) == "Local":
+            if (_session_type(effective_session) or "").lower() == "local":
                 result = _tauri_invoke(
                     "terminal_exec_command",
                     {"sessionId": effective_session, "command": command, "source": "ai"},
@@ -436,7 +480,6 @@ class TerminalOutputTool(Tool):
 
     def set_context(self, ctx: RequestContext) -> None:
         self._request_ctx = ctx
-        self.is_available = bool(ctx.terminal_session_id)
 
     @property
     def name(self) -> str:
@@ -462,9 +505,10 @@ class TerminalOutputTool(Tool):
         lines: int | None = None,
         **kwargs: Any,
     ) -> str:
-        effective_session = session_id or (
+        preferred = session_id or (
             self._request_ctx.terminal_session_id if self._request_ctx else None
         )
+        effective_session = _resolve_terminal_session(preferred)
         if effective_session:
             result = _tauri_invoke(
                 "terminal_get_output", {"sessionId": effective_session}
@@ -526,7 +570,6 @@ class TerminalUploadTool(Tool):
 
     def set_context(self, ctx: RequestContext) -> None:
         self._request_ctx = ctx
-        self.is_available = bool(ctx.terminal_session_id)
 
     @property
     def name(self) -> str:
@@ -557,9 +600,17 @@ class TerminalUploadTool(Tool):
         step_id: str | None = None,
         **kwargs: Any,
     ) -> str:
-        effective_session = session_id or (
+        if not task_id or not step_id:
+            return (
+                "Error: terminal_upload requires task_id and step_id from an active "
+                "maintenance task. Call terminal_task(action='start', ...) with a "
+                "complete plan first and pass the returned ids here."
+            )
+
+        preferred = session_id or (
             self._request_ctx.terminal_session_id if self._request_ctx else None
         )
+        effective_session = _resolve_terminal_session(preferred)
         if not effective_session:
             return (
                 "tool_unavailable: terminal_upload requires an active terminal "
@@ -567,13 +618,6 @@ class TerminalUploadTool(Tool):
                 "This is a transient state — the tool exists but cannot run. "
                 "Ask the user to open the terminal panel and try again. "
                 "Do NOT claim you do not have terminal tools."
-            )
-
-        if not task_id or not step_id:
-            return (
-                "Error: terminal_upload requires task_id and step_id from an active "
-                "maintenance task. Call terminal_task(action='start', ...) with a "
-                "complete plan first and pass the returned ids here."
             )
 
         enc = (encoding or "text").lower()

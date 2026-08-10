@@ -241,12 +241,39 @@ class Tool(ABC):
                 return False
             return val
 
-        if t == "array" and isinstance(val, list):
-            items = schema.get("items")
-            return [self._cast_value(x, items) for x in val] if items else val
+        if t == "array":
+            if isinstance(val, list):
+                items = schema.get("items")
+                return [self._cast_value(x, items) for x in val] if items else val
+            # Some providers/models encode arrays as JSON strings.
+            if isinstance(val, str) and val.strip().startswith("["):
+                try:
+                    import json
 
-        if t == "object" and isinstance(val, dict):
-            return self._cast_object(val, schema)
+                    parsed = json.loads(val)
+                    if isinstance(parsed, list):
+                        items = schema.get("items")
+                        return (
+                            [self._cast_value(x, items) for x in parsed]
+                            if items
+                            else parsed
+                        )
+                except (json.JSONDecodeError, ValueError):
+                    pass
+
+        if t == "object":
+            if isinstance(val, dict):
+                return self._cast_object(val, schema)
+            # Some providers/models encode objects as JSON strings.
+            if isinstance(val, str) and val.strip().startswith("{"):
+                try:
+                    import json
+
+                    parsed = json.loads(val)
+                    if isinstance(parsed, dict):
+                        return self._cast_object(parsed, schema)
+                except (json.JSONDecodeError, ValueError):
+                    pass
 
         return val
 
