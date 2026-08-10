@@ -164,8 +164,8 @@ export function FlowchartAgentPanel({
     return () => window.clearTimeout(timer);
   }, [notice]);
 
-  // AI 回答完成后，prepare 成功且 baseHash 仍匹配时自动应用；
-  // 生成期间图被修改（baseHash 不匹配）时保留手动确认。
+  // AI 回答完成后只做 prepare（dry-run）并写入变更卡片；
+  // 任何情况下都必须由用户点击"应用到流程图"后才提交修改。
   useEffect(() => {
     if (loading || creatingChat || isStreaming) return;
     if (!note || note.type !== "flowchart") return;
@@ -196,34 +196,15 @@ export function FlowchartAgentPanel({
     }
 
     const currentHash = flowchartSelectionCtx.baseHash ?? "";
-    if (result.pending.requestBaseHash === currentHash) {
-      // baseHash 仍匹配：直接自动应用
-      const applyResult = applyPendingPatch(
-        result.pending,
-        note.contentMarkdown,
-        note.title || "未命名流程图",
-      );
-      if (applyResult.ok) {
-        onApplyResult("replace", applyResult.markdown, completedMessage.id);
-        setNotice(applyResult.notice);
-      } else {
-        // 应用失败（patch 校验不通过等），保留手动确认
-        setPendingPatches((prev) => {
-          const next = new Map(prev);
-          next.set(completedMessage.id, { ...result.pending, status: "stale" });
-          return next;
-        });
-      }
-    } else {
-      // baseHash 不匹配（生成期间图被修改），保留手动确认
-      setPendingPatches((prev) => {
-        const next = new Map(prev);
-        next.set(completedMessage.id, { ...result.pending, status: "stale" });
-        return next;
-      });
-    }
+    // 不自动应用：baseHash 匹配 → ready（等待用户确认）；不匹配 → stale
+    const status = result.pending.requestBaseHash === currentHash ? "ready" : "stale";
+    setPendingPatches((prev) => {
+      const next = new Map(prev);
+      next.set(completedMessage.id, { ...result.pending, status });
+      return next;
+    });
     requestBaseHashRef.current = null;
-  }, [creatingChat, isStreaming, loading, messages, note, flowchartSelectionCtx.baseHash, onApplyResult]);
+  }, [creatingChat, isStreaming, loading, messages, note, flowchartSelectionCtx.baseHash]);
 
   // stale 检测：当前文档 baseHash 与 requestBaseHash 不同时，标记 pending 为 stale
   const currentBaseHash = flowchartSelectionCtx.baseHash;
@@ -531,6 +512,9 @@ function FlowchartPatchCard({
           <span>将替换完整流程图</span>
         ) : (
           <div className="flex flex-wrap gap-x-2 gap-y-0.5">
+            {summary.addedPools > 0 && <span>新增 {summary.addedPools} 泳池</span>}
+            {summary.addedLanes > 0 && <span>新增 {summary.addedLanes} 泳道</span>}
+            {summary.movedToLane > 0 && <span>移动 {summary.movedToLane} 节点归属</span>}
             {summary.addedNodes > 0 && <span>新增 {summary.addedNodes} 节点</span>}
             {summary.updatedNodes > 0 && <span>修改 {summary.updatedNodes} 节点</span>}
             {summary.removedNodes > 0 && <span className="text-destructive/80">删除 {summary.removedNodes} 节点</span>}

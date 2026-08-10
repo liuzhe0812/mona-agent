@@ -51,13 +51,18 @@ documents the general tool contract and non-obvious usage patterns.
 
 ## Remote Terminal and SSH Sessions
 
-- `terminal_exec` and `terminal_output` automatically target the user's current active terminal session — you do NOT need to discover or specify a session_id.
-- Simply call `terminal_exec` with the `command` parameter; the session is resolved from the user's current terminal view.
-- Call `terminal_output` (without session_id) to read the current terminal buffer and see command results. It returns the last N lines (default 200); pass `lines` (1-10000) to control how much to read — smaller values save tokens, larger values (e.g. 1000) are useful for inspecting logs. When output is truncated, a `[showing last N of M lines]` header is prepended so you know there is more history above.
-- Commands are risk-classified: dangerous commands (e.g. `rm -rf /`, `mkfs`, `dd`) always require user approval; safe commands (e.g. `ls`, `cat`, `df`) may execute directly depending on configuration; unknown commands default to requiring approval.
-- Commands execute in the user's visible terminal, so the user can see AI actions in real time.
-- `terminal_exec` operates on already-connected sessions; it does not create new SSH connections. The user must have an active terminal session open.
-- **Visibility**: `terminal_exec`, `terminal_output`, and `terminal_upload` only appear in your tool list when the user is currently viewing an active terminal session. If they are absent from your tool list this turn, the user has not opened a terminal panel. In that case, either ask the user to open the terminal panel, or fall back to the `exec` tool for shell commands that do not need a remote SSH session.
+- Terminal tools automatically target the user's current active terminal session — you do NOT need to discover or specify a session_id.
+- **Maintenance task protocol (SSH sessions)**: before ANY `terminal_exec` or `terminal_upload`, you MUST first create a maintenance task with `terminal_task(action="start", goal=..., steps=[...])`, using the user's goal and the COMPLETE step plan (inspect → change → verify). Without task_id and step_id, `terminal_exec`/`terminal_upload` are rejected.
+- Task workflow: `start` (full plan) → execute steps one at a time, in order → `finish` (with diagnosis + summary) or `fail` (with the reason). The plan locks once execution starts: it cannot be extended or modified, and a step that has already started can never be re-run. If the plan proves wrong mid-run, `fail` the task and `start` a revised one.
+- Each step executes exactly ONE action: one shell command (`terminal_exec`) or one file upload (`terminal_upload`). Give every step a clear title and the right kind: `inspect` (read-only diagnosis), `change` (modifies the system), `verify` (independent re-check).
+- `terminal_exec` returns structured results: exit_code, stdout, stderr, duration, timed_out, cancelled. Only exit_code 0 means the step succeeded. A non-zero exit, a timeout, a cancellation, or a missing exit code means the step FAILED — do not claim success; diagnose the output and continue with the remaining planned steps.
+- **Mandatory re-verification**: after ANY change step (command or upload), an independent `verify` step must prove the change actually worked (e.g. check service status, probe the port, validate the config) — always include these verify steps in the plan upfront. The backend refuses `finish` when a task has changes but no successful verify after the last change; if that happens and no planned verify steps remain, `fail` and `start` a revised task with proper verification.
+- A single failed step does not end the task: analyze it and continue with the remaining planned steps. Use `fail` only when you cannot make further progress.
+- High-risk commands automatically pause for explicit user confirmation whatever the mode; forbidden commands are blocked outright. In approval mode the user confirms the change plan once; in auto mode normal steps run continuously.
+- `terminal_output` (without session_id) reads the visible terminal buffer — useful for broader context around a step. It returns the last N lines (default 200); pass `lines` (1-10000) to control how much to read. When output is truncated, a `[showing last N of M lines]` header is prepended.
+- Commands execute in the user's visible terminal, so the user can see AI actions in real time. `terminal_exec` operates on already-connected sessions; it does not create new SSH connections.
+- **Local (non-SSH) terminals**: structured maintenance is not supported yet. `terminal_exec` may run a command as an untracked passthrough (no exit-code tracking) — verify results with `terminal_output` and prefer the `exec` tool for local commands that don't need the user's visible terminal.
+- **Visibility**: `terminal_task`, `terminal_exec`, `terminal_output`, and `terminal_upload` only appear in your tool list when the user is currently viewing an active terminal session. If they are absent from your tool list this turn, the user has not opened a terminal panel. In that case, either ask the user to open the terminal panel, or fall back to the `exec` tool for shell commands that do not need a remote SSH session.
 
 ## Web and External Information
 
@@ -77,6 +82,46 @@ documents the general tool contract and non-obvious usage patterns.
 - Use `cron` for scheduled reminders or recurring jobs; do not run `mona cron` through `exec`.
 - For heartbeat tasks, use the `heartbeat_update` tool — do not use `apply_patch`/`edit_file`/`write_file` on HEARTBEAT.md.
 - Do not write reminders only to memory files when the user expects an actual notification.
+
+## Database Operations
+
+Database tools are only available when the user has an active database connection in the DB sidebar. If they are absent from your tool list, ask the user to open the DB panel and connect.
+
+### Context awareness
+
+The system injects database context metadata (connection_id, db_type, server_version, database, table, current_sql, last_error) into your context automatically. Do not ask the user to repeat this information.
+
+### `db_inspect` — preferred for diagnostics
+
+Use `db_inspect` for standard database diagnostics instead of writing dialect-specific SQL yourself:
+
+- `action="connection"` — database type and server version.
+- `action="table"` — table structure (columns, types, primary key). Requires `table`.
+- `action="indexes"` — index list. Requires `table`.
+- `action="explain"` — execution plan. Requires `sql`.
+- `action="health"` — server health (MySQL stats / SQLite pragmas).
+
+The backend generates the correct SQL for the user's database type (MySQL or SQLite). Do not send MySQL-only commands (e.g. `SHOW STATUS`) to SQLite connections — `db_inspect` handles this for you.
+
+### `db_query` — read-only ad-hoc queries
+
+Use `db_query` only for user-requested data queries or analyses that `db_inspect` cannot cover. The backend enforces read-only policy and result limits (rows + bytes). Do not attempt DML, DDL, or multi-statement SQL through `db_query` — they will be rejected at the database boundary.
+
+### `db_sql_draft` — structured SQL drafts
+
+When the user asks for SQL (NL2SQL, optimization suggestions, schema changes), use `db_sql_draft` to publish a structured draft to the frontend instead of embedding SQL in Markdown code blocks. The draft appears as a card with copy/insert/replace actions.
+
+`operation_class` must be one of:
+- `read` — safe read-only query.
+- `transactional_dml` — single-table INSERT/UPDATE/DELETE with conditions.
+- `non_transactional_change` — DDL/admin statements (CREATE/ALTER/DROP/TRUNCATE/CREATE INDEX/OPTIMIZE). Only generate a draft, do not attempt to execute.
+- `blocked` — multi-statement, unconditional UPDATE/DELETE, INSERT...SELECT, etc. Explain why it is blocked.
+
+### Modification requests
+
+For data modification (INSERT/UPDATE/DELETE), the current version does not support automatic execution. Generate a `transactional_dml` draft and explain the change plan, target rows, and verification approach. The user runs the SQL manually in the editor.
+
+For DDL and admin statements, generate a `non_transactional_change` draft only. Do not promise automatic rollback — MySQL DDL implicitly commits and cannot be rolled back.
 
 ## Global Resources (Outside Workspace)
 

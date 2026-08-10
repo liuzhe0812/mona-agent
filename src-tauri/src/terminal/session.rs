@@ -48,6 +48,11 @@ pub struct Session {
     pub config_id: String,
     pub session_type: SessionType,
     pub status: SessionStatus,
+    /// Snapshot of `user@host:port` (or a local/desktop/vnc label) taken at
+    /// connect time — maintenance records stay identifiable even after the
+    /// connection config is deleted.
+    #[serde(default)]
+    pub target_label: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -112,6 +117,11 @@ impl SessionManager {
     pub async fn get_handle(&self, id: &str) -> Option<SessionHandle> {
         let handles = self.inner.handles.read().await;
         handles.get(id).map(|h| h.clone_handle())
+    }
+
+    pub async fn get(&self, id: &str) -> Option<Session> {
+        let sessions = self.inner.sessions.read().await;
+        sessions.get(id).cloned()
     }
 
     pub async fn remove(&self, id: &str) -> Option<Session> {

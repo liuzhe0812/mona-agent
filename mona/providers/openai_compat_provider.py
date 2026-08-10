@@ -670,10 +670,12 @@ class OpenAICompatProvider(LLMProvider):
                 or _model_thinking_style(model_name)
             )
         )
+        # DeepSeek-V4 reasoner 在 thinking mode 下要求所有历史 assistant
+        # 消息必须携带 reasoning_content 字段。即使通过第三方中转服务
+        # （Console / OpenRouter / VolcEngine 等）调用，上游 API 也会
+        # 强制校验，因此判断只看模型名，不看 spec.name。
         implicit_deepseek_thinking = (
-            spec is not None
-            and spec.name == "deepseek"
-            and semantic_effort not in ("none", "minimal", "minimum")
+            semantic_effort not in ("none", "minimal", "minimum")
             and any(t in model_name.lower() for t in ("deepseek-v4", "deepseek-reasoner"))
         )
         if explicit_thinking or implicit_deepseek_thinking:

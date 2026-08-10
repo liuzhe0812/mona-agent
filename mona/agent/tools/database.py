@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from typing import Any
 
 from loguru import logger
@@ -9,9 +8,6 @@ from mona.agent.tools.base import Tool, tool_parameters
 from mona.agent.tools.context import RequestContext
 from mona.agent.tools.schema import StringSchema, tool_parameters_schema
 from mona.agent.tools.terminal import _tauri_invoke
-
-_READ_ONLY_PREFIXES = ("SELECT", "SHOW", "DESCRIBE", "DESC", "EXPLAIN", "WITH")
-_MAX_ROWS = 100
 
 
 @tool_parameters(
@@ -49,13 +45,7 @@ class DbQueryTool(Tool):
             "Execute a read-only SQL query on the user's currently connected database. "
             "Only SELECT, SHOW, DESCRIBE, EXPLAIN, and WITH (CTE) statements are allowed. "
             "Results are limited to 100 rows. "
-            "Common patterns:\n"
-            "- Table structure: SHOW CREATE TABLE `db`.`table` / DESCRIBE `table`\n"
-            "- Index info: SHOW INDEX FROM `table`\n"
-            "- Server status: SHOW STATUS / SHOW VARIABLES / SHOW PROCESSLIST\n"
-            "- Query plan: EXPLAIN SELECT ...\n"
-            "- Table stats: SHOW TABLE STATUS\n"
-            "- Schema discovery: SHOW DATABASES / SHOW TABLES / SHOW TABLES FROM `db`"
+            "Prefer db_inspect for standard database diagnostics (table structure, indexes, EXPLAIN, health)."
         )
 
     @property
@@ -66,31 +56,15 @@ class DbQueryTool(Tool):
         if not self._connection_id:
             return "Error: No database connection available. The user is not currently connected to a database."
 
-        trimmed = sql.strip()
-        first_word = trimmed.split()[0].upper() if trimmed.split() else ""
-        if first_word not in _READ_ONLY_PREFIXES:
-            return (
-                f"Error: Only read-only queries are allowed "
-                f"(SELECT/SHOW/DESCRIBE/EXPLAIN/WITH). "
-                f"Got: {first_word}"
-            )
-
-        if not re.search(r"\bLIMIT\s+\d+", trimmed, re.IGNORECASE):
-            if trimmed.rstrip().endswith(";"):
-                trimmed = trimmed.rstrip()[:-1].rstrip() + f" LIMIT {_MAX_ROWS};"
-            else:
-                trimmed = trimmed.rstrip() + f" LIMIT {_MAX_ROWS}"
-
         effective_db = database or self._database
 
-        logger.debug("db_query: sql={!r} db={} conn={}", trimmed, effective_db, self._connection_id)
+        logger.debug("db_query: sql={!r} db={} conn={}", sql, effective_db, self._connection_id)
 
         result = _tauri_invoke(
-            "db_execute_query",
+            "db_execute_ai_read",
             {
                 "connectionId": self._connection_id,
-                "sql": trimmed,
-                "limit": _MAX_ROWS,
+                "sql": sql.strip(),
                 **({"database": effective_db} if effective_db else {}),
             },
         )
@@ -99,6 +73,139 @@ class DbQueryTool(Tool):
             return result
 
         return _format_query_result(result)
+
+
+@tool_parameters(
+    tool_parameters_schema(
+        action=StringSchema(
+            "Inspection action: connection | table | indexes | explain | health",
+        ),
+        database=StringSchema("Target database name", nullable=True),
+        table=StringSchema("Target table name (required for 'table' and 'indexes' actions)", nullable=True),
+        sql=StringSchema("SQL to explain (required for 'explain' action)", nullable=True),
+        required=["action"],
+    )
+)
+class DbInspectTool(Tool):
+    config_key = "db_inspect"
+    _scopes = {"core"}
+    _connection_id: str | None = None
+    _database: str | None = None
+
+    def set_context(self, ctx: RequestContext) -> None:
+        meta = ctx.metadata or {}
+        self._connection_id = meta.get("connection_id")
+        self._database = meta.get("database")
+
+    @property
+    def name(self) -> str:
+        return "db_inspect"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Inspect database structure, indexes, execution plans, and health. "
+            "Actions: 'connection' (db type/version), 'table' (table structure), "
+            "'indexes' (index info), 'explain' (execution plan for SQL), "
+            "'health' (server health check). "
+            "Prefer this tool over db_query for standard database diagnostics."
+        )
+
+    @property
+    def read_only(self) -> bool:
+        return True
+
+    async def execute(
+        self,
+        action: str,
+        database: str | None = None,
+        table: str | None = None,
+        sql: str | None = None,
+        **kwargs: Any,
+    ) -> str:
+        if not self._connection_id:
+            return "Error: No database connection available."
+
+        result = _tauri_invoke(
+            "db_ai_inspect",
+            {
+                "connectionId": self._connection_id,
+                "action": action,
+                **({"database": database or self._database} if database or self._database else {}),
+                **({"table": table} if table else {}),
+                **({"sql": sql} if sql else {}),
+            },
+        )
+
+        if isinstance(result, str) and result.startswith("Error:"):
+            return result
+
+        return str(result) if result else "No result."
+
+
+@tool_parameters(
+    tool_parameters_schema(
+        sql=StringSchema("The SQL statement"),
+        statement_type=StringSchema("Statement type: SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, DROP, etc."),
+        operation_class=StringSchema(
+            "Operation class: read, transactional_dml, non_transactional_change, blocked"
+        ),
+        explanation=StringSchema("Brief explanation of what the SQL does"),
+        target_objects=StringSchema("Comma-separated list of target table/database names", nullable=True),
+        required=["sql", "statement_type", "operation_class", "explanation"],
+    )
+)
+class DbSqlDraftTool(Tool):
+    config_key = "db_sql_draft"
+    _scopes = {"core"}
+
+    @property
+    def name(self) -> str:
+        return "db_sql_draft"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Publish a structured SQL draft to the user's SQL editor. "
+            "Use this when generating SQL for the user (NL2SQL, optimization suggestions, etc.). "
+            "The draft appears as a card in the DB sidebar with copy/insert/replace actions. "
+            "operation_class must be one of: read, transactional_dml, non_transactional_change, blocked."
+        )
+
+    @property
+    def read_only(self) -> bool:
+        return True
+
+    async def execute(
+        self,
+        sql: str,
+        statement_type: str,
+        operation_class: str,
+        explanation: str,
+        target_objects: str | None = None,
+        **kwargs: Any,
+    ) -> str:
+        target_list = (
+            [s.strip() for s in target_objects.split(",") if s.strip()]
+            if target_objects
+            else []
+        )
+
+        result = _tauri_invoke(
+            "db_publish_sql_draft",
+            {
+                "sql": sql,
+                "statementType": statement_type,
+                "targetObjects": target_list,
+                "operationClass": operation_class,
+                "explanation": explanation,
+            },
+        )
+
+        if isinstance(result, str) and result.startswith("Error:"):
+            return result
+
+        return f"SQL draft published: {statement_type} ({operation_class})"
 
 
 def _format_query_result(result: Any) -> str:

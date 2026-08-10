@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Check, CheckCircle2, Download, FolderOpen, Loader2, MessageSquareText, PanelLeft } from "lucide-react";
+import { Check, CheckCircle2, Download, FolderOpen, Loader2, MessageSquareText, PanelLeft, PanelLeftClose, Plus } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useClient } from "@/providers/ClientProvider";
 import { fetchPptExportStatus, markPptGenerating, savePptChatId, getApiBase } from "@/lib/api";
 import { isTauri, httpFetch } from "@/lib/tauri";
@@ -69,6 +70,11 @@ export const DEFAULT_EXPORT_OPTIONS: PptExportOptions = {
 };
 
 const ACTIVE_PROJECT_KEY = "mona.ppt.activeProject";
+const SIDEBAR_COLLAPSED_KEY = "mona.ppt.sidebarCollapsed";
+const SIDEBAR_WIDTH_KEY = "mona.ppt.sidebarWidth";
+const DEFAULT_SIDEBAR_WIDTH = 260;
+const MIN_SIDEBAR_WIDTH = 200;
+const MAX_SIDEBAR_WIDTH = 360;
 
 interface ActiveProjectState {
   name: string;
@@ -122,6 +128,8 @@ export function PptMakerView() {
   const [hasPptxOutput, setHasPptxOutput] = useState(false);
   const [pipelineStage, setPipelineStage] = useState<string>("init");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
+  const [isResizing, setIsResizing] = useState(false);
   const [chatSheetOpen, setChatSheetOpen] = useState(false);
   const chatPanelRef = useRef<PptChatPanelHandle>(null);
   const [displayContentMap, setDisplayContentMap] = useState<Record<string, string>>({});
@@ -165,12 +173,38 @@ export function PptMakerView() {
     }
   }, [projectName, chatId, phase]);
 
-  // Auto-collapse project sidebar on medium/narrow screens
+
+  // 初始化侧边栏折叠状态与宽度（从 localStorage 读取）
+  useEffect(() => {
+    try {
+      const collapsedRaw = localStorage.getItem(SIDEBAR_COLLAPSED_KEY);
+      const widthRaw = localStorage.getItem(SIDEBAR_WIDTH_KEY);
+      if (collapsedRaw === "true") setSidebarCollapsed(true);
+      if (widthRaw) {
+        const w = Math.max(MIN_SIDEBAR_WIDTH, Math.min(MAX_SIDEBAR_WIDTH, parseInt(widthRaw, 10)));
+        setSidebarWidth(w);
+      }
+    } catch {}
+  }, []);
+
+  // 窄屏自动折叠侧边栏，但保留用户手动展开的权利
   useEffect(() => {
     if (bp !== "wide") setSidebarCollapsed(true);
   }, [bp]);
 
-  // V2 §7.4: restore active project on mount
+  // 持久化侧边栏状态
+  useEffect(() => {
+    try {
+      localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(sidebarCollapsed));
+    } catch {}
+  }, [sidebarCollapsed]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(SIDEBAR_WIDTH_KEY, String(sidebarWidth));
+    } catch {}
+  }, [sidebarWidth]);
+
   // 校验项目在后端实际存在，避免恢复已删除的项目导致后续 API 持续 404
   useEffect(() => {
     let cancelled = false;
@@ -255,24 +289,11 @@ export function PptMakerView() {
     };
   }, [phase, projectName, token]);
 
-  const handleNewProject = useCallback(() => {
-    setPhase("config");
-    setProjectName(null);
-    setChatId(null);
-    setStartError(null);
-    setDownloadError(null);
-    setDownloading(false);
-    setConfig(DEFAULT_CONFIG);
-    setHasPptxOutput(false);
-    setPipelineStage("init");
-    try {
-      localStorage.removeItem(ACTIVE_PROJECT_KEY);
-    } catch {}
-  }, []);
+
 
   const handleStartGeneration = useCallback(async () => {
     setStartError(null);
-    const name = generateProjectName();
+    const name = generateProjectName(config.topic);
     try {
       setProjectName(name);
       const prompt = buildPptPrompt(config, name);
@@ -538,30 +559,127 @@ export function PptMakerView() {
     }
   }, [projectName]);
 
+  const handleNewProject = useCallback(() => {
+    setPhase("config");
+    setProjectName(null);
+    setChatId(null);
+    setStartError(null);
+    setDownloadError(null);
+    setDownloading(false);
+    setConfig(DEFAULT_CONFIG);
+    setHasPptxOutput(false);
+    setPipelineStage("init");
+    try {
+      localStorage.removeItem(ACTIVE_PROJECT_KEY);
+    } catch {}
+  }, []);
+
+  const startResize = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      setIsResizing(true);
+      const startX = e.clientX;
+      const startWidth = sidebarWidth;
+
+      const handleMove = (ev: MouseEvent) => {
+        const delta = ev.clientX - startX;
+        const next = Math.max(MIN_SIDEBAR_WIDTH, Math.min(MAX_SIDEBAR_WIDTH, startWidth + delta));
+        setSidebarWidth(next);
+      };
+      const handleUp = () => {
+        setIsResizing(false);
+        window.removeEventListener("mousemove", handleMove);
+        window.removeEventListener("mouseup", handleUp);
+      };
+      window.addEventListener("mousemove", handleMove);
+      window.addEventListener("mouseup", handleUp);
+    },
+    [sidebarWidth],
+  );
+
   return (
     <div className="flex h-full flex-col bg-background">
       <div className="flex min-h-0 flex-1">
         {sidebarCollapsed ? (
-          <div className="flex w-[40px] shrink-0 flex-col items-center border-r border-border/70 bg-muted/30 py-2">
-            <button
-              className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-              onClick={() => setSidebarCollapsed(false)}
-              title="展开侧栏"
-              aria-label="展开侧栏"
-            >
-              <PanelLeft className="h-3.5 w-3.5" />
-            </button>
-          </div>
-        ) : (
-          <aside className="flex w-[260px] shrink-0 flex-col border-r border-border/70">
-            <div className="flex shrink-0 flex-col gap-2 border-b border-border/70 p-3">
-              <Button
-                className="h-8 w-full text-[13px]"
-                onClick={handleNewProject}
-              >
-                新建演示文稿
-              </Button>
+          <TooltipProvider delayDuration={100}>
+            <div className="flex w-12 shrink-0 flex-col items-center border-r border-border/70 bg-muted/30 py-3">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                    onClick={() => setSidebarCollapsed(false)}
+                    aria-label="展开侧栏"
+                  >
+                    <PanelLeft className="h-4 w-4" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="right" sideOffset={8}>
+                  展开侧栏
+                </TooltipContent>
+              </Tooltip>
+
+              <div className="min-h-0 w-full flex-1 overflow-y-auto py-2">
+                <PptHistory
+                  key={historyKey}
+                  currentProjectName={projectName}
+                  collapsed
+                  onSelect={handleSelectProject}
+                  onDownload={handleDownload}
+                  onDelete={handleDeleteProject}
+                />
+              </div>
+
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                    onClick={handleNewProject}
+                    aria-label="新建演示文稿"
+                  >
+                    <Plus className="h-4 w-4" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="right" sideOffset={8}>
+                  新建演示文稿
+                </TooltipContent>
+              </Tooltip>
             </div>
+          </TooltipProvider>
+        ) : (
+          <aside
+            className="relative flex shrink-0 flex-col border-r border-border/70 bg-muted/30"
+            style={{ width: sidebarWidth }}
+          >
+            {/* 顶部标题栏：模块标识 + 收起按钮 */}
+            <div className="flex shrink-0 items-center justify-between border-b border-border/70 px-3 py-2.5">
+              <div className="flex items-center gap-2">
+                <div className="flex h-6 w-6 items-center justify-center rounded-md bg-primary/10 text-primary">
+                  <FolderOpen className="h-3.5 w-3.5" />
+                </div>
+                <span className="text-[13px] font-semibold text-foreground">PPT</span>
+              </div>
+              <TooltipProvider delayDuration={100}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                      onClick={() => setSidebarCollapsed(true)}
+                      aria-label="收起侧栏"
+                    >
+                      <PanelLeftClose className="h-3.5 w-3.5" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="right" sideOffset={8}>
+                    收起侧栏
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            </div>
+
+            {/* 历史项目列表 */}
             <div className="min-h-0 flex-1 overflow-y-auto scrollbar-hover">
               <PptHistory
                 key={historyKey}
@@ -571,6 +689,27 @@ export function PptMakerView() {
                 onDelete={handleDeleteProject}
               />
             </div>
+
+            {/* 底部主操作 */}
+            <div className="shrink-0 border-t border-border/70 p-3">
+              <Button
+                className="h-9 w-full gap-1.5 text-[13px]"
+                onClick={handleNewProject}
+              >
+                <Plus className="h-4 w-4" />
+                新建演示文稿
+              </Button>
+            </div>
+
+            {/* 拖拽调整宽度 */}
+            <div
+              className={cn(
+                "absolute right-0 top-0 bottom-0 w-1 -translate-x-1/2 cursor-col-resize transition-colors",
+                isResizing ? "bg-primary/40" : "hover:bg-primary/25",
+              )}
+              onMouseDown={startResize}
+              aria-hidden="true"
+            />
           </aside>
         )}
 
@@ -850,12 +989,29 @@ function ResponsiveChatLayout({
   );
 }
 
-function generateProjectName(): string {
+function generateProjectName(topic: string): string {
   const now = new Date();
   const pad = (n: number) => String(n).padStart(2, "0");
   const ts = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}`;
   const rand = Math.random().toString(36).slice(2, 6);
-  return `ppt-${ts}-${rand}`;
+
+  const raw = topic.trim();
+  if (!raw) {
+    return `ppt-${ts}-${rand}`;
+  }
+
+  const slug = raw
+    .toLowerCase()
+    .replace(/[^\w一-龥\s-]/g, "")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 30);
+
+  if (!slug) {
+    return `ppt-${ts}-${rand}`;
+  }
+  return `${slug}-${ts}-${rand}`;
 }
 
 function buildPptPrompt(config: PptConfig, projectName: string): string {

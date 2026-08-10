@@ -681,13 +681,16 @@
   justify-content: center;
   text-align: center;
   font-size: var(--node-font-size, 13px);
-  line-height: 1.4;
+  line-height: var(--node-line-height, 1.5);
   font-family: var(--node-font-family, inherit);
   font-weight: var(--node-font-weight, 400);
   font-style: var(--node-font-style, normal);
   user-select: none;
   background: transparent;
   border: none;
+  /* 填满 React Flow 节点 wrapper，让 NodeResizer 能正确缩放 */
+  width: 100%;
+  height: 100%;
   filter: drop-shadow(0 1px 2px rgb(0 0 0 / 0.08));
   transition: filter 0.15s;
 }
@@ -696,47 +699,28 @@
   filter: drop-shadow(0 4px 8px rgb(0 0 0 / 0.18));
 }
 
+/* 无显式 size 时的最小尺寸回退（v1 兼容） */
 .flowchart-node-wps.start,
 .flowchart-node-wps.end,
-.flowchart-node-wps.terminator {
-  width: 140px;
-  min-height: 40px;
-}
-
-.flowchart-node-wps.process {
-  width: 140px;
+.flowchart-node-wps.terminator,
+.flowchart-node-wps.process,
+.flowchart-node-wps.annotation,
+.flowchart-node-wps.subprocess,
+.flowchart-node-wps.predefined-process,
+.flowchart-node-wps.input-output {
+  min-width: 80px;
   min-height: 40px;
 }
 
 .flowchart-node-wps.decision {
-  width: 160px;
-  height: 80px;
+  min-width: 80px;
+  min-height: 60px;
 }
 
-.flowchart-node-wps.document {
-  width: 140px;
-  height: 60px;
-}
-
+.flowchart-node-wps.document,
 .flowchart-node-wps.database {
-  width: 140px;
-  height: 70px;
-}
-
-.flowchart-node-wps.annotation {
-  width: 140px;
-  min-height: 40px;
-}
-
-.flowchart-node-wps.subprocess,
-.flowchart-node-wps.predefined-process {
-  width: 140px;
-  min-height: 40px;
-}
-
-.flowchart-node-wps.input-output {
-  width: 140px;
-  min-height: 40px;
+  min-width: 80px;
+  min-height: 50px;
 }
 
 /* 多行 label 默认样式：节点宽度受 size 控制，文字按 textAlign 对齐 */
@@ -818,6 +802,89 @@
   filter: none !important;
   stroke: var(--flowchart-edge) !important;
   stroke-width: 1.5 !important;
+}
+
+/* ─── 流程图边控制点（WPS 风格连接线调整）──────────────────────────
+   折线（smoothstep）：选中边后，每一段中点显示一个实心方块把手，
+                       拖动调整该段位置并自动产生新的角；
+                       已有拐角点显示为空心方块，可拖拽、双击删除。
+   曲线（bezier）：选中边后，显示两个把手（cubic bezier 的 cp1/cp2）+ 虚线连接线。
+   把手显隐由组件层根据 selected/readOnly 条件渲染控制，CSS 不处理显隐。 */
+
+/* 折线拐角控制点：空心方块 */
+.flowchart-edge-control-point {
+  width: 10px;
+  height: 10px;
+  border-radius: 1px;
+  background: var(--background);
+  border: 1.5px solid var(--flowchart-handle);
+  box-shadow: 0 0 0 1px var(--background);
+  cursor: grab;
+  transition: transform 120ms ease, box-shadow 120ms ease;
+}
+.flowchart-edge-control-point:hover {
+  transform: translate(-50%, -50%) scale(1.2);
+}
+.flowchart-edge-control-point.dragging {
+  cursor: grabbing;
+  border-color: var(--flowchart-edge-selected);
+  background: var(--flowchart-handle);
+}
+.flowchart-edge-control-point.selected {
+  border-color: var(--flowchart-edge-selected);
+}
+
+/* 折线段中点把手：实心方块（WPS 风格） */
+.flowchart-edge-segment-handle {
+  width: 9px;
+  height: 9px;
+  border-radius: 1px;
+  background: var(--flowchart-handle);
+  border: 1px solid var(--background);
+  box-shadow: 0 0 0 1px var(--flowchart-handle);
+  cursor: grab;
+  transition: transform 120ms ease;
+}
+.flowchart-edge-segment-handle:hover {
+  transform: translate(-50%, -50%) scale(1.15);
+}
+.flowchart-edge-segment-handle.dragging {
+  cursor: grabbing;
+  background: var(--flowchart-edge-selected);
+  box-shadow: 0 0 0 1px var(--flowchart-edge-selected);
+}
+
+/* 曲线把手：空心圆点（对齐 WPS 曲线把手样式） */
+.flowchart-edge-bezier-handle {
+  width: 10px;
+  height: 10px;
+  border-radius: 9999px;
+  background: var(--background);
+  border: 1.5px solid var(--flowchart-handle);
+  box-shadow: 0 0 0 1px var(--background);
+  cursor: grab;
+  transition: transform 120ms ease;
+}
+.flowchart-edge-bezier-handle:hover {
+  transform: translate(-50%, -50%) scale(1.2);
+}
+.flowchart-edge-bezier-handle.dragging {
+  cursor: grabbing;
+  background: var(--flowchart-handle);
+  border-color: var(--flowchart-edge-selected);
+}
+
+/* 曲线把手连接线：细实线（对齐 WPS 曲线把手的浅色引线） */
+.flowchart-edge-handle-line {
+  border-top: 1px solid hsl(var(--theme) / 0.5);
+  pointer-events: none;
+}
+
+.flowchart-surface.flowchart-exporting .flowchart-edge-control-point,
+.flowchart-surface.flowchart-exporting .flowchart-edge-segment-handle,
+.flowchart-surface.flowchart-exporting .flowchart-edge-bezier-handle,
+.flowchart-surface.flowchart-exporting .flowchart-edge-handle-line {
+  display: none !important;
 }
 
 /* ─── jit-viewer 预览自适应父窗口 ──────────────────────────────────

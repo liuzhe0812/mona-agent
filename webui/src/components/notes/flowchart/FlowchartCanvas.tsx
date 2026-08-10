@@ -36,6 +36,7 @@ import {
   Handle,
   Position,
   SelectionMode,
+  ViewportPortal,
   addEdge,
   applyNodeChanges,
   applyEdgeChanges,
@@ -68,8 +69,16 @@ import type {
   FlowchartNode,
   FlowchartNodeKind,
   FlowchartNodeStyle,
+  FlowchartCanvasSettings,
 } from "./flowchart-document";
-import { SHAPES } from "./FlowchartShapePanel";
+import { isFlowchartContainerKind } from "./flowchart-document";
+import {
+  FLOWCHART_LANE_HEADER_SIZE,
+  FLOWCHART_LANE_MIN_EXTENT,
+  FLOWCHART_POOL_HEADER_SIZE,
+} from "./flowchart-operations";
+import { FLOWCHART_SHAPE_CATALOG, renderFlowchartShape } from "./flowchart-shapes";
+import type { FlowchartThemeDefaults } from "./flowchart-themes";
 import {
   HIGHLIGHTER_STYLE,
   PEN_STYLE,
@@ -79,6 +88,11 @@ import {
   getFreehandOutline,
   getSvgPathFromStroke,
 } from "./freehand";
+import {
+  BezierControlEdge,
+  SmoothstepControlEdge,
+  type FlowchartControlEdgeData,
+} from "./FlowchartControlEdge";
 
 // ---------------------------------------------------------------------------
 // 节点组件（WPS 风格）
@@ -108,16 +122,37 @@ interface FlowchartNodeData {
   opacity?: number;
   /** freehand 节点：笔触宽度 */
   strokeWidth?: number;
+  /** v2：主题解析出的默认颜色（节点手动覆盖优先） */
+  themeDefaults?: FlowchartThemeDefaults;
+  /** v2：旋转角度（0-359） */
+  rotation?: number;
+  /** v2：水平翻转 */
+  flipX?: boolean;
+  /** v2：垂直翻转 */
+  flipY?: boolean;
+  /** v2：不透明度（0-1） */
+  nodeOpacity?: number;
+  /** v2：锁定后禁止位置/尺寸修改 */
+  locked?: boolean;
+  /** v2：容器结构参数（group/pool/lane 渲染标题区方向与尺寸） */
+  container?: FlowchartNode["container"];
   [key: string]: unknown;
 }
 
-/** 把 FlowchartNodeStyle 转为 CSS 变量对象，注入到节点容器。 */
-function styleToCssVars(style: FlowchartNodeStyle | undefined): Record<string, string> {
-  if (!style) return {};
+/** 把 FlowchartNodeStyle 转为 CSS 变量对象，注入到节点容器。
+ *  themeDefaults 作为回退：节点未手动覆盖 fill/color/borderColor 时使用文档主题默认色。 */
+function styleToCssVars(
+  style: FlowchartNodeStyle | undefined,
+  themeDefaults?: FlowchartThemeDefaults,
+): Record<string, string> {
   const vars: Record<string, string> = {};
-  if (style.fill) vars["--node-fill"] = style.fill;
-  if (style.color) vars["--node-text"] = style.color;
-  if (style.borderColor) vars["--node-border"] = style.borderColor;
+  const fill = style?.fill ?? themeDefaults?.fill;
+  const text = style?.color ?? themeDefaults?.text;
+  const border = style?.borderColor ?? themeDefaults?.stroke;
+  if (fill) vars["--node-fill"] = fill;
+  if (text) vars["--node-text"] = text;
+  if (border) vars["--node-border"] = border;
+  if (!style) return vars;
   if (typeof style.borderWidth === "number") vars["--node-border-width"] = `${style.borderWidth}px`;
   if (style.borderStyle) vars["--node-border-style"] = style.borderStyle;
   if (typeof style.fontSize === "number") vars["--node-font-size"] = `${style.fontSize}px`;
@@ -126,6 +161,7 @@ function styleToCssVars(style: FlowchartNodeStyle | undefined): Record<string, s
   if (typeof style.italic === "boolean") vars["--node-font-style"] = style.italic ? "italic" : "normal";
   if (typeof style.underline === "boolean") vars["--node-text-decoration"] = style.underline ? "underline" : "none";
   if (style.textAlign) vars["--node-text-align"] = style.textAlign;
+  if (typeof style.lineHeight === "number") vars["--node-line-height"] = String(style.lineHeight);
   return vars;
 }
 
@@ -167,119 +203,9 @@ function FourHandles() {
  *  - 用户自定义样式通过 svgShapeStyle 覆盖 fill/stroke/strokeWidth/strokeDasharray
  *  - 默认 strokeWidth=1，dashed='8 6'，dotted='2 5'
  */
-function renderShape(
-  kind: FlowchartNodeKind,
-  selected: boolean,
-  cssVars: Record<string, string>,
-): React.ReactNode {
-  // 100% 对齐 NoteGen 的 svgShapeStyle：用户自定义优先，否则用 CSS 变量
-  const userFill = cssVars["--node-fill"];
-  const userStroke = cssVars["--node-border"];
-  const userBorderWidth = cssVars["--node-border-width"];
-  const userBorderStyle = cssVars["--node-border-style"];
-
-  const style: React.CSSProperties = {
-    fill: userFill || undefined,
-    stroke: userStroke || undefined,
-    strokeWidth: userBorderWidth ? parseFloat(userBorderWidth) : 1,
-    strokeDasharray:
-      userBorderStyle === "dashed" ? "8 6"
-      : userBorderStyle === "dotted" ? "2 5"
-      : undefined,
-    vectorEffect: "non-scaling-stroke",
-  };
-
-  // 形状 className：未自定义时用主题 token（fill-card stroke-border 等价）
-  const shapeClassName = !userFill && !userStroke ? "fill-card stroke-border" : "";
-
-  // 选中状态：NoteGen 不改 stroke 颜色，仅通过外层 drop-shadow 增强
-  // 这里保持 selected 参数用于未来扩展，但形状本身不变色
-  void selected;
-
-  const common = { className: shapeClassName, style };
-
-  switch (kind) {
-    case "decision":
-      return <polygon points="100,1 199,50 100,99 1,50" {...common} />;
-    case "start":
-    case "end":
-    case "terminator":
-      return <rect x="1" y="1" width="198" height="98" rx="49" {...common} />;
-    case "input-output":
-      return <polygon points="24,1 199,1 176,99 1,99" {...common} />;
-    case "document":
-      return <path d="M1 1H199V80C160 60 132 100 99 81C65 61 35 100 1 82Z" {...common} />;
-    case "multi-document":
-      return (
-        <>
-          <path d="M15 1H199V73C163 57 137 90 106 75C76 60 49 90 15 75Z" {...common} />
-          <path d="M8 9H192V81C156 65 130 98 99 83C69 68 42 98 8 83Z" {...common} />
-          <path d="M1 17H185V89C149 73 123 106 92 91C62 76 35 106 1 91Z" {...common} />
-        </>
-      );
-    case "database":
-      return (
-        <>
-          <path d="M1 17C1 8 45 1 100 1S199 8 199 17V83C199 92 155 99 100 99S1 92 1 83Z" {...common} />
-          <ellipse
-            className="fill-none stroke-border"
-            cx="100"
-            cy="17"
-            rx="99"
-            ry="16"
-            style={{
-              stroke: style.stroke,
-              strokeWidth: style.strokeWidth,
-              strokeDasharray: style.strokeDasharray,
-              vectorEffect: "non-scaling-stroke",
-            }}
-          />
-        </>
-      );
-    case "annotation":
-      return (
-        <>
-          <path d="M 1 1 L 1 99" stroke={style.stroke || "var(--border)"} strokeWidth={((style.strokeWidth as number | undefined) ?? 1) * 2} strokeDasharray={style.strokeDasharray} vectorEffect="non-scaling-stroke" fill="none" />
-          <rect x="1" y="1" width="198" height="98" rx="4" {...common} fill="none" />
-        </>
-      );
-    case "subprocess":
-    case "predefined-process":
-      return (
-        <>
-          <rect x="1" y="1" width="198" height="98" rx="6" {...common} />
-          <path className="fill-none stroke-border" d="M24 1V99M176 1V99" style={style} />
-        </>
-      );
-    case "manual-input":
-      return <polygon points="1,25 199,1 199,99 1,99" {...common} />;
-    case "preparation":
-      return <polygon points="28,1 172,1 199,50 172,99 28,99 1,50" {...common} />;
-    case "delay":
-      return <path d="M1 1H126C167 1 199 23 199 50S167 99 126 99H1Z" {...common} />;
-    case "display":
-      return <path d="M25 1H132C174 1 199 23 199 50S174 99 132 99H25C43 75 43 25 25 1Z" {...common} />;
-    case "connector":
-      return <ellipse cx="100" cy="50" rx="49" ry="49" {...common} />;
-    case "off-page-connector":
-      return <polygon points="1,1 199,1 199,66 100,99 1,66" {...common} />;
-    case "internal-storage":
-      return (
-        <>
-          <rect x="1" y="1" width="198" height="98" rx="4" {...common} />
-          <path className="fill-none stroke-border" d="M28 1V99M1 24H199" style={style} />
-        </>
-      );
-    case "stored-data":
-      return <path d="M24 1H176C207 20 207 80 176 99H24C-7 80-7 20 24 1Z" {...common} />;
-    case "text":
-      // text 节点：无 SVG 形状，仅渲染文本（对齐 NoteGen TextCanvasNode）
-      return null;
-    case "process":
-    default:
-      return <rect x="1" y="1" width="198" height="98" rx="8" {...common} />;
-  }
-}
+// ---------------------------------------------------------------------------
+// 形状渲染：使用 flowchart-shapes.tsx 中的统一 renderFlowchartShape
+// ---------------------------------------------------------------------------
 
 /**
  * 原地编辑 label 组件：双击时把 div 替换为 textarea，编辑完失焦或 Esc 退出。
@@ -354,7 +280,7 @@ const EditableLabel = memo(function EditableLabel({
         if (event.key === "Escape") {
           event.preventDefault();
           setEditing(false);
-        } else if (event.key === "Enter" && !event.shiftKey) {
+        } else if (event.key === "Enter" && !event.shiftKey && !event.altKey) {
           event.preventDefault();
           commit();
         }
@@ -367,9 +293,26 @@ const EditableLabel = memo(function EditableLabel({
 
 function FlowchartNodeView({ id, data, selected, width, height }: NodeProps<Node>) {
   const d = data as unknown as FlowchartNodeData;
-  const cssVars = useMemo(() => styleToCssVars(d.style), [d.style]);
+  const cssVars = useMemo(() => styleToCssVars(d.style, d.themeDefaults), [d.style, d.themeDefaults]);
   const className = `flowchart-node-wps ${d.kind}${selected ? " selected" : ""}`;
   const [imageSrc, setImageSrc] = useState<string | null>(null);
+
+  // v2：旋转 / 翻转 / 不透明度 / 锁定（锁定隐藏缩放手柄，拖动由 toFlowNode 的 draggable 控制）
+  const transform = useMemo(() => {
+    const parts: string[] = [];
+    if (d.rotation) parts.push(`rotate(${d.rotation}deg)`);
+    if (d.flipX) parts.push("scaleX(-1)");
+    if (d.flipY) parts.push("scaleY(-1)");
+    return parts.length > 0 ? parts.join(" ") : undefined;
+  }, [d.rotation, d.flipX, d.flipY]);
+  const nodeOpacity = typeof d.nodeOpacity === "number" ? d.nodeOpacity : undefined;
+  const resizable = !!d.resizable && !d.locked;
+  const containerStyle = useMemo(() => {
+    const base: React.CSSProperties = { ...cssVars };
+    if (transform) base.transform = transform;
+    if (nodeOpacity !== undefined) base.opacity = nodeOpacity;
+    return base;
+  }, [cssVars, transform, nodeOpacity]);
 
   useEffect(() => {
     if (d.kind !== "image" || !d.imagePath) {
@@ -413,8 +356,8 @@ function FlowchartNodeView({ id, data, selected, width, height }: NodeProps<Node
     const h = Math.max(nodeHeight, 4);
 
     return (
-      <div className={className} style={{ ...cssVars, width: "100%", height: "100%" }}>
-        {selected && d.resizable && (
+      <div className={className} style={{ ...containerStyle, width: "100%", height: "100%" }}>
+        {selected && resizable && (
           <NodeResizer
             minWidth={4}
             minHeight={4}
@@ -462,8 +405,8 @@ function FlowchartNodeView({ id, data, selected, width, height }: NodeProps<Node
   // 图片节点：直接渲染图片
   if (d.kind === "image") {
     return (
-      <div className={className} style={cssVars}>
-        {selected && d.resizable && (
+      <div className={className} style={containerStyle}>
+        {selected && resizable && (
           <NodeResizer
             minWidth={48}
             minHeight={48}
@@ -508,13 +451,127 @@ function FlowchartNodeView({ id, data, selected, width, height }: NodeProps<Node
     />
   );
 
-  const shape = renderShape(d.kind, selected, cssVars);
+  // 使用统一的 renderFlowchartShape，把 cssVars 转换为 options
+  const shape = renderFlowchartShape(d.kind, {
+    fill: cssVars["--node-fill"],
+    stroke: cssVars["--node-border"],
+    strokeWidth: cssVars["--node-border-width"] ? parseFloat(cssVars["--node-border-width"]) : undefined,
+    strokeDasharray:
+      cssVars["--node-border-style"] === "dashed" ? "8 6"
+      : cssVars["--node-border-style"] === "dotted" ? "2 5"
+      : undefined,
+    cornerRadius: d.style?.cornerRadius,
+  });
+
+  // group 容器（FC-GROUP-01）：无视觉框，仅作为 parentId 载体让子节点一起移动。
+  // 不渲染 FourHandles（connectable=false），不作为连线端点，不渲染 NodeResizer。
+  if (d.kind === "group") {
+    return <div className={className} style={{ ...containerStyle, width: "100%", height: "100%" }} />;
+  }
+
+  // 泳池 / 泳道（FC-SWIM-02）：外框 + 标题区（横向在左、纵向在顶）+ 可编辑标题。
+  // 子节点由 React Flow parentId 机制叠加在内容区；不渲染 FourHandles（connectable=false）。
+  if (d.kind === "swimlane-pool" || d.kind === "swimlane-lane") {
+    const isPool = d.kind === "swimlane-pool";
+    const orientation =
+      d.container && d.container.type !== "group" ? d.container.orientation : "horizontal";
+    const horizontal = orientation === "horizontal";
+    const headerSize = isPool
+      ? d.container?.type === "pool"
+        ? d.container.headerSize
+        : FLOWCHART_POOL_HEADER_SIZE
+      : FLOWCHART_LANE_HEADER_SIZE;
+    const borderColor = cssVars["--node-border"] ?? "var(--flowchart-node-border)";
+    const borderWidth = cssVars["--node-border-width"] ?? (isPool ? "1.5px" : "1px");
+    const headerBg = cssVars["--node-fill"] ?? (isPool ? "hsl(var(--theme) / 0.08)" : "hsl(var(--theme) / 0.05)");
+    // lane 只允许沿泳池方向 resize（横向改高、纵向改宽），另一维由 pool 内容区决定（Editor 提交时强制）
+    const laneShouldResize = (_event: unknown, params: { direction: number[] }) =>
+      horizontal ? params.direction[0] === 0 : params.direction[1] === 0;
+    return (
+      <div className={className} style={{ ...containerStyle, width: "100%", height: "100%" }}>
+        {selected && resizable && (
+          <NodeResizer
+            minWidth={
+              isPool
+                ? horizontal
+                  ? headerSize + 120
+                  : FLOWCHART_LANE_MIN_EXTENT * 2
+                : horizontal
+                  ? 120
+                  : FLOWCHART_LANE_MIN_EXTENT
+            }
+            minHeight={
+              isPool
+                ? horizontal
+                  ? FLOWCHART_LANE_MIN_EXTENT * 2
+                  : headerSize + 120
+                : horizontal
+                  ? FLOWCHART_LANE_MIN_EXTENT
+                  : 120
+            }
+            shouldResize={isPool ? undefined : laneShouldResize}
+            isVisible={true}
+            lineClassName="!border-[hsl(var(--flowchart-handle))]"
+            handleClassName="!bg-[hsl(var(--flowchart-handle))] !border-[hsl(var(--flowchart-handle))]"
+          />
+        )}
+        {/* 外框 */}
+        <div
+          className={isPool ? "flowchart-pool-frame" : "flowchart-lane-frame"}
+          style={{
+            position: "absolute",
+            inset: 0,
+            borderRadius: isPool ? 8 : 0,
+            borderWidth,
+            borderStyle: cssVars["--node-border-style"] ?? "solid",
+            borderColor,
+            background: "transparent",
+          }}
+        />
+        {/* 标题区（横向在左、纵向在顶），背景与文字继承主题 */}
+        <div
+          className={isPool ? "flowchart-pool-header" : "flowchart-lane-header"}
+          style={{
+            position: "absolute",
+            ...(horizontal
+              ? { left: 0, top: 0, bottom: 0, width: headerSize, borderRight: `1px solid ${borderColor}` }
+              : { left: 0, top: 0, right: 0, height: headerSize, borderBottom: `1px solid ${borderColor}` }),
+            background: headerBg,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            overflow: "hidden",
+            borderRadius: isPool ? (horizontal ? "8px 0 0 8px" : "8px 8px 0 0") : 0,
+            zIndex: 1,
+          }}
+        >
+          <EditableLabel
+            nodeId={id}
+            value={d.label}
+            readOnly={!!d.readOnly}
+            onLabelEdit={d.onLabelEdit}
+            className="flowchart-node-label"
+            style={{
+              color: cssVars["--node-text"] ?? undefined,
+              textAlign: "center",
+              fontSize: "0.8em",
+              whiteSpace: "pre-wrap",
+              pointerEvents: "auto",
+              ...(horizontal
+                ? { writingMode: "vertical-rl", textOrientation: "mixed", maxHeight: "100%" }
+                : { maxWidth: "100%" }),
+            }}
+          />
+        </div>
+      </div>
+    );
+  }
 
   // text 节点：对齐 NoteGen TextCanvasNode，无 SVG 形状，仅渲染文本
   if (d.kind === "text") {
     return (
-      <div className={className} style={cssVars}>
-        {selected && d.resizable && (
+      <div className={className} style={containerStyle}>
+        {selected && resizable && (
           <NodeResizer
             minWidth={48}
             minHeight={28}
@@ -544,8 +601,8 @@ function FlowchartNodeView({ id, data, selected, width, height }: NodeProps<Node
   }
 
   return (
-    <div className={className} style={cssVars}>
-      {selected && d.resizable && (
+    <div className={className} style={containerStyle}>
+      {selected && resizable && (
         <NodeResizer
           minWidth={d.kind === "connector" ? 48 : 96}
           minHeight={d.kind === "connector" ? 48 : 56}
@@ -568,6 +625,13 @@ function FlowchartNodeView({ id, data, selected, width, height }: NodeProps<Node
 
 const nodeTypes = { flowchart: FlowchartNodeView };
 
+/** 自定义边类型：注册 WPS 风格的折线和曲线边组件（带控制点交互）。
+ *  straight 保留 React Flow 默认实现（直线不支持控制点）。 */
+const edgeTypes = {
+  "flowchart-smoothstep": SmoothstepControlEdge,
+  "flowchart-bezier": BezierControlEdge,
+};
+
 /** 连线拖到空白处弹出的形状选择菜单（左侧形状库的子集，图标保持一致） */
 const CONNECTION_MENU_KINDS: FlowchartNodeKind[] = [
   "process",
@@ -580,7 +644,7 @@ const CONNECTION_MENU_KINDS: FlowchartNodeKind[] = [
   "subprocess",
   "annotation",
 ];
-const CONNECTION_MENU_SHAPES = SHAPES.filter((s) => CONNECTION_MENU_KINDS.includes(s.kind));
+const CONNECTION_MENU_SHAPES = FLOWCHART_SHAPE_CATALOG.filter((s) => CONNECTION_MENU_KINDS.includes(s.kind));
 
 // ---------------------------------------------------------------------------
 // 工具：节点/边转换
@@ -591,15 +655,43 @@ function toFlowNode(
   direction: FlowchartDirection,
   readOnly: boolean = true,
   onLabelEdit?: (nodeId: string, label: string) => void,
+  themeDefaults?: FlowchartThemeDefaults,
 ): Node {
   const node: Node = {
     id: n.id,
     type: "flowchart",
     position: n.position,
-    data: { kind: n.kind, label: n.label, style: n.style, resizable: !readOnly, readOnly, onLabelEdit, imagePath: n.imagePath },
+    data: {
+      kind: n.kind,
+      label: n.label,
+      style: n.style,
+      resizable: !readOnly,
+      readOnly,
+      onLabelEdit,
+      imagePath: n.imagePath,
+      themeDefaults,
+      rotation: n.rotation,
+      flipX: n.flipX,
+      flipY: n.flipY,
+      // freehand 的 opacity 是笔触不透明度（节点内部消费），不作为整体不透明度重复应用
+      nodeOpacity: n.kind === "freehand" ? undefined : n.opacity,
+      locked: n.locked,
+      container: n.container,
+    },
     sourcePosition: direction === "LR" ? Position.Right : Position.Bottom,
     targetPosition: direction === "LR" ? Position.Left : Position.Top,
   };
+  // 锁定节点禁止拖动（尺寸修改由 FlowchartNodeView 隐藏 NodeResizer 实现）
+  if (n.locked) node.draggable = false;
+  // 泳道不可自由拖动（FC-SWIM-02）：lane 位置由泳池布局紧凑重排管理，尺寸调整走 resizeLaneNodes 策略
+  if (n.kind === "swimlane-lane") node.draggable = false;
+  // 容器层级（FC-GROUP-01 / FC-LAYER-01）：
+  // - parentId 交由 React Flow 父子机制处理（子节点 position 即父相对坐标，与文档模型一致）
+  // - 容器默认位于普通节点下层；显式 zIndex（reorder 结果）优先
+  // - 容器不作为连线端点
+  if (n.parentId !== undefined) node.parentId = n.parentId;
+  node.zIndex = n.zIndex ?? (isFlowchartContainerKind(n.kind) ? -1 : 0);
+  if (isFlowchartContainerKind(n.kind)) node.connectable = false;
   if (n.size) {
     node.width = n.size.width;
     node.height = n.size.height;
@@ -621,12 +713,63 @@ function toFlowNode(
   return node;
 }
 
-function toFlowEdge(e: FlowchartEdge): Edge {
+/**
+ * 批量转换文档节点为 React Flow 节点。
+ * React Flow 要求父节点在数组中先于子节点出现：按父链深度稳定排序（父先子后），
+ * 同级保持文档顺序，不改变文档本身。
+ */
+function toFlowNodes(
+  nodes: readonly FlowchartNode[],
+  direction: FlowchartDirection,
+  readOnly: boolean = true,
+  onLabelEdit?: (nodeId: string, label: string) => void,
+  themeDefaults?: FlowchartThemeDefaults,
+): Node[] {
+  const indexOf = new Map<string, number>();
+  nodes.forEach((n, i) => indexOf.set(n.id, i));
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const depthCache = new Map<string, number>();
+  const depthOf = (n: FlowchartNode): number => {
+    const cached = depthCache.get(n.id);
+    if (cached !== undefined) return cached;
+    let d = 0;
+    let cur = n;
+    while (cur.parentId !== undefined) {
+      const parent = byId.get(cur.parentId);
+      if (!parent) break;
+      d += 1;
+      cur = parent;
+    }
+    depthCache.set(n.id, d);
+    return d;
+  };
+  const sorted = [...nodes].sort((a, b) => {
+    const da = depthOf(a);
+    const db = depthOf(b);
+    if (da !== db) return da - db;
+    return indexOf.get(a.id)! - indexOf.get(b.id)!;
+  });
+  return sorted.map((n) => toFlowNode(n, direction, readOnly, onLabelEdit, themeDefaults));
+}
+
+function toFlowEdge(
+  e: FlowchartEdge,
+  options?: {
+    readOnly?: boolean;
+    onControlPointsChange?: (
+      edgeId: string,
+      controlPoints: { x: number; y: number }[] | undefined,
+    ) => void;
+    onControlPointsCommit?: (
+      edgeId: string,
+      controlPoints: { x: number; y: number }[] | undefined,
+    ) => void;
+  },
+): Edge {
   const style = edgeStyleToCss(e.style);
-  // route 映射：bezier→default（贝塞尔曲线）、smoothstep→smoothstep（圆角折线）、straight→straight（直线）
+  // route 映射：bezier→自定义曲线（带把手）、smoothstep→自定义折线（带控制点）、straight→默认直线
   // 默认折线（smoothstep），对齐 NoteGen 流程图常见样式
-  const routeMap = { bezier: "default", smoothstep: "smoothstep", straight: "straight" } as const;
-  const route = routeMap[e.style?.route ?? "smoothstep"];
+  const route = e.style?.route ?? "smoothstep";
   // 兼容旧 handle id：旧格式为 top/bottom/left/right（单类型），
   // 新格式为 {dir}-source / {dir}-target。旧数据自动补全后缀。
   const normalizeSourceHandle = (h?: string | null): string | undefined => {
@@ -639,6 +782,17 @@ function toFlowEdge(e: FlowchartEdge): Edge {
     if (h.endsWith("-source") || h.endsWith("-target")) return h;
     return `${h}-target`;
   };
+  // 自定义边类型 vs React Flow 默认边类型
+  // - smoothstep / bezier：使用自定义边（支持控制点交互）
+  // - straight：使用 React Flow 默认 straight（直线不支持控制点）
+  const type = route === "straight" ? "straight" : `flowchart-${route}`;
+  // 注入 data：controlPoints + readOnly + 实时/提交回调
+  const data: FlowchartControlEdgeData = {
+    controlPoints: e.controlPoints,
+    readOnly: options?.readOnly,
+    onControlPointsChange: options?.onControlPointsChange,
+    onControlPointsCommit: options?.onControlPointsCommit,
+  };
   const edgeObj: Edge = {
     id: e.id,
     source: e.source,
@@ -646,8 +800,9 @@ function toFlowEdge(e: FlowchartEdge): Edge {
     sourceHandle: normalizeSourceHandle(e.sourceHandle),
     targetHandle: normalizeTargetHandle(e.targetHandle),
     label: e.label,
-    type: route,
+    type,
     style,
+    data,
   };
   // 箭头：默认终点闭合箭头
   const markerEnd = e.style?.markerEnd ?? "arrowclosed";
@@ -693,6 +848,8 @@ export interface FlowchartCanvasHandle {
   setZoom: (zoom: number) => void;
   /** 获取当前 viewport（包含 zoom），由 footer 初始化显示用 */
   getZoom: () => number;
+  /** 获取当前视口中心的 flow 坐标（考虑 zoom/pan），用于点击创建节点 */
+  getViewportCenter: () => { x: number; y: number };
 }
 
 
@@ -754,6 +911,16 @@ export interface FlowchartCanvasProps {
       targetHandle?: string;
     },
   ) => void;
+  /** 边控制点实时变更回调（拖动期间高频触发，仅更新视图） */
+  onEdgeControlPointsChange?: (
+    edgeId: string,
+    controlPoints: { x: number; y: number }[] | undefined,
+  ) => void;
+  /** 边控制点提交回调（拖动结束时触发一次，提交到历史栈） */
+  onEdgeControlPointsCommit?: (
+    edgeId: string,
+    controlPoints: { x: number; y: number }[] | undefined,
+  ) => void;
   /** viewport 变化回调（onMoveEnd 触发，用于持久化） */
   onViewportChange?: (vp: { x: number; y: number; zoom: number }) => void;
   /** 选区变化回调 */
@@ -762,8 +929,8 @@ export interface FlowchartCanvasProps {
   onNodeLabelEdit?: (nodeId: string, label: string) => void;
   /** 边双击编辑 label 回调 */
   onEdgeLabelEdit?: (edgeId: string, label: string) => void;
-  /** 从图形库拖拽放置形状回调 */
-  onDropShape?: (kind: FlowchartNodeKind, x: number, y: number) => void;
+  /** 从图形库拖拽放置形状回调（shapeId 为目录条目 id，普通形状等于 kind） */
+  onDropShape?: (shapeId: string, x: number, y: number) => void;
   /** 内部受控节点（若提供则使用受控模式） */
   internalNodes?: Node[];
   internalEdges?: Edge[];
@@ -812,6 +979,10 @@ export interface FlowchartCanvasProps {
   onFreehandComplete?: (payload: FreehandCompletePayload) => void;
   /** 橡皮擦除回调：传入被命中的 freehand 节点 ID 列表 */
   onEraseFreehand?: (nodeIds: string[]) => void;
+  /** v2：文档主题解析出的节点默认颜色（节点手动覆盖优先） */
+  themeDefaults?: FlowchartThemeDefaults;
+  /** v2：画布设置（网格大小、背景、页面模式） */
+  canvasSettings?: FlowchartCanvasSettings;
 }
 
 const FlowchartCanvasInner = forwardRef<FlowchartCanvasHandle, FlowchartCanvasProps>(function FlowchartCanvasInner({
@@ -837,6 +1008,8 @@ const FlowchartCanvasInner = forwardRef<FlowchartCanvasHandle, FlowchartCanvasPr
   onContextMenu,
   onConnect,
   onReconnect,
+  onEdgeControlPointsChange,
+  onEdgeControlPointsCommit,
   onViewportChange,
   onCreateNodeWithConnection,
   activeTool = "select",
@@ -846,6 +1019,8 @@ const FlowchartCanvasInner = forwardRef<FlowchartCanvasHandle, FlowchartCanvasPr
   highlighterSize = HIGHLIGHTER_STYLE.size,
   onFreehandComplete,
   onEraseFreehand,
+  themeDefaults,
+  canvasSettings,
 }, ref) {
   // label 编辑已下沉到节点内部（EditableLabel），无需外部 state
   const [editingEdgeId, setEditingEdgeId] = useState<string | null>(null);
@@ -858,13 +1033,42 @@ const FlowchartCanvasInner = forwardRef<FlowchartCanvasHandle, FlowchartCanvasPr
   // 订阅 viewport 变化，用于 freehand 预览 path 对齐
   const viewport = useViewport();
 
+  // v2：canvasSettings 优先于独立 gridGap prop（编辑器传入文档 canvas 设置）
+  const effectiveGridGap = canvasSettings?.grid.size ?? gridGap;
+  const pageMode = canvasSettings?.mode === "page";
+  const pageSize = pageMode
+    ? {
+        width: canvasSettings?.width ?? 1169,
+        height: canvasSettings?.height ?? 827,
+      }
+    : null;
+  const surfaceBackground = canvasSettings?.background;
+
   const flowNodes = useMemo(
-    () => (internalNodes ?? nodes.map((n) => toFlowNode(n, direction, readOnly, onNodeLabelEdit))),
-    [internalNodes, nodes, direction, readOnly, onNodeLabelEdit],
+    () => {
+      const base = internalNodes ?? nodes.map((n) => toFlowNode(n, direction, readOnly, onNodeLabelEdit, themeDefaults));
+      // internalNodes 由父组件创建时可能未注入 onLabelEdit，这里补上
+      if (internalNodes && onNodeLabelEdit) {
+        return base.map((n) => ({
+          ...n,
+          data: { ...n.data, onLabelEdit: onNodeLabelEdit },
+        }));
+      }
+      return base;
+    },
+    [internalNodes, nodes, direction, readOnly, onNodeLabelEdit, themeDefaults],
   );
   const flowEdges = useMemo(
-    () => (internalEdges ?? edges.map(toFlowEdge)),
-    [internalEdges, edges],
+    () =>
+      internalEdges ??
+      edges.map((e) =>
+        toFlowEdge(e, {
+          readOnly,
+          onControlPointsChange: onEdgeControlPointsChange,
+          onControlPointsCommit: onEdgeControlPointsCommit,
+        }),
+      ),
+    [internalEdges, edges, readOnly, onEdgeControlPointsChange, onEdgeControlPointsCommit],
   );
 
   // 恢复保存的 viewport，或在新建/默认视图时 zoom=1 居中（设计文档 §7.7）
@@ -1102,10 +1306,10 @@ const FlowchartCanvasInner = forwardRef<FlowchartCanvasHandle, FlowchartCanvasPr
     (e: React.DragEvent) => {
       e.preventDefault();
       if (readOnly || !onDropShape) return;
-      const kind = e.dataTransfer.getData("application/x-flowchart-kind") as FlowchartNodeKind | "";
-      if (!kind) return;
+      const shapeId = e.dataTransfer.getData("application/x-flowchart-kind");
+      if (!shapeId) return;
       const position = screenToFlowPosition({ x: e.clientX, y: e.clientY });
-      onDropShape(kind, position.x, position.y);
+      onDropShape(shapeId, position.x, position.y);
     },
     [readOnly, onDropShape, screenToFlowPosition],
   );
@@ -1449,14 +1653,24 @@ const FlowchartCanvasInner = forwardRef<FlowchartCanvasHandle, FlowchartCanvasPr
         setViewport({ x: vp.x, y: vp.y, zoom: z }, { duration: 120 });
       },
       getZoom: () => getViewport().zoom,
+      getViewportCenter: () => {
+        const el = reactFlowWrapper.current;
+        if (!el) return { x: 0, y: 0 };
+        const rect = el.getBoundingClientRect();
+        return screenToFlowPosition({
+          x: rect.left + rect.width / 2,
+          y: rect.top + rect.height / 2,
+        });
+      },
     }),
-    [exportToPng, exportToSvg, fitView, selectAll, getViewport, setViewport],
+    [exportToPng, exportToSvg, fitView, selectAll, getViewport, setViewport, screenToFlowPosition],
   );
 
   return (
     <div
       ref={reactFlowWrapper}
       className={`flowchart-surface h-full w-full${readOnly ? " flowchart-readonly" : ""}`}
+      style={surfaceBackground ? { background: surfaceBackground } : undefined}
       onDrop={handleDrop}
       onDragOver={handleDragOver}
     >
@@ -1464,6 +1678,7 @@ const FlowchartCanvasInner = forwardRef<FlowchartCanvasHandle, FlowchartCanvasPr
         nodes={flowNodes}
         edges={flowEdges}
         nodeTypes={nodeTypes}
+        edgeTypes={edgeTypes}
         onNodesChange={handleNodesChange}
         onEdgesChange={handleEdgesChange}
         onConnect={handleConnect}
@@ -1489,7 +1704,8 @@ const FlowchartCanvasInner = forwardRef<FlowchartCanvasHandle, FlowchartCanvasPr
         elementsSelectable={!readOnly}
         edgesFocusable={!readOnly}
         edgesReconnectable={!readOnly}
-        deleteKeyCode={readOnly ? null : ["Backspace", "Delete"]}
+        // 删除键统一由编辑器键盘处理（FC-SWIM-04 安全删除确认），禁用 React Flow 内置删除
+        deleteKeyCode={null}
         fitView={false}
         minZoom={0.2}
         maxZoom={2.5}
@@ -1500,14 +1716,35 @@ const FlowchartCanvasInner = forwardRef<FlowchartCanvasHandle, FlowchartCanvasPr
         connectionRadius={28}
         nodeDragThreshold={1}
         snapToGrid={!readOnly && snapToGrid}
-        snapGrid={[8, 8]}
+        snapGrid={[effectiveGridGap, effectiveGridGap]}
       >
         {showGrid && (
           <Background
             variant={BackgroundVariant.Lines}
-            gap={gridGap}
+            gap={effectiveGridGap}
             color="var(--flowchart-grid)"
           />
+        )}
+        {/* 页面模式：在流坐标 (0,0) 处渲染页面边框（zIndex -1 置于节点之下、网格之上） */}
+        {pageSize && (
+          <ViewportPortal>
+            <div
+              className="flowchart-page-frame"
+              style={{
+                position: "absolute",
+                left: 0,
+                top: 0,
+                width: pageSize.width,
+                height: pageSize.height,
+                zIndex: -1,
+                background: "var(--flowchart-node-bg, #fff)",
+                border: "1px solid var(--flowchart-node-border, #cbd5e1)",
+                boxShadow: "0 2px 12px rgb(0 0 0 / 0.08)",
+                borderRadius: 2,
+                pointerEvents: "none",
+              }}
+            />
+          </ViewportPortal>
         )}
         <MiniMap
           pannable
@@ -1557,7 +1794,6 @@ const FlowchartCanvasInner = forwardRef<FlowchartCanvasHandle, FlowchartCanvasPr
                 ...(preferredKind ? CONNECTION_MENU_SHAPES.filter((s) => s.kind === preferredKind) : []),
                 ...CONNECTION_MENU_SHAPES.filter((s) => s.kind !== preferredKind),
               ].map((s) => {
-                const Icon = s.icon;
                 return (
                   <Button
                     key={s.kind}
@@ -1566,7 +1802,18 @@ const FlowchartCanvasInner = forwardRef<FlowchartCanvasHandle, FlowchartCanvasPr
                     onClick={() => handleConnectionMenuSelect(s.kind)}
                     className="h-16 flex-col gap-1 font-normal"
                   >
-                    <Icon className="h-4 w-4 text-foreground/80" />
+                    <svg
+                      viewBox="0 0 200 100"
+                      preserveAspectRatio="none"
+                      className="h-6 w-8"
+                      aria-hidden="true"
+                    >
+                      {renderFlowchartShape(s.kind, {
+                        fill: "hsl(var(--muted) / 0.5)",
+                        stroke: "hsl(var(--muted-foreground) / 0.7)",
+                        strokeWidth: 1.5,
+                      })}
+                    </svg>
                     <span className="max-w-full truncate text-[11px] text-foreground/80">{s.label}</span>
                   </Button>
                 );
@@ -1646,6 +1893,7 @@ const FlowchartCanvasInner = forwardRef<FlowchartCanvasHandle, FlowchartCanvasPr
 // 受控模式辅助：把外部 nodes/edges 转换为 React Flow 内部状态的工具
 export const flowchartCanvasHelpers = {
   toFlowNode,
+  toFlowNodes,
   toFlowEdge,
   applyNodeChanges,
   applyEdgeChanges,
@@ -1812,6 +2060,7 @@ export function FlowchartFooter({
         <FooterButton
           label={showGrid ? "网格：开" : "网格：关"}
           active={showGrid}
+          disabled={readOnly}
           onClick={() => onShowGridChange(!showGrid)}
         >
           <Grid3X3 className="h-3 w-3" />

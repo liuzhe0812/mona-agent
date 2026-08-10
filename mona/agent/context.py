@@ -19,6 +19,30 @@ from mona.utils.helpers import (
 from mona.utils.prompt_templates import render_template
 
 
+def _build_db_runtime_context(metadata: Mapping[str, Any]) -> str | None:
+    """Build a compact database context line for the runtime context block.
+
+    Returns None when no database connection is active.
+    """
+    conn_id = metadata.get("connection_id")
+    if not conn_id:
+        return None
+    parts = ["DB:"]
+    if (db_type := metadata.get("db_type")):
+        parts.append(f"type={db_type}")
+    if (ver := metadata.get("server_version")):
+        parts.append(f"version={ver}")
+    if (db := metadata.get("database")):
+        parts.append(f"database={db}")
+    if (table := metadata.get("table")):
+        parts.append(f"table={table}")
+    if (sql := metadata.get("current_sql")):
+        parts.append(f"current_sql={sql!r}")
+    if (err := metadata.get("last_error")):
+        parts.append(f"last_error={err!r}")
+    return " ".join(parts)
+
+
 class ContextBuilder:
     """Builds the context (system prompt + messages) for the agent."""
 
@@ -105,6 +129,7 @@ class ContextBuilder:
         supplemental_lines: Sequence[str] | None = None,
         browser_page_url: str | None = None,
         browser_page_title: str | None = None,
+        db_context: str | None = None,
     ) -> str:
         """Build untrusted runtime metadata block appended after user content."""
         lines = [f"Current Time: {current_time_str(timezone)}"]
@@ -119,6 +144,8 @@ class ContextBuilder:
             if browser_page_url:
                 page_info += f" ({browser_page_url})"
             lines.append(page_info)
+        if db_context:
+            lines.append(db_context)
         if supplemental_lines:
             lines.extend(supplemental_lines)
         return ContextBuilder._RUNTIME_CONTEXT_TAG + "\n" + "\n".join(lines) + "\n" + ContextBuilder._RUNTIME_CONTEXT_END
@@ -178,9 +205,11 @@ class ContextBuilder:
         extra = goal_state_runtime_lines(session_metadata)
         browser_page_url = None
         browser_page_title = None
+        db_context = None
         if message_metadata:
             browser_page_url = message_metadata.get("browser_page_url")
             browser_page_title = message_metadata.get("browser_page_title")
+            db_context = _build_db_runtime_context(message_metadata)
         runtime_ctx = self._build_runtime_context(
             channel,
             chat_id,
@@ -189,6 +218,7 @@ class ContextBuilder:
             supplemental_lines=extra or None,
             browser_page_url=browser_page_url,
             browser_page_title=browser_page_title,
+            db_context=db_context,
         )
         user_content = self._build_user_content(current_message, media)
 

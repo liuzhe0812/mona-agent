@@ -205,6 +205,8 @@ export interface SettingsPayload {
     default_api_base?: string | null;
     free_default_model?: string | null;
     model?: string | null;
+    backend?: string;
+    probe_supported?: boolean;
   }>;
   web_search: {
     provider: string;
@@ -578,6 +580,10 @@ export type Outbound =
       db_connection_id?: string;
       db_database?: string;
       db_table?: string;
+      db_type?: string;
+      db_server_version?: string;
+      db_current_sql?: string;
+      db_last_error?: string;
       browser_page_url?: string;
       browser_page_title?: string;
     }

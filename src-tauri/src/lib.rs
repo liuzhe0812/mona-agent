@@ -733,6 +733,12 @@ pub fn run() {
             terminal::commands::terminal_request_exec,
             terminal::commands::terminal_respond_exec,
             terminal::commands::terminal_list_pending_exec,
+            terminal::maintenance_cmds::terminal_maintenance_get_active,
+            terminal::maintenance_cmds::terminal_maintenance_list,
+            terminal::maintenance_cmds::terminal_maintenance_get,
+            terminal::maintenance_cmds::terminal_maintenance_authorize,
+            terminal::maintenance_cmds::terminal_maintenance_cancel,
+            terminal::maintenance_cmds::terminal_maintenance_delete,
             terminal::commands::get_file_icon,
             terminal::commands::get_file_type_icon,
             terminal::commands::local_list_dir,
@@ -1176,7 +1182,7 @@ pub fn run() {
             let app_handle_for_update = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                match updater::fetch_manifest("https://www.mona-ai.cn/updates/update.json").await {
+                match updater::fetch_manifest_with_fallback().await {
                     Ok(manifest) => {
                         let current = updater::get_app_version();
                         let latest = manifest.version.clone();

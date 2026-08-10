@@ -20,6 +20,9 @@ import {
   CheckSquare,
   Code2,
   ExternalLink,
+  Palette,
+  Highlighter,
+  Eraser,
 } from "lucide-react";
 import { useMonaStream, type SendOptions } from "@/hooks/useMonaStream";
 import { useClientOptional } from "@/providers/ClientProvider";
@@ -381,6 +384,21 @@ export function SelectionAiToolbar({ editor, getNoteTitle, wrapperRef }: Props) 
             onClick={() => editor.chain().focus().toggleCode().run()}
           />
 
+          {/* 文字颜色 / 背景色 */}
+          <ColorPickerButton
+            editor={editor}
+            kind="color"
+            current={editor.getAttributes("textStyle").color as string | undefined}
+          />
+          <ColorPickerButton
+            editor={editor}
+            kind="highlight"
+            current={
+              (editor.getAttributes("highlight").color as string | undefined)
+              ?? (editor.isActive("highlight") ? "var(--highlight-default)" : undefined)
+            }
+          />
+
           <ToolbarSeparator />
 
           {/* 链接输入框 */}
@@ -562,6 +580,135 @@ function FormatToggleButton({
     >
       {icon}
     </button>
+  );
+}
+
+// 预设色板：兼顾浅色 / 深色主题下的可读性，避免纯黑 / 纯白
+const COLOR_SWATCHES = [
+  "#dc2626", // red
+  "#ea580c", // orange
+  "#ca8a04", // amber
+  "#16a34a", // green
+  "#0891b2", // cyan
+  "#2563eb", // blue
+  "#7c3aed", // violet
+  "#db2777", // pink
+  "#475569", // slate（替代黑色，更柔和）
+];
+
+const HIGHLIGHT_SWATCHES = [
+  "#fef08a", // yellow
+  "#fed7aa", // orange
+  "#fecaca", // red
+  "#bbf7d0", // green
+  "#bfdbfe", // blue
+  "#ddd6fe", // violet
+  "#fbcfe8", // pink
+  "#e5e7eb", // gray
+];
+
+function ColorPickerButton({
+  editor,
+  kind,
+  current,
+}: {
+  editor: Editor;
+  kind: "color" | "highlight";
+  current?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  const isColor = kind === "color";
+  const label = isColor ? "文字颜色" : "背景色";
+  const swatches = isColor ? COLOR_SWATCHES : HIGHLIGHT_SWATCHES;
+  const active = isColor ? !!current : editor.isActive("highlight");
+
+  const apply = (value: string) => {
+    if (isColor) {
+      editor.chain().focus().setColor(value).run();
+    } else {
+      editor.chain().focus().toggleHighlight({ color: value }).run();
+    }
+    setOpen(false);
+  };
+  const clear = () => {
+    if (isColor) {
+      editor.chain().focus().unsetColor().run();
+    } else {
+      editor.chain().focus().unsetHighlight().run();
+    }
+    setOpen(false);
+  };
+
+  const Icon = isColor ? Palette : Highlighter;
+
+  return (
+    <div ref={containerRef} className="relative">
+      <button
+        type="button"
+        title={label}
+        aria-label={label}
+        onClick={() => setOpen((v) => !v)}
+        onMouseDown={(e) => e.preventDefault()}
+        className={`inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors ${
+          active
+            ? "bg-accent text-foreground"
+            : "text-foreground/82 hover:bg-accent hover:text-foreground"
+        }`}
+      >
+        <Icon className="h-4 w-4" />
+        {/* 色条：在图标底部显示当前色，无色则不显示 */}
+        <span
+          className="absolute bottom-0.5 h-0.5 w-4 rounded-full"
+          style={{
+            backgroundColor: isColor ? (current ?? "transparent") : (current ?? "transparent"),
+          }}
+        />
+      </button>
+
+      {open ? (
+        <div className="absolute top-8 left-0 z-50 w-[200px] rounded-md border border-border/70 bg-popover p-2 shadow-md">
+          <div className="mb-1 flex items-center justify-between px-0.5">
+            <span className="text-[11px] text-muted-foreground">{label}</span>
+            <button
+              type="button"
+              onClick={clear}
+              onMouseDown={(e) => e.preventDefault()}
+              className="inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground"
+            >
+              <Eraser className="h-3 w-3" />
+              清除
+            </button>
+          </div>
+          <div className="grid grid-cols-9 gap-1">
+            {swatches.map((c) => (
+              <button
+                key={c}
+                type="button"
+                title={c}
+                aria-label={c}
+                onClick={() => apply(c)}
+                onMouseDown={(e) => e.preventDefault()}
+                className="h-4 w-4 rounded-full border border-black/10 transition-transform hover:scale-110"
+                style={{ backgroundColor: c }}
+              />
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </div>
   );
 }
 

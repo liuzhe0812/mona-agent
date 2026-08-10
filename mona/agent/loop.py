@@ -488,7 +488,7 @@ class AgentLoop:
           path (resolved) — project session keeps its own root.
         - Session with ``metadata.agent_kind`` in ``DOCUMENT_PROFILES``: the
           configured workspace root — dedicated agents keep their existing
-          workspace semantics (ppt_projects/, video_projects/, three_projects/).
+          workspace semantics (ppt_projects/, video_projects/).
         - Default session or no session: ``<workspace>/output`` — the shared
           artifacts directory for non-project sessions.
         """

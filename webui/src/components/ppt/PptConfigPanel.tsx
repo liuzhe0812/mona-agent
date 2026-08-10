@@ -33,7 +33,6 @@ interface ActionError {
 const TEMPLATE_KIND_LABELS: Record<string, string> = {
   layout: "内置版式",
   brand: "品牌模板",
-  native: "自定义模板",
 };
 
 export function PptConfigPanel({ config, setConfig, phase, onStart }: PptConfigPanelProps) {
@@ -597,14 +596,14 @@ export function PptConfigPanel({ config, setConfig, phase, onStart }: PptConfigP
                 disabled={readOnly}
               >
                 <LayoutTemplate className="mr-1.5 h-3.5 w-3.5" />
-                选择内置版式、品牌或自定义模板
+                选择内置版式或品牌模板
               </button>
             )}
             <PptTemplateDialog
               open={templateDialogOpen}
               onOpenChange={setTemplateDialogOpen}
               selectedKey={config.templateKey}
-              selectedKind={config.templateKind}
+              selectedKind={config.templateKind === "native" ? null : config.templateKind}
               token={token}
               onSelect={(tpl) => {
                 setSelectedTemplate(tpl);

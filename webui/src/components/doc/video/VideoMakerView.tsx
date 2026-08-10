@@ -1,52 +1,37 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Download, FolderOpen, History, MoreHorizontal, Play, SlidersHorizontal, Trash2, Volume2 } from "lucide-react";
+import { Check, Clapperboard, PanelLeft, PanelLeftClose, Play, Plus, Volume2 } from "lucide-react";
 
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { useClient } from "@/providers/ClientProvider";
 import {
-  buildVideoDownloadUrl,
   createVideoProject,
-  deleteVideoProject,
   downloadVideoRuntime,
   fetchVideoProject,
   fetchVideoProjects,
   fetchVideoRuntimeCheck,
-  getApiBase,
   saveVideoChatId,
   type VideoProject,
   type VideoProjectPhase,
   type VideoRuntimeStatus,
 } from "@/lib/api";
-import { downloadMediaUrl, isTauri, openPathWithSystemApp } from "@/lib/tauri";
 import { EDGE_TTS_VOICES } from "@/lib/constants";
-import { useWorkspaceStore } from "@/lib/workspace-store";
+import { useBreakpoint } from "@/hooks/useBreakpoint";
 import { cn } from "@/lib/utils";
 import { DocChatPanel } from "../DocChatPanel";
 import { StoryboardPhase } from "./StoryboardPhase";
 import { ProducingPhase } from "./ProducingPhase";
+import { VideoHistory } from "./VideoHistory";
 import { VideoRuntimeDialog, type RuntimeDepKey } from "./VideoRuntimeDialog";
 
-type SidebarTab = "config" | "history";
-type VideoPhase = "config" | "storyboard" | "producing";
+type VideoPhase = "config" | VideoProjectPhase;
 type VideoRatio = "16:9" | "9:16" | "1:1";
 type TtsProvider = "edge" | "custom";
 
@@ -60,14 +45,6 @@ const TTS_PROVIDERS: Array<{ value: TtsProvider; label: string; hint: string }> 
   { value: "edge", label: "Edge", hint: "免费" },
   { value: "custom", label: "自定义", hint: "使用设置页的全局语音合成配置" },
 ];
-
-const PHASE_LABELS: Record<VideoProjectPhase, string> = {
-  storyboard: "分镜中",
-  producing: "制作中",
-  exportable: "待导出",
-  rendering: "导出中",
-  done: "已完成",
-};
 
 const CUSTOM_VOICE_PLACEHOLDER = "alloy";
 
@@ -86,11 +63,33 @@ const DEFAULT_RUNTIME_STATUS: VideoRuntimeStatus = {
 // Only the most-recent project name is persisted locally. The authoritative
 // phase always comes from the server — never restore a stale local phase.
 const ACTIVE_PROJECT_KEY = "mona.video.activeProject";
+const SIDEBAR_COLLAPSED_KEY = "mona.video.sidebarCollapsed";
+const SIDEBAR_WIDTH_KEY = "mona.video.sidebarWidth";
+const DEFAULT_SIDEBAR_WIDTH = 260;
+const MIN_SIDEBAR_WIDTH = 200;
+const MAX_SIDEBAR_WIDTH = 360;
+
+const STEPS: ReadonlyArray<{ label: string; phases: VideoPhase[] }> = [
+  { label: "配置主题", phases: ["config"] },
+  { label: "编辑分镜", phases: ["storyboard"] },
+  { label: "制作场景", phases: ["producing"] },
+  { label: "导出交付", phases: ["exportable", "rendering", "done"] },
+];
+
+function getStepStatus(
+  stepIndex: number,
+  currentPhase: VideoPhase,
+): "completed" | "current" | "pending" {
+  const currentStepIndex = STEPS.findIndex((s) => s.phases.includes(currentPhase));
+  if (currentStepIndex === -1) return "pending";
+  if (stepIndex < currentStepIndex) return "completed";
+  if (stepIndex === currentStepIndex) return "current";
+  return "pending";
+}
 
 export function VideoMakerView() {
   const { client, token } = useClient();
-  const workspacePath = useWorkspaceStore((s) => s.workspacePath);
-  const [sidebarTab, setSidebarTab] = useState<SidebarTab>("config");
+  const bp = useBreakpoint();
   const [topic, setTopic] = useState("");
   const [ratio, setRatio] = useState<VideoRatio>("16:9");
   const [narrationEnabled, setNarrationEnabled] = useState(false);
@@ -102,26 +101,19 @@ export function VideoMakerView() {
   const [projectName, setProjectName] = useState<string | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
 
-  const [historyProjects, setHistoryProjects] = useState<VideoProject[]>([]);
   const [runtimeStatus, setRuntimeStatus] = useState<VideoRuntimeStatus>(DEFAULT_RUNTIME_STATUS);
   const [runtimeOk, setRuntimeOk] = useState(true);
   const [runtimeDialogOpen, setRuntimeDialogOpen] = useState(false);
   const [installing, setInstalling] = useState<RuntimeDepKey | null>(null);
   const [installErrors, setInstallErrors] = useState<Partial<Record<RuntimeDepKey, string>>>({});
-  const [deleting, setDeleting] = useState<string | null>(null);
-  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
-  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
+  const [isResizing, setIsResizing] = useState(false);
+  const [historyKey, setHistoryKey] = useState(0);
   const generatingRef = useRef(false);
   // Incremented when AI finishes a reply (streaming → false) to trigger storyboard refresh
   const [aiTurnComplete, setAiTurnComplete] = useState(0);
   const wasStreamingRef = useRef(false);
-
-  // Auto-switch to history tab when a project is active
-  useEffect(() => {
-    if (projectName) {
-      setSidebarTab("history");
-    }
-  }, [projectName]);
 
   // Passive runtime status check — only drives the hint banner. Storyboard
   // generation does not depend on FFmpeg/Chrome, so this never blocks creation.
@@ -141,21 +133,36 @@ export function VideoMakerView() {
     };
   }, [token]);
 
-  // Load history projects when history tab is opened
+  // 初始化侧边栏折叠状态与宽度（从 localStorage 读取）
   useEffect(() => {
-    if (sidebarTab !== "history") return;
-    let cancelled = false;
-    fetchVideoProjects(token)
-      .then((res) => {
-        if (!cancelled) setHistoryProjects(res.projects ?? []);
-      })
-      .catch(() => {
-        if (!cancelled) setHistoryProjects([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [sidebarTab, token]);
+    try {
+      const collapsedRaw = localStorage.getItem(SIDEBAR_COLLAPSED_KEY);
+      const widthRaw = localStorage.getItem(SIDEBAR_WIDTH_KEY);
+      if (collapsedRaw === "true") setSidebarCollapsed(true);
+      if (widthRaw) {
+        const w = Math.max(MIN_SIDEBAR_WIDTH, Math.min(MAX_SIDEBAR_WIDTH, parseInt(widthRaw, 10)));
+        setSidebarWidth(w);
+      }
+    } catch {}
+  }, []);
+
+  // 窄屏自动折叠侧边栏，但保留用户手动展开的权利
+  useEffect(() => {
+    if (bp !== "wide") setSidebarCollapsed(true);
+  }, [bp]);
+
+  // 持久化侧边栏状态
+  useEffect(() => {
+    try {
+      localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(sidebarCollapsed));
+    } catch {}
+  }, [sidebarCollapsed]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(SIDEBAR_WIDTH_KEY, String(sidebarWidth));
+    } catch {}
+  }, [sidebarWidth]);
 
   // Poll project status during storyboard phase (AI is generating storyboard.md)
   useEffect(() => {
@@ -278,6 +285,7 @@ export function VideoMakerView() {
       // 4. Send prompt
       client.sendMessage(newChatId, prompt, undefined, { displayContent: displayText });
       setPhase("storyboard");
+      setHistoryKey((k) => k + 1);
     } catch (e) {
       console.error("Failed to start video generation", e);
       setProjectName(null);
@@ -315,15 +323,47 @@ export function VideoMakerView() {
     wasStreamingRef.current = streaming;
   }, []);
 
-  const handleSelectHistory = useCallback(
-    (project: VideoProject) => {
-      setProjectName(project.name);
-      setChatId(project.chatId);
-      // Route by the server-recorded phase: storyboard → 分镜页,其他均进入制作页
-      setPhase(project.phase === "storyboard" ? "storyboard" : "producing");
+  const handleSelectProject = useCallback((project: VideoProject) => {
+    setProjectName(project.name);
+    setChatId(project.chatId);
+    // Route by the server-recorded phase: storyboard → 分镜页,其他均进入制作页
+    setPhase(project.phase);
+  }, []);
+
+  const handleDeleteProject = useCallback(
+    (name: string) => {
+      if (name === projectName) {
+        setPhase("config");
+        setChatId(null);
+        setProjectName(null);
+        try {
+          localStorage.removeItem(ACTIVE_PROJECT_KEY);
+        } catch {}
+      }
     },
-    [],
+    [projectName],
   );
+
+  const handleNewProject = useCallback(() => {
+    setPhase("config");
+    setProjectName(null);
+    setChatId(null);
+    setCreateError(null);
+    try {
+      localStorage.removeItem(ACTIVE_PROJECT_KEY);
+    } catch {}
+  }, []);
+
+  // ProducingPhase 阶段回传：驱动步骤条；渲染完成时刷新历史列表状态
+  const handleProjectPhaseChange = useCallback((next: VideoProjectPhase) => {
+    setPhase((prev) => {
+      if (prev === "config" || prev === "storyboard") return prev;
+      return prev === next ? prev : next;
+    });
+    if (next === "done") {
+      setHistoryKey((k) => k + 1);
+    }
+  }, []);
 
   // Persist only the active project name; the authoritative phase is always
   // read back from the server on restore.
@@ -351,7 +391,7 @@ export function VideoMakerView() {
           if (cancelled) return;
           const project = res.projects?.find((p) => p.name === savedName);
           if (project) {
-            handleSelectHistory(project);
+            handleSelectProject(project);
           } else {
             localStorage.removeItem(ACTIVE_PROJECT_KEY);
           }
@@ -366,100 +406,222 @@ export function VideoMakerView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleDownloadVideo = useCallback(
-    async (name: string) => {
-      setHistoryError(null);
-      try {
-        const base = await getApiBase();
-        const url = buildVideoDownloadUrl(base, token, name);
-        await downloadMediaUrl(url, `${name}.mp4`);
-      } catch (e) {
-        console.error("Video download failed", e);
-        setHistoryError(`下载失败: ${e instanceof Error ? e.message : String(e)}`);
-      }
-    },
-    [token],
-  );
+  const startResize = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      setIsResizing(true);
+      const startX = e.clientX;
+      const startWidth = sidebarWidth;
 
-  const handleOpenProjectDir = useCallback(
-    async (name: string) => {
-      if (!isTauri() || !workspacePath) return;
-      const dirPath = `${workspacePath}/video_projects/${name}`;
-      try {
-        await openPathWithSystemApp(dirPath);
-      } catch (e) {
-        console.error("Failed to open project directory", e);
-        setHistoryError(`打开目录失败: ${e instanceof Error ? e.message : String(e)}`);
-      }
+      const handleMove = (ev: MouseEvent) => {
+        const delta = ev.clientX - startX;
+        const next = Math.max(MIN_SIDEBAR_WIDTH, Math.min(MAX_SIDEBAR_WIDTH, startWidth + delta));
+        setSidebarWidth(next);
+      };
+      const handleUp = () => {
+        setIsResizing(false);
+        window.removeEventListener("mousemove", handleMove);
+        window.removeEventListener("mouseup", handleUp);
+      };
+      window.addEventListener("mousemove", handleMove);
+      window.addEventListener("mouseup", handleUp);
     },
-    [workspacePath],
-  );
-
-  const handleDeleteProject = useCallback(
-    async (name: string) => {
-      if (deleting) return;
-      setDeleting(name);
-      setHistoryError(null);
-      try {
-        await deleteVideoProject(token, name);
-        setHistoryProjects((prev) => prev.filter((p) => p.name !== name));
-        if (name === projectName) {
-          setPhase("config");
-          setChatId(null);
-          setProjectName(null);
-        }
-      } catch (e) {
-        console.error("Failed to delete video project", e);
-        setHistoryError(`删除失败: ${e instanceof Error ? e.message : String(e)}`);
-      } finally {
-        setDeleting(null);
-      }
-    },
-    [deleting, token, projectName],
+    [sidebarWidth],
   );
 
   return (
     <div className="flex h-full flex-col bg-background">
       <div className="flex min-h-0 flex-1">
-        {/* 左侧:新建 / 历史 */}
-        <aside className="flex w-[260px] shrink-0 flex-col border-r border-border/70">
-          <div className="flex shrink-0 border-b border-border/70" role="tablist">
-            <button
-              role="tab"
-              aria-selected={sidebarTab === "config"}
+        {sidebarCollapsed ? (
+          <TooltipProvider delayDuration={100}>
+            <div className="flex w-12 shrink-0 flex-col items-center border-r border-border/70 bg-muted/30 py-3">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                    onClick={() => setSidebarCollapsed(false)}
+                    aria-label="展开侧栏"
+                  >
+                    <PanelLeft className="h-4 w-4" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="right" sideOffset={8}>
+                  展开侧栏
+                </TooltipContent>
+              </Tooltip>
+
+              <div className="min-h-0 w-full flex-1 overflow-y-auto py-2">
+                <VideoHistory
+                  key={historyKey}
+                  refreshKey={historyKey}
+                  currentProjectName={projectName}
+                  collapsed
+                  onSelect={handleSelectProject}
+                  onDelete={handleDeleteProject}
+                />
+              </div>
+
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                    onClick={handleNewProject}
+                    aria-label="新建视频"
+                  >
+                    <Plus className="h-4 w-4" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="right" sideOffset={8}>
+                  新建视频
+                </TooltipContent>
+              </Tooltip>
+            </div>
+          </TooltipProvider>
+        ) : (
+          <aside
+            className="relative flex shrink-0 flex-col border-r border-border/70 bg-muted/30"
+            style={{ width: sidebarWidth }}
+          >
+            {/* 顶部标题栏：模块标识 + 收起按钮 */}
+            <div className="flex shrink-0 items-center justify-between border-b border-border/70 px-3 py-2.5">
+              <div className="flex items-center gap-2">
+                <div className="flex h-6 w-6 items-center justify-center rounded-md bg-primary/10 text-primary">
+                  <Clapperboard className="h-3.5 w-3.5" />
+                </div>
+                <span className="text-[13px] font-semibold text-foreground">视频</span>
+              </div>
+              <TooltipProvider delayDuration={100}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                      onClick={() => setSidebarCollapsed(true)}
+                      aria-label="收起侧栏"
+                    >
+                      <PanelLeftClose className="h-3.5 w-3.5" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="right" sideOffset={8}>
+                    收起侧栏
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            </div>
+
+            {/* 历史项目列表 */}
+            <div className="min-h-0 flex-1 overflow-y-auto scrollbar-hover">
+              <VideoHistory
+                key={historyKey}
+                refreshKey={historyKey}
+                currentProjectName={projectName}
+                onSelect={handleSelectProject}
+                onDelete={handleDeleteProject}
+              />
+            </div>
+
+            {/* 底部主操作 */}
+            <div className="shrink-0 border-t border-border/70 p-3">
+              <Button
+                className="h-9 w-full gap-1.5 text-[13px]"
+                onClick={handleNewProject}
+              >
+                <Plus className="h-4 w-4" />
+                新建视频
+              </Button>
+            </div>
+
+            {/* 拖拽调整宽度 */}
+            <div
               className={cn(
-                "flex flex-1 items-center justify-center gap-1.5 py-2 text-[12px] font-medium transition-colors",
-                sidebarTab === "config"
-                  ? "text-foreground border-b-2 border-primary"
-                  : "text-muted-foreground hover:text-foreground",
+                "absolute right-0 top-0 bottom-0 w-1 -translate-x-1/2 cursor-col-resize transition-colors",
+                isResizing ? "bg-primary/40" : "hover:bg-primary/25",
               )}
-              onClick={() => setSidebarTab("config")}
-            >
-              <SlidersHorizontal className="h-3 w-3" />
-              新建
-            </button>
-            <button
-              role="tab"
-              aria-selected={sidebarTab === "history"}
-              className={cn(
-                "flex flex-1 items-center justify-center gap-1.5 py-2 text-[12px] font-medium transition-colors",
-                sidebarTab === "history"
-                  ? "text-foreground border-b-2 border-primary"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-              onClick={() => setSidebarTab("history")}
-            >
-              <History className="h-3 w-3" />
-              历史
-            </button>
+              onMouseDown={startResize}
+              aria-hidden="true"
+            />
+          </aside>
+        )}
+
+        <div className="flex min-h-0 flex-1 flex-col">
+          {/* 步骤条 */}
+          <div className="flex shrink-0 items-center justify-center gap-1 border-b border-border/70 bg-background px-4 py-3">
+            {STEPS.map((step, i) => {
+              const status = getStepStatus(i, phase);
+              return (
+                <div key={step.label} className="flex items-center">
+                  {i > 0 && (
+                    <div
+                      className={cn(
+                        "mx-2 h-px w-5",
+                        getStepStatus(i - 1, phase) !== "pending" ? "bg-primary/40" : "bg-border",
+                      )}
+                    />
+                  )}
+                  <div className="flex items-center gap-1.5">
+                    <div
+                      className={cn(
+                        "flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-medium",
+                        status === "completed" && "bg-emerald-500/15 text-emerald-600",
+                        status === "current" && "bg-primary text-primary-foreground",
+                        status === "pending" && "border border-border bg-background text-muted-foreground",
+                      )}
+                    >
+                      {status === "completed" ? (
+                        <Check className="h-3 w-3" />
+                      ) : (
+                        <span>{i + 1}</span>
+                      )}
+                    </div>
+                    <span
+                      className={cn(
+                        "text-[11px] font-medium",
+                        status === "completed" && "text-muted-foreground",
+                        status === "current" && "text-foreground",
+                        status === "pending" && "text-muted-foreground/50",
+                      )}
+                    >
+                      {step.label}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
           </div>
 
-          <div className="min-h-0 flex-1">
-            {sidebarTab === "config" ? (
-              <div className="flex h-full flex-col">
-                <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overflow-x-hidden p-3">
+          {phase === "config" ? (
+            <div className="flex min-h-0 flex-1 flex-col items-center overflow-y-auto scrollbar-hover px-4 py-8">
+              <div className="w-full max-w-[560px]">
+                <h2 className="mb-6 text-lg font-medium">新建视频</h2>
+
+                {!runtimeOk ? (
+                  <button
+                    type="button"
+                    onClick={() => setRuntimeDialogOpen(true)}
+                    className="mb-4 flex w-full items-center gap-1.5 rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2 text-[12px] font-normal text-destructive transition-colors hover:bg-destructive/10 hover:text-destructive"
+                  >
+                    <Play className="h-3.5 w-3.5 shrink-0" />
+                    <span>视频依赖未安装，点击此处下载</span>
+                  </button>
+                ) : null}
+
+                <div className="space-y-5">
                   <section>
-                    <h3 className="mb-1.5 text-[12px] font-medium text-foreground">
+                    <h3 className="mb-1.5 text-[13px] font-medium text-foreground">
+                      视频主题
+                    </h3>
+                    <Textarea
+                      className="min-h-[96px] resize-none text-[13px]"
+                      placeholder="描述你想制作的视频内容..."
+                      value={topic}
+                      onChange={(e) => setTopic(e.target.value)}
+                    />
+                  </section>
+
+                  <section>
+                    <h3 className="mb-1.5 text-[13px] font-medium text-foreground">
                       画面比例
                     </h3>
                     <div className="grid grid-cols-3 gap-1 rounded-lg bg-muted p-1">
@@ -470,7 +632,7 @@ export function VideoMakerView() {
                           title={r.resolution}
                           aria-pressed={ratio === r.value}
                           className={cn(
-                            "rounded-md px-1.5 py-1 text-[12px] font-medium transition-all",
+                            "rounded-md px-1.5 py-1.5 text-[13px] font-medium transition-all",
                             ratio === r.value
                               ? "bg-background text-foreground shadow"
                               : "text-muted-foreground hover:text-foreground",
@@ -485,15 +647,15 @@ export function VideoMakerView() {
 
                   <section>
                     <div className="flex items-center justify-between">
-                      <h3 className="flex items-center gap-1.5 text-[12px] font-medium text-foreground">
-                        <Volume2 className="h-3 w-3" />
+                      <h3 className="flex items-center gap-1.5 text-[13px] font-medium text-foreground">
+                        <Volume2 className="h-3.5 w-3.5" />
                         旁白配音
                       </h3>
                       <button
                         type="button"
                         aria-pressed={narrationEnabled}
                         className={cn(
-                          "rounded-full px-2 py-0.5 text-[12px] font-medium transition-colors",
+                          "rounded-full px-2.5 py-0.5 text-[12px] font-medium transition-colors",
                           narrationEnabled
                             ? "bg-primary/10 text-foreground"
                             : "text-muted-foreground hover:text-foreground hover:bg-muted/50",
@@ -517,7 +679,7 @@ export function VideoMakerView() {
                                 title={p.hint}
                                 aria-pressed={ttsProvider === p.value}
                                 className={cn(
-                                  "rounded-md px-1 py-1 text-[12px] font-medium transition-all",
+                                  "rounded-md px-1 py-1.5 text-[13px] font-medium transition-all",
                                   ttsProvider === p.value
                                     ? "bg-background text-foreground shadow"
                                     : "text-muted-foreground hover:text-foreground",
@@ -540,7 +702,7 @@ export function VideoMakerView() {
                             </div>
                             <select
                               aria-label="Edge 音色"
-                              className="w-full rounded-lg border border-border/70 bg-transparent px-3 py-1.5 text-[12px] outline-none focus:border-primary"
+                              className="w-full rounded-lg border border-border/70 bg-transparent px-3 py-1.5 text-[13px] outline-none focus:border-primary"
                               value={
                                 EDGE_TTS_VOICES.some((v) => v.value === ttsVoice)
                                   ? ttsVoice
@@ -571,7 +733,7 @@ export function VideoMakerView() {
                                 onChange={(e) => setTtsVoice(e.target.value)}
                                 placeholder="zh-CN-XiaoyiNeural"
                                 aria-label="自定义音色 ID"
-                                className="mt-1.5 h-8 rounded-lg text-[12px]"
+                                className="mt-1.5"
                               />
                             )}
                           </div>
@@ -585,7 +747,6 @@ export function VideoMakerView() {
                               onChange={(e) => setTtsVoice(e.target.value)}
                               placeholder={CUSTOM_VOICE_PLACEHOLDER}
                               aria-label="自定义 TTS Voice ID"
-                              className="h-8 rounded-lg text-[12px]"
                             />
                             <div className="mt-1 text-[11px] text-muted-foreground">
                               API 凭据使用「设置 → 语音合成」中的全局配置。
@@ -602,40 +763,15 @@ export function VideoMakerView() {
                             onChange={(e) => setTtsRate(e.target.value)}
                             placeholder="+0%"
                             aria-label="语速"
-                            className="h-8 rounded-lg text-[12px]"
                           />
                         </div>
                       </div>
                     ) : null}
                   </section>
 
-                  {!runtimeOk ? (
-                    <button
-                      type="button"
-                      onClick={() => setRuntimeDialogOpen(true)}
-                      className="flex w-full items-center gap-1.5 rounded-lg border border-destructive/40 bg-destructive/5 px-2.5 py-2 text-[12px] font-normal text-destructive transition-colors hover:bg-destructive/10 hover:text-destructive"
-                    >
-                      <Play className="h-3.5 w-3.5 shrink-0" />
-                      <span>视频依赖未安装,点击此处下载</span>
-                    </button>
-                  ) : null}
-                </div>
-
-                <div className="shrink-0 space-y-2 border-t border-border/70 p-3">
-                  <div>
-                    <h3 className="mb-1.5 text-[12px] font-medium text-foreground">
-                      视频主题
-                    </h3>
-                    <Textarea
-                      className="min-h-[80px] resize-none text-[12px]"
-                      placeholder="描述你想制作的视频内容..."
-                      value={topic}
-                      onChange={(e) => setTopic(e.target.value)}
-                    />
-                  </div>
                   {createError ? (
                     <div
-                      className="flex items-center justify-between gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-2.5 py-2 text-[12px] text-destructive"
+                      className="flex items-center justify-between gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-[12px] text-destructive"
                       role="alert"
                     >
                       <span className="min-w-0 flex-1 break-words">{createError}</span>
@@ -650,104 +786,17 @@ export function VideoMakerView() {
                       </Button>
                     </div>
                   ) : null}
+
                   <Button
-                    className="w-full"
+                    className="h-9 w-full gap-1.5 text-[13px]"
                     disabled={!topic.trim()}
                     onClick={handleStartGeneration}
                   >
-                    <Play className="mr-1.5 h-4 w-4" />
+                    <Play className="h-4 w-4" />
                     开始生成
                   </Button>
                 </div>
               </div>
-            ) : (
-              <div className="flex h-full flex-col">
-                {historyError ? (
-                  <div className="shrink-0 px-2 pt-2" role="alert">
-                    <div className="rounded-md border border-destructive/30 bg-destructive/5 px-2.5 py-2 text-[12px] text-destructive">
-                      {historyError}
-                    </div>
-                  </div>
-                ) : null}
-                {historyProjects.length === 0 ? (
-                  <div className="flex flex-1 items-center justify-center text-[12px] text-muted-foreground">
-                    暂无历史项目
-                  </div>
-                ) : (
-                  <div className="min-h-0 flex-1 overflow-y-auto scrollbar-hover p-2">
-                    {historyProjects.map((p) => (
-                      <div
-                        key={p.name}
-                        className={cn(
-                          "group mb-1.5 flex items-center rounded-lg border border-border/60 transition-colors hover:bg-accent",
-                          p.name === projectName ? "border-primary bg-accent" : "",
-                        )}
-                      >
-                        <button
-                          className="min-w-0 flex-1 px-2.5 py-2 text-left"
-                          onClick={() => handleSelectHistory(p)}
-                        >
-                          <div className="truncate text-[12px] font-medium">
-                            {p.name}
-                          </div>
-                          <div className="mt-0.5 text-[11px] text-muted-foreground">
-                            {p.resolution} · {PHASE_LABELS[p.phase] ?? p.phase}
-                            {p.outputStale ? " · 内容已变化" : ""}
-                          </div>
-                        </button>
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="mr-1 h-7 w-7 shrink-0"
-                              aria-label={`项目 ${p.name} 更多操作`}
-                            >
-                              <MoreHorizontal className="h-3.5 w-3.5" />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent className="w-40" align="end">
-                            {p.hasVideo && !p.outputStale ? (
-                              <DropdownMenuItem
-                                onClick={() => void handleDownloadVideo(p.name)}
-                                className="text-[12px]"
-                              >
-                                <Download className="mr-2 h-3.5 w-3.5" />
-                                下载 MP4
-                              </DropdownMenuItem>
-                            ) : null}
-                            <DropdownMenuItem
-                              onClick={() => void handleOpenProjectDir(p.name)}
-                              className="text-[12px]"
-                            >
-                              <FolderOpen className="mr-2 h-3.5 w-3.5" />
-                              打开任务目录
-                            </DropdownMenuItem>
-                            <DropdownMenuSeparator />
-                            <DropdownMenuItem
-                              onClick={() => setDeleteTarget(p.name)}
-                              disabled={deleting === p.name}
-                              className="text-[12px] text-destructive focus:text-destructive"
-                            >
-                              <Trash2 className="mr-2 h-3.5 w-3.5" />
-                              {deleting === p.name ? "删除中..." : "删除项目"}
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        </aside>
-
-        {/* 右侧:预览 + 聊天(上下分割) */}
-        <div className="flex min-h-0 flex-1 flex-col">
-          {phase === "config" ? (
-            <div className="flex flex-1 items-center justify-center text-[13px] text-muted-foreground">
-              输入主题后开始生成视频
             </div>
           ) : phase === "storyboard" ? (
             <div className="flex min-h-0 flex-1">
@@ -767,12 +816,11 @@ export function VideoMakerView() {
                 />
               </div>
             </div>
-          ) : phase === "producing" ? (
-            <ProducingPhase projectName={projectName ?? ""} />
           ) : (
-            <div className="flex flex-1 items-center justify-center text-[13px] text-muted-foreground">
-              未知状态
-            </div>
+            <ProducingPhase
+              projectName={projectName ?? ""}
+              onPhaseChange={handleProjectPhaseChange}
+            />
           )}
         </div>
       </div>
@@ -785,34 +833,6 @@ export function VideoMakerView() {
         installErrors={installErrors}
         onInstall={(component) => void handleInstallRuntime(component)}
       />
-
-      <AlertDialog
-        open={deleteTarget !== null}
-        onOpenChange={(open) => {
-          if (!open && deleting === null) setDeleteTarget(null);
-        }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>删除项目</AlertDialogTitle>
-            <AlertDialogDescription>
-              确定删除项目「{deleteTarget}」吗？项目目录及其全部分镜、预览和导出结果将被删除，此操作不可撤销。
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>取消</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                const name = deleteTarget;
-                setDeleteTarget(null);
-                if (name) void handleDeleteProject(name);
-              }}
-            >
-              删除
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </div>
   );
 }
@@ -825,20 +845,19 @@ function generateProjectName(topic: string): string {
 
   const raw = topic.trim();
   if (!raw) {
-    return `video-${ts}-${rand}`;
+    return `${ts}-${rand}`;
   }
 
-  // 基于主题生成语义化目录名：保留中英文/数字/空格/连字符，空格转连字符，限制长度
   const slug = raw
     .toLowerCase()
-    .replace(/[^\w\u4e00-\u9fa5\s-]/g, "")
+    .replace(/[^\w一-龥\s-]/g, "")
     .replace(/\s+/g, "-")
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "")
     .slice(0, 30);
 
   if (!slug) {
-    return `video-${ts}-${rand}`;
+    return `${ts}-${rand}`;
   }
   return `${slug}-${ts}-${rand}`;
 }

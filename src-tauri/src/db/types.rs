@@ -297,3 +297,13 @@ pub struct UserInfo {
     pub password_expired: bool,
     pub account_locked: bool,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DbSqlDraft {
+    pub sql: String,
+    pub statement_type: String,
+    pub target_objects: Vec<String>,
+    pub operation_class: String,
+    pub explanation: String,
+}

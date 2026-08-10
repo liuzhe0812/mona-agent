@@ -69,27 +69,44 @@ const FLOWCHART_PATCH_CONTRACT = (baseHash: string) => `输出格式：
    {
      "baseHash": "${baseHash}",
      "ops": [
-       { "name": "replaceGraph", "graph": { "direction": "TB|LR", "nodes": [{"id":"n1","kind":"start|process|decision|end|document|database|annotation|subprocess","label":"..."}], "edges": [{"id":"e1","source":"n1","target":"n2","label":"可选"}] } },
+       { "name": "replaceGraph", "graph": { "direction": "TB|LR", "nodes": [{"id":"n1","kind":"流程语义形状（见下方 kind 列表）","label":"..."}], "edges": [{"id":"e1","source":"n1","target":"n2","label":"可选"}] } },
        { "name": "addNode", "node": { "id": "n-x", "kind": "process", "label": "..." } },
        { "name": "updateNode", "id": "n1", "expectedLabel": "原文本", "patch": { "kind": "process", "label": "新文本" } },
        { "name": "removeSubgraph", "nodes": [{"id":"n1","expectedLabel":"原文本"}], "edges": [{"id":"e1","expected":{"source":"n1","target":"n2","label":"可选"}}] },
        { "name": "addEdge", "edge": { "id": "e-x", "source": "n1", "target": "n2", "label": "可选" } },
        { "name": "updateEdge", "id": "e1", "expected": {"source":"n1","target":"n2","label":"可选"}, "patch": { "label": "新标签" } },
-       { "name": "removeEdge", "id": "e1", "expected": {"source":"n1","target":"n2","label":"可选"} }
+       { "name": "removeEdge", "id": "e1", "expected": {"source":"n1","target":"n2","label":"可选"} },
+       { "name": "addPool", "pool": { "id": "pool-1", "label": "泳池标题", "orientation": "horizontal", "lanes": [{"id":"lane-1","label":"泳道 1"},{"id":"lane-2","label":"泳道 2"}] } },
+       { "name": "addLane", "poolId": "pool-1", "lane": { "id": "lane-3", "label": "可选标题" } },
+       { "name": "moveNodeToLane", "id": "n1", "expectedLabel": "原文本", "laneId": "lane-1" }
      ]
    }
 
 字段说明：
 - baseHash: 必须等于下方提供的 baseHash 值；
 - ops: 操作数组，按顺序原子应用；任一 op 失败则整个 patch 不应用；
-- replaceGraph 必须是唯一 op，不能与其他 op 混用；
+- replaceGraph 必须是唯一 op，不能与其他 op 混用；图中已含泳道时不要使用 replaceGraph（泳道语义无法表达，会被拒绝），改用局部 ops；
 - addNode 的 id 必须在当前图和同一 patch 中唯一；不要输出 position；
-- updateNode/removeSubgraph/updateEdge/removeEdge 必须提供 expected，与当前图不匹配则整个 patch 拒绝；
+- updateNode/removeSubgraph/updateEdge/removeEdge/moveNodeToLane 必须提供 expected，与当前图不匹配则整个 patch 拒绝；
 - removeSubgraph 必须显式列出待删节点和这些节点在执行到该 op 时的全部关联边，不允许漏列、夹带或隐式级联；
-- 新节点不要输出 position，本地代码统一放置；
-- 节点 kind 仅允许 start/process/decision/end/document/database/annotation/subprocess；其中 document 表示文档输入输出、database 表示数据存储、annotation 表示注释说明、subprocess 表示子流程；
+- 新节点不要输出 position、size、rotation、zIndex、style、theme，本地代码统一放置和套用主题；
+- 节点 kind 仅允许以下流程语义形状：
+  起止：start（开始）/ end（结束）/ terminator（起止胶囊）；
+  流程：process（流程）/ alternate-process（替代流程）/ predefined-process（预定义流程）/ subprocess（子流程）/ manual-operation（手动操作）；
+  判断：decision；
+  数据与输入输出：input-output（输入输出）/ manual-input（手动输入）/ display（显示）/ document（文档）/ multi-document（多文档）/ database（数据库）/ internal-storage（内部存储）/ stored-data（存储数据）；
+  其他流程符号：preparation（准备）/ delay（延迟）/ card（卡片）/ merge（合并）/ extract（提取）/ sort（排序）/ or（或）/ summation（求和）/ connector（连接点）/ off-page-connector（跨页连接）/ annotation（注释）；
+- 不允许使用基础装饰形状（rectangle、star、cloud、箭头等）与容器（group、swimlane-pool、swimlane-lane），也不要创建 text/image/freehand 节点；
 - 自环边（source === target）不允许；
-- 单个 patch 的 ops 数量上限 50。`;
+- 单个 patch 的 ops 数量上限 50。
+
+泳道（泳池）规则：
+- 语义 JSON 中 lanes 是既有泳道列表（id + label），节点的 laneId 表示所属泳道；
+- 创建泳池用 addPool：恰好 2 条泳道，orientation 可省略（默认 horizontal）；坐标和尺寸由本地生成，不要输出；
+- 追加泳道用 addLane：poolId 必须是既有或本 patch 创建的泳池；
+- 调整节点归属用 moveNodeToLane：laneId 为目标泳道 id，传 null 表示移出泳道回到画布；
+- addNode 的 node 不要带 laneId；要把新节点放进泳道时，先 addNode 再 moveNodeToLane；
+- 同一 patch 中可以先 addPool 再 moveNodeToLane 引用新泳道。`;
 
 /**
  * 大图上下文裁剪（设计文档 §9.5）。
@@ -190,14 +207,21 @@ export function buildFlowchartAiContext(
     }
   }
 
-  // 4. 构建裁剪后的图：keepFull 节点完整，其余节点只保留 id/kind/label
-  const nodes: Array<FlowchartSemanticNode | { id: string; kind: string; label: string; trimmed: true }> = [];
+  // 4. 构建裁剪后的图：keepFull 节点完整，其余节点只保留 id/kind/label/laneId
+  const nodes: Array<FlowchartSemanticNode | { id: string; kind: string; label: string; laneId?: string; trimmed: true }> = [];
   for (const n of fullGraph.nodes) {
     if (keepFull.has(n.id)) {
       nodes.push(n);
     } else {
-      // 其余节点只发送 ID、kind 和 label
-      nodes.push({ id: n.id, kind: n.kind, label: n.label, trimmed: true } as unknown as FlowchartSemanticNode);
+      // 其余节点只发送 ID、kind、label 和泳道归属（laneId 是责任分配语义，不能丢）
+      const trimmed: { id: string; kind: string; label: string; laneId?: string; trimmed: true } = {
+        id: n.id,
+        kind: n.kind,
+        label: n.label,
+        trimmed: true,
+      };
+      if (n.laneId !== undefined) trimmed.laneId = n.laneId;
+      nodes.push(trimmed as unknown as FlowchartSemanticNode);
     }
   }
 
@@ -208,6 +232,8 @@ export function buildFlowchartAiContext(
     nodes: nodes as FlowchartSemanticNode[],
     edges,
   };
+  // 泳道列表始终完整保留（数量少且是归属语义）
+  if (fullGraph.lanes !== undefined) trimmedGraph.lanes = fullGraph.lanes;
 
   return { json: JSON.stringify(trimmedGraph, null, 2), trimmed: true };
 }

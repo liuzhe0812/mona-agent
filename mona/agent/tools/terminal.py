@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 import base64
-import re
 from typing import Any
 
 from loguru import logger
 
 from mona.agent.tools.base import Tool, tool_parameters
 from mona.agent.tools.context import RequestContext
-from mona.agent.tools.schema import IntegerSchema, StringSchema, tool_parameters_schema
+from mona.agent.tools.schema import (
+    ArraySchema,
+    IntegerSchema,
+    ObjectSchema,
+    StringSchema,
+    tool_parameters_schema,
+)
 from mona.agent.tools.tauri_ipc import tauri_invoke as _shared_tauri_invoke
 from mona.config.schema import TerminalToolConfig
 
@@ -29,32 +34,258 @@ def _tauri_invoke(cmd: str, args: dict[str, Any] | None = None) -> Any:
 
 _DEFAULT_TERMINAL_CONFIG = TerminalToolConfig()
 
+_NO_TASK_ERROR = (
+    "Error: terminal_exec requires task_id and step_id from an active "
+    "maintenance task. Call terminal_task(action='start', goal=..., steps=[...]) "
+    "first, then pass the returned ids here. Each step executes exactly one command."
+)
 
-def _pattern_matches(pattern: str, command_lower: str) -> bool:
-    pat_lower = pattern.lower()
-    if "-" not in pat_lower:
-        return pat_lower in command_lower
-    parts = pat_lower.split("-")
-    escaped = [re.escape(p) for p in parts]
-    regex = r"\W+".join(escaped)
-    return bool(re.search(regex, command_lower))
+_STEP_KINDS = ("inspect", "change", "verify")
 
 
-def _classify_risk(
-    command: str,
-    *,
-    exec_mode: str,
-    dangerous_patterns: list[str] | None = None,
-    safe_patterns: list[str] | None = None,
-) -> str:
-    cmd_lower = command.lower()
-    d_patterns = dangerous_patterns if dangerous_patterns is not None else _DEFAULT_TERMINAL_CONFIG.dangerous_patterns
-    for pat in d_patterns:
-        if _pattern_matches(pat, cmd_lower):
-            return "approval"
-    if exec_mode == "approval":
-        return "approval"
-    return "direct"
+def _parse_steps(raw: Any) -> list[dict[str, str]] | str:
+    """Validate the steps array; returns the parsed list or an error string."""
+    if not isinstance(raw, list) or not raw:
+        return "Error: steps must be a non-empty array of {title, kind} objects"
+    out: list[dict[str, str]] = []
+    for i, item in enumerate(raw):
+        if not isinstance(item, dict):
+            return f"Error: steps[{i}] must be an object with title and kind"
+        title = str(item.get("title") or "").strip()
+        kind = str(item.get("kind") or "inspect").strip()
+        if not title:
+            return f"Error: steps[{i}].title is required"
+        if kind not in _STEP_KINDS:
+            return f"Error: steps[{i}].kind must be one of {', '.join(_STEP_KINDS)}"
+        out.append({"title": title, "kind": kind})
+    return out
+
+
+def _session_type(session_id: str) -> str | None:
+    """Best-effort lookup of a session's type ('Ssh', 'Local', ...)."""
+    result = _tauri_invoke("terminal_list_sessions")
+    if isinstance(result, list):
+        for s in result:
+            if isinstance(s, dict) and s.get("id") == session_id:
+                return s.get("sessionType")
+    return None
+
+
+def _tail(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    return f"[truncated, showing last {limit} chars]\n" + text[-limit:]
+
+
+def _format_step_result(result: dict[str, Any]) -> str:
+    exit_code = result.get("exitCode")
+    duration = result.get("durationMs", "?")
+    bits = [f"exit_code: {exit_code if exit_code is not None else 'null'}", f"duration: {duration} ms"]
+    if result.get("timedOut"):
+        bits.append("TIMED OUT")
+    if result.get("cancelled"):
+        bits.append("CANCELLED")
+    lines = [" | ".join(bits)]
+    stdout = str(result.get("stdout") or "").rstrip()
+    stderr = str(result.get("stderr") or "").rstrip()
+    if stdout:
+        lines.append("--- stdout ---")
+        lines.append(_tail(stdout, 6000))
+    if stderr:
+        lines.append("--- stderr ---")
+        lines.append(_tail(stderr, 4000))
+    if exit_code != 0 or result.get("timedOut") or result.get("cancelled"):
+        lines.append(
+            "Step FAILED — only exit_code 0 counts as success. Diagnose the output "
+            "above and continue with the remaining planned steps; if the plan cannot "
+            "continue, call terminal_task(action='fail') and start a revised task. "
+            "Do NOT claim the step succeeded."
+        )
+    return "\n".join(lines)
+
+
+_STEP_ITEM_SCHEMA = ObjectSchema(
+    properties={
+        "title": StringSchema("Short human-readable step description"),
+        "kind": StringSchema(
+            "Step type: inspect (read-only diagnosis), change (modifies the system), "
+            "verify (independent re-check after changes)",
+            enum=list(_STEP_KINDS),
+        ),
+    },
+    required=["title", "kind"],
+)
+
+
+@tool_parameters(
+    tool_parameters_schema(
+        action=StringSchema(
+            "Task action",
+            enum=["start", "finish", "fail"],
+        ),
+        goal=StringSchema(
+            "The user's maintenance goal, in their own words (required for start)",
+            nullable=True,
+        ),
+        steps=ArraySchema(
+            _STEP_ITEM_SCHEMA,
+            description=(
+                "The COMPLETE step plan (required for start). Plan the full sequence "
+                "upfront: inspect steps to gather evidence, then change steps, then "
+                "verify steps. The plan locks once execution starts and cannot be "
+                "extended afterwards."
+            ),
+            min_items=1,
+            nullable=True,
+        ),
+        task_id=StringSchema(
+            "Task ID returned by start (required for finish, fail)",
+            nullable=True,
+        ),
+        diagnosis=StringSchema(
+            "AI diagnosis conclusion, saved with the task (for finish)",
+            nullable=True,
+        ),
+        summary=StringSchema(
+            "Final human-readable summary of what was done (for finish)",
+            nullable=True,
+        ),
+        error=StringSchema(
+            "Why the task cannot continue (for fail)",
+            nullable=True,
+        ),
+        session_id=StringSchema(
+            "Terminal session ID. If omitted, uses the current active terminal session.",
+            nullable=True,
+        ),
+        required=["action"],
+    )
+)
+class TerminalTaskTool(Tool):
+    _scopes = {"core", "subagent"}
+    config_key = "terminal_task"
+    _request_ctx: RequestContext | None = None
+
+    def set_context(self, ctx: RequestContext) -> None:
+        self._request_ctx = ctx
+        self.is_available = bool(ctx.terminal_session_id)
+
+    @property
+    def name(self) -> str:
+        return "terminal_task"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Manage a terminal maintenance task on the user's current SSH session. "
+            "Workflow: start (user goal + the COMPLETE step plan, inspect → change → "
+            "verify) → execute each step with terminal_exec/terminal_upload (exactly "
+            "one action per step, in order) → finish (diagnosis + summary) or fail "
+            "(reason). The plan is locked once execution starts — it cannot be "
+            "extended, so plan carefully; if the plan proves wrong mid-run, fail the "
+            "task and start a revised one. start returns task_id and step_ids — you "
+            "MUST pass them to terminal_exec/terminal_upload. Steps are executed in "
+            "the user's visible terminal and tracked with real exit codes. A task "
+            "containing change steps can only finish successfully after a verify step "
+            "that ran after the last change has succeeded."
+        )
+
+    @property
+    def read_only(self) -> bool:
+        return False
+
+    async def execute(
+        self,
+        action: str,
+        goal: str | None = None,
+        steps: Any = None,
+        task_id: str | None = None,
+        diagnosis: str | None = None,
+        summary: str | None = None,
+        error: str | None = None,
+        session_id: str | None = None,
+        **kwargs: Any,
+    ) -> str:
+        action = (action or "").strip()
+        if action == "start":
+            return self._start(goal, steps, session_id)
+        if action == "finish":
+            return self._finish(task_id, diagnosis, summary)
+        if action == "fail":
+            return self._fail(task_id, error)
+        return f"Error: unknown action {action!r}; use start, finish or fail"
+
+    def _start(self, goal: str | None, steps: Any, session_id: str | None) -> str:
+        effective_session = session_id or (
+            self._request_ctx.terminal_session_id if self._request_ctx else None
+        )
+        if not effective_session:
+            return (
+                "tool_unavailable: terminal_task requires an active terminal "
+                "session, but the user is not currently viewing a terminal. "
+                "Ask the user to open the terminal panel and try again."
+            )
+        if not goal or not goal.strip():
+            return "Error: goal is required for start"
+        parsed = _parse_steps(steps)
+        if isinstance(parsed, str):
+            return parsed
+        exec_mode = (
+            self._request_ctx.terminal_exec_mode
+            if self._request_ctx and self._request_ctx.terminal_exec_mode
+            else _DEFAULT_TERMINAL_CONFIG.exec_mode.value
+        )
+        result = _tauri_invoke(
+            "terminal_maintenance_start",
+            {
+                "sessionId": effective_session,
+                "goal": goal.strip(),
+                "execMode": exec_mode,
+                "steps": parsed,
+                "source": "ai",
+            },
+        )
+        if isinstance(result, str) and result.startswith("Error:"):
+            return result
+        task_id = result.get("taskId", "?") if isinstance(result, dict) else "?"
+        step_ids = result.get("stepIds", []) if isinstance(result, dict) else []
+        lines = [f"Maintenance task started. task_id: {task_id}", "steps:"]
+        for i, sid in enumerate(step_ids):
+            title = parsed[i]["title"] if i < len(parsed) else "?"
+            lines.append(f"  {sid}  [{parsed[i]['kind']}] {title}" if i < len(parsed) else f"  {sid}")
+        lines.append(
+            "Now execute the first step with terminal_exec(task_id=..., step_id=..., command=...)."
+        )
+        return "\n".join(lines)
+
+    def _finish(self, task_id: str | None, diagnosis: str | None, summary: str | None) -> str:
+        if not task_id:
+            return "Error: task_id is required for finish"
+        result = _tauri_invoke(
+            "terminal_maintenance_finish",
+            {
+                "taskId": task_id,
+                "diagnosis": diagnosis or "",
+                "summary": summary or "",
+            },
+        )
+        if isinstance(result, str) and result.startswith("Error:"):
+            return result
+        return (
+            "Maintenance task finished successfully. Give the user your final summary. "
+            "Do not run further steps for this task."
+        )
+
+    def _fail(self, task_id: str | None, error: str | None) -> str:
+        if not task_id:
+            return "Error: task_id is required for fail"
+        result = _tauri_invoke(
+            "terminal_maintenance_fail",
+            {"taskId": task_id, "error": error or "AI 放弃继续处理"},
+        )
+        if isinstance(result, str) and result.startswith("Error:"):
+            return result
+        return "Maintenance task marked as failed. Explain the situation to the user."
 
 
 @tool_parameters(
@@ -63,13 +294,22 @@ def _classify_risk(
             "Terminal session ID. If omitted, uses the current active terminal session.",
             nullable=True,
         ),
-        command=StringSchema("Shell command to execute in the terminal session"),
-        source=StringSchema(
-            "Source label for the approval dialog (e.g. 'AI Agent')",
+        command=StringSchema("Shell command to execute as this step"),
+        task_id=StringSchema(
+            "Maintenance task ID from terminal_task (required for SSH sessions)",
             nullable=True,
         ),
-        require_approval=StringSchema(
-            "Whether to require user approval before executing (true/false)",
+        step_id=StringSchema(
+            "Step ID within the task — each step executes exactly one command (required for SSH sessions)",
+            nullable=True,
+        ),
+        timeout_secs=IntegerSchema(
+            description=(
+                "Max seconds to wait for the command. Default 120, max 1800. "
+                "A timed-out command counts as a failed step."
+            ),
+            minimum=1,
+            maximum=1800,
             nullable=True,
         ),
         required=["command"],
@@ -95,35 +335,30 @@ class TerminalExecTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Execute a shell command in the user's current terminal session (SSH or local shell). "
-            "The session_id is automatically set to the active terminal the user is viewing — "
-            "you do NOT need to discover or specify it. Just provide the command. "
-            "Commands are risk-classified: dangerous commands (rm -rf, mkfs, dd, etc.) "
-            "always require user approval; safe commands (ls, cat, df, etc.) may execute "
-            "directly depending on config; unknown commands default to requiring approval. "
-            "After execution, call terminal_output to read the result."
+            "Execute one shell command as a step of the active maintenance task on the "
+            "user's current SSH terminal session. Requires task_id and step_id from "
+            "terminal_task — a step can only be executed once and the task plan cannot "
+            "be extended after start, so run the planned steps in order. Returns "
+            "structured results: exit_code, stdout, stderr, "
+            "duration, timed_out, cancelled. Only exit_code 0 means success — never "
+            "claim success otherwise. High-risk commands automatically pause for user "
+            "confirmation; forbidden commands are blocked. The command and its output "
+            "are shown live in the user's terminal. On Local (non-SSH) terminals it may "
+            "run without a task as an untracked passthrough — prefer the `exec` tool "
+            "for local commands."
         )
 
     @property
     def read_only(self) -> bool:
         return False
 
-    @staticmethod
-    def _load_config() -> TerminalToolConfig:
-        try:
-            import mona.config as _cfg
-
-            cfg = _cfg.load_config()
-            return cfg.tools.terminal
-        except Exception:
-            return TerminalToolConfig()
-
     async def execute(
         self,
         command: str,
         session_id: str | None = None,
-        source: str | None = None,
-        require_approval: str | None = None,
+        task_id: str | None = None,
+        step_id: str | None = None,
+        timeout_secs: int | None = None,
         **kwargs: Any,
     ) -> str:
         effective_session = session_id or (
@@ -139,55 +374,38 @@ class TerminalExecTool(Tool):
                 "instead. Do NOT claim you do not have terminal tools."
             )
 
-        explicit_approval = (
-            require_approval is not None
-            and require_approval.lower() in ("true", "1", "yes")
-        )
+        if not task_id or not step_id:
+            # Local shells have no structured execution yet — keep the previous
+            # untracked passthrough so existing local-terminal usage still works.
+            if _session_type(effective_session) == "Local":
+                result = _tauri_invoke(
+                    "terminal_exec_command",
+                    {"sessionId": effective_session, "command": command, "source": "ai"},
+                )
+                if isinstance(result, str) and result.startswith("Error:"):
+                    return result
+                return (
+                    "Command written to the local terminal (untracked — local sessions "
+                    "do not support maintenance steps yet). Call terminal_output to "
+                    "read the result; do not claim success without seeing it."
+                )
+            return _NO_TASK_ERROR
 
-        if explicit_approval:
-            need_approval = True
-        else:
-            tcfg = self._load_config()
-            effective_exec_mode = (
-                self._request_ctx.terminal_exec_mode
-                if self._request_ctx and self._request_ctx.terminal_exec_mode
-                else tcfg.exec_mode.value
-            )
-            risk = _classify_risk(
-                command,
-                exec_mode=effective_exec_mode,
-                dangerous_patterns=tcfg.dangerous_patterns,
-                safe_patterns=tcfg.safe_patterns,
-            )
-            need_approval = risk == "approval"
-            logger.debug(
-                "terminal risk classification: command={!r} risk={} exec_mode={}",
-                command,
-                risk,
-                effective_exec_mode,
-            )
-
-        if need_approval:
-            result = _tauri_invoke(
-                "terminal_request_exec",
-                {
-                    "sessionId": effective_session,
-                    "command": command,
-                    "source": source or "AI Agent",
-                },
-            )
-        else:
-            result = _tauri_invoke(
-                "terminal_exec_command",
-                {"sessionId": effective_session, "command": command},
-            )
+        args: dict[str, Any] = {
+            "taskId": task_id,
+            "stepId": step_id,
+            "command": command,
+            "source": "ai",
+        }
+        if isinstance(timeout_secs, int) and timeout_secs > 0:
+            args["timeoutSecs"] = timeout_secs
+        result = _tauri_invoke("terminal_maintenance_execute_step", args)
 
         if isinstance(result, str) and result.startswith("Error:"):
             return result
-
-        if need_approval:
-            return f"Command submitted for approval: {command}"
-        return f"Command executed: {command}"
+        if isinstance(result, dict):
+            return _format_step_result(result)
+        return str(result)
 
 
 _DEFAULT_OUTPUT_LINES = 200
@@ -290,6 +508,14 @@ class TerminalOutputTool(Tool):
             "Content encoding: 'text' for plain text (default), 'base64' for binary data",
             nullable=True,
         ),
+        task_id=StringSchema(
+            "Maintenance task ID from terminal_task (required)",
+            nullable=True,
+        ),
+        step_id=StringSchema(
+            "Step ID within the task — uploads count as change steps (required)",
+            nullable=True,
+        ),
         required=["remote_path", "content"],
     )
 )
@@ -309,11 +535,12 @@ class TerminalUploadTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Upload a file to the remote server via the current SSH session's SFTP channel. "
-            "The session_id is automatically set to the active terminal the user is viewing — "
-            "you do NOT need to discover or specify it. "
+            "Upload a file to the remote server as a change step of the active maintenance "
+            "task (SSH sessions). Requires task_id and step_id from terminal_task. "
             "Use encoding='text' (default) for text files, encoding='base64' for binary data. "
-            "This reuses the existing SSH connection, no additional authentication needed."
+            "Reuses the existing SSH connection, no additional authentication needed. "
+            "After an upload you must add and run a verify step confirming the file works "
+            "as intended."
         )
 
     @property
@@ -326,6 +553,8 @@ class TerminalUploadTool(Tool):
         content: str,
         session_id: str | None = None,
         encoding: str | None = None,
+        task_id: str | None = None,
+        step_id: str | None = None,
         **kwargs: Any,
     ) -> str:
         effective_session = session_id or (
@@ -340,6 +569,13 @@ class TerminalUploadTool(Tool):
                 "Do NOT claim you do not have terminal tools."
             )
 
+        if not task_id or not step_id:
+            return (
+                "Error: terminal_upload requires task_id and step_id from an active "
+                "maintenance task. Call terminal_task(action='start', ...) with a "
+                "complete plan first and pass the returned ids here."
+            )
+
         enc = (encoding or "text").lower()
         if enc == "base64":
             content_b64 = content
@@ -347,11 +583,13 @@ class TerminalUploadTool(Tool):
             content_b64 = base64.b64encode(content.encode("utf-8")).decode("ascii")
 
         result = _tauri_invoke(
-            "terminal_upload_file",
+            "terminal_maintenance_execute_upload",
             {
-                "sessionId": effective_session,
+                "taskId": task_id,
+                "stepId": step_id,
                 "remotePath": remote_path,
                 "content": content_b64,
+                "source": "ai",
             },
         )
 
@@ -359,10 +597,12 @@ class TerminalUploadTool(Tool):
             return result
 
         if isinstance(result, dict):
-            status = result.get("status", "unknown")
             bytes_uploaded = result.get("bytes", "?")
             path = result.get("remotePath", remote_path)
-            return f"File uploaded: {path} ({bytes_uploaded} bytes, {status})"
+            return (
+                f"Upload step succeeded: {path} ({bytes_uploaded} bytes). "
+                "Remember to run a verify step before finishing the task."
+            )
 
         return str(result)
 

@@ -5,6 +5,8 @@ pub mod credential_store;
 pub mod desktop;
 pub mod error;
 pub mod ide;
+pub mod maintenance;
+pub mod maintenance_cmds;
 pub mod session;
 pub mod shell;
 pub mod sftp;
@@ -27,6 +29,9 @@ pub struct TerminalState {
     pub approval: ApprovalState,
     pub batch_transfer: BatchTransferManager,
     pub transfer_cancels: Arc<RwLock<HashMap<String, CancellationToken>>>,
+    pub maintenance: Arc<maintenance::MaintenanceStore>,
+    /// Cancellation tokens for in-flight maintenance steps, keyed by task id.
+    pub maintenance_cancels: Arc<RwLock<HashMap<String, CancellationToken>>>,
 }
 
 impl TerminalState {
@@ -39,13 +44,20 @@ impl TerminalState {
                 })
                 .unwrap_or_else(|_| KnownHostsStore::new_in_memory()),
         );
+        let maintenance = maintenance::MaintenanceStore::new()
+            .unwrap_or_else(|e| {
+                log::error!("Failed to open maintenance store, using in-memory db: {}", e);
+                maintenance::MaintenanceStore::new_in_memory()
+                    .expect("in-memory maintenance store must work")
+            });
         Self {
             manager: SessionManager::new(32),
             known_hosts,
             approval: ApprovalState::new(),
             batch_transfer: BatchTransferManager::new(),
             transfer_cancels: Arc::new(RwLock::new(HashMap::new())),
+            maintenance: Arc::new(maintenance),
+            maintenance_cancels: Arc::new(RwLock::new(HashMap::new())),
         }
     }
-
-    }
+}

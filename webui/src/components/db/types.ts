@@ -182,6 +182,22 @@ export interface QueryTab {
   agentChatId: string | null;
 }
 
+/** AI SQL draft operation class — mirrors Rust DbSqlDraft.operation_class. */
+export type DbAiOperationClass =
+  | "read"
+  | "transactional_dml"
+  | "non_transactional_change"
+  | "blocked";
+
+/** Structured SQL draft published by the AI via db_sql_draft tool. */
+export interface DbSqlDraft {
+  sql: string;
+  statementType: string;
+  targetObjects: string[];
+  operationClass: DbAiOperationClass;
+  explanation: string;
+}
+
 export function displayCellValue(cell: CellValue): string {
   switch (cell.type) {
     case "null":

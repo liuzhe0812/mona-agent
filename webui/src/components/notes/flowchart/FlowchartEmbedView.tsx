@@ -148,7 +148,7 @@ function FlowchartEmbedCanvas({ document }: { document: FlowchartDocument }) {
     ),
   );
   const [internalEdges, setInternalEdges] = useState<Edge[]>(() =>
-    document.edges.map(flowchartCanvasHelpers.toFlowEdge),
+    document.edges.map((e) => flowchartCanvasHelpers.toFlowEdge(e, { readOnly: true })),
   );
 
   // 文档变化时重置
@@ -158,7 +158,7 @@ function FlowchartEmbedCanvas({ document }: { document: FlowchartDocument }) {
         flowchartCanvasHelpers.toFlowNode(n, document.direction),
       ),
     );
-    setInternalEdges(document.edges.map(flowchartCanvasHelpers.toFlowEdge));
+    setInternalEdges(document.edges.map((e) => flowchartCanvasHelpers.toFlowEdge(e, { readOnly: true })));
   }, [document]);
 
   const handleNodesChange = useCallback((changes: NodeChange[]) => {

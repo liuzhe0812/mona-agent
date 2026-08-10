@@ -49,6 +49,7 @@ from mona.utils.subagent_channel_display import scrub_subagent_messages_for_chan
 from mona.webui.settings_api import (
     WebUISettingsError,
     fetch_zen_free_models,
+    probe_provider_models,
     settings_payload,
     update_agent_settings,
     update_channel_settings,
@@ -861,6 +862,9 @@ class WebSocketChannel(BaseChannel):
         if got == "/api/settings/provider/update":
             return self._handle_settings_provider_update(request)
 
+        if got == "/api/settings/provider/models":
+            return await self._handle_settings_provider_models(request)
+
         if got == "/api/settings/web-search/update":
             return self._handle_settings_web_search_update(request)
 
@@ -1188,6 +1192,27 @@ class WebSocketChannel(BaseChannel):
         except WebUISettingsError as e:
             return _http_error(e.status, e.message)
         return _http_json_response(self._with_settings_restart_state(payload, section="image"))
+
+    async def _handle_settings_provider_models(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        query = _parse_query(request.path)
+        provider_name = (_query_first(query, "provider") or "").strip()
+        if not provider_name:
+            return _http_error(400, "provider is required")
+        # Allow callers to override api_key / api_base (e.g. when the user is
+        # editing the form but hasn't saved yet). Fall back to saved config.
+        api_key = _query_first(query, "api_key") or _query_first(query, "apiKey")
+        api_base = _query_first(query, "api_base") or _query_first(query, "apiBase")
+        try:
+            models = await probe_provider_models(
+                provider_name=provider_name,
+                api_key=api_key,
+                api_base=api_base,
+            )
+        except WebUISettingsError as e:
+            return _http_json_response({"error": e.message, "models": []})
+        return _http_json_response({"models": models})
 
     def _handle_settings_web_search_update(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):
@@ -3578,6 +3603,28 @@ class WebSocketChannel(BaseChannel):
             db_table = envelope.get("db_table")
             if isinstance(db_table, str) and db_table:
                 metadata["table"] = db_table
+            db_type = envelope.get("db_type")
+            if isinstance(db_type, str) and db_type:
+                metadata["db_type"] = db_type
+            db_server_version = envelope.get("db_server_version")
+            if isinstance(db_server_version, str) and db_server_version:
+                metadata["server_version"] = db_server_version
+            db_current_sql = envelope.get("db_current_sql")
+            if isinstance(db_current_sql, str) and db_current_sql:
+                # Cap oversized SQL to avoid bloating context.
+                cap = 2000
+                if len(db_current_sql) > cap:
+                    metadata["current_sql"] = db_current_sql[:cap] + " /* truncated */"
+                    metadata["current_sql_truncated"] = True
+                else:
+                    metadata["current_sql"] = db_current_sql
+            db_last_error = envelope.get("db_last_error")
+            if isinstance(db_last_error, str) and db_last_error:
+                cap_err = 1000
+                if len(db_last_error) > cap_err:
+                    metadata["last_error"] = db_last_error[:cap_err] + " /* truncated */"
+                else:
+                    metadata["last_error"] = db_last_error
             browser_page_url = envelope.get("browser_page_url")
             if isinstance(browser_page_url, str) and browser_page_url:
                 metadata["browser_page_url"] = browser_page_url

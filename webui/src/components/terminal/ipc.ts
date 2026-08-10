@@ -646,3 +646,129 @@ export async function vncDisconnect(sessionId: string): Promise<void> {
 export async function vncReconnect(sessionId: string): Promise<VncSessionInfo> {
   return invoke<VncSessionInfo>("vnc_reconnect", { sessionId });
 }
+
+// ─── Terminal maintenance tasks ─────────────────────────────────────
+
+export type MaintenanceTaskStatus =
+  | "planning"
+  | "waiting_approval"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "cancelled";
+
+export type MaintenanceTaskResolution =
+  | ""
+  | "completed_changes"
+  | "no_changes_needed"
+  | "partial"
+  | "failed";
+
+export type MaintenanceStepKind = "inspect" | "change" | "verify";
+
+export type MaintenanceStepStatus =
+  | "pending"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "skipped"
+  | "cancelled";
+
+export interface MaintenanceTask {
+  id: string;
+  sessionId: string;
+  configId: string;
+  targetLabel: string;
+  goal: string;
+  execMode: string;
+  status: MaintenanceTaskStatus;
+  resolution: MaintenanceTaskResolution;
+  diagnosis: string;
+  summary: string;
+  error: string;
+  createdAt: number;
+  startedAt: number | null;
+  finishedAt: number | null;
+}
+
+export interface MaintenanceStep {
+  id: string;
+  taskId: string;
+  ordinal: number;
+  title: string;
+  kind: MaintenanceStepKind;
+  status: MaintenanceStepStatus;
+  commandHash: string;
+  exitCode: number | null;
+  durationMs: number | null;
+  approvedAt: number | null;
+  startedAt: number | null;
+  finishedAt: number | null;
+}
+
+export interface MaintenanceTaskDetail {
+  task: MaintenanceTask;
+  steps: MaintenanceStep[];
+}
+
+export interface TerminalMaintenanceEvent {
+  sessionId: string;
+  task: MaintenanceTaskDetail;
+}
+
+export async function terminalMaintenanceGetActive(
+  sessionId: string,
+): Promise<MaintenanceTaskDetail | null> {
+  return invoke<MaintenanceTaskDetail | null>("terminal_maintenance_get_active", {
+    sessionId,
+  });
+}
+
+export async function terminalMaintenanceList(
+  configId?: string,
+  status?: MaintenanceTaskStatus,
+  limit = 100,
+): Promise<MaintenanceTask[]> {
+  return invoke<MaintenanceTask[]>("terminal_maintenance_list", {
+    configId: configId ?? null,
+    status: status ?? null,
+    limit,
+  });
+}
+
+export async function terminalMaintenanceGet(
+  taskId: string,
+): Promise<MaintenanceTaskDetail> {
+  return invoke<MaintenanceTaskDetail>("terminal_maintenance_get", { taskId });
+}
+
+export async function terminalMaintenanceAuthorize(
+  taskId: string,
+  stepIds: string[],
+): Promise<MaintenanceTaskDetail> {
+  return invoke<MaintenanceTaskDetail>("terminal_maintenance_authorize", {
+    taskId,
+    stepIds,
+  });
+}
+
+export async function terminalMaintenanceCancel(
+  taskId: string,
+): Promise<MaintenanceTaskDetail> {
+  return invoke<MaintenanceTaskDetail>("terminal_maintenance_cancel", { taskId });
+}
+
+export async function terminalMaintenanceDelete(taskId: string): Promise<void> {
+  return invoke<void>("terminal_maintenance_delete", { taskId });
+}
+
+export function onTerminalMaintenanceUpdated(
+  handler: (event: TerminalMaintenanceEvent) => void,
+): Promise<UnlistenFn> {
+  if (!isTauri()) {
+    return Promise.resolve(() => {});
+  }
+  return listen<TerminalMaintenanceEvent>("terminal-maintenance-updated", (e) =>
+    handler(e.payload),
+  );
+}

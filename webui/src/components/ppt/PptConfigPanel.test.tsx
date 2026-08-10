@@ -113,7 +113,7 @@ describe("PptConfigPanel", () => {
   it("可从配置页打开模板选择器，选择后写入 templateKey/templateKind", async () => {
     render(<Harness />);
 
-    fireEvent.click(screen.getByRole("button", { name: /选择内置版式、品牌或自定义模板/ }));
+    fireEvent.click(screen.getByRole("button", { name: /选择内置版式或品牌模板/ }));
     expect(dialogProps?.open).toBe(true);
 
     fireEvent.click(screen.getByTestId("mock-pick-template"));
@@ -134,7 +134,7 @@ describe("PptConfigPanel", () => {
     await screen.findByText("PPT 编辑组件已就绪（1.2.3）");
     expect(screen.getByRole("button", { name: /选择 \.pptx 模版文件/ })).toBeTruthy();
     // 内置版式入口消失
-    expect(screen.queryByText(/选择内置版式、品牌或自定义模板/)).toBeNull();
+    expect(screen.queryByText(/选择内置版式或品牌模板/)).toBeNull();
     expect(harnessConfig?.mode).toBe("template");
   });
 

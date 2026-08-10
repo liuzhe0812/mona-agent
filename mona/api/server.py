@@ -5406,6 +5406,17 @@ def _normalize_video_meta(project_dir: Path, meta: dict) -> dict:
     Only fills missing fields; never overwrites existing values.
     """
     result = dict(meta)
+    # Ensure resolution is always a string ("WxH" format).
+    # Old projects or AI-written meta may store it as a list [w, h] or
+    # dict {"width": w, "height": h}, which crashes the frontend.
+    res = result.get("resolution")
+    if not isinstance(res, str):
+        if isinstance(res, (list, tuple)) and len(res) == 2:
+            result["resolution"] = f"{res[0]}x{res[1]}"
+        elif isinstance(res, dict) and "width" in res and "height" in res:
+            result["resolution"] = f"{res['width']}x{res['height']}"
+        else:
+            result["resolution"] = "1920x1080"
     output_mp4 = project_dir / "renders" / "output.mp4"
     has_render = output_mp4.is_file()
     # phase

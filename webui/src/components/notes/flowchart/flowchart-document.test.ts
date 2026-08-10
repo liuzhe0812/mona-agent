@@ -8,6 +8,8 @@ import {
   computeFlowchartSemanticHash,
   countFlowchartFences,
   createBlankFlowchartDocument,
+  DEFAULT_FLOWCHART_CANVAS,
+  DEFAULT_FLOWCHART_THEME,
   extractFlowchartFence,
   parseFlowchartMarkdown,
   serializeFlowchartMarkdown,
@@ -15,9 +17,20 @@ import {
   type FlowchartDocument,
 } from "./flowchart-document";
 
+function v2Base() {
+  return {
+    version: 2 as const,
+    canvas: {
+      ...DEFAULT_FLOWCHART_CANVAS,
+      grid: { ...DEFAULT_FLOWCHART_CANVAS.grid },
+    },
+    theme: { ...DEFAULT_FLOWCHART_THEME },
+  };
+}
+
 function makeDoc(overrides: Partial<FlowchartDocument> = {}): FlowchartDocument {
   return {
-    version: 1,
+    ...v2Base(),
     direction: "TB",
     nodes: [
       { id: "n1", kind: "start", label: "开始", position: { x: 0, y: 0 } },
@@ -51,7 +64,7 @@ describe("validateFlowchartDocument", () => {
   });
 
   it("拒绝不支持的版本", () => {
-    const r = validateFlowchartDocument({ ...makeDoc(), version: 2 });
+    const r = validateFlowchartDocument({ ...makeDoc(), version: 99 });
     expect(r.ok).toBe(false);
     expect(r.ok === false && r.errors.some((e) => e.code === "version-unsupported")).toBe(true);
   });
@@ -248,7 +261,7 @@ describe("buildFlowchartPlainText", () => {
 
   it("节点 label 中的 [[wiki link]] 原文保留（preview 可读性）", () => {
     const doc: FlowchartDocument = {
-      version: 1,
+      ...v2Base(),
       direction: "TB",
       nodes: [
         { id: "n1", kind: "start", label: "读取 [[订单]]", position: { x: 0, y: 0 } },
@@ -267,7 +280,7 @@ describe("buildFlowchartPlainText", () => {
 describe("buildFlowchartIndexMarkdown", () => {
   it("空节点列表渲染占位", () => {
     const md = buildFlowchartIndexMarkdown("空", {
-      version: 1,
+      ...v2Base(),
       direction: "TB",
       nodes: [],
       edges: [],
@@ -278,7 +291,7 @@ describe("buildFlowchartIndexMarkdown", () => {
 
   it("边带 label 投影保留 label", () => {
     const md = buildFlowchartIndexMarkdown("t", {
-      version: 1,
+      ...v2Base(),
       direction: "TB",
       nodes: [
         { id: "n1", kind: "start", label: "a", position: { x: 0, y: 0 } },
@@ -397,7 +410,7 @@ describe("collectFlowchartSemanticWarnings", () => {
 
   it("开始节点有入边警告", () => {
     const doc: FlowchartDocument = {
-      version: 1,
+      ...v2Base(),
       direction: "TB",
       nodes: [
         { id: "s", kind: "start", label: "s", position: { x: 0, y: 0 } },
@@ -415,7 +428,7 @@ describe("collectFlowchartSemanticWarnings", () => {
 
   it("判断节点多出边无标签警告", () => {
     const doc: FlowchartDocument = {
-      version: 1,
+      ...v2Base(),
       direction: "TB",
       nodes: [
         { id: "d", kind: "decision", label: "d", position: { x: 0, y: 0 } },
@@ -433,7 +446,7 @@ describe("collectFlowchartSemanticWarnings", () => {
 
   it("循环作为警告而非硬错误", () => {
     const doc: FlowchartDocument = {
-      version: 1,
+      ...v2Base(),
       direction: "TB",
       nodes: [
         { id: "s", kind: "start", label: "s", position: { x: 0, y: 0 } },
@@ -452,7 +465,7 @@ describe("collectFlowchartSemanticWarnings", () => {
 
   it("孤立节点警告", () => {
     const doc: FlowchartDocument = {
-      version: 1,
+      ...v2Base(),
       direction: "TB",
       nodes: [
         { id: "s", kind: "start", label: "s", position: { x: 0, y: 0 } },

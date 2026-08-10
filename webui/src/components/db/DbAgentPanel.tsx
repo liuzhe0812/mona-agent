@@ -1,60 +1,24 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  Loader2,
-  RotateCcw,
-  Send,
-  Square,
-  Zap,
-  ListTree,
-  BarChart3,
-  AlertTriangle,
-  Shield,
-  Wrench,
-} from "lucide-react";
+import { Loader2, RotateCcw, Send, Square, Zap, AlertTriangle, Table2 } from "lucide-react";
 import { AgentLogo } from "@/components/AgentLogo";
 import { ThreadMessages } from "@/components/thread/ThreadMessages";
 import { useMonaStream, type SendOptions } from "@/hooks/useMonaStream";
 import { useSessionHistory } from "@/hooks/useSessions";
+import { isTauri } from "@/lib/tauri";
 import type { UIMessage } from "@/lib/types";
 import { useClient } from "@/providers/ClientProvider";
 import { useDbStore } from "./store/dbStore";
-import type { QueryTab } from "./types";
+import type { DbSqlDraft } from "./types";
 import { SqlResultCard } from "./SqlResultCard";
-import {
-  type DbActionConfirmResult,
-  ExplainPlanConfig,
-  IndexDiagnosisConfig,
-  DataProfileConfig,
-  DiagnoseErrorConfig,
-  HealthInspectionConfig,
-  OptimizeConfig,
-} from "./DbActionConfig";
 
-function buildDbContext(tab: QueryTab | undefined): string | null {
-  if (!tab?.connectionId) return null;
-  const lines: string[] = ["[DB_CONTEXT]"];
-  lines.push(`connection_id: ${tab.connectionId}`);
-  if (tab.database) lines.push(`database: ${tab.database}`);
-  if (tab.title) lines.push(`table: ${tab.title}`);
-  if (tab.result?.message) lines.push(`error: ${tab.result.message}`);
-  lines.push("[/DB_CONTEXT]");
-  return lines.join("\n");
-}
-
-function extractSql(text: string): string | null {
-  const codeBlockMatch = text.match(/```sql\s*\n?([\s\S]*?)\n?\s*```/i);
-  if (codeBlockMatch) return codeBlockMatch[1].trim();
-  const codeBlockMatch2 = text.match(/```\s*\n?([\s\S]*?)\n?\s*```/);
-  if (codeBlockMatch2) {
-    const content = codeBlockMatch2[1].trim();
-    if (/^(SELECT|INSERT|UPDATE|DELETE|WITH|CREATE|ALTER|DROP)\b/i.test(content)) {
-      return content;
-    }
-  }
-  const sqlPattern = /(?:^|\n)\s*((?:SELECT|INSERT|UPDATE|DELETE|WITH)\b[\s\S]*?)(?:\n\s*$|\n(?=[^\s])|$)/i;
-  const sqlMatch = text.match(sqlPattern);
-  if (sqlMatch) return sqlMatch[1].trim();
-  return null;
+/** Detect whether a tab title looks like a real table name (not "新查询" etc). */
+function isRealTable(title: string | undefined): boolean {
+  if (!title) return false;
+  const trimmed = title.trim();
+  if (!trimmed) return false;
+  // Reject placeholder titles used for fresh query tabs.
+  if (/^(新查询|new query|query|查询|untitled)/i.test(trimmed)) return false;
+  return true;
 }
 
 interface DbAgentPanelProps {
@@ -70,18 +34,21 @@ export function DbAgentPanel({
   const collapsed = collapsedProp ?? false;
   const [notice, setNotice] = useState<string | null>(null);
   const [creatingChat, setCreatingChat] = useState(false);
-  const [activeAction, setActiveAction] = useState<string | null>(null);
+  const [sqlDraft, setSqlDraft] = useState<DbSqlDraft | null>(null);
   const pendingPromptRef = useRef<string | null>(null);
   const pendingSendOptsRef = useRef<SendOptions | null>(null);
-  const pendingNlToSqlRef = useRef(false);
   const { client } = useClient();
-  const [pendingSqlResult, setPendingSqlResult] = useState<string | null>(null);
 
   const activeTabId = useDbStore((s) => s.activeTabId);
   const queryTabs = useDbStore((s) => s.queryTabs);
+  const activeConnections = useDbStore((s) => s.activeConnections);
   const updateTabSql = useDbStore((s) => s.updateTabSql);
   const setAgentStreaming = useDbStore((s) => s.setAgentStreaming);
   const activeTab = queryTabs.find((t) => t.id === activeTabId);
+
+  const activeConnection = activeTab?.connectionId
+    ? activeConnections.find((c) => c.id === activeTab.connectionId)
+    : undefined;
 
   const chatId = activeTab?.agentChatId ?? null;
   const historyKey = chatId ? `websocket:${chatId}` : null;
@@ -109,7 +76,7 @@ export function DbAgentPanel({
   useEffect(() => {
     setDraft("");
     setNotice(null);
-    setPendingSqlResult(null);
+    setSqlDraft(null);
     if (!activeTab?.agentChatId) setMessages([]);
   }, [activeTab?.id, activeTab?.agentChatId, setMessages]);
 
@@ -117,15 +84,7 @@ export function DbAgentPanel({
     if (!chatId || loading) return;
     setMessages((current) => {
       if (historical.length === 0 && current.length > 0) return current;
-      // Reconstruct displayContent for historical user messages that lost it
-      // after app restart (displayContent is not persisted by the backend).
-      return historical.map((m) => {
-        if (m.role === "user" && !m.displayContent) {
-          const label = inferDbActionDisplayLabel(m.content);
-          if (label) return { ...m, displayContent: label };
-        }
-        return m;
-      });
+      return historical;
     });
   }, [chatId, historical, historyVersion, loading, setMessages]);
 
@@ -145,6 +104,36 @@ export function DbAgentPanel({
     return () => window.clearTimeout(timer);
   }, [notice]);
 
+  // Listen for structured SQL drafts published by the AI via db_sql_draft tool.
+  useEffect(() => {
+    if (!isTauri()) return;
+    let unlisten: (() => void) | null = null;
+    (async () => {
+      const { listen } = await import("@tauri-apps/api/event");
+      unlisten = await listen<DbSqlDraft>("db-sql-draft-ready", (event) => {
+        setSqlDraft(event.payload);
+      });
+    })();
+    return () => { unlisten?.(); };
+  }, []);
+
+  const buildSendOpts = useCallback((): SendOptions => {
+    const opts: SendOptions = {
+      dbConnectionId: activeTab?.connectionId ?? undefined,
+      dbDatabase: activeTab?.database ?? undefined,
+      dbTable: activeTab?.title ?? undefined,
+      dbCurrentSql: activeTab?.sql?.trim() || undefined,
+      dbLastError: activeTab?.result?.message ?? undefined,
+    };
+    if (activeConnection) {
+      opts.dbType = activeConnection.config.db_type;
+      if (activeConnection.server_version) {
+        opts.dbServerVersion = activeConnection.server_version;
+      }
+    }
+    return opts;
+  }, [activeTab, activeConnection]);
+
   const sendPromptToAgent = useCallback(
     async (prompt: string, displayName?: string) => {
       const trimmed = prompt.trim();
@@ -154,23 +143,17 @@ export function DbAgentPanel({
         return;
       }
 
-      const dbCtx = buildDbContext(activeTab);
-      const enriched = dbCtx ? `${dbCtx}\n\n${trimmed}` : trimmed;
-      const sendOpts: SendOptions = {
-        dbConnectionId: activeTab?.connectionId ?? undefined,
-        dbDatabase: activeTab?.database ?? undefined,
-        dbTable: activeTab?.title ?? undefined,
-        displayContent: displayName,
-      };
+      const sendOpts = buildSendOpts();
+      if (displayName) sendOpts.displayContent = displayName;
 
       if (chatId) {
-        send(enriched, undefined, sendOpts);
+        send(trimmed, undefined, sendOpts);
         return;
       }
 
       setCreatingChat(true);
       setNotice("正在创建会话");
-      pendingPromptRef.current = enriched;
+      pendingPromptRef.current = trimmed;
       pendingSendOptsRef.current = sendOpts;
       try {
         const nextChatId = await client.newChat(5_000, true);
@@ -187,7 +170,7 @@ export function DbAgentPanel({
         setCreatingChat(false);
       }
     },
-    [chatId, client, creatingChat, isStreaming, activeTabId, activeTab, send],
+    [chatId, client, creatingChat, isStreaming, activeTabId, buildSendOpts, send],
   );
 
   const sendDraft = useCallback(() => {
@@ -197,35 +180,25 @@ export function DbAgentPanel({
     void sendPromptToAgent(question, question);
   }, [draft, sendPromptToAgent]);
 
-  const handleNlToSql = useCallback(() => {
-    const query = draft.trim();
-    if (!query || !activeTab?.connectionId) return;
-    setDraft("");
-    pendingNlToSqlRef.current = true;
-    const columns = activeTab.tableInfo?.columns
-      ?.map((c) => `${c.name} ${c.data_type}`)
-      .join(", ");
-    const tableDesc = activeTab.title
-      ? `${activeTab.title}${columns ? ` (${columns})` : ""}`
-      : "";
-    const prompt = `根据以下表结构，将用户的自然语言查询转为 SQL。
-数据库: ${activeTab.database ?? ""}
-表: ${tableDesc}
-用户查询: ${query}
-只输出一条 SQL 语句，不要解释。`;
-    void sendPromptToAgent(prompt, `NL2SQL: ${query}`);
-  }, [draft, activeTab, sendPromptToAgent]);
-
-  useEffect(() => {
-    if (!pendingNlToSqlRef.current || isStreaming) return;
-    const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant" && m.content);
-    if (!lastAssistant?.content) return;
-    const extracted = extractSql(lastAssistant.content);
-    if (extracted) {
-      setPendingSqlResult(extracted);
-    }
-    pendingNlToSqlRef.current = false;
-  }, [messages, isStreaming]);
+  const handleContextAction = useCallback(
+    (action: "explain_sql" | "diagnose_error" | "analyze_table") => {
+      if (!activeTab?.connectionId) return;
+      let prompt = "";
+      let label = "";
+      if (action === "explain_sql") {
+        prompt = "解释当前 SQL 编辑器中的语句：分析执行计划、潜在性能问题和优化建议。";
+        label = "解释当前 SQL";
+      } else if (action === "diagnose_error") {
+        prompt = "诊断当前 SQL 执行报错的原因，并给出修复建议。";
+        label = "诊断当前错误";
+      } else {
+        prompt = `分析当前表 ${activeTab.title}：结构、索引、数据特征和潜在问题。`;
+        label = "分析当前表";
+      }
+      void sendPromptToAgent(prompt, label);
+    },
+    [activeTab, sendPromptToAgent],
+  );
 
   const handleResetChat = useCallback(() => {
     setMessages([]);
@@ -240,6 +213,10 @@ export function DbAgentPanel({
   if (collapsed) {
     return null;
   }
+
+  const hasSql = !!activeTab?.sql?.trim();
+  const hasError = !!activeTab?.result?.message;
+  const hasTable = isRealTable(activeTab?.title);
 
   return (
     <aside
@@ -269,87 +246,50 @@ export function DbAgentPanel({
         </div>
       </div>
 
-      <div className="shrink-0 border-b border-border/65 px-2.5 py-2.5">
-        {activeAction ? (
-          <DbActionConfigPanel
-            actionId={activeAction}
-            activeTab={activeTab}
-            onConfirm={(result) => {
-              setActiveAction(null);
-              void sendPromptToAgent(result.prompt, result.label);
-            }}
-            onCancel={() => setActiveAction(null)}
-          />
-        ) : (
-          <div className="grid grid-cols-2 gap-1.5">
-            <button
-              type="button"
-              disabled={!activeTab?.connectionId || creatingChat || isStreaming}
-              onClick={() => setActiveAction("explain")}
-              className="flex h-9 items-center gap-2 rounded-lg border border-border/70 bg-background px-2.5 text-left text-[11.5px] font-medium text-foreground/82 transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
-            >
-              <Zap className="h-4 w-4 shrink-0 text-muted-foreground" />
-              <span className="min-w-0 truncate">执行计划</span>
-            </button>
-            <button
-              type="button"
-              disabled={!activeTab?.connectionId || creatingChat || isStreaming}
-              onClick={() => setActiveAction("index")}
-              className="flex h-9 items-center gap-2 rounded-lg border border-border/70 bg-background px-2.5 text-left text-[11.5px] font-medium text-foreground/82 transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
-            >
-              <ListTree className="h-4 w-4 shrink-0 text-muted-foreground" />
-              <span className="min-w-0 truncate">索引诊断</span>
-            </button>
-            <button
-              type="button"
-              disabled={!activeTab?.connectionId || creatingChat || isStreaming}
-              onClick={() => setActiveAction("profile")}
-              className="flex h-9 items-center gap-2 rounded-lg border border-border/70 bg-background px-2.5 text-left text-[11.5px] font-medium text-foreground/82 transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
-            >
-              <BarChart3 className="h-4 w-4 shrink-0 text-muted-foreground" />
-              <span className="min-w-0 truncate">数据画像</span>
-            </button>
-            <button
-              type="button"
-              disabled={!activeTab?.connectionId || creatingChat || isStreaming}
-              onClick={() => setActiveAction("error")}
-              className="flex h-9 items-center gap-2 rounded-lg border border-border/70 bg-background px-2.5 text-left text-[11.5px] font-medium text-foreground/82 transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
-            >
-              <AlertTriangle className="h-4 w-4 shrink-0 text-muted-foreground" />
-              <span className="min-w-0 truncate">诊断错误</span>
-            </button>
-            <button
-              type="button"
-              disabled={!activeTab?.connectionId || creatingChat || isStreaming}
-              onClick={() => setActiveAction("health")}
-              className="flex h-9 items-center gap-2 rounded-lg border border-border/70 bg-background px-2.5 text-left text-[11.5px] font-medium text-foreground/82 transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
-            >
-              <Shield className="h-4 w-4 shrink-0 text-muted-foreground" />
-              <span className="min-w-0 truncate">一键巡检</span>
-            </button>
-            <button
-              type="button"
-              disabled={!activeTab?.connectionId || creatingChat || isStreaming}
-              onClick={() => setActiveAction("optimize")}
-              className="flex h-9 items-center gap-2 rounded-lg border border-border/70 bg-background px-2.5 text-left text-[11.5px] font-medium text-foreground/82 transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
-            >
-              <Wrench className="h-4 w-4 shrink-0 text-muted-foreground" />
-              <span className="min-w-0 truncate">优化建议</span>
-            </button>
-          </div>
-        )}
+      <div className="shrink-0 border-b border-border/65 px-2.5 py-2">
+        <div className="flex flex-wrap gap-1.5">
+          {hasSql ? (
+            <ContextActionButton
+              icon={<Zap className="h-3.5 w-3.5" />}
+              label="解释当前 SQL"
+              disabled={creatingChat || isStreaming}
+              onClick={() => handleContextAction("explain_sql")}
+            />
+          ) : null}
+          {hasError ? (
+            <ContextActionButton
+              icon={<AlertTriangle className="h-3.5 w-3.5" />}
+              label="诊断当前错误"
+              disabled={creatingChat || isStreaming}
+              onClick={() => handleContextAction("diagnose_error")}
+            />
+          ) : null}
+          {hasTable ? (
+            <ContextActionButton
+              icon={<Table2 className="h-3.5 w-3.5" />}
+              label="分析当前表"
+              disabled={creatingChat || isStreaming}
+              onClick={() => handleContextAction("analyze_table")}
+            />
+          ) : null}
+          {!hasSql && !hasError && !hasTable ? (
+            <p className="px-1 py-1 text-[10.5px] text-muted-foreground">
+              打开 SQL、数据表或执行出错时，这里会出现对应的快捷分析动作。
+            </p>
+          ) : null}
+        </div>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-2.5 py-2 scrollbar-thin">
-        {pendingSqlResult && activeTabId ? (
+        {sqlDraft && activeTabId ? (
           <SqlResultCard
-            sql={pendingSqlResult}
+            draft={sqlDraft}
             onInsert={(sql) => {
               const tab = useDbStore.getState().queryTabs.find((t) => t.id === activeTabId);
               if (tab) updateTabSql(activeTabId, `${tab.sql}\n${sql}`);
             }}
             onReplace={(sql) => updateTabSql(activeTabId, sql)}
-            onDismiss={() => setPendingSqlResult(null)}
+            onDismiss={() => setSqlDraft(null)}
           />
         ) : null}
         <DbChat
@@ -378,18 +318,8 @@ export function DbAgentPanel({
             disabled={!activeTab?.connectionId || creatingChat}
             className="min-h-[44px] flex-1 resize-none bg-transparent text-[12px] leading-5 outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
             rows={2}
-            placeholder="输入问题，或用中文描述想查的数据..."
+            placeholder="描述想查的数据或想做的分析..."
           />
-          <button
-            type="button"
-            aria-label="生成SQL"
-            title="自然语言转 SQL"
-            disabled={!activeTab?.connectionId || !draft.trim() || creatingChat || isStreaming}
-            onClick={handleNlToSql}
-            className="grid h-6 w-6 shrink-0 place-items-center rounded-lg text-amber-500/80 transition-colors hover:bg-amber-500/10 hover:text-amber-500 disabled:pointer-events-none disabled:opacity-40"
-          >
-            <Zap className="h-3.5 w-3.5" />
-          </button>
           <button
             type="button"
             aria-label={isStreaming ? "停止生成" : "发送"}
@@ -413,6 +343,30 @@ export function DbAgentPanel({
         </div>
       </div>
     </aside>
+  );
+}
+
+function ContextActionButton({
+  icon,
+  label,
+  disabled,
+  onClick,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  disabled?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      className="inline-flex h-7 items-center gap-1.5 rounded-md border border-border/70 bg-background px-2 text-[11px] font-medium text-foreground/82 transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+    >
+      {icon}
+      <span className="max-w-[140px] truncate">{label}</span>
+    </button>
   );
 }
 
@@ -449,7 +403,7 @@ function DbChat({
       ) : null}
 
       {!hasMessages && !loading && hasActiveTab ? (
-        <AssistantHint text="可以提问关于当前数据库的问题，或使用上方快捷功能。" />
+        <AssistantHint text="描述你想查的数据或想做的分析，AI 会自动获取上下文。" />
       ) : null}
 
       {loading ? <AssistantHint text="正在读取会话历史..." loading /> : null}
@@ -460,59 +414,6 @@ function DbChat({
       {isStreaming ? <AssistantHint text="AI 正在处理..." loading /> : null}
     </div>
   );
-}
-
-/** Pattern-to-label pairs for inferring displayContent from persisted user messages. */
-const DB_ACTION_PROMPT_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
-  { pattern: /^分析表 .+ 的查询性能/, label: "执行计划" },
-  { pattern: /^诊断表 .+ 的索引状况/, label: "索引诊断" },
-  { pattern: /^诊断当前数据库所有表的索引状况/, label: "索引诊断" },
-  { pattern: /^为表 .+ 生成数据画像/, label: "数据画像" },
-  { pattern: /^SQL 执行报错/, label: "诊断错误" },
-  { pattern: /^对当前数据库实例做健康巡检/, label: "一键巡检" },
-  { pattern: /^分析表 .+ 的整体优化建议/, label: "优化建议" },
-];
-
-/**
- * Infer a short display label from a persisted user message that was sent by a
- * database AI quick-action.  Returns `undefined` when the content doesn't match
- * any known action pattern (i.e. a freeform question).
- */
-function inferDbActionDisplayLabel(content: string): string | undefined {
-  if (!content) return undefined;
-  for (const { pattern, label } of DB_ACTION_PROMPT_PATTERNS) {
-    if (pattern.test(content)) return label;
-  }
-  return undefined;
-}
-
-function DbActionConfigPanel({
-  actionId,
-  activeTab,
-  onConfirm,
-  onCancel,
-}: {
-  actionId: string;
-  activeTab: QueryTab | undefined;
-  onConfirm: (result: DbActionConfirmResult) => void;
-  onCancel: () => void;
-}) {
-  switch (actionId) {
-    case "explain":
-      return <ExplainPlanConfig activeTab={activeTab} onConfirm={onConfirm} onCancel={onCancel} />;
-    case "index":
-      return <IndexDiagnosisConfig activeTab={activeTab} onConfirm={onConfirm} onCancel={onCancel} />;
-    case "profile":
-      return <DataProfileConfig activeTab={activeTab} onConfirm={onConfirm} onCancel={onCancel} />;
-    case "error":
-      return <DiagnoseErrorConfig activeTab={activeTab} onConfirm={onConfirm} onCancel={onCancel} />;
-    case "health":
-      return <HealthInspectionConfig activeTab={activeTab} onConfirm={onConfirm} onCancel={onCancel} />;
-    case "optimize":
-      return <OptimizeConfig activeTab={activeTab} onConfirm={onConfirm} onCancel={onCancel} />;
-    default:
-      return null;
-  }
 }
 
 function AssistantHint({ text, loading = false }: { text: string; loading?: boolean }) {

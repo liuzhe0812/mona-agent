@@ -135,7 +135,6 @@ from mona.api.server import (
     handle_video_runtime_check,
     handle_video_runtime_download,
 )
-from mona.api.three_projects import register_three_routes
 from mona.email.imap_pool import imap_pool_manager
 from mona.materials.auth import get_services_token, materials_auth_middleware
 from mona.materials.compile import (
@@ -328,9 +327,6 @@ def create_services_app(
     app.router.add_get(
         "/api/video/project/preview-full", handle_video_project_preview_full
     )
-
-    # 3D project routes — 必须与 Agent 运行时共享同一 workspace 根目录
-    register_three_routes(app, workspace)
 
     # PPT project V2 routes (outline + lock + review + export)
     app.router.add_get("/api/ppt/project/outline", handle_ppt_outline_get)

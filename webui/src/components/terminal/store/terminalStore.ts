@@ -4,6 +4,8 @@ import {
   terminalSaveConnections,
   terminalLoadConnections,
   onTerminalOutput,
+  onTerminalMaintenanceUpdated,
+  type MaintenanceTaskDetail,
 } from "../ipc";
 import { TerminalRegistry } from "../terminalRegistry";
 
@@ -62,6 +64,8 @@ interface TerminalState {
   terminalRegistry: TerminalRegistry;
   terminalExecMode: "auto" | "approval";
   aiStreaming: boolean;
+  /** Latest maintenance task snapshot per session (drives the task card). */
+  activeMaintenanceTasks: Record<string, MaintenanceTaskDetail>;
 
   addSession: (session: Session) => void;
   removeSession: (sessionId: string) => void;
@@ -92,6 +96,10 @@ interface TerminalState {
   closeExecApproval: () => void;
   setTerminalExecMode: (mode: "auto" | "approval") => void;
   setAiStreaming: (streaming: boolean) => void;
+  setActiveMaintenanceTask: (
+    sessionId: string,
+    detail: MaintenanceTaskDetail | null,
+  ) => void;
 }
 
 const registry = new TerminalRegistry();
@@ -143,6 +151,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   terminalRegistry: registry,
   terminalExecMode: "auto" as const,
   aiStreaming: false,
+  activeMaintenanceTasks: {},
 
   addSession: (session) => {
     set((state) => ({
@@ -367,8 +376,26 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   setAiStreaming: (streaming) => {
     set({ aiStreaming: streaming });
   },
+
+  setActiveMaintenanceTask: (sessionId, detail) => {
+    set((state) => {
+      const next = { ...state.activeMaintenanceTasks };
+      if (detail) {
+        next[sessionId] = detail;
+      } else {
+        delete next[sessionId];
+      }
+      return { activeMaintenanceTasks: next };
+    });
+  },
 }));
 
 onTerminalOutput((event) => {
   registry.write(event.sessionId, event.data);
+}).catch(() => {});
+
+onTerminalMaintenanceUpdated((event) => {
+  useTerminalStore
+    .getState()
+    .setActiveMaintenanceTask(event.sessionId, event.task);
 }).catch(() => {});

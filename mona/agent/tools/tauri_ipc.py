@@ -21,7 +21,9 @@ from loguru import logger
 
 _GATEWAY_BASE = "http://127.0.0.1"
 _FALLBACK_IPC_PORT = 17860
-_IPC_PORT_FILE = Path.home() / ".mona" / "ipc_bridge_port"
+_IPC_META_FILE = Path.home() / ".mona" / "ipc_bridge.json"
+_LEGACY_IPC_PORT_FILE = Path.home() / ".mona" / "ipc_bridge_port"
+_TOKEN_HEADER = "x-mona-ipc-token"
 
 # Opener that bypasses all proxy settings. The IPC bridge is a localhost
 # HTTP server; system proxies (V2Ray/Clash on 127.0.0.1:10809) intercept
@@ -37,15 +39,27 @@ _ACCESS_CACHE: tuple[bool, float] | None = None
 _ACCESS_TTL_SECONDS: float = 30.0
 
 
-def _read_ipc_port() -> int:
+def _read_ipc_meta() -> tuple[int, str | None]:
+    """Read the bridge port + auth token written by the Tauri side.
+
+    Falls back to the legacy token-less port file so an older app build can
+    still be reached (that bridge does not enforce authentication).
+    """
     try:
-        text = _IPC_PORT_FILE.read_text().strip()
-        port = int(text)
+        data = json.loads(_IPC_META_FILE.read_text())
+        port = int(data.get("port", 0))
+        token = data.get("token")
         if 1 <= port <= 65535:
-            return port
+            return port, token if isinstance(token, str) and token else None
+    except (FileNotFoundError, ValueError, PermissionError, json.JSONDecodeError):
+        pass
+    try:
+        port = int(_LEGACY_IPC_PORT_FILE.read_text().strip())
+        if 1 <= port <= 65535:
+            return port, None
     except (FileNotFoundError, ValueError, PermissionError):
         pass
-    return _FALLBACK_IPC_PORT
+    return _FALLBACK_IPC_PORT, None
 
 
 def tauri_invoke(cmd: str, args: dict[str, Any] | None = None) -> Any:
@@ -54,12 +68,13 @@ def tauri_invoke(cmd: str, args: dict[str, Any] | None = None) -> Any:
     Raises RuntimeError if the bridge is unavailable or the command returns
     an error.
     """
-    port = _read_ipc_port()
+    port, token = _read_ipc_meta()
     payload = json.dumps({"cmd": cmd, "args": args or {}}).encode()
     url = f"{_GATEWAY_BASE}:{port}"
-    req = urllib.request.Request(
-        url, data=payload, headers={"Content-Type": "application/json"}
-    )
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers[_TOKEN_HEADER] = token
+    req = urllib.request.Request(url, data=payload, headers=headers)
     try:
         with _NO_PROXY_OPENER.open(req, timeout=30) as resp:
             result = json.loads(resp.read().decode())

@@ -1,0 +1,115 @@
+name: Build macOS
+
+on:
+  push:
+    paths:
+      - '.github/workflows/build-macos.yml'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build (e.g. 1.0.2)'
+        required: true
+        default: '1.0.2'
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install frontend dependencies
+        working-directory: webui
+        run: npm install
+
+      - name: Install Python dependencies
+        run: |
+          pip install --upgrade pip
+          pip install pyinstaller ".[api,wecom,weixin,pdf]"
+
+      - name: Build mona-gateway binary
+        run: |
+          GATEWAY_ENTRY=$(python -c "from mona.gateway import main; print('mona.gateway:main')" 2>/dev/null || echo "mona.gateway:main")
+          pyinstaller --onefile --name mona-gateway \
+            --hidden-import=mona \
+            --hidden-import=mona.gateway \
+            --hidden-import=mona.api \
+            --hidden-import=aiohttp \
+            -c \
+            "$GATEWAY_ENTRY"
+          cp dist/mona-gateway src-tauri/resources/mona-gateway
+          chmod +x src-tauri/resources/mona-gateway
+
+      - name: Download Python runtime
+        run: |
+          PYTHON_VERSION="3.12.13"
+          RELEASE_TAG="20260510"
+          PLATFORM="aarch64-apple-darwin"
+          BASE_URL="https://github.com/astral-sh/python-build-standalone/releases/download/$RELEASE_TAG"
+          FILE_NAME="cpython-$PYTHON_VERSION+$RELEASE_TAG-$PLATFORM-install_only.tar.gz"
+
+          RESOURCES_DIR="src-tauri/resources"
+          PYTHON_ARCHIVE="$RESOURCES_DIR/python.tar.gz"
+
+          echo "Downloading python-build-standalone for $PLATFORM..."
+          curl -fSL -o "$PYTHON_ARCHIVE" "$BASE_URL/$FILE_NAME"
+
+          # Extract, install mona-ai, repack
+          TEMP_DIR=$(mktemp -d)
+          tar -xzf "$PYTHON_ARCHIVE" -C "$TEMP_DIR"
+
+          PYTHON_DIR=$(find "$TEMP_DIR" -name "python3*" -type f -path "*/bin/*" | head -1 | xargs dirname | xargs dirname)
+          PYTHON_BIN="$PYTHON_DIR/bin/python3"
+
+          echo "Found Python at: $PYTHON_BIN"
+          $PYTHON_BIN -m pip install ".[api,wecom,weixin,pdf]" --no-warn-script-location
+
+          # Verify
+          pushd /tmp
+          MONA_FILE=$($PYTHON_BIN -c "import mona; print(mona.__file__)" 2>&1)
+          popd
+          echo "mona.__file__ = $MONA_FILE"
+
+          # Strip caches
+          find "$PYTHON_DIR" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+          find "$PYTHON_DIR" -type f -name "*.pyc" -delete 2>/dev/null || true
+          find "$PYTHON_DIR" -type f -name "*.pyo" -delete 2>/dev/null || true
+
+          # Repack
+          PARENT_DIR=$(dirname "$PYTHON_DIR")
+          DIR_NAME=$(basename "$PYTHON_DIR")
+          tar -czf "$PYTHON_ARCHIVE" -C "$PARENT_DIR" "$DIR_NAME"
+
+          rm -rf "$TEMP_DIR"
+
+      - name: Build Tauri (Universal Binary)
+        working-directory: src-tauri
+        run: cargo tauri build --target universal-apple-darwin
+        env:
+          CI: ""
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: Mona-macOS-DMG
+          path: src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+
+      - name: Upload App
+        uses: actions/upload-artifact@v4
+        with:
+          name: Mona-macOS-App
+          path: src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app

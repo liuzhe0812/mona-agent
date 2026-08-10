@@ -14,7 +14,6 @@ import { useClient } from "@/providers/ClientProvider";
 import { useTerminalStore } from "../store/terminalStore";
 import { isTauri, openPathWithSystemApp } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
-import type { ActionConfirmResult } from "./ActionConfig";
 
 /** Same MIME whitelist as ThreadComposer (mirrors server-side). */
 const ACCEPT_ATTR = "image/png,image/jpeg,image/webp,image/gif";
@@ -27,8 +26,6 @@ function formatBytes(n: number): string {
 
 interface Props {
   sessionId: string | null;
-  initialAction?: ActionConfirmResult;
-  onInitialMessageSent?: () => void;
   onStreamingChange?: (streaming: boolean) => void;
 }
 
@@ -38,7 +35,7 @@ interface ReportInfo {
   fileName: string;
 }
 
-export function AIChat({ sessionId, initialAction, onInitialMessageSent, onStreamingChange }: Props) {
+export function AIChat({ sessionId, onStreamingChange }: Props) {
   const [draft, setDraft] = useState("");
   const [chatId, setChatId] = useState<string | null>(null);
   const [creatingChat, setCreatingChat] = useState(false);
@@ -48,10 +45,15 @@ export function AIChat({ sessionId, initialAction, onInitialMessageSent, onStrea
   const registry = useTerminalStore((s) => s.terminalRegistry);
   const execMode = useTerminalStore((s) => s.terminalExecMode);
   const setExecMode = useTerminalStore((s) => s.setTerminalExecMode);
+  const sessionType = useTerminalStore(
+    (s) => s.sessions.find((sess) => sess.id === sessionId)?.type ?? null,
+  );
+  // Only SSH and local terminals expose executable maintenance to the agent.
+  const canExec = sessionType === "ssh" || sessionType === "local";
+  const effectiveSessionId = canExec ? sessionId : null;
   const pendingPromptRef = useRef<string | null>(null);
   const pendingSendOptsRef = useRef<SendOptions | null>(null);
   const pendingImagesRef = useRef<SendImage[] | undefined>(undefined);
-  const onInitialMessageSentRef = useRef(onInitialMessageSent);
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -105,10 +107,6 @@ export function AIChat({ sessionId, initialAction, onInitialMessageSent, onStrea
     e.target.value = "";
     addFiles(files);
   };
-
-  useEffect(() => {
-    onInitialMessageSentRef.current = onInitialMessageSent;
-  }, [onInitialMessageSent]);
 
   useEffect(() => {
     if (!client) return;
@@ -176,32 +174,14 @@ export function AIChat({ sessionId, initialAction, onInitialMessageSent, onStrea
     }
   }, [messages, reports]);
 
-  useEffect(() => {
-    const action = initialAction;
-    if (!action || !chatId || isStreaming || creatingChat) return;
-    const enriched = enrichWithTerminalContext(action.prompt, sessionId, registry);
-    const sendOpts: SendOptions = {
-      terminalSessionId: sessionId ?? undefined,
-      terminalExecMode: execMode,
-      // IMPORTANT: displayContent shows the action label (e.g. "健康巡检") in the
-      // message bubble instead of the full enriched prompt. Persisted to server for
-      // history replay. DO NOT remove this field.
-      displayContent: action.label,
-    };
-    if (chatId) {
-      send(enriched, undefined, sendOpts);
-    }
-    onInitialMessageSentRef.current?.();
-  }, [chatId, initialAction, sessionId, registry, execMode, isStreaming, creatingChat, send]);
-
   const handleSend = useCallback(() => {
     const text = draft.trim();
     if (!text && readyImages.length === 0) return;
     setDraft("");
-    const enriched = enrichWithTerminalContext(text, sessionId, registry);
+    const enriched = enrichWithTerminalContext(text, effectiveSessionId, registry);
     const sendOpts: SendOptions = {
-      terminalSessionId: sessionId ?? undefined,
-      terminalExecMode: execMode,
+      terminalSessionId: effectiveSessionId ?? undefined,
+      terminalExecMode: effectiveSessionId ? execMode : undefined,
       // IMPORTANT: displayContent shows the user's original input in the message
       // bubble, not the enriched prompt with terminal context. Persisted to server
       // for history replay. DO NOT remove this field.
@@ -234,7 +214,7 @@ export function AIChat({ sessionId, initialAction, onInitialMessageSent, onStrea
       pendingImagesRef.current = undefined;
       setCreatingChat(false);
     });
-  }, [draft, chatId, sessionId, registry, client, execMode, send, readyImages, clear]);
+  }, [draft, chatId, effectiveSessionId, registry, client, execMode, send, readyImages, clear]);
 
   const handleStop = useCallback(() => {
     stop();
@@ -276,17 +256,19 @@ export function AIChat({ sessionId, initialAction, onInitialMessageSent, onStrea
         ))}
       </div>
       <div className="shrink-0 p-2">
-        <div className="flex items-center gap-1.5 px-2.5 pb-1.5">
-          <Shield className="h-3 w-3 text-muted-foreground" />
-          <select
-            value={execMode}
-            onChange={(e) => setExecMode(e.target.value as "auto" | "approval")}
-            className="bg-transparent text-[11px] text-muted-foreground outline-none cursor-pointer hover:text-foreground transition-colors"
-          >
-            <option value="auto">自动模式（安全命令直接执行）</option>
-            <option value="approval">审批模式（所有命令需确认）</option>
-          </select>
-        </div>
+        {canExec && (
+          <div className="flex items-center gap-1.5 px-2.5 pb-1.5">
+            <Shield className="h-3 w-3 text-muted-foreground" />
+            <select
+              value={execMode}
+              onChange={(e) => setExecMode(e.target.value as "auto" | "approval")}
+              className="bg-transparent text-[11px] text-muted-foreground outline-none cursor-pointer hover:text-foreground transition-colors"
+            >
+              <option value="auto">自动模式（普通步骤自动执行，高风险单独确认）</option>
+              <option value="approval">审批模式（变更计划确认一次）</option>
+            </select>
+          </div>
+        )}
         <div
           onDragEnter={onDragEnter}
           onDragOver={onDragOver}

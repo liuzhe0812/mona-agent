@@ -94,6 +94,7 @@ import {
 } from "@/components/ui/tooltip";
 import {
   cancelWeixinLogin,
+  fetchProviderModels,
   fetchSettings,
   getWeixinLoginStatus,
   logoutWeixin,
@@ -1868,6 +1869,44 @@ function ModelsProvidersSettings({
   const { t } = useTranslation();
   const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
   const highlightRef = useRef<HTMLDivElement>(null);
+  const { token } = useClientOptional();
+
+  // --- 模型列表拉取状态 ---
+  // 每个 provider 独立维护 loading / 候选列表 / 错误信息。
+  type ProbeState = { loading: boolean; models: string[]; error: string };
+  const [probeStates, setProbeStates] = useState<Record<string, ProbeState>>({});
+  const setProbe = (providerName: string, patch: Partial<ProbeState>) => {
+    setProbeStates((prev) => {
+      const current = prev[providerName] ?? { loading: false, models: [], error: "" };
+      return {
+        ...prev,
+        [providerName]: { ...current, ...patch },
+      };
+    });
+  };
+
+  const handleFetchModels = useCallback(
+    async (providerName: string, apiKey: string, apiBase: string) => {
+      if (!token) return;
+      setProbe(providerName, { loading: true, models: [], error: "" });
+      try {
+        const result = await fetchProviderModels(token, {
+          provider: providerName,
+          apiKey: apiKey || undefined,
+          apiBase: apiBase || undefined,
+        });
+        if (result.error) {
+          setProbe(providerName, { loading: false, error: result.error });
+        } else {
+          setProbe(providerName, { loading: false, models: result.models });
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        setProbe(providerName, { loading: false, error: msg });
+      }
+    },
+    [token],
+  );
 
   // --- Agnes 一键配置对话框状态 ---
   const [agnesDialogOpen, setAgnesDialogOpen] = useState(false);
@@ -2101,10 +2140,28 @@ function ModelsProvidersSettings({
                 className="h-9 rounded-full text-[13px]"
               />
             </label>
-            <label className="block space-y-1.5">
-              <span className="text-[12px] font-medium text-muted-foreground">
-                模型 ID
-              </span>
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="text-[12px] font-medium text-muted-foreground">
+                  模型 ID
+                </span>
+                {provider.probe_supported && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => handleFetchModels(provider.name, form.apiKey, form.apiBase)}
+                    disabled={probeStates[provider.name]?.loading}
+                    className="h-6 px-2 text-[11px] text-muted-foreground hover:text-foreground"
+                  >
+                    {probeStates[provider.name]?.loading ? (
+                      <Loader2 className="mr-1 h-3 w-3 animate-spin" aria-hidden />
+                    ) : (
+                      <RefreshCw className="mr-1 h-3 w-3" aria-hidden />
+                    )}
+                    {probeStates[provider.name]?.loading ? "拉取中" : "拉取模型"}
+                  </Button>
+                )}
+              </div>
               <Input
                 value={form.model}
                 onChange={(event) =>
@@ -2113,7 +2170,33 @@ function ModelsProvidersSettings({
                 placeholder="例如 qwen3-plus, deepseek-chat"
                 className="h-9 rounded-full text-[13px]"
               />
-            </label>
+              {probeStates[provider.name]?.error && (
+                <p className="text-[11px] text-destructive">
+                  {probeStates[provider.name]?.error}
+                </p>
+              )}
+              {probeStates[provider.name]?.models.length > 0 && (
+                <div className="max-h-40 overflow-y-auto rounded-md border border-border/60 bg-background scrollbar-thin">
+                  {probeStates[provider.name]?.models.map((modelId) => (
+                    <button
+                      key={modelId}
+                      type="button"
+                      onClick={() => {
+                        onChangeProviderForm(provider.name, { model: modelId });
+                        // 清空候选列表，避免误操作。
+                        setProbe(provider.name, { models: [] });
+                      }}
+                      className="flex w-full items-center justify-between px-2.5 py-1.5 text-left text-[12px] hover:bg-accent"
+                    >
+                      <span className="truncate">{modelId}</span>
+                      {form.model === modelId && (
+                        <Check className="h-3 w-3 shrink-0 text-emerald-600" aria-hidden />
+                      )}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2">
                 {provider.configured && (

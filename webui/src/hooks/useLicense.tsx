@@ -124,8 +124,14 @@ export function LicenseProvider({ children }: { children: React.ReactNode }) {
       if (isTauri()) {
         raw = await invokeTauri<Record<string, unknown>>("get_pricing");
       } else {
-        const resp = await fetch("https://www.mona-ai.cn/config/pricing");
-        if (!resp.ok) throw new Error(`fetch pricing failed: ${resp.status}`);
+        let resp: Response;
+        try {
+          resp = await fetch("https://www.mona-ai.cn/config/pricing");
+          if (!resp.ok) throw new Error(`fetch pricing failed: ${resp.status}`);
+        } catch {
+          resp = await fetch("https://mona.lzfun.vip/config/pricing");
+          if (!resp.ok) throw new Error(`fetch pricing failed: ${resp.status}`);
+        }
         raw = await resp.json();
       }
       const data = raw as Record<string, unknown>;

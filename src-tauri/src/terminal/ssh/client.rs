@@ -16,6 +16,21 @@ use crate::terminal::ssh::known_hosts::{HostKeyVerification, KnownHostsStore};
 pub struct ExecResult {
     pub stdout: String,
     pub stderr: String,
+    pub exit_code: Option<u32>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StructuredExecResult {
+    pub stdout: String,
+    pub stderr: String,
+    /// `None` only when the connection dropped or the channel closed before
+    /// the remote exit-status arrived — such results must not be treated as
+    /// success.
+    pub exit_code: Option<u32>,
+    pub duration_ms: u64,
+    pub timed_out: bool,
+    pub cancelled: bool,
 }
 
 pub struct SshClientHandler {
@@ -362,6 +377,7 @@ impl SshClient {
 
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
+        let mut exit_code = None;
 
         loop {
             match channel.wait().await {
@@ -373,7 +389,12 @@ impl SshClient {
                         stderr.extend_from_slice(&data);
                     }
                 }
-                Some(ChannelMsg::Eof) | Some(ChannelMsg::Close) => break,
+                Some(ChannelMsg::ExitStatus { exit_status }) => {
+                    exit_code = Some(exit_status);
+                }
+                // Do not break on Eof: servers may deliver exit-status after EOF.
+                Some(ChannelMsg::Eof) => {}
+                Some(ChannelMsg::Close) => break,
                 None => break,
                 _ => {}
             }
@@ -382,7 +403,94 @@ impl SshClient {
         Ok(ExecResult {
             stdout: String::from_utf8_lossy(&stdout).to_string(),
             stderr: String::from_utf8_lossy(&stderr).to_string(),
+            exit_code,
         })
+    }
+
+    /// Execute a command on an independent channel with exit-status capture,
+    /// timeout and cancellation. This is the only execution path for AI
+    /// maintenance steps.
+    pub async fn exec_command_structured(
+        &self,
+        command: &str,
+        timeout: Duration,
+        cancel: tokio_util::sync::CancellationToken,
+    ) -> Result<StructuredExecResult, TerminalError> {
+        let started = std::time::Instant::now();
+        let mut channel = self
+            .handle
+            .lock()
+            .await
+            .channel_open_session()
+            .await
+            .map_err(|e| TerminalError::SshConnection(e.to_string()))?;
+
+        channel
+            .exec(true, command)
+            .await
+            .map_err(|e| TerminalError::SshConnection(e.to_string()))?;
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let mut exit_code = None;
+        let mut timed_out = false;
+        let mut cancelled = false;
+
+        let deadline = tokio::time::sleep(timeout);
+        tokio::pin!(deadline);
+
+        loop {
+            tokio::select! {
+                msg = channel.wait() => {
+                    match msg {
+                        Some(ChannelMsg::Data { data }) => {
+                            stdout.extend_from_slice(&data);
+                        }
+                        Some(ChannelMsg::ExtendedData { data, ext }) => {
+                            if ext == 1 {
+                                stderr.extend_from_slice(&data);
+                            }
+                        }
+                        Some(ChannelMsg::ExitStatus { exit_status }) => {
+                            exit_code = Some(exit_status);
+                        }
+                        // Do not break on Eof: exit-status may arrive after EOF;
+                        // wait for Close so the exit code is reliably captured.
+                        Some(ChannelMsg::Eof) => {}
+                        Some(ChannelMsg::Close) => break,
+                        None => break,
+                        _ => {}
+                    }
+                }
+                _ = &mut deadline => {
+                    timed_out = true;
+                    break;
+                }
+                _ = cancel.cancelled() => {
+                    cancelled = true;
+                    break;
+                }
+            }
+        }
+
+        if timed_out || cancelled {
+            let _ = channel.close().await;
+        }
+
+        Ok(StructuredExecResult {
+            stdout: String::from_utf8_lossy(&stdout).to_string(),
+            stderr: String::from_utf8_lossy(&stderr).to_string(),
+            exit_code,
+            duration_ms: started.elapsed().as_millis() as u64,
+            timed_out,
+            cancelled,
+        })
+    }
+
+    /// Append synthetic output (e.g. AI maintenance step echo) to the scroll
+    /// buffer so `terminal_output` reads stay consistent with what happened.
+    pub fn append_buffer(&self, chunk: String) {
+        self.scroll_buffer.push(chunk);
     }
 
     pub async fn open_sftp(&self) -> Result<russh_sftp::client::SftpSession, TerminalError> {

@@ -2007,6 +2007,7 @@ def doctor():
     critical_tool_classes = [
         "EmailSearchTool", "EmailReadTool", "EmailActionTool",
         "TerminalExecTool", "TerminalOutputTool", "TerminalUploadTool",
+        "TerminalTaskTool",
         "KnowledgeSearchTool", "DbQueryTool", "ApplyPatchTool",
         "SpawnTool", "DeliverFileTool", "HoardSearchTool",
     ]

@@ -1,10 +1,1 @@
-{
-  "test": {
-    "name": "test",
-    "summary": "从用户上传 PPTX 导入的自定义模板，共 8 页",
-    "canvas_format": "ppt169",
-    "page_count": 8,
-    "primary_color": "#1A1A1A",
-    "userCreated": true
-  }
-}
+{}

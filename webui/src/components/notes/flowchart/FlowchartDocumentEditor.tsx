@@ -33,14 +33,18 @@ import {
   Download,
   FileImage,
   FileText,
+  Group,
   Image as ImageIcon,
+  Layers,
   Loader2,
   Palette,
+  PanelRight,
   Pencil,
   Redo2,
   Scissors,
   Trash2,
   Undo2,
+  Ungroup,
   Workflow,
 } from "lucide-react";
 import type { Edge, Node, NodeChange, EdgeChange } from "@xyflow/react";
@@ -57,25 +61,62 @@ import {
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 import type { OperationNote } from "../notes-data";
-import { layoutEntireGraph } from "./flowchart-patch";
+import { layoutFlowchartWithContainers } from "./flowchart-patch";
 import {
   buildFlowchartPlainText,
   cloneFlowchartDocument,
   computeFlowchartSemanticHash,
+  DEFAULT_FLOWCHART_CANVAS,
+  DEFAULT_FLOWCHART_THEME,
+  FLOWCHART_DOCUMENT_VERSION,
   generateFlowchartEdgeId,
   generateFlowchartNodeId,
+  isFlowchartContainerKind,
   parseFlowchartMarkdown,
   serializeFlowchartMarkdown,
   validateFlowchartDocument,
   type FlowchartDirection,
   type FlowchartDocument,
+  type FlowchartCanvasSettings,
   type FlowchartEdge,
   type FlowchartEdgeStyle,
   type FlowchartNode,
   type FlowchartNodeKind,
   type FlowchartNodeStyle,
+  type FlowchartThemeSettings,
   type FlowchartViewport,
 } from "./flowchart-document";
+import {
+  getFlowchartShapeById,
+  getFlowchartShapeDefaultSize,
+  type FlowchartShapeDefinition,
+} from "./flowchart-shapes";
+import {
+  addLaneToPool,
+  createPoolNodes,
+  FLOWCHART_LANE_HEADER_SIZE,
+  flowchartNodeAbsolutePosition,
+  flowchartPoolDefaultSize,
+  groupNodes,
+  matchNodesHeight,
+  matchNodesSize,
+  matchNodesWidth,
+  nudgeNodes,
+  removeLane,
+  removePool,
+  reorderNodes,
+  reparentNodes,
+  resizeLaneNodes,
+  resizePoolNodes,
+  ungroupNodes,
+  type FlowchartLayerAction,
+  type RemoveLaneStrategy,
+} from "./flowchart-operations";
+import {
+  countNodesWithManualThemeStyles,
+  resolveFlowchartThemeDefaults,
+  stripThemeProvidedStyles,
+} from "./flowchart-themes";
 import { getNotesVaultPath, isTauri } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 import {
@@ -88,6 +129,16 @@ import {
   type FreehandCompletePayload,
 } from "./FlowchartCanvas";
 import { FlowchartShapePanel, type CanvasTool } from "./FlowchartShapePanel";
+import {
+  FlowchartSafeDeleteDialog,
+  type SafeDeleteConfirmOptions,
+  type SafeDeleteLaneInfo,
+  type SafeDeletePoolInfo,
+} from "./FlowchartSafeDeleteDialog";
+import {
+  FlowchartInspector,
+  type FlowchartNodeGeometryPatch,
+} from "./FlowchartInspector";
 import { useFlowchartSelection } from "./FlowchartSelectionContext";
 
 // ---------------------------------------------------------------------------
@@ -103,6 +154,137 @@ function sanitizeFilename(title: string): string {
     .replace(/\s+/g, " ")
     .trim();
   return cleaned.slice(0, 60) || "流程图";
+}
+
+/**
+ * 以中心点创建形状节点：尺寸取 catalog defaultSize（FC-LIB-02），position 为左上角。
+ * 容器 kind（group/pool/lane）由 Batch 4 专门入口创建，此处返回 null 拒绝半成品。
+ */
+function createShapeNodeAtCenter(
+  kind: FlowchartNodeKind,
+  center: { x: number; y: number },
+): FlowchartNode | null {
+  if (isFlowchartContainerKind(kind)) return null;
+  const size = getFlowchartShapeDefaultSize(kind);
+  return {
+    id: generateFlowchartNodeId(),
+    kind,
+    label: "新节点",
+    position: { x: center.x - size.width / 2, y: center.y - size.height / 2 },
+    size,
+  };
+}
+
+/**
+ * 查找选区中可追加泳道的泳池（FC-SWIM-01）：选中 pool 本身，或选中 lane 的父泳池；
+ * 要求方向匹配。返回第一个匹配的泳池。
+ */
+function findSelectedPoolForLane(
+  nodes: readonly FlowchartNode[],
+  selectedIds: readonly string[],
+  orientation: "horizontal" | "vertical",
+): FlowchartNode | null {
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  for (const id of selectedIds) {
+    const n = byId.get(id);
+    if (!n) continue;
+    const pool =
+      n.kind === "swimlane-pool"
+        ? n
+        : n.kind === "swimlane-lane" && n.parentId !== undefined
+          ? byId.get(n.parentId)
+          : undefined;
+    if (
+      pool &&
+      pool.kind === "swimlane-pool" &&
+      pool.container?.type === "pool" &&
+      pool.container.orientation === orientation
+    ) {
+      return pool;
+    }
+  }
+  return null;
+}
+
+/** 查找包含指定画布点的同方向泳池（pool 恒为根级节点，坐标即绝对坐标；后创建者优先）。 */
+function findPoolAtPoint(
+  nodes: readonly FlowchartNode[],
+  point: { x: number; y: number },
+  orientation: "horizontal" | "vertical",
+): FlowchartNode | null {
+  for (let i = nodes.length - 1; i >= 0; i--) {
+    const n = nodes[i];
+    if (n.kind !== "swimlane-pool" || n.container?.type !== "pool") continue;
+    if (n.container.orientation !== orientation) continue;
+    const w = n.size?.width ?? 0;
+    const h = n.size?.height ?? 0;
+    if (
+      point.x >= n.position.x &&
+      point.x <= n.position.x + w &&
+      point.y >= n.position.y &&
+      point.y <= n.position.y + h
+    ) {
+      return n;
+    }
+  }
+  return null;
+}
+
+/** 查找绝对坐标点所在的泳道（FC-SWIM-03：后创建者优先，lane 绝对位置沿父链累加）。 */
+function findLaneAtPoint(
+  nodes: readonly FlowchartNode[],
+  point: { x: number; y: number },
+): FlowchartNode | null {
+  for (let i = nodes.length - 1; i >= 0; i--) {
+    const n = nodes[i];
+    if (n.kind !== "swimlane-lane") continue;
+    const abs = flowchartNodeAbsolutePosition(nodes, n.id);
+    if (!abs) continue;
+    const w = n.size?.width ?? 0;
+    const h = n.size?.height ?? 0;
+    if (point.x >= abs.x && point.x <= abs.x + w && point.y >= abs.y && point.y <= abs.y + h) {
+      return n;
+    }
+  }
+  return null;
+}
+
+/** 把 lane 相对坐标 clamp 到内容区（FC-SWIM-03：避开标题区，不超出内容边界）。 */
+function clampPositionToLaneContent(
+  lane: FlowchartNode,
+  nodeSize: { width: number; height: number },
+  pos: { x: number; y: number },
+): { x: number; y: number } {
+  const laneW = lane.size?.width ?? 0;
+  const laneH = lane.size?.height ?? 0;
+  const horizontal =
+    lane.container?.type === "lane" ? lane.container.orientation === "horizontal" : true;
+  const header = FLOWCHART_LANE_HEADER_SIZE;
+  const minX = horizontal ? header : 0;
+  const minY = horizontal ? 0 : header;
+  // 节点大于内容区时下限优先（允许超出右/下界，不产生反向区间）
+  const maxX = Math.max(minX, laneW - nodeSize.width);
+  const maxY = Math.max(minY, laneH - nodeSize.height);
+  return {
+    x: Math.min(Math.max(pos.x, minX), maxX),
+    y: Math.min(Math.max(pos.y, minY), maxY),
+  };
+}
+
+/** 查找同泳池的相邻泳道（FC-SWIM-04：优先 order 下一条，否则上一条；无其他泳道返回 null）。 */
+function findAdjacentLaneId(nodes: readonly FlowchartNode[], laneId: string): string | null {
+  const lane = nodes.find((n) => n.id === laneId);
+  if (!lane || lane.kind !== "swimlane-lane" || lane.parentId === undefined) return null;
+  const order = lane.container?.type === "lane" ? lane.container.order : 0;
+  const siblings = nodes
+    .filter(
+      (n) => n.kind === "swimlane-lane" && n.parentId === lane.parentId && n.id !== laneId,
+    )
+    .map((n) => ({ id: n.id, order: n.container?.type === "lane" ? n.container.order : 0 }))
+    .sort((a, b) => a.order - b.order);
+  if (siblings.length === 0) return null;
+  const after = siblings.find((s) => s.order > order);
+  return (after ?? siblings[siblings.length - 1]).id;
 }
 
 /** 将 dataURL 转为 Blob 并触发下载 */
@@ -324,12 +506,29 @@ export function FlowchartDocumentEditor({
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
   const [activeTool, setActiveTool] = useState<CanvasTool>("select");
+  // 右侧属性面板（FC-UI-02）：默认展开，可关闭
+  const [inspectorOpen, setInspectorOpen] = useState(true);
   // 右键菜单上下文：null 表示关闭
   const [menuCtx, setMenuCtx] = useState<FlowchartContextMenuContext | null>(null);
-  // footer 状态：网格显示、吸附、缩放（受控，便于持久化和只读模式下禁用）
-  const [showGrid, setShowGrid] = useState(true);
-  const [snapToGrid, setSnapToGrid] = useState(true);
+  // footer 缩放显示（受控）；网格显示/吸附统一取文档 canvas.grid（FC-UI-02 单一数据源）
   const [zoom, setZoom] = useState(1);
+  // 方向键微移合并：连续微移（同选区、800ms 内）合并为一个历史单元
+  const nudgeCoalesceRef = useRef<{ key: string; at: number } | null>(null);
+  // 缓存最新的 commitChange 和 doc，让边控制点回调不依赖 history（避免连锁重建导致边重渲染）
+  const commitChangeRef = useRef<(next: FlowchartDocument, changeKind: "layout" | "semantic", coalesceKey?: string) => void>(() => {});
+  const latestDocRef = useRef<FlowchartDocument | null>(null);
+  // 操作提示（FC-SWIM-01 等）：画布底部浮动展示，3s 自动消失
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
+  useEffect(() => {
+    if (!actionNotice) return;
+    const timer = window.setTimeout(() => setActionNotice(null), 3000);
+    return () => window.clearTimeout(timer);
+  }, [actionNotice]);
+  // 安全删除确认（FC-SWIM-04）：非空泳池/泳道删除前弹出策略选择
+  const [safeDeleteTargets, setSafeDeleteTargets] = useState<{
+    pools: SafeDeletePoolInfo[];
+    lanes: SafeDeleteLaneInfo[];
+  } | null>(null);
 
   // 1. 解析 note.contentMarkdown
   const parsed = useMemo(() => parseFlowchartMarkdown(note.contentMarkdown), [note.contentMarkdown]);
@@ -343,6 +542,10 @@ export function FlowchartDocumentEditor({
   const [history, setHistory] = useState<HistoryState>(() =>
     parsed.ok ? makeInitialHistory(parsed.document) : makeInitialHistory(emptyDoc()),
   );
+  // 初始化 latestDocRef（在 history 声明后立即同步）
+  if (latestDocRef.current === null) {
+    latestDocRef.current = history.present.document;
+  }
 
   // 3. 同步外部 contentMarkdown 变化（多标签页广播）
   const lastSyncedMdRef = useRef(note.contentMarkdown);
@@ -377,19 +580,126 @@ export function FlowchartDocumentEditor({
   const [selectedEdgeIds, setSelectedEdgeIds] = useState<string[]>([]);
 
   // 5. React Flow 受控节点/边
+  // v2：文档主题解析为节点默认色（优先级：节点手动覆盖 > 文档主题 > CSS token）
+  const themeDefaults = useMemo(
+    () => resolveFlowchartThemeDefaults(history.present.document.theme),
+    [history.present.document.theme],
+  );
+
   const [rfNodes, setRfNodes] = useState<Node[]>(() =>
-    parsed.ok ? parsed.document.nodes.map((n) => flowchartCanvasHelpers.toFlowNode(n, parsed.document.direction, readOnly)) : [],
+    parsed.ok ? parsed.document.nodes.map((n) => flowchartCanvasHelpers.toFlowNode(n, parsed.document.direction, readOnly, undefined, themeDefaults)) : [],
   );
   const [rfEdges, setRfEdges] = useState<Edge[]>(() =>
-    parsed.ok ? parsed.document.edges.map(flowchartCanvasHelpers.toFlowEdge) : [],
+    parsed.ok ? parsed.document.edges.map((e) => flowchartCanvasHelpers.toFlowEdge(e)) : [],
+  );
+
+  // 9. 提交变更到中心（onContentChange + 历史 push）
+  // 单写者模型：非写者 readOnly，不能提交；写者提交后由中心广播给所有实例。
+  // 提交携带 baseRevision，NotesView 用于多标签页 revision 校验（设计文档 §8.5-3）。
+  // 注：commitChange 必须在 handleEdgeControlPointsCommit 之前定义（被其依赖）。
+  const commitChange = useCallback(
+    (next: FlowchartDocument, changeKind: "layout" | "semantic", coalesceKey?: string) => {
+      if (!isWriter) return;
+      // 校验文档
+      const v = validateFlowchartDocument(next);
+      if (!v.ok) {
+        // 不应用，提示用户
+        return;
+      }
+      let newHistory: HistoryState;
+      if (coalesceKey) {
+        // 合并连续同类变更（如方向键长按微移）：替换 present 而非 push，future 清空
+        const now = Date.now();
+        const last = nudgeCoalesceRef.current;
+        const canCoalesce = last !== null && last.key === coalesceKey && now - last.at < 800;
+        nudgeCoalesceRef.current = { key: coalesceKey, at: now };
+        newHistory = canCoalesce
+          ? { past: history.past, present: { document: next, changeKind }, future: [] }
+          : pushHistory(history, next, changeKind);
+      } else {
+        // 任何非合并提交都会打断微移合并链
+        nudgeCoalesceRef.current = null;
+        newHistory = pushHistory(history, next, changeKind);
+      }
+      setHistory(newHistory);
+      const md = serializeFlowchartMarkdown(note.title || "未命名流程图", next);
+      lastSyncedMdRef.current = md;
+      isLocalCommitRef.current = true;
+      onContentChange({
+        contentMarkdown: md,
+        plainText: buildFlowchartPlainText(note.title || "未命名流程图", next),
+        baseRevision: revision,
+      });
+    },
+    [history, note.title, onContentChange, isWriter, revision],
+  );
+  // 同步 ref：让边控制点回调通过 ref 间接调用，避免回调依赖 history 导致的连锁重建
+  commitChangeRef.current = commitChange;
+  latestDocRef.current = history.present.document;
+
+  // 边控制点实时变更（WPS 风格连接线调整）：拖动期间高频触发，
+  // 只更新 React Flow 内部状态（rfEdges），不提交历史栈，避免历史淹没。
+  // 与节点拖动一致：拖动期间实时更新 rfNodes，拖动结束才 commitChange。
+  // 注：必须定义在下方「同步 history → React Flow」的 useEffect 之前，避免 TDZ。
+  const handleEdgeControlPointsChange = useCallback(
+    (edgeId: string, controlPoints: { x: number; y: number }[] | undefined) => {
+      if (readOnly) return;
+      setRfEdges((edges) =>
+        edges.map((e) => {
+          if (e.id !== edgeId) return e;
+          const data = (e.data ?? {}) as Record<string, unknown>;
+          return {
+            ...e,
+            data: {
+              ...data,
+              controlPoints: controlPoints
+                ? controlPoints.map((p) => ({ x: p.x, y: p.y }))
+                : undefined,
+            },
+          };
+        }),
+      );
+    },
+    [readOnly],
+  );
+
+  // 边控制点提交（拖动结束或双击删除时触发一次）：写入文档历史栈。
+  // 使用 layout 变更类型（不影响 AI baseHash，但仍写入文档与序列化）。
+  // 通过 ref 间接调用 commitChange 和读取 doc，使回调只依赖 [readOnly]，
+  // 避免 history 变化时回调重建 → useEffect 重执行 → 所有 edges 重建 → 边重渲染。
+  const handleEdgeControlPointsCommit = useCallback(
+    (edgeId: string, controlPoints: { x: number; y: number }[] | undefined) => {
+      if (readOnly) return;
+      // latestDocRef 在每次渲染时同步 history.present.document，不会为 null
+      const doc = cloneFlowchartDocument(latestDocRef.current!);
+      const idx = doc.edges.findIndex((e) => e.id === edgeId);
+      if (idx < 0) return;
+      const next: FlowchartEdge = { ...doc.edges[idx] };
+      if (controlPoints && controlPoints.length > 0) {
+        next.controlPoints = controlPoints.map((p) => ({ x: p.x, y: p.y }));
+      } else {
+        delete next.controlPoints;
+      }
+      doc.edges[idx] = next;
+      commitChangeRef.current(doc, "layout");
+    },
+    [readOnly],
   );
 
   // 同步 history → React Flow
   useEffect(() => {
     const doc = history.present.document;
-    setRfNodes(doc.nodes.map((n) => flowchartCanvasHelpers.toFlowNode(n, doc.direction, readOnly)));
-    setRfEdges(doc.edges.map(flowchartCanvasHelpers.toFlowEdge));
-  }, [history, readOnly]);
+    setRfNodes(doc.nodes.map((n) => flowchartCanvasHelpers.toFlowNode(n, doc.direction, readOnly, undefined, themeDefaults)));
+    setRfEdges(
+      doc.edges.map((e) =>
+        flowchartCanvasHelpers.toFlowEdge(e, {
+          readOnly,
+          onControlPointsChange: handleEdgeControlPointsChange,
+          onControlPointsCommit: handleEdgeControlPointsCommit,
+        }),
+      ),
+    );
+  }, [history, readOnly, themeDefaults, handleEdgeControlPointsChange, handleEdgeControlPointsCommit]);
 
   // 6. 计算当前 baseHash 并同步到 Context
   const currentHash = useMemo(
@@ -405,75 +715,128 @@ export function FlowchartDocumentEditor({
     setSelection(note.id, { nodeIds: selectedNodeIds, edgeIds: selectedEdgeIds }, currentHash);
   }, [note.id, selectedNodeIds, selectedEdgeIds, currentHash, setSelection]);
 
-  // 9. 提交变更到中心（onContentChange + 历史 push）
-  // 单写者模型：非写者 readOnly，不能提交；写者提交后由中心广播给所有实例。
-  // 提交携带 baseRevision，NotesView 用于多标签页 revision 校验（设计文档 §8.5-3）。
-  const commitChange = useCallback(
-    (next: FlowchartDocument, changeKind: "layout" | "semantic") => {
-      if (!isWriter) return;
-      // 校验文档
-      const v = validateFlowchartDocument(next);
-      if (!v.ok) {
-        // 不应用，提示用户
-        return;
-      }
-      const newHistory = pushHistory(history, next, changeKind);
-      setHistory(newHistory);
-      const md = serializeFlowchartMarkdown(note.title || "未命名流程图", next);
-      lastSyncedMdRef.current = md;
-      isLocalCommitRef.current = true;
-      onContentChange({
-        contentMarkdown: md,
-        plainText: buildFlowchartPlainText(note.title || "未命名流程图", next),
-        baseRevision: revision,
-      });
-    },
-    [history, note.title, onContentChange, isWriter, revision],
-  );
+  // 注：commitChange 已上移至「边控制点」相关回调之前定义（被 handleEdgeControlPointsCommit 依赖）。
 
   // 10. 工具栏操作
   const handleAddNode = useCallback(
-    (kind: FlowchartNodeKind) => {
+    (shape: FlowchartShapeDefinition) => {
       if (readOnly) return;
+      // 点击在视口中心创建（考虑 zoom/pan）；canvas 未就绪时回退到包围盒右下方
+      let center = canvasRef.current?.getViewportCenter();
+      if (!center) {
+        const xs = history.present.document.nodes.map((n) => n.position.x);
+        const ys = history.present.document.nodes.map((n) => n.position.y);
+        center = {
+          x: xs.length > 0 ? Math.max(...xs) + 200 : 0,
+          y: ys.length > 0 ? Math.max(...ys) + 100 : 0,
+        };
+      }
+
+      const creation = shape.creation;
+      // 泳池（FC-SWIM-01）：1 pool + 2 lane，一次提交一次撤销
+      if (creation?.action === "pool") {
+        const size = flowchartPoolDefaultSize(creation.orientation);
+        const poolId = generateFlowchartNodeId();
+        const created = createPoolNodes({
+          poolId,
+          laneIds: [generateFlowchartNodeId(), generateFlowchartNodeId()],
+          orientation: creation.orientation,
+          position: { x: center.x - size.width / 2, y: center.y - size.height / 2 },
+        });
+        const doc = cloneFlowchartDocument(history.present.document);
+        doc.nodes.push(...created);
+        setSelectedNodeIds([poolId]);
+        setSelectedEdgeIds([]);
+        commitChange(doc, "semantic");
+        return;
+      }
+      // 泳道 / 分隔（FC-SWIM-01）：追加到当前选中的同方向泳池；未选中时提示先插入泳池
+      if (creation?.action === "lane" || creation?.action === "divider") {
+        const pool = findSelectedPoolForLane(
+          history.present.document.nodes,
+          selectedNodeIds,
+          creation.orientation,
+        );
+        if (!pool) {
+          setActionNotice(
+            `请先选中一个${creation.orientation === "horizontal" ? "横向" : "纵向"}泳池（或先插入泳池）`,
+          );
+          return;
+        }
+        const laneId = generateFlowchartNodeId();
+        const next = addLaneToPool(history.present.document.nodes, pool.id, laneId);
+        if (!next) return;
+        const doc = cloneFlowchartDocument(history.present.document);
+        doc.nodes = next;
+        setSelectedNodeIds([laneId]);
+        setSelectedEdgeIds([]);
+        commitChange(doc, "semantic");
+        return;
+      }
+
+      const node = createShapeNodeAtCenter(shape.kind, center);
+      if (!node) return;
       const doc = cloneFlowchartDocument(history.present.document);
-      const id = generateFlowchartNodeId();
-      // 新增节点默认 label 为"新节点"，由用户双击编辑
-      const label = "新节点";
-      // 放置在所有节点包围盒右下方
-      const xs = doc.nodes.map((n) => n.position.x);
-      const ys = doc.nodes.map((n) => n.position.y);
-      const cx = xs.length > 0 ? Math.max(...xs) + 200 : 0;
-      const cy = ys.length > 0 ? Math.max(...ys) + 100 : 0;
-      const node: FlowchartNode = {
-        id,
-        kind,
-        label,
-        position: { x: cx, y: cy },
-      };
       doc.nodes.push(node);
-      setSelectedNodeIds([id]);
+      setSelectedNodeIds([node.id]);
       commitChange(doc, "semantic");
     },
-    [history.present.document, readOnly, commitChange],
+    [history.present.document, readOnly, selectedNodeIds, commitChange],
   );
 
-  // 拖拽形状到画布指定位置
+  // 拖拽形状到画布指定位置（落点为节点中心）
   const handleDropShape = useCallback(
-    (kind: FlowchartNodeKind, x: number, y: number) => {
+    (shapeId: string, x: number, y: number) => {
       if (readOnly) return;
+      const shape = getFlowchartShapeById(shapeId);
+      if (!shape) return;
+      const creation = shape.creation;
+      // 泳池（FC-SWIM-01）：落点为泳池中心
+      if (creation?.action === "pool") {
+        const size = flowchartPoolDefaultSize(creation.orientation);
+        const poolId = generateFlowchartNodeId();
+        const created = createPoolNodes({
+          poolId,
+          laneIds: [generateFlowchartNodeId(), generateFlowchartNodeId()],
+          orientation: creation.orientation,
+          position: { x: x - size.width / 2, y: y - size.height / 2 },
+        });
+        const doc = cloneFlowchartDocument(history.present.document);
+        doc.nodes.push(...created);
+        setSelectedNodeIds([poolId]);
+        setSelectedEdgeIds([]);
+        commitChange(doc, "semantic");
+        return;
+      }
+      // 泳道 / 分隔（FC-SWIM-01）：落点所在的同方向泳池优先，其次当前选中的泳池
+      if (creation?.action === "lane" || creation?.action === "divider") {
+        const pool =
+          findPoolAtPoint(history.present.document.nodes, { x, y }, creation.orientation) ??
+          findSelectedPoolForLane(history.present.document.nodes, selectedNodeIds, creation.orientation);
+        if (!pool) {
+          setActionNotice(
+            `请将泳道拖入${creation.orientation === "horizontal" ? "横向" : "纵向"}泳池（或先插入泳池）`,
+          );
+          return;
+        }
+        const laneId = generateFlowchartNodeId();
+        const next = addLaneToPool(history.present.document.nodes, pool.id, laneId);
+        if (!next) return;
+        const doc = cloneFlowchartDocument(history.present.document);
+        doc.nodes = next;
+        setSelectedNodeIds([laneId]);
+        setSelectedEdgeIds([]);
+        commitChange(doc, "semantic");
+        return;
+      }
+      const node = createShapeNodeAtCenter(shape.kind, { x, y });
+      if (!node) return;
       const doc = cloneFlowchartDocument(history.present.document);
-      const id = generateFlowchartNodeId();
-      const node: FlowchartNode = {
-        id,
-        kind,
-        label: "新节点",
-        position: { x, y },
-      };
       doc.nodes.push(node);
-      setSelectedNodeIds([id]);
+      setSelectedNodeIds([node.id]);
       commitChange(doc, "semantic");
     },
-    [history.present.document, readOnly, commitChange],
+    [history.present.document, readOnly, selectedNodeIds, commitChange],
   );
 
   // 插入图片节点：复制图片到 vault/assets/ 目录，创建 image 节点
@@ -542,23 +905,18 @@ export function FlowchartDocumentEditor({
       connection: { source: string; sourceHandle?: string },
     ) => {
       if (readOnly) return;
+      const node = createShapeNodeAtCenter(kind, position);
+      if (!node) return;
       const doc = cloneFlowchartDocument(history.present.document);
-      const id = generateFlowchartNodeId();
-      const node: FlowchartNode = {
-        id,
-        kind,
-        label: "新节点",
-        position,
-      };
       doc.nodes.push(node);
       const edge: FlowchartEdge = {
         id: generateFlowchartEdgeId(),
         source: connection.source,
-        target: id,
+        target: node.id,
         sourceHandle: connection.sourceHandle,
       };
       doc.edges.push(edge);
-      setSelectedNodeIds([id]);
+      setSelectedNodeIds([node.id]);
       setSelectedEdgeIds([]);
       commitChange(doc, "semantic");
     },
@@ -671,15 +1029,208 @@ export function FlowchartDocumentEditor({
     [history.present.document, readOnly, selectedEdgeIds, commitChange],
   );
 
+  // 应用文档主题（FC-THEME-02）：主题属于视觉设置，commit 为 layout，不改变 semantic hash
+  // stripManualStyles=true 时（“不保留手动样式”经用户确认后）清理节点手动颜色字段
+  const handleApplyTheme = useCallback(
+    (theme: FlowchartThemeSettings, options: { stripManualStyles: boolean }) => {
+      if (readOnly) return;
+      const doc = cloneFlowchartDocument(history.present.document);
+      doc.theme = { ...theme };
+      if (options.stripManualStyles) {
+        doc.nodes = stripThemeProvidedStyles(doc.nodes);
+      }
+      commitChange(doc, "layout");
+    },
+    [history.present.document, readOnly, commitChange],
+  );
+
+  // 有手动颜色样式的节点数（样式面板“清理确认”提示用）
+  const manualStyleNodeCount = useMemo(
+    () => countNodesWithManualThemeStyles(history.present.document.nodes),
+    [history.present.document.nodes],
+  );
+
+  // Inspector 页面样式修改（FC-UI-02）：canvas 属于视觉设置，commit 为 layout
+  const handleCanvasSettingsChange = useCallback(
+    (patch: Partial<FlowchartCanvasSettings>) => {
+      if (readOnly) return;
+      const doc = cloneFlowchartDocument(history.present.document);
+      doc.canvas = { ...doc.canvas, ...patch };
+      commitChange(doc, "layout");
+    },
+    [history.present.document, readOnly, commitChange],
+  );
+
+  // 网格显示/吸附：文档 canvas.grid 为唯一数据源（FC-UI-02），footer 与 Inspector 共用
+  const showGrid = history.present.document.canvas.grid.visible;
+  const snapToGrid = history.present.document.canvas.grid.snap;
+  const handleShowGridChange = useCallback(
+    (visible: boolean) => {
+      handleCanvasSettingsChange({
+        grid: { ...history.present.document.canvas.grid, visible },
+      });
+    },
+    [handleCanvasSettingsChange, history.present.document.canvas.grid],
+  );
+  const handleSnapToGridChange = useCallback(
+    (snap: boolean) => {
+      handleCanvasSettingsChange({
+        grid: { ...history.present.document.canvas.grid, snap },
+      });
+    },
+    [handleCanvasSettingsChange, history.present.document.canvas.grid],
+  );
+
+  // Inspector 几何修改（FC-UI-02/03）：位置/尺寸/旋转/翻转/不透明度/锁定
+  // 锁定节点禁止几何修改（locked 字段本身除外）；批量修改形成一个撤销单元
+  const handleNodeGeometryChange = useCallback(
+    (patch: FlowchartNodeGeometryPatch) => {
+      if (readOnly || selectedNodeIds.length === 0) return;
+      const doc = cloneFlowchartDocument(history.present.document);
+      const idSet = new Set(selectedNodeIds);
+      const touchesGeometry =
+        patch.x !== undefined ||
+        patch.y !== undefined ||
+        patch.width !== undefined ||
+        patch.height !== undefined ||
+        patch.rotation !== undefined ||
+        patch.flipX !== undefined ||
+        patch.flipY !== undefined;
+      let changed = false;
+      doc.nodes = doc.nodes.map((n) => {
+        if (!idSet.has(n.id)) return n;
+        if (n.locked && touchesGeometry) return n;
+        const next = { ...n };
+        if (patch.x !== undefined) next.position = { x: patch.x, y: next.position.y };
+        if (patch.y !== undefined) next.position = { x: next.position.x, y: patch.y };
+        if (patch.width !== undefined || patch.height !== undefined) {
+          const cur = next.size ?? { width: 200, height: 100 };
+          next.size = { width: patch.width ?? cur.width, height: patch.height ?? cur.height };
+        }
+        if (patch.rotation !== undefined) next.rotation = patch.rotation > 0 ? patch.rotation : undefined;
+        if (patch.flipX !== undefined) next.flipX = patch.flipX || undefined;
+        if (patch.flipY !== undefined) next.flipY = patch.flipY || undefined;
+        if (patch.opacity !== undefined) next.opacity = patch.opacity >= 1 ? undefined : patch.opacity;
+        if (patch.locked !== undefined) next.locked = patch.locked || undefined;
+        changed = true;
+        return next;
+      });
+      if (changed) commitChange(doc, "layout");
+    },
+    [history.present.document, readOnly, selectedNodeIds, commitChange],
+  );
+
+  // 匹配大小（FC-ARRANGE-01）：以首个选中节点为基准，锁定节点跳过；单次撤销
+  const handleMatchSize = useCallback(
+    (mode: "width" | "height" | "both") => {
+      if (readOnly || selectedNodeIds.length < 2) return;
+      const doc = history.present.document;
+      const fn =
+        mode === "width" ? matchNodesWidth : mode === "height" ? matchNodesHeight : matchNodesSize;
+      const nextNodes = fn(doc.nodes, selectedNodeIds);
+      if (!nextNodes) return;
+      const next = cloneFlowchartDocument(doc);
+      next.nodes = nextNodes;
+      commitChange(next, "layout");
+    },
+    [history.present.document, readOnly, selectedNodeIds, commitChange],
+  );
+
+  // 组合（FC-GROUP-01）：≥2 个根级普通节点装入新建 group，单次撤销
+  const handleGroup = useCallback(() => {
+    if (readOnly) return;
+    const result = groupNodes(
+      history.present.document.nodes,
+      selectedNodeIds,
+      generateFlowchartNodeId(),
+    );
+    if (!result) return;
+    const doc = cloneFlowchartDocument(history.present.document);
+    doc.nodes = result.nodes;
+    setSelectedNodeIds([result.groupId]);
+    setSelectedEdgeIds([]);
+    commitChange(doc, "semantic");
+  }, [history.present.document, readOnly, selectedNodeIds, commitChange]);
+
+  // 取消组合（FC-GROUP-01）：解散选中的 group，子节点恢复根级并选中
+  const handleUngroup = useCallback(() => {
+    if (readOnly) return;
+    const doc0 = history.present.document;
+    const groupIds = selectedNodeIds.filter(
+      (id) => doc0.nodes.find((n) => n.id === id)?.kind === "group",
+    );
+    if (groupIds.length === 0) return;
+    const childIds = doc0.nodes
+      .filter((n) => n.parentId !== undefined && groupIds.includes(n.parentId))
+      .map((n) => n.id);
+    const result = ungroupNodes(doc0.nodes, doc0.edges, groupIds);
+    if (!result) return;
+    const doc = cloneFlowchartDocument(doc0);
+    doc.nodes = result.nodes;
+    doc.edges = result.edges;
+    setSelectedNodeIds(childIds);
+    setSelectedEdgeIds([]);
+    commitChange(doc, "semantic");
+  }, [history.present.document, readOnly, selectedNodeIds, commitChange]);
+
+  // 层级调整（FC-LAYER-01）：置顶/置底/上移一层/下移一层，单次撤销
+  const handleReorder = useCallback(
+    (action: FlowchartLayerAction) => {
+      if (readOnly || selectedNodeIds.length === 0) return;
+      const nextNodes = reorderNodes(history.present.document.nodes, selectedNodeIds, action);
+      if (!nextNodes) return;
+      const doc = cloneFlowchartDocument(history.present.document);
+      doc.nodes = nextNodes;
+      commitChange(doc, "layout");
+    },
+    [history.present.document, readOnly, selectedNodeIds, commitChange],
+  );
+
+  // 组合/取消组合可用性（右键菜单与 Inspector 共用判断）
+  const selectedNodesList = history.present.document.nodes.filter((n) =>
+    selectedNodeIds.includes(n.id),
+  );
+  const canGroup =
+    selectedNodesList.length >= 2 &&
+    selectedNodesList.every(
+      (n) => !n.locked && !isFlowchartContainerKind(n.kind) && n.parentId === undefined,
+    );
+  const canUngroup = selectedNodesList.some((n) => n.kind === "group");
+
+  // 直接删除（无确认）：普通节点/边/空泳道/无泳道的空泳池。
+  // 空泳道走 removeLane（泳池收缩、剩余泳道紧凑重排）；容器级联删除子树避免悬空 parentId。
   const handleDeleteSelected = useCallback(() => {
     if (readOnly) return;
     if (selectedNodeIds.length === 0 && selectedEdgeIds.length === 0) return;
     const doc = cloneFlowchartDocument(history.present.document);
     const idSet = new Set(selectedNodeIds);
-    doc.nodes = doc.nodes.filter((n) => !idSet.has(n.id));
+    // 空泳道走 removeLane（内容为空，move-to-root 无实际移动）
+    for (const n of doc.nodes) {
+      if (n.kind === "swimlane-lane" && idSet.has(n.id)) {
+        const res = removeLane(doc.nodes, doc.edges, n.id, { type: "move-to-root" });
+        if (res) {
+          doc.nodes = res.nodes;
+          doc.edges = res.edges;
+        }
+        idSet.delete(n.id);
+      }
+    }
+    // 容器节点级联删除其子树（group 子节点、pool 的 lane 及 lane 内容），避免悬空 parentId
+    const cascadeIds = new Set(idSet);
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const n of doc.nodes) {
+        if (n.parentId !== undefined && cascadeIds.has(n.parentId) && !cascadeIds.has(n.id)) {
+          cascadeIds.add(n.id);
+          grew = true;
+        }
+      }
+    }
+    doc.nodes = doc.nodes.filter((n) => !cascadeIds.has(n.id));
     // 同时删除关联边
     doc.edges = doc.edges.filter((e) => {
-      if (idSet.has(e.source) || idSet.has(e.target)) return false;
+      if (cascadeIds.has(e.source) || cascadeIds.has(e.target)) return false;
       return !selectedEdgeIds.includes(e.id);
     });
     setSelectedNodeIds([]);
@@ -687,19 +1238,158 @@ export function FlowchartDocumentEditor({
     commitChange(doc, "semantic");
   }, [history.present.document, readOnly, selectedNodeIds, selectedEdgeIds, commitChange]);
 
+  // 安全删除入口（FC-SWIM-04）：删除前检查非空泳池/泳道，需要时弹确认对话框。
+  // 键盘 Delete、右键菜单、剪切、工具栏删除统一走此入口。
+  const requestDeleteSelected = useCallback(() => {
+    if (readOnly) return;
+    if (selectedNodeIds.length === 0 && selectedEdgeIds.length === 0) return;
+    const doc = history.present.document;
+    const idSet = new Set(selectedNodeIds);
+    const selectedPools = doc.nodes.filter((n) => idSet.has(n.id) && n.kind === "swimlane-pool");
+    const selectedPoolIds = new Set(selectedPools.map((p) => p.id));
+    const pools: SafeDeletePoolInfo[] = [];
+    for (const pool of selectedPools) {
+      const laneIds = doc.nodes
+        .filter((n) => n.kind === "swimlane-lane" && n.parentId === pool.id)
+        .map((l) => l.id);
+      if (laneIds.length === 0) continue; // 无泳道的空泳池直接删
+      const laneIdSet = new Set(laneIds);
+      const contentIds = new Set(
+        doc.nodes
+          .filter((n) => n.parentId !== undefined && laneIdSet.has(n.parentId))
+          .map((n) => n.id),
+      );
+      const subtree = new Set([...laneIds, ...contentIds]);
+      pools.push({
+        id: pool.id,
+        label: pool.label || "泳池",
+        laneCount: laneIds.length,
+        contentCount: contentIds.size,
+        edgeCount: doc.edges.filter((e) => subtree.has(e.source) || subtree.has(e.target)).length,
+      });
+    }
+    const lanes: SafeDeleteLaneInfo[] = [];
+    for (const lane of doc.nodes) {
+      if (!idSet.has(lane.id) || lane.kind !== "swimlane-lane") continue;
+      // 父泳池同被选中时由泳池策略覆盖
+      if (lane.parentId !== undefined && selectedPoolIds.has(lane.parentId)) continue;
+      const children = doc.nodes.filter((n) => n.parentId === lane.id);
+      if (children.length === 0) continue; // 空泳道直接删
+      const childIds = new Set(children.map((c) => c.id));
+      const pool = doc.nodes.find((n) => n.id === lane.parentId);
+      const siblingCount = doc.nodes.filter(
+        (n) => n.kind === "swimlane-lane" && n.parentId === lane.parentId && n.id !== lane.id,
+      ).length;
+      lanes.push({
+        id: lane.id,
+        label: lane.label || "泳道",
+        poolLabel: pool?.label || "泳池",
+        contentCount: children.length,
+        edgeCount: doc.edges.filter((e) => childIds.has(e.source) || childIds.has(e.target)).length,
+        hasAdjacentLane: siblingCount > 0,
+      });
+    }
+    if (pools.length > 0 || lanes.length > 0) {
+      setSafeDeleteTargets({ pools, lanes });
+      return;
+    }
+    handleDeleteSelected();
+  }, [readOnly, selectedNodeIds, selectedEdgeIds, history.present.document, handleDeleteSelected]);
+
+  // 确认安全删除（FC-SWIM-04）：按策略处理泳池/泳道，再删除其余选中项，一次提交一次撤销
+  const handleConfirmSafeDelete = useCallback(
+    (opts: SafeDeleteConfirmOptions) => {
+      if (readOnly || !safeDeleteTargets) return;
+      const doc = cloneFlowchartDocument(history.present.document);
+      let nodes = doc.nodes;
+      let edges = doc.edges;
+      // 1. 非空泳道（其父泳池未被选中删除）：按策略迁移/删除内容，泳池收缩重排
+      for (const info of safeDeleteTargets.lanes) {
+        let strategy: RemoveLaneStrategy;
+        if (opts.laneStrategy === "move-to-lane") {
+          const targetLaneId = findAdjacentLaneId(nodes, info.id);
+          strategy = targetLaneId
+            ? { type: "move-to-lane", targetLaneId }
+            : { type: "move-to-root" };
+        } else if (opts.laneStrategy === "move-to-root") {
+          strategy = { type: "move-to-root" };
+        } else {
+          strategy = { type: "delete-content" };
+        }
+        const res = removeLane(nodes, edges, info.id, strategy);
+        if (res) {
+          nodes = res.nodes;
+          edges = res.edges;
+        }
+      }
+      // 2. 非空泳池：按策略迁移/删除全部泳道内容
+      for (const info of safeDeleteTargets.pools) {
+        const res = removePool(nodes, edges, info.id, { type: opts.poolStrategy });
+        if (res) {
+          nodes = res.nodes;
+          edges = res.edges;
+        }
+      }
+      // 3. 其余选中项（普通节点、空泳道、未确认容器、边）按直接删除逻辑处理
+      const idSet = new Set(selectedNodeIds);
+      for (const p of safeDeleteTargets.pools) idSet.delete(p.id);
+      for (const l of safeDeleteTargets.lanes) idSet.delete(l.id);
+      for (const n of nodes) {
+        if (n.kind === "swimlane-lane" && idSet.has(n.id)) {
+          const res = removeLane(nodes, edges, n.id, { type: "move-to-root" });
+          if (res) {
+            nodes = res.nodes;
+            edges = res.edges;
+          }
+          idSet.delete(n.id);
+        }
+      }
+      const cascadeIds = new Set(idSet);
+      let grew = true;
+      while (grew) {
+        grew = false;
+        for (const n of nodes) {
+          if (n.parentId !== undefined && cascadeIds.has(n.parentId) && !cascadeIds.has(n.id)) {
+            cascadeIds.add(n.id);
+            grew = true;
+          }
+        }
+      }
+      nodes = nodes.filter((n) => !cascadeIds.has(n.id));
+      edges = edges.filter((e) => {
+        if (cascadeIds.has(e.source) || cascadeIds.has(e.target)) return false;
+        return !selectedEdgeIds.includes(e.id);
+      });
+      doc.nodes = nodes;
+      doc.edges = edges;
+      setSafeDeleteTargets(null);
+      setSelectedNodeIds([]);
+      setSelectedEdgeIds([]);
+      commitChange(doc, "semantic");
+    },
+    [
+      readOnly,
+      safeDeleteTargets,
+      history.present.document,
+      selectedNodeIds,
+      selectedEdgeIds,
+      commitChange,
+    ],
+  );
+
   // 全选：通过 canvasRef 调用 FlowchartCanvas.selectAll
   const handleSelectAll = useCallback(() => {
     if (readOnly) return;
     canvasRef.current?.selectAll();
   }, [readOnly]);
 
-  // 自动布局：复用 flowchart-patch.layoutEntireGraph（dagre）
-  // 作为 semantic 变更进入撤销栈（节点位置改变影响 layout，但 baseHash 不变）
+  // 自动布局：容器感知布局（FC-SWIM-05），无容器时退化为全量 Dagre
+  // 作为 layout 变更进入撤销栈（节点位置改变影响 layout，但 baseHash 不变）
   const handleAutoLayout = useCallback(() => {
     if (readOnly) return;
     const doc = cloneFlowchartDocument(history.present.document);
     if (doc.nodes.length === 0) return;
-    layoutEntireGraph(doc);
+    layoutFlowchartWithContainers(doc);
     setHistory((state) => pushHistory(state, doc, "layout"));
     const md = serializeFlowchartMarkdown(note.title || "未命名流程图", doc);
     lastSyncedMdRef.current = md;
@@ -769,19 +1459,15 @@ export function FlowchartDocumentEditor({
   const handleMenuAddNodeAt = useCallback(
     (kind: FlowchartNodeKind) => {
       if (readOnly) return;
-      const doc = cloneFlowchartDocument(history.present.document);
-      const id = generateFlowchartNodeId();
-      const xs = doc.nodes.map((n) => n.position.x);
-      const ys = doc.nodes.map((n) => n.position.y);
+      const xs = history.present.document.nodes.map((n) => n.position.x);
+      const ys = history.present.document.nodes.map((n) => n.position.y);
       const cx = xs.length > 0 ? Math.max(...xs) + 200 : 0;
       const cy = ys.length > 0 ? Math.max(...ys) + 100 : 0;
-      doc.nodes.push({
-        id,
-        kind,
-        label: "新节点",
-        position: { x: cx, y: cy },
-      });
-      setSelectedNodeIds([id]);
+      const node = createShapeNodeAtCenter(kind, { x: cx, y: cy });
+      if (!node) return;
+      const doc = cloneFlowchartDocument(history.present.document);
+      doc.nodes.push(node);
+      setSelectedNodeIds([node.id]);
       commitChange(doc, "semantic");
       setMenuCtx(null);
     },
@@ -960,7 +1646,40 @@ export function FlowchartDocumentEditor({
         (c) => c.type === "dimensions" && c.resizing === false,
       );
       // 实时更新 React Flow 内部状态
-      setRfNodes((nodes) => flowchartCanvasHelpers.applyNodeChanges(changes, nodes));
+      // 拦截 group 子节点的 position 变化：拖动子节点时改为移动父容器，
+      // 子节点相对位置不变 → 所有同组节点一起移动（FC-GROUP-01）
+      setRfNodes((nodes) => {
+        const modified: NodeChange[] = [];
+        for (const c of changes) {
+          if (c.type === "position" && c.position) {
+            const rfNode = nodes.find((n) => n.id === c.id);
+            if (rfNode?.parentId) {
+              const parent = nodes.find((n) => n.id === rfNode.parentId);
+              if (parent && (parent.data as { kind?: string }).kind === "group") {
+                const dx = c.position.x - rfNode.position.x;
+                const dy = c.position.y - rfNode.position.y;
+                // 移动父容器（绝对坐标），子节点相对位置不变自动跟随
+                modified.push({
+                  type: "position",
+                  id: parent.id,
+                  position: { x: parent.position.x + dx, y: parent.position.y + dy },
+                  dragging: c.dragging,
+                });
+                // 保持子节点相对位置不变
+                modified.push({
+                  type: "position",
+                  id: c.id,
+                  position: { x: rfNode.position.x, y: rfNode.position.y },
+                  dragging: c.dragging,
+                });
+                continue;
+              }
+            }
+          }
+          modified.push(c);
+        }
+        return flowchartCanvasHelpers.applyNodeChanges(modified, nodes);
+      });
       if (hasRemove) {
         // 删除节点：同步到文档（同时删除关联边）
         setRfNodes((current) => {
@@ -993,7 +1712,75 @@ export function FlowchartDocumentEditor({
             }
             return next;
           });
-          commitChange(doc, "layout");
+          // FC-SWIM-02：pool/lane 尺寸变更按策略重分配
+          // （lane 跟随 pool 内容区、沿向按比例+最小尺寸保护、位置紧凑重排）
+          if (hasDimensionsEnd) {
+            const resizedIds: string[] = [];
+            for (const c of changes) {
+              if (c.type === "dimensions" && c.resizing === false) resizedIds.push(c.id);
+            }
+            for (const id of resizedIds) {
+              const target = doc.nodes.find((x) => x.id === id);
+              if (!target?.size) continue;
+              const next =
+                target.kind === "swimlane-pool"
+                  ? resizePoolNodes(doc.nodes, id, target.size)
+                  : target.kind === "swimlane-lane"
+                    ? resizeLaneNodes(doc.nodes, id, target.size)
+                    : null;
+              if (next) doc.nodes = next;
+            }
+          }
+          // FC-SWIM-03：拖动结束的节点做泳道归属判定
+          // （拖入 lane 转为相对坐标 / 拖出 lane 解除归属保持屏幕位置 / 位置 clamp 到内容区）
+          let membershipChanged = false;
+          if (hasPositionEnd) {
+            const draggedIds: string[] = [];
+            for (const c of changes) {
+              if (c.type === "position" && c.dragging === false) draggedIds.push(c.id);
+            }
+            for (const id of draggedIds) {
+              const target = doc.nodes.find((x) => x.id === id);
+              if (!target || target.locked || isFlowchartContainerKind(target.kind)) continue;
+              const abs = flowchartNodeAbsolutePosition(doc.nodes, id);
+              if (!abs) continue;
+              const size = target.size ?? { width: 200, height: 100 };
+              const center = { x: abs.x + size.width / 2, y: abs.y + size.height / 2 };
+              const lane = findLaneAtPoint(doc.nodes, center);
+              const parent = target.parentId
+                ? doc.nodes.find((x) => x.id === target.parentId)
+                : undefined;
+              // group 归属显式管理（不隐式解除）；lane 归属跟随拖放
+              let nextParent: string | undefined | null = null;
+              if (lane && target.parentId !== lane.id) nextParent = lane.id;
+              else if (!lane && parent?.kind === "swimlane-lane") nextParent = undefined;
+              if (nextParent !== null) {
+                const next = reparentNodes(doc.nodes, [id], nextParent);
+                if (next) {
+                  doc.nodes = next;
+                  membershipChanged = true;
+                }
+              }
+              // 位置 clamp 到 lane 内容区（不压标题区、不超出内容边界）
+              const after = doc.nodes.find((x) => x.id === id);
+              const afterParent = after?.parentId
+                ? doc.nodes.find((x) => x.id === after.parentId)
+                : undefined;
+              if (after && afterParent?.kind === "swimlane-lane") {
+                const clamped = clampPositionToLaneContent(
+                  afterParent,
+                  after.size ?? size,
+                  after.position,
+                );
+                if (clamped.x !== after.position.x || clamped.y !== after.position.y) {
+                  doc.nodes = doc.nodes.map((x) =>
+                    x.id === id ? { ...x, position: clamped } : x,
+                  );
+                }
+              }
+            }
+          }
+          commitChange(doc, membershipChanged ? "semantic" : "layout");
           return current;
         });
       }
@@ -1097,6 +1884,18 @@ export function FlowchartDocumentEditor({
       commitChange(doc, "semantic");
     },
     [readOnly, history.present.document, commitChange],
+  );
+
+  // 注：handleEdgeControlPointsChange / handleEdgeControlPointsCommit
+  // 已上移至「同步 history → React Flow」useEffect 之前定义（避免 TDZ）。
+
+  // Inspector 连线 label 修改（FC-UI-02）：作用于当前唯一选中边
+  const handleInspectorEdgeLabelChange = useCallback(
+    (label: string) => {
+      if (selectedEdgeIds.length !== 1) return;
+      handleEdgeLabelEdit(selectedEdgeIds[0], label);
+    },
+    [selectedEdgeIds, handleEdgeLabelEdit],
   );
 
   const handleSelectionChange = useCallback(
@@ -1235,8 +2034,8 @@ export function FlowchartDocumentEditor({
     [readOnly, history.present.document, commitChange],
   );
 
-  // 删除选中节点和边（删除按钮和 Delete 键共用）
-  // Delete/Backspace 已由 React Flow 内置处理（handleEdgesChange 和 handleNodesChange 中的 remove）
+  // 删除统一走 requestDeleteSelected（FC-SWIM-04 安全删除确认）；
+  // React Flow 内置 deleteKeyCode 已禁用，Delete/Backspace 由上方键盘监听处理。
 
   // 右键菜单：复制/剪切/粘贴/删除（依赖 clipboard，需在 getSelectedSubgraph/pasteSubgraph 之后定义）
   const handleMenuCopy = useCallback(() => {
@@ -1249,10 +2048,10 @@ export function FlowchartDocumentEditor({
     const clip = getSelectedSubgraph();
     if (clip) {
       clipboardRef.current = clip;
-      handleDeleteSelected();
+      requestDeleteSelected();
     }
     setMenuCtx(null);
-  }, [getSelectedSubgraph, handleDeleteSelected]);
+  }, [getSelectedSubgraph, requestDeleteSelected]);
 
   const handleMenuPaste = useCallback(() => {
     if (clipboardRef.current) {
@@ -1262,9 +2061,28 @@ export function FlowchartDocumentEditor({
   }, [pasteSubgraph]);
 
   const handleMenuDelete = useCallback(() => {
-    handleDeleteSelected();
+    requestDeleteSelected();
     setMenuCtx(null);
-  }, [handleDeleteSelected]);
+  }, [requestDeleteSelected]);
+
+  // 右键菜单：组合/取消组合/层级（FC-GROUP-01 / FC-LAYER-01）
+  const handleMenuGroup = useCallback(() => {
+    handleGroup();
+    setMenuCtx(null);
+  }, [handleGroup]);
+
+  const handleMenuUngroup = useCallback(() => {
+    handleUngroup();
+    setMenuCtx(null);
+  }, [handleUngroup]);
+
+  const handleMenuReorder = useCallback(
+    (action: FlowchartLayerAction) => {
+      handleReorder(action);
+      setMenuCtx(null);
+    },
+    [handleReorder],
+  );
 
   // 13b. 键盘事件监听
   useEffect(() => {
@@ -1303,10 +2121,16 @@ export function FlowchartDocumentEditor({
         const clip = getSelectedSubgraph();
         if (clip) {
           clipboardRef.current = clip;
-          // 删除选中节点（含关联边）
-          handleDeleteSelected();
+          // 删除选中节点（含关联边；非空泳池/泳道走安全删除确认）
+          requestDeleteSelected();
           e.preventDefault();
         }
+        return;
+      }
+      // 删除（FC-SWIM-04）：统一走安全删除入口（React Flow 内置 deleteKeyCode 已禁用）
+      if (!meta && (e.key === "Delete" || e.key === "Backspace")) {
+        requestDeleteSelected();
+        e.preventDefault();
         return;
       }
       // 粘贴
@@ -1332,10 +2156,80 @@ export function FlowchartDocumentEditor({
         e.preventDefault();
         return;
       }
+      // 组合（Ctrl+G）/ 取消组合（Ctrl+Shift+G）（FC-GROUP-01）
+      if (meta && (e.key === "g" || e.key === "G")) {
+        if (e.shiftKey) {
+          if (canUngroup) {
+            handleUngroup();
+            e.preventDefault();
+          }
+        } else if (canGroup) {
+          handleGroup();
+          e.preventDefault();
+        }
+        return;
+      }
+      // 层级（FC-LAYER-01）：Ctrl+] 上移一层，Ctrl+[ 下移一层；加 Shift 置顶/置底
+      if (meta && (e.key === "]" || e.key === "}")) {
+        if (selectedNodeIds.length > 0) {
+          handleReorder(e.shiftKey ? "front" : "forward");
+          e.preventDefault();
+        }
+        return;
+      }
+      if (meta && (e.key === "[" || e.key === "{")) {
+        if (selectedNodeIds.length > 0) {
+          handleReorder(e.shiftKey ? "back" : "backward");
+          e.preventDefault();
+        }
+        return;
+      }
+      // Tab 循环选择（FC-LAYER-01）：在重叠对象中按文档顺序循环选中
+      // 仅当焦点在画布（.react-flow）或 body 上时拦截，避免劫持工具栏/面板的 Tab 导航
+      if (!meta && e.key === "Tab") {
+        const nodes = history.present.document.nodes;
+        if (nodes.length === 0) return;
+        const inCanvas =
+          !target || target === document.body || !!target.closest?.(".react-flow");
+        if (!inCanvas) return;
+        e.preventDefault();
+        const dir = e.shiftKey ? -1 : 1;
+        const curIdx = nodes.findIndex((n) => n.id === selectedNodeIds[0]);
+        const nextIdx =
+          curIdx < 0
+            ? dir > 0
+              ? 0
+              : nodes.length - 1
+            : (curIdx + dir + nodes.length) % nodes.length;
+        setSelectedNodeIds([nodes[nextIdx].id]);
+        setSelectedEdgeIds([]);
+        return;
+      }
+      // 方向键微移（FC-ARRANGE-01）：吸附开启时步长跟随网格大小，Shift 大步；
+      // 吸附关闭时 1px 精调、Shift 10px。连续微移合并为一个撤销单元。
+      if (
+        !meta &&
+        (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "ArrowUp" || e.key === "ArrowDown")
+      ) {
+        if (selectedNodeIds.length === 0) return;
+        const gridSize = history.present.document.canvas.grid.size;
+        const baseStep = snapToGrid ? gridSize : 1;
+        const step = e.shiftKey ? (snapToGrid ? gridSize * 5 : 10) : baseStep;
+        const dx = e.key === "ArrowLeft" ? -step : e.key === "ArrowRight" ? step : 0;
+        const dy = e.key === "ArrowUp" ? -step : e.key === "ArrowDown" ? step : 0;
+        const nextNodes = nudgeNodes(history.present.document.nodes, selectedNodeIds, dx, dy);
+        if (nextNodes) {
+          e.preventDefault();
+          const doc = cloneFlowchartDocument(history.present.document);
+          doc.nodes = nextNodes;
+          commitChange(doc, "layout", `nudge:${selectedNodeIds.join(",")}`);
+        }
+        return;
+      }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [readOnly, handleUndo, handleRedo, getSelectedSubgraph, handleDeleteSelected, pasteSubgraph]);
+  }, [readOnly, handleUndo, handleRedo, getSelectedSubgraph, requestDeleteSelected, pasteSubgraph, selectedNodeIds, snapToGrid, history.present.document, commitChange, canGroup, canUngroup, handleGroup, handleUngroup, handleReorder]);
 
   // 14. 错误视图
   if (!parsed.ok) {
@@ -1537,6 +2431,22 @@ export function FlowchartDocumentEditor({
 
         <div className="ml-auto flex items-center gap-2">
           {toolbarExtra}
+          {/* 属性面板开关（FC-UI-01） */}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className={cn("h-7 w-7", inspectorOpen && "bg-accent")}
+                aria-label="属性面板"
+                aria-pressed={inspectorOpen}
+                onClick={() => setInspectorOpen((v) => !v)}
+              >
+                <PanelRight className="h-3.5 w-3.5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">属性面板</TooltipContent>
+          </Tooltip>
           {/* 导出菜单（设计文档 §7.12, §7.13） */}
           <DropdownMenu>
             <Tooltip>
@@ -1611,8 +2521,9 @@ export function FlowchartDocumentEditor({
         </div>
       )}
 
-      {/* 主体：画布（浮动工具栏覆盖在画布上方） */}
-      <div className="relative min-h-0 flex-1">
+      {/* 主体：画布（浮动工具栏覆盖在画布上方）+ 右侧属性面板（FC-UI-01） */}
+      <div className="flex min-h-0 flex-1">
+        <div className="relative min-h-0 min-w-0 flex-1">
         <FlowchartCanvas
           ref={canvasRef}
           noteId={note.id}
@@ -1620,6 +2531,8 @@ export function FlowchartDocumentEditor({
           edges={history.present.document.edges}
           direction={history.present.document.direction}
           readOnly={readOnly}
+          themeDefaults={themeDefaults}
+          canvasSettings={history.present.document.canvas}
           initialViewport={
             history.present.document.viewport &&
             (history.present.document.viewport.x !== 0 ||
@@ -1634,6 +2547,8 @@ export function FlowchartDocumentEditor({
           onInternalEdgesChange={handleEdgesChange}
           onConnect={handleConnect}
           onReconnect={handleEdgeReconnect}
+          onEdgeControlPointsChange={handleEdgeControlPointsChange}
+          onEdgeControlPointsCommit={handleEdgeControlPointsCommit}
           onEdgeLabelEdit={handleEdgeLabelEdit}
           onViewportChange={handleViewportChange}
           onSelectionChange={handleSelectionChange}
@@ -1645,19 +2560,38 @@ export function FlowchartDocumentEditor({
           onFreehandComplete={handleFreehandComplete}
           onEraseFreehand={handleEraseFreehand}
           showGrid={showGrid}
-          onShowGridChange={setShowGrid}
+          onShowGridChange={handleShowGridChange}
           snapToGrid={snapToGrid}
-          onSnapToGridChange={setSnapToGrid}
+          onSnapToGridChange={handleSnapToGridChange}
           onAutoLayout={handleAutoLayout}
         />
         {/* 浮动工具栏：覆盖在画布左侧（参考 NoteGen canvas-tools-sidebar） */}
         <FlowchartShapePanel
           onAddShape={handleAddNode}
-          onDropShape={handleDropShape}
           onAddImage={handleAddImage}
           readOnly={readOnly}
           activeTool={activeTool}
           onToolChange={setActiveTool}
+          theme={history.present.document.theme}
+          manualStyleNodeCount={manualStyleNodeCount}
+          onApplyTheme={handleApplyTheme}
+        />
+        {/* 操作提示（FC-SWIM-01 等）：画布底部居中浮动，3s 自动消失 */}
+        {actionNotice && (
+          <div
+            role="status"
+            className="pointer-events-none absolute bottom-4 left-1/2 z-40 -translate-x-1/2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-700 shadow-sm dark:text-amber-400"
+          >
+            {actionNotice}
+          </div>
+        )}
+        {/* 安全删除确认（FC-SWIM-04）：非空泳池/泳道删除前选择内容处理方式 */}
+        <FlowchartSafeDeleteDialog
+          open={safeDeleteTargets !== null}
+          pools={safeDeleteTargets?.pools ?? []}
+          lanes={safeDeleteTargets?.lanes ?? []}
+          onConfirm={handleConfirmSafeDelete}
+          onCancel={() => setSafeDeleteTargets(null)}
         />
           {/* 右键菜单：根据上下文（节点/边/画布）渲染不同选项 */}
           {menuCtx && (
@@ -1665,6 +2599,8 @@ export function FlowchartDocumentEditor({
               ctx={menuCtx}
               hasClipboard={clipboardRef.current !== null}
               canPaste={!readOnly}
+              canGroup={canGroup}
+              canUngroup={canUngroup}
               onClose={() => setMenuCtx(null)}
               onCopy={handleMenuCopy}
               onCut={handleMenuCut}
@@ -1674,9 +2610,36 @@ export function FlowchartDocumentEditor({
               onReverseEdge={handleReverseEdge}
               onAddNodeAt={handleMenuAddNodeAt}
               onSelectAll={handleSelectAll}
+              onGroup={handleMenuGroup}
+              onUngroup={handleMenuUngroup}
+              onReorder={handleMenuReorder}
             />
           )}
         </div>
+        {/* 右侧属性面板（FC-UI-02）：与工具栏修改同一中心文档 */}
+        {inspectorOpen && (
+          <FlowchartInspector
+            document={history.present.document}
+            selectedNodeIds={selectedNodeIds}
+            selectedEdgeIds={selectedEdgeIds}
+            readOnly={readOnly}
+            onClose={() => setInspectorOpen(false)}
+            onCanvasSettingsChange={handleCanvasSettingsChange}
+            onNodeGeometryChange={handleNodeGeometryChange}
+            onNodeStyleChange={applyNodeStyle}
+            onEdgeLabelChange={handleInspectorEdgeLabelChange}
+            onEdgeStyleChange={applyEdgeStyle}
+            onAlign={applyAlignment}
+            onDistribute={applyDistribution}
+            onMatchSize={handleMatchSize}
+            onGroup={handleGroup}
+            onUngroup={handleUngroup}
+            onReorder={handleReorder}
+            canGroup={canGroup}
+            canUngroup={canUngroup}
+          />
+        )}
+      </div>
 
       {/* 底部 footer：网格 / 吸附 / 自动布局 / 缩放 / 适应视图
           参考 NoteGen canvas-footer.tsx，替代原 ReactFlow <Controls> 浮动按钮 */}
@@ -1685,9 +2648,9 @@ export function FlowchartDocumentEditor({
         onZoomChange={handleZoomChange}
         onFitView={handleFitView}
         showGrid={showGrid}
-        onShowGridChange={setShowGrid}
+        onShowGridChange={handleShowGridChange}
         snapToGrid={snapToGrid}
-        onSnapToGridChange={setSnapToGrid}
+        onSnapToGridChange={handleSnapToGridChange}
         onAutoLayout={handleAutoLayout}
         readOnly={readOnly}
       />
@@ -1698,8 +2661,13 @@ export function FlowchartDocumentEditor({
 
 function emptyDoc(): FlowchartDocument {
   return {
-    version: 1,
+    version: FLOWCHART_DOCUMENT_VERSION,
     direction: "TB",
+    canvas: {
+      ...DEFAULT_FLOWCHART_CANVAS,
+      grid: { ...DEFAULT_FLOWCHART_CANVAS.grid },
+    },
+    theme: { ...DEFAULT_FLOWCHART_THEME },
     nodes: [],
     edges: [],
     viewport: { x: 0, y: 0, zoom: 1 },
@@ -2122,7 +3090,7 @@ function ColorPicker({
     if (mode === "fill") {
       return (
         <div
-          className="h-4 w-4 rounded-[2px] border border-black/10"
+          className="h-4 w-4 rounded-md border border-black/10"
           style={{
             backgroundColor: isTransparent ? undefined : value,
             backgroundImage: isTransparent
@@ -2150,7 +3118,7 @@ function ColorPicker({
     // stroke 模式：空心方框，描边颜色 = value
     return (
       <div
-        className="h-4 w-4 rounded-[2px]"
+        className="h-4 w-4 rounded-md"
         style={{
           backgroundColor: "transparent",
           border: `2px solid ${isTransparent ? dimColor : value}`,
@@ -2271,6 +3239,8 @@ interface FlowchartContextMenuProps {
   ctx: FlowchartContextMenuContext;
   hasClipboard: boolean;
   canPaste: boolean;
+  canGroup: boolean;
+  canUngroup: boolean;
   onClose: () => void;
   onCopy: () => void;
   onCut: () => void;
@@ -2280,12 +3250,24 @@ interface FlowchartContextMenuProps {
   onReverseEdge: (edgeId: string) => void;
   onAddNodeAt: (kind: FlowchartNodeKind) => void;
   onSelectAll: () => void;
+  onGroup: () => void;
+  onUngroup: () => void;
+  onReorder: (action: FlowchartLayerAction) => void;
 }
+
+const LAYER_MENU_OPTIONS: Array<{ action: FlowchartLayerAction; label: string; shortcut: string }> = [
+  { action: "front", label: "置顶", shortcut: "Ctrl+Shift+]" },
+  { action: "forward", label: "上移一层", shortcut: "Ctrl+]" },
+  { action: "backward", label: "下移一层", shortcut: "Ctrl+[" },
+  { action: "back", label: "置底", shortcut: "Ctrl+Shift+[" },
+];
 
 function FlowchartContextMenu({
   ctx,
   hasClipboard,
   canPaste,
+  canGroup,
+  canUngroup,
   onClose,
   onCopy,
   onCut,
@@ -2295,8 +3277,11 @@ function FlowchartContextMenu({
   onReverseEdge,
   onAddNodeAt,
   onSelectAll,
+  onGroup,
+  onUngroup,
+  onReorder,
 }: FlowchartContextMenuProps) {
-  const [subOpen, setSubOpen] = useState<"convert" | "add" | null>(null);
+  const [subOpen, setSubOpen] = useState<"convert" | "add" | "layer" | null>(null);
   // 点击遮罩关闭菜单
   useEffect(() => {
     const onDocClick = () => onClose();
@@ -2331,6 +3316,42 @@ function FlowchartContextMenu({
         <>
           <MenuIconItem icon={Copy} label="复制" shortcut="Ctrl+C" onClick={onCopy} />
           <MenuIconItem icon={Scissors} label="剪切" shortcut="Ctrl+X" onClick={onCut} />
+          <MenuSeparator />
+          <MenuIconItem
+            icon={Group}
+            label="组合"
+            shortcut="Ctrl+G"
+            onClick={onGroup}
+            disabled={!canGroup}
+          />
+          <MenuIconItem
+            icon={Ungroup}
+            label="取消组合"
+            shortcut="Ctrl+Shift+G"
+            onClick={onUngroup}
+            disabled={!canUngroup}
+          />
+          <MenuIconItem
+            icon={Layers}
+            label="层级"
+            expanded={subOpen === "layer"}
+            onToggle={() => setSubOpen(subOpen === "layer" ? null : "layer")}
+          />
+          {subOpen === "layer" && (
+            <div className="rounded-sm">
+              {LAYER_MENU_OPTIONS.map((opt) => (
+                <button
+                  key={opt.action}
+                  type="button"
+                  onClick={() => onReorder(opt.action)}
+                  className="flex w-full cursor-pointer items-center rounded-sm px-3 py-1 text-left text-[12px] outline-none hover:bg-accent"
+                >
+                  <span className="flex-1">{opt.label}</span>
+                  <span className="text-[10px] text-muted-foreground">{opt.shortcut}</span>
+                </button>
+              ))}
+            </div>
+          )}
           <MenuSeparator />
           <MenuIconItem
             icon={Pencil}

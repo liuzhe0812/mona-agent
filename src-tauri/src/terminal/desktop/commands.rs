@@ -95,6 +95,7 @@ pub async fn desktop_connect(
         config_id: config.id.clone(),
         session_type: SessionType::Desktop,
         status: SessionStatus::Connected,
+        target_label: format!("{}@{}:{}", config.username, config.host, config.port),
         created_at: chrono::Utc::now(),
     };
 

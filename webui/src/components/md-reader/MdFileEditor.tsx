@@ -34,6 +34,8 @@ export function MdFileEditor({ tab, onContentChange, onModeChange }: MdFileEdito
       onContentChange={(next) => onContentChange(next.contentMarkdown)}
       placeholder="Markdown 文档内容..."
       showStats
+      enableSelectionAi
+      getNoteTitle={() => tab.fileName}
       statsExtra={
         tab.dirty ? (
           <span className="text-[#eba45d]">未保存</span>

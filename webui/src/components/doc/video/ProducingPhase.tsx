@@ -58,6 +58,7 @@ import {
   regenerateVideoScene,
   rewriteVideoScene,
   type VideoExportStatus,
+  type VideoProjectPhase,
   type VideoRuntimeStatus,
   type VideoSceneWithHtml,
 } from "@/lib/api";
@@ -68,6 +69,8 @@ import { VideoRuntimeDialog, type RuntimeDepKey } from "./VideoRuntimeDialog";
 
 interface ProducingPhaseProps {
   projectName: string;
+  /** 项目阶段变化时通知父组件（驱动外层步骤条与历史列表刷新）。 */
+  onPhaseChange?: (phase: VideoProjectPhase) => void;
 }
 
 type ExportQuality = "draft" | "standard" | "high";
@@ -164,7 +167,7 @@ function ScenePreviewFrame({
   );
 }
 
-export function ProducingPhase({ projectName }: ProducingPhaseProps) {
+export function ProducingPhase({ projectName, onPhaseChange }: ProducingPhaseProps) {
   const { token } = useClient();
   const workspacePath = useWorkspaceStore((s) => s.workspacePath);
   const [scenes, setScenes] = useState<VideoSceneWithHtml[]>([]);
@@ -221,10 +224,11 @@ export function ProducingPhase({ projectName }: ProducingPhaseProps) {
       const p = await fetchVideoProject(token, projectName);
       setRatio(parseResolution(p.resolution));
       setOutputStale(Boolean(p.outputStale));
+      if (p.phase) onPhaseChange?.(p.phase);
     } catch {
       // keep defaults — project detail is best-effort here
     }
-  }, [token, projectName]);
+  }, [token, projectName, onPhaseChange]);
 
   useEffect(() => {
     void refreshProjectMeta();
@@ -355,6 +359,7 @@ export function ProducingPhase({ projectName }: ProducingPhaseProps) {
       }
       return;
     }
+    onPhaseChange?.("rendering");
     let cancelled = false;
     const poll = async () => {
       if (cancelled) return;
@@ -389,7 +394,7 @@ export function ProducingPhase({ projectName }: ProducingPhaseProps) {
         exportPollRef.current = null;
       }
     };
-  }, [exportStatus.stage, token, projectName, refreshProjectMeta]);
+  }, [exportStatus.stage, token, projectName, refreshProjectMeta, onPhaseChange]);
 
   const updateSceneStatus = useCallback((index: number, status: string) => {
     setScenes((prev) =>
@@ -811,15 +816,15 @@ export function ProducingPhase({ projectName }: ProducingPhaseProps) {
       <ResizablePanelGroup direction="horizontal" className="min-h-0 flex-1">
         {/* 左:场景状态列表 */}
         <ResizablePanel
-          defaultSize={20}
-          minSize="160px"
+          defaultSize={22}
+          minSize={18}
           maxSize={32}
           collapsible
           className="flex flex-col"
         >
           <div className="flex h-full min-h-0 flex-col border-r border-border/70">
-            <div className="flex shrink-0 items-center justify-between border-b border-border/70 px-3 py-2">
-              <span className="text-[11px] font-medium text-muted-foreground">
+            <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border/70 px-3 py-2">
+              <span className="whitespace-nowrap text-[11px] font-medium text-muted-foreground">
                 场景制作 · {confirmedCount}/{scenes.length} 已确认
               </span>
               {scenes.some(
@@ -896,7 +901,7 @@ export function ProducingPhase({ projectName }: ProducingPhaseProps) {
         <ResizableHandle withHandle />
 
         {/* 中:预览区 */}
-        <ResizablePanel defaultSize={54} minSize="320px" className="flex flex-col">
+        <ResizablePanel defaultSize={50} minSize={30} className="flex flex-col">
           <div className="flex h-full min-h-0 flex-col">
             <div className="shrink-0 border-b border-border/70 px-4 py-2">
               <div className="flex items-center justify-between">
@@ -1016,10 +1021,9 @@ export function ProducingPhase({ projectName }: ProducingPhaseProps) {
 
         {/* 右:操作面板 */}
         <ResizablePanel
-          defaultSize={26}
-          minSize="240px"
+          defaultSize={28}
+          minSize={22}
           maxSize={38}
-          collapsible
           className="flex flex-col"
         >
           <div className="flex h-full min-h-0 flex-col border-l border-border/70 bg-background">

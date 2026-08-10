@@ -3,7 +3,8 @@
  *
  * 规范（见 docs/design/2026-07-29-ai-flowchart-notes-feature-design.md §9.6, §9.7, §8.3）：
  * 1. AI 只输出一种 ```mona-flowchart-patch fenced block，包含 baseHash 和 ops 数组；
- * 2. ops 类型：replaceGraph / addNode / updateNode / removeSubgraph / addEdge / updateEdge / removeEdge；
+ * 2. ops 类型：replaceGraph / addNode / updateNode / removeSubgraph / addEdge / updateEdge / removeEdge
+ *    / addPool / addLane / moveNodeToLane（FC-AI-02 泳道操作）；
  * 3. replaceGraph 必须是唯一 op；
  * 4. removeSubgraph 必须显式列出待删节点和这些节点的全部关联边，不允许漏列、夹带或隐式级联；
  * 5. 不对 ops 自动排序，按 AI 声明顺序校验和执行；
@@ -24,14 +25,22 @@ import {
   FLOWCHART_PATCH_FENCE_LANG,
   generateFlowchartEdgeId,
   generateFlowchartNodeId,
+  isFlowchartContainerKind,
   validateFlowchartDocument,
   type FlowchartDocument,
+  type FlowchartDirection,
   type FlowchartEdge,
   type FlowchartNode,
   type FlowchartNodeKind,
   type FlowchartSemanticGraph,
   type FlowchartSemanticNode,
 } from "./flowchart-document";
+import {
+  addLaneToPool,
+  createPoolNodes,
+  flowchartNodeAbsolutePosition,
+  reparentNodes,
+} from "./flowchart-operations";
 
 // ---------------------------------------------------------------------------
 // Patch 类型定义
@@ -70,6 +79,29 @@ export type FlowchartPatchOp =
       name: "removeEdge";
       id: string;
       expected: { source: string; target: string; label?: string };
+    }
+  | {
+      /** 创建泳池：恰好 2 条泳道，坐标/尺寸由本地确定性生成（FC-AI-02）。 */
+      name: "addPool";
+      pool: {
+        id: string;
+        label: string;
+        orientation?: "horizontal" | "vertical";
+        lanes: [{ id: string; label: string }, { id: string; label: string }];
+      };
+    }
+  | {
+      /** 在既有泳池末尾追加一条泳道，泳池自动扩容。 */
+      name: "addLane";
+      poolId: string;
+      lane: { id: string; label?: string };
+    }
+  | {
+      /** 把普通节点移入泳道（laneId=null 移回根级）。 */
+      name: "moveNodeToLane";
+      id: string;
+      expectedLabel: string;
+      laneId: string | null;
     };
 
 // ---------------------------------------------------------------------------
@@ -159,7 +191,7 @@ function validateOpShape(raw: unknown, index: number): string | null {
       if (typeof op.id !== "string") return `${ctx}.id 不是字符串`;
       if (typeof op.expectedLabel !== "string") return `${ctx}.expectedLabel 不是字符串`;
       if (typeof op.patch !== "object" || op.patch === null) return `${ctx}.patch 不是对象`;
-      return null;
+      return validateNodeKindPatch(op.patch as Record<string, unknown>, ctx);
     case "removeSubgraph":
       if (!Array.isArray(op.nodes)) return `${ctx}.nodes 不是数组`;
       if (!Array.isArray(op.edges)) return `${ctx}.edges 不是数组`;
@@ -174,6 +206,40 @@ function validateOpShape(raw: unknown, index: number): string | null {
         return `${ctx}.patch 不是对象`;
       }
       return null;
+    case "addPool": {
+      if (typeof op.pool !== "object" || op.pool === null) return `${ctx}.pool 不是对象`;
+      const p = op.pool as Record<string, unknown>;
+      if (typeof p.id !== "string") return `${ctx}.pool.id 不是字符串`;
+      if (typeof p.label !== "string") return `${ctx}.pool.label 不是字符串`;
+      if (p.orientation !== undefined && p.orientation !== "horizontal" && p.orientation !== "vertical") {
+        return `${ctx}.pool.orientation 不合法`;
+      }
+      if (!Array.isArray(p.lanes) || p.lanes.length !== 2) {
+        return `${ctx}.pool.lanes 必须恰好 2 条泳道`;
+      }
+      for (let i = 0; i < p.lanes.length; i++) {
+        const l = p.lanes[i] as Record<string, unknown> | null;
+        if (typeof l !== "object" || l === null) return `${ctx}.pool.lanes[${i}] 不是对象`;
+        if (typeof l.id !== "string") return `${ctx}.pool.lanes[${i}].id 不是字符串`;
+        if (typeof l.label !== "string") return `${ctx}.pool.lanes[${i}].label 不是字符串`;
+      }
+      return null;
+    }
+    case "addLane": {
+      if (typeof op.poolId !== "string") return `${ctx}.poolId 不是字符串`;
+      if (typeof op.lane !== "object" || op.lane === null) return `${ctx}.lane 不是对象`;
+      const l = op.lane as Record<string, unknown>;
+      if (typeof l.id !== "string") return `${ctx}.lane.id 不是字符串`;
+      if (l.label !== undefined && typeof l.label !== "string") return `${ctx}.lane.label 不是字符串`;
+      return null;
+    }
+    case "moveNodeToLane":
+      if (typeof op.id !== "string") return `${ctx}.id 不是字符串`;
+      if (typeof op.expectedLabel !== "string") return `${ctx}.expectedLabel 不是字符串`;
+      if (op.laneId !== null && typeof op.laneId !== "string") {
+        return `${ctx}.laneId 必须是泳道 id 或 null`;
+      }
+      return null;
     default:
       return `${ctx} 未知 op name：${String(op.name)}`;
   }
@@ -185,6 +251,19 @@ function validateSemanticGraph(op: Record<string, unknown>, ctx: string): string
   if (g.direction !== "TB" && g.direction !== "LR") return `${ctx}.graph.direction 不合法`;
   if (!Array.isArray(g.nodes)) return `${ctx}.graph.nodes 不是数组`;
   if (!Array.isArray(g.edges)) return `${ctx}.graph.edges 不是数组`;
+  // replaceGraph 是单 op 全量替换，无法与同 patch 的泳道 op 组合；
+  // 泳道结构必须走 addPool/addLane/moveNodeToLane（FC-AI-02），避免泳道语义被静默丢弃
+  if (Array.isArray(g.lanes) && g.lanes.length > 0) {
+    return `${ctx}.graph 不支持 lanes：泳道请使用 addPool/addLane/moveNodeToLane op`;
+  }
+  for (let i = 0; i < g.nodes.length; i++) {
+    const nodeErr = validateSemanticNode({ node: g.nodes[i] }, "node", `${ctx}.graph.nodes[${i}]`);
+    if (nodeErr) return nodeErr;
+  }
+  for (let i = 0; i < g.edges.length; i++) {
+    const edgeErr = validateEdge({ edge: g.edges[i] }, "edge", `${ctx}.graph.edges[${i}]`);
+    if (edgeErr) return edgeErr;
+  }
   return null;
 }
 
@@ -195,7 +274,27 @@ function validateSemanticNode(op: Record<string, unknown>, key: string, ctx: str
   if (!FLOWCHART_NODE_KINDS.includes(n.kind as FlowchartNodeKind)) {
     return `${ctx}.${key}.kind 不合法`;
   }
+  // 容器结构（泳池/泳道/组合）AI 协议未稳定，禁止通过 patch 创建（FC-AI-02 延后）
+  if (isFlowchartContainerKind(n.kind as FlowchartNodeKind)) {
+    return `${ctx}.${key}.kind 不允许：AI 不能创建容器（${String(n.kind)}）`;
+  }
   if (typeof n.label !== "string") return `${ctx}.${key}.label 不是字符串`;
+  // 泳道归属只能通过 moveNodeToLane 变更（FC-AI-02），addNode/replaceGraph 不接受 laneId
+  if (n.laneId !== undefined) {
+    return `${ctx}.${key}.laneId 不允许：请使用 moveNodeToLane op 调整泳道归属`;
+  }
+  return null;
+}
+
+/** 校验 updateNode 的 patch.kind：只允许合法非容器 kind。 */
+function validateNodeKindPatch(patch: Record<string, unknown>, ctx: string): string | null {
+  if (patch.kind === undefined) return null;
+  if (typeof patch.kind !== "string" || !FLOWCHART_NODE_KINDS.includes(patch.kind as FlowchartNodeKind)) {
+    return `${ctx}.patch.kind 不合法`;
+  }
+  if (isFlowchartContainerKind(patch.kind as FlowchartNodeKind)) {
+    return `${ctx}.patch.kind 不允许：AI 不能把节点改为容器（${patch.kind}）`;
+  }
   return null;
 }
 
@@ -224,6 +323,12 @@ export interface FlowchartPatchSummary {
   addedEdges: number;
   updatedEdges: number;
   removedEdges: number;
+  /** 新增泳池数（FC-AI-02）；泳池自带的 2 条泳道不重复计入 addedLanes。 */
+  addedPools: number;
+  /** 通过 addLane 追加的泳道数。 */
+  addedLanes: number;
+  /** 泳道归属变更的节点数（含移出泳道）。 */
+  movedToLane: number;
   replacedGraph: boolean;
 }
 
@@ -259,6 +364,9 @@ export function applyFlowchartPatch(
     addedEdges: 0,
     updatedEdges: 0,
     removedEdges: 0,
+    addedPools: 0,
+    addedLanes: 0,
+    movedToLane: 0,
     replacedGraph: false,
   };
 
@@ -271,9 +379,10 @@ export function applyFlowchartPatch(
     accumulateSummary(summary, op);
   }
 
-  // 新节点统一放置
+  // 新节点统一放置：根级节点走局部放置，泳道归属节点走泳道内放置
   if (newNodeIds.size > 0) {
     placeNewNodes(work, newNodeIds);
+    placeNewNodesInLanes(work, newNodeIds);
   }
 
   // 完整文档校验
@@ -310,6 +419,15 @@ function accumulateSummary(summary: FlowchartPatchSummary, op: FlowchartPatchOp)
     case "removeEdge":
       summary.removedEdges++;
       break;
+    case "addPool":
+      summary.addedPools++;
+      break;
+    case "addLane":
+      summary.addedLanes++;
+      break;
+    case "moveNodeToLane":
+      summary.movedToLane++;
+      break;
   }
 }
 
@@ -337,6 +455,12 @@ function applyOp(
       return applyUpdateEdge(doc, op, ctx);
     case "removeEdge":
       return applyRemoveEdge(doc, op, ctx);
+    case "addPool":
+      return applyAddPool(doc, op, ctx);
+    case "addLane":
+      return applyAddLane(doc, op, ctx);
+    case "moveNodeToLane":
+      return applyMoveNodeToLane(doc, op, ctx);
   }
 }
 
@@ -579,6 +703,112 @@ function applyRemoveEdge(
 }
 
 // ---------------------------------------------------------------------------
+// 泳道 ops（FC-AI-02）
+// ---------------------------------------------------------------------------
+
+/** 泳池放置间距：放在既有内容右侧。 */
+const POOL_PLACEMENT_GAP = 80;
+
+/**
+ * 创建泳池：AI 只给 id/标题/方向/泳道标题，坐标和尺寸由本地确定性生成。
+ * 位置放在当前全部内容包围盒右侧（空文档放原点），重复应用结果一致。
+ */
+function applyAddPool(
+  doc: FlowchartDocument,
+  op: {
+    name: "addPool";
+    pool: {
+      id: string;
+      label: string;
+      orientation?: "horizontal" | "vertical";
+      lanes: [{ id: string; label: string }, { id: string; label: string }];
+    };
+  },
+  ctx: string,
+): OpResult {
+  const p = op.pool;
+  const ids = [p.id, p.lanes[0].id, p.lanes[1].id];
+  if (new Set(ids).size !== ids.length) {
+    return { ok: false, message: `${ctx}: 泳池/泳道 id 重复` };
+  }
+  for (const id of ids) {
+    if (doc.nodes.some((n) => n.id === id)) {
+      return { ok: false, message: `${ctx}: 节点 id 已存在 ${id}` };
+    }
+  }
+  let position = { x: 0, y: 0 };
+  if (doc.nodes.length > 0) {
+    let maxRight = -Infinity;
+    let minTop = Infinity;
+    for (const n of doc.nodes) {
+      const abs = flowchartNodeAbsolutePosition(doc.nodes, n.id) ?? n.position;
+      const size = n.size ?? { width: LAYOUT_DEFAULT_W, height: LAYOUT_DEFAULT_H };
+      maxRight = Math.max(maxRight, abs.x + size.width);
+      minTop = Math.min(minTop, abs.y);
+    }
+    position = { x: maxRight + POOL_PLACEMENT_GAP, y: minTop };
+  }
+  const created = createPoolNodes({
+    poolId: p.id,
+    laneIds: [p.lanes[0].id, p.lanes[1].id],
+    orientation: p.orientation ?? "horizontal",
+    position,
+    poolTitle: p.label,
+    laneTitles: [p.lanes[0].label, p.lanes[1].label],
+  });
+  doc.nodes.push(...created);
+  return { ok: true };
+}
+
+/** 追加泳道：结构与泳池扩容由 addLaneToPool 确定性完成。 */
+function applyAddLane(
+  doc: FlowchartDocument,
+  op: { name: "addLane"; poolId: string; lane: { id: string; label?: string } },
+  ctx: string,
+): OpResult {
+  const pool = doc.nodes.find((n) => n.id === op.poolId);
+  if (!pool || pool.kind !== "swimlane-pool") {
+    return { ok: false, message: `${ctx}: 泳池不存在 ${op.poolId}` };
+  }
+  const next = addLaneToPool(doc.nodes, op.poolId, op.lane.id, op.lane.label);
+  if (!next) {
+    return { ok: false, message: `${ctx}: 添加泳道失败（泳道 id 重复 ${op.lane.id}）` };
+  }
+  doc.nodes = next;
+  return { ok: true };
+}
+
+/**
+ * 移动节点泳道归属。
+ * - 现有节点：保持屏幕位置（坐标换算为泳道相对坐标），与手动拖入一致；
+ * - 同 patch 新增节点：坐标是占位值，由 placeNewNodesInLanes 在放置阶段统一计算；
+ * - laneId=null 移回根级；归属未变化时幂等成功。
+ */
+function applyMoveNodeToLane(
+  doc: FlowchartDocument,
+  op: { name: "moveNodeToLane"; id: string; expectedLabel: string; laneId: string | null },
+  ctx: string,
+): OpResult {
+  const node = doc.nodes.find((n) => n.id === op.id);
+  if (!node) return { ok: false, message: `${ctx}: 节点不存在 ${op.id}` };
+  if (node.label !== op.expectedLabel) {
+    return { ok: false, message: `${ctx}: 节点 ${op.id} expectedLabel 不匹配（期望 "${op.expectedLabel}"，实际 "${node.label}"）` };
+  }
+  if (isFlowchartContainerKind(node.kind)) {
+    return { ok: false, message: `${ctx}: 容器节点不能移动归属 ${op.id}` };
+  }
+  if (op.laneId !== null) {
+    const lane = doc.nodes.find((n) => n.id === op.laneId);
+    if (!lane || lane.kind !== "swimlane-lane") {
+      return { ok: false, message: `${ctx}: laneId 不是泳道 ${op.laneId}` };
+    }
+  }
+  const next = reparentNodes(doc.nodes, [op.id], op.laneId ?? undefined);
+  if (next) doc.nodes = next;
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
 // 局部放置：弱连通分组 + Dagre + 碰撞避让
 // ---------------------------------------------------------------------------
 
@@ -606,8 +836,20 @@ const GRID_UNIT = 40;
 function placeNewNodes(doc: FlowchartDocument, newNodeIds: Set<string>): void {
   if (newNodeIds.size === 0) return;
 
+  // 已归属泳道的新节点由 placeNewNodesInLanes 处理，不参与根级放置
+  const laneIds = new Set(
+    doc.nodes.filter((n) => n.kind === "swimlane-lane").map((n) => n.id),
+  );
+  const rootNewIds = new Set<string>();
+  for (const n of doc.nodes) {
+    if (newNodeIds.has(n.id) && !(n.parentId !== undefined && laneIds.has(n.parentId))) {
+      rootNewIds.add(n.id);
+    }
+  }
+  if (rootNewIds.size === 0) return;
+
   // 1. 拆分弱连通分组（包含共享锚点的合并）
-  const groups = partitionIntoGroups(doc, newNodeIds);
+  const groups = partitionIntoGroups(doc, rootNewIds);
 
   // 2. 收集现有节点包围盒（用于碰撞检测）
   const existingBoxes = doc.nodes
@@ -857,61 +1099,330 @@ function median(xs: number[]): number {
     : sorted[mid];
 }
 
+/**
+ * 泳道内新节点放置（FC-AI-02）。
+ *
+ * - 按泳道分组，组内用 Dagre 布局（仅新节点之间的边参与排序）；
+ * - 新节点块放在泳道既有内容之后（沿文档方向），坐标相对泳道左上角；
+ * - 放置后泳池按内容只增不减扩容（rebalancePoolExtents）；
+ * - 坐标为左上角语义（与 layoutFlowchartWithContainers 一致）；
+ * - 重复应用相同输入得到相同坐标。
+ */
+function placeNewNodesInLanes(doc: FlowchartDocument, newNodeIds: Set<string>): void {
+  const laneById = new Map(
+    doc.nodes.filter((n) => n.kind === "swimlane-lane").map((n) => [n.id, n]),
+  );
+  const byLane = new Map<string, FlowchartNode[]>();
+  for (const n of doc.nodes) {
+    if (!newNodeIds.has(n.id)) continue;
+    if (n.parentId === undefined || !laneById.has(n.parentId)) continue;
+    const arr = byLane.get(n.parentId) ?? [];
+    arr.push(n);
+    byLane.set(n.parentId, arr);
+  }
+  if (byLane.size === 0) return;
+
+  const isTB = doc.direction === "TB";
+  const affectedPools = new Set<string>();
+  for (const [laneId, newNodes] of byLane) {
+    const lane = laneById.get(laneId)!;
+    const horizontal =
+      lane.container?.type === "lane" ? lane.container.orientation === "horizontal" : true;
+    const existing = doc.nodes.filter(
+      (n) => n.parentId === laneId && !newNodeIds.has(n.id) && !isFlowchartContainerKind(n.kind),
+    );
+    const idSet = new Set(newNodes.map((n) => n.id));
+    const innerEdges = doc.edges.filter((e) => idSet.has(e.source) && idSet.has(e.target));
+    const pos = runDagreLayout(newNodes, innerEdges, doc.direction);
+    let minX = Infinity;
+    let minY = Infinity;
+    for (const c of newNodes) {
+      const p = pos.get(c.id);
+      if (!p) continue;
+      minX = Math.min(minX, p.x);
+      minY = Math.min(minY, p.y);
+    }
+    if (!Number.isFinite(minX) || !Number.isFinite(minY)) {
+      minX = 0;
+      minY = 0;
+    }
+    const originX = (horizontal ? LAYOUT_LANE_HEADER_SIZE : 0) + LAYOUT_LANE_PADDING;
+    const originY = (horizontal ? 0 : LAYOUT_LANE_HEADER_SIZE) + LAYOUT_LANE_PADDING;
+    // 既有内容在文档方向主轴上的末尾
+    let existEnd = 0;
+    for (const c of existing) {
+      const s = c.size ?? { width: LAYOUT_DEFAULT_W, height: LAYOUT_DEFAULT_H };
+      existEnd = Math.max(existEnd, isTB ? c.position.y + s.height : c.position.x + s.width);
+    }
+    const startMain =
+      existing.length > 0 ? existEnd + LAYOUT_RANK_SEP : isTB ? originY : originX;
+    for (const c of newNodes) {
+      const p = pos.get(c.id);
+      if (!p) continue;
+      c.position = isTB
+        ? { x: p.x - minX + originX, y: p.y - minY + startMain }
+        : { x: p.x - minX + startMain, y: p.y - minY + originY };
+    }
+    if (lane.parentId !== undefined) affectedPools.add(lane.parentId);
+  }
+
+  // 泳池按内容只增不减扩容
+  const nodeById = new Map(doc.nodes.map((n) => [n.id, n]));
+  for (const poolId of affectedPools) {
+    const pool = nodeById.get(poolId);
+    if (!pool || pool.container?.type !== "pool") continue;
+    const horizontal = pool.container.orientation === "horizontal";
+    const poolHeader = pool.container.headerSize;
+    const sorted = doc.nodes
+      .filter((n) => n.kind === "swimlane-lane" && n.parentId === poolId)
+      .sort((a, b) => {
+        const oa = a.container?.type === "lane" ? a.container.order : 0;
+        const ob = b.container?.type === "lane" ? b.container.order : 0;
+        return oa - ob;
+      });
+    const laneExtents = new Map<string, number>();
+    let maxNeedCross = 0;
+    for (const lane of sorted) {
+      const laneSize = lane.size ?? { width: LAYOUT_DEFAULT_W, height: LAYOUT_DEFAULT_H };
+      const currentExtent = horizontal ? laneSize.height : laneSize.width;
+      const children = doc.nodes.filter(
+        (n) => n.parentId === lane.id && !isFlowchartContainerKind(n.kind),
+      );
+      let maxX = 0;
+      let maxY = 0;
+      for (const c of children) {
+        const s = c.size ?? { width: LAYOUT_DEFAULT_W, height: LAYOUT_DEFAULT_H };
+        maxX = Math.max(maxX, c.position.x + s.width);
+        maxY = Math.max(maxY, c.position.y + s.height);
+      }
+      const needExtent =
+        children.length === 0
+          ? currentExtent
+          : Math.max(currentExtent, Math.ceil((horizontal ? maxY : maxX) + LAYOUT_LANE_PADDING));
+      laneExtents.set(lane.id, needExtent);
+      if (children.length > 0) {
+        maxNeedCross = Math.max(
+          maxNeedCross,
+          Math.ceil(poolHeader + (horizontal ? maxX : maxY) + LAYOUT_LANE_PADDING),
+        );
+      }
+    }
+    rebalancePoolExtents(pool, sorted, laneExtents, maxNeedCross);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // 全量布局
 // ---------------------------------------------------------------------------
 
-/**
- * 对整个文档运行 Dagre 布局，覆盖所有节点坐标。
- * 用于 replaceGraph 和"重新布局"按钮。
- *
- * 关键：dagre 返回的节点坐标是中心点，但 ReactFlow 的 position 是左上角，
- * 需要减去节点宽高的一半进行转换。使用节点实际 size（NodeResizer 写入），
- * 没有时回退到默认尺寸。
- */
-export function layoutEntireGraph(doc: FlowchartDocument): void {
-  if (doc.nodes.length === 0) return;
-  // 默认节点尺寸（与 NODE_WIDTH/NODE_HEIGHT 一致）
-  const DEFAULT_W = 140;
-  const DEFAULT_H = 48;
-  // 间距：同层节点间距、层间距、边间距均加大，避免节点/连线拥挤重叠
-  const NODE_SEP = 90;
-  const RANK_SEP = 110;
-  const EDGE_SEP = 30;
+const LAYOUT_DEFAULT_W = 140;
+const LAYOUT_DEFAULT_H = 48;
+// 间距：同层节点间距、层间距、边间距均加大，避免节点/连线拥挤重叠
+const LAYOUT_NODE_SEP = 90;
+const LAYOUT_RANK_SEP = 110;
+const LAYOUT_EDGE_SEP = 30;
 
+/**
+ * 对节点子集运行 Dagre 布局，返回左上角坐标（未归一化，含 dagre margin）。
+ * 关键：dagre 返回的节点坐标是中心点，需要减去节点宽高的一半转换为左上角。
+ * 使用节点实际 size（NodeResizer 写入），没有时回退到默认尺寸。
+ */
+function runDagreLayout(
+  nodes: readonly FlowchartNode[],
+  edges: readonly FlowchartEdge[],
+  direction: FlowchartDirection,
+): Map<string, { x: number; y: number }> {
+  const out = new Map<string, { x: number; y: number }>();
+  if (nodes.length === 0) return out;
   const g = new dagre.graphlib.Graph();
   g.setGraph({
-    rankdir: doc.direction === "TB" ? "TB" : "LR",
-    nodesep: NODE_SEP,
-    ranksep: RANK_SEP,
-    edgesep: EDGE_SEP,
+    rankdir: direction === "TB" ? "TB" : "LR",
+    nodesep: LAYOUT_NODE_SEP,
+    ranksep: LAYOUT_RANK_SEP,
+    edgesep: LAYOUT_EDGE_SEP,
     marginx: 24,
     marginy: 24,
   });
   g.setDefaultEdgeLabel(() => ({}));
-  // 使用实际尺寸，没有时回退默认值
-  for (const n of doc.nodes) {
-    const w = n.size?.width ?? DEFAULT_W;
-    const h = n.size?.height ?? DEFAULT_H;
-    g.setNode(n.id, { width: w, height: h });
+  for (const n of nodes) {
+    g.setNode(n.id, {
+      width: n.size?.width ?? LAYOUT_DEFAULT_W,
+      height: n.size?.height ?? LAYOUT_DEFAULT_H,
+    });
   }
-  for (const e of doc.edges) {
-    if (doc.nodes.some((n) => n.id === e.source) && doc.nodes.some((n) => n.id === e.target)) {
-      g.setEdge(e.source, e.target);
-    }
+  const ids = new Set(nodes.map((n) => n.id));
+  for (const e of edges) {
+    if (ids.has(e.source) && ids.has(e.target)) g.setEdge(e.source, e.target);
   }
   dagre.layout(g);
-  // dagre 返回中心点，转换为 ReactFlow 左上角坐标
-  for (const n of doc.nodes) {
+  for (const n of nodes) {
     const ln = g.node(n.id);
-    if (ln) {
-      const w = n.size?.width ?? DEFAULT_W;
-      const h = n.size?.height ?? DEFAULT_H;
-      n.position = { x: ln.x - w / 2, y: ln.y - h / 2 };
-    }
+    if (!ln) continue;
+    const w = n.size?.width ?? LAYOUT_DEFAULT_W;
+    const h = n.size?.height ?? LAYOUT_DEFAULT_H;
+    out.set(n.id, { x: ln.x - w / 2, y: ln.y - h / 2 });
+  }
+  return out;
+}
+
+/**
+ * 对整个文档运行 Dagre 布局，覆盖所有节点坐标。
+ * 用于 replaceGraph 和"重新布局"按钮（无容器场景）。
+ */
+export function layoutEntireGraph(doc: FlowchartDocument): void {
+  if (doc.nodes.length === 0) return;
+  const pos = runDagreLayout(doc.nodes, doc.edges, doc.direction);
+  for (const n of doc.nodes) {
+    const p = pos.get(n.id);
+    if (p) n.position = p;
   }
   // 根据源/目标相对位置为边分配连接点，减少连线重叠
-  assignEdgeHandles(doc, DEFAULT_W, DEFAULT_H);
+  assignEdgeHandles(doc, LAYOUT_DEFAULT_W, LAYOUT_DEFAULT_H);
+}
+
+/** 泳道内布局的泳道标题区尺寸（与 flowchart-operations 一致，避免循环依赖）。 */
+const LAYOUT_LANE_HEADER_SIZE = 32;
+/** 泳道内容区内边距 */
+const LAYOUT_LANE_PADDING = 16;
+
+/**
+ * 泳池尺寸与泳道位置重排（只增不减）：
+ * 泳道按 order 紧凑重排并写入沿向尺寸，泳池沿向取泳道总和、跨向取内容需要。
+ * layoutFlowchartWithContainers 与 placeNewNodesInLanes 共用。
+ */
+function rebalancePoolExtents(
+  pool: FlowchartNode,
+  sortedLanes: FlowchartNode[],
+  laneExtents: Map<string, number>,
+  maxNeedCross: number,
+): void {
+  if (pool.container?.type !== "pool") return;
+  const horizontal = pool.container.orientation === "horizontal";
+  const poolHeader = pool.container.headerSize;
+  const poolSize = pool.size ?? { width: LAYOUT_DEFAULT_W, height: LAYOUT_DEFAULT_H };
+  // 泳池跨向：只增不减；泳道跨向 = 泳池跨向 - 池标题区
+  const currentCross = horizontal ? poolSize.width : poolSize.height;
+  const newCross = Math.max(currentCross, maxNeedCross);
+  const laneCross = newCross - poolHeader;
+  let offset = 0;
+  for (const lane of sortedLanes) {
+    const extent = laneExtents.get(lane.id)!;
+    lane.position = horizontal ? { x: poolHeader, y: offset } : { x: offset, y: poolHeader };
+    lane.size = horizontal
+      ? { width: laneCross, height: extent }
+      : { width: extent, height: laneCross };
+    offset += extent;
+  }
+  // 泳池沿向 = max(当前, 泳道总和)，只增不减
+  const currentAlong = horizontal ? poolSize.height : poolSize.width;
+  const newAlong = Math.max(currentAlong, Math.ceil(offset));
+  pool.size = horizontal
+    ? { width: newCross, height: newAlong }
+    : { width: newAlong, height: newCross };
+}
+
+/**
+ * 容器感知的全量布局（FC-SWIM-05）：
+ * - pool/lane/group 本身位置不动，泳道顺序不变；
+ * - 根级普通节点用 Dagre 布局（仅根级之间的边参与排序）；
+ * - 每条泳道内按当前 direction 用 Dagre 布局（仅泳道内部边参与排序）；
+ * - 泳道尺寸按内容最小尺寸扩展，不自动缩小用户手调尺寸；
+ * - 泳池沿向尺寸取泳道总和（只增不减），跨向按内容需要扩展；
+ * - 跨容器边不参与任何子图排序，只在最后统一分配连接点。
+ */
+export function layoutFlowchartWithContainers(doc: FlowchartDocument): void {
+  if (doc.nodes.length === 0) return;
+  const hasContainer = doc.nodes.some((n) => isFlowchartContainerKind(n.kind));
+  if (!hasContainer) {
+    layoutEntireGraph(doc);
+    return;
+  }
+  const sizeOf = (n: FlowchartNode) =>
+    n.size ?? { width: LAYOUT_DEFAULT_W, height: LAYOUT_DEFAULT_H };
+  const nodeById = new Map(doc.nodes.map((n) => [n.id, n]));
+
+  // 1. 根级普通节点（group/pool 等容器与其子树不在此布局）
+  const rootNormals = doc.nodes.filter(
+    (n) => n.parentId === undefined && !isFlowchartContainerKind(n.kind),
+  );
+  const rootIds = new Set(rootNormals.map((n) => n.id));
+  const rootEdges = doc.edges.filter((e) => rootIds.has(e.source) && rootIds.has(e.target));
+  const rootPos = runDagreLayout(rootNormals, rootEdges, doc.direction);
+  for (const n of rootNormals) {
+    const p = rootPos.get(n.id);
+    if (p) n.position = p;
+  }
+
+  // 2. 每个泳池：逐泳道布局 + 泳道扩容 + 泳池扩容
+  const lanesByPool = new Map<string, FlowchartNode[]>();
+  for (const n of doc.nodes) {
+    if (n.kind !== "swimlane-lane" || n.parentId === undefined) continue;
+    const arr = lanesByPool.get(n.parentId) ?? [];
+    arr.push(n);
+    lanesByPool.set(n.parentId, arr);
+  }
+  for (const [poolId, poolLanes] of lanesByPool) {
+    const pool = nodeById.get(poolId);
+    if (!pool || pool.container?.type !== "pool") continue;
+    const orientation = pool.container.orientation;
+    const poolHeader = pool.container.headerSize;
+    const horizontal = orientation === "horizontal";
+    const sorted = [...poolLanes].sort((a, b) => {
+      const oa = a.container?.type === "lane" ? a.container.order : 0;
+      const ob = b.container?.type === "lane" ? b.container.order : 0;
+      return oa - ob;
+    });
+    const laneExtents = new Map<string, number>();
+    let maxNeedCross = 0;
+    for (const lane of sorted) {
+      const laneSize = sizeOf(lane);
+      const currentExtent = horizontal ? laneSize.height : laneSize.width;
+      const children = doc.nodes.filter(
+        (n) => n.parentId === lane.id && !isFlowchartContainerKind(n.kind),
+      );
+      if (children.length === 0) {
+        laneExtents.set(lane.id, currentExtent);
+        continue;
+      }
+      const childIds = new Set(children.map((c) => c.id));
+      const innerEdges = doc.edges.filter((e) => childIds.has(e.source) && childIds.has(e.target));
+      const pos = runDagreLayout(children, innerEdges, doc.direction);
+      // 归一化到内容区原点（避开 lane 标题区 + 内边距）
+      let minX = Infinity;
+      let minY = Infinity;
+      for (const c of children) {
+        const p = pos.get(c.id);
+        if (!p) continue;
+        minX = Math.min(minX, p.x);
+        minY = Math.min(minY, p.y);
+      }
+      const originX = (horizontal ? LAYOUT_LANE_HEADER_SIZE : 0) + LAYOUT_LANE_PADDING;
+      const originY = (horizontal ? 0 : LAYOUT_LANE_HEADER_SIZE) + LAYOUT_LANE_PADDING;
+      let maxX = 0;
+      let maxY = 0;
+      for (const c of children) {
+        const p = pos.get(c.id);
+        if (!p) continue;
+        c.position = { x: p.x - minX + originX, y: p.y - minY + originY };
+        const s = sizeOf(c);
+        maxX = Math.max(maxX, c.position.x + s.width);
+        maxY = Math.max(maxY, c.position.y + s.height);
+      }
+      // 泳道沿向需要容纳内容（含尾部内边距），只增不减
+      const needExtent = (horizontal ? maxY : maxX) + LAYOUT_LANE_PADDING;
+      laneExtents.set(lane.id, Math.max(currentExtent, Math.ceil(needExtent)));
+      // 泳池跨向需要 = 池标题区 + 内容跨向（含内边距）
+      maxNeedCross = Math.max(
+        maxNeedCross,
+        Math.ceil(poolHeader + (horizontal ? maxX : maxY) + LAYOUT_LANE_PADDING),
+      );
+    }
+    // 泳池跨向：只增不减；泳道按 order 紧凑重排，泳池沿向取泳道总和
+    rebalancePoolExtents(pool, sorted, laneExtents, maxNeedCross);
+  }
+
+  // 3. 统一分配连接点（跨容器边参与端口选择）
+  assignEdgeHandles(doc, LAYOUT_DEFAULT_W, LAYOUT_DEFAULT_H);
 }
 
 /**
@@ -927,10 +1438,15 @@ function assignEdgeHandles(
   const isTB = doc.direction === "TB";
   const nodeMap = new Map(doc.nodes.map((n) => [n.id, n]));
 
-  const nodeCenter = (n: FlowchartNode) => ({
-    x: n.position.x + (n.size?.width ?? defaultW) / 2,
-    y: n.position.y + (n.size?.height ?? defaultH) / 2,
-  });
+  // 使用绝对坐标：泳道/group 内节点的 position 是相对父容器的，
+  // 跨容器边需要用绝对中心点判断相对方位
+  const nodeCenter = (n: FlowchartNode) => {
+    const abs = flowchartNodeAbsolutePosition(doc.nodes, n.id) ?? n.position;
+    return {
+      x: abs.x + (n.size?.width ?? defaultW) / 2,
+      y: abs.y + (n.size?.height ?? defaultH) / 2,
+    };
+  };
 
   // 按源节点分组的出边
   const outEdges = new Map<string, FlowchartEdge[]>();
@@ -1085,6 +1601,9 @@ function assignEdgeHandles(
 export function summarizePatch(s: FlowchartPatchSummary): string {
   if (s.replacedGraph) return "替换为完整新流程图";
   const parts: string[] = [];
+  if (s.addedPools > 0) parts.push(`新增 ${s.addedPools} 个泳池`);
+  if (s.addedLanes > 0) parts.push(`新增 ${s.addedLanes} 条泳道`);
+  if (s.movedToLane > 0) parts.push(`移动 ${s.movedToLane} 个节点归属`);
   if (s.addedNodes > 0) parts.push(`新增 ${s.addedNodes} 个节点`);
   if (s.updatedNodes > 0) parts.push(`修改 ${s.updatedNodes} 个节点`);
   if (s.removedNodes > 0) parts.push(`删除 ${s.removedNodes} 个节点`);

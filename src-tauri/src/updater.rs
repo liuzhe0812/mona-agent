@@ -494,11 +494,21 @@ fn copy_dir_recursive(source: &Path, dest: &Path) -> Result<(), String> {
 // Tauri commands
 // ---------------------------------------------------------------------------
 
-const MANIFEST_URL: &str = "https://www.mona-ai.cn/updates/update.json";
+const MANIFEST_URL_PRIMARY: &str = "https://www.mona-ai.cn/updates/update.json";
+const MANIFEST_URL_FALLBACK: &str = "https://mona.lzfun.vip/updates/update.json";
+
+/// 依次尝试主备域名拉取更新清单。主域名 (www.mona-ai.cn) 可能被 SNI 阻断，
+/// 回退到已备案的 mona.lzfun.vip（同一 VPS）。
+pub async fn fetch_manifest_with_fallback() -> Result<UpdateManifest, String> {
+    match fetch_manifest(MANIFEST_URL_PRIMARY).await {
+        Ok(m) => Ok(m),
+        Err(_) => fetch_manifest(MANIFEST_URL_FALLBACK).await,
+    }
+}
 
 #[tauri::command]
 pub async fn check_for_updates() -> Result<UpdateCheckResult, String> {
-    let manifest = fetch_manifest(MANIFEST_URL).await?;
+    let manifest = fetch_manifest_with_fallback().await?;
     let current = get_app_version();
     let has_update = check_update_available(&current, &manifest.version);
     Ok(UpdateCheckResult {
@@ -515,7 +525,7 @@ pub async fn perform_update(
     state: tauri::State<'_, crate::GatewayState>,
     app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
-    let manifest = fetch_manifest(MANIFEST_URL).await?;
+    let manifest = fetch_manifest_with_fallback().await?;
 
     let staging_dir = dirs::cache_dir()
         .unwrap_or_else(|| PathBuf::from("."))

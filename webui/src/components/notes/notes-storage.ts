@@ -18,11 +18,6 @@ import {
   createBlankFlowchartDocument,
   serializeFlowchartMarkdown,
 } from "./flowchart/flowchart-document";
-import {
-  createBlankDiagramDocument,
-  type DiagramKind,
-} from "./diagram/diagram-document";
-import { serializeDiagramMarkdown } from "./diagram/diagram-serializer";
 
 export interface NotesStorageState {
   notebooks: Notebook[];
@@ -111,27 +106,6 @@ export function createBlankFlowchartNote(
     appliedAgentMessageIds: [],
     contextLevel: "full",
     type: "flowchart",
-  };
-}
-
-export function createBlankDiagramNote(
-  notebookId: string,
-  diagramKind: DiagramKind = "freeform",
-): OperationNote {
-  const doc = createBlankDiagramDocument(diagramKind);
-  const md = serializeDiagramMarkdown("未命名图表", doc);
-  return {
-    id: createId("note"),
-    notebookId,
-    title: "未命名图表",
-    preview: "图表",
-    createdAt: nowTimestamp(),
-    updatedAt: nowTimestamp(),
-    source: { kind: "manual", label: "手动记录" },
-    contentMarkdown: md,
-    appliedAgentMessageIds: [],
-    contextLevel: "full",
-    type: "diagram",
   };
 }
 

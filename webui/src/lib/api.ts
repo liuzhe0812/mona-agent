@@ -275,6 +275,32 @@ export async function fetchZenFreeModels(
   return request<{ models: string[] }>(`${effectiveBase}/api/zen/models`, token);
 }
 
+export interface ProviderModelsResult {
+  models: string[];
+  /** Friendly Chinese error message from the backend; empty on success. */
+  error?: string;
+}
+
+export async function fetchProviderModels(
+  token: string,
+  params: {
+    provider: string;
+    apiKey?: string;
+    apiBase?: string;
+  },
+  base?: string,
+): Promise<ProviderModelsResult> {
+  const effectiveBase = base ?? (await getApiBase());
+  const query = new URLSearchParams();
+  query.set("provider", params.provider);
+  if (params.apiKey !== undefined) query.set("api_key", params.apiKey);
+  if (params.apiBase !== undefined) query.set("api_base", params.apiBase);
+  return request<ProviderModelsResult>(
+    `${effectiveBase}/api/settings/provider/models?${query}`,
+    token,
+  );
+}
+
 export async function listSlashCommands(
   token: string,
   base?: string,

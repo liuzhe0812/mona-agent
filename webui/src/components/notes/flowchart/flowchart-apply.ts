@@ -159,6 +159,9 @@ function emptySummary(): FlowchartPatchSummary {
     addedEdges: 0,
     updatedEdges: 0,
     removedEdges: 0,
+    addedPools: 0,
+    addedLanes: 0,
+    movedToLane: 0,
     replacedGraph: false,
   };
 }
@@ -168,6 +171,9 @@ function formatPatchSummary(summary: FlowchartPatchSummary): string {
     return "已替换完整流程图";
   }
   const parts: string[] = [];
+  if (summary.addedPools > 0) parts.push(`新增 ${summary.addedPools} 个泳池`);
+  if (summary.addedLanes > 0) parts.push(`新增 ${summary.addedLanes} 条泳道`);
+  if (summary.movedToLane > 0) parts.push(`移动 ${summary.movedToLane} 个节点归属`);
   if (summary.addedNodes > 0) parts.push(`新增 ${summary.addedNodes} 个节点`);
   if (summary.updatedNodes > 0) parts.push(`修改 ${summary.updatedNodes} 个节点`);
   if (summary.removedNodes > 0) parts.push(`删除 ${summary.removedNodes} 个节点`);

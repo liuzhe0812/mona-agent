@@ -4,7 +4,7 @@ import type { JSONContent } from "@tiptap/core";
 import { MarkdownEditor, type EditorMode } from "@/components/common/MarkdownEditor";
 import { MindMapDocumentEditor, type MindMapDocumentEditorHandle } from "./mindmap/MindMapDocumentEditor";
 import { FlowchartDocumentEditor } from "./flowchart/FlowchartDocumentEditor";
-import { DiagramDocumentEditor } from "./diagram/DiagramDocumentEditor";
+import { DiagramMigrationView } from "./flowchart/DiagramMigrationView";
 
 import type { OperationNote } from "./notes-data";
 
@@ -57,6 +57,8 @@ interface NoteEditorProps {
   resolveEmbedContent?: (title: string) => string | null;
   /** Whether the embed target is a flowchart note. */
   isEmbedFlowchart?: (title: string) => boolean;
+  /** 旧版 diagram 迁移确认：创建新流程图笔记并更新旧笔记标题。 */
+  onMigrateDiagram?: (newNote: OperationNote, updatedOldNote: OperationNote) => void;
 }
 
 export interface NoteEditorHandle {
@@ -81,6 +83,7 @@ export const NoteEditor = forwardRef<NoteEditorHandle, NoteEditorProps>(function
   flowchartForceSync,
   resolveEmbedContent,
   isEmbedFlowchart,
+  onMigrateDiagram,
 }, ref) {
   const saveLabel =
     saveStatus === "saving"
@@ -153,12 +156,12 @@ export const NoteEditor = forwardRef<NoteEditorHandle, NoteEditorProps>(function
   }
 
   if (note.type === "diagram") {
+    // 旧版图表格式：不再提供编辑器，引导用户迁移为流程图
     return (
       <div className="flex h-full min-w-0 flex-1 flex-col">
-        <DiagramDocumentEditor
+        <DiagramMigrationView
           note={note}
-          onContentChange={handleContentChange}
-          toolbarExtra={toolbarExtra}
+          onMigrate={(newNote, updatedOldNote) => onMigrateDiagram?.(newNote, updatedOldNote)}
         />
       </div>
     );

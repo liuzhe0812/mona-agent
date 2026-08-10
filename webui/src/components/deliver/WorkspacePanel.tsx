@@ -438,6 +438,13 @@ export function WorkspacePanel({
               </ul>
             </div>
           )}
+          {tree.length > 0 && (
+            <div className="shrink-0 px-2 pt-1.5 pb-1">
+              <div className="px-1 text-[11px] font-medium text-muted-foreground">
+                工作区文件
+              </div>
+            </div>
+          )}
           <div className="flex-1 overflow-y-auto scrollbar-hover py-1">
             <ul className="flex flex-col text-[13px]">
               {tree.map((node) => (

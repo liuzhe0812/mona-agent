@@ -58,6 +58,7 @@ pub async fn ssh_connect(
             config_id: config.id.clone(),
             session_type,
             status: SessionStatus::Connected,
+            target_label: format!("{}@{}:{}", config.username, config.host, config.port),
             created_at: chrono::Utc::now(),
         };
 
@@ -85,6 +86,7 @@ pub async fn ssh_connect(
         config_id: config.id.clone(),
         session_type,
         status: SessionStatus::Connected,
+        target_label: format!("{}@{}:{}", config.username, config.host, config.port),
         created_at: chrono::Utc::now(),
     };
 
@@ -206,6 +208,7 @@ async fn ssh_connect_with_id_inner(
             config_id: config.id.clone(),
             session_type,
             status: SessionStatus::Connected,
+            target_label: format!("{}@{}:{}", config.username, config.host, config.port),
             created_at: chrono::Utc::now(),
         };
 
@@ -246,6 +249,7 @@ async fn ssh_connect_with_id_inner(
         config_id: config.id.clone(),
         session_type,
         status: SessionStatus::Connected,
+        target_label: format!("{}@{}:{}", config.username, config.host, config.port),
         created_at: chrono::Utc::now(),
     };
 
@@ -349,11 +353,18 @@ pub async fn ssh_open_sftp(
     let sftp_client = SftpClient::from_session(sftp_session, ssh_client);
 
     let new_session_id = uuid::Uuid::new_v4().to_string();
+    let target_label = state
+        .manager
+        .get(&session_id)
+        .await
+        .map(|s| s.target_label)
+        .unwrap_or_default();
     let session = Session {
         id: new_session_id.clone(),
         config_id: String::new(),
         session_type: SessionType::Sftp,
         status: SessionStatus::Connected,
+        target_label,
         created_at: chrono::Utc::now(),
     };
 
@@ -420,6 +431,7 @@ pub async fn ssh_reconnect(
                 config_id: config.id.clone(),
                 session_type,
                 status: SessionStatus::Connected,
+                target_label: format!("{}@{}:{}", config.username, config.host, config.port),
                 created_at: chrono::Utc::now(),
             },
             SessionHandle::Ssh(Arc::new(client)),
@@ -495,6 +507,7 @@ pub async fn shell_spawn(
         config_id: String::new(),
         session_type: SessionType::Local,
         status: SessionStatus::Connected,
+        target_label: "local".to_string(),
         created_at: chrono::Utc::now(),
     };
 
@@ -1260,7 +1273,7 @@ pub async fn terminal_request_exec(
     command: String,
     source: String,
 ) -> Result<String, String> {
-    let (pending_cmd, mut rx) = state
+    let (pending_cmd, rx) = state
         .approval
         .manager
         .submit(session_id, command, source)

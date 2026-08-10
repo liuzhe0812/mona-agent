@@ -18,8 +18,10 @@ from typing import Any
 import httpx
 from loguru import logger
 
-# Must stay in sync with ``src-tauri/src/license.rs::AUTH_SERVER_URL``.
-_AUTH_SERVER_URL = "https://www.mona-ai.cn"
+# Must stay in sync with ``src-tauri/src/license.rs::AUTH_SERVER_URL_PRIMARY``
+# and ``AUTH_SERVER_URL_FALLBACK``.
+_AUTH_SERVER_URL_PRIMARY = "https://www.mona-ai.cn"
+_AUTH_SERVER_URL_FALLBACK = "https://mona.lzfun.vip"
 _UPLOAD_ENDPOINT = "/upload/image"
 _DEFAULT_TIMEOUT_S = 60.0
 
@@ -122,14 +124,21 @@ async def _upload_data_url(data_url: str) -> str:
 
 
 async def _post_multipart(raw: bytes, mime: str, filename: str) -> str:
-    url = f"{_AUTH_SERVER_URL}{_UPLOAD_ENDPOINT}"
-    logger.info("Uploading image to {} ({} bytes, {})", url, len(raw), mime)
-    try:
-        async with httpx.AsyncClient(timeout=_DEFAULT_TIMEOUT_S) as client:
-            files = {"file": (filename, raw, mime)}
-            resp = await client.post(url, files=files)
-    except httpx.HTTPError as exc:
-        raise ImageUploadError(f"upload request failed: {exc}") from exc
+    files = {"file": (filename, raw, mime)}
+    resp: httpx.Response | None = None
+    last_exc: httpx.HTTPError | None = None
+    async with httpx.AsyncClient(timeout=_DEFAULT_TIMEOUT_S) as client:
+        for base in (_AUTH_SERVER_URL_PRIMARY, _AUTH_SERVER_URL_FALLBACK):
+            url = f"{base}{_UPLOAD_ENDPOINT}"
+            logger.info("Uploading image to {} ({} bytes, {})", url, len(raw), mime)
+            try:
+                resp = await client.post(url, files=files)
+                break
+            except httpx.HTTPError as exc:
+                last_exc = exc
+                continue
+    if resp is None:
+        raise ImageUploadError(f"upload request failed: {last_exc}") from last_exc
 
     if resp.status_code >= 400:
         raise ImageUploadError(

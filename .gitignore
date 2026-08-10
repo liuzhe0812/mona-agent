@@ -7,18 +7,28 @@
 .web
 .orion
 
-# 清理：屏蔽非核心目录（配置、文档、测试、官网、素材、硬件相关）
+# 官网与营销站点（不上传GitHub）
+official-site/
+
+# 临时调试/部署产物
+.codex_tmp/
+
+# 开发计划文档（不进远程仓库）
+*PLAN*.md
+*SOLUTION*.md
+AI_EDITABLE_DIAGRAM_CANVAS_PRODUCTION_PLAN.md
+DATABASE_AI_SIDEBAR_DEVELOPMENT_PLAN.md
+FLOWCHART_DEVELOPMENT_PLAN.md
+FLOWCHART_OPTIMIZATION_SOLUTION.md
+TERMINAL_AI_MAINTENANCE_DEVELOPMENT_PLAN.md
+
+# 清理：屏蔽非核心目录（配置、文档、测试、素材、硬件相关）
 mona-auth/
 site/
 scripts/
 design-assets/
 tests/
 docs/
-!docs/
-docs/*
-!docs/design/
-docs/design/*
-!docs/design/2026-08-04-notes-materials-implementation-assessment-and-plan.md
 hardware/
 %TEMP%/
 
@@ -38,7 +48,6 @@ docs/archive/system-module/
 # 清理：屏蔽所有隐藏目录（.开头，IDE/CI/AI 助手本地配置）
 .agent/
 .codegraph/
-.github/
 .superpowers/
 .trae/
 .vscode/

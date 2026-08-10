@@ -26,7 +26,6 @@ import {
   Plus,
   Printer,
   Search,
-  Share2,
   Sparkles,
   Star,
   Trash2,
@@ -84,7 +83,6 @@ import { ConfirmDialog, PromptDialog, TemplatePickerDialog } from "./NotesDialog
 import { NoteAgentPanel } from "./NoteAgentPanel";
 import { MindMapAgentPanel } from "./mindmap/MindMapAgentPanel";
 import { FlowchartAgentPanel } from "./flowchart/FlowchartAgentPanel";
-import { DiagramAgentPanel } from "./diagram/DiagramAgentPanel";
 import { MaterialsSidebar, MaterialsPreview, type MaterialsSelection, type MaterialsSidebarHandle } from "./materials/MaterialsView";
 import type { EditorMode } from "@/components/common/MarkdownEditor";
 import { openActiveEditorFind, openActiveEditorReplace } from "@/components/common/FindReplaceBar";
@@ -101,10 +99,6 @@ import { MindMapBridgeContext, type MindMapSelectNodeFn } from "./mindmap/MindMa
 import {
   FlowchartSelectionProvider,
 } from "./flowchart/FlowchartSelectionContext";
-import {
-  DiagramSelectionProvider,
-  type DiagramDocumentStateSnapshot,
-} from "./diagram/DiagramSelectionContext";
 import type { MindMapSelectionContext as MindMapSelectionCtx } from "./notes-ai";
 import type { FlowchartSelectionContext as FlowchartSelectionCtx } from "./notes-ai";
 import {
@@ -126,7 +120,6 @@ import type {
 import { nowTimestamp } from "./notes-data";
 import {
   createBlankFlowchartNote,
-  createBlankDiagramNote,
   createBlankMindMapNote,
   createBlankNote,
   createCustomNotebook,
@@ -223,9 +216,6 @@ export function NotesView({
   const [flowchartSelection, setFlowchartSelection] = useState<FlowchartSelectionCtx | null>(null);
   const [flowchartSelectionNoteId, setFlowchartSelectionNoteId] = useState<string | null>(null);
   const [flowchartBaseHash, setFlowchartBaseHash] = useState<string | null>(null);
-  const [diagramSelection, setDiagramSelection] = useState<{ elementIds: string[]; connectorIds: string[] } | null>(null);
-  const [diagramSelectionNoteId, setDiagramSelectionNoteId] = useState<string | null>(null);
-  const [diagramDocState, setDiagramDocState] = useState<DiagramDocumentStateSnapshot | null>(null);
   const dragRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const rightDragRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const lastSavedSnapshotRef = useRef<string | null>(null);
@@ -274,27 +264,6 @@ export function NotesView({
       setFlowchartBaseHash(baseHash);
     },
   }), [flowchartSelection, flowchartSelectionNoteId, flowchartBaseHash, activeNoteId]);
-
-  const diagramSelectionValue = useMemo<{
-    selection: { elementIds: string[]; connectorIds: string[] } | null;
-    noteId: string | null;
-    docState: DiagramDocumentStateSnapshot | null;
-    setSelection: (noteId: string, selection: { elementIds: string[]; connectorIds: string[] } | null, docState: DiagramDocumentStateSnapshot | null) => void;
-    updateDocState: (noteId: string, docState: DiagramDocumentStateSnapshot) => void;
-  }>(() => ({
-    selection: diagramSelectionNoteId === activeNoteId ? diagramSelection : null,
-    noteId: diagramSelectionNoteId,
-    docState: diagramDocState,
-    setSelection: (noteId, sel, ds) => {
-      setDiagramSelectionNoteId(noteId);
-      setDiagramSelection(sel);
-      setDiagramDocState(ds);
-    },
-    updateDocState: (noteId, ds) => {
-      setDiagramSelectionNoteId(noteId);
-      setDiagramDocState(ds);
-    },
-  }), [diagramSelection, diagramSelectionNoteId, diagramDocState, activeNoteId]);
 
   // 录音转写状态。当前正在录音的笔记 id 和已确定的文字。
   // 用 ref 避免回调闭包陈旧问题，state 仅用于按钮 UI 反馈。
@@ -1027,40 +996,6 @@ export function NotesView({
       });
       setSearchQuery("");
       // 新建流程图后自动切到画布模块，避免在笔记列表中不可见
-      setModuleView("canvas");
-    },
-    [updateLeaf],
-  );
-
-  const createDiagramNote = useCallback(
-    (overrideNotebookId?: string) => {
-      const notebookId = overrideNotebookId !== undefined ? overrideNotebookId : "";
-      let nextNote: OperationNote;
-      try {
-        nextNote = createBlankDiagramNote(notebookId);
-      } catch (error) {
-        notifyError(error instanceof Error ? error.message : "新建图表失败");
-        return;
-      }
-      setNotes((current) => [nextNote, ...current]);
-      setActiveNoteId(nextNote.id);
-      setWorkspace((prev) => {
-        const leafId = prev.activeLeafId;
-        return updateLeaf(prev, leafId, (leaf) => {
-          const activeIdx = leaf.activeTabId ? leaf.tabIds.indexOf(leaf.activeTabId) : -1;
-          if (activeIdx >= 0) {
-            const nextTabIds = [...leaf.tabIds];
-            nextTabIds[activeIdx] = nextNote.id;
-            return { ...leaf, tabIds: nextTabIds, activeTabId: nextNote.id, graphOpen: false };
-          }
-          return {
-            ...leaf,
-            tabIds: [...leaf.tabIds, nextNote.id],
-            activeTabId: nextNote.id,
-            graphOpen: false,
-          };
-        });
-      });
       setModuleView("canvas");
     },
     [updateLeaf],
@@ -2177,7 +2112,6 @@ export function NotesView({
   return (
     <MindMapSelectionProvider value={mindMapSelectionValue}>
     <FlowchartSelectionProvider value={flowchartSelectionValue}>
-    <DiagramSelectionProvider value={diagramSelectionValue}>
     <div className="relative flex h-full min-h-0 bg-background">
       <section className="flex min-w-0 flex-1 flex-col">
 
@@ -2334,10 +2268,6 @@ export function NotesView({
                             <DropdownMenuItem onSelect={() => createFlowchartNote("")}>
                               <Workflow className="mr-2 h-3.5 w-3.5" />
                               新建流程图
-                            </DropdownMenuItem>
-                            <DropdownMenuItem onSelect={() => createDiagramNote("")}>
-                              <Share2 className="mr-2 h-3.5 w-3.5" />
-                              新建图表
                             </DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
@@ -2689,10 +2619,6 @@ export function NotesView({
                         <ContextMenuItem onSelect={() => createFlowchartNote("")}>
                           <Workflow className="mr-2 h-3.5 w-3.5" />
                           新建流程图
-                        </ContextMenuItem>
-                        <ContextMenuItem onSelect={() => createDiagramNote("")}>
-                          <Share2 className="mr-2 h-3.5 w-3.5" />
-                          新建图表
                         </ContextMenuItem>
                       </ContextMenuContent>
                     </ContextMenu>
@@ -3091,16 +3017,6 @@ export function NotesView({
           }
           onInitialPromptHandled={handleFlowchartInitialPromptHandled}
         />
-      ) : activeNote?.type === "diagram" ? (
-        <DiagramAgentPanel
-          note={activeNote}
-          collapsed={agentPanelCollapsed}
-          width={agentPanelWidth}
-          onAgentChatIdChange={(agentChatId) => updateActiveNote({ agentChatId })}
-          onApplyResult={(markdown, messageId) => applyAiResult("replace", markdown, messageId)}
-          onClearChat={() => updateActiveNote({ agentChatId: undefined })}
-          onStreamingChange={setAgentStreaming}
-        />
       ) : (
         <NoteAgentPanel
           note={activeNote}
@@ -3162,7 +3078,6 @@ export function NotesView({
         </div>
       ) : null}
     </div>
-    </DiagramSelectionProvider>
     </FlowchartSelectionProvider>
     </MindMapSelectionProvider>
   );

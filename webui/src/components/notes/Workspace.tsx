@@ -148,6 +148,8 @@ interface WorkspaceProps {
   resolveEmbedContent?: (title: string) => string | null;
   /** Whether the embed target is a flowchart note. */
   isEmbedFlowchart?: (title: string) => boolean;
+  /** 旧版 diagram 迁移确认：创建新流程图笔记并更新旧笔记标题。 */
+  onMigrateDiagram?: (newNote: OperationNote, updatedOldNote: OperationNote) => void;
 }
 
 interface PaneLeafProps {
@@ -196,6 +198,8 @@ interface PaneLeafProps {
   resolveEmbedContent?: (title: string) => string | null;
   /** Whether the embed target is a flowchart note. */
   isEmbedFlowchart?: (title: string) => boolean;
+  /** 旧版 diagram 迁移确认。 */
+  onMigrateDiagram?: (newNote: OperationNote, updatedOldNote: OperationNote) => void;
 }
 
 function PaneLeafView({
@@ -229,6 +233,7 @@ function PaneLeafView({
   flowchartForceSyncByNote,
   resolveEmbedContent,
   isEmbedFlowchart,
+  onMigrateDiagram,
 }: PaneLeafProps) {
   const tabs = useMemo(
     () => leaf.tabIds.map((id) => notes.find((n) => n.id === id)).filter((n): n is OperationNote => n != null),
@@ -320,6 +325,7 @@ function PaneLeafView({
             flowchartForceSync={flowchartForceSyncByNote?.[activeNote.id]}
             resolveEmbedContent={resolveEmbedContent}
             isEmbedFlowchart={isEmbedFlowchart}
+            onMigrateDiagram={onMigrateDiagram}
           />
         ) : (
           <div className="flex flex-1 flex-col items-center justify-center text-muted-foreground">
@@ -376,6 +382,8 @@ interface SplitViewProps {
   resolveEmbedContent?: (title: string) => string | null;
   /** Whether the embed target is a flowchart note. */
   isEmbedFlowchart?: (title: string) => boolean;
+  /** 旧版 diagram 迁移确认。 */
+  onMigrateDiagram?: (newNote: OperationNote, updatedOldNote: OperationNote) => void;
 }
 
 function SplitView({
@@ -408,6 +416,7 @@ function SplitView({
   flowchartForceSyncByNote,
   resolveEmbedContent,
   isEmbedFlowchart,
+  onMigrateDiagram,
 }: SplitViewProps) {
   const isHorizontal = node.direction === "horizontal";
   const containerRef = useRef<HTMLDivElement>(null);
@@ -519,6 +528,7 @@ function SplitView({
               flowchartForceSyncByNote={flowchartForceSyncByNote}
               resolveEmbedContent={resolveEmbedContent}
               isEmbedFlowchart={isEmbedFlowchart}
+              onMigrateDiagram={onMigrateDiagram}
             />
             ) : (
               <SplitView
@@ -551,6 +561,7 @@ function SplitView({
                 flowchartForceSyncByNote={flowchartForceSyncByNote}
                 resolveEmbedContent={resolveEmbedContent}
                 isEmbedFlowchart={isEmbedFlowchart}
+                onMigrateDiagram={onMigrateDiagram}
               />
             )}
           </div>,
@@ -596,6 +607,7 @@ export function Workspace({
   flowchartForceSyncByNote,
   resolveEmbedContent,
   isEmbedFlowchart,
+  onMigrateDiagram,
 }: WorkspaceProps) {
   const handleLeafChange = useCallback(
     (leafId: string, updater: (leaf: LeafPane) => LeafPane) => {
@@ -755,6 +767,7 @@ export function Workspace({
     flowchartForceSyncByNote,
     resolveEmbedContent,
     isEmbedFlowchart,
+    onMigrateDiagram,
   };
 
   // 主 leaf：视觉上最右最上的 leaf，用于固定显示工具栏按钮
@@ -834,6 +847,7 @@ export function Workspace({
       flowchartForceSyncByNote={flowchartForceSyncByNote}
       resolveEmbedContent={resolveEmbedContent}
       isEmbedFlowchart={isEmbedFlowchart}
+      onMigrateDiagram={onMigrateDiagram}
     />
   );
 }

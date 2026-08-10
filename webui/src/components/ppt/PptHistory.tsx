@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { AlertCircle, Download, FolderOpen, Loader2, Trash2 } from "lucide-react";
+import { AlertCircle, Download, FolderOpen, Loader2, MonitorPlay, Trash2 } from "lucide-react";
 
 import { deletePptProject, fetchPptProjects } from "@/lib/api";
 import { isTauri, openPathWithSystemApp } from "@/lib/tauri";
@@ -23,11 +23,14 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import type { PptProject } from "@/lib/types";
 
 interface PptHistoryProps {
   /** 当前打开的项目名：用于列表高亮 */
   currentProjectName?: string | null;
+  /** 折叠态：以图标 rail 形式展示，类似主侧边栏的会话列表 */
+  collapsed?: boolean;
   onSelect: (project: PptProject) => void;
   onDownload: (name: string) => void;
   onDelete?: (name: string) => void;
@@ -54,7 +57,7 @@ const STATUS_LABELS: Record<string, string> = {
   done: "已完成",
 };
 
-export function PptHistory({ currentProjectName, onSelect, onDownload, onDelete }: PptHistoryProps) {
+export function PptHistory({ currentProjectName, collapsed = false, onSelect, onDownload, onDelete }: PptHistoryProps) {
   const { token } = useClient();
   const workspacePath = useWorkspaceStore((s) => s.workspacePath);
   const [projects, setProjects] = useState<PptProject[]>([]);
@@ -120,6 +123,131 @@ export function PptHistory({ currentProjectName, onSelect, onDownload, onDelete 
     }
   };
 
+  if (collapsed) {
+    if (loadError) {
+      return (
+        <TooltipProvider delayDuration={100}>
+          <div className="flex flex-1 flex-col items-center justify-center py-3">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  className="flex h-8 w-8 items-center justify-center rounded-md text-destructive hover:bg-destructive/10"
+                  onClick={() => void loadProjects()}
+                  aria-label="加载历史项目失败，点击重试"
+                >
+                  <AlertCircle className="h-4 w-4" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="right" sideOffset={8}>
+                加载失败：{loadError}，点击重试
+              </TooltipContent>
+            </Tooltip>
+          </div>
+        </TooltipProvider>
+      );
+    }
+
+    return (
+      <TooltipProvider delayDuration={100}>
+        <div className="flex min-h-0 flex-1 flex-col items-center gap-1 overflow-y-auto py-2">
+          {projects.length === 0 && !loading && (
+            <div className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground">
+              <MonitorPlay className="h-4 w-4 opacity-40" />
+            </div>
+          )}
+          {projects.map((p) => {
+            const isCurrent = p.name === currentProjectName;
+            return (
+              <ContextMenu key={p.name}>
+                <ContextMenuTrigger asChild>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        onClick={() => onSelect(p)}
+                        aria-label={`打开项目 ${p.name}，${STATUS_LABELS[p.status] || p.status}，${p.slideCount} 页`}
+                        className={cn(
+                          "flex h-8 w-8 items-center justify-center rounded-md transition-colors",
+                          isCurrent
+                            ? "bg-[hsl(var(--sidebar-active-surface)/0.07)] text-sidebar-foreground"
+                            : "text-sidebar-foreground/70 hover:bg-[hsl(var(--sidebar-hover-surface)/0.04)] hover:text-sidebar-foreground",
+                        )}
+                      >
+                        <MonitorPlay className="h-4 w-4" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="right" sideOffset={8}>
+                      <div className="max-w-[180px]">
+                        <div className="truncate font-medium">{p.name}</div>
+                        <div className="text-[10px] text-muted-foreground">
+                          {STATUS_LABELS[p.status] || p.status} · {p.slideCount} 页
+                        </div>
+                      </div>
+                    </TooltipContent>
+                  </Tooltip>
+                </ContextMenuTrigger>
+                <ContextMenuContent className="w-40">
+                  {p.hasExport && (
+                    <ContextMenuItem onClick={() => onDownload(p.name)} className="text-[12px]">
+                      <Download className="mr-2 h-3.5 w-3.5" />
+                      下载 PPTX
+                    </ContextMenuItem>
+                  )}
+                  <ContextMenuItem onClick={() => handleOpenDir(p.name)} className="text-[12px]">
+                    <FolderOpen className="mr-2 h-3.5 w-3.5" />
+                    打开任务目录
+                  </ContextMenuItem>
+                  <ContextMenuSeparator />
+                  <ContextMenuItem
+                    onClick={() => setPendingDelete(p.name)}
+                    disabled={deleting === p.name}
+                    className="text-[12px] text-destructive focus:text-destructive"
+                  >
+                    <Trash2 className="mr-2 h-3.5 w-3.5" />
+                    {deleting === p.name ? "删除中..." : "删除项目"}
+                  </ContextMenuItem>
+                </ContextMenuContent>
+              </ContextMenu>
+            );
+          })}
+          {loading && (
+            <div className="flex h-8 w-8 items-center justify-center">
+              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+            </div>
+          )}
+        </div>
+
+        <AlertDialog
+          open={pendingDelete !== null}
+          onOpenChange={(open) => {
+            if (!open) setPendingDelete(null);
+          }}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>删除这个项目？</AlertDialogTitle>
+              <AlertDialogDescription>
+                将删除项目「{pendingDelete}」及其全部页面、素材和导出文件，删除后无法恢复。
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>取消</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={() => {
+                  if (pendingDelete) void handleDelete(pendingDelete);
+                  setPendingDelete(null);
+                }}
+              >
+                删除
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      </TooltipProvider>
+    );
+  }
+
   if (loadError) {
     return (
       <div className="flex flex-col items-center gap-2 px-2 py-6 text-center text-[11px]">
@@ -169,9 +297,11 @@ export function PptHistory({ currentProjectName, onSelect, onDownload, onDelete 
             <ContextMenuTrigger asChild>
               <div
                 className={cn(
-                  "flex w-full items-center gap-2 px-2 py-1.5 text-left",
-                  "hover:bg-accent",
-                  p.name === currentProjectName && "bg-accent",
+                  "flex w-full items-center gap-2 px-2 py-1.5 text-left text-sidebar-foreground/82 transition-colors",
+                  "hover:bg-[hsl(var(--sidebar-hover-surface)/0.04)] hover:text-sidebar-foreground",
+                  p.name === currentProjectName
+                    ? "bg-[hsl(var(--sidebar-active-surface)/0.07)] text-sidebar-foreground"
+                    : "",
                 )}
               >
                 <button
@@ -196,7 +326,7 @@ export function PptHistory({ currentProjectName, onSelect, onDownload, onDelete 
                 {p.hasExport && (
                   <button
                     type="button"
-                    className="shrink-0 rounded p-0.5 hover:bg-accent"
+                    className="shrink-0 rounded p-0.5 hover:bg-[hsl(var(--sidebar-hover-surface)/0.04)]"
                     aria-label={`下载 ${p.name} 的 PPTX`}
                     onClick={(e) => {
                       e.stopPropagation();

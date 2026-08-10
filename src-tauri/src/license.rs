@@ -9,7 +9,8 @@ use tauri::{AppHandle, Emitter};
 use std::os::windows::process::CommandExt;
 
 const LICENSE_FILENAME: &str = "license.jwt";
-const AUTH_SERVER_URL: &str = "https://www.mona-ai.cn";
+const AUTH_SERVER_URL_PRIMARY: &str = "https://www.mona-ai.cn";
+const AUTH_SERVER_URL_FALLBACK: &str = "https://mona.lzfun.vip";
 
 fn license_dir() -> Result<PathBuf, String> {
     let base = dirs::data_local_dir()
@@ -104,14 +105,30 @@ fn build_client() -> Result<reqwest::Client, String> {
         .map_err(|e| format!("HTTP client error: {}", e))
 }
 
+/// 依次尝试主备域名发送请求。主域名 (www.mona-ai.cn) 可能被 SNI 阻断，
+/// 回退到已备案的 mona.lzfun.vip（同一 VPS）。只在连接失败时回退，
+/// 收到 HTTP 响应（含 4xx/5xx）直接返回。
+async fn auth_send<F>(build: F) -> Result<reqwest::Response, String>
+where
+    F: Fn(&reqwest::Client, &str) -> reqwest::RequestBuilder,
+{
+    let client = build_client()?;
+    let urls = [AUTH_SERVER_URL_PRIMARY, AUTH_SERVER_URL_FALLBACK];
+    let mut last_err = String::new();
+    for base in &urls {
+        match build(&client, base).send().await {
+            Ok(resp) => return Ok(resp),
+            Err(e) => {
+                last_err = format!("Request failed: {}", e);
+            }
+        }
+    }
+    Err(last_err)
+}
+
 #[tauri::command]
 pub async fn get_pricing() -> Result<serde_json::Value, String> {
-    let client = build_client()?;
-    let resp = client
-        .get(format!("{}/config/pricing", AUTH_SERVER_URL))
-        .send()
-        .await
-        .map_err(|e| format!("Request failed: {}", e))?;
+    let resp = auth_send(|client, base| client.get(format!("{}/config/pricing", base))).await?;
 
     if !resp.status().is_success() {
         return Err(format!("Server error: {}", resp.status()));
@@ -124,13 +141,12 @@ pub async fn get_pricing() -> Result<serde_json::Value, String> {
 #[tauri::command]
 pub async fn list_notifications() -> Result<serde_json::Value, String> {
     let token = load_auth_token().ok_or_else(|| "Not logged in".to_string())?;
-    let client = build_client()?;
-    let resp = client
-        .get(format!("{}/notifications/", AUTH_SERVER_URL))
-        .header("Authorization", format!("Bearer {}", token))
-        .send()
-        .await
-        .map_err(|e| format!("Request failed: {}", e))?;
+    let resp = auth_send(|client, base| {
+        client
+            .get(format!("{}/notifications/", base))
+            .header("Authorization", format!("Bearer {}", token))
+    })
+    .await?;
 
     if !resp.status().is_success() {
         return Err(format!("Server error: {}", resp.status()));
@@ -142,13 +158,12 @@ pub async fn list_notifications() -> Result<serde_json::Value, String> {
 #[tauri::command]
 pub async fn get_unread_notification_count() -> Result<serde_json::Value, String> {
     let token = load_auth_token().ok_or_else(|| "Not logged in".to_string())?;
-    let client = build_client()?;
-    let resp = client
-        .get(format!("{}/notifications/unread-count", AUTH_SERVER_URL))
-        .header("Authorization", format!("Bearer {}", token))
-        .send()
-        .await
-        .map_err(|e| format!("Request failed: {}", e))?;
+    let resp = auth_send(|client, base| {
+        client
+            .get(format!("{}/notifications/unread-count", base))
+            .header("Authorization", format!("Bearer {}", token))
+    })
+    .await?;
 
     if !resp.status().is_success() {
         return Err(format!("Server error: {}", resp.status()));
@@ -160,13 +175,12 @@ pub async fn get_unread_notification_count() -> Result<serde_json::Value, String
 #[tauri::command]
 pub async fn mark_notification_read(notification_id: i64) -> Result<serde_json::Value, String> {
     let token = load_auth_token().ok_or_else(|| "Not logged in".to_string())?;
-    let client = build_client()?;
-    let resp = client
-        .post(format!("{}/notifications/{}/read", AUTH_SERVER_URL, notification_id))
-        .header("Authorization", format!("Bearer {}", token))
-        .send()
-        .await
-        .map_err(|e| format!("Request failed: {}", e))?;
+    let resp = auth_send(|client, base| {
+        client
+            .post(format!("{}/notifications/{}/read", base, notification_id))
+            .header("Authorization", format!("Bearer {}", token))
+    })
+    .await?;
 
     if !resp.status().is_success() {
         return Err(format!("Server error: {}", resp.status()));
@@ -209,13 +223,12 @@ fn translate_error(error: &str) -> String {
 
 #[tauri::command]
 pub async fn send_register_code(email: String, account: String) -> Result<serde_json::Value, String> {
-    let client = build_client()?;
-    let resp = client
-        .post(format!("{}/auth/send-register-code", AUTH_SERVER_URL))
-        .json(&serde_json::json!({ "email": email, "account": account }))
-        .send()
-        .await
-        .map_err(|e| format!("Request failed: {}", e))?;
+    let resp = auth_send(|client, base| {
+        client
+            .post(format!("{}/auth/send-register-code", base))
+            .json(&serde_json::json!({ "email": email, "account": account }))
+    })
+    .await?;
 
     let status = resp.status();
     let text = resp.text().await.unwrap_or_default();
@@ -233,13 +246,12 @@ pub async fn send_register_code(email: String, account: String) -> Result<serde_
 #[tauri::command]
 pub async fn auth_register(email: String, password: String, code: String, account: String) -> Result<serde_json::Value, String> {
     let machine_fp = get_machine_fingerprint();
-    let client = build_client()?;
-    let resp = client
-        .post(format!("{}/auth/register?device_fingerprint={}", AUTH_SERVER_URL, machine_fp))
-        .json(&serde_json::json!({ "email": email, "password": password, "code": code, "account": account }))
-        .send()
-        .await
-        .map_err(|e| format!("Request failed: {}", e))?;
+    let resp = auth_send(|client, base| {
+        client
+            .post(format!("{}/auth/register?device_fingerprint={}", base, machine_fp))
+            .json(&serde_json::json!({ "email": email, "password": password, "code": code, "account": account }))
+    })
+    .await?;
 
     let body: serde_json::Value = resp.json().await.map_err(|e| format!("Parse error: {}", e))?;
 
@@ -254,13 +266,12 @@ pub async fn auth_register(email: String, password: String, code: String, accoun
 
 #[tauri::command]
 pub async fn auth_login(app: AppHandle, account: String, password: String) -> Result<serde_json::Value, String> {
-    let client = build_client()?;
-    let resp = client
-        .post(format!("{}/auth/login", AUTH_SERVER_URL))
-        .json(&serde_json::json!({ "account": account, "password": password }))
-        .send()
-        .await
-        .map_err(|e| format!("Request failed: {}", e))?;
+    let resp = auth_send(|client, base| {
+        client
+            .post(format!("{}/auth/login", base))
+            .json(&serde_json::json!({ "account": account, "password": password }))
+    })
+    .await?;
 
     let body: serde_json::Value = resp.json().await.map_err(|e| format!("Parse error: {}", e))?;
 
@@ -289,13 +300,12 @@ pub async fn auth_logout(app: AppHandle) -> Result<serde_json::Value, String> {
 
 #[tauri::command]
 pub async fn auth_forgot_password(email: String) -> Result<serde_json::Value, String> {
-    let client = build_client()?;
-    let resp = client
-        .post(format!("{}/auth/forgot-password", AUTH_SERVER_URL))
-        .json(&serde_json::json!({ "email": email }))
-        .send()
-        .await
-        .map_err(|e| format!("Request failed: {}", e))?;
+    let resp = auth_send(|client, base| {
+        client
+            .post(format!("{}/auth/forgot-password", base))
+            .json(&serde_json::json!({ "email": email }))
+    })
+    .await?;
 
     let status = resp.status();
     let text = resp.text().await.unwrap_or_default();
@@ -316,13 +326,12 @@ pub async fn auth_reset_password(
     code: String,
     new_password: String,
 ) -> Result<serde_json::Value, String> {
-    let client = build_client()?;
-    let resp = client
-        .post(format!("{}/auth/reset-password", AUTH_SERVER_URL))
-        .json(&serde_json::json!({ "email": email, "code": code, "new_password": new_password }))
-        .send()
-        .await
-        .map_err(|e| format!("Request failed: {}", e))?;
+    let resp = auth_send(|client, base| {
+        client
+            .post(format!("{}/auth/reset-password", base))
+            .json(&serde_json::json!({ "email": email, "code": code, "new_password": new_password }))
+    })
+    .await?;
 
     let status = resp.status();
     let text = resp.text().await.unwrap_or_default();
@@ -343,14 +352,13 @@ pub async fn auth_change_password(
     new_password: String,
 ) -> Result<serde_json::Value, String> {
     let token = load_auth_token().ok_or_else(|| "Not logged in".to_string())?;
-    let client = build_client()?;
-    let resp = client
-        .post(format!("{}/auth/change-password", AUTH_SERVER_URL))
-        .header("Authorization", format!("Bearer {}", token))
-        .json(&serde_json::json!({ "old_password": old_password, "new_password": new_password }))
-        .send()
-        .await
-        .map_err(|e| format!("Request failed: {}", e))?;
+    let resp = auth_send(|client, base| {
+        client
+            .post(format!("{}/auth/change-password", base))
+            .header("Authorization", format!("Bearer {}", token))
+            .json(&serde_json::json!({ "old_password": old_password, "new_password": new_password }))
+    })
+    .await?;
 
     let status = resp.status();
     let text = resp.text().await.unwrap_or_default();
@@ -378,14 +386,13 @@ pub async fn bind_device() -> Result<serde_json::Value, String> {
         None => return Err("Not logged in".to_string()),
     };
     let machine_fp = get_machine_fingerprint();
-    let client = build_client()?;
-    let resp = client
-        .post(format!("{}/license/bind-device", AUTH_SERVER_URL))
-        .header("Authorization", format!("Bearer {}", token))
-        .json(&serde_json::json!({ "device_fingerprint": machine_fp }))
-        .send()
-        .await
-        .map_err(|e| format!("Request failed: {}", e))?;
+    let resp = auth_send(|client, base| {
+        client
+            .post(format!("{}/license/bind-device", base))
+            .header("Authorization", format!("Bearer {}", token))
+            .json(&serde_json::json!({ "device_fingerprint": machine_fp }))
+    })
+    .await?;
 
     let body: serde_json::Value = resp.json().await.map_err(|e| format!("Parse error: {}", e))?;
 
@@ -423,22 +430,19 @@ pub async fn upload_image(file_path: String) -> Result<serde_json::Value, String
         _ => "application/octet-stream",
     };
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(60))
-        .build()
-        .map_err(|e| format!("HTTP client error: {}", e))?;
-    let part = reqwest::multipart::Part::bytes(bytes)
-        .file_name(file_name)
-        .mime_str(mime)
-        .map_err(|e| format!("Mime error: {}", e))?;
-    let form = reqwest::multipart::Form::new().part("file", part);
-
-    let resp = client
-        .post(format!("{}/upload/image", AUTH_SERVER_URL))
-        .multipart(form)
-        .send()
-        .await
-        .map_err(|e| format!("Request failed: {}", e))?;
+    let resp = auth_send(|client, base| {
+        // Rebuild the multipart form on each attempt — reqwest::multipart::Form
+        // does not implement Clone, so we reconstruct from the raw bytes.
+        let part = reqwest::multipart::Part::bytes(bytes.clone())
+            .file_name(file_name.clone())
+            .mime_str(mime)
+            .expect("mime string is validated above");
+        let form = reqwest::multipart::Form::new().part("file", part);
+        client
+            .post(format!("{}/upload/image", base))
+            .multipart(form)
+    })
+    .await?;
 
     if !resp.status().is_success() {
         return Err(format!("Server error: {}", resp.status()));
@@ -474,17 +478,16 @@ pub async fn create_subscription(plan_code: String, payment_method: String) -> R
         Some(t) => t,
         None => return Err("Not logged in".to_string()),
     };
-    let client = build_client()?;
-    let resp = client
-        .post(format!("{}/payment/subscribe", AUTH_SERVER_URL))
-        .header("Authorization", format!("Bearer {}", token))
-        .json(&serde_json::json!({
-            "plan_code": plan_code,
-            "payment_method": payment_method,
-        }))
-        .send()
-        .await
-        .map_err(|e| format!("Request failed: {}", e))?;
+    let resp = auth_send(|client, base| {
+        client
+            .post(format!("{}/payment/subscribe", base))
+            .header("Authorization", format!("Bearer {}", token))
+            .json(&serde_json::json!({
+                "plan_code": plan_code,
+                "payment_method": payment_method,
+            }))
+    })
+    .await?;
 
     let status = resp.status();
     let text = resp.text().await.unwrap_or_default();
@@ -505,13 +508,12 @@ pub async fn poll_payment_status(order_id: i64) -> Result<serde_json::Value, Str
         Some(t) => t,
         None => return Err("Not logged in".to_string()),
     };
-    let client = build_client()?;
-    let resp = client
-        .get(format!("{}/payment/orders/{}", AUTH_SERVER_URL, order_id))
-        .header("Authorization", format!("Bearer {}", token))
-        .send()
-        .await
-        .map_err(|e| format!("Request failed: {}", e))?;
+    let resp = auth_send(|client, base| {
+        client
+            .get(format!("{}/payment/orders/{}", base, order_id))
+            .header("Authorization", format!("Bearer {}", token))
+    })
+    .await?;
 
     if !resp.status().is_success() {
         return Err(format!("Server error: {}", resp.status()));
@@ -526,13 +528,12 @@ pub async fn get_subscription_info() -> Result<serde_json::Value, String> {
         Some(t) => t,
         None => return Err("Not logged in".to_string()),
     };
-    let client = build_client()?;
-    let resp = client
-        .get(format!("{}/payment/subscription", AUTH_SERVER_URL))
-        .header("Authorization", format!("Bearer {}", token))
-        .send()
-        .await
-        .map_err(|e| format!("Request failed: {}", e))?;
+    let resp = auth_send(|client, base| {
+        client
+            .get(format!("{}/payment/subscription", base))
+            .header("Authorization", format!("Bearer {}", token))
+    })
+    .await?;
 
     if !resp.status().is_success() {
         return Err(format!("Server error: {}", resp.status()));
@@ -547,14 +548,14 @@ pub async fn cancel_auto_renew(reason: Option<String>) -> Result<serde_json::Val
         Some(t) => t,
         None => return Err("Not logged in".to_string()),
     };
-    let client = build_client()?;
-    let resp = client
-        .post(format!("{}/payment/cancel-auto-renew", AUTH_SERVER_URL))
-        .header("Authorization", format!("Bearer {}", token))
-        .json(&serde_json::json!({ "reason": reason.unwrap_or_default() }))
-        .send()
-        .await
-        .map_err(|e| format!("Request failed: {}", e))?;
+    let reason_val = reason.unwrap_or_default();
+    let resp = auth_send(|client, base| {
+        client
+            .post(format!("{}/payment/cancel-auto-renew", base))
+            .header("Authorization", format!("Bearer {}", token))
+            .json(&serde_json::json!({ "reason": reason_val }))
+    })
+    .await?;
 
     let status = resp.status();
     let text = resp.text().await.unwrap_or_default();
@@ -575,13 +576,12 @@ pub async fn list_renewals() -> Result<serde_json::Value, String> {
         Some(t) => t,
         None => return Err("Not logged in".to_string()),
     };
-    let client = build_client()?;
-    let resp = client
-        .get(format!("{}/payment/renewals", AUTH_SERVER_URL))
-        .header("Authorization", format!("Bearer {}", token))
-        .send()
-        .await
-        .map_err(|e| format!("Request failed: {}", e))?;
+    let resp = auth_send(|client, base| {
+        client
+            .get(format!("{}/payment/renewals", base))
+            .header("Authorization", format!("Bearer {}", token))
+    })
+    .await?;
 
     if !resp.status().is_success() {
         return Err(format!("Server error: {}", resp.status()));
@@ -752,13 +752,12 @@ fn is_expired(expires_at: &str) -> bool {
 
 async fn check_license_server(token: &str) -> Result<LicenseCache, String> {
     let machine_fp = get_machine_fingerprint();
-    let client = build_client()?;
-    let resp = client
-        .get(format!("{}/license/check?device_fingerprint={}", AUTH_SERVER_URL, machine_fp))
-        .header("Authorization", format!("Bearer {}", token))
-        .send()
-        .await
-        .map_err(|e| format!("Request failed: {}", e))?;
+    let resp = auth_send(|client, base| {
+        client
+            .get(format!("{}/license/check?device_fingerprint={}", base, machine_fp))
+            .header("Authorization", format!("Bearer {}", token))
+    })
+    .await?;
 
     if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
         // Token expired or invalid

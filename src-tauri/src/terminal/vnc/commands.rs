@@ -88,6 +88,7 @@ pub async fn vnc_connect(
         config_id: String::new(),
         session_type: SessionType::Vnc,
         status: SessionStatus::Connected,
+        target_label: format!("vnc://{}:{}", config.host, config.port),
         created_at: chrono::Utc::now(),
     };
     terminal_state

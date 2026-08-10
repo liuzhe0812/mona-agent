@@ -50,6 +50,11 @@ impl ConnectionManager {
             .map(|conn| (conn.handle.clone(), conn.config.clone()))
     }
 
+    pub fn get_handle_with_version(&self, connection_id: &str) -> Option<(DbHandle, DbConnectionConfig, Option<String>)> {
+        self.connections.get(connection_id)
+            .map(|conn| (conn.handle.clone(), conn.config.clone(), conn.server_version.clone()))
+    }
+
     pub fn insert_connection(
         &mut self,
         config: DbConnectionConfig,

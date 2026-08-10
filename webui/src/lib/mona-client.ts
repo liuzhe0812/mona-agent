@@ -461,6 +461,10 @@ export class MonaClient {
       dbConnectionId?: string;
       dbDatabase?: string;
       dbTable?: string;
+      dbType?: string;
+      dbServerVersion?: string;
+      dbCurrentSql?: string;
+      dbLastError?: string;
       browserPageUrl?: string;
       browserPageTitle?: string;
       /** Workspace-relative paths of documents uploaded via sendDocUpload.
@@ -482,6 +486,10 @@ export class MonaClient {
       ...(options?.dbConnectionId ? { db_connection_id: options.dbConnectionId } : {}),
       ...(options?.dbDatabase ? { db_database: options.dbDatabase } : {}),
       ...(options?.dbTable ? { db_table: options.dbTable } : {}),
+      ...(options?.dbType ? { db_type: options.dbType } : {}),
+      ...(options?.dbServerVersion ? { db_server_version: options.dbServerVersion } : {}),
+      ...(options?.dbCurrentSql ? { db_current_sql: options.dbCurrentSql } : {}),
+      ...(options?.dbLastError ? { db_last_error: options.dbLastError } : {}),
       ...(options?.browserPageUrl ? { browser_page_url: options.browserPageUrl } : {}),
       ...(options?.browserPageTitle ? { browser_page_title: options.browserPageTitle } : {}),
       ...(options?.docPaths && options.docPaths.length > 0 ? { doc_paths: options.docPaths } : {}),

@@ -17,6 +17,8 @@
 // 类型定义
 // ---------------------------------------------------------------------------
 
+import { migrateFlowchartV1ToV2 } from "./flowchart-migrate";
+
 export type FlowchartDirection = "TB" | "LR";
 export type FlowchartNodeKind =
   | "start"
@@ -42,7 +44,46 @@ export type FlowchartNodeKind =
   | "stored-data"         // 存储数据（横胶囊）
   | "text"                // 文本节点（对齐 NoteGen text 节点）
   | "image"               // 图片（对齐 NoteGen image 节点）
-  | "freehand";           // 自由手绘（钢笔/荧光笔笔触）
+  | "freehand"            // 自由手绘（钢笔/荧光笔笔触）
+  // v2 流程图扩展形状
+  | "alternate-process"   // 替代流程（圆角矩形）
+  | "manual-operation"    // 手动操作（梯形）
+  | "card"                // 卡片
+  | "merge"               // 合并（倒三角）
+  | "extract"             // 提取（正三角）
+  | "sort"                // 排序（三角对置）
+  | "or"                  // 或（圆形带叉）
+  | "summation"           // 求和连接（双弧圆）
+  // v2 基础形状（视觉元素，不改变流程语义检查规则）
+  | "rectangle"
+  | "rounded-rectangle"
+  | "ellipse"
+  | "circle"
+  | "triangle"
+  | "right-triangle"
+  | "diamond-basic"       // 基础菱形（区别于 decision）
+  | "pentagon-basic"      // 基础五边形
+  | "hexagon-basic"       // 基础六边形（区别于 preparation）
+  | "octagon"
+  | "star"
+  | "cloud"
+  | "callout"
+  | "plus"
+  | "l-shape"
+  | "arrow-left"
+  | "arrow-right"
+  | "arrow-up"
+  | "arrow-down"
+  | "arrow-bidirectional"
+  | "bracket-round"
+  | "bracket-square"
+  | "brace"
+  | "code-block"
+  | "note"                // 便签
+  // v2 容器（不进流程语义节点列表，不可作为边端点）
+  | "group"
+  | "swimlane-pool"
+  | "swimlane-lane";
 
 export const FLOWCHART_NODE_KINDS: readonly FlowchartNodeKind[] = [
   "start",
@@ -68,6 +109,93 @@ export const FLOWCHART_NODE_KINDS: readonly FlowchartNodeKind[] = [
   "text",
   "image",
   "freehand",
+  "alternate-process",
+  "manual-operation",
+  "card",
+  "merge",
+  "extract",
+  "sort",
+  "or",
+  "summation",
+  "rectangle",
+  "rounded-rectangle",
+  "ellipse",
+  "circle",
+  "triangle",
+  "right-triangle",
+  "diamond-basic",
+  "pentagon-basic",
+  "hexagon-basic",
+  "octagon",
+  "star",
+  "cloud",
+  "callout",
+  "plus",
+  "l-shape",
+  "arrow-left",
+  "arrow-right",
+  "arrow-up",
+  "arrow-down",
+  "arrow-bidirectional",
+  "bracket-round",
+  "bracket-square",
+  "brace",
+  "code-block",
+  "note",
+  "group",
+  "swimlane-pool",
+  "swimlane-lane",
+];
+
+/** 容器 kind：不进入流程语义节点列表，不可作为普通流程边端点。 */
+export const FLOWCHART_CONTAINER_KINDS: readonly FlowchartNodeKind[] = [
+  "group",
+  "swimlane-pool",
+  "swimlane-lane",
+];
+
+export function isFlowchartContainerKind(kind: FlowchartNodeKind): boolean {
+  return FLOWCHART_CONTAINER_KINDS.includes(kind);
+}
+
+/**
+ * AI patch 可用的节点 kind（FC-AI-01）。
+ *
+ * - 仅包含流程语义形状：9 种基础流程 + NoteGen 11 种扩展 + v2 8 种流程扩展；
+ * - 不含基础装饰形状（rectangle/star/cloud 等）：避免模型随意美化，
+ *   这些形状不出现在 AI 提示中（replaceGraph 回传既有装饰节点由校验层容忍）；
+ * - 不含容器（group/swimlane-pool/swimlane-lane）：泳道 AI 协议未稳定（FC-AI-02 延后）；
+ * - 不含 text/image/freehand：这些元素需要尺寸/内容语义，AI 不应管理。
+ */
+export const FLOWCHART_AI_NODE_KINDS: readonly FlowchartNodeKind[] = [
+  "start",
+  "end",
+  "terminator",
+  "process",
+  "alternate-process",
+  "predefined-process",
+  "subprocess",
+  "manual-operation",
+  "decision",
+  "input-output",
+  "manual-input",
+  "display",
+  "document",
+  "multi-document",
+  "database",
+  "internal-storage",
+  "stored-data",
+  "preparation",
+  "delay",
+  "card",
+  "merge",
+  "extract",
+  "sort",
+  "or",
+  "summation",
+  "connector",
+  "off-page-connector",
+  "annotation",
 ];
 
 export const FLOWCHART_DIRECTIONS: readonly FlowchartDirection[] = ["TB", "LR"];
@@ -96,6 +224,12 @@ export interface FlowchartNodeStyle {
   underline?: boolean;
   /** 文字水平对齐（多行 label 时生效） */
   textAlign?: "left" | "center" | "right";
+  /** 文字垂直对齐 */
+  verticalAlign?: "top" | "middle" | "bottom";
+  /** 行高倍数 */
+  lineHeight?: number;
+  /** 圆角半径（px，仅对支持圆角的几何生效） */
+  cornerRadius?: number;
 }
 
 /** 边样式覆盖（全部可选，undefined 表示使用主题默认值）。 */
@@ -137,10 +271,27 @@ export interface FlowchartNode {
   drawingTool?: "pen" | "highlighter";
   /** freehand 节点：笔触颜色，不参与语义哈希 */
   color?: string;
-  /** freehand 节点：不透明度（0-1，荧光笔默认 0.28），不参与语义哈希 */
+  /** 不透明度（0-1，freehand 荧光笔默认 0.28），不参与语义哈希；v2 起通用，freehand 作为笔触不透明度 */
   opacity?: number;
   /** freehand 节点：笔触宽度（参考 perfect-freehand size），不参与语义哈希 */
   strokeWidth?: number;
+  /** v2：父容器 id（group/pool/lane）；指向 lane 时进入语义投影（责任分配语义） */
+  parentId?: string;
+  /** v2：同父级内的层叠顺序，不参与语义哈希 */
+  zIndex?: number;
+  /** v2：旋转角度（0-359），不参与语义哈希 */
+  rotation?: number;
+  /** v2：水平翻转，不参与语义哈希 */
+  flipX?: boolean;
+  /** v2：垂直翻转，不参与语义哈希 */
+  flipY?: boolean;
+  /** v2：锁定后禁止位置/尺寸修改，不参与语义哈希 */
+  locked?: boolean;
+  /** v2：容器结构参数，只允许挂在 group/pool/lane kind 上 */
+  container?:
+    | { type: "group" }
+    | { type: "pool"; orientation: "horizontal" | "vertical"; headerSize: number }
+    | { type: "lane"; orientation: "horizontal" | "vertical"; order: number };
 }
 
 export interface FlowchartEdge {
@@ -154,6 +305,11 @@ export interface FlowchartEdge {
   label?: string;
   /** 边级样式覆盖；不参与语义哈希，但会写入 JSON 与渲染 */
   style?: FlowchartEdgeStyle;
+  /** 用户调整的控制点（画布流坐标系绝对坐标），不参与语义哈希。
+   *  - smoothstep: 用户拖动产生的拐角点序列，按顺序连接 source 和 target 之间的折线段
+   *  - bezier: 长度固定为 2，作为 cubic bezier 的两个控制点 [cp1, cp2]
+   *  - straight: 忽略（直线不支持控制点） */
+  controlPoints?: { x: number; y: number }[];
 }
 
 export interface FlowchartViewport {
@@ -162,9 +318,52 @@ export interface FlowchartViewport {
   zoom: number;
 }
 
+/** v2：画布设置。 */
+export interface FlowchartCanvasSettings {
+  mode: "infinite" | "page";
+  /** 页面模式下的页面尺寸（px） */
+  width?: number;
+  height?: number;
+  orientation?: "portrait" | "landscape";
+  /** 画布背景（CSS color） */
+  background?: string;
+  grid: {
+    visible: boolean;
+    snap: boolean;
+    size: number;
+  };
+}
+
+/** v2：文档主题与配色。 */
+export interface FlowchartThemeSettings {
+  stylePreset: "solid" | "outline" | "soft";
+  /** 内置配色 id（见 flowchart-themes.ts） */
+  paletteId: string;
+  /** 切换主题时是否保留节点级手动样式覆盖 */
+  preserveManualStyles: boolean;
+}
+
+export const DEFAULT_FLOWCHART_CANVAS: FlowchartCanvasSettings = {
+  mode: "infinite",
+  grid: { visible: true, snap: true, size: 16 },
+};
+
+export const DEFAULT_FLOWCHART_THEME: FlowchartThemeSettings = {
+  stylePreset: "solid",
+  paletteId: "default",
+  preserveManualStyles: true,
+};
+
+/**
+ * 流程图文档（内存中始终是 v2）。
+ * v1 文件解析后经 flowchart-migrate.ts 纯迁移函数补默认值进入内存；
+ * 首次真实编辑保存时写为 v2。
+ */
 export interface FlowchartDocument {
-  version: 1;
+  version: 2;
   direction: FlowchartDirection;
+  canvas: FlowchartCanvasSettings;
+  theme: FlowchartThemeSettings;
   nodes: FlowchartNode[];
   edges: FlowchartEdge[];
   viewport?: FlowchartViewport;
@@ -175,6 +374,14 @@ export interface FlowchartSemanticNode {
   id: string;
   kind: FlowchartNodeKind;
   label: string;
+  /** 所属泳道 id（责任分配语义）；仅当 parentId 指向 swimlane-lane 时存在。 */
+  laneId?: string;
+}
+
+/** 语义泳道：只含 id/label，不伪装成流程节点。 */
+export interface FlowchartSemanticLane {
+  id: string;
+  label: string;
 }
 
 /** 语义图：不含坐标和 viewport，用于 AI 上下文、patch 和语义哈希。 */
@@ -182,6 +389,8 @@ export interface FlowchartSemanticGraph {
   direction: FlowchartDirection;
   nodes: FlowchartSemanticNode[];
   edges: FlowchartEdge[];
+  /** 泳道标题列表（泳道归属是流程语义的一部分） */
+  lanes?: FlowchartSemanticLane[];
 }
 
 // ---------------------------------------------------------------------------
@@ -190,7 +399,8 @@ export interface FlowchartSemanticGraph {
 
 export const FLOWCHART_FENCE_LANG = "mona-flowchart";
 export const FLOWCHART_PATCH_FENCE_LANG = "mona-flowchart-patch";
-export const FLOWCHART_DOCUMENT_VERSION = 1;
+/** 当前文档版本；v1 文件解析后经迁移进入内存。 */
+export const FLOWCHART_DOCUMENT_VERSION = 2;
 
 const FENCE_OPEN_RE = /```mona-flowchart\s*\n/g;
 const FENCE_CLOSE_RE = /```/g;
@@ -273,6 +483,52 @@ export function validateFlowchartDocument(input: unknown): FlowchartValidationRe
     errors.push(invalid("direction-invalid", `direction 必须是 TB 或 LR`));
   }
 
+  // canvas / theme（v2 必填）
+  if (typeof doc.canvas !== "object" || doc.canvas === null || Array.isArray(doc.canvas)) {
+    errors.push(invalid("canvas-missing", "缺少 canvas 设置"));
+  } else {
+    const c = doc.canvas as Record<string, unknown>;
+    if (c.mode !== "infinite" && c.mode !== "page") {
+      errors.push(invalid("canvas-mode-invalid", "canvas.mode 必须是 infinite 或 page"));
+    }
+    if (typeof c.grid !== "object" || c.grid === null || Array.isArray(c.grid)) {
+      errors.push(invalid("canvas-grid-invalid", "canvas.grid 不是对象"));
+    } else {
+      const g = c.grid as Record<string, unknown>;
+      if (typeof g.visible !== "boolean" || typeof g.snap !== "boolean" ||
+          typeof g.size !== "number" || !Number.isFinite(g.size) || g.size <= 0) {
+        errors.push(invalid("canvas-grid-invalid", "canvas.grid 字段不合法"));
+      }
+    }
+    for (const key of ["width", "height"] as const) {
+      const v = c[key];
+      if (v !== undefined && (typeof v !== "number" || !Number.isFinite(v) || v <= 0)) {
+        errors.push(invalid("canvas-size-invalid", `canvas.${key} 必须为正有限数`));
+      }
+    }
+    if (c.orientation !== undefined && c.orientation !== "portrait" && c.orientation !== "landscape") {
+      errors.push(invalid("canvas-orientation-invalid", "canvas.orientation 不合法"));
+    }
+    if (c.background !== undefined && typeof c.background !== "string") {
+      errors.push(invalid("canvas-background-invalid", "canvas.background 不是字符串"));
+    }
+  }
+
+  if (typeof doc.theme !== "object" || doc.theme === null || Array.isArray(doc.theme)) {
+    errors.push(invalid("theme-missing", "缺少 theme 设置"));
+  } else {
+    const t = doc.theme as Record<string, unknown>;
+    if (t.stylePreset !== "solid" && t.stylePreset !== "outline" && t.stylePreset !== "soft") {
+      errors.push(invalid("theme-preset-invalid", "theme.stylePreset 不合法"));
+    }
+    if (typeof t.paletteId !== "string" || t.paletteId.length === 0) {
+      errors.push(invalid("theme-palette-invalid", "theme.paletteId 为空"));
+    }
+    if (typeof t.preserveManualStyles !== "boolean") {
+      errors.push(invalid("theme-preserve-invalid", "theme.preserveManualStyles 不是布尔值"));
+    }
+  }
+
   if (!Array.isArray(doc.nodes)) {
     errors.push(invalid("nodes-not-array", "nodes 不是数组"));
   } else {
@@ -305,13 +561,124 @@ export function validateFlowchartDocument(input: unknown): FlowchartValidationRe
           errors.push(invalid("node-size-invalid", `${ctx} size 不是对象`));
         } else {
           const s = n.size as Record<string, unknown>;
-          if (typeof s.width !== "number" || !Number.isFinite(s.width) || s.width <= 0 ||
-              typeof s.height !== "number" || !Number.isFinite(s.height) || s.height <= 0) {
-            errors.push(invalid("node-size-invalid", `${ctx} size.width/height 必须为正有限数`));
+          if (typeof s.width !== "number" || !Number.isFinite(s.width) || s.width <= 0 || s.width > 10000 ||
+              typeof s.height !== "number" || !Number.isFinite(s.height) || s.height <= 0 || s.height > 10000) {
+            errors.push(invalid("node-size-invalid", `${ctx} size.width/height 必须在 0-10000 之间的正有限数`));
+          }
+        }
+      }
+      // v2 可选字段
+      if (n.parentId !== undefined && (typeof n.parentId !== "string" || n.parentId.length === 0)) {
+        errors.push(invalid("node-parent-invalid", `${ctx} parentId 不是非空字符串`));
+      }
+      if (n.zIndex !== undefined && (typeof n.zIndex !== "number" || !Number.isFinite(n.zIndex))) {
+        errors.push(invalid("node-zindex-invalid", `${ctx} zIndex 不是有限数值`));
+      }
+      if (n.rotation !== undefined && (typeof n.rotation !== "number" || !Number.isFinite(n.rotation))) {
+        errors.push(invalid("node-rotation-invalid", `${ctx} rotation 不是有限数值`));
+      }
+      if (n.flipX !== undefined && typeof n.flipX !== "boolean") {
+        errors.push(invalid("node-flip-invalid", `${ctx} flipX 不是布尔值`));
+      }
+      if (n.flipY !== undefined && typeof n.flipY !== "boolean") {
+        errors.push(invalid("node-flip-invalid", `${ctx} flipY 不是布尔值`));
+      }
+      if (n.locked !== undefined && typeof n.locked !== "boolean") {
+        errors.push(invalid("node-locked-invalid", `${ctx} locked 不是布尔值`));
+      }
+      if (n.opacity !== undefined &&
+          (typeof n.opacity !== "number" || !Number.isFinite(n.opacity) || n.opacity < 0 || n.opacity > 1)) {
+        errors.push(invalid("node-opacity-invalid", `${ctx} opacity 必须在 0-1 之间`));
+      }
+      // container 结构参数：只允许挂在 group/pool/lane 上，且类型必须匹配 kind
+      const kindIsContainer = isFlowchartContainerKind(n.kind as FlowchartNodeKind);
+      if (n.container !== undefined) {
+        if (!kindIsContainer || typeof n.container !== "object" || n.container === null || Array.isArray(n.container)) {
+          errors.push(invalid("node-container-invalid", `${ctx} container 只允许挂在 group/pool/lane 上`));
+        } else {
+          const c = n.container as Record<string, unknown>;
+          const expectType =
+            n.kind === "group" ? "group" : n.kind === "swimlane-pool" ? "pool" : "lane";
+          if (c.type !== expectType) {
+            errors.push(invalid("node-container-invalid", `${ctx} container.type 与 kind 不匹配`));
+          }
+          if ((c.type === "pool" || c.type === "lane") &&
+              c.orientation !== "horizontal" && c.orientation !== "vertical") {
+            errors.push(invalid("node-container-invalid", `${ctx} container.orientation 不合法`));
+          }
+          if (c.type === "pool" &&
+              (typeof c.headerSize !== "number" || !Number.isFinite(c.headerSize) || c.headerSize <= 0)) {
+            errors.push(invalid("node-container-invalid", `${ctx} container.headerSize 必须为正有限数`));
+          }
+          if (c.type === "lane" &&
+              (typeof c.order !== "number" || !Number.isFinite(c.order))) {
+            errors.push(invalid("node-container-invalid", `${ctx} container.order 不是有限数值`));
           }
         }
       }
     });
+
+    // 跨节点结构校验：parentId 引用、泳道归属、嵌套深度、父子循环
+    const kindById = new Map<string, FlowchartNodeKind>();
+    const containerById = new Map<string, Record<string, unknown>>();
+    const parentById = new Map<string, string>();
+    doc.nodes.forEach((raw) => {
+      if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return;
+      const n = raw as Record<string, unknown>;
+      if (typeof n.id !== "string" || n.id.length === 0) return;
+      kindById.set(n.id, n.kind as FlowchartNodeKind);
+      if (typeof n.container === "object" && n.container !== null && !Array.isArray(n.container)) {
+        containerById.set(n.id, n.container as Record<string, unknown>);
+      }
+      if (typeof n.parentId === "string" && n.parentId.length > 0) {
+        parentById.set(n.id, n.parentId);
+      }
+    });
+    for (const [id, parentId] of parentById) {
+      const parentKind = kindById.get(parentId);
+      if (!parentKind) {
+        errors.push(invalid("node-parent-missing", `节点 ${id} 的 parentId 指向不存在节点：${parentId}`));
+        continue;
+      }
+      if (!isFlowchartContainerKind(parentKind)) {
+        errors.push(invalid("node-parent-not-container", `节点 ${id} 的 parentId 指向非容器节点：${parentId}`));
+        continue;
+      }
+      const kind = kindById.get(id)!;
+      // 容器自身的归属：pool/group 必须在根部；lane 的 parent 必须是 pool 且方向一致
+      if (kind === "swimlane-pool" || kind === "group") {
+        errors.push(invalid("node-parent-nesting", `容器节点 ${id} 不能归属其他容器`));
+        continue;
+      }
+      if (kind === "swimlane-lane" && parentKind !== "swimlane-pool") {
+        errors.push(invalid("node-parent-nesting", `泳道 ${id} 的 parent 必须是泳池`));
+        continue;
+      }
+      if (kind === "swimlane-lane" && parentKind === "swimlane-pool") {
+        const laneC = containerById.get(id);
+        const poolC = containerById.get(parentId);
+        if (laneC && poolC && laneC.orientation !== poolC.orientation) {
+          errors.push(invalid("node-parent-orientation", `泳道 ${id} 与泳池方向不一致`));
+        }
+      }
+      // 最大嵌套：root -> group/pool -> lane -> shape；shape 的直接 parent 只能是 group 或 lane
+      if (!isFlowchartContainerKind(kind) && parentKind === "swimlane-pool") {
+        errors.push(invalid("node-parent-nesting", `节点 ${id} 不能直接归属泳池，应归属泳道`));
+      }
+      // 父子循环（parent 链回到自身）
+      let cursor = parentId;
+      const seen = new Set<string>([id]);
+      while (true) {
+        if (seen.has(cursor)) {
+          errors.push(invalid("node-parent-cycle", `节点 ${id} 的 parent 链存在循环`));
+          break;
+        }
+        seen.add(cursor);
+        const next = parentById.get(cursor);
+        if (!next) break;
+        cursor = next;
+      }
+    }
   }
 
   if (!Array.isArray(doc.edges)) {
@@ -319,10 +686,12 @@ export function validateFlowchartDocument(input: unknown): FlowchartValidationRe
   } else {
     const edgeIds = new Set<string>();
     const nodeIds = new Set<string>();
+    const kindById = new Map<string, FlowchartNodeKind>();
     if (Array.isArray(doc.nodes)) {
       for (const n of doc.nodes) {
         if (typeof n === "object" && n !== null && typeof (n as { id: unknown }).id === "string") {
           nodeIds.add((n as { id: string }).id);
+          kindById.set((n as { id: string }).id, (n as { kind: FlowchartNodeKind }).kind);
         }
       }
     }
@@ -348,6 +717,16 @@ export function validateFlowchartDocument(input: unknown): FlowchartValidationRe
       }
       if (typeof e.source === "string" && typeof e.target === "string" && e.source === e.target) {
         errors.push(invalid("edge-self-loop", `${ctx} source 等于 target：${e.source}`));
+      }
+      // 容器（group/pool/lane）不能作为普通流程边端点
+      for (const endpoint of ["source", "target"] as const) {
+        const ref = e[endpoint];
+        if (typeof ref === "string") {
+          const k = kindById.get(ref);
+          if (k && isFlowchartContainerKind(k)) {
+            errors.push(invalid("edge-container-endpoint", `${ctx} ${endpoint} 指向容器节点：${ref}`));
+          }
+        }
       }
       if (e.label !== undefined && typeof e.label !== "string") {
         errors.push(invalid("edge-label-not-string", `${ctx} label 不是字符串`));
@@ -427,8 +806,9 @@ export function collectFlowchartSemanticWarnings(doc: FlowchartDocument): Flowch
     }
   }
 
-  // 孤立节点：既无入边也无出边
+  // 孤立节点：既无入边也无出边（容器只是视觉分组，不参与流程语义检查）
   for (const node of nodes) {
+    if (isFlowchartContainerKind(node.kind)) continue;
     if (!edges.some((e) => e.source === node.id || e.target === node.id)) {
       warnings.push({ code: "isolated-node", message: `节点 ${node.id} 孤立`, nodeId: node.id });
     }
@@ -447,6 +827,7 @@ export function collectFlowchartSemanticWarnings(doc: FlowchartDocument): Flowch
       }
     }
     for (const node of nodes) {
+      if (isFlowchartContainerKind(node.kind)) continue;
       if (!reachable.has(node.id) && node.kind !== "start") {
         warnings.push({ code: "unreachable-node", message: `节点 ${node.id} 不可从开始节点到达`, nodeId: node.id });
       }
@@ -528,6 +909,14 @@ export function parseFlowchartMarkdown(markdown: string): ParseFlowchartResult {
     return { ok: false, message: `JSON 解析失败：${e instanceof Error ? e.message : String(e)}` };
   }
 
+  // v1 文件：经纯迁移函数补默认值进入内存（不静默丢字段，不写回文件）
+  if (
+    typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) &&
+    (parsed as Record<string, unknown>).version === 1
+  ) {
+    parsed = migrateFlowchartV1ToV2(parsed as Record<string, unknown>);
+  }
+
   const validation = validateFlowchartDocument(parsed);
   if (!validation.ok) {
     const detail = validation.errors.map((e) => `[${e.code}] ${e.message}`).join("; ");
@@ -568,7 +957,45 @@ function normalizeNodeStyle(raw: unknown): FlowchartNodeStyle | undefined {
   if (s.borderStyle === "solid" || s.borderStyle === "dashed" || s.borderStyle === "dotted") out.borderStyle = s.borderStyle;
   if (typeof s.bold === "boolean") out.bold = s.bold;
   if (typeof s.italic === "boolean") out.italic = s.italic;
+  if (typeof s.underline === "boolean") out.underline = s.underline;
+  if (s.textAlign === "left" || s.textAlign === "center" || s.textAlign === "right") out.textAlign = s.textAlign;
+  if (s.verticalAlign === "top" || s.verticalAlign === "middle" || s.verticalAlign === "bottom") out.verticalAlign = s.verticalAlign;
+  if (typeof s.lineHeight === "number" && Number.isFinite(s.lineHeight) && s.lineHeight > 0) out.lineHeight = s.lineHeight;
+  if (typeof s.cornerRadius === "number" && Number.isFinite(s.cornerRadius) && s.cornerRadius >= 0) out.cornerRadius = s.cornerRadius;
   return Object.keys(out).length === 0 ? undefined : out;
+}
+
+/** 规范化 canvas 设置：非法字段回退默认值。v1 迁移与 v2 解析共用。 */
+export function normalizeFlowchartCanvas(raw: unknown): FlowchartCanvasSettings {
+  const base: FlowchartCanvasSettings = {
+    mode: DEFAULT_FLOWCHART_CANVAS.mode,
+    grid: { ...DEFAULT_FLOWCHART_CANVAS.grid },
+  };
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return base;
+  const c = raw as Record<string, unknown>;
+  if (c.mode === "page") base.mode = "page";
+  if (typeof c.width === "number" && Number.isFinite(c.width) && c.width > 0) base.width = c.width;
+  if (typeof c.height === "number" && Number.isFinite(c.height) && c.height > 0) base.height = c.height;
+  if (c.orientation === "portrait" || c.orientation === "landscape") base.orientation = c.orientation;
+  if (typeof c.background === "string" && c.background.length > 0) base.background = c.background;
+  if (typeof c.grid === "object" && c.grid !== null && !Array.isArray(c.grid)) {
+    const g = c.grid as Record<string, unknown>;
+    if (typeof g.visible === "boolean") base.grid.visible = g.visible;
+    if (typeof g.snap === "boolean") base.grid.snap = g.snap;
+    if (typeof g.size === "number" && Number.isFinite(g.size) && g.size > 0) base.grid.size = g.size;
+  }
+  return base;
+}
+
+/** 规范化 theme 设置：非法字段回退默认值。v1 迁移与 v2 解析共用。 */
+export function normalizeFlowchartTheme(raw: unknown): FlowchartThemeSettings {
+  const base: FlowchartThemeSettings = { ...DEFAULT_FLOWCHART_THEME };
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return base;
+  const t = raw as Record<string, unknown>;
+  if (t.stylePreset === "outline" || t.stylePreset === "soft") base.stylePreset = t.stylePreset;
+  if (typeof t.paletteId === "string" && t.paletteId.length > 0) base.paletteId = t.paletteId;
+  if (typeof t.preserveManualStyles === "boolean") base.preserveManualStyles = t.preserveManualStyles;
+  return base;
 }
 
 /** 规范化边样式：只保留已知字段且值为合法类型的键；全部缺失则返回 undefined。
@@ -590,6 +1017,24 @@ function normalizeEdgeStyle(raw: unknown): FlowchartEdgeStyle | undefined {
   if (s.markerStart === "none" || s.markerStart === "arrow" || s.markerStart === "arrowclosed") out.markerStart = s.markerStart;
   if (s.markerEnd === "none" || s.markerEnd === "arrow" || s.markerEnd === "arrowclosed") out.markerEnd = s.markerEnd;
   return Object.keys(out).length === 0 ? undefined : out;
+}
+
+/** 规范化控制点：仅保留有限数值坐标对；最多 16 个；全部无效返回 undefined。
+ *  用于解析时容错（旧文件无此字段或字段损坏）。 */
+function normalizeControlPoints(raw: unknown): { x: number; y: number }[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: { x: number; y: number }[] = [];
+  for (const item of raw) {
+    if (typeof item !== "object" || item === null || Array.isArray(item)) continue;
+    const p = item as Record<string, unknown>;
+    const x = Number(p.x);
+    const y = Number(p.y);
+    if (Number.isFinite(x) && Number.isFinite(y)) {
+      out.push({ x, y });
+    }
+    if (out.length >= 16) break;
+  }
+  return out.length > 0 ? out : undefined;
 }
 
 /**
@@ -624,10 +1069,13 @@ function normalizeFlowchartDocument(input: unknown): FlowchartDocument {
       if (typeof n.path === "string") node.path = n.path;
       if (n.drawingTool === "pen" || n.drawingTool === "highlighter") node.drawingTool = n.drawingTool;
       if (typeof n.color === "string" && n.color.length > 0) node.color = n.color;
-      if (typeof n.opacity === "number" && Number.isFinite(n.opacity)) node.opacity = n.opacity;
       if (typeof n.strokeWidth === "number" && Number.isFinite(n.strokeWidth) && n.strokeWidth > 0) {
         node.strokeWidth = n.strokeWidth;
       }
+    }
+    // 不透明度（freehand 笔触透明度与 v2 通用节点透明度共用此字段）
+    if (typeof n.opacity === "number" && Number.isFinite(n.opacity) && n.opacity >= 0 && n.opacity <= 1) {
+      node.opacity = n.opacity;
     }
     // 节点尺寸
     if (n.size && typeof n.size === "object" && !Array.isArray(n.size)) {
@@ -636,6 +1084,36 @@ function normalizeFlowchartDocument(input: unknown): FlowchartDocument {
       const h = Number(sz.height);
       if (Number.isFinite(w) && w > 0 && Number.isFinite(h) && h > 0) {
         node.size = { width: w, height: h };
+      }
+    }
+    // v2：容器归属与层叠
+    if (typeof n.parentId === "string" && n.parentId.length > 0) node.parentId = n.parentId;
+    if (typeof n.zIndex === "number" && Number.isFinite(n.zIndex)) node.zIndex = n.zIndex;
+    // v2：旋转规范化到 0..359
+    if (typeof n.rotation === "number" && Number.isFinite(n.rotation)) {
+      node.rotation = ((Math.round(n.rotation) % 360) + 360) % 360;
+    }
+    if (typeof n.flipX === "boolean") node.flipX = n.flipX;
+    if (typeof n.flipY === "boolean") node.flipY = n.flipY;
+    if (typeof n.locked === "boolean") node.locked = n.locked;
+    // v2：容器结构参数
+    if (isFlowchartContainerKind(node.kind) &&
+        typeof n.container === "object" && n.container !== null && !Array.isArray(n.container)) {
+      const c = n.container as Record<string, unknown>;
+      if (node.kind === "group" && c.type === "group") {
+        node.container = { type: "group" };
+      } else if (node.kind === "swimlane-pool" && c.type === "pool") {
+        node.container = {
+          type: "pool",
+          orientation: c.orientation === "vertical" ? "vertical" : "horizontal",
+          headerSize: Number(c.headerSize),
+        };
+      } else if (node.kind === "swimlane-lane" && c.type === "lane") {
+        node.container = {
+          type: "lane",
+          orientation: c.orientation === "vertical" ? "vertical" : "horizontal",
+          order: Number(c.order),
+        };
       }
     }
     return node;
@@ -652,11 +1130,16 @@ function normalizeFlowchartDocument(input: unknown): FlowchartDocument {
     if (typeof e.targetHandle === "string") edge.targetHandle = e.targetHandle;
     const s = normalizeEdgeStyle(e.style);
     if (s) edge.style = s;
+    // 解析用户调整的控制点（仅保留有限数值坐标对）
+    const cps = normalizeControlPoints(e.controlPoints);
+    if (cps) edge.controlPoints = cps;
     return edge;
   });
   const doc: FlowchartDocument = {
-    version: 1,
+    version: FLOWCHART_DOCUMENT_VERSION,
     direction: raw.direction as FlowchartDirection,
+    canvas: normalizeFlowchartCanvas(raw.canvas),
+    theme: normalizeFlowchartTheme(raw.theme),
     nodes,
     edges,
   };
@@ -697,27 +1180,33 @@ export function serializeFlowchartMarkdown(title: string, doc: FlowchartDocument
  * - 文件中围栏之前的可读内容；
  * - 后端 preview/plainText/search；
  * - 关系图扫描（节点和边 label 中的 [[wiki link]] 进入反链）。
+ *
+ * v2 规则（FC-DOC-05）：
+ * - pool/lane/group 标题进入投影；
+ * - 纯视觉、无文字的基础形状不制造空索引项（label 为空时跳过）。
  */
 export function buildFlowchartIndexMarkdown(title: string, doc: FlowchartDocument): string {
   const lines: string[] = [];
-  lines.push(`# ${title || "未命名流程图"}`);
+  lines.push(`# ${title || "未命名画布"}`);
   lines.push("");
   lines.push("## 节点");
   lines.push("");
-  if (doc.nodes.length === 0) {
+  const labeledNodes = doc.nodes.filter((n) => n.label.trim().length > 0);
+  if (labeledNodes.length === 0) {
     lines.push("- （无节点）");
   } else {
-    for (const n of doc.nodes) {
+    for (const n of labeledNodes) {
       lines.push(`- ${n.label}`);
     }
   }
   lines.push("");
   lines.push("## 连线");
   lines.push("");
-  if (doc.edges.length === 0) {
+  const labeledEdges = doc.edges.filter((e) => (e.label ?? "").trim().length > 0);
+  if (labeledEdges.length === 0) {
     lines.push("- （无连线）");
   } else {
-    for (const e of doc.edges) {
+    for (const e of labeledEdges) {
       lines.push(`- ${e.label ?? ""}`.trimEnd());
     }
   }
@@ -748,17 +1237,40 @@ export function buildFlowchartPlainText(title: string, doc: FlowchartDocument): 
 // 语义图与语义哈希
 // ---------------------------------------------------------------------------
 
-/** 提取语义图：去掉 position 和 viewport，保留 id/kind/label/direction/edges。 */
+/**
+ * 提取语义图：去掉 position 和 viewport，保留 id/kind/label/direction/edges。
+ *
+ * v2 规则（FC-DOC-04）：
+ * - 排除 group/pool/lane 容器与 freehand/image 非流程语义节点；
+ * - 节点所属泳道是责任分配语义，parentId 指向 lane 时写入 laneId；
+ * - lane 标题进入 lanes 投影（不伪装成流程节点）；
+ * - 普通 group 的 parentId、position、size、rotation、zIndex、style、theme、canvas 不进入。
+ */
 export function extractSemanticGraph(doc: FlowchartDocument): FlowchartSemanticGraph {
-  return {
+  const laneIds = new Set(
+    doc.nodes.filter((n) => n.kind === "swimlane-lane").map((n) => n.id),
+  );
+  const nodes: FlowchartSemanticNode[] = [];
+  for (const n of doc.nodes) {
+    if (isFlowchartContainerKind(n.kind) || n.kind === "freehand" || n.kind === "image") continue;
+    const node: FlowchartSemanticNode = { id: n.id, kind: n.kind, label: n.label };
+    if (n.parentId && laneIds.has(n.parentId)) node.laneId = n.parentId;
+    nodes.push(node);
+  }
+  const lanes: FlowchartSemanticLane[] = doc.nodes
+    .filter((n) => n.kind === "swimlane-lane")
+    .map((n) => ({ id: n.id, label: n.label }));
+  const graph: FlowchartSemanticGraph = {
     direction: doc.direction,
-    nodes: doc.nodes.map((n) => ({ id: n.id, kind: n.kind, label: n.label })),
+    nodes,
     edges: doc.edges.map((e) => {
       const edge: FlowchartEdge = { id: e.id, source: e.source, target: e.target };
       if (e.label !== undefined) edge.label = e.label;
       return edge;
     }),
   };
+  if (lanes.length > 0) graph.lanes = lanes;
+  return graph;
 }
 
 /**
@@ -784,12 +1296,17 @@ export function computeFlowchartSemanticHash(doc: FlowchartDocument): string {
   return `h${hash.toString(16).padStart(14, "0")}`;
 }
 
-/** 规范化为可哈希对象：稳定字段顺序 + 节点/边排序。 */
+/** 规范化为可哈希对象：稳定字段顺序 + 节点/边排序；与 extractSemanticGraph 同一投影。 */
 function canonicalizeForHash(doc: FlowchartDocument): Record<string, unknown> {
-  const nodes = [...doc.nodes]
-    .map((n) => ({ id: n.id, kind: n.kind, label: n.label }))
-    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-  const edges = [...doc.edges]
+  const graph = extractSemanticGraph(doc);
+  const nodes = [...graph.nodes]
+    .map((n) => {
+      const node: Record<string, unknown> = { id: n.id, kind: n.kind, label: n.label };
+      if (n.laneId !== undefined) node.laneId = n.laneId;
+      return node;
+    })
+    .sort((a, b) => ((a.id as string) < (b.id as string) ? -1 : (a.id as string) > (b.id as string) ? 1 : 0));
+  const edges = [...graph.edges]
     .map((e) => {
       const edge: Record<string, unknown> = { id: e.id, source: e.source, target: e.target };
       if (e.label !== undefined) edge.label = e.label;
@@ -800,10 +1317,14 @@ function canonicalizeForHash(doc: FlowchartDocument): Record<string, unknown> {
       const sb = `${b.source}|${b.target}|${b.id}`;
       return sa < sb ? -1 : sa > sb ? 1 : 0;
     });
+  const lanes = [...(graph.lanes ?? [])]
+    .map((l) => ({ id: l.id, label: l.label }))
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   return {
     version: doc.version,
     direction: doc.direction,
     nodes,
+    lanes,
     edges,
   };
 }
@@ -837,6 +1358,11 @@ export function cloneFlowchartDocument(doc: FlowchartDocument): FlowchartDocumen
   return {
     version: doc.version,
     direction: doc.direction,
+    canvas: {
+      ...doc.canvas,
+      grid: { ...doc.canvas.grid },
+    },
+    theme: { ...doc.theme },
     nodes: doc.nodes.map((n) => {
       const clone: FlowchartNode = {
         id: n.id,
@@ -852,9 +1378,17 @@ export function cloneFlowchartDocument(doc: FlowchartDocument): FlowchartDocumen
         if (n.path) clone.path = n.path;
         if (n.drawingTool) clone.drawingTool = n.drawingTool;
         if (n.color) clone.color = n.color;
-        if (typeof n.opacity === "number") clone.opacity = n.opacity;
         if (typeof n.strokeWidth === "number") clone.strokeWidth = n.strokeWidth;
       }
+      if (typeof n.opacity === "number") clone.opacity = n.opacity;
+      // v2 字段
+      if (n.parentId !== undefined) clone.parentId = n.parentId;
+      if (n.zIndex !== undefined) clone.zIndex = n.zIndex;
+      if (n.rotation !== undefined) clone.rotation = n.rotation;
+      if (n.flipX !== undefined) clone.flipX = n.flipX;
+      if (n.flipY !== undefined) clone.flipY = n.flipY;
+      if (n.locked !== undefined) clone.locked = n.locked;
+      if (n.container) clone.container = { ...n.container };
       return clone;
     }),
     edges: doc.edges.map((e) => {
@@ -868,6 +1402,7 @@ export function cloneFlowchartDocument(doc: FlowchartDocument): FlowchartDocumen
       if (typeof e.sourceHandle === "string") edge.sourceHandle = e.sourceHandle;
       if (typeof e.targetHandle === "string") edge.targetHandle = e.targetHandle;
       if (e.style) edge.style = { ...e.style };
+      if (e.controlPoints) edge.controlPoints = e.controlPoints.map((p) => ({ x: p.x, y: p.y }));
       return edge;
     }),
     viewport: doc.viewport
@@ -879,8 +1414,13 @@ export function cloneFlowchartDocument(doc: FlowchartDocument): FlowchartDocumen
 /** 构造空白流程图文档：包含一个开始节点和一个结束节点，不连线。 */
 export function createBlankFlowchartDocument(): FlowchartDocument {
   return {
-    version: 1,
+    version: FLOWCHART_DOCUMENT_VERSION,
     direction: "TB",
+    canvas: {
+      ...DEFAULT_FLOWCHART_CANVAS,
+      grid: { ...DEFAULT_FLOWCHART_CANVAS.grid },
+    },
+    theme: { ...DEFAULT_FLOWCHART_THEME },
     nodes: [
       {
         id: "n-start",

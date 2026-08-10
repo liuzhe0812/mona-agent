@@ -18,6 +18,7 @@ from mona.config.loader import get_config_path, load_config, save_config
 from mona.providers.image_generation import get_image_gen_provider
 from mona.providers.registry import PROVIDERS, find_by_name
 from mona.providers.video_generation import get_video_gen_provider
+from mona.security.network import validate_url_target
 
 QueryParams = dict[str, list[str]]
 
@@ -492,6 +493,12 @@ def settings_payload(*, requires_restart: bool = False) -> dict[str, Any]:
                 "model": cfg_model,
                 "free_default_model": (
                     spec.free_default_model if spec.free_default_model else None
+                ),
+                "backend": spec.backend,
+                "probe_supported": (
+                    not spec.is_oauth
+                    and spec.backend
+                    in ("openai_compat", "anthropic")
                 ),
             }
         )
@@ -1183,3 +1190,177 @@ async def fetch_zen_free_models() -> list[str]:
     except Exception:
         logger.exception("Failed to fetch Zen free models")
         return []
+
+
+# ─── Provider model probing ───────────────────────────────────────────
+#
+# Fetch a provider's real model catalog by hitting its OpenAI-compatible
+# ``GET /v1/models`` (or vendor equivalent). Mirrors the approach used by
+# OpenAkita's ``model_probe.probe_models``: one HTTP GET, normalised payload
+# parsing, typed errors with Chinese user messages.
+#
+# Mona-specific: every outbound request MUST pass ``validate_url_target``
+# (project_rules.md SSRF 红线).
+
+
+def _models_url_for(backend: str, api_base: str, provider_name: str = "") -> str | None:
+    """Resolve the models-list URL for a (backend, provider, api_base) tuple.
+
+    Returns ``None`` when the backend/provider combo has no public catalog
+    route; the caller surfaces a friendly "unsupported" message.
+    """
+    base = (api_base or "").strip().rstrip("/")
+    if not base:
+        return None
+
+    provider_l = (provider_name or "").lower()
+    backend_l = (backend or "").lower()
+
+    # DashScope's OpenAI-compat entry is /compatible-mode/v1/models.
+    # If the user already pasted a base ending in /compatible-mode/v1,
+    # just append /models; otherwise rebuild from the bare host.
+    if provider_l == "dashscope" and "dashscope.aliyuncs.com" in base:
+        if "/compatible-mode" in base:
+            return f"{base.rstrip('/')}/models"
+        return f"{base.rstrip('/')}/compatible-mode/v1/models"
+
+    # Anthropic native API has no public /v1/models, but relays that
+    # expose Claude through an OpenAI shim usually do — still try /v1/models.
+    if backend_l in ("openai_compat", "anthropic"):
+        # Normalise: strip trailing /v1/chat/completions, /chat/completions,
+        # or /v1 so we can re-append a canonical /v1/models.
+        for suffix in ("/v1/chat/completions", "/chat/completions", "/v1"):
+            if base.endswith(suffix):
+                base = base[: -len(suffix)]
+                break
+        return f"{base}/v1/models"
+
+    return None
+
+
+def _parse_models_payload(payload: Any) -> list[str]:
+    """Extract a flat ``list[str]`` of model ids from arbitrary shapes.
+
+    Accepted shapes (any of):
+      - ``{"data": [{"id": "gpt-4o"}, ...]}``        (OpenAI standard)
+      - ``{"data": ["gpt-4o", "gpt-4o-mini"]}``       (some relays)
+      - ``{"models": [{"name": "claude-3.5"}]}``      (Anthropic-ish)
+      - ``[{"id": "x"}, {"id": "y"}]``                (flat list at root)
+      - ``["x", "y"]``                                (string array)
+    Duplicates removed, first-seen order preserved.
+    """
+    items: list[Any] = []
+    if isinstance(payload, dict):
+        for key in ("data", "models", "list"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                items = value
+                break
+    elif isinstance(payload, list):
+        items = payload
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        if isinstance(item, str):
+            name = item.strip()
+        elif isinstance(item, dict):
+            name = str(item.get("id") or item.get("name") or "").strip()
+        else:
+            continue
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        out.append(name)
+    return out
+
+
+async def probe_provider_models(
+    *,
+    provider_name: str,
+    api_key: str | None = None,
+    api_base: str | None = None,
+    timeout: float = 15.0,
+) -> list[str]:
+    """Fetch the model catalog for one provider.
+
+    Raises ``WebUISettingsError`` on any failure (auth / network / unsupported /
+    parse), with a Chinese ``message`` suitable for surfacing to the UI.
+    On success returns a list of model id strings (may be empty).
+    """
+    spec = find_by_name(provider_name)
+    if spec is None:
+        raise WebUISettingsError("unknown provider")
+
+    # OAuth / non-HTTP providers (Codex, Copilot, Bedrock) can't be probed.
+    if spec.is_oauth or spec.backend in ("openai_codex", "github_copilot", "bedrock", "azure_openai"):
+        raise WebUISettingsError("该服务商不支持自动拉取模型列表，请手动填写")
+
+    config = load_config()
+    provider_config = getattr(config.providers, spec.name, None)
+    if provider_config is None:
+        raise WebUISettingsError("unknown provider")
+
+    effective_base = (api_base or provider_config.api_base or spec.default_api_base or "").strip()
+    if not effective_base:
+        raise WebUISettingsError("请先填写 API Base 后再拉取模型")
+
+    effective_key = (api_key or provider_config.api_key or "").strip()
+
+    url = _models_url_for(spec.backend, effective_base, spec.name)
+    if not url:
+        raise WebUISettingsError("该服务商不支持自动拉取模型列表，请手动填写")
+
+    # SSRF 红线：所有出站 HTTP 必须过 validate_url_target
+    ok, err = validate_url_target(url)
+    if not ok:
+        raise WebUISettingsError(f"API Base 不允许访问：{err}")
+
+    headers: dict[str, str] = {"Accept": "application/json"}
+    if effective_key:
+        # Send both Bearer and x-api-key so we don't branch per provider;
+        # an extra header an endpoint ignores is harmless.
+        headers["Authorization"] = f"Bearer {effective_key}"
+        headers["x-api-key"] = effective_key
+        headers["anthropic-version"] = "2023-06-01"
+
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.get(url, headers=headers)
+    except httpx.TimeoutException:
+        raise WebUISettingsError(
+            f"探测超时（>{timeout:.0f}s），请检查网络或 API Base 是否可达"
+        ) from None
+    except httpx.HTTPError as exc:
+        raise WebUISettingsError(f"无法访问该 API Base：{exc}") from exc
+
+    body = resp.text or ""
+    status = resp.status_code
+
+    if status in (401, 403):
+        raise WebUISettingsError(
+            f"API Key 被拒绝（HTTP {status}），请检查 Key / 计费是否正常"
+        )
+    if status == 404:
+        raise WebUISettingsError("该 endpoint 没有 /v1/models 路由，无法拉取模型列表")
+    if status >= 400:
+        raise WebUISettingsError(f"拉取失败 HTTP {status}：{body[:120]}")
+
+    # Some expired relays return an HTML 200 login page — treat as unsupported.
+    head = body.lstrip()[:64].lower()
+    if head.startswith(("<!doctype", "<html", "<head", "<body")):
+        raise WebUISettingsError("endpoint 返回 HTML 页面（可能需要登录），不是模型列表")
+
+    try:
+        payload = resp.json() if body else None
+    except ValueError as exc:
+        raise WebUISettingsError(f"endpoint 返回内容不是 JSON: {body[:100]}") from exc
+
+    if not isinstance(payload, (dict, list)):
+        raise WebUISettingsError("endpoint 返回内容格式无法识别")
+
+    models = _parse_models_payload(payload)
+    if not models and isinstance(payload, dict) and payload.get("error"):
+        err_msg = str(payload["error"])[:200]
+        raise WebUISettingsError(f"endpoint 返回错误: {err_msg}")
+    return models

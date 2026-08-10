@@ -347,6 +347,10 @@ export interface SendOptions {
   dbConnectionId?: string;
   dbDatabase?: string;
   dbTable?: string;
+  dbType?: string;
+  dbServerVersion?: string;
+  dbCurrentSql?: string;
+  dbLastError?: string;
   browserPageUrl?: string;
   browserPageTitle?: string;
 }
@@ -994,6 +998,10 @@ export function useMonaStream(
           dbConnectionId: options.dbConnectionId,
           dbDatabase: options.dbDatabase,
           dbTable: options.dbTable,
+          dbType: options.dbType,
+          dbServerVersion: options.dbServerVersion,
+          dbCurrentSql: options.dbCurrentSql,
+          dbLastError: options.dbLastError,
           browserPageUrl: options.browserPageUrl,
           browserPageTitle: options.browserPageTitle,
         });
