@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Loader2, RotateCcw, Send, Square, Zap, AlertTriangle, Table2 } from "lucide-react";
+import { Loader2, RotateCcw, Send, Square, Zap, AlertTriangle } from "lucide-react";
 import { AgentLogo } from "@/components/AgentLogo";
 import { ThreadMessages } from "@/components/thread/ThreadMessages";
 import { useMonaStream, type SendOptions } from "@/hooks/useMonaStream";
@@ -10,16 +10,6 @@ import { useClient } from "@/providers/ClientProvider";
 import { useDbStore } from "./store/dbStore";
 import type { DbSqlDraft } from "./types";
 import { SqlResultCard } from "./SqlResultCard";
-
-/** Detect whether a tab title looks like a real table name (not "新查询" etc). */
-function isRealTable(title: string | undefined): boolean {
-  if (!title) return false;
-  const trimmed = title.trim();
-  if (!trimmed) return false;
-  // Reject placeholder titles used for fresh query tabs.
-  if (/^(新查询|new query|query|查询|untitled)/i.test(trimmed)) return false;
-  return true;
-}
 
 interface DbAgentPanelProps {
   collapsed?: boolean;
@@ -37,6 +27,7 @@ export function DbAgentPanel({
   const [sqlDraft, setSqlDraft] = useState<DbSqlDraft | null>(null);
   const pendingPromptRef = useRef<string | null>(null);
   const pendingSendOptsRef = useRef<SendOptions | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
   const { client } = useClient();
 
   const activeTabId = useDbStore((s) => s.activeTabId);
@@ -117,6 +108,14 @@ export function DbAgentPanel({
     return () => { unlisten?.(); };
   }, []);
 
+  // 草稿卡片现在挂在对话流最底部，新草稿到达时自动滚到底部，避免用户回滚查找。
+  useEffect(() => {
+    if (!sqlDraft) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+  }, [sqlDraft]);
+
   const buildSendOpts = useCallback((): SendOptions => {
     const opts: SendOptions = {
       dbConnectionId: activeTab?.connectionId ?? undefined,
@@ -181,19 +180,16 @@ export function DbAgentPanel({
   }, [draft, sendPromptToAgent]);
 
   const handleContextAction = useCallback(
-    (action: "explain_sql" | "diagnose_error" | "analyze_table") => {
+    (action: "explain_sql" | "diagnose_error") => {
       if (!activeTab?.connectionId) return;
       let prompt = "";
       let label = "";
       if (action === "explain_sql") {
         prompt = "解释当前 SQL 编辑器中的语句：分析执行计划、潜在性能问题和优化建议。";
         label = "解释当前 SQL";
-      } else if (action === "diagnose_error") {
+      } else {
         prompt = "诊断当前 SQL 执行报错的原因，并给出修复建议。";
         label = "诊断当前错误";
-      } else {
-        prompt = `分析当前表 ${activeTab.title}：结构、索引、数据特征和潜在问题。`;
-        label = "分析当前表";
       }
       void sendPromptToAgent(prompt, label);
     },
@@ -216,7 +212,6 @@ export function DbAgentPanel({
 
   const hasSql = !!activeTab?.sql?.trim();
   const hasError = !!activeTab?.result?.message;
-  const hasTable = isRealTable(activeTab?.title);
 
   return (
     <aside
@@ -264,34 +259,18 @@ export function DbAgentPanel({
               onClick={() => handleContextAction("diagnose_error")}
             />
           ) : null}
-          {hasTable ? (
-            <ContextActionButton
-              icon={<Table2 className="h-3.5 w-3.5" />}
-              label="分析当前表"
-              disabled={creatingChat || isStreaming}
-              onClick={() => handleContextAction("analyze_table")}
-            />
-          ) : null}
-          {!hasSql && !hasError && !hasTable ? (
+          {!hasSql && !hasError ? (
             <p className="px-1 py-1 text-[10.5px] text-muted-foreground">
-              打开 SQL、数据表或执行出错时，这里会出现对应的快捷分析动作。
+              打开 SQL 或执行出错时，这里会出现对应的快捷分析动作。
             </p>
           ) : null}
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-2.5 py-2 scrollbar-thin">
-        {sqlDraft && activeTabId ? (
-          <SqlResultCard
-            draft={sqlDraft}
-            onInsert={(sql) => {
-              const tab = useDbStore.getState().queryTabs.find((t) => t.id === activeTabId);
-              if (tab) updateTabSql(activeTabId, `${tab.sql}\n${sql}`);
-            }}
-            onReplace={(sql) => updateTabSql(activeTabId, sql)}
-            onDismiss={() => setSqlDraft(null)}
-          />
-        ) : null}
+      <div
+        ref={scrollRef}
+        className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-2.5 py-2 scrollbar-thin"
+      >
         <DbChat
           messages={messages}
           loading={loading}
@@ -302,6 +281,19 @@ export function DbAgentPanel({
           hasActiveTab={!!activeTab?.connectionId}
           onDismissStreamError={dismissStreamError}
         />
+        {sqlDraft && activeTabId ? (
+          <div className="mt-2">
+            <SqlResultCard
+              draft={sqlDraft}
+              onInsert={(sql) => {
+                const tab = useDbStore.getState().queryTabs.find((t) => t.id === activeTabId);
+                if (tab) updateTabSql(activeTabId, `${tab.sql}\n${sql}`);
+              }}
+              onReplace={(sql) => updateTabSql(activeTabId, sql)}
+              onDismiss={() => setSqlDraft(null)}
+            />
+          </div>
+        ) : null}
       </div>
 
       <div className="shrink-0 p-2">

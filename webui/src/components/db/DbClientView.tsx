@@ -30,6 +30,17 @@ const AGENT_PANEL_MIN = 240;
 const AGENT_PANEL_MAX = 480;
 const AGENT_PANEL_DEFAULT = 320;
 
+const STORAGE_KEY_LEFT = "db.panel.leftWidth";
+const STORAGE_KEY_AGENT = "db.panel.agentWidth";
+
+function loadStoredWidth(key: string, fallback: number): number {
+  const raw = typeof localStorage !== "undefined" ? localStorage.getItem(key) : null;
+  if (!raw) return fallback;
+  const v = Number(raw);
+  if (!Number.isFinite(v) || v <= 0) return fallback;
+  return v;
+}
+
 export function DbClientView({ onOpenSubscribe }: { onOpenSubscribe?: () => void }) {
   const { licenseActive } = useLicense();
   const loadSavedConnections = useDbStore((s) => s.loadSavedConnections);
@@ -48,10 +59,10 @@ export function DbClientView({ onOpenSubscribe }: { onOpenSubscribe?: () => void
   const agentStreaming = useDbStore((s) => s.agentStreaming);
   const initializedRef = useRef(false);
 
-  const [leftWidth, setLeftWidth] = useState(LEFT_PANEL_DEFAULT);
+  const [leftWidth, setLeftWidth] = useState(() => loadStoredWidth(STORAGE_KEY_LEFT, LEFT_PANEL_DEFAULT));
   const [resultHeight, setResultHeight] = useState(RESULT_PANEL_DEFAULT);
   const [agentPanelCollapsed, setAgentPanelCollapsed] = useState(true);
-  const [agentPanelWidth, setAgentPanelWidth] = useState(AGENT_PANEL_DEFAULT);
+  const [agentPanelWidth, setAgentPanelWidth] = useState(() => loadStoredWidth(STORAGE_KEY_AGENT, AGENT_PANEL_DEFAULT));
   const leftDraggingRef = useRef(false);
   const resultDraggingRef = useRef(false);
   const agentDraggingRef = useRef(false);
@@ -60,6 +71,11 @@ export function DbClientView({ onOpenSubscribe }: { onOpenSubscribe?: () => void
   const startLeftWidthRef = useRef(0);
   const startResultHeightRef = useRef(0);
   const startAgentWidthRef = useRef(0);
+  // 用 ref 跟踪最新宽度，避免 onMouseUp 闭包捕获过时 state。
+  const leftWidthRef = useRef(leftWidth);
+  const agentWidthRef = useRef(agentPanelWidth);
+  useEffect(() => { leftWidthRef.current = leftWidth; }, [leftWidth]);
+  useEffect(() => { agentWidthRef.current = agentPanelWidth; }, [agentPanelWidth]);
 
   useEffect(() => {
     if (initializedRef.current) return;
@@ -117,6 +133,7 @@ export function DbClientView({ onOpenSubscribe }: { onOpenSubscribe?: () => void
         leftDraggingRef.current = false;
         document.body.style.cursor = "";
         document.body.style.userSelect = "";
+        try { localStorage.setItem(STORAGE_KEY_LEFT, String(leftWidthRef.current)); } catch {}
       }
       if (resultDraggingRef.current) {
         resultDraggingRef.current = false;
@@ -127,6 +144,7 @@ export function DbClientView({ onOpenSubscribe }: { onOpenSubscribe?: () => void
         agentDraggingRef.current = false;
         document.body.style.cursor = "";
         document.body.style.userSelect = "";
+        try { localStorage.setItem(STORAGE_KEY_AGENT, String(agentWidthRef.current)); } catch {}
       }
     };
     window.addEventListener("mousemove", onMouseMove);
@@ -147,9 +165,11 @@ export function DbClientView({ onOpenSubscribe }: { onOpenSubscribe?: () => void
       </div>
 
       <div
-        className="w-[1px] shrink-0 cursor-col-resize bg-border"
+        className="relative w-[5px] shrink-0 cursor-col-resize"
         onMouseDown={onLeftDragStart}
-      />
+      >
+        <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-border transition-colors hover:bg-primary/50" />
+      </div>
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         {currentView === "table" && (
@@ -279,9 +299,11 @@ export function DbClientView({ onOpenSubscribe }: { onOpenSubscribe?: () => void
                 <SqlEditor />
               </div>
               <div
-                className="h-[1px] shrink-0 cursor-row-resize bg-border"
+                className="relative h-[5px] shrink-0 cursor-row-resize"
                 onMouseDown={onResultDragStart}
-              />
+              >
+                <div className="absolute inset-x-0 top-1/2 h-px -translate-y-1/2 bg-border transition-colors hover:bg-primary/50" />
+              </div>
               <div style={{ height: resultHeight }} className="shrink-0">
                 <ResultPanel />
               </div>
@@ -357,9 +379,11 @@ export function DbClientView({ onOpenSubscribe }: { onOpenSubscribe?: () => void
 
       {licenseActive && !agentPanelCollapsed && (
         <div
-          className="w-[1px] shrink-0 cursor-col-resize bg-border"
+          className="relative w-[5px] shrink-0 cursor-col-resize"
           onMouseDown={onAgentDragStart}
-        />
+        >
+          <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-border transition-colors hover:bg-primary/50" />
+        </div>
       )}
 
       {licenseActive && (
