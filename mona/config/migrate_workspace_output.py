@@ -199,7 +199,9 @@ def run_startup_migrations(*, skip_loose_artifacts: bool = False) -> None:
 
     1. Ensure workspace root exists.
     2. Run global resource migration (move memory/skills/AGENTS.md/etc.
-       out of workspace into ~/.mona/).
+       out of workspace into Mona's agent-private dirs).
+    2.5. Copy legacy global ``~/.mona/memory`` and ``~/.mona/skills`` into
+       Mona's agent-private dirs (multi-agent phase 1).
     3. Fill in missing global templates under ~/.mona/ via
        ``sync_global_templates()``.
     4. Create ``<workspace>/output/``.
@@ -221,6 +223,15 @@ def run_startup_migrations(*, skip_loose_artifacts: bool = False) -> None:
         migrate_global_resources()
     except Exception:
         logger.exception("Global resource migration failed; continuing startup")
+
+    # 2.5. Multi-agent phase 1: legacy ~/.mona/memory|skills → agents/mona/...
+    # Must run before sync_global_templates, which would otherwise populate
+    # the target dirs and block the copy.
+    try:
+        from mona.agent.migration import migrate_legacy_agent_resources
+        migrate_legacy_agent_resources()
+    except Exception:
+        logger.exception("Agent resource migration failed; continuing startup")
 
     # 3. Sync global templates into ~/.mona/ (memory/, skills/, AGENTS.md, ...).
     try:

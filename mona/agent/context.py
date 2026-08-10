@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from mona.agent.memory import MemoryStore
+from mona.agent.partners import MONA_AGENT_ID, AgentRegistry, normalize_agent_id
 from mona.agent.skills import SkillsLoader
 from mona.session.goal_state import goal_state_runtime_lines
 from mona.utils.helpers import (
@@ -52,11 +53,41 @@ class ContextBuilder:
     _MAX_HISTORY_CHARS = 32_000  # hard cap on recent history section size
     _RUNTIME_CONTEXT_END = "[/Runtime Context]"
 
-    def __init__(self, workspace: Path, timezone: str | None = None, disabled_skills: list[str] | None = None):
+    def __init__(
+        self,
+        workspace: Path,
+        timezone: str | None = None,
+        disabled_skills: list[str] | None = None,
+        *,
+        agent_id: str = MONA_AGENT_ID,
+        agent_registry: AgentRegistry | None = None,
+    ):
         self.workspace = workspace
         self.timezone = timezone
-        self.memory = MemoryStore(workspace)
-        self.skills = SkillsLoader(workspace, disabled_skills=set(disabled_skills) if disabled_skills else None)
+        # Active agent identity (multi-agent phase 1): memory and skills
+        # resolve from this agent's private directories. The reserved Mona
+        # agent keeps the legacy platform behavior.
+        self.agent_id = normalize_agent_id(agent_id)
+        self._agent_registry = agent_registry
+        self.memory = MemoryStore(workspace, agent_id=self.agent_id)
+        self.skills = SkillsLoader(
+            workspace,
+            disabled_skills=set(disabled_skills) if disabled_skills else None,
+            agent_id=self.agent_id,
+            package_skill_dirs=self._package_skill_dirs(),
+        )
+
+    def _registry(self) -> AgentRegistry | None:
+        """Agent registry for partner agents; Mona needs no package lookups."""
+        if self.agent_id == MONA_AGENT_ID:
+            return None
+        if self._agent_registry is None:
+            self._agent_registry = AgentRegistry()
+        return self._agent_registry
+
+    def _package_skill_dirs(self) -> list[Path]:
+        registry = self._registry()
+        return registry.resolve_skill_dirs(self.agent_id) if registry else []
 
     def build_system_prompt(
         self,
@@ -66,6 +97,10 @@ class ContextBuilder:
     ) -> str:
         """Build the system prompt from identity, bootstrap files, memory, and skills."""
         parts = [self._get_identity(channel=channel)]
+
+        agent_identity = self._get_agent_identity()
+        if agent_identity:
+            parts.append(agent_identity)
 
         bootstrap = self._load_bootstrap_files()
         if bootstrap:
@@ -120,6 +155,23 @@ class ContextBuilder:
             channel=channel or "",
         )
 
+    def _get_agent_identity(self) -> str:
+        """Partner-agent identity section: display name + package prompt.
+
+        Empty for the reserved Mona agent, whose identity stays in the
+        platform templates, and for unknown agent IDs (graceful fallback).
+        Prompt order follows multi-agent guide 7.2: platform rules → agent
+        identity → tool contract → private memory → visible skills.
+        """
+        registry = self._registry()
+        if registry is None:
+            return ""
+        definition = registry.get(self.agent_id)
+        prompt = registry.load_prompt(self.agent_id).strip()
+        if definition is None or not prompt:
+            return ""
+        return f"# Agent: {definition.display_name}\n\n{prompt}"
+
     @staticmethod
     def _build_runtime_context(
         channel: str | None,
@@ -165,13 +217,11 @@ class ContextBuilder:
         return _to_blocks(left) + _to_blocks(right)
 
     def _load_bootstrap_files(self) -> str:
-        """Load all bootstrap files from global memory dir (~/.mona/memory/)."""
-        from mona.config.paths import get_memory_file
-
+        """Load bootstrap files from the active agent's private memory dir."""
         parts = []
 
         for filename in self.BOOTSTRAP_FILES:
-            file_path = get_memory_file(filename)
+            file_path = self.memory.memory_dir / filename
             if file_path.exists():
                 content = file_path.read_text(encoding="utf-8")
                 parts.append(f"## {filename}\n\n{content}")

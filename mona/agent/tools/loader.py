@@ -4,7 +4,7 @@ from __future__ import annotations
 import importlib
 import pkgutil
 from importlib.metadata import entry_points
-from typing import Any
+from typing import Any, Collection
 
 from loguru import logger
 
@@ -16,6 +16,10 @@ _SKIP_MODULES = frozenset({
     "file_state", "sandbox", "mcp", "__init__", "runtime_state",
     "ssh", "tauri_ipc", "path_utils",
 })
+
+# Tools reserved for the reserved Mona agent. A package agent must never get
+# them, even if its manifest allowlist names them (multi-agent guide 7.2).
+_MONA_ONLY_TOOLS = frozenset({"spawn", "delegate_agent"})
 
 
 class ToolLoader:
@@ -84,7 +88,19 @@ class ToolLoader:
         self._plugins = plugins
         return plugins
 
-    def load(self, ctx: Any, registry: ToolRegistry, *, scope: str = "core") -> list[str]:
+    def load(
+        self,
+        ctx: Any,
+        registry: ToolRegistry,
+        *,
+        scope: str = "core",
+        tool_allowlist: Collection[str] | None = None,
+    ) -> list[str]:
+        # ``tool_allowlist=None`` keeps the full platform tool table (reserved
+        # Mona agent). A concrete list restricts registration to the
+        # intersection of the allowlist and the platform-safe table — Mona-only
+        # tools are stripped even when named (multi-agent guide 7.2 steps 4-5).
+        allow = set(tool_allowlist) if tool_allowlist is not None else None
         registered: list[str] = []
         builtin_names: set[str] = set()
         sources = [(self.discover(), False), (self._discover_plugins().values(), True)]
@@ -97,6 +113,10 @@ class ToolLoader:
                     if not tool_cls.enabled(ctx):
                         continue
                     tool = tool_cls.create(ctx)
+                    if allow is not None and (
+                        tool.name not in allow or tool.name in _MONA_ONLY_TOOLS
+                    ):
+                        continue
                     if registry.has(tool.name):
                         if is_plugin_source and tool.name in builtin_names:
                             logger.warning(

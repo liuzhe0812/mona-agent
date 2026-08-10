@@ -7,6 +7,9 @@ import shutil
 from pathlib import Path
 
 import yaml
+from loguru import logger
+
+from mona.agent.partners import MONA_AGENT_ID, normalize_agent_id
 
 # Default builtin skills directory (relative to this file)
 BUILTIN_SKILLS_DIR = Path(__file__).parent.parent / "skills"
@@ -26,23 +29,41 @@ class SkillsLoader:
     specific tools or perform certain tasks.
     """
 
-    def __init__(self, workspace: Path, builtin_skills_dir: Path | None = None, disabled_skills: set[str] | None = None):
-        from mona.config.paths import get_skills_dir
+    def __init__(
+        self,
+        workspace: Path,
+        builtin_skills_dir: Path | None = None,
+        disabled_skills: set[str] | None = None,
+        *,
+        agent_id: str = MONA_AGENT_ID,
+        package_skill_dirs: list[Path] | None = None,
+    ):
+        from mona.config.paths import get_agent_skills_dir
         self.workspace = workspace
-        # User skills live OUTSIDE workspace (~/.mona/skills/) for hard boundary.
-        self.workspace_skills = get_skills_dir()
+        self.agent_id = normalize_agent_id(agent_id)
+        # Agent-private skills live OUTSIDE the workspace
+        # (~/.mona/agents/<agent_id>/skills/) for the _FsTool hard boundary
+        # (multi-agent phase 1).
+        self.workspace_skills = get_agent_skills_dir(self.agent_id)
+        # Package skills ship inside the read-only agent package; they sit
+        # between agent-private and platform-builtin skills in priority
+        # (multi-agent guide section 7.3).
+        self.package_skill_dirs = [Path(p) for p in (package_skill_dirs or [])]
         self.builtin_skills = builtin_skills_dir or BUILTIN_SKILLS_DIR
         self.disabled_skills = disabled_skills or set()
+        # Same-name skills shadowed by a higher-priority layer get one
+        # warning per loader instance (guide 7.3).
+        self._shadow_warned: set[str] = set()
 
-    def _skill_entries_from_dir(self, base: Path, source: str, *, skip_names: set[str] | None = None) -> list[dict[str, str]]:
+    def _skill_entries_from_dir(self, base: Path, source: str) -> list[dict[str, str]]:
         if not base.exists():
             return []
         entries: list[dict[str, str]] = []
         for skill_dir in base.iterdir():
             if not skill_dir.is_dir():
                 continue
-            # Skill lifecycle artifacts live alongside user skills under
-            # ~/.mona/skills/ but must never be enumerated as skills:
+            # Skill lifecycle artifacts live alongside agent-private skills
+            # but must never be enumerated as skills:
             #   .archive/     — archived skills (moved here by archive_skill)
             #   .snapshots/   — reserved for future backup/rollback
             # Any other dotfile directory (lock files etc.) is also skipped.
@@ -51,11 +72,28 @@ class SkillsLoader:
             skill_file = skill_dir / "SKILL.md"
             if not skill_file.exists():
                 continue
-            name = skill_dir.name
-            if skip_names is not None and name in skip_names:
-                continue
-            entries.append({"name": name, "path": str(skill_file), "source": source})
+            entries.append({"name": skill_dir.name, "path": str(skill_file), "source": source})
         return entries
+
+    def _append_with_priority(
+        self,
+        skills: list[dict[str, str]],
+        new_entries: list[dict[str, str]],
+        seen: set[str],
+    ) -> None:
+        """Append entries not shadowed by an already-seen higher-priority layer."""
+        for entry in new_entries:
+            name = entry["name"]
+            if name in seen:
+                if name not in self._shadow_warned:
+                    self._shadow_warned.add(name)
+                    logger.warning(
+                        "Skill {!r} at {} shadowed by a higher-priority copy for agent {!r}",
+                        name, entry["path"], self.agent_id,
+                    )
+                continue
+            seen.add(name)
+            skills.append(entry)
 
     def list_skills(self, filter_unavailable: bool = True) -> list[dict[str, str]]:
         """
@@ -67,11 +105,19 @@ class SkillsLoader:
         Returns:
             List of skill info dicts with 'name', 'path', 'source'.
         """
-        skills = self._skill_entries_from_dir(self.workspace_skills, "workspace")
-        workspace_names = {entry["name"] for entry in skills}
+        # Priority: agent-private > agent package > platform builtin (guide 7.3).
+        skills: list[dict[str, str]] = []
+        seen: set[str] = set()
+        self._append_with_priority(
+            skills, self._skill_entries_from_dir(self.workspace_skills, "workspace"), seen
+        )
+        for package_dir in self.package_skill_dirs:
+            self._append_with_priority(
+                skills, self._skill_entries_from_dir(package_dir, "package"), seen
+            )
         if self.builtin_skills and self.builtin_skills.exists():
-            skills.extend(
-                self._skill_entries_from_dir(self.builtin_skills, "builtin", skip_names=workspace_names)
+            self._append_with_priority(
+                skills, self._skill_entries_from_dir(self.builtin_skills, "builtin"), seen
             )
 
         if self.disabled_skills:
@@ -91,7 +137,7 @@ class SkillsLoader:
         Returns:
             Skill content or None if not found.
         """
-        roots = [self.workspace_skills]
+        roots = [self.workspace_skills, *self.package_skill_dirs]
         if self.builtin_skills:
             roots.append(self.builtin_skills)
         for root in roots:

@@ -20,6 +20,7 @@ import json
 import logging
 import os
 import tempfile
+import threading
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -28,6 +29,14 @@ from typing import Any, Iterator
 from mona.config.paths import get_skills_dir
 
 logger = logging.getLogger(__name__)
+
+# Re-entrancy guard: msvcrt.locking / fcntl.flock are NOT re-entrant within
+# one process (Windows fails fast with EDEADLK), yet the lifecycle lock is
+# nested by design — SkillCreateTool holds it across capacity check +
+# provenance write, and the provenance writer (_mutate) locks internally.
+# Track per-thread depth so nested acquisitions in the same thread become
+# no-ops while the outermost one holds the real cross-process file lock.
+_lock_state = threading.local()
 
 # fcntl is Unix-only; on Windows fall back to msvcrt for cross-process locking.
 fcntl: Any = None
@@ -90,8 +99,17 @@ def _lifecycle_lock() -> Iterator[None]:
 
     Only protects the sidecar file; skill directory moves rely on filesystem
     atomicity. Windows uses msvcrt.locking on a 1-byte lock file, Unix uses
-    fcntl.flock.
+    fcntl.flock. Re-entrant within a single thread (see _lock_state).
     """
+    depth = getattr(_lock_state, "depth", 0)
+    if depth:
+        _lock_state.depth = depth + 1
+        try:
+            yield
+        finally:
+            _lock_state.depth = depth
+        return
+
     lock_path = _lock_file()
     lock_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -111,8 +129,10 @@ def _lifecycle_lock() -> Iterator[None]:
         else:
             fd.seek(0)
             msvcrt.locking(fd.fileno(), msvcrt.LK_LOCK, 1)
+        _lock_state.depth = 1
         yield
     finally:
+        _lock_state.depth = 0
         if fcntl is not None:
             try:
                 fcntl.flock(fd, fcntl.LOCK_UN)

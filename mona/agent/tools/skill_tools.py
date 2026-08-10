@@ -1,7 +1,8 @@
 """Dedicated tools for accessing skills stored outside the workspace.
 
 These tools replace direct file access (read_file/write_file) to skill files
-stored OUTSIDE the workspace at ~/.mona/skills/ and the builtin skills dir.
+stored OUTSIDE the workspace at ~/.mona/agents/<agent_id>/skills/ and the
+builtin skills dir.
 The _FsTool hard boundary prevents direct file access, so agents must use
 these tools.
 """
@@ -12,6 +13,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from mona.agent.partners import MONA_AGENT_ID, normalize_agent_id
 from mona.agent.tools.base import Tool
 from mona.agent.tools.schema import (
     StringSchema,
@@ -92,16 +94,24 @@ class SkillCreateTool(Tool):
     # directory and are not counted. Caller can override via constructor.
     DEFAULT_MAX_ACTIVE_USER_SKILLS = 100
 
-    def __init__(self, *, max_active_user_skills: int | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        max_active_user_skills: int | None = None,
+        agent_id: str = MONA_AGENT_ID,
+    ) -> None:
         self._max_active = (
             max_active_user_skills
             if max_active_user_skills is not None
             else self.DEFAULT_MAX_ACTIVE_USER_SKILLS
         )
+        # New skills land in the executing agent's private skills dir
+        # (~/.mona/agents/<agent_id>/skills/) — multi-agent phase 1.
+        self._agent_id = normalize_agent_id(agent_id)
 
     @classmethod
     def create(cls, ctx: Any) -> Tool:
-        return cls()
+        return cls(agent_id=getattr(ctx, "agent_id", None) or MONA_AGENT_ID)
 
     @property
     def name(self) -> str:
@@ -110,7 +120,8 @@ class SkillCreateTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Create a new user skill under ~/.mona/skills/<name>/SKILL.md. "
+            "Create a new user skill under the executing agent's private skills dir "
+            "(~/.mona/agents/<agent_id>/skills/<name>/SKILL.md). "
             "Dream agent only. "
             "Fails if the skill already exists (use skill_read to inspect first) "
             "or if the active user skill count has reached the configured cap."
@@ -142,9 +153,9 @@ class SkillCreateTool(Tool):
         if not all(c.isalnum() or c in "-_" for c in name):
             return f"Error: invalid skill name '{name}' (only alphanumeric, dash, underscore allowed)."
         from mona.agent import skill_usage
-        from mona.config.paths import get_skills_dir
+        from mona.config.paths import get_agent_skills_dir
 
-        skill_dir = get_skills_dir() / name
+        skill_dir = get_agent_skills_dir(self._agent_id) / name
         skill_file = skill_dir / "SKILL.md"
         if skill_file.exists():
             return f"Error: skill '{name}' already exists at {skill_file}."
