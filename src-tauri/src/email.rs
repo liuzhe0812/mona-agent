@@ -3773,12 +3773,30 @@ async fn sync_folder_internal(
         };
         obj.insert("uidValidity".to_string(), Value::String(local_uid_validity));
     }
-    let resp = client
-        .post(&url)
-        .json(&req_json)
-        .send()
-        .await
-        .map_err(|e| format!("请求 gateway 失败 ({url}): {e}"))?;
+    // services 进程由前端启动，时序不保证：若用户在 services 还没监听端口时就触发同步，
+    // reqwest 会直接报 "error sending request"。这里在检测到连接错误时，等待 services
+    // 就绪后重试一次，避免用户看到生硬的连接失败。
+    let resp = match client.post(&url).json(&req_json).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            let err_str = e.to_string();
+            if !is_services_unavailable(&err_str) {
+                return Err(format!("请求 gateway 失败 ({url}): {e}"));
+            }
+            log::info!("[email-sync] services 不可用，等待就绪后重试: {}", e);
+            if let Err(wait_err) = wait_for_services_ready(gateway_url, Duration::from_secs(30)).await {
+                return Err(format!(
+                    "请求 gateway 失败 ({url}): {e}\nservices 等待就绪失败: {wait_err}"
+                ));
+            }
+            client
+                .post(&url)
+                .json(&req_json)
+                .send()
+                .await
+                .map_err(|e2| format!("请求 gateway 失败 ({url}): {e2}"))?
+        }
+    };
     if !resp.status().is_success() {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
@@ -4510,11 +4528,64 @@ fn is_permanent_auth_error(error_text: &str) -> bool {
         || lower.contains("频率限制")
 }
 
+/// 判断错误是否为 services 不可用（连接失败、进程崩溃、端口未监听）。
+/// 用于后台同步跳过当前周期，避免对每个账号都重复失败。
+fn is_services_unavailable(error_text: &str) -> bool {
+    let lower = error_text.to_lowercase();
+    lower.contains("error sending request")
+        || lower.contains("请求 gateway 失败")
+        || lower.contains("connection refused")
+        || lower.contains("connect error")
+        || lower.contains("tcp connect error")
+}
+
+/// 等待 services 进程就绪（探测 /health）。
+/// 用于用户主动触发同步时 services 尚未启动完成的情况：
+/// 前端启动 services 的时序不保证，若用户在 Services 还没监听端口时就点击同步，
+/// 会直接报 "error sending request"。这里在超时窗口内探测 /health，就绪后让调用方重试。
+async fn wait_for_services_ready(gateway_url: &str, timeout: Duration) -> Result<(), String> {
+    let health_url = format!("{}/health", gateway_url.trim_end_matches('/'));
+    let start = std::time::Instant::now();
+    loop {
+        match reqwest::get(&health_url).await {
+            Ok(resp) if resp.status().is_success() => return Ok(()),
+            _ => {
+                if start.elapsed() > timeout {
+                    return Err(format!("services 在 {}s 内未就绪", timeout.as_secs()));
+                }
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        }
+    }
+}
+
 /// 启动后台静默同步引擎。应在 services 启动成功后调用。
 pub fn start_background_sync(app_handle: AppHandle, services_port: u16) {
     let gateway_url = format!("http://127.0.0.1:{}", services_port);
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(Duration::from_secs(BG_SYNC_INITIAL_DELAY_SECS)).await;
+
+        // 等待 services 就绪后再开始同步。
+        // services 由前端启动，时序不保证，直接发请求会导致 "error sending request" 失败。
+        // 这里主动探测 /health，最多等 120 秒，超时就放弃（可能用户没配置邮件账号）。
+        let health_url = format!("{}/health", gateway_url);
+        let wait_start = std::time::Instant::now();
+        loop {
+            match reqwest::get(&health_url).await {
+                Ok(resp) if resp.status().is_success() => break,
+                _ => {
+                    if wait_start.elapsed() > Duration::from_secs(120) {
+                        log::warn!(
+                            "[email-bg] services not ready after 120s, aborting background sync"
+                        );
+                        return;
+                    }
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                }
+            }
+        }
+        log::info!("[email-bg] services ready, starting background sync");
+
         loop {
             let started = std::time::Instant::now();
             let mut total_new: u32 = 0;
@@ -4710,6 +4781,14 @@ async fn run_bg_sync_cycle(
                     );
                 }
                 Err(e) => {
+                    // services 不可用：跳过整个周期，等下个周期重试
+                    if is_services_unavailable(&e) {
+                        log::warn!(
+                            "[email-bg] services unavailable, skipping sync cycle: {}",
+                            e
+                        );
+                        return Err(e);
+                    }
                     log::warn!(
                         "[email-bg] account={} sync folders failed: {}",
                         account.id,
@@ -4836,6 +4915,14 @@ async fn run_bg_sync_cycle(
                         );
                         mark_account_cooldown(&email_state, &account.id, "imap", &e);
                         break; // 跳过该账号剩余文件夹
+                    }
+                    // services 不可用：跳过整个周期，等下个周期重试
+                    if is_services_unavailable(&e) {
+                        log::warn!(
+                            "[email-bg] services unavailable, skipping sync cycle: {}",
+                            e
+                        );
+                        return Err(e);
                     }
                     log::warn!(
                         "[email-bg] account={} folder={} sync failed: {}",
