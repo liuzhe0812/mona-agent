@@ -262,10 +262,10 @@ pub fn install_update(
         },
     );
 
-    #[cfg(windows)]
-    let exe_new = install_dir.join("Mona.exe.new");
-    #[cfg(not(windows))]
-    let exe_new = install_dir.join("Mona.new");
+    // 按当前运行 exe 的文件名替换（NSIS 产物为 mona-desktop.exe），
+    // 避免硬编码 Mona.exe 导致快捷方式仍指向旧版本。
+    let exe_name = current_exe_name()?;
+    let exe_new = install_dir.join(format!("{}.new", exe_name));
 
     fs::copy(&new_exe, &exe_new)
         .map_err(|e| format!("Failed to stage new exe: {}", e))?;
@@ -287,6 +287,7 @@ pub fn install_update(
 pub fn launch_update_restart() -> Result<(), String> {
     let install_dir = get_install_dir()?;
     let current_pid = std::process::id();
+    let exe_name = current_exe_name()?;
 
     let script_content = format!(
         r#"@echo off
@@ -297,13 +298,14 @@ if %ERRORLEVEL%==0 (
     goto wait
 )
 cd /d "{install_dir}"
-move /y "Mona.exe.new" "Mona.exe" >nul 2>&1
-start "" "Mona.exe"
-del "Mona.exe.old" >nul 2>&1
+move /y "{exe_name}.new" "{exe_name}" >nul 2>&1
+start "" "{exe_name}"
+del "{exe_name}.old" >nul 2>&1
 del "%~f0" >nul 2>&1
 "#,
         pid = current_pid,
-        install_dir = install_dir.display()
+        install_dir = install_dir.display(),
+        exe_name = exe_name,
     );
 
     let script_path = install_dir.join("_update_restart.bat");
@@ -327,6 +329,7 @@ del "%~f0" >nul 2>&1
 pub fn launch_update_restart() -> Result<(), String> {
     let install_dir = get_install_dir()?;
     let current_pid = std::process::id();
+    let exe_name = current_exe_name()?;
 
     let script_content = format!(
         r#"#!/bin/bash
@@ -334,13 +337,14 @@ while kill -0 {pid} 2>/dev/null; do
     sleep 1
 done
 cd "{install_dir}"
-mv -f "Mona.new" "Mona" 2>/dev/null
-chmod +x "Mona"
-open "Mona"
-rm -f "Mona.old" "$0"
+mv -f "{exe_name}.new" "{exe_name}" 2>/dev/null
+chmod +x "{exe_name}"
+open "{exe_name}"
+rm -f "{exe_name}.old" "$0"
 "#,
         pid = current_pid,
-        install_dir = install_dir.display()
+        install_dir = install_dir.display(),
+        exe_name = exe_name,
     );
 
     let script_path = install_dir.join("_update_restart.sh");
@@ -380,11 +384,9 @@ pub fn cleanup_after_update() -> Result<(), String> {
         let _ = fs::remove_dir_all(&gateway_bak);
     }
 
-    #[cfg(windows)]
-    let exe_old = install_dir.join("Mona.exe.old");
-    #[cfg(not(windows))]
-    let exe_old = install_dir.join("Mona.old");
-
+    // 按当前 exe 名清理 .old 备份；同时清理历史遗留的 Mona.exe.old
+    let exe_name = current_exe_name()?;
+    let exe_old = install_dir.join(format!("{}.old", exe_name));
     if exe_old.exists() {
         let _ = fs::remove_file(&exe_old);
     }
@@ -431,6 +433,17 @@ fn get_install_dir() -> Result<PathBuf, String> {
         .parent()
         .map(|p| p.to_path_buf())
         .ok_or_else(|| "Cannot determine install directory".to_string())
+}
+
+/// 获取当前运行的可执行文件名（如 "mona-desktop.exe" 或 "Mona.exe"）。
+/// 热更新时按此文件名替换原文件，避免硬编码 Mona.exe 导致快捷方式
+/// 仍指向旧文件（NSIS 安装产物为 mona-desktop.exe）。
+fn current_exe_name() -> Result<String, String> {
+    let exe = std::env::current_exe().map_err(|e| format!("Cannot get exe path: {}", e))?;
+    exe.file_name()
+        .and_then(|n| n.to_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| "Cannot determine exe name".to_string())
 }
 
 #[cfg(test)]

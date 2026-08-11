@@ -271,7 +271,7 @@ export function Sidebar(props: SidebarProps) {
                       "transition-[width,padding,border-radius,color,background-color] duration-300 ease-out",
                       collapsed
                         ? "flex w-9 shrink-0 items-center justify-center gap-0 rounded-xl px-0"
-                        : "flex w-full shrink-0 items-center justify-start gap-2 px-3 text-[12.5px]",
+                        : "flex min-w-0 flex-1 items-center justify-start gap-2 px-3 text-[12.5px]",
                     )}
                   >
                     <span className="flex shrink-0 items-center justify-center" aria-hidden>
