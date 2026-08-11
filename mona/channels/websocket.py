@@ -658,6 +658,7 @@ class WebSocketChannel(BaseChannel):
         session_manager: "SessionManager | None" = None,
         static_dist_path: Path | None = None,
         runtime_model_name: Callable[[], str | None] | None = None,
+        subagent_manager: Any | None = None,
     ):
         if isinstance(config, dict):
             config = WebSocketConfig.model_validate(config)
@@ -677,6 +678,7 @@ class WebSocketChannel(BaseChannel):
         self._server_task: asyncio.Task[None] | None = None
         self._artifact_watch_task: asyncio.Task[None] | None = None
         self._session_manager = session_manager
+        self._subagent_manager = subagent_manager
         self._static_dist_path: Path | None = (
             static_dist_path.resolve() if static_dist_path is not None else None
         )
@@ -3659,6 +3661,119 @@ class WebSocketChannel(BaseChannel):
             request_id=request_id, **self._room_state_payload(conversation),
         )
 
+    async def _handle_cancel_agent_job_envelope(
+        self, connection: Any, envelope: dict[str, Any]
+    ) -> None:
+        """Cancel a queued/running room job (multi-agent phase 2c, guide 7.4).
+
+        Permission: the chat must be a collaboration room and the job must
+        belong to it. A client-supplied ``agent_id`` is treated only as a
+        membership claim — it must be a room member (Mona is always one);
+        when omitted the human room owner is the requester. Client-supplied
+        users and permission flags are never trusted.
+        """
+        from mona.agent.jobs import JobNotFoundError, JobTransitionError, serialize_job
+        from mona.agent.partners import normalize_agent_id
+
+        request_id = self._room_request_id(envelope)
+        chat_id = envelope.get("chat_id")
+        if not _is_valid_chat_id(chat_id):
+            await self._send_event(
+                connection, "cancel_agent_job_result", ok=False,
+                code="invalid_chat_id", detail="invalid chat_id", request_id=request_id,
+            )
+            return
+        job_id = envelope.get("job_id")
+        if not isinstance(job_id, str) or not job_id:
+            await self._send_event(
+                connection, "cancel_agent_job_result", ok=False,
+                code="invalid_job_id", detail="invalid job_id",
+                chat_id=chat_id, request_id=request_id,
+            )
+            return
+        if self._session_manager is None:
+            await self._send_event(
+                connection, "cancel_agent_job_result", ok=False,
+                code="unavailable", detail="session manager unavailable",
+                chat_id=chat_id, request_id=request_id,
+            )
+            return
+        session = self._session_manager.get_or_create(f"websocket:{chat_id}")
+        conversation = session.conversation_metadata
+        if conversation.type != "room":
+            await self._send_event(
+                connection, "cancel_agent_job_result", ok=False,
+                code="not_a_room", detail="chat is not a collaboration room",
+                chat_id=chat_id, request_id=request_id,
+            )
+            return
+        requester = envelope.get("agent_id")
+        if requester is not None:
+            if not isinstance(requester, str):
+                await self._send_event(
+                    connection, "cancel_agent_job_result", ok=False,
+                    code="invalid_agent_id", detail="invalid agent_id",
+                    chat_id=chat_id, request_id=request_id,
+                )
+                return
+            try:
+                requester = normalize_agent_id(requester)
+            except ValueError:
+                await self._send_event(
+                    connection, "cancel_agent_job_result", ok=False,
+                    code="invalid_agent_id", detail="invalid agent_id",
+                    chat_id=chat_id, request_id=request_id,
+                )
+                return
+            if requester not in conversation.agent_ids:
+                await self._send_event(
+                    connection, "cancel_agent_job_result", ok=False,
+                    code="not_a_member",
+                    detail=f"agent {requester!r} is not a room member",
+                    chat_id=chat_id, request_id=request_id,
+                )
+                return
+        if self._subagent_manager is None:
+            await self._send_event(
+                connection, "cancel_agent_job_result", ok=False,
+                code="unavailable", detail="subagent manager unavailable",
+                chat_id=chat_id, request_id=request_id,
+            )
+            return
+        reason = envelope.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            reason = None
+        try:
+            job = await self._subagent_manager.cancel_job(
+                job_id, room_id=chat_id, reason=reason
+            )
+        except JobNotFoundError:
+            await self._send_event(
+                connection, "cancel_agent_job_result", ok=False,
+                code="job_not_found", detail="job not found in this room",
+                chat_id=chat_id, request_id=request_id,
+            )
+            return
+        except JobTransitionError:
+            await self._send_event(
+                connection, "cancel_agent_job_result", ok=False,
+                code="job_not_cancellable",
+                detail="job is already in a terminal state",
+                chat_id=chat_id, request_id=request_id,
+            )
+            return
+        except ValueError:
+            await self._send_event(
+                connection, "cancel_agent_job_result", ok=False,
+                code="invalid_job_id", detail="invalid job_id",
+                chat_id=chat_id, request_id=request_id,
+            )
+            return
+        await self._send_event(
+            connection, "cancel_agent_job_result", ok=True, chat_id=chat_id,
+            job_id=job.id, request_id=request_id, job=serialize_job(job),
+        )
+
     async def _dispatch_envelope(
         self,
         connection: Any,
@@ -3731,6 +3846,9 @@ class WebSocketChannel(BaseChannel):
             return
         if t == "get_room_state":
             await self._handle_get_room_state_envelope(connection, envelope)
+            return
+        if t == "cancel_agent_job":
+            await self._handle_cancel_agent_job_envelope(connection, envelope)
             return
         if t == "message":
             cid = envelope.get("chat_id")

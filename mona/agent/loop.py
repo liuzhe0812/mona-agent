@@ -921,6 +921,9 @@ class AgentLoop:
         """Run the agent loop, dispatching messages as tasks to stay responsive to /stop."""
         self._running = True
         await self._connect_mcp()
+        # Reconcile non-terminal agent jobs left over from a previous process:
+        # queued jobs relaunch, running jobs are marked failed (guide 7.4).
+        self._schedule_background(self.subagents.recover_jobs())
         logger.info("Agent loop started")
 
         while self._running:

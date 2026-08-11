@@ -229,8 +229,8 @@ class AgentJobStore:
             tmp_path.unlink(missing_ok=True)
             raise
 
-    def list_for_room(self, room_id: str) -> list[AgentJob]:
-        """List all jobs for a room, oldest first; corrupt files are skipped."""
+    def _scan(self) -> list[AgentJob]:
+        """Load every readable job file, oldest first; corrupt files are skipped."""
         if not self.jobs_dir.is_dir():
             return []
         jobs: list[AgentJob] = []
@@ -243,10 +243,22 @@ class AgentJobStore:
             except Exception as exc:
                 logger.error("Skipping unreadable job file {}: {}", path, exc)
                 continue
-            if job.room_id == room_id:
-                jobs.append(job)
+            jobs.append(job)
         jobs.sort(key=lambda job: (job.created_at, job.id))
         return jobs
+
+    def list_for_room(self, room_id: str) -> list[AgentJob]:
+        """List all jobs for a room, oldest first; corrupt files are skipped."""
+        return [job for job in self._scan() if job.room_id == room_id]
+
+    def list_non_terminal(self) -> list[AgentJob]:
+        """List jobs still in ``queued``/``running`` across all rooms (guide 7.4).
+
+        Used by restart recovery: queued jobs may be restarted, running jobs
+        must be reconciled by the caller (a crashed process cannot prove they
+        are safe to resume, so they are marked failed).
+        """
+        return [job for job in self._scan() if job.status not in TERMINAL_JOB_STATUSES]
 
     # ------------------------------------------------------------------
     # Compare-and-set transitions
@@ -295,6 +307,37 @@ class AgentJobStore:
 
     def mark_cancelled(self, job_id: str, *, error: str | None = None) -> AgentJob:
         return self.transition(job_id, JOB_STATUS_CANCELLED, error=error)
+
+    def cancel_job(self, job_id: str, *, reason: str | None = None) -> AgentJob:
+        """Cancel a queued/running job (CAS); terminal jobs reject it.
+
+        Once ``cancelled`` is written the job never accepts a late result —
+        terminal states have no outgoing transitions, so a racing success or
+        failure write is rejected by :meth:`transition`.
+        """
+        return self.transition(
+            job_id, JOB_STATUS_CANCELLED, error=reason or "Cancelled by user."
+        )
+
+    def fail_job(self, job_id: str, *, error: str) -> AgentJob:
+        """Mark a *running* job failed with an error (stricter CAS, guide 7.4).
+
+        Only ``running`` may enter ``failed`` here: a job that never started
+        should be cancelled or retried, not failed. :meth:`mark_failed` keeps
+        the looser queued|running predecessors for pre-start failure paths
+        (e.g. restart recovery of a job whose agent was uninstalled).
+        """
+        with self._lock_for(job_id):
+            job = self.load(job_id)
+            if job.status != JOB_STATUS_RUNNING:
+                raise JobTransitionError(
+                    f"job {job_id} cannot transition from {job.status!r} to 'failed'"
+                )
+            job.status = JOB_STATUS_FAILED
+            job.error = error
+            job.finished_at = datetime.now()
+            self._save(job)
+            return job
 
 
 def serialize_job(job: AgentJob) -> dict[str, Any]:

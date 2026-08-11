@@ -11,7 +11,13 @@ from typing import Any, Callable
 from loguru import logger
 
 from mona.agent.hook import AgentHook, AgentHookContext
-from mona.agent.jobs import AgentJob, AgentJobStore, JobTransitionError
+from mona.agent.jobs import (
+    JOB_STATUS_RUNNING,
+    AgentJob,
+    AgentJobStore,
+    JobNotFoundError,
+    JobTransitionError,
+)
 from mona.agent.partners import AgentDefinition, AgentRegistry, normalize_agent_id
 from mona.agent.runner import AgentRunner, AgentRunSpec
 from mona.agent.tools.context import ToolContext
@@ -103,6 +109,9 @@ class SubagentManager:
         self._llm_wall_timeout_for_session = llm_wall_timeout_for_session
         # Optional SessionManager used to post agent-authored room messages.
         self._sessions = session_manager
+        # Job stores are cached by workspace root so per-job locks are shared
+        # by every caller going through this manager (guide 6.2).
+        self._job_stores: dict[Path, AgentJobStore] = {}
         self._running_tasks: dict[str, asyncio.Task[None]] = {}
         self._task_statuses: dict[str, SubagentStatus] = {}
         self._session_tasks: dict[str, set[str]] = {}  # session_key -> {task_id, ...}
@@ -274,7 +283,64 @@ class SubagentManager:
         from mona.agent.tools.path_utils import get_current_workspace
 
         root = get_current_workspace(self.workspace)
-        return AgentJobStore(AgentJobStore.default_dir(root))
+        return self._job_store(root)
+
+    def _job_store(self, root: Path) -> AgentJobStore:
+        """Return the cached job store for a workspace root."""
+        key = Path(root).expanduser().resolve()
+        store = self._job_stores.get(key)
+        if store is None:
+            store = AgentJobStore(AgentJobStore.default_dir(key))
+            self._job_stores[key] = store
+        return store
+
+    def job_store_for_room(self, room_id: str) -> AgentJobStore:
+        """Resolve the job store backing a room session's workspace.
+
+        Project rooms keep jobs under the project directory; every other
+        room falls back to the shared output workspace, matching the
+        workspace the delegating turn ran under.
+        """
+        root: Path | None = None
+        if self._sessions is not None:
+            try:
+                session = self._sessions.get_or_create(f"websocket:{room_id}")
+                override = session.metadata.get("workspace")
+                if isinstance(override, str) and override.strip():
+                    root = Path(override)
+            except Exception:
+                logger.exception("Cannot resolve workspace for room {}", room_id)
+        if root is None:
+            from mona.config.paths import get_shared_output_dir
+
+            root = get_shared_output_dir(self.workspace)
+        return self._job_store(root)
+
+    async def cancel_job(
+        self,
+        job_id: str,
+        *,
+        room_id: str,
+        reason: str | None = None,
+        job_store: AgentJobStore | None = None,
+    ) -> AgentJob:
+        """Cancel a queued/running room job (CAS), then stop its local task.
+
+        The persisted state flips to ``cancelled`` first, so a racing
+        completion can never overwrite it (terminal states have no outgoing
+        transitions). A job whose ``room_id`` does not match is reported as
+        not found — cross-room job IDs must not leak.
+        """
+        store = job_store or self.job_store_for_room(room_id)
+        job = store.load(job_id)
+        if job.room_id != room_id:
+            raise JobNotFoundError(job_id)
+        cancelled = store.cancel_job(job_id, reason=reason)
+        task = self._running_tasks.get(job_id)
+        if task is not None and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        return cancelled
 
     def _build_named_agent_tools(
         self,
@@ -383,6 +449,21 @@ class SubagentManager:
                 logger.exception("Job [{}] failed to persist {} state", job.id, target_status)
                 return False
 
+        def _fail(error: str) -> bool:
+            """Persist ``failed`` via the strict running-only CAS (guide 7.4)."""
+            try:
+                store.fail_job(job.id, error=error)
+                return True
+            except JobTransitionError:
+                logger.info(
+                    "Job [{}] no longer accepts 'failed' (late callback); dropping update",
+                    job.id,
+                )
+                return False
+            except Exception:
+                logger.exception("Job [{}] failed to persist 'failed' state", job.id)
+                return False
+
         try:
             try:
                 store.mark_running(job.id)
@@ -425,16 +506,18 @@ class SubagentManager:
             if result.stop_reason == "tool_error":
                 status.tool_events = list(result.tool_events)
                 partial = self._format_partial_progress(result)
-                if not _finish("failed", error=partial):
+                if not _fail(partial):
                     return
+                self._post_agent_room_message(origin, job, definition, partial)
                 await self._announce_result(
                     task_id, label, job.task, partial, origin, "error",
                     origin_message_id, job=job, definition=definition,
                 )
             elif result.stop_reason == "error":
                 error = result.error or "Error: agent execution failed."
-                if not _finish("failed", error=error):
+                if not _fail(error):
                     return
+                self._post_agent_room_message(origin, job, definition, error)
                 await self._announce_result(
                     task_id, label, job.task, error, origin, "error",
                     origin_message_id, job=job, definition=definition,
@@ -459,7 +542,8 @@ class SubagentManager:
             status.phase = "error"
             status.error = str(e)
             logger.exception("Named agent job [{}] failed", task_id)
-            _finish("failed", error=str(e))
+            if _fail(str(e)):
+                self._post_agent_room_message(origin, job, definition, f"Error: {e}")
             await self._announce_result(
                 task_id, label, job.task, f"Error: {e}", origin, "error",
                 origin_message_id, job=job, definition=definition,
@@ -482,7 +566,13 @@ class SubagentManager:
         try:
             channel = origin.get("channel") or "websocket"
             session = self._sessions.get_or_create(f"{channel}:{job.room_id}")
-            session.add_message("assistant", content, author_id=definition.id, job_id=job.id)
+            session.add_message(
+                "assistant",
+                content,
+                author_id=definition.id,
+                message_type="message",
+                job_id=job.id,
+            )
             self._sessions.save(session)
         except Exception:
             logger.exception("Failed to post room message for job {}", job.id)
@@ -657,6 +747,125 @@ class SubagentManager:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         return len(tasks)
+
+    async def recover_jobs(
+        self,
+        *,
+        registry: AgentRegistry | None = None,
+        job_stores: list[AgentJobStore] | None = None,
+    ) -> dict[str, int]:
+        """Reconcile non-terminal jobs left behind by a restart (guide 7.4).
+
+        ``queued`` jobs are relaunched (their side effects never started);
+        ``running`` jobs are marked failed — a crashed process cannot prove
+        they are safe to resume. Returns a small stats dict for logging.
+        """
+        registry = registry or AgentRegistry()
+        stores = job_stores if job_stores is not None else self._recovery_job_stores()
+        stats = {"restarted": 0, "failed": 0, "skipped": 0}
+        for store in stores:
+            try:
+                pending = store.list_non_terminal()
+            except Exception:
+                logger.exception("Job recovery: cannot scan {}", store.jobs_dir)
+                continue
+            for job in pending:
+                if job.status == JOB_STATUS_RUNNING:
+                    try:
+                        store.fail_job(
+                            job.id,
+                            error="Process restarted before the job finished; "
+                            "a running job cannot be proven safe to resume.",
+                        )
+                        stats["failed"] += 1
+                        logger.warning("Job recovery: running job [{}] marked failed", job.id)
+                    except Exception:
+                        logger.exception("Job recovery: cannot fail job [{}]", job.id)
+                    continue
+                definition = registry.get(job.assigned_to)
+                if definition is None:
+                    try:
+                        store.mark_failed(
+                            job.id,
+                            error=f"Agent {job.assigned_to!r} is not installed or is disabled.",
+                        )
+                        stats["failed"] += 1
+                        logger.warning(
+                            "Job recovery: queued job [{}] failed, agent {!r} unavailable",
+                            job.id, job.assigned_to,
+                        )
+                    except Exception:
+                        logger.exception("Job recovery: cannot fail job [{}]", job.id)
+                    continue
+                if self.get_running_count() >= self.max_concurrent_subagents:
+                    stats["skipped"] += 1
+                    logger.info("Job recovery: job [{}] stays queued (concurrency limit)", job.id)
+                    continue
+                self._relaunch_job(store, job, definition, registry)
+                stats["restarted"] += 1
+                logger.info("Job recovery: relaunched queued job [{}]", job.id)
+        if any(stats.values()):
+            logger.info(
+                "Job recovery complete: {} restarted, {} failed, {} skipped",
+                stats["restarted"], stats["failed"], stats["skipped"],
+            )
+        return stats
+
+    def _recovery_job_stores(self) -> list[AgentJobStore]:
+        """Job stores to scan on startup: every workspace a session can bind."""
+        from mona.config.paths import get_shared_output_dir
+
+        roots: list[Path] = [self.workspace, get_shared_output_dir(self.workspace)]
+        if self._sessions is not None:
+            try:
+                for item in self._sessions.list_sessions():
+                    override = item.get("workspace")
+                    if isinstance(override, str) and override.strip():
+                        roots.append(Path(override))
+            except Exception:
+                logger.exception("Job recovery: cannot enumerate session workspaces")
+        stores: list[AgentJobStore] = []
+        seen: set[Path] = set()
+        for root in roots:
+            key = Path(root).expanduser().resolve()
+            if key in seen:
+                continue
+            seen.add(key)
+            stores.append(self._job_store(key))
+        return stores
+
+    def _relaunch_job(
+        self,
+        store: AgentJobStore,
+        job: AgentJob,
+        definition: AgentDefinition,
+        registry: AgentRegistry,
+    ) -> None:
+        """Restart execution of a recovered ``queued`` job in the background."""
+        session_key = f"websocket:{job.room_id}"
+        origin = {"channel": "websocket", "chat_id": job.room_id, "session_key": session_key}
+        status = SubagentStatus(
+            task_id=job.id,
+            label=definition.display_name,
+            task_description=job.task,
+            started_at=time.monotonic(),
+        )
+        self._task_statuses[job.id] = status
+        bg_task = asyncio.create_task(
+            self._run_named_agent(job.id, job, definition, origin, status, registry, store)
+        )
+        self._running_tasks[job.id] = bg_task
+        self._session_tasks.setdefault(session_key, set()).add(job.id)
+
+        def _cleanup(_: asyncio.Task) -> None:
+            self._running_tasks.pop(job.id, None)
+            self._task_statuses.pop(job.id, None)
+            if ids := self._session_tasks.get(session_key):
+                ids.discard(job.id)
+                if not ids:
+                    del self._session_tasks[session_key]
+
+        bg_task.add_done_callback(_cleanup)
 
     def get_running_count(self) -> int:
         """Return the number of currently running subagents."""
