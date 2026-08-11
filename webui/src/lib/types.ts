@@ -10,6 +10,73 @@ export type AuthorType = "user" | "agent" | "system";
 /** Structured message kinds; plain conversation is ``message``. */
 export type MessageType = "message" | "job_status" | "workflow_run" | "approval" | "artifact";
 
+/** Conversation shapes (multi-agent phase 2, guide 5.2). */
+export type ConversationType = "direct" | "room";
+
+/** Conversation metadata mirrored from ``Session.metadata["conversation"]``
+ * (camelCase, matching the backend ``by_alias=True`` dump). Legacy sessions
+ * without this payload are treated as a direct chat with Mona. */
+export interface ConversationMeta {
+  schemaVersion?: number;
+  type: ConversationType;
+  title: string;
+  goal?: string | null;
+  agentIds: string[];
+  directAgentId?: string | null;
+  activeWorkflowId?: string | null;
+  activeWorkflowRevision?: number | null;
+  archived?: boolean;
+}
+
+/** Agent listing entry (``GET /api/agents``). */
+export interface AgentSummary {
+  id: string;
+  displayName: string;
+  avatarUrl?: string;
+  description: string;
+  enabled: boolean;
+}
+
+/** One member entry inside a room state payload. */
+export interface RoomAgentInfo {
+  id: string;
+  displayName: string;
+  description: string;
+}
+
+/** Room state returned by ``create_room`` / ``update_room`` / ``get_room_state``
+ * results and pushed via ``room_updated`` events. */
+export interface RoomState {
+  conversation: ConversationMeta;
+  agents: RoomAgentInfo[];
+}
+
+/** Job states mirrored from ``mona/agent/jobs.py`` (guide 5.6). */
+export type AgentJobStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
+
+/** Compact job projection carried by ``agent_job_updated`` events. */
+export interface AgentJobSummary {
+  id: string;
+  roomId: string;
+  requestedBy: string;
+  assignedTo: string;
+  task: string;
+  status: AgentJobStatus;
+  workflowRunId?: string | null;
+  workflowStepId?: string | null;
+  parentJobId?: string | null;
+  attempt?: number;
+  result?: string | null;
+  error?: string | null;
+}
+
+/** Editable room fields accepted by the ``update_room`` command. */
+export interface RoomUpdate {
+  title?: string;
+  goal?: string | null;
+  agentIds?: string[];
+}
+
 /** One image attached to a UIMessage.
  *
  * ``url`` can arrive in three different shapes, which the bubble renders
@@ -93,6 +160,12 @@ export interface UIMessage {
   authorId?: string;
   /** Structured message kind; plain conversation when absent or ``message``. */
   messageType?: MessageType;
+  /** Delegated job this message belongs to (``job_status`` / delegated replies). */
+  jobId?: string;
+  /** Workflow run this message belongs to (``workflow_run`` / ``approval``). */
+  workflowRunId?: string;
+  /** Structured payload for non-``message`` kinds (job snapshot, run summary…). */
+  payload?: unknown;
 }
 
 /** Structured UI blob on ``progress`` WS frames; channels may add more ``kind`` values later. */
