@@ -11,6 +11,8 @@ from typing import Any, Callable
 from loguru import logger
 
 from mona.agent.hook import AgentHook, AgentHookContext
+from mona.agent.jobs import AgentJob, AgentJobStore, JobTransitionError
+from mona.agent.partners import AgentDefinition, AgentRegistry, normalize_agent_id
 from mona.agent.runner import AgentRunner, AgentRunSpec
 from mona.agent.tools.context import ToolContext
 from mona.agent.tools.file_state import FileStates
@@ -80,6 +82,7 @@ class SubagentManager:
         disabled_skills: list[str] | None = None,
         max_iterations: int | None = None,
         llm_wall_timeout_for_session: Callable[[str | None], float | None] | None = None,
+        session_manager: Any | None = None,
     ):
         defaults = AgentDefaults()
         self.provider = provider
@@ -98,6 +101,8 @@ class SubagentManager:
         self.max_concurrent_subagents = defaults.max_concurrent_subagents
         self.runner = AgentRunner(provider)
         self._llm_wall_timeout_for_session = llm_wall_timeout_for_session
+        # Optional SessionManager used to post agent-authored room messages.
+        self._sessions = session_manager
         self._running_tasks: dict[str, asyncio.Task[None]] = {}
         self._task_statuses: dict[str, SubagentStatus] = {}
         self._session_tasks: dict[str, set[str]] = {}  # session_key -> {task_id, ...}
@@ -179,6 +184,309 @@ class SubagentManager:
         logger.info("Spawned subagent [{}]: {}", task_id, display_label)
         return f"Subagent [{display_label}] started (id: {task_id}). I'll notify you when it completes."
 
+    async def delegate(
+        self,
+        *,
+        agent_id: str,
+        task: str,
+        success_criteria: str,
+        room_id: str,
+        requested_by: str,
+        origin_channel: str = "cli",
+        origin_chat_id: str = "direct",
+        session_key: str | None = None,
+        origin_message_id: str | None = None,
+        workflow_run_id: str | None = None,
+        job_store: AgentJobStore | None = None,
+        registry: AgentRegistry | None = None,
+    ) -> str:
+        """Delegate a task to a named room agent as a tracked AgentJob.
+
+        The ``queued`` job is persisted before the coroutine starts, so the
+        room can rebuild projections from the job file after a restart
+        (guide 7.4). Room membership is validated by the caller (the
+        delegate_agent tool); the registry is re-checked here so an
+        uninstalled agent can never launch.
+        """
+        try:
+            target = normalize_agent_id(agent_id)
+        except ValueError:
+            return f"Cannot delegate: invalid agent id {agent_id!r}."
+        registry = registry or AgentRegistry()
+        definition = registry.get(target)
+        if definition is None:
+            return f"Cannot delegate: agent {target!r} is not installed or is disabled."
+        running = self.get_running_count()
+        limit = self.max_concurrent_subagents
+        if running >= limit:
+            return (
+                f"Cannot delegate to {definition.display_name}: concurrency limit "
+                f"reached ({running}/{limit} running). Wait for a running task "
+                f"to complete before delegating a new one."
+            )
+
+        store = job_store or self._default_job_store()
+        job = store.create(
+            room_id=room_id,
+            requested_by=requested_by,
+            assigned_to=target,
+            task=task,
+            success_criteria=success_criteria,
+            workflow_run_id=workflow_run_id,
+        )
+        task_id = job.id
+        origin = {"channel": origin_channel, "chat_id": origin_chat_id, "session_key": session_key}
+        status = SubagentStatus(
+            task_id=task_id,
+            label=definition.display_name,
+            task_description=task,
+            started_at=time.monotonic(),
+        )
+        self._task_statuses[task_id] = status
+
+        bg_task = asyncio.create_task(
+            self._run_named_agent(
+                task_id, job, definition, origin, status, registry, store, origin_message_id
+            )
+        )
+        self._running_tasks[task_id] = bg_task
+        if session_key:
+            self._session_tasks.setdefault(session_key, set()).add(task_id)
+
+        def _cleanup(_: asyncio.Task) -> None:
+            self._running_tasks.pop(task_id, None)
+            self._task_statuses.pop(task_id, None)
+            if session_key and (ids := self._session_tasks.get(session_key)):
+                ids.discard(task_id)
+                if not ids:
+                    del self._session_tasks[session_key]
+
+        bg_task.add_done_callback(_cleanup)
+
+        logger.info("Delegated job [{}] to agent {!r}: {}", task_id, target, task[:60])
+        return (
+            f"Delegated to {definition.display_name} (job {task_id}). "
+            f"I'll relay their update when the job completes."
+        )
+
+    def _default_job_store(self) -> AgentJobStore:
+        """Job store under the calling session's workspace (guide 6.1)."""
+        from mona.agent.tools.path_utils import get_current_workspace
+
+        root = get_current_workspace(self.workspace)
+        return AgentJobStore(AgentJobStore.default_dir(root))
+
+    def _build_named_agent_tools(
+        self,
+        definition: AgentDefinition,
+        job: AgentJob,
+    ) -> ToolRegistry:
+        """Build the tool registry for a named agent run.
+
+        The manifest allowlist is intersected with the platform-safe table;
+        Mona-only tools (spawn/delegate_agent) can never leak into a partner
+        agent (loader guarantee, guide 7.2). An empty allowlist means no
+        tools at all.
+        """
+        from mona.agent.tools.path_utils import get_current_workspace
+
+        root = get_current_workspace(self.workspace)
+        registry = ToolRegistry()
+        ctx = ToolContext(
+            config=self._subagent_tools_config(),
+            workspace=str(root.resolve()),
+            file_state_store=FileStates(),
+            agent_id=definition.id,
+            conversation_id=job.room_id,
+            room_id=job.room_id,
+            job_id=job.id,
+            workflow_run_id=job.workflow_run_id,
+        )
+        ToolLoader().load(
+            ctx, registry, scope="subagent", tool_allowlist=definition.tool_allowlist
+        )
+        return registry
+
+    def _build_named_agent_prompt(
+        self,
+        definition: AgentDefinition,
+        registry: AgentRegistry,
+    ) -> str:
+        """System prompt for a named agent run.
+
+        Package identity (display name + prompt.md) and the agent's private
+        long-term memory lead; the shared subagent rules carry the agent's
+        visible skills (private + package).
+        """
+        from mona.agent.context import ContextBuilder
+        from mona.agent.memory import MemoryStore
+        from mona.agent.skills import SkillsLoader
+
+        parts: list[str] = []
+        package_prompt = registry.load_prompt(definition.id).strip()
+        if package_prompt:
+            parts.append(f"# Agent: {definition.display_name}\n\n{package_prompt}")
+        memory = MemoryStore(self.workspace, agent_id=definition.id).get_memory_context()
+        if memory:
+            parts.append(f"# Memory\n\n{memory}")
+        time_ctx = ContextBuilder._build_runtime_context(None, None)
+        skills_summary = SkillsLoader(
+            self.workspace,
+            disabled_skills=self.disabled_skills,
+            agent_id=definition.id,
+            package_skill_dirs=registry.resolve_skill_dirs(definition.id),
+        ).build_skills_summary()
+        parts.append(render_template(
+            "agent/subagent_system.md",
+            time_ctx=time_ctx,
+            workspace=str(self.workspace),
+            skills_summary=skills_summary or "",
+        ))
+        return "\n\n---\n\n".join(parts)
+
+    async def _run_named_agent(
+        self,
+        task_id: str,
+        job: AgentJob,
+        definition: AgentDefinition,
+        origin: dict[str, str],
+        status: SubagentStatus,
+        registry: AgentRegistry,
+        store: AgentJobStore,
+        origin_message_id: str | None = None,
+    ) -> None:
+        """Execute a named-agent job and persist every state transition.
+
+        Order is strict (guide 7.4): CAS to ``running`` before execution;
+        write the terminal job state first, then post the agent-authored room
+        message and the Mona inject. A late callback that loses the CAS race
+        is dropped, never applied over a newer terminal state.
+        """
+        label = definition.display_name
+        logger.debug("Named agent job [{}] starting: {}", task_id, label)
+
+        async def _on_checkpoint(payload: dict) -> None:
+            status.phase = payload.get("phase", status.phase)
+            status.iteration = payload.get("iteration", status.iteration)
+
+        def _finish(target_status: str, **fields: Any) -> bool:
+            try:
+                store.transition(job.id, target_status, **fields)
+                return True
+            except JobTransitionError:
+                logger.info(
+                    "Job [{}] no longer accepts {} (late callback); dropping update",
+                    job.id, target_status,
+                )
+                return False
+            except Exception:
+                logger.exception("Job [{}] failed to persist {} state", job.id, target_status)
+                return False
+
+        try:
+            try:
+                store.mark_running(job.id)
+            except JobTransitionError:
+                logger.info("Job [{}] left queued state before start; aborting", job.id)
+                return
+            tools = self._build_named_agent_tools(definition, job)
+            system_prompt = self._build_named_agent_prompt(definition, registry)
+            user_content = job.task
+            if job.success_criteria:
+                user_content += f"\n\n[Success criteria]\n{job.success_criteria}"
+            messages: list[dict[str, Any]] = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content},
+            ]
+
+            sess_key = origin.get("session_key")
+            llm_timeout = (
+                self._llm_wall_timeout_for_session(sess_key)
+                if self._llm_wall_timeout_for_session
+                else None
+            )
+            result = await self.runner.run(AgentRunSpec(
+                initial_messages=messages,
+                tools=tools,
+                model=self.model,
+                max_iterations=self.max_iterations,
+                max_tool_result_chars=self.max_tool_result_chars,
+                hook=_SubagentHook(task_id, status),
+                max_iterations_message="Task completed but no final response was generated.",
+                error_message=None,
+                fail_on_tool_error=True,
+                checkpoint_callback=_on_checkpoint,
+                session_key=sess_key,
+                llm_timeout_s=llm_timeout,
+            ))
+            status.phase = "done"
+            status.stop_reason = result.stop_reason
+
+            if result.stop_reason == "tool_error":
+                status.tool_events = list(result.tool_events)
+                partial = self._format_partial_progress(result)
+                if not _finish("failed", error=partial):
+                    return
+                await self._announce_result(
+                    task_id, label, job.task, partial, origin, "error",
+                    origin_message_id, job=job, definition=definition,
+                )
+            elif result.stop_reason == "error":
+                error = result.error or "Error: agent execution failed."
+                if not _finish("failed", error=error):
+                    return
+                await self._announce_result(
+                    task_id, label, job.task, error, origin, "error",
+                    origin_message_id, job=job, definition=definition,
+                )
+            else:
+                final_result = result.final_content or "Task completed but no final response was generated."
+                logger.info("Named agent job [{}] completed successfully", task_id)
+                if not _finish("succeeded", result=final_result):
+                    return
+                self._post_agent_room_message(origin, job, definition, final_result)
+                await self._announce_result(
+                    task_id, label, job.task, final_result, origin, "ok",
+                    origin_message_id, job=job, definition=definition,
+                )
+
+        except asyncio.CancelledError:
+            status.phase = "error"
+            status.error = "cancelled"
+            _finish("cancelled")
+            raise
+        except Exception as e:
+            status.phase = "error"
+            status.error = str(e)
+            logger.exception("Named agent job [{}] failed", task_id)
+            _finish("failed", error=str(e))
+            await self._announce_result(
+                task_id, label, job.task, f"Error: {e}", origin, "error",
+                origin_message_id, job=job, definition=definition,
+            )
+
+    def _post_agent_room_message(
+        self,
+        origin: dict[str, str],
+        job: AgentJob,
+        definition: AgentDefinition,
+        content: str,
+    ) -> None:
+        """Append the agent-authored message to the room session (best effort).
+
+        A failure here never rolls back a completed job — the room projection
+        can be rebuilt from the job file after reconnect (guide 7.4).
+        """
+        if self._sessions is None or not content.strip():
+            return
+        try:
+            channel = origin.get("channel") or "websocket"
+            session = self._sessions.get_or_create(f"{channel}:{job.room_id}")
+            session.add_message("assistant", content, author_id=definition.id, job_id=job.id)
+            self._sessions.save(session)
+        except Exception:
+            logger.exception("Failed to post room message for job {}", job.id)
+
     async def _run_subagent(
         self,
         task_id: str,
@@ -259,6 +567,8 @@ class SubagentManager:
         origin: dict[str, str],
         status: str,
         origin_message_id: str | None = None,
+        job: AgentJob | None = None,
+        definition: AgentDefinition | None = None,
     ) -> None:
         """Announce the subagent result to the main agent via the message bus."""
         status_text = "completed successfully" if status == "ok" else "failed"
@@ -281,6 +591,11 @@ class SubagentManager:
             "injected_event": "subagent_result",
             "subagent_task_id": task_id,
         }
+        if job is not None:
+            metadata["job_id"] = job.id
+            metadata["room_id"] = job.room_id
+        if definition is not None:
+            metadata["agent_author_id"] = definition.id
         if origin_message_id:
             metadata["origin_message_id"] = origin_message_id
         msg = InboundMessage(

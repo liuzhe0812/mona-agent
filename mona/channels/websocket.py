@@ -3459,6 +3459,206 @@ class WebSocketChannel(BaseChannel):
             logger.exception("doc_upload error")
             await self._send_event(connection, "doc_upload_result", ok=False, error=str(e))
 
+    # -- Collaboration rooms (multi-agent phase 2, guide 7.5) ---------------
+
+    def _room_agent_registry(self) -> Any:
+        """Lazy AgentRegistry used to validate room membership."""
+        registry = getattr(self, "_room_registry", None)
+        if registry is None:
+            from mona.agent.partners import AgentRegistry
+
+            registry = AgentRegistry()
+            self._room_registry = registry
+        return registry
+
+    def _validate_room_agent_ids(
+        self, raw: Any
+    ) -> tuple[list[str] | None, str | None, str | None]:
+        """Validate a client-supplied room member list.
+
+        Returns ``(agent_ids, None, None)`` on success or ``(None, code,
+        detail)`` on failure. The reserved Mona agent coordinates every room
+        and is always kept as a member; every other ID must be an installed
+        agent. Client-supplied users, initiating agents and permission fields
+        are never trusted — membership is the only input.
+        """
+        from mona.agent.partners import MONA_AGENT_ID, normalize_agent_id
+
+        if not isinstance(raw, list) or not raw:
+            return None, "invalid_agents", "agent_ids must be a non-empty list of agent IDs"
+        normalized: list[str] = []
+        for entry in raw:
+            if not isinstance(entry, str):
+                return None, "invalid_agents", "agent_ids entries must be strings"
+            try:
+                agent_id = normalize_agent_id(entry)
+            except ValueError:
+                return None, "invalid_agent_id", f"invalid agent id {entry!r}"
+            if agent_id not in normalized:
+                normalized.append(agent_id)
+        if MONA_AGENT_ID not in normalized:
+            normalized.insert(0, MONA_AGENT_ID)
+        if len(normalized) < 2:
+            return None, "not_enough_agents", "a room needs at least one partner agent"
+        registry = self._room_agent_registry()
+        unknown = [a for a in normalized if registry.get(a) is None]
+        if unknown:
+            return None, "unknown_agent", f"unknown or disabled agents: {', '.join(unknown)}"
+        return normalized, None, None
+
+    def _room_state_payload(self, conversation: Any) -> dict[str, Any]:
+        registry = self._room_agent_registry()
+        agents = []
+        for agent_id in conversation.agent_ids:
+            definition = registry.get(agent_id)
+            agents.append({
+                "id": agent_id,
+                "displayName": definition.display_name if definition else agent_id,
+                "description": definition.description if definition else "",
+            })
+        return {
+            "conversation": conversation.to_session_metadata(),
+            "agents": agents,
+        }
+
+    @staticmethod
+    def _room_request_id(envelope: dict[str, Any]) -> str | None:
+        request_id = envelope.get("request_id")
+        return request_id if isinstance(request_id, str) and request_id else None
+
+    async def _handle_create_room_envelope(
+        self, connection: Any, envelope: dict[str, Any]
+    ) -> None:
+        from mona.agent.partners import CONVERSATION_METADATA_KEY, ConversationMetadata
+
+        request_id = self._room_request_id(envelope)
+        chat_id = envelope.get("chat_id")
+        if not _is_valid_chat_id(chat_id):
+            await self._send_event(
+                connection, "create_room_result", ok=False,
+                code="invalid_chat_id", detail="invalid chat_id", request_id=request_id,
+            )
+            return
+        agent_ids, code, detail = self._validate_room_agent_ids(envelope.get("agent_ids"))
+        if agent_ids is None:
+            await self._send_event(
+                connection, "create_room_result", ok=False,
+                code=code, detail=detail, chat_id=chat_id, request_id=request_id,
+            )
+            return
+        title = envelope.get("title")
+        if not isinstance(title, str):
+            title = ""
+        goal = envelope.get("goal")
+        if not isinstance(goal, str) or not goal.strip():
+            goal = None
+        if self._session_manager is None:
+            await self._send_event(
+                connection, "create_room_result", ok=False,
+                code="unavailable", detail="session manager unavailable",
+                chat_id=chat_id, request_id=request_id,
+            )
+            return
+        session = self._session_manager.get_or_create(f"websocket:{chat_id}")
+        if session.conversation_metadata.type == "room":
+            await self._send_event(
+                connection, "create_room_result", ok=False,
+                code="already_a_room", detail="chat is already a collaboration room",
+                chat_id=chat_id, request_id=request_id,
+            )
+            return
+        conversation = ConversationMetadata.room(agent_ids, title=title.strip(), goal=goal)
+        session.metadata[CONVERSATION_METADATA_KEY] = conversation.to_session_metadata()
+        self._session_manager.save(session)
+        await self._send_event(
+            connection, "create_room_result", ok=True, chat_id=chat_id,
+            request_id=request_id, **self._room_state_payload(conversation),
+        )
+
+    async def _handle_update_room_envelope(
+        self, connection: Any, envelope: dict[str, Any]
+    ) -> None:
+        from mona.agent.partners import CONVERSATION_METADATA_KEY
+
+        request_id = self._room_request_id(envelope)
+        chat_id = envelope.get("chat_id")
+        if not _is_valid_chat_id(chat_id):
+            await self._send_event(
+                connection, "update_room_result", ok=False,
+                code="invalid_chat_id", detail="invalid chat_id", request_id=request_id,
+            )
+            return
+        if self._session_manager is None:
+            await self._send_event(
+                connection, "update_room_result", ok=False,
+                code="unavailable", detail="session manager unavailable",
+                chat_id=chat_id, request_id=request_id,
+            )
+            return
+        session = self._session_manager.get_or_create(f"websocket:{chat_id}")
+        conversation = session.conversation_metadata
+        if conversation.type != "room":
+            await self._send_event(
+                connection, "update_room_result", ok=False,
+                code="not_a_room", detail="chat is not a collaboration room",
+                chat_id=chat_id, request_id=request_id,
+            )
+            return
+        raw_agents = envelope.get("agent_ids")
+        if raw_agents is not None:
+            agent_ids, code, detail = self._validate_room_agent_ids(raw_agents)
+            if agent_ids is None:
+                await self._send_event(
+                    connection, "update_room_result", ok=False,
+                    code=code, detail=detail, chat_id=chat_id, request_id=request_id,
+                )
+                return
+            conversation.agent_ids = agent_ids
+        title = envelope.get("title")
+        if isinstance(title, str):
+            conversation.title = title.strip()
+        goal = envelope.get("goal")
+        if isinstance(goal, str):
+            conversation.goal = goal.strip() or None
+        session.metadata[CONVERSATION_METADATA_KEY] = conversation.to_session_metadata()
+        self._session_manager.save(session)
+        await self._send_event(
+            connection, "update_room_result", ok=True, chat_id=chat_id,
+            request_id=request_id, **self._room_state_payload(conversation),
+        )
+
+    async def _handle_get_room_state_envelope(
+        self, connection: Any, envelope: dict[str, Any]
+    ) -> None:
+        request_id = self._room_request_id(envelope)
+        chat_id = envelope.get("chat_id")
+        if not _is_valid_chat_id(chat_id):
+            await self._send_event(
+                connection, "room_state_result", ok=False,
+                code="invalid_chat_id", detail="invalid chat_id", request_id=request_id,
+            )
+            return
+        if self._session_manager is None:
+            await self._send_event(
+                connection, "room_state_result", ok=False,
+                code="unavailable", detail="session manager unavailable",
+                chat_id=chat_id, request_id=request_id,
+            )
+            return
+        session = self._session_manager.get_or_create(f"websocket:{chat_id}")
+        conversation = session.conversation_metadata
+        if conversation.type != "room":
+            await self._send_event(
+                connection, "room_state_result", ok=False,
+                code="not_a_room", detail="chat is not a collaboration room",
+                chat_id=chat_id, request_id=request_id,
+            )
+            return
+        await self._send_event(
+            connection, "room_state_result", ok=True, chat_id=chat_id,
+            request_id=request_id, **self._room_state_payload(conversation),
+        )
+
     async def _dispatch_envelope(
         self,
         connection: Any,
@@ -3522,6 +3722,15 @@ class WebSocketChannel(BaseChannel):
             return
         if t == "ppt_delete_native":
             await self._handle_ppt_delete_native(connection, envelope)
+            return
+        if t == "create_room":
+            await self._handle_create_room_envelope(connection, envelope)
+            return
+        if t == "update_room":
+            await self._handle_update_room_envelope(connection, envelope)
+            return
+        if t == "get_room_state":
+            await self._handle_get_room_state_envelope(connection, envelope)
             return
         if t == "message":
             cid = envelope.get("chat_id")

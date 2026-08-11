@@ -278,6 +278,10 @@ class AgentLoop:
             schedule_background=lambda coro: self._schedule_background(coro),
         )
         self.tools = ToolRegistry()
+        # Shared ToolContext handed to every loaded tool at registration; its
+        # per-request identity fields (conversation_id/room_id/job_id/...) are
+        # refreshed in _set_tool_context before tools read them.
+        self._tool_ctx: Any | None = None
         # One file-read/write tracker per logical session. The tool registry is
         # shared by this loop, so tools resolve the active state via contextvars.
         self._file_state_store = FileStateStore()
@@ -293,6 +297,7 @@ class AgentLoop:
             disabled_skills=disabled_skills,
             max_iterations=self.max_iterations,
             llm_wall_timeout_for_session=lambda sk: runner_wall_llm_timeout_s(self.sessions, sk),
+            session_manager=self.sessions,
         )
         self._unified_session = unified_session
         self._max_messages = max_messages if max_messages > 0 else 120
@@ -557,6 +562,7 @@ class AgentLoop:
             video_generation_provider_configs=self._video_generation_provider_configs,
             timezone=self.context.timezone or "UTC",
         )
+        self._tool_ctx = ctx
         loader = ToolLoader()
         registered = loader.load(ctx, self.tools)
 
@@ -594,10 +600,24 @@ class AgentLoop:
     def _set_tool_context(
         self, channel: str, chat_id: str,
         message_id: str | None = None, metadata: dict | None = None,
-        session_key: str | None = None,
+        session_key: str | None = None, session: Session | None = None,
     ) -> None:
         """Update context for all tools that need routing info."""
         from mona.agent.tools.context import ContextAware, RequestContext
+
+        # Multi-agent identity (phase 2): refresh the shared ToolContext
+        # before tools read it in set_context. The main loop always executes
+        # as the reserved Mona agent; room_id is set only for collaboration
+        # rooms, so delegate_agent stays hidden elsewhere.
+        if self._tool_ctx is not None:
+            self._tool_ctx.conversation_id = chat_id
+            self._tool_ctx.job_id = None
+            self._tool_ctx.workflow_run_id = None
+            is_room = (
+                session is not None
+                and session.conversation_metadata.type == "room"
+            )
+            self._tool_ctx.room_id = chat_id if is_room else None
 
         if session_key is not None:
             effective_key = session_key
@@ -1270,7 +1290,7 @@ class AgentLoop:
             self.sessions.save(session)
         self._set_tool_context(
             channel, chat_id, msg.metadata.get("message_id"),
-            msg.metadata, session_key=key,
+            msg.metadata, session_key=key, session=session,
         )
         _hist_kwargs: dict[str, Any] = {
             "max_messages": self._max_messages,
@@ -1555,7 +1575,7 @@ class AgentLoop:
             ctx.msg.chat_id,
             ctx.msg.metadata.get("message_id"),
             ctx.msg.metadata,
-            session_key=ctx.session_key,
+            session_key=ctx.session_key, session=ctx.session,
         )
         if message_tool := self.tools.get("message"):
             if isinstance(message_tool, MessageTool):
@@ -1806,12 +1826,28 @@ class AgentLoop:
             for m in session.messages
         ):
             return False
+        extra: dict[str, Any] = {}
+        if isinstance(msg.metadata, dict):
+            # Named-agent results (multi-agent phase 2): persist the true
+            # author and job reference so room history projects correctly.
+            agent_author = msg.metadata.get("agent_author_id")
+            if isinstance(agent_author, str) and agent_author:
+                try:
+                    from mona.agent.partners import normalize_agent_id
+
+                    extra["author_id"] = normalize_agent_id(agent_author)
+                except ValueError:
+                    logger.warning("Ignoring invalid agent_author_id {!r}", agent_author)
+            job_id = msg.metadata.get("job_id")
+            if isinstance(job_id, str) and job_id:
+                extra["job_id"] = job_id
         session.add_message(
             "assistant",
             msg.content,
             sender_id=msg.sender_id,
             injected_event="subagent_result",
             subagent_task_id=task_id,
+            **extra,
         )
         return True
 
