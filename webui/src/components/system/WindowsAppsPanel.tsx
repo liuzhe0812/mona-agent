@@ -15,6 +15,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
+import { StatusNotice } from "@/components/ui/status-notice";
 
 import { MetricCard, PanelCard, StatusPill, TaskFailureNotice } from "./SystemUi";
 import type { SystemAgentHandoffTask } from "./systemAgentHandoff";
@@ -115,30 +117,41 @@ export function WindowsAppsPanel({ onHandoff }: WindowsAppsPanelProps) {
         <MetricCard label="高风险" value={`${unsafeCount} 项`} detail="展示但不会自动选择" icon={<ShieldAlert className="h-4 w-4" />} accent="orange" />
       </div>
 
-      {result?.success && <div role="status" className="flex items-center gap-2 rounded-lg border border-emerald-500/25 bg-emerald-500/5 px-4 py-3 text-xs text-emerald-700 dark:text-emerald-400"><CheckCircle2 className="h-4 w-4" />{result.message || "卸载完成"}</div>}
+      {result?.success && <StatusNotice tone="success">{result.message || "卸载完成"}</StatusNotice>}
       {result && !result.success && !dismissedFailure && <TaskFailureNotice title={`卸载 ${lastAttempt?.name ?? "Windows 应用"} 失败`} detail={result.message || "Windows 未返回详细原因"} onRetry={lastAttempt ? () => void remove(lastAttempt) : undefined} onHandoff={() => { setDismissedFailure(true); onHandoff({ id: crypto.randomUUID(), title: `卸载 ${lastAttempt?.name ?? "Windows 应用"}`, action: "卸载软件", target: lastAttempt?.name ?? "Windows 应用", arguments: { id: lastAttempt?.id, appIds: lastAttempt?.appIds }, error: result.message || "Windows 未返回详细原因" }); }} onDismiss={() => setDismissedFailure(true)} />}
 
-      <PanelCard title="Windows 预装应用" action={<span className="text-[11px] text-muted-foreground">完整目录 {data?.total ?? 141} 项</span>}>
+      <PanelCard title="Windows 预装应用" action={<span className="text-micro text-muted-foreground">完整目录 {data?.total ?? 141} 项</span>}>
         <div className="mb-3 flex flex-wrap items-center gap-2">
-          <div className="relative min-w-[220px] flex-1"><Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" /><Input aria-label="搜索预装应用" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索应用名称或 App ID" className="h-9 w-full rounded-full pl-9" /></div>
-          <select aria-label="预装应用风险筛选" value={risk} onChange={(event) => setRisk(event.target.value as typeof risk)} className="h-9 rounded-lg border bg-background px-2.5 text-xs"><option value="all">全部风险</option><option value="safe">通常可移除</option><option value="optional">按需保留</option><option value="unsafe">高风险</option></select>
-          <label className="inline-flex h-9 cursor-pointer items-center gap-2 rounded-lg border bg-background px-3 text-xs"><Checkbox checked={installedOnly} onCheckedChange={(value) => setInstalledOnly(value === true)} />仅本机已安装</label>
+          <div className="relative min-w-[220px] flex-1"><Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" /><Input aria-label="搜索预装应用" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索应用名称或 App ID" className="w-full pl-9" /></div>
+          <Select
+            aria-label="预装应用风险筛选"
+            value={risk}
+            onValueChange={(value) => setRisk(value as typeof risk)}
+            options={[
+              { value: "all", label: "全部风险" },
+              { value: "safe", label: "通常可移除" },
+              { value: "optional", label: "按需保留" },
+              { value: "unsafe", label: "高风险" },
+            ]}
+            className="h-8 w-[130px] text-caption"
+          />
+          <label className="inline-flex h-8 cursor-pointer items-center gap-2 rounded-lg border bg-background px-3 text-caption"><Checkbox checked={installedOnly} onCheckedChange={(value) => setInstalledOnly(value === true)} />仅本机已安装</label>
           <Button type="button" variant="outline" size="sm" onClick={() => void refresh()} disabled={loading}><RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />刷新</Button>
         </div>
-        {error && <div role="alert" className="mb-3 rounded-lg border border-red-500/25 bg-red-500/5 px-3 py-2 text-xs text-red-700 dark:text-red-400">预装应用读取失败：{error}</div>}
+        {error && <StatusNotice tone="danger" className="mb-3">预装应用读取失败：{error}</StatusNotice>}
         <div className="max-h-[480px] overflow-auto rounded-lg border border-border/60">
-          <table className="w-full min-w-[720px] table-fixed text-left text-xs">
+          <table className="w-full min-w-[720px] table-fixed text-left text-caption">
             <colgroup><col className="w-[210px]" /><col /><col className="w-[105px]" /><col className="w-[95px]" /><col className="w-[78px]" /></colgroup>
             <thead className="sticky top-0 z-10 bg-card text-muted-foreground"><tr><th className="px-3 py-2.5 font-medium">应用</th><th className="font-medium">说明</th><th className="font-medium">建议</th><th className="font-medium">状态</th><th /></tr></thead>
-            <tbody>{visible.map((item) => { const meta = riskMeta[item.recommendation]; return <tr key={item.id} className="border-t border-border/50 transition hover:bg-accent"><td className="px-3 py-2.5"><p className="truncate font-medium" title={item.name}>{item.name}</p><p className="mt-0.5 truncate text-[10px] text-muted-foreground" title={item.appIds.join(", ")}>{item.appIds[0]}</p></td><td className="pr-3"><p className="truncate text-muted-foreground" title={item.description}>{item.description}</p></td><td><StatusPill tone={meta.tone}>{meta.label}</StatusPill></td><td><StatusPill tone={item.installed ? "blue" : "neutral"}>{item.installed ? "已安装" : "未安装"}</StatusPill></td><td className="pr-3 text-right"><button type="button" className="text-primary hover:underline disabled:text-muted-foreground disabled:no-underline" disabled={!item.installed || Boolean(working)} onClick={() => { setPending(item); setAcknowledged(false); setResult(null); }}>{working === item.id ? "卸载中" : "卸载"}</button></td></tr>; })}</tbody>
+            <tbody>{visible.map((item) => { const meta = riskMeta[item.recommendation]; return <tr key={item.id} className="border-t border-border/50 transition hover:bg-accent"><td className="px-3 py-2.5"><p className="truncate font-medium" title={item.name}>{item.name}</p><p className="mt-0.5 truncate text-micro text-muted-foreground" title={item.appIds.join(", ")}>{item.appIds[0]}</p></td><td className="pr-3"><p className="truncate text-muted-foreground" title={item.description}>{item.description}</p></td><td><StatusPill tone={meta.tone}>{meta.label}</StatusPill></td><td><StatusPill tone={item.installed ? "blue" : "neutral"}>{item.installed ? "已安装" : "未安装"}</StatusPill></td><td className="pr-3 text-right"><Button type="button" variant="link" size="xs" className="h-auto px-0" disabled={!item.installed || Boolean(working)} onClick={() => { setPending(item); setAcknowledged(false); setResult(null); }}>{working === item.id ? "卸载中" : "卸载"}</Button></td></tr>; })}</tbody>
           </table>
-          {!loading && visible.length === 0 && <p className="py-12 text-center text-xs text-muted-foreground">没有符合条件的应用</p>}
+          {!loading && visible.length === 0 && <p className="py-12 text-center text-caption text-muted-foreground">没有符合条件的应用</p>}
         </div>
-        <div className="mt-3 flex gap-2 rounded-lg border border-border/60 bg-muted/40 p-3 text-[11px] leading-5 text-muted-foreground"><ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" /><p>目录用于识别 Windows 预装与 OEM 应用。Mona 不会默认全选，也不会因 AI 建议直接卸载；每个项目都需要你确认。</p></div>
+        <div className="mt-3 flex gap-2 rounded-lg border border-border/60 bg-muted/40 p-3 text-micro leading-5 text-muted-foreground"><ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" /><p>目录用于识别 Windows 预装与 OEM 应用。Mona 不会默认全选，也不会因 AI 建议直接卸载；每个项目都需要你确认。</p></div>
       </PanelCard>
 
       <AlertDialog open={Boolean(pending)} onOpenChange={(open) => { if (!open && !working) { setPending(null); setAcknowledged(false); } }}>
-        <AlertDialogContent><AlertDialogHeader><AlertDialogTitle>卸载“{pending?.name ?? "Windows 应用"}”？</AlertDialogTitle><AlertDialogDescription>{pending ? riskMeta[pending.recommendation].description : ""} 卸载后可能需要从 Microsoft Store 或厂商渠道重新安装。</AlertDialogDescription></AlertDialogHeader>{pending?.recommendation === "unsafe" && <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-red-500/25 bg-red-500/5 p-3 text-xs leading-5"><Checkbox className="mt-1" checked={acknowledged} onCheckedChange={(value) => setAcknowledged(value === true)} /><span><strong className="text-red-700 dark:text-red-400">我已了解该应用被标记为高风险</strong><br /><span className="text-muted-foreground">移除后可能影响 Windows 核心体验或难以重新安装。</span></span></label>}<AlertDialogFooter><AlertDialogCancel disabled={Boolean(working)}>取消</AlertDialogCancel><AlertDialogAction disabled={Boolean(working) || (pending?.recommendation === "unsafe" && !acknowledged)} onClick={(event) => { event.preventDefault(); if (pending) void remove(pending); }} className={pending?.recommendation === "unsafe" ? "bg-red-600 text-white hover:bg-red-700" : undefined}>{working && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}确认卸载</AlertDialogAction></AlertDialogFooter></AlertDialogContent>
+        <AlertDialogContent><AlertDialogHeader><AlertDialogTitle>卸载“{pending?.name ?? "Windows 应用"}”？</AlertDialogTitle><AlertDialogDescription>{pending ? riskMeta[pending.recommendation].description : ""} 卸载后可能需要从 Microsoft Store 或厂商渠道重新安装。</AlertDialogDescription></AlertDialogHeader>{pending?.recommendation === "unsafe" && <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-destructive/25 bg-destructive/5 p-3 text-caption leading-5"><Checkbox className="mt-1" checked={acknowledged} onCheckedChange={(value) => setAcknowledged(value === true)} /><span><strong className="text-destructive">我已了解该应用被标记为高风险</strong><br /><span className="text-muted-foreground">移除后可能影响 Windows 核心体验或难以重新安装。</span></span></label>}<AlertDialogFooter><AlertDialogCancel disabled={Boolean(working)}>取消</AlertDialogCancel><AlertDialogAction disabled={Boolean(working) || (pending?.recommendation === "unsafe" && !acknowledged)} onClick={(event) => { event.preventDefault(); if (pending) void remove(pending); }} className={pending?.recommendation === "unsafe" ? "bg-destructive text-destructive-foreground hover:bg-destructive/90" : undefined}>{working && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}确认卸载</AlertDialogAction></AlertDialogFooter></AlertDialogContent>
       </AlertDialog>
     </div>
   );

@@ -153,12 +153,12 @@ export function LargeFileTable({ files, onAnalyze, onTrash }: Props) {
       }
     >
       {displayFiles.length === 0 ? (
-        <div className="py-8 text-center text-xs text-muted-foreground">
+        <div className="py-8 text-center text-caption text-muted-foreground">
           扫描后展示占用最大的文件
         </div>
       ) : (
         <div className="max-h-[280px] overflow-y-auto scrollbar-hover">
-          <table className="w-full table-fixed text-left text-[11px]">
+          <table className="w-full table-fixed text-left text-micro">
             <colgroup>
               <col className="w-8" />
               <col />
@@ -196,7 +196,7 @@ export function LargeFileTable({ files, onAnalyze, onTrash }: Props) {
                   <td className="py-2 pr-2 text-muted-foreground">
                     {BUCKET_LABEL[file.modifiedBucket] ?? file.modifiedBucket}
                   </td>
-                  <td className="py-2 text-right font-medium text-orange-600">
+                  <td className="py-2 text-right font-medium text-warning">
                     {formatStorage(file.sizeGb)}
                   </td>
                 </tr>
@@ -215,14 +215,14 @@ export function LargeFileTable({ files, onAnalyze, onTrash }: Props) {
         >
           <button
             type="button"
-            className="flex w-full cursor-default select-none items-center rounded-sm px-2 py-1.5 text-xs outline-none hover:bg-accent hover:text-accent-foreground"
+            className="flex w-full cursor-default select-none items-center rounded-sm px-2 py-1.5 text-caption outline-none hover:bg-accent hover:text-accent-foreground"
             onClick={() => { void revealInExplorer(menu.path); closeMenu(); }}
           >
             在资源管理器中显示
           </button>
           <button
             type="button"
-            className="flex w-full cursor-default select-none items-center rounded-sm px-2 py-1.5 text-xs outline-none hover:bg-accent hover:text-accent-foreground"
+            className="flex w-full cursor-default select-none items-center rounded-sm px-2 py-1.5 text-caption outline-none hover:bg-accent hover:text-accent-foreground"
             onClick={() => { navigator.clipboard?.writeText(menu.path).catch(() => {}); closeMenu(); }}
           >
             复制路径
@@ -230,7 +230,7 @@ export function LargeFileTable({ files, onAnalyze, onTrash }: Props) {
           {onTrash && (
             <button
               type="button"
-              className="flex w-full cursor-default select-none items-center rounded-sm px-2 py-1.5 text-xs text-destructive outline-none hover:bg-destructive/10"
+              className="flex w-full cursor-default select-none items-center rounded-sm px-2 py-1.5 text-caption text-destructive outline-none hover:bg-destructive/10"
               onClick={() => handleTrashRequest(menu.path)}
             >
               移至回收站
@@ -256,28 +256,28 @@ export function LargeFileTable({ files, onAnalyze, onTrash }: Props) {
                 <Trash2 className="h-5 w-5" strokeWidth={2.4} aria-hidden />
               </div>
             </div>
-            <AlertDialogTitle className="text-center text-[20px] font-semibold leading-tight tracking-[-0.02em] text-foreground">
+            <AlertDialogTitle className="text-center text-title-sm tracking-[-0.02em] text-foreground">
               删除这个大文件？
             </AlertDialogTitle>
-            <AlertDialogDescription className="mt-3 max-w-[17rem] text-center text-[14px] leading-6 text-muted-foreground">
+            <AlertDialogDescription className="mt-3 max-w-[17rem] text-center text-body leading-6 text-muted-foreground">
               {trashTarget
                 ? `「${trashTarget.parentDirName}」下的 ${trashTarget.extension === "(none)" ? "文件" : `.${trashTarget.extension} 文件`}（${formatStorage(trashTarget.sizeGb)}）将被移至系统回收站，需要时可以从回收站恢复。`
                 : ""}
             </AlertDialogDescription>
             {trashError ? (
-              <p className="mt-3 max-w-[17rem] text-center text-[13px] leading-5 text-destructive">
+              <p className="mt-3 max-w-[17rem] text-center text-ui leading-5 text-destructive">
                 移至回收站失败：{trashError}
               </p>
             ) : null}
           </AlertDialogHeader>
           <AlertDialogFooter className="mt-7 grid grid-cols-2 gap-3 space-x-0">
-            <AlertDialogCancel className="mt-0 h-11 rounded-full border-0 bg-muted/70 px-5 text-[15px] font-semibold text-foreground shadow-none hover:bg-muted">
+            <AlertDialogCancel className="mt-0 h-11 rounded-full border-0 bg-muted/70 px-5 text-body-lg font-semibold text-foreground shadow-none hover:bg-muted">
               取消
             </AlertDialogCancel>
             <AlertDialogAction
               onClick={handleTrashConfirm}
               disabled={trashPending}
-              className="h-11 rounded-full bg-destructive px-5 text-[15px] font-semibold text-destructive-foreground shadow-none hover:bg-destructive/90"
+              className="h-11 rounded-full bg-destructive px-5 text-body-lg font-semibold text-destructive-foreground shadow-none hover:bg-destructive/90"
             >
               {trashPending ? "正在移除…" : "移至回收站"}
             </AlertDialogAction>

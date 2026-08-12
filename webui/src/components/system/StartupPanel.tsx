@@ -175,15 +175,15 @@ export function StartupPanel({ onHandoff }: StartupPanelProps) {
               </svg>
             </div>
           ) : (
-            <div className="flex h-28 items-center justify-center text-xs text-muted-foreground">暂无启动耗时记录（Windows 会在每次启动时自动记录）</div>
+            <div className="flex h-28 items-center justify-center text-caption text-muted-foreground">暂无启动耗时记录（Windows 会在每次启动时自动记录）</div>
           )}
         </PanelCard>
 
         <PanelCard title="启动项变化">
           {changes.length === 0 ? (
-            <div className="flex h-28 items-center justify-center text-xs text-muted-foreground">暂无变更记录</div>
+            <div className="flex h-28 items-center justify-center text-caption text-muted-foreground">暂无变更记录</div>
           ) : (
-            <div className="h-28 space-y-2.5 overflow-y-auto pr-1 text-xs">
+            <div className="h-28 space-y-2.5 overflow-y-auto pr-1 text-caption">
               {changes.slice(0, 5).map((change) => {
                 const isEnable = change.action === "enable";
                 return (
@@ -201,12 +201,12 @@ export function StartupPanel({ onHandoff }: StartupPanelProps) {
 
       <PanelCard title="启动应用">
         {loading ? (
-          <div className="flex h-40 items-center justify-center text-xs text-muted-foreground"><Loader2 className="mr-2 h-4 w-4 animate-spin" /> 正在扫描启动项...</div>
+          <div className="flex h-40 items-center justify-center text-caption text-muted-foreground"><Loader2 className="mr-2 h-4 w-4 animate-spin" /> 正在扫描启动项...</div>
         ) : items.length === 0 ? (
-          <div className="flex h-40 items-center justify-center text-xs text-muted-foreground">未发现启动项</div>
+          <div className="flex h-40 items-center justify-center text-caption text-muted-foreground">未发现启动项</div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[640px] table-fixed text-left text-xs">
+            <table className="w-full min-w-[640px] table-fixed text-left text-caption">
               <colgroup>
                 <col className="w-[210px]" />
                 <col className="w-[140px]" />
@@ -230,7 +230,7 @@ export function StartupPanel({ onHandoff }: StartupPanelProps) {
               <tbody>
                 {sortedItems.map((item) => (
                   <tr key={item.id} className="border-t border-border/50">
-                    <td className="py-2.5 pr-3 font-medium"><div className="flex min-w-0 items-center"><span className="truncate" title={item.name}>{item.name}</span>{item.signed && <CheckCircle2 className="ml-1 h-3 w-3 shrink-0 text-emerald-500" />}</div></td>
+                    <td className="py-2.5 pr-3 font-medium"><div className="flex min-w-0 items-center"><span className="truncate" title={item.name}>{item.name}</span>{item.signed && <CheckCircle2 className="ml-1 h-3 w-3 shrink-0 text-success" />}</div></td>
                     <td className="pr-3"><div className="truncate" title={item.publisher || undefined}>{item.publisher || "—"}</div></td>
                     <td className="pr-3"><div className="truncate" title={item.source}>{item.source}</div></td>
                     <td><StatusPill tone={item.scope === "user" ? "blue" : "violet"}>{scopeLabel(item.scope)}</StatusPill></td>
@@ -245,7 +245,7 @@ export function StartupPanel({ onHandoff }: StartupPanelProps) {
         )}
       </PanelCard>
 
-      {notice && <p role="status" className="text-xs text-emerald-600">{notice}</p>}
+      {notice && <p role="status" className="text-caption text-success">{notice}</p>}
     </div>
   );
 }

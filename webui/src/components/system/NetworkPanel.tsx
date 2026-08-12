@@ -91,28 +91,28 @@ function DnsSection() {
     >
       <div className="flex flex-col gap-4">
         {loading ? (
-          <div className="flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />正在读取当前 DNS...</div>
+          <div className="flex items-center gap-2 text-caption text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />正在读取当前 DNS...</div>
         ) : (
           <>
             <div className="rounded-lg border border-border/60 bg-muted/30 p-3">
-              <p className="text-[11px] text-muted-foreground">当前 DNS</p>
+              <p className="text-micro text-muted-foreground">当前 DNS</p>
               {status && status.adapters.length > 0 ? (
                 <div className="mt-2 flex flex-col gap-1.5">
                   {status.adapters.map((adapter) => (
-                    <div key={adapter.alias} className="flex flex-wrap items-center gap-2 text-xs">
+                    <div key={adapter.alias} className="flex flex-wrap items-center gap-2 text-caption">
                       <span className="font-medium">{adapter.alias}</span>
                       <span className="text-muted-foreground">→</span>
-                      <span className="font-mono text-[11px]">{adapter.servers.join("、")}</span>
+                      <span className="font-mono text-micro">{adapter.servers.join("、")}</span>
                     </div>
                   ))}
                 </div>
               ) : (
-                <p className="mt-1 text-xs text-muted-foreground">未检测到手动设置的 DNS（DHCP 自动获取）</p>
+                <p className="mt-1 text-caption text-muted-foreground">未检测到手动设置的 DNS（DHCP 自动获取）</p>
               )}
             </div>
 
             <div>
-              <p className="mb-2 text-[11px] text-muted-foreground">选择预设（将对所有在线物理适配器生效，需管理员授权）</p>
+              <p className="mb-2 text-micro text-muted-foreground">选择预设（将对所有在线物理适配器生效，需管理员授权）</p>
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
                 {status?.presets.map((preset) => {
                   const isActive = activePresetId === preset.id;
@@ -130,11 +130,11 @@ function DnsSection() {
                       )}
                     >
                       <div className="flex w-full items-center justify-between">
-                        <span className="text-xs font-semibold">{preset.label}</span>
+                        <span className="text-caption font-semibold">{preset.label}</span>
                         {isActing && <Loader2 className="h-3 w-3 animate-spin text-primary" />}
                         {isActive && !isActing && <CheckCircle2 className="h-3.5 w-3.5 text-primary" />}
                       </div>
-                      <span className="font-mono text-[10px] text-muted-foreground">
+                      <span className="font-mono text-micro text-muted-foreground">
                         {preset.primaryV4}{preset.secondaryV4 ? ` / ${preset.secondaryV4}` : ""}
                       </span>
                     </button>
@@ -146,7 +146,7 @@ function DnsSection() {
         )}
 
         {message && (
-          <p className={cn("text-xs", message.tone === "ok" ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400")}>
+          <p className={cn("text-caption", message.tone === "ok" ? "text-success" : "text-destructive")}>
             {message.text}
           </p>
         )}
@@ -243,23 +243,23 @@ function HostsSection() {
       <div className="flex flex-col gap-4">
         {/* 添加条目 */}
         <div className="rounded-lg border border-border/60 p-3">
-          <p className="mb-2 text-[11px] text-muted-foreground">添加条目（将域名指向指定 IP）</p>
+          <p className="mb-2 text-micro text-muted-foreground">添加条目（将域名指向指定 IP）</p>
           <div className="flex flex-wrap items-center gap-2">
             <Input
-              className="h-8 w-32 rounded-lg text-xs"
+              className="w-32"
               placeholder="IP 地址"
               value={addIp}
               onChange={(e) => setAddIp(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter") handleAdd(); }}
             />
             <Input
-              className="h-8 min-w-[140px] flex-1 rounded-lg text-xs"
+              className="min-w-[140px] flex-1"
               placeholder="域名"
               value={addDomain}
               onChange={(e) => setAddDomain(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter") handleAdd(); }}
             />
-            <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <label className="flex items-center gap-1.5 text-micro text-muted-foreground">
               <Checkbox checked={includeWww} onCheckedChange={(v) => setIncludeWww(v === true)} />
               同时添加 www
             </label>
@@ -272,10 +272,10 @@ function HostsSection() {
 
         {/* 屏蔽域名 */}
         <div className="rounded-lg border border-border/60 p-3">
-          <p className="mb-2 text-[11px] text-muted-foreground">屏蔽域名（指向 0.0.0.0，阻止访问）</p>
+          <p className="mb-2 text-micro text-muted-foreground">屏蔽域名（指向 0.0.0.0，阻止访问）</p>
           <div className="flex flex-wrap items-center gap-2">
             <Input
-              className="h-8 min-w-[140px] flex-1 rounded-lg text-xs"
+              className="min-w-[140px] flex-1"
               placeholder="要屏蔽的域名"
               value={blockDomain}
               onChange={(e) => setBlockDomain(e.target.value)}
@@ -290,48 +290,50 @@ function HostsSection() {
 
         {/* 当前条目列表 */}
         <div>
-          <p className="mb-2 text-[11px] text-muted-foreground">
+          <p className="mb-2 text-micro text-muted-foreground">
             当前条目{data ? `（${data.entries.length}）` : ""}
           </p>
           {loading ? (
-            <div className="flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />正在读取...</div>
+            <div className="flex items-center gap-2 text-caption text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />正在读取...</div>
           ) : data && data.entries.length > 0 ? (
             <div className="max-h-64 overflow-y-auto rounded-lg border border-border/60 scrollbar-hover">
               {data.entries.map((entry, idx) => (
                 <div
                   key={`${entry.ip}-${entry.domains.join(",")}-${idx}`}
-                  className="flex items-center gap-2 border-b border-border/40 px-3 py-2 text-xs last:border-b-0"
+                  className="flex items-center gap-2 border-b border-border/40 px-3 py-2 text-caption last:border-b-0"
                 >
-                  <span className="font-mono text-[11px] text-muted-foreground">{entry.ip}</span>
+                  <span className="font-mono text-micro text-muted-foreground">{entry.ip}</span>
                   <span className="min-w-0 flex-1 truncate">{entry.domains.join(" ")}</span>
                   {entry.blocked && <StatusPill tone="red">屏蔽</StatusPill>}
                   {entry.monaManaged && <StatusPill tone="blue">Mona</StatusPill>}
-                  <button
+                  <Button
                     type="button"
-                    className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground transition hover:bg-red-500/10 hover:text-red-600"
+                    variant="ghost"
+                    size="xs"
+                    className="w-6 px-0 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
                     onClick={() => handleRemove(entry)}
                     disabled={acting}
                     aria-label={entry.blocked && entry.monaManaged ? "解除屏蔽" : "删除条目"}
                   >
                     <Trash2 className="h-3 w-3" />
-                  </button>
+                  </Button>
                 </div>
               ))}
             </div>
           ) : (
-            <p className="text-xs text-muted-foreground">HOSTS 文件没有自定义条目</p>
+            <p className="text-caption text-muted-foreground">HOSTS 文件没有自定义条目</p>
           )}
         </div>
 
         {/* 备份恢复 */}
         {data && data.backupFiles.length > 0 && (
           <div>
-            <p className="mb-2 text-[11px] text-muted-foreground">自动备份（编辑前自动创建，可恢复）</p>
+            <p className="mb-2 text-micro text-muted-foreground">自动备份（编辑前自动创建，可恢复）</p>
             <div className="flex flex-col gap-1.5">
               {data.backupFiles.slice(0, 5).map((backup) => {
                 const name = backup.split(/[\\/]/).pop() ?? backup;
                 return (
-                  <div key={backup} className="flex items-center gap-2 text-[11px]">
+                  <div key={backup} className="flex items-center gap-2 text-micro">
                     <span className="min-w-0 flex-1 truncate font-mono text-muted-foreground">{name}</span>
                     <Button
                       type="button"
@@ -351,7 +353,7 @@ function HostsSection() {
         )}
 
         {message && (
-          <p className={cn("text-xs", message.tone === "ok" ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400")}>
+          <p className={cn("text-caption", message.tone === "ok" ? "text-success" : "text-destructive")}>
             {message.text}
           </p>
         )}

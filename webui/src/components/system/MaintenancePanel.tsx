@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
-import { MetricCard, PanelCard, StatusPill } from "./SystemUi";
+import { MetricCard, PanelCard, StatusPill, TaskFailureNotice } from "./SystemUi";
 import type { SystemAgentHandoffTask } from "./systemAgentHandoff";
 import { useMaintenanceHistory, type MaintenanceEvent } from "./useSystemData";
 
@@ -75,7 +75,14 @@ export function MaintenancePanel({ onHandoff }: MaintenancePanelProps) {
         <MetricCard label="失败操作" value={loading ? "—" : `${failedCount} 项`} detail={failedCount ? "保留原始失败信息" : "暂无失败"} icon={<AlertTriangle className="h-4 w-4" />} accent={failedCount ? "orange" : "green"} />
       </div>
 
-      {error && <div role="alert" className="rounded-lg border border-red-500/30 bg-red-500/5 p-3 text-xs text-red-700">维护记录读取失败：{error}<button className="ml-2 underline" onClick={refresh}>重试</button>{failedTask && <button type="button" className="ml-2 underline" onClick={() => onHandoff(failedTask)}>交给 Mona</button>}</div>}
+      {error && (
+        <TaskFailureNotice
+          title="维护记录读取失败"
+          detail={error}
+          onRetry={() => void refresh()}
+          onHandoff={failedTask ? () => onHandoff(failedTask) : undefined}
+        />
+      )}
 
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap gap-2">{filters.map((item) => item === filter ? <Button key={item} size="sm" onClick={() => setFilter(item)}>{item}</Button> : <Button key={item} variant="outline" size="sm" onClick={() => setFilter(item)}>{item}</Button>)}</div>
@@ -85,18 +92,18 @@ export function MaintenancePanel({ onHandoff }: MaintenancePanelProps) {
       <div className="grid gap-3 lg:grid-cols-[minmax(0,1.35fr)_minmax(280px,0.8fr)]">
         <PanelCard title="维护时间线" className="h-full">
           {loading ? (
-            <div className="flex h-48 items-center justify-center text-xs text-muted-foreground">正在读取维护记录...</div>
+            <div className="flex h-48 items-center justify-center text-caption text-muted-foreground">正在读取维护记录...</div>
           ) : filtered.length === 0 ? (
-            <div className="flex h-48 items-center justify-center text-xs text-muted-foreground">没有匹配的维护记录</div>
+            <div className="flex h-48 items-center justify-center text-caption text-muted-foreground">没有匹配的维护记录</div>
           ) : (
             <div className="scrollbar-hover relative max-h-[60vh] space-y-1 overflow-y-auto before:absolute before:bottom-4 before:left-[78px] before:top-4 before:w-px before:bg-border">
               {filtered.map((event) => (
                 <button key={event.id} type="button" onClick={() => setSelectedId(event.id)} className={`relative flex w-full items-center gap-3 rounded-lg p-2 text-left transition ${selected?.id === event.id ? "bg-accent" : "hover:bg-accent"}`}>
-                  <span className="w-16 shrink-0 text-[10px] text-muted-foreground">{eventTime(event.ts)}</span>
-                  <span className={`z-10 h-2.5 w-2.5 shrink-0 rounded-full ring-4 ring-background ${event.status === "成功" ? "bg-emerald-500" : "bg-orange-500"}`} />
+                  <span className="w-16 shrink-0 text-micro text-muted-foreground">{eventTime(event.ts)}</span>
+                  <span className={`z-10 h-2.5 w-2.5 shrink-0 rounded-full ring-4 ring-background ${event.status === "成功" ? "bg-success" : "bg-warning"}`} />
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-xs font-medium" title={event.title}>{event.title}</span>
-                    <span className="mt-0.5 block truncate text-[10px] text-muted-foreground" title={event.detail}>{event.detail}</span>
+                    <span className="block truncate text-caption font-medium" title={event.title}>{event.title}</span>
+                    <span className="mt-0.5 block truncate text-micro text-muted-foreground" title={event.detail}>{event.detail}</span>
                   </span>
                   <StatusPill tone={statusTone(event.status)}>{event.status}</StatusPill>
                 </button>
@@ -108,25 +115,25 @@ export function MaintenancePanel({ onHandoff }: MaintenancePanelProps) {
         <div className="space-y-3">
           <PanelCard title="执行详情">
             {selected ? (
-              <div className="space-y-3 text-xs">
-                <div><p className="text-[10px] text-muted-foreground">操作</p><p className="mt-1 font-medium">{selected.title}</p></div>
-                <div className="grid grid-cols-2 gap-3"><div><p className="text-[10px] text-muted-foreground">来源</p><p className="mt-1">{selected.source}</p></div><div><p className="text-[10px] text-muted-foreground">结果</p><p className="mt-1">{selected.status}</p></div></div>
-                <div><p className="text-[10px] text-muted-foreground">依据</p><p className="mt-1 break-words leading-5">{selected.detail}</p></div>
-                {selected.bytesChanged > 0 && <div><p className="text-[10px] text-muted-foreground">空间变化</p><p className="mt-1 text-emerald-600">释放 {formatBytes(selected.bytesChanged)}</p></div>}
+              <div className="space-y-3 text-caption">
+                <div><p className="text-micro text-muted-foreground">操作</p><p className="mt-1 font-medium">{selected.title}</p></div>
+                <div className="grid grid-cols-2 gap-3"><div><p className="text-micro text-muted-foreground">来源</p><p className="mt-1">{selected.source}</p></div><div><p className="text-micro text-muted-foreground">结果</p><p className="mt-1">{selected.status}</p></div></div>
+                <div><p className="text-micro text-muted-foreground">依据</p><p className="mt-1 break-words leading-5">{selected.detail}</p></div>
+                {selected.bytesChanged > 0 && <div><p className="text-micro text-muted-foreground">空间变化</p><p className="mt-1 text-success">释放 {formatBytes(selected.bytesChanged)}</p></div>}
               </div>
-            ) : <p className="py-8 text-center text-xs text-muted-foreground">选择一条记录查看详情</p>}
+            ) : <p className="py-8 text-center text-caption text-muted-foreground">选择一条记录查看详情</p>}
           </PanelCard>
 
           <PanelCard title="可恢复操作">
-            {recoverable.length === 0 ? <p className="py-8 text-center text-xs text-muted-foreground">暂无可恢复操作</p> : (
-              <div className="space-y-2 text-xs">
+            {recoverable.length === 0 ? <p className="py-8 text-center text-caption text-muted-foreground">暂无可恢复操作</p> : (
+              <div className="space-y-2 text-caption">
                 {recoverable.map((event: MaintenanceEvent) => (
                   <div key={event.id} className="flex items-center gap-2 rounded-lg border p-2.5">
                     <span className="min-w-0 flex-1 truncate" title={event.title}>{event.title}</span>
                     <Button variant="outline" size="sm" disabled={restoringId === event.id} onClick={() => void restoreEvent(event)}><RotateCcw className="mr-1 h-3 w-3" />{restoringId === event.id ? "恢复中" : "恢复"}</Button>
                   </div>
                 ))}
-                <p className="text-[10px] text-muted-foreground">卸载、更新和文件清理不支持自动回滚。</p>
+                <p className="text-micro text-muted-foreground">卸载、更新和文件清理不支持自动回滚。</p>
               </div>
             )}
           </PanelCard>

@@ -22,10 +22,10 @@ export function MetricCard({
   active?: boolean;
 }) {
   const tones = {
-    blue: "bg-blue-500/10 text-blue-600 dark:text-blue-400",
-    violet: "bg-violet-500/10 text-violet-600 dark:text-violet-400",
-    green: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
-    orange: "bg-orange-500/10 text-orange-600 dark:text-orange-400",
+    blue: "bg-info/10 text-info",
+    violet: "bg-primary/10 text-primary",
+    green: "bg-success/10 text-success",
+    orange: "bg-warning/10 text-warning",
   };
   const className = cn(
     "min-w-0 rounded-lg border bg-card p-3.5 text-left transition",
@@ -38,9 +38,9 @@ export function MetricCard({
         {icon}
       </span>
       <div className="min-w-0">
-        <p className="text-xs text-muted-foreground">{label}</p>
-        <p className="mt-0.5 truncate text-xl font-semibold tracking-tight">{value}</p>
-        <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{detail}</p>
+        <p className="text-caption text-muted-foreground">{label}</p>
+        <p className="mt-0.5 truncate text-title-sm tracking-tight">{value}</p>
+        <p className="mt-0.5 truncate text-micro text-muted-foreground">{detail}</p>
       </div>
     </div>
   );
@@ -70,7 +70,7 @@ export function PanelCard({
   return (
     <section className={cn("min-w-0 rounded-lg border border-border/70 bg-card shadow-sm", className)}>
       <div className="flex min-h-11 items-center justify-between border-b border-border/60 px-4 py-2.5">
-        <h2 className="text-sm font-semibold">{title}</h2>
+        <h2 className="text-body font-semibold">{title}</h2>
         {action}
       </div>
       <div className={cn("p-4", bodyClassName)}>{children}</div>
@@ -87,16 +87,16 @@ export function StatusPill({
 }) {
   const tones = {
     neutral: "bg-muted text-muted-foreground",
-    blue: "bg-blue-500/10 text-blue-600 dark:text-blue-400",
-    green: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
-    orange: "bg-orange-500/10 text-orange-700 dark:text-orange-400",
-    red: "bg-red-500/10 text-red-700 dark:text-red-400",
-    violet: "bg-violet-500/10 text-violet-700 dark:text-violet-400",
+    blue: "bg-info/10 text-info",
+    green: "bg-success/10 text-success",
+    orange: "bg-warning/10 text-warning",
+    red: "bg-destructive/10 text-destructive",
+    violet: "bg-primary/10 text-primary",
   };
-  return <span className={cn("inline-flex rounded-md px-2 py-0.5 text-[10px] font-medium", tones[tone])}>{children}</span>;
+  return <span className={cn("inline-flex rounded-md px-2 py-0.5 text-micro font-medium", tones[tone])}>{children}</span>;
 }
 
-export function ProgressBar({ value, color = "bg-blue-500" }: { value: number; color?: string }) {
+export function ProgressBar({ value, color = "bg-info" }: { value: number; color?: string }) {
   return (
     <div className="h-2 overflow-hidden rounded-full bg-muted">
       <div className={cn("h-full rounded-full", color)} style={{ width: `${value}%` }} />
@@ -118,10 +118,10 @@ export function TaskFailureNotice({
   onDismiss?: () => void;
 }) {
   return (
-    <div data-testid="system-task-failure" role="alert" className="flex flex-wrap items-center gap-3 rounded-lg border border-red-500/30 bg-red-500/5 p-3 text-xs">
-      <AlertTriangle className="h-4 w-4 shrink-0 text-red-600" />
+    <div data-testid="system-task-failure" role="alert" className="flex flex-wrap items-center gap-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-caption">
+      <AlertTriangle className="h-4 w-4 shrink-0 text-destructive" />
       <div className="min-w-0 flex-1">
-        <p className="font-medium text-red-700 dark:text-red-400">{title}</p>
+        <p className="font-medium text-destructive">{title}</p>
         <p className="mt-1 break-words text-muted-foreground">{detail}</p>
       </div>
       {onRetry && <Button type="button" variant="outline" size="sm" onClick={onRetry}>重试</Button>}

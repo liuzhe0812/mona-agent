@@ -630,7 +630,7 @@ describe("SystemView", () => {
     expect(await screen.findByText("Clipchamp")).toBeTruthy();
     expect(screen.getByText("Microsoft Store")).toBeTruthy();
     expect(screen.getByText("完整目录 141 项")).toBeTruthy();
-    expect(screen.getByRole("combobox", { name: "预装应用风险筛选" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "预装应用风险筛选" })).toBeTruthy();
   });
 
   it("renders maintenance history returned by the backend instead of mock events", async () => {

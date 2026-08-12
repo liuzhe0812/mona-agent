@@ -2,6 +2,7 @@ import { ChevronDown, Clock3, HardDrive, RefreshCw } from "lucide-react";
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { StatusNotice } from "@/components/ui/status-notice";
 
 import type { SystemTab } from "./systemTabs";
 import { PanelCard, StatusPill } from "./SystemUi";
@@ -27,6 +28,15 @@ const TIME_RANGES = [
   { label: "30 分钟", seconds: 1800 },
   { label: "1 小时", seconds: 3600 },
 ] as const;
+
+/** 历史图表数据色板（规范 §3.3 数据可视化例外） */
+const CHART_COLORS = {
+  cpu: "#2f80ff",
+  memory: "#9367ff",
+  network: "#4caf72",
+  diskDanger: "#ef4444",
+  diskWarning: "#ff5a52",
+} as const;
 
 const PROCESS_COLUMNS = [
   { key: "name", label: "程序" },
@@ -155,9 +165,9 @@ function OverviewMetric({
     <section className="min-w-0 rounded-lg border border-border/70 bg-card p-3.5 shadow-sm">
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-xs text-muted-foreground">{label}</p>
-          <p className="mt-1 text-[28px] font-semibold leading-none tracking-tight">{value}</p>
-          <p className="mt-2 truncate text-[11px] text-muted-foreground">{detail}</p>
+          <p className="text-caption text-muted-foreground">{label}</p>
+          <p className="mt-1 text-display-sm font-semibold tracking-tight">{value}</p>
+          <p className="mt-2 truncate text-micro text-muted-foreground">{detail}</p>
         </div>
         <svg
           viewBox="0 0 120 48"
@@ -220,13 +230,13 @@ function DiagnosticsCard() {
                   onClick={() => setExpandedId(expanded ? null : check.id)}
                   className="flex w-full items-center gap-3 py-2.5 text-left"
                 >
-                  <span className="w-28 shrink-0 text-[13px] font-medium">{labelOf(check.id)}</span>
+                  <span className="w-28 shrink-0 text-ui font-medium">{labelOf(check.id)}</span>
                   <StatusPill tone={tone.tone}>{tone.label}</StatusPill>
-                  <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{check.summary}</span>
+                  <span className="min-w-0 flex-1 truncate text-caption text-muted-foreground">{check.summary}</span>
                   <ChevronDown className={`h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform ${expanded ? "rotate-180" : ""}`} />
                 </button>
                 {expanded ? (
-                  <pre className="mb-3 max-h-48 overflow-y-auto whitespace-pre-wrap rounded-lg bg-muted/40 p-3 font-mono text-[11px] leading-5 text-muted-foreground scrollbar-thin">{check.detail}</pre>
+                  <pre className="mb-3 max-h-48 overflow-y-auto whitespace-pre-wrap rounded-lg bg-muted/40 p-3 font-mono text-micro leading-5 text-muted-foreground scrollbar-thin">{check.detail}</pre>
                 ) : null}
               </li>
             );
@@ -248,11 +258,10 @@ export function OverviewPanel({ onNavigate, onStartStorageScan, onAcknowledgeSta
   if (!data) {
     if (error) {
       return (
-        <section className="rounded-lg border border-amber-200/80 bg-amber-500/[0.035] p-5">
-          <h2 className="text-sm font-semibold">暂时无法读取系统状态</h2>
-          <p className="mt-2 text-xs text-muted-foreground">{error}</p>
-          <p className="mt-1 text-xs text-muted-foreground">正在自动重试。</p>
-        </section>
+        <StatusNotice tone="warning" title="暂时无法读取系统状态" className="p-5">
+          <p>{error}</p>
+          <p className="mt-1">正在自动重试。</p>
+        </StatusNotice>
       );
     }
     return (
@@ -276,9 +285,9 @@ export function OverviewPanel({ onNavigate, onStartStorageScan, onAcknowledgeSta
   const historyReady = history.length >= 2;
   const timeLabels = buildTimeLabels(history, timeRange.seconds);
   const issueTone = {
-    red: "border-red-200/80 bg-red-500/[0.035]",
-    orange: "border-orange-200/90 bg-orange-500/[0.035]",
-    blue: "border-blue-200/90 bg-blue-500/[0.035]",
+    red: "border-destructive/30 bg-destructive/5",
+    orange: "border-warning/30 bg-warning/5",
+    blue: "border-info/30 bg-info/5",
   };
   const sortedProcesses = [...data.topProcesses].sort((left, right) => {
     const direction = sort.direction === "ascending" ? 1 : -1;
@@ -308,8 +317,8 @@ export function OverviewPanel({ onNavigate, onStartStorageScan, onAcknowledgeSta
       {issues.length > 0 && (
         <section className="rounded-lg border border-border/70 bg-card shadow-sm">
           <div className="border-b border-border/60 px-4 py-3">
-            <h2 className="text-sm font-semibold">现在值得处理</h2>
-            <p className="mt-1 text-[11px] text-muted-foreground">基于本机实时证据，为你排序 {issues.length} 个可执行问题</p>
+            <h2 className="text-body font-semibold">现在值得处理</h2>
+            <p className="mt-1 text-micro text-muted-foreground">基于本机实时证据，为你排序 {issues.length} 个可执行问题</p>
           </div>
           <div className="grid gap-3 p-3 md:grid-cols-3">
             {issues.map((issue) => {
@@ -318,17 +327,17 @@ export function OverviewPanel({ onNavigate, onStartStorageScan, onAcknowledgeSta
               return (
                 <article key={issue.id} className={`flex min-w-0 flex-col rounded-lg border p-3 ${issueTone[issue.tone]}`}>
                   <div className="flex items-start gap-3">
-                    <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${issue.tone === "red" ? "bg-red-500/10 text-red-600" : issue.tone === "orange" ? "bg-orange-500/10 text-orange-600" : "bg-blue-500/10 text-blue-600"}`}><Icon className="h-4 w-4" /></span>
+                    <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${issue.tone === "red" ? "bg-destructive/10 text-destructive" : issue.tone === "orange" ? "bg-warning/10 text-warning" : "bg-info/10 text-info"}`}><Icon className="h-4 w-4" /></span>
                     <div className="min-w-0 flex-1">
                       <StatusPill tone={pillTone}>{issue.priority}</StatusPill>
-                      <h3 className="mt-2 text-sm font-semibold">{issue.title}</h3>
+                      <h3 className="mt-2 text-body font-semibold">{issue.title}</h3>
                     </div>
                   </div>
-                  <p className="mt-3 text-[11px] leading-5 text-muted-foreground">{issue.evidence}</p>
-                  <p className="mt-1 text-[11px] leading-5 text-muted-foreground">{issue.impact}</p>
+                  <p className="mt-3 text-micro leading-5 text-muted-foreground">{issue.evidence}</p>
+                  <p className="mt-1 text-micro leading-5 text-muted-foreground">{issue.impact}</p>
                   <div className="mt-3 flex items-center gap-2">
                     <Button type="button" size="sm" onClick={() => void openIssue(issue)} className="flex-1">{issue.actionLabel}</Button>
-                    {issue.id === "scan-storage" && <span className="text-[10px] text-muted-foreground">先分析，暂不清理</span>}
+                    {issue.id === "scan-storage" && <span className="text-micro text-muted-foreground">先分析，暂不清理</span>}
                   </div>
                 </article>
               );
@@ -338,11 +347,11 @@ export function OverviewPanel({ onNavigate, onStartStorageScan, onAcknowledgeSta
       )}
 
       <section>
-        <h2 className="mb-2 text-sm font-semibold">系统状态</h2>
+        <h2 className="mb-2 text-body font-semibold">系统状态</h2>
         <div className="grid gap-3 md:grid-cols-3">
-          <OverviewMetric label="CPU" value={formatPercent(data.cpu.usagePercent)} detail={`${data.cpu.frequencyGhz.toFixed(1)} GHz`} points={cpuMiniPolyline} color="#2f80ff" />
-          <OverviewMetric label="内存" value={formatPercent(data.memory.usagePercent)} detail={`${formatGb(data.memory.usedGb)} / ${formatGb(data.memory.totalGb)} GB`} points={memoryMiniPolyline} color="#9367ff" />
-          <OverviewMetric label="网络" value={formatMbps(data.network.totalMbps)} detail={`↑ ${formatMbps(data.network.uploadMbps)}　↓ ${formatMbps(data.network.downloadMbps)}`} points={networkMiniPolyline} color="#4caf72" />
+          <OverviewMetric label="CPU" value={formatPercent(data.cpu.usagePercent)} detail={`${data.cpu.frequencyGhz.toFixed(1)} GHz`} points={cpuMiniPolyline} color={CHART_COLORS.cpu} />
+          <OverviewMetric label="内存" value={formatPercent(data.memory.usagePercent)} detail={`${formatGb(data.memory.usedGb)} / ${formatGb(data.memory.totalGb)} GB`} points={memoryMiniPolyline} color={CHART_COLORS.memory} />
+          <OverviewMetric label="网络" value={formatMbps(data.network.totalMbps)} detail={`↑ ${formatMbps(data.network.uploadMbps)}　↓ ${formatMbps(data.network.downloadMbps)}`} points={networkMiniPolyline} color={CHART_COLORS.network} />
         </div>
       </section>
 
@@ -356,7 +365,7 @@ export function OverviewPanel({ onNavigate, onStartStorageScan, onAcknowledgeSta
                   key={range.seconds}
                   type="button"
                   onClick={() => setTimeRange(range)}
-                  className={`rounded px-2.5 py-1 text-[11px] transition ${timeRange.seconds === range.seconds ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                  className={`rounded px-2.5 py-1 text-micro transition ${timeRange.seconds === range.seconds ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground"}`}
                 >
                   {range.label}
                 </button>
@@ -364,22 +373,22 @@ export function OverviewPanel({ onNavigate, onStartStorageScan, onAcknowledgeSta
             </div>
           }
         >
-          <div className="flex gap-4 text-[11px] text-muted-foreground">
-            <span><i className="mr-1 inline-block h-0.5 w-4 align-middle bg-blue-500" />CPU (%)</span>
-            <span><i className="mr-1 inline-block h-0.5 w-4 align-middle bg-violet-500" />内存 (%)</span>
+          <div className="flex gap-4 text-micro text-muted-foreground">
+            <span><i className="mr-1 inline-block h-0.5 w-4 align-middle" style={{ background: CHART_COLORS.cpu }} />CPU (%)</span>
+            <span><i className="mr-1 inline-block h-0.5 w-4 align-middle" style={{ background: CHART_COLORS.memory }} />内存 (%)</span>
           </div>
           <div className="mt-2 grid grid-cols-[30px_minmax(0,1fr)] gap-2">
-            <div className="flex h-40 flex-col justify-between pb-0.5 text-right text-[10px] text-muted-foreground"><span>100%</span><span>75%</span><span>50%</span><span>25%</span><span>0%</span></div>
+            <div className="flex h-40 flex-col justify-between pb-0.5 text-right text-micro text-muted-foreground"><span>100%</span><span>75%</span><span>50%</span><span>25%</span><span>0%</span></div>
             <div>
               <div className="relative h-40 rounded-sm bg-[linear-gradient(to_bottom,hsl(var(--border)/0.55)_1px,transparent_1px)] bg-[length:100%_25%]">
                 {historyReady ? (
                   <svg viewBox="0 0 600 160" className="h-full w-full" preserveAspectRatio="none" aria-label="CPU 与内存趋势图">
-                    <polyline points={cpuPolyline} fill="none" stroke="#2f80ff" strokeWidth="2" vectorEffect="non-scaling-stroke" />
-                    <polyline points={memoryPolyline} fill="none" stroke="#9367ff" strokeWidth="2" vectorEffect="non-scaling-stroke" />
+                    <polyline points={cpuPolyline} fill="none" stroke={CHART_COLORS.cpu} strokeWidth="2" vectorEffect="non-scaling-stroke" />
+                    <polyline points={memoryPolyline} fill="none" stroke={CHART_COLORS.memory} strokeWidth="2" vectorEffect="non-scaling-stroke" />
                   </svg>
-                ) : <div className="flex h-full items-center justify-center text-xs text-muted-foreground">正在采集趋势数据</div>}
+                ) : <div className="flex h-full items-center justify-center text-caption text-muted-foreground">正在采集趋势数据</div>}
               </div>
-              <div className="mt-1 flex justify-between text-[10px] text-muted-foreground">{timeLabels.map((label) => <span key={label}>{label}</span>)}</div>
+              <div className="mt-1 flex justify-between text-micro text-muted-foreground">{timeLabels.map((label) => <span key={label}>{label}</span>)}</div>
             </div>
           </div>
         </PanelCard>
@@ -387,12 +396,12 @@ export function OverviewPanel({ onNavigate, onStartStorageScan, onAcknowledgeSta
         {cDrive && (
           <PanelCard title={`磁盘空间 (${cDrive.driveLetter})`}>
             <div className="flex items-center gap-5">
-              <div className="relative flex h-28 w-28 shrink-0 items-center justify-center rounded-full" style={{ background: `conic-gradient(${cDrive.usagePercent >= 90 ? "#ef4444" : cDrive.usagePercent >= 80 ? "#ff5a52" : "#2f80ff"} 0 ${cDrive.usagePercent}%, hsl(var(--muted)) ${cDrive.usagePercent}% 100%)` }}>
-                <div className="flex h-20 w-20 flex-col items-center justify-center rounded-full bg-card"><strong className="text-2xl">{formatPercent(cDrive.usagePercent)}</strong><span className="text-[10px] text-muted-foreground">已使用</span></div>
+              <div className="relative flex h-28 w-28 shrink-0 items-center justify-center rounded-full" style={{ background: `conic-gradient(${cDrive.usagePercent >= 90 ? CHART_COLORS.diskDanger : cDrive.usagePercent >= 80 ? CHART_COLORS.diskWarning : CHART_COLORS.cpu} 0 ${cDrive.usagePercent}%, hsl(var(--muted)) ${cDrive.usagePercent}% 100%)` }}>
+                <div className="flex h-20 w-20 flex-col items-center justify-center rounded-full bg-card"><strong className="text-title">{formatPercent(cDrive.usagePercent)}</strong><span className="text-micro text-muted-foreground">已使用</span></div>
               </div>
-              <div className="min-w-0 flex-1 divide-y divide-border/60 text-xs">
-                <div className="pb-2"><p className="text-muted-foreground">已使用</p><p className="mt-1 text-lg font-semibold text-red-500">{formatGb(cDrive.usedGb)} GB</p></div>
-                <div className="py-2"><p className="text-muted-foreground">可用</p><p className="mt-1 text-lg font-semibold">{formatGb(cDrive.availableGb)} GB</p></div>
+              <div className="min-w-0 flex-1 divide-y divide-border/60 text-caption">
+                <div className="pb-2"><p className="text-muted-foreground">已使用</p><p className="mt-1 text-title-sm text-destructive">{formatGb(cDrive.usedGb)} GB</p></div>
+                <div className="py-2"><p className="text-muted-foreground">可用</p><p className="mt-1 text-title-sm">{formatGb(cDrive.availableGb)} GB</p></div>
                 <div className="pt-2 text-muted-foreground">总容量　{formatGb(cDrive.totalGb)} GB</div>
               </div>
             </div>
@@ -404,7 +413,7 @@ export function OverviewPanel({ onNavigate, onStartStorageScan, onAcknowledgeSta
 
       <PanelCard title="资源占用较高的程序">
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[540px] text-left text-xs">
+          <table className="w-full min-w-[540px] text-left text-caption">
             <thead className="text-muted-foreground"><tr>{PROCESS_COLUMNS.map((column) => <th key={column.key} aria-sort={sort.key === column.key ? sort.direction : "none"} className="pb-2 font-medium"><button type="button" aria-label={`按 ${column.label} 排序`} onClick={() => toggleSort(column.key)} className="inline-flex items-center gap-1 hover:text-foreground">{column.label}<span aria-hidden>{sort.key === column.key ? sort.direction === "ascending" ? "↑" : "↓" : "↕"}</span></button></th>)}</tr></thead>
             <tbody>
               {sortedProcesses.map((process) => <tr key={process.pid} className="border-t border-border/50"><td className="py-2.5 font-medium">{process.name}</td><td>{process.cpuPercent.toFixed(1)}%</td><td>{process.memoryMb > 1024 ? `${(process.memoryMb / 1024).toFixed(1)} GB` : `${process.memoryMb} MB`}</td><td>{formatBytesPerSecond(process.diskReadBytesPerSec)}</td><td>{formatBytesPerSecond(process.diskWriteBytesPerSec)}</td></tr>)}

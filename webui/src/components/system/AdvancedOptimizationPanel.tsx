@@ -60,9 +60,9 @@ export function PerformanceSection() {
   return (
     <PanelCard title="性能微调" action={<Zap className="h-4 w-4" />}>
       {loading ? (
-        <div className="flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />正在读取...</div>
+        <div className="flex items-center gap-2 text-caption text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />正在读取...</div>
       ) : items.length === 0 ? (
-        <p className="text-xs text-muted-foreground">暂无可优化的性能项。</p>
+        <p className="text-caption text-muted-foreground">暂无可优化的性能项。</p>
       ) : (
         <div className="flex flex-col gap-1.5">
           {items.map((item) => {
@@ -73,20 +73,20 @@ export function PerformanceSection() {
                 key={item.id}
                 className={cn(
                   "flex items-center justify-between gap-3 rounded-lg border px-3 py-2.5 transition",
-                  enabled ? "border-blue-500/30 bg-blue-500/[0.04]" : "border-border/60",
+                  enabled ? "border-info/30 bg-info/[0.04]" : "border-border/60",
                   isLoading && "opacity-70",
                 )}
               >
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-1.5">
-                    <span className="text-xs font-semibold">{item.label}</span>
+                    <span className="text-caption font-semibold">{item.label}</span>
                     {item.risk === "medium" && <StatusPill tone="orange">中风险</StatusPill>}
                     {item.risk === "high" && <StatusPill tone="red">高风险</StatusPill>}
                     {item.requiresReboot && <StatusPill tone="violet">需重启</StatusPill>}
                     {item.requiresAdministrator && <StatusPill tone="orange">管理员</StatusPill>}
                   </div>
-                  <p className="mt-1 text-[11px] text-muted-foreground">{item.description}</p>
-                  {item.currentDetail && <p className="mt-0.5 text-[10px] text-muted-foreground/70">{item.currentDetail}</p>}
+                  <p className="mt-1 text-micro text-muted-foreground">{item.description}</p>
+                  {item.currentDetail && <p className="mt-0.5 text-micro text-muted-foreground/70">{item.currentDetail}</p>}
                 </div>
                 <button
                   type="button"
@@ -97,7 +97,7 @@ export function PerformanceSection() {
                   onClick={() => void handleToggle(item)}
                   className={cn(
                     "relative inline-flex h-6 w-11 shrink-0 items-center rounded-full p-0.5 transition-all duration-300 disabled:cursor-not-allowed disabled:opacity-40",
-                    enabled ? "bg-blue-600 shadow-sm shadow-blue-500/25" : "bg-muted-foreground/25",
+                    enabled ? "bg-primary" : "bg-muted-foreground/25",
                   )}
                 >
                   {isLoading
@@ -109,7 +109,7 @@ export function PerformanceSection() {
           })}
         </div>
       )}
-      {message && <p className={cn("mt-2 text-xs", message.tone === "ok" ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400")}>{message.text}</p>}
+      {message && <p className={cn("mt-2 text-caption", message.tone === "ok" ? "text-success" : "text-destructive")}>{message.text}</p>}
     </PanelCard>
   );
 }
@@ -152,20 +152,20 @@ export function ContextMenuSection() {
   return (
     <PanelCard title="右键菜单集成" action={<Menu className="h-4 w-4" />}>
       {loading ? (
-        <div className="flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />正在读取...</div>
+        <div className="flex items-center gap-2 text-caption text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />正在读取...</div>
       ) : (
         <div className="flex flex-col gap-2">
           {items.map((item) => (
             <div key={item.id} className={cn(
               "flex items-center justify-between gap-3 rounded-lg border p-3",
-              item.isApplied ? "border-blue-500/40 bg-blue-500/5" : "border-border/60",
+              item.isApplied ? "border-info/40 bg-info/5" : "border-border/60",
             )}>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
-                  <span className="text-xs font-semibold">{item.label}</span>
-                  {item.isApplied && <CheckCircle2 className="h-3.5 w-3.5 text-blue-600" />}
+                  <span className="text-caption font-semibold">{item.label}</span>
+                  {item.isApplied && <CheckCircle2 className="h-3.5 w-3.5 text-info" />}
                 </div>
-                <p className="mt-0.5 text-[11px] text-muted-foreground">{item.description}</p>
+                <p className="mt-0.5 text-micro text-muted-foreground">{item.description}</p>
               </div>
               <Button
                 type="button"
@@ -181,7 +181,7 @@ export function ContextMenuSection() {
           ))}
         </div>
       )}
-      {message && <p className={cn("text-xs", message.tone === "ok" ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400")}>{message.text}</p>}
+      {message && <p className={cn("text-caption", message.tone === "ok" ? "text-success" : "text-destructive")}>{message.text}</p>}
     </PanelCard>
   );
 }
@@ -242,20 +242,20 @@ export function DefenderSection() {
   return (
     <PanelCard title="Windows Defender 控制" action={<Shield className="h-4 w-4" />}>
       {loading ? (
-        <div className="flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />正在读取...</div>
+        <div className="flex items-center gap-2 text-caption text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />正在读取...</div>
       ) : status ? (
         <div className="flex flex-col gap-3">
           <div className={cn(
             "rounded-lg border p-3",
-            isDisabled ? "border-red-500/40 bg-red-500/5" : "border-emerald-500/40 bg-emerald-500/5",
+            isDisabled ? "border-destructive/40 bg-destructive/5" : "border-success/40 bg-success/5",
           )}>
             <div className="flex items-center gap-2">
-              {isDisabled ? <ShieldOff className="h-4 w-4 text-red-600" /> : <Shield className="h-4 w-4 text-emerald-600" />}
-              <span className="text-xs font-semibold">{isDisabled ? "实时保护已禁用" : "实时保护已启用"}</span>
+              {isDisabled ? <ShieldOff className="h-4 w-4 text-destructive" /> : <Shield className="h-4 w-4 text-success" />}
+              <span className="text-caption font-semibold">{isDisabled ? "实时保护已禁用" : "实时保护已启用"}</span>
             </div>
-            <p className="mt-1 text-[11px] text-muted-foreground">{status.detail}</p>
+            <p className="mt-1 text-micro text-muted-foreground">{status.detail}</p>
             {hasThirdParty && (
-              <div className="mt-2 rounded border border-blue-500/30 bg-blue-500/5 p-2 text-[10px] text-blue-600 dark:text-blue-400">
+              <div className="mt-2 rounded border border-info/30 bg-info/5 p-2 text-micro text-info">
                 检测到第三方杀毒软件：{status.thirdPartyAv.join("、")}
               </div>
             )}
@@ -263,18 +263,18 @@ export function DefenderSection() {
 
           {status.realtimeEnabled ? (
             <div className="flex flex-col gap-2">
-              <label className="flex items-start gap-2 text-[11px] text-muted-foreground">
+              <label className="flex items-start gap-2 text-micro text-muted-foreground">
                 <Checkbox checked={confirmed} onCheckedChange={(v) => setConfirmed(v === true)} className="mt-0.5" />
                 <span>
                   我已了解禁用 Defender 会降低系统安全性
-                  {!hasThirdParty && <span className="font-medium text-red-600">，且当前没有第三方杀毒软件保护</span>}
+                  {!hasThirdParty && <span className="font-medium text-destructive">，且当前没有第三方杀毒软件保护</span>}
                 </span>
               </label>
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
-                className="border-red-500/60 bg-red-500/10 text-red-600 hover:bg-red-500/20 hover:text-red-600"
+                className="border-destructive/60 bg-destructive/10 text-destructive hover:bg-destructive/20 hover:text-destructive"
                 onClick={() => void handleDisable()}
                 disabled={!confirmed || acting}
               >
@@ -287,7 +287,7 @@ export function DefenderSection() {
               type="button"
               variant="outline"
               size="sm"
-              className="border-emerald-500/60 bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20 hover:text-emerald-600"
+              className="border-success/60 bg-success/10 text-success hover:bg-success/20 hover:text-success"
               onClick={() => void handleEnable()}
               disabled={acting}
             >
@@ -296,13 +296,13 @@ export function DefenderSection() {
             </Button>
           )}
 
-          <div className="flex items-start gap-1.5 text-[10px] text-muted-foreground/70">
+          <div className="flex items-start gap-1.5 text-micro text-muted-foreground/70">
             <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
             <span>禁用 Defender 可能需要重启或安全模式才能完全生效。Windows 10 1903+ 客户端的 DisableAntiSpyware 注册表值会被忽略。</span>
           </div>
         </div>
       ) : null}
-      {message && <p className={cn("text-xs", message.tone === "ok" ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400")}>{message.text}</p>}
+      {message && <p className={cn("text-caption", message.tone === "ok" ? "text-success" : "text-destructive")}>{message.text}</p>}
     </PanelCard>
   );
 }

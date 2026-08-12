@@ -58,7 +58,7 @@ export function SystemView({ initialTab = "overview" }: { initialTab?: SystemTab
               role="tab"
               aria-selected={activeTab === tab.id}
               onClick={() => switchTab(tab.id)}
-              className={`relative flex items-center gap-1.5 whitespace-nowrap rounded-md px-3 py-1.5 text-[13px] transition-colors ${
+              className={`relative flex items-center gap-1.5 whitespace-nowrap rounded-md px-3 py-1.5 text-ui transition-colors ${
                 activeTab === tab.id
                   ? "font-medium text-foreground"
                   : "text-muted-foreground hover:bg-accent"
@@ -66,7 +66,7 @@ export function SystemView({ initialTab = "overview" }: { initialTab?: SystemTab
             >
               {tab.label}
               {tab.id === "software" && updateCount > 0 ? (
-                <span className="rounded-full bg-amber-500/15 px-1.5 py-px text-[10px] font-semibold text-amber-600">
+                <span className="rounded-full bg-warning/15 px-1.5 py-px text-micro font-semibold text-warning">
                   {updateCount}
                 </span>
               ) : null}

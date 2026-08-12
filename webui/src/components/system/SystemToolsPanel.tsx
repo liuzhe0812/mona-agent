@@ -73,7 +73,7 @@ function ProcessBlacklistSection() {
       <div className="flex flex-col gap-3">
         <div className="flex items-center gap-2">
           <Input
-            className="h-8 min-w-[120px] flex-1 rounded-lg text-xs"
+            className="min-w-[120px] flex-1"
             placeholder="进程名（如 notepad.exe）"
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
@@ -86,12 +86,12 @@ function ProcessBlacklistSection() {
         </div>
 
         {loading ? (
-          <div className="flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />正在读取...</div>
+          <div className="flex items-center gap-2 text-caption text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />正在读取...</div>
         ) : blocked.length > 0 ? (
           <div className="rounded-lg border border-border/60">
             {blocked.map((proc) => (
-              <div key={proc.exeName} className="flex items-center gap-2 border-b border-border/40 px-3 py-2 text-xs last:border-b-0">
-                <Ban className="h-3 w-3 text-red-500" />
+              <div key={proc.exeName} className="flex items-center gap-2 border-b border-border/40 px-3 py-2 text-caption last:border-b-0">
+                <Ban className="h-3 w-3 text-destructive" />
                 <span className="min-w-0 flex-1 truncate font-mono">{proc.exeName}</span>
                 <Button
                   type="button"
@@ -107,14 +107,14 @@ function ProcessBlacklistSection() {
             ))}
           </div>
         ) : (
-          <p className="text-xs text-muted-foreground">没有阻止任何进程</p>
+          <p className="text-caption text-muted-foreground">没有阻止任何进程</p>
         )}
 
-        <p className="text-[10px] text-muted-foreground/70">
+        <p className="text-micro text-muted-foreground/70">
           通过 IFEO（Image File Execution Options）劫持阻止 exe 启动。系统关键进程被保护，不允许阻止。
         </p>
 
-        {message && <p className={cn("text-xs", message.tone === "ok" ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400")}>{message.text}</p>}
+        {message && <p className={cn("text-caption", message.tone === "ok" ? "text-success" : "text-destructive")}>{message.text}</p>}
       </div>
     </PanelCard>
   );

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { Loader2, Send, Square } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { StatusNotice } from "@/components/ui/status-notice";
 import { Textarea } from "@/components/ui/textarea";
 import { ThreadMessages } from "@/components/thread/ThreadMessages";
 import { useMonaStream } from "@/hooks/useMonaStream";
@@ -71,12 +72,12 @@ export function SystemAgentChat({ chatId, task, onChatCreated, onTaskHandled }: 
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden p-4 scrollbar-hover">
         <div className="space-y-3">
-          {creationError && <p role="alert" className="text-xs text-red-700 dark:text-red-400">创建 Mona 会话失败：{creationError}</p>}
-          {historyError && <p role="alert" className="text-xs text-red-700 dark:text-red-400">会话历史加载失败：{historyError}</p>}
-          {streamError && <div role="alert" className="flex items-center justify-between gap-2 text-xs text-red-700 dark:text-red-400"><span>消息发送失败，请稍后重试。</span><button type="button" onClick={dismissStreamError} className="underline">关闭</button></div>}
-          {creating && <p className="flex items-center gap-1.5 text-xs text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" />正在创建 Mona 会话...</p>}
-          {loading && <p className="flex items-center gap-1.5 text-xs text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" />正在加载会话...</p>}
-          {!loading && !creating && messages.length === 0 && <p className="rounded-lg border border-border/70 bg-muted/30 p-3 text-xs leading-5 text-muted-foreground">Mona 会在这里接管失败的维护任务。你也可以继续补充要求。</p>}
+          {creationError && <StatusNotice tone="danger">创建 Mona 会话失败：{creationError}</StatusNotice>}
+          {historyError && <StatusNotice tone="danger">会话历史加载失败：{historyError}</StatusNotice>}
+          {streamError && <StatusNotice tone="danger" action={<Button type="button" variant="ghost" size="xs" onClick={dismissStreamError}>关闭</Button>}>消息发送失败，请稍后重试。</StatusNotice>}
+          {creating && <p className="flex items-center gap-1.5 text-caption text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" />正在创建 Mona 会话...</p>}
+          {loading && <p className="flex items-center gap-1.5 text-caption text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" />正在加载会话...</p>}
+          {!loading && !creating && messages.length === 0 && <p className="rounded-lg border border-border/70 bg-muted/30 p-3 text-caption leading-5 text-muted-foreground">Mona 会在这里接管失败的维护任务。你也可以继续补充要求。</p>}
           <ThreadMessages messages={messages} isStreaming={isStreaming} />
           <div ref={bottomRef} />
         </div>
@@ -94,7 +95,7 @@ export function SystemAgentChat({ chatId, task, onChatCreated, onTaskHandled }: 
               }
             }}
             disabled={!chatId || isStreaming || creating}
-            className="min-h-[36px] flex-1 resize-none rounded-lg border-0 bg-transparent px-0 text-xs leading-5 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
+            className="min-h-[36px] flex-1 resize-none rounded-lg border-0 bg-transparent px-0 text-caption leading-5 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
             rows={2}
             placeholder="继续告诉 Mona..."
           />

@@ -101,7 +101,7 @@ function NodeRow({
         onContextMenu={handleContextMenu}
         onKeyDown={handleKeyDown}
         className={cn(
-          "flex cursor-default select-none items-center gap-1 px-2 py-0.5 text-xs outline-none",
+          "flex cursor-default select-none items-center gap-1 px-2 py-0.5 text-caption outline-none",
           isSelected
             ? "bg-accent text-foreground"
             : "hover:bg-accent",
@@ -127,14 +127,14 @@ function NodeRow({
         </span>
         {/* 文件夹图标 */}
         {expanded && hasChildren ? (
-          <FolderOpen className="h-4 w-4 shrink-0 text-amber-400" />
+          <FolderOpen className="h-4 w-4 shrink-0 text-warning" />
         ) : (
-          <Folder className="h-4 w-4 shrink-0 text-amber-400" />
+          <Folder className="h-4 w-4 shrink-0 text-warning" />
         )}
         {/* 名称 */}
         <span className="min-w-0 flex-1 truncate font-medium">{name}</span>
         {/* 大小 */}
-        <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
+        <span className="shrink-0 text-micro tabular-nums text-muted-foreground">
           {formatStorage(node.sizeGb)}
         </span>
       </div>
@@ -157,7 +157,7 @@ function NodeRow({
           ))}
           {node.children!.length > MAX_CHILDREN_PER_NODE && (
             <div
-              className="px-2 py-0.5 text-[10px] text-muted-foreground"
+              className="px-2 py-0.5 text-micro text-muted-foreground"
               style={{ paddingLeft: `${(depth + 1) * 16 + 8}px` }}
             >
               还有 {node.children!.length - MAX_CHILDREN_PER_NODE} 个子目录未显示
@@ -259,7 +259,7 @@ export function DirectoryTreeView({
       bodyClassName="h-full p-2"
     >
       {sorted.length === 0 ? (
-        <div className="py-6 text-center text-xs text-muted-foreground select-none">
+        <div className="py-6 text-center text-caption text-muted-foreground select-none">
           扫描后展示目录占用
         </div>
       ) : (
@@ -293,7 +293,7 @@ export function DirectoryTreeView({
             type="button"
             disabled={!menuHasChildren}
             className={cn(
-              "flex w-full cursor-default select-none items-center rounded-sm px-2 py-1.5 text-xs outline-none",
+              "flex w-full cursor-default select-none items-center rounded-sm px-2 py-1.5 text-caption outline-none",
               menuHasChildren
                 ? "hover:bg-accent hover:text-accent-foreground"
                 : "opacity-50 pointer-events-none",
@@ -304,14 +304,14 @@ export function DirectoryTreeView({
           </button>
           <button
             type="button"
-            className="flex w-full cursor-default select-none items-center rounded-sm px-2 py-1.5 text-xs outline-none hover:bg-accent hover:text-accent-foreground"
+            className="flex w-full cursor-default select-none items-center rounded-sm px-2 py-1.5 text-caption outline-none hover:bg-accent hover:text-accent-foreground"
             onClick={() => { void openInExplorer(menu.path); closeMenu(); }}
           >
             在资源管理器中打开
           </button>
           <button
             type="button"
-            className="flex w-full cursor-default select-none items-center rounded-sm px-2 py-1.5 text-xs outline-none hover:bg-accent hover:text-accent-foreground"
+            className="flex w-full cursor-default select-none items-center rounded-sm px-2 py-1.5 text-caption outline-none hover:bg-accent hover:text-accent-foreground"
             onClick={() => { navigator.clipboard?.writeText(menu.path).catch(() => {}); closeMenu(); }}
           >
             复制路径

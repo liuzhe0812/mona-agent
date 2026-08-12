@@ -184,12 +184,12 @@ export function TreemapView({
 
   // 面包屑导航（放在标题右侧，点击回退）
   const breadcrumbEl = (
-    <div className="flex items-center gap-0.5 overflow-x-auto text-[11px] scrollbar-none select-none">
+    <div className="flex items-center gap-0.5 overflow-x-auto text-micro scrollbar-none select-none">
       <Button
         variant="ghost"
         size="sm"
         onClick={() => onNavigate(null)}
-        className="h-auto px-1 py-0.5 text-[11px] font-normal text-muted-foreground hover:bg-accent hover:text-foreground"
+        className="h-auto px-1 py-0.5 text-micro font-normal text-muted-foreground hover:bg-accent hover:text-foreground"
       >
         <Home className="h-3 w-3" />
         <span>此电脑</span>
@@ -204,7 +204,7 @@ export function TreemapView({
               size="sm"
               onClick={() => !isLast && onNavigate(item.path)}
               className={cn(
-                "h-auto max-w-[160px] truncate px-1 py-0.5 text-[11px] font-normal",
+                "h-auto max-w-[160px] truncate px-1 py-0.5 text-micro font-normal",
                 isLast
                   ? "pointer-events-none font-medium text-foreground hover:bg-transparent"
                   : "text-muted-foreground hover:bg-accent hover:text-foreground",
@@ -222,15 +222,15 @@ export function TreemapView({
   return (
     <PanelCard title={title} className="h-full" action={breadcrumbEl}>
       {loading ? (
-        <div className="flex h-[320px] items-center justify-center text-xs text-muted-foreground">
+        <div className="flex h-[320px] items-center justify-center text-caption text-muted-foreground">
           正在扫描子目录...
         </div>
       ) : error ? (
-        <div className="flex h-[320px] items-center justify-center text-xs text-orange-600">
+        <div className="flex h-[320px] items-center justify-center text-caption text-warning">
           {error}
         </div>
       ) : tiles.length === 0 ? (
-        <div className="flex h-[320px] items-center justify-center text-xs text-muted-foreground">
+        <div className="flex h-[320px] items-center justify-center text-caption text-muted-foreground">
           暂无数据
         </div>
       ) : (

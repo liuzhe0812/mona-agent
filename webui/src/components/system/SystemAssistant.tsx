@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
+import { StatusNotice } from "@/components/ui/status-notice";
 import {
   collectSystemEvidence,
   executeSystemAction,
@@ -58,9 +59,9 @@ const evidenceStageLabels: Record<SystemEvidenceStage, string> = {
 const DIAGNOSTIC_INTENT = /为什么|怎么|慢|卡|异常|报错|蓝屏|崩溃|发热/;
 
 const CONFIDENCE_STYLES: Record<SystemDiagnosisResult["hypotheses"][number]["confidence"], { pill: string; label: string }> = {
-  high: { pill: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400", label: "高置信" },
-  medium: { pill: "bg-amber-500/10 text-amber-600 dark:text-amber-400", label: "中置信" },
-  low: { pill: "bg-slate-500/10 text-slate-600 dark:text-slate-400", label: "低置信" },
+  high: { pill: "bg-success/10 text-success", label: "高置信" },
+  medium: { pill: "bg-warning/10 text-warning", label: "中置信" },
+  low: { pill: "bg-muted text-muted-foreground", label: "低置信" },
 };
 
 export function SystemAssistant({
@@ -216,21 +217,23 @@ export function SystemAssistant({
       )}
     >
       <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border/60 px-4">
-        <h2 className="flex-1 text-[13px] font-semibold">Mona 系统管家</h2>
+        <h2 className="flex-1 text-ui font-semibold">Mona 系统管家</h2>
         {viewMode === "agent" && (
-          <button
+          <Button
+            variant="ghost"
+            size="xs"
             onClick={handleReturnToPlanner}
-            className="rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+            className="text-muted-foreground"
           >
             返回系统方案
-          </button>
+          </Button>
         )}
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto scrollbar-hover">
         {viewMode === "agent" ? (
           <div className="flex min-h-full flex-col">
-            <p className="border-b border-border/40 px-4 py-2 text-xs text-muted-foreground">
+            <p className="border-b border-border/40 px-4 py-2 text-caption text-muted-foreground">
               Mona 正在接管维护任务，可继续对话补充要求
             </p>
             <SystemAgentChat
@@ -250,7 +253,7 @@ export function SystemAssistant({
             />
 
             {error ? (
-              <div role="alert" className="rounded-lg border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-red-600">{error}</div>
+              <StatusNotice tone="danger">{error}</StatusNotice>
             ) : null}
 
             {diagnosis ? (
@@ -258,9 +261,9 @@ export function SystemAssistant({
                 <div className="rounded-lg border border-border/60 p-3">
                   <div className="flex items-center gap-2">
                     <Stethoscope className="h-4 w-4 text-primary" />
-                    <p className="text-sm font-semibold">诊断结论</p>
+                    <p className="text-body font-semibold">诊断结论</p>
                   </div>
-                  <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{diagnosis.summary}</p>
+                  <p className="mt-2 text-caption leading-relaxed text-muted-foreground">{diagnosis.summary}</p>
                 </div>
 
                 {diagnosis.hypotheses.map((hypothesis) => {
@@ -268,11 +271,11 @@ export function SystemAssistant({
                   return (
                     <div key={hypothesis.title} className="rounded-lg border border-border/60 p-3">
                       <div className="flex items-center justify-between gap-2">
-                        <p className="text-[13px] font-medium">{hypothesis.title}</p>
-                        <span className={cn("shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium", confidence.pill)}>{confidence.label}</span>
+                        <p className="text-ui font-medium">{hypothesis.title}</p>
+                        <span className={cn("shrink-0 rounded-full px-1.5 py-0.5 text-micro font-medium", confidence.pill)}>{confidence.label}</span>
                       </div>
-                      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{hypothesis.explanation}</p>
-                      <p className="mt-2 text-xs text-foreground">建议：{hypothesis.nextStep}</p>
+                      <p className="mt-1 text-caption leading-relaxed text-muted-foreground">{hypothesis.explanation}</p>
+                      <p className="mt-2 text-caption text-foreground">建议：{hypothesis.nextStep}</p>
                       {hypothesis.evidenceIds.length > 0 ? (
                         <div className="mt-2 flex flex-wrap gap-1.5">
                           {hypothesis.evidenceIds.map((id) => (
@@ -280,7 +283,7 @@ export function SystemAssistant({
                               key={id}
                               type="button"
                               onClick={() => onNavigate("overview")}
-                              className="rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground hover:bg-accent hover:text-foreground"
+                              className="rounded-full bg-muted px-2 py-0.5 text-micro text-muted-foreground hover:bg-accent hover:text-foreground"
                             >
                               {diagnosticLabel(id)}
                             </button>
@@ -292,7 +295,7 @@ export function SystemAssistant({
                 })}
 
                 {diagnosis.cautions.length > 0 ? (
-                  <ul className="space-y-1 text-xs text-muted-foreground">
+                  <ul className="space-y-1 text-caption text-muted-foreground">
                     {diagnosis.cautions.map((caution) => <li key={caution}>· {caution}</li>)}
                   </ul>
                 ) : null}
@@ -303,10 +306,10 @@ export function SystemAssistant({
               <div className="space-y-3">
                 <div className="rounded-lg border border-border/60 p-3">
                   <div className="flex items-center gap-2">
-                    <ShieldCheck className="h-4 w-4 text-emerald-600" />
-                    <p className="text-sm font-semibold">{plan.summary}</p>
+                    <ShieldCheck className="h-4 w-4 text-success" />
+                    <p className="text-body font-semibold">{plan.summary}</p>
                   </div>
-                  <ul className="mt-2 space-y-1 text-xs text-muted-foreground">
+                  <ul className="mt-2 space-y-1 text-caption text-muted-foreground">
                     {plan.findings.map((finding) => <li key={finding}>· {finding}</li>)}
                   </ul>
                 </div>
@@ -327,14 +330,14 @@ export function SystemAssistant({
                           />
                           <div className="min-w-0 flex-1">
                             <div className="flex items-center justify-between gap-2">
-                              <p className="text-[13px] font-medium">{action.title}</p>
+                              <p className="text-ui font-medium">{action.title}</p>
                               <StatusPill tone={(({ low: "green", medium: "orange" }) as const)[action.risk]}>{({ low: "低风险", medium: "中风险" })[action.risk]}</StatusPill>
                             </div>
-                            <p className="mt-1 text-xs text-muted-foreground">{action.reason}</p>
+                            <p className="mt-1 text-caption text-muted-foreground">{action.reason}</p>
                             <div className="mt-2 flex items-center gap-2">
-                              <button onClick={() => onNavigate(action.evidenceTab)} className="text-xs text-primary hover:underline">查看{tabLabel(action.evidenceTab)}依据</button>
+                              <Button variant="link" size="xs" className="h-auto px-0" onClick={() => onNavigate(action.evidenceTab)}>查看{tabLabel(action.evidenceTab)}依据</Button>
                               {result ? (
-                                <span className={`inline-flex items-center gap-1 text-xs ${result.success ? "text-emerald-600" : "text-red-600"}`}>
+                                <span className={`inline-flex items-center gap-1 text-caption ${result.success ? "text-success" : "text-destructive"}`}>
                                   {result.success ? <Check className="h-3 w-3" /> : null}
                                   <span>{result.detail}</span>
                                   {result.verified ? <span>验证完成</span> : null}
@@ -381,7 +384,7 @@ export function SystemAssistant({
               {planning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
             </Button>
           </div>
-          {stage ? <p className="mt-2 text-xs text-muted-foreground">{stage}</p> : null}
+          {stage ? <p className="mt-2 text-caption text-muted-foreground">{stage}</p> : null}
         </div>
       ) : null}
     </aside>

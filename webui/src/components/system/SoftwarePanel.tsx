@@ -4,6 +4,7 @@ import { Fragment, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
+import { StatusNotice } from "@/components/ui/status-notice";
 
 import { MetricCard, PanelCard, StatusPill, TaskFailureNotice } from "./SystemUi";
 import type { SystemAgentHandoffTask } from "./systemAgentHandoff";
@@ -183,7 +184,7 @@ export function SoftwarePanel({ onHandoff }: SoftwarePanelProps) {
             role="tab"
             aria-selected={activeSection === section.id}
             onClick={() => setActiveSection(section.id)}
-            className={`relative whitespace-nowrap px-1 pb-2.5 text-sm font-medium transition ${activeSection === section.id ? "text-primary" : "text-muted-foreground hover:text-foreground"}`}
+            className={`relative whitespace-nowrap px-1 pb-2.5 text-body font-medium transition ${activeSection === section.id ? "text-primary" : "text-muted-foreground hover:text-foreground"}`}
           >
             {section.label}
             {activeSection === section.id && <span className="absolute inset-x-0 bottom-0 h-0.5 rounded-full bg-primary" />}
@@ -192,9 +193,7 @@ export function SoftwarePanel({ onHandoff }: SoftwarePanelProps) {
       </div>
 
       {error && (
-        <div role="alert" className="rounded-lg border border-red-500/30 bg-red-500/5 px-4 py-3 text-xs text-red-700 dark:text-red-400">
-          软件信息读取失败：{error}
-        </div>
+        <StatusNotice tone="danger">软件信息读取失败：{error}</StatusNotice>
       )}
 
       {activeSection === "updates" && (
@@ -234,7 +233,7 @@ export function SoftwarePanel({ onHandoff }: SoftwarePanelProps) {
             action={<Button variant="outline" size="sm" onClick={refresh} disabled={loading || busy}>重新扫描</Button>}
           >
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[620px] text-left text-xs">
+              <table className="w-full min-w-[620px] text-left text-caption">
                 <thead className="text-muted-foreground">
                   <tr>
                     <th className="w-10 pb-2 font-medium">
@@ -281,7 +280,7 @@ export function SoftwarePanel({ onHandoff }: SoftwarePanelProps) {
                         {isWorking && latest && (
                           <tr>
                             <td colSpan={6} className="px-4 pb-2.5 pt-0">
-                              <p className="truncate text-[11px] text-muted-foreground" title={latest}>{latest}</p>
+                              <p className="truncate text-micro text-muted-foreground" title={latest}>{latest}</p>
                             </td>
                           </tr>
                         )}
@@ -290,15 +289,15 @@ export function SoftwarePanel({ onHandoff }: SoftwarePanelProps) {
                   })}
                 </tbody>
               </table>
-              {!loading && updates.length === 0 && <p className="py-8 text-center text-xs text-muted-foreground">当前没有可用更新</p>}
+              {!loading && updates.length === 0 && <p className="py-8 text-center text-caption text-muted-foreground">当前没有可用更新</p>}
             </div>
-            <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border/70 bg-muted/30 p-2.5 text-xs">
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border/70 bg-muted/30 p-2.5 text-caption">
               <span>已选择 {selectedUpdates.length} 项</span>
               <Button size="sm" onClick={() => upgrade(selectedUpdates)} disabled={selectedUpdates.length === 0 || busy}>
                 {busy ? "处理中" : "更新所选"}
               </Button>
             </div>
-            {lastAction && <p role="status" className="mt-2 text-xs text-emerald-600">{lastAction}</p>}
+            {lastAction && <p role="status" className="mt-2 text-caption text-success">{lastAction}</p>}
           </PanelCard>
         </>
       )}
@@ -317,7 +316,7 @@ export function SoftwarePanel({ onHandoff }: SoftwarePanelProps) {
           )}
         >
           <div className="max-h-[360px] overflow-auto">
-            <table className="w-full min-w-[700px] table-fixed text-left text-xs">
+            <table className="w-full min-w-[700px] table-fixed text-left text-caption">
               <colgroup><col className="w-[230px]" /><col className="w-[160px]" /><col className="w-[100px]" /><col className="w-[110px]" /><col className="w-[100px]" /><col className="w-[72px]" /></colgroup>
               <thead className="sticky top-0 bg-card text-muted-foreground"><tr><th className="pb-2 font-medium">已安装软件</th><th>发布者</th><th>版本</th><th>占用</th><th>安装日期</th><th /></tr></thead>
               <tbody>
@@ -328,17 +327,17 @@ export function SoftwarePanel({ onHandoff }: SoftwarePanelProps) {
                     <td className="truncate pr-3" title={software.version || undefined}>{software.version || "未知"}</td>
                     <td>{software.estimatedSizeBytes != null ? formatBytes(software.estimatedSizeBytes) : "—"}</td>
                     <td>{software.installDate || "—"}</td>
-                    <td><button className="text-primary hover:underline" aria-label={`卸载 ${software.name}`} disabled={busy} onClick={() => { setSelectedInstalledId(software.id); setConfirmingUninstall(true); }}>卸载</button></td>
+                    <td><Button variant="link" size="xs" className="h-auto px-0" aria-label={`卸载 ${software.name}`} disabled={busy} onClick={() => { setSelectedInstalledId(software.id); setConfirmingUninstall(true); }}>卸载</Button></td>
                   </tr>
                 ))}
               </tbody>
             </table>
-            {!loading && filteredInstalled.length === 0 && <p className="py-8 text-center text-xs text-muted-foreground">没有匹配的已安装软件</p>}
+            {!loading && filteredInstalled.length === 0 && <p className="py-8 text-center text-caption text-muted-foreground">没有匹配的已安装软件</p>}
           </div>
 
           {confirmingUninstall && selectedInstalled && (
-            <div className="mt-3 flex flex-wrap items-center gap-3 rounded-lg border border-orange-500/30 bg-orange-500/5 p-3 text-xs">
-              <AlertTriangle className="h-4 w-4 text-orange-600" />
+            <div className="mt-3 flex flex-wrap items-center gap-3 rounded-lg border border-warning/30 bg-warning/5 p-3 text-caption">
+              <AlertTriangle className="h-4 w-4 text-warning" />
               <span className="flex-1">将通过 WinGet 精确匹配并卸载“{selectedInstalled.name}”。卸载后仅展示检测到的残留候选，不会自动删除。</span>
               <Button variant="outline" size="sm" onClick={() => setConfirmingUninstall(false)}>取消</Button>
               <Button size="sm" onClick={handleUninstall} aria-label={`确认卸载 ${selectedInstalled.name}`}>确认卸载</Button>
@@ -349,10 +348,10 @@ export function SoftwarePanel({ onHandoff }: SoftwarePanelProps) {
 
       {activeSection === "uninstall-history" && (
         <PanelCard title="卸载记录" action={<Button variant="outline" size="sm" onClick={maintenance.refresh} disabled={maintenance.loading}>刷新</Button>}>
-          {maintenance.error && <p role="alert" className="text-xs text-red-700 dark:text-red-400">卸载记录读取失败：{maintenance.error}</p>}
+          {maintenance.error && <StatusNotice tone="danger" className="mb-3">卸载记录读取失败：{maintenance.error}</StatusNotice>}
           {!maintenance.error && (
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[620px] text-left text-xs">
+              <table className="w-full min-w-[620px] text-left text-caption">
                 <thead className="text-muted-foreground"><tr><th className="pb-2 font-medium">时间</th><th>软件</th><th>状态</th><th>详情</th></tr></thead>
                 <tbody>
                   {uninstallEvents.map((event) => (
@@ -365,7 +364,7 @@ export function SoftwarePanel({ onHandoff }: SoftwarePanelProps) {
                   ))}
                 </tbody>
               </table>
-              {!maintenance.loading && uninstallEvents.length === 0 && <p className="py-8 text-center text-xs text-muted-foreground">暂无卸载记录</p>}
+              {!maintenance.loading && uninstallEvents.length === 0 && <p className="py-8 text-center text-caption text-muted-foreground">暂无卸载记录</p>}
             </div>
           )}
         </PanelCard>
@@ -375,15 +374,15 @@ export function SoftwarePanel({ onHandoff }: SoftwarePanelProps) {
 
       {activeSection !== "windows-apps" && <PanelCard title="卸载与残留检测">
         {/* ponytail: WinGet only returns residual candidates after an uninstall completes. */}
-        {!lastUninstall && <p className="text-xs text-muted-foreground">完成卸载后，将在此显示检测到的残留候选；系统不会自动删除任何文件。</p>}
+        {!lastUninstall && <p className="text-caption text-muted-foreground">完成卸载后，将在此显示检测到的残留候选；系统不会自动删除任何文件。</p>}
         {lastUninstall?.success && lastUninstall.residuals.length === 0 && (
-          <p role="status" className="text-xs text-emerald-700 dark:text-emerald-400">已确认卸载完成，未发现高置信度残留候选。</p>
+          <p role="status" className="text-caption text-success">已确认卸载完成，未发现高置信度残留候选。</p>
         )}
         {lastUninstall?.success && lastUninstall.residuals.length > 0 && (
           <div role="status" className="space-y-2">
-            <div className="flex items-center gap-2 text-xs font-medium text-orange-700 dark:text-orange-400"><AlertTriangle className="h-4 w-4" />疑似残留，删除前需确认</div>
+            <div className="flex items-center gap-2 text-caption font-medium text-warning"><AlertTriangle className="h-4 w-4" />疑似残留，删除前需确认</div>
             {lastUninstall.residuals.map((candidate) => (
-              <div key={candidate.path} className="flex flex-wrap items-center gap-2 rounded-md border border-orange-500/20 bg-orange-500/5 px-3 py-2 text-xs">
+              <div key={candidate.path} className="flex flex-wrap items-center gap-2 rounded-md border border-warning/20 bg-warning/5 px-3 py-2 text-caption">
                 <StatusPill tone="orange">{candidate.category}</StatusPill>
                 <span className="min-w-0 flex-1 break-all">{candidate.path}</span>
                 <span className="text-muted-foreground">{formatBytes(candidate.sizeBytes)}</span>
