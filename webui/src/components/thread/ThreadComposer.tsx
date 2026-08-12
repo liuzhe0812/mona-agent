@@ -124,19 +124,19 @@ const HERO_PROMPT_CHIPS: HeroPromptChip[] = [
     label: "网页生成笔记",
     prompt: "把这个网页转成笔记：|",
     Icon: Globe,
-    iconClass: "text-[#4f9de8]",
+    iconClass: "text-info-strong",
   },
   {
     label: "邮件整理今日待办",
     prompt: "整理今天邮件里的待办事项",
     Icon: Mail,
-    iconClass: "text-[#d8852d]",
+    iconClass: "text-warning",
   },
   {
     label: "帮我想想关于…",
     prompt: "帮我找找记录过关于「|」的内容，从笔记、资料、邮件、记忆里整理出来",
     Icon: Layers,
-    iconClass: "text-[#4f9de8]",
+    iconClass: "text-info-strong",
   },
 ];
 

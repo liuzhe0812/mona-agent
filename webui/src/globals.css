@@ -24,13 +24,38 @@
     --border: 0 0% 89.8%;
     --input: 0 0% 89.8%;
     --ring: 0 0% 3.9%;
-    --radius: 0.4375rem;
     --sidebar: 0 0% 98.5%;
     --sidebar-foreground: 0 0% 3.9%;
     --sidebar-accent: 0 0% 95.8%;
     --sidebar-accent-foreground: 0 0% 9%;
     --sidebar-border: 0 0% 89.8%;
     --theme: 217 91% 60%;
+
+    /* ─── 语义状态色（design §4.4）：取自第一屏基准值，组件消费 Token，
+       禁止在业务页面直接书写 hex。派生状态透明度：info-strong 背景 7%、
+       悬停 10%、光环 15%；success/warning 的 hover 用 *-hover Token。 ─── */
+    --info-strong: 209 77% 61%; /* #4F9DE8 日程圆点、焦点标记 */
+    --info: 210 59% 50%; /* #347FCA 日程时间、信息链接 */
+    --success: 160 84% 34%; /* #0E9F6E 继续、完成、已连接 */
+    --success-hover: 159 85% 29%; /* #0B8A5E */
+    --success-indicator: 160 84% 39%; /* #10B981 在线圆点、完成图标 */
+    --warning: 31 69% 51%; /* #D8852D 未读邮件、待处理提醒 */
+    --warning-hover: 31 72% 44%; /* #C2741F */
+
+    /* ─── 命名圆角（design §7.1）：tailwind.config.js 的 rounded-xs~xl 映射到这些 Token ─── */
+    --radius-xs: 4px; /* 微型状态、代码元素 */
+    --radius-sm: 6px; /* 紧凑控件、表格行操作 */
+    --radius-md: 8px; /* 按钮、输入框、菜单项 */
+    --radius-lg: 12px; /* 卡片、小面板 */
+    --radius-xl: 16px; /* 主内容表面、编辑器、标准弹窗（rounded-2xl 同值保留） */
+
+    /* ─── 动效（design §9）：tailwind 的 duration-/ease- 工具类映射到这些 Token ─── */
+    --motion-instant: 120ms; /* 按下、悬停、颜色反馈 */
+    --motion-fast: 180ms; /* 菜单、Tooltip、小状态变化 */
+    --motion-standard: 240ms; /* 面板、页签、抽屉 */
+    --motion-arrival: 500ms; /* 新消息、新产物、欢迎内容入场 */
+    --ease-standard: cubic-bezier(0.25, 1, 0.5, 1); /* 状态变化 */
+    --ease-entrance: cubic-bezier(0.16, 1, 0.3, 1); /* 入场 */
 
     /* 阶段 1 画布样板色（待视觉评审固定）：
        基于 --theme 217° 蓝调的低饱和暖中性渐变，不复制 Buzz 黄绿/浅蓝组合。
@@ -70,6 +95,15 @@
     --sidebar-accent-foreground: 0 0% 98%;
     --sidebar-border: 0 0% 18%;
     --theme: 213 94% 68%;
+
+    /* 语义状态色（深色基准，design §4.4）：hover 色与浅色一致，保持当前首屏渲染 */
+    --info-strong: 209 77% 61%; /* #4F9DE8 */
+    --info: 209 79% 71%; /* #7CB8F0 */
+    --success: 158 64% 52%; /* #34D399 */
+    --success-hover: 159 85% 29%; /* #0B8A5E */
+    --success-indicator: 160 84% 39%; /* #10B981 */
+    --warning: 30 81% 70%; /* #F0B273 */
+    --warning-hover: 31 72% 44%; /* #C2741F */
 
     /* 深色画布：深石板蓝渐变，不使用纯黑，保持与浅色相同的品牌关系 */
     --canvas-top: 220 20% 13%;

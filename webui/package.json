@@ -11,6 +11,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "eslint src --max-warnings 0",
+    "check:ui": "node scripts/ui-debt.mjs check",
+    "check:ui:scan": "node scripts/ui-debt.mjs scan",
+    "check:ui:update": "node scripts/ui-debt.mjs baseline",
     "postinstall": "patch-package"
   },
   "dependencies": {

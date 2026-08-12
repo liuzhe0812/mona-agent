@@ -105,7 +105,7 @@ export function NewChatDashboard({
           <h2 className={sectionTitleClass}>今日焦点</h2>
           {nextItem ? (
             <span className="text-[11.5px] text-muted-foreground">
-              下一项 <span className="font-medium tabular-nums text-[#347fca] dark:text-[#7cb8f0]">{formatTime(nextItem.startAtMs)}</span>
+              下一项 <span className="font-medium tabular-nums text-info">{formatTime(nextItem.startAtMs)}</span>
             </span>
           ) : null}
         </header>
@@ -120,18 +120,18 @@ export function NewChatDashboard({
                   key={item.id}
                   className={cn(
                     "flex items-center gap-3 rounded-md px-1.5 py-1.5 transition-colors hover:bg-accent",
-                    isNext && "bg-[#4f9de8]/[0.07] hover:bg-[#4f9de8]/[0.1]",
+                    isNext && "bg-info-strong/[0.07] hover:bg-info-strong/10",
                   )}
                 >
                   <span className="flex h-4 w-4 shrink-0 items-center justify-center">
                     {state === "done" ? (
-                      <Check className="h-3.5 w-3.5 text-[#10b981]" />
+                      <Check className="h-3.5 w-3.5 text-success-indicator" />
                     ) : (
                       <span
                         className={cn(
                           "h-2 w-2 rounded-full",
                           isNext
-                            ? "bg-[#4f9de8] ring-4 ring-[#4f9de8]/15"
+                            ? "bg-info-strong ring-4 ring-info-strong/15"
                             : "border border-muted-foreground/40",
                         )}
                       />
@@ -139,7 +139,7 @@ export function NewChatDashboard({
                   </span>
                   <time className={cn(
                     "w-10 shrink-0 text-[12.5px] tabular-nums text-muted-foreground",
-                    isNext && "font-medium text-[#347fca] dark:text-[#7cb8f0]",
+                    isNext && "font-medium text-info",
                   )}>
                     {formatTime(item.startAtMs)}
                   </time>
@@ -166,7 +166,7 @@ export function NewChatDashboard({
           <div className="flex items-baseline gap-3">
             <span className="text-[11.5px] text-muted-foreground">
               {unreadCount > 0 ? (
-                <><span className="font-medium tabular-nums text-[#d8852d] dark:text-[#f0b273]">{unreadCount}</span> 封未读</>
+                <><span className="font-medium tabular-nums text-warning">{unreadCount}</span> 封未读</>
               ) : "收件箱已清空"}
             </span>
             {unreadCount > 0 && onOpenEmail ? (
@@ -174,7 +174,7 @@ export function NewChatDashboard({
                 type="button"
                 onClick={onOpenEmail}
                 disabled={disabled}
-                className="group inline-flex items-center gap-1 text-[12px] font-medium text-[#d8852d] transition-colors hover:text-[#c2741f] disabled:pointer-events-none disabled:opacity-50 dark:text-[#f0b273]"
+                className="group inline-flex items-center gap-1 text-[12px] font-medium text-warning transition-colors hover:text-warning-hover disabled:pointer-events-none disabled:opacity-50"
               >
                 查看
                 <ArrowRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />
@@ -212,7 +212,7 @@ export function NewChatDashboard({
                 type="button"
                 onClick={() => onContinue(recentSession.key)}
                 disabled={disabled}
-                className="group inline-flex items-center gap-1 text-[12px] font-medium text-[#0e9f6e] transition-colors hover:text-[#0b8a5e] disabled:pointer-events-none disabled:opacity-50 dark:text-[#34d399]"
+                className="group inline-flex items-center gap-1 text-[12px] font-medium text-success transition-colors hover:text-success-hover disabled:pointer-events-none disabled:opacity-50"
               >
                 继续
                 <ArrowRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />

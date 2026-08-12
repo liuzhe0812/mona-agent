@@ -33,7 +33,6 @@ export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
             ref={ref}
             type="button"
             variant="outline"
-            size="sm"
             disabled={disabled}
             className={cn("w-full justify-between font-normal", className)}
           >

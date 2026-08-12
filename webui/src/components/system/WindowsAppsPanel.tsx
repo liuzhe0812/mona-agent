@@ -120,7 +120,7 @@ export function WindowsAppsPanel({ onHandoff }: WindowsAppsPanelProps) {
 
       <PanelCard title="Windows 预装应用" action={<span className="text-[11px] text-muted-foreground">完整目录 {data?.total ?? 141} 项</span>}>
         <div className="mb-3 flex flex-wrap items-center gap-2">
-          <div className="relative min-w-[220px] flex-1"><Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" /><Input aria-label="搜索预装应用" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索应用名称或 App ID" className="h-9 w-full pl-9" /></div>
+          <div className="relative min-w-[220px] flex-1"><Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" /><Input aria-label="搜索预装应用" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索应用名称或 App ID" className="h-9 w-full rounded-full pl-9" /></div>
           <select aria-label="预装应用风险筛选" value={risk} onChange={(event) => setRisk(event.target.value as typeof risk)} className="h-9 rounded-lg border bg-background px-2.5 text-xs"><option value="all">全部风险</option><option value="safe">通常可移除</option><option value="optional">按需保留</option><option value="unsafe">高风险</option></select>
           <label className="inline-flex h-9 cursor-pointer items-center gap-2 rounded-lg border bg-background px-3 text-xs"><Checkbox checked={installedOnly} onCheckedChange={(value) => setInstalledOnly(value === true)} />仅本机已安装</label>
           <Button type="button" variant="outline" size="sm" onClick={() => void refresh()} disabled={loading}><RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />刷新</Button>

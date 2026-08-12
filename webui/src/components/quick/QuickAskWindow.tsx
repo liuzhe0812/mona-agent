@@ -108,7 +108,7 @@ export function QuickAskWindow() {
                 disabled={submitting}
                 onClick={() => void quickAskOpenSsh()}
               >
-                <Terminal className="mr-1.5 h-4 w-4 text-[#4f9de8]" aria-hidden />
+                <Terminal className="mr-1.5 h-4 w-4 text-info-strong" aria-hidden />
                 SSH
               </Button>
               <Button

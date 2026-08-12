@@ -242,7 +242,7 @@ export function SystemOptimizationPanel() {
           <div className="flex flex-wrap items-center gap-2 border-b border-border/60 px-4 py-3">
             <div className="relative min-w-[220px] flex-1">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-              <Input role="searchbox" aria-label="搜索 Windows 设置" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索 Windows 设置" className="pl-9" />
+              <Input role="searchbox" aria-label="搜索 Windows 设置" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索 Windows 设置" className="rounded-full pl-9" />
             </div>
             <label className="inline-flex h-9 cursor-pointer items-center gap-2 rounded-lg border border-border/70 bg-background px-3 text-xs">
               <Checkbox checked={compatibleOnly} onCheckedChange={(value) => setCompatibleOnly(value === true)} />仅当前设备可用

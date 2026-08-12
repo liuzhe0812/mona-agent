@@ -79,7 +79,7 @@ export function MaintenancePanel({ onHandoff }: MaintenancePanelProps) {
 
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap gap-2">{filters.map((item) => item === filter ? <Button key={item} size="sm" onClick={() => setFilter(item)}>{item}</Button> : <Button key={item} variant="outline" size="sm" onClick={() => setFilter(item)}>{item}</Button>)}</div>
-        <Input aria-label="搜索维护记录" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索维护记录" className="w-48" />
+        <Input aria-label="搜索维护记录" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索维护记录" className="w-48 rounded-full" />
       </div>
 
       <div className="grid gap-3 lg:grid-cols-[minmax(0,1.35fr)_minmax(280px,0.8fr)]">
