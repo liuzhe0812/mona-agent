@@ -4,6 +4,7 @@ import type { JSONContent } from "@tiptap/core";
 import { X, GitFork } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 import { NoteTabBar } from "./NoteTabBar";
 import { NoteEditor } from "./NoteEditor";
 import { GraphViewDialog } from "./GraphViewDialog";
@@ -265,11 +266,12 @@ function PaneLeafView({
             {...tabMenuCallbacks}
           />
           {leaf.graphOpen && (
-            <button
+            <Button
               type="button"
+              variant="ghost"
               title="关系图谱"
               aria-label="关系图谱"
-              className="group relative flex h-full w-[140px] shrink-0 items-center gap-1.5 border-r border-border/40 bg-background px-3 text-[12px] text-foreground transition-colors"
+              className="group relative h-full w-[140px] shrink-0 justify-start gap-1.5 rounded-none border-r border-border/40 bg-background px-3 text-caption font-normal text-foreground hover:bg-background hover:text-foreground"
             >
               <span className="absolute inset-x-0 top-0 h-[2px] bg-primary" />
               <GitFork className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
@@ -285,7 +287,7 @@ function PaneLeafView({
               >
                 <X className="h-3 w-3" />
               </span>
-            </button>
+            </Button>
           )}
         </div>
         {isPrimary && toolbarTrailing && (
@@ -329,7 +331,7 @@ function PaneLeafView({
           />
         ) : (
           <div className="flex flex-1 flex-col items-center justify-center text-muted-foreground">
-            <span className="text-[13px]">选择一篇笔记开始编辑</span>
+            <span className="text-ui">选择一篇笔记开始编辑</span>
           </div>
         )}
       </div>

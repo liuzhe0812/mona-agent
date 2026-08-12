@@ -571,28 +571,28 @@ export function GraphViewDialog({
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-background">
       <div className="flex h-10 shrink-0 items-center justify-between border-b border-border/60 px-3">
-        <div className="flex items-center gap-2 text-[13px] font-medium">
+        <div className="flex items-center gap-2 text-ui font-medium">
           <span>关系图</span>
           {stats && (
-            <span className="text-[11px] text-muted-foreground">
+            <span className="text-micro text-muted-foreground">
               {stats.nodes} 节点 · {stats.edges} 连接 · {stats.orphans} 孤立
             </span>
           )}
         </div>
         <div className="flex items-center gap-1">
-          <Button variant="ghost" size="sm" className="h-7 px-2 text-[12px]" onClick={zoomIn}>
+          <Button variant="ghost" size="sm" className="h-7 px-2 text-caption" onClick={zoomIn}>
             <ZoomIn className="h-3.5 w-3.5" />
           </Button>
-          <Button variant="ghost" size="sm" className="h-7 px-2 text-[12px]" onClick={zoomOut}>
+          <Button variant="ghost" size="sm" className="h-7 px-2 text-caption" onClick={zoomOut}>
             <ZoomOut className="h-3.5 w-3.5" />
           </Button>
-          <Button variant="ghost" size="sm" className="h-7 px-2 text-[12px]" onClick={resetView}>
+          <Button variant="ghost" size="sm" className="h-7 px-2 text-caption" onClick={resetView}>
             <Maximize2 className="h-3.5 w-3.5" />
           </Button>
           <Button
             variant="ghost"
             size="sm"
-            className="h-7 px-2 text-[12px]"
+            className="h-7 px-2 text-caption"
             onClick={() => onOpenChange(false)}
           >
             <X className="h-4 w-4" />
@@ -603,16 +603,16 @@ export function GraphViewDialog({
         {loading && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
             <Loader2 className="h-7 w-7 animate-spin text-muted-foreground" />
-            <span className="text-[13px] text-muted-foreground">正在加载关系图...</span>
+            <span className="text-ui text-muted-foreground">正在加载关系图...</span>
           </div>
         )}
         {error && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-[13px] text-destructive">
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-ui text-destructive">
             <span>{error}</span>
             <Button
               variant="outline"
               size="sm"
-              className="h-7 px-3 text-[12px]"
+              className="h-7 px-3 text-caption"
               onClick={() => {
                 setError(null);
                 setGraph(null);
@@ -627,15 +627,15 @@ export function GraphViewDialog({
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-center">
             {!isTauri() ? (
               <>
-                <p className="text-[13px] text-muted-foreground">仅桌面客户端可用</p>
-                <p className="text-[11px] text-muted-foreground/70">
+                <p className="text-ui text-muted-foreground">仅桌面客户端可用</p>
+                <p className="text-micro text-muted-foreground/70">
                   关系图谱依赖 Tauri 后端，请在 Mona 桌面客户端中打开此视图
                 </p>
               </>
             ) : (
               <>
-                <p className="text-[13px] text-muted-foreground">暂无笔记</p>
-                <p className="text-[11px] text-muted-foreground/70">
+                <p className="text-ui text-muted-foreground">暂无笔记</p>
+                <p className="text-micro text-muted-foreground/70">
                   先创建笔记并使用 [[双链]] 标记，关系图将自动生成
                 </p>
               </>
@@ -654,7 +654,7 @@ export function GraphViewDialog({
           />
         )}
         {graph && graph.nodes.length > 0 && (
-          <div className="absolute bottom-2 left-2 flex flex-col gap-0.5 rounded-md border border-border/60 bg-background px-2 py-1 text-[10px]">
+          <div className="absolute bottom-2 left-2 flex flex-col gap-0.5 rounded-md border border-border/60 bg-background px-2 py-1 text-micro">
             <div className="flex items-center gap-1.5">
               <span className="h-2 w-2 rounded-full bg-blue-500" />
               <span>当前笔记</span>

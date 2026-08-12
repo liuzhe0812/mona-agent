@@ -37,6 +37,7 @@ import {
 
 import { AgentLogo } from "@/components/AgentLogo";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -2277,11 +2278,11 @@ export function NotesView({
 
         <div className="flex min-h-0 flex-1">
           {storageError ? (
-            <div className="flex flex-1 items-center justify-center px-8 text-center text-[13px] text-destructive">
+            <div className="flex flex-1 items-center justify-center px-8 text-center text-ui text-destructive">
               {storageError}
             </div>
           ) : !storageReady ? (
-            <div className="flex flex-1 items-center justify-center text-[13px] text-muted-foreground">
+            <div className="flex flex-1 items-center justify-center text-ui text-muted-foreground">
               正在加载笔记...
             </div>
           ) : !vaultPath ? (
@@ -2311,15 +2312,16 @@ export function NotesView({
                     ] as const).map(({ key, label, Icon }) => {
                       const active = moduleView === key;
                       return (
-                        <button
+                        <Button
                           key={key}
                           type="button"
+                          variant="ghost"
                           title={label}
                           onClick={() => setModuleView(key)}
                           className={cn(
-                            "flex items-center rounded-md py-1.5 text-[11px] font-medium transition-all duration-300",
+                            "flex h-auto items-center rounded-md py-1.5 text-micro font-medium transition-all duration-300",
                             active
-                              ? "bg-muted px-2.5 text-foreground"
+                              ? "bg-muted px-2.5 text-foreground hover:bg-muted"
                               : "px-1.5 text-muted-foreground opacity-70 hover:bg-muted hover:text-foreground hover:opacity-100",
                           )}
                         >
@@ -2332,7 +2334,7 @@ export function NotesView({
                           >
                             {label}
                           </span>
-                        </button>
+                        </Button>
                       );
                     })}
                   </div>
@@ -2347,13 +2349,15 @@ export function NotesView({
                         </IconButton>
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
-                            <button
+                            <Button
                               type="button"
+                              variant="ghost"
+                              size="icon"
                               title="更多"
-                              className="grid h-7 w-7 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+                              className="h-7 w-7 rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
                             >
                               <MoreHorizontal className="h-3.5 w-3.5" />
-                            </button>
+                            </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end" className="w-48">
                             <DropdownMenuItem onSelect={() => { setGlobalSearchInitialQuery(""); setGlobalSearchOpen(true); }}>
@@ -2361,7 +2365,7 @@ export function NotesView({
                               全局搜索
                             </DropdownMenuItem>
                             <DropdownMenuItem onSelect={() => setViewMode((m) => (m === "favorite" ? "all" : "favorite"))}>
-                              <Star className={cn("mr-2 h-3.5 w-3.5", viewMode === "favorite" && "fill-current text-amber-500")} />
+                              <Star className={cn("mr-2 h-3.5 w-3.5", viewMode === "favorite" && "fill-current text-warning")} />
                               {viewMode === "favorite" ? "显示全部笔记" : "显示收藏笔记"}
                             </DropdownMenuItem>
                             <DropdownMenuSeparator />
@@ -2419,13 +2423,15 @@ export function NotesView({
                       <>
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
-                            <button
+                            <Button
                               type="button"
+                              variant="ghost"
+                              size="icon"
                               title="新建画布"
-                              className="grid h-7 w-7 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+                              className="h-7 w-7 rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
                             >
                               <Plus className="h-3.5 w-3.5" />
-                            </button>
+                            </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end" className="w-44">
                             <DropdownMenuItem onSelect={() => createMindMapNote("")}>
@@ -2440,13 +2446,15 @@ export function NotesView({
                         </DropdownMenu>
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
-                            <button
+                            <Button
                               type="button"
+                              variant="ghost"
+                              size="icon"
                               title="更多"
-                              className="grid h-7 w-7 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+                              className="h-7 w-7 rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
                             >
                               <MoreHorizontal className="h-3.5 w-3.5" />
-                            </button>
+                            </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end" className="w-48">
                             <DropdownMenuSub>
@@ -2522,22 +2530,24 @@ export function NotesView({
                 <>
                 <div className="flex h-8 shrink-0 items-center gap-1 px-3 pb-1">
                   <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                  <input
+                  <Input
                     value={searchQuery}
                     onChange={(event) => setSearchQuery(event.target.value)}
                     placeholder="搜索笔记"
-                    className="min-w-0 flex-1 bg-transparent text-[12.5px] outline-none placeholder:text-muted-foreground"
+                    className="h-auto min-w-0 flex-1 rounded-full border-0 bg-transparent px-0 py-0 text-caption shadow-none focus-visible:ring-0"
                   />
                   {searchQuery ? (
-                    <button
+                    <Button
                       type="button"
+                      variant="ghost"
+                      size="icon"
                       aria-label="清空搜索"
                       title="清空搜索"
                       onClick={() => setSearchQuery("")}
-                      className="grid h-5 w-5 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+                      className="h-5 w-5 rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
                     >
                       <X className="h-3.5 w-3.5" />
-                    </button>
+                    </Button>
                   ) : null}
                 </div>
 
@@ -2593,7 +2603,7 @@ export function NotesView({
                       ) : (
                       <>
                       {notebooks.length === 0 && notes.length === 0 ? (
-                        <div className="flex h-full items-center justify-center px-6 py-4 text-center text-[12px] leading-5 text-muted-foreground">
+                        <div className="flex h-full items-center justify-center px-6 py-4 text-center text-caption text-muted-foreground">
                           仓库为空，右键新建文件夹或笔记
                         </div>
                       ) : null}
@@ -2720,22 +2730,24 @@ export function NotesView({
                   <>
                     <div className="flex h-8 shrink-0 items-center gap-1 px-3 pb-1">
                       <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                      <input
+                      <Input
                         value={canvasSearchQuery}
                         onChange={(event) => setCanvasSearchQuery(event.target.value)}
                         placeholder="搜索画布"
-                        className="min-w-0 flex-1 bg-transparent text-[12.5px] outline-none placeholder:text-muted-foreground"
+                        className="h-auto min-w-0 flex-1 rounded-full border-0 bg-transparent px-0 py-0 text-caption shadow-none focus-visible:ring-0"
                       />
                       {canvasSearchQuery ? (
-                        <button
+                        <Button
                           type="button"
+                          variant="ghost"
+                          size="icon"
                           aria-label="清空搜索"
                           title="清空搜索"
                           onClick={() => setCanvasSearchQuery("")}
-                          className="grid h-5 w-5 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+                          className="h-5 w-5 rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
                         >
                           <X className="h-3.5 w-3.5" />
-                        </button>
+                        </Button>
                       ) : null}
                     </div>
                     <ContextMenu>
@@ -2879,8 +2891,10 @@ export function NotesView({
                     const isRecordingThis = recordingActive && recordingNoteRef.current === noteId;
                     return (
                       <>
-                        <button
+                        <Button
                           type="button"
+                          variant="ghost"
+                          size="icon"
                           title={
                             !speech.supported
                               ? "当前环境不支持语音识别（需 Edge / WebView2 内核）"
@@ -2892,11 +2906,11 @@ export function NotesView({
                           disabled={!speech.supported || (recordingActive && !isRecordingThis)}
                           onClick={isRecordingThis ? stopRecording : startRecording}
                           className={cn(
-                            "grid h-7 w-7 place-items-center rounded-md hover:bg-accent hover:text-foreground",
+                            "h-7 w-7 rounded-md hover:bg-accent hover:text-foreground",
                             isRecordingThis
-                              ? "bg-accent text-rose-500"
+                              ? "bg-accent text-destructive"
                               : recordingError
-                                ? "text-amber-500"
+                                ? "text-warning"
                                 : "text-muted-foreground",
                           )}
                         >
@@ -2905,72 +2919,82 @@ export function NotesView({
                           ) : (
                             <Mic className="h-4 w-4" />
                           )}
-                        </button>
+                        </Button>
                         <div className="mx-0.5 h-4 w-px shrink-0 bg-border/50" />
                       </>
                     );
                   }}
                   toolbarTrailing={
                     <>
-                      <button
+                      <Button
                         type="button"
+                        variant="ghost"
+                        size="icon"
                         title="关系图"
                         aria-label="关系图"
                         onClick={toggleGraphInActiveLeaf}
                         className={cn(
-                          "grid h-8 w-8 place-items-center hover:bg-accent hover:text-foreground",
+                          "hover:bg-accent hover:text-foreground",
                           activeLeafGraphOpen ? "bg-accent text-foreground" : "text-muted-foreground",
                         )}
                       >
                         <GitFork className="h-4 w-4" />
-                      </button>
-                      <button
+                      </Button>
+                      <Button
                         type="button"
+                        variant="ghost"
+                        size="icon"
                         title={leftSidebarOpen ? "收起左侧面板" : "展开左侧面板"}
                         aria-label={leftSidebarOpen ? "收起左侧面板" : "展开左侧面板"}
                         onClick={() => setLeftSidebarOpen((v) => !v)}
                         className={cn(
-                          "grid h-8 w-8 place-items-center hover:bg-accent hover:text-foreground",
+                          "hover:bg-accent hover:text-foreground",
                           leftSidebarOpen ? "bg-accent text-foreground" : "text-muted-foreground",
                         )}
                       >
                         <LeftSidebarToggleIcon open={leftSidebarOpen} className="h-4 w-4" />
-                      </button>
-                      <button
+                      </Button>
+                      <Button
                         type="button"
+                        variant="ghost"
+                        size="icon"
                         title={rightSidebarOpen ? "收起右侧面板" : "展开右侧面板"}
                         aria-label={rightSidebarOpen ? "收起右侧面板" : "展开右侧面板"}
                         onClick={() => setRightSidebarOpen((v) => !v)}
                         className={cn(
-                          "grid h-8 w-8 place-items-center hover:bg-accent hover:text-foreground",
+                          "hover:bg-accent hover:text-foreground",
                           rightSidebarOpen ? "bg-accent text-foreground" : "text-muted-foreground",
                         )}
                       >
                         <RightSidebarToggleIcon open={rightSidebarOpen} className="h-4 w-4" />
-                      </button>
+                      </Button>
                       {licenseActive ? (
-                        <button
+                        <Button
                           type="button"
+                          variant="ghost"
+                          size="icon"
                           title={agentPanelCollapsed ? "展开 Agent 联动" : "收起 Agent 联动"}
                           aria-label={agentPanelCollapsed ? "展开 Agent 联动" : "收起 Agent 联动"}
                           onClick={() => setAgentPanelCollapsed((current) => !current)}
                           className={cn(
-                            "grid h-8 w-8 place-items-center hover:bg-accent hover:text-foreground",
+                            "hover:bg-accent hover:text-foreground",
                             !agentPanelCollapsed ? "bg-accent text-foreground" : "text-muted-foreground",
                           )}
                         >
                           <AgentLogo state={agentStreaming ? "working" : "idle"} className="h-4 w-4" />
-                        </button>
+                        </Button>
                       ) : (
-                        <button
+                        <Button
                           type="button"
+                          variant="ghost"
+                          size="icon"
                           title="升级 Pro 解锁 AI"
                           aria-label="升级 Pro 解锁 AI"
                           onClick={onOpenSubscribe}
-                          className="grid h-8 w-8 place-items-center text-muted-foreground hover:bg-accent hover:text-foreground"
+                          className="text-muted-foreground hover:bg-accent hover:text-foreground"
                         >
                           <LockKeyhole className="h-4 w-4" />
-                        </button>
+                        </Button>
                       )}
                     </>
                   }
@@ -2983,29 +3007,33 @@ export function NotesView({
                       <div className="flex items-center gap-1">
                         {!isStructuredDoc && (
                         <>
-                        <button
+                        <Button
                           type="button"
+                          variant="ghost"
+                          size="icon"
                           title={editorMode === "visual" ? "切换为 MD 源码" : "切换为可视化编辑"}
                           aria-label={editorMode === "visual" ? "切换为 MD 源码" : "切换为可视化编辑"}
                           onClick={() => setEditorMode((mode) => (mode === "visual" ? "markdown" : "visual"))}
-                          className="grid h-7 w-7 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+                          className="h-7 w-7 rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
                         >
                           {editorMode === "visual" ? (
                             <FileCode2 className="h-4 w-4" />
                           ) : (
                             <Pencil className="h-4 w-4" />
                           )}
-                        </button>
+                        </Button>
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
-                            <button
+                            <Button
                               type="button"
+                              variant="ghost"
+                              size="icon"
                               title="更多"
                               aria-label="更多"
-                              className="grid h-7 w-7 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+                              className="h-7 w-7 rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
                             >
                               <MoreHorizontal className="h-4 w-4" />
-                            </button>
+                            </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end" className="w-48">
                             <DropdownMenuItem
@@ -3018,7 +3046,7 @@ export function NotesView({
                             <DropdownMenuSub>
                               <DropdownMenuSubTrigger
                                 disabled={!note || notes.filter((n) => n.id !== note.id).length === 0}
-                                className="text-[13px]"
+                                className="text-ui"
                               >
                                 <FolderInput className="mr-2 h-3.5 w-3.5" />
                                 合并到其他笔记...
@@ -3030,7 +3058,7 @@ export function NotesView({
                                     <DropdownMenuItem
                                       key={targetNote.id}
                                       onClick={() => note && mergeNoteInto(note, targetNote.id)}
-                                      className="text-[13px]"
+                                      className="text-ui"
                                     >
                                       <span className="min-w-0 truncate">{targetNote.title || "未命名笔记"}</span>
                                     </DropdownMenuItem>
@@ -3048,7 +3076,7 @@ export function NotesView({
                             <DropdownMenuSub>
                               <DropdownMenuSubTrigger
                                 disabled={!note}
-                                className="text-[13px]"
+                                className="text-ui"
                               >
                                 <Download className="mr-2 h-3.5 w-3.5" />
                                 导出
@@ -3232,24 +3260,26 @@ export function NotesView({
       />
       {docNoteLoading && docNoteStage ? (
         <div className="pointer-events-none absolute bottom-4 right-4 z-50">
-          <div className="pointer-events-auto flex max-w-[320px] items-center gap-2 rounded-lg border border-border/60 bg-background/90 px-3 py-2 text-[12px] text-muted-foreground shadow-lg backdrop-blur">
+          <div className="pointer-events-auto flex max-w-[320px] items-center gap-2 rounded-lg border border-border/60 bg-background/90 px-3 py-2 text-caption text-muted-foreground shadow-lg backdrop-blur">
             <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-primary" />
-            <span className="min-w-0 flex-1 leading-5">{docNoteStage}</span>
+            <span className="min-w-0 flex-1">{docNoteStage}</span>
           </div>
         </div>
       ) : null}
       {notice && noticeType === "error" ? (
         <div className="pointer-events-none absolute bottom-4 right-4 z-50">
-          <div className="pointer-events-auto flex max-w-[320px] items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-[12px] text-destructive shadow-lg backdrop-blur">
-            <span className="min-w-0 flex-1 leading-5">{notice}</span>
-            <button
+          <div className="pointer-events-auto flex max-w-[320px] items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-caption text-destructive shadow-lg backdrop-blur">
+            <span className="min-w-0 flex-1">{notice}</span>
+            <Button
               type="button"
+              variant="ghost"
+              size="icon"
               aria-label="关闭"
               onClick={() => setNotice(null)}
-              className="shrink-0 text-destructive/70 hover:text-destructive"
+              className="h-auto w-auto shrink-0 p-0.5 text-destructive/70 hover:bg-transparent hover:text-destructive"
             >
               <X className="h-3 w-3" />
-            </button>
+            </Button>
           </div>
         </div>
       ) : null}
@@ -3273,8 +3303,8 @@ function VaultBootstrap({
           <FolderOpen className="h-7 w-7 text-muted-foreground" />
         </div>
         <div className="space-y-1.5">
-          <h2 className="text-[16px] font-semibold text-foreground">打开笔记仓库</h2>
-          <p className="text-[12.5px] leading-5 text-muted-foreground">
+          <h2 className="text-body-lg font-semibold text-foreground">打开笔记仓库</h2>
+          <p className="text-caption text-muted-foreground">
             笔记以 Markdown 文件形式保存在你选择的仓库目录中，笔记本为文件夹，可直接用外部编辑器访问。选择一个已有仓库或新建一个空文件夹作为新仓库。
           </p>
         </div>
@@ -3282,7 +3312,7 @@ function VaultBootstrap({
           type="button"
           onClick={onOpenOrCreate}
           disabled={busy}
-          className="h-9 gap-1.5 rounded-lg px-4 text-[13px]"
+          className="h-9 gap-1.5 rounded-lg px-4"
         >
           <FolderOpen className="h-4 w-4" />
           {busy ? "处理中..." : "选择仓库目录"}
@@ -3480,7 +3510,7 @@ function FavoriteNotesList({
 
   if (sortedNotes.length === 0) {
     return (
-      <div className="flex h-full items-center justify-center px-6 py-4 text-center text-[12px] leading-5 text-muted-foreground">
+      <div className="flex h-full items-center justify-center px-6 py-4 text-center text-caption text-muted-foreground">
         没有收藏笔记
       </div>
     );
@@ -3636,12 +3666,13 @@ function NotebookSection({
     <div className="px-1" onDragOver={handleSectionDragOver}>
       <ContextMenu>
         <ContextMenuTrigger asChild>
-          <button
+          <Button
             type="button"
+            variant="ghost"
             onClick={onToggle}
             onDragOver={handleDragOver}
             onDrop={handleDrop}
-            className="group flex h-8 w-full items-center gap-1 rounded-md px-1.5 text-left text-foreground/85 transition-colors hover:bg-accent"
+            className="group flex h-8 w-full items-center justify-start gap-1 rounded-md px-1.5 text-left font-normal text-foreground/85 hover:bg-accent"
           >
             <ChevronRight
               className={cn(
@@ -3649,13 +3680,13 @@ function NotebookSection({
                 isExpanded && "rotate-90",
               )}
             />
-            <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium">
+            <span className="min-w-0 flex-1 truncate text-caption font-medium">
               {notebook.name}
             </span>
-            <span className="shrink-0 text-[10.5px] tabular-nums text-muted-foreground/70">
+            <span className="shrink-0 text-micro tabular-nums text-muted-foreground/70">
               {totalCount}
             </span>
-          </button>
+          </Button>
         </ContextMenuTrigger>
         <ContextMenuContent className="w-48">
           <ContextMenuItem onSelect={() => onCreateNote?.("manual", notebook.id)}>
@@ -3771,8 +3802,9 @@ function CanvasRow(props: CanvasRowProps) {
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
-        <button
+        <Button
           type="button"
+          variant="ghost"
           onClick={onSelect}
           onPointerDown={(e) => {
             // 右键按下时立即选中该行（在 contextmenu 事件之前），
@@ -3780,7 +3812,7 @@ function CanvasRow(props: CanvasRowProps) {
             if (e.button === 2 && !active) onSelect();
           }}
           className={cn(
-            "w-full rounded-md px-2 py-1.5 text-left text-xs hover:bg-accent",
+            "h-auto w-full justify-start rounded-md px-2 py-1.5 text-left font-normal text-caption hover:bg-accent",
             active && "bg-accent",
           )}
         >
@@ -3790,7 +3822,7 @@ function CanvasRow(props: CanvasRowProps) {
               : <Network className="h-3 w-3 shrink-0" />}
             <span className="truncate">{note.title || "未命名"}</span>
           </div>
-        </button>
+        </Button>
       </ContextMenuTrigger>
       <ContextMenuContent className="w-48">
         <ContextMenuItem onSelect={props.onOpenInNewTab}>

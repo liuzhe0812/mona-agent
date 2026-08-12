@@ -35,6 +35,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 
 import {
   NOTE_AI_ACTIONS,
@@ -382,13 +384,14 @@ export function NoteAgentPanel({
     <aside className="flex h-full shrink-0 flex-col border-l border-border/70 bg-background" style={{ width }}>
       <div className="flex h-12 shrink-0 items-center justify-between border-b border-border/65 px-3">
         <div className="flex min-w-0 items-center gap-2">
-          <h2 className="truncate text-[13px] font-semibold text-foreground">Mona</h2>
+          <h2 className="truncate text-ui font-semibold text-foreground">Mona</h2>
         </div>
         <div className="flex items-center gap-1">
-          {notice ? <span className="max-w-28 truncate text-[11px] text-muted-foreground">{notice}</span> : null}
+          {notice ? <span className="max-w-28 truncate text-micro text-muted-foreground">{notice}</span> : null}
           {chatId ? (
-            <button
+            <Button
               type="button"
+              variant="ghost"
               aria-label="重置会话"
               title="重置会话"
               disabled={isStreaming || creatingChat}
@@ -396,10 +399,10 @@ export function NoteAgentPanel({
                 setMessages([]);
                 onClearChat?.();
               }}
-              className="grid h-7 w-7 place-items-center rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+              className="h-7 w-7 rounded-lg p-0 text-muted-foreground hover:bg-accent hover:text-foreground"
             >
               <RotateCcw className="h-3.5 w-3.5" />
-            </button>
+            </Button>
           ) : null}
         </div>
       </div>
@@ -439,7 +442,7 @@ export function NoteAgentPanel({
 
       <div className="shrink-0 p-2">
         <div className="flex min-h-[52px] items-end gap-1.5 rounded-xl border border-border/75 bg-background px-2.5 py-1.5 shadow-sm">
-          <textarea
+          <Textarea
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {
@@ -449,19 +452,20 @@ export function NoteAgentPanel({
               }
             }}
             disabled={!note || creatingChat}
-            className="min-h-[36px] flex-1 resize-none bg-transparent text-[12px] leading-5 outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
+            className="min-h-[36px] flex-1 resize-none rounded-none border-0 bg-transparent px-0 py-0 text-caption focus-visible:ring-0 disabled:opacity-60"
             rows={2}
             placeholder="问当前笔记、总结内容..."
           />
-          <button
+          <Button
             type="button"
+            variant="ghost"
             aria-label={isStreaming ? "停止生成" : "发送"}
             disabled={!isStreaming && (!note || !draft.trim() || creatingChat)}
             onClick={isStreaming ? stop : sendDraft}
-            className={`grid h-6 w-6 shrink-0 place-items-center rounded-lg transition-colors ${
+            className={`h-6 w-6 shrink-0 rounded-lg p-0 ${
               isStreaming
-                ? "text-destructive hover:bg-destructive/10"
-                : "bg-foreground text-background hover:bg-foreground/90 disabled:bg-muted disabled:text-muted-foreground"
+                ? "text-destructive hover:bg-destructive/10 hover:text-destructive"
+                : "bg-foreground text-background hover:bg-foreground/90 hover:text-background disabled:bg-muted disabled:text-muted-foreground"
             }`}
           >
             {isStreaming ? (
@@ -471,7 +475,7 @@ export function NoteAgentPanel({
             ) : (
               <Send className="h-3 w-3" />
             )}
-          </button>
+          </Button>
         </div>
       </div>
     </aside>
@@ -677,38 +681,41 @@ function QuickActionSection({
   onAction: (actionId: Exclude<NoteAiActionId, "freeform">) => void;
 }) {
   const btnClass =
-    "flex h-9 items-center gap-2 rounded-lg border border-border/70 bg-background px-2.5 text-left text-[11.5px] font-medium text-foreground/82 transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50";
+    "h-9 justify-start gap-2 rounded-lg border-border/70 px-2.5 text-left text-micro font-medium text-foreground/82 hover:bg-accent hover:text-foreground";
 
   return (
     <div className="shrink-0 border-b border-border/65 px-2.5 py-2.5">
       <div className="grid grid-cols-2 gap-1.5">
-        <button
+        <Button
           type="button"
+          variant="outline"
           disabled={!note || disabled}
           onClick={() => onAction("summary")}
           className={btnClass}
         >
           <Sparkles className="h-4 w-4 shrink-0 text-muted-foreground" />
           <span className="min-w-0 truncate">总结当前笔记</span>
-        </button>
-        <button
+        </Button>
+        <Button
           type="button"
+          variant="outline"
           disabled={!note || disabled}
           onClick={() => onAction("translate")}
           className={btnClass}
         >
           <Languages className="h-4 w-4 shrink-0 text-muted-foreground" />
           <span className="min-w-0 truncate">翻译</span>
-        </button>
-        <button
+        </Button>
+        <Button
           type="button"
+          variant="outline"
           disabled={!note || disabled}
           onClick={() => onAction("generateHtml")}
           className={btnClass}
         >
           <FileCode2 className="h-4 w-4 shrink-0 text-muted-foreground" />
           <span className="min-w-0 truncate">生成HTML文档</span>
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -729,14 +736,15 @@ function TransformationSection({
     // Show a compact entry point when there are no custom templates yet.
     return (
       <div className="shrink-0 border-b border-border/65 px-2.5 py-2">
-        <button
+        <Button
           type="button"
+          variant="ghost"
           onClick={onManage}
-          className="flex h-8 w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-border/70 text-[11.5px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          className="h-8 w-full gap-1.5 rounded-lg border border-dashed border-border/70 text-micro font-normal text-muted-foreground hover:bg-accent hover:text-foreground"
         >
           <Wand2 className="h-3.5 w-3.5" />
           <span>自定义 AI 模板</span>
-        </button>
+        </Button>
       </div>
     );
   }
@@ -744,32 +752,34 @@ function TransformationSection({
   return (
     <div className="shrink-0 border-b border-border/65 px-2.5 py-2.5">
       <div className="mb-1.5 flex items-center justify-between">
-        <span className="text-[10.5px] font-medium uppercase tracking-wide text-muted-foreground">
+        <span className="text-micro font-medium uppercase tracking-wide text-muted-foreground">
           自定义模板
         </span>
-        <button
+        <Button
           type="button"
+          variant="ghost"
           onClick={onManage}
           aria-label="管理模板"
           title="管理模板"
-          className="grid h-5 w-5 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+          className="h-5 w-5 rounded-md p-0 text-muted-foreground hover:bg-accent hover:text-foreground"
         >
           <Settings2 className="h-3 w-3" />
-        </button>
+        </Button>
       </div>
       <div className="flex max-h-32 flex-col gap-1 overflow-y-auto scrollbar-thin">
         {transformations.map((transformation) => (
-          <button
+          <Button
             key={transformation.id}
             type="button"
+            variant="outline"
             disabled={disabled}
             onClick={() => onRun(transformation)}
             title={transformation.description || transformation.name}
-            className="flex h-8 items-center gap-2 rounded-lg border border-border/70 bg-background px-2.5 text-left text-[11.5px] font-medium text-foreground/82 transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+            className="h-8 justify-start gap-2 rounded-lg border-border/70 px-2.5 text-left text-micro font-medium text-foreground/82 hover:bg-accent hover:text-foreground"
           >
             <Wand2 className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
             <span className="min-w-0 truncate">{transformation.name}</span>
-          </button>
+          </Button>
         ))}
       </div>
     </div>
@@ -796,11 +806,11 @@ function TransformationManagerDialog({
       <DialogContent className="max-w-[520px] gap-0 rounded-xl border-border/70 p-0">
         <DialogTitle className="sr-only">管理 AI 模板</DialogTitle>
         <div className="flex items-center justify-between border-b border-border/65 px-4 py-3">
-          <h2 className="text-[13px] font-semibold text-foreground">AI 模板管理</h2>
+          <h2 className="text-ui font-semibold text-foreground">AI 模板管理</h2>
           <Button
             variant="ghost"
             size="sm"
-            className="h-7 gap-1 px-2 text-[11.5px]"
+            className="h-7 gap-1 px-2 text-micro"
             onClick={onCreate}
           >
             <Plus className="h-3.5 w-3.5" />
@@ -809,16 +819,17 @@ function TransformationManagerDialog({
         </div>
         <div className="max-h-[420px] min-h-[120px] overflow-y-auto scrollbar-thin">
           {transformations.length === 0 ? (
-            <div className="flex h-[120px] flex-col items-center justify-center gap-2 text-[12px] text-muted-foreground">
+            <div className="flex h-[120px] flex-col items-center justify-center gap-2 text-caption text-muted-foreground">
               <Wand2 className="h-6 w-6 opacity-50" />
               <span>还没有自定义模板</span>
-              <button
+              <Button
                 type="button"
+                variant="link"
                 onClick={onCreate}
-                className="text-[11.5px] text-primary hover:underline"
+                className="h-auto p-0 text-micro"
               >
                 创建第一个模板
-              </button>
+              </Button>
             </div>
           ) : (
             <ul className="py-1">
@@ -830,33 +841,35 @@ function TransformationManagerDialog({
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
                       <Wand2 className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                      <span className="min-w-0 truncate text-[12.5px] font-medium text-foreground">
+                      <span className="min-w-0 truncate text-ui font-medium text-foreground">
                         {transformation.name}
                       </span>
                     </div>
                     {transformation.description ? (
-                      <p className="mt-0.5 line-clamp-1 pl-6 text-[11px] text-muted-foreground">
+                      <p className="mt-0.5 line-clamp-1 pl-6 text-micro text-muted-foreground">
                         {transformation.description}
                       </p>
                     ) : null}
                   </div>
                   <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
-                    <button
+                    <Button
                       type="button"
+                      variant="ghost"
                       aria-label="编辑"
                       onClick={() => onEdit(transformation)}
-                      className="grid h-6 w-6 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+                      className="h-6 w-6 rounded-md p-0 text-muted-foreground hover:bg-accent hover:text-foreground"
                     >
                       <Pencil className="h-3 w-3" />
-                    </button>
-                    <button
+                    </Button>
+                    <Button
                       type="button"
+                      variant="ghost"
                       aria-label="删除"
                       onClick={() => onDelete(transformation)}
-                      className="grid h-6 w-6 place-items-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                      className="h-6 w-6 rounded-md p-0 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
                     >
                       <Trash2 className="h-3 w-3" />
-                    </button>
+                    </Button>
                   </div>
                 </li>
               ))}
@@ -909,57 +922,58 @@ function TransformationEditorDialog({
   return (
     <Dialog open onOpenChange={onOpenChange}>
       <DialogContent className="max-w-[600px] gap-0 rounded-xl border-border/70 p-0">
-        <DialogTitle className="border-b border-border/65 px-4 py-3 text-[13px] font-semibold text-foreground">
+        <DialogTitle className="border-b border-border/65 px-4 py-3 text-ui font-semibold text-foreground">
           {transformation.name ? `编辑模板：${transformation.name}` : "新建 AI 模板"}
         </DialogTitle>
         <div className="flex max-h-[60vh] flex-col gap-3 overflow-y-auto scrollbar-thin p-4">
           <div className="flex flex-col gap-1.5">
-            <label className="text-[11.5px] font-medium text-foreground">名称</label>
-            <input
+            <label className="text-micro font-medium text-foreground">名称</label>
+            <Input
               value={draft.name}
               onChange={(e) => setDraft({ ...draft, name: e.target.value })}
               placeholder="例如：生成会议纪要"
-              className="h-8 rounded-lg border border-border/70 bg-background px-2.5 text-[12.5px] outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              className="h-8 rounded-lg border-border/70 px-2.5 text-caption"
             />
           </div>
           <div className="flex flex-col gap-1.5">
-            <label className="text-[11.5px] font-medium text-foreground">描述（可选）</label>
-            <input
+            <label className="text-micro font-medium text-foreground">描述（可选）</label>
+            <Input
               value={draft.description}
               onChange={(e) => setDraft({ ...draft, description: e.target.value })}
               placeholder="简短描述这个模板的用途"
-              className="h-8 rounded-lg border border-border/70 bg-background px-2.5 text-[12.5px] outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              className="h-8 rounded-lg border-border/70 px-2.5 text-caption"
             />
           </div>
           <div className="flex flex-col gap-1.5">
             <div className="flex items-center justify-between">
-              <label className="text-[11.5px] font-medium text-foreground">Prompt 模板</label>
-              <span className="text-[10.5px] text-muted-foreground">
+              <label className="text-micro font-medium text-foreground">Prompt 模板</label>
+              <span className="text-micro text-muted-foreground">
                 支持变量插入
               </span>
             </div>
             <div className="flex flex-wrap gap-1">
               {TRANSFORMATION_VARIABLES.map((variable) => (
-                <button
+                <Button
                   key={variable.token}
                   type="button"
+                  variant="outline"
                   onClick={() => insertVariable(variable.token)}
                   title={variable.description}
-                  className="rounded-md border border-border/60 bg-muted/30 px-1.5 py-0.5 text-[10.5px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                  className="h-auto rounded-md border-border/60 bg-muted/30 px-1.5 py-0.5 text-micro font-normal text-muted-foreground hover:bg-accent hover:text-foreground"
                 >
                   {variable.label}
-                </button>
+                </Button>
               ))}
             </div>
-            <textarea
+            <Textarea
               ref={textareaRef}
               value={draft.promptTemplate}
               onChange={(e) => setDraft({ ...draft, promptTemplate: e.target.value })}
               placeholder={`请基于以下笔记内容完成任务：\n\n{{note_content}}\n\n任务：...`}
               rows={10}
-              className="min-h-[160px] w-full resize-y rounded-lg border border-border/70 bg-background px-2.5 py-2 font-mono text-[12px] leading-5 outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              className="min-h-[160px] resize-y rounded-lg border-border/70 px-2.5 py-2 font-mono text-caption leading-5"
             />
-            <p className="text-[10.5px] text-muted-foreground">
+            <p className="text-micro text-muted-foreground">
               变量会在执行时替换为当前笔记的实际内容。如果不使用变量，笔记内容会自动附在 prompt 末尾。
             </p>
           </div>
@@ -1013,7 +1027,7 @@ function NoteMessageActions({
     <div className="mt-2 flex flex-wrap gap-1.5 border-t border-border/40 pt-2">
       {autoApplied ? (
         <>
-          <span className="inline-flex h-7 items-center gap-1 rounded-md border border-[#1f9d7a]/25 bg-[#1f9d7a]/8 px-2 text-[11px] text-[#11745a]">
+          <span className="inline-flex h-7 items-center gap-1 rounded-md border border-success/25 bg-success/10 px-2 text-micro text-success">
             <Check className="h-3.5 w-3.5" />
             已应用
           </span>
@@ -1071,13 +1085,15 @@ function InlineNotice({
     <div className="flex items-start gap-2 text-xs text-muted-foreground">
       <span className="min-w-0 flex-1">{children}</span>
       {onClose ? (
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="xs"
           onClick={onClose}
-          className="shrink-0 text-foreground/65 hover:text-foreground"
+          className="h-auto shrink-0 px-1 py-0 font-normal text-foreground/65 hover:bg-transparent hover:text-foreground"
         >
           关闭
-        </button>
+        </Button>
       ) : null}
     </div>
   );
@@ -1095,14 +1111,15 @@ function MiniAction({
   onClick: () => void;
 }) {
   return (
-    <button
+    <Button
       type="button"
+      variant="outline"
       disabled={disabled}
       onClick={onClick}
-      className="inline-flex h-7 items-center gap-1 rounded-md border border-border/70 bg-muted/25 px-2 text-[11px] font-medium text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-55"
+      className="h-7 gap-1 rounded-md border-border/70 bg-muted/25 px-2 text-micro font-medium text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-55"
     >
       {children}
       {label}
-    </button>
+    </Button>
   );
 }

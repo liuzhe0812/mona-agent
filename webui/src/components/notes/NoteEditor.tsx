@@ -2,6 +2,7 @@ import { useCallback, useRef, forwardRef, useImperativeHandle, type ReactNode } 
 import type { JSONContent } from "@tiptap/core";
 
 import { MarkdownEditor, type EditorMode } from "@/components/common/MarkdownEditor";
+import { Input } from "@/components/ui/input";
 import { MindMapDocumentEditor, type MindMapDocumentEditorHandle } from "./mindmap/MindMapDocumentEditor";
 import { FlowchartDocumentEditor } from "./flowchart/FlowchartDocumentEditor";
 import { DiagramMigrationView } from "./flowchart/DiagramMigrationView";
@@ -204,10 +205,10 @@ function NoteTitleBlock({
   onTitleChange: (title: string) => void;
 }) {
   return (
-    <input
+    <Input
       value={note.title}
       onChange={(event) => onTitleChange(event.target.value)}
-      className="w-full bg-transparent text-[22px] font-semibold leading-tight tracking-normal text-foreground outline-none placeholder:text-muted-foreground"
+      className="h-auto w-full rounded-none border-0 bg-transparent px-0 py-0 text-title-sm tracking-normal text-foreground focus-visible:ring-0 focus-visible:ring-offset-0"
       placeholder="未命名笔记"
     />
   );

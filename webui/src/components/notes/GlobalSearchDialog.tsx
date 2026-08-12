@@ -6,6 +6,8 @@ import {
   DialogContent,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { searchAllNotes, type NoteSearchResult } from "@/lib/tauri";
 
@@ -117,83 +119,87 @@ export function GlobalSearchDialog({
         <DialogTitle className="sr-only">全局搜索笔记</DialogTitle>
         <div className="flex items-center gap-2 border-b border-border/65 px-3 py-2.5">
           <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
-          <input
+          <Input
             ref={inputRef}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="跨所有笔记本搜索笔记..."
-            className="h-7 flex-1 bg-transparent text-[13px] outline-none placeholder:text-muted-foreground"
+            className="h-7 flex-1 rounded-none border-0 bg-transparent px-0 py-0 text-ui shadow-none focus-visible:ring-0"
           />
           {loading ? (
             <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
           ) : null}
           {hasQuery ? (
-            <button
+            <Button
               type="button"
+              variant="ghost"
               aria-label="清空"
               onClick={() => {
                 setQuery("");
                 inputRef.current?.focus();
               }}
-              className="grid h-5 w-5 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+              className="h-5 w-5 shrink-0 rounded-md p-0 text-muted-foreground hover:bg-accent hover:text-foreground"
             >
               <X className="h-3.5 w-3.5" />
-            </button>
+            </Button>
           ) : null}
         </div>
 
         <div className="max-h-[420px] min-h-[120px] overflow-y-auto scrollbar-thin">
           {!hasQuery ? (
-            <div className="flex h-[120px] items-center justify-center text-[12px] text-muted-foreground">
+            <div className="flex h-[120px] items-center justify-center text-caption text-muted-foreground">
               输入关键词搜索所有笔记本中的笔记
             </div>
           ) : loading && results.length === 0 ? (
-            <div className="flex h-[120px] items-center justify-center text-[12px] text-muted-foreground">
+            <div className="flex h-[120px] items-center justify-center text-caption text-muted-foreground">
               正在搜索...
             </div>
           ) : results.length === 0 ? (
-            <div className="flex h-[120px] items-center justify-center text-[12px] text-muted-foreground">
+            <div className="flex h-[120px] items-center justify-center text-caption text-muted-foreground">
               没有匹配的笔记
             </div>
           ) : (
             <ul className="py-1">
               {results.map((result, index) => (
                 <li key={result.noteId}>
-                  <button
+                  <Button
                     type="button"
+                    variant="ghost"
                     onMouseEnter={() => setActiveIndex(index)}
                     onClick={() => handleSelect(result)}
                     className={cn(
-                      "flex w-full flex-col gap-1 px-3 py-2 text-left transition-colors",
-                      index === activeIndex ? "bg-accent" : "hover:bg-accent",
+                      "h-auto w-full flex-col items-start justify-start gap-1 rounded-none px-3 py-2 text-left font-normal",
+                      index === activeIndex
+                        ? "bg-accent hover:bg-accent hover:text-foreground"
+                        : "hover:bg-accent hover:text-foreground",
                     )}
                   >
-                    <div className="flex items-center gap-2">
+                    <div className="flex w-full items-center gap-2">
                       <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                      <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium text-foreground">
+                      <span className="min-w-0 flex-1 truncate text-ui font-medium text-foreground">
                         {result.title || "未命名笔记"}
                       </span>
                       {result.notebookName ? (
-                        <span className="shrink-0 rounded-full border border-border/60 bg-muted/30 px-1.5 py-0.5 text-[10.5px] text-muted-foreground">
+                        <span className="shrink-0 rounded-full border border-border/60 bg-muted/30 px-1.5 py-0.5 text-micro text-muted-foreground">
                           {result.notebookName}
                         </span>
                       ) : null}
                     </div>
                     {result.snippet ? (
                       <p
-                        className="line-clamp-2 pl-6 text-[11.5px] leading-4 text-muted-foreground"
+                        className="line-clamp-2 pl-6 text-micro text-muted-foreground"
                         dangerouslySetInnerHTML={{ __html: renderSnippet(result.snippet) }}
                       />
                     ) : null}
-                  </button>
+                  </Button>
                 </li>
               ))}
             </ul>
           )}
         </div>
 
-        <div className="flex items-center justify-between border-t border-border/65 px-3 py-1.5 text-[10.5px] text-muted-foreground">
+        <div className="flex items-center justify-between border-t border-border/65 px-3 py-1.5 text-micro text-muted-foreground">
           <span className="flex items-center gap-2">
             <kbd className="rounded border border-border/60 bg-muted/30 px-1 py-0.5">↑↓</kbd>
             <span>选择</span>

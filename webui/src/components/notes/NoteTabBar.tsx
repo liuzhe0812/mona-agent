@@ -24,6 +24,7 @@ import {
   ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 import type { Notebook, OperationNote } from "./notes-data";
@@ -78,13 +79,14 @@ export function NoteTabBar({
         return (
           <ContextMenu key={note.id}>
             <ContextMenuTrigger asChild>
-              <button
+              <Button
                 type="button"
+                variant="ghost"
                 onClick={() => onSelect(note.id)}
                 className={cn(
-                  "group relative flex h-full w-[140px] shrink-0 items-center gap-1.5 border-r border-border/40 px-3 text-[12px] transition-colors",
+                  "group relative h-full w-[140px] shrink-0 justify-start gap-1.5 rounded-none border-r border-border/40 px-3 text-caption font-normal",
                   isActive
-                    ? "bg-background text-foreground"
+                    ? "bg-background text-foreground hover:bg-background hover:text-foreground"
                     : "bg-transparent text-muted-foreground hover:bg-accent hover:text-foreground",
                 )}
               >
@@ -103,7 +105,7 @@ export function NoteTabBar({
                 >
                   <X className="h-3 w-3" />
                 </span>
-              </button>
+              </Button>
             </ContextMenuTrigger>
             <ContextMenuContent className="w-52">
               <ContextMenuItem onSelect={() => onClose(note.id)}>
@@ -136,7 +138,7 @@ export function NoteTabBar({
                 <ContextMenuSub>
                   <ContextMenuSubTrigger
                     disabled={notebooks.length <= 1}
-                    className="text-[13px]"
+                    className="text-ui"
                   >
                     <FolderInput className="mr-2 h-3.5 w-3.5" />
                     将文件移动到...
@@ -145,7 +147,7 @@ export function NoteTabBar({
                     {note.notebookId !== "" ? (
                       <ContextMenuItem
                         onSelect={() => onMoveToNotebook(note, "")}
-                        className="text-[13px]"
+                        className="text-ui"
                       >
                         <FolderOpen className="mr-2 h-3.5 w-3.5" />
                         根目录
@@ -160,7 +162,7 @@ export function NoteTabBar({
                         <ContextMenuItem
                           key={notebook.id}
                           onSelect={() => onMoveToNotebook(note, notebook.id)}
-                          className="text-[13px]"
+                          className="text-ui"
                         >
                           {notebook.name}
                         </ContextMenuItem>
@@ -183,7 +185,7 @@ export function NoteTabBar({
                 <ContextMenuSub>
                   <ContextMenuSubTrigger
                     disabled={allNotes.filter((n) => n.id !== note.id).length === 0}
-                    className="text-[13px]"
+                    className="text-ui"
                   >
                     <GitMerge className="mr-2 h-3.5 w-3.5" />
                     将该笔记合并到...
@@ -195,7 +197,7 @@ export function NoteTabBar({
                         <ContextMenuItem
                           key={target.id}
                           onSelect={() => onMergeNote(note, target.id)}
-                          className="text-[13px]"
+                          className="text-ui"
                         >
                           <span className="min-w-0 truncate">{target.title || "未命名笔记"}</span>
                         </ContextMenuItem>

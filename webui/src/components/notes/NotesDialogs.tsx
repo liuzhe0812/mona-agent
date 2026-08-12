@@ -60,17 +60,17 @@ export function PromptDialog({
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="max-w-[360px] gap-0 rounded-xl border-border/70 p-0">
         <DialogHeader className="border-b border-border/65 px-4 py-3 text-left">
-          <DialogTitle className="text-[14px]">{title}</DialogTitle>
+          <DialogTitle className="text-body">{title}</DialogTitle>
         </DialogHeader>
         <div className="px-4 py-3">
-          <input
+          <Input
             value={value}
             onChange={(e) => setValue(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder={placeholder}
             autoFocus
             disabled={loading}
-            className="h-8 w-full rounded-lg border border-border/70 bg-background px-2.5 text-[12px] outline-none placeholder:text-muted-foreground focus:border-border disabled:opacity-50"
+            className="h-8 w-full rounded-lg border-border/70 bg-background px-2.5 text-caption shadow-none focus-visible:ring-0 focus:border-border"
           />
         </div>
         <DialogFooter className="border-t border-border/65 px-4 py-2.5">
@@ -78,7 +78,7 @@ export function PromptDialog({
             type="button"
             variant="ghost"
             size="sm"
-            className="h-7 px-2.5 text-[12px]"
+            className="h-7 px-2.5 text-caption"
             disabled={loading}
             onClick={() => onOpenChange(false)}
           >
@@ -87,7 +87,7 @@ export function PromptDialog({
           <Button
             type="button"
             size="sm"
-            className="h-7 px-2.5 text-[12px]"
+            className="h-7 px-2.5 text-caption"
             disabled={!value.trim() || loading}
             onClick={handleSubmit}
           >
@@ -122,17 +122,17 @@ export function ConfirmDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-[360px] gap-0 rounded-xl border-border/70 p-0">
         <DialogHeader className="border-b border-border/65 px-4 py-3 text-left">
-          <DialogTitle className="text-[14px]">{title}</DialogTitle>
+          <DialogTitle className="text-body">{title}</DialogTitle>
         </DialogHeader>
         <div className="px-4 py-3">
-          <p className="text-[12.5px] leading-5 text-muted-foreground">{message}</p>
+          <p className="text-ui text-muted-foreground">{message}</p>
         </div>
         <DialogFooter className="border-t border-border/65 px-4 py-2.5">
           <Button
             type="button"
             variant="ghost"
             size="sm"
-            className="h-7 px-2.5 text-[12px]"
+            className="h-7 px-2.5 text-caption"
             onClick={() => onOpenChange(false)}
           >
             取消
@@ -140,7 +140,7 @@ export function ConfirmDialog({
           <Button
             type="button"
             size="sm"
-            className={cn("h-7 px-2.5 text-[12px]", destructive && "bg-destructive hover:bg-destructive/90")}
+            className={cn("h-7 px-2.5 text-caption", destructive && "bg-destructive hover:bg-destructive/90")}
             onClick={() => {
               onConfirm();
               onOpenChange(false);
@@ -187,31 +187,32 @@ export function TemplatePickerDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-[440px] gap-0 rounded-xl border-border/70 p-0">
         <DialogHeader className="border-b border-border/65 px-4 py-3 text-left">
-          <DialogTitle className="text-[14px]">从模板创建笔记</DialogTitle>
+          <DialogTitle className="text-body">从模板创建笔记</DialogTitle>
         </DialogHeader>
         <div className="flex flex-col gap-3 px-4 py-3">
           {templates.length === 0 ? (
-            <p className="py-4 text-center text-[12.5px] text-muted-foreground">
+            <p className="py-4 text-center text-ui text-muted-foreground">
               没有可用模板。请先创建一篇笔记并标记为模板。
             </p>
           ) : (
             <>
               <div className="max-h-[220px] space-y-px overflow-y-auto scrollbar-thin">
                 {templates.map((tpl) => (
-                  <button
+                  <Button
                     key={tpl.id}
                     type="button"
+                    variant="ghost"
                     onClick={() => setSelectedId(tpl.id)}
                     className={cn(
-                      "flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-[12.5px] transition-colors",
+                      "h-auto w-full justify-start gap-2 rounded-md px-2.5 py-2 text-left text-ui font-normal",
                       selectedId === tpl.id
-                        ? "bg-primary/10 text-primary"
-                        : "hover:bg-accent",
+                        ? "bg-primary/10 text-primary hover:bg-primary/10 hover:text-primary"
+                        : "hover:bg-accent hover:text-foreground",
                     )}
                   >
                     <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                     <span className="min-w-0 flex-1 truncate">{tpl.title || "未命名模板"}</span>
-                  </button>
+                  </Button>
                 ))}
               </div>
               <Input
@@ -225,7 +226,7 @@ export function TemplatePickerDialog({
                 }}
                 placeholder="新笔记标题"
                 autoFocus
-                className="h-8 text-[13px]"
+                className="h-8 text-ui"
               />
             </>
           )}
@@ -235,7 +236,7 @@ export function TemplatePickerDialog({
             type="button"
             variant="ghost"
             size="sm"
-            className="h-7 px-2.5 text-[12px]"
+            className="h-7 px-2.5 text-caption"
             onClick={() => onOpenChange(false)}
           >
             取消
@@ -243,7 +244,7 @@ export function TemplatePickerDialog({
           <Button
             type="button"
             size="sm"
-            className="h-7 px-2.5 text-[12px]"
+            className="h-7 px-2.5 text-caption"
             disabled={!selectedId || !title.trim()}
             onClick={handleConfirm}
           >

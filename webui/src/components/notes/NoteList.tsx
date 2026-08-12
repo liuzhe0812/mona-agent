@@ -40,6 +40,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 import type { Notebook, NoteContextLevel, NoteSourceKind, OperationNote } from "./notes-data";
@@ -189,7 +190,7 @@ export function NoteList({
                   onCreateNote={onCreateNote}
                 />
               ) : null}
-              <div className="flex flex-1 items-center justify-center px-6 py-4 text-center text-[12px] leading-5 text-muted-foreground">
+              <div className="flex flex-1 items-center justify-center px-6 py-4 text-center text-caption text-muted-foreground">
                 {emptyLabel}
               </div>
             </div>
@@ -315,39 +316,41 @@ function ListHeader({
   return (
     <div className="flex h-9 shrink-0 items-center justify-between border-b border-border/55 px-2">
       <div className="flex min-w-0 items-center gap-1.5 px-1">
-        <span className="text-[11.5px] font-semibold uppercase tracking-wide text-muted-foreground">
+        <span className="text-micro font-semibold uppercase tracking-wide text-muted-foreground">
           笔记
         </span>
-        <span className="rounded-full bg-muted/50 px-1.5 py-px text-[10.5px] text-muted-foreground">
+        <span className="rounded-full bg-muted/50 px-1.5 py-px text-micro text-muted-foreground">
           {count}
         </span>
         {selectionSize > 0 ? (
           <>
             <span className="mx-1 text-muted-foreground/40">·</span>
-            <span className="text-[11.5px] text-primary">已选 {selectionSize}</span>
-            <button
+            <span className="text-micro text-primary">已选 {selectionSize}</span>
+            <Button
               type="button"
+              variant="ghost"
               onClick={onClearSelection}
-              className="grid h-4 w-4 place-items-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
+              className="h-4 w-4 rounded p-0 text-muted-foreground hover:bg-accent hover:text-foreground"
               title="取消选择"
             >
               <X className="h-3 w-3" />
-            </button>
+            </Button>
           </>
         ) : null}
       </div>
       <div className="flex items-center gap-0.5">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button
+            <Button
               type="button"
+              variant="ghost"
               title={`排序：${SORT_LABELS[sortMode]}`}
-              className="inline-flex h-6 items-center gap-1 rounded-md px-1.5 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground"
+              className="h-6 gap-1 rounded-md px-1.5 text-micro font-normal text-muted-foreground hover:bg-accent hover:text-foreground"
             >
               <ArrowDownUp className="h-3 w-3" />
               <span className="hidden sm:inline">{SORT_LABELS[sortMode]}</span>
               <ChevronDown className="h-2.5 w-2.5 opacity-60" />
-            </button>
+            </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-48">
             <DropdownMenuRadioGroup
@@ -375,14 +378,15 @@ function ListHeader({
             </DropdownMenuRadioGroup>
           </DropdownMenuContent>
         </DropdownMenu>
-        <button
+        <Button
           type="button"
+          variant="ghost"
           title="新建笔记"
           onClick={() => onCreateNote?.("manual")}
-          className="grid h-6 w-6 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+          className="h-6 w-6 rounded-md p-0 text-muted-foreground hover:bg-accent hover:text-foreground"
         >
           <Plus className="h-3.5 w-3.5" />
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -438,8 +442,9 @@ export function NoteRow({
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
-        <button
+        <Button
           type="button"
+          variant="ghost"
           data-note-id={note.id}
           draggable
           onDragStart={(e) => {
@@ -450,12 +455,12 @@ export function NoteRow({
           onClick={onSelect}
           onContextMenu={(e) => e.stopPropagation()}
           className={cn(
-            "group flex h-[30px] w-full items-center gap-1.5 rounded-md px-2 text-left transition-colors",
+            "group h-[30px] w-full justify-start gap-1.5 rounded-md px-2 text-left font-normal",
             active
-              ? "bg-primary/15 text-foreground"
+              ? "bg-primary/15 text-foreground hover:bg-primary/15 hover:text-foreground"
               : selected
-                ? "bg-primary/8 text-foreground"
-                : "text-foreground/85 hover:bg-accent",
+                ? "bg-primary/8 text-foreground hover:bg-primary/8 hover:text-foreground"
+                : "text-foreground/85 hover:bg-accent hover:text-foreground",
           )}
         >
           {note.type === "mindmap" ? (
@@ -465,28 +470,28 @@ export function NoteRow({
           ) : (
             <FileText className="shrink-0 h-3 w-3 text-muted-foreground" />
           )}
-          <span className="min-w-0 flex-1 truncate text-[12.5px] leading-none">
+          <span className="min-w-0 flex-1 truncate text-ui">
             {note.title || "未命名笔记"}
           </span>
           {note.favorite ? (
-            <Star className="shrink-0 h-3 w-3 fill-current text-amber-500" />
+            <Star className="shrink-0 h-3 w-3 fill-current text-warning" />
           ) : null}
           {isRecording ? (
-            <span className="flex shrink-0 items-center gap-1 rounded-full bg-rose-500/12 px-1.5 py-px text-[10px] tabular-nums leading-none text-rose-600 dark:text-rose-400">
+            <span className="flex shrink-0 items-center gap-1 rounded-full bg-rose-500/12 px-1.5 py-px text-micro tabular-nums text-rose-600 dark:text-rose-400">
               <span className="note-processing-dot inline-block h-1.5 w-1.5 rounded-full bg-rose-500" />
               录音中
             </span>
           ) : null}
           {isAiProcessing ? (
-            <span className="flex shrink-0 items-center gap-1 rounded-full bg-emerald-500/12 px-1.5 py-px text-[10px] tabular-nums leading-none text-emerald-600 dark:text-emerald-400">
+            <span className="flex shrink-0 items-center gap-1 rounded-full bg-emerald-500/12 px-1.5 py-px text-micro tabular-nums text-emerald-600 dark:text-emerald-400">
               <span className="note-processing-dot inline-block h-1.5 w-1.5 rounded-full bg-emerald-500" />
               AI 处理中
             </span>
           ) : null}
-          <span className="shrink-0 text-[10.5px] tabular-nums text-muted-foreground/70">
+          <span className="shrink-0 text-micro tabular-nums text-muted-foreground/70">
             {formatRelativeTime(note.updatedAt)}
           </span>
-        </button>
+        </Button>
       </ContextMenuTrigger>
       <ContextMenuContent className="w-52">
         {onOpenInNewTab ? (
@@ -503,7 +508,7 @@ export function NoteRow({
         <ContextMenuSub>
           <ContextMenuSubTrigger
             disabled={notebooks.length <= 1}
-            className="text-[13px]"
+            className="text-ui"
           >
             <FolderInput className="mr-2 h-3.5 w-3.5" />
             将文件移动到...
@@ -512,7 +517,7 @@ export function NoteRow({
             {note.notebookId !== "" ? (
               <ContextMenuItem
                 onSelect={() => onMoveToNotebook?.(note, "")}
-                className="text-[13px]"
+                className="text-ui"
               >
                 <FolderOpen className="mr-2 h-3.5 w-3.5" />
                 根目录
@@ -527,7 +532,7 @@ export function NoteRow({
                 <ContextMenuItem
                   key={notebook.id}
                   onSelect={() => onMoveToNotebook?.(note, notebook.id)}
-                  className="text-[13px]"
+                  className="text-ui"
                 >
                   {notebook.name}
                 </ContextMenuItem>
@@ -538,7 +543,7 @@ export function NoteRow({
           <ContextMenuSub>
             <ContextMenuSubTrigger
               disabled={allNotes.filter((n) => n.id !== note.id).length === 0}
-              className="text-[13px]"
+              className="text-ui"
             >
               <GitMerge className="mr-2 h-3.5 w-3.5" />
               将该笔记合并到...
@@ -550,7 +555,7 @@ export function NoteRow({
                   <ContextMenuItem
                     key={target.id}
                     onSelect={() => onMergeNote(note, target.id)}
-                    className="text-[13px]"
+                    className="text-ui"
                   >
                     <span className="min-w-0 truncate">{target.title || "未命名笔记"}</span>
                   </ContextMenuItem>
@@ -591,7 +596,7 @@ export function NoteRow({
           <>
             <ContextMenuSeparator />
             <ContextMenuSub>
-              <ContextMenuSubTrigger className="text-[13px]">
+              <ContextMenuSubTrigger className="text-ui">
                 <BookOpen className="mr-2 h-3.5 w-3.5" />
                 AI 上下文级别
               </ContextMenuSubTrigger>
@@ -600,11 +605,11 @@ export function NoteRow({
                   <ContextMenuItem
                     key={level}
                     onSelect={() => onSetContextLevel(note, level)}
-                    className="text-[13px]"
+                    className="text-ui"
                   >
                     <span className="flex items-center gap-2">
                       {currentLevel === level ? (
-                        <span className="text-[#3d82e7]">✓</span>
+                        <span className="text-info">✓</span>
                       ) : (
                         <span className="inline-block w-[14px]" />
                       )}

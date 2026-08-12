@@ -36,7 +36,7 @@ export function NotebookSelect({
         <Button
           type="button"
           variant="outline"
-          className="h-8 w-[188px] justify-start gap-2 rounded-lg border-border/70 bg-background px-2.5 text-[12.5px] font-medium text-foreground/86 shadow-none"
+          className="h-8 w-[188px] justify-start gap-2 rounded-lg border-border/70 bg-background px-2.5 text-ui font-medium text-foreground/86 shadow-none"
         >
           <BookOpen className="h-3.5 w-3.5 text-muted-foreground" />
           <span className="min-w-0 truncate">{activeNotebook.name}</span>
@@ -44,7 +44,7 @@ export function NotebookSelect({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-64">
-        <DropdownMenuLabel className="px-2 py-1.5 text-[12px] text-muted-foreground">
+        <DropdownMenuLabel className="px-2 py-1.5 text-caption text-muted-foreground">
           选择笔记本
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
@@ -57,14 +57,14 @@ export function NotebookSelect({
             <span
               className={cn(
                 "grid h-5 w-5 shrink-0 place-items-center rounded-md border border-border/70",
-                notebook.id === activeNotebook.id && "border-[#6aa7ff]/45 bg-[#6aa7ff]/10",
+                notebook.id === activeNotebook.id && "border-info-strong/45 bg-info-strong/10",
               )}
             >
               {notebook.id === activeNotebook.id ? (
-                <Check className="h-3.5 w-3.5 text-[#3d82e7]" />
+                <Check className="h-3.5 w-3.5 text-info" />
               ) : null}
             </span>
-            <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium text-foreground">
+            <span className="min-w-0 flex-1 truncate text-ui font-medium text-foreground">
               {notebook.name}
             </span>
           </DropdownMenuItem>
@@ -75,7 +75,7 @@ export function NotebookSelect({
             {onRenameNotebook ? (
               <DropdownMenuItem onSelect={onRenameNotebook} className="gap-2 px-2 py-2">
                 <Pencil className="h-3.5 w-3.5 text-muted-foreground" />
-                <span className="text-[12.5px] font-medium text-foreground/88">重命名当前笔记本</span>
+                <span className="text-ui font-medium text-foreground/88">重命名当前笔记本</span>
               </DropdownMenuItem>
             ) : null}
             {onDeleteNotebook ? (
@@ -85,7 +85,7 @@ export function NotebookSelect({
                 className="gap-2 px-2 py-2 text-destructive focus:text-destructive data-[disabled]:opacity-50 data-[disabled]:text-muted-foreground"
               >
                 <Trash2 className="h-3.5 w-3.5" />
-                <span className="text-[12.5px] font-medium">删除当前笔记本</span>
+                <span className="text-ui font-medium">删除当前笔记本</span>
               </DropdownMenuItem>
             ) : null}
             <DropdownMenuSeparator />
@@ -93,7 +93,7 @@ export function NotebookSelect({
               <span className="grid h-5 w-5 place-items-center rounded-md border border-border/70 bg-muted/30">
                 <Plus className="h-3.5 w-3.5 text-muted-foreground" />
               </span>
-              <span className="text-[12.5px] font-medium text-foreground/88">新建笔记本</span>
+              <span className="text-ui font-medium text-foreground/88">新建笔记本</span>
             </DropdownMenuItem>
           </>
         ) : null}

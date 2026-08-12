@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { List, Link2 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 
 import { BacklinksPanel } from "./BacklinksPanel";
 import { parseMindMap, type MindMapNode } from "./mindmap/mindmap-outline";
@@ -123,19 +124,20 @@ export function RightSidebar({
           const Icon = tab.icon;
           const active = activeTab === tab.id;
           return (
-            <button
+            <Button
               key={tab.id}
               type="button"
+              variant="ghost"
               title={tab.label}
               aria-label={tab.label}
               onClick={() => onTabChange(tab.id)}
               className={cn(
-                "flex flex-1 items-center justify-center text-muted-foreground hover:bg-accent hover:text-foreground",
+                "h-full flex-1 rounded-none p-0 text-muted-foreground hover:bg-accent hover:text-foreground",
                 active && "bg-accent text-foreground",
               )}
             >
               <Icon className="h-4 w-4" />
-            </button>
+            </Button>
           );
         })}
       </div>
@@ -144,14 +146,15 @@ export function RightSidebar({
         {activeTab === "outline" && !isMindMap && (
           <div className="flex flex-col gap-0.5">
             {outline.length === 0 ? (
-              <div className="px-1 py-2 text-[11.5px] text-muted-foreground/70">
+              <div className="px-1 py-2 text-micro text-muted-foreground/70">
                 暂无标题大纲
               </div>
             ) : (
               outline.map((h, idx) => (
-                <button
+                <Button
                   key={idx}
                   type="button"
+                  variant="ghost"
                   onClick={() => {
                     const root = document.querySelector("[data-note-editor='true']");
                     if (!root) return;
@@ -172,12 +175,12 @@ export function RightSidebar({
                       }
                     }
                   }}
-                  className="truncate rounded px-1 py-0.5 text-left text-[12px] text-muted-foreground hover:bg-accent hover:text-foreground"
+                  className="block h-auto w-full truncate rounded px-1 py-0.5 text-left text-caption font-normal text-muted-foreground hover:bg-accent hover:text-foreground"
                   style={{ paddingLeft: `${4 + (h.level - 1) * 10}px` }}
                   title={h.text}
                 >
                   {h.text}
-                </button>
+                </Button>
               ))
             )}
           </div>
@@ -186,7 +189,7 @@ export function RightSidebar({
         {activeTab === "outline" && isMindMap && (
           <div className="flex flex-col gap-0.5">
             {!mindMapTree ? (
-              <div className="px-1 py-2 text-[11.5px] text-muted-foreground/70">
+              <div className="px-1 py-2 text-micro text-muted-foreground/70">
                 暂无节点
               </div>
             ) : (
@@ -202,7 +205,7 @@ export function RightSidebar({
         {activeTab === "links" && note && (
           <div className="flex flex-col gap-3">
             {/* Outgoing links */}
-            <div className="flex flex-col gap-1 text-[12.5px]">
+            <div className="flex flex-col gap-1 text-ui">
               <div className="flex items-center gap-1.5 px-1 py-0.5 text-muted-foreground">
                 <span className="font-medium">正向链接</span>
                 <span className="tabular-nums text-muted-foreground/70">
@@ -215,9 +218,10 @@ export function RightSidebar({
                     const target = outgoingLinkNotes.get(title.toLowerCase());
                     const unresolved = !target;
                     return (
-                      <button
+                      <Button
                         key={title}
                         type="button"
+                        variant="ghost"
                         onClick={() => {
                           if (target) {
                             onSelectNote?.(target.id);
@@ -225,7 +229,7 @@ export function RightSidebar({
                             onOpenNoteByTitle?.(title);
                           }
                         }}
-                        className="group flex items-center gap-1.5 rounded px-1.5 py-1 text-left hover:bg-accent"
+                        className="group h-auto justify-start gap-1.5 rounded px-1.5 py-1 text-left font-normal hover:bg-accent"
                       >
                         <Link2
                           className={cn(
@@ -235,7 +239,7 @@ export function RightSidebar({
                         />
                         <span
                           className={cn(
-                            "min-w-0 flex-1 truncate text-[12px]",
+                            "min-w-0 flex-1 truncate text-caption",
                             unresolved
                               ? "text-muted-foreground/50"
                               : "text-foreground/90",
@@ -244,13 +248,13 @@ export function RightSidebar({
                         >
                           {title}
                         </span>
-                      </button>
+                      </Button>
                     );
                   })}
                 </div>
               )}
               {outgoingLinks.length === 0 && (
-                <div className="px-2 py-1 text-[11px] text-muted-foreground/60">
+                <div className="px-2 py-1 text-micro text-muted-foreground/60">
                   暂无正向链接
                 </div>
               )}
@@ -277,11 +281,12 @@ function MindMapOutlineTree({
   const hasChildren = node.children && node.children.length > 0;
   return (
     <>
-      <button
+      <Button
         type="button"
+        variant="ghost"
         onClick={() => onSelectNode?.(node.id)}
         className={cn(
-          "truncate rounded px-1 py-0.5 text-left text-[12px] hover:bg-accent hover:text-foreground",
+          "block h-auto w-full truncate rounded px-1 py-0.5 text-left text-caption font-normal hover:bg-accent hover:text-foreground",
           level === 0
             ? "font-medium text-foreground"
             : "text-muted-foreground",
@@ -290,7 +295,7 @@ function MindMapOutlineTree({
         title={node.topic}
       >
         {node.topic || "（空节点）"}
-      </button>
+      </Button>
       {hasChildren &&
         node.children.map((child) => (
           <MindMapOutlineTree

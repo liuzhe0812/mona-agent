@@ -16,6 +16,9 @@ import {
 import { ImageIcon, Loader2, Send, Square, X } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import {
   useAttachedImages,
   MAX_IMAGES_PER_MESSAGE,
@@ -141,7 +144,7 @@ export function AgentComposer({
         isDragging && "ring-2 ring-primary/40",
       )}
     >
-      <input
+      <Input
         ref={fileInputRef}
         type="file"
         accept={ACCEPT_ATTR}
@@ -166,7 +169,7 @@ export function AgentComposer({
         </div>
       ) : null}
 
-      <textarea
+      <Textarea
         ref={textareaRef}
         value={value}
         onChange={(event) => onChange(event.target.value)}
@@ -175,43 +178,45 @@ export function AgentComposer({
         disabled={disabled}
         rows={2}
         placeholder={placeholder}
-        className="min-h-[36px] flex-1 resize-none bg-transparent text-[12px] leading-5 outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
+        className="min-h-[36px] flex-1 resize-none rounded-none border-0 bg-transparent px-0 py-0 text-caption focus-visible:ring-0 disabled:opacity-60"
       />
 
       {inlineError ? (
-        <div className="mb-1 rounded-md border border-destructive/40 bg-destructive/8 px-2 py-0.5 text-[11px] text-destructive">
+        <div className="mb-1 rounded-md border border-destructive/40 bg-destructive/8 px-2 py-0.5 text-micro text-destructive">
           {inlineError}
         </div>
       ) : null}
 
       <div className="mt-1 flex items-center justify-between gap-2">
-        <button
+        <Button
           type="button"
+          variant="ghost"
           disabled={disabled || full}
           aria-label="添加图片"
           title="添加图片"
           onClick={() => fileInputRef.current?.click()}
-          className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+          className="h-6 w-6 shrink-0 rounded-md p-0 text-muted-foreground hover:bg-accent hover:text-foreground"
         >
           {encoding ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
           ) : images.length > 0 ? (
-            <span className="text-[10px] font-medium">{images.length}</span>
+            <span className="text-micro font-medium">{images.length}</span>
           ) : (
             <ImageIcon className="h-3.5 w-3.5" />
           )}
-        </button>
+        </Button>
 
-        <button
+        <Button
           type="button"
+          variant="ghost"
           aria-label={isStreaming ? "停止生成" : "发送"}
           disabled={!isStreaming && !canSend}
           onClick={isStreaming ? onStop : submit}
           className={cn(
-            "grid h-6 w-6 shrink-0 place-items-center rounded-lg transition-colors",
+            "h-6 w-6 shrink-0 rounded-lg p-0",
             isStreaming
-              ? "text-destructive hover:bg-destructive/10"
-              : "bg-foreground text-background hover:bg-foreground/90 disabled:bg-muted disabled:text-muted-foreground",
+              ? "text-destructive hover:bg-destructive/10 hover:text-destructive"
+              : "bg-foreground text-background hover:bg-foreground/90 hover:text-background disabled:bg-muted disabled:text-muted-foreground",
           )}
         >
           {isStreaming ? (
@@ -221,7 +226,7 @@ export function AgentComposer({
           ) : (
             <Send className="h-3 w-3" />
           )}
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -239,7 +244,7 @@ function AttachmentChip({
   return (
     <div
       className={cn(
-        "group relative flex items-center gap-1.5 rounded-md border px-1.5 py-1 text-[10px]",
+        "group relative flex items-center gap-1.5 rounded-md border px-1.5 py-1 text-micro",
         image.status === "error"
           ? "border-destructive/40 bg-destructive/5 text-destructive"
           : "border-border/70 bg-muted/60 text-foreground/80",
@@ -269,15 +274,16 @@ function AttachmentChip({
       <span className="max-w-[4.5rem] truncate" title={image.file.name}>
         {image.file.name}
       </span>
-      <button
+      <Button
         type="button"
+        variant="ghost"
         ref={registerRef}
         onClick={onRemove}
         aria-label="移除图片"
-        className="grid h-4 w-4 place-items-center rounded-full text-muted-foreground/80 hover:bg-foreground/8 hover:text-foreground"
+        className="h-4 w-4 rounded-full p-0 text-muted-foreground/80 hover:bg-foreground/8 hover:text-foreground"
       >
         <X className="h-3 w-3" />
-      </button>
+      </Button>
     </div>
   );
 }
