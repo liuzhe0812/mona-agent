@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">
+  <!-- 暖纸白背景 -->
+  <rect width="1280" height="720" fill="#FAF7F2"/>
+
+  <!-- 页眉：kicker + 页面标题 + 发丝线 -->
+  <rect x="80" y="88" width="36" height="2" fill="#C9A227"/>
+  <text x="128" y="94" fill="#C9A227" font-family="Arial, Microsoft YaHei, sans-serif" font-size="13" letter-spacing="3">{{KICKER}}</text>
+  <text x="80" y="150" fill="#16264C" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="30" font-weight="bold">{{PAGE_TITLE}}</text>
+  <line x1="80" y1="182" x2="1200" y2="182" stroke="#D8D2C4" stroke-width="1"/>
+
+  <!-- 横向时间主线（2px 深蓝） -->
+  <line x1="100" y1="380" x2="1180" y2="380" stroke="#16264C" stroke-width="2"/>
+
+  <!-- 节点 1（上方） -->
+  <line x1="180" y1="348" x2="180" y2="375" stroke="#D8D2C4" stroke-width="1"/>
+  <text x="180" y="252" text-anchor="middle" fill="#8A94A6" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="12">{{TL_1_DESC}}</text>
+  <text x="180" y="278" text-anchor="middle" fill="#3C4657" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="15">{{TL_1_TITLE}}</text>
+  <text x="180" y="330" text-anchor="middle" fill="#16264C" font-family="Arial, Microsoft YaHei, sans-serif" font-size="20" font-weight="bold">{{TL_1_YEAR}}</text>
+  <circle cx="180" cy="380" r="5" fill="#C9A227"/>
+
+  <!-- 节点 2（下方） -->
+  <line x1="405" y1="385" x2="405" y2="412" stroke="#D8D2C4" stroke-width="1"/>
+  <text x="405" y="440" text-anchor="middle" fill="#16264C" font-family="Arial, Microsoft YaHei, sans-serif" font-size="20" font-weight="bold">{{TL_2_YEAR}}</text>
+  <text x="405" y="468" text-anchor="middle" fill="#3C4657" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="15">{{TL_2_TITLE}}</text>
+  <text x="405" y="492" text-anchor="middle" fill="#8A94A6" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="12">{{TL_2_DESC}}</text>
+  <circle cx="405" cy="380" r="5" fill="#C9A227"/>
+
+  <!-- 节点 3（上方） -->
+  <line x1="630" y1="348" x2="630" y2="375" stroke="#D8D2C4" stroke-width="1"/>
+  <text x="630" y="252" text-anchor="middle" fill="#8A94A6" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="12">{{TL_3_DESC}}</text>
+  <text x="630" y="278" text-anchor="middle" fill="#3C4657" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="15">{{TL_3_TITLE}}</text>
+  <text x="630" y="330" text-anchor="middle" fill="#16264C" font-family="Arial, Microsoft YaHei, sans-serif" font-size="20" font-weight="bold">{{TL_3_YEAR}}</text>
+  <circle cx="630" cy="380" r="5" fill="#C9A227"/>
+
+  <!-- 节点 4（下方） -->
+  <line x1="855" y1="385" x2="855" y2="412" stroke="#D8D2C4" stroke-width="1"/>
+  <text x="855" y="440" text-anchor="middle" fill="#16264C" font-family="Arial, Microsoft YaHei, sans-serif" font-size="20" font-weight="bold">{{TL_4_YEAR}}</text>
+  <text x="855" y="468" text-anchor="middle" fill="#3C4657" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="15">{{TL_4_TITLE}}</text>
+  <text x="855" y="492" text-anchor="middle" fill="#8A94A6" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="12">{{TL_4_DESC}}</text>
+  <circle cx="855" cy="380" r="5" fill="#C9A227"/>
+
+  <!-- 节点 5（上方） -->
+  <line x1="1080" y1="348" x2="1080" y2="375" stroke="#D8D2C4" stroke-width="1"/>
+  <text x="1080" y="252" text-anchor="middle" fill="#8A94A6" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="12">{{TL_5_DESC}}</text>
+  <text x="1080" y="278" text-anchor="middle" fill="#3C4657" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="15">{{TL_5_TITLE}}</text>
+  <text x="1080" y="330" text-anchor="middle" fill="#16264C" font-family="Arial, Microsoft YaHei, sans-serif" font-size="20" font-weight="bold">{{TL_5_YEAR}}</text>
+  <circle cx="1080" cy="380" r="5" fill="#C9A227"/>
+
+  <!-- 页脚 -->
+  <line x1="80" y1="664" x2="1200" y2="664" stroke="#D8D2C4" stroke-width="1"/>
+  <rect x="80" y="686" width="8" height="8" fill="#C9A227"/>
+  <text x="98" y="694" fill="#8A94A6" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="11">{{SECTION_NAME}}</text>
+  <text x="1200" y="694" text-anchor="end" fill="#8A94A6" font-family="Arial, Microsoft YaHei, sans-serif" font-size="12">{{PAGE_NUM}}</text>
+</svg>

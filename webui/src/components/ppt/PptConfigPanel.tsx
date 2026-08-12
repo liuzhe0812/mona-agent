@@ -35,6 +35,10 @@ const TEMPLATE_KIND_LABELS: Record<string, string> = {
   brand: "品牌模板",
 };
 
+/**
+ * @deprecated PPT-401：配置面板已重构为四步向导式（PptConfigWizard），
+ * 新需求请使用 ./PptConfigWizard。本组件仅保留用于向后兼容与既有测试。
+ */
 export function PptConfigPanel({ config, setConfig, phase, onStart }: PptConfigPanelProps) {
   const { client, token } = useClient();
   const readOnly = phase !== "config";

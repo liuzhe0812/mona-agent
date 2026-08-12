@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">
+  <!-- 背景 -->
+  <rect width="1280" height="720" fill="#FFFFFF"/>
+
+  <!-- 左侧 6px 深蓝竖引用条 -->
+  <rect x="160" y="200" width="6" height="220" fill="#005587"/>
+
+  <!-- 浅灰引号装饰 -->
+  <text x="200" y="250" fill="#C8CDD2" font-family="Arial, Microsoft YaHei, sans-serif" font-size="48" font-weight="bold">“</text>
+
+  <!-- 引用正文（支持 2-3 行） -->
+  <text x="200" y="308" fill="#1A1A1A" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="24">
+    <tspan x="200">{{QUOTE_TEXT}}</tspan>
+  </text>
+
+  <!-- 署名 -->
+  <text x="200" y="456" fill="#005587" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="14" font-weight="bold">— {{QUOTE_AUTHOR}}</text>
+  <text x="200" y="480" fill="#5B6770" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="12">{{QUOTE_ROLE}}</text>
+
+  <!-- 页脚三件套 -->
+  <line x1="64" y1="664" x2="1216" y2="664" stroke="#C8CDD2" stroke-width="0.75"/>
+  <text x="64" y="686" fill="#5B6770" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="11"><tspan>{{FOOTNOTE}}</tspan><tspan dx="16">来源：{{SOURCE}}</tspan></text>
+  <text x="1216" y="686" text-anchor="end" fill="#5B6770" font-family="Arial, Microsoft YaHei, sans-serif" font-size="11">{{PAGE_NUM}}</text>
+</svg>

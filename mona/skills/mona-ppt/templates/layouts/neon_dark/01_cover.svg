@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">
+  <defs>
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0B1220"/>
+      <stop offset="100%" stop-color="#131C2E"/>
+    </linearGradient>
+    <pattern id="dotGrid" x="0" y="0" width="48" height="48" patternUnits="userSpaceOnUse" data-pptx-pattern="dotGrid" data-pptx-fg="#1C2942" data-pptx-bg="#101828">
+      <rect width="48" height="48" fill="#101828"/>
+      <path d="M 48 0 L 0 0 0 48" fill="none" stroke="#1C2942" stroke-width="0.5"/>
+      <circle cx="2" cy="2" r="1" fill="#FFFFFF" fill-opacity="0.06"/>
+    </pattern>
+    <radialGradient id="violetGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#8B5CF6"/>
+      <stop offset="60%" stop-color="#3B2F6B"/>
+      <stop offset="100%" stop-color="#131C2E"/>
+    </radialGradient>
+    <radialGradient id="cyanGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#22D3EE"/>
+      <stop offset="55%" stop-color="#1A4A5E"/>
+      <stop offset="100%" stop-color="#0B1220"/>
+    </radialGradient>
+  </defs>
+
+  <g id="background">
+    <rect x="0" y="0" width="1280" height="720" fill="url(#bgGrad)"/>
+    <rect x="0" y="0" width="1280" height="720" fill="url(#dotGrid)"/>
+    <circle cx="1150" cy="90" r="380" fill="url(#violetGlow)" fill-opacity="0.5"/>
+    <circle cx="60" cy="690" r="300" fill="url(#cyanGlow)" fill-opacity="0.35"/>
+  </g>
+
+  <g id="kicker-header">
+    <rect x="56" y="60" width="16" height="16" rx="3" fill="#22D3EE" fill-opacity="0.15"/>
+    <rect x="60" y="64" width="8" height="8" rx="1.5" fill="#22D3EE"/>
+    <text x="78" y="72" font-family="Arial, Microsoft YaHei, sans-serif" font-size="12" letter-spacing="3" fill="#22D3EE">{{KICKER}}</text>
+  </g>
+
+  <g id="title-block">
+    <text x="60" y="288" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="58" font-weight="bold" fill="#E6EDF7">
+      <tspan x="60" dy="0">{{TITLE}}</tspan>
+      <tspan x="60" dy="76" fill="#22D3EE">{{TITLE_ACCENT}}</tspan>
+    </text>
+    <line x1="62" y1="382" x2="262" y2="382" stroke="#22D3EE" stroke-width="6" stroke-opacity="0.15" stroke-linecap="round"/>
+    <line x1="62" y1="382" x2="262" y2="382" stroke="#22D3EE" stroke-width="1.5" stroke-linecap="round"/>
+    <text x="60" y="426" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="20" fill="#7A8BA8">{{SUBTITLE}}</text>
+  </g>
+
+  <g id="cover-footer">
+    <text x="60" y="614" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="14" fill="#E6EDF7">{{PRESENTER}}</text>
+    <text x="60" y="640" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="14" fill="#7A8BA8">{{ORGANIZATION}}</text>
+    <text x="1220" y="628" font-family="Arial, Microsoft YaHei, sans-serif" font-size="14" fill="#7A8BA8" text-anchor="end">{{DATE}}</text>
+  </g>
+
+  <g id="cover-decor">
+    <text x="952" y="470" font-family="Arial, Microsoft YaHei, sans-serif" font-size="260" font-weight="bold" fill="#22D3EE" fill-opacity="0.05">&#187;</text>
+    <polyline points="880,560 980,560 1020,600 1130,600 1160,630 1220,630" fill="none" stroke="#22D3EE" stroke-width="6" stroke-opacity="0.04" stroke-linejoin="round"/>
+    <polyline points="880,560 980,560 1020,600 1130,600 1160,630 1220,630" fill="none" stroke="#22D3EE" stroke-width="1.5" stroke-opacity="0.2" stroke-linejoin="round"/>
+    <circle cx="1220" cy="630" r="8" fill="#22D3EE" fill-opacity="0.2"/>
+    <circle cx="1220" cy="630" r="3.5" fill="#22D3EE"/>
+    <circle cx="880" cy="560" r="6" fill="#8B5CF6" fill-opacity="0.2"/>
+    <circle cx="880" cy="560" r="2.5" fill="#8B5CF6"/>
+  </g>
+</svg>

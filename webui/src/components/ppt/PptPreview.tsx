@@ -1,7 +1,17 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { AlertTriangle, ChevronLeft, ChevronRight, ExternalLink, Loader2, RefreshCw } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import {
+  AlertTriangle,
+  ChevronLeft,
+  ChevronRight,
+  ExternalLink,
+  Loader2,
+  Maximize,
+  Minimize,
+  RefreshCw,
+} from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   fetchPptPreviewPort,
   fetchPptProjectSlides,
@@ -40,6 +50,13 @@ export function PptPreview({ projectName, isStreaming, hasPptxOutput, pipelineSt
   const [svgLoadStates, setSvgLoadStates] = useState<Record<string, "idle" | "loading" | "loaded" | "error">>({});
   const svgRequestedRef = useRef<Set<string>>(new Set());
   const objectUrlsRef = useRef<Set<string>>(new Set());
+  // Zoom & fullscreen state (PPT-402)
+  const [zoom, setZoom] = useState(1);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
+  const [stageSize, setStageSize] = useState({ w: 0, h: 0 });
+  const [naturalSize, setNaturalSize] = useState<{ w: number; h: number } | null>(null);
 
   useEffect(() => {
     getApiBase().then(setApiBase);
@@ -281,6 +298,8 @@ export function PptPreview({ projectName, isStreaming, hasPptxOutput, pipelineSt
     slidesFoundRef.current = false;
     setSlides([]);
     setIndex(0);
+    setZoom(1);
+    setNaturalSize(null);
     setSvgLoadStates({});
     svgRequestedRef.current.clear();
     setSvgObjectUrls((prev) => {
@@ -337,6 +356,86 @@ export function PptPreview({ projectName, isStreaming, hasPptxOutput, pipelineSt
     () => setIndex((i) => Math.min(slides.length - 1, i + 1)),
     [slides.length],
   );
+
+  // --- Zoom & fullscreen (PPT-402) ---
+  const ZOOM_MIN = 0.5;
+  const ZOOM_MAX = 2.0;
+  const clampZoom = useCallback(
+    (z: number) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(z * 100) / 100)),
+    [],
+  );
+
+  const showSlides = slides.length > 0 && !editorUrl;
+  const currentSlideUrl = showSlides ? (slides[index]?.url ?? null) : null;
+
+  // Track stage size so zoom can compute explicit pixel dimensions (keeps the
+  // SVG centered while allowing the container to scroll when zoomed in).
+  useEffect(() => {
+    if (!showSlides) return;
+    const el = stageRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      setStageSize({ w: el.clientWidth, h: el.clientHeight });
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [showSlides]);
+
+  // Reset measured image size when switching pages.
+  useEffect(() => {
+    setNaturalSize(null);
+  }, [currentSlideUrl]);
+
+  // Ctrl/Cmd + wheel zoom on the stage. Non-passive so we can prevent the
+  // browser's default zoom/scroll.
+  useEffect(() => {
+    if (!showSlides) return;
+    const el = stageRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      setZoom((z) => clampZoom(z + (e.deltaY < 0 ? 0.1 : -0.1)));
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [showSlides, clampZoom]);
+
+  // Arrow-key page turning. Skips editable targets and modified keys so text
+  // inputs and system shortcuts keep their default behaviour.
+  useEffect(() => {
+    if (!showSlides) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)
+      ) {
+        return;
+      }
+      if (e.key === "ArrowLeft") goPrev();
+      else goNext();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [showSlides, goPrev, goNext]);
+
+  // Fullscreen presentation mode via the Fullscreen API.
+  useEffect(() => {
+    const onChange = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, []);
+
+  const toggleFullscreen = useCallback(() => {
+    if (document.fullscreenElement) {
+      document.exitFullscreen().catch(() => {});
+    } else {
+      rootRef.current?.requestFullscreen().catch(() => {});
+    }
+  }, []);
 
   // No project selected
   if (!projectName) {
@@ -482,69 +581,167 @@ export function PptPreview({ projectName, isStreaming, hasPptxOutput, pipelineSt
   const isSvgLoading = !isImage && svgLoadState !== "loaded" && svgLoadState !== "error";
   const isSvgError = !isImage && svgLoadState === "error";
 
+  // Compute explicit pixel dimensions for the slide so zooming keeps it
+  // centered while letting the stage scroll when the image exceeds the
+  // viewport. Falls back to a CSS transform when the intrinsic size is not
+  // available yet (layout box stays at fit size, transform scales visually).
+  const STAGE_PAD = 16; // p-4
+  const availW = Math.max(0, stageSize.w - STAGE_PAD * 2);
+  const availH = Math.max(0, stageSize.h - STAGE_PAD * 2);
+  let slideStyle: CSSProperties;
+  if (naturalSize && availW > 0 && availH > 0) {
+    const fit = Math.min(availW / naturalSize.w, availH / naturalSize.h);
+    slideStyle = {
+      width: naturalSize.w * fit * zoom,
+      height: naturalSize.h * fit * zoom,
+    };
+  } else {
+    slideStyle = {
+      maxWidth: availW > 0 ? availW : undefined,
+      maxHeight: availH > 0 ? availH : undefined,
+      transform: `scale(${zoom})`,
+    };
+  }
+  const slideClassName = "block rounded shadow-md";
+
   return (
-    <div className="flex h-full flex-col">
+    <div ref={rootRef} className="group/preview relative flex h-full flex-col bg-background">
       {/* Slide display area */}
-      <div className="flex min-h-0 flex-1 items-center justify-center bg-muted/30 p-4">
-        {isImage ? (
-          <img
-            src={slideUrl}
-            alt={slide.name}
-            className="max-h-full max-w-full rounded shadow-md"
-            draggable={false}
-          />
-        ) : isSvgLoading ? (
-          <div className="flex flex-col items-center justify-center gap-2 text-[13px] text-muted-foreground">
-            <Loader2 className="h-5 w-5 animate-spin" />
-            <span>正在加载幻灯片…</span>
+      <div ref={stageRef} className="min-h-0 flex-1 overflow-auto bg-muted/30 scrollbar-hover">
+        <div className="flex h-max min-h-full w-max min-w-full">
+          <div className="m-auto p-4">
+            {isImage ? (
+              <img
+                src={slideUrl}
+                alt={slide.name}
+                className={slideClassName}
+                style={slideStyle}
+                draggable={false}
+                onLoad={(e) => {
+                  const img = e.currentTarget;
+                  if (img.naturalWidth > 0 && img.naturalHeight > 0) {
+                    setNaturalSize({ w: img.naturalWidth, h: img.naturalHeight });
+                  }
+                }}
+              />
+            ) : isSvgLoading ? (
+              <div className="flex flex-col items-center justify-center gap-2 text-[13px] text-muted-foreground">
+                <Loader2 className="h-5 w-5 animate-spin" />
+                <span>正在加载幻灯片…</span>
+              </div>
+            ) : isSvgError || !svgObjectUrl ? (
+              <div className="flex flex-col items-center justify-center gap-2 text-[13px] text-muted-foreground">
+                <AlertTriangle className="h-5 w-5 text-destructive" />
+                <span>幻灯片加载失败</span>
+                <Button variant="ghost" size="sm" onClick={handleRefresh} className="h-6 gap-1 text-[11px]">
+                  <RefreshCw className="h-3 w-3" />
+                  重试
+                </Button>
+              </div>
+            ) : (
+              <img
+                src={svgObjectUrl}
+                alt={slide.name}
+                className={slideClassName}
+                style={slideStyle}
+                draggable={false}
+                onLoad={(e) => {
+                  const img = e.currentTarget;
+                  if (img.naturalWidth > 0 && img.naturalHeight > 0) {
+                    setNaturalSize({ w: img.naturalWidth, h: img.naturalHeight });
+                  }
+                }}
+                onError={() => setSvgLoadStates((prev) => ({ ...prev, [slide.url]: "error" }))}
+              />
+            )}
           </div>
-        ) : isSvgError || !svgObjectUrl ? (
-          <div className="flex flex-col items-center justify-center gap-2 text-[13px] text-muted-foreground">
-            <AlertTriangle className="h-5 w-5 text-destructive" />
-            <span>幻灯片加载失败</span>
-            <Button variant="ghost" size="sm" onClick={handleRefresh} className="h-6 gap-1 text-[11px]">
-              <RefreshCw className="h-3 w-3" />
-              重试
-            </Button>
-          </div>
-        ) : (
-          <img
-            src={svgObjectUrl}
-            alt={slide.name}
-            className="max-h-full max-w-full rounded shadow-md"
-            draggable={false}
-            onError={() => setSvgLoadStates((prev) => ({ ...prev, [slide.url]: "error" }))}
-          />
-        )}
+        </div>
       </div>
 
-      {/* Navigation bar */}
-      <div className="flex shrink-0 items-center justify-center gap-3 border-t border-border/70 py-1.5 text-[12px] text-muted-foreground">
-        <button
-          onClick={goPrev}
-          disabled={index === 0}
-          className="rounded p-1 hover:bg-muted disabled:opacity-30"
-        >
-          <ChevronLeft className="h-4 w-4" />
-        </button>
-        <span>
-          {index + 1} / {slides.length}
-        </span>
-        <button
-          onClick={goNext}
-          disabled={index === slides.length - 1}
-          className="rounded p-1 hover:bg-muted disabled:opacity-30"
-        >
-          <ChevronRight className="h-4 w-4" />
-        </button>
+      {/* Zoom indicator (bottom-right) */}
+      <div className="pointer-events-none absolute bottom-3 right-3 rounded-md border border-border/60 bg-background/80 px-1.5 py-0.5 text-[11px] tabular-nums text-muted-foreground backdrop-blur">
+        {zoom.toFixed(1)}x
+      </div>
 
-        <span className="mx-1 text-border">|</span>
+      {/* Floating toolbar (bottom-center, appears on hover) */}
+      <div className="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center opacity-0 transition-opacity duration-200 group-focus-within/preview:opacity-100 group-hover/preview:opacity-100">
+        <TooltipProvider delayDuration={200}>
+          <div className="pointer-events-auto flex items-center gap-1 rounded-full border border-border/60 bg-background/80 px-1.5 py-1 shadow-md backdrop-blur">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={goPrev}
+                  disabled={index === 0}
+                  className="h-7 w-7"
+                  aria-label="上一页"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="top">上一页（←）</TooltipContent>
+            </Tooltip>
 
-        <Button variant="ghost" size="sm" onClick={handleRefresh} className="h-6 gap-1 text-[11px]">
-          <RefreshCw className="h-3 w-3" />
-          刷新
-        </Button>
+            <span className="min-w-20 text-center text-[12px] tabular-nums text-muted-foreground">
+              第 {index + 1} / {slides.length} 页
+            </span>
 
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={goNext}
+                  disabled={index === slides.length - 1}
+                  className="h-7 w-7"
+                  aria-label="下一页"
+                >
+                  <ChevronRight className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="top">下一页（→）</TooltipContent>
+            </Tooltip>
+
+            <span className="mx-1 text-border">|</span>
+
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={handleRefresh}
+                  className="h-7 w-7"
+                  aria-label="刷新"
+                >
+                  <RefreshCw className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="top">刷新</TooltipContent>
+            </Tooltip>
+
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={toggleFullscreen}
+                  className="h-7 w-7"
+                  aria-label={isFullscreen ? "退出全屏" : "全屏演示"}
+                >
+                  {isFullscreen ? (
+                    <Minimize className="h-4 w-4" />
+                  ) : (
+                    <Maximize className="h-4 w-4" />
+                  )}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="top">
+                {isFullscreen ? "退出全屏" : "全屏演示"}
+              </TooltipContent>
+            </Tooltip>
+          </div>
+        </TooltipProvider>
       </div>
     </div>
   );

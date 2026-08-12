@@ -29,12 +29,16 @@ vi.mock("@/lib/tauri", async (importOriginal) => {
   };
 });
 
+vi.mock("@/lib/project-name", () => ({
+  generateProjectName: vi.fn().mockReturnValue("ppt-test-project"),
+}));
+
 const newChat = vi.fn().mockResolvedValue("chat-1");
 const sendMessage = vi.fn();
 
 vi.mock("@/providers/ClientProvider", () => ({
   useClient: () => ({
-    client: { newChat, sendMessage },
+    client: { newChat, sendMessage, onPptPhaseChanged: () => () => {} },
     token: "tok",
   }),
 }));
@@ -52,8 +56,8 @@ interface ConfigPanelProps {
 }
 let configPanelProps: ConfigPanelProps | null = null;
 
-vi.mock("./PptConfigPanel", () => ({
-  PptConfigPanel: (props: ConfigPanelProps) => {
+vi.mock("./PptConfigWizard", () => ({
+  PptConfigWizard: (props: ConfigPanelProps) => {
     configPanelProps = props;
     return <div data-testid="config-panel" />;
   },
@@ -149,13 +153,13 @@ describe("PptMakerView", () => {
     await startGeneration();
 
     // 启动序列：标记 generating → 创建会话 → 保存 chatId → 发送 prompt
-    expect(markPptGenerating).toHaveBeenCalledWith("tok", expect.stringMatching(/^ppt-/), "start");
+    expect(markPptGenerating).toHaveBeenCalledWith("tok", "ppt-test-project", "start");
     expect(newChat).toHaveBeenCalled();
-    expect(savePptChatId).toHaveBeenCalledWith("tok", expect.stringMatching(/^ppt-/), "chat-1");
+    expect(savePptChatId).toHaveBeenCalledWith("tok", "ppt-test-project", "chat-1");
     expect(sendMessage).toHaveBeenCalledWith("chat-1", expect.stringContaining("PPT_UI_CHECKPOINTS=1"));
 
     // 统一进入 generating，不直接跳 outline
-    expect(screen.getByText("正在准备内容")).toBeTruthy();
+    expect(screen.getByText("正在处理")).toBeTruthy();
     expect(screen.queryByTestId("outline-phase")).toBeNull();
 
     // 轮询返回 outline 后进入大纲页
@@ -192,10 +196,10 @@ describe("PptMakerView", () => {
     );
     // 停留在配置页，可重试；不留活动项目假状态
     expect(screen.getByTestId("config-panel")).toBeTruthy();
-    expect(screen.queryByText("正在准备内容")).toBeNull();
+    expect(screen.queryByText("正在处理")).toBeNull();
     expect(configPanelProps?.phase).toBe("config");
     // best-effort 结束后端 generating 标记
-    expect(markPptGenerating).toHaveBeenCalledWith("tok", expect.stringMatching(/^ppt-/), "finish");
+    expect(markPptGenerating).toHaveBeenCalledWith("tok", "ppt-test-project", "finish");
   });
 
   it("restores a persisted project to its saved phase instead of the done page", async () => {
@@ -208,7 +212,7 @@ describe("PptMakerView", () => {
     render(<PptMakerView />);
 
     // 存在性校验通过 → 恢复到 generating，不渲染完成页
-    await waitFor(() => expect(screen.getByText("正在准备内容")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("正在处理")).toBeTruthy());
     expect(screen.queryByText("PPT 已生成")).toBeNull();
     expect(screen.queryByTestId("outline-phase")).toBeNull();
   });
@@ -225,5 +229,22 @@ describe("PptMakerView", () => {
     // 校验失败后回到新建页
     await waitFor(() => expect(screen.getByTestId("config-panel")).toBeTruthy());
     expect(localStorage.getItem("mona.ppt.activeProject")).toBeNull();
+  });
+
+  it("corrects a stale persisted phase from the backend on restore", async () => {
+    localStorage.setItem(
+      "mona.ppt.activeProject",
+      JSON.stringify({ name: "ppt-old", chatId: "chat-old", phase: "generating" }),
+    );
+    fetchPptExportStatus.mockResolvedValue(statusWithPhase("outline"));
+
+    render(<PptMakerView />);
+
+    // 后端权威 phase 为 outline，校正后渲染大纲页而非 generating
+    await waitFor(() => expect(screen.getByTestId("outline-phase")).toBeTruthy());
+    expect(screen.queryByText("正在处理")).toBeNull();
+    // localStorage 同步被校正
+    const persisted = JSON.parse(localStorage.getItem("mona.ppt.activeProject")!);
+    expect(persisted.phase).toBe("outline");
   });
 });

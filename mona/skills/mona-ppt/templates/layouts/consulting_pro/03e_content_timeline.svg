@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">
+  <!-- 背景 -->
+  <rect width="1280" height="720" fill="#FFFFFF"/>
+
+  <!-- Action Title 区 -->
+  <text x="64" y="60" fill="#005587" font-family="Arial, Microsoft YaHei, sans-serif" font-size="12" font-weight="bold" letter-spacing="2">{{KICKER}}</text>
+  <rect x="64" y="68" width="28" height="3" fill="#005587"/>
+  <text x="64" y="106" fill="#1A1A1A" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="24" font-weight="bold">{{PAGE_TITLE}}</text>
+  <text x="1216" y="60" text-anchor="end" fill="#5B6770" font-family="Arial, Microsoft YaHei, sans-serif" font-size="11" font-weight="bold">Exhibit {{EXHIBIT_NUM}}</text>
+  <line x1="64" y1="126" x2="1216" y2="126" stroke="#C8CDD2" stroke-width="1"/>
+
+  <!-- 2px 深蓝时间轴主线 -->
+  <line x1="104" y1="360" x2="1176" y2="360" stroke="#005587" stroke-width="2"/>
+
+  <!-- 节点连接线 -->
+  <line x1="168" y1="350" x2="168" y2="296" stroke="#C8CDD2" stroke-width="1"/>
+  <line x1="400" y1="370" x2="400" y2="424" stroke="#C8CDD2" stroke-width="1"/>
+  <line x1="632" y1="350" x2="632" y2="296" stroke="#C8CDD2" stroke-width="1"/>
+  <line x1="864" y1="370" x2="864" y2="424" stroke="#C8CDD2" stroke-width="1"/>
+  <line x1="1096" y1="350" x2="1096" y2="296" stroke="#C8CDD2" stroke-width="1"/>
+
+  <!-- 节点圆环（当前节点琥珀实心） -->
+  <circle cx="168" cy="360" r="8" fill="#FFFFFF" stroke="#005587" stroke-width="2.5"/>
+  <circle cx="400" cy="360" r="8" fill="#FFFFFF" stroke="#005587" stroke-width="2.5"/>
+  <circle cx="632" cy="360" r="8" fill="#F2A900" stroke="#F2A900" stroke-width="2.5"/>
+  <circle cx="864" cy="360" r="8" fill="#FFFFFF" stroke="#005587" stroke-width="2.5"/>
+  <circle cx="1096" cy="360" r="8" fill="#FFFFFF" stroke="#005587" stroke-width="2.5"/>
+
+  <!-- 节点 1（上方） -->
+  <text x="168" y="224" text-anchor="middle" fill="#005587" font-family="Arial, Microsoft YaHei, sans-serif" font-size="16" font-weight="bold">{{TL_1_YEAR}}</text>
+  <text x="168" y="250" text-anchor="middle" fill="#1A1A1A" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="13" font-weight="bold">{{TL_1_TITLE}}</text>
+  <text x="168" y="274" text-anchor="middle" fill="#5B6770" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="11">{{TL_1_DESC}}</text>
+
+  <!-- 节点 2（下方） -->
+  <text x="400" y="448" text-anchor="middle" fill="#005587" font-family="Arial, Microsoft YaHei, sans-serif" font-size="16" font-weight="bold">{{TL_2_YEAR}}</text>
+  <text x="400" y="474" text-anchor="middle" fill="#1A1A1A" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="13" font-weight="bold">{{TL_2_TITLE}}</text>
+  <text x="400" y="498" text-anchor="middle" fill="#5B6770" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="11">{{TL_2_DESC}}</text>
+
+  <!-- 节点 3（上方，当前） -->
+  <text x="632" y="224" text-anchor="middle" fill="#005587" font-family="Arial, Microsoft YaHei, sans-serif" font-size="16" font-weight="bold">{{TL_3_YEAR}}</text>
+  <text x="632" y="250" text-anchor="middle" fill="#1A1A1A" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="13" font-weight="bold">{{TL_3_TITLE}}</text>
+  <text x="632" y="274" text-anchor="middle" fill="#5B6770" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="11">{{TL_3_DESC}}</text>
+
+  <!-- 节点 4（下方） -->
+  <text x="864" y="448" text-anchor="middle" fill="#005587" font-family="Arial, Microsoft YaHei, sans-serif" font-size="16" font-weight="bold">{{TL_4_YEAR}}</text>
+  <text x="864" y="474" text-anchor="middle" fill="#1A1A1A" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="13" font-weight="bold">{{TL_4_TITLE}}</text>
+  <text x="864" y="498" text-anchor="middle" fill="#5B6770" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="11">{{TL_4_DESC}}</text>
+
+  <!-- 节点 5（上方） -->
+  <text x="1096" y="224" text-anchor="middle" fill="#005587" font-family="Arial, Microsoft YaHei, sans-serif" font-size="16" font-weight="bold">{{TL_5_YEAR}}</text>
+  <text x="1096" y="250" text-anchor="middle" fill="#1A1A1A" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="13" font-weight="bold">{{TL_5_TITLE}}</text>
+  <text x="1096" y="274" text-anchor="middle" fill="#5B6770" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="11">{{TL_5_DESC}}</text>
+
+  <!-- 页脚三件套 -->
+  <line x1="64" y1="664" x2="1216" y2="664" stroke="#C8CDD2" stroke-width="0.75"/>
+  <text x="64" y="686" fill="#5B6770" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="11"><tspan>{{FOOTNOTE}}</tspan><tspan dx="16">来源：{{SOURCE}}</tspan></text>
+  <text x="1216" y="686" text-anchor="end" fill="#5B6770" font-family="Arial, Microsoft YaHei, sans-serif" font-size="11">{{PAGE_NUM}}</text>
+</svg>

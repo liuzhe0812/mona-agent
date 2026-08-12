@@ -6,12 +6,13 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/componen
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useClient } from "@/providers/ClientProvider";
-import { fetchPptExportStatus, markPptGenerating, savePptChatId, getApiBase } from "@/lib/api";
+import { fetchPptExportStatus, fetchPptProjects, markPptGenerating, savePptChatId, getApiBase } from "@/lib/api";
+import { generateProjectName } from "@/lib/project-name";
 import { isTauri, httpFetch } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 import { useBreakpoint } from "@/hooks/useBreakpoint";
 import type { PptProject } from "@/lib/types";
-import { PptConfigPanel } from "./PptConfigPanel";
+import { PptConfigWizard } from "./PptConfigWizard";
 import { PptChatPanel } from "./PptChatPanel";
 import type { PptChatPanelHandle } from "./PptChatPanel";
 import { PptPreview } from "./PptPreview";
@@ -142,14 +143,6 @@ export function PptMakerView() {
   // immediately, mirroring the VideoMakerView pattern.
   const wasStreamingRef = useRef(false);
   const [aiTurnComplete, setAiTurnComplete] = useState(0);
-  const handleStreamingChange = useCallback((streaming: boolean) => {
-    setIsStreaming(streaming);
-    if (wasStreamingRef.current && !streaming) {
-      // AI just finished a reply — trigger refresh in outline/producing phases
-      setAiTurnComplete((n) => n + 1);
-    }
-    wasStreamingRef.current = streaming;
-  }, []);
 
   useEffect(() => {
     chatIdRef.current = chatId;
@@ -205,7 +198,8 @@ export function PptMakerView() {
     } catch {}
   }, [sidebarWidth]);
 
-  // 校验项目在后端实际存在，避免恢复已删除的项目导致后续 API 持续 404
+  // 校验项目在后端实际存在，避免恢复已删除的项目导致后续 API 持续 404；
+  // 同时用后端权威 phase 校正 localStorage 中可能过期的 phase。
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -215,8 +209,10 @@ export function PptMakerView() {
         const state = JSON.parse(raw) as ActiveProjectState;
         if (!state?.name) return;
         // 校验项目存在性：fetchPptExportStatus 在项目不存在时抛 ApiError(404)
+        let backendPhase: string | null = null;
         try {
-          await fetchPptExportStatus(token, state.name);
+          const res = await fetchPptExportStatus(token, state.name);
+          backendPhase = (res as { phase?: string }).phase ?? null;
         } catch {
           // 项目不存在，清理 localStorage 并回到 config
           try { localStorage.removeItem(ACTIVE_PROJECT_KEY); } catch {}
@@ -225,7 +221,20 @@ export function PptMakerView() {
         if (cancelled) return;
         setProjectName(state.name);
         setChatId(state.chatId ?? null);
-        setPhase(state.phase);
+        // 用后端 phase 校正 localStorage 中可能过期的 phase；
+        // 仅允许前进迁移（resolveNextPhase 语义），防止过期响应回退阶段。
+        const corrected = backendPhase
+          ? (resolveNextPhase(state.phase, backendPhase) ?? state.phase)
+          : state.phase;
+        setPhase(corrected);
+        if (corrected !== state.phase) {
+          try {
+            localStorage.setItem(
+              ACTIVE_PROJECT_KEY,
+              JSON.stringify({ ...state, phase: corrected }),
+            );
+          } catch {}
+        }
         setHistoryKey((k) => k + 1);
       } catch {}
     })();
@@ -236,7 +245,68 @@ export function PptMakerView() {
   // NOTE: Do NOT delete the chat on unmount. PPT chats are persistent
   // and should remain accessible from the history panel.
 
-  // V2 polling: detect phase transitions from backend status
+  // V2: refresh project status from backend. Shared by the
+  // ``ppt_phase_changed`` WebSocket push and the fallback polling below.
+  const refreshStatus = useCallback(async () => {
+    if (!projectName) return;
+    try {
+      const res = await fetchPptExportStatus(token, projectName);
+      setHasPptxOutput(res.hasPptxOutput);
+      setPipelineStage(res.pipelineStage ?? "init");
+
+      const v2Phase = (res as { phase?: string }).phase;
+      // 通过 resolveNextPhase 校验迁移方向，过期的响应不得回退阶段
+      const next = v2Phase ? resolveNextPhase(phase, v2Phase) : null;
+      if (next === "done") {
+        await markPptGenerating(token, projectName, "finish").catch(() => {});
+        setPhase("done");
+        setHistoryKey((k) => k + 1);
+        generationStartRef.current = null;
+        return;
+      }
+      // 前进迁移：generating → outline / producing 等，由后端阶段驱动
+      if (next && next !== phase) {
+        setPhase(next);
+      }
+
+      // Fallback: legacy done detection
+      if (res.status === "done" && res.hasExport) {
+        await markPptGenerating(token, projectName, "finish").catch(() => {});
+        setPhase("done");
+        setHistoryKey((k) => k + 1);
+        generationStartRef.current = null;
+        return;
+      }
+    } catch {}
+  }, [phase, projectName, token]);
+
+  // AI 结束一次回复时立即刷新项目阶段：大纲/页面文件由 Agent 在 chat 中写入，
+  // generating → outline 没有服务端推送源，不能干等 30s 兜底轮询。
+  const handleStreamingChange = useCallback(
+    (streaming: boolean) => {
+      setIsStreaming(streaming);
+      if (wasStreamingRef.current && !streaming) {
+        // AI just finished a reply — trigger refresh in outline/producing phases
+        setAiTurnComplete((n) => n + 1);
+        void refreshStatus();
+      }
+      wasStreamingRef.current = streaming;
+    },
+    [refreshStatus],
+  );
+
+  // PPT-302: server pushes phase changes over WebSocket; refresh immediately.
+  // The event is only a trigger — authoritative state comes from refreshStatus.
+  useEffect(() => {
+    if (!projectName) return;
+    return client.onPptPhaseChanged(({ projectName: changed }) => {
+      if (changed !== projectName) return;
+      void refreshStatus();
+    });
+  }, [client, projectName, refreshStatus]);
+
+  // Fallback polling (30s): covers WebSocket disconnects; the primary trigger
+  // is the ppt_phase_changed broadcast above.
   useEffect(() => {
     if (!projectName) return;
     if (phase !== "generating" && phase !== "producing" && phase !== "exporting") return;
@@ -245,39 +315,9 @@ export function PptMakerView() {
 
     async function poll() {
       if (cancelled) return;
-
-      try {
-        const res = await fetchPptExportStatus(token, projectName!);
-        if (cancelled) return;
-        setHasPptxOutput(res.hasPptxOutput);
-        setPipelineStage(res.pipelineStage ?? "init");
-
-        const v2Phase = (res as { phase?: string }).phase;
-        // 通过 resolveNextPhase 校验迁移方向，过期的轮询响应不得回退阶段
-        const next = v2Phase ? resolveNextPhase(phase, v2Phase) : null;
-        if (next === "done") {
-          await markPptGenerating(token, projectName!, "finish").catch(() => {});
-          setPhase("done");
-          setHistoryKey((k) => k + 1);
-          generationStartRef.current = null;
-          return;
-        }
-        // 前进迁移：generating → outline / producing 等，由后端阶段驱动
-        if (next && next !== phase) {
-          setPhase(next);
-        }
-
-        // Fallback: legacy done detection
-        if (res.status === "done" && res.hasExport) {
-          await markPptGenerating(token, projectName!, "finish").catch(() => {});
-          setPhase("done");
-          setHistoryKey((k) => k + 1);
-          generationStartRef.current = null;
-          return;
-        }
-      } catch {}
+      await refreshStatus();
       if (!cancelled) {
-        timer = setTimeout(poll, 3000);
+        timer = setTimeout(poll, 30000);
       }
     }
 
@@ -287,13 +327,21 @@ export function PptMakerView() {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [phase, projectName, token]);
+  }, [phase, projectName, refreshStatus]);
 
 
 
   const handleStartGeneration = useCallback(async () => {
     setStartError(null);
-    const name = generateProjectName(config.topic);
+    // 拉取已有项目名用于重名去重；失败不阻塞创建
+    let existingNames: string[] = [];
+    try {
+      const res = await fetchPptProjects(token);
+      existingNames = res.projects.map((p) => p.name);
+    } catch {
+      // best-effort
+    }
+    const name = generateProjectName(config.topic, existingNames, "未命名演示");
     try {
       setProjectName(name);
       const prompt = buildPptPrompt(config, name);
@@ -763,7 +811,7 @@ export function PptMakerView() {
             <div className="flex min-h-0 flex-1 flex-col items-center overflow-y-auto scrollbar-hover px-4 py-8">
               <div className="w-full max-w-[640px]">
                 <h2 className="mb-6 text-lg font-medium">新建演示文稿</h2>
-                <PptConfigPanel
+                <PptConfigWizard
                   config={config}
                   setConfig={setConfig}
                   phase={phase}
@@ -794,7 +842,7 @@ export function PptMakerView() {
               <div className="flex min-h-0 flex-1 items-center justify-center bg-muted/20">
                 <div className="flex flex-col items-center gap-3 text-[13px] text-muted-foreground">
                   <Loader2 className="h-6 w-6 animate-spin text-primary" />
-                  <span className="font-medium">正在准备内容</span>
+                  <span className="font-medium">正在处理</span>
                   <span className="text-[11px] text-muted-foreground/70">
                     AI 正在分析素材并生成大纲，请稍候…
                   </span>
@@ -858,7 +906,7 @@ export function PptMakerView() {
               <div className="flex min-h-0 flex-1 items-center justify-center bg-muted/20">
                 <div className="flex flex-col items-center gap-3 text-[13px] text-muted-foreground">
                   <Loader2 className="h-6 w-6 animate-spin text-primary" />
-                  <span className="font-medium">正在导出 PPTX 文件</span>
+                  <span className="font-medium">正在处理</span>
                   <span className="text-[11px] text-muted-foreground/70">
                     正在整理页面并生成 PPTX，请稍候…
                   </span>
@@ -905,11 +953,11 @@ export function PptMakerView() {
               )}
               {bp === "wide" ? (
                 <ResizablePanelGroup direction="horizontal" className="min-h-0 flex-1">
-                  <ResizablePanel defaultSize={60} minSize={25}>
+                  <ResizablePanel defaultSize="60%" minSize="25%">
                     <PptPreview projectName={projectName} isStreaming={isStreaming} hasPptxOutput={hasPptxOutput} pipelineStage={pipelineStage} />
                   </ResizablePanel>
                   <ResizableHandle withHandle />
-                  <ResizablePanel defaultSize={40} minSize={20}>
+                  <ResizablePanel defaultSize="40%" minSize="20%">
                     <PptChatPanel key={chatId ?? "empty"} chatId={chatId} onStreamingChange={handleStreamingChange} displayContentMap={displayContentMap} ref={chatPanelRef} />
                   </ResizablePanel>
                 </ResizablePanelGroup>
@@ -987,31 +1035,6 @@ function ResponsiveChatLayout({
       )}
     </div>
   );
-}
-
-function generateProjectName(topic: string): string {
-  const now = new Date();
-  const pad = (n: number) => String(n).padStart(2, "0");
-  const ts = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}`;
-  const rand = Math.random().toString(36).slice(2, 6);
-
-  const raw = topic.trim();
-  if (!raw) {
-    return `ppt-${ts}-${rand}`;
-  }
-
-  const slug = raw
-    .toLowerCase()
-    .replace(/[^\w一-龥\s-]/g, "")
-    .replace(/\s+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "")
-    .slice(0, 30);
-
-  if (!slug) {
-    return `ppt-${ts}-${rand}`;
-  }
-  return `${slug}-${ts}-${rand}`;
 }
 
 function buildPptPrompt(config: PptConfig, projectName: string): string {

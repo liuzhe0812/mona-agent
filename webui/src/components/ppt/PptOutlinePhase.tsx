@@ -127,6 +127,12 @@ function normalizeColor(color: string | null | undefined): string {
   return "#000000";
 }
 
+/** 挂载时检测到的本地草稿，非 null 时弹出恢复确认对话框 */
+interface PptDraftRestore {
+  outline?: { pages: PptOutlinePage[]; savedAt?: number };
+  spec?: { summary: PptDesignSpecSummary; savedAt?: number };
+}
+
 function makeEmptyPage(): PptOutlinePage {
   return {
     page: `page_${Date.now()}`,
@@ -164,6 +170,8 @@ export function PptOutlinePhase({ projectName, token, onLocked, refreshTrigger, 
   // 窄屏 Sheet：页面列表 / 整体规格
   const [pageSheetOpen, setPageSheetOpen] = useState(false);
   const [specSheetOpen, setSpecSheetOpen] = useState(false);
+  // 挂载时检测到的本地草稿，非 null 时提示用户恢复或丢弃
+  const [draftRestore, setDraftRestore] = useState<PptDraftRestore | null>(null);
 
   // Refs to access latest values inside async callbacks without re-creating them
   const pagesRef = useRef<PptOutlinePage[]>(pages);
@@ -180,6 +188,120 @@ export function PptOutlinePhase({ projectName, token, onLocked, refreshTrigger, 
   // Spec save state: track in-flight request to serialize saves
   const specSaveInFlightRef = useRef(false);
   const specSaveErrorRef = useRef<string | null>(null);
+
+  // --- 本地草稿自动保存（localStorage，3s 防抖） ---
+  // 服务端保存（scheduleSave / scheduleSpecSave）之外的崩溃保护：
+  // 编辑变更 3s 后把当前 pages / specSummary 快照写入 localStorage，
+  // 挂载时若检测到草稿则提示用户恢复或丢弃。确认大纲后清理。
+  const outlineDraftKey = `mona.ppt.outlineDraft.${projectName}`;
+  const specDraftKey = `mona.ppt.specDraft.${projectName}`;
+  const outlineDraftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const specDraftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const scheduleOutlineDraft = useCallback(() => {
+    if (outlineDraftTimerRef.current) clearTimeout(outlineDraftTimerRef.current);
+    outlineDraftTimerRef.current = setTimeout(() => {
+      outlineDraftTimerRef.current = null;
+      try {
+        localStorage.setItem(
+          outlineDraftKey,
+          JSON.stringify({ pages: pagesRef.current, savedAt: Date.now() }),
+        );
+      } catch {
+        // localStorage 不可用或超限 — 草稿保存失败不影响编辑
+      }
+    }, 3000);
+  }, [outlineDraftKey]);
+
+  const scheduleSpecDraft = useCallback(() => {
+    if (specDraftTimerRef.current) clearTimeout(specDraftTimerRef.current);
+    specDraftTimerRef.current = setTimeout(() => {
+      specDraftTimerRef.current = null;
+      if (!specSummaryRef.current) return;
+      try {
+        localStorage.setItem(
+          specDraftKey,
+          JSON.stringify({ summary: specSummaryRef.current, savedAt: Date.now() }),
+        );
+      } catch {
+        // localStorage 不可用或超限 — 草稿保存失败不影响编辑
+      }
+    }, 3000);
+  }, [specDraftKey]);
+
+  /** 停止草稿防抖计时器并清除 localStorage 中的草稿 */
+  const clearDrafts = useCallback(() => {
+    if (outlineDraftTimerRef.current) {
+      clearTimeout(outlineDraftTimerRef.current);
+      outlineDraftTimerRef.current = null;
+    }
+    if (specDraftTimerRef.current) {
+      clearTimeout(specDraftTimerRef.current);
+      specDraftTimerRef.current = null;
+    }
+    try {
+      localStorage.removeItem(outlineDraftKey);
+      localStorage.removeItem(specDraftKey);
+    } catch {
+      // localStorage 不可用 — ignore
+    }
+  }, [outlineDraftKey, specDraftKey]);
+
+  // 挂载时检测未保存草稿，有则提示恢复或丢弃
+  useEffect(() => {
+    try {
+      const draft: PptDraftRestore = {};
+      const outlineRaw = localStorage.getItem(outlineDraftKey);
+      if (outlineRaw) {
+        const parsed = JSON.parse(outlineRaw) as PptDraftRestore["outline"];
+        if (parsed && Array.isArray(parsed.pages) && parsed.pages.length > 0) {
+          draft.outline = parsed;
+        }
+      }
+      const specRaw = localStorage.getItem(specDraftKey);
+      if (specRaw) {
+        const parsed = JSON.parse(specRaw) as PptDraftRestore["spec"];
+        if (parsed && parsed.summary && typeof parsed.summary === "object") {
+          draft.spec = parsed;
+        }
+      }
+      if (draft.outline || draft.spec) setDraftRestore(draft);
+    } catch {
+      // 草稿损坏 — 忽略，不提示
+    }
+  }, [outlineDraftKey, specDraftKey]);
+
+  // 卸载时清理草稿计时器；若防抖窗口内还有未落盘草稿则立即写入
+  useEffect(() => {
+    return () => {
+      if (outlineDraftTimerRef.current) {
+        clearTimeout(outlineDraftTimerRef.current);
+        outlineDraftTimerRef.current = null;
+        try {
+          localStorage.setItem(
+            outlineDraftKey,
+            JSON.stringify({ pages: pagesRef.current, savedAt: Date.now() }),
+          );
+        } catch {
+          // ignore
+        }
+      }
+      if (specDraftTimerRef.current) {
+        clearTimeout(specDraftTimerRef.current);
+        specDraftTimerRef.current = null;
+        if (specSummaryRef.current) {
+          try {
+            localStorage.setItem(
+              specDraftKey,
+              JSON.stringify({ summary: specSummaryRef.current, savedAt: Date.now() }),
+            );
+          } catch {
+            // ignore
+          }
+        }
+      }
+    };
+  }, [outlineDraftKey, specDraftKey]);
 
   // --- Re-fetch outline (used by initial load and 409 recovery) ---
   const refetch = useCallback(async (): Promise<void> => {
@@ -280,8 +402,10 @@ export function PptOutlinePhase({ projectName, token, onLocked, refreshTrigger, 
       specSaveTimerRef.current = setTimeout(() => {
         void flushSpecSave();
       }, 800);
+      // 同步触发规格草稿保存（updateSpecField / applySpecPreset 均经此漏斗）
+      scheduleSpecDraft();
     },
-    [flushSpecSave],
+    [flushSpecSave, scheduleSpecDraft],
   );
 
   // Update a single spec field locally + schedule debounced save
@@ -390,6 +514,8 @@ export function PptOutlinePhase({ projectName, token, onLocked, refreshTrigger, 
 
   // --- Debounced save (1s after last edit) ---
   const scheduleSave = useCallback(() => {
+    // 同步触发大纲草稿保存（所有页面编辑均经此漏斗）
+    scheduleOutlineDraft();
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(async () => {
       try {
@@ -418,7 +544,7 @@ export function PptOutlinePhase({ projectName, token, onLocked, refreshTrigger, 
         setSaving(false);
       }
     }, 1000);
-  }, [token, projectName, refetch]);
+  }, [token, projectName, refetch, scheduleOutlineDraft]);
 
   // Cleanup pending save on unmount
   useEffect(() => {
@@ -426,6 +552,25 @@ export function PptOutlinePhase({ projectName, token, onLocked, refreshTrigger, 
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     };
   }, []);
+
+  // --- 草稿恢复 / 丢弃 ---
+  const handleRestoreDraft = useCallback(() => {
+    if (draftRestore?.outline) {
+      setPages(draftRestore.outline.pages);
+      scheduleSave();
+    }
+    if (draftRestore?.spec) {
+      setSpecSummary(draftRestore.spec.summary);
+      scheduleSpecSave(draftRestore.spec.summary);
+    }
+    clearDrafts();
+    setDraftRestore(null);
+  }, [draftRestore, scheduleSave, scheduleSpecSave, clearDrafts]);
+
+  const handleDiscardDraft = useCallback(() => {
+    clearDrafts();
+    setDraftRestore(null);
+  }, [clearDrafts]);
 
   // Clamp selectedIdx when pages shrink
   useEffect(() => {
@@ -556,10 +701,13 @@ export function PptOutlinePhase({ projectName, token, onLocked, refreshTrigger, 
     [selectedIdx, scheduleSave],
   );
 
-  // --- Confirm: flush spec save → save outline → lock ---
+  // --- Confirm: clear drafts → flush spec save → save outline → lock ---
   const handleConfirm = useCallback(async () => {
     // Clear any pending outline save timer
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    // Step 0: 停止草稿防抖并清理本地草稿（确认后内容以服务端为准，草稿失去意义）。
+    // 与后续 flushSpecSave 串行执行，若确认失败，后续编辑会经漏斗重新生成草稿。
+    clearDrafts();
     setLocking(true);
     setError(null);
     try {
@@ -596,7 +744,7 @@ export function PptOutlinePhase({ projectName, token, onLocked, refreshTrigger, 
     } finally {
       setLocking(false);
     }
-  }, [token, projectName, onLocked, refetch, flushSpecSave]);
+  }, [token, projectName, onLocked, refetch, flushSpecSave, clearDrafts]);
 
   const selectedPage: PptOutlinePage | null =
     selectedIdx >= 0 && selectedIdx < pages.length ? pages[selectedIdx] : null;
@@ -1220,6 +1368,39 @@ export function PptOutlinePhase({ projectName, token, onLocked, refreshTrigger, 
           {specPanel}
         </SheetContent>
       </Sheet>
+
+      {/* 草稿恢复确认：检测到本地未保存草稿时提示恢复或丢弃 */}
+      <AlertDialog
+        open={draftRestore !== null}
+        onOpenChange={(open) => {
+          // 未做选择直接关闭（ESC/点击遮罩）：保留草稿，下次挂载再提示
+          if (!open) setDraftRestore(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>检测到未保存的草稿</AlertDialogTitle>
+            <AlertDialogDescription>
+              本地存在
+              {[
+                draftRestore?.outline ? `大纲草稿（${draftRestore.outline.pages.length} 页）` : null,
+                draftRestore?.spec ? "设计规格草稿" : null,
+              ]
+                .filter(Boolean)
+                .join("和")}
+              {(() => {
+                const savedAt = draftRestore?.outline?.savedAt ?? draftRestore?.spec?.savedAt;
+                return savedAt ? `，保存于 ${new Date(savedAt).toLocaleString()}` : "";
+              })()}
+              。恢复后将覆盖当前内容并同步到服务端；丢弃则使用服务端版本。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={handleDiscardDraft}>丢弃</AlertDialogCancel>
+            <AlertDialogAction onClick={handleRestoreDraft}>恢复草稿</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* 整页删除二次确认（删除单个要点保持直接操作） */}
       <AlertDialog

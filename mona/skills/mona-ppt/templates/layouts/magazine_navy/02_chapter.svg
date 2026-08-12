@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">
+  <!-- 深蓝整页背景 -->
+  <rect width="1280" height="720" fill="#16264C"/>
+
+  <!-- 左上角 kicker：金色短线 + CHAPTER 标签 -->
+  <rect x="80" y="112" width="36" height="2" fill="#C9A227"/>
+  <text x="128" y="118" fill="#C9A227" font-family="Arial, Microsoft YaHei, sans-serif" font-size="13" letter-spacing="3">CHAPTER</text>
+
+  <!-- 超大章节数字（金色低透明装饰） -->
+  <text x="70" y="420" fill="#C9A227" fill-opacity="0.15" font-family="Arial, Microsoft YaHei, sans-serif" font-size="260" font-weight="bold">{{CHAPTER_NUM}}</text>
+
+  <!-- 章节标题与副标题 -->
+  <text x="80" y="520" fill="#FAF7F2" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="44" font-weight="bold">{{CHAPTER_TITLE}}</text>
+  <text x="80" y="566" fill="#FAF7F2" fill-opacity="0.6" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="18">{{CHAPTER_SUB}}</text>
+
+  <!-- 底部金色短线 -->
+  <rect x="80" y="624" width="64" height="3" fill="#C9A227"/>
+</svg>
