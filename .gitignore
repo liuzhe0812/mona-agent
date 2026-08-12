@@ -24,7 +24,6 @@ TERMINAL_AI_MAINTENANCE_DEVELOPMENT_PLAN.md
 
 # 清理：屏蔽非核心目录（配置、文档、测试、素材、硬件相关）
 mona-auth/
-site/
 scripts/
 design-assets/
 tests/
