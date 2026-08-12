@@ -302,8 +302,96 @@
       "goal": "目標",
       "goalEmpty": "尚未設定房間目標。",
       "members": "成員",
-      "workflow": "工作流程",
-      "workflowPlaceholder": "尚未設定工作流程。"
+      "workflow": "工作流程"
+    },
+    "workflow": {
+      "new": "新增工作流程",
+      "edit": "編輯",
+      "editNewVersion": "編輯新版本",
+      "activate": "啟用",
+      "run": "執行",
+      "cancelRun": "取消執行",
+      "draft": "草稿",
+      "active": "目前版本",
+      "revision": "版本 {{revision}}",
+      "stepsCount": "{{count}} 個步驟",
+      "empty": "尚未設定工作流程。",
+      "hint": "也可以直接在對話裡讓 Mona 幫你編排。",
+      "editor": {
+        "goal": "流程目標",
+        "goalPlaceholder": "這次協作要產出什麼？",
+        "addAgent": "新增 Agent 步驟",
+        "addApproval": "新增審批步驟",
+        "stepId": "步驟 ID",
+        "type": "步驟類型",
+        "typeAgent": "Agent",
+        "typeApproval": "審批",
+        "agent": "執行 Agent",
+        "task": "任務",
+        "taskPlaceholder": "描述這一步要做什麼",
+        "expectedOutput": "期望產出（可選）",
+        "message": "審批提示",
+        "messagePlaceholder": "審批時需要向使用者確認什麼？",
+        "dependsOn": "依賴步驟",
+        "remove": "刪除步驟",
+        "save": "儲存草稿",
+        "cancel": "取消",
+        "discardTitle": "放棄未儲存的修改？",
+        "discardBody": "目前編輯尚未儲存，離開後修改將遺失。",
+        "discardConfirm": "放棄修改",
+        "keepEditing": "繼續編輯"
+      },
+      "errors": {
+        "empty": "至少需要一個步驟。",
+        "noAgentStep": "至少需要一個 Agent 步驟。",
+        "duplicateId": "步驟 ID 重複：{{step}}",
+        "invalidId": "步驟 ID 只能包含字母、數字、- 和 _：{{step}}",
+        "missingAgent": "步驟 {{step}} 未選擇執行 Agent。",
+        "nonMember": "步驟 {{step}} 的 Agent 不是房間成員。",
+        "missingTask": "步驟 {{step}} 缺少任務描述。",
+        "missingMessage": "審批步驟 {{step}} 缺少提示語。",
+        "unknownDep": "步驟 {{step}} 依賴了不存在的步驟 {{detail}}。",
+        "selfDep": "步驟 {{step}} 不能依賴自身。",
+        "cycle": "步驟依賴存在環。"
+      },
+      "run": {
+        "title": "最近執行",
+        "status": {
+          "queued": "排隊中",
+          "running": "執行中",
+          "waiting_approval": "等待審批",
+          "succeeded": "已完成",
+          "failed": "已失敗",
+          "cancelled": "已取消"
+        },
+        "stepStatus": {
+          "queued": "排隊中",
+          "running": "執行中",
+          "waiting_approval": "等待審批",
+          "succeeded": "已完成",
+          "failed": "已失敗",
+          "cancelled": "已取消",
+          "skipped": "已略過"
+        },
+        "approval": "審批",
+        "revision": "基於版本 {{revision}}"
+      },
+      "approval": {
+        "approve": "批准",
+        "reject": "拒絕",
+        "decision": {
+          "approved": "已由 {{by}} 批准",
+          "rejected": "已由 {{by}} 拒絕"
+        },
+        "notifyTitle": "工作流等待審批",
+        "notifyBody": "有步驟正在等待你的審批。",
+        "error": {
+          "conflict": "該審批已被處理。",
+          "not_waiting": "該步驟不在等待審批狀態。",
+          "invalid_token": "審批令牌無效，請重新整理後重試。",
+          "approval_expired": "審批已過期。"
+        }
+      }
     }
   },
   "thread": {

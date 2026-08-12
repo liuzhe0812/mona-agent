@@ -89,6 +89,145 @@ export interface RoomUpdate {
   agentIds?: string[];
 }
 
+// ---------------------------------------------------------------------------
+// Workflow (multi-agent phase 3, guide 5.4/5.5). Wire shapes mirror
+// ``mona/agent/workflow.py`` serialized with ``by_alias=True`` (camelCase).
+// ---------------------------------------------------------------------------
+
+export type WorkflowTriggerType = "manual" | "cron";
+
+export interface WorkflowTrigger {
+  type: WorkflowTriggerType;
+  /** Cron expression when ``type === "cron"`` (phase 4). */
+  expr?: string | null;
+  /** IANA timezone; null = server local. */
+  tz?: string | null;
+}
+
+export type WorkflowStepType = "agent" | "approval";
+
+export interface WorkflowStep {
+  id: string;
+  type: WorkflowStepType;
+  /** Agent steps only; must be a room member. */
+  agentId?: string | null;
+  /** Agent steps only: task brief. */
+  task?: string;
+  /** Agent steps only: what a good result looks like. */
+  expectedOutput?: string;
+  /** Approval steps only: prompt shown to the approver. */
+  message?: string;
+  dependsOn?: string[];
+}
+
+export type WorkflowStatus = "draft" | "active" | "archived";
+
+export interface WorkflowDefinition {
+  schemaVersion: number;
+  id: string;
+  roomId: string;
+  revision: number;
+  status: WorkflowStatus;
+  goal: string;
+  trigger: WorkflowTrigger;
+  steps: WorkflowStep[];
+  createdAt: string;
+  createdBy: string;
+}
+
+export type WorkflowRunStatus =
+  | "queued"
+  | "running"
+  | "waiting_approval"
+  | "succeeded"
+  | "failed"
+  | "cancelled";
+
+export type WorkflowStepStatus =
+  | "queued"
+  | "running"
+  | "waiting_approval"
+  | "succeeded"
+  | "failed"
+  | "cancelled"
+  | "skipped";
+
+/** Per-step state inside a run (``StepRun``). The approval fields are
+ *  only set on approval steps (phase 4). */
+export interface WorkflowStepRun {
+  status: WorkflowStepStatus;
+  jobId?: string | null;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  output?: { summary?: string; artifacts?: string[] } | null;
+  error?: string | null;
+  approvalToken?: string | null;
+  approvalExpiresAt?: string | null;
+  approvalDecision?: "approved" | "rejected" | null;
+  approvalResolvedAt?: string | null;
+  approvalResolvedBy?: string | null;
+}
+
+/** One workflow execution with a full definition snapshot. */
+export interface WorkflowRun {
+  schemaVersion: number;
+  id: string;
+  roomId: string;
+  workflowId: string;
+  workflowRevision: number;
+  workflow: WorkflowDefinition;
+  status: WorkflowRunStatus;
+  triggerType: WorkflowTriggerType;
+  startedBy: string;
+  startedAt: string;
+  finishedAt?: string | null;
+  steps: Record<string, WorkflowStepRun>;
+}
+
+/** Shared envelope of the workflow ``*_result`` events. On ``ok: false``
+ *  only ``code`` / ``detail`` are set. */
+export interface WorkflowCommandResult {
+  ok: boolean;
+  chat_id?: string;
+  request_id?: string;
+  code?: string;
+  detail?: string;
+  workflow?: WorkflowDefinition;
+  /** ``workflow_state_result``: current draft (may be null). */
+  draft?: WorkflowDefinition | null;
+  /** ``workflow_state_result``: active revision snapshot (may be null). */
+  active?: WorkflowDefinition | null;
+  activeRevision?: number | null;
+  revisions?: number[];
+  run?: WorkflowRun | null;
+  run_id?: string;
+  /** ``resolve_workflow_approval_result``: the resolved step id. */
+  step_id?: string;
+}
+
+/** One waiting approval inside an ``approval_requested`` broadcast. */
+export interface ApprovalRequestItem {
+  stepId: string;
+  message: string;
+  token: string | null;
+}
+
+/** ``approval_requested`` broadcast payload (normalized by MonaClient). */
+export interface ApprovalRequestedPayload {
+  chatId: string;
+  runId: string;
+  approvals: ApprovalRequestItem[];
+}
+
+/** ``workflow_updated`` broadcast payload (normalized by MonaClient). */
+export interface WorkflowUpdatedPayload {
+  chatId: string;
+  workflow: WorkflowDefinition;
+  /** True when the pushed workflow is the room draft. */
+  draft: boolean;
+  activeRevision?: number | null;
+}
+
 /** One image attached to a UIMessage.
  *
  * ``url`` can arrive in three different shapes, which the bubble renders
@@ -680,7 +819,34 @@ export type InboundEvent =
       event: "agent_job_updated";
       chat_id: string;
       job: AgentJobSummary;
-    };
+    }
+  | ({ event: "workflow_draft_ready" } & WorkflowCommandResult)
+  | ({ event: "activate_workflow_result" } & WorkflowCommandResult)
+  | ({ event: "workflow_state_result" } & WorkflowCommandResult)
+  | ({ event: "run_workflow_result" } & WorkflowCommandResult)
+  | ({ event: "cancel_workflow_run_result" } & WorkflowCommandResult)
+  | ({ event: "workflow_run_state_result" } & WorkflowCommandResult)
+  | ({ event: "resolve_workflow_approval_result" } & WorkflowCommandResult)
+  | {
+      event: "approval_requested";
+      chat_id: string;
+      run_id: string;
+      approvals: ApprovalRequestItem[];
+    }
+  | {
+      event: "workflow_updated";
+      chat_id: string;
+      workflow: WorkflowDefinition;
+      draft?: boolean;
+      activeRevision?: number | null;
+    }
+  | ({
+      event: "workflow_run_updated";
+      chat_id: string;
+      /** Present (with ``detail``) on run-conflict frames instead of a run. */
+      error?: string;
+      detail?: string;
+    } & Partial<WorkflowRun>);
 
 /** Base64-encoded image attached to an outbound ``message`` envelope.
  *
@@ -773,6 +939,33 @@ export type Outbound =
       chat_id: string;
       job_id: string;
       reason?: string;
+      request_id?: string;
+    }
+  | {
+      type: "save_workflow_draft";
+      chat_id: string;
+      goal: string;
+      trigger?: WorkflowTrigger;
+      steps: WorkflowStep[];
+      request_id?: string;
+    }
+  | { type: "activate_workflow"; chat_id: string; request_id?: string }
+  | { type: "get_workflow"; chat_id: string; request_id?: string }
+  | { type: "run_workflow"; chat_id: string; request_id?: string }
+  | {
+      type: "cancel_workflow_run";
+      chat_id: string;
+      run_id?: string;
+      request_id?: string;
+    }
+  | { type: "get_workflow_run"; chat_id: string; run_id?: string; request_id?: string }
+  | {
+      type: "resolve_workflow_approval";
+      chat_id: string;
+      run_id: string;
+      step_id: string;
+      token: string;
+      approve: boolean;
       request_id?: string;
     };
 

@@ -679,9 +679,21 @@ class WebSocketChannel(BaseChannel):
         self._artifact_watch_task: asyncio.Task[None] | None = None
         self._session_manager = session_manager
         self._subagent_manager = subagent_manager
+        if subagent_manager is not None:
+            # Tool-proposed workflow drafts surface as workflow_updated pushes.
+            subagent_manager.workflow_draft_observer = (
+                self._on_workflow_draft_proposed
+            )
+            # Run state changes surface as workflow_run_updated pushes; the
+            # hook also emits approval_requested for pending approval steps.
+            subagent_manager.workflow_run_observer = self._on_workflow_run_updated
         self._static_dist_path: Path | None = (
             static_dist_path.resolve() if static_dist_path is not None else None
         )
+        # chat_id -> asyncio.Task driving the room's active run loop
+        self._workflow_tasks: dict[str, asyncio.Task] = {}
+        # run_id -> notified waiting-approval signature (dedupe approval_requested)
+        self._approval_notified: dict[str, str] = {}
         self._runtime_model_name = runtime_model_name
         self._settings_restart_sections: set[str] = set()
         # Process-local WeChat QR login session (single-use, replaced on each start).
@@ -3801,6 +3813,517 @@ class WebSocketChannel(BaseChannel):
             job_id=job.id, request_id=request_id, job=serialize_job(job),
         )
 
+    # ------------------------------------------------------------------
+    # Workflow commands (multi-agent phase 3, guide 8.2)
+    # ------------------------------------------------------------------
+
+    def _on_workflow_draft_proposed(
+        self, chat_id: str, workflow: dict[str, Any]
+    ) -> None:
+        """SubagentManager hook: broadcast a propose_workflow draft (phase 3)."""
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        asyncio.create_task(
+            self.send_workflow_updated(chat_id, {"workflow": workflow, "draft": True})
+        )
+
+    def _workflow_runner_for(self, chat_id: str) -> Any:
+        """Return the process-wide WorkflowRunner bound to a room.
+
+        Runners live on the SubagentManager so the WebSocket channel and the
+        cron callback share the same per-room run lock (phase 4).
+        """
+        return self._subagent_manager.workflow_runner_for_room(chat_id)
+
+    def _on_workflow_run_updated(self, chat_id: str, payload: dict[str, Any]) -> None:
+        """SubagentManager hook: broadcast run state; emit approval_requested.
+
+        ``approval_requested`` fires once per distinct set of waiting steps
+        per run, so observer replays of the same paused state do not spam
+        clients (the run card itself refreshes via workflow_run_updated).
+        """
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        asyncio.create_task(self.send_workflow_run_updated(chat_id, payload))
+        run_id = payload.get("id")
+        if not isinstance(run_id, str) or not run_id:
+            return
+        status = payload.get("status")
+        if status == "waiting_approval":
+            steps = payload.get("steps")
+            waiting = sorted(
+                sid
+                for sid, step in (steps.items() if isinstance(steps, dict) else [])
+                if isinstance(step, dict) and step.get("status") == "waiting_approval"
+            )
+            signature = ",".join(waiting)
+            if waiting and self._approval_notified.get(run_id) != signature:
+                self._approval_notified[run_id] = signature
+                asyncio.create_task(
+                    self.send_approval_requested(chat_id, payload, waiting)
+                )
+        elif status in ("succeeded", "failed", "cancelled"):
+            self._approval_notified.pop(run_id, None)
+
+    async def send_approval_requested(
+        self, chat_id: str, run: dict[str, Any], step_ids: list[str]
+    ) -> None:
+        """Broadcast approval_requested to the room's subscribers (guide 8.3)."""
+        conns = list(self._subs.get(chat_id, ()))
+        if not conns:
+            return
+        steps = run.get("steps") if isinstance(run.get("steps"), dict) else {}
+        workflow = run.get("workflow") if isinstance(run.get("workflow"), dict) else {}
+        step_defs = {
+            step.get("id"): step
+            for step in workflow.get("steps", [])
+            if isinstance(step, dict)
+        }
+        approvals = [
+            {
+                "stepId": sid,
+                "message": step_defs.get(sid, {}).get("message", ""),
+                "token": (steps.get(sid) or {}).get("approvalToken"),
+            }
+            for sid in step_ids
+        ]
+        body: dict[str, Any] = {
+            "event": "approval_requested",
+            "chat_id": chat_id,
+            "run_id": run.get("id"),
+            "approvals": approvals,
+        }
+        raw = json.dumps(body, ensure_ascii=False)
+        for connection in conns:
+            await self._safe_send_to(connection, raw, label=" approval_requested ")
+
+    async def _workflow_room_context(
+        self, connection: Any, envelope: dict[str, Any], *, result_event: str,
+    ) -> tuple[str, Any, Any] | None:
+        """Shared prelude: validate chat_id + room, return (chat_id, conversation, request_id)."""
+        request_id = self._room_request_id(envelope)
+        chat_id = envelope.get("chat_id")
+        if not _is_valid_chat_id(chat_id):
+            await self._send_event(
+                connection, result_event, ok=False,
+                code="invalid_chat_id", detail="invalid chat_id", request_id=request_id,
+            )
+            return None
+        if self._session_manager is None:
+            await self._send_event(
+                connection, result_event, ok=False,
+                code="unavailable", detail="session manager unavailable",
+                chat_id=chat_id, request_id=request_id,
+            )
+            return None
+        session = self._session_manager.get_or_create(f"websocket:{chat_id}")
+        conversation = session.conversation_metadata
+        if conversation.type != "room":
+            await self._send_event(
+                connection, result_event, ok=False,
+                code="not_a_room", detail="chat is not a collaboration room",
+                chat_id=chat_id, request_id=request_id,
+            )
+            return None
+        return chat_id, conversation, request_id
+
+    async def _handle_save_workflow_draft_envelope(
+        self, connection: Any, envelope: dict[str, Any]
+    ) -> None:
+        from mona.agent.workflow import (
+            WorkflowStep,
+            WorkflowTrigger,
+            WorkflowValidationError,
+            serialize_workflow,
+        )
+
+        ctx = await self._workflow_room_context(
+            connection, envelope, result_event="workflow_draft_ready"
+        )
+        if ctx is None:
+            return
+        chat_id, conversation, request_id = ctx
+        goal = envelope.get("goal")
+        if not isinstance(goal, str):
+            goal = ""
+        trigger_raw = envelope.get("trigger")
+        steps_raw = envelope.get("steps")
+        if not isinstance(steps_raw, list) or not steps_raw:
+            await self._send_event(
+                connection, "workflow_draft_ready", ok=False,
+                code="invalid_workflow", detail="steps must be a non-empty list",
+                chat_id=chat_id, request_id=request_id,
+            )
+            return
+        try:
+            steps = [WorkflowStep.model_validate(s) for s in steps_raw]
+            trigger = (
+                WorkflowTrigger.model_validate(trigger_raw)
+                if isinstance(trigger_raw, dict)
+                else None
+            )
+        except Exception as exc:
+            await self._send_event(
+                connection, "workflow_draft_ready", ok=False,
+                code="invalid_workflow", detail=str(exc),
+                chat_id=chat_id, request_id=request_id,
+            )
+            return
+        store = self._subagent_manager.workflow_store_for_room(chat_id)
+        try:
+            draft = store.save_draft(
+                chat_id,
+                goal=goal,
+                trigger=trigger,
+                steps=steps,
+                conversation=conversation,
+                registry=self._room_agent_registry(),
+            )
+        except WorkflowValidationError as exc:
+            await self._send_event(
+                connection, "workflow_draft_ready", ok=False,
+                code="invalid_workflow", detail=str(exc),
+                chat_id=chat_id, request_id=request_id,
+            )
+            return
+        payload = {"workflow": serialize_workflow(draft)}
+        await self._send_event(
+            connection, "workflow_draft_ready", ok=True, chat_id=chat_id,
+            request_id=request_id, **payload,
+        )
+        await self.send_workflow_updated(chat_id, {**payload, "draft": True})
+
+    async def _handle_activate_workflow_envelope(
+        self, connection: Any, envelope: dict[str, Any]
+    ) -> None:
+        from mona.agent.partners import CONVERSATION_METADATA_KEY
+        from mona.agent.workflow import WorkflowNotFoundError, serialize_workflow
+
+        ctx = await self._workflow_room_context(
+            connection, envelope, result_event="activate_workflow_result"
+        )
+        if ctx is None:
+            return
+        chat_id, conversation, request_id = ctx
+        store = self._subagent_manager.workflow_store_for_room(chat_id)
+        try:
+            promoted = store.activate(chat_id)
+        except WorkflowNotFoundError:
+            await self._send_event(
+                connection, "activate_workflow_result", ok=False,
+                code="no_draft", detail="room has no workflow draft",
+                chat_id=chat_id, request_id=request_id,
+            )
+            return
+        # Record the active pointer on the conversation metadata (guide 5.2).
+        conversation.active_workflow_id = promoted.id
+        conversation.active_workflow_revision = promoted.revision
+        session = self._session_manager.get_or_create(f"websocket:{chat_id}")
+        session.metadata[CONVERSATION_METADATA_KEY] = conversation.to_session_metadata()
+        self._session_manager.save(session)
+        # Sync the room's cron entry with the new active revision (guide
+        # 7.7): one deterministic job per room, replaced on every activation,
+        # removed when the trigger is manual.
+        self._subagent_manager.sync_workflow_cron(chat_id, promoted)
+        payload = {
+            "workflow": serialize_workflow(promoted),
+            "activeRevision": promoted.revision,
+        }
+        await self._send_event(
+            connection, "activate_workflow_result", ok=True, chat_id=chat_id,
+            request_id=request_id, **payload,
+        )
+        await self.send_workflow_updated(chat_id, {**payload, "draft": False})
+
+    async def _handle_get_workflow_envelope(
+        self, connection: Any, envelope: dict[str, Any]
+    ) -> None:
+        from mona.agent.workflow import serialize_workflow
+
+        ctx = await self._workflow_room_context(
+            connection, envelope, result_event="workflow_state_result"
+        )
+        if ctx is None:
+            return
+        chat_id, _conversation, request_id = ctx
+        store = self._subagent_manager.workflow_store_for_room(chat_id)
+        state = store.load(chat_id)
+        active = state.active()
+        await self._send_event(
+            connection,
+            "workflow_state_result",
+            ok=True,
+            chat_id=chat_id,
+            request_id=request_id,
+            draft=serialize_workflow(state.draft) if state.draft is not None else None,
+            active=serialize_workflow(active) if active is not None else None,
+            activeRevision=state.active_revision,
+            revisions=[v.revision for v in state.versions],
+        )
+
+    async def _handle_run_workflow_envelope(
+        self, connection: Any, envelope: dict[str, Any]
+    ) -> None:
+        from mona.agent.workflow import RunConflictError
+
+        ctx = await self._workflow_room_context(
+            connection, envelope, result_event="run_workflow_result"
+        )
+        if ctx is None:
+            return
+        chat_id, conversation, request_id = ctx
+        store = self._subagent_manager.workflow_store_for_room(chat_id)
+        active = store.get_active(chat_id)
+        if active is None:
+            await self._send_event(
+                connection, "run_workflow_result", ok=False,
+                code="no_active_workflow",
+                detail="room has no active workflow; activate a draft first",
+                chat_id=chat_id, request_id=request_id,
+            )
+            return
+        runner = self._workflow_runner_for(chat_id)
+        if runner.active_run_for_room(chat_id) is not None:
+            await self._send_event(
+                connection, "run_workflow_result", ok=False,
+                code="run_conflict", detail="room already has an active run",
+                chat_id=chat_id, request_id=request_id,
+            )
+            return
+
+        async def _drive() -> None:
+            try:
+                await runner.run(
+                    room_id=chat_id,
+                    workflow=active,
+                    conversation=conversation,
+                    registry=self._room_agent_registry(),
+                )
+            except RunConflictError:
+                await self.send_workflow_run_updated(chat_id, {
+                    "error": "run_conflict",
+                    "detail": "room already has an active run",
+                })
+            except Exception:
+                logger.exception("Workflow run failed for room {}", chat_id)
+
+        task = asyncio.create_task(_drive())
+        self._workflow_tasks[chat_id] = task
+        task.add_done_callback(lambda _t: self._workflow_tasks.pop(chat_id, None))
+        await self._send_event(
+            connection, "run_workflow_result", ok=True, chat_id=chat_id,
+            request_id=request_id,
+        )
+
+    async def _handle_cancel_workflow_run_envelope(
+        self, connection: Any, envelope: dict[str, Any]
+    ) -> None:
+        from mona.agent.workflow import (
+            TERMINAL_RUN_STATUSES,
+            TERMINAL_STEP_STATUSES,
+            WorkflowNotFoundError,
+            WorkflowTransitionError,
+            serialize_run,
+        )
+
+        ctx = await self._workflow_room_context(
+            connection, envelope, result_event="cancel_workflow_run_result"
+        )
+        if ctx is None:
+            return
+        chat_id, _conversation, request_id = ctx
+        run_id = envelope.get("run_id")
+        run_store = self._subagent_manager.run_store_for_room(chat_id)
+        if not isinstance(run_id, str) or not run_id:
+            # Default: cancel the room's active run (if any).
+            runner = self._workflow_runner_for(chat_id)
+            run_id = runner.active_run_for_room(chat_id)
+            if run_id is None:
+                latest = run_store.list_for_room(chat_id, limit=1)
+                run_id = latest[0].id if latest else None
+            if run_id is None:
+                await self._send_event(
+                    connection, "cancel_workflow_run_result", ok=False,
+                    code="run_not_found", detail="no run to cancel",
+                    chat_id=chat_id, request_id=request_id,
+                )
+                return
+        try:
+            run = run_store.load(run_id)
+        except (WorkflowNotFoundError, ValueError):
+            await self._send_event(
+                connection, "cancel_workflow_run_result", ok=False,
+                code="run_not_found", detail="run not found in this room",
+                chat_id=chat_id, request_id=request_id,
+            )
+            return
+        if run.room_id != chat_id:
+            await self._send_event(
+                connection, "cancel_workflow_run_result", ok=False,
+                code="run_not_found", detail="run not found in this room",
+                chat_id=chat_id, request_id=request_id,
+            )
+            return
+        if run.status in TERMINAL_RUN_STATUSES:
+            await self._send_event(
+                connection, "cancel_workflow_run_result", ok=False,
+                code="run_not_cancellable", detail="run is already terminal",
+                chat_id=chat_id, request_id=request_id,
+            )
+            return
+        runner = self._workflow_runner_for(chat_id)
+        if runner.active_run_for_room(chat_id) == run_id:
+            # Live loop: signal; the runner cancels remaining steps and the run.
+            runner.cancel_run(run_id)
+        else:
+            # Paused (waiting_approval) or orphaned run: CAS directly.
+            reason = "Cancelled by user."
+            for step_id, step in run.steps.items():
+                if step.status in TERMINAL_STEP_STATUSES:
+                    continue
+                try:
+                    run_store.transition_step(run_id, step_id, "cancelled", error=reason)
+                except WorkflowTransitionError:
+                    pass
+            try:
+                run = run_store.transition(run_id, "cancelled")
+            except WorkflowTransitionError:
+                pass
+        await self._send_event(
+            connection, "cancel_workflow_run_result", ok=True, chat_id=chat_id,
+            request_id=request_id, run_id=run_id,
+        )
+        await self.send_workflow_run_updated(
+            chat_id, serialize_run(run_store.load(run_id))
+        )
+
+    async def _handle_resolve_workflow_approval_envelope(
+        self, connection: Any, envelope: dict[str, Any]
+    ) -> None:
+        from mona.agent.workflow import (
+            WorkflowApprovalError,
+            WorkflowNotFoundError,
+            serialize_run,
+        )
+
+        ctx = await self._workflow_room_context(
+            connection, envelope, result_event="resolve_workflow_approval_result"
+        )
+        if ctx is None:
+            return
+        chat_id, _conversation, request_id = ctx
+        run_id = envelope.get("run_id")
+        step_id = envelope.get("step_id")
+        token = envelope.get("token")
+        approve = envelope.get("approve")
+        if (
+            not isinstance(run_id, str)
+            or not run_id
+            or not isinstance(step_id, str)
+            or not step_id
+            or not isinstance(token, str)
+            or not isinstance(approve, bool)
+        ):
+            await self._send_event(
+                connection, "resolve_workflow_approval_result", ok=False,
+                code="invalid_request",
+                detail="run_id, step_id, token and a boolean approve are required",
+                chat_id=chat_id, request_id=request_id,
+            )
+            return
+        run_store = self._subagent_manager.run_store_for_room(chat_id)
+        try:
+            run = run_store.load(run_id)
+        except (WorkflowNotFoundError, ValueError):
+            run = None
+        if run is None or run.room_id != chat_id:
+            await self._send_event(
+                connection, "resolve_workflow_approval_result", ok=False,
+                code="run_not_found", detail="run not found in this room",
+                chat_id=chat_id, request_id=request_id,
+            )
+            return
+        runner = self._workflow_runner_for(chat_id)
+        try:
+            runner.resolve_approval(
+                run_id=run_id, step_id=step_id, token=token, approve=approve,
+            )
+        except WorkflowApprovalError as exc:
+            # State conflict / expired / bad token: push the authoritative
+            # run state so the client refreshes instead of trusting its card.
+            await self._send_event(
+                connection, "resolve_workflow_approval_result", ok=False,
+                code=exc.code, detail=exc.detail,
+                chat_id=chat_id, request_id=request_id,
+            )
+            await self.send_workflow_run_updated(
+                chat_id, serialize_run(run_store.load(run_id))
+            )
+            return
+        await self._send_event(
+            connection, "resolve_workflow_approval_result", ok=True,
+            chat_id=chat_id, request_id=request_id, run_id=run_id, step_id=step_id,
+        )
+        await self.send_workflow_run_updated(
+            chat_id, serialize_run(run_store.load(run_id))
+        )
+        if approve:
+            # Resume in the background: the run continues from the persisted
+            # state with every downstream step still queued (guide 7.6).
+            async def _resume() -> None:
+                try:
+                    await runner.resume(run_id)
+                except Exception:
+                    logger.exception(
+                        "Workflow resume after approval failed for run {}", run_id
+                    )
+
+            task = asyncio.create_task(_resume())
+            self._workflow_tasks[chat_id] = task
+            task.add_done_callback(lambda _t: self._workflow_tasks.pop(chat_id, None))
+
+    async def _handle_get_workflow_run_envelope(
+        self, connection: Any, envelope: dict[str, Any]
+    ) -> None:
+        from mona.agent.workflow import WorkflowNotFoundError, serialize_run
+
+        ctx = await self._workflow_room_context(
+            connection, envelope, result_event="workflow_run_state_result"
+        )
+        if ctx is None:
+            return
+        chat_id, _conversation, request_id = ctx
+        run_id = envelope.get("run_id")
+        run_store = self._subagent_manager.run_store_for_room(chat_id)
+        run = None
+        if isinstance(run_id, str) and run_id:
+            try:
+                run = run_store.load(run_id)
+            except (WorkflowNotFoundError, ValueError):
+                run = None
+            if run is None or run.room_id != chat_id:
+                await self._send_event(
+                    connection, "workflow_run_state_result", ok=False,
+                    code="run_not_found", detail="run not found in this room",
+                    chat_id=chat_id, request_id=request_id,
+                )
+                return
+        else:
+            latest = run_store.list_for_room(chat_id, limit=1)
+            run = latest[0] if latest else None
+        await self._send_event(
+            connection,
+            "workflow_run_state_result",
+            ok=True,
+            chat_id=chat_id,
+            request_id=request_id,
+            run=serialize_run(run) if run is not None else None,
+        )
+
     async def _dispatch_envelope(
         self,
         connection: Any,
@@ -3876,6 +4399,27 @@ class WebSocketChannel(BaseChannel):
             return
         if t == "cancel_agent_job":
             await self._handle_cancel_agent_job_envelope(connection, envelope)
+            return
+        if t == "save_workflow_draft":
+            await self._handle_save_workflow_draft_envelope(connection, envelope)
+            return
+        if t == "activate_workflow":
+            await self._handle_activate_workflow_envelope(connection, envelope)
+            return
+        if t == "get_workflow":
+            await self._handle_get_workflow_envelope(connection, envelope)
+            return
+        if t == "run_workflow":
+            await self._handle_run_workflow_envelope(connection, envelope)
+            return
+        if t == "cancel_workflow_run":
+            await self._handle_cancel_workflow_run_envelope(connection, envelope)
+            return
+        if t == "resolve_workflow_approval":
+            await self._handle_resolve_workflow_approval_envelope(connection, envelope)
+            return
+        if t == "get_workflow_run":
+            await self._handle_get_workflow_run_envelope(connection, envelope)
             return
         if t == "message":
             cid = envelope.get("chat_id")
@@ -4390,6 +4934,26 @@ class WebSocketChannel(BaseChannel):
         raw = json.dumps(body, ensure_ascii=False)
         for connection in conns:
             await self._safe_send_to(connection, raw, label=" room_updated ")
+
+    async def send_workflow_updated(self, chat_id: str, payload: dict[str, Any]) -> None:
+        """Broadcast a workflow definition/draft change to room subscribers."""
+        conns = list(self._subs.get(chat_id, ()))
+        if not conns:
+            return
+        body: dict[str, Any] = {"event": "workflow_updated", "chat_id": chat_id, **payload}
+        raw = json.dumps(body, ensure_ascii=False)
+        for connection in conns:
+            await self._safe_send_to(connection, raw, label=" workflow_updated ")
+
+    async def send_workflow_run_updated(self, chat_id: str, payload: dict[str, Any]) -> None:
+        """Broadcast a workflow run state change to room subscribers."""
+        conns = list(self._subs.get(chat_id, ()))
+        if not conns:
+            return
+        body: dict[str, Any] = {"event": "workflow_run_updated", "chat_id": chat_id, **payload}
+        raw = json.dumps(body, ensure_ascii=False)
+        for connection in conns:
+            await self._safe_send_to(connection, raw, label=" workflow_run_updated ")
 
     async def send_artifacts_changed(self) -> None:
         """Broadcast a shared-output change hint to every open websocket connection."""

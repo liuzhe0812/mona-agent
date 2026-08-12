@@ -1,5 +1,6 @@
 import type {
   AgentJobSummary,
+  ApprovalRequestedPayload,
   ConnectionStatus,
   InboundEvent,
   Outbound,
@@ -8,6 +9,12 @@ import type {
   RoomCommandResult,
   RoomState,
   RoomUpdate,
+  WorkflowCommandResult,
+  WorkflowDefinition,
+  WorkflowRun,
+  WorkflowStep,
+  WorkflowTrigger,
+  WorkflowUpdatedPayload,
 } from "./types";
 
 /** WebSocket readyState constants, referenced by value to stay portable
@@ -62,6 +69,13 @@ type SessionUpdateHandler = (chatId: string, scope?: SessionUpdateScope) => void
 type RunStatusHandler = (chatId: string, startedAt: number | null) => void;
 type RoomUpdatedHandler = (chatId: string, state: RoomState) => void;
 type AgentJobUpdatedHandler = (chatId: string, job: AgentJobSummary) => void;
+type WorkflowUpdatedHandler = (chatId: string, payload: WorkflowUpdatedPayload) => void;
+/** ``run`` is null on run-conflict error frames (``error`` carries the code). */
+type WorkflowRunUpdatedHandler = (chatId: string, run: WorkflowRun | null, error?: string) => void;
+type ApprovalRequestedHandler = (payload: ApprovalRequestedPayload) => void;
+/** Room-scoped command results share one pending map; workflow commands add
+ *  their optional payload fields via this intersection. */
+type AnyRoomCommandResult = RoomCommandResult & WorkflowCommandResult;
 
 /** Structured connection-level errors surfaced to the UI.
  *
@@ -79,6 +93,19 @@ export type StreamError =
 
 type ErrorHandler = (error: StreamError) => void;
 
+/** Rejection for failed room commands; ``code`` carries the wire-safe
+ *  server error code (e.g. ``approval_expired``) when the failure came from
+ *  a ``*_result`` frame. */
+export class RoomCommandError extends Error {
+  readonly code?: string;
+
+  constructor(message: string, code?: string) {
+    super(message);
+    this.name = "RoomCommandError";
+    this.code = code;
+  }
+}
+
 interface PendingNewChat {
   resolve: (chatId: string) => void;
   reject: (err: Error) => void;
@@ -86,7 +113,7 @@ interface PendingNewChat {
 }
 
 interface PendingRoomCommand {
-  resolve: (result: RoomCommandResult) => void;
+  resolve: (result: AnyRoomCommandResult) => void;
   reject: (err: Error) => void;
   timer: ReturnType<typeof setTimeout>;
 }
@@ -118,6 +145,9 @@ export class MonaClient {
   private runStatusHandlers = new Set<RunStatusHandler>();
   private roomUpdatedHandlers = new Set<RoomUpdatedHandler>();
   private agentJobUpdatedHandlers = new Set<AgentJobUpdatedHandler>();
+  private workflowUpdatedHandlers = new Set<WorkflowUpdatedHandler>();
+  private workflowRunUpdatedHandlers = new Set<WorkflowRunUpdatedHandler>();
+  private approvalRequestedHandlers = new Set<ApprovalRequestedHandler>();
   private errorHandlers = new Set<ErrorHandler>();
   private pptUploadHandlers = new Set<(result: { ok: boolean; files?: { name: string; path: string }[]; error?: string }) => void>();
   private pptSaveBrandHandlers = new Set<(result: { ok: boolean; brandId?: string; error?: string }) => void>();
@@ -404,6 +434,30 @@ export class MonaClient {
     };
   }
 
+  /** Subscribe to workflow draft/activation broadcasts (``workflow_updated``). */
+  onWorkflowUpdated(handler: WorkflowUpdatedHandler): Unsubscribe {
+    this.workflowUpdatedHandlers.add(handler);
+    return () => {
+      this.workflowUpdatedHandlers.delete(handler);
+    };
+  }
+
+  /** Subscribe to workflow run state broadcasts (``workflow_run_updated``). */
+  onWorkflowRunUpdated(handler: WorkflowRunUpdatedHandler): Unsubscribe {
+    this.workflowRunUpdatedHandlers.add(handler);
+    return () => {
+      this.workflowRunUpdatedHandlers.delete(handler);
+    };
+  }
+
+  /** Subscribe to approval request broadcasts (``approval_requested``). */
+  onApprovalRequested(handler: ApprovalRequestedHandler): Unsubscribe {
+    this.approvalRequestedHandlers.add(handler);
+    return () => {
+      this.approvalRequestedHandlers.delete(handler);
+    };
+  }
+
   /** Turn an existing chat into a collaboration room (phase 2d). */
   createRoom(
     chatId: string,
@@ -457,6 +511,124 @@ export class MonaClient {
       }
       return job;
     });
+  }
+
+  // -- workflow commands (multi-agent phase 3) -----------------------------
+
+  /** Fetch the room's workflow draft + active revision. */
+  getWorkflow(chatId: string): Promise<{
+    draft: WorkflowDefinition | null;
+    active: WorkflowDefinition | null;
+    activeRevision: number | null;
+    revisions: number[];
+  }> {
+    return this.sendRoomCommandRaw("workflow_state_result", (requestId) => ({
+      type: "get_workflow",
+      chat_id: chatId,
+      request_id: requestId,
+    })).then((result) => ({
+      draft: result.draft ?? null,
+      active: result.active ?? null,
+      activeRevision: result.activeRevision ?? null,
+      revisions: result.revisions ?? [],
+    }));
+  }
+
+  /** Save (or replace) the room's workflow draft. */
+  saveWorkflowDraft(
+    chatId: string,
+    goal: string,
+    steps: WorkflowStep[],
+    trigger?: WorkflowTrigger,
+  ): Promise<WorkflowDefinition> {
+    return this.sendRoomCommandRaw("workflow_draft_ready", (requestId) => ({
+      type: "save_workflow_draft",
+      chat_id: chatId,
+      goal,
+      steps,
+      ...(trigger ? { trigger } : {}),
+      request_id: requestId,
+    })).then((result) => {
+      if (!result.workflow) {
+        throw new Error("malformed workflow_draft_ready");
+      }
+      return result.workflow;
+    });
+  }
+
+  /** Promote the room draft to the active revision. */
+  activateWorkflow(chatId: string): Promise<WorkflowDefinition> {
+    return this.sendRoomCommandRaw("activate_workflow_result", (requestId) => ({
+      type: "activate_workflow",
+      chat_id: chatId,
+      request_id: requestId,
+    })).then((result) => {
+      if (!result.workflow) {
+        throw new Error("malformed activate_workflow_result");
+      }
+      return result.workflow;
+    });
+  }
+
+  /** Start a run of the room's active workflow. Run state arrives via
+   *  ``workflow_run_updated`` pushes. */
+  runWorkflow(chatId: string): Promise<void> {
+    return this.sendRoomCommandRaw("run_workflow_result", (requestId) => ({
+      type: "run_workflow",
+      chat_id: chatId,
+      request_id: requestId,
+    })).then(() => undefined);
+  }
+
+  /** Cancel a non-terminal run (defaults to the room's active run);
+   *  resolves with the cancelled run id. */
+  cancelWorkflowRun(chatId: string, runId?: string): Promise<string> {
+    return this.sendRoomCommandRaw("cancel_workflow_run_result", (requestId) => ({
+      type: "cancel_workflow_run",
+      chat_id: chatId,
+      ...(runId ? { run_id: runId } : {}),
+      request_id: requestId,
+    })).then((result) => {
+      if (!result.run_id) {
+        throw new Error("malformed cancel_workflow_run_result");
+      }
+      return result.run_id;
+    });
+  }
+
+  /** Fetch a workflow run (defaults to the room's latest). */
+  getWorkflowRun(chatId: string, runId?: string): Promise<WorkflowRun | null> {
+    return this.sendRoomCommandRaw("workflow_run_state_result", (requestId) => ({
+      type: "get_workflow_run",
+      chat_id: chatId,
+      ...(runId ? { run_id: runId } : {}),
+      request_id: requestId,
+    })).then((result) => result.run ?? null);
+  }
+
+  /** Approve or reject a waiting approval step (phase 4). Rejects with a
+   *  ``RoomCommandError`` whose ``code`` is one of ``conflict`` /
+   *  ``not_waiting`` / ``invalid_token`` / ``approval_expired``; the run
+   *  state refresh arrives via ``workflow_run_updated`` either way. */
+  resolveWorkflowApproval(
+    chatId: string,
+    runId: string,
+    stepId: string,
+    token: string,
+    approve: boolean,
+  ): Promise<void> {
+    return this.sendRoomCommandRaw(
+      "resolve_workflow_approval_result",
+      (requestId) => ({
+        type: "resolve_workflow_approval",
+        chat_id: chatId,
+        run_id: runId,
+        step_id: stepId,
+        token,
+        approve,
+        request_id: requestId,
+      }),
+    ).then(() => undefined);
   }
 
   connect(): void {
@@ -734,7 +906,14 @@ export class MonaClient {
       parsed.event === "create_room_result" ||
       parsed.event === "update_room_result" ||
       parsed.event === "room_state_result" ||
-      parsed.event === "cancel_agent_job_result"
+      parsed.event === "cancel_agent_job_result" ||
+      parsed.event === "workflow_draft_ready" ||
+      parsed.event === "activate_workflow_result" ||
+      parsed.event === "workflow_state_result" ||
+      parsed.event === "run_workflow_result" ||
+      parsed.event === "cancel_workflow_run_result" ||
+      parsed.event === "workflow_run_state_result" ||
+      parsed.event === "resolve_workflow_approval_result"
     ) {
       this.handleRoomCommandResult(parsed);
       return;
@@ -753,6 +932,39 @@ export class MonaClient {
     if (parsed.event === "agent_job_updated") {
       for (const handler of this.agentJobUpdatedHandlers) {
         handler(parsed.chat_id, parsed.job);
+      }
+      return;
+    }
+
+    if (parsed.event === "workflow_updated") {
+      for (const handler of this.workflowUpdatedHandlers) {
+        handler(parsed.chat_id, {
+          chatId: parsed.chat_id,
+          workflow: parsed.workflow,
+          draft: parsed.draft === true,
+          activeRevision: parsed.activeRevision ?? null,
+        });
+      }
+      return;
+    }
+
+    if (parsed.event === "workflow_run_updated") {
+      // The run snapshot is spread at the top level of the frame; conflict
+      // error frames carry ``error``/``detail`` instead of ``id``.
+      const run = parsed.id ? (parsed as unknown as WorkflowRun) : null;
+      for (const handler of this.workflowRunUpdatedHandlers) {
+        handler(parsed.chat_id, run, parsed.error ?? parsed.detail);
+      }
+      return;
+    }
+
+    if (parsed.event === "approval_requested") {
+      for (const handler of this.approvalRequestedHandlers) {
+        handler({
+          chatId: parsed.chat_id,
+          runId: parsed.run_id,
+          approvals: parsed.approvals ?? [],
+        });
       }
       return;
     }
@@ -781,9 +993,9 @@ export class MonaClient {
   private sendRoomCommandRaw(
     resultEvent: string,
     build: (requestId: string) => Outbound,
-  ): Promise<RoomCommandResult> {
+  ): Promise<AnyRoomCommandResult> {
     const requestId = `room_${Date.now().toString(36)}_${(this.roomCommandSeq++).toString(36)}`;
-    return new Promise<RoomCommandResult>((resolve, reject) => {
+    return new Promise<AnyRoomCommandResult>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingRoomCommands.delete(requestId);
         reject(new Error(`${resultEvent} timed out`));
@@ -794,7 +1006,7 @@ export class MonaClient {
   }
 
   private handleRoomCommandResult(ev: InboundEvent): void {
-    const result = ev as RoomCommandResult & { event: string };
+    const result = ev as AnyRoomCommandResult & { event: string };
     const requestId = result.request_id;
     const pending = requestId ? this.pendingRoomCommands.get(requestId) : undefined;
     if (!pending) return;
@@ -803,7 +1015,12 @@ export class MonaClient {
     if (result.ok) {
       pending.resolve(result);
     } else {
-      pending.reject(new Error(result.detail || result.code || "room command failed"));
+      pending.reject(
+        new RoomCommandError(
+          result.detail || result.code || "room command failed",
+          result.code,
+        ),
+      );
     }
   }
 

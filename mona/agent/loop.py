@@ -924,6 +924,9 @@ class AgentLoop:
         # Reconcile non-terminal agent jobs left over from a previous process:
         # queued jobs relaunch, running jobs are marked failed (guide 7.4).
         self._schedule_background(self.subagents.recover_jobs())
+        # Same reconciliation for workflow runs (guide 7.6): waiting approvals
+        # survive, interrupted running runs fail, never-started runs resume.
+        self._schedule_background(self.subagents.recover_workflow_runs())
         logger.info("Agent loop started")
 
         while self._running:

@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 
 import { AgentAvatar, resolveAgentDisplayName, type AgentIdentity } from "@/components/room/AgentAvatar";
 import { useAgents } from "@/components/room/useAgents";
+import { WorkflowPanel } from "@/components/workflow/WorkflowPanel";
 import { cn } from "@/lib/utils";
 import type { ConversationMeta, RoomState } from "@/lib/types";
 import { useClient } from "@/providers/ClientProvider";
@@ -156,9 +157,7 @@ export function RoomContextPanel({
                 <Workflow className="h-3.5 w-3.5" />
                 {t("room.panel.workflow")}
               </div>
-              <p className="mt-1.5 text-[13px] leading-relaxed text-muted-foreground/70">
-                {t("room.panel.workflowPlaceholder")}
-              </p>
+              <WorkflowPanel chatId={chatId} members={members} className="mt-1.5" />
             </section>
           </>
         ) : (

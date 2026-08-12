@@ -372,8 +372,96 @@
       "goal": "目标",
       "goalEmpty": "尚未设置房间目标。",
       "members": "成员",
-      "workflow": "工作流",
-      "workflowPlaceholder": "尚未配置工作流。"
+      "workflow": "工作流"
+    },
+    "workflow": {
+      "new": "新建工作流",
+      "edit": "编辑",
+      "editNewVersion": "编辑新版本",
+      "activate": "激活",
+      "run": "运行",
+      "cancelRun": "取消运行",
+      "draft": "草稿",
+      "active": "当前版本",
+      "revision": "版本 {{revision}}",
+      "stepsCount": "{{count}} 个步骤",
+      "empty": "尚未配置工作流。",
+      "hint": "也可以直接在对话里让 Mona 帮你编排。",
+      "editor": {
+        "goal": "流程目标",
+        "goalPlaceholder": "这次协作要产出什么？",
+        "addAgent": "添加 Agent 步骤",
+        "addApproval": "添加审批步骤",
+        "stepId": "步骤 ID",
+        "type": "步骤类型",
+        "typeAgent": "Agent",
+        "typeApproval": "审批",
+        "agent": "执行 Agent",
+        "task": "任务",
+        "taskPlaceholder": "描述这一步要做什么",
+        "expectedOutput": "期望产出（可选）",
+        "message": "审批提示",
+        "messagePlaceholder": "审批时需要向用户确认什么？",
+        "dependsOn": "依赖步骤",
+        "remove": "删除步骤",
+        "save": "保存草稿",
+        "cancel": "取消",
+        "discardTitle": "放弃未保存的修改？",
+        "discardBody": "当前编辑尚未保存，离开后修改将丢失。",
+        "discardConfirm": "放弃修改",
+        "keepEditing": "继续编辑"
+      },
+      "errors": {
+        "empty": "至少需要一个步骤。",
+        "noAgentStep": "至少需要一个 Agent 步骤。",
+        "duplicateId": "步骤 ID 重复：{{step}}",
+        "invalidId": "步骤 ID 只能包含字母、数字、- 和 _：{{step}}",
+        "missingAgent": "步骤 {{step}} 未选择执行 Agent。",
+        "nonMember": "步骤 {{step}} 的 Agent 不是房间成员。",
+        "missingTask": "步骤 {{step}} 缺少任务描述。",
+        "missingMessage": "审批步骤 {{step}} 缺少提示语。",
+        "unknownDep": "步骤 {{step}} 依赖了不存在的步骤 {{detail}}。",
+        "selfDep": "步骤 {{step}} 不能依赖自身。",
+        "cycle": "步骤依赖存在环。"
+      },
+      "run": {
+        "title": "最近运行",
+        "status": {
+          "queued": "排队中",
+          "running": "运行中",
+          "waiting_approval": "等待审批",
+          "succeeded": "已完成",
+          "failed": "已失败",
+          "cancelled": "已取消"
+        },
+        "stepStatus": {
+          "queued": "排队中",
+          "running": "运行中",
+          "waiting_approval": "等待审批",
+          "succeeded": "已完成",
+          "failed": "已失败",
+          "cancelled": "已取消",
+          "skipped": "已跳过"
+        },
+        "approval": "审批",
+        "revision": "基于版本 {{revision}}"
+      },
+      "approval": {
+        "approve": "批准",
+        "reject": "拒绝",
+        "decision": {
+          "approved": "已由 {{by}} 批准",
+          "rejected": "已由 {{by}} 拒绝"
+        },
+        "notifyTitle": "工作流等待审批",
+        "notifyBody": "有步骤正在等待你的审批。",
+        "error": {
+          "conflict": "该审批已被处理。",
+          "not_waiting": "该步骤不在等待审批状态。",
+          "invalid_token": "审批令牌无效，请刷新后重试。",
+          "approval_expired": "审批已过期。"
+        }
+      }
     }
   },
   "thread": {

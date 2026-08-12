@@ -404,6 +404,87 @@ describe("MonaClient", () => {
     });
   });
 
+  it("sends resolve_workflow_approval and surfaces server error codes", async () => {
+    const client = new MonaClient({
+      url: "ws://test",
+      reconnect: false,
+      socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket,
+    });
+    client.connect();
+    lastSocket().fakeOpen();
+
+    const okPromise = client.resolveWorkflowApproval(
+      "room1",
+      "run_1",
+      "ok",
+      "tok-1",
+      true,
+    );
+    const sent = JSON.parse(lastSocket().sent.at(-1) as string);
+    expect(sent).toMatchObject({
+      type: "resolve_workflow_approval",
+      chat_id: "room1",
+      run_id: "run_1",
+      step_id: "ok",
+      token: "tok-1",
+      approve: true,
+    });
+    lastSocket().fakeMessage({
+      event: "resolve_workflow_approval_result",
+      ok: true,
+      chat_id: "room1",
+      request_id: sent.request_id,
+      run_id: "run_1",
+      step_id: "ok",
+    });
+    await okPromise;
+
+    const failPromise = client.resolveWorkflowApproval(
+      "room1",
+      "run_1",
+      "ok",
+      "tok-1",
+      false,
+    );
+    const sent2 = JSON.parse(lastSocket().sent.at(-1) as string);
+    lastSocket().fakeMessage({
+      event: "resolve_workflow_approval_result",
+      ok: false,
+      code: "approval_expired",
+      detail: "approval for step 'ok' has expired",
+      chat_id: "room1",
+      request_id: sent2.request_id,
+    });
+    await expect(failPromise).rejects.toMatchObject({
+      name: "RoomCommandError",
+      code: "approval_expired",
+    });
+  });
+
+  it("dispatches approval_requested broadcasts to subscribers", () => {
+    const client = new MonaClient({
+      url: "ws://test",
+      reconnect: false,
+      socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket,
+    });
+    const handler = vi.fn();
+    client.onApprovalRequested(handler);
+    client.connect();
+    lastSocket().fakeOpen();
+    lastSocket().fakeMessage({
+      event: "approval_requested",
+      chat_id: "room1",
+      run_id: "run_1",
+      approvals: [{ stepId: "ok", message: "Confirm?", token: "tok-1" }],
+    });
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledWith({
+      chatId: "room1",
+      runId: "run_1",
+      approvals: [{ stepId: "ok", message: "Confirm?", token: "tok-1" }],
+    });
+  });
+
   it("emits a message_too_big error when the socket closes with code 1009", () => {
     const client = new MonaClient({
       url: "ws://test",

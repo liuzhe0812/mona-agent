@@ -359,8 +359,96 @@
       "goal": "Goal",
       "goalEmpty": "No room goal yet.",
       "members": "Members",
-      "workflow": "Workflow",
-      "workflowPlaceholder": "No workflow configured yet."
+      "workflow": "Workflow"
+    },
+    "workflow": {
+      "new": "New workflow",
+      "edit": "Edit",
+      "editNewVersion": "Edit new revision",
+      "activate": "Activate",
+      "run": "Run",
+      "cancelRun": "Cancel run",
+      "draft": "Draft",
+      "active": "Active",
+      "revision": "Revision {{revision}}",
+      "stepsCount": "{{count}} steps",
+      "empty": "No workflow configured yet.",
+      "hint": "You can also ask Mona to draft one in the conversation.",
+      "editor": {
+        "goal": "Workflow goal",
+        "goalPlaceholder": "What should this collaboration deliver?",
+        "addAgent": "Add agent step",
+        "addApproval": "Add approval step",
+        "stepId": "Step ID",
+        "type": "Step type",
+        "typeAgent": "Agent",
+        "typeApproval": "Approval",
+        "agent": "Assigned agent",
+        "task": "Task",
+        "taskPlaceholder": "Describe what this step should do",
+        "expectedOutput": "Expected output (optional)",
+        "message": "Approval prompt",
+        "messagePlaceholder": "What should the user confirm?",
+        "dependsOn": "Depends on",
+        "remove": "Remove step",
+        "save": "Save draft",
+        "cancel": "Cancel",
+        "discardTitle": "Discard unsaved changes?",
+        "discardBody": "Your edits have not been saved and will be lost.",
+        "discardConfirm": "Discard",
+        "keepEditing": "Keep editing"
+      },
+      "errors": {
+        "empty": "At least one step is required.",
+        "noAgentStep": "At least one agent step is required.",
+        "duplicateId": "Duplicate step id: {{step}}",
+        "invalidId": "Step ids may only contain letters, digits, - and _: {{step}}",
+        "missingAgent": "Step {{step}} has no agent selected.",
+        "nonMember": "Step {{step}} uses an agent that is not a room member.",
+        "missingTask": "Step {{step}} is missing a task.",
+        "missingMessage": "Approval step {{step}} is missing a prompt.",
+        "unknownDep": "Step {{step}} depends on unknown step {{detail}}.",
+        "selfDep": "Step {{step}} must not depend on itself.",
+        "cycle": "Step dependencies contain a cycle."
+      },
+      "run": {
+        "title": "Latest run",
+        "status": {
+          "queued": "Queued",
+          "running": "Running",
+          "waiting_approval": "Waiting for approval",
+          "succeeded": "Succeeded",
+          "failed": "Failed",
+          "cancelled": "Cancelled"
+        },
+        "stepStatus": {
+          "queued": "Queued",
+          "running": "Running",
+          "waiting_approval": "Waiting",
+          "succeeded": "Done",
+          "failed": "Failed",
+          "cancelled": "Cancelled",
+          "skipped": "Skipped"
+        },
+        "approval": "Approval",
+        "revision": "Based on revision {{revision}}"
+      },
+      "approval": {
+        "approve": "Approve",
+        "reject": "Reject",
+        "decision": {
+          "approved": "Approved by {{by}}",
+          "rejected": "Rejected by {{by}}"
+        },
+        "notifyTitle": "Workflow approval requested",
+        "notifyBody": "A step is waiting for your approval.",
+        "error": {
+          "conflict": "This approval has already been resolved.",
+          "not_waiting": "This step is not waiting for approval.",
+          "invalid_token": "Invalid approval token; refresh and try again.",
+          "approval_expired": "This approval has expired."
+        }
+      }
     }
   },
   "thread": {

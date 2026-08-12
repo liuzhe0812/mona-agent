@@ -21,10 +21,11 @@ export interface SelectProps {
   placeholder?: string;
   className?: string;
   disabled?: boolean;
+  "aria-label"?: string;
 }
 
 export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
-  ({ value, onValueChange, options, placeholder = "请选择", className, disabled }, ref) => {
+  ({ value, onValueChange, options, placeholder = "请选择", className, disabled, "aria-label": ariaLabel }, ref) => {
     const selected = options.find((o) => o.value === value);
     return (
       <DropdownMenu>
@@ -35,6 +36,7 @@ export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
             variant="outline"
             size="sm"
             disabled={disabled}
+            aria-label={ariaLabel}
             className={cn("w-full justify-between font-normal", className)}
           >
             <span className={cn("truncate", !selected && "text-muted-foreground")}>
