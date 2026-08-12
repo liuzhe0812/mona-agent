@@ -3,8 +3,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { getGatewayHttpBase } from "@/lib/api";
 import { httpFetch } from "@/lib/tauri";
 
-import type { SystemTab } from "./mockData";
+import type { SystemTab } from "./systemTabs";
 import type {
+  DiagnosticCheck,
   MaintenanceHistory,
   SoftwareActionResult,
   SoftwareCheckResult,
@@ -49,6 +50,8 @@ export interface SystemEvidence {
   startup: Omit<StartupListResult, "items"> & { items: StartupEvidenceItem[] };
   storage: StorageEvidence;
   maintenance: MaintenanceHistory;
+  /** 诊断请求附加的健康检查快照，供后端校验 hypotheses 的 evidenceIds */
+  checks?: DiagnosticCheck[];
 }
 
 export type SystemEvidenceStage = "overview" | "storage" | "software" | "startup" | "maintenance";
@@ -64,6 +67,20 @@ function isSystemAgentActionType(value: unknown): value is SystemAgentActionType
   return value === "storage_clean" || value === "software_update" || value === "startup_disable";
 }
 
+// winget 全量检查为秒级耗时，证据采集对结果做 60s 模块级缓存；
+// 执行动作后的复检绕过缓存（见 executeSystemAction）
+const SOFTWARE_EVIDENCE_TTL_MS = 60_000;
+let softwareEvidenceCache: { at: number; value: SoftwareCheckResult } | null = null;
+
+async function loadSoftwareCheck(): Promise<SoftwareCheckResult> {
+  if (softwareEvidenceCache && Date.now() - softwareEvidenceCache.at < SOFTWARE_EVIDENCE_TTL_MS) {
+    return softwareEvidenceCache.value;
+  }
+  const value = await invoke<SoftwareCheckResult>("system_check_updates");
+  softwareEvidenceCache = { at: Date.now(), value };
+  return value;
+}
+
 export async function collectSystemEvidence(
   storage: StorageScanResult | null,
   onProgress?: (stage: SystemEvidenceStage) => void,
@@ -74,7 +91,7 @@ export async function collectSystemEvidence(
       onProgress?.("storage");
       return result;
     }),
-    invoke<SoftwareCheckResult>("system_check_updates").then((result) => {
+    loadSoftwareCheck().then((result) => {
       onProgress?.("software");
       return result;
     }),
@@ -136,6 +153,45 @@ export async function requestSystemPlan(goal: string, evidence: SystemEvidence):
   };
 }
 
+export interface SystemDiagnosisHypothesis {
+  title: string;
+  confidence: "low" | "medium" | "high";
+  evidenceIds: string[];
+  explanation: string;
+  nextStep: string;
+}
+
+export interface SystemDiagnosisResult {
+  summary: string;
+  hypotheses: SystemDiagnosisHypothesis[];
+  cautions: string[];
+}
+
+export async function requestSystemDiagnosis(
+  symptom: string,
+  evidence: SystemEvidence,
+): Promise<SystemDiagnosisResult> {
+  const base = await getGatewayHttpBase();
+  if (!base) throw new Error("Mona 服务未就绪，请稍后重试");
+  const response = await httpFetch(`${base}/api/system/diagnose`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ symptom, evidence }),
+  });
+  const payload = await response.json() as Partial<SystemDiagnosisResult> & { error?: string };
+  if (!response.ok) throw new Error(payload.error || "系统诊断生成失败");
+  return {
+    summary: typeof payload.summary === "string" ? payload.summary : "Mona 未返回可用结论",
+    hypotheses: Array.isArray(payload.hypotheses)
+      ? payload.hypotheses.filter((item): item is SystemDiagnosisHypothesis =>
+          Boolean(item) && typeof item.title === "string" && Array.isArray(item.evidenceIds))
+      : [],
+    cautions: Array.isArray(payload.cautions)
+      ? payload.cautions.filter((item): item is string => typeof item === "string").slice(0, 3)
+      : [],
+  };
+}
+
 export async function executeSystemAction(action: SystemAgentAction): Promise<SystemActionResult> {
   if (action.type === "storage_clean") {
     const result = await invoke<StorageCleanupResult>("clean_storage", { ids: action.targetIds });
@@ -171,6 +227,8 @@ export async function executeSystemAction(action: SystemAgentAction): Promise<Sy
       }
     }
     const success = errors.length === 0;
+    // 复检必须拿到最新数据，先让证据缓存失效
+    softwareEvidenceCache = null;
     const current = await invoke<SoftwareCheckResult>("system_check_updates");
     const verified = action.targetIds.every((id) => !current.updates.some((update) => update.id === id));
     return {

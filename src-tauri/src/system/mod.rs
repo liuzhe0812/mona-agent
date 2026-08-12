@@ -21,6 +21,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use sysinfo::{Disks, Networks, ProcessRefreshKind, ProcessesToUpdate, System};
 use tauri::{AppHandle, Emitter, State};
@@ -92,10 +93,16 @@ fn history_window_secs(window_secs: Option<i64>) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        bytes_per_second, cleanup_is_allowed, decode_windows_output, file_type_category, history_window_secs,
-        whole_machine_cpu_percent, HISTORY_WINDOW_SECS,
+        bytes_per_second, cleanup_is_allowed, cleanup_path, decode_windows_output, file_type_category,
+        history_window_secs, is_thumbcache_file, normalize_scan_drive, refresh_readings, sample,
+        scan_directory_tree, trash_path_check, whole_machine_cpu_percent, Connection, Disks, Inner, Networks,
+        ScanProgressEmitter, System, HISTORY_WINDOW_SECS,
     };
+    use std::collections::HashMap;
     use std::path::Path;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Arc;
+    use std::time::Instant;
 
     #[test]
     fn only_allows_the_supported_history_windows() {
@@ -147,7 +154,151 @@ mod tests {
         assert!(cleanup_is_allowed("updates"));
         assert!(cleanup_is_allowed("wer"));
         assert!(cleanup_is_allowed("delivery_optimization"));
+        assert!(cleanup_is_allowed("dxshader"));
+        assert!(cleanup_is_allowed("thumbcache"));
+        // windows_old 仅检测提示，不允许 Mona 直接删除
+        assert!(!cleanup_is_allowed("windows_old"));
         assert!(!cleanup_is_allowed("custom-path"));
+    }
+
+    #[test]
+    fn thumbcache_file_filter_only_matches_db_files() {
+        assert!(is_thumbcache_file("thumbcache_96.db"));
+        assert!(is_thumbcache_file("thumbcache_idx.db"));
+        assert!(!is_thumbcache_file("thumbcache_96.db-journal"));
+        assert!(!is_thumbcache_file("iconcache_96.db"));
+        assert!(!is_thumbcache_file("thumbcache_96.tmp"));
+    }
+
+    #[test]
+    fn cleanup_path_resolves_new_candidate_ids() {
+        // dxshader / thumbcache 依赖 LOCALAPPDATA；windows_old 无路径（仅提示）
+        if std::env::var_os("LOCALAPPDATA").is_some() {
+            assert!(cleanup_path("dxshader").is_some());
+            assert!(cleanup_path("thumbcache").is_some());
+        }
+        assert!(cleanup_path("windows_old").is_none());
+    }
+
+    #[test]
+    fn trash_path_check_rejects_system_directories() {
+        assert!(trash_path_check(Path::new("C:\\Windows\\System32\\kernel32.dll")).is_err());
+        assert!(trash_path_check(Path::new("c:\\program files\\app\\big.bin")).is_err());
+        assert!(trash_path_check(Path::new("C:/Program Files (x86)/app/big.iso")).is_err());
+    }
+
+    #[test]
+    fn trash_path_check_rejects_missing_paths_and_directories() {
+        assert!(trash_path_check(Path::new("D:\\mona-definitely-not-exist-98765\\big.bin")).is_err());
+        // 存在的目录必须拒绝（仅允许文件）
+        assert!(trash_path_check(&std::env::temp_dir()).is_err());
+    }
+
+    #[test]
+    fn trash_path_check_accepts_regular_file() {
+        let file = std::env::temp_dir().join(format!("mona-trash-check-{}.tmp", std::process::id()));
+        std::fs::write(&file, b"x").expect("write temp file");
+        let result = trash_path_check(&file);
+        let _ = std::fs::remove_file(&file);
+        assert_eq!(result.ok(), Some(1));
+    }
+
+    #[test]
+    fn overview_reads_do_not_write_samples() {
+        // 查询/采样分离：refresh_readings（system_get_overview 路径）不得写库，
+        // 历史折线密度只由后台 10s sampler（sample）决定
+        let mut inner = Inner {
+            sys: System::new(),
+            disks: Disks::new_with_refreshed_list(),
+            networks: Networks::new_with_refreshed_list(),
+            last_net_rx: 0,
+            last_net_tx: 0,
+            last_ts: Instant::now(),
+            db: Connection::open_in_memory().expect("in-memory db"),
+            scan_cancel: Arc::new(AtomicBool::new(false)),
+        };
+        inner
+            .db
+            .execute_batch(
+                "CREATE TABLE system_samples (ts INTEGER PRIMARY KEY, cpu_usage REAL NOT NULL, mem_usage REAL NOT NULL, net_total_mbps REAL NOT NULL, net_up_mbps REAL NOT NULL, net_down_mbps REAL NOT NULL);",
+            )
+            .expect("create samples table");
+
+        let row_count = |inner: &Inner| -> i64 {
+            inner
+                .db
+                .query_row("SELECT COUNT(*) FROM system_samples", [], |r| r.get(0))
+                .expect("count samples")
+        };
+
+        let _ = refresh_readings(&mut inner);
+        assert_eq!(row_count(&inner), 0);
+
+        sample(&mut inner).expect("sample writes one row");
+        assert_eq!(row_count(&inner), 1);
+    }
+
+    #[test]
+    fn normalize_scan_drive_accepts_common_spellings() {
+        // 默认回退系统盘（CI/开发机均为 C:）
+        assert_eq!(normalize_scan_drive(None).expect("default"), "C:");
+        assert_eq!(normalize_scan_drive(Some("d".to_string())).expect("d"), "D:");
+        assert_eq!(normalize_scan_drive(Some("D:".to_string())).expect("D:"), "D:");
+        assert_eq!(normalize_scan_drive(Some("e:\\".to_string())).expect("e:\\"), "E:");
+        assert!(normalize_scan_drive(Some("1:".to_string())).is_err());
+    }
+
+    #[test]
+    fn tree_scan_is_deterministic_across_runs() {
+        // 并行扫描的合并正确性建立在单树扫描确定性之上：同一目录两次扫描结果必须一致
+        let root = std::env::temp_dir().join(format!("mona-scan-determinism-{}", std::process::id()));
+        let sub_a = root.join("alpha");
+        let sub_b = root.join("beta").join("nested");
+        std::fs::create_dir_all(&sub_a).expect("create alpha");
+        std::fs::create_dir_all(&sub_b).expect("create beta");
+        std::fs::write(sub_a.join("a.bin"), vec![0u8; 1024]).expect("write a");
+        std::fs::write(sub_b.join("b.bin"), vec![0u8; 2048]).expect("write b");
+
+        let scan = || {
+            let cancel = AtomicBool::new(false);
+            let emitter = ScanProgressEmitter::noop();
+            let mut dirs = 0u64;
+            let mut types = HashMap::new();
+            let mut top = Vec::new();
+            let mut ext = HashMap::new();
+            scan_directory_tree(
+                &root, 0, &cancel, &emitter, &mut dirs, &mut types, &mut top, &mut ext,
+            )
+        };
+        let first = scan();
+        let second = scan();
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert_eq!(first.size_bytes, 1024 + 2048);
+        assert_eq!(first.file_count, 2);
+        assert_eq!(first.size_bytes, second.size_bytes);
+        assert_eq!(first.file_count, second.file_count);
+    }
+
+    #[test]
+    fn cancel_token_short_circuits_tree_scan() {
+        let root = std::env::temp_dir().join(format!("mona-scan-cancel-{}", std::process::id()));
+        std::fs::create_dir_all(&root).expect("create root");
+        std::fs::write(root.join("a.bin"), vec![0u8; 512]).expect("write");
+
+        let cancel = AtomicBool::new(true); // 预置取消令牌
+        let emitter = ScanProgressEmitter::noop();
+        let mut dirs = 0u64;
+        let mut types = HashMap::new();
+        let mut top = Vec::new();
+        let mut ext = HashMap::new();
+        let node = scan_directory_tree(
+            &root, 0, &cancel, &emitter, &mut dirs, &mut types, &mut top, &mut ext,
+        );
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert_eq!(node.size_bytes, 0);
+        assert_eq!(node.file_count, 0);
     }
 }
 
@@ -224,6 +375,7 @@ pub struct Inner {
     last_net_tx: u64,
     last_ts: Instant,
     db: Connection,
+    scan_cancel: Arc<AtomicBool>,
 }
 
 #[derive(Clone)]
@@ -291,6 +443,7 @@ impl SystemState {
             last_net_tx,
             last_ts: Instant::now(),
             db,
+            scan_cancel: Arc::new(AtomicBool::new(false)),
         })))
     }
 }
@@ -317,8 +470,9 @@ fn whole_machine_cpu_percent(process_cpu_percent: f32, logical_core_count: usize
     (process_cpu_percent / logical_core_count.max(1) as f32).clamp(0.0, 100.0)
 }
 
-/// 刷新 sysinfo + 计算指标 + 写入 SQLite + 清理过期样本
-fn sample(inner: &mut Inner) -> Result<SampleMetrics, String> {
+/// 刷新 sysinfo 读数并计算瞬时指标（不写 SQLite）
+/// 供 system_get_overview 等查询路径使用，避免前端轮询污染历史折线密度
+fn refresh_readings(inner: &mut Inner) -> SampleMetrics {
     let now = Instant::now();
     let elapsed = now.duration_since(inner.last_ts).as_secs_f64().max(0.1);
 
@@ -357,14 +511,27 @@ fn sample(inner: &mut Inner) -> Result<SampleMetrics, String> {
     };
     let up_mbps = (d_tx as f64 * 8.0) / elapsed / 1_000_000.0;
     let down_mbps = (d_rx as f64 * 8.0) / elapsed / 1_000_000.0;
-    let net_total = up_mbps + down_mbps;
+
+    SampleMetrics {
+        cpu_usage: avg_usage,
+        mem_usage,
+        up_mbps,
+        down_mbps,
+        elapsed_secs: elapsed,
+    }
+}
+
+/// 后台采样：刷新读数 + 写入 SQLite + 清理过期样本（仅 10s sampler 调用）
+fn sample(inner: &mut Inner) -> Result<SampleMetrics, String> {
+    let metrics = refresh_readings(inner);
+    let net_total = metrics.up_mbps + metrics.down_mbps;
 
     let ts = now_ts();
     inner
         .db
         .execute(
             "INSERT OR REPLACE INTO system_samples (ts, cpu_usage, mem_usage, net_total_mbps, net_up_mbps, net_down_mbps) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![ts, avg_usage, mem_usage, net_total, up_mbps, down_mbps],
+            params![ts, metrics.cpu_usage, metrics.mem_usage, net_total, metrics.up_mbps, metrics.down_mbps],
         )
         .map_err(|e| format!("Failed to insert sample: {}", e))?;
     // 过期数据置换：删除超过 60 分钟窗口的旧记录
@@ -373,19 +540,13 @@ fn sample(inner: &mut Inner) -> Result<SampleMetrics, String> {
         .db
         .execute("DELETE FROM system_samples WHERE ts < ?1", params![cutoff])
         .map_err(|e| format!("Failed to prune stale samples: {}", e))?;
-    Ok(SampleMetrics {
-        cpu_usage: avg_usage,
-        mem_usage,
-        up_mbps,
-        down_mbps,
-        elapsed_secs: elapsed,
-    })
+    Ok(metrics)
 }
 
 #[tauri::command]
 pub async fn system_get_overview(state: State<'_, SystemState>) -> Result<SystemOverview, String> {
     let mut inner = state.0.lock().map_err(|e| format!("State lock: {}", e))?;
-    let metrics = sample(&mut inner)?;
+    let metrics = refresh_readings(&mut inner);
 
     let cpus = inner.sys.cpus();
     let avg_freq = if !cpus.is_empty() {
@@ -517,6 +678,8 @@ pub struct StorageDiskInfo {
     pub used_gb: f64,
     pub total_gb: f64,
     pub available_gb: f64,
+    /// 可移动盘（U 盘等），磁盘选择器中过滤
+    pub is_removable: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -524,6 +687,9 @@ pub struct StorageDiskInfo {
 pub struct DirectorySize {
     pub path: String,
     pub size_gb: f64,
+    /// 字节级精确大小，仅扫描内部累加（消除 GB 浮点往返误差），不序列化
+    #[serde(skip)]
+    pub size_bytes: u64,
     pub file_count: u64,
     /// 嵌套子目录（仅递归扫描时填充，按大小降序）。
     /// 顶层扫描结果中该字段为空数组或省略；下钻时由前端从内存切片。
@@ -570,6 +736,48 @@ pub struct ScanSummary {
     pub total_dirs: u64,
     pub scan_duration_secs: f64,
     pub scanned_disk: String,
+    /// 用户取消导致的提前结束（结果为部分数据）
+    #[serde(default)]
+    pub cancelled: bool,
+}
+
+/// 并行扫描共享的进度发射器：聚合各线程目录计数，按 500 目录 + 200ms 节流 emit
+struct ScanProgressEmitter {
+    on_progress: Box<dyn Fn(&Path, u64) + Send + Sync>,
+    dirs: AtomicU64,
+    last_emit: Mutex<Instant>,
+}
+
+impl ScanProgressEmitter {
+    fn new(on_progress: impl Fn(&Path, u64) + Send + Sync + 'static) -> Self {
+        Self {
+            on_progress: Box::new(on_progress),
+            dirs: AtomicU64::new(0),
+            last_emit: Mutex::new(Instant::now()),
+        }
+    }
+
+    #[cfg(test)]
+    fn noop() -> Self {
+        Self::new(|_, _| {})
+    }
+
+    /// 每扫描完一个目录调用一次；返回最新的全局目录计数
+    fn dir_scanned(&self, current_path: &Path) -> u64 {
+        let dirs = self.dirs.fetch_add(1, Ordering::Relaxed) + 1;
+        if dirs % 500 == 0 {
+            let mut last = self.last_emit.lock().unwrap();
+            if last.elapsed() >= Duration::from_millis(200) {
+                *last = Instant::now();
+                (self.on_progress)(current_path, dirs);
+            }
+        }
+        dirs
+    }
+
+    fn total_dirs(&self) -> u64 {
+        self.dirs.load(Ordering::Relaxed)
+    }
 }
 
 /// 按扩展名聚合的大文件桶（用于发送给 AI 做归因，脱敏）
@@ -718,22 +926,26 @@ fn parent_dir_name(path: &Path) -> String {
 /// 递归扫描目录：累计大小、文件数，同时收集 Top 大文件（脱敏）和扩展名桶
 fn scan_directory_for_insights(
     path: &Path,
+    cancel: &AtomicBool,
+    emitter: &ScanProgressEmitter,
     type_bytes: &mut HashMap<&'static str, u64>,
     top_files: &mut Vec<TopFileInfo>,
     extension_stats: &mut HashMap<String, (u64, u64)>,
 ) -> (u64, u64, u64) {
+    if cancel.load(Ordering::Relaxed) { return (0, 0, 0); }
     let mut total = 0u64;
     let mut file_count = 0u64;
     let mut dir_count = 0u64;
     let mut stack = vec![path.to_path_buf()];
     while let Some(dir) = stack.pop() {
+        if cancel.load(Ordering::Relaxed) { break; }
         dir_count += 1;
+        emitter.dir_scanned(&dir);
         let Ok(entries) = fs::read_dir(&dir) else { continue };
         for entry in entries.flatten() {
+            if cancel.load(Ordering::Relaxed) { break; }
             let Ok(file_type) = entry.file_type() else { continue };
-            if file_type.is_symlink() {
-                continue;
-            }
+            if file_type.is_symlink() { continue; }
             if file_type.is_dir() {
                 stack.push(entry.path());
             } else if file_type.is_file() {
@@ -775,12 +987,25 @@ const MIN_SIZE_TO_KEEP_CHILDREN_GB: f64 = 0.05;
 fn scan_directory_tree(
     path: &Path,
     depth: usize,
+    cancel: &AtomicBool,
+    emitter: &ScanProgressEmitter,
     dir_counter: &mut u64,
     type_bytes: &mut HashMap<&'static str, u64>,
     top_files: &mut Vec<TopFileInfo>,
     extension_stats: &mut HashMap<String, (u64, u64)>,
 ) -> DirectorySize {
+    if cancel.load(Ordering::Relaxed) {
+        return DirectorySize {
+            path: path.to_string_lossy().to_string(),
+            size_gb: 0.0,
+            size_bytes: 0,
+            file_count: 0,
+            children: Vec::new(),
+        };
+    }
+
     *dir_counter += 1;
+    emitter.dir_scanned(path);
     let mut total = 0u64;
     let mut file_count = 0u64;
     let mut children: Vec<DirectorySize> = Vec::new();
@@ -789,6 +1014,7 @@ fn scan_directory_tree(
         return DirectorySize {
             path: path.to_string_lossy().to_string(),
             size_gb: 0.0,
+            size_bytes: 0,
             file_count: 0,
             children: Vec::new(),
         };
@@ -797,29 +1023,31 @@ fn scan_directory_tree(
     let can_recurse = depth < MAX_TREE_DEPTH;
 
     for entry in entries.flatten() {
+        if cancel.load(Ordering::Relaxed) { break; }
         let Ok(file_type) = entry.file_type() else { continue };
         if file_type.is_symlink() { continue; }
 
         if file_type.is_dir() {
             let child_path = entry.path();
             let child = if can_recurse {
-                scan_directory_tree(&child_path, depth + 1, dir_counter, type_bytes, top_files, extension_stats)
+                scan_directory_tree(&child_path, depth + 1, cancel, emitter, dir_counter, type_bytes, top_files, extension_stats)
             } else {
                 // 达到深度上限：用迭代版只算大小，不展开
                 let mut tmp_type: HashMap<&'static str, u64> = HashMap::new();
                 let (size, files, _dirs) = scan_directory_for_insights(
-                    &child_path, &mut tmp_type, top_files, extension_stats,
+                    &child_path, cancel, emitter, &mut tmp_type, top_files, extension_stats,
                 );
                 *dir_counter += _dirs;
                 for (k, v) in tmp_type { *type_bytes.entry(k).or_default() += v; }
                 DirectorySize {
                     path: child_path.to_string_lossy().to_string(),
                     size_gb: size as f64 / 1_073_741_824.0,
+                    size_bytes: size,
                     file_count: files,
                     children: Vec::new(),
                 }
             };
-            total += (child.size_gb * 1_073_741_824.0) as u64;
+            total += child.size_bytes;
             file_count += child.file_count;
             children.push(child);
         } else if file_type.is_file() {
@@ -860,6 +1088,7 @@ fn scan_directory_tree(
     DirectorySize {
         path: path.to_string_lossy().to_string(),
         size_gb,
+        size_bytes: total,
         file_count,
         children,
     }
@@ -911,7 +1140,7 @@ fn extract_hotspots(directories: &[DirectorySize]) -> Vec<DirectorySize> {
     let hotspot_paths: Vec<(String, PathBuf)> = {
         let mut paths: Vec<(String, PathBuf)> = Vec::new();
         if let Some(home) = &user_profile {
-            paths.push(("用户家目录".to_string(), home.clone()));
+            // 家目录与子路径平铺会重复计数：子路径单独列出，家目录改为「家目录其他」
             paths.push(("AppData\\Local".to_string(), home.join("AppData\\Local")));
             paths.push(("AppData\\Roaming".to_string(), home.join("AppData\\Roaming")));
             paths.push(("桌面".to_string(), home.join("Desktop")));
@@ -921,23 +1150,95 @@ fn extract_hotspots(directories: &[DirectorySize]) -> Vec<DirectorySize> {
         paths
     };
 
+    let mut listed_home_bytes = 0u64;
     for (label, path) in hotspot_paths {
         if let Some(node) = find_node_in_tree(directories, &path) {
+            // 只有家目录下的子路径才计入「家目录其他」的扣减
+            if user_profile.as_ref().is_some_and(|home| path.starts_with(home)) {
+                listed_home_bytes += node.size_bytes;
+            }
             // 复制节点但清空 children（热点卡片只展示大小，不需要嵌套）
             hotspots.push(DirectorySize {
                 path: format!("{} · {}", label, node.path),
                 size_gb: node.size_gb,
+                size_bytes: node.size_bytes,
                 file_count: node.file_count,
                 children: Vec::new(),
             });
+        }
+    }
+
+    // 「家目录其他」= 家目录总大小 − 已列出子路径大小之和，避免与子路径重复
+    if let Some(home) = &user_profile {
+        if let Some(home_node) = find_node_in_tree(directories, home) {
+            let other_bytes = home_node.size_bytes.saturating_sub(listed_home_bytes);
+            if other_bytes > 0 {
+                hotspots.push(DirectorySize {
+                    path: format!("家目录其他 · {}", home_node.path),
+                    size_gb: other_bytes as f64 / 1_073_741_824.0,
+                    size_bytes: other_bytes,
+                    file_count: 0,
+                    children: Vec::new(),
+                });
+            }
         }
     }
     hotspots
 }
 
 fn cleanup_is_allowed(id: &str) -> bool {
-    matches!(id, "temp" | "chrome" | "edge" | "trash" | "updates" | "wer" | "delivery_optimization")
+    matches!(
+        id,
+        "temp" | "chrome" | "edge" | "trash" | "updates" | "wer" | "delivery_optimization" | "dxshader" | "thumbcache"
+    )
 }
+
+/// 资源管理器缩略图缓存目录（%LOCALAPPDATA%\Microsoft\Windows\Explorer）
+fn thumbcache_dir() -> Option<PathBuf> {
+    std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .map(|root| root.join("Microsoft\\Windows\\Explorer"))
+}
+
+fn is_thumbcache_file(name: &str) -> bool {
+    name.starts_with("thumbcache_") && name.ends_with(".db")
+}
+
+/// 缩略图缓存总大小（目录内仅 thumbcache_*.db，其余文件不属于清理范围）
+fn thumbcache_bytes(dir: &Path) -> u64 {
+    fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .filter_map(|entry| entry.ok())
+                .filter(|entry| {
+                    entry.file_name().to_str().map(is_thumbcache_file).unwrap_or(false)
+                })
+                .filter_map(|entry| entry.metadata().ok())
+                .map(|meta| meta.len())
+                .sum()
+        })
+        .unwrap_or(0)
+}
+
+/// 停止 Windows Update 服务（清理更新下载缓存前置步骤，需管理员授权）
+#[cfg(windows)]
+fn stop_windows_update_service() -> Result<(), String> {
+    run_elevated("net.exe", "stop wuauserv", 60_000)
+}
+
+#[cfg(not(windows))]
+fn stop_windows_update_service() -> Result<(), String> {
+    Err("仅支持 Windows".into())
+}
+
+/// 恢复 Windows Update 服务（尽力而为，失败不阻断清理结果）
+#[cfg(windows)]
+fn start_windows_update_service() {
+    let _ = run_elevated("net.exe", "start wuauserv", 60_000);
+}
+
+#[cfg(not(windows))]
+fn start_windows_update_service() {}
 
 /// 计算清理项大小
 fn scan_cleanup_items() -> Vec<CleanupItem> {
@@ -1036,12 +1337,76 @@ fn scan_cleanup_items() -> Vec<CleanupItem> {
                 });
             }
         }
+
+        // DirectX Shader Cache
+        let dxshader = PathBuf::from(&local_app).join("D3DSCache");
+        if dxshader.exists() {
+            let (size, _) = dir_size(&dxshader);
+            items.push(CleanupItem {
+                id: "dxshader".to_string(),
+                name: "DirectX 着色器缓存".to_string(),
+                size_gb: size as f64 / 1_073_741_824.0,
+                path: dxshader.to_string_lossy().to_string(),
+                cleanable: true,
+                recommended: true,
+                reason: "显卡驱动会按需重新生成着色器缓存".to_string(),
+            });
+        }
+
+        // 资源管理器缩略图缓存（仅 thumbcache_*.db）
+        if let Some(dir) = thumbcache_dir() {
+            if dir.exists() {
+                let size = thumbcache_bytes(&dir);
+                items.push(CleanupItem {
+                    id: "thumbcache".to_string(),
+                    name: "缩略图缓存".to_string(),
+                    size_gb: size as f64 / 1_073_741_824.0,
+                    path: dir.to_string_lossy().to_string(),
+                    cleanable: true,
+                    recommended: true,
+                    reason: "删除后资源管理器会重建缩略图，建议清理后重启资源管理器".to_string(),
+                });
+            }
+        }
+    }
+
+    // Windows.old：仅检测提示，不提供 Mona 内删除（系统存储感知处理更安全）
+    let windows_old = PathBuf::from("C:\\Windows.old");
+    if windows_old.exists() {
+        let (size, _) = dir_size(&windows_old);
+        if size >= 1_073_741_824 {
+            items.push(CleanupItem {
+                id: "windows_old".to_string(),
+                name: "Windows.old（旧系统文件）".to_string(),
+                size_gb: size as f64 / 1_073_741_824.0,
+                path: windows_old.to_string_lossy().to_string(),
+                cleanable: false,
+                recommended: false,
+                reason: "建议通过系统「存储感知」清理：设置 → 系统 → 存储 → 临时文件".to_string(),
+            });
+        }
     }
     items
 }
 
-fn scan_storage_inner(app: AppHandle) -> StorageScanResult {
+/// 规范化扫描盘符：接受 "D" / "D:" / "D:\\" / "d:/" 等写法，统一为 "D:" 形式。
+/// None 时回退系统盘（SystemDrive 环境变量，通常为 "C:"）。
+fn normalize_scan_drive(drive: Option<String>) -> Result<String, String> {
+    let raw = match drive {
+        Some(value) if !value.trim().is_empty() => value.trim().to_string(),
+        _ => std::env::var("SystemDrive").unwrap_or_else(|_| "C:".to_string()),
+    };
+    let letter = raw.chars().next().unwrap_or('C').to_ascii_uppercase();
+    if !letter.is_ascii_uppercase() {
+        return Err(format!("无效盘符：{raw}"));
+    }
+    Ok(format!("{letter}:"))
+}
+
+fn scan_storage_inner(app: AppHandle, cancel: Arc<AtomicBool>, drive: Option<String>) -> Result<StorageScanResult, String> {
     let start = Instant::now();
+    let scanned_drive = normalize_scan_drive(drive)?;
+    let is_system_drive = scanned_drive == "C:";
 
     // 磁盘信息（sysinfo 快速获取）
     let disks_list = Disks::new_with_refreshed_list();
@@ -1063,60 +1428,131 @@ fn scan_storage_inner(app: AppHandle) -> StorageScanResult {
                 used_gb: used as f64 / 1_073_741_824.0,
                 total_gb: total as f64 / 1_073_741_824.0,
                 available_gb: available as f64 / 1_073_741_824.0,
+                is_removable: d.is_removable(),
             }
         })
         .collect();
 
-    // 扫描目标目录：系统盘根下的关键目录
-    let scan_targets: Vec<PathBuf> = {
+    let drive_root = PathBuf::from(format!("{scanned_drive}\\"));
+    if !drive_root.exists() {
+        return Err(format!("磁盘 {scanned_drive} 不存在或不可访问"));
+    }
+
+    // 扫描目标目录：系统盘为根下的关键目录；其他盘扫根目录全部顶层子目录
+    // （跳过回收站/卷信息等系统保留目录，避免无权限目录产出 0 字节块）
+    let scan_targets: Vec<PathBuf> = if is_system_drive {
         let mut targets = Vec::new();
-        let c_drive = PathBuf::from("C:\\");
-        if c_drive.exists() {
-            for name in ["Windows", "Users", "Program Files", "Program Files (x86)", "ProgramData"] {
-                let p = c_drive.join(name);
-                if p.exists() {
-                    targets.push(p);
-                }
+        for name in ["Windows", "Users", "Program Files", "Program Files (x86)", "ProgramData"] {
+            let p = drive_root.join(name);
+            if p.exists() {
+                targets.push(p);
             }
         }
         targets
+    } else {
+        let reserved = ["$RECYCLE.BIN", "System Volume Information"];
+        fs::read_dir(&drive_root)
+            .map_err(|e| format!("读取 {scanned_drive} 根目录失败: {e}"))?
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.path())
+            .filter(|path| path.is_dir())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .map(|name| !reserved.iter().any(|r| name.eq_ignore_ascii_case(r)))
+                    .unwrap_or(false)
+            })
+            .collect()
     };
+
+    // 每次扫描开始前复位取消令牌
+    cancel.store(false, Ordering::Relaxed);
+
+    let emitter = ScanProgressEmitter::new({
+        let app = app.clone();
+        move |path, dirs| {
+            let _ = app.emit(
+                "storage-scan-progress",
+                ScanProgress {
+                    current_path: path.to_string_lossy().to_string(),
+                    scanned_dirs: dirs,
+                    elapsed_secs: start.elapsed().as_secs_f64(),
+                },
+            );
+        }
+    });
 
     let mut directories = Vec::new();
     let mut total_scanned = 0u64;
-    let mut dir_count = 0u64;
     let mut total_files = 0u64;
-    let mut type_bytes = HashMap::new();
+    let mut type_bytes: HashMap<&'static str, u64> = HashMap::new();
     let mut top_files: Vec<TopFileInfo> = Vec::new();
     let mut extension_stats: HashMap<String, (u64, u64)> = HashMap::new();
 
-    for target in &scan_targets {
-        let _ = app.emit(
-            "storage-scan-progress",
-            ScanProgress {
-                current_path: target.to_string_lossy().to_string(),
-                scanned_dirs: dir_count,
-                elapsed_secs: start.elapsed().as_secs_f64(),
-            },
-        );
-        let node = scan_directory_tree(target, 0, &mut dir_count, &mut type_bytes, &mut top_files, &mut extension_stats);
-        total_scanned += (node.size_gb * 1_073_741_824.0) as u64;
+    // 并行扫描顶层目录（目录间无共享状态，各自收集后合并）
+    let results: Vec<_> = std::thread::scope(|s| {
+        scan_targets
+            .iter()
+            .map(|target| {
+                let cancel = &cancel;
+                let emitter = &emitter;
+                s.spawn(move || {
+                    let mut local_dirs = 0u64;
+                    let mut local_types = HashMap::new();
+                    let mut local_top = Vec::new();
+                    let mut local_ext = HashMap::new();
+                    let node = scan_directory_tree(
+                        target,
+                        0,
+                        cancel,
+                        emitter,
+                        &mut local_dirs,
+                        &mut local_types,
+                        &mut local_top,
+                        &mut local_ext,
+                    );
+                    (node, local_dirs, local_types, local_top, local_ext)
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().expect("扫描线程 panic"))
+            .collect()
+    });
+
+    for (node, _local_dirs, local_types, local_top, local_ext) in results {
+        total_scanned += node.size_bytes;
         total_files += node.file_count;
+        for (k, v) in local_types {
+            *type_bytes.entry(k).or_default() += v;
+        }
+        top_files.extend(local_top);
+        for (k, v) in local_ext {
+            let entry = extension_stats.entry(k).or_insert((0, 0));
+            entry.0 += v.0;
+            entry.1 += v.1;
+        }
         directories.push(node);
     }
+    let dir_count = emitter.total_dirs();
 
     // 按大小降序
     directories.sort_by(|a, b| b.size_gb.partial_cmp(&a.size_gb).unwrap_or(std::cmp::Ordering::Equal));
 
-    let _ = app.emit(
-        "storage-scan-progress",
-        ScanProgress {
-            current_path: "正在扫描清理项...".to_string(),
-            scanned_dirs: dir_count,
-            elapsed_secs: start.elapsed().as_secs_f64(),
-        },
-    );
-    let cleanup_items = scan_cleanup_items();
+    // 清理项与热点路径均为系统盘口径，非系统盘扫描跳过
+    let cleanup_items = if is_system_drive {
+        let _ = app.emit(
+            "storage-scan-progress",
+            ScanProgress {
+                current_path: "正在扫描清理项...".to_string(),
+                scanned_dirs: dir_count,
+                elapsed_secs: start.elapsed().as_secs_f64(),
+            },
+        );
+        scan_cleanup_items()
+    } else {
+        Vec::new()
+    };
     let file_types = ["应用", "视频", "图片", "文档", "系统", "其他"]
         .into_iter()
         .map(|category| FileTypeSize {
@@ -1128,15 +1564,21 @@ fn scan_storage_inner(app: AppHandle) -> StorageScanResult {
 
     let extension_buckets = build_extension_buckets(extension_stats);
     let top_files = build_top_files(top_files);
+    let cancelled = cancel.load(Ordering::Relaxed);
     let scan_summary = ScanSummary {
         total_files,
         total_dirs: dir_count,
         scan_duration_secs: start.elapsed().as_secs_f64(),
-        scanned_disk: "C:".to_string(),
+        scanned_disk: scanned_drive.clone(),
+        cancelled,
     };
-    let hotspots = extract_hotspots(&directories);
+    let hotspots = if is_system_drive {
+        extract_hotspots(&directories)
+    } else {
+        Vec::new()
+    };
 
-    StorageScanResult {
+    Ok(StorageScanResult {
         disks,
         directories,
         cleanup_items,
@@ -1146,14 +1588,31 @@ fn scan_storage_inner(app: AppHandle) -> StorageScanResult {
         scan_summary: Some(scan_summary),
         extension_buckets,
         hotspots,
-    }
+    })
 }
 
 #[tauri::command]
-pub async fn scan_storage(app: AppHandle) -> Result<StorageScanResult, String> {
-    tokio::task::spawn_blocking(move || scan_storage_inner(app))
+pub async fn scan_storage(
+    app: AppHandle,
+    state: State<'_, SystemState>,
+    drive: Option<String>,
+) -> Result<StorageScanResult, String> {
+    let cancel = state
+        .0
+        .lock()
+        .map_err(|e| format!("State lock: {}", e))?
+        .scan_cancel
+        .clone();
+    tokio::task::spawn_blocking(move || scan_storage_inner(app, cancel, drive))
         .await
-        .map_err(|error| format!("存储扫描任务失败: {error}"))
+        .map_err(|error| format!("存储扫描任务失败: {error}"))?
+}
+
+#[tauri::command]
+pub fn cancel_storage_scan(state: State<'_, SystemState>) -> Result<(), String> {
+    let inner = state.0.lock().map_err(|e| format!("State lock: {}", e))?;
+    inner.scan_cancel.store(true, Ordering::Relaxed);
+    Ok(())
 }
 
 /// 在 Windows 资源管理器中打开指定目录（绕过 Tauri opener 权限限制）
@@ -1210,7 +1669,11 @@ fn cleanup_path(id: &str) -> Option<PathBuf> {
         "delivery_optimization" => Some(PathBuf::from(
             "C:\\Windows\\ServiceProfiles\\NetworkService\\AppData\\Local\\Microsoft\\Windows\\DeliveryOptimization",
         )),
-        // trash 走 PowerShell，不走目录删除路径
+        "dxshader" => std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .map(|root| root.join("D3DSCache")),
+        "thumbcache" => thumbcache_dir(),
+        // trash 走 PowerShell，windows_old 仅提示不清理，不走目录删除路径
         _ => None,
     }
 }
@@ -1245,14 +1708,39 @@ fn clear_directory_with_verification(id: &str) -> Result<CleanupVerification, St
             after_bytes: 0,
         });
     }
-    let before = dir_size(&path).0;
+
+    // Windows 更新缓存：先停 wuauserv 释放文件占用，清理后恢复服务（无管理员权限时放弃该项）
+    let update_service_stopped = if id == "updates" {
+        match stop_windows_update_service() {
+            Ok(()) => true,
+            Err(error) => return Err(format!("无法停止 Windows Update 服务（需管理员权限）：{error}")),
+        }
+    } else {
+        false
+    };
+
+    // 缩略图缓存只删除 thumbcache_*.db，其余文件不属于清理范围
+    let before = if id == "thumbcache" { thumbcache_bytes(&path) } else { dir_size(&path).0 };
     let entries = fs::read_dir(&path).map_err(|error| format!("{}: {error}", path.display()))?;
     for entry in entries.flatten() {
         let entry_path = entry.path();
         let Ok(file_type) = entry.file_type() else { continue };
+        if id == "thumbcache" {
+            let is_target = entry_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(is_thumbcache_file)
+                .unwrap_or(false);
+            if !is_target {
+                continue;
+            }
+        }
         let result = if file_type.is_symlink() {
             continue;
         } else if file_type.is_dir() {
+            if id == "thumbcache" {
+                continue;
+            }
             fs::remove_dir_all(&entry_path)
         } else {
             fs::remove_file(&entry_path)
@@ -1261,7 +1749,12 @@ fn clear_directory_with_verification(id: &str) -> Result<CleanupVerification, St
             log::warn!("storage cleanup skipped {}: {error}", entry_path.display());
         }
     }
-    let after = dir_size(&path).0;
+    let after = if id == "thumbcache" { thumbcache_bytes(&path) } else { dir_size(&path).0 };
+
+    if update_service_stopped {
+        start_windows_update_service();
+    }
+
     Ok(CleanupVerification {
         id: id.to_string(),
         path: path_str,
@@ -1332,5 +1825,142 @@ pub async fn clean_storage(
         cleaned_ids,
         failures,
         verification,
+    })
+}
+
+// ===== 大文件移至回收站（存储价值闭环 P0） =====
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageTrashItem {
+    pub path: String,
+    pub size_gb: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageTrashFailure {
+    pub path: String,
+    pub error: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageTrashResult {
+    pub trashed: Vec<StorageTrashItem>,
+    pub failures: Vec<StorageTrashFailure>,
+    pub freed_gb: f64,
+}
+
+/// 大文件删除的系统关键目录前缀（路径小写、统一 \ 分隔后比较）
+const TRASH_BLOCKED_PREFIXES: [&str; 3] = [
+    "c:\\windows",
+    "c:\\program files",
+    "c:\\program files (x86)",
+];
+
+/// 校验待回收路径并返回文件大小（纯校验不删除，便于单测）
+fn trash_path_check(path: &Path) -> Result<u64, String> {
+    let normalized = path.to_string_lossy().replace('/', "\\").to_lowercase();
+    if TRASH_BLOCKED_PREFIXES
+        .iter()
+        .any(|prefix| normalized.starts_with(prefix))
+    {
+        return Err("系统关键目录下的文件不允许由 Mona 移除".to_string());
+    }
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|e| format!("文件不存在或不可访问: {e}"))?;
+    if metadata.file_type().is_symlink() {
+        return Err("符号链接不允许移除".to_string());
+    }
+    if !metadata.is_file() {
+        return Err("仅支持移除文件，目录请在资源管理器中处理".to_string());
+    }
+    Ok(metadata.len())
+}
+
+#[tauri::command]
+pub async fn system_trash_storage_files(
+    state: State<'_, SystemState>,
+    paths: Vec<String>,
+) -> Result<StorageTrashResult, String> {
+    if paths.is_empty() {
+        return Err("没有需要移除的文件".to_string());
+    }
+    if paths.len() > 20 {
+        return Err("单次最多移除 20 个文件".to_string());
+    }
+
+    let (trashed, failures, freed_bytes) = tokio::task::spawn_blocking(move || {
+        let mut trashed: Vec<StorageTrashItem> = Vec::new();
+        let mut failures: Vec<StorageTrashFailure> = Vec::new();
+        let mut freed_bytes = 0u64;
+        for raw in paths {
+            let path = PathBuf::from(&raw);
+            match trash_path_check(&path) {
+                Ok(size) => match trash::delete(&path) {
+                    Ok(()) => {
+                        freed_bytes += size;
+                        trashed.push(StorageTrashItem {
+                            path: raw,
+                            size_gb: size as f64 / 1_073_741_824.0,
+                        });
+                    }
+                    Err(e) => failures.push(StorageTrashFailure {
+                        path: raw,
+                        error: e.to_string(),
+                    }),
+                },
+                Err(error) => failures.push(StorageTrashFailure { path: raw, error }),
+            }
+        }
+        (trashed, failures, freed_bytes)
+    })
+    .await
+    .map_err(|error| format!("回收站任务失败: {error}"))?;
+
+    // 写维护历史（category 固定为「清理」，巡检卡 maintained 回流自动生效）
+    if let Ok(inner) = state.0.lock() {
+        let _ = inner.db.execute_batch(
+            "CREATE TABLE IF NOT EXISTS cleanup_operations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                status TEXT NOT NULL,
+                bytes_changed INTEGER NOT NULL,
+                detail TEXT NOT NULL
+            );",
+        );
+        let status = if failures.is_empty() {
+            "成功"
+        } else if trashed.is_empty() {
+            "失败"
+        } else {
+            "部分成功"
+        };
+        let title = if trashed.is_empty() {
+            "大文件移至回收站".to_string()
+        } else {
+            format!("将 {} 个大文件移至回收站", trashed.len())
+        };
+        let detail = if failures.is_empty() {
+            "已移至系统回收站，可从回收站恢复".to_string()
+        } else {
+            failures
+                .iter()
+                .map(|f| format!("{}: {}", f.path, f.error))
+                .collect::<Vec<_>>()
+                .join("；")
+        };
+        let _ = inner.db.execute(
+            "INSERT INTO cleanup_operations (ts, title, status, bytes_changed, detail) VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![now_ts(), title, status, freed_bytes as i64, detail],
+        );
+    }
+
+    Ok(StorageTrashResult {
+        trashed,
+        failures,
+        freed_gb: freed_bytes as f64 / 1_073_741_824.0,
     })
 }

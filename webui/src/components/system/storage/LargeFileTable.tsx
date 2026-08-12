@@ -1,15 +1,29 @@
-import { FileText, Sparkles } from "lucide-react";
+import { FileText, Sparkles, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
-import { PanelCard, secondaryButtonClass } from "../SystemUi";
-import type { TopFileInfo } from "../useSystemData";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Button } from "@/components/ui/button";
+
+import { PanelCard } from "../SystemUi";
+import type { StorageTrashResult, TopFileInfo } from "../useSystemData";
 import { formatStorage } from "../useSystemData";
 
 interface Props {
   files: TopFileInfo[];
   /** 点击"交给 Mona 评估"按钮触发 AI 分析 */
   onAnalyze?: (goal: string) => void;
+  /** 移至系统回收站（可恢复）；不传则不显示删除入口 */
+  onTrash?: (paths: string[]) => Promise<StorageTrashResult>;
 }
 
 const BUCKET_LABEL: Record<string, string> = {
@@ -24,7 +38,7 @@ const BUCKET_LABEL: Record<string, string> = {
 const DISPLAY_LIMIT = 20;
 const MENU_WIDTH = 200;
 const MENU_ITEM_HEIGHT = 32;
-const MENU_ITEMS = 2;
+const MENU_ITEMS = 3;
 
 /** 在 Windows 资源管理器中打开并选中文件 */
 async function revealInExplorer(path: string): Promise<void> {
@@ -36,9 +50,12 @@ async function revealInExplorer(path: string): Promise<void> {
 }
 
 /** 大文件列表：展示全局 Top 20 大文件（脱敏：仅扩展名 + 目录名 + 大小 + 修改时间桶） */
-export function LargeFileTable({ files, onAnalyze }: Props) {
+export function LargeFileTable({ files, onAnalyze, onTrash }: Props) {
   const displayFiles = files.slice(0, DISPLAY_LIMIT);
   const [menu, setMenu] = useState<{ path: string; x: number; y: number } | null>(null);
+  const [trashTarget, setTrashTarget] = useState<TopFileInfo | null>(null);
+  const [trashPending, setTrashPending] = useState(false);
+  const [trashError, setTrashError] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
   const handleAnalyze = () => {
@@ -73,6 +90,36 @@ export function LargeFileTable({ files, onAnalyze }: Props) {
 
   const closeMenu = () => setMenu(null);
 
+  const handleTrashRequest = (path: string) => {
+    const target = displayFiles.find((file) => file.path === path) ?? null;
+    setTrashError(null);
+    setTrashTarget(target);
+    closeMenu();
+  };
+
+  const handleTrashConfirm = async (event: React.MouseEvent) => {
+    // Radix 默认点击 Action 即关闭弹窗；改为成功后自行关闭，
+    // 失败时保持弹窗并展示原因，绝不静默失败。
+    event.preventDefault();
+    if (!trashTarget || !onTrash) return;
+    setTrashPending(true);
+    setTrashError(null);
+    try {
+      const result = await onTrash([trashTarget.path]);
+      if (result.failures.length > 0) {
+        setTrashPending(false);
+        setTrashError(result.failures.map((f) => f.error).join("；"));
+        return;
+      }
+    } catch (error) {
+      setTrashPending(false);
+      setTrashError(error instanceof Error ? error.message : String(error));
+      return;
+    }
+    setTrashPending(false);
+    setTrashTarget(null);
+  };
+
   // 点击外部关闭菜单
   useEffect(() => {
     if (!menu) return;
@@ -98,10 +145,10 @@ export function LargeFileTable({ files, onAnalyze }: Props) {
       className="h-full"
       action={
         displayFiles.length > 0 && onAnalyze ? (
-          <button type="button" className={secondaryButtonClass} onClick={handleAnalyze}>
+          <Button type="button" variant="outline" size="sm" onClick={handleAnalyze}>
             <Sparkles className="mr-1.5 h-3.5 w-3.5" />
             交给 Mona 评估
-          </button>
+          </Button>
         ) : undefined
       }
     >
@@ -180,8 +227,63 @@ export function LargeFileTable({ files, onAnalyze }: Props) {
           >
             复制路径
           </button>
+          {onTrash && (
+            <button
+              type="button"
+              className="flex w-full cursor-default select-none items-center rounded-sm px-2 py-1.5 text-xs text-destructive outline-none hover:bg-destructive/10"
+              onClick={() => handleTrashRequest(menu.path)}
+            >
+              移至回收站
+            </button>
+          )}
         </div>
       )}
+
+      {/* 移至回收站确认弹窗（复刻产物区回收站语义：可恢复、失败保持弹窗） */}
+      <AlertDialog
+        open={!!trashTarget}
+        onOpenChange={(open) => {
+          if (!open) {
+            setTrashTarget(null);
+            setTrashError(null);
+          }
+        }}
+      >
+        <AlertDialogContent className="w-[min(calc(100vw-2rem),22.75rem)] gap-0 rounded-2xl border border-border/60 bg-card/95 p-5 text-center shadow-lg backdrop-blur-xl sm:rounded-2xl">
+          <AlertDialogHeader className="items-center space-y-0 text-center">
+            <div className="mb-5 grid h-16 w-16 place-items-center rounded-full bg-destructive/10 text-destructive">
+              <div className="grid h-9 w-9 place-items-center rounded-full border border-destructive/20 bg-destructive/5">
+                <Trash2 className="h-5 w-5" strokeWidth={2.4} aria-hidden />
+              </div>
+            </div>
+            <AlertDialogTitle className="text-center text-[20px] font-semibold leading-tight tracking-[-0.02em] text-foreground">
+              删除这个大文件？
+            </AlertDialogTitle>
+            <AlertDialogDescription className="mt-3 max-w-[17rem] text-center text-[14px] leading-6 text-muted-foreground">
+              {trashTarget
+                ? `「${trashTarget.parentDirName}」下的 ${trashTarget.extension === "(none)" ? "文件" : `.${trashTarget.extension} 文件`}（${formatStorage(trashTarget.sizeGb)}）将被移至系统回收站，需要时可以从回收站恢复。`
+                : ""}
+            </AlertDialogDescription>
+            {trashError ? (
+              <p className="mt-3 max-w-[17rem] text-center text-[13px] leading-5 text-destructive">
+                移至回收站失败：{trashError}
+              </p>
+            ) : null}
+          </AlertDialogHeader>
+          <AlertDialogFooter className="mt-7 grid grid-cols-2 gap-3 space-x-0">
+            <AlertDialogCancel className="mt-0 h-11 rounded-full border-0 bg-muted/70 px-5 text-[15px] font-semibold text-foreground shadow-none hover:bg-muted">
+              取消
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleTrashConfirm}
+              disabled={trashPending}
+              className="h-11 rounded-full bg-destructive px-5 text-[15px] font-semibold text-destructive-foreground shadow-none hover:bg-destructive/90"
+            >
+              {trashPending ? "正在移除…" : "移至回收站"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </PanelCard>
   );
 }

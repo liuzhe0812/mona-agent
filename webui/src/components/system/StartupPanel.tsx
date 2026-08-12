@@ -74,7 +74,7 @@ function SortableHeader({
         className="inline-flex items-center gap-1 py-2 text-left font-medium transition hover:text-foreground"
       >
         {label}
-        {!direction ? <ArrowUpDown className="h-3 w-3" /> : direction === "asc" ? <ArrowUp className="h-3 w-3 text-blue-600" /> : <ArrowDown className="h-3 w-3 text-blue-600" />}
+        {!direction ? <ArrowUpDown className="h-3 w-3" /> : direction === "asc" ? <ArrowUp className="h-3 w-3 text-primary" /> : <ArrowDown className="h-3 w-3 text-primary" />}
       </button>
     </th>
   );
@@ -236,7 +236,7 @@ export function StartupPanel({ onHandoff }: StartupPanelProps) {
                     <td><StatusPill tone={item.scope === "user" ? "blue" : "violet"}>{scopeLabel(item.scope)}</StatusPill></td>
                     <td>{item.enabled ? <StatusPill tone="green">已启用</StatusPill> : <StatusPill tone="neutral">已禁用</StatusPill>}</td>
                     <td className="truncate" title={item.added || undefined}>{item.added ?? "—"}</td>
-                    <td className="text-right"><button role="switch" aria-checked={item.enabled} aria-label={`切换 ${item.name} 启动状态`} disabled={toggling} onClick={() => toggleItem(item)} className={`relative h-5 w-9 rounded-full transition disabled:opacity-50 ${item.enabled ? "bg-blue-600" : "bg-muted"}`}><span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition ${item.enabled ? "left-[18px]" : "left-0.5"}`} /></button></td>
+                    <td className="text-right"><button role="switch" aria-checked={item.enabled} aria-label={`切换 ${item.name} 启动状态`} disabled={toggling} onClick={() => toggleItem(item)} className={`relative h-5 w-9 rounded-full transition disabled:opacity-50 ${item.enabled ? "bg-primary" : "bg-muted"}`}><span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition ${item.enabled ? "left-[18px]" : "left-0.5"}`} /></button></td>
                   </tr>
                 ))}
               </tbody>

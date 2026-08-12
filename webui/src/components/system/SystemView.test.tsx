@@ -167,6 +167,18 @@ vi.mock("@tauri-apps/api/core", () => ({
       sourceVersion: "1.0",
     });
     if (command === "system_remove_windows_app") return Promise.resolve({ success: true, message: "卸载完成", exitCode: 0, residuals: [] });
+    if (command === "system_check_pending_reboot") return Promise.resolve({
+      id: "pending_reboot",
+      status: "attention",
+      summary: "检测到待重启状态",
+      detail: "来源：Windows 更新。保存工作并重启后再复查相关问题。",
+    });
+    if (command.startsWith("system_check_")) return Promise.resolve({
+      id: command.replace("system_check_", ""),
+      status: "clear",
+      summary: "未检测到异常",
+      detail: "检查完成，未发现问题。",
+    });
     if (command === "scan_storage") return storageScanMock();
     return Promise.resolve({
       cpu: { usagePercent: 18, frequencyGhz: 2.1, coreCount: 8 },
@@ -194,6 +206,7 @@ describe("SystemView", () => {
     configurationApplyMock.mockReset();
     configurationApplyMock.mockResolvedValue({ itemId: "privacy_advertising_id", success: true, detail: "操作已完成", requiresRestart: false });
     localStorage.removeItem("system.storageScan");
+    localStorage.removeItem("system.assistantCollapsed");
   });
 
   it("shows the overview recovery state when native data cannot be read", async () => {
@@ -204,23 +217,37 @@ describe("SystemView", () => {
     expect(screen.getByText("系统概览读取失败")).toBeTruthy();
   });
 
+  it("shows system health checks on the overview with expandable details", async () => {
+    render(<SystemView />);
+
+    expect(await screen.findByRole("heading", { name: "系统健康检查" })).toBeTruthy();
+    expect((await screen.findAllByText("待重启状态")).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("检测到待重启状态").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("需关注").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("正常").length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole("button", { name: /待重启状态/ }));
+    expect(screen.getByText(/来源：Windows 更新/)).toBeTruthy();
+
+    expect(screen.getByRole("button", { name: /重新检查/ })).toBeTruthy();
+  });
+
   it("toggles the Mona assistant entirely through the header Mona button", () => {
     localStorage.removeItem("system.assistantCollapsed");
     render(<SystemView />);
 
-    const pageHeader = screen.getByRole("heading", { name: "系统" }).closest("header")!;
-    const toggleButton = within(pageHeader).getByRole("button", { name: "收起 Mona 系统管家" });
+    const toggleButton = screen.getByRole("button", { name: "收起 Mona 系统管家" });
     fireEvent.click(toggleButton);
 
     const assistant = document.querySelector('aside[aria-label="Mona 系统管家"]')!;
     expect(assistant.getAttribute("aria-hidden")).toBe("true");
-    expect(within(pageHeader).getByRole("button", { name: "展开 Mona 系统管家" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "展开 Mona 系统管家" })).toBeTruthy();
     expect(screen.getByTestId("system-layout").className).toContain("grid-cols-[minmax(0,1fr)]");
     expect(screen.getByTestId("system-layout").className).not.toContain("grid-cols-[minmax(0,1fr)_360px]");
 
-    fireEvent.click(within(pageHeader).getByRole("button", { name: "展开 Mona 系统管家" }));
+    fireEvent.click(screen.getByRole("button", { name: "展开 Mona 系统管家" }));
     expect(document.querySelector('aside[aria-label="Mona 系统管家"]')?.getAttribute("aria-hidden")).toBe("false");
-    expect(within(pageHeader).getByRole("button", { name: "收起 Mona 系统管家" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "收起 Mona 系统管家" })).toBeTruthy();
     expect(screen.getByTestId("system-layout").className).toContain("grid-cols-[minmax(0,1fr)_360px]");
 
     localStorage.removeItem("system.assistantCollapsed");
@@ -230,9 +257,7 @@ describe("SystemView", () => {
     render(<SystemView />);
 
     expect(screen.getByRole("heading", { name: "电脑状态概览" })).toBeTruthy();
-    const headerIcon = screen.getByRole("heading", { name: "系统" }).closest("header")?.querySelector("img");
-    expect(headerIcon).not.toBeNull();
-    expect((headerIcon as HTMLImageElement).src).toContain("sidebar-system");
+    expect(screen.getByRole("tablist", { name: "系统模块导航" })).toBeTruthy();
 
     fireEvent.click(screen.getByRole("tab", { name: "存储空间" }));
     expect(screen.getByText(/尚未扫描/)).toBeTruthy();
@@ -255,10 +280,10 @@ describe("SystemView", () => {
 
     expect(await screen.findByRole("button", { name: "10 分钟" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Mona 系统管家" })).toBeTruthy();
-    expect(screen.getByText("从一个问题开始")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "释放 C 盘可清理空间" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "减少不必要的开机启动项" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "调整系统配置提升响应速度" })).toBeTruthy();
+    expect(await screen.findByText("巡检发现")).toBeTruthy();
+    expect(screen.getByTestId("inspection-card-software")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "一键更新" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "释放 C 盘可清理空间" })).toBeNull();
     expect(screen.getByTestId("system-layout").className).toContain(
       "grid-cols-[minmax(0,1fr)_360px]",
     );
@@ -320,7 +345,7 @@ describe("SystemView", () => {
 
     expect(await screen.findByRole("heading", { name: "启动项有新增" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "审查启动项" }));
-    await waitFor(() => expect(vi.mocked(invoke)).toHaveBeenCalledWith("system_acknowledge_startup_items"));
+    await waitFor(() => expect(vi.mocked(invoke)).toHaveBeenCalledWith("system_acknowledge_startup_items", {}));
     expect(await screen.findByRole("heading", { name: "启动应用" })).toBeTruthy();
 
     fireEvent.click(screen.getByRole("tab", { name: "概览" }));
@@ -442,6 +467,8 @@ describe("SystemView", () => {
     expect(await screen.findByText("106.1 GB")).toBeTruthy();
     expect(screen.getByText("86.5 GB")).toBeTruthy();
     expect(screen.getByText("19.6 GB")).toBeTruthy();
+    // 指标卡口径为系统盘（无扫描数据时回退 C:），不再是全盘聚合
+    expect(screen.getAllByText("系统盘 C:").length).toBeGreaterThan(0);
     expect(storageScanMock).toHaveBeenCalledTimes(scanCallsBeforeRender);
   });
 
@@ -478,6 +505,71 @@ describe("SystemView", () => {
     // WizTree 布局：CleanupPanel 中的清理项 + FileTypePanel 中的类型
     expect((await screen.findAllByText("1.5 GB")).length).toBeGreaterThan(0);
     expect(screen.getByText("应用")).toBeTruthy();
+    // 扫描覆盖率说明：totalScannedGb(20) / 系统盘已用(50) = 40%
+    expect((await screen.findAllByText(/约占 C: 已用的 40%/)).length).toBeGreaterThan(0);
+  });
+
+  it("cancels an active storage scan and keeps the partial result marked as cancelled", async () => {
+    let resolveScan!: (value: StorageScanResult) => void;
+    storageScanMock.mockReturnValueOnce(new Promise((resolve) => { resolveScan = resolve; }));
+    render(<SystemView initialTab="storage" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "开始扫描" }));
+    expect(screen.getAllByText("正在扫描磁盘...").length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "取消扫描" }));
+    expect(vi.mocked(invoke)).toHaveBeenCalledWith("cancel_storage_scan");
+
+    await act(async () => resolveScan({
+      disks: [{ driveLetter: "C:\\", usagePercent: 50, usedGb: 50, totalGb: 100, availableGb: 50 }],
+      directories: [{ path: "C:\\Users", sizeGb: 8, fileCount: 4 }],
+      cleanupItems: [],
+      fileTypes: [{ category: "应用", sizeGb: 5 }],
+      totalScannedGb: 8,
+      scanSummary: { totalFiles: 4, totalDirs: 2, scanDurationSecs: 1.2, scannedDisk: "C:", cancelled: true },
+    }));
+
+    // 取消后状态回落到 done，状态栏标记部分结果而非失败
+    expect((await screen.findAllByText(/扫描已取消 · 部分结果/)).length).toBeGreaterThan(0);
+    expect(screen.queryByRole("button", { name: "取消扫描" })).toBeNull();
+    expect(screen.getByRole("button", { name: "重新扫描" })).toBeTruthy();
+  });
+
+  it("shows a real cleanup preview list and warns that cache cleanup bypasses the recycle bin", async () => {
+    let resolveScan!: (value: StorageScanResult) => void;
+    storageScanMock.mockReturnValueOnce(new Promise((resolve) => { resolveScan = resolve; }));
+    render(<SystemView initialTab="storage" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "开始扫描" }));
+    await act(async () => resolveScan({
+      disks: [{ driveLetter: "C:\\", usagePercent: 50, usedGb: 50, totalGb: 100, availableGb: 50 }],
+      directories: [{ path: "C:\\Users", sizeGb: 8, fileCount: 4 }],
+      cleanupItems: [
+        { id: "temp", name: "系统临时文件", sizeGb: 1.5, path: "C:\\Windows\\Temp", cleanable: true, recommended: true, reason: "应用未占用的临时文件可安全清理" },
+        { id: "windows_old", name: "Windows.old（旧系统文件）", sizeGb: 12, path: "C:\\Windows.old", cleanable: false, recommended: false, reason: "建议通过系统「存储感知」清理：设置 → 系统 → 存储 → 临时文件" },
+      ],
+      fileTypes: [],
+      totalScannedGb: 8,
+    }));
+
+    // Windows.old 仅提示，不提供 Mona 内删除（reason 经 title 提示暴露）
+    expect(await screen.findByText("Windows.old（旧系统文件）")).toBeTruthy();
+    expect(screen.getByText("交由 Windows")).toBeTruthy();
+    expect(screen.getByTitle(/建议通过系统「存储感知」清理/)).toBeTruthy();
+
+    // 勾选可清理项（挂载时 items 为空，初始选中集不含扫描后到达的项）
+    fireEvent.click(screen.getByRole("checkbox", { name: "选择 系统临时文件" }));
+
+    // 预览清单为真清单（项目名 + 路径 + 大小 + reason），不再是 notice 拼文本
+    // Radix DropdownMenu 在 jsdom 中通过键盘事件打开（pointerdown 依赖 PointerEvent）
+    fireEvent.keyDown(screen.getByRole("button", { name: "预览清单" }), { key: "Enter" });
+    expect(await screen.findByText("C:\\Windows\\Temp")).toBeTruthy();
+    expect(screen.getByText("应用未占用的临时文件可安全清理")).toBeTruthy();
+
+    // 确认弹窗文案明示直接删除语义（与产物区回收站语义区分）
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    fireEvent.click(screen.getByRole("button", { name: "安全清理" }));
+    expect(await screen.findByText(/这些文件将被直接删除，不经过回收站/)).toBeTruthy();
   });
 
   it("removes a handed-off software failure from the current task list", async () => {
@@ -552,7 +644,9 @@ describe("SystemView", () => {
   it("keeps a real Agent plan across tabs and opens its evidence source", async () => {
     render(<SystemView initialTab="software" />);
 
-    fireEvent.click(screen.getByRole("button", { name: "释放 C 盘可清理空间" }));
+    const goalInput = await screen.findByLabelText("描述系统维护目标");
+    fireEvent.change(goalInput, { target: { value: "释放 C 盘可清理空间" } });
+    fireEvent.keyDown(goalInput, { key: "Enter" });
     expect(screen.getByText("正在整理系统证据")).toBeTruthy();
 
     expect(await screen.findByText("已发现 1 项可更新软件")).toBeTruthy();
@@ -570,7 +664,9 @@ describe("SystemView", () => {
   it("executes only the selected real Agent actions and reports verification", async () => {
     render(<SystemView initialTab="software" />);
 
-    fireEvent.click(screen.getByRole("button", { name: "释放 C 盘可清理空间" }));
+    const goalInput = await screen.findByLabelText("描述系统维护目标");
+    fireEvent.change(goalInput, { target: { value: "释放 C 盘可清理空间" } });
+    fireEvent.keyDown(goalInput, { key: "Enter" });
     await screen.findByText("更新 Google Chrome");
     fireEvent.click(screen.getByRole("button", { name: "确认并执行" }));
 

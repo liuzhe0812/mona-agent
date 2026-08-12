@@ -1,6 +1,7 @@
 import { AlertTriangle, CheckCircle2, Loader2, Menu, RotateCcw, Shield, ShieldOff, Zap } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
+import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
 
@@ -16,7 +17,7 @@ import {
   type DefenderStatus,
   type PerformanceItem,
 } from "./advancedSystemApi";
-import { PanelCard, StatusPill, primaryButtonClass, secondaryButtonClass } from "./SystemUi";
+import { PanelCard, StatusPill } from "./SystemUi";
 
 // ===== P2 性能微调 =====
 
@@ -166,15 +167,16 @@ export function ContextMenuSection() {
                 </div>
                 <p className="mt-0.5 text-[11px] text-muted-foreground">{item.description}</p>
               </div>
-              <button
+              <Button
                 type="button"
-                className={item.isApplied ? secondaryButtonClass : primaryButtonClass}
+                variant={item.isApplied ? "outline" : "default"}
+                size="sm"
                 onClick={() => void handleToggle(item)}
                 disabled={acting === item.id}
               >
                 {acting === item.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : item.isApplied ? <RotateCcw className="h-3.5 w-3.5" /> : <Menu className="h-3.5 w-3.5" />}
                 {item.isApplied ? "移除" : "添加"}
-              </button>
+              </Button>
             </div>
           ))}
         </div>
@@ -268,26 +270,30 @@ export function DefenderSection() {
                   {!hasThirdParty && <span className="font-medium text-red-600">，且当前没有第三方杀毒软件保护</span>}
                 </span>
               </label>
-              <button
+              <Button
                 type="button"
-                className={cn(primaryButtonClass, "border-red-500/60 bg-red-500/10 text-red-600 hover:bg-red-500/20")}
+                variant="outline"
+                size="sm"
+                className="border-red-500/60 bg-red-500/10 text-red-600 hover:bg-red-500/20 hover:text-red-600"
                 onClick={() => void handleDisable()}
                 disabled={!confirmed || acting}
               >
                 {acting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ShieldOff className="h-3.5 w-3.5" />}
                 禁用实时保护
-              </button>
+              </Button>
             </div>
           ) : (
-            <button
+            <Button
               type="button"
-              className={cn(primaryButtonClass, "border-emerald-500/60 bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20")}
+              variant="outline"
+              size="sm"
+              className="border-emerald-500/60 bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20 hover:text-emerald-600"
               onClick={() => void handleEnable()}
               disabled={acting}
             >
               {acting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Shield className="h-3.5 w-3.5" />}
               启用实时保护
-            </button>
+            </Button>
           )}
 
           <div className="flex items-start gap-1.5 text-[10px] text-muted-foreground/70">

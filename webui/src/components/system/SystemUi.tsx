@@ -28,9 +28,9 @@ export function MetricCard({
     orange: "bg-orange-500/10 text-orange-600 dark:text-orange-400",
   };
   const className = cn(
-    "min-w-0 rounded-xl border bg-card p-3.5 text-left transition",
-    active ? "border-blue-500/60 ring-2 ring-blue-500/15" : "border-border/70 shadow-sm",
-    onClick && !active && "cursor-pointer hover:border-blue-500/40 hover:shadow",
+    "min-w-0 rounded-lg border bg-card p-3.5 text-left transition",
+    active ? "border-primary/60 ring-2 ring-primary/15" : "border-border/70 shadow-sm",
+    onClick && !active && "cursor-pointer hover:border-primary/40 hover:shadow",
   );
   const content = (
     <div className="flex items-start gap-3">
@@ -68,7 +68,7 @@ export function PanelCard({
   action?: ReactNode;
 }) {
   return (
-    <section className={cn("min-w-0 rounded-xl border border-border/70 bg-card shadow-sm", className)}>
+    <section className={cn("min-w-0 rounded-lg border border-border/70 bg-card shadow-sm", className)}>
       <div className="flex min-h-11 items-center justify-between border-b border-border/60 px-4 py-2.5">
         <h2 className="text-sm font-semibold">{title}</h2>
         {action}
@@ -104,12 +104,6 @@ export function ProgressBar({ value, color = "bg-blue-500" }: { value: number; c
   );
 }
 
-export const primaryButtonClass =
-  "inline-flex h-8 items-center justify-center rounded-lg bg-blue-600 px-3 text-xs font-medium text-white transition hover:bg-blue-700";
-
-export const secondaryButtonClass =
-  "inline-flex h-8 items-center justify-center rounded-lg border border-border bg-background px-3 text-xs font-medium transition hover:bg-accent";
-
 export function TaskFailureNotice({
   title,
   detail,
@@ -124,7 +118,7 @@ export function TaskFailureNotice({
   onDismiss?: () => void;
 }) {
   return (
-    <div data-testid="system-task-failure" role="alert" className="flex flex-wrap items-center gap-3 rounded-xl border border-red-500/30 bg-red-500/5 p-3 text-xs">
+    <div data-testid="system-task-failure" role="alert" className="flex flex-wrap items-center gap-3 rounded-lg border border-red-500/30 bg-red-500/5 p-3 text-xs">
       <AlertTriangle className="h-4 w-4 shrink-0 text-red-600" />
       <div className="min-w-0 flex-1">
         <p className="font-medium text-red-700 dark:text-red-400">{title}</p>

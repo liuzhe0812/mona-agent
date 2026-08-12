@@ -1,7 +1,16 @@
-import { Database, Eraser, FolderSearch, HardDrive, Loader2, PieChart, RefreshCw } from "lucide-react";
+import { Database, Eraser, FolderSearch, HardDrive, Loader2, PieChart, RefreshCw, X } from "lucide-react";
 import { useMemo, useState } from "react";
 
-import { MetricCard, PanelCard, ProgressBar, primaryButtonClass, secondaryButtonClass } from "./SystemUi";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Select } from "@/components/ui/select";
+
+import { MetricCard, PanelCard, ProgressBar } from "./SystemUi";
 import type { SystemAgentHandoffTask } from "./systemAgentHandoff";
 import { DirectoryTreeView } from "./storage/DirectoryTreeView";
 import { LargeFileTable } from "./storage/LargeFileTable";
@@ -15,6 +24,7 @@ import {
   type DirectorySize,
   type FileTypeSize,
   type ScanProgress,
+  type StorageDiskInfo,
   type StorageScanResult,
 } from "./useSystemData";
 
@@ -39,7 +49,7 @@ function AnalysisPlaceholder({
   if (status === "scanning") {
     return (
       <div className="flex h-[154px] flex-col items-center justify-center gap-2 text-center">
-        <Loader2 className="h-6 w-6 animate-spin text-blue-600" />
+        <Loader2 className="h-6 w-6 animate-spin text-primary" />
         <p className="text-xs font-medium">正在扫描磁盘...</p>
         <p className="max-w-full truncate text-[10px] text-muted-foreground" title={progress?.currentPath}>
           {progress?.currentPath ?? "正在准备扫描"}
@@ -58,7 +68,7 @@ function AnalysisPlaceholder({
   }
   return (
     <div className="flex h-[154px] flex-col items-center justify-center gap-2 text-center">
-      <FolderSearch className="h-7 w-7 text-blue-600" />
+      <FolderSearch className="h-7 w-7 text-primary" />
       <div>
         <p className="text-xs font-medium">等待深度空间分析</p>
         <p className="mt-1 text-[10px] text-muted-foreground">点击顶部"开始扫描"显示真实占用</p>
@@ -73,7 +83,12 @@ function ScanStatusBar({
   lastScanAt,
   progress,
   error,
+  coverageNote,
+  driveOptions,
+  selectedDrive,
+  onSelectDrive,
   onScan,
+  onCancel,
   onHandoff,
 }: {
   status: string;
@@ -81,19 +96,41 @@ function ScanStatusBar({
   lastScanAt: number | null;
   progress: ScanProgress | null;
   error: string | null;
+  /** 扫描覆盖率说明（如「约占 C: 已用的 62%」），仅有扫描数据时传入 */
+  coverageNote?: string | null;
+  /** 可扫描磁盘（仅固定盘），多于 1 个时显示选择器 */
+  driveOptions: string[];
+  selectedDrive: string;
+  onSelectDrive: (drive: string) => void;
   onScan: () => void;
+  onCancel: () => void;
   onHandoff: (task: SystemAgentHandoffTask) => void;
 }) {
   const scanning = status === "scanning";
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border/70 bg-card px-4 py-2 text-xs">
+    <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border/70 bg-card px-4 py-2 text-xs">
       <div className="flex min-w-0 items-center gap-2 text-muted-foreground">
+        {driveOptions.length > 1 && (
+          <Select
+            value={selectedDrive}
+            onValueChange={onSelectDrive}
+            disabled={scanning}
+            placeholder="选择磁盘"
+            options={driveOptions.map((drive) => ({ value: drive, label: `${drive} 盘` }))}
+            className="h-7 w-[92px] shrink-0 text-xs"
+          />
+        )}
         {scanning ? (
           <>
-            <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-blue-600" />
-            <span className="truncate">
+            <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-primary" />
+            <span className="shrink-0">
               正在扫描{progress ? ` · 已处理 ${progress.scannedDirs} 个区域 · ${progress.elapsedSecs.toFixed(0)} 秒` : ""}
             </span>
+            {progress?.currentPath && (
+              <span className="min-w-0 truncate text-[10px] text-muted-foreground/70" title={progress.currentPath}>
+                {progress.currentPath}
+              </span>
+            )}
           </>
         ) : status === "error" ? (
           <>
@@ -102,9 +139,11 @@ function ScanStatusBar({
           </>
         ) : result ? (
           <>
-            <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
+            <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${result.scanSummary?.cancelled ? "bg-amber-500" : "bg-emerald-500"}`} />
             <span className="truncate">
-              上次扫描：{formatRelativeTime(lastScanAt)} · {result.directories.length} 个区域 · {formatStorage(result.totalScannedGb)}
+              {result.scanSummary?.cancelled
+                ? `扫描已取消 · 部分结果：${result.directories.length} 个区域 · ${formatStorage(result.totalScannedGb)}`
+                : `上次扫描：${formatRelativeTime(lastScanAt)} · ${result.directories.length} 个区域 · ${formatStorage(result.totalScannedGb)}${coverageNote ? ` · ${coverageNote}` : ""}`}
             </span>
           </>
         ) : (
@@ -116,9 +155,10 @@ function ScanStatusBar({
       </div>
       <div className="flex shrink-0 gap-2">
         {status === "error" && (
-          <button
+          <Button
             type="button"
-            className={secondaryButtonClass}
+            variant="outline"
+            size="sm"
             onClick={() => onHandoff({
               id: crypto.randomUUID(),
               title: "扫描存储空间",
@@ -127,17 +167,25 @@ function ScanStatusBar({
               arguments: {},
               error: error ?? "未知错误",
             })}
-          >交给 Mona</button>
+          >交给 Mona</Button>
         )}
-        <button
-          type="button"
-          className={secondaryButtonClass}
-          onClick={onScan}
-          disabled={scanning}
-        >
-          <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${scanning ? "animate-spin" : ""}`} />
-          {result ? "重新扫描" : "开始扫描"}
-        </button>
+        {scanning ? (
+          <Button type="button" variant="outline" size="sm" onClick={onCancel}>
+            <X className="mr-1.5 h-3.5 w-3.5" />
+            取消扫描
+          </Button>
+        ) : (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={onScan}
+            disabled={scanning}
+          >
+            <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${scanning ? "animate-spin" : ""}`} />
+            {result ? "重新扫描" : "开始扫描"}
+          </Button>
+        )}
       </div>
     </div>
   );
@@ -276,7 +324,7 @@ function CleanupPanel({
               <tbody>
                 {items.map((item) => (
                   <tr key={item.id} className="border-t border-border/50">
-                    <td className="py-2.5"><input aria-label={`选择 ${item.name}`} type="checkbox" checked={selected.has(item.id)} disabled={!item.cleanable} onChange={() => toggle(item.id)} /></td>
+                    <td className="py-2.5"><Checkbox aria-label={`选择 ${item.name}`} checked={selected.has(item.id)} disabled={!item.cleanable} onCheckedChange={() => toggle(item.id)} /></td>
                     <td className="truncate pr-2 font-medium" title={`${item.path} · ${item.reason}`}>{item.name}</td>
                     <td>{item.sizeGb > 0 ? formatStorage(item.sizeGb) : "权限受限"}</td>
                     <td className={item.cleanable ? "text-emerald-600" : "text-muted-foreground"}>{item.cleanable ? "可直接清理" : "交由 Windows"}</td>
@@ -288,21 +336,41 @@ function CleanupPanel({
           <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-border/60 pt-3 text-xs">
             <span className="text-muted-foreground">已选择 {selectedItems.length} 项 · 可释放 {formatStorage(selectedSize)}</span>
             <div className="flex gap-2">
-              <button className={secondaryButtonClass} onClick={() => setNotice(selectedItems.length > 0 ? selectedItems.map((item) => `${item.name} ${formatStorage(item.sizeGb)}`).join("；") : "请先选择可清理项目")}>预览清单</button>
-              <button className={primaryButtonClass} disabled={selectedItems.length === 0 || cleaning} onClick={() => setConfirming(true)}>安全清理</button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" size="sm" disabled={selectedItems.length === 0}>预览清单</Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-[320px] p-0">
+                  <div className="max-h-64 overflow-y-auto scrollbar-thin p-2">
+                    <ul className="space-y-2">
+                      {selectedItems.map((item) => (
+                        <li key={item.id} className="rounded-md border border-border/50 px-2.5 py-2 text-xs">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-medium">{item.name}</span>
+                            <span className="shrink-0 text-muted-foreground">{formatStorage(item.sizeGb)}</span>
+                          </div>
+                          <p className="mt-1 truncate text-[10px] text-muted-foreground" title={item.path}>{item.path}</p>
+                          <p className="mt-0.5 text-[10px] text-muted-foreground">{item.reason}</p>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <Button size="sm" disabled={selectedItems.length === 0 || cleaning} onClick={() => setConfirming(true)}>安全清理</Button>
             </div>
           </div>
           {confirming && (
             <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-orange-500/30 bg-orange-500/5 p-3 text-xs">
-              <span className="min-w-0 flex-1">确认删除所选缓存和临时文件？正在使用的文件会自动跳过。</span>
-              <button className={secondaryButtonClass} onClick={() => setConfirming(false)}>取消</button>
-              <button className={primaryButtonClass} onClick={() => void clean()} disabled={cleaning}>{cleaning ? "正在清理" : "确认清理"}</button>
+              <span className="min-w-0 flex-1">这些文件将被直接删除，不经过回收站。确认删除所选缓存和临时文件？正在使用的文件会自动跳过。</span>
+              <Button variant="outline" size="sm" onClick={() => setConfirming(false)}>取消</Button>
+              <Button size="sm" onClick={() => void clean()} disabled={cleaning}>{cleaning ? "正在清理" : "确认清理"}</Button>
             </div>
           )}
            {notice && (
              <div role={failedTask ? "alert" : "status"} className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                <span>{notice}</span>
-               {failedTask && <button type="button" className={secondaryButtonClass} onClick={() => onHandoff(failedTask)}>交给 Mona</button>}
+               {failedTask && <Button type="button" variant="outline" size="sm" onClick={() => onHandoff(failedTask)}>交给 Mona</Button>}
              </div>
            )}
         </>
@@ -329,7 +397,7 @@ function findNodeByPath(nodes: DirectorySize[], target: string): DirectorySize |
 }
 
 export function StoragePanel({ scan, onHandoff, onAnalyze }: { scan: ReturnType<typeof useStorageScan>; onHandoff: (task: SystemAgentHandoffTask) => void; onAnalyze?: (goal: string) => void }) {
-  const { status, result, lastScanAt, progress, error, cleaning, start, clean } = scan;
+  const { status, result, lastScanAt, progress, error, cleaning, start, clean, selectedDrive, selectDrive } = scan;
   const { data: overview, error: overviewError } = useSystemOverview();
 
   // 下钻路径：数组形式，每项 {path, name}。空数组表示根。
@@ -343,6 +411,23 @@ export function StoragePanel({ scan, onHandoff, onAnalyze }: { scan: ReturnType<
   const topFiles = result?.topFiles ?? [];
   const hotspots = result?.hotspots ?? [];
 
+  // 磁盘选择器：仅固定盘（U 盘等可移动盘不提供扫描），按盘符去重
+  const driveOptions = useMemo(() => {
+    const letters = new Set<string>();
+    for (const disk of disks) {
+      if ((disk as StorageDiskInfo).isRemovable === true) continue;
+      const letter = disk.driveLetter.trim().charAt(0).toUpperCase();
+      if (letter) letters.add(`${letter}:`);
+    }
+    return [...letters].sort();
+  }, [disks]);
+
+  const handleDriveChange = (drive: string) => {
+    if (drive === selectedDrive) return;
+    selectDrive(drive);
+    setDrilldownPath([]);
+  };
+
   // 根据下钻路径在内存树中切片当前层级的目录列表
   const { currentPath, displayDirs } = useMemo(() => {
     if (drilldownPath.length === 0) {
@@ -353,11 +438,27 @@ export function StoragePanel({ scan, onHandoff, onAnalyze }: { scan: ReturnType<
     return { currentPath: target, displayDirs: node?.children ?? [] };
   }, [drilldownPath, rootDirectories]);
 
-  const totalUsed = disks.reduce((sum, disk) => sum + disk.usedGb, 0);
-  const totalCapacity = disks.reduce((sum, disk) => sum + disk.totalGb, 0);
-  const totalAvailable = disks.reduce((sum, disk) => sum + disk.availableGb, 0);
-  const usedPercent = totalCapacity > 0 ? (totalUsed / totalCapacity) * 100 : 0;
+  // 当前层级父目录总大小（根层级为 totalScannedGb），供 Treemap 补「其他（未展开）」块
+  const currentTotalGb = useMemo(() => {
+    if (!currentPath) return result?.totalScannedGb;
+    return findNodeByPath(rootDirectories, currentPath)?.sizeGb;
+  }, [currentPath, rootDirectories, result]);
+
+  // 指标卡口径对齐系统盘：优先取扫描目标所在盘（与扫描覆盖率同口径），
+  // 无扫描数据时回退 C:；挂载点形如 "C:\"，统一取首字母大写比较。
+  const scannedDiskLetter = result?.scanSummary?.scannedDisk?.trim().charAt(0).toUpperCase() || "C";
+  const systemDisk = useMemo(
+    () => disks.find((disk) => disk.driveLetter.trim().charAt(0).toUpperCase() === scannedDiskLetter) ?? null,
+    [disks, scannedDiskLetter],
+  );
   const cleanupTotal = cleanupItems.filter((item) => item.cleanable).reduce((sum, item) => sum + item.sizeGb, 0);
+
+  // 扫描覆盖率：扫描总量 / 系统盘已用，回答「这次扫描看了多少」
+  const coverageNote = useMemo(() => {
+    if (!result || !systemDisk || systemDisk.usedGb <= 0) return null;
+    const percent = Math.round((result.totalScannedGb / systemDisk.usedGb) * 100);
+    return `约占 ${scannedDiskLetter}: 已用的 ${percent}%`;
+  }, [result, systemDisk, scannedDiskLetter]);
 
   const handleDrillDown = (path: string) => {
     const name = path.split("\\").filter(Boolean).pop() ?? path;
@@ -375,16 +476,18 @@ export function StoragePanel({ scan, onHandoff, onAnalyze }: { scan: ReturnType<
   };
 
   const hasScanData = rootDirectories.length > 0;
+  // 清理项与热点路径仅系统盘有值（后端对非系统盘返回空），对应面板同步隐藏
+  const isSystemDrive = scannedDiskLetter === "C";
 
   return (
     <div className="space-y-3">
-      <ScanStatusBar status={status} result={result} lastScanAt={lastScanAt} progress={progress} error={error} onScan={start} onHandoff={onHandoff} />
+      <ScanStatusBar status={status} result={result} lastScanAt={lastScanAt} progress={progress} error={error} coverageNote={coverageNote} driveOptions={driveOptions} selectedDrive={selectedDrive} onSelectDrive={handleDriveChange} onScan={start} onCancel={() => void scan.cancel()} onHandoff={onHandoff} />
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <MetricCard label="总容量" value={disks.length ? formatStorage(totalCapacity) : "—"} detail={disks.length ? `${disks.length} 个本地磁盘` : "正在读取实时信息"} icon={<HardDrive className="h-4 w-4" />} />
-        <MetricCard label="已使用" value={disks.length ? formatStorage(totalUsed) : "—"} detail={disks.length ? formatPercent(usedPercent) : "实时磁盘数据"} icon={<PieChart className="h-4 w-4" />} accent="violet" />
-        <MetricCard label="可用" value={disks.length ? formatStorage(totalAvailable) : "—"} detail={disks.length ? formatPercent(100 - usedPercent) : "无需深度扫描"} icon={<Database className="h-4 w-4" />} accent="green" />
-        <MetricCard label="可安全释放" value={result ? formatStorage(cleanupTotal) : "待分析"} detail={result ? `${cleanupItems.filter((item) => item.cleanable && item.sizeGb > 0).length} 项可直接清理` : "深度扫描后计算"} icon={<Eraser className="h-4 w-4" />} accent="orange" />
+        <MetricCard label="总容量" value={systemDisk ? formatStorage(systemDisk.totalGb) : "—"} detail={systemDisk ? (isSystemDrive ? `系统盘 ${scannedDiskLetter}:` : `磁盘 ${scannedDiskLetter}:`) : "正在读取实时信息"} icon={<HardDrive className="h-4 w-4" />} />
+        <MetricCard label="已使用" value={systemDisk ? formatStorage(systemDisk.usedGb) : "—"} detail={systemDisk ? formatPercent(systemDisk.usagePercent) : "实时磁盘数据"} icon={<PieChart className="h-4 w-4" />} accent="violet" />
+        <MetricCard label="可用" value={systemDisk ? formatStorage(systemDisk.availableGb) : "—"} detail={systemDisk ? formatPercent(100 - systemDisk.usagePercent) : "无需深度扫描"} icon={<Database className="h-4 w-4" />} accent="green" />
+        <MetricCard label="可安全释放" value={result ? (isSystemDrive ? formatStorage(cleanupTotal) : "—") : "待分析"} detail={result ? (isSystemDrive ? `${cleanupItems.filter((item) => item.cleanable && item.sizeGb > 0).length} 项可直接清理` : "仅系统盘支持安全清理") : "深度扫描后计算"} icon={<Eraser className="h-4 w-4" />} accent="orange" />
       </div>
 
       {overviewError && <p role="alert" className="rounded-lg border border-orange-500/30 bg-orange-500/5 p-3 text-xs text-orange-700">实时磁盘信息读取失败：{overviewError}</p>}
@@ -402,6 +505,7 @@ export function StoragePanel({ scan, onHandoff, onAnalyze }: { scan: ReturnType<
           </div>
           <TreemapView
             directories={displayDirs}
+            currentTotalGb={currentTotalGb}
             breadcrumb={drilldownPath}
             loading={false}
             error={null}
@@ -418,15 +522,17 @@ export function StoragePanel({ scan, onHandoff, onAnalyze }: { scan: ReturnType<
       {/* 大文件列表 + 文件类型分布 */}
       {hasScanData && (
         <div className="grid gap-3 lg:grid-cols-[1.3fr_1fr]">
-          <LargeFileTable files={topFiles} onAnalyze={onAnalyze} />
+          <LargeFileTable files={topFiles} onAnalyze={onAnalyze} onTrash={scan.trashFiles} />
           <FileTypePanel items={fileTypes} status={status} progress={progress} error={error} />
         </div>
       )}
 
-      <div className="grid gap-3 lg:grid-cols-[1fr_1fr]">
-        <HotspotPanel hotspots={hotspots} />
-        <CleanupPanel items={cleanupItems} status={status} progress={progress} error={error} onClean={clean} cleaning={cleaning} onHandoff={onHandoff} />
-      </div>
+      {isSystemDrive && (
+        <div className="grid gap-3 lg:grid-cols-[1fr_1fr]">
+          <HotspotPanel hotspots={hotspots} />
+          <CleanupPanel items={cleanupItems} status={status} progress={progress} error={error} onClean={clean} cleaning={cleaning} onHandoff={onHandoff} />
+        </div>
+      )}
     </div>
   );
 }

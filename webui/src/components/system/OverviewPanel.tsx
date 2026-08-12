@@ -1,17 +1,22 @@
-import { Clock3, HardDrive } from "lucide-react";
+import { ChevronDown, Clock3, HardDrive, RefreshCw } from "lucide-react";
 import { useState } from "react";
 
-import type { SystemTab } from "./mockData";
-import { PanelCard, primaryButtonClass, StatusPill } from "./SystemUi";
+import { Button } from "@/components/ui/button";
+
+import type { SystemTab } from "./systemTabs";
+import { PanelCard, StatusPill } from "./SystemUi";
 import {
+  DIAGNOSTIC_CHECKS,
   formatGb,
   formatMbps,
   formatPercent,
   useBootHistory,
   useStartupItems,
+  useSystemDiagnostics,
   useSystemHistory,
   useSystemOverview,
   type BootHistoryResult,
+  type DiagnosticCheck,
   type DiskInfo,
   type SamplePoint,
   type StartupItem,
@@ -147,7 +152,7 @@ function OverviewMetric({
   color: string;
 }) {
   return (
-    <section className="min-w-0 rounded-xl border border-border/70 bg-card p-3.5 shadow-sm">
+    <section className="min-w-0 rounded-lg border border-border/70 bg-card p-3.5 shadow-sm">
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
           <p className="text-xs text-muted-foreground">{label}</p>
@@ -174,6 +179,64 @@ interface OverviewPanelProps {
   onAcknowledgeStartupItems: () => Promise<void>;
 }
 
+const DIAGNOSTIC_TONE: Record<DiagnosticCheck["status"], { tone: "green" | "orange" | "blue" | "neutral"; label: string }> = {
+  clear: { tone: "green", label: "正常" },
+  attention: { tone: "orange", label: "需关注" },
+  collected: { tone: "blue", label: "已收集" },
+  unavailable: { tone: "neutral", label: "不可用" },
+};
+
+function DiagnosticsCard() {
+  const { checks, loading, recheck } = useSystemDiagnostics();
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  // 后端返回短 id（如 pending_reboot），命令名为 system_check_<id>
+  const labelOf = (id: string) =>
+    DIAGNOSTIC_CHECKS.find((item) => item.command === id || item.command === `system_check_${id}`)?.label ?? id;
+
+  return (
+    <PanelCard
+      title="系统健康检查"
+      action={
+        <Button variant="outline" size="sm" onClick={() => void recheck()} disabled={loading}>
+          <RefreshCw className={loading ? "h-3.5 w-3.5 animate-spin" : "h-3.5 w-3.5"} />
+          重新检查
+        </Button>
+      }
+    >
+      {loading && checks.length === 0 ? (
+        <div className="space-y-2">
+          {[0, 1, 2].map((index) => <div key={index} className="h-8 animate-pulse rounded-lg bg-muted/40" />)}
+        </div>
+      ) : (
+        <ul className="divide-y divide-border/50">
+          {checks.map((check) => {
+            const tone = DIAGNOSTIC_TONE[check.status] ?? DIAGNOSTIC_TONE.unavailable;
+            const expanded = expandedId === check.id;
+            return (
+              <li key={check.id}>
+                <button
+                  type="button"
+                  aria-expanded={expanded}
+                  onClick={() => setExpandedId(expanded ? null : check.id)}
+                  className="flex w-full items-center gap-3 py-2.5 text-left"
+                >
+                  <span className="w-28 shrink-0 text-[13px] font-medium">{labelOf(check.id)}</span>
+                  <StatusPill tone={tone.tone}>{tone.label}</StatusPill>
+                  <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{check.summary}</span>
+                  <ChevronDown className={`h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform ${expanded ? "rotate-180" : ""}`} />
+                </button>
+                {expanded ? (
+                  <pre className="mb-3 max-h-48 overflow-y-auto whitespace-pre-wrap rounded-lg bg-muted/40 p-3 font-mono text-[11px] leading-5 text-muted-foreground scrollbar-thin">{check.detail}</pre>
+                ) : null}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </PanelCard>
+  );
+}
+
 export function OverviewPanel({ onNavigate, onStartStorageScan, onAcknowledgeStartupItems }: OverviewPanelProps) {
   const { data, error } = useSystemOverview();
   const { data: startup } = useStartupItems();
@@ -185,7 +248,7 @@ export function OverviewPanel({ onNavigate, onStartStorageScan, onAcknowledgeSta
   if (!data) {
     if (error) {
       return (
-        <section className="rounded-xl border border-amber-200/80 bg-amber-500/[0.035] p-5">
+        <section className="rounded-lg border border-amber-200/80 bg-amber-500/[0.035] p-5">
           <h2 className="text-sm font-semibold">暂时无法读取系统状态</h2>
           <p className="mt-2 text-xs text-muted-foreground">{error}</p>
           <p className="mt-1 text-xs text-muted-foreground">正在自动重试。</p>
@@ -196,9 +259,9 @@ export function OverviewPanel({ onNavigate, onStartStorageScan, onAcknowledgeSta
       <div className="space-y-3">
         <h2 className="sr-only">电脑状态概览</h2>
         <div className="grid gap-3 md:grid-cols-3">
-          {[0, 1, 2].map((index) => <div key={index} className="h-[118px] animate-pulse rounded-xl border border-border/70 bg-card" />)}
+          {[0, 1, 2].map((index) => <div key={index} className="h-[118px] animate-pulse rounded-lg border border-border/70 bg-card" />)}
         </div>
-        <div className="h-64 animate-pulse rounded-xl border border-border/70 bg-card" />
+        <div className="h-64 animate-pulse rounded-lg border border-border/70 bg-card" />
       </div>
     );
   }
@@ -243,7 +306,7 @@ export function OverviewPanel({ onNavigate, onStartStorageScan, onAcknowledgeSta
       <h2 className="sr-only">电脑状态概览</h2>
 
       {issues.length > 0 && (
-        <section className="rounded-xl border border-border/70 bg-card shadow-sm">
+        <section className="rounded-lg border border-border/70 bg-card shadow-sm">
           <div className="border-b border-border/60 px-4 py-3">
             <h2 className="text-sm font-semibold">现在值得处理</h2>
             <p className="mt-1 text-[11px] text-muted-foreground">基于本机实时证据，为你排序 {issues.length} 个可执行问题</p>
@@ -253,9 +316,9 @@ export function OverviewPanel({ onNavigate, onStartStorageScan, onAcknowledgeSta
               const Icon = issue.id === "scan-storage" ? HardDrive : Clock3;
               const pillTone = issue.tone === "red" ? "red" : issue.tone === "orange" ? "orange" : "blue";
               return (
-                <article key={issue.id} className={`flex min-w-0 flex-col rounded-xl border p-3 ${issueTone[issue.tone]}`}>
+                <article key={issue.id} className={`flex min-w-0 flex-col rounded-lg border p-3 ${issueTone[issue.tone]}`}>
                   <div className="flex items-start gap-3">
-                    <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${issue.tone === "red" ? "bg-red-500/10 text-red-600" : issue.tone === "orange" ? "bg-orange-500/10 text-orange-600" : "bg-blue-500/10 text-blue-600"}`}><Icon className="h-4 w-4" /></span>
+                    <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${issue.tone === "red" ? "bg-red-500/10 text-red-600" : issue.tone === "orange" ? "bg-orange-500/10 text-orange-600" : "bg-blue-500/10 text-blue-600"}`}><Icon className="h-4 w-4" /></span>
                     <div className="min-w-0 flex-1">
                       <StatusPill tone={pillTone}>{issue.priority}</StatusPill>
                       <h3 className="mt-2 text-sm font-semibold">{issue.title}</h3>
@@ -264,7 +327,7 @@ export function OverviewPanel({ onNavigate, onStartStorageScan, onAcknowledgeSta
                   <p className="mt-3 text-[11px] leading-5 text-muted-foreground">{issue.evidence}</p>
                   <p className="mt-1 text-[11px] leading-5 text-muted-foreground">{issue.impact}</p>
                   <div className="mt-3 flex items-center gap-2">
-                    <button type="button" onClick={() => void openIssue(issue)} className={`${primaryButtonClass} flex-1`}>{issue.actionLabel}</button>
+                    <Button type="button" size="sm" onClick={() => void openIssue(issue)} className="flex-1">{issue.actionLabel}</Button>
                     {issue.id === "scan-storage" && <span className="text-[10px] text-muted-foreground">先分析，暂不清理</span>}
                   </div>
                 </article>
@@ -293,7 +356,7 @@ export function OverviewPanel({ onNavigate, onStartStorageScan, onAcknowledgeSta
                   key={range.seconds}
                   type="button"
                   onClick={() => setTimeRange(range)}
-                  className={`rounded px-2.5 py-1 text-[11px] transition ${timeRange.seconds === range.seconds ? "bg-blue-50 text-blue-600 shadow-sm dark:bg-blue-500/15" : "text-muted-foreground hover:text-foreground"}`}
+                  className={`rounded px-2.5 py-1 text-[11px] transition ${timeRange.seconds === range.seconds ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground"}`}
                 >
                   {range.label}
                 </button>
@@ -336,6 +399,8 @@ export function OverviewPanel({ onNavigate, onStartStorageScan, onAcknowledgeSta
           </PanelCard>
         )}
       </div>
+
+      <DiagnosticsCard />
 
       <PanelCard title="资源占用较高的程序">
         <div className="overflow-x-auto">

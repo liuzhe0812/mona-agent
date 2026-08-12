@@ -209,10 +209,14 @@ export function useSoftwareManagement() {
   const [lastUninstall, setLastUninstall] = useState<SoftwareActionResult | null>(null);
   const [progressMap, setProgressMap] = useState<Record<string, string[]>>({});
 
+  const hasDataRef = useRef(false);
+  // 已有数据时后台刷新替换，避免整列表进入 loading 闪烁
   const refresh = async () => {
-    setLoading(true);
+    if (!hasDataRef.current) setLoading(true);
     try {
-      setData(await invoke<SoftwareCheckResult>("system_check_updates"));
+      const result = await invoke<SoftwareCheckResult>("system_check_updates");
+      hasDataRef.current = true;
+      setData(result);
       setError(null);
     } catch (e) {
       setError(String(e));
@@ -305,6 +309,8 @@ export interface StorageDiskInfo {
   usedGb: number;
   totalGb: number;
   availableGb: number;
+  /** 可移动盘（U 盘等），仅 scan_storage 返回的 disks 带该字段；磁盘选择器据此过滤 */
+  isRemovable?: boolean;
 }
 
 export interface DirectorySize {
@@ -344,6 +350,8 @@ export interface ScanSummary {
   totalDirs: number;
   scanDurationSecs: number;
   scannedDisk: string;
+  /** 扫描被用户取消（结果为部分数据） */
+  cancelled?: boolean;
 }
 
 export interface FileExtensionBucket {
@@ -379,6 +387,17 @@ export interface StorageCleanupResult {
   verification?: CleanupVerification[];
 }
 
+export interface StorageTrashFailure {
+  path: string;
+  error: string;
+}
+
+export interface StorageTrashResult {
+  trashed: Array<{ path: string; sizeGb: number }>;
+  failures: StorageTrashFailure[];
+  freedGb: number;
+}
+
 export interface ScanProgress {
   currentPath: string;
   scannedDirs: number;
@@ -388,11 +407,11 @@ export interface ScanProgress {
 export type ScanStatus = "idle" | "scanning" | "done" | "error";
 
 // 缓存版本：StorageScanResult 结构变化时递增，旧缓存自动失效
-// v2 → v3: TopFileInfo 增加 path 字段
-const STORAGE_CACHE_VERSION = 3;
+// v3 → v4: 缓存 key 增加盘符维度（latest:C / latest:D），disks 增加 isRemovable
+const STORAGE_CACHE_VERSION = 4;
 const STORAGE_DB_NAME = "mona-system";
 const STORAGE_DB_STORE = "storage-scan";
-const STORAGE_DB_KEY = "latest";
+const storageCacheKey = (drive: string) => `latest:${drive}`;
 
 interface StorageCache {
   version: number;
@@ -419,13 +438,13 @@ function openStorageDb(): Promise<IDBDatabase | null> {
   });
 }
 
-async function loadStorageCache(): Promise<StorageCache | null> {
+async function loadStorageCache(drive: string): Promise<StorageCache | null> {
   try {
     const db = await openStorageDb();
     if (!db) return null;
     return await new Promise<StorageCache | null>((resolve) => {
       const tx = db.transaction(STORAGE_DB_STORE, "readonly");
-      const req = tx.objectStore(STORAGE_DB_STORE).get(STORAGE_DB_KEY);
+      const req = tx.objectStore(STORAGE_DB_STORE).get(storageCacheKey(drive));
       req.onsuccess = () => {
         const parsed = req.result as StorageCache | undefined;
         if (!parsed || parsed.version !== STORAGE_CACHE_VERSION || !parsed.result) {
@@ -441,13 +460,13 @@ async function loadStorageCache(): Promise<StorageCache | null> {
   }
 }
 
-async function saveStorageCache(cache: Omit<StorageCache, "version">): Promise<void> {
+async function saveStorageCache(drive: string, cache: Omit<StorageCache, "version">): Promise<void> {
   try {
     const db = await openStorageDb();
     if (!db) return;
     await new Promise<void>((resolve) => {
       const tx = db.transaction(STORAGE_DB_STORE, "readwrite");
-      tx.objectStore(STORAGE_DB_STORE).put({ ...cache, version: STORAGE_CACHE_VERSION }, STORAGE_DB_KEY);
+      tx.objectStore(STORAGE_DB_STORE).put({ ...cache, version: STORAGE_CACHE_VERSION }, storageCacheKey(drive));
       tx.oncomplete = () => resolve();
       tx.onerror = () => resolve();
     });
@@ -463,34 +482,45 @@ export function useStorageScan() {
   const [progress, setProgress] = useState<ScanProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [cleaning, setCleaning] = useState(false);
+  const [selectedDrive, setSelectedDrive] = useState<string>("C:");
 
-  // 应用启动时从 IndexedDB 异步恢复上次扫描结果
+  // 扫描会话标记：start() 递增，晚到的缓存加载结果不得覆盖更新的扫描结果
+  const scanSessionRef = useRef(0);
+
+  // 启动与切盘时从 IndexedDB 异步恢复所选盘的扫描结果；无缓存回到未扫描态
   useEffect(() => {
     let active = true;
+    const session = scanSessionRef.current;
     (async () => {
-      const cached = await loadStorageCache();
-      if (active && cached) {
+      const cached = await loadStorageCache(selectedDrive);
+      if (!active || session !== scanSessionRef.current) return;
+      if (cached) {
         setResult(cached.result);
         setLastScanAt(cached.lastScanAt);
         setStatus("done");
+      } else {
+        setResult(null);
+        setLastScanAt(null);
+        setStatus("idle");
       }
     })();
     return () => { active = false; };
-  }, []);
+  }, [selectedDrive]);
 
   const start = async () => {
+    scanSessionRef.current += 1;
     // 保留上次扫描结果显示，扫描完成后才覆盖
     setStatus("scanning");
     setProgress(null);
     setError(null);
     try {
-      const res = await invoke<StorageScanResult>("scan_storage");
+      const res = await invoke<StorageScanResult>("scan_storage", { drive: selectedDrive });
       const now = Date.now();
       setResult(res);
       setLastScanAt(now);
       setStatus("done");
       setProgress(null);
-      void saveStorageCache({ result: res, lastScanAt: now });
+      void saveStorageCache(selectedDrive, { result: res, lastScanAt: now });
       return res;
     } catch (e) {
       setError(String(e));
@@ -520,13 +550,31 @@ export function useStorageScan() {
             return { ...item, sizeGb };
           }),
         };
-        void saveStorageCache({ result: next, lastScanAt: lastScanAt ?? Date.now() });
+        void saveStorageCache(selectedDrive, { result: next, lastScanAt: lastScanAt ?? Date.now() });
         return next;
       });
       return cleanup;
     } finally {
       setCleaning(false);
     }
+  };
+
+  /** 大文件移至回收站（系统回收站可恢复）；成功后从 topFiles 移除并同步缓存 */
+  const trashFiles = async (paths: string[]) => {
+    const trash = await invoke<StorageTrashResult>("system_trash_storage_files", { paths });
+    if (trash.trashed.length > 0) {
+      const trashedPaths = new Set(trash.trashed.map((item) => item.path));
+      setResult((current) => {
+        if (!current) return current;
+        const next: StorageScanResult = {
+          ...current,
+          topFiles: (current.topFiles ?? []).filter((file) => !trashedPaths.has(file.path)),
+        };
+        void saveStorageCache(selectedDrive, { result: next, lastScanAt: lastScanAt ?? Date.now() });
+        return next;
+      });
+    }
+    return trash;
   };
 
   useEffect(() => {
@@ -543,7 +591,11 @@ export function useStorageScan() {
     };
   }, []);
 
-  return { status, result, lastScanAt, progress, error, cleaning, start, clean };
+  const cancel = async () => {
+    await invoke("cancel_storage_scan");
+  };
+
+  return { status, result, lastScanAt, progress, error, cleaning, start, cancel, clean, trashFiles, selectedDrive, selectDrive: setSelectedDrive };
 }
 
 // ===== 启动项管理 =====
@@ -603,11 +655,14 @@ export function useStartupItems() {
   const [error, setError] = useState<string | null>(null);
   const [toggling, setToggling] = useState(false);
 
+  const hasDataRef = useRef(false);
+  // 已有数据时后台刷新替换，避免整列表进入 loading 闪烁
   const refresh = async () => {
-    setLoading(true);
+    if (!hasDataRef.current) setLoading(true);
     setError(null);
     try {
       const result = await invoke<StartupListResult>("system_list_startup_items");
+      hasDataRef.current = true;
       setData(result);
     } catch (e) {
       setError(String(e));
@@ -616,14 +671,35 @@ export function useStartupItems() {
     }
   };
 
+  // 乐观更新：本地先改 enabled 与计数，失败时回滚
+  const applyLocalToggle = (ids: string[], enabled: boolean) => {
+    setData((current) => {
+      if (!current) return current;
+      let delta = 0;
+      const items = current.items.map((item) => {
+        if (!ids.includes(item.id) || item.enabled === enabled) return item;
+        delta += 1;
+        return { ...item, enabled };
+      });
+      return {
+        ...current,
+        items,
+        enabledCount: enabled ? current.enabledCount + delta : current.enabledCount - delta,
+        disabledCount: enabled ? current.disabledCount - delta : current.disabledCount + delta,
+      };
+    });
+  };
+
   const toggle = async (id: string, enabled: boolean) => {
     setToggling(true);
     setError(null);
+    applyLocalToggle([id], enabled);
     try {
       await invoke("system_toggle_startup_item", { id, enabled });
       await refresh();
       return null;
     } catch (e) {
+      applyLocalToggle([id], !enabled);
       const message = extractErrorMessage(e);
       setError(message);
       return message;
@@ -635,10 +711,12 @@ export function useStartupItems() {
   const batchToggle = async (ids: string[], enabled: boolean) => {
     setToggling(true);
     setError(null);
+    applyLocalToggle(ids, enabled);
     try {
       await invoke<number>("system_batch_toggle_startup_items", { ids, enabled });
       await refresh();
     } catch (e) {
+      applyLocalToggle(ids, !enabled);
       setError(extractErrorMessage(e));
     } finally {
       setToggling(false);
@@ -690,6 +768,65 @@ export function useStartupChanges() {
   }, []);
 
   return { data, error };
+}
+
+// ===== 系统健康检查（诊断命令） =====
+
+export interface DiagnosticCheck {
+  id: string;
+  status: "clear" | "attention" | "collected" | "unavailable";
+  summary: string;
+  detail: string;
+}
+
+export interface DiagnosticDefinition {
+  command: string;
+  label: string;
+}
+
+export const DIAGNOSTIC_CHECKS: DiagnosticDefinition[] = [
+  { command: "system_check_pending_reboot", label: "待重启状态" },
+  { command: "system_check_component_health", label: "组件存储健康" },
+  { command: "system_check_driver_issues", label: "设备驱动异常" },
+  { command: "system_check_power_events", label: "电源唤醒事件" },
+  { command: "system_check_network_configuration", label: "网络代理配置" },
+  { command: "system_check_recovery_status", label: "恢复与磁盘保护" },
+];
+
+export function useSystemDiagnostics() {
+  const [checks, setChecks] = useState<DiagnosticCheck[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const run = async () => {
+    setLoading(true);
+    try {
+      const results = await Promise.all(
+        DIAGNOSTIC_CHECKS.map(async ({ command }) => {
+          try {
+            return await invoke<DiagnosticCheck>(command);
+          } catch (e) {
+            // 单命令失败降级为 unavailable，不影响其他检查项
+            return {
+              id: command,
+              status: "unavailable",
+              summary: "检查不可用",
+              detail: extractErrorMessage(e),
+            } satisfies DiagnosticCheck;
+          }
+        }),
+      );
+      setChecks(results);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void run();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return { checks, loading, recheck: run };
 }
 
 // ===== 维护记录 =====

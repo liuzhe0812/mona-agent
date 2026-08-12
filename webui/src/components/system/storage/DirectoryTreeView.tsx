@@ -103,8 +103,8 @@ function NodeRow({
         className={cn(
           "flex cursor-default select-none items-center gap-1 px-2 py-0.5 text-xs outline-none",
           isSelected
-            ? "bg-blue-500/15 text-foreground"
-            : "hover:bg-blue-500/10",
+            ? "bg-accent text-foreground"
+            : "hover:bg-accent",
         )}
         style={{ paddingLeft: `${depth * 16 + 8}px` }}
         title={`${node.path} · ${formatStorage(node.sizeGb)} · ${total > 0 ? ((node.sizeGb / total) * 100).toFixed(1) : "0.0"}%`}

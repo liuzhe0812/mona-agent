@@ -33,6 +33,8 @@ describe("system sidebar entry", () => {
       onUpdateView: vi.fn(),
       onCollapse: vi.fn(),
       onOpenSystem,
+      // 把「系统」排到主区域首位，避免它落入「更多」收纳菜单（PRIMARY_MAX=6）
+      modules: [{ key: "system", visible: true, order: -1 }],
     } as ComponentProps<typeof Sidebar> & { onOpenSystem: () => void };
 
     render(<Sidebar {...props} />);

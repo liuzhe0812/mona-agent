@@ -1,6 +1,7 @@
 import { Ban, Loader2, RotateCcw } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
@@ -10,7 +11,7 @@ import {
   unblockProcess,
   type BlockedProcess,
 } from "./advancedSystemApi";
-import { PanelCard, primaryButtonClass, secondaryButtonClass } from "./SystemUi";
+import { PanelCard } from "./SystemUi";
 
 export function ProcessBlacklistPanel() {
   return <ProcessBlacklistSection />;
@@ -78,10 +79,10 @@ function ProcessBlacklistSection() {
             onChange={(e) => setNewName(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") void handleBlock(); }}
           />
-          <button type="button" className={primaryButtonClass} onClick={() => void handleBlock()} disabled={acting}>
+          <Button type="button" size="sm" onClick={() => void handleBlock()} disabled={acting}>
             {acting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Ban className="h-3.5 w-3.5" />}
             阻止
-          </button>
+          </Button>
         </div>
 
         {loading ? (
@@ -92,15 +93,16 @@ function ProcessBlacklistSection() {
               <div key={proc.exeName} className="flex items-center gap-2 border-b border-border/40 px-3 py-2 text-xs last:border-b-0">
                 <Ban className="h-3 w-3 text-red-500" />
                 <span className="min-w-0 flex-1 truncate font-mono">{proc.exeName}</span>
-                <button
+                <Button
                   type="button"
-                  className={secondaryButtonClass}
+                  variant="outline"
+                  size="sm"
                   onClick={() => void handleUnblock(proc.exeName)}
                   disabled={acting}
                 >
                   <RotateCcw className="h-3 w-3" />
                   解除
-                </button>
+                </Button>
               </div>
             ))}
           </div>

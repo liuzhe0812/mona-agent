@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Loader2, Send, Square } from "lucide-react";
 
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 import { ThreadMessages } from "@/components/thread/ThreadMessages";
 import { useMonaStream } from "@/hooks/useMonaStream";
 import { useSessionHistory } from "@/hooks/useSessions";
@@ -74,15 +76,15 @@ export function SystemAgentChat({ chatId, task, onChatCreated, onTaskHandled }: 
           {streamError && <div role="alert" className="flex items-center justify-between gap-2 text-xs text-red-700 dark:text-red-400"><span>消息发送失败，请稍后重试。</span><button type="button" onClick={dismissStreamError} className="underline">关闭</button></div>}
           {creating && <p className="flex items-center gap-1.5 text-xs text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" />正在创建 Mona 会话...</p>}
           {loading && <p className="flex items-center gap-1.5 text-xs text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" />正在加载会话...</p>}
-          {!loading && !creating && messages.length === 0 && <p className="rounded-xl border border-border/70 bg-muted/30 p-3 text-xs leading-5 text-muted-foreground">Mona 会在这里接管失败的维护任务。你也可以继续补充要求。</p>}
+          {!loading && !creating && messages.length === 0 && <p className="rounded-lg border border-border/70 bg-muted/30 p-3 text-xs leading-5 text-muted-foreground">Mona 会在这里接管失败的维护任务。你也可以继续补充要求。</p>}
           <ThreadMessages messages={messages} isStreaming={isStreaming} />
           <div ref={bottomRef} />
         </div>
       </div>
 
       <div className="shrink-0 border-t border-border/70 p-3">
-        <div className="flex min-h-[52px] items-end gap-1.5 rounded-xl border border-border/75 bg-background px-2.5 py-1.5 shadow-sm">
-          <textarea
+        <div className="flex min-h-[52px] items-end gap-1.5 rounded-lg border border-border/75 bg-background px-2.5 py-1.5 shadow-sm">
+          <Textarea
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {
@@ -92,19 +94,21 @@ export function SystemAgentChat({ chatId, task, onChatCreated, onTaskHandled }: 
               }
             }}
             disabled={!chatId || isStreaming || creating}
-            className="min-h-[36px] flex-1 resize-none bg-transparent text-xs leading-5 outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
+            className="min-h-[36px] flex-1 resize-none rounded-lg border-0 bg-transparent px-0 text-xs leading-5 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
             rows={2}
             placeholder="继续告诉 Mona..."
           />
-          <button
+          <Button
             type="button"
             aria-label={isStreaming ? "停止执行" : "发送给 Mona"}
+            variant={isStreaming ? "destructive" : "default"}
+            size="icon"
             disabled={isStreaming ? false : !chatId || !draft.trim() || creating}
             onClick={isStreaming ? stop : sendDraft}
-            className={`grid h-7 w-7 shrink-0 place-items-center rounded-lg transition-colors ${isStreaming ? "text-red-600 hover:bg-red-500/10" : "bg-blue-600 text-white hover:bg-blue-700 disabled:bg-muted disabled:text-muted-foreground"}`}
+            className="h-7 w-7 shrink-0 rounded-lg"
           >
             {isStreaming ? <Square className="h-3 w-3" /> : <Send className="h-3.5 w-3.5" />}
-          </button>
+          </Button>
         </div>
       </div>
     </div>

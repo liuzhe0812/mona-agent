@@ -1,7 +1,10 @@
 import { AlertTriangle, CheckCircle2, Database, History, RotateCcw } from "lucide-react";
 import { useMemo, useState } from "react";
 
-import { MetricCard, PanelCard, StatusPill, secondaryButtonClass } from "./SystemUi";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+
+import { MetricCard, PanelCard, StatusPill } from "./SystemUi";
 import type { SystemAgentHandoffTask } from "./systemAgentHandoff";
 import { useMaintenanceHistory, type MaintenanceEvent } from "./useSystemData";
 
@@ -72,11 +75,11 @@ export function MaintenancePanel({ onHandoff }: MaintenancePanelProps) {
         <MetricCard label="失败操作" value={loading ? "—" : `${failedCount} 项`} detail={failedCount ? "保留原始失败信息" : "暂无失败"} icon={<AlertTriangle className="h-4 w-4" />} accent={failedCount ? "orange" : "green"} />
       </div>
 
-      {error && <div role="alert" className="rounded-xl border border-red-500/30 bg-red-500/5 p-3 text-xs text-red-700">维护记录读取失败：{error}<button className="ml-2 underline" onClick={refresh}>重试</button>{failedTask && <button type="button" className="ml-2 underline" onClick={() => onHandoff(failedTask)}>交给 Mona</button>}</div>}
+      {error && <div role="alert" className="rounded-lg border border-red-500/30 bg-red-500/5 p-3 text-xs text-red-700">维护记录读取失败：{error}<button className="ml-2 underline" onClick={refresh}>重试</button>{failedTask && <button type="button" className="ml-2 underline" onClick={() => onHandoff(failedTask)}>交给 Mona</button>}</div>}
 
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex flex-wrap gap-2">{filters.map((item) => <button key={item} onClick={() => setFilter(item)} className={item === filter ? "h-8 rounded-lg bg-blue-600 px-3 text-xs text-white" : secondaryButtonClass}>{item}</button>)}</div>
-        <input aria-label="搜索维护记录" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索维护记录" className="h-8 w-48 rounded-lg border bg-background px-3 text-xs" />
+        <div className="flex flex-wrap gap-2">{filters.map((item) => item === filter ? <Button key={item} size="sm" onClick={() => setFilter(item)}>{item}</Button> : <Button key={item} variant="outline" size="sm" onClick={() => setFilter(item)}>{item}</Button>)}</div>
+        <Input aria-label="搜索维护记录" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索维护记录" className="w-48" />
       </div>
 
       <div className="grid gap-3 lg:grid-cols-[minmax(0,1.35fr)_minmax(280px,0.8fr)]">
@@ -88,7 +91,7 @@ export function MaintenancePanel({ onHandoff }: MaintenancePanelProps) {
           ) : (
             <div className="scrollbar-hover relative max-h-[60vh] space-y-1 overflow-y-auto before:absolute before:bottom-4 before:left-[78px] before:top-4 before:w-px before:bg-border">
               {filtered.map((event) => (
-                <button key={event.id} type="button" onClick={() => setSelectedId(event.id)} className={`relative flex w-full items-center gap-3 rounded-lg p-2 text-left transition ${selected?.id === event.id ? "bg-blue-500/5" : "hover:bg-muted/40"}`}>
+                <button key={event.id} type="button" onClick={() => setSelectedId(event.id)} className={`relative flex w-full items-center gap-3 rounded-lg p-2 text-left transition ${selected?.id === event.id ? "bg-accent" : "hover:bg-accent"}`}>
                   <span className="w-16 shrink-0 text-[10px] text-muted-foreground">{eventTime(event.ts)}</span>
                   <span className={`z-10 h-2.5 w-2.5 shrink-0 rounded-full ring-4 ring-background ${event.status === "成功" ? "bg-emerald-500" : "bg-orange-500"}`} />
                   <span className="min-w-0 flex-1">
@@ -120,7 +123,7 @@ export function MaintenancePanel({ onHandoff }: MaintenancePanelProps) {
                 {recoverable.map((event: MaintenanceEvent) => (
                   <div key={event.id} className="flex items-center gap-2 rounded-lg border p-2.5">
                     <span className="min-w-0 flex-1 truncate" title={event.title}>{event.title}</span>
-                    <button className={secondaryButtonClass} disabled={restoringId === event.id} onClick={() => void restoreEvent(event)}><RotateCcw className="mr-1 h-3 w-3" />{restoringId === event.id ? "恢复中" : "恢复"}</button>
+                    <Button variant="outline" size="sm" disabled={restoringId === event.id} onClick={() => void restoreEvent(event)}><RotateCcw className="mr-1 h-3 w-3" />{restoringId === event.id ? "恢复中" : "恢复"}</Button>
                   </div>
                 ))}
                 <p className="text-[10px] text-muted-foreground">卸载、更新和文件清理不支持自动回滚。</p>

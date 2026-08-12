@@ -1,125 +1,149 @@
+import { BotMessageSquare } from "lucide-react";
 import { useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 
-import { AgentLogo } from "@/components/AgentLogo";
-import sidebarSystemIcon from "@/assets/icons/sidebar-system.png";
+import { invokeWithTimeout } from "@/lib/tauri";
+import { cn } from "@/lib/utils";
 
+import { Button } from "@/components/ui/button";
 import { MaintenancePanel } from "./MaintenancePanel";
 import { OverviewPanel } from "./OverviewPanel";
-import { SystemOptimizationPanel } from "./SystemOptimizationPanel";
 import { SoftwarePanel } from "./SoftwarePanel";
 import { StartupPanel } from "./StartupPanel";
 import { StoragePanel } from "./StoragePanel";
 import { SystemAssistant } from "./SystemAssistant";
 import type { SystemAgentHandoffTask } from "./systemAgentHandoff";
-import { systemTabs, type SystemTab } from "./mockData";
+import { SystemOptimizationPanel } from "./SystemOptimizationPanel";
+import { systemTabs, type SystemTab } from "./systemTabs";
 import { useSoftwareManagement, useStorageScan } from "./useSystemData";
 
 export function SystemView({ initialTab = "overview" }: { initialTab?: SystemTab }) {
   const [activeTab, setActiveTab] = useState<SystemTab>(initialTab);
-  const [storageMounted, setStorageMounted] = useState(initialTab === "storage");
-  const [softwareMounted, setSoftwareMounted] = useState(initialTab === "software");
+  const [hasVisitedStorage, setHasVisitedStorage] = useState(initialTab === "storage");
+  const [hasVisitedSoftware, setHasVisitedSoftware] = useState(initialTab === "software");
   const [handoffTask, setHandoffTask] = useState<SystemAgentHandoffTask | null>(null);
-  const [analysisRequest, setAnalysisRequest] = useState<{ goal: string; nonce: number } | null>(null);
+  const [analysisRequest, setAnalysisRequest] = useState<{ goal: string; nonce: number; channel?: "plan" | "diagnose" } | null>(null);
   const [assistantCollapsed, setAssistantCollapsed] = useState(
-    () => localStorage.getItem("system.assistantCollapsed") === "1",
+    () => localStorage.getItem("system.assistantCollapsed") === "true",
   );
-  const storageScan = useStorageScan();
-  const { data: softwareData } = useSoftwareManagement();
-  const updateCount = softwareData?.updates.length ?? 0;
+  const storage = useStorageScan();
+  const software = useSoftwareManagement();
 
-  const handleTabChange = (tab: SystemTab) => {
+  const switchTab = (tab: SystemTab) => {
     setActiveTab(tab);
-    if (tab === "software") setSoftwareMounted(true);
-    if (tab === "storage") setStorageMounted(true);
-  };
-
-  const ActivePanel = activeTab === "overview"
-    ? <OverviewPanel onNavigate={handleTabChange} onStartStorageScan={() => void storageScan.start()} onAcknowledgeStartupItems={() => invoke<void>("system_acknowledge_startup_items")} />
-    : activeTab === "startup"
-      ? <StartupPanel onHandoff={setHandoffTask} />
-      : activeTab === "optimization"
-        ? <SystemOptimizationPanel />
-      : activeTab === "maintenance"
-        ? <MaintenancePanel onHandoff={setHandoffTask} />
-        : null;
-
-  const expandAssistant = () => {
-    setAssistantCollapsed(false);
-    localStorage.setItem("system.assistantCollapsed", "0");
-  };
-
-  const collapseAssistant = () => {
-    setAssistantCollapsed(true);
-    localStorage.setItem("system.assistantCollapsed", "1");
+    if (tab === "storage") setHasVisitedStorage(true);
+    if (tab === "software") setHasVisitedSoftware(true);
   };
 
   const toggleAssistant = () => {
-    if (assistantCollapsed) {
-      expandAssistant();
-    } else {
-      collapseAssistant();
-    }
+    setAssistantCollapsed((previous) => {
+      localStorage.setItem("system.assistantCollapsed", String(!previous));
+      return !previous;
+    });
   };
 
+  const handleHandoff = (task: SystemAgentHandoffTask) => {
+    setHandoffTask(task);
+    if (assistantCollapsed) toggleAssistant();
+  };
+
+  const updateCount = software.data?.updates.length ?? 0;
+
   return (
-    <section
-      data-testid="system-layout"
-      className={`relative grid h-full min-h-0 overflow-hidden bg-background ${assistantCollapsed ? "grid-cols-[minmax(0,1fr)]" : "grid-cols-[minmax(0,1fr)_360px]"}`}
-    >
-      <div className="flex min-h-0 min-w-0 flex-col">
-        <header className="shrink-0 border-b border-border/70 bg-card/70 px-4 pt-4 lg:px-5">
-          <div className="flex flex-wrap items-center gap-3">
-            <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-sky-400 to-blue-600 p-1.5 shadow-sm"><img src={sidebarSystemIcon} className="h-full w-full object-contain" alt="" draggable={false} /></span>
-            <div className="min-w-0"><h1 className="text-xl font-semibold tracking-tight">系统</h1><p className="text-xs text-muted-foreground">管理电脑配置与日常维护</p></div>
-            <div className="ml-auto flex items-center gap-2">
-              <button type="button" aria-label={assistantCollapsed ? "展开 Mona 系统管家" : "收起 Mona 系统管家"} onClick={toggleAssistant} className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition hover:bg-accent hover:text-foreground"><AgentLogo state="welcome" className="h-5 w-5" /></button>
-            </div>
-          </div>
-          <div role="tablist" aria-label="系统功能" className="mt-3 flex gap-1 overflow-x-auto scrollbar-none">
-            {systemTabs.map((tab) => {
-              const badge = tab.id === "software" && updateCount > 0 ? updateCount : 0;
-              return (
-                <button key={tab.id} type="button" role="tab" aria-selected={activeTab === tab.id} onClick={() => handleTabChange(tab.id)} className={`relative whitespace-nowrap px-3 py-2.5 text-xs font-medium transition ${activeTab === tab.id ? "text-blue-600" : "text-muted-foreground hover:text-foreground"}`}>
-                  <span className="inline-flex items-center gap-1.5">
-                    {tab.label}
-                    {badge > 0 && <span className="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-blue-600 px-1 text-[10px] font-semibold text-white">{badge}</span>}
-                  </span>
-                  {activeTab === tab.id && <span className="absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-blue-600" />}
-                </button>
-              );
-            })}
-          </div>
-        </header>
-
-        <div className="min-h-0 overflow-y-auto p-4 lg:p-5 scrollbar-hover">
-          <div className="mx-auto w-full max-w-[1160px]">
-            {softwareMounted && (
-              <div className={activeTab === "software" ? "" : "hidden"}>
-                <SoftwarePanel onHandoff={setHandoffTask} />
-              </div>
-            )}
-            {storageMounted && (
-              <div className={activeTab === "storage" ? "" : "hidden"}>
-                <StoragePanel scan={storageScan} onHandoff={setHandoffTask} onAnalyze={(goal) => setAnalysisRequest({ goal, nonce: Date.now() })} />
-              </div>
-            )}
-            {activeTab !== "software" && activeTab !== "storage" && ActivePanel}
-          </div>
+    <div className="flex h-full min-h-0 flex-col bg-background text-foreground">
+      <header className="flex h-11 shrink-0 items-center gap-3 border-b border-border/60 pl-4 pr-3">
+        <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto scrollbar-none" role="tablist" aria-label="系统模块导航">
+          {systemTabs.map((tab) => (
+            <button
+              key={tab.id}
+              role="tab"
+              aria-selected={activeTab === tab.id}
+              onClick={() => switchTab(tab.id)}
+              className={`relative flex items-center gap-1.5 whitespace-nowrap rounded-md px-3 py-1.5 text-[13px] transition-colors ${
+                activeTab === tab.id
+                  ? "font-medium text-foreground"
+                  : "text-muted-foreground hover:bg-accent"
+              }`}
+            >
+              {tab.label}
+              {tab.id === "software" && updateCount > 0 ? (
+                <span className="rounded-full bg-amber-500/15 px-1.5 py-px text-[10px] font-semibold text-amber-600">
+                  {updateCount}
+                </span>
+              ) : null}
+              {activeTab === tab.id ? (
+                <span className="absolute inset-x-3 bottom-0 h-0.5 rounded-full bg-primary" />
+              ) : null}
+            </button>
+          ))}
         </div>
-      </div>
+        <Button
+          variant="ghost"
+          size="sm"
+          aria-label={assistantCollapsed ? "展开 Mona 系统管家" : "收起 Mona 系统管家"}
+          aria-pressed={!assistantCollapsed}
+          onClick={toggleAssistant}
+          className="gap-1.5"
+        >
+          <BotMessageSquare className="h-4 w-4" />
+          系统管家
+        </Button>
+      </header>
 
-      <SystemAssistant
-        tab={activeTab}
-        requestId={0}
-        handoffTask={handoffTask}
-        onHandoffTaskHandled={(taskId) => setHandoffTask((current) => current?.id === taskId ? null : current)}
-        storage={{ result: storageScan.result, clean: storageScan.clean }}
-        onNavigate={setActiveTab}
-        collapsed={assistantCollapsed}
-        onCollapse={collapseAssistant}
-        analysisRequest={analysisRequest}
-      />
-    </section>
+      <div
+        data-testid="system-layout"
+        className={cn(
+          "grid min-h-0 flex-1",
+          assistantCollapsed
+            ? "grid-cols-[minmax(0,1fr)]"
+            : "grid-cols-[minmax(0,1fr)_360px]",
+        )}
+      >
+        <main className="min-h-0 overflow-y-auto scrollbar-hover bg-background">
+          <div className="mx-auto w-full max-w-7xl p-6">
+            {activeTab === "overview" ? (
+              <OverviewPanel
+                onNavigate={switchTab}
+                onStartStorageScan={() => void storage.start()}
+                onAcknowledgeStartupItems={() => invokeWithTimeout<void>("system_acknowledge_startup_items", {}, 10_000)}
+              />
+            ) : null}
+
+            {hasVisitedStorage ? (
+              <div hidden={activeTab !== "storage"}>
+                <StoragePanel
+                  scan={storage}
+                  onHandoff={handleHandoff}
+                  onAnalyze={(goal) => setAnalysisRequest({ goal, nonce: Date.now(), channel: "diagnose" })}
+                />
+              </div>
+            ) : null}
+
+            {hasVisitedSoftware ? (
+              <div hidden={activeTab !== "software"}>
+                <SoftwarePanel onHandoff={handleHandoff} />
+              </div>
+            ) : null}
+
+            {activeTab === "startup" ? <StartupPanel onHandoff={handleHandoff} /> : null}
+            {activeTab === "optimization" ? <SystemOptimizationPanel /> : null}
+            {activeTab === "maintenance" ? <MaintenancePanel onHandoff={handleHandoff} /> : null}
+          </div>
+        </main>
+
+        <SystemAssistant
+          tab={activeTab}
+          storage={storage}
+          software={software.data}
+          onNavigate={switchTab}
+          collapsed={assistantCollapsed}
+          onCollapse={toggleAssistant}
+          handoffTask={handoffTask}
+          onHandoffTaskHandled={(taskId) =>
+            setHandoffTask((current) => (current?.id === taskId ? null : current))
+          }
+          analysisRequest={analysisRequest}
+        />
+      </div>
+    </div>
   );
 }

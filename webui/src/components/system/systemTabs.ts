@@ -19,4 +19,3 @@ export const systemTabs: SystemTabDefinition[] = [
   { id: "optimization", label: "系统优化" },
   { id: "maintenance", label: "维护记录" },
 ];
-

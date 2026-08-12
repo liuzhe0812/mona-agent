@@ -1,7 +1,11 @@
 import { AlertTriangle, Boxes, RefreshCw, ShieldCheck } from "lucide-react";
 import { Fragment, useMemo, useState } from "react";
 
-import { MetricCard, PanelCard, StatusPill, TaskFailureNotice, primaryButtonClass, secondaryButtonClass } from "./SystemUi";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
+
+import { MetricCard, PanelCard, StatusPill, TaskFailureNotice } from "./SystemUi";
 import type { SystemAgentHandoffTask } from "./systemAgentHandoff";
 import { useMaintenanceHistory, useSoftwareManagement, type SoftwareFailure } from "./useSystemData";
 import { WindowsAppsPanel } from "./WindowsAppsPanel";
@@ -179,16 +183,16 @@ export function SoftwarePanel({ onHandoff }: SoftwarePanelProps) {
             role="tab"
             aria-selected={activeSection === section.id}
             onClick={() => setActiveSection(section.id)}
-            className={`relative whitespace-nowrap px-1 pb-2.5 text-sm font-medium transition ${activeSection === section.id ? "text-blue-600" : "text-muted-foreground hover:text-foreground"}`}
+            className={`relative whitespace-nowrap px-1 pb-2.5 text-sm font-medium transition ${activeSection === section.id ? "text-primary" : "text-muted-foreground hover:text-foreground"}`}
           >
             {section.label}
-            {activeSection === section.id && <span className="absolute inset-x-0 bottom-0 h-0.5 rounded-full bg-blue-600" />}
+            {activeSection === section.id && <span className="absolute inset-x-0 bottom-0 h-0.5 rounded-full bg-primary" />}
           </button>
         ))}
       </div>
 
       {error && (
-        <div role="alert" className="rounded-xl border border-red-500/30 bg-red-500/5 px-4 py-3 text-xs text-red-700 dark:text-red-400">
+        <div role="alert" className="rounded-lg border border-red-500/30 bg-red-500/5 px-4 py-3 text-xs text-red-700 dark:text-red-400">
           软件信息读取失败：{error}
         </div>
       )}
@@ -227,18 +231,17 @@ export function SoftwarePanel({ onHandoff }: SoftwarePanelProps) {
 
           <PanelCard
             title="可用更新"
-            action={<button className={secondaryButtonClass} onClick={refresh} disabled={loading || busy}>重新扫描</button>}
+            action={<Button variant="outline" size="sm" onClick={refresh} disabled={loading || busy}>重新扫描</Button>}
           >
             <div className="overflow-x-auto">
               <table className="w-full min-w-[620px] text-left text-xs">
                 <thead className="text-muted-foreground">
                   <tr>
                     <th className="w-10 pb-2 font-medium">
-                      <input
+                      <Checkbox
                         aria-label="选择全部可更新软件"
-                        type="checkbox"
                         checked={updates.length > 0 && updates.every((software) => selected.has(software.id))}
-                        onChange={toggleAll}
+                        onCheckedChange={() => toggleAll()}
                         disabled={updates.length === 0 || busy}
                       />
                     </th>
@@ -258,11 +261,10 @@ export function SoftwarePanel({ onHandoff }: SoftwarePanelProps) {
                       <Fragment key={software.id}>
                         <tr className="border-t border-border/50">
                           <td className="py-2.5">
-                            <input
+                            <Checkbox
                               aria-label={`选择 ${software.name}`}
-                              type="checkbox"
                               checked={selected.has(software.id)}
-                              onChange={() => toggle(software.id)}
+                              onCheckedChange={() => toggle(software.id)}
                               disabled={isWorking}
                             />
                           </td>
@@ -271,9 +273,9 @@ export function SoftwarePanel({ onHandoff }: SoftwarePanelProps) {
                           <td>{software.nextVersion || "—"}</td>
                           <td><StatusPill tone={isWorking ? "orange" : "blue"}>{isWorking ? "更新中" : (software.status || "—")}</StatusPill></td>
                           <td className="text-right">
-                            <button className={secondaryButtonClass} onClick={() => upgrade([software])} disabled={busy}>
+                            <Button variant="outline" size="sm" onClick={() => upgrade([software])} disabled={busy}>
                               {isWorking ? "更新中" : "更新"}
-                            </button>
+                            </Button>
                           </td>
                         </tr>
                         {isWorking && latest && (
@@ -292,9 +294,9 @@ export function SoftwarePanel({ onHandoff }: SoftwarePanelProps) {
             </div>
             <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border/70 bg-muted/30 p-2.5 text-xs">
               <span>已选择 {selectedUpdates.length} 项</span>
-              <button className={primaryButtonClass} onClick={() => upgrade(selectedUpdates)} disabled={selectedUpdates.length === 0 || busy}>
+              <Button size="sm" onClick={() => upgrade(selectedUpdates)} disabled={selectedUpdates.length === 0 || busy}>
                 {busy ? "处理中" : "更新所选"}
-              </button>
+              </Button>
             </div>
             {lastAction && <p role="status" className="mt-2 text-xs text-emerald-600">{lastAction}</p>}
           </PanelCard>
@@ -305,12 +307,12 @@ export function SoftwarePanel({ onHandoff }: SoftwarePanelProps) {
         <PanelCard
           title="已安装软件"
           action={(
-            <input
+            <Input
               aria-label="搜索已安装软件"
               value={installedQuery}
               onChange={(event) => setInstalledQuery(event.target.value)}
               placeholder="搜索已安装软件"
-              className="h-8 w-48 rounded-lg border bg-background px-3 text-xs"
+              className="w-48"
             />
           )}
         >
@@ -326,7 +328,7 @@ export function SoftwarePanel({ onHandoff }: SoftwarePanelProps) {
                     <td className="truncate pr-3" title={software.version || undefined}>{software.version || "未知"}</td>
                     <td>{software.estimatedSizeBytes != null ? formatBytes(software.estimatedSizeBytes) : "—"}</td>
                     <td>{software.installDate || "—"}</td>
-                    <td><button className="text-blue-600 hover:underline" aria-label={`卸载 ${software.name}`} disabled={busy} onClick={() => { setSelectedInstalledId(software.id); setConfirmingUninstall(true); }}>卸载</button></td>
+                    <td><button className="text-primary hover:underline" aria-label={`卸载 ${software.name}`} disabled={busy} onClick={() => { setSelectedInstalledId(software.id); setConfirmingUninstall(true); }}>卸载</button></td>
                   </tr>
                 ))}
               </tbody>
@@ -338,15 +340,15 @@ export function SoftwarePanel({ onHandoff }: SoftwarePanelProps) {
             <div className="mt-3 flex flex-wrap items-center gap-3 rounded-lg border border-orange-500/30 bg-orange-500/5 p-3 text-xs">
               <AlertTriangle className="h-4 w-4 text-orange-600" />
               <span className="flex-1">将通过 WinGet 精确匹配并卸载“{selectedInstalled.name}”。卸载后仅展示检测到的残留候选，不会自动删除。</span>
-              <button className={secondaryButtonClass} onClick={() => setConfirmingUninstall(false)}>取消</button>
-              <button className={primaryButtonClass} onClick={handleUninstall} aria-label={`确认卸载 ${selectedInstalled.name}`}>确认卸载</button>
+              <Button variant="outline" size="sm" onClick={() => setConfirmingUninstall(false)}>取消</Button>
+              <Button size="sm" onClick={handleUninstall} aria-label={`确认卸载 ${selectedInstalled.name}`}>确认卸载</Button>
             </div>
           )}
         </PanelCard>
       )}
 
       {activeSection === "uninstall-history" && (
-        <PanelCard title="卸载记录" action={<button className={secondaryButtonClass} onClick={maintenance.refresh} disabled={maintenance.loading}>刷新</button>}>
+        <PanelCard title="卸载记录" action={<Button variant="outline" size="sm" onClick={maintenance.refresh} disabled={maintenance.loading}>刷新</Button>}>
           {maintenance.error && <p role="alert" className="text-xs text-red-700 dark:text-red-400">卸载记录读取失败：{maintenance.error}</p>}
           {!maintenance.error && (
             <div className="overflow-x-auto">

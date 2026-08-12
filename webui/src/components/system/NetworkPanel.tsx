@@ -1,6 +1,7 @@
 import { CheckCircle2, Globe, Loader2, RotateCcw, ShieldOff, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
+import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
@@ -17,7 +18,7 @@ import {
   type HostsEntry,
   type HostsListResult,
 } from "./networkApi";
-import { PanelCard, StatusPill, primaryButtonClass, secondaryButtonClass } from "./SystemUi";
+import { PanelCard, StatusPill } from "./SystemUi";
 
 export function NetworkPanel() {
   return (
@@ -82,10 +83,10 @@ function DnsSection() {
     <PanelCard
       title="DNS 服务器"
       action={
-        <button type="button" className={secondaryButtonClass} onClick={handleReset} disabled={acting === "reset" || !status}>
+        <Button type="button" variant="outline" size="sm" onClick={handleReset} disabled={acting === "reset" || !status}>
           {acting === "reset" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
           恢复 DHCP
-        </button>
+        </Button>
       }
     >
       <div className="flex flex-col gap-4">
@@ -124,14 +125,14 @@ function DnsSection() {
                       disabled={isActing}
                       className={cn(
                         "flex flex-col items-start gap-1 rounded-lg border p-2.5 text-left transition",
-                        isActive ? "border-blue-500/60 bg-blue-500/5 ring-1 ring-blue-500/20" : "border-border/70 bg-card hover:border-blue-500/40 hover:bg-accent",
+                        isActive ? "border-primary/60 bg-accent ring-1 ring-primary/20" : "border-border/70 bg-card hover:bg-accent",
                         isActing && "opacity-60",
                       )}
                     >
                       <div className="flex w-full items-center justify-between">
                         <span className="text-xs font-semibold">{preset.label}</span>
-                        {isActing && <Loader2 className="h-3 w-3 animate-spin text-blue-600" />}
-                        {isActive && !isActing && <CheckCircle2 className="h-3.5 w-3.5 text-blue-600" />}
+                        {isActing && <Loader2 className="h-3 w-3 animate-spin text-primary" />}
+                        {isActive && !isActing && <CheckCircle2 className="h-3.5 w-3.5 text-primary" />}
                       </div>
                       <span className="font-mono text-[10px] text-muted-foreground">
                         {preset.primaryV4}{preset.secondaryV4 ? ` / ${preset.secondaryV4}` : ""}
@@ -262,10 +263,10 @@ function HostsSection() {
               <Checkbox checked={includeWww} onCheckedChange={(v) => setIncludeWww(v === true)} />
               同时添加 www
             </label>
-            <button type="button" className={primaryButtonClass} onClick={handleAdd} disabled={acting}>
+            <Button type="button" size="sm" onClick={handleAdd} disabled={acting}>
               {acting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Globe className="h-3.5 w-3.5" />}
               添加
-            </button>
+            </Button>
           </div>
         </div>
 
@@ -280,10 +281,10 @@ function HostsSection() {
               onChange={(e) => setBlockDomain(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter") handleBlock(); }}
             />
-            <button type="button" className={primaryButtonClass} onClick={handleBlock} disabled={acting}>
+            <Button type="button" size="sm" onClick={handleBlock} disabled={acting}>
               {acting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ShieldOff className="h-3.5 w-3.5" />}
               屏蔽
-            </button>
+            </Button>
           </div>
         </div>
 
@@ -332,15 +333,16 @@ function HostsSection() {
                 return (
                   <div key={backup} className="flex items-center gap-2 text-[11px]">
                     <span className="min-w-0 flex-1 truncate font-mono text-muted-foreground">{name}</span>
-                    <button
+                    <Button
                       type="button"
-                      className={secondaryButtonClass}
+                      variant="outline"
+                      size="sm"
                       onClick={() => void handleRestore(backup)}
                       disabled={acting}
                     >
                       <RotateCcw className="h-3 w-3" />
                       恢复
-                    </button>
+                    </Button>
                   </div>
                 );
               })}
