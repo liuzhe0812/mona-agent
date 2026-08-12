@@ -30,6 +30,10 @@ pub fn deploy_gateway(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> 
     let source_dir = find_gateway_resource_dir(app_handle)?;
     let dest_dir = gateway_deploy_dir().join(GATEWAY_DIR_NAME);
 
+    // Best-effort sweep of stale dirs left by the rename fallback in
+    // remove_old_gateway_dir (locked by an orphaned process at the time).
+    sweep_stale_gateway_dirs();
+
     let source_exe = source_dir.join(GATEWAY_EXE_NAME);
     if !source_exe.exists() {
         return Err(format!(
@@ -40,8 +44,13 @@ pub fn deploy_gateway(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> 
 
     let dest_exe = dest_dir.join(GATEWAY_EXE_NAME);
 
-    // Check if we need to (re-)deploy: missing or different exe size
+    // Check if we need to (re-)deploy: missing/damaged or different exe size
     let need_deploy = if !dest_exe.exists() {
+        true
+    } else if !dest_dir.join("_internal").is_dir() {
+        // A previous removal partially deleted the tree (e.g. blocked by a
+        // locked exe mid-way): re-deploy to repair.
+        log::warn!("Deployed gateway dir damaged (missing _internal), repairing");
         true
     } else {
         let src_meta = std::fs::metadata(&source_exe)
@@ -71,8 +80,7 @@ pub fn deploy_gateway(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> 
 
     // Remove old deployment directory if it exists
     if dest_dir.exists() {
-        std::fs::remove_dir_all(&dest_dir)
-            .map_err(|e| format!("Failed to remove old gateway dir: {}", e))?;
+        remove_old_gateway_dir(&dest_dir)?;
     }
 
     // Copy the entire directory tree
@@ -81,6 +89,88 @@ pub fn deploy_gateway(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> 
     log::info!("Gateway deployed to {:?}", dest_dir);
 
     Ok(dest_exe)
+}
+
+/// Remove the previously deployed gateway directory.
+///
+/// The tree can be locked by an orphaned `mona-gateway.exe` process (e.g. a
+/// services process left behind by an older hot-update, or a crash remnant),
+/// in which case plain `remove_dir_all` fails with Access Denied (os error 5).
+/// Strategy: kill stale processes, retry removal with backoff, then fall back
+/// to renaming the directory aside (rename works even while files inside are
+/// locked) and deleting it best-effort — the sweep on a later launch cleans
+/// it up once the orphan exits.
+fn remove_old_gateway_dir(dir: &PathBuf) -> Result<(), String> {
+    #[cfg(windows)]
+    kill_stale_gateway_processes();
+
+    const ATTEMPTS: u32 = 4;
+    let mut last_err: Option<std::io::Error> = None;
+    for attempt in 1..=ATTEMPTS {
+        match std::fs::remove_dir_all(dir) {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                last_err = Some(e);
+                if attempt < ATTEMPTS {
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                }
+            }
+        }
+    }
+    log::warn!(
+        "remove_dir_all {:?} failed after {} attempts ({:?}), trying rename fallback",
+        dir,
+        ATTEMPTS,
+        last_err
+    );
+
+    let stale = dir.with_file_name(format!("{}.stale-{}", GATEWAY_DIR_NAME, std::process::id()));
+    std::fs::rename(dir, &stale).map_err(|e| {
+        format!(
+            "Failed to remove old gateway dir: {}; rename fallback also failed: {}",
+            last_err
+                .map(|e| e.to_string())
+                .unwrap_or_else(|| "unknown".to_string()),
+            e
+        )
+    })?;
+    // Best-effort: may still be locked; sweep_stale_gateway_dirs retries later.
+    let _ = std::fs::remove_dir_all(&stale);
+    Ok(())
+}
+
+/// Delete `mona-gateway.stale-*` directories left by the rename fallback.
+fn sweep_stale_gateway_dirs() {
+    let prefix = format!("{}.stale-", GATEWAY_DIR_NAME);
+    let Ok(entries) = std::fs::read_dir(gateway_deploy_dir()) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if entry
+            .file_name()
+            .to_str()
+            .map(|n| n.starts_with(&prefix))
+            .unwrap_or(false)
+        {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
+/// Kill any lingering `mona-gateway.exe` processes from previous app sessions.
+/// Only called when the deployed directory is about to be replaced, so any
+/// running instance is necessarily an outdated orphan that would hold locks
+/// on the exe/DLLs inside.
+#[cfg(windows)]
+fn kill_stale_gateway_processes() {
+    let mut cmd = std::process::Command::new("taskkill");
+    cmd.args(["/IM", GATEWAY_EXE_NAME, "/T", "/F"]);
+    use std::os::windows::process::CommandExt;
+    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    // taskkill exits non-zero when no matching process exists — that is fine.
+    if let Err(e) = cmd.status() {
+        log::warn!("Failed to taskkill stale gateway processes: {}", e);
+    }
 }
 
 /// Recursively copy a directory tree.

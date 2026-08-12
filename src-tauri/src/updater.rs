@@ -174,7 +174,9 @@ pub async fn download_and_verify(
 ///
 /// Steps:
 /// 1. Extract mona-<version>.tar.gz → staging/Mona(.exe) + staging/mona-gateway/
-/// 2. Stop gateway
+/// 2. Stop gateway AND services (both run from the same deployed exe;
+///    leaving services alive would orphan it on exit, locking the deployed
+///    dir and breaking the re-deploy on next launch — os error 5)
 /// 3. Backup resources/mona-gateway/ → mona-gateway.bak/
 /// 4. Copy new mona-gateway/ → resources/mona-gateway/
 /// 5. Copy Mona(.exe) → Mona(.exe).new (staged for swap)
@@ -182,6 +184,7 @@ pub async fn download_and_verify(
 pub fn install_update(
     package_path: &Path,
     gateway_state: &crate::GatewayState,
+    services_state: &crate::ServicesState,
     app_handle: &tauri::AppHandle,
 ) -> Result<(), String> {
     let staging_dir = package_path
@@ -225,6 +228,7 @@ pub fn install_update(
     );
 
     gateway_state.stop()?;
+    services_state.stop()?;
     // Grace period for file locks
     std::thread::sleep(std::time::Duration::from_millis(500));
 
@@ -536,6 +540,7 @@ pub async fn check_for_updates() -> Result<UpdateCheckResult, String> {
 #[tauri::command]
 pub async fn perform_update(
     state: tauri::State<'_, crate::GatewayState>,
+    services_state: tauri::State<'_, crate::ServicesState>,
     app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
     let manifest = fetch_manifest_with_fallback().await?;
@@ -567,7 +572,7 @@ pub async fn perform_update(
         }
     };
 
-    install_update(&package_path, &state, &app_handle)?;
+    install_update(&package_path, &state, &services_state, &app_handle)?;
 
     launch_update_restart()?;
 
