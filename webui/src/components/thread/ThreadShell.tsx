@@ -11,7 +11,7 @@ import { NewChatDashboard } from "@/components/thread/NewChatDashboard";
 import { SplitPane } from "@/components/deliver/SplitPane";
 import { FilePreviewPanel } from "@/components/deliver/FilePreviewPanel";
 import { WorkspacePanel, flattenFilesForDisplay } from "@/components/deliver/WorkspacePanel";
-import { useFilePreviewStore, type PreviewScope } from "@/components/deliver/filePreviewStore";
+import { useFilePreviewStore, type PreviewScope, isArtifactTombstoned, normalizeArtifactPath } from "@/components/deliver/filePreviewStore";
 import { useMonaStream, type SendImage, type SendOptions } from "@/hooks/useMonaStream";
 import { usePendingQueue } from "@/hooks/usePendingQueue";
 import { useSessionHistory } from "@/hooks/useSessions";
@@ -210,6 +210,17 @@ export function ThreadShell({
   }, [chatId, historyKey]);
 
   const displayMessages = useMemo(() => projectWebuiThreadMessages(messages), [messages]);
+  // Delivered files surface in the workspace panel (session section, with
+  // preview/delete affordances). Rendering them again as inline cards in
+  // the transcript would duplicate every row, so the transcript view
+  // strips them; ``displayMessages`` keeps them for ``messageFiles``.
+  const transcriptMessages = useMemo(
+    () =>
+      displayMessages.map((m) =>
+        m.deliveredFiles?.length ? { ...m, deliveredFiles: undefined } : m,
+      ),
+    [displayMessages],
+  );
 
   const showHeroComposer = messages.length === 0 && !loading;
   const scheduleItems = useScheduleStore((s) => s.items);
@@ -641,12 +652,13 @@ export function ThreadShell({
   const isHome = !session;
   const workspaceScope: PreviewScope = isProjectSession ? "project" : "shared";
 
-  // Shared-output scan: only fetched for non-project sessions. Project
-  // sessions keep using the existing aggregation from messages (which is
-  // limited to explicit deliver_file + file_edit events).
+  // Authoritative on-disk scan: shared sessions scan ``<workspace>/output/``;
+  // project sessions scan the bound project directory (all files — project
+  // sessions have no "artifact" concept, the directory IS the list).
   const artifacts = useArtifacts(
-    !isProjectSession && !isHome ? token : null,
+    !isHome ? token : null,
     `${historyKey ?? "home"}-${artifactsRefreshSignal}`,
+    { scope: workspaceScope, sessionKey: isProjectSession ? sessionKey : null },
   );
 
   // Rescan when the server pushes ``artifacts_changed`` — the shared output
@@ -697,27 +709,38 @@ export function ThreadShell({
     return out;
   }, [displayMessages]);
 
-  // Paths deleted from the shared output via the workspace panel. Message
-  // events (deliver_file / file_edit) are immutable, so deleted files must
-  // be explicitly filtered out of the session list. Cleared on session switch.
-  const [deletedArtifactPaths, setDeletedArtifactPaths] = useState<Set<string>>(
-    new Set(),
-  );
-  useEffect(() => setDeletedArtifactPaths(new Set()), [historyKey]);
+  // Paths trashed via the workspace panel. Message events (deliver_file /
+  // file_edit) are immutable history: without tombstones a trashed file would
+  // resurrect in the session section on every remount. The tombstones live in
+  // the module-level preview store so they survive panel/shell remounts, and
+  // the authoritative scan can still revive a path the agent re-created.
+  const deletedArtifactPaths = useFilePreviewStore((s) => s.deletedArtifactPaths);
+  const markArtifactDeleted = useFilePreviewStore((s) => s.markArtifactDeleted);
+  const scanKeys = useMemo(() => {
+    const keys = new Set<string>();
+    for (const f of artifacts.files) {
+      keys.add(normalizeArtifactPath(f.absolute_path || f.path || f.name));
+    }
+    return keys;
+  }, [artifacts.files]);
   const visibleMessageFiles = useMemo(() => {
     if (deletedArtifactPaths.size === 0) return messageFiles;
     return messageFiles.filter((f) => {
       const key = f.absolute_path || f.path || f.name;
-      return !deletedArtifactPaths.has(key);
+      if (!isArtifactTombstoned(key, deletedArtifactPaths)) return true;
+      // Scan-authoritative revival: the latest scan sees the file again, so
+      // it exists on disk and must not stay hidden by the tombstone.
+      return scanKeys.has(normalizeArtifactPath(key));
     });
-  }, [messageFiles, deletedArtifactPaths]);
+  }, [messageFiles, deletedArtifactPaths, scanKeys]);
 
   // Pick the authoritative data source for the workspace panel.
-  // - Non-project: merge scan results with live events (scan wins on dedup
-  //   so its richer metadata — size, mtime, mime — is preferred).
-  // - Project: live events only.
+  // - Shared: merge scan results with live events (scan wins on dedup so its
+  //   richer metadata — size, mtime, mime — is preferred).
+  // - Project: the project directory scan IS the list; message events are
+  //   not artifacts and never shown.
   const workspaceFiles = useMemo(() => {
-    if (isProjectSession) return visibleMessageFiles;
+    if (isProjectSession) return artifacts.files;
     const out: DeliveredFile[] = [];
     const seen = new Set<string>();
     const push = (file: DeliveredFile) => {
@@ -733,24 +756,38 @@ export function ThreadShell({
     return out;
   }, [isProjectSession, artifacts.files, visibleMessageFiles]);
 
+  // Session section rows: the scan wins on dedup — a file present in the
+  // latest scan renders in the tree with its richer metadata (size, mtime),
+  // not as a sparse session row.
+  const sessionFilesForPanel = useMemo(() => {
+    if (isProjectSession) return undefined;
+    return visibleMessageFiles.filter(
+      (f) =>
+        !scanKeys.has(normalizeArtifactPath(f.absolute_path || f.path || f.name)),
+    );
+  }, [isProjectSession, visibleMessageFiles, scanKeys]);
+
   const hasFiles = workspaceFiles.length > 0;
   // Preview prev/next cycles in the same visual order the workspace panel
   // displays: flat session section first, then the sorted artifact tree.
   const previewNavFiles = useMemo(
     () =>
       flattenFilesForDisplay(
-        isProjectSession ? visibleMessageFiles : artifacts.files,
+        artifacts.files,
         isProjectSession ? [] : visibleMessageFiles,
       ),
     [isProjectSession, artifacts.files, visibleMessageFiles],
   );
   // Right panel shows the file list by default, or the in-pane preview
-  // when a file is selected. Empty sessions hide the panel by default but
-  // keep the collapsed edge button as an always-reachable entry; expanding
-  // it reveals the panel's empty state ("还没有产物" + open output dir).
+  // when a file is selected. Sessions with zero artifact activity hide the
+  // panel by default but keep the collapsed edge button as an
+  // always-reachable entry; expanding it reveals the panel's empty state.
+  // A session whose transcript references artifacts (even if all were
+  // trashed afterwards) keeps the panel reachable on its empty state.
   const [emptyPanelExpanded, setEmptyPanelExpanded] = useState(false);
   useEffect(() => setEmptyPanelExpanded(false), [historyKey]);
-  const hasPreviewTarget = hasFiles || !!previewFile;
+  const hasPreviewTarget =
+    hasFiles || !!previewFile || messageFiles.length > 0;
   const rightVisible =
     !isHome && !workspaceCollapsed && (hasPreviewTarget || emptyPanelExpanded);
   const showWorkspaceToggle = !isHome && !rightVisible;
@@ -794,14 +831,10 @@ export function ThreadShell({
       const { moveToTrash } = await import("@/lib/tauri");
       await moveToTrash(target);
       // 消息事件不可变，显式记录已删除路径让本次会话列表立即移除。
-      setDeletedArtifactPaths((prev) => {
-        const next = new Set(prev);
-        next.add(target);
-        return next;
-      });
+      markArtifactDeleted(target);
       artifacts.refresh();
     },
-    [artifacts],
+    [artifacts, markArtifactDeleted],
   );
 
   return (
@@ -819,7 +852,7 @@ export function ThreadShell({
             />
           ) : null}
           <ThreadViewport
-            messages={displayMessages}
+            messages={transcriptMessages}
             isStreaming={isStreaming}
             emptyState={emptyState}
             composer={composer}
@@ -861,16 +894,18 @@ export function ThreadShell({
           <FilePreviewPanel files={previewNavFiles} />
         ) : (
           <WorkspacePanel
-            files={isProjectSession ? visibleMessageFiles : artifacts.files}
-            sessionFiles={!isProjectSession ? visibleMessageFiles : undefined}
+            files={artifacts.files}
+            sessionFiles={sessionFilesForPanel}
             scope={workspaceScope}
             sessionKey={isProjectSession ? sessionKey : null}
-            loading={!isProjectSession ? artifacts.loading : false}
-            error={!isProjectSession ? artifacts.error : null}
-            truncated={!isProjectSession ? artifacts.truncated : false}
-            onRefresh={!isProjectSession ? artifacts.refresh : undefined}
-            onDelete={!isProjectSession ? handleDeleteArtifact : undefined}
-            outputDir={!isProjectSession ? sharedOutputDir : null}
+            loading={artifacts.loading}
+            error={artifacts.error}
+            truncated={artifacts.truncated}
+            onRefresh={artifacts.refresh}
+            onDelete={handleDeleteArtifact}
+            outputDir={
+              isProjectSession ? session?.workspace ?? null : sharedOutputDir
+            }
           />
         )
       }

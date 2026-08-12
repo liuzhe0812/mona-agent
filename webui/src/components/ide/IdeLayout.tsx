@@ -169,7 +169,7 @@ export function IdeLayout({ sessionId }: IdeLayoutProps) {
               </div>
             </ResizablePanel>
             <ResizableHandle />
-            <ResizablePanel defaultSize={50} minSize={15}>
+            <ResizablePanel defaultSize="50%" minSize="15%">
               <IdeEditorPanel />
             </ResizablePanel>
           </ResizablePanelGroup>
