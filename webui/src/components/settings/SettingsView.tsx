@@ -145,6 +145,8 @@ import type {
 } from "@/lib/types";
 import { SkillManagementPanel } from "@/components/settings/SkillManagementPanel";
 import { McpManagementPanel } from "@/components/settings/McpManagementPanel";
+import { PageHeader, SubsectionLabel } from "@/components/ui/page-header";
+import { StatusNotice } from "@/components/ui/status-notice";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 type SettingsSectionKey =
@@ -929,7 +931,7 @@ export function SettingsView({
   };
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[radial-gradient(circle_at_50%_0%,hsl(var(--muted))_0%,hsl(var(--background))_42%)] md:flex-row">
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden md:flex-row">
       <SettingsSidebar
         activeSection={activeSection}
         onSelectSection={setActiveSection}
@@ -938,33 +940,26 @@ export function SettingsView({
 
       <main className="min-w-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
         <div className="mx-auto w-full max-w-[920px] px-5 py-8 sm:px-8 lg:py-12">
-          <div className="mb-7">
-            <p className="mb-2 text-[13px] font-medium text-muted-foreground">
-              {t("settings.sidebar.title")}
-            </p>
-            <h1 className="text-[28px] font-semibold leading-tight tracking-[-0.02em] text-foreground sm:text-[34px]">
-              {text(`settings.nav.${activeSection}`, titleForSection(activeSection))}
-            </h1>
-          </div>
+          <PageHeader
+            className="mb-7"
+            title={text(`settings.nav.${activeSection}`, titleForSection(activeSection))}
+            description={t("settings.sidebar.title")}
+          />
 
           {loading ? (
-            <div className="flex h-48 items-center justify-center rounded-2xl border border-border/50 bg-card/75 text-sm text-muted-foreground shadow-sm">
+            <div className="flex h-48 items-center justify-center rounded-lg border border-border/60 bg-card text-body text-muted-foreground">
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               {t("settings.status.loading")}
             </div>
           ) : error && !settings ? (
             <SettingsGroup>
               <SettingsRow title={t("settings.status.loadError")}>
-                <span className="max-w-[520px] text-sm text-muted-foreground">{error}</span>
+                <span className="max-w-[520px] text-body text-muted-foreground">{error}</span>
               </SettingsRow>
             </SettingsGroup>
           ) : settings ? (
             <div className="space-y-5">
-              {error ? (
-                <div className="rounded-2xl border border-destructive/20 bg-destructive/5 px-4 py-3 text-[13px] text-destructive">
-                  {error}
-                </div>
-              ) : null}
+              {error ? <StatusNotice tone="danger">{error}</StatusNotice> : null}
               {renderSection()}
             </div>
           ) : null}
@@ -1003,17 +998,18 @@ function SettingsSidebar({
 }) {
   const { t } = useTranslation();
   return (
-    <aside className="flex w-full shrink-0 flex-col border-b border-border/55 bg-card/62 px-4 pb-3 pt-4 shadow-[inset_0_-1px_0_rgba(255,255,255,0.55)] backdrop-blur-xl dark:bg-card/45 dark:shadow-none md:w-[17rem] md:border-b-0 md:border-r md:px-3 md:py-4 md:shadow-[inset_-1px_0_0_rgba(255,255,255,0.55)]">
-      <button
+    <aside className="flex w-full shrink-0 flex-col border-b border-border/55 px-4 pb-3 pt-4 md:w-[17rem] md:border-b-0 md:border-r md:px-3 md:py-4">
+      <Button
         type="button"
+        variant="ghost"
         onClick={onBackToChat}
-        className="mb-2 inline-flex w-fit items-center gap-1.5 rounded-full px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground md:mb-3"
+        className="mb-2 w-fit gap-1.5 rounded-full px-2.5 text-caption font-medium text-muted-foreground hover:text-foreground md:mb-3"
       >
         <ChevronLeft className="h-3.5 w-3.5" aria-hidden />
         {t("settings.backToChat")}
-      </button>
+      </Button>
       <div className="mb-3 px-1 md:mb-4 md:px-2">
-        <h2 className="text-[21px] font-semibold tracking-[-0.02em] text-foreground">
+        <h2 className="text-title-sm text-foreground">
           {t("settings.sidebar.title")}
         </h2>
       </div>
@@ -1025,21 +1021,22 @@ function SettingsSidebar({
         {SETTINGS_NAV_ITEMS.filter((item) => !item.desktopOnly || isTauri()).map(({ key, icon: Icon, fallback }) => {
           const active = key === activeSection;
           return (
-            <button
+            <Button
               key={key}
               type="button"
+              variant="ghost"
               aria-current={active ? "page" : undefined}
               onClick={() => onSelectSection(key)}
               className={cn(
-                "flex h-9 w-auto shrink-0 items-center gap-2 rounded-full px-3 text-left text-[13px] font-medium transition-colors md:w-full md:rounded-md md:px-2.5",
+                "h-9 w-auto shrink-0 justify-start gap-2 rounded-full px-3 text-left text-ui font-medium md:w-full md:rounded-md md:px-2.5",
                 active
-                  ? "bg-muted/90 text-foreground"
-                  : "text-muted-foreground/78 hover:bg-muted/45 hover:text-foreground",
+                  ? "bg-accent text-foreground hover:bg-accent"
+                  : "text-muted-foreground hover:text-foreground",
               )}
             >
               <Icon className="h-4 w-4 shrink-0" strokeWidth={2} aria-hidden />
               <span className="truncate">{t(`settings.nav.${key}`, { defaultValue: fallback })}</span>
-            </button>
+            </Button>
           );
         })}
       </nav>
@@ -1087,18 +1084,18 @@ function OverviewSettings({
   return (
     <div className="space-y-7">
       <section>
-        <div className="overflow-hidden rounded-2xl border border-border/45 bg-card/86 shadow-sm backdrop-blur-xl dark:border-white/10">
+        <div className="overflow-hidden rounded-lg border border-border/60 bg-card shadow-sm">
           <div className="flex flex-col gap-4 px-5 py-5 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex min-w-0 items-center gap-3">
               <span className="grid h-12 w-12 shrink-0 place-items-center rounded-lg bg-muted text-foreground/82 dark:bg-muted/70">
                 <Bot className="h-6 w-6" aria-hidden />
               </span>
               <div className="min-w-0">
-                <div className="text-[12px] font-medium text-muted-foreground">mona</div>
-                <div className="mt-0.5 truncate text-[18px] font-semibold leading-6 text-foreground">
+                <div className="text-caption font-medium text-muted-foreground">mona</div>
+                <div className="mt-0.5 truncate text-title-sm text-foreground">
                   {settings.agent.model}
                 </div>
-                <div className="mt-0.5 truncate text-[13px] leading-5 text-muted-foreground">
+                <div className="mt-0.5 truncate text-ui text-muted-foreground">
                   {activeProvider} · {activePreset}
                 </div>
               </div>
@@ -1131,7 +1128,7 @@ function OverviewSettings({
       </section>
 
       <section>
-        <SettingsSectionTitle>{tx("settings.sections.ai", "AI")}</SettingsSectionTitle>
+        <SubsectionLabel className="mb-2 px-1">{tx("settings.sections.ai", "AI")}</SubsectionLabel>
         <SettingsGroup>
           <OverviewListRow
             icon={Bot}
@@ -1157,7 +1154,7 @@ function OverviewSettings({
       </section>
 
       <section>
-        <SettingsSectionTitle>{tx("settings.sections.capabilities", "Capabilities")}</SettingsSectionTitle>
+        <SubsectionLabel className="mb-2 px-1">{tx("settings.sections.capabilities", "Capabilities")}</SubsectionLabel>
         <SettingsGroup>
           <OverviewListRow
             icon={Globe2}
@@ -1184,7 +1181,7 @@ function OverviewSettings({
       </section>
 
       <section>
-        <SettingsSectionTitle>{tx("settings.sections.system", "System")}</SettingsSectionTitle>
+        <SubsectionLabel className="mb-2 px-1">{tx("settings.sections.system", "System")}</SubsectionLabel>
         <SettingsGroup>
           <OverviewListRow
             icon={Server}
@@ -1222,16 +1219,17 @@ function AppearanceSettings({
   return (
     <div className="space-y-7">
       <section>
-        <SettingsSectionTitle>{t("settings.sections.interface")}</SettingsSectionTitle>
+        <SubsectionLabel className="mb-2 px-1">{t("settings.sections.interface")}</SubsectionLabel>
         <SettingsGroup>
           <SettingsRow
             title={t("settings.rows.theme")}
             description={t("settings.help.theme")}
           >
-            <button
+            <Button
               type="button"
+              variant="ghost"
               onClick={onToggleTheme}
-              className="inline-flex h-8 items-center rounded-full bg-muted p-0.5 text-[12px] font-medium text-muted-foreground"
+              className="h-8 gap-0 rounded-full bg-muted p-0.5 text-caption font-medium text-muted-foreground hover:bg-muted hover:text-muted-foreground"
             >
               <span
                 className={cn(
@@ -1249,7 +1247,7 @@ function AppearanceSettings({
               >
                 {t("settings.values.dark")}
               </span>
-            </button>
+            </Button>
           </SettingsRow>
 
           <SettingsRow
@@ -1262,7 +1260,7 @@ function AppearanceSettings({
       </section>
 
       <section>
-        <SettingsSectionTitle>{tx("settings.sections.sidebarModules", "侧边栏模块")}</SettingsSectionTitle>
+        <SubsectionLabel className="mb-2 px-1">{tx("settings.sections.sidebarModules", "侧边栏模块")}</SubsectionLabel>
         <SidebarModulesSettings />
       </section>
     </div>
@@ -1359,7 +1357,7 @@ function SidebarModulesSettings() {
 
   if (!settings) {
     return (
-      <div className="flex h-32 items-center justify-center text-sm text-muted-foreground">
+      <div className="flex h-32 items-center justify-center text-body text-muted-foreground">
         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
         {tx("settings.status.loading", "Loading...")}
       </div>
@@ -1384,7 +1382,7 @@ function SidebarModulesSettings() {
                 type="button"
                 variant="outline"
                 size="sm"
-                className="h-8 min-w-[140px] justify-between rounded-full px-3 text-[12px] font-medium"
+                className="h-8 min-w-[140px] justify-between rounded-full px-3 text-caption font-medium"
               >
                 <span className="truncate">{currentDefaultLabel}</span>
                 <ChevronDown className="ml-2 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
@@ -1394,7 +1392,7 @@ function SidebarModulesSettings() {
               {viewOptions.map((opt) => (
                 <DropdownMenuItem
                   key={opt.key}
-                  className="gap-2 px-2.5 py-1.5 text-[13px]"
+                  className="gap-2 px-2.5 py-1.5 text-ui"
                   onSelect={() => setDefaultView(opt.key)}
                 >
                   <span className="flex-1 truncate">{opt.label}</span>
@@ -1421,16 +1419,16 @@ function SidebarModulesSettings() {
                 {def.icon}
               </span>
               <div className="min-w-0 flex-1">
-                <div className="text-[14px] font-medium leading-5 text-foreground">
+                <div className="text-body font-medium text-foreground">
                   {def.label}
                   {locked && (
-                    <span className="ml-2 text-[11px] font-normal text-muted-foreground">
+                    <span className="ml-2 text-micro font-normal text-muted-foreground">
                       {tx("settings.values.locked", "固定")}
                     </span>
                   )}
                 </div>
                 {def.windowsOnly && (
-                  <div className="mt-0.5 text-[11px] text-muted-foreground">Windows</div>
+                  <div className="mt-0.5 text-micro text-muted-foreground">Windows</div>
                 )}
               </div>
               <div className="flex shrink-0 items-center gap-1">
@@ -1476,27 +1474,27 @@ function SidebarModulesSettings() {
           size="sm"
           onClick={handleReset}
           disabled={saving || !dirty}
-          className="h-8 rounded-full text-[12px] text-muted-foreground hover:text-foreground"
+          className="h-8 rounded-full text-caption text-muted-foreground hover:text-foreground"
         >
           <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
           {tx("settings.actions.reset", "恢复默认")}
         </Button>
         <div className="flex items-center gap-2">
           {saved && (
-            <span className="text-[12px] text-emerald-600 dark:text-emerald-400">
+            <span className="text-caption text-success">
               <Check className="mr-1 inline h-3.5 w-3.5" />
               {tx("settings.status.saved", "已保存")}
             </span>
           )}
           {error && (
-            <span className="text-[12px] text-destructive">{error}</span>
+            <span className="text-caption text-destructive">{error}</span>
           )}
           <Button
             type="button"
             size="sm"
             onClick={handleSave}
             disabled={!dirty || saving}
-            className="h-8 rounded-full px-4 text-[12px]"
+            className="h-8 rounded-full px-4 text-caption"
           >
             {saving ? (
               <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
@@ -1916,40 +1914,41 @@ function ModelsProvidersSettings({
         key={provider.name}
         ref={highlighted ? highlightRef : undefined}
         className={cn(
-          "divide-y divide-border/45",
-          highlighted && "ring-2 ring-inset ring-primary/40 rounded-2xl",
+          "divide-y divide-border/50",
+          highlighted && "ring-2 ring-inset ring-primary/40 rounded-lg",
         )}
       >
-        <button
+        <Button
           type="button"
+          variant="ghost"
           onClick={() => !provider.free_default_model && onToggleProvider(provider.name)}
           className={cn(
-            "flex min-h-[70px] w-full items-center justify-between gap-4 px-4 py-3 text-left transition-colors sm:px-5",
-            provider.free_default_model ? "cursor-default" : "hover:bg-muted/35",
+            "h-auto min-h-[70px] w-full justify-between gap-4 rounded-none px-4 py-3 text-left sm:px-5",
+            provider.free_default_model ? "cursor-default hover:bg-transparent" : "hover:bg-accent",
           )}
         >
           <span className="flex min-w-0 items-center gap-3">
             <ProviderIcon provider={provider.name} />
             <span className="min-w-0">
               <span className="flex items-center gap-1.5">
-                <span className="truncate text-[15px] font-semibold leading-5 text-foreground">
+                <span className="truncate text-body font-semibold text-foreground">
                   {provider.label}
                 </span>
                 {settings.agent.provider === provider.name ? (
-                  <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
+                  <span className="inline-flex items-center gap-1 rounded-full bg-success/10 px-1.5 py-0.5 text-micro font-medium text-success">
                     <Star className="h-2.5 w-2.5" aria-hidden />
                     默认
                   </span>
                 ) : null}
                 {settings.image_generation.provider === provider.name ? (
-                  <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+                  <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-1.5 py-0.5 text-micro font-medium text-primary">
                     <ImageIcon className="h-2.5 w-2.5" aria-hidden />
                     {tx("settings.image.badge", "Image")}
                   </span>
                 ) : null}
               </span>
               {!provider.free_default_model && (
-                <span className="block truncate text-[12px] text-muted-foreground">
+                <span className="block truncate text-caption text-muted-foreground">
                   {provider.api_base || provider.default_api_base || provider.name}
                 </span>
               )}
@@ -1970,12 +1969,12 @@ function ModelsProvidersSettings({
                 ? t("settings.byok.configured")
                 : t("settings.byok.notConfigured")}
           </StatusPill>
-        </button>
+        </Button>
 
         {expanded ? (
           <div className="space-y-3 bg-muted/18 px-4 py-4 sm:px-5">
             <label className="block space-y-1.5">
-              <span className="text-[12px] font-medium text-muted-foreground">
+              <span className="text-caption font-medium text-muted-foreground">
                 {t("settings.byok.apiKey")}
               </span>
               <div className="relative">
@@ -1992,7 +1991,7 @@ function ModelsProvidersSettings({
                           ? t("settings.byok.apiKeyConfiguredPlaceholder")
                           : t("settings.byok.apiKeyPlaceholder")
                       }
-                      className="h-8 rounded-full pr-11 text-[13px]"
+                      className="h-8 rounded-full pr-11 text-ui"
                     />
                     <Button
                       type="button"
@@ -2015,7 +2014,7 @@ function ModelsProvidersSettings({
                   </>
                 ) : (
                   <>
-                    <div className="flex h-8 items-center rounded-full border border-input bg-background px-3 pr-11 text-[13px] text-muted-foreground">
+                    <div className="flex h-8 items-center rounded-full border border-input bg-background px-3 pr-11 text-ui text-muted-foreground">
                       {provider.api_key_hint ?? t("settings.byok.configuredKeyHint")}
                     </div>
                     <Button
@@ -2033,7 +2032,7 @@ function ModelsProvidersSettings({
               </div>
             </label>
             <label className="block space-y-1.5">
-              <span className="text-[12px] font-medium text-muted-foreground">
+              <span className="text-caption font-medium text-muted-foreground">
                 {t("settings.byok.apiBase")}
               </span>
               <Input
@@ -2042,12 +2041,12 @@ function ModelsProvidersSettings({
                   onChangeProviderForm(provider.name, { apiBase: event.target.value })
                 }
                 placeholder={provider.default_api_base ?? t("settings.byok.apiBasePlaceholder")}
-                className="h-8 rounded-full text-[13px]"
+                className="h-8 rounded-full text-ui"
               />
             </label>
             <div className="space-y-1.5">
               <div className="flex items-center justify-between">
-                <span className="text-[12px] font-medium text-muted-foreground">
+                <span className="text-caption font-medium text-muted-foreground">
                   模型 ID
                 </span>
                 {provider.probe_supported && (
@@ -2056,7 +2055,7 @@ function ModelsProvidersSettings({
                     variant="ghost"
                     onClick={() => handleFetchModels(provider.name, form.apiKey, form.apiBase)}
                     disabled={probeStates[provider.name]?.loading}
-                    className="h-6 px-2 text-[11px] text-muted-foreground hover:text-foreground"
+                    className="h-6 px-2 text-micro text-muted-foreground hover:text-foreground"
                   >
                     {probeStates[provider.name]?.loading ? (
                       <Loader2 className="mr-1 h-3 w-3 animate-spin" aria-hidden />
@@ -2073,31 +2072,32 @@ function ModelsProvidersSettings({
                   onChangeProviderForm(provider.name, { model: event.target.value })
                 }
                 placeholder="例如 qwen3-plus, deepseek-chat"
-                className="h-8 rounded-full text-[13px]"
+                className="h-8 rounded-full text-ui"
               />
               {probeStates[provider.name]?.error && (
-                <p className="text-[11px] text-destructive">
+                <p className="text-micro text-destructive">
                   {probeStates[provider.name]?.error}
                 </p>
               )}
               {probeStates[provider.name]?.models.length > 0 && (
                 <div className="max-h-40 overflow-y-auto rounded-md border border-border/60 bg-background scrollbar-thin">
                   {probeStates[provider.name]?.models.map((modelId) => (
-                    <button
+                    <Button
                       key={modelId}
                       type="button"
+                      variant="ghost"
                       onClick={() => {
                         onChangeProviderForm(provider.name, { model: modelId });
                         // 清空候选列表，避免误操作。
                         setProbe(provider.name, { models: [] });
                       }}
-                      className="flex w-full items-center justify-between px-2.5 py-1.5 text-left text-[12px] hover:bg-accent"
+                      className="h-auto w-full justify-between rounded-none px-2.5 py-1.5 text-left text-caption font-normal hover:bg-accent"
                     >
                       <span className="truncate">{modelId}</span>
                       {form.model === modelId && (
-                        <Check className="h-3 w-3 shrink-0 text-emerald-600" aria-hidden />
+                        <Check className="h-3 w-3 shrink-0 text-success" aria-hidden />
                       )}
-                    </button>
+                    </Button>
                   ))}
                 </div>
               )}
@@ -2122,7 +2122,7 @@ function ModelsProvidersSettings({
                     variant="ghost"
                     onClick={() => onSetDefaultProvider(provider.name)}
                     disabled={saving}
-                    className="rounded-full text-emerald-600 hover:text-emerald-700 dark:text-emerald-400 dark:hover:text-emerald-300"
+                    className="rounded-full text-success hover:text-success/80"
                   >
                     <Star className="mr-1 h-3.5 w-3.5" aria-hidden />
                     设为默认
@@ -2161,14 +2161,14 @@ function ModelsProvidersSettings({
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-full border border-primary/30 bg-primary/5 px-4 py-2.5">
           <div className="flex min-w-0 items-center gap-2.5">
             <Sparkles className="h-4 w-4 shrink-0 text-primary" aria-hidden />
-            <span className="truncate text-[13px] font-medium text-foreground">
+            <span className="truncate text-ui font-medium text-foreground">
               {tx("settings.agnesSetup.title", "一键配置 Agnes AI")}
             </span>
             <a
               href="https://agnes-ai.com/doc/cid5"
               target="_blank"
               rel="noopener noreferrer"
-              className="hidden items-center gap-1 text-[12px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline sm:inline-flex"
+              className="hidden items-center gap-1 text-caption text-muted-foreground underline-offset-2 hover:text-foreground hover:underline sm:inline-flex"
             >
               <ExternalLink className="h-3 w-3 shrink-0" />
               {tx("settings.agnesSetup.manualTutorial", "手动配置教程")}
@@ -2177,7 +2177,7 @@ function ModelsProvidersSettings({
           <Button
             type="button"
             size="sm"
-            className="h-7 rounded-full px-3.5 text-[12px]"
+            className="h-7 rounded-full px-3.5 text-caption"
             onClick={() => setAgnesDialogOpen(true)}
           >
             <Zap className="mr-1.5 h-3 w-3" aria-hidden />
@@ -2198,10 +2198,10 @@ function ModelsProvidersSettings({
       />
       {/* 供应商配置区 */}
       <section>
-        <SettingsSectionTitle>供应商</SettingsSectionTitle>
+        <SubsectionLabel className="mb-2 px-1">供应商</SubsectionLabel>
         {providersRestartPending && onRestart ? (
           <div className="flex min-h-[48px] items-center justify-between gap-3 border-y border-border/55 py-3 mb-4">
-            <p className="text-[13px] leading-5 text-muted-foreground">
+            <p className="text-ui text-muted-foreground">
               {tx("settings.status.providerRestart", "Provider changes saved. Restart when ready.")}
             </p>
             <div className="shrink-0">
@@ -2228,7 +2228,7 @@ function ModelsProvidersSettings({
             value={query}
             onChange={(event) => onQueryChange(event.target.value)}
             placeholder={tx("settings.providers.searchPlaceholder", "搜索供应商")}
-            className="h-8 rounded-full pl-9 text-[13px]"
+            className="h-8 rounded-full pl-9 text-ui"
           />
         </div>
         <div className="mt-4">
@@ -2309,7 +2309,7 @@ function AgnesSetupDialog({
           </DialogHeader>
 
           <div className="grid gap-2">
-            <label htmlFor="agnes-setup-email" className="text-[12px] font-medium text-muted-foreground">
+            <label htmlFor="agnes-setup-email" className="text-caption font-medium text-muted-foreground">
               {tx("settings.agnesSetup.emailLabel", "注册邮箱")}
             </label>
             <Input
@@ -2320,12 +2320,12 @@ function AgnesSetupDialog({
               placeholder={tx("settings.agnesSetup.emailPlaceholder", "you@example.com")}
               autoFocus
               autoComplete="email"
-              className="h-8 rounded-lg text-[13px]"
+              className="h-8 rounded-lg text-ui"
             />
           </div>
 
           <div className="grid gap-2">
-            <label htmlFor="agnes-setup-password" className="text-[12px] font-medium text-muted-foreground">
+            <label htmlFor="agnes-setup-password" className="text-caption font-medium text-muted-foreground">
               {tx("settings.agnesSetup.passwordLabel", "注册密码")}
             </label>
             <div className="relative">
@@ -2336,24 +2336,26 @@ function AgnesSetupDialog({
                 onChange={(event) => onPasswordChange(event.target.value)}
                 placeholder={tx("settings.agnesSetup.passwordPlaceholder", "至少 6 位")}
                 autoComplete="new-password"
-                className="h-8 rounded-lg pr-9 text-[13px]"
+                className="h-8 rounded-lg pr-9 text-ui"
               />
-              <button
+              <Button
                 type="button"
+                variant="ghost"
+                size="icon"
                 onClick={onTogglePasswordVisible}
                 aria-label={passwordVisible ? tx("common.hide", "隐藏") : tx("common.show", "显示")}
-                className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1 text-muted-foreground transition-colors hover:text-foreground"
+                className="absolute right-1 top-1/2 h-7 w-7 -translate-y-1/2 rounded-md text-muted-foreground hover:bg-transparent hover:text-foreground"
               >
                 {passwordVisible ? (
                   <EyeOff className="h-3.5 w-3.5" aria-hidden />
                 ) : (
                   <Eye className="h-3.5 w-3.5" aria-hidden />
                 )}
-              </button>
+              </Button>
             </div>
           </div>
 
-          <p className="text-[11px] leading-relaxed text-muted-foreground">
+          <p className="text-micro leading-relaxed text-muted-foreground">
             {tx(
               "settings.agnesSetup.securityNote",
               "密码仅在本地浏览器中填入并随本次会话发送给 AI 完成注册，不会被存储。注册完成后建议尽快去 Agnes 平台修改密码。",
@@ -2429,7 +2431,7 @@ function ImageGenerationSettings({
   return (
     <div className="space-y-7">
       <section>
-        <SettingsSectionTitle>{tx("settings.sections.imageGeneration", "Image generation")}</SettingsSectionTitle>
+        <SubsectionLabel className="mb-2 px-1">{tx("settings.sections.imageGeneration", "Image generation")}</SubsectionLabel>
         <SettingsGroup>
           <SettingsRow
             title={tx("settings.rows.imageGeneration", "Image generation")}
@@ -2480,7 +2482,7 @@ function ImageGenerationSettings({
                   {tx("settings.values.configured", "Configured")}
                 </StatusPill>
                 {selectedProvider?.api_key_hint ? (
-                  <span className="text-[13px] text-muted-foreground">{selectedProvider.api_key_hint}</span>
+                  <span className="text-ui text-muted-foreground">{selectedProvider.api_key_hint}</span>
                 ) : null}
                 <Button
                   size="sm"
@@ -2489,7 +2491,7 @@ function ImageGenerationSettings({
                     onApiKeyDraftChange("");
                     setKeyEditing(true);
                   }}
-                  className="rounded-full text-[13px] text-muted-foreground"
+                  className="rounded-full text-ui text-muted-foreground"
                 >
                   {tx("settings.image.changeKey", "修改")}
                 </Button>
@@ -2506,7 +2508,7 @@ function ImageGenerationSettings({
                   value={apiKeyDraft}
                   onChange={(event) => onApiKeyDraftChange(event.target.value)}
                   placeholder={selectedProvider?.api_key_hint ?? tx("settings.image.apiKeyPlaceholder", "输入 API Key")}
-                  className="h-8 w-[min(300px,70vw)] rounded-full text-[13px]"
+                  className="h-8 w-[min(300px,70vw)] rounded-full text-ui"
                 />
                 <Button
                   type="button"
@@ -2521,7 +2523,7 @@ function ImageGenerationSettings({
             </SettingsRow>
           )}
           <SettingsRow title={tx("settings.rows.imageProviderBase", "Provider base")}>
-            <span className="max-w-[320px] truncate text-right text-[13px] text-muted-foreground">
+            <span className="max-w-[320px] truncate text-right text-ui text-muted-foreground">
               {selectedProvider?.api_base || selectedProvider?.default_api_base || selectedProvider?.name || tx("settings.values.notAvailable", "Not available")}
             </span>
           </SettingsRow>
@@ -2529,7 +2531,7 @@ function ImageGenerationSettings({
       </section>
 
       <section>
-        <SettingsSectionTitle>{tx("settings.sections.imageDefaults", "Defaults")}</SettingsSectionTitle>
+        <SubsectionLabel className="mb-2 px-1">{tx("settings.sections.imageDefaults", "Defaults")}</SubsectionLabel>
         <SettingsGroup>
           <SettingsRow
             title={tx("settings.rows.imageModel", "Image model")}
@@ -2665,7 +2667,7 @@ function VideoGenerationSettings({
   return (
     <div className="space-y-7">
       <section>
-        <SettingsSectionTitle>{tx("settings.sections.videoGeneration", "视频生成")}</SettingsSectionTitle>
+        <SubsectionLabel className="mb-2 px-1">{tx("settings.sections.videoGeneration", "视频生成")}</SubsectionLabel>
         <SettingsGroup>
           <SettingsRow
             title={tx("settings.rows.videoGeneration", "视频生成")}
@@ -2716,7 +2718,7 @@ function VideoGenerationSettings({
                   {tx("settings.values.configured", "已配置")}
                 </StatusPill>
                 {selectedProvider?.api_key_hint ? (
-                  <span className="text-[13px] text-muted-foreground">{selectedProvider.api_key_hint}</span>
+                  <span className="text-ui text-muted-foreground">{selectedProvider.api_key_hint}</span>
                 ) : null}
                 <Button
                   size="sm"
@@ -2725,7 +2727,7 @@ function VideoGenerationSettings({
                     onApiKeyDraftChange("");
                     setKeyEditing(true);
                   }}
-                  className="rounded-full text-[13px] text-muted-foreground"
+                  className="rounded-full text-ui text-muted-foreground"
                 >
                   {tx("settings.video.changeKey", "修改")}
                 </Button>
@@ -2742,7 +2744,7 @@ function VideoGenerationSettings({
                   value={apiKeyDraft}
                   onChange={(event) => onApiKeyDraftChange(event.target.value)}
                   placeholder={selectedProvider?.api_key_hint ?? tx("settings.video.apiKeyPlaceholder", "输入 API Key")}
-                  className="h-8 w-[min(300px,70vw)] rounded-full text-[13px]"
+                  className="h-8 w-[min(300px,70vw)] rounded-full text-ui"
                 />
                 <Button
                   type="button"
@@ -2757,7 +2759,7 @@ function VideoGenerationSettings({
             </SettingsRow>
           )}
           <SettingsRow title={tx("settings.rows.videoProviderBase", "供应商地址")}>
-            <span className="max-w-[320px] truncate text-right text-[13px] text-muted-foreground">
+            <span className="max-w-[320px] truncate text-right text-ui text-muted-foreground">
               {selectedProvider?.api_base || selectedProvider?.default_api_base || selectedProvider?.name || tx("settings.values.notAvailable", "不可用")}
             </span>
           </SettingsRow>
@@ -2765,7 +2767,7 @@ function VideoGenerationSettings({
       </section>
 
       <section>
-        <SettingsSectionTitle>{tx("settings.sections.videoDefaults", "默认设置")}</SettingsSectionTitle>
+        <SubsectionLabel className="mb-2 px-1">{tx("settings.sections.videoDefaults", "默认设置")}</SubsectionLabel>
         <SettingsGroup>
           <SettingsRow
             title={tx("settings.rows.videoModel", "视频模型")}
@@ -2880,7 +2882,7 @@ function TtsSettings({
   return (
     <div className="space-y-7">
       <section>
-        <SettingsSectionTitle>{tx("settings.sections.tts", "语音合成")}</SettingsSectionTitle>
+        <SubsectionLabel className="mb-2 px-1">{tx("settings.sections.tts", "语音合成")}</SubsectionLabel>
         <SettingsGroup>
           <SettingsRow
             title={tx("settings.rows.ttsProvider", "合成引擎")}
@@ -2916,7 +2918,7 @@ function TtsSettings({
                 }
                 placeholder="alloy"
                 aria-label={tx("settings.tts.voiceId", "Voice ID")}
-                className="h-8 w-[min(300px,70vw)] rounded-full text-[13px]"
+                className="h-8 w-[min(300px,70vw)] rounded-full text-ui"
               />
             ) : (
               <ImageModelInput
@@ -2946,7 +2948,7 @@ function TtsSettings({
                   }
                   placeholder="https://api.openai.com/v1"
                   aria-label={tx("settings.tts.apiBase", "API 地址")}
-                  className="h-8 w-[min(300px,70vw)] rounded-full text-[13px]"
+                  className="h-8 w-[min(300px,70vw)] rounded-full text-ui"
                 />
               </SettingsRow>
               <SettingsRow
@@ -2960,7 +2962,7 @@ function TtsSettings({
                   }
                   placeholder="tts-1"
                   aria-label={tx("settings.tts.model", "模型")}
-                  className="h-8 w-[min(300px,70vw)] rounded-full text-[13px]"
+                  className="h-8 w-[min(300px,70vw)] rounded-full text-ui"
                 />
               </SettingsRow>
               {keyConfigured && !showKeyInput ? (
@@ -2973,7 +2975,7 @@ function TtsSettings({
                       {tx("settings.values.configured", "已配置")}
                     </StatusPill>
                     {settings.tts.api_key_hint ? (
-                      <span className="text-[13px] text-muted-foreground">
+                      <span className="text-ui text-muted-foreground">
                         {settings.tts.api_key_hint}
                       </span>
                     ) : null}
@@ -2984,7 +2986,7 @@ function TtsSettings({
                         onApiKeyDraftChange("");
                         setKeyEditing(true);
                       }}
-                      className="rounded-full text-[13px] text-muted-foreground"
+                      className="rounded-full text-ui text-muted-foreground"
                     >
                       {tx("settings.tts.changeKey", "修改")}
                     </Button>
@@ -3008,7 +3010,7 @@ function TtsSettings({
                         tx("settings.tts.apiKeyPlaceholder", "输入 API Key")
                       }
                       aria-label={tx("settings.rows.ttsApiKey", "API 密钥")}
-                      className="h-8 w-[min(300px,70vw)] rounded-full text-[13px]"
+                      className="h-8 w-[min(300px,70vw)] rounded-full text-ui"
                     />
                     <Button
                       type="button"
@@ -3105,7 +3107,7 @@ function WebSettings({
   return (
     <div className="space-y-7">
       <section>
-        <SettingsSectionTitle>{tx("settings.sections.webSearch", "Web search")}</SettingsSectionTitle>
+        <SubsectionLabel className="mb-2 px-1">{tx("settings.sections.webSearch", "Web search")}</SubsectionLabel>
         <SettingsGroup>
           <SettingsRow
             title={t("settings.byok.webSearch.provider")}
@@ -3147,7 +3149,7 @@ function WebSettings({
                           ? t("settings.byok.apiKeyConfiguredPlaceholder")
                           : t("settings.byok.apiKeyPlaceholder")
                       }
-                      className="h-8 rounded-full pr-11 text-[13px]"
+                      className="h-8 rounded-full pr-11 text-ui"
                     />
                     <Button
                       type="button"
@@ -3168,7 +3170,7 @@ function WebSettings({
                   </>
                 ) : (
                   <>
-                    <div className="flex h-8 items-center rounded-full border border-input bg-background px-3 pr-11 text-[13px] text-muted-foreground">
+                    <div className="flex h-8 items-center rounded-full border border-input bg-background px-3 pr-11 text-ui text-muted-foreground">
                       {settings.web_search.api_key_hint ?? t("settings.byok.configuredKeyHint")}
                     </div>
                     <Button
@@ -3198,7 +3200,7 @@ function WebSettings({
                   onChangeForm((prev) => ({ ...prev, baseUrl: event.target.value }))
                 }
                 placeholder={t("settings.byok.webSearch.baseUrlPlaceholder")}
-                className="h-8 w-[280px] rounded-full text-[13px]"
+                className="h-8 w-[280px] rounded-full text-ui"
               />
             </SettingsRow>
           ) : null}
@@ -3206,7 +3208,7 @@ function WebSettings({
       </section>
 
       <section>
-        <SettingsSectionTitle>{tx("settings.sections.webBehavior", "Behavior")}</SettingsSectionTitle>
+        <SubsectionLabel className="mb-2 px-1">{tx("settings.sections.webBehavior", "Behavior")}</SubsectionLabel>
         <SettingsGroup>
           <SettingsRow
             title={tx("settings.rows.maxResults", "Max results")}
@@ -3408,19 +3410,19 @@ function CredentialChannelCard({
         >
           <div className="flex w-full min-w-[200px] flex-col items-stretch gap-3 sm:w-[300px]">
             <div className="flex items-center gap-2">
-              <span className="w-16 shrink-0 text-[13px] text-muted-foreground">
+              <span className="w-16 shrink-0 text-ui text-muted-foreground">
                 {idLabel}
               </span>
               <Input
                 value={idValue}
                 onChange={(e) => setIdValue(e.target.value)}
                 placeholder={idPlaceholder}
-                className="h-8 rounded-full text-[13px]"
+                className="h-8 rounded-full text-ui"
                 disabled={saving}
               />
             </div>
             <div className="flex items-center gap-2">
-              <span className="w-16 shrink-0 text-[13px] text-muted-foreground">
+              <span className="w-16 shrink-0 text-ui text-muted-foreground">
                 {secretLabel}
               </span>
               <Input
@@ -3435,12 +3437,12 @@ function CredentialChannelCard({
                     ? tx(`${i18nPrefix}.secretSet`, "已设置，输入新值覆盖")
                     : tx(`${i18nPrefix}.secretPlaceholder`, "输入 Secret")
                 }
-                className="h-8 rounded-full text-[13px]"
+                className="h-8 rounded-full text-ui"
                 disabled={saving}
               />
             </div>
             {error ? (
-              <span className="text-[12px] text-destructive">{error}</span>
+              <span className="text-caption text-destructive">{error}</span>
             ) : null}
           </div>
         </SettingsRow>
@@ -3456,7 +3458,7 @@ function CredentialChannelCard({
         >
           <div className="flex w-full min-w-[200px] flex-col items-stretch gap-3 sm:w-[260px]">
             <div className="flex items-center justify-between gap-2">
-              <span className="text-[13px] text-muted-foreground">
+              <span className="text-ui text-muted-foreground">
                 {tx(`${i18nPrefix}.allowAll`, "允许所有人")}
               </span>
               <ToggleSwitch
@@ -3477,7 +3479,7 @@ function CredentialChannelCard({
                   `${i18nPrefix}.allowFromPlaceholder`,
                   "每行一个用户 ID，或用逗号分隔",
                 )}
-                className="min-h-[80px] resize-none rounded-lg text-[13px]"
+                className="min-h-[80px] resize-none rounded-lg text-ui"
                 disabled={saving}
               />
             ) : null}
@@ -3681,7 +3683,7 @@ function ChannelsSettings({
   return (
     <div className="space-y-7">
       <section>
-        <SettingsSectionTitle>{tx("settings.sections.channels", "频道接入")}</SettingsSectionTitle>
+        <SubsectionLabel className="mb-2 px-1">{tx("settings.sections.channels", "频道接入")}</SubsectionLabel>
         <SettingsGroup>
           {weixin ? (
             <>
@@ -3768,7 +3770,7 @@ function ChannelsSettings({
                 >
                   <div className="flex w-full min-w-[200px] flex-col items-stretch gap-3 sm:w-[260px]">
                     <div className="flex items-center justify-between gap-2">
-                      <span className="text-[13px] text-muted-foreground">
+                      <span className="text-ui text-muted-foreground">
                         {tx("settings.channels.weixin.allowAll", "允许所有人")}
                       </span>
                       <ToggleSwitch
@@ -3789,13 +3791,13 @@ function ChannelsSettings({
                           "settings.channels.weixin.allowFromPlaceholder",
                           "每行一个微信用户 ID，或用逗号分隔",
                         )}
-                        className="min-h-[80px] resize-none rounded-lg text-[13px]"
+                        className="min-h-[80px] resize-none rounded-lg text-ui"
                         disabled={allowFromSaving}
                       />
                     ) : null}
                     <div className="flex items-center justify-end gap-2">
                       {allowFromError ? (
-                        <span className="text-[12px] text-destructive">{allowFromError}</span>
+                        <span className="text-caption text-destructive">{allowFromError}</span>
                       ) : null}
                       <Button
                         size="sm"
@@ -3892,12 +3894,12 @@ function ChannelsSettings({
         </SettingsGroup>
 
         {error ? (
-          <div className="mt-3 px-1 text-[12px] text-destructive">{error}</div>
+          <div className="mt-3 px-1 text-caption text-destructive">{error}</div>
         ) : null}
 
         {requiresRestartPending ? (
           <div className="mt-4 flex items-center justify-end gap-2">
-            <span className="text-[12px] text-muted-foreground">
+            <span className="text-caption text-muted-foreground">
               {tx("settings.status.savedRestartApply", "已保存，重启后生效")}
             </span>
             {onRestart ? (
@@ -3947,7 +3949,7 @@ function ChannelsSettings({
                 <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" aria-hidden />
               )}
             </div>
-            <div className="flex items-center gap-2 text-[13px] text-muted-foreground">
+            <div className="flex items-center gap-2 text-ui text-muted-foreground">
               {loginStatus?.state === "confirmed" ? (
                 <Check className="h-4 w-4 text-emerald-500" aria-hidden />
               ) : loginStatus?.state === "failed" || loginStatus?.state === "expired" ? (
@@ -3958,7 +3960,7 @@ function ChannelsSettings({
               <span>{loginStateLabel}</span>
             </div>
             {loginStatus?.error ? (
-              <div className="max-w-full text-center text-[12px] text-destructive">
+              <div className="max-w-full text-center text-caption text-destructive">
                 {loginStatus.error}
               </div>
             ) : null}
@@ -3991,18 +3993,19 @@ function ToggleSwitch({
   "aria-label"?: string;
 }) {
   return (
-    <button
+    <Button
       type="button"
       role="switch"
+      variant="ghost"
       aria-checked={checked}
       aria-label={ariaLabel}
       disabled={disabled}
       onClick={() => onChange(!checked)}
       className={cn(
-        "relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
-        "disabled:cursor-not-allowed disabled:opacity-50",
-        checked ? "bg-primary" : "bg-muted",
+        "relative h-6 w-11 shrink-0 cursor-pointer justify-start rounded-full border-2 border-transparent p-0 transition-colors",
+        "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+        "disabled:cursor-not-allowed",
+        checked ? "bg-primary hover:bg-primary" : "bg-muted hover:bg-muted",
       )}
     >
       <span
@@ -4011,7 +4014,7 @@ function ToggleSwitch({
           checked ? "translate-x-5" : "translate-x-0",
         )}
       />
-    </button>
+    </Button>
   );
 }
 
@@ -4041,27 +4044,27 @@ function RuntimeSettings({
   return (
     <div className="space-y-7">
       <section>
-        <SettingsSectionTitle>{tx("settings.sections.identity", "Identity")}</SettingsSectionTitle>
+        <SubsectionLabel className="mb-2 px-1">{tx("settings.sections.identity", "Identity")}</SubsectionLabel>
         <SettingsGroup>
           <SettingsRow title={tx("settings.rows.botName", "Bot name")} description={tx("settings.help.botName", "Shown in runtime surfaces that use the configured bot identity.")}>
             <Input
               value={form.botName}
               onChange={(event) => setForm((prev) => ({ ...prev, botName: event.target.value }))}
-              className="h-8 w-[220px] rounded-full text-[13px]"
+              className="h-8 w-[220px] rounded-full text-ui"
             />
           </SettingsRow>
           <SettingsRow title={tx("settings.rows.botIcon", "Bot icon")} description={tx("settings.help.botIcon", "Short emoji or text shown beside the bot name.")}>
             <Input
               value={form.botIcon}
               onChange={(event) => setForm((prev) => ({ ...prev, botIcon: event.target.value }))}
-              className="h-8 w-[120px] rounded-full text-center text-[13px]"
+              className="h-8 w-[120px] rounded-full text-center text-ui"
             />
           </SettingsRow>
           <SettingsRow title={tx("settings.rows.timezone", "Timezone")} description={tx("settings.help.timezone", "IANA timezone used by runtime context and schedules.")}>
             <Input
               value={form.timezone}
               onChange={(event) => setForm((prev) => ({ ...prev, timezone: event.target.value }))}
-              className="h-8 w-[220px] rounded-full text-[13px]"
+              className="h-8 w-[220px] rounded-full text-ui"
             />
           </SettingsRow>
           <SettingsRow title={tx("settings.rows.toolHintMaxLength", "Tool hint length")} description={tx("settings.help.toolHintMaxLength", "Maximum characters shown in tool progress hints.")}>
@@ -4086,7 +4089,7 @@ function RuntimeSettings({
       </section>
 
       <section>
-        <SettingsSectionTitle>{t("settings.sections.system")}</SettingsSectionTitle>
+        <SubsectionLabel className="mb-2 px-1">{t("settings.sections.system")}</SubsectionLabel>
         <SettingsGroup>
           {onRestart && !requiresRestartPending ? (
             <SettingsRow
@@ -4131,7 +4134,7 @@ function RuntimeSettings({
               <Input
                 value={form.workspace}
                 onChange={(event) => setForm((prev) => ({ ...prev, workspace: event.target.value }))}
-                className="h-8 w-[min(280px,60vw)] rounded-full text-[13px]"
+                className="h-8 w-[min(280px,60vw)] rounded-full text-ui"
               />
               {isTauri() ? (
                 <Button
@@ -4163,7 +4166,7 @@ function RuntimeSettings({
       </section>
 
       <section>
-        <SettingsSectionTitle>{tx("settings.sections.safety", "Safety")}</SettingsSectionTitle>
+        <SubsectionLabel className="mb-2 px-1">{tx("settings.sections.safety", "Safety")}</SubsectionLabel>
         <SettingsGroup>
           <ReadOnlyRow title={tx("settings.rows.restrictWorkspace", "Restrict to workspace")} value={settings.advanced.restrict_to_workspace ? tx("settings.values.enabled", "Enabled") : tx("settings.values.disabled", "Disabled")} />
           <ReadOnlyRow title={tx("settings.rows.execTool", "Exec tool")} value={settings.advanced.exec_enabled ? tx("settings.values.enabled", "Enabled") : tx("settings.values.disabled", "Disabled")} />
@@ -4361,20 +4364,20 @@ function AboutSettings() {
   return (
     <div className="space-y-7">
       <section>
-        <SettingsSectionTitle>{tx("settings.about.product", "产品信息")}</SettingsSectionTitle>
+        <SubsectionLabel className="mb-2 px-1">{tx("settings.about.product", "产品信息")}</SubsectionLabel>
         <SettingsGroup>
           <SettingsRow title={tx("settings.about.productName", "产品名称")}>
-            <span className="text-[13px] text-muted-foreground">Mona</span>
+            <span className="text-ui text-muted-foreground">Mona</span>
           </SettingsRow>
           <SettingsRow title={tx("settings.about.version", "版本号")}>
-            <span className="text-[13px] text-muted-foreground">{appVersion || "..."}</span>
+            <span className="text-ui text-muted-foreground">{appVersion || "..."}</span>
           </SettingsRow>
           <SettingsRow
             title={tx("settings.about.machineId", "机器码")}
             description={tx("settings.about.machineIdDesc", "复制此机器码，到授权页面换取 License 文件")}
           >
             <div className="flex items-center gap-2">
-              <code className="max-w-[200px] truncate rounded bg-muted px-2 py-0.5 text-[12px] font-mono text-muted-foreground">
+              <code className="max-w-[200px] truncate rounded bg-muted px-2 py-0.5 text-caption font-mono text-muted-foreground">
                 {machineId || "..."}
               </code>
               <Button
@@ -4397,10 +4400,10 @@ function AboutSettings() {
 
       {isTauri() ? (
         <section>
-          <SettingsSectionTitle>{tx("settings.about.update", "软件更新")}</SettingsSectionTitle>
+          <SubsectionLabel className="mb-2 px-1">{tx("settings.about.update", "软件更新")}</SubsectionLabel>
           <SettingsGroup>
             <SettingsRow title={tx("settings.about.currentVersion", "当前版本")}>
-              <span className="text-[13px] text-muted-foreground">{appVersion || "..."}</span>
+              <span className="text-ui text-muted-foreground">{appVersion || "..."}</span>
             </SettingsRow>
             <SettingsRow
               title={tx("settings.about.checkUpdate", "检查更新")}
@@ -4447,7 +4450,7 @@ function AboutSettings() {
             </SettingsRow>
             {updateDownloading && updateProgress ? (
               <div className="px-4 py-3 sm:px-5">
-                <div className="mb-1.5 flex items-center justify-between text-[12px]">
+                <div className="mb-1.5 flex items-center justify-between text-caption">
                   <span className="text-muted-foreground">{updateProgress.message}</span>
                   <span className="font-medium text-foreground">{updateProgress.percent}%</span>
                 </div>
@@ -4460,7 +4463,7 @@ function AboutSettings() {
               </div>
             ) : null}
             {updateCheck?.notes ? (
-              <div className="px-4 py-3 text-[13px] text-muted-foreground sm:px-5">
+              <div className="px-4 py-3 text-ui text-muted-foreground sm:px-5">
                 {updateCheck.notes}
               </div>
             ) : null}
@@ -4469,7 +4472,7 @@ function AboutSettings() {
       ) : null}
 
       <section>
-        <SettingsSectionTitle>{tx("settings.about.license", "授权")}</SettingsSectionTitle>
+        <SubsectionLabel className="mb-2 px-1">{tx("settings.about.license", "授权")}</SubsectionLabel>
         <SettingsGroup>
           <SettingsRow
             title={tx("settings.about.activationStatus", "激活状态")}
@@ -4504,7 +4507,7 @@ function AboutSettings() {
           </SettingsRow>
           {importMessage ? (
             <div className={cn(
-              "px-4 py-2.5 text-[13px] sm:px-5",
+              "px-4 py-2.5 text-ui sm:px-5",
               importMessage.type === "success" && "text-emerald-700 dark:text-emerald-300",
               importMessage.type === "error" && "text-destructive",
             )}>
@@ -4515,7 +4518,7 @@ function AboutSettings() {
       </section>
 
       <section>
-        <SettingsSectionTitle>{tx("settings.about.proFeatures", "Pro 功能")}</SettingsSectionTitle>
+        <SubsectionLabel className="mb-2 px-1">{tx("settings.about.proFeatures", "Pro 功能")}</SubsectionLabel>
         <SettingsGroup>
           <ReadOnlyRow title="DB AI" value={licenseStatus === "active" ? tx("settings.values.enabled", "已启用") : tx("settings.values.disabled", "未启用")} />
           <ReadOnlyRow title="笔记 AI" value={licenseStatus === "active" ? tx("settings.values.enabled", "已启用") : tx("settings.values.disabled", "未启用")} />
@@ -4681,7 +4684,7 @@ function AgentScopeSettings() {
 
   if (!loaded || !scope) {
     return (
-      <div className="flex h-48 items-center justify-center rounded-2xl border border-border/50 bg-card/75 text-sm text-muted-foreground shadow-sm">
+      <div className="flex h-48 items-center justify-center rounded-lg border border-border/60 bg-card text-body text-muted-foreground">
         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
         {tx("settings.status.loading", "Loading…")}
       </div>
@@ -4708,18 +4711,19 @@ function AgentScopeSettings() {
   return (
     <div className="space-y-7">
       <section>
-        <SettingsSectionTitle>笔记搜索范围</SettingsSectionTitle>
+        <SubsectionLabel className="mb-2 px-1">笔记搜索范围</SubsectionLabel>
         <SettingsGroup>
           {vaultReady ? (
             <>
               {notesModeOptions.map((opt) => {
                 const selected = notesMode === opt.value;
                 return (
-                  <button
+                  <Button
                     key={opt.value}
                     type="button"
+                    variant="ghost"
                     onClick={() => void setNotesMode(opt.value)}
-                    className="flex w-full min-h-[62px] items-center gap-3 px-4 py-3.5 text-left transition-colors hover:bg-muted/35 sm:px-5"
+                    className="h-auto min-h-[62px] w-full items-center justify-start gap-3 whitespace-normal rounded-none px-4 py-3.5 text-left font-normal hover:bg-muted/35 sm:px-5"
                   >
                     <span
                       className={cn(
@@ -4732,23 +4736,23 @@ function AgentScopeSettings() {
                       {selected ? <span className="h-1.5 w-1.5 rounded-full bg-background" /> : null}
                     </span>
                     <div className="min-w-0">
-                      <div className="text-[14px] font-medium leading-5 text-foreground">{opt.label}</div>
-                      <div className="mt-0.5 max-w-[28rem] text-[12px] leading-5 text-muted-foreground">
+                      <div className="text-body font-medium leading-5 text-foreground">{opt.label}</div>
+                      <div className="mt-0.5 max-w-[28rem] text-caption leading-5 text-muted-foreground">
                         {opt.desc}
                       </div>
                     </div>
-                  </button>
+                  </Button>
                 );
               })}
 
               {notesMode === "specific" ? (
                 <>
                   <div className="bg-muted/25 px-4 py-2 sm:px-5">
-                    <div className="text-[12px] font-medium text-muted-foreground">
+                    <div className="text-caption font-medium text-muted-foreground">
                       勾选允许检索的文件夹
                     </div>
                   </div>
-                  <label className="flex cursor-pointer select-none items-center gap-2.5 px-4 py-2.5 text-[13px] text-foreground/85 hover:bg-muted/35 sm:px-5">
+                  <label className="flex cursor-pointer select-none items-center gap-2.5 px-4 py-2.5 text-ui text-foreground/85 hover:bg-muted/35 sm:px-5">
                     <Checkbox
                       checked={allowedSet.has("")}
                       onCheckedChange={() => void toggleNotebook("")}
@@ -4758,7 +4762,7 @@ function AgentScopeSettings() {
                   {notebooks.map((nb) => (
                     <label
                       key={nb.id}
-                      className="flex cursor-pointer select-none items-center gap-2.5 px-4 py-2.5 text-[13px] text-foreground/85 hover:bg-muted/35 sm:px-5"
+                      className="flex cursor-pointer select-none items-center gap-2.5 px-4 py-2.5 text-ui text-foreground/85 hover:bg-muted/35 sm:px-5"
                     >
                       <Checkbox
                         checked={allowedSet.has(nb.id)}
@@ -4780,7 +4784,7 @@ function AgentScopeSettings() {
       </section>
 
       <section>
-        <SettingsSectionTitle>邮件搜索范围</SettingsSectionTitle>
+        <SubsectionLabel className="mb-2 px-1">邮件搜索范围</SubsectionLabel>
         <SettingsGroup>
           {accounts.length === 0 ? (
             <SettingsRow
@@ -4792,11 +4796,12 @@ function AgentScopeSettings() {
               {emailModeOptions.map((opt) => {
                 const selected = emailMode === opt.value;
                 return (
-                  <button
+                  <Button
                     key={opt.value}
                     type="button"
+                    variant="ghost"
                     onClick={() => void setEmailMode(opt.value)}
-                    className="flex w-full min-h-[62px] items-center gap-3 px-4 py-3.5 text-left transition-colors hover:bg-muted/35 sm:px-5"
+                    className="h-auto min-h-[62px] w-full items-center justify-start gap-3 whitespace-normal rounded-none px-4 py-3.5 text-left font-normal hover:bg-muted/35 sm:px-5"
                   >
                     <span
                       className={cn(
@@ -4809,19 +4814,19 @@ function AgentScopeSettings() {
                       {selected ? <span className="h-1.5 w-1.5 rounded-full bg-background" /> : null}
                     </span>
                     <div className="min-w-0">
-                      <div className="text-[14px] font-medium leading-5 text-foreground">{opt.label}</div>
-                      <div className="mt-0.5 max-w-[28rem] text-[12px] leading-5 text-muted-foreground">
+                      <div className="text-body font-medium leading-5 text-foreground">{opt.label}</div>
+                      <div className="mt-0.5 max-w-[28rem] text-caption leading-5 text-muted-foreground">
                         {opt.desc}
                       </div>
                     </div>
-                  </button>
+                  </Button>
                 );
               })}
 
               {emailMode === "specific" ? (
                 <>
                   <div className="bg-muted/25 px-4 py-2 sm:px-5">
-                    <div className="text-[12px] font-medium text-muted-foreground">
+                    <div className="text-caption font-medium text-muted-foreground">
                       勾选允许检索的文件夹
                     </div>
                   </div>
@@ -4829,17 +4834,17 @@ function AgentScopeSettings() {
                     const folders = foldersByAccount[account.id] ?? [];
                     return (
                       <div key={account.id} className="px-4 py-3 sm:px-5">
-                        <div className="mb-1.5 text-[13px] font-medium text-foreground">
+                        <div className="mb-1.5 text-ui font-medium text-foreground">
                           {account.displayName || account.fromAddress || account.imapUsername}
                         </div>
                         <div className="grid gap-1 pl-1">
                           {folders.length === 0 ? (
-                            <div className="text-[12px] text-muted-foreground">暂无文件夹缓存</div>
+                            <div className="text-caption text-muted-foreground">暂无文件夹缓存</div>
                           ) : (
                             folders.map((folder) => (
                               <label
                                 key={folder.name}
-                                className="flex cursor-pointer select-none items-center gap-2.5 rounded-md px-2 py-1 text-[13px] text-foreground/85 hover:bg-muted/45"
+                                className="flex cursor-pointer select-none items-center gap-2.5 rounded-md px-2 py-1 text-ui text-foreground/85 hover:bg-muted/45"
                               >
                                 <Checkbox
                                   checked={emailAllowed.has(folder.name)}
@@ -4861,7 +4866,7 @@ function AgentScopeSettings() {
       </section>
 
       {saving ? (
-        <div className="text-[12px] text-muted-foreground">正在保存…</div>
+        <div className="text-caption text-muted-foreground">正在保存…</div>
       ) : null}
     </div>
   );
@@ -4889,7 +4894,7 @@ function ProviderPicker({
           variant="outline"
           disabled={disabled}
           className={cn(
-            "h-8 w-[210px] justify-between rounded-full border-input bg-background px-3 text-[13px] font-normal shadow-none",
+            "h-8 w-[210px] justify-between rounded-full border-input bg-background px-3 text-ui font-normal shadow-none",
             "hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring",
             disabled && "text-muted-foreground",
           )}
@@ -4909,7 +4914,7 @@ function ProviderPicker({
               key={provider.name}
               onSelect={() => onChange(provider.name)}
               className={cn(
-                "flex cursor-default items-center justify-between gap-2 rounded-lg px-3 py-2 text-[13px]",
+                "flex cursor-default items-center justify-between gap-2 rounded-lg px-3 py-2 text-ui",
                 "focus:bg-muted focus:text-foreground",
                 selected && "bg-primary/10 text-primary focus:bg-primary/12 focus:text-primary",
               )}
@@ -4956,7 +4961,7 @@ function ImageModelInput({
         value={value}
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}
-        className="h-8 w-[min(300px,70vw)] rounded-full text-[13px]"
+        className="h-8 w-[min(300px,70vw)] rounded-full text-ui"
       />
     );
   }
@@ -4967,24 +4972,26 @@ function ImageModelInput({
         value={value}
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}
-        className="h-8 w-[min(300px,70vw)] rounded-full pr-9 text-[13px]"
+        className="h-8 w-[min(300px,70vw)] rounded-full pr-9 text-ui"
       />
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="icon"
             aria-label={selectLabel}
-            className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-full"
+            className="absolute right-1.5 top-1/2 h-6 w-6 -translate-y-1/2 rounded-full text-muted-foreground hover:bg-transparent hover:text-foreground"
           >
             <ChevronDown className="h-3.5 w-3.5" aria-hidden />
-          </button>
+          </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent
           align="end"
           className="max-h-[18rem] w-[min(300px,70vw)] overflow-y-auto rounded-md border-border/65 bg-popover p-1.5 text-popover-foreground shadow-lg dark:border-white/10"
         >
           {filtered.length === 0 ? (
-            <div className="px-3 py-2 text-[13px] text-muted-foreground">{noMatchLabel}</div>
+            <div className="px-3 py-2 text-ui text-muted-foreground">{noMatchLabel}</div>
           ) : (
             filtered.map((model) => {
               const selected = model === value;
@@ -4993,7 +5000,7 @@ function ImageModelInput({
                   key={model}
                   onSelect={() => onChange(model)}
                   className={cn(
-                    "flex cursor-default items-center justify-between gap-2 rounded-lg px-3 py-2 text-[13px]",
+                    "flex cursor-default items-center justify-between gap-2 rounded-lg px-3 py-2 text-ui",
                     "focus:bg-muted focus:text-foreground",
                     selected && "bg-primary/10 text-primary focus:bg-primary/12 focus:text-primary",
                   )}
@@ -5010,7 +5017,7 @@ function ImageModelInput({
               <DropdownMenuItem
                 onSelect={onAddModel}
                 className={cn(
-                  "flex cursor-default items-center gap-2 rounded-lg px-3 py-2 text-[13px]",
+                  "flex cursor-default items-center gap-2 rounded-lg px-3 py-2 text-ui",
                   "focus:bg-muted focus:text-foreground text-primary",
                 )}
               >
@@ -5039,9 +5046,9 @@ function ProviderSection({
   return (
     <section className="space-y-3">
       <ByokSectionHeader title={title} count={count} />
-      <div className="overflow-hidden rounded-2xl border border-border/45 bg-card/86 shadow-sm backdrop-blur-xl dark:border-white/10">
+      <div className="overflow-hidden rounded-lg border border-border/60 bg-card">
         {count > 0 ? (
-          <div className="divide-y divide-border/45">{children}</div>
+          <div className="divide-y divide-border/50">{children}</div>
         ) : (
           <ByokEmptyState>{empty}</ByokEmptyState>
         )}
@@ -5053,10 +5060,10 @@ function ProviderSection({
 function ByokSectionHeader({ title, count }: { title: string; count: number }) {
   return (
     <div className="flex items-center justify-between px-1">
-      <h2 className="text-[13px] font-semibold tracking-[-0.01em] text-foreground/85">
+      <h2 className="text-ui font-semibold tracking-[-0.01em] text-foreground/85">
         {title}
       </h2>
-      <span className="rounded-full bg-muted px-2 py-0.5 text-[11.5px] font-medium text-muted-foreground">
+      <span className="rounded-full bg-muted px-2 py-0.5 text-micro font-medium text-muted-foreground">
         {count}
       </span>
     </div>
@@ -5065,7 +5072,7 @@ function ByokSectionHeader({ title, count }: { title: string; count: number }) {
 
 function ByokEmptyState({ children }: { children: ReactNode }) {
   return (
-    <div className="rounded-2xl border border-dashed border-border/65 bg-card/45 px-4 py-5 text-[13px] text-muted-foreground">
+    <div className="rounded-2xl border border-dashed border-border/65 bg-card/45 px-4 py-5 text-ui text-muted-foreground">
       {children}
     </div>
   );
@@ -5177,20 +5184,21 @@ function OverviewListRow({
   onClick: () => void;
 }) {
   return (
-    <button
+    <Button
       type="button"
+      variant="ghost"
       onClick={onClick}
-      className="group flex min-h-[68px] w-full items-center gap-3 px-4 py-3.5 text-left transition-colors hover:bg-muted/30 sm:px-5"
+      className="group h-auto min-h-[68px] w-full items-center justify-start gap-3 whitespace-normal rounded-none px-4 py-3.5 text-left font-normal hover:bg-muted/30 sm:px-5"
     >
       <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-muted text-foreground/82 transition-colors group-hover:bg-muted/80 dark:bg-muted/70">
         <Icon className="h-4 w-4" aria-hidden />
       </span>
       <span className="min-w-0 flex-1">
-        <span className="block text-[14px] font-medium leading-5 text-foreground">{title}</span>
-        <span className="mt-0.5 block truncate text-[12px] leading-5 text-muted-foreground">{caption}</span>
+        <span className="block text-body font-medium leading-5 text-foreground">{title}</span>
+        <span className="mt-0.5 block truncate text-caption leading-5 text-muted-foreground">{caption}</span>
       </span>
       <span className="ml-auto flex min-w-0 max-w-[48%] items-center gap-2">
-        <span className="truncate text-right text-[13px] leading-5 text-muted-foreground">
+        <span className="truncate text-right text-ui leading-5 text-muted-foreground">
           {value}
         </span>
         <ChevronRight
@@ -5198,22 +5206,14 @@ function OverviewListRow({
           aria-hidden
         />
       </span>
-    </button>
-  );
-}
-
-function SettingsSectionTitle({ children }: { children: ReactNode }) {
-  return (
-    <h2 className="mb-2 px-1 text-[13px] font-semibold tracking-[-0.01em] text-foreground/85">
-      {children}
-    </h2>
+    </Button>
   );
 }
 
 function SettingsGroup({ children }: { children: ReactNode }) {
   return (
-    <div className="overflow-hidden rounded-2xl border border-border/45 bg-card/86 shadow-sm backdrop-blur-xl dark:border-white/10">
-      <div className="divide-y divide-border/45">{children}</div>
+    <div className="overflow-hidden rounded-lg border border-border/60 bg-card">
+      <div className="divide-y divide-border/50">{children}</div>
     </div>
   );
 }
@@ -5230,9 +5230,9 @@ function SettingsRow({
   return (
     <div className="flex min-h-[62px] flex-col gap-3 px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between sm:px-5">
       <div className="min-w-0">
-        <div className="text-[14px] font-medium leading-5 text-foreground">{title}</div>
+        <div className="text-body font-medium text-foreground">{title}</div>
         {description ? (
-          <div className="mt-0.5 max-w-[28rem] text-[12px] leading-5 text-muted-foreground">
+          <div className="mt-0.5 max-w-[28rem] text-caption text-muted-foreground">
             {description}
           </div>
         ) : null}
@@ -5245,7 +5245,7 @@ function SettingsRow({
 function ReadOnlyRow({ title, value }: { title: string; value: string }) {
   return (
     <SettingsRow title={title}>
-      <span className="block max-w-[320px] truncate text-right text-[13px] text-muted-foreground">
+      <span className="block max-w-[320px] truncate text-right text-ui text-muted-foreground">
         {value}
       </span>
     </SettingsRow>
@@ -5290,7 +5290,7 @@ function RestartSettingsFooter({
 
   return (
     <div className="flex min-h-[58px] flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5">
-      <div className="min-w-0 text-[13px] leading-5 text-muted-foreground">
+      <div className="min-w-0 text-ui leading-5 text-muted-foreground">
         <SettingsStatusMessage tone={statusTone}>{statusMessage}</SettingsStatusMessage>
       </div>
       <div className="flex w-full shrink-0 flex-wrap justify-end gap-2 sm:w-auto">
@@ -5356,7 +5356,7 @@ function SettingsStatusMessage({
           className={cn(
             "h-1.5 w-1.5 shrink-0 rounded-full",
             tone === "accent" &&
-              "bg-blue-500 shadow-[0_0_0_3px_rgba(59,130,246,0.14)] dark:bg-blue-400 dark:shadow-[0_0_0_3px_rgba(96,165,250,0.18)]",
+              "bg-blue-500 ring ring-blue-500/15 dark:bg-blue-400 dark:ring-blue-400/20",
             tone === "danger" && "bg-destructive/70",
           )}
           aria-hidden
@@ -5377,7 +5377,7 @@ function StatusPill({
   return (
     <span
       className={cn(
-        "inline-flex max-w-[260px] items-center rounded-full px-2.5 py-1 text-[12px] font-medium",
+        "inline-flex max-w-[260px] items-center rounded-full px-2.5 py-1 text-caption font-medium",
         tone === "success" && "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
         tone === "warning" && "bg-amber-500/10 text-amber-700 dark:text-amber-300",
         tone === "info" && "bg-blue-500/10 text-blue-700 dark:text-blue-300",
@@ -5399,18 +5399,19 @@ function ToggleButton({
   label: string;
 }) {
   return (
-    <button
+    <Button
       type="button"
+      variant="ghost"
       onClick={() => onChange(!checked)}
       className={cn(
-        "inline-flex h-8 min-w-[64px] items-center justify-center rounded-full px-3 text-[12px] font-medium transition-colors",
+        "h-8 min-w-[64px] rounded-full px-3 text-caption font-medium",
         checked
-          ? "bg-primary text-primary-foreground"
-          : "bg-muted text-muted-foreground hover:text-foreground",
+          ? "bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground"
+          : "bg-muted text-muted-foreground hover:bg-muted hover:text-foreground",
       )}
     >
       {label}
-    </button>
+    </Button>
   );
 }
 
@@ -5438,9 +5439,9 @@ function NumberInput({
           const parsed = Number(event.target.value);
           if (Number.isFinite(parsed)) onChange(parsed);
         }}
-        className="h-8 w-24 rounded-full text-[13px]"
+        className="h-8 w-24 rounded-full text-ui"
       />
-      {suffix ? <span className="text-[12px] text-muted-foreground">{suffix}</span> : null}
+      {suffix ? <span className="text-caption text-muted-foreground">{suffix}</span> : null}
     </div>
   );
 }
@@ -5526,7 +5527,7 @@ function DesktopSettings() {
   return (
     <div className="space-y-7">
       <section>
-        <SettingsSectionTitle>{tx("settings.desktop.behavior", "窗口行为")}</SettingsSectionTitle>
+        <SubsectionLabel className="mb-2 px-1">{tx("settings.desktop.behavior", "窗口行为")}</SubsectionLabel>
         <SettingsGroup>
           <SettingsRow
             title={tx("settings.desktop.runInBackground", "后台运行")}
@@ -5552,7 +5553,7 @@ function DesktopSettings() {
       </section>
 
       <section>
-        <SettingsSectionTitle>{tx("settings.desktop.gateway", "网关")}</SettingsSectionTitle>
+        <SubsectionLabel className="mb-2 px-1">{tx("settings.desktop.gateway", "网关")}</SubsectionLabel>
         <SettingsGroup>
           <SettingsRow
             title={tx("settings.desktop.gatewayStatus", "网关状态")}
@@ -5565,7 +5566,7 @@ function DesktopSettings() {
                   : tx("settings.desktop.stopped", "已停止")}
               </StatusPill>
               {gatewayStatus?.port ? (
-                <span className="text-[12px] text-muted-foreground">
+                <span className="text-caption text-muted-foreground">
                   :{gatewayStatus.port}
                 </span>
               ) : null}
@@ -5748,7 +5749,7 @@ function ShortcutsSettings() {
   return (
     <div className="space-y-7">
       <section>
-        <SettingsSectionTitle>{tx("settings.shortcuts.quickAsk", "快问快捷键")}</SettingsSectionTitle>
+        <SubsectionLabel className="mb-2 px-1">{tx("settings.shortcuts.quickAsk", "快问快捷键")}</SubsectionLabel>
         <SettingsGroup>
           <SettingsRow
             title={tx("settings.desktop.quickAskShortcut", "快问快捷键")}
@@ -5765,7 +5766,7 @@ function ShortcutsSettings() {
                   }}
                   onKeyDown={handleQuickAskKeyDown}
                   placeholder="Ctrl+Alt+M"
-                  className="h-8 w-44 rounded-full text-right text-[13px]"
+                  className="h-8 w-44 rounded-full text-right text-ui"
                 />
                 <Button
                   size="sm"
@@ -5779,7 +5780,7 @@ function ShortcutsSettings() {
                     : tx("settings.actions.save", "保存")}
                 </Button>
               </div>
-              <div className="max-w-[320px] text-right text-[12px] leading-5 text-muted-foreground">
+              <div className="max-w-[320px] text-right text-caption leading-5 text-muted-foreground">
                 {quickAskError ? (
                   <span className="text-destructive">{quickAskError}</span>
                 ) : quickAskSaved ? (
@@ -5797,35 +5798,41 @@ function ShortcutsSettings() {
             description={tx("settings.desktop.quickAskModeHelp", "选择按下快捷键后的打开方式。")}
           >
             <div className="flex items-center gap-1 rounded-full border border-border p-0.5">
-              <button
+              <Button
                 type="button"
+                variant="ghost"
+                size="sm"
                 onClick={() => { setQuickAskMode("compact"); setQuickAskSaved(false); }}
-                className={`rounded-full px-3 py-1 text-[13px] transition-colors ${
+                className={cn(
+                  "h-auto rounded-full px-3 py-1 text-ui font-normal",
                   quickAskMode === "compact"
-                    ? "bg-foreground text-background"
-                    : "text-muted-foreground hover:text-foreground"
-                }`}
+                    ? "bg-foreground text-background hover:bg-foreground hover:text-background"
+                    : "text-muted-foreground hover:bg-transparent hover:text-foreground",
+                )}
               >
                 {tx("settings.desktop.quickAskModeCompact", "简洁模式")}
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
+                variant="ghost"
+                size="sm"
                 onClick={() => { setQuickAskMode("full"); setQuickAskSaved(false); }}
-                className={`rounded-full px-3 py-1 text-[13px] transition-colors ${
+                className={cn(
+                  "h-auto rounded-full px-3 py-1 text-ui font-normal",
                   quickAskMode === "full"
-                    ? "bg-foreground text-background"
-                    : "text-muted-foreground hover:text-foreground"
-                }`}
+                    ? "bg-foreground text-background hover:bg-foreground hover:text-background"
+                    : "text-muted-foreground hover:bg-transparent hover:text-foreground",
+                )}
               >
                 {tx("settings.desktop.quickAskModeFull", "完整模式")}
-              </button>
+              </Button>
             </div>
           </SettingsRow>
         </SettingsGroup>
       </section>
 
       <section>
-        <SettingsSectionTitle>{tx("settings.shortcuts.sidebarNav", "侧边栏导航快捷键")}</SettingsSectionTitle>
+        <SubsectionLabel className="mb-2 px-1">{tx("settings.shortcuts.sidebarNav", "侧边栏导航快捷键")}</SubsectionLabel>
         <SettingsGroup>
           {SIDEBAR_SHORTCUT_ITEMS.map(({ key, label }) => (
             <SettingsRow
@@ -5841,12 +5848,12 @@ function ShortcutsSettings() {
                 }}
                 onKeyDown={(event) => handleSidebarShortcutKeyDown(event, key)}
                 placeholder={DEFAULT_SIDEBAR_SHORTCUTS[key]}
-                className="h-8 w-44 rounded-full text-right text-[13px]"
+                className="h-8 w-44 rounded-full text-right text-ui"
               />
             </SettingsRow>
           ))}
           <div className="flex min-h-[58px] flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5">
-            <div className="min-w-0 text-[13px] leading-5 text-muted-foreground">
+            <div className="min-w-0 text-ui leading-5 text-muted-foreground">
               {sidebarError ? (
                 <span className="text-destructive">{sidebarError}</span>
               ) : sidebarSaved ? (

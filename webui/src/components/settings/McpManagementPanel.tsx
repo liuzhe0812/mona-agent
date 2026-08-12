@@ -19,6 +19,8 @@ import { useTranslation } from "react-i18next";
 
 import { useClientOptional } from "@/providers/ClientProvider";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
+import { SubsectionLabel } from "@/components/ui/page-header";
 import { DeleteConfirm } from "@/components/DeleteConfirm";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -326,7 +328,7 @@ export function McpManagementPanel() {
 
   if (!token) {
     return (
-      <div className="flex h-48 items-center justify-center rounded-2xl border border-border/50 bg-card/75 text-sm text-muted-foreground shadow-sm">
+      <div className="flex h-48 items-center justify-center rounded-lg border border-border/60 bg-card text-body text-muted-foreground">
         {tx("settings.mcp.unavailable", "需要登录后才能管理 MCP server。")}
       </div>
     );
@@ -334,7 +336,7 @@ export function McpManagementPanel() {
 
   if (loading) {
     return (
-      <div className="flex h-48 items-center justify-center rounded-2xl border border-border/50 bg-card/75 text-sm text-muted-foreground shadow-sm">
+      <div className="flex h-48 items-center justify-center rounded-lg border border-border/60 bg-card text-body text-muted-foreground">
         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
         {tx("settings.status.loading", "Loading…")}
       </div>
@@ -344,21 +346,23 @@ export function McpManagementPanel() {
   return (
     <div className="space-y-7">
       {error ? (
-        <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-[12px] text-destructive">
+        <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-caption text-destructive">
           <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           <span className="flex-1 break-words">{error}</span>
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="icon"
             onClick={() => setError(null)}
-            className="text-destructive/70 hover:text-destructive"
+            className="h-5 w-5 text-destructive/70 hover:bg-transparent hover:text-destructive"
           >
             ×
-          </button>
+          </Button>
         </div>
       ) : null}
 
       <section>
-        <SectionTitle>{tx("settings.mcp.overview.title", "概览")}</SectionTitle>
+        <SubsectionLabel className="mb-2 px-1">{tx("settings.mcp.overview.title", "概览")}</SubsectionLabel>
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
           <StatCard
             label={tx("settings.mcp.overview.total", "已配置")}
@@ -380,9 +384,9 @@ export function McpManagementPanel() {
 
       <section>
         <div className="mb-2 flex items-center justify-between px-1">
-          <SectionTitle className="mb-0">
+          <SubsectionLabel>
             {tx("settings.mcp.list.title", "Server 列表")}
-          </SectionTitle>
+          </SubsectionLabel>
           <div className="flex items-center gap-1">
             <Button
               size="sm"
@@ -418,15 +422,18 @@ export function McpManagementPanel() {
         </div>
 
         {servers.length === 0 ? (
-          <div className="rounded-2xl border border-border/45 bg-card/75 px-4 py-8 text-center text-[12px] text-muted-foreground shadow-sm">
-            {tx(
-              "settings.mcp.list.empty",
-              "尚未配置任何 MCP server。点击右上角「新增」开始添加。",
-            )}
+          <div className="rounded-lg border border-border/60 bg-card">
+            <EmptyState
+              className="py-8"
+              title={tx(
+                "settings.mcp.list.empty",
+                "尚未配置任何 MCP server。点击右上角「新增」开始添加。",
+              )}
+            />
           </div>
         ) : (
-          <div className="overflow-hidden rounded-2xl border border-border/45 bg-card/86 shadow-sm backdrop-blur-xl dark:border-white/10">
-            <div className="divide-y divide-border/45">
+          <div className="overflow-hidden rounded-lg border border-border/60 bg-card">
+            <div className="divide-y divide-border/50">
               {servers.map((server) => (
                 <McpServerRow
                   key={server.name}
@@ -481,25 +488,6 @@ export function McpManagementPanel() {
 // Subcomponents
 // ---------------------------------------------------------------------------
 
-function SectionTitle({
-  children,
-  className,
-}: {
-  children: React.ReactNode;
-  className?: string;
-}) {
-  return (
-    <h2
-      className={cn(
-        "mb-2 px-1 text-[13px] font-semibold tracking-[-0.01em] text-foreground/85",
-        className,
-      )}
-    >
-      {children}
-    </h2>
-  );
-}
-
 function StatCard({
   label,
   value,
@@ -510,13 +498,13 @@ function StatCard({
   hint?: string;
 }) {
   return (
-    <div className="rounded-2xl border border-border/45 bg-card/86 px-3 py-3 shadow-sm backdrop-blur-xl dark:border-white/10">
-      <div className="text-[11px] text-muted-foreground">{label}</div>
-      <div className="mt-1 text-[20px] font-semibold leading-none text-foreground">
+    <div className="rounded-lg border border-border/60 bg-card px-3 py-3">
+      <div className="text-micro text-muted-foreground">{label}</div>
+      <div className="mt-1 text-title-sm leading-none text-foreground">
         {value}
       </div>
       {hint ? (
-        <div className="mt-1 text-[11px] text-muted-foreground/80">{hint}</div>
+        <div className="mt-1 text-micro text-muted-foreground/80">{hint}</div>
       ) : null}
     </div>
   );
@@ -562,10 +550,11 @@ function McpServerRow({
   return (
     <div className="px-4 py-3 sm:px-5">
       <div className="flex items-center gap-3">
-        <button
+        <Button
           type="button"
+          variant="ghost"
           onClick={onToggleExpand}
-          className="flex min-w-0 flex-1 items-center gap-2 text-left"
+          className="h-auto min-w-0 flex-1 items-center justify-start gap-2 whitespace-normal rounded-none px-0 py-0 text-left font-normal hover:bg-transparent"
         >
           {server.toolCount > 0 ? (
             expanded ? (
@@ -577,33 +566,33 @@ function McpServerRow({
             <span className="w-3.5 shrink-0" />
           )}
           <Server className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-          <span className="truncate text-[13px] font-medium text-foreground">
+          <span className="truncate text-ui font-medium text-foreground">
             {server.name}
           </span>
           <span
             className={cn(
-              "shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-medium",
+              "shrink-0 rounded-md px-1.5 py-0.5 text-micro font-medium",
               transportStyle,
             )}
           >
             {transportLabel(server.transport)}
           </span>
           {server.connected ? (
-            <span className="flex shrink-0 items-center gap-0.5 text-[10px] text-emerald-600 dark:text-emerald-400">
+            <span className="flex shrink-0 items-center gap-0.5 text-micro text-emerald-600 dark:text-emerald-400">
               <CircleCheck className="h-3 w-3" />
               {tx("settings.mcp.row.connected", "已连接")}
             </span>
           ) : (
-            <span className="flex shrink-0 items-center gap-0.5 text-[10px] text-muted-foreground">
+            <span className="flex shrink-0 items-center gap-0.5 text-micro text-muted-foreground">
               <CircleX className="h-3 w-3" />
               {tx("settings.mcp.row.disconnected", "未连接")}
             </span>
           )}
-          <span className="hidden shrink-0 items-center gap-0.5 text-[10px] text-muted-foreground sm:flex">
+          <span className="hidden shrink-0 items-center gap-0.5 text-micro text-muted-foreground sm:flex">
             <Wrench className="h-3 w-3" />
             {server.toolCount}
           </span>
-        </button>
+        </Button>
 
         <div className="flex shrink-0 items-center gap-1">
           <TooltipProvider>
@@ -669,7 +658,7 @@ function McpServerRow({
         </div>
       </div>
 
-      <div className="mt-1 pl-7 text-[11px] text-muted-foreground">
+      <div className="mt-1 pl-7 text-micro text-muted-foreground">
         {server.transport === "stdio" && server.config ? (
           <span className="font-mono">
             {server.config.command} {server.config.args.join(" ")}
@@ -686,7 +675,7 @@ function McpServerRow({
       {expanded && tools ? (
         <div className="mt-2 pl-7">
           {tools.length === 0 ? (
-            <div className="text-[12px] text-muted-foreground">
+            <div className="text-caption text-muted-foreground">
               {tx("settings.mcp.row.noTools", "此 server 未注册任何工具。")}
             </div>
           ) : (
@@ -695,7 +684,7 @@ function McpServerRow({
                 <TooltipProvider key={tool.name}>
                   <Tooltip>
                     <TooltipTrigger asChild>
-                      <span className="inline-flex items-center gap-1 rounded-md bg-muted/60 px-1.5 py-0.5 text-[11px] text-foreground/80">
+                      <span className="inline-flex items-center gap-1 rounded-md bg-muted/60 px-1.5 py-0.5 text-micro text-foreground/80">
                         {tool.kind === "tool" ? (
                           <Wrench className="h-2.5 w-2.5 text-muted-foreground" />
                         ) : tool.kind === "resource" ? (
@@ -708,15 +697,15 @@ function McpServerRow({
                     </TooltipTrigger>
                     <TooltipContent>
                       <div className="max-w-sm">
-                        <div className="font-mono text-[11px] font-semibold">
+                        <div className="font-mono text-micro font-semibold">
                           {tool.name}
                         </div>
                         {tool.description ? (
-                          <div className="mt-1 text-[11px] text-muted-foreground">
+                          <div className="mt-1 text-micro text-muted-foreground">
                             {tool.description}
                           </div>
                         ) : null}
-                        <div className="mt-1 text-[10px] uppercase text-muted-foreground">
+                        <div className="mt-1 text-micro uppercase text-muted-foreground">
                           {tool.kind}
                         </div>
                       </div>
@@ -766,10 +755,10 @@ function KeyValueEditor({
 
   return (
     <div>
-      <div className="mb-1 text-[12px] font-medium text-foreground">{title}</div>
+      <div className="mb-1 text-caption font-medium text-foreground">{title}</div>
       <div className="space-y-1">
         {entries.length === 0 ? (
-          <div className="text-[11px] text-muted-foreground">
+          <div className="text-micro text-muted-foreground">
             {tx("settings.mcp.editor.kvEmpty", "（无）")}
           </div>
         ) : null}
@@ -778,7 +767,7 @@ function KeyValueEditor({
             <Input
               value={k}
               readOnly
-              className="h-7 flex-1 rounded-md bg-muted/40 font-mono text-[12px]"
+              className="h-7 flex-1 rounded-md bg-muted/40 font-mono text-caption"
             />
             <Input
               type="password"
@@ -788,7 +777,7 @@ function KeyValueEditor({
                 "settings.mcp.editor.kvValuePlaceholder",
                 "值（留空清除）",
               )}
-              className="h-7 flex-1 rounded-md font-mono text-[12px]"
+              className="h-7 flex-1 rounded-md font-mono text-caption"
             />
             <Button
               size="icon"
@@ -812,7 +801,7 @@ function KeyValueEditor({
             }
           }}
           placeholder={tx("settings.mcp.editor.kvKeyPlaceholder", "新键名")}
-          className="h-7 flex-1 rounded-md font-mono text-[12px]"
+          className="h-7 flex-1 rounded-md font-mono text-caption"
         />
         <Button
           size="sm"
@@ -853,18 +842,18 @@ function McpServerEditor({
   ];
 
   return (
-    <section className="mt-2 rounded-2xl border border-border/45 bg-card/86 p-4 shadow-sm backdrop-blur-xl dark:border-white/10 sm:p-5">
+    <section className="mt-2 rounded-lg border border-border/60 bg-card p-4 sm:p-5">
       <div className="mb-3 flex items-center justify-between">
-        <h2 className="text-[13px] font-semibold tracking-[-0.01em] text-foreground/85">
+        <SubsectionLabel>
           {editingName
             ? tx("settings.mcp.editor.editTitle", "编辑 server")
             : tx("settings.mcp.editor.createTitle", "新增 server")}
           {editingName ? (
-            <span className="ml-2 font-mono text-[12px] text-muted-foreground">
+            <span className="ml-2 font-mono text-caption text-muted-foreground">
               {editingName}
             </span>
           ) : null}
-        </h2>
+        </SubsectionLabel>
       </div>
 
       <div className="space-y-4">
@@ -874,30 +863,32 @@ function McpServerEditor({
               value={draft.name}
               onChange={(e) => onChange({ ...draft, name: e.target.value })}
               placeholder="my-server"
-              className="h-8 rounded-full font-mono text-[12px]"
+              className="h-8 rounded-full font-mono text-caption"
             />
           </Field>
         ) : null}
 
         <div>
-          <div className="mb-1 text-[12px] font-medium text-foreground">
+          <div className="mb-1 text-caption font-medium text-foreground">
             {tx("settings.mcp.editor.transport", "传输方式")}
           </div>
-          <div className="flex items-center gap-1 rounded-full border border-border/45 bg-card/60 p-0.5 text-[12px]">
+          <div className="flex items-center gap-1 rounded-full border border-border/45 bg-card/60 p-0.5 text-caption">
             {transportOptions.map((opt) => (
-              <button
+              <Button
                 key={opt.key}
                 type="button"
+                variant="ghost"
+                size="sm"
                 onClick={() => onChange({ ...draft, transport: opt.key })}
                 className={cn(
-                  "rounded-full px-3 py-1 transition-colors",
+                  "h-auto rounded-full px-3 py-1 font-normal",
                   draft.transport === opt.key
-                    ? "bg-foreground text-background"
+                    ? "bg-foreground text-background hover:bg-foreground hover:text-background"
                     : "text-muted-foreground hover:bg-accent",
                 )}
               >
                 {opt.label}
-              </button>
+              </Button>
             ))}
           </div>
         </div>
@@ -909,7 +900,7 @@ function McpServerEditor({
                 value={draft.command}
                 onChange={(e) => onChange({ ...draft, command: e.target.value })}
                 placeholder="npx"
-                className="h-8 rounded-full text-[13px]"
+                className="h-8 rounded-full text-ui"
               />
             </Field>
             <Field
@@ -922,7 +913,7 @@ function McpServerEditor({
                 value={draft.args}
                 onChange={(e) => onChange({ ...draft, args: e.target.value })}
                 placeholder={"-y\n@modelcontextprotocol/server-filesystem\n/path"}
-                className="min-h-[80px] rounded-lg font-mono text-[12px]"
+                className="min-h-[80px] rounded-lg font-mono text-caption"
               />
             </Field>
             <KeyValueEditor
@@ -950,7 +941,7 @@ function McpServerEditor({
                     ? "https://example.com/sse"
                     : "https://example.com/mcp"
                 }
-                className="h-8 rounded-full font-mono text-[12px]"
+                className="h-8 rounded-full font-mono text-caption"
               />
             </Field>
             <KeyValueEditor
@@ -974,7 +965,7 @@ function McpServerEditor({
                   onChange({ ...draft, toolTimeout: v });
                 }
               }}
-              className="h-8 rounded-full text-[13px]"
+              className="h-8 rounded-full text-ui"
             />
           </Field>
           <Field
@@ -989,7 +980,7 @@ function McpServerEditor({
                 onChange({ ...draft, enabledTools: e.target.value })
               }
               placeholder="*"
-              className="min-h-[60px] rounded-lg font-mono text-[12px]"
+              className="min-h-[60px] rounded-lg font-mono text-caption"
             />
           </Field>
         </div>
@@ -1022,9 +1013,9 @@ function Field({
   return (
     <div>
       <div className="mb-1 flex items-baseline justify-between">
-        <span className="text-[12px] font-medium text-foreground">{label}</span>
+        <span className="text-caption font-medium text-foreground">{label}</span>
         {hint ? (
-          <span className="text-[10px] text-muted-foreground">{hint}</span>
+          <span className="text-micro text-muted-foreground">{hint}</span>
         ) : null}
       </div>
       {children}

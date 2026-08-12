@@ -14,6 +14,8 @@ import { useTranslation } from "react-i18next";
 
 import { useClientOptional } from "@/providers/ClientProvider";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
+import { SubsectionLabel } from "@/components/ui/page-header";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -286,7 +288,7 @@ export function SkillManagementPanel() {
 
   if (!token) {
     return (
-      <div className="flex h-48 items-center justify-center rounded-2xl border border-border/50 bg-card/75 text-sm text-muted-foreground shadow-sm">
+      <div className="flex h-48 items-center justify-center rounded-lg border border-border/60 bg-card text-body text-muted-foreground">
         {tx("settings.skill.unavailable", "需要登录后才能管理 skill。")}
       </div>
     );
@@ -294,7 +296,7 @@ export function SkillManagementPanel() {
 
   if (loading) {
     return (
-      <div className="flex h-48 items-center justify-center rounded-2xl border border-border/50 bg-card/75 text-sm text-muted-foreground shadow-sm">
+      <div className="flex h-48 items-center justify-center rounded-lg border border-border/60 bg-card text-body text-muted-foreground">
         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
         {tx("settings.status.loading", "Loading…")}
       </div>
@@ -304,21 +306,23 @@ export function SkillManagementPanel() {
   return (
     <div className="space-y-7">
       {error ? (
-        <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-[12px] text-destructive">
+        <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-caption text-destructive">
           <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           <span className="flex-1 break-words">{error}</span>
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="icon"
             onClick={() => setError(null)}
-            className="text-destructive/70 hover:text-destructive"
+            className="h-5 w-5 text-destructive/70 hover:bg-transparent hover:text-destructive"
           >
             ×
-          </button>
+          </Button>
         </div>
       ) : null}
 
       <section>
-        <SectionTitle>{tx("settings.skill.overview.title", "概览")}</SectionTitle>
+        <SubsectionLabel className="mb-2 px-1">{tx("settings.skill.overview.title", "概览")}</SubsectionLabel>
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
           <StatCard
             label={tx("settings.skill.overview.active", "活跃 skill")}
@@ -344,14 +348,14 @@ export function SkillManagementPanel() {
       </section>
 
       <section>
-        <SectionTitle>{tx("settings.skill.config.title", "生命周期配置")}</SectionTitle>
+        <SubsectionLabel className="mb-2 px-1">{tx("settings.skill.config.title", "生命周期配置")}</SubsectionLabel>
         <SettingsGroup>
           <Row>
             <div className="min-w-0 flex-1">
-              <div className="text-[13px] font-medium text-foreground">
+              <div className="text-ui font-medium text-foreground">
                 {tx("settings.skill.config.autoArchive", "自动归档")}
               </div>
-              <div className="mt-0.5 text-[12px] text-muted-foreground">
+              <div className="mt-0.5 text-caption text-muted-foreground">
                 {tx(
                   "settings.skill.config.autoArchive.desc",
                   "Dream 每 2 小时扫描一次，将超过阈值的自进化 skill 移入归档。默认关闭，建议先 dry-run 观察。",
@@ -370,10 +374,10 @@ export function SkillManagementPanel() {
           </Row>
           <Row>
             <div className="min-w-0 flex-1">
-              <div className="text-[13px] font-medium text-foreground">
+              <div className="text-ui font-medium text-foreground">
                 {tx("settings.skill.config.archiveAfterDays", "归档阈值（天）")}
               </div>
-              <div className="mt-0.5 text-[12px] text-muted-foreground">
+              <div className="mt-0.5 text-caption text-muted-foreground">
                 {tx(
                   "settings.skill.config.archiveAfterDays.desc",
                   "自进化 skill 在此天数未被访问时进入归档候选。",
@@ -384,7 +388,7 @@ export function SkillManagementPanel() {
               type="number"
               min={1}
               value={archiveDaysDraft ?? String(config?.archiveAfterDays ?? 90)}
-              className="h-8 w-24 rounded-full text-[13px]"
+              className="h-8 w-24 rounded-full text-ui"
               onChange={(e) => setArchiveDaysDraft(e.target.value)}
               onBlur={() =>
                 commitNumberConfig(
@@ -402,10 +406,10 @@ export function SkillManagementPanel() {
           </Row>
           <Row>
             <div className="min-w-0 flex-1">
-              <div className="text-[13px] font-medium text-foreground">
+              <div className="text-ui font-medium text-foreground">
                 {tx("settings.skill.config.maxActive", "容量上限")}
               </div>
-              <div className="mt-0.5 text-[12px] text-muted-foreground">
+              <div className="mt-0.5 text-caption text-muted-foreground">
                 {tx(
                   "settings.skill.config.maxActive.desc",
                   "活跃用户 skill 数量上限。达到后 Dream 拒绝创建新 skill。",
@@ -416,7 +420,7 @@ export function SkillManagementPanel() {
               type="number"
               min={1}
               value={maxActiveDraft ?? String(config?.maxActiveUserSkills ?? 100)}
-              className="h-8 w-24 rounded-full text-[13px]"
+              className="h-8 w-24 rounded-full text-ui"
               onChange={(e) => setMaxActiveDraft(e.target.value)}
               onBlur={() =>
                 commitNumberConfig(
@@ -436,14 +440,14 @@ export function SkillManagementPanel() {
       </section>
 
       <section>
-        <SectionTitle>{tx("settings.skill.prune.title", "归档工具")}</SectionTitle>
+        <SubsectionLabel className="mb-2 px-1">{tx("settings.skill.prune.title", "归档工具")}</SubsectionLabel>
         <SettingsGroup>
           <Row>
             <div className="min-w-0 flex-1">
-              <div className="text-[13px] font-medium text-foreground">
+              <div className="text-ui font-medium text-foreground">
                 {tx("settings.skill.prune.dryRun", "扫描闲置 skill")}
               </div>
-              <div className="mt-0.5 text-[12px] text-muted-foreground">
+              <div className="mt-0.5 text-caption text-muted-foreground">
                 {tx(
                   "settings.skill.prune.dryRun.desc",
                   "按当前阈值列出归档候选，不实际执行。",
@@ -452,14 +456,14 @@ export function SkillManagementPanel() {
               {prunePreview ? (
                 <div className="mt-2 flex flex-wrap gap-1">
                   {prunePreview.length === 0 ? (
-                    <span className="text-[12px] text-muted-foreground">
+                    <span className="text-caption text-muted-foreground">
                       {tx("settings.skill.prune.empty", "无候选")}
                     </span>
                   ) : (
                     prunePreview.map((n) => (
                       <span
                         key={n}
-                        className="rounded-md bg-muted/60 px-1.5 py-0.5 text-[11px] text-muted-foreground"
+                        className="rounded-md bg-muted/60 px-1.5 py-0.5 text-micro text-muted-foreground"
                       >
                         {n}
                       </span>
@@ -468,7 +472,7 @@ export function SkillManagementPanel() {
                 </div>
               ) : null}
               {pruneMsg ? (
-                <div className="mt-2 text-[12px] text-emerald-600 dark:text-emerald-400">
+                <div className="mt-2 text-caption text-emerald-600 dark:text-emerald-400">
                   {pruneMsg}
                 </div>
               ) : null}
@@ -504,9 +508,9 @@ export function SkillManagementPanel() {
 
       <section>
         <div className="mb-2 flex items-center justify-between px-1">
-          <SectionTitle className="mb-0">
+          <SubsectionLabel>
             {tx("settings.skill.list.title", "Skill 列表")}
-          </SectionTitle>
+          </SubsectionLabel>
           <div className="flex items-center gap-1">
             <Button
               size="sm"
@@ -529,10 +533,10 @@ export function SkillManagementPanel() {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder={tx("settings.skill.list.search", "按名称搜索…")}
-            className="h-8 w-56 rounded-full text-[13px]"
+            className="h-8 w-56 rounded-full text-ui"
           />
           <SortMenu sort={sort} onChange={setSort} tx={tx} />
-          <label className="flex items-center gap-1.5 text-[12px] text-muted-foreground">
+          <label className="flex items-center gap-1.5 text-caption text-muted-foreground">
             <Checkbox
               checked={showArchived}
               onCheckedChange={(v) => setShowArchived(v === true)}
@@ -542,12 +546,15 @@ export function SkillManagementPanel() {
         </div>
 
         {filtered.length === 0 ? (
-          <div className="rounded-2xl border border-border/45 bg-card/75 px-4 py-8 text-center text-[12px] text-muted-foreground shadow-sm">
-            {tx("settings.skill.list.empty", "没有匹配的 skill。")}
+          <div className="rounded-lg border border-border/60 bg-card">
+            <EmptyState
+              className="py-8"
+              title={tx("settings.skill.list.empty", "没有匹配的 skill。")}
+            />
           </div>
         ) : (
-          <div className="overflow-hidden rounded-2xl border border-border/45 bg-card/86 shadow-sm backdrop-blur-xl dark:border-white/10">
-            <div className="divide-y divide-border/45">
+          <div className="overflow-hidden rounded-lg border border-border/60 bg-card">
+            <div className="divide-y divide-border/50">
               {filtered.map((row) => (
                 <SkillRow
                   key={`${row.name}-${row.location}`}
@@ -571,29 +578,10 @@ export function SkillManagementPanel() {
 // Subcomponents
 // ---------------------------------------------------------------------------
 
-function SectionTitle({
-  children,
-  className,
-}: {
-  children: React.ReactNode;
-  className?: string;
-}) {
-  return (
-    <h2
-      className={cn(
-        "mb-2 px-1 text-[13px] font-semibold tracking-[-0.01em] text-foreground/85",
-        className,
-      )}
-    >
-      {children}
-    </h2>
-  );
-}
-
 function SettingsGroup({ children }: { children: React.ReactNode }) {
   return (
-    <div className="overflow-hidden rounded-2xl border border-border/45 bg-card/86 shadow-sm backdrop-blur-xl dark:border-white/10">
-      <div className="divide-y divide-border/45">{children}</div>
+    <div className="overflow-hidden rounded-lg border border-border/60 bg-card">
+      <div className="divide-y divide-border/50">{children}</div>
     </div>
   );
 }
@@ -616,13 +604,13 @@ function StatCard({
   hint?: string;
 }) {
   return (
-    <div className="rounded-2xl border border-border/45 bg-card/86 px-3 py-3 shadow-sm backdrop-blur-xl dark:border-white/10">
-      <div className="text-[11px] text-muted-foreground">{label}</div>
-      <div className="mt-1 text-[20px] font-semibold leading-none text-foreground">
+    <div className="rounded-lg border border-border/60 bg-card px-3 py-3">
+      <div className="text-micro text-muted-foreground">{label}</div>
+      <div className="mt-1 text-title-sm leading-none text-foreground">
         {value}
       </div>
       {hint ? (
-        <div className="mt-1 text-[11px] text-muted-foreground/80">{hint}</div>
+        <div className="mt-1 text-micro text-muted-foreground/80">{hint}</div>
       ) : null}
     </div>
   );
@@ -643,21 +631,23 @@ function SortMenu({
     { key: "name", label: tx("settings.skill.sort.name", "名称") },
   ];
   return (
-    <div className="flex items-center gap-1 rounded-full border border-border/45 bg-card/60 p-0.5 text-[12px]">
+    <div className="flex items-center gap-1 rounded-full border border-border/45 bg-card/60 p-0.5 text-caption">
       {options.map((opt) => (
-        <button
+        <Button
           key={opt.key}
           type="button"
+          variant="ghost"
+          size="sm"
           onClick={() => onChange(opt.key)}
           className={cn(
-            "rounded-full px-2.5 py-1 transition-colors",
+            "h-auto rounded-full px-2.5 py-1 font-normal",
             sort === opt.key
-              ? "bg-foreground text-background"
+              ? "bg-foreground text-background hover:bg-foreground hover:text-background"
               : "text-muted-foreground hover:bg-accent",
           )}
         >
           {opt.label}
-        </button>
+        </Button>
       ))}
     </div>
   );
@@ -689,31 +679,31 @@ function SkillRow({
     <div className="flex items-center gap-3 px-4 py-3 sm:px-5">
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <span className="truncate text-[13px] font-medium text-foreground">
+          <span className="truncate text-ui font-medium text-foreground">
             {row.name}
           </span>
           <span
             className={cn(
-              "shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-medium",
+              "shrink-0 rounded-md px-1.5 py-0.5 text-micro font-medium",
               provStyle,
             )}
           >
             {provenanceLabel(row.provenance)}
           </span>
           {row.pinned ? (
-            <span className="flex shrink-0 items-center gap-0.5 rounded-md bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-600 dark:text-amber-400">
+            <span className="flex shrink-0 items-center gap-0.5 rounded-md bg-amber-500/10 px-1.5 py-0.5 text-micro font-medium text-amber-600 dark:text-amber-400">
               <Pin className="h-2.5 w-2.5" />
               {tx("settings.skill.row.pinned", "置顶")}
             </span>
           ) : null}
           {row.location === "archived" ? (
-            <span className="flex shrink-0 items-center gap-0.5 rounded-md bg-muted/60 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+            <span className="flex shrink-0 items-center gap-0.5 rounded-md bg-muted/60 px-1.5 py-0.5 text-micro font-medium text-muted-foreground">
               <Hourglass className="h-2.5 w-2.5" />
               {tx("settings.skill.row.archived", "已归档")}
             </span>
           ) : null}
         </div>
-        <div className="mt-1 flex items-center gap-3 text-[11px] text-muted-foreground">
+        <div className="mt-1 flex items-center gap-3 text-micro text-muted-foreground">
           <span>
             {tx("settings.skill.row.access", "访问")}
             <span className="ml-1 text-foreground/80">{row.access_count}</span>
