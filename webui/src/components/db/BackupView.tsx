@@ -1,6 +1,12 @@
 import { useState } from "react";
 import { Download, Upload, HardDrive, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { EmptyState } from "@/components/ui/empty-state";
+import { PageToolbar } from "@/components/ui/page-toolbar";
+import { Select } from "@/components/ui/select";
+import { StatusNotice } from "@/components/ui/status-notice";
+import { cn } from "@/lib/utils";
 import { useDbStore } from "./store/dbStore";
 
 type BackupTab = "backup" | "restore";
@@ -97,94 +103,89 @@ export function BackupView() {
 
   if (!selectedConnectionId) {
     return (
-      <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-        请先连接一个数据库
-      </div>
+      <EmptyState className="h-full" title="请先连接一个数据库" />
     );
   }
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center gap-2 border-b border-border bg-card px-3.5 py-2">
-        <HardDrive className="h-3.5 w-3.5 text-muted-foreground" />
-        <div className="flex items-center gap-1 rounded-lg border border-border bg-muted p-0.5">
-          {(["backup", "restore"] as BackupTab[]).map((t) => (
-            <button
-              key={t}
-              type="button"
-              onClick={() => {
-                setTab(t);
-                setMessage(null);
-              }}
-              className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                tab === t
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              {t === "backup" ? "备份" : "恢复"}
-            </button>
-          ))}
-        </div>
-      </div>
+      <PageToolbar
+        className="h-10 border-b border-border bg-card px-3.5"
+        leading={
+          <>
+            <HardDrive className="h-3.5 w-3.5 text-muted-foreground" />
+            <div className="flex items-center gap-1 rounded-lg border border-border bg-muted p-0.5">
+              {(["backup", "restore"] as BackupTab[]).map((t) => (
+                <Button
+                  key={t}
+                  type="button"
+                  variant="ghost"
+                  size="xs"
+                  onClick={() => {
+                    setTab(t);
+                    setMessage(null);
+                  }}
+                  className={cn(
+                    "font-medium",
+                    tab === t
+                      ? "bg-background text-foreground shadow-sm hover:bg-background"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  {t === "backup" ? "备份" : "恢复"}
+                </Button>
+              ))}
+            </div>
+          </>
+        }
+      />
 
       <div className="flex-1 overflow-auto p-5">
         <div className="mx-auto max-w-lg space-y-4">
           <div>
-            <label className="mb-1.5 block text-[11px] font-medium text-muted-foreground">
+            <label className="mb-1.5 block text-micro font-medium text-muted-foreground">
               目标数据库
             </label>
-            <select
+            <Select
               value={targetDb}
-              onChange={(e) => setSelectedDb(e.target.value)}
-              className="h-8 w-full rounded-md border border-border bg-background px-2.5 text-[12px] outline-none focus:border-ring"
-            >
-              <option value="" disabled>
-                选择数据库
-              </option>
-              {databases.map((db) => (
-                <option key={db} value={db}>
-                  {db}
-                </option>
-              ))}
-            </select>
+              onValueChange={(v) => setSelectedDb(v)}
+              options={databases.map((db) => ({ value: db, label: db }))}
+              placeholder="选择数据库"
+              className="h-8 text-caption"
+            />
           </div>
 
           {tab === "backup" && !isSqlite && (
             <div className="space-y-2">
-              <label className="flex items-center gap-2 text-[12px]">
-                <input
-                  type="checkbox"
+              <label className="flex items-center gap-2 text-caption">
+                <Checkbox
                   checked={includeDDL}
-                  onChange={(e) => {
-                    const next = e.target.checked;
+                  onCheckedChange={(checked) => {
+                    const next = checked === true;
                     if (!next && !includeData) return;
                     setIncludeDDL(next);
                   }}
-                  className="rounded border-border"
                 />
                 表结构
-                <span className="text-[10px] text-muted-foreground">
+                <span className="text-micro text-muted-foreground">
                   — 建表语句，恢复时重建表
                 </span>
               </label>
-              <label className="flex items-center gap-2 text-[12px]">
-                <input
-                  type="checkbox"
+              <label className="flex items-center gap-2 text-caption">
+                <Checkbox
                   checked={includeData}
-                  onChange={(e) => {
-                    const next = e.target.checked;
+                  onCheckedChange={(checked) => {
+                    const next = checked === true;
                     if (!next && !includeDDL) return;
                     setIncludeData(next);
                   }}
-                  className="rounded border-border"
                 />
                 表数据
-                <span className="text-[10px] text-muted-foreground">
+                <span className="text-micro text-muted-foreground">
                   — 表里的实际内容
                 </span>
               </label>
-              <p className="text-[10px] text-muted-foreground">
+              <p className="text-micro text-muted-foreground">
                 至少勾选一项。只勾表结构适合迁移空库，只勾表数据适合表已存在时补充数据。
               </p>
             </div>
@@ -192,18 +193,16 @@ export function BackupView() {
 
           {tab === "backup" && isSqlite && (
             <div className="rounded-lg border border-border/70 bg-muted/25 px-3 py-2">
-              <p className="text-[11px] text-muted-foreground">
+              <p className="text-micro text-muted-foreground">
                 SQLite 备份将直接复制数据库文件。
               </p>
             </div>
           )}
 
           {tab === "restore" && (
-            <div className="rounded-lg border border-orange-500/30 bg-orange-500/5 px-3 py-2">
-              <p className="text-[11px] text-orange-500">
-                ⚠️ 恢复操作将执行 SQL 文件中的所有语句，可能覆盖现有数据。请确认备份文件来源可信。
-              </p>
-            </div>
+            <StatusNotice tone="warning">
+              恢复操作将执行 SQL 文件中的所有语句，可能覆盖现有数据。请确认备份文件来源可信。
+            </StatusNotice>
           )}
 
           <Button
@@ -222,21 +221,9 @@ export function BackupView() {
           </Button>
 
           {message && (
-            <div
-              className={`rounded-lg border px-3 py-2 ${
-                message.type === "success"
-                  ? "border-green-500/30 bg-green-500/5"
-                  : "border-red-500/30 bg-red-500/5"
-              }`}
-            >
-              <p
-                className={`text-[11px] ${
-                  message.type === "success" ? "text-green-600" : "text-red-500"
-                }`}
-              >
-                {message.type === "success" ? "✅" : "❌"} {message.text}
-              </p>
-            </div>
+            <StatusNotice tone={message.type === "success" ? "success" : "danger"}>
+              {message.text}
+            </StatusNotice>
           )}
         </div>
       </div>

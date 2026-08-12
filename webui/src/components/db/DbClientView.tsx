@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Play, Square, Plus, FolderOpen, Save, Download, Upload, Trash2, PlusCircle, ChevronLeft, ChevronRight, LockKeyhole } from "lucide-react";
 import { AgentLogo } from "@/components/AgentLogo";
 import { Button } from "@/components/ui/button";
+import { PageToolbar } from "@/components/ui/page-toolbar";
 import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
@@ -192,13 +193,16 @@ export function DbClientView({ onOpenSubscribe }: { onOpenSubscribe?: () => void
             />
 
             <TooltipProvider delayDuration={300}>
-              <div className="flex items-center gap-2 border-b border-border bg-card px-3.5 py-1.5">
+              <PageToolbar
+                className="h-10 border-b border-border bg-card px-3.5"
+                leading={
+                  <>
                 <div className="flex items-center gap-1">
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <Button
                         size="sm"
-                        className="h-6 gap-1 bg-blue-600 px-2 text-xs text-white hover:bg-blue-700"
+                        className="h-6 gap-1 px-2 text-caption"
                         disabled={!activeTab?.connectionId || activeTab?.isExecuting}
                         onClick={() => activeTabId && executeQuery(activeTabId)}
                       >
@@ -287,11 +291,14 @@ export function DbClientView({ onOpenSubscribe }: { onOpenSubscribe?: () => void
                     <TooltipContent>删除行</TooltipContent>
                   </Tooltip>
                 </div>
-                <div className="flex-1" />
-                <span className="text-[11px] text-muted-foreground">
-                  {selectedTable?.name}
-                </span>
-              </div>
+                  </>
+                }
+                actions={
+                  <span className="text-micro text-muted-foreground">
+                    {selectedTable?.name}
+                  </span>
+                }
+              />
             </TooltipProvider>
 
             <div className="flex min-h-0 flex-1 flex-col">
@@ -347,11 +354,11 @@ export function DbClientView({ onOpenSubscribe }: { onOpenSubscribe?: () => void
           </div>
         )}
 
-        <div className="flex items-center justify-between border-t border-border bg-card px-3.5 py-1 text-[11px] text-muted-foreground">
+        <div className="flex items-center justify-between border-t border-border bg-card px-3.5 py-1 text-micro text-muted-foreground">
           <div className="flex items-center gap-3">
             {activeConn ? (
               <span className="flex items-center gap-1.5">
-                <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
+                <span className="h-1.5 w-1.5 rounded-full bg-success-indicator" />
                 {activeConn.config.name}
                 {activeConn.server_version && ` · ${activeConn.server_version}`}
               </span>
@@ -457,13 +464,14 @@ function QueryTabBar({
   return (
     <div className="flex items-center border-b border-border bg-card">
       {canScrollLeft && (
-        <button
+        <Button
           type="button"
-          className="flex h-full shrink-0 items-center justify-center px-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+          variant="ghost"
+          className="h-full shrink-0 rounded-none px-1 text-muted-foreground hover:text-foreground"
           onClick={() => scroll("left")}
         >
           <ChevronLeft className="h-3.5 w-3.5" />
-        </button>
+        </Button>
       )}
       <div
         ref={scrollRef}
@@ -480,7 +488,7 @@ function QueryTabBar({
             key={tab.id}
             data-active={tab.id === activeTabId}
             className={cn(
-              "group flex shrink-0 items-center gap-1.5 border-r border-border px-3 py-1.5 text-xs cursor-pointer relative",
+              "group flex shrink-0 items-center gap-1.5 border-r border-border px-3 py-1.5 text-caption cursor-pointer relative",
               tab.id === activeTabId
                 ? "bg-background text-foreground"
                 : "text-muted-foreground hover:text-foreground hover:bg-accent",
@@ -491,43 +499,51 @@ function QueryTabBar({
               <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-theme" />
             )}
             <span className="truncate max-w-28">{tab.title}</span>
-            <button
-              className="ml-1 hidden text-muted-foreground hover:text-foreground group-hover:block"
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              aria-label="关闭标签"
+              className="ml-1 hidden h-4 w-4 text-muted-foreground hover:text-foreground group-hover:block"
               onClick={(e) => {
                 e.stopPropagation();
                 onTabClose(tab.id);
               }}
             >
               ×
-            </button>
+            </Button>
           </div>
         ))}
       </div>
       {canScrollRight && (
-        <button
+        <Button
           type="button"
-          className="flex h-full shrink-0 items-center justify-center px-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+          variant="ghost"
+          className="h-full shrink-0 rounded-none px-1 text-muted-foreground hover:text-foreground"
           onClick={() => scroll("right")}
         >
           <ChevronRight className="h-3.5 w-3.5" />
-        </button>
+        </Button>
       )}
-      <button
-        className="flex shrink-0 items-center justify-center px-2 py-1.5 text-muted-foreground hover:text-foreground hover:bg-accent"
+      <Button
+        type="button"
+        variant="ghost"
+        className="h-auto shrink-0 rounded-none px-2 py-1.5 text-muted-foreground hover:text-foreground"
         onClick={onAddTab}
         title="新建查询"
       >
         <Plus className="h-3.5 w-3.5" />
-      </button>
+      </Button>
       <div className="flex-1" />
-      <button
+      <Button
         type="button"
-        className="flex shrink-0 items-center justify-center px-2 py-1.5"
+        variant="ghost"
+        className="h-auto shrink-0 rounded-none px-2 py-1.5"
         onClick={onToggleAgent}
         title={agentPanelCollapsed ? "展开 Mona" : "收起 Mona"}
       >
         {agentLogoNode}
-      </button>
+      </Button>
     </div>
   );
 }

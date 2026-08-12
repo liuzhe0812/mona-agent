@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { RefreshCw, Search, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Input } from "@/components/ui/input";
+import { PageToolbar } from "@/components/ui/page-toolbar";
+import { StatusNotice } from "@/components/ui/status-notice";
 import { useDbStore } from "./store/dbStore";
 import { displayCellValue } from "./types";
 
@@ -86,45 +90,53 @@ export function SlowQueryView() {
 
   if (!selectedConnectionId) {
     return (
-      <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-        请先连接一个数据库
-      </div>
+      <EmptyState className="h-full" title="请先连接一个数据库" />
     );
   }
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center gap-2 border-b border-border bg-card px-3.5 py-2">
-        <Clock className="h-3.5 w-3.5 text-muted-foreground" />
-        <span className="text-[11px] text-muted-foreground">
-          慢查询日志: {enabled === null ? "检测中..." : enabled ? "已开启" : "未开启"}
-        </span>
-        <div className="relative flex-1">
+      <PageToolbar
+        className="h-10 border-b border-border bg-card px-3.5"
+        leading={
+          <>
+            <Clock className="h-3.5 w-3.5 text-muted-foreground" />
+            <span className="shrink-0 text-micro text-muted-foreground">
+              慢查询日志: {enabled === null ? "检测中..." : enabled ? "已开启" : "未开启"}
+            </span>
+          </>
+        }
+        actions={
+          <Button variant="ghost" size="sm" onClick={load} disabled={loading}>
+            <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+            刷新
+          </Button>
+        }
+      >
+        <div className="relative w-full">
           <Search className="absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
-          <input
+          <Input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="搜索 SQL..."
-            className="h-7 w-full rounded-md border border-border bg-background pl-7 pr-2 text-[12px] outline-none focus:border-ring"
+            className="h-7 rounded-full pl-7 pr-2 text-caption"
           />
         </div>
-        <Button variant="ghost" size="sm" onClick={load} disabled={loading}>
-          <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
-          刷新
-        </Button>
-      </div>
+      </PageToolbar>
       <div className="flex-1 overflow-auto">
         {error ? (
-          <div className="p-5 text-sm text-destructive">{error}</div>
+          <StatusNotice tone="danger" className="m-3.5">
+            {error}
+          </StatusNotice>
         ) : (
-          <table className="w-full border-collapse text-[12px]">
+          <table className="w-full border-collapse text-caption">
             <thead>
               <tr>
                 {["时间", "用户@主机", "查询耗时", "锁等待", "扫描行数", "返回行数", "SQL"].map(
                   (h) => (
                     <th
                       key={h}
-                      className="sticky top-0 z-10 bg-muted px-2.5 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground"
+                      className="sticky top-0 z-10 bg-muted px-2.5 py-1.5 text-left text-micro font-semibold uppercase tracking-wider text-muted-foreground"
                     >
                       {h}
                     </th>
@@ -139,33 +151,33 @@ export function SlowQueryView() {
                   className="border-b border-border/50 hover:bg-accent cursor-pointer"
                   onClick={() => setExpandedIdx(expandedIdx === idx ? null : idx)}
                 >
-                  <td className="whitespace-nowrap px-2.5 py-1 text-[11px] text-muted-foreground">
+                  <td className="whitespace-nowrap px-2.5 py-1 text-muted-foreground">
                     {row.start_time}
                   </td>
-                  <td className="max-w-[150px] truncate px-2.5 py-1 text-[11px]">
+                  <td className="max-w-[150px] truncate px-2.5 py-1">
                     {row.user_host}
                   </td>
                   <td className="whitespace-nowrap px-2.5 py-1">
-                    <span className="rounded bg-orange-500/15 px-1 py-0.5 text-[10px] font-medium text-orange-500">
+                    <span className="rounded-xs bg-warning/15 px-1 py-0.5 text-micro font-medium text-warning">
                       {row.query_time}
                     </span>
                   </td>
-                  <td className="whitespace-nowrap px-2.5 py-1 text-[11px] text-muted-foreground">
+                  <td className="whitespace-nowrap px-2.5 py-1 text-muted-foreground">
                     {row.lock_time}
                   </td>
-                  <td className="whitespace-nowrap px-2.5 py-1 text-[11px]">
+                  <td className="whitespace-nowrap px-2.5 py-1 text-right">
                     {row.rows_examined}
                   </td>
-                  <td className="whitespace-nowrap px-2.5 py-1 text-[11px]">
+                  <td className="whitespace-nowrap px-2.5 py-1 text-right">
                     {row.rows_sent}
                   </td>
                   <td className="max-w-[300px] px-2.5 py-1">
                     {expandedIdx === idx ? (
-                      <pre className="whitespace-pre-wrap font-mono text-[11px] text-foreground/80">
+                      <pre className="whitespace-pre-wrap font-mono text-micro text-foreground/80">
                         {row.sql_text}
                       </pre>
                     ) : (
-                      <span className="truncate font-mono text-[11px] text-foreground/70">
+                      <span className="truncate font-mono text-micro text-foreground/70">
                         {row.sql_text}
                       </span>
                     )}
@@ -176,12 +188,12 @@ export function SlowQueryView() {
           </table>
         )}
         {!loading && filtered.length === 0 && !error && (
-          <div className="p-5 text-sm text-muted-foreground">
-            {search ? "没有匹配的慢查询" : "暂无慢查询记录"}
-          </div>
+          <EmptyState
+            title={search ? "没有匹配的慢查询" : "暂无慢查询记录"}
+          />
         )}
       </div>
-      <div className="shrink-0 border-t border-border bg-card px-3.5 py-1 text-[11px] text-muted-foreground">
+      <div className="shrink-0 border-t border-border bg-card px-3.5 py-1 text-micro text-muted-foreground">
         共 {filtered.length} 条慢查询
       </div>
     </div>

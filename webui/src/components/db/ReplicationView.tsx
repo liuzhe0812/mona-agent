@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
+import { PageToolbar } from "@/components/ui/page-toolbar";
+import { StatusNotice } from "@/components/ui/status-notice";
+import { cn } from "@/lib/utils";
 import { useDbStore } from "./store/dbStore";
 import { displayCellValue } from "./types";
 
@@ -74,9 +78,7 @@ export function ReplicationView() {
 
   if (!selectedConnectionId) {
     return (
-      <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-        请先连接一个数据库
-      </div>
+      <EmptyState className="h-full" title="请先连接一个数据库" />
     );
   }
 
@@ -88,71 +90,82 @@ export function ReplicationView() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center gap-2 border-b border-border bg-card px-3.5 py-2">
-        <div className="flex items-center gap-1 rounded-lg border border-border bg-muted p-0.5">
-          <button
-            type="button"
-            onClick={() => setActiveTab("slave")}
-            className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
-              activeTab === "slave"
-                ? "bg-background text-foreground shadow-sm"
-                : "text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            从库状态
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab("master")}
-            className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
-              activeTab === "master"
-                ? "bg-background text-foreground shadow-sm"
-                : "text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            主库状态
-          </button>
-        </div>
-        <Button variant="ghost" size="sm" onClick={load} disabled={loading}>
-          <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
-          刷新
-        </Button>
-      </div>
+      <PageToolbar
+        className="h-10 border-b border-border bg-card px-3.5"
+        leading={
+          <>
+            <div className="flex items-center gap-1 rounded-lg border border-border bg-muted p-0.5">
+              <Button
+                type="button"
+                variant="ghost"
+                size="xs"
+                onClick={() => setActiveTab("slave")}
+                className={cn(
+                  "font-medium",
+                  activeTab === "slave"
+                    ? "bg-background text-foreground shadow-sm hover:bg-background"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                从库状态
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="xs"
+                onClick={() => setActiveTab("master")}
+                className={cn(
+                  "font-medium",
+                  activeTab === "master"
+                    ? "bg-background text-foreground shadow-sm hover:bg-background"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                主库状态
+              </Button>
+            </div>
+            <Button variant="ghost" size="sm" onClick={load} disabled={loading}>
+              <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+              刷新
+            </Button>
+          </>
+        }
+      />
 
       {activeTab === "slave" && slaveRows.length > 0 && (
         <div className="shrink-0 border-b border-border bg-card px-3.5 py-2">
           <div className="flex items-center gap-4">
             <div className="flex items-center gap-2">
-              <span className="text-[11px] text-muted-foreground">IO 线程:</span>
+              <span className="text-micro text-muted-foreground">IO 线程:</span>
               <span
-                className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                className={`rounded-xs px-1.5 py-0.5 text-micro font-medium ${
                   slaveRunning === "Yes"
-                    ? "bg-green-500/15 text-green-500"
-                    : "bg-red-500/15 text-red-500"
+                    ? "bg-success/15 text-success"
+                    : "bg-destructive/15 text-destructive"
                 }`}
               >
                 {slaveRunning ?? "N/A"}
               </span>
             </div>
             <div className="flex items-center gap-2">
-              <span className="text-[11px] text-muted-foreground">SQL 线程:</span>
+              <span className="text-micro text-muted-foreground">SQL 线程:</span>
               <span
-                className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                className={`rounded-xs px-1.5 py-0.5 text-micro font-medium ${
                   slaveSqlRunning === "Yes"
-                    ? "bg-green-500/15 text-green-500"
-                    : "bg-red-500/15 text-red-500"
+                    ? "bg-success/15 text-success"
+                    : "bg-destructive/15 text-destructive"
                 }`}
               >
                 {slaveSqlRunning ?? "N/A"}
               </span>
             </div>
             <div className="flex items-center gap-2">
-              <span className="text-[11px] text-muted-foreground">延迟:</span>
+              <span className="text-micro text-muted-foreground">延迟:</span>
               <span
-                className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                className={`rounded-xs px-1.5 py-0.5 text-micro font-medium ${
                   secondsBehind === "0" || secondsBehind === null
-                    ? "bg-green-500/15 text-green-500"
-                    : "bg-orange-500/15 text-orange-500"
+                    ? "bg-success/15 text-success"
+                    : "bg-warning/15 text-warning"
                 }`}
               >
                 {secondsBehind ?? "N/A"}s
@@ -164,21 +177,25 @@ export function ReplicationView() {
 
       <div className="flex-1 overflow-auto">
         {error ? (
-          <div className="p-5 text-sm text-destructive">{error}</div>
+          <StatusNotice tone="danger" className="m-3.5">
+            {error}
+          </StatusNotice>
         ) : currentRows.length === 0 ? (
-          <div className="p-5 text-sm text-muted-foreground">
-            {activeTab === "master"
-              ? "未配置为主库或无活跃主库状态"
-              : "未配置为从库或无活跃从库状态"}
-          </div>
+          <EmptyState
+            title={
+              activeTab === "master"
+                ? "未配置为主库或无活跃主库状态"
+                : "未配置为从库或无活跃从库状态"
+            }
+          />
         ) : (
-          <table className="w-full border-collapse text-[12px]">
+          <table className="w-full border-collapse text-caption">
             <thead>
               <tr>
-                <th className="sticky top-0 z-10 bg-muted px-3 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                <th className="sticky top-0 z-10 bg-muted px-3 py-1.5 text-left text-micro font-semibold uppercase tracking-wider text-muted-foreground">
                   参数
                 </th>
-                <th className="sticky top-0 z-10 bg-muted px-3 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                <th className="sticky top-0 z-10 bg-muted px-3 py-1.5 text-left text-micro font-semibold uppercase tracking-wider text-muted-foreground">
                   值
                 </th>
               </tr>
@@ -189,10 +206,10 @@ export function ReplicationView() {
                   key={row.key}
                   className="border-b border-border/50 hover:bg-accent"
                 >
-                  <td className="max-w-[300px] truncate px-3 py-1 font-mono text-[11px]">
+                  <td className="max-w-[300px] truncate px-3 py-1 font-mono text-micro">
                     {row.key}
                   </td>
-                  <td className="px-3 py-1 font-mono text-[11px] text-foreground/80">
+                  <td className="px-3 py-1 font-mono text-micro text-foreground/80">
                     {row.value}
                   </td>
                 </tr>
@@ -201,7 +218,7 @@ export function ReplicationView() {
           </table>
         )}
       </div>
-      <div className="shrink-0 border-t border-border bg-card px-3.5 py-1 text-[11px] text-muted-foreground">
+      <div className="shrink-0 border-t border-border bg-card px-3.5 py-1 text-micro text-muted-foreground">
         {activeTab === "master"
           ? `主库状态 ${masterRows.length} 个参数`
           : `从库状态 ${slaveRows.length} 个参数`}

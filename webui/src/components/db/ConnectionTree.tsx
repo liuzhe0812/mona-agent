@@ -26,12 +26,13 @@ import {
   FileCode,
   Eraser,
   Loader2,
-  AlertCircle,
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
+import { StatusNotice } from "@/components/ui/status-notice";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -85,7 +86,7 @@ export function ConnectionTree() {
   return (
     <div className="flex h-full flex-col bg-sidebar text-sidebar-foreground">
       <div className="flex items-center justify-between border-b border-sidebar-border px-3 py-2">
-        <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+        <span className="text-caption font-semibold uppercase tracking-wider text-muted-foreground">
           连接
         </span>
         <div className="flex gap-1">
@@ -100,17 +101,24 @@ export function ConnectionTree() {
         </div>
       </div>
       {connectError && (
-        <div className="mx-2 mt-1 flex items-start gap-1.5 rounded-md border border-destructive/30 bg-destructive/5 px-2 py-1.5 text-[11px] text-destructive">
-          <AlertCircle className="mt-0.5 h-3 w-3 shrink-0" />
-          <span className="flex-1 break-all">{connectError}</span>
-          <button
-            type="button"
-            onClick={() => setConnectError(null)}
-            className="shrink-0 text-destructive/60 hover:text-destructive"
-          >
-            <X className="h-3 w-3" />
-          </button>
-        </div>
+        <StatusNotice
+          tone="danger"
+          className="mx-2 mt-1 p-2 text-caption"
+          action={
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              aria-label="关闭"
+              onClick={() => setConnectError(null)}
+              className="h-5 w-5 text-destructive/60 hover:text-destructive"
+            >
+              <X className="h-3 w-3" />
+            </Button>
+          }
+        >
+          <span className="break-all text-destructive">{connectError}</span>
+        </StatusNotice>
       )}
       <ScrollArea className="flex-1">
         <div className="py-1">
@@ -369,7 +377,7 @@ function DatabaseNode({
                       );
                     })}
                     {folder.children.length === 0 && (
-                      <div className="px-6 py-1 text-xs text-muted-foreground italic">
+                      <div className="px-6 py-1 text-caption text-muted-foreground italic">
                         空
                       </div>
                     )}
@@ -409,12 +417,12 @@ function DatabaseNode({
           <AlertDialogHeader>
             <AlertDialogTitle>删除数据库</AlertDialogTitle>
           </AlertDialogHeader>
-          <p className="text-sm">
+          <p className="text-body">
             确定要删除数据库{" "}
-            <code className="rounded bg-muted px-1 py-0.5 text-[12px]">{node.name}</code>{" "}
+            <code className="rounded bg-muted px-1 py-0.5 text-caption">{node.name}</code>{" "}
             吗？此操作不可撤销，所有数据将被永久删除。
           </p>
-          {dropError && <p className="text-sm text-destructive">{dropError}</p>}
+          {dropError && <p className="text-body text-destructive">{dropError}</p>}
           <AlertDialogFooter>
             <AlertDialogCancel disabled={dropLoading}>取消</AlertDialogCancel>
             <AlertDialogAction
@@ -435,30 +443,30 @@ function DatabaseNode({
           </DialogHeader>
           <div className="space-y-3">
             <div>
-              <label className="mb-1 block text-[11px] font-medium text-muted-foreground">
+              <label className="mb-1 block text-caption font-medium text-muted-foreground">
                 数据库
               </label>
-              <span className="text-[12px]">{node.name}</span>
+              <span className="text-caption">{node.name}</span>
             </div>
             <div>
-              <label className="mb-1 block text-[11px] font-medium text-muted-foreground">
+              <label className="mb-1 block text-caption font-medium text-muted-foreground">
                 表名
               </label>
-              <input
+              <Input
                 value={createTableName}
                 onChange={(e) => setCreateTableName(e.target.value)}
-                className="h-8 w-full rounded-md border border-border bg-background px-2.5 text-[12px] outline-none focus:border-ring"
+                className="h-8 text-caption"
                 placeholder="table_name"
                 onKeyDown={(e) => {
                   if (e.key === "Enter") handleCreateTable();
                 }}
               />
             </div>
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-micro text-muted-foreground">
               将创建包含自增 id 主键的基础表，后续可通过 SQL 修改结构。
             </p>
             {createTableError && (
-              <p className="text-sm text-destructive">{createTableError}</p>
+              <p className="text-body text-destructive">{createTableError}</p>
             )}
           </div>
           <DialogFooter>
@@ -599,7 +607,7 @@ function TableNode({
         <ContextMenuTrigger asChild>
           <div>
             <TreeItem
-              icon={<Table2 className="h-3 w-3 text-blue-400" />}
+              icon={<Table2 className="h-3 w-3 text-info" />}
               label={name}
               onClick={onSelect}
             />
@@ -639,7 +647,7 @@ function TableNode({
               </ContextMenuItem>
               <ContextMenuSeparator />
               <ContextMenuItem
-                className="text-orange-500 focus:text-orange-500"
+                className="text-warning focus:text-warning"
                 onClick={() => setTruncateOpen(true)}
               >
                 <Eraser className="mr-2 h-3.5 w-3.5" />
@@ -663,14 +671,14 @@ function TableNode({
           <AlertDialogHeader>
             <AlertDialogTitle>{isTable ? "删除表" : "删除视图"}</AlertDialogTitle>
           </AlertDialogHeader>
-          <p className="text-sm">
+          <p className="text-body">
             确定要删除{isTable ? "表" : "视图"}{" "}
-            <code className="rounded bg-muted px-1 py-0.5 text-[12px]">
+            <code className="rounded bg-muted px-1 py-0.5 text-caption">
               {dbName}.{name}
             </code>{" "}
             吗？此操作不可撤销。
           </p>
-          {actionError && <p className="text-sm text-destructive">{actionError}</p>}
+          {actionError && <p className="text-body text-destructive">{actionError}</p>}
           <AlertDialogFooter>
             <AlertDialogCancel disabled={actionLoading}>取消</AlertDialogCancel>
             <AlertDialogAction
@@ -689,20 +697,20 @@ function TableNode({
           <AlertDialogHeader>
             <AlertDialogTitle>清空表</AlertDialogTitle>
           </AlertDialogHeader>
-          <p className="text-sm">
+          <p className="text-body">
             确定要清空表{" "}
-            <code className="rounded bg-muted px-1 py-0.5 text-[12px]">
+            <code className="rounded bg-muted px-1 py-0.5 text-caption">
               {dbName}.{name}
             </code>{" "}
             的所有数据吗？此操作不可撤销。
           </p>
-          {actionError && <p className="text-sm text-destructive">{actionError}</p>}
+          {actionError && <p className="text-body text-destructive">{actionError}</p>}
           <AlertDialogFooter>
             <AlertDialogCancel disabled={actionLoading}>取消</AlertDialogCancel>
             <AlertDialogAction
               disabled={actionLoading}
               onClick={handleTruncateTable}
-              className="bg-orange-500 text-white hover:bg-orange-600"
+              className="border border-warning/40 bg-warning/10 text-warning hover:bg-warning/20"
             >
               {actionLoading ? "清空中..." : "清空"}
             </AlertDialogAction>
@@ -802,7 +810,7 @@ function TreeItem({
     <div>
       <div
         className={cn(
-          "flex items-center gap-1.5 px-3 py-1 cursor-pointer hover:bg-sidebar-accent group",
+          "flex items-center gap-1.5 px-3 py-1 cursor-pointer hover:bg-accent group",
           !hasChildren && "pl-5",
         )}
         onClick={() => {
@@ -821,31 +829,34 @@ function TreeItem({
           />
         )}
         <span className="shrink-0">{icon}</span>
-        <span className="flex-1 truncate text-[13px]">{label}</span>
+        <span className="flex-1 truncate text-ui">{label}</span>
         {actions && (
           <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
             {actions.map((action, i) => (
-              <button
+              <Button
                 key={i}
-                className="flex h-5 w-5 items-center justify-center rounded hover:bg-sidebar-accent text-muted-foreground hover:text-sidebar-accent-foreground"
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-5 w-5 text-muted-foreground hover:text-foreground"
                 onClick={(e) => {
                   e.stopPropagation();
                   action.onClick();
                 }}
               >
                 {action.icon}
-              </button>
+              </Button>
             ))}
           </div>
         )}
         {badge && (
           <span
             className={cn(
-              "shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium",
+              "shrink-0 rounded-full px-1.5 py-0.5 text-micro font-medium",
               badgeVariant === "success"
-                ? "bg-green-500/15 text-green-500"
+                ? "bg-success/15 text-success"
                 : badgeVariant === "warning"
-                  ? "bg-amber-500/15 text-amber-500"
+                  ? "bg-warning/15 text-warning"
                   : "bg-muted text-muted-foreground",
             )}
           >

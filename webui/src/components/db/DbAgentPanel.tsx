@@ -2,10 +2,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2, RotateCcw, Send, Square, Zap, AlertTriangle } from "lucide-react";
 import { AgentLogo } from "@/components/AgentLogo";
 import { ThreadMessages } from "@/components/thread/ThreadMessages";
+import { Button } from "@/components/ui/button";
+import { StatusNotice } from "@/components/ui/status-notice";
+import { Textarea } from "@/components/ui/textarea";
 import { useMonaStream, type SendOptions } from "@/hooks/useMonaStream";
 import { useSessionHistory } from "@/hooks/useSessions";
 import { isTauri } from "@/lib/tauri";
 import type { UIMessage } from "@/lib/types";
+import { cn } from "@/lib/utils";
 import { useClient } from "@/providers/ClientProvider";
 import { useDbStore } from "./store/dbStore";
 import type { DbSqlDraft } from "./types";
@@ -220,23 +224,25 @@ export function DbAgentPanel({
     >
       <div className="flex h-10 shrink-0 items-center justify-between border-b border-border/65 px-3">
         <div className="flex min-w-0 items-center gap-2">
-          <h2 className="truncate text-[12px] font-semibold text-foreground">Mona</h2>
+          <h2 className="truncate text-caption font-semibold text-foreground">Mona</h2>
         </div>
         <div className="flex items-center gap-1">
           {notice ? (
-            <span className="max-w-28 truncate text-[10px] text-muted-foreground">{notice}</span>
+            <span className="max-w-28 truncate text-micro text-muted-foreground">{notice}</span>
           ) : null}
           {chatId ? (
-            <button
+            <Button
               type="button"
+              variant="ghost"
+              size="icon"
               aria-label="重置会话"
               title="重置会话"
               disabled={isStreaming || creatingChat}
               onClick={handleResetChat}
-              className="grid h-6 w-6 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+              className="h-6 w-6 text-muted-foreground hover:text-foreground"
             >
               <RotateCcw className="h-3.5 w-3.5" />
-            </button>
+            </Button>
           ) : null}
         </div>
       </div>
@@ -260,7 +266,7 @@ export function DbAgentPanel({
             />
           ) : null}
           {!hasSql && !hasError ? (
-            <p className="px-1 py-1 text-[10.5px] text-muted-foreground">
+            <p className="px-1 py-1 text-micro text-muted-foreground">
               打开 SQL 或执行出错时，这里会出现对应的快捷分析动作。
             </p>
           ) : null}
@@ -298,7 +304,7 @@ export function DbAgentPanel({
 
       <div className="shrink-0 p-2">
         <div className="flex min-h-[52px] items-end gap-1.5 rounded-xl border border-border/75 bg-background px-2.5 py-1.5 shadow-sm">
-          <textarea
+          <Textarea
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {
@@ -308,21 +314,24 @@ export function DbAgentPanel({
               }
             }}
             disabled={!activeTab?.connectionId || creatingChat}
-            className="min-h-[44px] flex-1 resize-none bg-transparent text-[12px] leading-5 outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
+            className="min-h-[44px] flex-1 resize-none border-0 bg-transparent px-0 py-0 text-caption leading-5 shadow-none focus-visible:ring-0 disabled:cursor-not-allowed disabled:opacity-60"
             rows={2}
             placeholder="描述想查的数据或想做的分析..."
           />
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="icon"
             aria-label={isStreaming ? "停止生成" : "发送"}
             title={isStreaming ? "停止生成" : "发送消息"}
             disabled={!isStreaming && (!activeTab?.connectionId || !draft.trim() || creatingChat)}
             onClick={isStreaming ? stop : sendDraft}
-            className={`grid h-6 w-6 shrink-0 place-items-center rounded-lg transition-colors ${
+            className={cn(
+              "h-6 w-6 shrink-0 rounded-lg",
               isStreaming
-                ? "text-destructive hover:bg-destructive/10"
-                : "bg-foreground text-background hover:bg-foreground/90 disabled:bg-muted disabled:text-muted-foreground"
-            }`}
+                ? "text-destructive hover:bg-destructive/10 hover:text-destructive"
+                : "bg-foreground text-background hover:bg-foreground/90 hover:text-background disabled:bg-muted disabled:text-muted-foreground",
+            )}
           >
             {creatingChat ? (
               <Loader2 className="h-3 w-3 animate-spin" />
@@ -331,7 +340,7 @@ export function DbAgentPanel({
             ) : (
               <Send className="h-3 w-3" />
             )}
-          </button>
+          </Button>
         </div>
       </div>
     </aside>
@@ -350,15 +359,16 @@ function ContextActionButton({
   onClick: () => void;
 }) {
   return (
-    <button
+    <Button
       type="button"
+      variant="outline"
       disabled={disabled}
       onClick={onClick}
-      className="inline-flex h-7 items-center gap-1.5 rounded-md border border-border/70 bg-background px-2 text-[11px] font-medium text-foreground/82 transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+      className="h-7 gap-1.5 rounded-md border-border/70 px-2 text-micro text-foreground/82"
     >
       {icon}
       <span className="max-w-[140px] truncate">{label}</span>
-    </button>
+    </Button>
   );
 }
 
@@ -410,7 +420,7 @@ function DbChat({
 
 function AssistantHint({ text, loading = false }: { text: string; loading?: boolean }) {
   return (
-    <p className="text-center text-xs text-muted-foreground py-8">
+    <p className="py-8 text-center text-caption text-muted-foreground">
       <span className="inline-flex items-center gap-2">
         {loading ? (
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -431,17 +441,24 @@ function InlineNotice({
   onClose?: () => void;
 }) {
   return (
-    <div className="flex items-start gap-2 rounded-lg border border-border/70 bg-background px-3 py-2 text-xs leading-relaxed text-muted-foreground">
-      <span className="min-w-0 flex-1">{children}</span>
-      {onClose ? (
-        <button
-          type="button"
-          onClick={onClose}
-          className="shrink-0 text-foreground/65 hover:text-foreground"
-        >
-          关闭
-        </button>
-      ) : null}
-    </div>
+    <StatusNotice
+      tone="danger"
+      className="text-caption"
+      action={
+        onClose ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="xs"
+            onClick={onClose}
+            className="h-auto px-1 py-0 text-foreground/65 hover:bg-transparent hover:text-foreground"
+          >
+            关闭
+          </Button>
+        ) : undefined
+      }
+    >
+      {children}
+    </StatusNotice>
   );
 }

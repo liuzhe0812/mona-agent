@@ -5,6 +5,7 @@ import { sql } from "@codemirror/lang-sql";
 import { oneDark } from "@codemirror/theme-one-dark";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { useDbStore } from "./store/dbStore";
+import { EmptyState } from "@/components/ui/empty-state";
 
 const customTheme = EditorView.theme({
   "&": {
@@ -123,16 +124,14 @@ export function SqlEditor() {
 
   if (!activeTab) {
     return (
-      <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-        选择或新建一个查询标签
-      </div>
+      <EmptyState className="h-full" title="选择或新建一个查询标签" />
     );
   }
 
   return (
     <div className="flex h-full flex-col">
       <div ref={editorRef} className="flex-1 overflow-hidden" />
-      <div className="flex items-center justify-between border-t border-border bg-card px-3.5 py-1 text-[11px] text-muted-foreground">
+      <div className="flex items-center justify-between border-t border-border bg-card px-3.5 py-1 text-micro text-muted-foreground">
         <span>Ctrl+Enter 执行</span>
         <span>UTF-8 | SQL</span>
       </div>

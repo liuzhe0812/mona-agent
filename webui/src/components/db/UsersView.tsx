@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { Plus, RefreshCw, Shield, Trash2, Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Input } from "@/components/ui/input";
+import { PageToolbar } from "@/components/ui/page-toolbar";
+import { StatusNotice } from "@/components/ui/status-notice";
 import {
   Dialog,
   DialogContent,
@@ -89,36 +93,39 @@ export function UsersView() {
 
   if (!selectedConnectionId) {
     return (
-      <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-        请先连接一个数据库
-      </div>
+      <EmptyState className="h-full" title="请先连接一个数据库" />
     );
   }
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center gap-2 border-b border-border bg-card px-3.5 py-2">
-        <Button variant="ghost" size="sm" onClick={() => setCreateOpen(true)}>
-          <Plus className="mr-1.5 h-3.5 w-3.5" />
-          新建用户
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => refreshUsers(selectedConnectionId)}
-        >
-          <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
-          刷新
-        </Button>
-      </div>
+      <PageToolbar
+        className="h-10 border-b border-border bg-card px-3.5"
+        leading={
+          <>
+            <Button variant="ghost" size="sm" onClick={() => setCreateOpen(true)}>
+              <Plus className="mr-1.5 h-3.5 w-3.5" />
+              新建用户
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => refreshUsers(selectedConnectionId)}
+            >
+              <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+              刷新
+            </Button>
+          </>
+        }
+      />
       <div className="flex-1 overflow-auto">
-        <table className="w-full border-collapse text-[12px]">
+        <table className="w-full border-collapse text-caption">
           <thead>
             <tr>
               {["用户名", "主机", "密码过期", "账户锁定", "操作"].map((h) => (
                 <th
                   key={h}
-                  className="sticky top-0 z-10 bg-muted px-2.5 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground"
+                  className="sticky top-0 z-10 bg-muted px-2.5 py-1.5 text-left text-micro font-semibold uppercase tracking-wider text-muted-foreground"
                 >
                   {h}
                 </th>
@@ -135,10 +142,10 @@ export function UsersView() {
                 <td className="px-2.5 py-1 text-muted-foreground">{user.host}</td>
                 <td className="px-2.5 py-1">
                   <span
-                    className={`rounded px-1 py-0.5 text-[10px] font-medium ${
+                    className={`rounded-xs px-1 py-0.5 text-micro font-medium ${
                       user.password_expired
-                        ? "bg-orange-500/15 text-orange-500"
-                        : "bg-green-500/15 text-green-500"
+                        ? "bg-warning/15 text-warning"
+                        : "bg-success/15 text-success"
                     }`}
                   >
                     {user.password_expired ? "是" : "否"}
@@ -146,10 +153,10 @@ export function UsersView() {
                 </td>
                 <td className="px-2.5 py-1">
                   <span
-                    className={`rounded px-1 py-0.5 text-[10px] font-medium ${
+                    className={`rounded-xs px-1 py-0.5 text-micro font-medium ${
                       user.account_locked
-                        ? "bg-red-500/15 text-red-500"
-                        : "bg-green-500/15 text-green-500"
+                        ? "bg-destructive/15 text-destructive"
+                        : "bg-success/15 text-success"
                     }`}
                   >
                     {user.account_locked ? "是" : "否"}
@@ -159,8 +166,7 @@ export function UsersView() {
                   <div className="flex gap-1">
                     <Button
                       variant="ghost"
-                      size="sm"
-                      className="h-6 text-xs"
+                      size="xs"
                       onClick={() => handleShowGrants(user.username, user.host)}
                     >
                       <Eye className="mr-1 h-3 w-3" />
@@ -169,8 +175,8 @@ export function UsersView() {
                     {user.username !== "root" && (
                       <Button
                         variant="ghost"
-                        size="sm"
-                        className="h-6 text-xs text-destructive hover:text-destructive"
+                        size="xs"
+                        className="text-destructive hover:text-destructive"
                         onClick={() =>
                           setDeleteTarget({
                             username: user.username,
@@ -189,7 +195,7 @@ export function UsersView() {
           </tbody>
         </table>
         {users.length === 0 && (
-          <div className="p-5 text-sm text-muted-foreground">暂无用户数据</div>
+          <EmptyState title="暂无用户数据" />
         )}
       </div>
 
@@ -213,15 +219,15 @@ export function UsersView() {
           <DialogHeader>
             <DialogTitle>删除用户</DialogTitle>
           </DialogHeader>
-          <p className="text-sm">
+          <p className="text-body">
             确定要删除用户{" "}
-            <code className="rounded bg-muted px-1 py-0.5 text-[12px]">
+            <code className="rounded-xs bg-muted px-1 py-0.5 text-caption">
               {deleteTarget?.username}@{deleteTarget?.host}
             </code>{" "}
             吗？此操作不可撤销。
           </p>
           {actionError && (
-            <p className="text-sm text-destructive">{actionError}</p>
+            <StatusNotice tone="danger">{actionError}</StatusNotice>
           )}
           <DialogFooter>
             <Button
@@ -265,19 +271,19 @@ export function UsersView() {
           </DialogHeader>
           <div className="max-h-[400px] overflow-auto">
             {grantsLoading ? (
-              <p className="text-sm text-muted-foreground">加载中...</p>
+              <p className="text-body text-muted-foreground">加载中...</p>
             ) : (
               <div className="space-y-2">
                 {grants.map((g, i) => (
                   <div
                     key={i}
-                    className="rounded-lg border border-border/70 bg-muted/25 px-3 py-2 font-mono text-[11px] leading-5"
+                    className="rounded-lg border border-border/70 bg-muted/25 px-3 py-2 font-mono text-micro leading-5"
                   >
                     {g}
                   </div>
                 ))}
                 {grants.length === 0 && (
-                  <p className="text-sm text-muted-foreground">无权限信息</p>
+                  <p className="text-body text-muted-foreground">无权限信息</p>
                 )}
               </div>
             )}
@@ -337,40 +343,37 @@ function CreateUserDialog({
         </DialogHeader>
         <div className="space-y-3">
           <div>
-            <label className="mb-1 block text-[11px] font-medium text-muted-foreground">
+            <label className="mb-1 block text-micro font-medium text-muted-foreground">
               用户名
             </label>
-            <input
+            <Input
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              className="h-8 w-full rounded-md border border-border bg-background px-2.5 text-[12px] outline-none focus:border-ring"
               placeholder="username"
             />
           </div>
           <div>
-            <label className="mb-1 block text-[11px] font-medium text-muted-foreground">
+            <label className="mb-1 block text-micro font-medium text-muted-foreground">
               主机
             </label>
-            <input
+            <Input
               value={host}
               onChange={(e) => setHost(e.target.value)}
-              className="h-8 w-full rounded-md border border-border bg-background px-2.5 text-[12px] outline-none focus:border-ring"
               placeholder="% 表示任意主机"
             />
           </div>
           <div>
-            <label className="mb-1 block text-[11px] font-medium text-muted-foreground">
+            <label className="mb-1 block text-micro font-medium text-muted-foreground">
               密码
             </label>
-            <input
+            <Input
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="h-8 w-full rounded-md border border-border bg-background px-2.5 text-[12px] outline-none focus:border-ring"
               placeholder="可选"
             />
           </div>
-          {error && <p className="text-sm text-destructive">{error}</p>}
+          {error && <StatusNotice tone="danger">{error}</StatusNotice>}
         </div>
         <DialogFooter>
           <Button
