@@ -1827,7 +1827,7 @@ function Shell({
               {view === "profile" && (
                 <div className={cn("absolute inset-0 flex flex-col", isBrowserTabActive && "hidden")}>
                   <Suspense fallback={<ModuleLoading title="正在打开用户画像" />}>
-                    <ProfileView />
+                    <ProfileView onAskMona={onTriggerAgent} />
                   </Suspense>
                 </div>
               )}

@@ -55,6 +55,9 @@ class ProfileTask(DistillTask):
             "sessions": session_stats.to_dict(),
             "user_prior": user_prior,
             "prev_trajectory": prev_trajectory,
+            # 历史痛点/开放问题（存在 profile 子键下），供 LLM 继承与更新 last_seen
+            "prev_pain_points": rich.get("profile", {}).get("pain_points", []),
+            "prev_open_questions": rich.get("profile", {}).get("open_questions", []),
         }
 
     async def distill(
@@ -86,6 +89,8 @@ class ProfileTask(DistillTask):
                 work_patterns=work_patterns,
                 sessions=sessions,
                 user_prior=user_prior,
+                prev_pain_points=data.get("prev_pain_points", []),
+                prev_open_questions=data.get("prev_open_questions", []),
             )
         except Exception as e:
             return DistillResult(
@@ -255,6 +260,9 @@ def _rule_based_profile(data: dict[str, Any]) -> dict[str, Any]:
         },
         "tech_stack": [{"area": "detected", "items": keywords}],
         "interests": keywords,
+        # 规则降级无法可靠推断痛点，置空（禁止编造）
+        "pain_points": [],
+        "open_questions": [],
         "knowledge_structure": {
             "deep_areas": [n["notebook"] for n in notes.get("notebook_distribution", [])[:3]],
             "exploring_areas": [],
@@ -316,6 +324,11 @@ def _format_profile_markdown(data: dict[str, Any]) -> str:
     if interests:
         sentences.append(f"关注领域：{'、'.join(interests[:5])}")
 
+    # 近期痛点：只注入 6 个月内仍有信号的，过期的自然降权不写入 USER.md
+    pain_topics = _fresh_pain_topics(data.get("pain_points") or [], max_age_months=6)
+    if pain_topics:
+        sentences.append(f"近期反复困扰的问题：{'；'.join(pain_topics[:3])}")
+
     # 协作关系
     rel = data.get("relationships", {})
     contacts = rel.get("frequent_contacts") or []
@@ -343,6 +356,38 @@ def _format_profile_markdown(data: dict[str, Any]) -> str:
     if not sentences:
         return "(insufficient data)"
     return "。".join(sentences) + "。"
+
+
+def _fresh_pain_topics(
+    pain_points: list[dict[str, Any]], max_age_months: int
+) -> list[str]:
+    """提取仍在保鲜期内的痛点 topic。
+
+    last_seen 为 YYYY-MM；超过 max_age_months 未再出现的痛点视为已过期，
+    保留在 rich.json 中供前端展示，但不再注入 agent 上下文。
+    """
+    from datetime import datetime
+
+    now = datetime.now()
+    current = now.year * 12 + now.month
+    topics: list[str] = []
+    for p in pain_points:
+        if not isinstance(p, dict):
+            continue
+        topic = (p.get("topic") or "").strip()
+        if not topic:
+            continue
+        last_seen = (p.get("last_seen") or "").strip()
+        try:
+            year, month = last_seen.split("-")
+            seen = int(year) * 12 + int(month)
+        except (ValueError, AttributeError):
+            # 无有效时间戳时保守保留（由 LLM 每轮继承机制负责淘汰）
+            topics.append(topic)
+            continue
+        if current - seen <= max_age_months:
+            topics.append(topic)
+    return topics
 
 
 def _build_focus_extra(

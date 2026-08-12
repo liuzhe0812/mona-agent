@@ -61,7 +61,7 @@ _TECH_AREA_MAP: dict[str, str] = {
     "vim": "tools", "vscode": "tools", "命令行": "tools",
     "windows": "tools", "macos": "tools",
     # learning / depth
-    "蒸馏": "learning", "画像": "learning",
+    "学习": "learning", "阅读": "learning", "教程": "learning",
     "模型": "depth", "降级": "depth",
     "提示词": "depth", "模板": "depth",
     "知识库": "depth", "笔记": "depth",
@@ -126,8 +126,9 @@ def compute_radar_scores(
     # Creativity boost from diverse notebooks
     signals["creativity"] += min(len(notebook_dist) * 5, 25)
 
-    # Normalize to 0-100 with soft cap
-    max_signal = max(max(signals.values()) if signals else 1, 30)
+    # Normalize to absolute 0-100 score (zero signal = zero)
+    # Scaling: ~300 raw signal → 100 (roughly: 10 deep notes in a topic)
+    absolute_max = 300
     results: list[dict[str, Any]] = []
     axis_labels = {
         "architecture": "架构",
@@ -141,8 +142,8 @@ def compute_radar_scores(
     }
     for key in RADAR_AXES:
         raw = signals.get(key, 0)
-        # Logarithmic scaling to avoid extreme values
-        score = min(100, round(20 + (raw / max_signal) * 70 + min(raw, 10)))
+        # Linear absolute scaling; cross-week comparable
+        score = min(100, round((raw / absolute_max) * 100))
         results.append({
             "axis": axis_labels[key],
             "key": key,
@@ -463,58 +464,3 @@ def get_previous_snapshot(
         return prev[-1] if prev else None
     return snapshots[-1] if len(snapshots) >= 2 else None
 
-
-def compute_active_heatmap(
-    work_patterns: dict[str, Any] | None,
-) -> list[list[int]]:
-    """Build 7×24 activity heatmap (rows=days, cols=hours).
-
-    Returns [[0,0,0,...24],...7 rows] with activity counts.
-    """
-    # 7 days × 24 hours
-    grid = [[0] * 24 for _ in range(7)]
-
-    if not work_patterns:
-        return grid
-
-    evidence = work_patterns.get("evidence", {})
-    hourly = evidence.get("hourly_distribution", {})
-    # If only hourly data, apply to all days equally
-    for hour_str, count in hourly.items():
-        try:
-            h = int(hour_str)
-            if 0 <= h < 24:
-                for day in range(7):
-                    grid[day][h] += count // 7 or (1 if count > 0 else 0)
-        except (ValueError, TypeError):
-            continue
-
-    return grid
-
-
-def compute_ai_collaboration_index(
-    work_patterns: dict[str, Any] | None,
-) -> dict[str, Any]:
-    """Compute AI collaboration index (active vs autonomous).
-
-    Returns {"active_seek": 40, "autonomous": 60, "label": "主动求助"}
-    """
-    if not work_patterns:
-        return {"active_seek": 0, "autonomous": 100, "label": "独立完成"}
-
-    # Heuristic: count tool calls that are AI-initiated vs user-initiated
-    # For now, use tool diversity as proxy
-    preferred = work_patterns.get("preferred_tools", [])
-    tool_diversity = len(preferred)
-
-    # If user uses many different tools, they're more autonomous
-    active_seek = max(20, min(80, 100 - tool_diversity * 8))
-    autonomous = 100 - active_seek
-
-    label = "主动求助" if active_seek > 50 else "混合模式" if active_seek > 30 else "独立完成"
-
-    return {
-        "active_seek": active_seek,
-        "autonomous": autonomous,
-        "label": label,
-    }

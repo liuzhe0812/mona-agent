@@ -34,7 +34,12 @@ function formatTimestamp(ts: string | null | undefined): string {
   }
 }
 
-export function ProfileView() {
+interface ProfileViewProps {
+  /** 带着上下文提示词开启一个 Mona 会话（画像洞察的行动出口）。 */
+  onAskMona?: (prompt: string) => void;
+}
+
+export function ProfileView({ onAskMona }: ProfileViewProps) {
   const [data, setData] = useState<RichProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -150,6 +155,7 @@ export function ProfileView() {
           <ProfileTab
             data={data?.profile}
             loading={loading}
+            onAskMona={onAskMona}
           />
         </TabsContent>
         <TabsContent value="trajectory" className="mt-0 h-full overflow-auto p-4">

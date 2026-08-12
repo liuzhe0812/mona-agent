@@ -14,10 +14,8 @@ from typing import Any
 from loguru import logger
 
 from mona.distill.base import DistillContext, DistillResult
-from mona.distill.tasks.work_pattern import WorkPatternTask
 from mona.distill.tasks.profile import ProfileTask
-from mona.distill.store import read_rich_profile
-
+from mona.distill.tasks.work_pattern import WorkPatternTask
 
 # Distill job IDs (must be stable across runs for idempotent registration)
 JOB_WORK_PATTERN = "distill-work-pattern"

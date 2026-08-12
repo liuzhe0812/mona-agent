@@ -186,7 +186,8 @@ async def _call_llm(ctx: DistillContext, prompt: str) -> str:
         messages=messages,
         model=ctx.model_name or None,
         temperature=0.3,
-        max_tokens=1024,
+        # profile schema 含 pain_points/open_questions，需要更大输出空间
+        max_tokens=2048,
     )
     # LLMResponse has .content attribute
     return response.content or ""

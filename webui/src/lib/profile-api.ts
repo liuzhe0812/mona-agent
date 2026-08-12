@@ -47,6 +47,8 @@ export interface ProfileData {
   };
   tech_stack?: { area: string; items: string[] }[];
   interests?: string[];
+  pain_points?: PainPoint[];
+  open_questions?: string[];
   knowledge_structure?: {
     deep_areas?: string[];
     exploring_areas?: string[];
@@ -91,6 +93,14 @@ export interface RadarScore {
   key: string;
   value: number;
   raw_signal?: number;
+}
+
+/** 用户反复纠结/卡住的问题（由蒸馏 LLM 从对话提炼，带新鲜度）。 */
+export interface PainPoint {
+  topic: string;
+  detail?: string;
+  /** 最后一次出现该信号的月份，格式 YYYY-MM */
+  last_seen?: string;
 }
 
 export interface SkillItem {

@@ -118,22 +118,22 @@ export function TrajectoryTab({ data, loading }: TrajectoryTabProps) {
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-3">
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
-        <MetricCard icon={<TrendingUp className="h-5 w-5" />} label="当前评分" value={`${currentScore} /100`} hint={hasComparison ? `较上期 ${delta >= 0 ? "+" : ""}${delta} 分` : "暂无对比"} color={PROFILE_COLORS.emerald} />
-        <MetricCard icon={<Rocket className="h-5 w-5" />} label="本期提升" value={hasComparison ? `${delta >= 0 ? "+" : ""}${delta}` : "—"} hint={hasComparison ? "综合能力变化" : "需两次蒸馏"} color={PROFILE_COLORS.amber} />
+        <MetricCard icon={<TrendingUp className="h-5 w-5" />} label="当前投入度" value={`${currentScore} /100`} hint={hasComparison ? `较上期 ${delta >= 0 ? "+" : ""}${delta}` : "暂无对比"} color={PROFILE_COLORS.emerald} />
+        <MetricCard icon={<Rocket className="h-5 w-5" />} label="本期变化" value={hasComparison ? `${delta >= 0 ? "+" : ""}${delta}` : "—"} hint={hasComparison ? "话题投入度变化" : "需两次蒸馏"} color={PROFILE_COLORS.amber} />
         <MetricCard icon={<Sparkles className="h-5 w-5" />} label="新增技能" value={newSkills.length} hint="本期新增掌握的技能点" color={PROFILE_COLORS.cyan} />
         <MetricCard icon={<Crown className="h-5 w-5" />} label="里程碑" value={milestoneCount} hint="达成重要里程碑" color={PROFILE_COLORS.amber} />
       </div>
 
       <div className="grid grid-cols-1 gap-3 xl:grid-cols-[1fr_1.25fr_320px]">
         <Panel className="p-4">
-          <SectionTitle icon={<Sparkles className="h-4 w-4" />} title="能力对比" hint={hasComparison ? "本期 vs 上期" : "仅本期"} color={PROFILE_COLORS.emerald} />
+          <SectionTitle icon={<Sparkles className="h-4 w-4" />} title="投入分布对比" hint={hasComparison ? "本期 vs 上期" : "仅本期"} color={PROFILE_COLORS.emerald} />
           <div className="flex justify-center">
             <RadarChart current={currentRadar} previous={previousRadar.length > 0 ? previousRadar : undefined} size={330} />
           </div>
           <p className="mt-2 text-center text-xs text-muted-foreground">
             {hasComparison && fastest.length > 0
-              ? <>多个维度提升，尤其在 <span className="text-emerald-600">{fastest[0].skill}</span> 方面进步明显</>
-              : "蒸馏两次后可查看能力对比"}
+              ? <>多个话题投入上升，尤其 <span className="text-emerald-600">{fastest[0].skill}</span> 增幅明显</>
+              : "蒸馏两次后可查看投入分布对比"}
           </p>
         </Panel>
 
@@ -152,7 +152,7 @@ export function TrajectoryTab({ data, loading }: TrajectoryTabProps) {
         <div className="grid gap-3">
           <Panel className="p-4">
             <SectionTitle icon={<BookOpen className="h-4 w-4" />} title="本期变化" color={PROFILE_COLORS.emerald} />
-            <SummaryRow label="综合评分变化" value={hasComparison ? `${delta >= 0 ? "+" : ""}${delta} 分` : "—"} />
+            <SummaryRow label="投入度变化" value={hasComparison ? `${delta >= 0 ? "+" : ""}${delta}` : "—"} />
             <SummaryRow label="月度记录" value={`${monthCount} 个月`} />
             <SummaryRow label="新增技能点" value={`${newSkills.length} 个`} />
             <SummaryRow label="累计笔记" value={`${totalNotes} 篇`} />

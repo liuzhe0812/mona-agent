@@ -88,19 +88,30 @@ def collect_email_stats(top_n: int = 15) -> EmailStats:
         if stats.total_emails == 0:
             return stats
 
-        # Top senders (by address, prefer display name)
+        # Own addresses (from configured accounts) — excluded from top senders
+        own_addresses = {
+            (r[0] or "").strip().lower()
+            for r in conn.execute("SELECT from_address FROM accounts").fetchall()
+            if r[0]
+        }
+
+        # Top senders (by address, prefer display name; skip self)
         sender_rows = conn.execute(
             "SELECT from_address, from_name, COUNT(*) AS c "
             "FROM messages GROUP BY from_address ORDER BY c DESC LIMIT ?",
-            (top_n,),
+            (top_n + len(own_addresses),),
         ).fetchall()
         seen_addresses: set[str] = set()
         for addr, name, count in sender_rows:
             if not addr or addr in seen_addresses:
                 continue
+            if addr.strip().lower() in own_addresses:
+                continue
             seen_addresses.add(addr)
             label = name.strip() if name and name.strip() else addr
             stats.top_senders.append({"sender": label, "address": addr, "count": count})
+            if len(stats.top_senders) >= top_n:
+                break
 
         stats.total_senders = conn.execute(
             "SELECT COUNT(DISTINCT from_address) FROM messages"
