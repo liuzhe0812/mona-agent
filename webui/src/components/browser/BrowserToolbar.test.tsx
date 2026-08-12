@@ -44,6 +44,23 @@ vi.mock("@/lib/browser-ipc", () => ({
 
 describe("BrowserToolbar", () => {
   beforeEach(() => {
+    // 组件 useEffect 通过动态 import("@tauri-apps/api/event") 注册下载监听；
+    // 动态 import 的外部化模块可能绕过 vi.mock，此时真实 listen 需要
+    // window.__TAURI_INTERNALS__ 存在，否则会抛 unhandled rejection。
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {
+      value: {
+        transformCallback: () => 0,
+        unregisterListener: () => {},
+        invoke: vi.fn().mockResolvedValue(0),
+      },
+      configurable: true,
+      writable: true,
+    });
+    Object.defineProperty(window, "__TAURI_EVENT_PLUGIN_INTERNALS__", {
+      value: { unregisterListener: () => {} },
+      configurable: true,
+      writable: true,
+    });
     menuNew.mockClear();
     popup.mockClear();
     close.mockClear();
@@ -53,7 +70,7 @@ describe("BrowserToolbar", () => {
     toggleDownloads.mockClear();
   });
 
-  it("uses a native window for address suggestions", async () => {
+  it("renders address suggestions inline instead of a native window", async () => {
     vi.useFakeTimers();
     try {
       const suggestion = {
@@ -65,14 +82,6 @@ describe("BrowserToolbar", () => {
       };
       const { browserSearchSuggestions } = await import("@/lib/browser-ipc");
       vi.mocked(browserSearchSuggestions).mockResolvedValueOnce([suggestion]);
-      vi.spyOn(HTMLInputElement.prototype, "getBoundingClientRect").mockReturnValue({
-        left: 120,
-        top: 20,
-        right: 720,
-        bottom: 44,
-        width: 600,
-        height: 24,
-      } as DOMRect);
 
       render(
         <BrowserToolbar
@@ -95,13 +104,9 @@ describe("BrowserToolbar", () => {
       });
       await act(async () => vi.advanceTimersByTimeAsync(200));
 
-      expect(showAddressSuggestions).toHaveBeenCalledWith(expect.objectContaining({
-        left: 120,
-        top: 48,
-        width: 600,
-        suggestions: [suggestion],
-      }));
-      expect(screen.queryByText("Example article")).toBeNull();
+      // 地址建议通过内联浮层渲染，不再调用原生窗口 IPC
+      expect(showAddressSuggestions).not.toHaveBeenCalled();
+      expect(screen.getByText("Example article")).toBeTruthy();
     } finally {
       vi.useRealTimers();
     }

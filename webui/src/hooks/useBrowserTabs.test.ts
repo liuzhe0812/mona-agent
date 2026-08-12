@@ -33,9 +33,9 @@ describe("mergeServerTabs", () => {
 });
 
 describe("browser session persistence", () => {
-  it("is disabled in development so dev never reopens production tabs", () => {
+  it("is disabled in every environment", () => {
     expect(shouldPersistBrowserSession(true)).toBe(false);
-    expect(shouldPersistBrowserSession(false)).toBe(true);
+    expect(shouldPersistBrowserSession(false)).toBe(false);
   });
 });
 

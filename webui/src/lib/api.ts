@@ -1073,6 +1073,71 @@ export async function extractUrl2Note(
   );
 }
 
+export interface Doc2NoteStatus {
+  supportedExtensions: string[];
+  pandoc: {
+    ok: boolean;
+    version: string | null;
+    path: string | null;
+    error?: string | null;
+  };
+  pandocDownloadMb: number;
+}
+
+export async function fetchDoc2NoteStatus(
+  token: string,
+  base?: string,
+): Promise<Doc2NoteStatus> {
+  const effectiveBase = base ?? (await getServicesHttpBase());
+  return request<Doc2NoteStatus>(`${effectiveBase}/api/doc2note/status`, token);
+}
+
+export async function downloadDoc2NoteRuntime(
+  token: string,
+  base?: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const effectiveBase = base ?? (await getServicesHttpBase());
+  return request<{ ok: boolean; error?: string }>(
+    `${effectiveBase}/api/doc2note/runtime-download`,
+    token,
+    { method: "POST" },
+  );
+}
+
+export interface Doc2NoteSource {
+  title: string;
+  kind: string;
+  text: string;
+}
+
+export async function extractDoc2Note(
+  token: string,
+  filePath: string,
+  base?: string,
+): Promise<Doc2NoteSource> {
+  const effectiveBase = base ?? (await getServicesHttpBase());
+  // 直接用 httpFetch 以透出服务端的友好错误文案（request() 只给 HTTP 状态码）
+  const res = await httpFetch(`${effectiveBase}/api/doc2note/extract`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ file_path: filePath }),
+  });
+  if (!res.ok) {
+    let message = `HTTP ${res.status}`;
+    try {
+      const payload = (await res.json()) as { error?: string };
+      if (payload.error) message = payload.error;
+    } catch {
+      // 保留默认 HTTP 状态码错误
+    }
+    throw new ApiError(res.status, message);
+  }
+  return (await res.json()) as Doc2NoteSource;
+}
+
 export async function fetchVideoProjects(
   token: string,
   base?: string,
@@ -1712,6 +1777,24 @@ export async function listArtifacts(
   const effectiveBase = base ?? (await getApiBase());
   return request<ArtifactListResponse>(
     `${effectiveBase}/api/artifacts`,
+    token,
+  );
+}
+
+/** List all files of a project session's bound workspace directory.
+ *
+ *  The root is resolved server-side from the session's ``metadata.workspace``;
+ *  clients cannot pass an arbitrary root. Machine-generated directories
+ *  (``node_modules``, ``dist`` …) are skipped by the server. */
+export async function listProjectFiles(
+  token: string,
+  sessionKey: string,
+  base?: string,
+): Promise<ArtifactListResponse> {
+  const effectiveBase = base ?? (await getApiBase());
+  const query = new URLSearchParams({ key: sessionKey });
+  return request<ArtifactListResponse>(
+    `${effectiveBase}/api/project-files?${query.toString()}`,
     token,
   );
 }

@@ -62,45 +62,32 @@ describe("MaintenanceTaskCard", () => {
     vi.clearAllMocks();
   });
 
-  it("shows goal, three stable phase labels, and status badge", () => {
+  it("shows goal, status badge, and done/total progress", () => {
     render(<MaintenanceTaskCard detail={makeDetail()} />);
 
     expect(screen.getByText("修复 nginx 502")).toBeTruthy();
     expect(screen.getByText("执行中")).toBeTruthy();
-    // Three stable phase labels always visible
-    expect(screen.getByText("检查现状")).toBeTruthy();
-    expect(screen.getByText("执行必要变更")).toBeTruthy();
-    expect(screen.getByText("最终验证")).toBeTruthy();
+    // s1 succeeded → 1 done of 3 steps
+    expect(screen.getByText("1/3")).toBeTruthy();
   });
 
-  it("shows per-phase summary text reflecting step outcomes", () => {
+  it("renders every step row with its title and duration", () => {
     render(<MaintenanceTaskCard detail={makeDetail()} />);
 
-    // Inspect phase: 1/1 succeeded
-    expect(screen.getByText("1/1 项通过")).toBeTruthy();
-    // Change phase: running
-    expect(screen.getByText("正在执行…")).toBeTruthy();
-    // Verify phase: pending
-    expect(screen.getByText("等待执行")).toBeTruthy();
+    expect(screen.getByText("检查 nginx 状态")).toBeTruthy();
+    expect(screen.getByText("重启 nginx")).toBeTruthy();
+    expect(screen.getByText("验证 80 端口")).toBeTruthy();
+    // s1 and s2 both carry the default 820ms duration
+    expect(screen.getAllByText("820ms").length).toBe(2);
   });
 
-  it("shows empty phase summary when a phase has no steps", () => {
-    const detail = makeDetail(
-      { status: "succeeded", resolution: "no_changes_needed", summary: "环境已符合目标" },
-      [
-        makeStep({ id: "s1", kind: "inspect", status: "succeeded", title: "检查 nginx" }),
-        makeStep({ id: "s2", kind: "verify", status: "succeeded", title: "验证 80 端口", ordinal: 2 }),
-      ],
-    );
-    render(<MaintenanceTaskCard detail={detail} />);
+  it("tags verify steps with a 复检 badge", () => {
+    render(<MaintenanceTaskCard detail={makeDetail()} />);
 
-    // Change phase has no steps → "无需执行"
-    expect(screen.getByText("当前环境已满足要求，无需执行")).toBeTruthy();
-    // Resolution label shown instead of status
-    expect(screen.getByText("已符合目标，无需变更")).toBeTruthy();
+    expect(screen.getByText("复检")).toBeTruthy();
   });
 
-  it("shows resolution label for completed_changes", () => {
+  it("shows the summary once the task succeeded", () => {
     const detail = makeDetail(
       { status: "succeeded", resolution: "completed_changes", summary: "nginx 已恢复" },
       [
@@ -111,11 +98,11 @@ describe("MaintenanceTaskCard", () => {
     );
     render(<MaintenanceTaskCard detail={detail} />);
 
-    expect(screen.getByText("完成变更")).toBeTruthy();
+    expect(screen.getByText("成功")).toBeTruthy();
     expect(screen.getByText("nginx 已恢复")).toBeTruthy();
   });
 
-  it("shows resolution label for partial failure", () => {
+  it("shows exit codes on failed steps", () => {
     const detail = makeDetail(
       { status: "failed", resolution: "partial", error: "复检未通过" },
       [
@@ -126,35 +113,12 @@ describe("MaintenanceTaskCard", () => {
     );
     render(<MaintenanceTaskCard detail={detail} />);
 
-    expect(screen.getByText("部分完成")).toBeTruthy();
+    expect(screen.getByText("失败")).toBeTruthy();
+    expect(screen.getByText("exit 1")).toBeTruthy();
     expect(screen.getByText("复检未通过")).toBeTruthy();
   });
 
-  it("hides individual step titles by default, reveals them on expand", () => {
-    render(<MaintenanceTaskCard detail={makeDetail()} />);
-
-    // Step titles are in the collapsed details section
-    expect(screen.queryByText("检查 nginx 状态")).toBeNull();
-    expect(screen.queryByText("重启 nginx")).toBeNull();
-
-    // Expand details
-    const expandBtn = screen.getByText(/查看执行详情/);
-    act(() => {
-      fireEvent.click(expandBtn);
-    });
-
-    // Now step titles are visible
-    expect(screen.getByText("检查 nginx 状态")).toBeTruthy();
-    expect(screen.getByText("重启 nginx")).toBeTruthy();
-  });
-
-  it("shows accurate success/total counts in the details toggle", () => {
-    // 1 succeeded, 1 running, 1 pending → 1/3 成功
-    render(<MaintenanceTaskCard detail={makeDetail()} />);
-    expect(screen.getByText(/1\/3 成功，共 3 步/)).toBeTruthy();
-  });
-
-  it("excludes skipped and cancelled from executable count", () => {
+  it("counts skipped steps as done in the progress count", () => {
     const detail = makeDetail(
       { status: "succeeded", resolution: "completed_changes" },
       [
@@ -166,12 +130,11 @@ describe("MaintenanceTaskCard", () => {
     );
     render(<MaintenanceTaskCard detail={detail} />);
 
-    // 3 succeeded, 1 skipped excluded from executable → 3/3 成功，共 4 步
-    expect(screen.getByText(/3\/3 成功，共 4 步/)).toBeTruthy();
+    // succeeded/skipped/failed all count as done → 4/4
+    expect(screen.getByText("4/4")).toBeTruthy();
   });
 
-  it("does not mark a phase as failed while steps are still pending", () => {
-    // 截图场景：3 失败 + 1 pending，任务仍在执行，阶段应显示进行中而非失败
+  it("keeps the running badge while failed and pending steps coexist", () => {
     const detail = makeDetail(
       { status: "running" },
       [
@@ -183,23 +146,10 @@ describe("MaintenanceTaskCard", () => {
     );
     render(<MaintenanceTaskCard detail={detail} />);
 
-    // 阶段进行中，不显示"存在失败"的定性结论
-    expect(screen.getByText("进行中 · 0/4 通过，3 项失败")).toBeTruthy();
-    expect(screen.queryByText(/存在失败/)).toBeNull();
-    // 进行中的任务，空阶段显示"待定"而非"无需执行"
-    expect(screen.getAllByText("待定，等待 AI 判断是否需要").length).toBe(2);
-  });
-
-  it("shows 未执行 for empty phases when the task has failed", () => {
-    const detail = makeDetail(
-      { status: "failed", resolution: "failed", error: "检查阶段全部失败" },
-      [
-        makeStep({ id: "s1", kind: "inspect", status: "failed", title: "定位日志", exitCode: 1 }),
-      ],
-    );
-    render(<MaintenanceTaskCard detail={detail} />);
-
-    expect(screen.getAllByText("未执行").length).toBe(2);
+    expect(screen.getByText("执行中")).toBeTruthy();
+    // 3 failed steps are done, 1 pending → 3/4; each failed step shows its exit code
+    expect(screen.getByText("3/4")).toBeTruthy();
+    expect(screen.getAllByText("exit 1").length).toBe(3);
   });
 
   it("shows the plan approval button only while waiting for approval", () => {

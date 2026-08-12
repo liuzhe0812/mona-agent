@@ -15,11 +15,15 @@ import {
 } from "@/lib/api";
 
 describe("webui API helpers", () => {
+  // ``request()`` in api.ts inspects the content-type header on ok
+  // responses, so every stubbed response needs a ``headers.get`` shim.
+  const jsonHeaders = { get: () => "application/json" };
   beforeEach(() => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({
         ok: true,
+        headers: jsonHeaders,
         json: async () => ({ deleted: true, key: "websocket:chat-1", messages: [] }),
       }),
     );
@@ -152,8 +156,9 @@ describe("webui API helpers", () => {
     };
     vi.mocked(fetch).mockResolvedValueOnce({
       ok: true,
+      headers: jsonHeaders,
       json: async () => state,
-    } as Response);
+    } as unknown as Response);
 
     await expect(fetchSidebarState("tok")).resolves.toEqual(state);
     expect(fetch).toHaveBeenCalledWith(
@@ -180,6 +185,7 @@ describe("webui API helpers", () => {
   it("maps generated session titles from the sessions list", async () => {
     vi.mocked(fetch).mockResolvedValueOnce({
       ok: true,
+      headers: jsonHeaders,
       json: async () => ({
         sessions: [
           {
@@ -206,6 +212,7 @@ describe("webui API helpers", () => {
   it("maps slash command metadata from the commands endpoint", async () => {
     vi.mocked(fetch).mockResolvedValueOnce({
       ok: true,
+      headers: jsonHeaders,
       json: async () => ({
         commands: [
           {

@@ -44,8 +44,8 @@ describe("localized format helpers", () => {
     await setAppLanguage("en");
     const english = fmtDateTime(value);
 
-    await setAppLanguage("fr");
-    const french = fmtDateTime(value);
+    await setAppLanguage("zh-TW");
+    const traditionalChinese = fmtDateTime(value);
 
     expect(english).toBe(
       new Intl.DateTimeFormat("en", {
@@ -53,13 +53,13 @@ describe("localized format helpers", () => {
         timeStyle: "short",
       }).format(date),
     );
-    expect(french).toBe(
-      new Intl.DateTimeFormat("fr", {
+    expect(traditionalChinese).toBe(
+      new Intl.DateTimeFormat("zh-TW", {
         dateStyle: "medium",
         timeStyle: "short",
       }).format(date),
     );
-    expect(english).not.toBe(french);
+    expect(english).not.toBe(traditionalChinese);
   });
 
   it("formats turn latency with locale-aware units", async () => {

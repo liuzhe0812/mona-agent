@@ -103,6 +103,8 @@ export class MonaClient {
   private runtimeModelHandlers = new Set<RuntimeModelHandler>();
   private sessionUpdateHandlers = new Set<SessionUpdateHandler>();
   private artifactsChangedHandlers = new Set<() => void>();
+  private pptPhaseChangedHandlers = new Set<(payload: { projectName: string; phase: string }) => void>();
+  private videoProjectChangedHandlers = new Set<(payload: { projectName: string; hint: string }) => void>();
   private runStatusHandlers = new Set<RunStatusHandler>();
   private errorHandlers = new Set<ErrorHandler>();
   private pptUploadHandlers = new Set<(result: { ok: boolean; files?: { name: string; path: string }[]; error?: string }) => void>();
@@ -199,6 +201,24 @@ export class MonaClient {
     this.artifactsChangedHandlers.add(handler);
     return () => {
       this.artifactsChangedHandlers.delete(handler);
+    };
+  }
+
+  /** Subscribe to server-pushed ``ppt_phase_changed`` broadcasts: a PPT
+   *  project's lifecycle phase changed, listeners should refresh its status. */
+  onPptPhaseChanged(handler: (payload: { projectName: string; phase: string }) => void): Unsubscribe {
+    this.pptPhaseChangedHandlers.add(handler);
+    return () => {
+      this.pptPhaseChangedHandlers.delete(handler);
+    };
+  }
+
+  /** Subscribe to server-pushed ``video_project_changed`` broadcasts: a video
+   *  project's state changed, listeners should refresh per ``hint`` granularity. */
+  onVideoProjectChanged(handler: (payload: { projectName: string; hint: string }) => void): Unsubscribe {
+    this.videoProjectChangedHandlers.add(handler);
+    return () => {
+      this.videoProjectChangedHandlers.delete(handler);
     };
   }
 
@@ -567,6 +587,23 @@ export class MonaClient {
     if (parsed.event === "artifacts_changed") {
       for (const handler of this.artifactsChangedHandlers) {
         handler();
+      }
+      return;
+    }
+
+    if (parsed.event === "video_project_changed") {
+      const payload = parsed as { name?: string; hint?: string };
+      for (const handler of this.videoProjectChangedHandlers) {
+        handler({ projectName: payload.name ?? "", hint: payload.hint ?? "" });
+      }
+      return;
+    }
+
+    // PPT phase broadcasts use a ``type`` envelope (not ``event``).
+    if ((parsed as { type?: string }).type === "ppt_phase_changed") {
+      const payload = parsed as unknown as { project_name?: string; phase?: string };
+      for (const handler of this.pptPhaseChangedHandlers) {
+        handler({ projectName: payload.project_name ?? "", phase: payload.phase ?? "" });
       }
       return;
     }

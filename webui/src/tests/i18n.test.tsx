@@ -1,4 +1,4 @@
-﻿import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -50,10 +50,10 @@ describe("webui i18n", () => {
 
     await act(async () => {
       const { setAppLanguage } = await import("@/i18n");
-      await setAppLanguage("ja");
+      await setAppLanguage("zh-TW");
     });
 
-    expect(screen.getByLabelText("メッセージ入力欄")).toBeInTheDocument();
+    expect(screen.getByLabelText("訊息輸入框")).toBeInTheDocument();
   });
 
   it("keeps welcome quick actions localized for every registered locale", () => {

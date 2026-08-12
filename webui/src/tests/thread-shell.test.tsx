@@ -142,6 +142,9 @@ function httpJson(body: unknown) {
   return {
     ok: true,
     status: 200,
+    // ``request()`` in api.ts inspects the content-type header on ok
+    // responses; a bare ``{ok, json}`` stub would throw TypeError there.
+    headers: { get: () => "application/json" },
     json: async () => body,
   };
 }
@@ -158,6 +161,7 @@ describe("ThreadShell", () => {
       fullscreen: false,
       artifactBaseline: null,
       viewedArtifactPaths: new Set(),
+      deletedArtifactPaths: new Set(),
     });
     vi.stubGlobal(
       "fetch",
@@ -311,7 +315,9 @@ describe("ThreadShell", () => {
     await waitFor(() => {
       expect(screen.queryByText("delete me cleanly")).not.toBeInTheDocument();
     });
-    expect(screen.getByPlaceholderText("Ask anything...")).toBeInTheDocument();
+    expect(
+      screen.getByPlaceholderText("问任何问题、运行终端、查笔记、维护 Windows..."),
+    ).toBeInTheDocument();
   });
 
   it("creates a chat only when the blank landing sends a first message", async () => {
@@ -418,15 +424,21 @@ describe("ThreadShell", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Write code" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "网页生成笔记" })).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Write code" }));
+    fireEvent.click(screen.getByRole("button", { name: "网页生成笔记" }));
+
+    // Hero chips fill the composer (cursor marker stripped); the user then sends.
+    await waitFor(() =>
+      expect(screen.getByLabelText("Message input")).toHaveValue("把这个网页转成笔记："),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
 
     await waitFor(() =>
       expect(client.sendMessage).toHaveBeenCalledWith(
         "chat-a",
-        "Help me write the code for this task, starting with the smallest useful change.",
+        "把这个网页转成笔记：",
         undefined,
       ),
     );
@@ -487,9 +499,11 @@ describe("ThreadShell", () => {
 
     expect(screen.queryByText("old answer")).not.toBeInTheDocument();
     await waitFor(() =>
-      expect(screen.getByPlaceholderText("Ask anything...")).toBeInTheDocument(),
+      expect(
+        screen.getByPlaceholderText("问任何问题、运行终端、查笔记、维护 Windows..."),
+      ).toBeInTheDocument(),
     );
-    const input = screen.getByPlaceholderText("Ask anything...");
+    const input = screen.getByPlaceholderText("问任何问题、运行终端、查笔记、维护 Windows...");
     expect(input.className).toContain("min-h-[78px]");
     expect(screen.queryByText("old answer")).not.toBeInTheDocument();
   });
@@ -865,7 +879,7 @@ describe("ThreadShell", () => {
     );
 
     await waitFor(() => expect(fetch).toHaveBeenCalledWith(
-      "/api/commands",
+      expect.stringContaining("/api/commands"),
       expect.objectContaining({
         headers: { Authorization: "Bearer tok" },
       }),
@@ -875,32 +889,10 @@ describe("ThreadShell", () => {
       target: { value: "/" },
     });
 
-    expect(screen.getByRole("listbox", { name: "Slash commands" })).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: /\/history/i })).toBeInTheDocument();
-  });
-
-  it("switches welcome quick actions when image mode is enabled", async () => {
-    const client = makeClient();
-    render(
-      wrap(
-        client,
-        <ThreadShell
-          session={null}
-          title="mona"
-          onToggleSidebar={() => {}}
-          onNewChat={() => {}}
-        />,
-      ),
+    await waitFor(() =>
+      expect(screen.getByRole("listbox", { name: "Slash commands" })).toBeInTheDocument(),
     );
-    await act(async () => {});
-
-    expect(screen.getByText("Write code")).toBeInTheDocument();
-    expect(screen.queryByText("Design an app icon")).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "Toggle image generation mode" }));
-
-    expect(screen.getByText("Design an app icon")).toBeInTheDocument();
-    expect(screen.queryByText("Write code")).not.toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /\/history/i })).toBeInTheDocument();
   });
 
   it("surfaces a dismissible banner when the stream reports message_too_big", async () => {
@@ -1362,5 +1354,393 @@ describe("ThreadShell", () => {
       expect(vi.mocked(moveToTrash)).toHaveBeenCalledWith("/ws/output/a.png"),
     );
     expect(vi.mocked(remove)).not.toHaveBeenCalled();
+  });
+
+  it("keeps a trashed artifact hidden after the panel remounts (scan-authoritative tombstone)", async () => {
+    const client = makeClient();
+    const fileA = {
+      path: "a.png",
+      absolute_path: "/ws/output/a.png",
+      name: "a.png",
+      size: 1,
+      size_human: "1 B",
+      mime: "image/png",
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/api/artifacts")) {
+          return {
+            ok: true,
+            status: 200,
+            headers: { get: () => "application/json" },
+            json: async () => ({ files: [], truncated: false }),
+          };
+        }
+        if (url.includes("websocket%3Achat-tombstone/webui-thread")) {
+          // The file is known only from the immutable transcript history.
+          return httpJson({
+            schemaVersion: 3,
+            messages: [
+              {
+                id: "m-0",
+                role: "assistant",
+                content: "done",
+                createdAt: 1000,
+                deliveredFiles: [fileA],
+              },
+            ],
+          });
+        }
+        return { ok: false, status: 404, json: async () => ({}) };
+      }),
+    );
+
+    const first = render(
+      wrap(
+        client,
+        <ThreadShell
+          session={session("chat-tombstone")}
+          title="Chat chat-tombstone"
+          onToggleSidebar={() => {}}
+          onNewChat={() => {}}
+        />,
+      ),
+    );
+
+    fireEvent.contextMenu(await screen.findByText("a.png"));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "删除" }));
+    fireEvent.click(await screen.findByRole("button", { name: "移至回收站" }));
+
+    const { moveToTrash } = await import("@/lib/tauri");
+    await waitFor(() =>
+      expect(vi.mocked(moveToTrash)).toHaveBeenCalledWith("/ws/output/a.png"),
+    );
+    await waitFor(() =>
+      expect(screen.queryByText("a.png")).not.toBeInTheDocument(),
+    );
+
+    // Switching away and back re-parses the immutable transcript; the
+    // deletion must survive the remount instead of resurrecting the row.
+    first.unmount();
+    render(
+      wrap(
+        client,
+        <ThreadShell
+          session={session("chat-tombstone")}
+          title="Chat chat-tombstone"
+          onToggleSidebar={() => {}}
+          onNewChat={() => {}}
+        />,
+      ),
+    );
+    // Wait for the empty state so "not found" is not just "not loaded yet".
+    await screen.findByText(/还没有产物/);
+    expect(screen.queryByText("a.png")).not.toBeInTheDocument();
+  });
+
+  it("shows a tombstoned file again when a fresh scan contains it (re-created)", async () => {
+    const client = makeClient();
+    const fileA = {
+      path: "a.png",
+      absolute_path: "/ws/output/a.png",
+      name: "a.png",
+      size: 1,
+      size_human: "1 B",
+      mime: "image/png",
+    };
+    let artifactFiles: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/api/artifacts")) {
+          return {
+            ok: true,
+            status: 200,
+            headers: { get: () => "application/json" },
+            json: async () => ({ files: artifactFiles, truncated: false }),
+          };
+        }
+        if (url.includes("websocket%3Achat-revive/webui-thread")) {
+          return httpJson({
+            schemaVersion: 3,
+            messages: [
+              {
+                id: "m-0",
+                role: "assistant",
+                content: "done",
+                createdAt: 1000,
+                deliveredFiles: [fileA],
+              },
+            ],
+          });
+        }
+        return { ok: false, status: 404, json: async () => ({}) };
+      }),
+    );
+
+    render(
+      wrap(
+        client,
+        <ThreadShell
+          session={session("chat-revive")}
+          title="Chat chat-revive"
+          onToggleSidebar={() => {}}
+          onNewChat={() => {}}
+        />,
+      ),
+    );
+
+    fireEvent.contextMenu(await screen.findByText("a.png"));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "删除" }));
+    fireEvent.click(await screen.findByRole("button", { name: "移至回收站" }));
+    await waitFor(() =>
+      expect(screen.queryByText("a.png")).not.toBeInTheDocument(),
+    );
+
+    // The agent re-creates the file on disk: the authoritative scan sees it
+    // again and the row comes back (tombstones must not hide live files).
+    artifactFiles = [fileA];
+    await act(async () => {
+      client._emitArtifactsChanged();
+    });
+    await screen.findByText("a.png");
+  });
+
+  it("hides transcript files inside a trashed directory (prefix tombstone)", async () => {
+    const client = makeClient();
+    const { useWorkspaceStore } = await import("@/lib/workspace-store");
+    useWorkspaceStore.setState({ workspacePath: "/ws" });
+    const nested = {
+      path: "docs/report.md",
+      absolute_path: "/ws/output/docs/report.md",
+      name: "report.md",
+      size: 1,
+      size_human: "1 B",
+      mime: "text/markdown",
+    };
+    let artifactFiles: unknown[] = [nested];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/api/artifacts")) {
+          return {
+            ok: true,
+            status: 200,
+            headers: { get: () => "application/json" },
+            json: async () => ({ files: artifactFiles, truncated: false }),
+          };
+        }
+        if (url.includes("websocket%3Achat-dirdel/webui-thread")) {
+          return httpJson({
+            schemaVersion: 3,
+            messages: [
+              {
+                id: "m-0",
+                role: "assistant",
+                content: "done",
+                createdAt: 1000,
+                deliveredFiles: [nested],
+              },
+            ],
+          });
+        }
+        return { ok: false, status: 404, json: async () => ({}) };
+      }),
+    );
+
+    const first = render(
+      wrap(
+        client,
+        <ThreadShell
+          session={session("chat-dirdel")}
+          title="Chat chat-dirdel"
+          onToggleSidebar={() => {}}
+          onNewChat={() => {}}
+        />,
+      ),
+    );
+
+    await screen.findByText("report.md");
+    artifactFiles = [];
+    fireEvent.contextMenu(screen.getByText("docs"));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "删除" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog).toHaveTextContent("文件夹");
+    fireEvent.click(screen.getByRole("button", { name: "移至回收站" }));
+
+    const { moveToTrash } = await import("@/lib/tauri");
+    await waitFor(() =>
+      expect(vi.mocked(moveToTrash)).toHaveBeenCalledWith("/ws/output/docs"),
+    );
+    await waitFor(() =>
+      expect(screen.queryByText("report.md")).not.toBeInTheDocument(),
+    );
+
+    // The transcript copy of the file stays hidden across a remount too.
+    first.unmount();
+    render(
+      wrap(
+        client,
+        <ThreadShell
+          session={session("chat-dirdel")}
+          title="Chat chat-dirdel"
+          onToggleSidebar={() => {}}
+          onNewChat={() => {}}
+        />,
+      ),
+    );
+    await screen.findByText(/还没有产物/);
+    expect(screen.queryByText("report.md")).not.toBeInTheDocument();
+  });
+
+  it("lists all project directory files for project sessions, never message artifacts", async () => {
+    const client = makeClient();
+    const appPy = {
+      path: "app.py",
+      absolute_path: "/proj/app.py",
+      name: "app.py",
+      size: 3,
+      size_human: "3 B",
+      mime: "text/x-python",
+    };
+    const mainPy = {
+      path: "src/main.py",
+      absolute_path: "/proj/src/main.py",
+      name: "main.py",
+      size: 3,
+      size_human: "3 B",
+      mime: "text/x-python",
+    };
+    let artifactsFetched = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/api/project-files")) {
+          return {
+            ok: true,
+            status: 200,
+            headers: { get: () => "application/json" },
+            json: async () => ({ files: [appPy, mainPy], truncated: false }),
+          };
+        }
+        if (url.includes("/api/artifacts")) {
+          artifactsFetched += 1;
+          return {
+            ok: true,
+            status: 200,
+            headers: { get: () => "application/json" },
+            json: async () => ({ files: [], truncated: false }),
+          };
+        }
+        if (url.includes("websocket%3Achat-proj/webui-thread")) {
+          // Immutable history claims an artifact; project sessions must not
+          // show message artifacts at all — only the project directory scan.
+          return httpJson({
+            schemaVersion: 3,
+            messages: [
+              {
+                id: "m-0",
+                role: "assistant",
+                content: "done",
+                createdAt: 1000,
+                deliveredFiles: [
+                  {
+                    path: "/proj/old.png",
+                    absolute_path: "/proj/old.png",
+                    name: "old.png",
+                    size: 1,
+                    size_human: "1 B",
+                    mime: "image/png",
+                  },
+                ],
+              },
+            ],
+          });
+        }
+        return { ok: false, status: 404, json: async () => ({}) };
+      }),
+    );
+
+    render(
+      wrap(
+        client,
+        <ThreadShell
+          session={{ ...session("chat-proj"), workspace: "/proj" }}
+          title="Chat chat-proj"
+          onToggleSidebar={() => {}}
+          onNewChat={() => {}}
+        />,
+      ),
+    );
+
+    await screen.findByText("app.py");
+    await screen.findByText("main.py");
+    expect(screen.getByText("项目文件")).toBeInTheDocument();
+    expect(screen.getByText("全部文件")).toBeInTheDocument();
+    expect(screen.queryByText("本次会话")).not.toBeInTheDocument();
+    expect(screen.queryByText("old.png")).not.toBeInTheDocument();
+    expect(screen.queryByText("产物")).not.toBeInTheDocument();
+    expect(artifactsFetched).toBe(0);
+  });
+
+  it("moves project files to the trash and rescans the project directory", async () => {
+    const client = makeClient();
+    const appPy = {
+      path: "app.py",
+      absolute_path: "/proj/app.py",
+      name: "app.py",
+      size: 3,
+      size_human: "3 B",
+      mime: "text/x-python",
+    };
+    let projectFetches = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/api/project-files")) {
+          projectFetches += 1;
+          return {
+            ok: true,
+            status: 200,
+            headers: { get: () => "application/json" },
+            json: async () => ({ files: [appPy], truncated: false }),
+          };
+        }
+        if (url.includes("websocket%3Achat-projdel/webui-thread")) {
+          return httpJson({ schemaVersion: 3, messages: [] });
+        }
+        return { ok: false, status: 404, json: async () => ({}) };
+      }),
+    );
+
+    render(
+      wrap(
+        client,
+        <ThreadShell
+          session={{ ...session("chat-projdel"), workspace: "/proj" }}
+          title="Chat chat-projdel"
+          onToggleSidebar={() => {}}
+          onNewChat={() => {}}
+        />,
+      ),
+    );
+
+    fireEvent.contextMenu(await screen.findByText("app.py"));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "删除" }));
+    fireEvent.click(await screen.findByRole("button", { name: "移至回收站" }));
+
+    const { moveToTrash } = await import("@/lib/tauri");
+    const { remove } = await import("@tauri-apps/plugin-fs");
+    await waitFor(() =>
+      expect(vi.mocked(moveToTrash)).toHaveBeenCalledWith("/proj/app.py"),
+    );
+    expect(vi.mocked(remove)).not.toHaveBeenCalled();
+    await waitFor(() => expect(projectFetches).toBeGreaterThanOrEqual(2));
   });
 });

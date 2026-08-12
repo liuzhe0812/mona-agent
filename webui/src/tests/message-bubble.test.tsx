@@ -1,4 +1,4 @@
-﻿import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { MessageBubble } from "@/components/MessageBubble";
@@ -18,7 +18,7 @@ describe("MessageBubble", () => {
     const pill = screen.getByText("hello");
 
     expect(row).toHaveClass("ml-auto", "flex");
-    expect(pill).toHaveClass("ml-auto", "w-fit", "rounded-[18px]");
+    expect(pill).toHaveClass("ml-auto", "max-w-full", "rounded-2xl");
     expect(screen.queryByRole("button", { name: "Copy reply" })).not.toBeInTheDocument();
   });
 
@@ -239,7 +239,7 @@ describe("MessageBubble", () => {
     const { container } = render(<MessageBubble message={message} />);
 
     const imageButton = screen.getByRole("button", { name: /view image/i });
-    expect(imageButton).toHaveClass("w-[min(100%,34rem)]", "rounded-[20px]");
+    expect(imageButton).toHaveClass("w-[min(100%,34rem)]", "rounded-2xl");
     expect(imageButton).not.toHaveAttribute("title");
     expect(container.querySelector("img")).toHaveClass("h-auto", "w-full", "object-contain");
   });

@@ -82,8 +82,8 @@ describe("ThreadComposer", () => {
     const input = screen.getByPlaceholderText("Type your message...");
     expect(input.className).toContain("min-h-[50px]");
     expect(input.parentElement?.className).toContain("max-w-[49.5rem]");
-    expect(input.parentElement?.className).toContain("rounded-[22px]");
-    expect(input.parentElement?.className).toContain("shadow-[0_12px_30px_rgba(15,23,42,0.07)]");
+    expect(input.parentElement?.className).toContain("rounded-2xl");
+    expect(input.parentElement?.className).toContain("shadow-sm");
     expect(screen.getByRole("button", { name: "Attach image" }).className).toContain("bg-card");
     expect(screen.getByRole("button", { name: "Send message" }).className).toContain("bg-foreground");
   });

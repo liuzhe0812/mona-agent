@@ -315,7 +315,7 @@ export interface SettingsPayload {
     api_key_hint: string | null;
   };
   requires_restart: boolean;
-  restart_required_sections?: Array<"runtime" | "web" | "image" | "channels">;
+  restart_required_sections?: Array<"runtime" | "web" | "providers" | "channels">;
 }
 
 export interface ChannelInfo {
@@ -503,6 +503,7 @@ export type InboundEvent =
     }
   | { event: "session_updated"; chat_id: string; scope?: "metadata" | "thread" | string }
   | { event: "artifacts_changed" }
+  | { event: "video_project_changed"; name?: string; hint?: string }
   | { event: "error"; chat_id?: string; detail?: string }
   | {
       event: "ppt_upload_result";

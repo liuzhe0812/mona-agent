@@ -35,7 +35,7 @@ describe("SubscribeView", () => {
     render(<SubscribeView userEmail="user@example.com" onBackToLogin={vi.fn()} />);
 
     expect(screen.getByText("让 Mona 理解你的工作上下文")).toBeTruthy();
-    expect(screen.getByText("在终端、数据库中直接获得 AI 协作")).toBeTruthy();
+    expect(screen.getByText("在笔记、终端、邮件等模块获得AI协作")).toBeTruthy();
     expect(screen.getByText("使用知识库、AI 文档与跨模块知识沉淀")).toBeTruthy();
     expect(screen.getByText("早期用户价")).toBeTruthy();
   });
