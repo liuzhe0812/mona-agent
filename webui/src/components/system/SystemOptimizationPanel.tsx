@@ -1,7 +1,5 @@
 import {
-  AlertTriangle,
   Check,
-  CheckCircle2,
   ChevronRight,
   CircleHelp,
   FileCog,
@@ -35,6 +33,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { StatusNotice } from "@/components/ui/status-notice";
 
 import {
   applyConfigurationItem,
@@ -217,13 +216,13 @@ export function SystemOptimizationPanel() {
 
   return (
     <div className="space-y-3 pb-4">
-      <section className="relative overflow-hidden rounded-2xl border border-blue-500/15 bg-gradient-to-r from-blue-500/[0.08] via-card to-violet-500/[0.06] px-5 py-4 shadow-sm">
-        <div className="pointer-events-none absolute -right-8 -top-16 h-36 w-36 rounded-full bg-blue-400/15 blur-3xl" />
+      <section className="relative overflow-hidden rounded-2xl border border-info/15 bg-gradient-to-r from-info/[0.08] via-card to-primary/[0.06] px-5 py-4 shadow-sm">
+        <div className="pointer-events-none absolute -right-8 -top-16 h-36 w-36 rounded-full bg-info/15 blur-3xl" />
         <div className="relative flex flex-wrap items-center gap-3">
           <span className="flex h-11 w-11 items-center justify-center rounded-lg bg-primary text-primary-foreground"><SlidersHorizontal className="h-5 w-5" /></span>
           <div>
-            <h2 className="text-lg font-semibold tracking-tight">系统优化</h2>
-            <p className="mt-1 text-xs text-muted-foreground">集中管理性能、界面、网络、安全和应用行为。</p>
+            <h2 className="text-title-sm tracking-tight">系统优化</h2>
+            <p className="mt-1 text-caption text-muted-foreground">集中管理性能、界面、网络、安全和应用行为。</p>
           </div>
           <div className="ml-auto flex items-center gap-2">
             {audit?.windowsBuild ? <StatusPill tone="neutral">Build {audit.windowsBuild}</StatusPill> : null}
@@ -232,9 +231,7 @@ export function SystemOptimizationPanel() {
       </section>
 
       {notice && (
-        <div role={notice.tone === "error" ? "alert" : "status"} className={`flex items-start gap-2 rounded-lg border px-4 py-3 text-xs ${notice.tone === "error" ? "border-red-500/25 bg-red-500/5 text-red-700 dark:text-red-400" : "border-emerald-500/25 bg-emerald-500/5 text-emerald-700 dark:text-emerald-400"}`}>
-          {notice.tone === "error" ? <AlertTriangle className="h-4 w-4 shrink-0" /> : <CheckCircle2 className="h-4 w-4 shrink-0" />}{notice.text}
-        </div>
+        <StatusNotice tone={notice.tone === "error" ? "danger" : "success"}>{notice.text}</StatusNotice>
       )}
 
       <section className="overflow-hidden rounded-2xl border border-border/70 bg-card shadow-sm">
@@ -244,14 +241,14 @@ export function SystemOptimizationPanel() {
               <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
               <Input role="searchbox" aria-label="搜索 Windows 设置" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索 Windows 设置" className="rounded-full pl-9" />
             </div>
-            <label className="inline-flex h-9 cursor-pointer items-center gap-2 rounded-lg border border-border/70 bg-background px-3 text-xs">
+            <label className="inline-flex h-9 cursor-pointer items-center gap-2 rounded-lg border border-border/70 bg-background px-3 text-caption">
               <Checkbox checked={compatibleOnly} onCheckedChange={(value) => setCompatibleOnly(value === true)} />仅当前设备可用
             </label>
           </div>
         )}
 
         <div className="flex gap-1 overflow-x-auto border-b border-border/60 px-3 py-2 lg:hidden">
-          {["全部设置", ...categories].map((label) => <button key={label} type="button" aria-label={`${label}（紧凑导航）`} onClick={() => setCategory(label)} className={`whitespace-nowrap rounded-lg px-2.5 py-1.5 text-xs ${category === label ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent"}`}>{label}</button>)}
+          {["全部设置", ...categories].map((label) => <button key={label} type="button" aria-label={`${label}（紧凑导航）`} onClick={() => setCategory(label)} className={`whitespace-nowrap rounded-lg px-2.5 py-1.5 text-caption ${category === label ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent"}`}>{label}</button>)}
         </div>
 
         <div className="grid min-h-[470px] lg:grid-cols-[190px_minmax(0,1fr)]">
@@ -259,15 +256,15 @@ export function SystemOptimizationPanel() {
             {["全部设置", ...categories].map((label) => {
               const Icon = label === "全部设置" ? SlidersHorizontal : (categoryIcons[label] ?? CircleHelp);
               const count = label === "全部设置" ? items.length : catalogCategories.has(label) ? (categoryCounts.get(label) ?? items.filter((item) => item.category === label).length) : null;
-              return <button key={label} type="button" aria-label={label} onClick={() => setCategory(label)} className={`mb-0.5 flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs transition ${category === label ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent hover:text-foreground"}`}><Icon className="h-3.5 w-3.5 shrink-0" /><span className="min-w-0 flex-1 truncate">{label}</span>{count !== null && <span className={`text-[10px] ${category === label ? "text-primary-foreground/70" : "text-muted-foreground/70"}`}>{count}</span>}</button>;
+              return <button key={label} type="button" aria-label={label} onClick={() => setCategory(label)} className={`mb-0.5 flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-caption transition ${category === label ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent hover:text-foreground"}`}><Icon className="h-3.5 w-3.5 shrink-0" /><span className="min-w-0 flex-1 truncate">{label}</span>{count !== null && <span className={`text-micro ${category === label ? "text-primary-foreground/70" : "text-muted-foreground/70"}`}>{count}</span>}</button>;
             })}
           </nav>
 
           <div className="min-w-0 p-3">
-            <div className="mb-2 flex items-center justify-between px-1"><p className="text-xs font-medium">{category}</p>{showCatalogSettings && <span className="text-[11px] text-muted-foreground">{shownCount} 个配置</span>}</div>
+            <div className="mb-2 flex items-center justify-between px-1"><p className="text-caption font-medium">{category}</p>{showCatalogSettings && <span className="text-micro text-muted-foreground">{shownCount} 个配置</span>}</div>
             {showCatalogSettings && loading && <div className="space-y-2">{[0, 1, 2, 3, 4].map((value) => <div key={value} className="h-[78px] animate-pulse rounded-lg border border-border/50 bg-muted/30" />)}</div>}
-            {showCatalogSettings && !loading && error && <div role="alert" className="rounded-lg border border-red-500/25 bg-red-500/5 p-4 text-xs text-red-700 dark:text-red-400">无法读取 Windows 设置：{error}</div>}
-            {showCatalogSettings && !loading && !error && shownCount === 0 && <div className="rounded-lg border border-dashed border-border/70 py-16 text-center text-xs text-muted-foreground">没有符合当前条件的设置</div>}
+            {showCatalogSettings && !loading && error && <StatusNotice tone="danger">无法读取 Windows 设置：{error}</StatusNotice>}
+            {showCatalogSettings && !loading && !error && shownCount === 0 && <div className="rounded-lg border border-dashed border-border/70 py-16 text-center text-caption text-muted-foreground">没有符合当前条件的设置</div>}
             {showCatalogSettings && !loading && !error && shownCount > 0 && (
               <div className="space-y-2">
                 {visibleGroups.map((group) => {
@@ -277,9 +274,9 @@ export function SystemOptimizationPanel() {
                   const groupRiskValue = groupRisk(group, itemById);
                   return <article key={group.id} className="group rounded-lg border border-border/65 bg-background/70 px-3.5 py-3 transition hover:bg-accent">
                     <div className="flex flex-wrap items-center gap-3">
-                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-violet-500/10 text-violet-600"><SlidersHorizontal className="h-4 w-4" /></span>
-                      <div className="min-w-[180px] flex-1"><div className="flex items-center gap-2"><h3 className="text-xs font-semibold">{groupTitle(group.id, group.label)}</h3><StatusPill tone={riskMeta[groupRiskValue].tone}>{riskMeta[groupRiskValue].label}</StatusPill></div><p className="mt-1 truncate text-[11px] text-muted-foreground">从互斥选项中选择一个 Windows 行为</p></div>
-                      <Select value={current} disabled={disabled || applying} onValueChange={(id) => { const item = itemById.get(id); if (item) openPending({ item, mode: "recommended" }); }} placeholder={disabled ? "当前版本不适用" : "选择配置"} options={group.values.map((value) => ({ value: value.featureIds[0], label: optionLabel(value.label) }))} className="h-8 w-auto min-w-[190px] max-w-[280px] text-xs" />
+                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary"><SlidersHorizontal className="h-4 w-4" /></span>
+                      <div className="min-w-[180px] flex-1"><div className="flex items-center gap-2"><h3 className="text-caption font-semibold">{groupTitle(group.id, group.label)}</h3><StatusPill tone={riskMeta[groupRiskValue].tone}>{riskMeta[groupRiskValue].label}</StatusPill></div><p className="mt-1 truncate text-micro text-muted-foreground">从互斥选项中选择一个 Windows 行为</p></div>
+                      <Select value={current} disabled={disabled || applying} onValueChange={(id) => { const item = itemById.get(id); if (item) openPending({ item, mode: "recommended" }); }} placeholder={disabled ? "当前版本不适用" : "选择配置"} options={group.values.map((value) => ({ value: value.featureIds[0], label: optionLabel(value.label) }))} className="h-8 w-auto min-w-[190px] max-w-[280px] text-caption" />
                     </div>
                   </article>;
                 })}
@@ -288,8 +285,8 @@ export function SystemOptimizationPanel() {
                   const riskInfo = riskMeta[item.risk];
                   return <article key={item.id} tabIndex={0} role="button" onClick={() => setDetails(item)} onKeyDown={(event) => { if (event.key === "Enter") setDetails(item); }} className={`group rounded-lg border px-3.5 py-3 transition hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ${item.status === "unavailable" ? "border-border/50 bg-muted/20 opacity-70" : "border-border/65 bg-background/70"}`}>
                     <div className="flex items-center gap-3">
-                      <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${item.risk === "high" ? "bg-red-500/10 text-red-600" : item.status === "configured" ? "bg-emerald-500/10 text-emerald-600" : "bg-primary/10 text-primary"}`}>{item.status === "configured" ? <Check className="h-4 w-4" /> : <SlidersHorizontal className="h-4 w-4" />}</span>
-                      <div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-1.5"><h3 className="truncate text-xs font-semibold">{featureTitle(item.id, item.title)}</h3><StatusPill tone={meta.tone}>{meta.label}</StatusPill><StatusPill tone={riskInfo.tone}>{riskInfo.label}</StatusPill>{item.requiresRestart && <StatusPill tone="violet">需重启</StatusPill>}{item.requiresAdministrator && <StatusPill tone="orange">管理员</StatusPill>}</div><p className="mt-1 truncate text-[11px] text-muted-foreground">{displayDescription(item)}</p></div>
+                      <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${item.risk === "high" ? "bg-destructive/10 text-destructive" : item.status === "configured" ? "bg-success/10 text-success" : "bg-primary/10 text-primary"}`}>{item.status === "configured" ? <Check className="h-4 w-4" /> : <SlidersHorizontal className="h-4 w-4" />}</span>
+                      <div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-1.5"><h3 className="truncate text-caption font-semibold">{featureTitle(item.id, item.title)}</h3><StatusPill tone={meta.tone}>{meta.label}</StatusPill><StatusPill tone={riskInfo.tone}>{riskInfo.label}</StatusPill>{item.requiresRestart && <StatusPill tone="violet">需重启</StatusPill>}{item.requiresAdministrator && <StatusPill tone="orange">管理员</StatusPill>}</div><p className="mt-1 truncate text-micro text-muted-foreground">{displayDescription(item)}</p></div>
                       <SettingSwitch item={item} onAction={openPending} />
                       <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/50 transition group-hover:translate-x-0.5 group-hover:text-primary" />
                     </div>
@@ -308,13 +305,13 @@ export function SystemOptimizationPanel() {
       <Sheet open={Boolean(details)} onOpenChange={(open) => { if (!open) setDetails(null); }}>
         <SheetContent side="right" className="w-[440px] max-w-[92vw] overflow-y-auto p-0 sm:max-w-[440px]">
           {details && <>
-            <div className="border-b border-border/60 bg-gradient-to-br from-blue-500/[0.08] to-violet-500/[0.05] p-5"><SheetHeader><SheetTitle className="pr-8 text-left text-base">{featureTitle(details.id, details.title)}</SheetTitle></SheetHeader><div className="mt-3 flex flex-wrap gap-1.5"><StatusPill tone={statusMeta[details.status].tone}>{statusMeta[details.status].label}</StatusPill><StatusPill tone={riskMeta[details.risk].tone}>{riskMeta[details.risk].label}</StatusPill>{details.requiresAdministrator && <StatusPill tone="orange">需要管理员权限</StatusPill>}{details.requiresRestart && <StatusPill tone="violet">重启后生效</StatusPill>}</div></div>
-            <div className="space-y-4 p-5 text-xs leading-5">
+            <div className="border-b border-border/60 bg-gradient-to-br from-info/[0.08] to-primary/[0.05] p-5"><SheetHeader><SheetTitle className="pr-8 text-left text-body-lg">{featureTitle(details.id, details.title)}</SheetTitle></SheetHeader><div className="mt-3 flex flex-wrap gap-1.5"><StatusPill tone={statusMeta[details.status].tone}>{statusMeta[details.status].label}</StatusPill><StatusPill tone={riskMeta[details.risk].tone}>{riskMeta[details.risk].label}</StatusPill>{details.requiresAdministrator && <StatusPill tone="orange">需要管理员权限</StatusPill>}{details.requiresRestart && <StatusPill tone="violet">重启后生效</StatusPill>}</div></div>
+            <div className="space-y-4 p-5 text-caption leading-5">
               <section><h4 className="font-semibold">当前状态</h4><p className="mt-1 rounded-lg border border-border/60 bg-muted/25 px-3 py-2 text-muted-foreground">{details.currentValue}</p></section>
               <section><h4 className="font-semibold">功能影响</h4><p className="mt-1 text-muted-foreground">{featureImpact(details.id) || displayDescription(details)}</p></section>
               <section className="grid grid-cols-2 gap-2"><div className="rounded-lg border border-border/60 p-3"><p className="text-muted-foreground">恢复能力</p><p className="mt-1 font-medium">{details.reversible ? "支持自动恢复" : "需要手动恢复"}</p></div><div className="rounded-lg border border-border/60 p-3"><p className="text-muted-foreground">兼容范围</p><p className="mt-1 font-medium">{details.minVersion ? `Build ${details.minVersion}+` : "Windows 10/11"}</p></div></section>
-              {details.risk === "high" && <div className="flex gap-2 rounded-lg border border-red-500/25 bg-red-500/5 p-3 text-red-700 dark:text-red-400"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /><span>此设置可能影响安全、恢复或系统组件。Mona 不会自动替你选择。</span></div>}
-              <p className="text-[11px] text-muted-foreground">{details.note}</p>
+              {details.risk === "high" && <StatusNotice tone="danger">此设置可能影响安全、恢复或系统组件。Mona 不会自动替你选择。</StatusNotice>}
+              <p className="text-micro text-muted-foreground">{details.note}</p>
               <div className="flex justify-end gap-2"><Button type="button" variant="outline" size="sm" onClick={() => setDetails(null)}>关闭</Button>{details.canRestore && details.status === "configured" && <Button type="button" variant="outline" size="sm" onClick={() => { setDetails(null); openPending({ item: details, mode: "restore" }); }}><RotateCcw className="mr-1.5 h-3.5 w-3.5" />恢复</Button>}<Button type="button" size="sm" disabled={!details.canApply || details.status === "configured"} onClick={() => { setDetails(null); openPending({ item: details, mode: "recommended" }); }}>应用设置</Button></div>
             </div>
           </>}
@@ -324,9 +321,9 @@ export function SystemOptimizationPanel() {
       <AlertDialog open={Boolean(pending)} onOpenChange={(open) => { if (!open && !applying) { setPending(null); setAcknowledged(false); setActionError(""); } }}>
         <AlertDialogContent>
           <AlertDialogHeader><AlertDialogTitle>{pending?.mode === "restore" ? "恢复 Windows 默认设置？" : `应用“${pending ? featureTitle(pending.item.id, pending.item.title) : ""}”？`}</AlertDialogTitle><AlertDialogDescription>{pending?.item ? `${displayDescription(pending.item)}${pending.item.requiresAdministrator ? " Windows 可能要求管理员权限。" : ""}${pending.item.requiresRestart ? " 完成后需要重启。" : ""}${!pending.item.reversible ? " 此项目无法由 Mona 自动恢复。" : ""}` : ""}</AlertDialogDescription></AlertDialogHeader>
-          {actionError && <div role="alert" className="flex gap-2 rounded-lg border border-red-500/25 bg-red-500/5 p-3 text-xs text-red-700 dark:text-red-400"><AlertTriangle className="h-4 w-4 shrink-0" /><span>{actionError}</span></div>}
-          {pending?.item.risk === "high" && <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-red-500/25 bg-red-500/5 p-3 text-xs leading-5"><Checkbox className="mt-1" checked={acknowledged} onCheckedChange={(value) => setAcknowledged(value === true)} /><span><strong className="text-red-700 dark:text-red-400">我已了解这是高风险设置</strong><br /><span className="text-muted-foreground">可能影响系统组件、安全策略或恢复能力，我确认继续。</span></span></label>}
-          <AlertDialogFooter><AlertDialogCancel disabled={applying}>取消</AlertDialogCancel><AlertDialogAction disabled={applying || (pending?.item.risk === "high" && !acknowledged)} onClick={(event) => { event.preventDefault(); void confirm(); }} className={pending?.item.risk === "high" ? "bg-red-600 text-white hover:bg-red-700" : "bg-primary text-primary-foreground hover:bg-primary/90"}>{applying && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}{pending?.mode === "restore" ? "确认恢复" : "确认应用"}</AlertDialogAction></AlertDialogFooter>
+          {actionError && <StatusNotice tone="danger">{actionError}</StatusNotice>}
+          {pending?.item.risk === "high" && <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-caption leading-5"><Checkbox className="mt-1" checked={acknowledged} onCheckedChange={(value) => setAcknowledged(value === true)} /><span><strong className="text-destructive">我已了解这是高风险设置</strong><br /><span className="text-muted-foreground">可能影响系统组件、安全策略或恢复能力，我确认继续。</span></span></label>}
+          <AlertDialogFooter><AlertDialogCancel disabled={applying}>取消</AlertDialogCancel><AlertDialogAction disabled={applying || (pending?.item.risk === "high" && !acknowledged)} onClick={(event) => { event.preventDefault(); void confirm(); }} className={pending?.item.risk === "high" ? "bg-destructive text-destructive-foreground hover:bg-destructive/90" : "bg-primary text-primary-foreground hover:bg-primary/90"}>{applying && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}{pending?.mode === "restore" ? "确认恢复" : "确认应用"}</AlertDialogAction></AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
     </div>
