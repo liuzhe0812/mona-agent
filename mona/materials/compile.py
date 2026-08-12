@@ -34,7 +34,7 @@ from mona.materials.api import (
     _require_vault,
     _text_path_for_raw,
 )
-from mona.materials.search import _parse_frontmatter
+from mona.materials.frontmatter import _parse_frontmatter, _render_frontmatter
 from mona.utils.document import IMAGE_EXTENSIONS, SUPPORTED_EXTENSIONS
 
 # 单文件源文本上限（字符）：超出截断，避免上下文爆炸
@@ -174,50 +174,30 @@ def parse_file_blocks(text: str) -> tuple[list[dict[str, str]], list[str]]:
 _LANGUAGE_RULE = "Write all content in the same language as the source document."
 
 
-def build_analysis_prompt(source_file_name: str) -> str:
-    """Stage 1：分析源文档，输出结构化分析。"""
-    return "\n".join([
-        "You are an expert research analyst. Read the source document and produce a structured analysis.",
-        "Do not output chain-of-thought, hidden reasoning, or a thinking transcript. Reason internally and write only the concise final analysis.",
-        "",
-        _LANGUAGE_RULE,
-        "",
-        "Your analysis should cover:",
-        "",
-        "## Key Entities",
-        "List people, organizations, products, datasets, tools mentioned. For each: name, type, and role in the source (central vs. peripheral).",
-        "",
-        "## Key Concepts",
-        "List theories, methods, techniques, phenomena. For each: name, brief definition, and why it matters in this source.",
-        "",
-        "## Main Arguments & Findings",
-        "- What are the core claims or results? What evidence supports them?",
-        "",
-        "## Recommendations",
-        "- What wiki pages should be created or updated? What should be emphasized?",
-        "",
-        "Be thorough but concise. Focus on what's genuinely important.",
-        f"The source file is: {source_file_name}",
-    ])
-
-
-def build_generation_prompt(
+def build_compile_prompt(
     source_file_name: str,
     source_raw_rel: str,
     summary_path: str,
 ) -> str:
-    """Stage 2：基于分析生成 Wiki FILE 块。"""
+    """单次调用 prompt：内部分析源文档，直接生成 Wiki FILE 块。"""
     return "\n".join([
-        "You are a wiki maintainer. Based on the analysis provided, generate wiki files.",
+        "You are a research analyst and wiki maintainer. Read the source document, analyze it internally, and generate wiki files in one pass.",
         "Do not output chain-of-thought, hidden reasoning, or explanatory preamble. Reason internally and output only the requested FILE blocks.",
         "",
         _LANGUAGE_RULE,
+        "",
+        "## Step 1 — Analyze internally (never output this analysis)",
+        "",
+        "Identify before writing:",
+        "- Key entities: people, organizations, products, datasets, tools; central vs. peripheral.",
+        "- Key concepts: theories, methods, techniques, phenomena; why they matter here.",
+        "- Main arguments, findings, and the evidence supporting them.",
         "",
         "## IMPORTANT: Source File",
         f"The original source file is: **{source_raw_rel}**",
         "All wiki pages generated from this source MUST include this exact path in their frontmatter `sources` field.",
         "",
-        "## What to generate",
+        "## Step 2 — What to generate",
         "",
         f"1. A source summary page at **{summary_path}** (MUST use this exact path)",
         "2. Entity pages for key named things identified in the analysis, under wiki/entities/.",
@@ -257,8 +237,7 @@ def build_generation_prompt(
         "```",
         "",
         "1. The FIRST character of your response MUST be `-` (the opening of `---FILE:`).",
-        "2. DO NOT output any preamble or trailing commentary.",
-        "3. DO NOT echo or restate the analysis — your job is to emit FILE blocks.",
+        "2. DO NOT output any preamble, analysis, or trailing commentary.",
         "",
         "If you start with anything other than `---FILE:`, the entire response will be discarded.",
     ])
@@ -291,6 +270,32 @@ def _source_summary_slug(raw_rel: str) -> str:
     return slug or "source"
 
 
+# 需要按 title canonical 化的 wiki 子目录（实体/概念跨文件归并）
+_CANONICAL_DIRS = ("entities/", "concepts/")
+
+
+def _title_slug(title: str) -> str:
+    """页面 title 的 CJK 安全 slug（与 _source_summary_slug 同一套规则）。"""
+    slug = re.sub(r"[^A-Za-z0-9一-鿿]+", "-", title).strip("-").lower()
+    return slug or "page"
+
+
+def _canonical_wiki_rel(wiki_rel: str, content: str) -> str:
+    """entities/concepts 页面 canonical 化为 ``{dir}/{slug(title)}.md``。
+
+    同 title 必同页，跨文件归并不再依赖 LLM 两次生成相同路径。
+    其他目录（sources 等）或非 markdown 路径原样返回。
+    """
+    if not wiki_rel.startswith(_CANONICAL_DIRS) or not wiki_rel.endswith(".md"):
+        return wiki_rel
+    fm, _ = _parse_frontmatter(content)
+    title = str(fm.get("title") or "").strip()
+    if not title:
+        return wiki_rel
+    dir_name = wiki_rel.rpartition("/")[0]
+    return f"{dir_name}/{_title_slug(title)}.md"
+
+
 def _coerce_str_list(value: Any) -> list[str]:
     """把 frontmatter 值（字符串/列表/flow 形式）归一化为字符串列表。"""
     if value is None:
@@ -302,21 +307,6 @@ def _coerce_str_list(value: Any) -> list[str]:
         text = text[1:-1]
         return [p.strip().strip('"').strip("'") for p in text.split(",") if p.strip()]
     return [text] if text else []
-
-
-def _render_compile_frontmatter(fields: list[tuple[str, Any]]) -> str:
-    """渲染 frontmatter；list 值渲染为 YAML block list（本地解析器兼容）。"""
-    lines = ["---"]
-    for key, value in fields:
-        if isinstance(value, list):
-            lines.append(f"{key}:")
-            for item in value:
-                lines.append(f"  - {item}")
-        else:
-            lines.append(f"{key}: {value}")
-    lines.append("---")
-    lines.append("")
-    return "\n".join(lines)
 
 
 def merge_page_content(
@@ -337,6 +327,10 @@ def merge_page_content(
     now_iso = datetime.now().isoformat(timespec="seconds")
 
     cand_fm, cand_body = _parse_frontmatter(candidate_content)
+    if not cand_fm and candidate_content.startswith("---"):
+        # frontmatter 存在但 YAML 非法（如 title 含未加引号的冒号）：
+        # 至少剥离出正文，避免原始 frontmatter 文本混入合并后的 body
+        cand_body = _strip_frontmatter(candidate_content)
 
     exist_fm: dict[str, Any] = {}
     if existing_content:
@@ -381,7 +375,7 @@ def merge_page_content(
             continue
         fields.append((key, value))
 
-    return _render_compile_frontmatter(fields) + cand_body.strip() + "\n"
+    return _render_frontmatter(fields) + cand_body.strip() + "\n"
 
 
 # ---------------------------------------------------------------------------
@@ -456,26 +450,11 @@ async def _compile_one_file(
     raw_rel: str,
     text_content: str,
 ) -> tuple[list[dict[str, str]], list[str]]:
-    """对单个文件执行两阶段 LLM 编译，返回候选 FILE 块与告警。"""
+    """对单个文件执行单次 LLM 编译（内部分析 + 直接生成），返回候选 FILE 块与告警。"""
+    del root  # 路径推导只依赖 raw_rel，保留参数位与调用方签名一致
     source_file_name = raw_rel.split("/")[-1]
     summary_path = f"wiki/sources/{_source_summary_slug(raw_rel)}.md"
     source_content = text_content[:MAX_SOURCE_CHARS]
-
-    analysis = await _llm_call(
-        provider,
-        model,
-        [
-            {"role": "system", "content": build_analysis_prompt(source_file_name)},
-            {
-                "role": "user",
-                "content": (
-                    f"Analyze this source document:\n\n**File:** {source_file_name}\n\n"
-                    f"---\n\n{source_content}"
-                ),
-            },
-        ],
-        max_tokens=4096,
-    )
 
     generation = await _llm_call(
         provider,
@@ -483,19 +462,15 @@ async def _compile_one_file(
         [
             {
                 "role": "system",
-                "content": build_generation_prompt(source_file_name, raw_rel, summary_path),
+                "content": build_compile_prompt(source_file_name, raw_rel, summary_path),
             },
             {
                 "role": "user",
                 "content": (
-                    f"Source document to process: **{source_file_name}**\n\n"
-                    "The Stage 1 analysis below is CONTEXT to inform your output. Do NOT echo "
-                    "its tables, bullet points, or prose. Your output must be FILE blocks as "
-                    "specified in the system prompt — nothing else.\n\n"
-                    "## Stage 1 Analysis (context only — do not repeat)\n\n"
-                    f"{analysis}\n\n---\n\n"
-                    f"Now emit the FILE blocks for the wiki files derived from **{source_file_name}**. "
-                    "Your response MUST begin with `---FILE:` as the very first characters."
+                    f"Source document: **{source_file_name}** (path: {raw_rel})\n\n"
+                    f"---\n\n{source_content}\n\n---\n\n"
+                    "Now emit the FILE blocks. Your response MUST begin with `---FILE:` "
+                    "as the very first characters."
                 ),
             },
         ],
@@ -532,7 +507,7 @@ def _collect_raw_files(root: Path, paths: list[str]) -> list[str]:
 
 
 async def _run_compile(task: CompileTask, vault: Path, root: Path, raw_files: list[str]) -> None:
-    """编译主流程：候选化 → 合并 → 事务写入。"""
+    """编译主流程：并发候选化 → canonical 归并 → 事务写入 → 索引同步。"""
     from mona.providers.factory import load_provider_snapshot
 
     wiki_root = root / "wiki"
@@ -542,55 +517,79 @@ async def _run_compile(task: CompileTask, vault: Path, root: Path, raw_files: li
         snapshot = await asyncio.to_thread(load_provider_snapshot)
         provider, model = snapshot.provider, snapshot.model
 
-        # 1. 候选化：逐文件等待提取 ready 并调用 LLM
-        #    candidates: wiki_rel -> {"content", "sources", "materialIds", "sourceHashes"}
+        # 1. 候选化：文件级并发（Semaphore 限流），每文件等待提取 ready 后单次 LLM 调用
+        sem = asyncio.Semaphore(3)
+
+        async def _process_file(raw_rel: str) -> dict[str, Any] | None:
+            """处理单个文件；成功返回候选块与来源元数据，失败记录错误并返回 None。"""
+            async with sem:
+                task.current_file = raw_rel
+                try:
+                    wait_error = await _wait_text_ready(vault, root, raw_rel)
+                    if wait_error is not None:
+                        task.errors.append(f"{raw_rel}: 提取未就绪（{wait_error}）")
+                        return None
+
+                    text_path = _text_path_for_raw(raw_rel, root)
+                    full_text = text_path.read_text(encoding="utf-8")
+                    text_fm, _ = _parse_frontmatter(full_text)
+                    body = _strip_frontmatter(full_text)
+                    if not body.strip():
+                        task.errors.append(f"{raw_rel}: 提取文本为空")
+                        return None
+
+                    try:
+                        blocks, warnings = await _compile_one_file(
+                            provider, model, root, raw_rel, body
+                        )
+                    except RuntimeError as e:
+                        task.errors.append(f"{raw_rel}: {e}")
+                        return None
+                    for w in warnings:
+                        logger.warning("materials compile {}: {}", raw_rel, w)
+
+                    # 任一 LLM 输出格式错误（0 个有效块）→ 记录错误，该文件不产生候选
+                    if not blocks:
+                        task.errors.append(f"{raw_rel}: LLM 输出无有效 FILE 块，已跳过")
+                        return None
+
+                    return {
+                        "raw_rel": raw_rel,
+                        "material_id": str(text_fm.get("id", "")),
+                        "source_hash": str(text_fm.get("sha256", "")),
+                        "blocks": blocks,
+                    }
+                finally:
+                    task.completed_files.append(raw_rel)
+
+        results = await asyncio.gather(*(_process_file(rel) for rel in raw_files))
+        task.current_file = ""
+
+        # 2. 归并：gather 之后统一合并（避免并发写共享 dict）；
+        #    entities/concepts 页面 canonical 化为 {dir}/{slug(title)}.md，同 title 必同页
+        #    candidates: wiki_rel -> {"content", "sources", "materialIds", "sourceHashes", "legacy_rels"}
         candidates: dict[str, dict[str, Any]] = {}
-        for raw_rel in raw_files:
-            task.current_file = raw_rel
-            wait_error = await _wait_text_ready(vault, root, raw_rel)
-            if wait_error is not None:
-                task.errors.append(f"{raw_rel}: 提取未就绪（{wait_error}）")
-                task.completed_files.append(raw_rel)
+        for result in results:
+            if result is None:
                 continue
-
-            text_path = _text_path_for_raw(raw_rel, root)
-            full_text = text_path.read_text(encoding="utf-8")
-            text_fm, _ = _parse_frontmatter(full_text)
-            body = _strip_frontmatter(full_text)
-            if not body.strip():
-                task.errors.append(f"{raw_rel}: 提取文本为空")
-                task.completed_files.append(raw_rel)
-                continue
-
-            material_id = str(text_fm.get("id", ""))
-            source_hash = str(text_fm.get("sha256", ""))
-
-            try:
-                blocks, warnings = await _compile_one_file(provider, model, root, raw_rel, body)
-            except RuntimeError as e:
-                task.errors.append(f"{raw_rel}: {e}")
-                task.completed_files.append(raw_rel)
-                continue
-            for w in warnings:
-                logger.warning("materials compile {}: {}", raw_rel, w)
-
-            # 任一 LLM 输出格式错误（0 个有效块）→ 记录错误，该文件不产生候选
-            if not blocks:
-                task.errors.append(f"{raw_rel}: LLM 输出无有效 FILE 块，已跳过")
-                task.completed_files.append(raw_rel)
-                continue
-
-            for block in blocks:
+            raw_rel = result["raw_rel"]
+            material_id = result["material_id"]
+            source_hash = result["source_hash"]
+            for block in result["blocks"]:
                 block_path = block["path"].replace("\\", "/")
                 if not block_path.startswith("wiki/") or not block_path.endswith(".md"):
                     continue
                 wiki_rel = block_path[len("wiki/"):]
-                entry = candidates.setdefault(wiki_rel, {
+                canonical_rel = _canonical_wiki_rel(wiki_rel, block["content"])
+                entry = candidates.setdefault(canonical_rel, {
                     "content": block["content"],
                     "sources": [],
                     "materialIds": [],
                     "sourceHashes": [],
+                    "legacy_rels": [],
                 })
+                if canonical_rel != wiki_rel and wiki_rel not in entry["legacy_rels"]:
+                    entry["legacy_rels"].append(wiki_rel)
                 if raw_rel not in entry["sources"]:
                     entry["sources"].append(raw_rel)
                 if material_id and material_id not in entry["materialIds"]:
@@ -598,11 +597,7 @@ async def _run_compile(task: CompileTask, vault: Path, root: Path, raw_files: li
                 if source_hash and source_hash not in entry["sourceHashes"]:
                     entry["sourceHashes"].append(source_hash)
 
-            task.completed_files.append(raw_rel)
-
-        task.current_file = ""
-
-        # 2. 事务写入：全部候选先落临时目录，验证通过后原子替换进 wiki/
+        # 3. 事务写入：全部候选先落临时目录，验证通过后原子替换进 wiki/
         if candidates:
             tmp_root.mkdir(parents=True, exist_ok=True)
             staged: list[tuple[Path, Path]] = []
@@ -610,7 +605,18 @@ async def _run_compile(task: CompileTask, vault: Path, root: Path, raw_files: li
                 for wiki_rel, entry in candidates.items():
                     # 候选路径二次校验（防逃逸）
                     final_path = _ensure_within_domain(wiki_root / wiki_rel, wiki_root)
-                    existing = final_path.read_text(encoding="utf-8") if final_path.exists() else None
+                    existing: str | None = None
+                    if final_path.exists():
+                        existing = final_path.read_text(encoding="utf-8")
+                    else:
+                        # 旧页面渐进迁移：canonical 不存在时回读 LLM 原始路径
+                        for legacy_rel in entry["legacy_rels"]:
+                            legacy_path = _ensure_within_domain(
+                                wiki_root / legacy_rel, wiki_root
+                            )
+                            if legacy_path.exists():
+                                existing = legacy_path.read_text(encoding="utf-8")
+                                break
                     merged = merge_page_content(
                         existing,
                         entry["content"],
@@ -635,6 +641,12 @@ async def _run_compile(task: CompileTask, vault: Path, root: Path, raw_files: li
         task.pages_written = len(task.written_paths)
         # 全部文件都没有产出候选才算失败；部分失败仍算完成（errors 带明细）
         task.state = "done" if candidates else "error"
+
+        # 4. 索引同步：编译写入完成后全量轻量同步（fingerprint skip，成本低）
+        if task.written_paths:
+            from mona.materials.index import sync_write_point
+
+            sync_write_point(vault, full=True)
 
     except asyncio.CancelledError:
         task.state = "cancelled"

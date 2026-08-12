@@ -12,10 +12,14 @@ import hashlib
 import json
 import re
 import sqlite3
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
-from mona.materials.search import _extract_snippet, _parse_frontmatter
+from loguru import logger
+
+from mona.materials.frontmatter import _parse_frontmatter
+from mona.materials.search import _extract_snippet
 
 _SEG_MARKER_RE = re.compile(r"^<!-- seg (\{[^}]*\}) -->[ \t]*$", re.MULTILINE)
 
@@ -120,6 +124,13 @@ class MaterialsIndex:
                     )
                     removed += 1
         return removed
+
+    def remove_material(self, material_id: str) -> None:
+        """删除单个 material 的全部 chunks（raw/wiki 文件删除后的写入点同步）。"""
+        with self._conn:
+            self._conn.execute(
+                "DELETE FROM chunks WHERE material_id = ?", (material_id,)
+            )
 
     # ------------------------------------------------------------------
     # 查询
@@ -275,6 +286,101 @@ def _parse_text_document(content: str) -> tuple[dict[str, Any], list[tuple[dict[
     return fm, segments
 
 
+def _index_text_md(
+    vault: Path, index: MaterialsIndex, md_file: Path
+) -> tuple[str | None, int | None]:
+    """索引单个 text/ 文件。
+
+    返回 (material_id, chunks)：chunks 为 None 表示指纹未变跳过；
+    material_id 为 None 表示文件不可索引（读取失败/无 id/状态非 ok），
+    调用方不应把它计入存活集合（其旧 chunks 会被 remove_except 清理）。
+    """
+    del vault  # 路径推导只依赖 md_file 内容与索引
+    try:
+        content = md_file.read_text(encoding="utf-8")
+    except OSError:
+        return None, None
+    fm, segments = _parse_text_document(content)
+    material_id = fm.get("id")
+    if not isinstance(material_id, str) or not material_id:
+        return None, None
+    if fm.get("status") != "ok":
+        return None, None
+    source = fm.get("source", "")
+    if not isinstance(source, str):
+        source = ""
+    raw_path = source[len("raw/"):] if source.startswith("raw/") else source
+    # 指纹基于 text 文件内容本身：重新提取/编辑后必触发重建，
+    # frontmatter 中的 raw sha256 仅作为元数据透传。
+    fingerprint = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    size = _int_or(fm.get("size"), 0)
+    mtime_ns = _int_or(fm.get("mtimeNs"), 0)
+    if index.material_fresh(material_id, fingerprint):
+        return material_id, None
+    title = Path(raw_path).name if raw_path else md_file.name
+    chunks = []
+    for meta, seg_text in segments:
+        if not seg_text:
+            continue
+        location = {
+            k: v for k, v in meta.items() if k not in ("kind", "label")
+        }
+        chunks.append({
+            "title": title,
+            "rawPath": raw_path,
+            "kind": "source",
+            "segKind": meta.get("kind", "block"),
+            "location": location,
+            "label": meta.get("label", ""),
+            "fingerprint": fingerprint,
+            "size": size,
+            "mtimeNs": mtime_ns,
+            "staleFlag": 0,
+            "content": seg_text,
+        })
+    index.replace_material(material_id, chunks)
+    return material_id, len(chunks)
+
+
+def _index_wiki_md(
+    index: MaterialsIndex, wiki_root: Path, md_file: Path
+) -> tuple[str | None, int | None]:
+    """索引单个 wiki/ 文件，返回约定同 `_index_text_md`。"""
+    try:
+        content = md_file.read_text(encoding="utf-8")
+    except OSError:
+        return None, None
+    fm, body = _parse_frontmatter(content)
+    wiki_rel = str(md_file.relative_to(wiki_root)).replace("\\", "/")
+    material_id = fm.get("id")
+    if not isinstance(material_id, str) or not material_id:
+        material_id = f"wiki-{wiki_rel}"
+    fingerprint = f"mtime:{md_file.stat().st_mtime_ns}"
+    if index.material_fresh(material_id, fingerprint):
+        return material_id, None
+    stale_flag = 1 if str(fm.get("stale", "")).lower() == "true" else 0
+    title = fm.get("title", md_file.stem)
+    if not isinstance(title, str):
+        title = md_file.stem
+    chunks = []
+    if body.strip():
+        chunks.append({
+            "title": title,
+            "rawPath": wiki_rel,
+            "kind": "derived",
+            "segKind": "wiki",
+            "location": {"path": wiki_rel},
+            "label": title,
+            "fingerprint": fingerprint,
+            "size": md_file.stat().st_size,
+            "mtimeNs": md_file.stat().st_mtime_ns,
+            "staleFlag": stale_flag,
+            "content": body.strip(),
+        })
+    index.replace_material(material_id, chunks)
+    return material_id, len(chunks)
+
+
 def sync_index(vault: Path, index: MaterialsIndex) -> dict[str, int]:
     """把 text/ 与 wiki/ 的最新状态增量同步进索引。
 
@@ -289,91 +395,70 @@ def sync_index(vault: Path, index: MaterialsIndex) -> dict[str, int]:
 
     if text_root.exists():
         for md_file in sorted(text_root.rglob("*.md")):
-            try:
-                content = md_file.read_text(encoding="utf-8")
-            except OSError:
+            material_id, chunks = _index_text_md(vault, index, md_file)
+            if material_id is None:
                 continue
-            fm, segments = _parse_text_document(content)
-            material_id = fm.get("id")
-            if not isinstance(material_id, str) or not material_id:
-                continue
-            if fm.get("status") != "ok":
-                continue
-            source = fm.get("source", "")
-            raw_path = source[len("raw/"):] if source.startswith("raw/") else source
-            # 指纹基于 text 文件内容本身：重新提取/编辑后必触发重建，
-            # frontmatter 中的 raw sha256 仅作为元数据透传。
-            fingerprint = hashlib.sha256(content.encode("utf-8")).hexdigest()
-            size = _int_or(fm.get("size"), 0)
-            mtime_ns = _int_or(fm.get("mtimeNs"), 0)
             seen.add(material_id)
-            if index.material_fresh(material_id, fingerprint):
+            if chunks is None:
                 stats["skipped"] += 1
-                continue
-            title = Path(raw_path).name if raw_path else md_file.name
-            chunks = []
-            for meta, seg_text in segments:
-                if not seg_text:
-                    continue
-                location = {
-                    k: v for k, v in meta.items() if k not in ("kind", "label")
-                }
-                chunks.append({
-                    "title": title,
-                    "rawPath": raw_path,
-                    "kind": "source",
-                    "segKind": meta.get("kind", "block"),
-                    "location": location,
-                    "label": meta.get("label", ""),
-                    "fingerprint": fingerprint,
-                    "size": size,
-                    "mtimeNs": mtime_ns,
-                    "staleFlag": 0,
-                    "content": seg_text,
-                })
-            index.replace_material(material_id, chunks)
-            stats["indexed"] += len(chunks)
+            else:
+                stats["indexed"] += chunks
 
     if wiki_root.exists():
         for md_file in sorted(wiki_root.rglob("*.md")):
-            try:
-                content = md_file.read_text(encoding="utf-8")
-            except OSError:
+            material_id, chunks = _index_wiki_md(index, wiki_root, md_file)
+            if material_id is None:
                 continue
-            fm, body = _parse_frontmatter(content)
-            wiki_rel = str(md_file.relative_to(wiki_root)).replace("\\", "/")
-            material_id = fm.get("id") or f"wiki-{wiki_rel}"
-            if not isinstance(material_id, str) or not material_id:
-                material_id = f"wiki-{wiki_rel}"
             seen.add(material_id)
-            fingerprint = f"mtime:{md_file.stat().st_mtime_ns}"
-            if index.material_fresh(material_id, fingerprint):
+            if chunks is None:
                 stats["skipped"] += 1
-                continue
-            stale_flag = 1 if fm.get("stale") == "true" else 0
-            title = fm.get("title", md_file.stem)
-            if not isinstance(title, str):
-                title = md_file.stem
-            chunks = []
-            if body.strip():
-                chunks.append({
-                    "title": title,
-                    "rawPath": wiki_rel,
-                    "kind": "derived",
-                    "segKind": "wiki",
-                    "location": {"path": wiki_rel},
-                    "label": title,
-                    "fingerprint": fingerprint,
-                    "size": md_file.stat().st_size,
-                    "mtimeNs": md_file.stat().st_mtime_ns,
-                    "staleFlag": stale_flag,
-                    "content": body.strip(),
-                })
-            index.replace_material(material_id, chunks)
-            stats["indexed"] += len(chunks)
+            else:
+                stats["indexed"] += chunks
 
     stats["removed"] = index.remove_except(seen)
     return stats
+
+
+def sync_write_point(
+    vault: Path,
+    *,
+    text_files: Iterable[Path] = (),
+    wiki_files: Iterable[Path] = (),
+    removed_ids: Iterable[str] = (),
+    full: bool = False,
+) -> None:
+    """写入点索引同步：提取/删除/移动/编译/单页写入后调用。
+
+    失败只记日志，绝不影响主流程；reconcile 仍作为兜底全量对账。
+    """
+    try:
+        index = MaterialsIndex(
+            vault / ".mona" / "materials" / "index.db", vault=vault
+        )
+    except Exception:
+        logger.exception("materials: open index failed at write point")
+        return
+    try:
+        wiki_root = vault / ".mona" / "materials" / "wiki"
+        for md_file in text_files:
+            try:
+                _index_text_md(vault, index, md_file)
+            except Exception:
+                logger.exception("materials: index sync failed for {}", md_file)
+        for md_file in wiki_files:
+            try:
+                _index_wiki_md(index, wiki_root, md_file)
+            except Exception:
+                logger.exception("materials: index sync failed for {}", md_file)
+        for material_id in removed_ids:
+            try:
+                index.remove_material(material_id)
+            except Exception:
+                logger.exception("materials: index remove failed for {}", material_id)
+        if full:
+            sync_index(vault, index)
+    finally:
+        index.close()
 
 
 def _int_or(value: Any, default: int) -> int:

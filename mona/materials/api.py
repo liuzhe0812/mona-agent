@@ -19,7 +19,9 @@ from typing import Any
 from aiohttp import web
 from loguru import logger
 
-from mona.materials.search import _parse_frontmatter, search_materials
+from mona.materials.frontmatter import _parse_frontmatter, _render_frontmatter
+from mona.materials.index import sync_write_point
+from mona.materials.vault import get_vault_path
 from mona.utils.document import (
     EXTRACTOR_VERSION,
     IMAGE_EXTENSIONS,
@@ -43,28 +45,9 @@ EXTRACT_TIMEOUT = 120
 _EXTRACT_TASKS: dict[Path, dict[str, dict[str, Any]]] = {}
 
 
-def _get_vault_path() -> Path | None:
-    """通过 Tauri IPC 获取笔记 vault 路径。"""
-    try:
-        from mona.agent.tools.tauri_ipc import tauri_invoke
-
-        result = tauri_invoke("notes_vault_get_path")
-    except RuntimeError:
-        return None
-    if result is None:
-        return None
-    if isinstance(result, str) and result.strip():
-        return Path(result.strip())
-    if isinstance(result, dict):
-        v = result.get("path") or result.get("result")
-        if isinstance(v, str) and v.strip():
-            return Path(v.strip())
-    return None
-
-
 def _require_vault() -> Path:
     """获取 vault 路径，未配置则抛出 HTTP 400。"""
-    vault = _get_vault_path()
+    vault = get_vault_path()
     if vault is None:
         raise web.HTTPBadRequest(reason="Notes vault not configured")
     return vault
@@ -160,15 +143,6 @@ def _atomic_write_text(path: Path, content: str) -> None:
     os.replace(tmp, path)
 
 
-def _render_frontmatter(fields: dict[str, Any]) -> str:
-    lines = ["---"]
-    for k, v in fields.items():
-        lines.append(f"{k}: {v}")
-    lines.append("---")
-    lines.append("")
-    return "\n".join(lines)
-
-
 def _read_existing_material_id(text_path: Path) -> str | None:
     """读取已有 text/ 文件的 material ID（重新提取时保留稳定身份）。"""
     try:
@@ -229,7 +203,6 @@ async def _extract_one(vault: Path, materials_root: Path, raw_rel_path: str) -> 
     产物 frontmatter 携带稳定 material ID、sha256、size、mtimeNs 和
     extractorVersion；失败时写入 error 状态文件，图片写 unsupported。
     """
-    del vault  # 保留参数位，任务表由调度方管理
     raw_path = materials_root / "raw" / raw_rel_path
     text_path = _text_path_for_raw(raw_rel_path, materials_root)
     try:
@@ -283,6 +256,7 @@ async def _extract_one(vault: Path, materials_root: Path, raw_rel_path: str) -> 
             mtime_ns=_mtime_ns,
         )
         _atomic_write_text(text_path, document)
+        sync_write_point(vault, text_files=[text_path])
         logger.info("materials: extracted {}", raw_rel_path)
     except asyncio.TimeoutError:
         _mark_text_error(text_path, raw_rel_path, "提取超时")
@@ -464,6 +438,18 @@ async def handle_materials_delete(req: web.Request) -> web.Response:
     # text 侧对应路径：文件 -> `<rel>.md`；目录 -> 同名子树
     text_target = root / "text" / (f"{rel}.md" if raw_target.is_file() else rel)
 
+    # 删除前收集受影响 text 文件的 material ID，用于索引同步清理
+    removed_ids: list[str] = []
+    text_mds: list[Path] = []
+    if text_target.is_file():
+        text_mds.append(text_target)
+    elif text_target.is_dir():
+        text_mds.extend(text_target.rglob("*.md"))
+    for md in text_mds:
+        mid = _read_existing_material_id(md)
+        if mid:
+            removed_ids.append(mid)
+
     # 先删 raw（失败则整体未变），再同步删除 text；text 删除失败留下的
     # 孤儿文件由 reconciliation 兜底清理。
     if raw_target.is_file():
@@ -479,6 +465,9 @@ async def handle_materials_delete(req: web.Request) -> web.Response:
                 shutil.rmtree(text_target)
         except OSError:
             logger.warning("materials: text cleanup incomplete for {}", rel)
+
+    if removed_ids:
+        sync_write_point(vault, removed_ids=removed_ids)
 
     return web.json_response({"deleted": rel})
 
@@ -555,6 +544,7 @@ async def handle_materials_move(req: web.Request) -> web.Response:
     # 移动 raw（用 shutil.move 确保跨卷移动也是真移动而非 copy），
     # 再同步移动 text；text 移动失败时回滚 raw，避免半完成状态。
     shutil.move(str(src), str(dst))
+    moved_text_mds: list[Path] = []
     try:
         if old_text.exists():
             new_text.parent.mkdir(parents=True, exist_ok=True)
@@ -562,6 +552,7 @@ async def handle_materials_move(req: web.Request) -> web.Response:
             # 更新 text frontmatter 的 source 路径（material ID 不变）
             if src_is_file:
                 _rewrite_text_frontmatter_source(new_text, new_rel)
+                moved_text_mds.append(new_text)
             else:
                 for moved_md in new_text.rglob("*.md"):
                     old_source_rel = str(
@@ -572,9 +563,13 @@ async def handle_materials_move(req: web.Request) -> web.Response:
                     _rewrite_text_frontmatter_source(
                         moved_md, f"{new_rel}/{old_source_rel}"
                     )
+                    moved_text_mds.append(moved_md)
     except OSError:
         shutil.move(str(dst), str(src))
         raise
+
+    if moved_text_mds:
+        sync_write_point(vault, text_files=moved_text_mds)
 
     return web.json_response({
         "source": source_rel,
@@ -808,6 +803,7 @@ async def handle_materials_write_wiki_page(req: web.Request) -> web.Response:
     existing_id = _read_wiki_existing_id(wiki_path) if wiki_path.exists() else None
     final_content = _ensure_wiki_frontmatter_id(content, existing_id)
     wiki_path.write_text(final_content, encoding="utf-8")
+    sync_write_point(vault, wiki_files=[wiki_path])
     return web.json_response({"path": rel, "bytes": len(final_content)})
 
 
@@ -820,17 +816,27 @@ async def handle_materials_delete_wiki_page(req: web.Request) -> web.Response:
 
     wiki_path = _ensure_within_domain(wiki_root / rel, wiki_root)
     if wiki_path.exists():
+        existing_id = _read_wiki_existing_id(wiki_path)
         wiki_path.unlink()
+        # 索引中的 material_id 是显式 id 或 wiki-<rel> 回退，两者都清
+        removed = [existing_id] if existing_id else []
+        fallback_id = f"wiki-{rel}"
+        if fallback_id != existing_id:
+            removed.append(fallback_id)
+        sync_write_point(vault, removed_ids=removed)
     return web.json_response({"deleted": rel})
 
 
 async def handle_materials_search(req: web.Request) -> web.Response:
-    """GET /api/materials/search — 关键词搜索资料。
+    """GET /api/materials/search — FTS5 chunk 索引检索资料。
 
     查询参数：
       - q: 搜索关键词
       - count: 返回上限，默认 10
       - scope: "all"（默认）| "text" | "wiki"
+
+    结果 path 约定：source 为相对 raw/ 的路径，wiki 为相对 wiki/ 的路径；
+    locationLabel/stale 由索引透传（写入点同步保证新鲜，reconcile 兜底）。
     """
     vault = _require_vault()
     query = req.query.get("q", "").strip()
@@ -839,14 +845,32 @@ async def handle_materials_search(req: web.Request) -> web.Response:
 
     count = int(req.query.get("count", "10"))
     scope = req.query.get("scope", "all")
-
-    include_text = scope in ("all", "text")
-    include_wiki = scope in ("all", "wiki")
-
-    results = search_materials(
-        vault, query, count=count,
-        include_text=include_text, include_wiki=include_wiki,
+    kinds = {"text": ("source",), "wiki": ("derived",)}.get(
+        scope, ("source", "derived")
     )
+
+    from mona.materials.index import MaterialsIndex
+
+    index = MaterialsIndex(
+        vault / ".mona" / "materials" / "index.db", vault=vault
+    )
+    try:
+        rows = index.search(query, count=count, kinds=kinds)
+    finally:
+        index.close()
+
+    results = [
+        {
+            "kind": r["kind"],
+            "title": r["title"],
+            "path": r["rawPath"],
+            "snippet": r["snippet"],
+            "score": r["score"],
+            "locationLabel": r.get("locationLabel") or None,
+            "stale": bool(r.get("stale")),
+        }
+        for r in rows
+    ]
     return web.json_response({"results": results})
 
 
@@ -945,7 +969,7 @@ async def reconcile_materials(vault: Path, root: Path) -> dict[str, Any]:
             if not sources:
                 continue
             wiki_rel = str(wiki_file.relative_to(wiki_root)).replace("\\", "/")
-            if fm.get("stale") == "true":
+            if str(fm.get("stale", "")).lower() == "true":
                 continue
             for source in sources:
                 if not isinstance(source, str):
@@ -1047,7 +1071,20 @@ async def handle_materials_status(req: web.Request) -> web.Response:
         "wikiFiles": len(wiki_files),
         "extract": counts,
         "rawRoot": str(raw_dir),
+        "vaultRoot": str(vault),
     })
+
+
+async def handle_materials_lint(req: web.Request) -> web.Response:
+    """POST /api/materials/lint — 对 LLM Wiki 产物跑确定性质量检查，返回 lint 报告。
+
+    只报告不修复；前端可把报告注入 Agent 面板走「让 Mona 修复」流程。
+    """
+    vault = _require_vault()
+    from mona.materials.lint import lint_materials
+
+    report = lint_materials(vault)
+    return web.json_response(report)
 
 
 async def handle_materials_llm_config(_req: web.Request) -> web.Response:

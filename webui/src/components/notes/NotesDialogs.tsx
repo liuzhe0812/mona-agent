@@ -104,6 +104,7 @@ interface ConfirmDialogProps {
   title: string;
   message: string;
   destructive?: boolean;
+  confirmText?: string;
   onConfirm: () => void;
   onOpenChange: (open: boolean) => void;
 }
@@ -113,6 +114,7 @@ export function ConfirmDialog({
   title,
   message,
   destructive = false,
+  confirmText = "确定",
   onConfirm,
   onOpenChange,
 }: ConfirmDialogProps) {
@@ -144,7 +146,7 @@ export function ConfirmDialog({
               onOpenChange(false);
             }}
           >
-            确定
+            {confirmText}
           </Button>
         </DialogFooter>
       </DialogContent>

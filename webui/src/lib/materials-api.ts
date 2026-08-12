@@ -68,9 +68,14 @@ export interface WikiPageDetail {
 export interface MaterialsSearchResult {
   kind: "material_source" | "material_wiki";
   title: string;
+  /** source 为相对 raw/ 的路径；wiki 为相对 wiki/ 的路径 */
   path: string;
   snippet: string;
   score: number;
+  /** 位置标签（如 "Page 12"），点击跳转时用于预览内滚动定位 */
+  locationLabel?: string | null;
+  /** 引用的原始资料已缺失或内容已变化 */
+  stale?: boolean;
   sources?: string[];
 }
 
@@ -84,6 +89,34 @@ export interface MaterialsStatus {
     error: number;
   };
   rawRoot?: string;
+  vaultRoot?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Lint（LLM Wiki 质量检查）
+// ---------------------------------------------------------------------------
+
+export interface MaterialsLintIssue {
+  /** 规则 ID：frontmatter-schema / broken-wikilink / dangling-source /
+   *  duplicate-title / orphan-page / thin-page / text-extract-error */
+  rule: string;
+  severity: "error" | "warning";
+  /** wiki 问题为相对 wiki/ 的路径；提取问题为 text/ 前缀路径 */
+  path: string;
+  message: string;
+  /** 规则中文标签，直接展示 */
+  label: string;
+  details: Record<string, unknown>;
+}
+
+export interface MaterialsLintReport {
+  issues: MaterialsLintIssue[];
+  summary: {
+    errors: number;
+    warnings: number;
+    wikiPages: number;
+    textFiles: number;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -255,4 +288,9 @@ export async function searchMaterials(
 
 export function getMaterialsStatus(): Promise<MaterialsStatus> {
   return fetchJSON<MaterialsStatus>(`/api/materials/status`);
+}
+
+/** 对 LLM Wiki 产物跑确定性质量检查（只报告不修复）。 */
+export function lintMaterials(): Promise<MaterialsLintReport> {
+  return fetchJSON<MaterialsLintReport>(`/api/materials/lint`, { method: "POST" });
 }
