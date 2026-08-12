@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronDown,
   ChevronRight,
@@ -60,12 +60,13 @@ interface WorkspacePanelProps {
   truncated?: boolean;
   /** Manual refresh callback. */
   onRefresh?: () => void;
-  /** Move a shared-output artifact to the system recycle bin. Only offered
-   *  when ``scope === "shared"``. May return a promise; rejections are shown
-   *  inside the confirmation dialog so the user can retry or cancel. */
+  /** Move an artifact (file or directory) to the system recycle bin. May
+   *  return a promise; rejections are shown inside the confirmation dialog
+   *  so the user can retry or cancel. */
   onDelete?: (file: DeliveredFile) => void | Promise<void>;
-  /** Absolute path of the shared output directory. Enables the
-   *  "open output directory" affordances (empty state + truncated footer). */
+  /** Absolute path of the panel's root directory (shared output dir or the
+   *  project workspace). Enables the "open directory" affordances and the
+   *  directory context menu. */
   outputDir?: string | null;
   className?: string;
 }
@@ -242,10 +243,14 @@ export function WorkspacePanel({
   const observeArtifactInventory = useFilePreviewStore(
     (s) => s.observeArtifactInventory,
   );
+  const markArtifactsViewed = useFilePreviewStore((s) => s.markArtifactsViewed);
 
   const tree = useMemo(() => buildFileTree(files), [files]);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
-  const [deleteTarget, setDeleteTarget] = useState<DeliveredFile | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{
+    file: DeliveredFile;
+    isDir: boolean;
+  } | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [deletePending, setDeletePending] = useState(false);
 
@@ -285,6 +290,15 @@ export function WorkspacePanel({
     observeArtifactInventory(allKeys);
   }, [allKeys, observeArtifactInventory]);
 
+  // Everything the panel displayed counts as seen: when the panel unmounts
+  // (preview opens, panel collapses, session switches), merge the current
+  // inventory into the baseline so the same rows are not flagged "new" again.
+  const allKeysRef = useRef(allKeys);
+  allKeysRef.current = allKeys;
+  useEffect(() => {
+    return () => markArtifactsViewed(allKeysRef.current);
+  }, [markArtifactsViewed]);
+
   const newKeys = useMemo(() => {
     const out = new Set<string>();
     if (!artifactBaseline) return out;
@@ -310,9 +324,9 @@ export function WorkspacePanel({
     void openPathWithSystemApp(outputDir);
   };
 
-  const handleDeleteRequest = (file: DeliveredFile) => {
+  const handleDeleteRequest = (file: DeliveredFile, isDir = false) => {
     setDeleteError(null);
-    setDeleteTarget(file);
+    setDeleteTarget({ file, isDir });
   };
 
   const handleDeleteConfirm = async (event: React.MouseEvent) => {
@@ -321,7 +335,8 @@ export function WorkspacePanel({
     // dialog open and never read as a silent permanent delete.
     event.preventDefault();
     if (!deleteTarget || !onDelete) return;
-    const target = deleteTarget;
+    const target = deleteTarget.file;
+    const targetIsDir = deleteTarget.isDir;
     setDeletePending(true);
     setDeleteError(null);
     try {
@@ -332,21 +347,27 @@ export function WorkspacePanel({
       return;
     }
     setDeletePending(false);
-    // 若正在预览该文件，先关闭预览，避免预览面板指向已删除文件。
-    if (previewFile?.absolute_path === target.absolute_path) {
-      closePreview();
+    // 若正在预览该文件（或被删目录内的文件），先关闭预览，避免预览面板
+    // 指向已删除内容。
+    const previewPath = previewFile?.absolute_path;
+    if (previewPath) {
+      const targetPath = target.absolute_path;
+      const insideDir =
+        targetIsDir && previewPath.startsWith(`${targetPath}/`);
+      if (previewPath === targetPath || insideDir) closePreview();
     }
     setDeleteTarget(null);
   };
 
   const isEmpty = files.length === 0 && sessionFiles.length === 0;
-  const canDelete = scope === "shared" && !!onDelete;
+  const canDelete = !!onDelete;
+  const panelLabel = scope === "shared" ? "产物" : "项目文件";
 
   return (
     <div className={cn("flex h-full flex-col bg-background", className)}>
       <div className="flex items-center gap-2 border-b border-border/60 px-3 py-2">
         <Package className="h-4 w-4 text-muted-foreground" />
-        <span className="text-sm font-medium">产物</span>
+        <span className="text-sm font-medium">{panelLabel}</span>
         {!isEmpty && (
           <span className="rounded-full bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
             {totalCount}
@@ -380,7 +401,7 @@ export function WorkspacePanel({
       {error ? (
         <div className="flex flex-col items-center gap-2 px-4 py-6 text-center text-xs text-destructive">
           <AlertTriangle className="h-5 w-5 opacity-70" />
-          <span>加载产物失败：{error}</span>
+          <span>加载{panelLabel}失败：{error}</span>
           {onRefresh && (
             <button
               type="button"
@@ -397,7 +418,7 @@ export function WorkspacePanel({
           <span>
             {scope === "shared"
               ? "还没有产物。AI 创建的文件会出现在这里。"
-              : "当前项目还没有交付文件。"}
+              : "项目目录里还没有文件。"}
           </span>
           {isTauri() && scope === "shared" && outputDir && (
             <button
@@ -432,6 +453,7 @@ export function WorkspacePanel({
                       canDelete={canDelete}
                       onDelete={handleDeleteRequest}
                       newKeys={newKeys}
+                      rootDir={outputDir}
                     />
                   );
                 })}
@@ -441,7 +463,7 @@ export function WorkspacePanel({
           {tree.length > 0 && (
             <div className="shrink-0 px-2 pt-1.5 pb-1">
               <div className="px-1 text-[11px] font-medium text-muted-foreground">
-                工作区文件
+                {scope === "shared" ? "全部产物" : "全部文件"}
               </div>
             </div>
           )}
@@ -460,6 +482,7 @@ export function WorkspacePanel({
                   canDelete={canDelete}
                   onDelete={handleDeleteRequest}
                   newKeys={newKeys}
+                  rootDir={outputDir}
                 />
               ))}
             </ul>
@@ -472,7 +495,9 @@ export function WorkspacePanel({
                     onClick={handleOpenOutputDir}
                     className="ml-1 underline-offset-2 hover:underline"
                   >
-                    打开 output 目录查看全部
+                    {scope === "shared"
+                      ? "打开 output 目录查看全部"
+                      : "打开项目目录查看全部"}
                   </button>
                 )}
               </div>
@@ -498,10 +523,10 @@ export function WorkspacePanel({
               </div>
             </div>
             <AlertDialogTitle className="text-center text-[20px] font-semibold leading-tight tracking-[-0.02em] text-foreground">
-              删除这个文件？
+              {deleteTarget?.isDir ? "删除这个文件夹？" : "删除这个文件？"}
             </AlertDialogTitle>
             <AlertDialogDescription className="mt-3 max-w-[17rem] text-center text-[14px] leading-6 text-muted-foreground">
-              「{deleteTarget?.name ?? ""}」将被移至系统回收站，需要时可以从回收站恢复。
+              「{deleteTarget?.file.name ?? ""}」将被移至系统回收站，需要时可以从回收站恢复。
             </AlertDialogDescription>
             {deleteError ? (
               <p className="mt-3 max-w-[17rem] text-center text-[13px] leading-5 text-destructive">
@@ -538,6 +563,7 @@ function TreeRow({
   canDelete,
   onDelete,
   newKeys,
+  rootDir,
 }: {
   node: TreeNode;
   depth: number;
@@ -547,10 +573,13 @@ function TreeRow({
   sessionKey: string | null;
   activePath: string | null;
   canDelete: boolean;
-  onDelete: (file: DeliveredFile) => void;
+  onDelete: (file: DeliveredFile, isDir?: boolean) => void;
   /** Paths that arrived after the baseline inventory and are not yet
    *  previewed — file rows get a leading "new" dot. */
   newKeys: Set<string>;
+  /** Absolute path of the panel root; directory rows resolve their own
+   *  absolute path against it for the context menu. */
+  rootDir: string | null;
 }) {
   const openPreview = useFilePreviewStore((s) => s.open);
   const indent = 8 + depth * 14;
@@ -561,32 +590,77 @@ function TreeRow({
   if (node.isDir) {
     const isCollapsed = collapsed.has(node.path);
     const childCount = node.children?.length ?? 0;
+    const dirButton = (
+      <button
+        type="button"
+        onClick={() => onToggle(node.path)}
+        className={cn(
+          "flex w-full items-center gap-1 rounded-sm py-1 pr-2 text-left",
+          "text-foreground/90 hover:bg-muted/60",
+        )}
+        style={{ paddingLeft: indent }}
+      >
+        {isCollapsed ? (
+          <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        ) : (
+          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        )}
+        {isCollapsed ? (
+          <Folder className="h-4 w-4 shrink-0 text-amber-500" />
+        ) : (
+          <FolderOpen className="h-4 w-4 shrink-0 text-amber-500" />
+        )}
+        <span className="min-w-0 truncate font-medium">{node.name}</span>
+        <span className="shrink-0 text-[11px] text-muted-foreground">
+          {childCount}
+        </span>
+      </button>
+    );
+
+    // Directory rows resolve their absolute path against the panel root so
+    // the context menu can open / trash the whole folder.
+    const dirAbsPath = rootDir
+      ? `${rootDir.replace(/\\/g, "/").replace(/\/+$/, "")}/${node.path}`
+      : null;
+    const dirPseudoFile: DeliveredFile = {
+      path: node.path,
+      absolute_path: dirAbsPath ?? node.path,
+      name: node.name,
+      size: 0,
+      size_human: "",
+      mime: "",
+    };
+    const handleOpenDir = () => {
+      if (isTauri() && dirAbsPath) void openPathWithSystemApp(dirAbsPath);
+    };
+    const handleDeleteDir = () => onDelete(dirPseudoFile, true);
+
     return (
       <li>
-        <button
-          type="button"
-          onClick={() => onToggle(node.path)}
-          className={cn(
-            "flex w-full items-center gap-1 rounded-sm py-1 pr-2 text-left",
-            "text-foreground/90 hover:bg-muted/60",
-          )}
-          style={{ paddingLeft: indent }}
-        >
-          {isCollapsed ? (
-            <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-          ) : (
-            <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-          )}
-          {isCollapsed ? (
-            <Folder className="h-4 w-4 shrink-0 text-amber-500" />
-          ) : (
-            <FolderOpen className="h-4 w-4 shrink-0 text-amber-500" />
-          )}
-          <span className="min-w-0 truncate font-medium">{node.name}</span>
-          <span className="shrink-0 text-[11px] text-muted-foreground">
-            {childCount}
-          </span>
-        </button>
+        {isTauri() && dirAbsPath ? (
+          <ContextMenu>
+            <ContextMenuTrigger asChild>{dirButton}</ContextMenuTrigger>
+            <ContextMenuContent className="w-48">
+              <ContextMenuItem onClick={handleOpenDir}>
+                在系统资源管理器中打开
+              </ContextMenuItem>
+              {canDelete && (
+                <>
+                  <ContextMenuSeparator />
+                  <ContextMenuItem
+                    onClick={handleDeleteDir}
+                    className="text-destructive focus:text-destructive"
+                  >
+                    <Trash2 className="mr-2 h-4 w-4" />
+                    删除
+                  </ContextMenuItem>
+                </>
+              )}
+            </ContextMenuContent>
+          </ContextMenu>
+        ) : (
+          dirButton
+        )}
         {!isCollapsed && node.children && (
           <ul className="flex flex-col">
             {node.children.map((child) => (
@@ -602,6 +676,7 @@ function TreeRow({
                 canDelete={canDelete}
                 onDelete={onDelete}
                 newKeys={newKeys}
+                rootDir={rootDir}
               />
             ))}
           </ul>

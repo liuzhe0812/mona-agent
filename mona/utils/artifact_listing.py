@@ -13,6 +13,13 @@ MAX_ARTIFACT_FILES = 1000
 
 _TEMP_EXTENSIONS = {".tmp", ".part"}
 
+# Project-directory scans skip dependency/build output directories; they are
+# machine-generated bulk, not user-authored project files. Dot-directories
+# (.git, .venv, .idea …) are already excluded by the dotfile rule.
+_PROJECT_SKIP_DIRS = frozenset({
+    "node_modules", "__pycache__", "dist", "build", "target", "venv",
+})
+
 # Generated media sidecar metadata (img_<hash12>.json / vid_<slug>_<hash12>.json
 # etc.) is internal bookkeeping, not a user deliverable — hidden from the panel.
 _SIDECAR_RE = re.compile(r"^(?:img|vid)_(?:.*_)?[0-9a-f]{12}\.json$")
@@ -55,7 +62,10 @@ def _is_temp_file(name: str) -> bool:
     return Path(name).suffix.lower() in _TEMP_EXTENSIONS
 
 
-def _scan_files(root: Path) -> list[tuple[Path, str, float, int]]:
+def _scan_files(
+    root: Path,
+    skip_dir_names: frozenset[str] | None = None,
+) -> list[tuple[Path, str, float, int]]:
     """Collect real files under root as ``(path, rel_posix, mtime, size)``.
 
     Symlinks, dot-segment paths, and temp files are skipped. Errors on
@@ -80,7 +90,8 @@ def _scan_files(root: Path) -> list[tuple[Path, str, float, int]]:
                 continue
             try:
                 if entry.is_dir():
-                    stack.append(entry)
+                    if skip_dir_names is None or entry.name not in skip_dir_names:
+                        stack.append(entry)
                     continue
                 if not entry.is_file():
                     continue
@@ -102,17 +113,10 @@ def _scan_files(root: Path) -> list[tuple[Path, str, float, int]]:
     return results
 
 
-def list_artifacts(output_dir: Path) -> ArtifactListResult:
-    """Scan the shared output directory and return artifact files.
-
-    The directory is walked recursively. Files are sorted by mtime desc,
-    then by relative path asc. Symlinks, dotfiles, and temp files are
-    skipped. Returns at most MAX_ARTIFACT_FILES entries (most recent
-    first); ``truncated`` is True if the limit was hit.
-    """
-    root = Path(output_dir).resolve(strict=False)
-
-    scanned = _scan_files(root)
+def _to_result(
+    scanned: list[tuple[Path, str, float, int]],
+) -> ArtifactListResult:
+    """Sort, cap, and hydrate scanned entries into an ``ArtifactListResult``."""
     # Sort by mtime desc, then relative path asc. Combined key is a total
     # order (relative paths are unique), so the stable sort is deterministic.
     scanned.sort(key=lambda item: (-item[2], item[1]))
@@ -137,6 +141,29 @@ def list_artifacts(output_dir: Path) -> ArtifactListResult:
             )
         )
     return ArtifactListResult(files=files, truncated=truncated)
+
+
+def list_artifacts(output_dir: Path) -> ArtifactListResult:
+    """Scan the shared output directory and return artifact files.
+
+    The directory is walked recursively. Files are sorted by mtime desc,
+    then by relative path asc. Symlinks, dotfiles, and temp files are
+    skipped. Returns at most MAX_ARTIFACT_FILES entries (most recent
+    first); ``truncated`` is True if the limit was hit.
+    """
+    root = Path(output_dir).resolve(strict=False)
+    return _to_result(_scan_files(root))
+
+
+def list_project_files(project_dir: Path) -> ArtifactListResult:
+    """Scan a project session's workspace directory and return its files.
+
+    Same filtering and cap as :func:`list_artifacts`, plus dependency/build
+    directories (``node_modules``, ``__pycache__``, ``dist`` …) are skipped:
+    they are machine-generated bulk, not user-authored project files.
+    """
+    root = Path(project_dir).resolve(strict=False)
+    return _to_result(_scan_files(root, skip_dir_names=_PROJECT_SKIP_DIRS))
 
 
 def artifact_signature(output_dir: Path) -> str:
