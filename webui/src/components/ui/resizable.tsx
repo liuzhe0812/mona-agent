@@ -1,3 +1,4 @@
+import { GripVertical } from "lucide-react"
 import {
   Group,
   Panel,
@@ -6,6 +7,7 @@ import {
   type PanelProps,
   type SeparatorProps,
 } from "react-resizable-panels"
+
 import { cn } from "@/lib/utils"
 
 function ResizablePanelGroup({
@@ -41,21 +43,19 @@ function ResizableHandle({
     <Separator
       data-slot="resizable-handle"
       className={cn(
-        "group relative flex shrink-0 items-center justify-center bg-transparent",
-        // Vertical split (default between side-by-side panels): narrow tall handle
-        "w-3 cursor-col-resize",
-        // Horizontal split (between vertically stacked panels): wide short handle
-        "aria-[orientation=horizontal]:h-3 aria-[orientation=horizontal]:w-full aria-[orientation=horizontal]:cursor-row-resize",
+        "group relative flex shrink-0 items-center justify-center bg-border",
+        // Vertical split (default between side-by-side panels): visible 1px line + wider hit area
+        "w-px cursor-col-resize after:absolute after:inset-y-0 after:left-1/2 after:w-3 after:-translate-x-1/2 after:bg-transparent",
+        // Horizontal split (between vertically stacked panels)
+        "data-[orientation=vertical]:h-px data-[orientation=vertical]:w-full data-[orientation=vertical]:cursor-row-resize data-[orientation=vertical]:after:inset-x-0 data-[orientation=vertical]:after:top-1/2 data-[orientation=vertical]:after:h-3 data-[orientation=vertical]:after:w-full data-[orientation=vertical]:after:-translate-y-1/2 data-[orientation=vertical]:after:translate-x-0",
         className
       )}
       {...props}
     >
-      {/* Visible 1px line - vertical split (between side-by-side panels) */}
-      <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-border group-hover:bg-primary/40 group-active:bg-primary/40 group-aria-[orientation=horizontal]:hidden" />
-      {/* Visible 1px line - horizontal split (between stacked panels) */}
-      <div className="absolute inset-x-0 top-1/2 hidden h-px -translate-y-1/2 bg-border group-hover:bg-primary/40 group-active:bg-primary/40 group-aria-[orientation=horizontal]:block" />
       {withHandle && (
-        <div className="z-10 flex h-8 w-1.5 shrink-0 rounded-full bg-border group-aria-[orientation=horizontal]:h-1.5 group-aria-[orientation=horizontal]:w-8" />
+        <div className="z-10 flex h-7 w-5 shrink-0 items-center justify-center rounded-full border bg-background shadow-sm transition-colors group-hover:border-primary/40 group-hover:text-primary group-active:border-primary/40 group-active:text-primary group-data-[orientation=vertical]:rotate-90">
+          <GripVertical className="h-3.5 w-3.5 text-muted-foreground" />
+        </div>
       )}
     </Separator>
   )
