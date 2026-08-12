@@ -95,6 +95,9 @@ export function SkillManagementPanel() {
   const [prunePreview, setPrunePreview] = useState<string[] | null>(null);
   const [pruneMsg, setPruneMsg] = useState<string | null>(null);
   const [savingConfig, setSavingConfig] = useState(false);
+  // 数字配置输入草稿：输入过程不触发保存，blur/Enter 时校验提交
+  const [archiveDaysDraft, setArchiveDaysDraft] = useState<string | null>(null);
+  const [maxActiveDraft, setMaxActiveDraft] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     if (!token) return;
@@ -267,6 +270,20 @@ export function SkillManagementPanel() {
     }
   };
 
+  // blur/Enter 时提交数字配置：仅当值合法且发生变化才发请求
+  const commitNumberConfig = (
+    draft: string | null,
+    current: number | undefined,
+    apply: (v: number) => void,
+    clearDraft: () => void,
+  ) => {
+    if (draft === null) return;
+    clearDraft();
+    const v = Number(draft);
+    if (!Number.isFinite(v) || v < 1 || v === current) return;
+    apply(v);
+  };
+
   if (!token) {
     return (
       <div className="flex h-48 items-center justify-center rounded-2xl border border-border/50 bg-card/75 text-sm text-muted-foreground shadow-sm">
@@ -366,13 +383,19 @@ export function SkillManagementPanel() {
             <Input
               type="number"
               min={1}
-              value={config?.archiveAfterDays ?? 90}
+              value={archiveDaysDraft ?? String(config?.archiveAfterDays ?? 90)}
               className="h-8 w-24 rounded-full text-[13px]"
-              onChange={(e) => {
-                const v = Number(e.target.value);
-                if (Number.isFinite(v) && v >= 1) {
-                  void handleUpdateConfig({ archiveAfterDays: v });
-                }
+              onChange={(e) => setArchiveDaysDraft(e.target.value)}
+              onBlur={() =>
+                commitNumberConfig(
+                  archiveDaysDraft,
+                  config?.archiveAfterDays,
+                  (v) => void handleUpdateConfig({ archiveAfterDays: v }),
+                  () => setArchiveDaysDraft(null),
+                )
+              }
+              onKeyDown={(e) => {
+                if (e.key === "Enter") e.currentTarget.blur();
               }}
               disabled={savingConfig}
             />
@@ -392,13 +415,19 @@ export function SkillManagementPanel() {
             <Input
               type="number"
               min={1}
-              value={config?.maxActiveUserSkills ?? 100}
+              value={maxActiveDraft ?? String(config?.maxActiveUserSkills ?? 100)}
               className="h-8 w-24 rounded-full text-[13px]"
-              onChange={(e) => {
-                const v = Number(e.target.value);
-                if (Number.isFinite(v) && v >= 1) {
-                  void handleUpdateConfig({ maxActiveUserSkills: v });
-                }
+              onChange={(e) => setMaxActiveDraft(e.target.value)}
+              onBlur={() =>
+                commitNumberConfig(
+                  maxActiveDraft,
+                  config?.maxActiveUserSkills,
+                  (v) => void handleUpdateConfig({ maxActiveUserSkills: v }),
+                  () => setMaxActiveDraft(null),
+                )
+              }
+              onKeyDown={(e) => {
+                if (e.key === "Enter") e.currentTarget.blur();
               }}
               disabled={savingConfig}
             />

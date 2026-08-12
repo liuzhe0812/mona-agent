@@ -101,14 +101,15 @@
       "providers": "Providers",
       "image": "Image",
       "models_providers": "Model Settings",
-      "web": "Web",
-      "runtime": "Runtime",
-      "advanced": "Advanced"
+      "web": "Search",
+      "runtime": "Runtime"
     },
     "aiModels": {
       "tabsAria": "Model settings type",
       "chat": "Chat models",
-      "image": "Image models"
+      "image": "Image models",
+      "video": "Video models",
+      "tts": "Text to speech"
     },
     "sections": {
       "interface": "Interface",
@@ -116,15 +117,13 @@
       "system": "System",
       "status": "Status",
       "localPreferences": "Local preferences",
-      "presets": "Presets",
       "imageGeneration": "Image generation",
       "imageDefaults": "Defaults",
       "webSearch": "Web search",
       "webBehavior": "Behavior",
       "identity": "Identity",
       "safety": "Safety",
-      "capabilities": "Capabilities",
-      "integrations": "Integrations"
+      "capabilities": "Capabilities"
     },
     "rows": {
       "theme": "Theme",
@@ -133,12 +132,9 @@
       "model": "Model",
       "restart": "Restart mona",
       "configPath": "Config path",
-      "activePreset": "Active preset",
       "gateway": "Gateway",
       "restartState": "Restart state",
       "pendingChanges": "Pending changes",
-      "selectedPreset": "Selected preset",
-      "presetModel": "Preset model",
       "density": "Density",
       "activityMode": "Activity detail",
       "codeWrap": "Code wrapping",
@@ -166,8 +162,6 @@
       "execTool": "Exec tool",
       "execSandbox": "Exec sandbox",
       "ssrfWhitelist": "SSRF whitelist",
-      "mcpServers": "MCP servers",
-      "pathAppend": "PATH append",
       "configurationDocs": "Configuration docs"
     },
     "help": {
@@ -176,8 +170,6 @@
       "provider": "Select the provider that should serve new model requests.",
       "model": "Set the default model name used by mona.",
       "configPath": "The gateway configuration file currently in use.",
-      "selectedPreset": "Named presets are read-only here; edit them in config.json.",
-      "presetModel": "Switch to Default to edit model and provider from the WebUI.",
       "density": "Stored only in this browser.",
       "activityMode": "Choose how much agent activity chrome to show by default.",
       "codeWrap": "Keep long code lines readable on smaller screens.",
@@ -194,8 +186,7 @@
       "botName": "Shown in runtime surfaces that use the configured bot identity.",
       "botIcon": "Short emoji or text shown beside the bot name.",
       "timezone": "IANA timezone used by runtime context and schedules.",
-      "toolHintMaxLength": "Maximum characters shown in tool progress hints.",
-      "advancedReadOnly": "Advanced safety controls are read-only in WebUI. Edit config.json intentionally when needed."
+      "toolHintMaxLength": "Maximum characters shown in tool progress hints."
     },
     "values": {
       "light": "Light",
@@ -222,7 +213,7 @@
       "savedRestart": "Saved. Restart mona to apply.",
       "restartAfterSaving": "Save changes, then restart when ready.",
       "savedRestartApply": "Saved. Restart when ready.",
-      "imageProviderRestart": "Image provider changes saved. Restart when ready."
+      "providerRestart": "Provider changes saved. Restart when ready."
     },
     "actions": {
       "save": "Save",

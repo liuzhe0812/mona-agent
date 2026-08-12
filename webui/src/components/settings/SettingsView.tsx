@@ -52,7 +52,6 @@ import {
   RotateCcw,
   Search,
   Server,
-  ShieldCheck,
   SlidersHorizontal,
   Sparkles,
   Star,
@@ -144,9 +143,9 @@ import type {
   WebSearchSettingsUpdate,
   WeixinLoginStatus,
 } from "@/lib/types";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SkillManagementPanel } from "@/components/settings/SkillManagementPanel";
 import { McpManagementPanel } from "@/components/settings/McpManagementPanel";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 type SettingsSectionKey =
   | "overview"
@@ -158,20 +157,9 @@ type SettingsSectionKey =
   | "runtime"
   | "desktop"
   | "shortcuts"
-  | "agent_scope"
   | "skills"
   | "mcp"
-  | "advanced"
   | "about";
-
-type LocalDensity = "comfortable" | "compact";
-type LocalActivityMode = "auto" | "expanded";
-
-interface LocalPreferences {
-  density: LocalDensity;
-  activityMode: LocalActivityMode;
-  codeWrap: boolean;
-}
 
 interface AgentSettingsDraft {
   model: string;
@@ -184,16 +172,8 @@ interface AgentSettingsDraft {
   workspace: string;
 }
 
-type PendingRestartSection = "runtime" | "web" | "image" | "channels";
+type PendingRestartSection = "runtime" | "web" | "providers" | "channels";
 type PendingRestartSections = Record<PendingRestartSection, boolean>;
-
-const LOCAL_PREFS_STORAGE_KEY = "mona-webui.settings-preferences";
-
-const DEFAULT_LOCAL_PREFS: LocalPreferences = {
-  density: "comfortable",
-  activityMode: "auto",
-  codeWrap: true,
-};
 
 const LOCAL_UNCONFIGURED_PROVIDER_ORDER = new Map(
   ["vllm", "ollama", "lm_studio", "atomic_chat", "ovms"].map((name, index) => [
@@ -209,7 +189,7 @@ const VIDEO_DURATION_OPTIONS = [3, 5, 10, 18];
 const EMPTY_PENDING_RESTART_SECTIONS: PendingRestartSections = {
   runtime: false,
   web: false,
-  image: false,
+  providers: false,
   channels: false,
 };
 
@@ -222,21 +202,6 @@ interface SettingsViewProps {
   isRestarting?: boolean;
   initialSection?: string;
   onTriggerAgent?: (prompt: string) => void;
-}
-
-function readLocalPreferences(): LocalPreferences {
-  try {
-    const raw = window.localStorage.getItem(LOCAL_PREFS_STORAGE_KEY);
-    if (!raw) return DEFAULT_LOCAL_PREFS;
-    const parsed = JSON.parse(raw) as Partial<LocalPreferences>;
-    return {
-      density: parsed.density === "compact" ? "compact" : "comfortable",
-      activityMode: parsed.activityMode === "expanded" ? "expanded" : "auto",
-      codeWrap: parsed.codeWrap !== false,
-    };
-  } catch {
-    return DEFAULT_LOCAL_PREFS;
-  }
 }
 
 function modelPresetValue(payload: SettingsPayload): string {
@@ -288,7 +253,6 @@ export function SettingsView({
   const [pendingRestartSections, setPendingRestartSections] = useState<PendingRestartSections>(
     EMPTY_PENDING_RESTART_SECTIONS,
   );
-  const [localPrefs, setLocalPrefs] = useState<LocalPreferences>(() => readLocalPreferences());
   const [webSearchForm, setWebSearchForm] = useState<WebSearchSettingsUpdate>({
     provider: "duckduckgo",
     apiKey: "",
@@ -389,7 +353,7 @@ export function SettingsView({
       setPendingRestartSections({
         runtime: payload.restart_required_sections.includes("runtime"),
         web: payload.restart_required_sections.includes("web"),
-        image: payload.restart_required_sections.includes("image"),
+        providers: payload.restart_required_sections.includes("providers"),
         channels: payload.restart_required_sections.includes("channels"),
       });
     }
@@ -415,14 +379,6 @@ export function SettingsView({
       cancelled = true;
     };
   }, [applyPayload, token]);
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(LOCAL_PREFS_STORAGE_KEY, JSON.stringify(localPrefs));
-    } catch {
-      // Browser-only preferences should never block settings.
-    }
-  }, [localPrefs]);
 
   useEffect(() => {
     if (!settings) return;
@@ -488,7 +444,7 @@ export function SettingsView({
       !!settings?.requires_restart ||
       pendingRestartSections.runtime ||
       pendingRestartSections.web ||
-      pendingRestartSections.image ||
+      pendingRestartSections.providers ||
       pendingRestartSections.channels,
     [pendingRestartSections, settings?.requires_restart],
   );
@@ -531,7 +487,7 @@ export function SettingsView({
       const payload = await updateImageGenerationSettings(token, imageGenerationForm);
       applyPayload(payload);
       if (payload.requires_restart) {
-        setPendingRestartSections((prev) => ({ ...prev, image: true }));
+        setPendingRestartSections((prev) => ({ ...prev, providers: true }));
       }
       setImageApiKeyDraft("");
       setError(null);
@@ -557,7 +513,7 @@ export function SettingsView({
       const payload = await updateVideoGenerationSettings(token, videoGenerationForm);
       applyPayload(payload);
       if (payload.requires_restart) {
-        setPendingRestartSections((prev) => ({ ...prev, image: true }));
+        setPendingRestartSections((prev) => ({ ...prev, providers: true }));
       }
       setVideoApiKeyDraft("");
       setError(null);
@@ -614,7 +570,7 @@ export function SettingsView({
       });
       applyPayload(payload);
       if (payload.requires_restart) {
-        setPendingRestartSections((prev) => ({ ...prev, image: true }));
+        setPendingRestartSections((prev) => ({ ...prev, providers: true }));
       }
       setProviderForms((prev) => ({
         ...prev,
@@ -645,7 +601,7 @@ export function SettingsView({
       });
       applyPayload(payload);
       if (payload.requires_restart) {
-        setPendingRestartSections((prev) => ({ ...prev, image: true }));
+        setPendingRestartSections((prev) => ({ ...prev, providers: true }));
       }
       setProviderForms((prev) => ({
         ...prev,
@@ -808,6 +764,10 @@ export function SettingsView({
     });
   };
 
+  const handleSelectSection = (section: SettingsSectionKey) => {
+    setActiveSection(section);
+  };
+
   const renderSection = () => {
     if (!settings) return null;
     switch (activeSection) {
@@ -818,7 +778,7 @@ export function SettingsView({
             requiresRestart={hasPendingRestart}
             onRestart={onRestart}
             isRestarting={isRestarting}
-            onSelectSection={setActiveSection}
+            onSelectSection={handleSelectSection}
           />
         );
       case "appearance":
@@ -826,8 +786,6 @@ export function SettingsView({
           <AppearanceSettings
             theme={theme}
             onToggleTheme={onToggleTheme}
-            localPrefs={localPrefs}
-            onChangeLocalPrefs={setLocalPrefs}
           />
         );
       case "models_providers":
@@ -869,7 +827,7 @@ export function SettingsView({
             imageSaving={imageGenerationSaving}
             onImageFormChange={setImageGenerationForm}
             onImageSave={saveImageGenerationSettings}
-            imageProviderRestartPending={pendingRestartSections.image}
+            imageProviderRestartPending={pendingRestartSections.providers}
             imageApiKeyDraft={imageApiKeyDraft}
             onImageApiKeyDraftChange={setImageApiKeyDraft}
             imageKeyVisible={imageKeyVisible}
@@ -901,26 +859,29 @@ export function SettingsView({
         );
       case "web":
         return (
-          <WebSettings
-            settings={settings}
-            form={webSearchForm}
-            keyVisible={webSearchKeyVisible}
-            keyEditing={webSearchKeyEditing}
-            saving={webSearchSaving}
-            onChangeForm={setWebSearchForm}
-            onChangeProvider={handleWebSearchProviderChange}
-            onToggleKey={() => setWebSearchKeyVisible((visible) => !visible)}
-            onToggleKeyEditing={() => {
-              setWebSearchKeyEditing((editing) => !editing);
-              setWebSearchKeyVisible(false);
-              setWebSearchForm((prev) => ({ ...prev, apiKey: "" }));
-            }}
-            onReset={resetWebSearchDraft}
-            onSave={saveWebSearch}
-            onRestart={onRestart}
-            isRestarting={isRestarting}
-            requiresRestartPending={pendingRestartSections.web}
-          />
+          <div className="space-y-10">
+            <WebSettings
+              settings={settings}
+              form={webSearchForm}
+              keyVisible={webSearchKeyVisible}
+              keyEditing={webSearchKeyEditing}
+              saving={webSearchSaving}
+              onChangeForm={setWebSearchForm}
+              onChangeProvider={handleWebSearchProviderChange}
+              onToggleKey={() => setWebSearchKeyVisible((visible) => !visible)}
+              onToggleKeyEditing={() => {
+                setWebSearchKeyEditing((editing) => !editing);
+                setWebSearchKeyVisible(false);
+                setWebSearchForm((prev) => ({ ...prev, apiKey: "" }));
+              }}
+              onReset={resetWebSearchDraft}
+              onSave={saveWebSearch}
+              onRestart={onRestart}
+              isRestarting={isRestarting}
+              requiresRestartPending={pendingRestartSections.web}
+            />
+            {isTauri() ? <AgentScopeSettings /> : null}
+          </div>
         );
       case "channels":
         return (
@@ -956,14 +917,10 @@ export function SettingsView({
         return <DesktopSettings />;
       case "shortcuts":
         return <ShortcutsSettings />;
-      case "agent_scope":
-        return <AgentScopeSettings />;
       case "skills":
         return <SkillManagementPanel />;
       case "mcp":
         return <McpManagementPanel />;
-      case "advanced":
-        return <AdvancedSettings settings={settings} />;
       case "about":
         return <AboutSettings />;
       default:
@@ -1021,15 +978,13 @@ const SETTINGS_NAV_ITEMS: Array<{ key: SettingsSectionKey; icon: LucideIcon; fal
   { key: "overview", icon: Activity, fallback: "Overview" },
   { key: "appearance", icon: Palette, fallback: "Appearance" },
   { key: "models_providers", icon: SlidersHorizontal, fallback: "模型设置" },
-  { key: "web", icon: Globe2, fallback: "Web" },
+  { key: "web", icon: Search, fallback: "搜索" },
   { key: "channels", icon: Radio, fallback: "频道" },
   { key: "runtime", icon: Server, fallback: "Runtime" },
   { key: "desktop", icon: Monitor, fallback: "桌面", desktopOnly: true },
   { key: "shortcuts", icon: Keyboard, fallback: "快捷键", desktopOnly: true },
-  { key: "agent_scope", icon: Search, fallback: "Agent 搜索范围", desktopOnly: true },
   { key: "skills", icon: Hexagon, fallback: "技能", desktopOnly: true },
-  { key: "mcp", icon: Plug, fallback: "扩展能力", desktopOnly: true },
-  { key: "advanced", icon: ShieldCheck, fallback: "Advanced" },
+  { key: "mcp", icon: Plug, fallback: "MCP", desktopOnly: true },
   { key: "about", icon: Info, fallback: "关于" },
 ];
 
@@ -1216,14 +1171,14 @@ function OverviewSettings({
             title={tx("settings.overview.imageGeneration", "Image generation")}
             value={imageStatus}
             caption={imageCaption}
-            onClick={() => onSelectSection("image")}
+            onClick={() => onSelectSection("models_providers")}
           />
           <OverviewListRow
             icon={Video}
             title={tx("settings.overview.videoGeneration", "Video generation")}
             value={videoStatus}
             caption={videoCaption}
-            onClick={() => onSelectSection("image")}
+            onClick={() => onSelectSection("models_providers")}
           />
         </SettingsGroup>
       </section>
@@ -1258,13 +1213,9 @@ function OverviewSettings({
 function AppearanceSettings({
   theme,
   onToggleTheme,
-  localPrefs,
-  onChangeLocalPrefs,
 }: {
   theme: "light" | "dark";
   onToggleTheme: () => void;
-  localPrefs: LocalPreferences;
-  onChangeLocalPrefs: Dispatch<SetStateAction<LocalPreferences>>;
 }) {
   const { t } = useTranslation();
   const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
@@ -1306,52 +1257,6 @@ function AppearanceSettings({
             description={t("settings.help.language")}
           >
             <LanguageSwitcher />
-          </SettingsRow>
-        </SettingsGroup>
-      </section>
-
-      <section>
-        <SettingsSectionTitle>{tx("settings.sections.localPreferences", "Local preferences")}</SettingsSectionTitle>
-        <SettingsGroup>
-          <SettingsRow
-            title={tx("settings.rows.density", "Density")}
-            description={tx("settings.help.density", "Stored only in this browser.")}
-          >
-            <SegmentedControl
-              value={localPrefs.density}
-              options={[
-                { value: "comfortable", label: tx("settings.values.comfortable", "Comfortable") },
-                { value: "compact", label: tx("settings.values.compact", "Compact") },
-              ]}
-              onChange={(density) =>
-                onChangeLocalPrefs((prev) => ({ ...prev, density: density as LocalDensity }))
-              }
-            />
-          </SettingsRow>
-          <SettingsRow
-            title={tx("settings.rows.activityMode", "Activity detail")}
-            description={tx("settings.help.activityMode", "Choose how much agent activity chrome to show by default.")}
-          >
-            <SegmentedControl
-              value={localPrefs.activityMode}
-              options={[
-                { value: "auto", label: tx("settings.values.auto", "Auto") },
-                { value: "expanded", label: tx("settings.values.expanded", "Expanded") },
-              ]}
-              onChange={(activityMode) =>
-                onChangeLocalPrefs((prev) => ({ ...prev, activityMode: activityMode as LocalActivityMode }))
-              }
-            />
-          </SettingsRow>
-          <SettingsRow
-            title={tx("settings.rows.codeWrap", "Code wrapping")}
-            description={tx("settings.help.codeWrap", "Keep long code lines readable on smaller screens.")}
-          >
-            <ToggleButton
-              checked={localPrefs.codeWrap}
-              onChange={(codeWrap) => onChangeLocalPrefs((prev) => ({ ...prev, codeWrap }))}
-              label={localPrefs.codeWrap ? tx("settings.values.on", "On") : tx("settings.values.off", "Off")}
-            />
           </SettingsRow>
         </SettingsGroup>
       </section>
@@ -1748,7 +1653,7 @@ function AiModelsSettings({
           onDeleteProvider={onDeleteProvider}
           onResetProviderDraft={onResetProviderDraft}
           onSetDefaultProvider={onSetDefaultProvider}
-          imageProviderRestartPending={imageProviderRestartPending}
+          providersRestartPending={imageProviderRestartPending}
           onRestart={onRestart}
           isRestarting={isRestarting}
           highlightProvider={highlightProvider}
@@ -1836,7 +1741,7 @@ function ModelsProvidersSettings({
   onDeleteProvider,
   onResetProviderDraft,
   onSetDefaultProvider,
-  imageProviderRestartPending,
+  providersRestartPending,
   onRestart,
   isRestarting,
   highlightProvider,
@@ -1859,7 +1764,7 @@ function ModelsProvidersSettings({
   onDeleteProvider: (provider: string) => void;
   onResetProviderDraft: (provider: string) => void;
   onSetDefaultProvider: (provider: string) => void;
-  imageProviderRestartPending: boolean;
+  providersRestartPending: boolean;
   onRestart?: () => void;
   isRestarting?: boolean;
   highlightProvider?: string | null;
@@ -2087,7 +1992,7 @@ function ModelsProvidersSettings({
                           ? t("settings.byok.apiKeyConfiguredPlaceholder")
                           : t("settings.byok.apiKeyPlaceholder")
                       }
-                      className="h-9 rounded-full pr-11 text-[13px]"
+                      className="h-8 rounded-full pr-11 text-[13px]"
                     />
                     <Button
                       type="button"
@@ -2110,7 +2015,7 @@ function ModelsProvidersSettings({
                   </>
                 ) : (
                   <>
-                    <div className="flex h-9 items-center rounded-full border border-input bg-background px-3 pr-11 text-[13px] text-muted-foreground">
+                    <div className="flex h-8 items-center rounded-full border border-input bg-background px-3 pr-11 text-[13px] text-muted-foreground">
                       {provider.api_key_hint ?? t("settings.byok.configuredKeyHint")}
                     </div>
                     <Button
@@ -2137,7 +2042,7 @@ function ModelsProvidersSettings({
                   onChangeProviderForm(provider.name, { apiBase: event.target.value })
                 }
                 placeholder={provider.default_api_base ?? t("settings.byok.apiBasePlaceholder")}
-                className="h-9 rounded-full text-[13px]"
+                className="h-8 rounded-full text-[13px]"
               />
             </label>
             <div className="space-y-1.5">
@@ -2168,7 +2073,7 @@ function ModelsProvidersSettings({
                   onChangeProviderForm(provider.name, { model: event.target.value })
                 }
                 placeholder="例如 qwen3-plus, deepseek-chat"
-                className="h-9 rounded-full text-[13px]"
+                className="h-8 rounded-full text-[13px]"
               />
               {probeStates[provider.name]?.error && (
                 <p className="text-[11px] text-destructive">
@@ -2294,10 +2199,10 @@ function ModelsProvidersSettings({
       {/* 供应商配置区 */}
       <section>
         <SettingsSectionTitle>供应商</SettingsSectionTitle>
-        {imageProviderRestartPending && onRestart ? (
+        {providersRestartPending && onRestart ? (
           <div className="flex min-h-[48px] items-center justify-between gap-3 border-y border-border/55 py-3 mb-4">
             <p className="text-[13px] leading-5 text-muted-foreground">
-              {tx("settings.status.imageProviderRestart", "Image provider changes saved. Restart when ready.")}
+              {tx("settings.status.providerRestart", "Provider changes saved. Restart when ready.")}
             </p>
             <div className="shrink-0">
               <Button
@@ -2323,7 +2228,7 @@ function ModelsProvidersSettings({
             value={query}
             onChange={(event) => onQueryChange(event.target.value)}
             placeholder={tx("settings.providers.searchPlaceholder", "搜索供应商")}
-            className="h-10 rounded-full pl-9 text-[13px]"
+            className="h-8 rounded-full pl-9 text-[13px]"
           />
         </div>
         <div className="mt-4">
@@ -2415,7 +2320,7 @@ function AgnesSetupDialog({
               placeholder={tx("settings.agnesSetup.emailPlaceholder", "you@example.com")}
               autoFocus
               autoComplete="email"
-              className="h-9 rounded-lg text-[13px]"
+              className="h-8 rounded-lg text-[13px]"
             />
           </div>
 
@@ -2431,7 +2336,7 @@ function AgnesSetupDialog({
                 onChange={(event) => onPasswordChange(event.target.value)}
                 placeholder={tx("settings.agnesSetup.passwordPlaceholder", "至少 6 位")}
                 autoComplete="new-password"
-                className="h-9 rounded-lg pr-9 text-[13px]"
+                className="h-8 rounded-lg pr-9 text-[13px]"
               />
               <button
                 type="button"
@@ -3242,7 +3147,7 @@ function WebSettings({
                           ? t("settings.byok.apiKeyConfiguredPlaceholder")
                           : t("settings.byok.apiKeyPlaceholder")
                       }
-                      className="h-9 rounded-full pr-11 text-[13px]"
+                      className="h-8 rounded-full pr-11 text-[13px]"
                     />
                     <Button
                       type="button"
@@ -3263,7 +3168,7 @@ function WebSettings({
                   </>
                 ) : (
                   <>
-                    <div className="flex h-9 items-center rounded-full border border-input bg-background px-3 pr-11 text-[13px] text-muted-foreground">
+                    <div className="flex h-8 items-center rounded-full border border-input bg-background px-3 pr-11 text-[13px] text-muted-foreground">
                       {settings.web_search.api_key_hint ?? t("settings.byok.configuredKeyHint")}
                     </div>
                     <Button
@@ -3293,7 +3198,7 @@ function WebSettings({
                   onChangeForm((prev) => ({ ...prev, baseUrl: event.target.value }))
                 }
                 placeholder={t("settings.byok.webSearch.baseUrlPlaceholder")}
-                className="h-9 w-[280px] rounded-full text-[13px]"
+                className="h-8 w-[280px] rounded-full text-[13px]"
               />
             </SettingsRow>
           ) : null}
@@ -4256,6 +4161,16 @@ function RuntimeSettings({
           <ReadOnlyRow title={tx("settings.rows.unifiedSession", "Unified session")} value={settings.runtime.unified_session ? tx("settings.values.enabled", "Enabled") : tx("settings.values.disabled", "Disabled")} />
         </SettingsGroup>
       </section>
+
+      <section>
+        <SettingsSectionTitle>{tx("settings.sections.safety", "Safety")}</SettingsSectionTitle>
+        <SettingsGroup>
+          <ReadOnlyRow title={tx("settings.rows.restrictWorkspace", "Restrict to workspace")} value={settings.advanced.restrict_to_workspace ? tx("settings.values.enabled", "Enabled") : tx("settings.values.disabled", "Disabled")} />
+          <ReadOnlyRow title={tx("settings.rows.execTool", "Exec tool")} value={settings.advanced.exec_enabled ? tx("settings.values.enabled", "Enabled") : tx("settings.values.disabled", "Disabled")} />
+          <ReadOnlyRow title={tx("settings.rows.execSandbox", "Exec sandbox")} value={settings.advanced.exec_sandbox ?? tx("settings.values.notAvailable", "Not available")} />
+          <ReadOnlyRow title={tx("settings.rows.ssrfWhitelist", "SSRF whitelist")} value={String(settings.advanced.ssrf_whitelist_count)} />
+        </SettingsGroup>
+      </section>
     </div>
   );
 }
@@ -4952,32 +4867,6 @@ function AgentScopeSettings() {
   );
 }
 
-function AdvancedSettings({ settings }: { settings: SettingsPayload }) {
-  const { t } = useTranslation();
-  const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
-  return (
-    <div className="space-y-7">
-      <section>
-        <SettingsSectionTitle>{tx("settings.sections.safety", "Safety")}</SettingsSectionTitle>
-        <SettingsGroup>
-          <ReadOnlyRow title={tx("settings.rows.restrictWorkspace", "Restrict to workspace")} value={settings.advanced.restrict_to_workspace ? tx("settings.values.enabled", "Enabled") : tx("settings.values.disabled", "Disabled")} />
-          <ReadOnlyRow title={tx("settings.rows.execTool", "Exec tool")} value={settings.advanced.exec_enabled ? tx("settings.values.enabled", "Enabled") : tx("settings.values.disabled", "Disabled")} />
-          <ReadOnlyRow title={tx("settings.rows.execSandbox", "Exec sandbox")} value={settings.advanced.exec_sandbox ?? tx("settings.values.notAvailable", "Not available")} />
-          <ReadOnlyRow title={tx("settings.rows.ssrfWhitelist", "SSRF whitelist")} value={String(settings.advanced.ssrf_whitelist_count)} />
-        </SettingsGroup>
-      </section>
-
-      <section>
-        <SettingsSectionTitle>{tx("settings.sections.integrations", "Integrations")}</SettingsSectionTitle>
-        <SettingsGroup>
-          <ReadOnlyRow title={tx("settings.rows.mcpServers", "MCP servers")} value={String(settings.advanced.mcp_server_count)} />
-          <ReadOnlyRow title={tx("settings.rows.pathAppend", "PATH append")} value={settings.advanced.exec_path_append_set ? tx("settings.values.configured", "Configured") : tx("settings.values.notConfigured", "Not configured")} />
-        </SettingsGroup>
-      </section>
-    </div>
-  );
-}
-
 function ProviderPicker({
   providers,
   value,
@@ -5497,34 +5386,6 @@ function StatusPill({
     >
       <span className="truncate">{children}</span>
     </span>
-  );
-}
-
-function SegmentedControl({
-  value,
-  options,
-  onChange,
-}: {
-  value: string;
-  options: Array<{ value: string; label: string }>;
-  onChange: (value: string) => void;
-}) {
-  return (
-    <div className="inline-flex h-8 items-center rounded-full bg-muted p-0.5 text-[12px] font-medium text-muted-foreground">
-      {options.map((option) => (
-        <button
-          key={option.value}
-          type="button"
-          onClick={() => onChange(option.value)}
-          className={cn(
-            "rounded-full px-3 py-1 transition-colors",
-            value === option.value && "bg-background text-foreground shadow-sm",
-          )}
-        >
-          {option.label}
-        </button>
-      ))}
-    </div>
   );
 }
 

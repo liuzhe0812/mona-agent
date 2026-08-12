@@ -19,6 +19,7 @@ import { useTranslation } from "react-i18next";
 
 import { useClientOptional } from "@/providers/ClientProvider";
 import { Button } from "@/components/ui/button";
+import { DeleteConfirm } from "@/components/DeleteConfirm";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -67,6 +68,7 @@ function parseStringList(value: string): string[] {
 }
 
 interface DraftConfig {
+  name: string; // 仅新建时编辑；编辑已有 server 时忽略（名称不可改）
   transport: Transport;
   command: string;
   args: string; // newline-separated for editing
@@ -80,6 +82,7 @@ interface DraftConfig {
 function configToDraft(cfg?: McpServerConfig): DraftConfig {
   const transport = cfg ? detectTransport(cfg) : "stdio";
   return {
+    name: "",
     transport,
     command: cfg?.command ?? "",
     args: (cfg?.args ?? []).join("\n"),
@@ -156,6 +159,7 @@ export function McpManagementPanel() {
   const [draft, setDraft] = useState<DraftConfig | null>(null);
   const [saving, setSaving] = useState(false);
   const [reloadBusy, setReloadBusy] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     if (!token) return;
@@ -220,15 +224,13 @@ export function McpManagementPanel() {
     }
   };
 
-  const handleDelete = async (name: string) => {
-    if (!token || busyName) return;
-    if (
-      !window.confirm(
-        tx("settings.mcp.delete.confirm", "确认删除 server \"{{name}}\"？", { name }),
-      )
-    ) {
-      return;
-    }
+  const handleDelete = (name: string) => {
+    if (busyName) return;
+    setPendingDelete(name);
+  };
+
+  const executeDelete = async (name: string) => {
+    if (!token) return;
     setBusyName(name);
     setError(null);
     try {
@@ -295,12 +297,19 @@ export function McpManagementPanel() {
           return;
         }
       } else {
-        const name = prompt(
-          tx("settings.mcp.editor.namePrompt", "请输入 server 名称："),
-        );
-        if (!name || !name.trim()) return;
+        const name = draft.name.trim();
+        if (!name) {
+          setError(tx("settings.mcp.editor.nameRequired", "请输入 server 名称"));
+          return;
+        }
+        if (servers.some((s) => s.name === name)) {
+          setError(
+            tx("settings.mcp.editor.nameConflict", "已存在同名 server：{{name}}", { name }),
+          );
+          return;
+        }
         const cfg = draftToConfig(draft);
-        const res = await createMcpServer(token, name.trim(), cfg);
+        const res = await createMcpServer(token, name, cfg);
         if (!res.ok) {
           setError(res.error ?? tx("settings.mcp.save.failed", "保存失败"));
           return;
@@ -428,7 +437,7 @@ export function McpManagementPanel() {
                   onToggleExpand={() => void toggleExpand(server.name)}
                   onRestart={() => void handleRestart(server.name)}
                   onEdit={() => openEdit(server)}
-                  onDelete={() => void handleDelete(server.name)}
+                  onDelete={() => handleDelete(server.name)}
                   tx={tx}
                 />
               ))}
@@ -448,6 +457,22 @@ export function McpManagementPanel() {
           tx={tx}
         />
       ) : null}
+
+      <DeleteConfirm
+        open={pendingDelete !== null}
+        title={pendingDelete ?? ""}
+        titleText={tx("settings.mcp.delete.confirmTitle", "删除这个 server？")}
+        descriptionText={tx(
+          "settings.mcp.delete.confirmDesc",
+          "将从配置中移除该 server 并断开连接。",
+        )}
+        onCancel={() => setPendingDelete(null)}
+        onConfirm={() => {
+          const name = pendingDelete;
+          setPendingDelete(null);
+          if (name) void executeDelete(name);
+        }}
+      />
     </div>
   );
 }
@@ -843,6 +868,17 @@ function McpServerEditor({
       </div>
 
       <div className="space-y-4">
+        {!editingName ? (
+          <Field label={tx("settings.mcp.editor.name", "名称")}>
+            <Input
+              value={draft.name}
+              onChange={(e) => onChange({ ...draft, name: e.target.value })}
+              placeholder="my-server"
+              className="h-8 rounded-full font-mono text-[12px]"
+            />
+          </Field>
+        ) : null}
+
         <div>
           <div className="mb-1 text-[12px] font-medium text-foreground">
             {tx("settings.mcp.editor.transport", "传输方式")}

@@ -113,14 +113,15 @@
       "providers": "提供商",
       "image": "图片",
       "models_providers": "模型设置",
-      "web": "网页",
-      "runtime": "运行时",
-      "advanced": "高级"
+      "web": "搜索",
+      "runtime": "运行时"
     },
     "aiModels": {
       "tabsAria": "模型设置类型",
       "chat": "聊天模型",
-      "image": "图片模型"
+      "image": "图片模型",
+      "video": "视频模型",
+      "tts": "语音合成"
     },
     "sections": {
       "interface": "界面",
@@ -128,15 +129,13 @@
       "system": "系统",
       "status": "状态",
       "localPreferences": "本地偏好",
-      "presets": "预设",
       "imageGeneration": "图片生成",
       "imageDefaults": "默认值",
       "webSearch": "网页搜索",
       "webBehavior": "行为",
       "identity": "身份",
       "safety": "安全",
-      "capabilities": "能力",
-      "integrations": "集成"
+      "capabilities": "能力"
     },
     "rows": {
       "theme": "主题",
@@ -145,12 +144,9 @@
       "model": "模型",
       "restart": "重启 mona",
       "configPath": "配置路径",
-      "activePreset": "当前预设",
       "gateway": "网关",
       "restartState": "重启状态",
       "pendingChanges": "待处理更改",
-      "selectedPreset": "选中的预设",
-      "presetModel": "预设模型",
       "density": "密度",
       "activityMode": "活动细节",
       "codeWrap": "代码换行",
@@ -188,8 +184,6 @@
       "provider": "选择新模型请求使用的服务商。",
       "model": "设置 mona 默认使用的模型名称。",
       "configPath": "当前网关正在使用的配置文件。",
-      "selectedPreset": "命名预设在这里只读；需要编辑时请改 config.json。",
-      "presetModel": "切回 Default 后可在 WebUI 编辑模型和服务商。",
       "density": "仅保存在当前浏览器。",
       "activityMode": "选择默认显示多少 agent 活动细节。",
       "codeWrap": "让较小屏幕上的长代码行更易读。",
@@ -206,8 +200,7 @@
       "botName": "显示在使用 bot 身份的运行时界面里。",
       "botIcon": "显示在 bot 名称旁的短 emoji 或文本。",
       "timezone": "运行时上下文和计划任务使用的 IANA 时区。",
-      "toolHintMaxLength": "工具进度提示显示的最大字符数。",
-      "advancedReadOnly": "高级安全控制在 WebUI 中只读；需要时请谨慎编辑 config.json。"
+      "toolHintMaxLength": "工具进度提示显示的最大字符数。"
     },
     "values": {
       "light": "浅色",
@@ -234,7 +227,7 @@
       "savedRestart": "已保存。重启 mona 后生效。",
       "restartAfterSaving": "保存后，可在合适时重启。",
       "savedRestartApply": "已保存，可稍后重启。",
-      "imageProviderRestart": "图片服务商改动已保存，可稍后重启。"
+      "providerRestart": "服务商改动已保存，可稍后重启。"
     },
     "actions": {
       "save": "保存",
