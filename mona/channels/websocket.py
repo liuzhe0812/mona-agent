@@ -384,6 +384,9 @@ def _decode_data_url_payload(url: str, max_bytes: int = _PPT_DOC_MAX_BYTES) -> b
 
 _LOCALHOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 
+# PPT project lifecycle phases pushed to clients via ``ppt_phase_changed``.
+_PPT_PHASES = frozenset({"generating", "outline", "producing", "exporting", "done"})
+
 # Matches the legacy chat-id pattern but allows file-system-safe stems too,
 # so the API can address sessions whose keys came from non-WebSocket channels.
 _API_KEY_RE = re.compile(r"^[A-Za-z0-9_:.-]{1,128}$")
@@ -920,10 +923,16 @@ class WebSocketChannel(BaseChannel):
             return self._handle_ppt_generate_preview(request)
 
         if got == "/api/ppt/mark-generating":
-            return self._handle_ppt_mark_generating(request)
+            return await self._handle_ppt_mark_generating(request)
 
         if got == "/api/ppt/save-chat-id":
-            return self._handle_ppt_save_chat_id(request)
+            return await self._handle_ppt_save_chat_id(request)
+
+        if got == "/api/ppt/broadcast-phase":
+            return await self._handle_ppt_broadcast_phase(connection, request)
+
+        if got == "/api/video/broadcast-change":
+            return await self._handle_video_broadcast_change(connection, request)
 
         if got == "/api/ppt/delete-project":
             return self._handle_ppt_delete_project(request)
@@ -984,6 +993,11 @@ class WebSocketChannel(BaseChannel):
 
         if got == "/api/artifacts":
             return self._handle_artifacts_list(request)
+
+        if got == "/api/project-files":
+            return self._handle_project_files_list(
+                request, _query_first(query, "key") or ""
+            )
 
         # 4. WebSocket upgrade (the channel's primary purpose). Only run the
         # handshake gate on requests that actually ask to upgrade; otherwise
@@ -1191,7 +1205,7 @@ class WebSocketChannel(BaseChannel):
             payload = update_provider_settings(query)
         except WebUISettingsError as e:
             return _http_error(e.status, e.message)
-        return _http_json_response(self._with_settings_restart_state(payload, section="image"))
+        return _http_json_response(self._with_settings_restart_state(payload, section="providers"))
 
     async def _handle_settings_provider_models(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):
@@ -1232,7 +1246,7 @@ class WebSocketChannel(BaseChannel):
             payload = update_image_generation_settings(query)
         except WebUISettingsError as e:
             return _http_error(e.status, e.message)
-        return _http_json_response(self._with_settings_restart_state(payload, section="image"))
+        return _http_json_response(self._with_settings_restart_state(payload, section="providers"))
 
     def _handle_settings_video_generation_update(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):
@@ -1242,7 +1256,7 @@ class WebSocketChannel(BaseChannel):
             payload = update_video_generation_settings(query)
         except WebUISettingsError as e:
             return _http_error(e.status, e.message)
-        return _http_json_response(self._with_settings_restart_state(payload, section="image"))
+        return _http_json_response(self._with_settings_restart_state(payload, section="providers"))
 
     def _handle_settings_channels_update(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):
@@ -1830,9 +1844,19 @@ class WebSocketChannel(BaseChannel):
                 return _http_error(400, "invalid project name")
 
             workspace = get_workspace_path()
-            project_dir = workspace / "ppt_projects" / project_name
+            projects_dir = workspace / "ppt_projects"
+            project_dir = projects_dir / project_name
             if not project_dir.is_dir():
-                return _http_json_response({"status": "not_found"})
+                # Fallback: prefix match for renamed directories (e.g. init
+                # script appended _ppt169_YYYYMMDD to a pre-created placeholder).
+                candidates = [
+                    d for d in projects_dir.iterdir()
+                    if d.is_dir() and d.name.startswith(f"{project_name}_")
+                ]
+                if len(candidates) == 1:
+                    project_dir = candidates[0]
+                else:
+                    return _http_json_response({"status": "not_found"})
 
             status_info = _get_ppt_project_status(project_dir)
             return _http_json_response({
@@ -1929,7 +1953,74 @@ class WebSocketChannel(BaseChannel):
             logger.exception("ppt generate preview error")
             return _http_error(500, str(e))
 
-    def _handle_ppt_mark_generating(self, request: WsRequest) -> Response:
+    async def _push_ppt_phase_from_disk(self, project_dir: Path, project_name: str) -> None:
+        """Best-effort PPT phase push derived from disk state.
+
+        Notification must never fail the mutating request; the polling
+        project-status APIs remain the fallback.
+        """
+        try:
+            phase = str(_get_ppt_project_status(project_dir).get("phase") or "")
+            if phase in _PPT_PHASES:
+                await self.broadcast_ppt_phase_changed(project_name, phase)
+        except Exception:
+            logger.exception("ppt phase broadcast failed")
+
+    async def _handle_ppt_broadcast_phase(self, connection: Any, request: WsRequest) -> Response:
+        """Internal trigger letting the services process fan out a PPT phase change.
+
+        Gated like ``/webui/bootstrap``: the configured shared secret when one
+        is set, otherwise loopback only.
+        """
+        secret = self.config.token_issue_secret.strip() or self.config.token.strip()
+        if secret:
+            if not _issue_route_secret_matches(request.headers, secret):
+                return _http_error(401, "Unauthorized")
+        elif not _is_localhost(connection):
+            return _http_error(403, "ppt broadcast-phase is localhost-only")
+        query = _parse_query(request.path)
+        project_name = _query_first(query, "project") or ""
+        phase = _query_first(query, "phase") or ""
+        if (
+            not project_name
+            or "/" in project_name
+            or "\\" in project_name
+            or ".." in project_name
+        ):
+            return _http_error(400, "invalid project name")
+        if phase not in _PPT_PHASES:
+            return _http_error(400, "invalid phase")
+        await self.broadcast_ppt_phase_changed(project_name, phase)
+        return _http_json_response({"ok": True})
+
+    async def _handle_video_broadcast_change(self, connection: Any, request: WsRequest) -> Response:
+        """Internal trigger letting the services process fan out a video project change.
+
+        Same gating as ``/api/ppt/broadcast-phase``: shared secret when set,
+        otherwise loopback only.
+        """
+        secret = self.config.token_issue_secret.strip() or self.config.token.strip()
+        if secret:
+            if not _issue_route_secret_matches(request.headers, secret):
+                return _http_error(401, "Unauthorized")
+        elif not _is_localhost(connection):
+            return _http_error(403, "video broadcast-change is localhost-only")
+        query = _parse_query(request.path)
+        project_name = _query_first(query, "name") or ""
+        hint = _query_first(query, "hint") or ""
+        if (
+            not project_name
+            or "/" in project_name
+            or "\\" in project_name
+            or ".." in project_name
+        ):
+            return _http_error(400, "invalid project name")
+        if hint not in ("", "scenes", "phase", "progress", "status"):
+            return _http_error(400, "invalid hint")
+        await self.broadcast_video_project_changed(project_name, hint)
+        return _http_json_response({"ok": True})
+
+    async def _handle_ppt_mark_generating(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         try:
@@ -1957,12 +2048,14 @@ class WebSocketChannel(BaseChannel):
             elif action == "finish":
                 marker.unlink(missing_ok=True)
 
+            await self._push_ppt_phase_from_disk(project_dir, project_name)
+
             return _http_json_response({"ok": True})
         except Exception as e:
             logger.exception("ppt mark generating error")
             return _http_error(500, str(e))
 
-    def _handle_ppt_save_chat_id(self, request: WsRequest) -> Response:
+    async def _handle_ppt_save_chat_id(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         try:
@@ -1987,6 +2080,8 @@ class WebSocketChannel(BaseChannel):
 
             chat_id_file = project_dir / ".chat_id"
             chat_id_file.write_text(chat_id, encoding="utf-8")
+
+            await self._push_ppt_phase_from_disk(project_dir, project_name)
 
             return _http_json_response({"ok": True})
         except Exception as e:
@@ -2816,6 +2911,59 @@ class WebSocketChannel(BaseChannel):
             extra_headers=[("Cache-Control", "no-store")],
         )
 
+    def _handle_project_files_list(self, request: WsRequest, key: str) -> Response:
+        """List all files of a project session's bound workspace directory.
+
+        Requires API token. The root is resolved from the session's
+        ``metadata.workspace`` — clients cannot pass an arbitrary root.
+        Session resolution mirrors ``_handle_file_preview`` (project scope).
+        """
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        if not key:
+            return _http_error(400, "missing key")
+        if self._session_manager is None:
+            return _http_error(404, "session not found")
+        decoded_key = _decode_api_key(key)
+        if decoded_key is None or not self._is_websocket_channel_session_key(decoded_key):
+            return _http_error(404, "session not found")
+        data = self._session_manager.read_session_file(decoded_key)
+        if data is None:
+            return _http_error(404, "session not found")
+        metadata = data.get("metadata") or {}
+        workspace = metadata.get("workspace")
+        if not workspace:
+            return _http_error(404, "session not found")
+
+        from mona.utils.artifact_listing import list_project_files
+
+        try:
+            result = list_project_files(Path(workspace).expanduser())
+        except Exception:
+            logger.exception("Failed to list project files in {}", workspace)
+            return _http_error(500, "scan failed")
+        payload = {
+            "files": [
+                {
+                    "path": f.path,
+                    "absolute_path": f.absolute_path,
+                    "name": f.name,
+                    "size": f.size,
+                    "size_human": f.size_human,
+                    "mime": f.mime,
+                    "modified_at": f.modified_at,
+                }
+                for f in result.files
+            ],
+            "truncated": result.truncated,
+        }
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        return _http_response(
+            body,
+            content_type="application/json; charset=utf-8",
+            extra_headers=[("Cache-Control", "no-store")],
+        )
+
     def _handle_session_delete(self, request: WsRequest, key: str) -> Response:
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
@@ -2947,6 +3095,7 @@ class WebSocketChannel(BaseChannel):
 
         self._server_task = asyncio.create_task(runner())
         self._artifact_watch_task = asyncio.create_task(self._watch_artifacts())
+        self._ppt_watch_task = asyncio.create_task(self._watch_ppt_projects())
         await self._server_task
 
     async def _watch_artifacts(self) -> None:
@@ -2979,6 +3128,44 @@ class WebSocketChannel(BaseChannel):
             if signature != last:
                 last = signature
                 await self.send_artifacts_changed()
+
+    async def _watch_ppt_projects(self) -> None:
+        """Poll ppt_projects dir; broadcast phase changes per project.
+
+        Covers generating → outline (page_visual_plan.json) and other
+        transitions that lack an explicit server-side push source.
+        """
+        from mona.config.paths import get_workspace_path
+        from mona.utils.artifact_listing import artifact_signature
+
+        last: str | None = None
+        while True:
+            await asyncio.sleep(_ARTIFACT_WATCH_INTERVAL_S)
+            if not self._conn_chats:
+                continue
+            try:
+                projects_dir = get_workspace_path() / "ppt_projects"
+                if not projects_dir.is_dir():
+                    continue
+                signature = await asyncio.to_thread(
+                    artifact_signature,
+                    projects_dir,
+                )
+                if last is None:
+                    last = signature
+                    continue
+                if signature != last:
+                    last = signature
+                    for d in projects_dir.iterdir():
+                        if not d.is_dir():
+                            continue
+                        if d.name.startswith("_"):
+                            continue
+                        phase = str(_get_ppt_project_status(d).get("phase") or "")
+                        if phase in _PPT_PHASES:
+                            await self.broadcast_ppt_phase_changed(d.name, phase)
+            except Exception:
+                logger.exception("ppt project watch failed")
 
     async def _connection_loop(self, connection: Any) -> None:
         request = connection.request
@@ -4018,6 +4205,41 @@ class WebSocketChannel(BaseChannel):
         raw = json.dumps({"event": "artifacts_changed"}, ensure_ascii=False)
         for connection in conns:
             await self._safe_send_to(connection, raw, label=" artifacts_changed ")
+
+    async def broadcast_ppt_phase_changed(self, project_name: str, phase: str) -> None:
+        """Broadcast a PPT project phase change to every open websocket connection."""
+        conns = list(self._conn_chats)
+        if not conns:
+            return
+        raw = json.dumps(
+            {
+                "type": "ppt_phase_changed",
+                "project_name": project_name,
+                "phase": phase,
+            },
+            ensure_ascii=False,
+        )
+        for connection in conns:
+            await self._safe_send_to(connection, raw, label=" ppt_phase_changed ")
+
+    async def broadcast_video_project_changed(
+        self, project_name: str, hint: str = ""
+    ) -> None:
+        """Broadcast a video project state change to every open websocket connection.
+
+        hint 语义：scenes（分镜/场景内容）、phase（阶段迁移）、
+        progress（渲染进度高频）、status（其他元数据）。前端按 name 过滤、
+        按 hint 决定刷新粒度。
+        """
+        conns = list(self._conn_chats)
+        if not conns:
+            return
+        body: dict[str, Any] = {"event": "video_project_changed", "name": project_name}
+        if hint:
+            body["hint"] = hint
+        raw = json.dumps(body, ensure_ascii=False)
+        for connection in conns:
+            await self._safe_send_to(connection, raw, label=" video_project_changed ")
 
     async def send_runtime_model_updated(
         self,

@@ -4,9 +4,8 @@
 `notes_search` 和 `kb_search`。
 
 - 笔记搜索：通过 Tauri IPC 调用 Rust 侧 `notes_search_all`（子串匹配）
-- 资料搜索：调用 Python 侧 `mona.materials.search.search_materials`
-  （CJK bigram + 关键词打分）
-- 结果合并后按相关性排序返回
+- 资料搜索：走 `mona.materials.index` 的 FTS5 chunk 索引（结构化 segment、
+  位置标记、stale 检测）
 
 scope 参数控制搜索范围：
 - "all"（默认）：笔记 + 资料（text + wiki）
@@ -31,27 +30,11 @@ from mona.agent.tools.schema import (
     tool_parameters_schema,
 )
 from mona.agent.tools.tauri_ipc import tauri_invoke
+from mona.materials.vault import get_vault_path as _get_vault_path
 
 
 def _notes_config(ctx: Any) -> Any:
     return getattr(ctx.config, "notes_tools", None)
-
-
-def _get_vault_path() -> Path | None:
-    """通过 Tauri IPC 获取笔记 vault 路径。"""
-    try:
-        result = tauri_invoke("notes_vault_get_path")
-    except RuntimeError:
-        return None
-    if result is None:
-        return None
-    if isinstance(result, str) and result.strip():
-        return Path(result.strip())
-    if isinstance(result, dict):
-        v = result.get("path") or result.get("result")
-        if isinstance(v, str) and v.strip():
-            return Path(v.strip())
-    return None
 
 
 def _vault_ready() -> bool:
@@ -79,10 +62,9 @@ def _search_materials(
     limit: int,
     scope: str,
 ) -> list[dict[str, Any]]:
-    """走 FTS5 chunk 索引检索资料；索引不可用时回退到目录扫描。
+    """走 FTS5 chunk 索引检索资料，返回结构化 chunk（ref/location/stale）。
 
-    索引路径返回结构化 chunk（ref/location/stale），供 materials_read 闭环；
-    回退路径返回文件级结果（无 ref），保持旧行为兼容。
+    索引不可用时返回空列表（reconcile 与写入点同步负责索引新鲜度）。
     """
     kinds_map = {
         "text": ("source",),
@@ -103,22 +85,8 @@ def _search_materials(
         finally:
             index.close()
     except Exception as e:
-        logger.warning("knowledge_search: index search failed, fallback: {}", e)
-        try:
-            from mona.materials.search import search_materials
-
-            include_text = scope in ("all", "materials", "text")
-            include_wiki = scope in ("all", "materials", "wiki")
-            return search_materials(
-                vault,
-                query,
-                count=limit,
-                include_text=include_text,
-                include_wiki=include_wiki,
-            )
-        except Exception as e2:
-            logger.warning("knowledge_search: search_materials failed: {}", e2)
-            return []
+        logger.warning("knowledge_search: index search failed: {}", e)
+        return []
 
 
 _SEARCH_PARAMETERS = tool_parameters_schema(

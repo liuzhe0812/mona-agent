@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
-import html
 import imaplib
 import json as _json
 import re
@@ -46,6 +45,7 @@ from mona.materials.api import (
     handle_materials_get_raw_binary,
     handle_materials_get_text,
     handle_materials_get_wiki_page,
+    handle_materials_lint,
     handle_materials_list_files,
     handle_materials_list_wiki,
     handle_materials_llm_config,
@@ -56,7 +56,7 @@ from mona.materials.api import (
     handle_materials_write_wiki_page,
 )
 from mona.security.network import validate_host
-from mona.system_agent import handle_system_plan
+from mona.system_agent import handle_system_diagnose, handle_system_plan
 from mona.utils.helpers import safe_filename
 from mona.utils.media_decode import (
     MAX_FILE_SIZE,
@@ -4921,6 +4921,36 @@ def _ppt_projects_dir() -> Path:
     return get_workspace_path() / "ppt_projects"
 
 
+async def _push_ppt_phase_changed(project_name: str, phase: str) -> None:
+    """Best-effort push of a PPT phase change to connected webui clients.
+
+    These handlers run in the services process while the websocket channel
+    lives in the gateway process, so the fan-out is triggered via a loopback
+    call to the websocket port's internal route. The polling project-status
+    APIs remain the fallback when the push fails.
+    """
+    try:
+        import httpx
+
+        from mona.channels.websocket import WebSocketConfig
+        from mona.config.loader import load_config
+
+        section = getattr(load_config().channels, "websocket", None)
+        ws_cfg = WebSocketConfig.model_validate(section if isinstance(section, dict) else {})
+        headers = {}
+        secret = ws_cfg.token_issue_secret.strip() or ws_cfg.token.strip()
+        if secret:
+            headers["Authorization"] = f"Bearer {secret}"
+        async with httpx.AsyncClient(timeout=httpx.Timeout(5.0, connect=2.0)) as client:
+            await client.get(
+                f"http://127.0.0.1:{ws_cfg.port}/api/ppt/broadcast-phase",
+                params={"project": project_name, "phase": phase},
+                headers=headers,
+            )
+    except Exception as e:
+        logger.warning("ppt phase push failed ({} -> {}): {}", project_name, phase, e)
+
+
 def _ppt_project_dir_or_404(name: str) -> tuple[Path | None, web.Response | None]:
     """Validate PPT project name and return (project_dir, None) or (None, error)."""
     if not name or "/" in name or "\\" in name or ".." in name:
@@ -4929,6 +4959,34 @@ def _ppt_project_dir_or_404(name: str) -> tuple[Path | None, web.Response | None
     if not project_dir.is_dir():
         return None, web.json_response({"error": "project not found"}, status=404)
     return project_dir, None
+
+
+def _resolve_ppt_project_dir(name: str) -> tuple[Path | None, web.Response | None]:
+    """Resolve project dir with fallback to prefix-matched directories.
+
+    Handles the case where the frontend pre-created a placeholder directory
+    (e.g. "3页介绍黄鹤楼-202608112045-gatb") and the init script appended
+    a format suffix, producing "3页介绍黄鹤楼-202608112045-gatb_ppt169_20260811".
+    The frontend keeps querying by the original name, so we resolve the
+    actual directory by prefix matching.
+    """
+    if not name or "/" in name or "\\" in name or ".." in name:
+        return None, web.json_response({"error": "invalid project name"}, status=400)
+
+    projects_dir = _ppt_projects_dir()
+    exact_dir = projects_dir / name
+    if exact_dir.is_dir():
+        return exact_dir, None
+
+    # Fallback: find directories starting with name_
+    candidates = [
+        d for d in projects_dir.iterdir()
+        if d.is_dir() and d.name.startswith(f"{name}_")
+    ]
+    if len(candidates) == 1:
+        return candidates[0], None
+
+    return None, web.json_response({"error": "project not found"}, status=404)
 
 
 def _load_ppt_meta(project_dir: Path) -> dict:
@@ -5046,7 +5104,7 @@ async def handle_ppt_outline_get(request: web.Request) -> web.Response:
     """GET /api/ppt/project/outline?name=<n> - read outline JSON."""
     try:
         name = request.query.get("name") or ""
-        project_dir, err = _ppt_project_dir_or_404(name)
+        project_dir, err = _resolve_ppt_project_dir(name)
         if err is not None:
             return err
         assert project_dir is not None
@@ -5075,7 +5133,7 @@ async def handle_ppt_outline_put(request: web.Request) -> web.Response:
         return web.json_response({"error": "Invalid JSON body"}, status=400)
     try:
         name = str(body.get("name", "") or "").strip()
-        project_dir, err = _ppt_project_dir_or_404(name)
+        project_dir, err = _resolve_ppt_project_dir(name)
         if err is not None:
             return err
         assert project_dir is not None
@@ -5138,7 +5196,7 @@ async def handle_ppt_lock_outline(request: web.Request) -> web.Response:
         return web.json_response({"error": "Invalid JSON body"}, status=400)
     try:
         name = str(body.get("name", "") or "").strip()
-        project_dir, err = _ppt_project_dir_or_404(name)
+        project_dir, err = _resolve_ppt_project_dir(name)
         if err is not None:
             return err
         assert project_dir is not None
@@ -5187,7 +5245,7 @@ async def handle_ppt_design_spec_summary_get(request: web.Request) -> web.Respon
     """
     try:
         name = request.query.get("name") or ""
-        project_dir, err = _ppt_project_dir_or_404(name)
+        project_dir, err = _resolve_ppt_project_dir(name)
         if err is not None:
             return err
         assert project_dir is not None
@@ -5220,7 +5278,7 @@ async def handle_ppt_design_spec_summary_put(request: web.Request) -> web.Respon
     """
     try:
         name = request.query.get("name") or ""
-        project_dir, err = _ppt_project_dir_or_404(name)
+        project_dir, err = _resolve_ppt_project_dir(name)
         if err is not None:
             return err
         assert project_dir is not None
@@ -5243,11 +5301,11 @@ async def handle_ppt_design_spec_summary_put(request: web.Request) -> web.Respon
 
         # Merge user edits into existing
         existing.update(body)
-        existing["updatedAt"] = _datetime.now().isoformat() + "Z"
+        existing["updatedAt"] = datetime.now().isoformat() + "Z"
 
         # Atomic write
-        import tempfile
         import os as _os
+        import tempfile
 
         tmp_fd, tmp_path = tempfile.mkstemp(
             dir=str(project_dir), suffix=".tmp", prefix=".design_spec_summary_"
@@ -5270,7 +5328,7 @@ async def handle_ppt_pages_get(request: web.Request) -> web.Response:
     """GET /api/ppt/project/pages?name=<n> - return page files, mtime, state."""
     try:
         name = request.query.get("name") or ""
-        project_dir, err = _ppt_project_dir_or_404(name)
+        project_dir, err = _resolve_ppt_project_dir(name)
         if err is not None:
             return err
         assert project_dir is not None
@@ -5327,7 +5385,7 @@ async def handle_ppt_page_confirm(request: web.Request) -> web.Response:
         return web.json_response({"error": "Invalid JSON body"}, status=400)
     try:
         name = str(body.get("name", "") or "").strip()
-        project_dir, err = _ppt_project_dir_or_404(name)
+        project_dir, err = _resolve_ppt_project_dir(name)
         if err is not None:
             return err
         assert project_dir is not None
@@ -5363,6 +5421,8 @@ async def handle_ppt_page_confirm(request: web.Request) -> web.Response:
         meta.setdefault("schemaVersion", 2)
         _save_ppt_meta_atomic(project_dir, meta)
 
+        await _push_ppt_phase_changed(name, "producing")
+
         return web.json_response({
             "ok": True,
             "file": file_name,
@@ -5385,7 +5445,7 @@ async def handle_ppt_request_export(request: web.Request) -> web.Response:
         return web.json_response({"error": "Invalid JSON body"}, status=400)
     try:
         name = str(body.get("name", "") or "").strip()
-        project_dir, err = _ppt_project_dir_or_404(name)
+        project_dir, err = _resolve_ppt_project_dir(name)
         if err is not None:
             return err
         assert project_dir is not None
@@ -5406,6 +5466,8 @@ async def handle_ppt_request_export(request: web.Request) -> web.Response:
         meta["exportRequestedAt"] = now
         meta["updatedAt"] = now
         _save_ppt_meta_atomic(project_dir, meta)
+
+        await _push_ppt_phase_changed(name, "exporting")
 
         return web.json_response({"ok": True, "exportRequestedAt": now})
     except Exception as e:
@@ -5459,7 +5521,7 @@ def _normalize_video_meta(project_dir: Path, meta: dict) -> dict:
         elif render_running:
             result["phase"] = "rendering"
         elif scenes and all(
-            _video_scene_confirmed_current(project_dir, s) for s in scenes
+            _video_scene_ready(project_dir, s) for s in scenes
         ):
             result["phase"] = "exportable"
         elif result.get("storyboardLocked") or scenes or has_scene_html:
@@ -5538,6 +5600,68 @@ async def handle_url2note_extract(request: web.Request) -> web.Response:
     except Exception:
         logger.exception("url2note extraction error")
         return web.json_response({"error": "URL extraction failed"}, status=500)
+
+
+async def handle_doc2note_status(request: web.Request) -> web.Response:
+    """GET /api/doc2note/status - supported formats + pandoc availability.
+
+    The frontend calls this before importing an Office document; when
+    ``pandoc.ok`` is false it shows the first-download confirmation dialog
+    (``pandocDownloadMb`` is the approximate zip size shown in that dialog).
+    """
+    try:
+        from mona.api.doc2note import SUPPORTED_EXTENSIONS
+        from mona.api.pandoc_runtime import PANDOC_DOWNLOAD_MB, PandocRuntime
+
+        return web.json_response(
+            {
+                "supportedExtensions": SUPPORTED_EXTENSIONS,
+                "pandoc": PandocRuntime().check(),
+                "pandocDownloadMb": PANDOC_DOWNLOAD_MB,
+            }
+        )
+    except Exception as e:
+        logger.exception("doc2note status error")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_doc2note_runtime_download(request: web.Request) -> web.Response:
+    """POST /api/doc2note/runtime-download - download the Pandoc binary."""
+    try:
+        from mona.api.pandoc_runtime import PandocRuntime
+
+        result = await PandocRuntime().ensure()
+        return web.json_response(result, status=200 if result.get("ok") else 500)
+    except Exception as e:
+        logger.exception("doc2note runtime-download error")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_doc2note_extract(request: web.Request) -> web.Response:
+    """POST /api/doc2note/extract - parse a local document into text for a note."""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+    file_path = str(body.get("file_path") or "").strip() if isinstance(body, dict) else ""
+    if not file_path:
+        return web.json_response({"error": "file_path is required"}, status=400)
+    try:
+        from mona.api.doc2note import Doc2NoteError, PandocMissingError, extract_document
+
+        source = await extract_document(file_path)
+        return web.json_response(
+            {"title": source.title, "kind": source.kind, "text": source.text}
+        )
+    except PandocMissingError as exc:
+        return web.json_response(
+            {"error": str(exc), "code": "PANDOC_MISSING"}, status=409
+        )
+    except Doc2NoteError as exc:
+        return web.json_response({"error": str(exc)}, status=422)
+    except Exception:
+        logger.exception("doc2note extraction error")
+        return web.json_response({"error": "文档解析失败"}, status=500)
 
 
 async def handle_video_runtime_download(request: web.Request) -> web.Response:
@@ -5848,6 +5972,58 @@ def _video_project_dir_or_404(name: str) -> tuple[Path | None, web.Response | No
     return project_dir, None
 
 
+async def _push_video_project_changed(name: str, hint: str = "") -> None:
+    """Best-effort push of a video project change to connected webui clients.
+
+    Same cross-process fan-out as ``_push_ppt_phase_changed``: these handlers
+    run in the services process while the websocket channel lives in the
+    gateway process, so we loop back to the websocket port's internal route.
+    Polling endpoints remain the fallback when the push fails.
+    """
+    try:
+        import httpx
+
+        from mona.channels.websocket import WebSocketConfig
+        from mona.config.loader import load_config
+
+        section = getattr(load_config().channels, "websocket", None)
+        ws_cfg = WebSocketConfig.model_validate(section if isinstance(section, dict) else {})
+        headers = {}
+        secret = ws_cfg.token_issue_secret.strip() or ws_cfg.token.strip()
+        if secret:
+            headers["Authorization"] = f"Bearer {secret}"
+        params: dict[str, str] = {"name": name}
+        if hint:
+            params["hint"] = hint
+        async with httpx.AsyncClient(timeout=httpx.Timeout(5.0, connect=2.0)) as client:
+            await client.get(
+                f"http://127.0.0.1:{ws_cfg.port}/api/video/broadcast-change",
+                params=params,
+                headers=headers,
+            )
+    except Exception as e:
+        logger.warning("video project push failed ({} {}): {}", name, hint, e)
+
+
+# Strong refs to in-flight push tasks (asyncio only weak-refs tasks).
+_video_push_tasks: set[asyncio.Task] = set()
+
+
+def _schedule_video_push(name: str, hint: str = "") -> None:
+    """Fire-and-forget ``video_project_changed`` push.
+
+    Handlers stay on the fast path: the loopback HTTP call runs in the
+    background and never delays the response. Polling endpoints remain the
+    fallback when the push fails or no client is connected.
+    """
+    try:
+        task = asyncio.create_task(_push_video_project_changed(name, hint))
+    except RuntimeError:
+        return  # no running event loop (unit tests)
+    _video_push_tasks.add(task)
+    task.add_done_callback(_video_push_tasks.discard)
+
+
 def _video_scene_confirmed_current(project_dir: Path, scene: dict) -> bool:
     """A scene counts as confirmed only when its confirmation is bound to the
     current HTML file version (confirmedMtime == disk mtime)."""
@@ -5876,6 +6052,21 @@ def _all_video_scenes_confirmed(project_dir: Path, scenes: list[dict]) -> bool:
     return all(_video_scene_confirmed_current(project_dir, s) for s in scenes)
 
 
+def _video_scene_ready(project_dir: Path, scene: dict) -> bool:
+    """A scene is export-ready when its HTML has been generated for the current
+    storyboard content (htmlStatus past pending) and the file exists on disk.
+
+    P3: export gates on "ready", not "confirmed" — the render task snapshots
+    scene HTML at start, so per-scene confirmation is no longer required.
+    """
+    if scene.get("htmlStatus") not in ("previewing", "confirmed"):
+        return False
+    idx = scene.get("index")
+    if idx is None:
+        return False
+    return (project_dir / "scenes" / f"scene_{int(idx):02d}.html").is_file()
+
+
 def _invalidate_video_outputs(
     project_dir: Path,
     meta: dict,
@@ -5902,6 +6093,8 @@ def _invalidate_video_outputs(
         # Clear confirmation
         scene.pop("confirmedAt", None)
         scene.pop("confirmedMtime", None)
+        # Clear narration-audio cache binding so export re-synthesizes TTS
+        scene.pop("audioMtime", None)
         if reset_html:
             scene["htmlStatus"] = "pending"
         else:
@@ -5931,9 +6124,39 @@ def _load_video_meta(project_dir: Path) -> dict:
 
 def _save_video_meta(project_dir: Path, meta: dict) -> None:
     """Save meta.json."""
+    # scenes 变更时同步时间戳，供 storyboard GET 做 mtime 仲裁：
+    # AI 会话裸写 storyboard.md 后 mtime > scenesUpdatedAt → 触发重解析。
+    # 调用方须先 _sync_storyboard 落盘 storyboard.md 再调本函数，
+    # 保证 scenesUpdatedAt >= storyboard.mtime。
+    if isinstance(meta.get("scenes"), list) and meta["scenes"]:
+        meta["scenesUpdatedAt"] = time.time()
     (project_dir / "meta.json").write_text(
         _json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
     )
+
+
+def _merge_scene_status(
+    old_scenes: list, new_scenes: list[dict]
+) -> list[dict]:
+    """按 scene.index 把旧场景的运行状态合并到重解析出的新场景上。
+
+    storyboard.md 被 AI 重写后会解析出全新 scenes，但 htmlStatus /
+    confirmedMtime 等运行状态只存在于 meta.json，必须按 index 保留，
+    否则重解析会把已生成/已确认的场景打回 pending。
+    """
+    old_by_index = {
+        s.get("index"): s
+        for s in old_scenes
+        if isinstance(s, dict) and s.get("index") is not None
+    }
+    for scene in new_scenes:
+        old = old_by_index.get(scene.get("index"))
+        if not isinstance(old, dict):
+            continue
+        for key in ("htmlStatus", "confirmedMtime", "confirmedAt", "audioMtime", "error"):
+            if old.get(key) is not None:
+                scene[key] = old[key]
+    return new_scenes
 
 
 def _sync_storyboard(project_dir: Path, scenes: list[dict]) -> None:
@@ -5962,10 +6185,24 @@ async def handle_video_project_storyboard(request: web.Request) -> web.Response:
         storyboard_path = project_dir / "storyboard.md"
         storyboard_exists = storyboard_path.is_file()
 
-        # Prefer meta.json scenes (source of truth); fallback to parsing storyboard.md
+        # meta.json scenes 是唯一事实源，但 AI 会话可能裸写 storyboard.md。
+        # mtime 仲裁：storyboard.md 比 meta.scenes 更新（AI 改过）→ 重新解析；
+        # 否则直接用 meta 缓存。scenesUpdatedAt 缺失（旧项目）视为 0，
+        # 首次 GET 会重解析一次（内容幂等），之后走 meta 缓存。
         meta = _load_video_meta(project_dir)
-        scenes = meta.get("scenes")
-        if isinstance(scenes, list) and scenes:
+        cached_scenes = meta.get("scenes")
+        try:
+            scenes_updated_at = float(meta.get("scenesUpdatedAt") or 0)
+        except (TypeError, ValueError):
+            scenes_updated_at = 0.0
+        sb_mtime = storyboard_path.stat().st_mtime if storyboard_exists else None
+        meta_fresh = (
+            isinstance(cached_scenes, list)
+            and bool(cached_scenes)
+            and not (sb_mtime is not None and sb_mtime > scenes_updated_at)
+        )
+        if meta_fresh:
+            scenes = cached_scenes
             # Attach current HTML file mtime so the client can bind confirmation
             # to the exact previewed version (expectedMtime on confirm).
             for scene in scenes:
@@ -5999,6 +6236,9 @@ async def handle_video_project_storyboard(request: web.Request) -> web.Response:
         spec.loader.exec_module(mod)
         scenes = mod.parse_storyboard(storyboard_path)
         if scenes:
+            # storyboard.md 被 AI 重写过：保留 meta 中各场景的运行状态
+            if isinstance(cached_scenes, list) and cached_scenes:
+                _merge_scene_status(cached_scenes, scenes)
             meta["scenes"] = scenes
             meta.setdefault("phase", "storyboard")
             _save_video_meta(project_dir, meta)
@@ -6070,8 +6310,8 @@ async def handle_video_project_scene_update(request: web.Request) -> web.Respons
 
         meta["scenes"] = scenes
         _invalidate_video_outputs(project_dir, meta, {index}, reset_html=True)
-        _save_video_meta(project_dir, meta)
         _sync_storyboard(project_dir, scenes)
+        _save_video_meta(project_dir, meta)
         return web.json_response({"ok": True, "scene": target})
     except Exception as e:
         logger.exception("video scene update error")
@@ -6101,8 +6341,8 @@ async def handle_video_project_scene_delete(request: web.Request) -> web.Respons
             s["index"] = i
         meta["scenes"] = scenes
         _invalidate_video_outputs(project_dir, meta, None, reset_html=True)
-        _save_video_meta(project_dir, meta)
         _sync_storyboard(project_dir, scenes)
+        _save_video_meta(project_dir, meta)
         return web.json_response({"ok": True, "scenes": scenes})
     except Exception as e:
         logger.exception("video scene delete error")
@@ -6138,8 +6378,8 @@ async def handle_video_project_scene_add(request: web.Request) -> web.Response:
         scenes.append(new_scene)
         meta["scenes"] = scenes
         _invalidate_video_outputs(project_dir, meta, None, reset_html=True)
-        _save_video_meta(project_dir, meta)
         _sync_storyboard(project_dir, scenes)
+        _save_video_meta(project_dir, meta)
         return web.json_response({"ok": True, "scene": new_scene})
     except Exception as e:
         logger.exception("video scene add error")
@@ -6182,8 +6422,9 @@ async def handle_video_project_scene_reorder(request: web.Request) -> web.Respon
             new_scenes.append(s)
         meta["scenes"] = new_scenes
         _invalidate_video_outputs(project_dir, meta, None, reset_html=True)
-        _save_video_meta(project_dir, meta)
         _sync_storyboard(project_dir, new_scenes)
+        _save_video_meta(project_dir, meta)
+        _schedule_video_push(name, "scenes")
         return web.json_response({"ok": True, "scenes": new_scenes})
     except Exception as e:
         logger.exception("video scene reorder error")
@@ -6218,10 +6459,108 @@ async def handle_video_project_lock_storyboard(request: web.Request) -> web.Resp
         meta["storyboardLocked"] = True
         meta["phase"] = "producing"
         _save_video_meta(project_dir, meta)
+        _schedule_video_push(name, "phase")
         return web.json_response({"ok": True, "phase": "producing"})
     except Exception as e:
         logger.exception("video lock storyboard error")
         return web.json_response({"error": str(e)}, status=500)
+
+
+async def _synthesize_scene_narration(
+    project_dir: Path,
+    scene: dict,
+    meta: dict,
+    *,
+    force: bool = False,
+) -> bytes | None:
+    """Synthesize TTS audio for one scene's narration into audio/scene_NN.mp3.
+
+    缓存策略：合成成功后把文件 mtime 记到 scene["audioMtime"]；下次调用若
+    文件 mtime 与 audioMtime 匹配（说明场景内容未变——内容变更路径会经
+    _invalidate_video_outputs 清掉 audioMtime），直接读缓存返回。
+    force=True 跳过缓存（前端"重新合成"语义）。
+
+    Returns audio bytes, or None on failure / empty narration.
+    """
+    index = int(scene.get("index") or 0)
+    text = (scene.get("narration") or "").strip()
+    if index < 1 or not text:
+        return None
+
+    audio_dir = project_dir / "audio"
+    audio_dir.mkdir(parents=True, exist_ok=True)
+    cache_path = audio_dir / f"scene_{index:02d}.mp3"
+
+    if not force and cache_path.is_file():
+        try:
+            mtime = cache_path.stat().st_mtime
+            if scene.get("audioMtime") == mtime:
+                return cache_path.read_bytes()
+        except OSError:
+            pass
+
+    from mona.providers.tts import EdgeTTSProvider, get_tts_provider
+
+    provider_name = str(meta.get("ttsProvider") or "edge").strip() or "edge"
+    voice = str(meta.get("ttsVoice") or "").strip()
+    rate = str(meta.get("ttsRate") or "+0%").strip() or "+0%"
+
+    if provider_name == "edge":
+        provider = EdgeTTSProvider(
+            voice=voice or "zh-CN-XiaoyiNeural", rate=rate
+        )
+    elif provider_name == "custom":
+        # Project-level credentials (legacy) take precedence; otherwise fall
+        # back to the global ChannelsConfig TTS settings so new projects
+        # never store API keys in meta.json.
+        try:
+            from mona.config.loader import load_config
+
+            channels_cfg = load_config().channels
+        except Exception:
+            channels_cfg = None
+        api_base = str(meta.get("ttsApiBase") or "").strip() or (
+            str(getattr(channels_cfg, "tts_api_base", "") or "").strip()
+            if channels_cfg is not None
+            else ""
+        )
+        api_key = str(meta.get("ttsApiKey") or "").strip() or (
+            str(getattr(channels_cfg, "tts_api_key", "") or "").strip()
+            if channels_cfg is not None
+            else ""
+        )
+        model = (
+            str(meta.get("ttsModel") or "").strip()
+            or (
+                str(getattr(channels_cfg, "tts_model", "") or "").strip()
+                if channels_cfg is not None
+                else ""
+            )
+            or "tts-1"
+        )
+        if not api_base or not api_key:
+            return None
+        provider = get_tts_provider(
+            "custom",
+            api_key=api_key,
+            api_base=api_base,
+            voice=voice,
+            model=model,
+            rate=rate,
+        )
+    else:
+        provider = get_tts_provider(provider_name, voice=voice)
+
+    audio_bytes = await provider.synthesize_to_bytes(text, voice=voice)
+    if audio_bytes is None:
+        return None
+
+    try:
+        cache_path.write_bytes(audio_bytes)
+        scene["audioMtime"] = cache_path.stat().st_mtime
+    except Exception:
+        pass  # Caching is best-effort
+    return audio_bytes
 
 
 async def handle_video_project_scene_narration(request: web.Request) -> web.Response:
@@ -6261,77 +6600,38 @@ async def handle_video_project_scene_narration(request: web.Request) -> web.Resp
                 {"error": "scene has no narration text"}, status=409
             )
 
-        # Resolve TTS provider
-        from mona.providers.tts import EdgeTTSProvider, get_tts_provider
-
         provider_name = str(meta.get("ttsProvider") or "edge").strip() or "edge"
-        voice = str(meta.get("ttsVoice") or "").strip()
-        rate = str(meta.get("ttsRate") or "+0%").strip() or "+0%"
+        if provider_name == "custom":
+            # custom 缺少凭据时辅助函数返回 None；提前给出可读错误
+            from mona.config.loader import load_config
 
-        if provider_name == "edge":
-            provider = EdgeTTSProvider(
-                voice=voice or "zh-CN-XiaoyiNeural", rate=rate
-            )
-        elif provider_name == "custom":
-            # Project-level credentials (legacy) take precedence; otherwise fall
-            # back to the global ChannelsConfig TTS settings so new projects
-            # never store API keys in meta.json.
             try:
-                from mona.config.loader import load_config
-
                 channels_cfg = load_config().channels
             except Exception:
                 channels_cfg = None
-            api_base = str(meta.get("ttsApiBase") or "").strip() or (
-                str(getattr(channels_cfg, "tts_api_base", "") or "").strip()
-                if channels_cfg is not None
-                else ""
+            has_creds = (
+                str(meta.get("ttsApiBase") or "").strip()
+                or str(getattr(channels_cfg, "tts_api_base", "") or "").strip()
+            ) and (
+                str(meta.get("ttsApiKey") or "").strip()
+                or str(getattr(channels_cfg, "tts_api_key", "") or "").strip()
             )
-            api_key = str(meta.get("ttsApiKey") or "").strip() or (
-                str(getattr(channels_cfg, "tts_api_key", "") or "").strip()
-                if channels_cfg is not None
-                else ""
-            )
-            model = (
-                str(meta.get("ttsModel") or "").strip()
-                or (
-                    str(getattr(channels_cfg, "tts_model", "") or "").strip()
-                    if channels_cfg is not None
-                    else ""
-                )
-                or "tts-1"
-            )
-            if not api_base or not api_key:
+            if not has_creds:
                 return web.json_response(
                     {"error": "custom TTS requires apiBase/apiKey — 请在设置页配置语音合成"},
                     status=409,
                 )
-            provider = get_tts_provider(
-                "custom",
-                api_key=api_key,
-                api_base=api_base,
-                voice=voice,
-                model=model,
-                rate=rate,
-            )
-        else:
-            provider = get_tts_provider(provider_name, voice=voice)
 
-        # Synthesize to bytes
-        audio_bytes = await provider.synthesize_to_bytes(text, voice=voice)
+        audio_bytes = await _synthesize_scene_narration(
+            project_dir, target, meta, force=True
+        )
         if audio_bytes is None:
             return web.json_response(
                 {"error": "TTS synthesis failed"}, status=502
             )
 
-        # Optionally cache to audio/scene_NN.mp3
-        audio_dir = project_dir / "audio"
-        audio_dir.mkdir(parents=True, exist_ok=True)
-        cache_path = audio_dir / f"scene_{index:02d}.mp3"
-        try:
-            cache_path.write_bytes(audio_bytes)
-        except Exception:
-            pass  # Caching is best-effort
+        # Persist audioMtime for cache validation on later calls
+        _save_video_meta(project_dir, meta)
 
         return web.Response(
             body=audio_bytes,
@@ -6405,8 +6705,8 @@ async def _generate_scene_html_via_llm(
     # 检测截断:LLM 因 max_tokens 不足被强制截断时 finish_reason="length"
     if getattr(resp, "finish_reason", "") == "length":
         raise RuntimeError(
-            f"LLM 输出被截断 (finish_reason=length)，当前 max_tokens 不足生成完整 HTML。"
-            f"请在 config.json 中提高 generation.max_tokens (建议 ≥16384)。"
+            "LLM 输出被截断 (finish_reason=length)，当前 max_tokens 不足生成完整 HTML。"
+            "请在 config.json 中提高 generation.max_tokens (建议 ≥16384)。"
         )
     # 校验 HTML 完整性:必须包含闭合标签,避免写入残缺文件导致预览空白
     if not re.search(r"</(html|body)>", html, re.IGNORECASE):
@@ -6576,6 +6876,7 @@ async def handle_video_project_scene_confirm(request: web.Request) -> web.Respon
             meta["phase"] = "exportable"
 
         _save_video_meta(project_dir, meta)
+        _schedule_video_push(name, "phase" if all_confirmed else "scenes")
         return web.json_response({
             "ok": True,
             "scene": target,
@@ -6744,8 +7045,8 @@ async def handle_video_ai_scene_rewrite(request: web.Request) -> web.Response:
                 break
         meta["scenes"] = scenes
         _invalidate_video_outputs(project_dir, meta, {index}, reset_html=True)
-        _save_video_meta(project_dir, meta)
         _sync_storyboard(project_dir, scenes)
+        _save_video_meta(project_dir, meta)
 
         return web.json_response({"ok": True, "scene": new_scene})
     except Exception as e:
@@ -6784,6 +7085,85 @@ async def _run_render_task(project_dir: Path, fps: int, quality: str) -> None:
     """Background task that runs render.py and updates status."""
     name = project_dir.name
     try:
+        # ---- 导出前置：逐场景合成旁白（P0-2） -------------------------------
+        # UI 全流程不经过 agent，SKILL.md 约定的手动 synthesize_narration 不会
+        # 发生；导出前在此补齐。单场景失败不阻塞（该场景无声），全部失败时
+        # 在完成状态的 message 中注明降级。
+        meta = _load_video_meta(project_dir)
+        scenes = meta.get("scenes") or []
+        audio_dir = project_dir / "audio"
+        narration_note: str | None = None
+        if meta.get("narrationEnabled"):
+            targets = [s for s in scenes if (s.get("narration") or "").strip()]
+            if targets:
+                _write_render_status(project_dir, {
+                    "stage": "rendering",
+                    "progress": 2,
+                    "message": f"合成场景旁白 (0/{len(targets)})...",
+                    "started_at": datetime.now().isoformat(),
+                })
+                ok_count = 0
+                for i, scene in enumerate(targets, start=1):
+                    try:
+                        result = await _synthesize_scene_narration(
+                            project_dir, scene, meta
+                        )
+                    except Exception:
+                        logger.exception(
+                            f"narration synthesis failed for scene {scene.get('index')}"
+                        )
+                        result = None
+                    if result is not None:
+                        ok_count += 1
+                    _write_render_status(project_dir, {
+                        "stage": "rendering",
+                        "progress": 2,
+                        "message": f"合成场景旁白 ({i}/{len(targets)})...",
+                        "started_at": datetime.now().isoformat(),
+                    })
+                if ok_count == 0:
+                    narration_note = "旁白合成失败，导出为无声视频"
+                elif ok_count < len(targets):
+                    narration_note = (
+                        f"{len(targets) - ok_count} 个场景旁白合成失败，对应场景无声"
+                    )
+                # Persist audioMtime cache bindings
+                _save_video_meta(project_dir, meta)
+            # 清理孤儿 scene_*.mp3（场景删除/重排后残留，避免拼入旧音频）
+            valid_names = {
+                f"scene_{int(s['index']):02d}.mp3"
+                for s in scenes
+                if s.get("index") is not None
+            }
+            if audio_dir.is_dir():
+                for mp3 in audio_dir.glob("scene_*.mp3"):
+                    if mp3.name not in valid_names:
+                        mp3.unlink(missing_ok=True)
+        else:
+            # 旁白关闭：清掉历史 TTS 缓存，防止 render.py 兜底拼接旧音频
+            if audio_dir.is_dir():
+                for mp3 in audio_dir.glob("scene_*.mp3"):
+                    mp3.unlink(missing_ok=True)
+        # 无论是否开启旁白，删除旧 narration.mp3，让 render.py 基于当前
+        # scene_*.mp3 集合重新拼接（或确认无音频）。
+        if audio_dir.is_dir():
+            (audio_dir / "narration.mp3").unlink(missing_ok=True)
+
+        # ---- P3 快照导出 -------------------------------------------------
+        # 复制 scenes/scene_*.html → renders/snapshot/scenes/，渲染只读快照，
+        # 用户在渲染期间继续编辑场景不影响本次导出内容。
+        live_scenes_dir = project_dir / "scenes"
+        snapshot_scenes_dir = project_dir / "renders" / "snapshot" / "scenes"
+        if snapshot_scenes_dir.is_dir():
+            for stale in snapshot_scenes_dir.glob("*.html"):
+                stale.unlink(missing_ok=True)
+        else:
+            snapshot_scenes_dir.mkdir(parents=True, exist_ok=True)
+        for html_file in live_scenes_dir.glob("scene_*.html"):
+            (snapshot_scenes_dir / html_file.name).write_bytes(
+                html_file.read_bytes()
+            )
+
         _write_render_status(project_dir, {
             "stage": "rendering",
             "progress": 5,
@@ -6809,17 +7189,36 @@ async def _run_render_task(project_dir: Path, fps: int, quality: str) -> None:
             "started_at": datetime.now().isoformat(),
         })
 
+        # 帧级进度回调（工作线程中执行，仅做文件写入）
+        def _on_render_progress(stage: str, percent: float, message: str) -> None:
+            prev = _read_render_status(project_dir)
+            _write_render_status(project_dir, {
+                "stage": "rendering",
+                "progress": percent,
+                "message": message,
+                "started_at": prev.get("started_at") or datetime.now().isoformat(),
+            })
+
         # render_project is a sync wrapper around render_project_async.
         # Run it in a thread to avoid blocking the event loop.
+        # scenes_dir 指向快照目录（P3），渲染与后续编辑隔离。
         result = await asyncio.to_thread(
-            mod.render_project, str(project_dir), fps, quality
+            mod.render_project,
+            str(project_dir),
+            fps,
+            quality,
+            _on_render_progress,
+            scenes_dir=snapshot_scenes_dir,
         )
 
         if result.get("ok"):
+            done_message = "渲染完成"
+            if narration_note:
+                done_message = f"渲染完成（{narration_note}）"
             _write_render_status(project_dir, {
                 "stage": "done",
                 "progress": 100,
-                "message": "渲染完成",
+                "message": done_message,
                 "output": result.get("output"),
                 "duration": result.get("duration"),
                 "fps": result.get("fps"),
@@ -6834,6 +7233,7 @@ async def _run_render_task(project_dir: Path, fps: int, quality: str) -> None:
             meta["hasVideo"] = True
             meta["outputStale"] = False
             _save_video_meta(project_dir, meta)
+            _schedule_video_push(name, "status")
         else:
             _write_render_status(project_dir, {
                 "stage": "error",
@@ -6846,6 +7246,7 @@ async def _run_render_task(project_dir: Path, fps: int, quality: str) -> None:
             meta = _load_video_meta(project_dir)
             meta["phase"] = "exportable"
             _save_video_meta(project_dir, meta)
+            _schedule_video_push(name, "status")
     except Exception as e:
         logger.exception("video render task error")
         _write_render_status(project_dir, {
@@ -6858,6 +7259,7 @@ async def _run_render_task(project_dir: Path, fps: int, quality: str) -> None:
         meta = _load_video_meta(project_dir)
         meta["phase"] = "exportable"
         _save_video_meta(project_dir, meta)
+        _schedule_video_push(name, "status")
     finally:
         _video_render_tasks.pop(name, None)
 
@@ -6866,7 +7268,9 @@ async def handle_video_project_export(request: web.Request) -> web.Response:
     """POST /api/video/project/export  body: {name, quality?}.
 
     Triggers MP4 rendering in background. Returns immediately with status.
-    Validates all scenes are confirmed before allowing export.
+    Validates all scenes are ready (HTML generated) before allowing export —
+    the render task snapshots scene HTML at start, so confirmation is not
+    required (P3 快照导出).
     """
     try:
         body = await request.json()
@@ -6891,13 +7295,13 @@ async def handle_video_project_export(request: web.Request) -> web.Response:
         scenes = meta.get("scenes") or []
         if not scenes:
             return web.json_response(
-                {"error": "SCENES_NOT_CONFIRMED", "detail": "No scenes found"}, status=409
+                {"error": "SCENES_NOT_READY", "detail": "No scenes found"}, status=409
             )
-        # Check all scenes are confirmed against their current HTML version
+        # Check all scenes have generated HTML for their current storyboard version
         for scene in scenes:
-            if not _video_scene_confirmed_current(project_dir, scene):
+            if not _video_scene_ready(project_dir, scene):
                 return web.json_response(
-                    {"error": "SCENES_NOT_CONFIRMED", "detail": f"Scene {scene.get('index')} not confirmed"},
+                    {"error": "SCENES_NOT_READY", "detail": f"Scene {scene.get('index')} HTML not generated"},
                     status=409,
                 )
 
@@ -6919,6 +7323,7 @@ async def handle_video_project_export(request: web.Request) -> web.Response:
         # Mark project as rendering
         meta["phase"] = "rendering"
         _save_video_meta(project_dir, meta)
+        _schedule_video_push(name, "phase")
 
         task = asyncio.create_task(_run_render_task(project_dir, fps, quality))
         _video_render_tasks[name] = task
@@ -7117,13 +7522,15 @@ def _build_video_preview_html(
     Each scene is injected as an iframe ``srcdoc`` so relative paths inside the
     scene HTML can be rewritten to absolute project-file URLs.
     """
+    # NOTE: do NOT html.escape the srcdoc here — <script> content is raw text,
+    # so entities like &lt; are never decoded and the iframe would show escaped
+    # source instead of rendering the scene. Instead every "<" is written as
+    # a JSON unicode escape (decoded back to "<" by the JS parser) so a
+    # literal "</script>" in the scene HTML cannot terminate this script block.
     entries_json = _json.dumps(
-        [
-            [num, duration, html.escape(srcdoc, quote=True)]
-            for num, duration, srcdoc in scene_entries
-        ],
+        [[num, duration, srcdoc] for num, duration, srcdoc in scene_entries],
         ensure_ascii=False,
-    )
+    ).replace("<", "\\u003c")
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -7309,6 +7716,7 @@ def create_app(
     app.router.add_post("/shutdown", handle_shutdown)
     app.router.add_post("/api/tauri/invoke", handle_tauri_invoke)
     app.router.add_post("/api/system/plan", handle_system_plan)
+    app.router.add_post("/api/system/diagnose", handle_system_diagnose)
 
     # --- Skill lifecycle routes ---
     app.router.add_get("/api/skills/list", handle_skills_list)

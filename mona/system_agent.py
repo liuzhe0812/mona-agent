@@ -285,3 +285,30 @@ async def handle_system_plan(request: web.Request) -> web.Response:
         return web.json_response({"error": str(error)}, status=422)
     except Exception as error:
         return web.json_response({"error": str(error)}, status=500)
+
+
+async def handle_system_diagnose(request: web.Request) -> web.Response:
+    """Gateway endpoint for the System sidebar's read-only diagnostic request."""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+
+    symptom = str(body.get("symptom", "") or "").strip()
+    evidence = body.get("evidence")
+    if not symptom or not isinstance(evidence, dict):
+        return web.json_response({"error": "symptom 和 evidence 不能为空"}, status=400)
+
+    agent_loop = request.app.get("agent_loop")
+    provider = getattr(agent_loop, "provider", None)
+    if provider is None:
+        return web.json_response({"error": "LLM provider 不可用"}, status=503)
+
+    config = getattr(agent_loop, "config", None)
+    model = getattr(config, "model", None) or getattr(agent_loop, "model_name", None)
+    try:
+        return web.json_response(await generate_diagnostic_report(provider, symptom, evidence, model=model))
+    except ValueError as error:
+        return web.json_response({"error": str(error)}, status=422)
+    except Exception as error:
+        return web.json_response({"error": str(error)}, status=500)

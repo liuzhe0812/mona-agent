@@ -28,6 +28,9 @@ from mona.api.server import (
     handle_contacts_sync_eas,
     handle_contacts_test_carddav,
     handle_contacts_test_eas,
+    handle_doc2note_extract,
+    handle_doc2note_runtime_download,
+    handle_doc2note_status,
     handle_email_account_removed,
     handle_email_analyze,
     handle_email_create_folder,
@@ -70,6 +73,7 @@ from mona.api.server import (
     handle_materials_get_raw_binary,
     handle_materials_get_text,
     handle_materials_get_wiki_page,
+    handle_materials_lint,
     handle_materials_list_files,
     handle_materials_list_wiki,
     handle_materials_llm_config,
@@ -260,6 +264,7 @@ def create_services_app(
     app.router.add_post("/api/materials/wiki/write", handle_materials_write_wiki_page)
     app.router.add_delete("/api/materials/wiki/{path:.*}", handle_materials_delete_wiki_page)
     app.router.add_get("/api/materials/search", handle_materials_search)
+    app.router.add_post("/api/materials/lint", handle_materials_lint)
     app.router.add_get("/api/materials/status", handle_materials_status)
     app.router.add_get("/api/materials/llm-config", handle_materials_llm_config)
 
@@ -275,10 +280,13 @@ def create_services_app(
     app.router.add_get("/api/profile/snapshots", handle_profile_snapshots)
     app.router.add_get("/api/profile/comparison", handle_profile_comparison)
 
-    # Video project routes + url2note
+    # Video project routes + url2note + doc2note
     app.router.add_get("/api/video/runtime-check", handle_video_runtime_check)
     app.router.add_post("/api/video/runtime-download", handle_video_runtime_download)
     app.router.add_post("/api/url2note/extract", handle_url2note_extract)
+    app.router.add_get("/api/doc2note/status", handle_doc2note_status)
+    app.router.add_post("/api/doc2note/runtime-download", handle_doc2note_runtime_download)
+    app.router.add_post("/api/doc2note/extract", handle_doc2note_extract)
 
     # Office document collaboration (阶段 B: OfficeCLI-backed AI modification)
     app.router.add_get("/api/office/health", handle_office_health)
