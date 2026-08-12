@@ -43,11 +43,12 @@ const RECURRENCE_OPTIONS: { value: ScheduleRecurrence; label: string }[] = [
 ];
 
 const COLOR_OPTIONS = [
-  { value: "", label: "默认", className: "bg-blue-500" },
-  { value: "green", label: "绿", className: "bg-green-500" },
-  { value: "orange", label: "橙", className: "bg-orange-500" },
+  { value: "", label: "默认", className: "bg-info-strong" },
+  { value: "green", label: "绿", className: "bg-success" },
+  { value: "orange", label: "橙", className: "bg-warning" },
+  // 无语义紫色 token，保留调色板类（色值仅存数据模型，日历视图不消费）
   { value: "purple", label: "紫", className: "bg-purple-500" },
-  { value: "gray", label: "灰", className: "bg-gray-500" },
+  { value: "gray", label: "灰", className: "bg-muted-foreground" },
 ];
 
 export function ScheduleDialog({
@@ -179,31 +180,31 @@ export function ScheduleDialog({
         <div className="space-y-3">
           {/* Type selector */}
           <div className="flex gap-2">
-            <button
+            <Button
               type="button"
+              variant="outline"
               onClick={() => setKind("personal")}
               className={cn(
-                "flex-1 rounded-lg border px-3 py-2 text-sm transition-colors",
-                kind === "personal"
-                  ? "border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300"
-                  : "border-input hover:bg-accent",
+                "h-auto flex-1 rounded-lg px-3 py-2 text-body",
+                kind === "personal" &&
+                  "border-primary bg-primary/10 text-primary hover:bg-primary/10 hover:text-primary",
               )}
             >
               个人日程
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
+              variant="outline"
               onClick={() => setKind("ai_task")}
               className={cn(
-                "flex-1 rounded-lg border px-3 py-2 text-sm transition-colors flex items-center justify-center gap-1.5",
-                kind === "ai_task"
-                  ? "border-purple-500 bg-purple-50 text-purple-700 dark:bg-purple-950/40 dark:text-purple-300"
-                  : "border-input hover:bg-accent",
+                "h-auto flex-1 rounded-lg px-3 py-2 text-body gap-1.5",
+                kind === "ai_task" &&
+                  "border-primary bg-primary/10 text-primary hover:bg-primary/10 hover:text-primary",
               )}
             >
               <Bot className="h-3.5 w-3.5" />
               AI 自动化任务
-            </button>
+            </Button>
           </div>
 
           {/* Title */}
@@ -214,7 +215,6 @@ export function ScheduleDialog({
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="日程标题"
-              className="rounded-lg"
             />
           </div>
 
@@ -222,18 +222,20 @@ export function ScheduleDialog({
           <div className="space-y-1.5">
             <div className="flex items-center justify-between">
               <Label>时间</Label>
-              <button
+              <Button
                 type="button"
+                variant="ghost"
+                size="xs"
                 onClick={() => setAllDay(!allDay)}
                 className={cn(
-                  "text-xs px-2 py-0.5 rounded-full transition-colors",
+                  "h-auto rounded-full px-2 py-0.5",
                   allDay
-                    ? "bg-primary text-primary-foreground"
-                    : "text-muted-foreground hover:bg-accent",
+                    ? "bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground"
+                    : "text-muted-foreground",
                 )}
               >
                 全天
-              </button>
+              </Button>
             </div>
             <div className="flex items-center gap-2">
               <Input
@@ -246,16 +248,16 @@ export function ScheduleDialog({
                     setStartAt(e.target.value);
                   }
                 }}
-                className="rounded-lg flex-1"
+                className="flex-1"
               />
               {!allDay && (
                 <>
-                  <span className="text-muted-foreground text-sm">—</span>
+                  <span className="text-body text-muted-foreground">—</span>
                   <Input
                     type="datetime-local"
                     value={endAt}
                     onChange={(e) => setEndAt(e.target.value)}
-                    className="rounded-lg flex-1"
+                    className="flex-1"
                   />
                 </>
               )}
@@ -267,19 +269,21 @@ export function ScheduleDialog({
             <Label>重复</Label>
             <div className="flex flex-wrap gap-1.5">
               {RECURRENCE_OPTIONS.map((opt) => (
-                <button
+                <Button
                   key={opt.value}
                   type="button"
+                  variant="ghost"
+                  size="xs"
                   onClick={() => setRecurrence(opt.value)}
                   className={cn(
-                    "px-2.5 py-1 rounded-full text-xs transition-colors",
+                    "h-auto rounded-full px-2.5 py-1",
                     recurrence === opt.value
-                      ? "bg-primary text-primary-foreground"
-                      : "bg-accent text-accent-foreground hover:bg-accent",
+                      ? "bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground"
+                      : "bg-accent text-accent-foreground",
                   )}
                 >
                   {opt.label}
-                </button>
+                </Button>
               ))}
             </div>
             {recurrence === "cron_expr" && (
@@ -287,34 +291,36 @@ export function ScheduleDialog({
                 value={cronExpr}
                 onChange={(e) => setCronExpr(e.target.value)}
                 placeholder="0 9 * * 1-5"
-                className="rounded-lg mt-1.5 font-mono text-xs"
+                className="mt-1.5 font-mono text-caption"
               />
             )}
           </div>
 
           {/* AI task fields */}
           {kind === "ai_task" && (
-            <div className="space-y-1.5 rounded-lg border border-purple-200 dark:border-purple-900/50 bg-purple-50/50 dark:bg-purple-950/20 p-3">
+            <div className="space-y-1.5 rounded-lg border border-primary/20 bg-primary/5 p-3">
               <Label htmlFor="sched-ai">AI 指令</Label>
               <Textarea
                 id="sched-ai"
                 value={aiMessage}
                 onChange={(e) => setAiMessage(e.target.value)}
                 placeholder="到时间让 AI 执行的指令，例如：检查邮箱并汇总未读邮件"
-                className="rounded-lg min-h-[44px] text-[13px]"
+                className="min-h-[44px]"
               />
-              <button
+              <Button
                 type="button"
+                variant="ghost"
+                size="xs"
                 onClick={() => setAiDeliver(!aiDeliver)}
                 className={cn(
-                  "text-xs px-2 py-1 rounded-full transition-colors",
+                  "h-auto rounded-full px-2 py-1",
                   aiDeliver
-                    ? "bg-primary text-primary-foreground"
-                    : "text-muted-foreground hover:bg-accent",
+                    ? "bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground"
+                    : "text-muted-foreground",
                 )}
               >
                 {aiDeliver ? "✓ 执行后把结果发给我" : "执行后不通知"}
-              </button>
+              </Button>
             </div>
           )}
 
@@ -326,7 +332,7 @@ export function ScheduleDialog({
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder="备注（可选）"
-              className="rounded-lg min-h-[36px] text-[13px]"
+              className="min-h-[36px]"
             />
           </div>
 
@@ -353,7 +359,7 @@ export function ScheduleDialog({
           </div>
 
           {error && (
-            <p className="text-sm text-destructive">{error}</p>
+            <p className="text-body text-destructive">{error}</p>
           )}
         </div>
 

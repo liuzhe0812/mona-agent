@@ -11,6 +11,7 @@ import { useEffect, useState } from "react";
 import { Inbox as InboxIcon, Plus } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { StatusNotice } from "@/components/ui/status-notice";
 
 import { CalendarMonth } from "./CalendarMonth";
 import { CalendarWeek } from "./CalendarWeek";
@@ -99,13 +100,13 @@ export function ScheduleView({ onOpenInbox }: ScheduleViewProps) {
         type="button"
         variant="ghost"
         size="sm"
-        className="relative h-7 gap-1.5 px-2 text-[12px]"
+        className="relative h-7 gap-1.5 px-2 text-caption"
         onClick={onOpenInbox}
       >
         <InboxIcon className="h-3.5 w-3.5" />
         收集箱
         {inboxBadgeText && (
-          <span className="pointer-events-none absolute -right-1 -top-1 flex min-w-[16px] h-[16px] items-center justify-center rounded-full bg-red-500 px-1 text-[9px] font-medium leading-none text-white">
+          <span className="pointer-events-none absolute -right-1 -top-1 flex h-[16px] min-w-[16px] items-center justify-center rounded-full bg-destructive px-1 text-micro font-medium leading-none text-destructive-foreground">
             {inboxBadgeText}
           </span>
         )}
@@ -113,7 +114,7 @@ export function ScheduleView({ onOpenInbox }: ScheduleViewProps) {
       <Button
         type="button"
         size="sm"
-        className="h-7 gap-1 rounded-full px-2.5 text-[12px]"
+        className="h-7 gap-1 px-2.5 text-caption"
         onClick={() => openCreate(selectedDate)}
       >
         <Plus className="h-3.5 w-3.5" />
@@ -127,9 +128,12 @@ export function ScheduleView({ onOpenInbox }: ScheduleViewProps) {
       {/* Calendar area */}
       <div className="flex-1 flex flex-col min-w-0">
         {error && (
-          <div className="px-4 py-2 text-sm text-destructive bg-destructive/10 border-b">
-            {error}
-          </div>
+          <StatusNotice
+            tone="danger"
+            className="rounded-none border-x-0 border-t-0 px-4 py-2"
+          >
+            <span className="text-destructive">{error}</span>
+          </StatusNotice>
         )}
 
         <div className="flex-1 overflow-hidden">

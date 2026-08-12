@@ -3,11 +3,20 @@
 import { useEffect, useMemo, useState } from "react";
 import { Check, Star } from "lucide-react";
 
+import { Select } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 
 import { useScheduleStore } from "./scheduleStore";
 import { useTodoStore } from "./todoStore";
 import type { TodoItem } from "./todoTypes";
+
+const BUCKET_OPTIONS = [
+  { value: "inbox", label: "收件" },
+  { value: "today", label: "今日" },
+  { value: "next", label: "下一步" },
+  { value: "waiting", label: "等待" },
+  { value: "someday", label: "将来" },
+];
 
 function formatTime(ms: number): string {
   const d = new Date(ms);
@@ -69,14 +78,14 @@ function TodoCard({
           )}
           <span
             className={cn(
-              "truncate text-[13px]",
+              "truncate text-ui",
               item.state === "done" && "line-through opacity-50",
             )}
           >
             {item.title}
           </span>
         </div>
-        <div className="mt-0.5 flex flex-wrap items-center gap-x-3 text-[11px] text-muted-foreground">
+        <div className="mt-0.5 flex flex-wrap items-center gap-x-3 text-micro text-muted-foreground">
           {item.dueAtMs != null && (
             <span
               className={cn(
@@ -100,17 +109,12 @@ function TodoCard({
         </div>
       </div>
       {item.state !== "done" && onMove && (
-        <select
-          className="h-6 shrink-0 rounded-md border border-border/40 bg-background px-1 text-[11px] opacity-0 transition-opacity group-hover:opacity-100"
+        <Select
           value={item.bucket}
-          onChange={(e) => onMove(item.id, e.target.value as TodoItem["bucket"])}
-        >
-          <option value="inbox">收件</option>
-          <option value="today">今日</option>
-          <option value="next">下一步</option>
-          <option value="waiting">等待</option>
-          <option value="someday">将来</option>
-        </select>
+          onValueChange={(v) => onMove(item.id, v as TodoItem["bucket"])}
+          options={BUCKET_OPTIONS}
+          className="h-6 w-auto shrink-0 gap-1 rounded-md border-border/40 px-1 text-micro opacity-0 transition-opacity group-hover:opacity-100"
+        />
       )}
     </div>
   );
@@ -196,15 +200,15 @@ export function TodayView() {
   return (
     <div className="h-full overflow-y-auto scrollbar-hover">
       {/* Top3 card */}
-      <section className="m-3 rounded-2xl border border-primary/30 bg-primary/5 p-4">
+      <section className="m-3 rounded-xl border border-primary/30 bg-primary/5 p-4">
         <div className="mb-2 flex items-center justify-between">
-          <h3 className="text-[14px] font-semibold">
+          <h3 className="text-body font-semibold">
             {hasConfirmed ? "今日三件事" : "推荐三件事"}
           </h3>
-          <span className="text-[11px] text-muted-foreground">{dateStr}</span>
+          <span className="text-micro text-muted-foreground">{dateStr}</span>
         </div>
         {top3.length === 0 ? (
-          <div className="py-4 text-center text-[12px] text-muted-foreground">
+          <div className="py-4 text-center text-ui text-muted-foreground">
             今天还没有重点事项，从下方待办中挑选加入今日三件事
           </div>
         ) : (
@@ -214,12 +218,12 @@ export function TodayView() {
                 key={it.id}
                 className="flex items-center gap-2 rounded-lg bg-background/60 p-2"
               >
-                <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary text-[11px] font-semibold text-primary-foreground">
+                <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary text-micro font-semibold text-primary-foreground">
                   {it.focusRank ?? idx + 1}
                 </span>
-                <span className="flex-1 truncate text-[13px]">{it.title}</span>
+                <span className="flex-1 truncate text-ui">{it.title}</span>
                 {it.dueAtMs != null && (
-                  <span className="text-[11px] text-muted-foreground">
+                  <span className="text-micro text-muted-foreground">
                     {formatDue(it.dueAtMs)}
                   </span>
                 )}
@@ -227,7 +231,7 @@ export function TodayView() {
                   <button
                     type="button"
                     onClick={() => handleToggleFocus(it.id, it.focusRank)}
-                    className="text-[11px] text-muted-foreground hover:text-primary"
+                    className="text-caption text-muted-foreground hover:text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                   >
                     {it.focusRank != null ? "取消重点" : "设为重点"}
                   </button>
@@ -240,11 +244,11 @@ export function TodayView() {
 
       {/* Today schedule (time-anchored) */}
       <section className="mx-3 mb-3">
-        <h4 className="mb-1.5 text-[12px] font-medium text-muted-foreground">
+        <h4 className="mb-1.5 text-caption font-medium text-muted-foreground">
           今日时间安排
         </h4>
         {todaySchedule.length === 0 ? (
-          <div className="rounded-lg border border-dashed border-border/40 p-3 text-center text-[12px] text-muted-foreground">
+          <div className="p-3 text-center text-ui text-muted-foreground">
             今天没有日程安排
           </div>
         ) : (
@@ -254,10 +258,10 @@ export function TodayView() {
                 key={it.id}
                 className="flex items-center gap-3 rounded-lg border border-border/40 p-2"
               >
-                <span className="text-[12px] font-medium tabular-nums text-muted-foreground">
+                <span className="text-caption font-medium tabular-nums text-muted-foreground">
                   {formatTime(it.startAtMs)}
                 </span>
-                <span className="flex-1 truncate text-[13px]">{it.title}</span>
+                <span className="flex-1 truncate text-ui">{it.title}</span>
               </div>
             ))}
           </div>
@@ -266,11 +270,11 @@ export function TodayView() {
 
       {/* Today todos */}
       <section className="mx-3 mb-3">
-        <h4 className="mb-1.5 text-[12px] font-medium text-muted-foreground">
+        <h4 className="mb-1.5 text-caption font-medium text-muted-foreground">
           今日待办 ({todayTodos.length})
         </h4>
         {todayTodos.length === 0 ? (
-          <div className="rounded-lg border border-dashed border-border/40 p-3 text-center text-[12px] text-muted-foreground">
+          <div className="p-3 text-center text-ui text-muted-foreground">
             把收集箱里的待办移到今日开始推进
           </div>
         ) : (
@@ -291,7 +295,7 @@ export function TodayView() {
       {/* Overdue */}
       {overdueTodos.length > 0 && (
         <section className="mx-3 mb-3">
-          <h4 className="mb-1.5 text-[12px] font-medium text-destructive">
+          <h4 className="mb-1.5 text-caption font-medium text-destructive">
             逾期 ({overdueTodos.length})
           </h4>
           <div className="space-y-1.5">
@@ -311,7 +315,7 @@ export function TodayView() {
       {/* Due today */}
       {dueTodayTodos.length > 0 && (
         <section className="mx-3 mb-3">
-          <h4 className="mb-1.5 text-[12px] font-medium text-muted-foreground">
+          <h4 className="mb-1.5 text-caption font-medium text-muted-foreground">
             今天到期 ({dueTodayTodos.length})
           </h4>
           <div className="space-y-1.5">

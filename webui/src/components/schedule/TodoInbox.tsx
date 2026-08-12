@@ -21,10 +21,19 @@ import {
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
 
 import { type PendingScheduleItem } from "./scheduleApi";
 import { useTodoStore } from "./todoStore";
 import type { TodoItem } from "./todoTypes";
+
+const BUCKET_OPTIONS = [
+  { value: "inbox", label: "收件" },
+  { value: "today", label: "今日" },
+  { value: "next", label: "下一步" },
+  { value: "waiting", label: "等待" },
+  { value: "someday", label: "将来" },
+];
 
 function formatDue(ms: number | null): string {
   if (ms == null) return "";
@@ -195,7 +204,7 @@ export function TodoInbox() {
             <button
               type="button"
               onClick={() => setSuggestionsExpanded((v) => !v)}
-              className="mb-2 flex w-full items-center gap-1.5 text-[12px] font-medium text-amber-700 dark:text-amber-400"
+              className="mb-2 flex w-full items-center gap-1.5 text-caption font-medium text-warning focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             >
               {suggestionsExpanded ? (
                 <ChevronUp className="h-3.5 w-3.5" />
@@ -218,7 +227,7 @@ export function TodoInbox() {
                 <button
                   type="button"
                   onClick={() => setSuggestionsExpanded(true)}
-                  className="w-full rounded-md py-1 text-[11px] text-muted-foreground hover:bg-accent"
+                  className="w-full rounded-md py-1 text-caption text-muted-foreground hover:bg-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 >
                   还有 {hiddenSuggestionCount} 条待确认…
                 </button>
@@ -233,7 +242,7 @@ export function TodoInbox() {
             <button
               type="button"
               onClick={() => setPendingExpanded((v) => !v)}
-              className="mb-2 flex w-full items-center gap-1.5 text-[12px] font-medium text-amber-700 dark:text-amber-400"
+              className="mb-2 flex w-full items-center gap-1.5 text-caption font-medium text-warning focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             >
               {pendingExpanded ? (
                 <ChevronUp className="h-3.5 w-3.5" />
@@ -261,11 +270,11 @@ export function TodoInbox() {
 
         {/* Open inbox items */}
         <section>
-          <div className="mb-2 text-[12px] font-medium text-muted-foreground">
+          <div className="mb-2 text-caption font-medium text-muted-foreground">
             收集箱 ({inboxItems.length})
           </div>
           {inboxItems.length === 0 ? (
-            <div className="rounded-lg border border-dashed border-border/40 p-6 text-center text-[12px] text-muted-foreground">
+            <div className="p-6 text-center text-ui text-muted-foreground">
               收集箱已清空
             </div>
           ) : (
@@ -308,7 +317,7 @@ function TodoRow({
     <div
       className={cn(
         "group flex items-start gap-2 rounded-lg border border-border/40 p-2.5",
-        isSuggestion && "bg-amber-50/60 dark:bg-amber-950/20",
+        isSuggestion && "border-warning/30 bg-warning/5",
         isDone && "opacity-50",
       )}
     >
@@ -330,22 +339,22 @@ function TodoRow({
         <div className="flex items-center gap-2">
           <span
             className={cn(
-              "shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-medium",
+              "shrink-0 rounded-md px-1.5 py-0.5 text-micro font-medium",
               isSuggestion
-                ? "bg-amber-200/60 text-amber-900 dark:bg-amber-900/40 dark:text-amber-200"
+                ? "bg-warning/15 text-warning"
                 : "bg-muted text-muted-foreground",
             )}
           >
             {sourceLabel(item)}
           </span>
           {isReplied(item) && (
-            <span className="shrink-0 rounded-md bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">
+            <span className="shrink-0 rounded-md bg-success/15 px-1.5 py-0.5 text-micro font-medium text-success">
               已回复
             </span>
           )}
           <span
             className={cn(
-              "truncate text-[13px]",
+              "truncate text-ui",
               isDone && "line-through",
             )}
           >
@@ -353,7 +362,7 @@ function TodoRow({
           </span>
         </div>
         {(item.dueAtMs != null || item.sourceSnapshot.evidence) && (
-          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground">
+          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-micro text-muted-foreground">
             {item.dueAtMs != null && (
               <span
                 className={cn(
@@ -369,7 +378,7 @@ function TodoRow({
           </div>
         )}
         {isSuggestion && item.sourceSnapshot.evidence && (
-          <div className="mt-1.5 rounded-md bg-background/60 p-1.5 text-[11px] text-muted-foreground">
+          <div className="mt-1.5 rounded-md bg-background/60 p-1.5 text-micro text-muted-foreground">
             {item.sourceSnapshot.evidence.slice(0, 120)}
             {item.sourceSnapshot.evidence.length > 120 && "…"}
           </div>
@@ -404,17 +413,12 @@ function TodoRow({
             </Button>
           </>
         ) : !isDone && onMove ? (
-          <select
-            className="h-6 rounded-md border border-border/40 bg-background px-1 text-[11px]"
+          <Select
             value={item.bucket}
-            onChange={(e) => onMove(item.id, e.target.value as TodoItem["bucket"])}
-          >
-            <option value="inbox">收件</option>
-            <option value="today">今日</option>
-            <option value="next">下一步</option>
-            <option value="waiting">等待</option>
-            <option value="someday">将来</option>
-          </select>
+            onValueChange={(v) => onMove(item.id, v as TodoItem["bucket"])}
+            options={BUCKET_OPTIONS}
+            className="h-6 w-auto shrink-0 gap-1 rounded-md border-border/40 px-1 text-micro"
+          />
         ) : null}
       </div>
     </div>
@@ -433,20 +437,20 @@ function PendingScheduleRow({
   busy: string | null;
 }) {
   return (
-    <div className="rounded-lg border border-amber-200/60 bg-amber-50/40 p-2.5 dark:border-amber-900/40 dark:bg-amber-950/20">
+    <div className="rounded-lg border border-warning/30 bg-warning/5 p-2.5">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0 flex-1 space-y-0.5">
-          <div className="truncate text-[13px] font-medium">
+          <div className="truncate text-ui font-medium">
             {pending.item.title || "(未命名日程)"}
           </div>
-          <div className="text-[11px] text-muted-foreground">
+          <div className="text-micro text-muted-foreground">
             {formatScheduleTime(pending.item)}
           </div>
-          <div className="truncate text-[11px] text-muted-foreground">
+          <div className="truncate text-micro text-muted-foreground">
             邮件：{pending.emailSubject || "(无主题)"}
           </div>
           {pending.emailFrom && (
-            <div className="truncate text-[11px] text-muted-foreground/70">
+            <div className="truncate text-micro text-muted-foreground/70">
               发件人：{pending.emailFrom}
             </div>
           )}
@@ -456,7 +460,7 @@ function PendingScheduleRow({
             type="button"
             variant="ghost"
             size="sm"
-            className="h-7 gap-1 px-2 text-[11px] text-emerald-600 hover:text-emerald-700"
+            className="h-7 gap-1 px-2 text-caption text-success hover:text-success-hover"
             disabled={busy === pending.id}
             onClick={() => onConfirm(pending)}
             title="确认创建"
@@ -472,7 +476,7 @@ function PendingScheduleRow({
             type="button"
             variant="ghost"
             size="sm"
-            className="h-7 gap-1 px-2 text-[11px] text-muted-foreground hover:text-destructive"
+            className="h-7 gap-1 px-2 text-caption text-muted-foreground hover:text-destructive"
             disabled={busy === pending.id}
             onClick={() => onDiscard(pending)}
             title="丢弃"

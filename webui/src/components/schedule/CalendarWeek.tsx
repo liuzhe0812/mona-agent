@@ -390,13 +390,13 @@ export function CalendarWeek({
           <Button variant="ghost" size="icon" onClick={goPrev} className="h-6 w-6">
             <ChevronLeft className="h-3.5 w-3.5" />
           </Button>
-          <span className="min-w-[104px] px-1.5 text-center text-sm font-semibold">
+          <span className="min-w-[104px] px-1.5 text-center text-body font-semibold">
             {rangeLabel()}
           </span>
           <Button variant="ghost" size="icon" onClick={goNext} className="h-6 w-6">
             <ChevronRight className="h-3.5 w-3.5" />
           </Button>
-          <Button variant="outline" size="sm" onClick={goToday} className="ml-1 h-6 px-2 text-xs">
+          <Button variant="outline" size="sm" onClick={goToday} className="ml-1 h-6 px-2 text-caption">
             今天
           </Button>
         </div>
@@ -411,12 +411,12 @@ export function CalendarWeek({
           return (
             <div
               key={day.toISOString()}
-              className="flex-1 py-1 text-center text-[11px]"
+              className="flex-1 py-1 text-center text-micro"
             >
               <span className={cn(isToday ? "font-medium text-primary" : "text-muted-foreground")}>
                 {weekdayName(day).replace("周", "")} {day.getDate()}
               </span>
-              {isToday && <span className="ml-1 text-[10px] text-primary">今天</span>}
+              {isToday && <span className="ml-1 text-micro text-primary">今天</span>}
             </div>
           );
         })}
@@ -424,7 +424,7 @@ export function CalendarWeek({
 
       {/* All-day row (also the drop target for making events all-day) */}
       <div ref={allDayRowRef} className="flex border-b border-border/40">
-        <div className="w-12 flex-shrink-0 py-1 text-right pr-1.5 text-[10px] text-muted-foreground">
+        <div className="w-12 flex-shrink-0 py-1 pr-1.5 text-right text-micro text-muted-foreground">
           全天
         </div>
         {days.map((day, dayIdx) => (
@@ -448,7 +448,7 @@ export function CalendarWeek({
                 onPointerUp={handleDragEnd}
                 onPointerCancel={cancelDrag}
                 className={cn(
-                  "flex cursor-grab touch-none items-center gap-1 truncate rounded border-l-2 border-primary bg-primary/10 px-1.5 py-0.5 text-[11px]",
+                  "flex cursor-grab touch-none items-center gap-1 truncate rounded-xs border-l-2 border-primary bg-primary/10 px-1.5 py-0.5 text-micro",
                   (item.done || !item.enabled) && "opacity-50",
                   drag?.item.id === item.id && drag.mode === "move" && "opacity-40",
                 )}
@@ -459,7 +459,7 @@ export function CalendarWeek({
               </div>
             ))}
             {drag?.allDay && drag.dayIdx === dayIdx && (
-              <div className="truncate rounded border border-dashed border-primary bg-primary/10 px-1.5 py-0.5 text-[11px] text-primary">
+              <div className="truncate rounded-xs border border-dashed border-primary bg-primary/10 px-1.5 py-0.5 text-micro text-primary">
                 {drag.item.title}
               </div>
             )}
@@ -475,7 +475,7 @@ export function CalendarWeek({
             {Array.from({ length: 23 }, (_, i) => i + 1).map((h) => (
               <span
                 key={h}
-                className="absolute right-1.5 -translate-y-1/2 text-[10px] text-muted-foreground"
+                className="absolute right-1.5 -translate-y-1/2 text-micro text-muted-foreground"
                 style={{ top: h * HOUR_PX }}
               >
                 {h}:00
@@ -537,7 +537,7 @@ export function CalendarWeek({
                       }}
                       title={`${formatTime(new Date(day).setHours(0, startMin, 0, 0))} ${ev.item.title}`}
                     >
-                      <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
+                      <div className="flex items-center gap-1 text-micro text-muted-foreground">
                         {formatTime(new Date(day).setHours(0, startMin, 0, 0))}
                         {ev.item.kind === "ai_task" && (
                           <Bot className="h-3 w-3 flex-shrink-0 text-primary" />
@@ -545,7 +545,7 @@ export function CalendarWeek({
                       </div>
                       <div
                         className={cn(
-                          "truncate text-[11px] leading-tight",
+                          "truncate text-micro leading-tight",
                           ev.item.done && "line-through",
                         )}
                       >
@@ -566,7 +566,7 @@ export function CalendarWeek({
                 {/* Move ghost */}
                 {drag && drag.mode === "move" && !drag.allDay && drag.dayIdx === dayIdx && (
                   <div
-                    className="pointer-events-none absolute z-30 rounded-md border border-dashed border-primary bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary"
+                    className="pointer-events-none absolute z-30 rounded-md border border-dashed border-primary bg-primary/10 px-1.5 py-0.5 text-micro text-primary"
                     style={{
                       top: (drag.startMin / 60) * HOUR_PX,
                       height: Math.max(((drag.endMin - drag.startMin) / 60) * HOUR_PX, 18),
@@ -582,7 +582,7 @@ export function CalendarWeek({
                 {/* Todo drop hint */}
                 {dropHint && dropHint.dayIdx === dayIdx && (
                   <div
-                    className="pointer-events-none absolute z-30 rounded-md border border-dashed border-primary bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary"
+                    className="pointer-events-none absolute z-30 rounded-md border border-dashed border-primary bg-primary/10 px-1.5 py-0.5 text-micro text-primary"
                     style={{
                       top: (dropHint.startMin / 60) * HOUR_PX,
                       height: (DEFAULT_DURATION_MIN / 60) * HOUR_PX,

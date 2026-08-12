@@ -33,7 +33,7 @@ export function PlanningView() {
           className="w-[400px] max-w-[90vw] p-0 sm:max-w-[400px]"
         >
           <SheetHeader className="border-b px-4 py-3">
-            <SheetTitle className="text-[14px]">收集箱</SheetTitle>
+            <SheetTitle className="text-body">收集箱</SheetTitle>
           </SheetHeader>
           <div className="min-h-0 flex-1 overflow-hidden">
             <TodoInbox />

@@ -100,7 +100,7 @@ export function CalendarMonth({
               <Button
                 variant="ghost"
                 size="sm"
-                className="h-6 min-w-[104px] gap-0.5 px-1.5 text-sm font-semibold"
+                className="h-6 min-w-[104px] gap-0.5 px-1.5 text-body font-semibold"
               >
                 {monthLabel}
                 <ChevronDown className="h-3 w-3 text-muted-foreground" />
@@ -116,7 +116,7 @@ export function CalendarMonth({
                 >
                   <ChevronLeft className="h-3.5 w-3.5" />
                 </Button>
-                <span className="text-sm font-medium">{pickerYear}年</span>
+                <span className="text-body font-medium">{pickerYear}年</span>
                 <Button
                   variant="ghost"
                   size="icon"
@@ -131,17 +131,20 @@ export function CalendarMonth({
                   const isCursorMonth =
                     pickerYear === cursor.getFullYear() && m === cursor.getMonth();
                   return (
-                    <button
+                    <Button
                       key={m}
                       type="button"
+                      variant="ghost"
+                      size="xs"
                       onClick={() => jumpToMonth(pickerYear, m)}
                       className={cn(
-                        "rounded-md py-1 text-[12px] hover:bg-accent",
-                        isCursorMonth && "bg-primary/10 font-medium text-primary",
+                        "h-auto w-full rounded-md py-1",
+                        isCursorMonth &&
+                          "bg-primary/10 font-medium text-primary hover:bg-primary/10 hover:text-primary",
                       )}
                     >
                       {m + 1}月
-                    </button>
+                    </Button>
                   );
                 })}
               </div>
@@ -150,7 +153,7 @@ export function CalendarMonth({
           <Button variant="ghost" size="icon" onClick={goNext} className="h-6 w-6">
             <ChevronRight className="h-3.5 w-3.5" />
           </Button>
-          <Button variant="outline" size="sm" onClick={goToday} className="h-6 ml-1 text-xs px-2">
+          <Button variant="outline" size="sm" onClick={goToday} className="h-6 ml-1 px-2 text-caption">
             今天
           </Button>
         </div>
@@ -160,7 +163,7 @@ export function CalendarMonth({
       </div>
 
       {/* Weekday header */}
-      <div className="grid grid-cols-7 border-b text-xs text-muted-foreground">
+      <div className="grid grid-cols-7 border-b text-caption text-muted-foreground">
         {WEEKDAY_HEADERS.map((d) => (
           <div key={d} className="py-1.5 text-center font-medium">
             {d}
@@ -188,7 +191,7 @@ export function CalendarMonth({
               <div className="flex items-center justify-between mb-0.5">
                 <span
                   className={cn(
-                    "text-xs w-5 h-5 flex items-center justify-center rounded-full",
+                    "text-caption w-5 h-5 flex items-center justify-center rounded-full",
                     isToday
                       ? "bg-primary text-primary-foreground font-semibold"
                       : inMonth
@@ -198,17 +201,19 @@ export function CalendarMonth({
                 >
                   {date.getDate()}
                 </span>
-                <button
+                <Button
                   type="button"
+                  variant="ghost"
+                  size="icon"
                   onClick={(e) => {
                     e.stopPropagation();
                     onCreateAt(date);
                   }}
-                  className="text-muted-foreground/60 opacity-0 hover:opacity-100 group-hover:opacity-100 hover:text-foreground transition-opacity"
+                  className="h-4 w-4 rounded-xs text-muted-foreground/60 opacity-0 transition-opacity hover:bg-transparent hover:text-foreground hover:opacity-100 group-hover:opacity-100"
                   title="新建日程"
                 >
                   <Plus className="h-3 w-3" />
-                </button>
+                </Button>
               </div>
               <div className="space-y-0.5">
                 {dayItems.slice(0, 3).map((item) => (
@@ -220,14 +225,14 @@ export function CalendarMonth({
                       onSelectItem(item);
                     }}
                     className={cn(
-                      "flex w-full items-center gap-1 rounded px-1 py-0.5 text-left text-[11px] hover:bg-accent",
+                      "flex w-full items-center gap-1 rounded-xs px-1 py-0.5 text-left text-micro hover:bg-accent",
                       (item.done || !item.enabled) && "opacity-50",
                     )}
                     title={item.title}
                   >
                     <span className="h-3 w-0.5 flex-shrink-0 rounded-full bg-primary" />
                     {!item.allDay && (
-                      <span className="font-mono text-[10px] text-muted-foreground">
+                      <span className="font-mono text-micro text-muted-foreground">
                         {formatTime(item.startAtMs)}
                       </span>
                     )}
@@ -240,7 +245,7 @@ export function CalendarMonth({
                   </button>
                 ))}
                 {dayItems.length > 3 && (
-                  <div className="text-[10px] text-muted-foreground px-1">
+                  <div className="px-1 text-micro text-muted-foreground">
                     +{dayItems.length - 3} 项
                   </div>
                 )}

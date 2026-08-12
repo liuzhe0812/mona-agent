@@ -10,9 +10,10 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, Bot, Check, GripVertical, Pause, Play, Star } from "lucide-react";
+import { Bot, Check, GripVertical, Pause, Play, Star } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { StatusNotice } from "@/components/ui/status-notice";
 import { cn } from "@/lib/utils";
 
 import { formatTime, isSameDay, startOfDay, weekdayName } from "./dateUtils";
@@ -147,13 +148,13 @@ export function DayPlanPanel({
     <div className="flex flex-col h-full">
       {/* Date header */}
       <div className="px-4 py-3 border-b border-border/40">
-        <div className="text-[14px] font-semibold">
+        <div className="text-body font-semibold">
           {date.getMonth() + 1}月{date.getDate()}日 {weekdayName(date)}
           {isToday && (
-            <span className="ml-2 text-[11px] text-primary font-normal">今天</span>
+            <span className="ml-2 text-micro font-normal text-primary">今天</span>
           )}
         </div>
-        <div className="text-[11px] text-muted-foreground mt-0.5">
+        <div className="mt-0.5 text-micro text-muted-foreground">
           {planCount} 项计划
         </div>
       </div>
@@ -162,39 +163,35 @@ export function DayPlanPanel({
         {/* Overdue banner (not counted in planCount) */}
         {overdueTodos.length > 0 && (
           <section className="mx-3 mt-3">
-            <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-2.5">
-              <div className="mb-1.5 flex items-center gap-1.5 text-[12px] font-medium text-destructive">
-                <AlertTriangle className="h-3.5 w-3.5" />
-                逾期 {overdueTodos.length} 项
-              </div>
+            <StatusNotice tone="danger" title={`逾期 ${overdueTodos.length} 项`} className="p-2.5">
               <div className="space-y-1">
                 {overdueTodos.slice(0, 5).map((it) => (
-                  <div key={it.id} className="flex items-center gap-2 text-[12px]">
+                  <div key={it.id} className="flex items-center gap-2 text-caption">
                     <span className="text-destructive">●</span>
-                    <span className="flex-1 truncate">{it.title}</span>
-                    <span className="text-[10px] text-muted-foreground">
+                    <span className="flex-1 truncate text-foreground">{it.title}</span>
+                    <span className="text-micro text-muted-foreground">
                       {formatDueLabel(it.dueAtMs!)}
                     </span>
                   </div>
                 ))}
                 {overdueTodos.length > 5 && (
-                  <div className="text-[10px] text-muted-foreground">
+                  <div className="text-micro">
                     +{overdueTodos.length - 5} 项
                   </div>
                 )}
               </div>
-            </div>
+            </StatusNotice>
           </section>
         )}
 
         {/* Today's top3 (compact, only when today) */}
         {isToday && (
           <section className="mx-3 mt-3">
-            <div className="mb-1.5 text-[12px] font-medium text-muted-foreground">
+            <div className="mb-1.5 text-caption font-medium text-muted-foreground">
               今日三件事
             </div>
             {top3.length === 0 ? (
-              <div className="text-[11px] text-muted-foreground/70">
+              <div className="text-ui text-muted-foreground/70">
                 还没有重点事项，从下方待办中标记
               </div>
             ) : (
@@ -204,12 +201,12 @@ export function DayPlanPanel({
                     key={it.id}
                     className="flex items-center gap-2 rounded-md bg-primary/5 px-2 py-1.5"
                   >
-                    <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-primary text-[10px] font-semibold text-primary-foreground">
+                    <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-primary text-micro font-semibold text-primary-foreground">
                       {it.focusRank ?? idx + 1}
                     </span>
-                    <span className="flex-1 truncate text-[12px]">{it.title}</span>
+                    <span className="flex-1 truncate text-caption">{it.title}</span>
                     {it.dueAtMs != null && (
-                      <span className="text-[10px] text-muted-foreground">
+                      <span className="text-micro text-muted-foreground">
                         {formatDueLabel(it.dueAtMs)}
                       </span>
                     )}
@@ -222,17 +219,17 @@ export function DayPlanPanel({
 
         {/* Schedule items + todos (merged empty state) */}
         {daySchedules.length === 0 && dayTodos.length === 0 ? (
-          <div className="mx-3 mt-3 py-6 text-center text-[11px] text-muted-foreground">
+          <div className="mx-3 mt-3 py-6 text-center text-ui text-muted-foreground">
             这一天还没有日程或待办
           </div>
         ) : (
           <>
             <section className="mx-3 mt-3">
-              <div className="mb-1.5 text-[12px] font-medium text-muted-foreground">
+              <div className="mb-1.5 text-caption font-medium text-muted-foreground">
                 日程 ({daySchedules.length})
               </div>
               {daySchedules.length === 0 ? (
-                <div className="px-1 text-[11px] text-muted-foreground">
+                <div className="px-1 text-ui text-muted-foreground">
                   当天没有日程
                 </div>
               ) : (
@@ -251,11 +248,11 @@ export function DayPlanPanel({
             </section>
 
             <section className="mx-3 mt-3">
-              <div className="mb-1.5 text-[12px] font-medium text-muted-foreground">
+              <div className="mb-1.5 text-caption font-medium text-muted-foreground">
                 待办 ({dayTodos.length})
               </div>
               {dayTodos.length === 0 ? (
-                <div className="px-1 text-[11px] text-muted-foreground">
+                <div className="px-1 text-ui text-muted-foreground">
                   当天没有待办
                 </div>
               ) : (
@@ -278,10 +275,10 @@ export function DayPlanPanel({
         {unscheduledTodos.length > 0 && (
           <section className="mx-3 mt-3 mb-3">
             <div className="mb-1.5 flex items-baseline justify-between">
-              <span className="text-[12px] font-medium text-muted-foreground">
+              <span className="text-caption font-medium text-muted-foreground">
                 未排期 ({unscheduledTodos.length})
               </span>
-              <span className="text-[10px] text-muted-foreground/70">
+              <span className="text-micro text-muted-foreground/70">
                 拖到日历上排期
               </span>
             </div>
@@ -294,18 +291,18 @@ export function DayPlanPanel({
                     e.dataTransfer.setData(TODO_DRAG_MIME, it.id);
                     e.dataTransfer.effectAllowed = "move";
                   }}
-                  className="flex cursor-grab items-center gap-1.5 rounded-md px-2 py-1.5 text-[12px] hover:bg-accent transition-colors"
+                  className="flex cursor-grab items-center gap-1.5 rounded-md px-2 py-1.5 text-caption hover:bg-accent transition-colors"
                   title="拖到日历上排期"
                 >
                   <GripVertical className="h-3 w-3 shrink-0 text-muted-foreground/60" />
                   <span className="flex-1 truncate">{it.title}</span>
-                  <span className="text-[10px] text-muted-foreground">
+                  <span className="text-micro text-muted-foreground">
                     {it.bucket === "next" ? "下一步" : it.bucket === "waiting" ? "等待" : "将来"}
                   </span>
                 </div>
               ))}
               {unscheduledTodos.length > 6 && (
-                <div className="px-2 text-[10px] text-muted-foreground">
+                <div className="px-2 text-micro text-muted-foreground">
                   +{unscheduledTodos.length - 6} 项
                 </div>
               )}
@@ -347,9 +344,9 @@ function ScheduleRow({
       />
       <div className="flex-shrink-0 w-12 pt-0.5">
         {item.allDay ? (
-          <span className="text-[10px] text-muted-foreground">全天</span>
+          <span className="text-micro text-muted-foreground">全天</span>
         ) : (
-          <span className="text-[11px] font-mono text-foreground">
+          <span className="font-mono text-micro text-foreground">
             {formatTime(item.startAtMs)}
           </span>
         )}
@@ -359,7 +356,7 @@ function ScheduleRow({
           {isAi && <Bot className="h-3 w-3 flex-shrink-0 text-primary" />}
           <span
             className={cn(
-              "truncate text-[12px] font-medium",
+              "truncate text-caption font-medium",
               item.done && "line-through",
             )}
           >
@@ -367,12 +364,12 @@ function ScheduleRow({
           </span>
         </div>
         {item.description && (
-          <p className="text-[10px] text-muted-foreground mt-0.5 line-clamp-1">
+          <p className="mt-0.5 line-clamp-1 text-micro text-muted-foreground">
             {item.description}
           </p>
         )}
         {item.recurrence !== "none" && (
-          <span className="text-[10px] text-muted-foreground">
+          <span className="text-micro text-muted-foreground">
             {recurrenceLabel(item.recurrence)}
           </span>
         )}
@@ -437,14 +434,14 @@ function TodoRow({
           )}
           <span
             className={cn(
-              "truncate text-[12px]",
+              "truncate text-caption",
               item.state === "done" && "line-through opacity-50",
             )}
           >
             {item.title}
           </span>
         </div>
-        <div className="flex items-center gap-2 mt-0.5 text-[10px] text-muted-foreground">
+        <div className="mt-0.5 flex items-center gap-2 text-micro text-muted-foreground">
           {item.dueAtMs != null && (
             <span
               className={cn(
