@@ -24,6 +24,18 @@
       "reference_style"
     ]
   },
+  "consulting_pro": {
+    "summary": "Premium consulting style for strategy reports, board presentations, due diligence, and formal executive briefings.",
+    "canvas_format": "ppt169",
+    "page_count": 11,
+    "page_types": [
+      "cover",
+      "toc",
+      "chapter",
+      "content",
+      "ending"
+    ]
+  },
   "government_blue": {
     "summary": "Key project briefings, Five-Year Plan presentations, work summaries, investment promotion, policy interpretation.",
     "canvas_format": "ppt169",
@@ -48,10 +60,34 @@
       "ending"
     ]
   },
+  "magazine_navy": {
+    "summary": "Business magazine editorial style for executive briefings, industry research, annual reviews, and premium business presentations.",
+    "canvas_format": "ppt169",
+    "page_count": 11,
+    "page_types": [
+      "cover",
+      "toc",
+      "chapter",
+      "content",
+      "ending"
+    ]
+  },
   "medical_university": {
     "summary": "Medical academic reports, case discussions, research presentations, hospital work reports, medical education and training.",
     "canvas_format": "ppt169",
     "page_count": 5,
+    "page_types": [
+      "cover",
+      "toc",
+      "chapter",
+      "content",
+      "ending"
+    ]
+  },
+  "neon_dark": {
+    "summary": "Dark neon tech style for product launches, tech talks, AI/digital topics, and developer-facing presentations.",
+    "canvas_format": "ppt169",
+    "page_count": 11,
     "page_types": [
       "cover",
       "toc",

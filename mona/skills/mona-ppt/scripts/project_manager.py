@@ -136,9 +136,17 @@ class ProjectManager:
             )
 
         date_str = datetime.now().strftime("%Y%m%d")
+        # 前端会为预生成项目名预创建占位目录（含 .generating / .chat_id 标记）。
+        # 检测到占位目录时必须沿用项目名，否则文件写进加后缀的目录后，
+        # 前端按项目名查询会错位到空占位目录，阶段检测永远卡住。
+        placeholder_dir = base_path / project_name
+        is_frontend_placeholder = placeholder_dir.is_dir() and any(
+            (placeholder_dir / marker).exists()
+            for marker in (".generating", ".chat_id")
+        )
         # If project name already looks like a pre-generated name (ppt-YYYYMMDD...),
         # use it as-is to avoid creating a mismatched directory name.
-        if project_name.startswith("ppt-") and len(project_name) > 10:
+        if is_frontend_placeholder or (project_name.startswith("ppt-") and len(project_name) > 10):
             project_dir_name = project_name
         else:
             project_dir_name = f"{project_name}_{normalized_format}_{date_str}"
