@@ -32,7 +32,7 @@ export function WorkPatternTab({
 }: WorkPatternTabProps) {
   if (loading) {
     return (
-      <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+      <div className="flex h-full items-center justify-center text-body text-muted-foreground">
         加载中…
       </div>
     );
@@ -106,7 +106,7 @@ export function WorkPatternTab({
             <div className="flex justify-center">
               {chains.length > 0
                 ? <SankeyChart chains={chains} height={200} />
-                : <div className="flex h-[200px] items-center justify-center text-xs text-muted-foreground">暂无工具链数据</div>}
+                : <div className="flex h-[200px] items-center justify-center text-caption text-muted-foreground">暂无工具链数据</div>}
             </div>
           </Panel>
         </div>
@@ -158,7 +158,7 @@ export function WorkPatternTab({
       <div className="grid grid-cols-1 gap-3 xl:grid-cols-[0.8fr_1fr_1fr]">
         <Panel className="p-4">
           <SectionTitle icon={<Target className="h-4 w-4" />} title="工具使用分布" hint={toolDistribution.length > 0 ? "基于真实调用次数" : "暂无数据"} color={PROFILE_COLORS.amber} />
-          {toolDistribution.length > 0 ? <TaskDistribution items={toolDistribution} total={topTools.reduce((sum, t) => sum + t.count, 0)} /> : <span className="text-xs text-muted-foreground">暂无工具数据</span>}
+          {toolDistribution.length > 0 ? <TaskDistribution items={toolDistribution} total={topTools.reduce((sum, t) => sum + t.count, 0)} /> : <span className="text-caption text-muted-foreground">暂无工具数据</span>}
         </Panel>
 
         <Panel className="p-4">
@@ -166,7 +166,7 @@ export function WorkPatternTab({
           <div className="flex flex-col gap-3">
             {chains.length > 0 ? chains.slice(0, 3).map((chain, index) => (
               <WorkflowRow key={chain.chain} index={index + 1} chain={chain.chain} count={chain.count} />
-            )) : <span className="text-xs text-muted-foreground">暂无工作流数据</span>}
+            )) : <span className="text-caption text-muted-foreground">暂无工作流数据</span>}
           </div>
         </Panel>
 
@@ -177,7 +177,7 @@ export function WorkPatternTab({
               <ToolRow key={tool.tool} rank={index + 1} label={tool.tool} value={tool.count} max={topTools[0]?.count ?? 1} />
             )) : preferredTools.length > 0 ? preferredTools.slice(0, 5).map((tool, index) => (
               <ToolRow key={tool} rank={index + 1} label={tool} value={5 - index} max={5} />
-            )) : <span className="text-xs text-muted-foreground">暂无工具数据</span>}
+            )) : <span className="text-caption text-muted-foreground">暂无工具数据</span>}
           </div>
         </Panel>
       </div>
@@ -185,7 +185,7 @@ export function WorkPatternTab({
       <Panel className="grid grid-cols-1 gap-3 p-4 lg:grid-cols-[1fr_2fr]">
         <div>
           <SectionTitle icon={<ListChecks className="h-4 w-4" />} title="输出风格" color={PROFILE_COLORS.coral} />
-          <div className="grid grid-cols-3 gap-3 text-center text-xs">
+          <div className="grid grid-cols-3 gap-3 text-center text-caption">
             <OutputMetric label="输出风格" value={outputStyle} />
             <OutputMetric label="工具数" value={`${preferredTools.length} 种`} />
             <OutputMetric label="任务类" value={`${frequentTasks.length} 类`} />
@@ -193,7 +193,7 @@ export function WorkPatternTab({
         </div>
         <div>
           <SectionTitle icon={<SparklineIcon />} title="本期工作聚焦" color={PROFILE_COLORS.emerald} />
-          <p className="text-sm leading-6 text-muted-foreground">{workFocus || "暂无工作聚焦数据，蒸馏后生成。"}</p>
+          <p className="text-body leading-6 text-muted-foreground">{workFocus || "暂无工作聚焦数据，蒸馏后生成。"}</p>
         </div>
       </Panel>
     </div>
@@ -236,11 +236,11 @@ function SectionTitle({
 }) {
   return (
     <div className="mb-3 flex items-center justify-between gap-3">
-      <h3 className="flex items-center gap-1.5 text-sm font-semibold">
+      <h3 className="flex items-center gap-1.5 text-body font-semibold">
         <span style={{ color }}>{icon}</span>
         {title}
       </h3>
-      {hint && <span className="truncate text-xs text-muted-foreground">{hint}</span>}
+      {hint && <span className="truncate text-caption text-muted-foreground">{hint}</span>}
     </div>
   );
 }
@@ -264,9 +264,9 @@ function MetricCard({
         {icon}
       </div>
       <div className="min-w-0">
-        <p className="text-xs text-muted-foreground">{label}</p>
-        <p className="truncate text-xl font-bold tabular-nums" style={{ color }}>{value}</p>
-        <p className="truncate text-[11px] text-muted-foreground">{hint}</p>
+        <p className="text-caption text-muted-foreground">{label}</p>
+        <p className="truncate text-title-sm tabular-nums" style={{ color }}>{value}</p>
+        <p className="truncate text-micro text-muted-foreground">{hint}</p>
       </div>
     </Panel>
   );
@@ -291,9 +291,9 @@ function InsightItem({
         {icon}
       </div>
       <div className="min-w-0">
-        <p className="text-sm font-semibold" style={{ color }}>{title}</p>
-        <p className="mt-1 text-xs leading-5 text-foreground">{body}</p>
-        <span className="mt-2 inline-flex rounded-full px-2 py-0.5 text-[10px]" style={{ background: `${color}12`, color }}>
+        <p className="text-body font-semibold" style={{ color }}>{title}</p>
+        <p className="mt-1 text-caption leading-5 text-foreground">{body}</p>
+        <span className="mt-2 inline-flex rounded-full px-2 py-0.5 text-micro" style={{ background: `${color}12`, color }}>
           {evidence}
         </span>
       </div>
@@ -325,13 +325,13 @@ function TaskDistribution({
     <div className="grid grid-cols-[120px_1fr] items-center gap-5">
       <div className="relative h-28 w-28 rounded-full" style={{ background: gradient }}>
         <div className="absolute inset-8 flex flex-col items-center justify-center rounded-full bg-card text-center">
-          <span className="text-[10px] text-muted-foreground">总调用</span>
-          <span className="text-sm font-bold tabular-nums">{total}</span>
+          <span className="text-micro text-muted-foreground">总调用</span>
+          <span className="text-body font-bold tabular-nums">{total}</span>
         </div>
       </div>
       <div className="space-y-1.5">
         {percentItems.map((item) => (
-          <div key={item.label} className="flex items-center gap-2 text-xs">
+          <div key={item.label} className="flex items-center gap-2 text-caption">
             <span className="h-2.5 w-2.5 rounded-full" style={{ background: item.color }} />
             <span className="flex-1 truncate text-muted-foreground">{item.label}</span>
             <span className="tabular-nums">{item.value} 次</span>
@@ -355,8 +355,8 @@ function WorkflowRow({
   const steps = chain.split("→");
 
   return (
-    <div className="grid grid-cols-[22px_1fr_44px] items-center gap-2 rounded-lg border bg-background/60 p-2 text-xs">
-      <span className="flex h-5 w-5 items-center justify-center rounded-full bg-emerald-500 text-[10px] font-medium text-white">{index}</span>
+    <div className="grid grid-cols-[22px_1fr_44px] items-center gap-2 rounded-lg border bg-background/60 p-2 text-caption">
+      <span className="flex h-5 w-5 items-center justify-center rounded-full bg-success-indicator text-micro font-medium text-white">{index}</span>
       <div className="flex min-w-0 items-center gap-1">
         {steps.map((step, stepIndex) => (
           <span key={`${step}-${stepIndex}`} className="flex min-w-0 items-center gap-1">
@@ -383,11 +383,11 @@ function ToolRow({
 }) {
   const ratio = max > 0 ? (value / max) * 100 : 0;
   return (
-    <div className="grid grid-cols-[18px_90px_1fr_34px] items-center gap-2 text-xs">
+    <div className="grid grid-cols-[18px_90px_1fr_34px] items-center gap-2 text-caption">
       <span className="text-muted-foreground">{rank}</span>
       <span className="truncate">{label}</span>
       <div className="h-1.5 overflow-hidden rounded-full bg-muted">
-        <div className="h-full rounded-full bg-emerald-500" style={{ width: `${Math.min(ratio, 100)}%` }} />
+        <div className="h-full rounded-full bg-success-indicator" style={{ width: `${Math.min(ratio, 100)}%` }} />
       </div>
       <span className="text-right tabular-nums text-muted-foreground">{value}</span>
     </div>

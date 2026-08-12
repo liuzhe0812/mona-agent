@@ -41,7 +41,7 @@ export function RadarChart({
 
   if (!current || current.length === 0) {
     return (
-      <div className="flex h-40 items-center justify-center text-xs text-muted-foreground">
+      <div className="flex h-40 items-center justify-center text-caption text-muted-foreground">
         暂无数据
       </div>
     );

@@ -15,6 +15,7 @@ import {
   Users,
 } from "lucide-react";
 
+import { Button } from "@/components/ui/button";
 import {
   type PainPoint,
   type ProfileData,
@@ -42,7 +43,7 @@ export function ProfileTab({
 }: ProfileTabProps) {
   if (loading) {
     return (
-      <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+      <div className="flex h-full items-center justify-center text-body text-muted-foreground">
         加载中…
       </div>
     );
@@ -98,24 +99,24 @@ export function ProfileTab({
         <div className="grid gap-5 lg:grid-cols-[1fr_260px]">
           <div className="flex min-w-0 items-center gap-5">
             <div
-              className="relative flex h-24 w-24 shrink-0 items-center justify-center rounded-2xl text-white shadow-lg"
+              className="relative flex h-24 w-24 shrink-0 items-center justify-center rounded-2xl text-white shadow-overlay"
               style={{ background: `linear-gradient(145deg, ${PROFILE_COLORS.coralSoft}, ${PROFILE_COLORS.coral})` }}
             >
               <UserRound className="h-12 w-12" />
-              <span className="absolute right-3 top-3 h-5 w-5 rounded-full border-2 border-white bg-teal-400" />
+              <span className="absolute right-3 top-3 h-5 w-5 rounded-full border-2 border-white bg-success-indicator" />
             </div>
             <div className="min-w-0">
               <div className="mb-2 flex flex-wrap items-center gap-2">
-                <h2 className="truncate text-2xl font-bold tracking-tight">
+                <h2 className="truncate text-title tracking-tight">
                   {identity.primary_role || "尚未确定角色"}
                 </h2>
-                <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-700">
+                <span className="rounded-full border border-success/30 bg-success/10 px-2 py-0.5 text-caption font-medium text-success">
                   主角色
                 </span>
               </div>
               <div className="mb-3 flex flex-wrap gap-1.5">
                 {(identity.secondary_roles ?? []).map((role) => (
-                  <span key={role} className="rounded-full border bg-background px-2.5 py-1 text-xs text-muted-foreground">
+                  <span key={role} className="rounded-full border bg-background px-2.5 py-1 text-caption text-muted-foreground">
                     {role}
                   </span>
                 ))}
@@ -124,24 +125,24 @@ export function ProfileTab({
                 <MetricPill label="置信度" value={`${Math.round((data?.confidence ?? 0) * 100)}%`} color={PROFILE_COLORS.emerald} />
                 <MetricPill label="笔记总数" value={`${totalNotes} 篇`} color={PROFILE_COLORS.cyan} />
               </div>
-              <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
+              <p className="max-w-3xl text-body leading-6 text-muted-foreground">
                 {data?.relationships?.collaboration_pattern || "暂无画像摘要，蒸馏后生成。"}
               </p>
             </div>
           </div>
           <div className="flex flex-col justify-center border-t pt-4 lg:border-l lg:border-t-0 lg:pl-6 lg:pt-0">
-            <div className="mb-1 flex items-center gap-1.5 text-sm text-muted-foreground">
+            <div className="mb-1 flex items-center gap-1.5 text-body text-muted-foreground">
               <CalendarDays className="h-4 w-4" />
               记录活跃月数
             </div>
             <div className="flex items-end gap-2">
-              <span className="text-5xl font-bold tabular-nums" style={{ color: PROFILE_COLORS.emerald }}>{activeMonths}</span>
-              <span className="pb-2 text-sm text-muted-foreground">个月</span>
+              <span className="text-display-sm font-semibold tabular-nums" style={{ color: PROFILE_COLORS.emerald }}>{activeMonths}</span>
+              <span className="pb-1 text-body text-muted-foreground">个月</span>
             </div>
             <div className="mt-3 h-2 overflow-hidden rounded-full bg-muted">
               <div className="h-full rounded-full" style={{ width: `${Math.min(100, (activeMonths / 12) * 100)}%`, background: PROFILE_COLORS.emerald }} />
             </div>
-            <span className="mt-2 text-xs text-muted-foreground">有笔记记录的月份 · 共 {totalNotes} 篇</span>
+            <span className="mt-2 text-caption text-muted-foreground">有笔记记录的月份 · 共 {totalNotes} 篇</span>
           </div>
         </div>
       </Panel>
@@ -159,17 +160,19 @@ export function ProfileTab({
                   <CircleHelp className="h-4 w-4" />
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="text-xs leading-5 text-foreground">{q}</p>
+                  <p className="text-caption leading-5 text-foreground">{q}</p>
                   {onAskMona && (
-                    <button
+                    <Button
                       type="button"
-                      className="mt-2 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] transition-colors hover:bg-accent"
+                      variant="ghost"
+                      size="xs"
+                      className="mt-2 h-auto gap-1 rounded-full px-2 py-0.5 text-micro"
                       style={{ color: PROFILE_COLORS.cyan }}
                       onClick={() => onAskMona(`我正在探索这个问题：${q}。请结合你的工作记忆，帮我分析一下现状和可能的解法。`)}
                     >
                       <MessageSquareText className="h-3 w-3" />
                       和 Mona 探讨
-                    </button>
+                    </Button>
                   )}
                 </div>
               </div>
@@ -242,7 +245,7 @@ export function ProfileTab({
             {tagCloud.length > 0 ? tagCloud.map((tag, index) => (
               <span
                 key={tag.tag}
-                className="rounded-full border px-2.5 py-1 text-xs font-medium"
+                className="rounded-full border px-2.5 py-1 text-caption font-medium"
                 style={{
                   background: `${[PROFILE_COLORS.emerald, PROFILE_COLORS.amber, PROFILE_COLORS.coral, PROFILE_COLORS.cyan][index % 4]}14`,
                   color: [PROFILE_COLORS.emeraldDeep, PROFILE_COLORS.amberDeep, PROFILE_COLORS.coralDeep, PROFILE_COLORS.cyan][index % 4],
@@ -250,7 +253,7 @@ export function ProfileTab({
               >
                 {tag.tag}
               </span>
-            )) : <span className="text-xs text-muted-foreground">暂无标签</span>}
+            )) : <span className="text-caption text-muted-foreground">暂无标签</span>}
           </div>
         </Panel>
         <Panel className="p-4">
@@ -264,7 +267,7 @@ export function ProfileTab({
                 value={contact.count !== null ? `${contact.count} 封` : ""}
                 color={PROFILE_COLORS.emerald}
               />
-            )) : <span className="text-xs text-muted-foreground">暂无联系人数据</span>}
+            )) : <span className="text-caption text-muted-foreground">暂无联系人数据</span>}
           </div>
         </Panel>
       </div>
@@ -285,24 +288,26 @@ function PainPointCard({
         <AlertTriangle className="h-4 w-4" />
       </div>
       <div className="min-w-0 flex-1">
-        <p className="text-sm font-semibold" style={{ color: PROFILE_COLORS.coralDeep }}>{point.topic}</p>
-        {point.detail && <p className="mt-1 text-xs leading-5 text-foreground">{point.detail}</p>}
+        <p className="text-body font-semibold" style={{ color: PROFILE_COLORS.coralDeep }}>{point.topic}</p>
+        {point.detail && <p className="mt-1 text-caption leading-5 text-foreground">{point.detail}</p>}
         <div className="mt-2 flex items-center gap-2">
           {point.last_seen && (
-            <span className="rounded-full px-2 py-0.5 text-[10px]" style={{ background: `${PROFILE_COLORS.coral}12`, color: PROFILE_COLORS.coralDeep }}>
+            <span className="rounded-full px-2 py-0.5 text-micro" style={{ background: `${PROFILE_COLORS.coral}12`, color: PROFILE_COLORS.coralDeep }}>
               最近信号 {point.last_seen}
             </span>
           )}
           {onAskMona && (
-            <button
+            <Button
               type="button"
-              className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] transition-colors hover:bg-accent"
+              variant="ghost"
+              size="xs"
+              className="h-auto gap-1 rounded-full px-2 py-0.5 text-micro"
               style={{ color: PROFILE_COLORS.coralDeep }}
               onClick={() => onAskMona(`我最近反复被这个问题困扰：${point.topic}${point.detail ? `（${point.detail}）` : ""}。请结合你的工作记忆，帮我梳理思路并给出可执行的下一步建议。`)}
             >
               <MessageSquareText className="h-3 w-3" />
               和 Mona 聊聊
-            </button>
+            </Button>
           )}
         </div>
       </div>
@@ -337,11 +342,11 @@ function SectionTitle({
 }) {
   return (
     <div className="mb-3 flex items-center justify-between gap-3">
-      <h3 className="flex items-center gap-1.5 text-sm font-semibold">
+      <h3 className="flex items-center gap-1.5 text-body font-semibold">
         <span style={{ color }}>{icon}</span>
         {title}
       </h3>
-      {hint && <span className="truncate text-xs text-muted-foreground">{hint}</span>}
+      {hint && <span className="truncate text-caption text-muted-foreground">{hint}</span>}
     </div>
   );
 }
@@ -356,7 +361,7 @@ function MetricPill({
   color: string;
 }) {
   return (
-    <span className="rounded-md border px-2.5 py-1 text-xs" style={{ background: `${color}12`, borderColor: `${color}33`, color }}>
+    <span className="rounded-md border px-2.5 py-1 text-caption" style={{ background: `${color}12`, borderColor: `${color}33`, color }}>
       {label} {value}
     </span>
   );
@@ -383,20 +388,22 @@ function InsightItem({
         {icon}
       </div>
       <div className="min-w-0">
-        <p className="text-sm font-semibold" style={{ color }}>{title}</p>
-        <p className="mt-1 text-xs leading-5 text-foreground">{body}</p>
+        <p className="text-body font-semibold" style={{ color }}>{title}</p>
+        <p className="mt-1 text-caption leading-5 text-foreground">{body}</p>
         <div className="mt-1 flex items-center gap-2">
-          <span className="text-[11px] text-muted-foreground">{evidence}</span>
+          <span className="text-micro text-muted-foreground">{evidence}</span>
           {onAskMona && (
-            <button
+            <Button
               type="button"
-              className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[11px] transition-colors hover:bg-accent"
+              variant="ghost"
+              size="xs"
+              className="h-auto gap-1 rounded-full px-1.5 py-0.5 text-micro"
               style={{ color }}
               onClick={onAskMona}
             >
               <MessageSquareText className="h-3 w-3" />
               和 Mona 聊聊
-            </button>
+            </Button>
           )}
         </div>
       </div>
@@ -418,7 +425,7 @@ function BarRow({
   color: string;
 }) {
   return (
-    <div className="grid grid-cols-[90px_1fr_52px] items-center gap-2 text-xs">
+    <div className="grid grid-cols-[90px_1fr_52px] items-center gap-2 text-caption">
       <span className="truncate text-muted-foreground">{label}</span>
       <div className="h-1.5 overflow-hidden rounded-full bg-muted">
         {ratio !== null && (

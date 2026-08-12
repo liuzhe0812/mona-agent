@@ -36,7 +36,7 @@ const CHAIN_COLORS = [
 export function SankeyChart({ chains, height = 200 }: SankeyChartProps) {
   if (!chains || chains.length === 0) {
     return (
-      <div className="flex h-32 items-center justify-center text-xs text-muted-foreground">
+      <div className="flex h-32 items-center justify-center text-caption text-muted-foreground">
         暂无调用链数据
       </div>
     );

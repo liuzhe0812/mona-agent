@@ -4,6 +4,8 @@ import { useCallback, useEffect, useState } from "react";
 import { RefreshCw, Sparkles } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { PageToolbar } from "@/components/ui/page-toolbar";
+import { StatusNotice } from "@/components/ui/status-notice";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   fetchProfile,
@@ -98,54 +100,59 @@ export function ProfileView({ onAskMona }: ProfileViewProps) {
     <Tabs value={tab} onValueChange={setTab} className="flex h-full w-full flex-col bg-background">
       <ProfileStyles />
       {/* 顶部栏：Tab 居中 + 操作按钮两端对齐，单行紧凑布局 */}
-      <div className="flex h-9 items-center gap-2 border-b px-3">
-        <div className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
-          <span className="whitespace-nowrap">
-            {`上次蒸馏：${formatTimestamp(lastDistilled)}`}
-          </span>
-          {loading && <span className="whitespace-nowrap">加载中…</span>}
-        </div>
-        <div className="flex flex-1 justify-center">
-          <TabsList className="h-7 p-0.5">
-            <TabsTrigger value="profile" className="h-6 px-2.5 text-xs">人物画像</TabsTrigger>
-            <TabsTrigger value="trajectory" className="h-6 px-2.5 text-xs">成长轨迹</TabsTrigger>
-            <TabsTrigger value="work-pattern" className="h-6 px-2.5 text-xs">工作模式</TabsTrigger>
-          </TabsList>
-        </div>
-        <div className="flex items-center gap-1">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7"
-            onClick={() => void load()}
-            title="刷新"
-          >
-            <RefreshCw className="h-3.5 w-3.5" />
-          </Button>
-          <Button
-            variant="default"
-            size="sm"
-            className="h-7 gap-1 px-2 text-xs"
-            disabled={distilling}
-            onClick={() => void handleDistill()}
-          >
-            <Sparkles className="h-3.5 w-3.5" />
-            {distilling ? "蒸馏中…" : "立即蒸馏"}
-          </Button>
-        </div>
-      </div>
+      <PageToolbar
+        className="border-b px-3"
+        leading={
+          <div className="flex items-center gap-2 text-caption text-muted-foreground">
+            <span className="whitespace-nowrap">
+              {`上次蒸馏：${formatTimestamp(lastDistilled)}`}
+            </span>
+            {loading && <span className="whitespace-nowrap">加载中…</span>}
+          </div>
+        }
+        actions={
+          <>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => void load()}
+              title="刷新"
+            >
+              <RefreshCw className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="default"
+              size="sm"
+              className="gap-1"
+              disabled={distilling}
+              onClick={() => void handleDistill()}
+            >
+              <Sparkles className="h-3.5 w-3.5" />
+              {distilling ? "蒸馏中…" : "立即蒸馏"}
+            </Button>
+          </>
+        }
+      >
+        <TabsList className="h-7 p-0.5">
+          <TabsTrigger value="profile" className="h-6 px-2.5 text-caption">人物画像</TabsTrigger>
+          <TabsTrigger value="trajectory" className="h-6 px-2.5 text-caption">成长轨迹</TabsTrigger>
+          <TabsTrigger value="work-pattern" className="h-6 px-2.5 text-caption">工作模式</TabsTrigger>
+        </TabsList>
+      </PageToolbar>
 
       {/* 蒸馏结果提示 */}
       {distillMsg && (
-        <div className="border-b bg-blue-500/10 px-4 py-1.5 text-xs text-blue-700 dark:text-blue-300">
-          {distillMsg}
+        <div className="border-b px-3 py-2">
+          <StatusNotice tone="info" className="text-caption">
+            {distillMsg}
+          </StatusNotice>
         </div>
       )}
 
       {/* 错误提示 */}
       {error && !loading && (
-        <div className="border-b bg-destructive/10 px-4 py-1.5 text-sm text-destructive">
-          {error}
+        <div className="border-b px-3 py-2">
+          <StatusNotice tone="danger">{error}</StatusNotice>
         </div>
       )}
 

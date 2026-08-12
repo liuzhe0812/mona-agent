@@ -10,7 +10,7 @@ interface SkillMatrixProps {
 export function SkillMatrix({ skills }: SkillMatrixProps) {
   if (!skills || skills.length === 0) {
     return (
-      <div className="flex h-32 items-center justify-center text-xs text-muted-foreground">
+      <div className="flex h-32 items-center justify-center text-caption text-muted-foreground">
         暂无技能数据
       </div>
     );
@@ -29,7 +29,7 @@ export function SkillMatrix({ skills }: SkillMatrixProps) {
   return (
     <div className="flex flex-col gap-1.5">
       {/* 表头 */}
-      <div className="grid grid-cols-[1fr_repeat(5,28px)] items-center gap-1 text-[10px] text-muted-foreground">
+      <div className="grid grid-cols-[1fr_repeat(5,28px)] items-center gap-1 text-micro text-muted-foreground">
         <span>领域</span>
         {levelLabels.map((label, i) => (
           <span
@@ -51,7 +51,7 @@ export function SkillMatrix({ skills }: SkillMatrixProps) {
             style={{ animationDelay: `${i * 60}ms` }}
           >
             <span
-              className="truncate text-xs text-foreground"
+              className="truncate text-caption text-foreground"
               title={`${skill.area}（${skill.note_count} 篇笔记）`}
             >
               {skill.area}
@@ -76,7 +76,7 @@ export function SkillMatrix({ skills }: SkillMatrixProps) {
         );
       })}
       {/* 图例 */}
-      <div className="mt-2 flex items-center gap-3 text-[10px] text-muted-foreground">
+      <div className="mt-2 flex items-center gap-3 text-micro text-muted-foreground">
         <span>低</span>
         <div className="flex gap-1">
           {levelColors.map((c, i) => (

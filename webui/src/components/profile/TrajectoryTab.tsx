@@ -52,7 +52,7 @@ export function TrajectoryTab({ data, loading }: TrajectoryTabProps) {
 
   if (loading) {
     return (
-      <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+      <div className="flex h-full items-center justify-center text-body text-muted-foreground">
         加载中…
       </div>
     );
@@ -130,9 +130,9 @@ export function TrajectoryTab({ data, loading }: TrajectoryTabProps) {
           <div className="flex justify-center">
             <RadarChart current={currentRadar} previous={previousRadar.length > 0 ? previousRadar : undefined} size={330} />
           </div>
-          <p className="mt-2 text-center text-xs text-muted-foreground">
+          <p className="mt-2 text-center text-caption text-muted-foreground">
             {hasComparison && fastest.length > 0
-              ? <>多个话题投入上升，尤其 <span className="text-emerald-600">{fastest[0].skill}</span> 增幅明显</>
+              ? <>多个话题投入上升，尤其 <span className="text-success">{fastest[0].skill}</span> 增幅明显</>
               : "蒸馏两次后可查看投入分布对比"}
           </p>
         </Panel>
@@ -141,10 +141,10 @@ export function TrajectoryTab({ data, loading }: TrajectoryTabProps) {
           <SectionTitle icon={<TrendingUp className="h-4 w-4" />} title="技能积累" hint={growthPointsWithPrev.length > 0 ? "累计掌握技能数" : "暂无数据"} color={PROFILE_COLORS.emerald} />
           {growthPointsWithPrev.length > 0
             ? <GrowthLineChart points={growthPointsWithPrev} />
-            : <div className="flex h-[250px] items-center justify-center text-xs text-muted-foreground">暂无月度数据</div>}
-          <p className="mt-2 text-center text-xs text-muted-foreground">
+            : <div className="flex h-[250px] items-center justify-center text-caption text-muted-foreground">暂无月度数据</div>}
+          <p className="mt-2 text-center text-caption text-muted-foreground">
             {milestoneCount > 0
-              ? <>本期有 <span className="text-emerald-600">{milestoneCount}</span> 个里程碑推动成长</>
+              ? <>本期有 <span className="text-success">{milestoneCount}</span> 个里程碑推动成长</>
               : "暂无里程碑记录"}
           </p>
         </Panel>
@@ -161,13 +161,13 @@ export function TrajectoryTab({ data, loading }: TrajectoryTabProps) {
             <SectionTitle icon={<TrendingUp className="h-4 w-4" />} title="增长最快 Top 3" color={PROFILE_COLORS.emerald} />
             {fastest.length > 0 ? fastest.map((item, index) => (
               <BarRow key={item.skill} rank={index + 1} label={item.skill} value={item.delta} color={PROFILE_COLORS.emerald} sign="+" />
-            )) : <span className="text-xs text-muted-foreground">需两次蒸馏对比</span>}
+            )) : <span className="text-caption text-muted-foreground">需两次蒸馏对比</span>}
           </Panel>
           <Panel className="p-4">
             <SectionTitle icon={<TriangleAlert className="h-4 w-4" />} title="需要补强 Top 3" color={PROFILE_COLORS.coral} />
             {slowest.length > 0 ? slowest.map((item, index) => (
               <BarRow key={item.skill} rank={index + 1} label={item.skill} value={Math.max(8 - item.delta, 2)} color={PROFILE_COLORS.coral} sign="-" />
-            )) : <span className="text-xs text-muted-foreground">需两次蒸馏对比</span>}
+            )) : <span className="text-caption text-muted-foreground">需两次蒸馏对比</span>}
           </Panel>
         </div>
       </div>
@@ -178,7 +178,7 @@ export function TrajectoryTab({ data, loading }: TrajectoryTabProps) {
           <div className="flex flex-col gap-2">
             {skillProgression.length > 0 ? skillProgression.map((item) => (
               <ProgressRow key={item.skill} label={item.skill} before={item.before} after={item.after} delta={item.delta} />
-            )) : <span className="text-xs text-muted-foreground">蒸馏两次后显示技能提升对比</span>}
+            )) : <span className="text-caption text-muted-foreground">蒸馏两次后显示技能提升对比</span>}
           </div>
         </Panel>
 
@@ -194,15 +194,15 @@ export function TrajectoryTab({ data, loading }: TrajectoryTabProps) {
                     style={{ background: [PROFILE_COLORS.emerald, PROFILE_COLORS.amber, PROFILE_COLORS.cyan][index % 3] }}
                   />
                   <div className="flex items-baseline gap-2">
-                    <span className="text-sm font-semibold">{milestone.date || milestone.type}</span>
-                    <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">{milestone.icon}</span>
+                    <span className="text-body font-semibold">{milestone.date || milestone.type}</span>
+                    <span className="rounded-full bg-muted px-2 py-0.5 text-micro text-muted-foreground">{milestone.icon}</span>
                   </div>
-                  <p className="mt-1 text-xs font-medium">{milestone.title}</p>
-                  <p className="mt-1 text-[11px] leading-5 text-muted-foreground">{milestone.description}</p>
+                  <p className="mt-1 text-caption font-medium">{milestone.title}</p>
+                  <p className="mt-1 text-micro leading-5 text-muted-foreground">{milestone.description}</p>
                 </div>
               ))}
             </div>
-          ) : <span className="text-xs text-muted-foreground">暂无里程碑</span>}
+          ) : <span className="text-caption text-muted-foreground">暂无里程碑</span>}
         </Panel>
 
         <Panel className="p-4">
@@ -210,19 +210,19 @@ export function TrajectoryTab({ data, loading }: TrajectoryTabProps) {
           <div className="grid grid-cols-2 gap-2">
             {fieldMatrix.map((field) => (
               <div key={field.title} className="rounded-lg border p-3" style={{ background: `${field.color}10`, borderColor: `${field.color}24` }}>
-                <p className="mb-2 text-sm font-semibold" style={{ color: field.color }}>{field.title}</p>
+                <p className="mb-2 text-body font-semibold" style={{ color: field.color }}>{field.title}</p>
                 {field.items.length > 0 ? (
-                  <ul className="space-y-1 text-xs text-muted-foreground">
+                  <ul className="space-y-1 text-caption text-muted-foreground">
                     {field.items.map((item) => <li key={item}>· {item}</li>)}
                   </ul>
-                ) : <p className="text-xs text-muted-foreground">暂无</p>}
+                ) : <p className="text-caption text-muted-foreground">暂无</p>}
               </div>
             ))}
           </div>
         </Panel>
       </div>
 
-      <Panel className="grid grid-cols-1 gap-3 p-4 text-xs text-muted-foreground md:grid-cols-5">
+      <Panel className="grid grid-cols-1 gap-3 p-4 text-caption text-muted-foreground md:grid-cols-5">
         <EvidenceItem label="数据快照" value={`${snapshotCount} 份`} />
         <EvidenceItem label="技能维度" value={`${radarDimCount} 个`} />
         <EvidenceItem label="月度记录" value={`${monthCount} 个月`} />
@@ -298,11 +298,11 @@ function SectionTitle({
 }) {
   return (
     <div className="mb-3 flex items-center justify-between gap-3">
-      <h3 className="flex items-center gap-1.5 text-sm font-semibold">
+      <h3 className="flex items-center gap-1.5 text-body font-semibold">
         <span style={{ color }}>{icon}</span>
         {title}
       </h3>
-      {hint && <span className="truncate text-xs text-muted-foreground">{hint}</span>}
+      {hint && <span className="truncate text-caption text-muted-foreground">{hint}</span>}
     </div>
   );
 }
@@ -326,9 +326,9 @@ function MetricCard({
         {icon}
       </div>
       <div className="min-w-0">
-        <p className="text-xs text-muted-foreground">{label}</p>
-        <p className="truncate text-2xl font-bold tabular-nums" style={{ color }}>{value}</p>
-        <p className="truncate text-[11px] text-muted-foreground">{hint}</p>
+        <p className="text-caption text-muted-foreground">{label}</p>
+        <p className="truncate text-title tabular-nums" style={{ color }}>{value}</p>
+        <p className="truncate text-micro text-muted-foreground">{hint}</p>
       </div>
     </Panel>
   );
@@ -405,9 +405,9 @@ function SummaryRow({
   value: string;
 }) {
   return (
-    <div className="flex items-center justify-between border-b py-2 text-xs last:border-b-0">
+    <div className="flex items-center justify-between border-b py-2 text-caption last:border-b-0">
       <span className="text-muted-foreground">{label}</span>
-      <span className="font-medium text-emerald-600">{value}</span>
+      <span className="font-medium text-success">{value}</span>
     </div>
   );
 }
@@ -426,8 +426,8 @@ function BarRow({
   sign: "+" | "-";
 }) {
   return (
-    <div className="grid grid-cols-[22px_80px_1fr_42px] items-center gap-2 py-1 text-xs">
-      <span className="flex h-5 w-5 items-center justify-center rounded text-[10px] text-white" style={{ background: color }}>{rank}</span>
+    <div className="grid grid-cols-[22px_80px_1fr_42px] items-center gap-2 py-1 text-caption">
+      <span className="flex h-5 w-5 items-center justify-center rounded text-micro text-white" style={{ background: color }}>{rank}</span>
       <span className="truncate">{label}</span>
       <div className="h-1.5 overflow-hidden rounded-full bg-muted">
         <div className="h-full rounded-full" style={{ width: `${Math.min(value * 5, 100)}%`, background: color }} />
@@ -449,14 +449,14 @@ function ProgressRow({
   delta: number;
 }) {
   return (
-    <div className="grid grid-cols-[88px_1fr_38px_38px_38px] items-center gap-2 text-xs">
+    <div className="grid grid-cols-[88px_1fr_38px_38px_38px] items-center gap-2 text-caption">
       <span className="truncate">{label}</span>
       <div className="h-2 overflow-hidden rounded-full bg-muted">
-        <div className="h-full rounded-full bg-emerald-500" style={{ width: `${after}%` }} />
+        <div className="h-full rounded-full bg-success-indicator" style={{ width: `${after}%` }} />
       </div>
       <span className="text-right tabular-nums text-muted-foreground">{before}</span>
       <span className="text-right tabular-nums">{after}</span>
-      <span className="text-right tabular-nums text-emerald-600">+{delta}</span>
+      <span className="text-right tabular-nums text-success">+{delta}</span>
     </div>
   );
 }

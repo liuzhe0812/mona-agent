@@ -114,7 +114,7 @@ export const PROFILE_ANIMATIONS = `
 export const CARD_BASE =
   "relative overflow-hidden rounded-2xl border border-border/40 bg-card/40 backdrop-blur-md";
 export const CARD_HOVER =
-  "transition-all duration-300 hover:border-border/80 hover:bg-card/60 hover:shadow-lg hover:shadow-emerald-500/5";
+  "transition-all duration-300 hover:border-border/80 hover:bg-card/60 hover:shadow-overlay";
 
 /** 等级颜色 */
 export function levelColor(level: number): string {
