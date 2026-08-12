@@ -844,6 +844,9 @@ class WebSocketChannel(BaseChannel):
         if got == "/api/sessions":
             return self._handle_sessions_list(request)
 
+        if got == "/api/agents":
+            return self._handle_agents_list(request)
+
         if got == "/api/settings":
             return self._handle_settings(request)
 
@@ -1112,6 +1115,28 @@ class WebSocketChannel(BaseChannel):
                 row["run_started_at"] = started_at
             cleaned.append(row)
         return _http_json_response({"sessions": cleaned})
+
+    def _handle_agents_list(self, request: WsRequest) -> Response:
+        """List all loaded agents (multi-agent phase 2d).
+
+        Broken installed manifests are skipped at registry load time, so every
+        listed agent is usable; ``enabled`` is always true and kept only for
+        forward compatibility with an enable/disable toggle.
+        """
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        registry = self._room_agent_registry()
+        agents = [
+            {
+                "id": definition.id,
+                "displayName": definition.display_name,
+                "description": definition.description,
+                "avatarUrl": definition.avatar,
+                "enabled": True,
+            }
+            for definition in registry.list_agents()
+        ]
+        return _http_json_response({"agents": agents})
 
     def _handle_settings(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):
@@ -3576,6 +3601,7 @@ class WebSocketChannel(BaseChannel):
             connection, "create_room_result", ok=True, chat_id=chat_id,
             request_id=request_id, **self._room_state_payload(conversation),
         )
+        await self.send_room_updated(chat_id, self._room_state_payload(conversation))
 
     async def _handle_update_room_envelope(
         self, connection: Any, envelope: dict[str, Any]
@@ -3628,6 +3654,7 @@ class WebSocketChannel(BaseChannel):
             connection, "update_room_result", ok=True, chat_id=chat_id,
             request_id=request_id, **self._room_state_payload(conversation),
         )
+        await self.send_room_updated(chat_id, self._room_state_payload(conversation))
 
     async def _handle_get_room_state_envelope(
         self, connection: Any, envelope: dict[str, Any]
@@ -4353,6 +4380,16 @@ class WebSocketChannel(BaseChannel):
         raw = json.dumps(body, ensure_ascii=False)
         for connection in conns:
             await self._safe_send_to(connection, raw, label=" session_updated ")
+
+    async def send_room_updated(self, chat_id: str, payload: dict[str, Any]) -> None:
+        """Broadcast the current room state to every connection attached to *chat_id*."""
+        conns = list(self._subs.get(chat_id, ()))
+        if not conns:
+            return
+        body: dict[str, Any] = {"event": "room_updated", "chat_id": chat_id, **payload}
+        raw = json.dumps(body, ensure_ascii=False)
+        for connection in conns:
+            await self._safe_send_to(connection, raw, label=" room_updated ")
 
     async def send_artifacts_changed(self) -> None:
         """Broadcast a shared-output change hint to every open websocket connection."""

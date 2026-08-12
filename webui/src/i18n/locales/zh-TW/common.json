@@ -291,6 +291,21 @@
     "closed": "已中斷",
     "error": "連線錯誤"
   },
+  "room": {
+    "header": {
+      "members": "成員（{{count}}）"
+    },
+    "panel": {
+      "title": "協作房間",
+      "partner": "夥伴",
+      "collapse": "收合面板",
+      "goal": "目標",
+      "goalEmpty": "尚未設定房間目標。",
+      "members": "成員",
+      "workflow": "工作流程",
+      "workflowPlaceholder": "尚未設定工作流程。"
+    }
+  },
   "thread": {
     "loadingConversation": "正在載入對話…",
     "empty": {

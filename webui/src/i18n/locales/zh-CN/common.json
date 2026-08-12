@@ -361,6 +361,21 @@
     "closed": "已断开",
     "error": "连接出错"
   },
+  "room": {
+    "header": {
+      "members": "成员（{{count}}）"
+    },
+    "panel": {
+      "title": "协作房间",
+      "partner": "伙伴",
+      "collapse": "收起面板",
+      "goal": "目标",
+      "goalEmpty": "尚未设置房间目标。",
+      "members": "成员",
+      "workflow": "工作流",
+      "workflowPlaceholder": "尚未配置工作流。"
+    }
+  },
   "thread": {
     "loadingConversation": "正在加载对话…",
     "empty": {

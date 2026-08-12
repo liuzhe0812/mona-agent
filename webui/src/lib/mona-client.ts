@@ -1,9 +1,13 @@
 import type {
+  AgentJobSummary,
   ConnectionStatus,
   InboundEvent,
   Outbound,
   OutboundMedia,
   GoalStateWsPayload,
+  RoomCommandResult,
+  RoomState,
+  RoomUpdate,
 } from "./types";
 
 /** WebSocket readyState constants, referenced by value to stay portable
@@ -56,6 +60,8 @@ type RuntimeModelHandler = (modelName: string | null, modelPreset?: string | nul
 type SessionUpdateScope = "metadata" | "thread" | string;
 type SessionUpdateHandler = (chatId: string, scope?: SessionUpdateScope) => void;
 type RunStatusHandler = (chatId: string, startedAt: number | null) => void;
+type RoomUpdatedHandler = (chatId: string, state: RoomState) => void;
+type AgentJobUpdatedHandler = (chatId: string, job: AgentJobSummary) => void;
 
 /** Structured connection-level errors surfaced to the UI.
  *
@@ -75,6 +81,12 @@ type ErrorHandler = (error: StreamError) => void;
 
 interface PendingNewChat {
   resolve: (chatId: string) => void;
+  reject: (err: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+interface PendingRoomCommand {
+  resolve: (result: RoomCommandResult) => void;
   reject: (err: Error) => void;
   timer: ReturnType<typeof setTimeout>;
 }
@@ -104,6 +116,8 @@ export class MonaClient {
   private sessionUpdateHandlers = new Set<SessionUpdateHandler>();
   private artifactsChangedHandlers = new Set<() => void>();
   private runStatusHandlers = new Set<RunStatusHandler>();
+  private roomUpdatedHandlers = new Set<RoomUpdatedHandler>();
+  private agentJobUpdatedHandlers = new Set<AgentJobUpdatedHandler>();
   private errorHandlers = new Set<ErrorHandler>();
   private pptUploadHandlers = new Set<(result: { ok: boolean; files?: { name: string; path: string }[]; error?: string }) => void>();
   private pptSaveBrandHandlers = new Set<(result: { ok: boolean; brandId?: string; error?: string }) => void>();
@@ -136,6 +150,8 @@ export class MonaClient {
   /** Latest ``goal_state`` snapshot per ``chat_id`` (multi-session isolation). */
   private goalStateByChatId = new Map<string, GoalStateWsPayload>();
   private pendingNewChat: PendingNewChat | null = null;
+  private pendingRoomCommands = new Map<string, PendingRoomCommand>();
+  private roomCommandSeq = 0;
   // Frames queued while the socket is not yet OPEN
   private sendQueue: Outbound[] = [];
   private reconnectAttempts = 0;
@@ -369,6 +385,78 @@ export class MonaClient {
       current.delete(handler);
       if (current.size === 0) this.chatHandlers.delete(chatId);
     };
+  }
+
+  /** Subscribe to server-pushed ``room_updated`` broadcasts (room metadata
+   *  changed on another client or as a side effect of a room command). */
+  onRoomUpdated(handler: RoomUpdatedHandler): Unsubscribe {
+    this.roomUpdatedHandlers.add(handler);
+    return () => {
+      this.roomUpdatedHandlers.delete(handler);
+    };
+  }
+
+  /** Subscribe to room job state changes (``agent_job_updated``). */
+  onAgentJobUpdated(handler: AgentJobUpdatedHandler): Unsubscribe {
+    this.agentJobUpdatedHandlers.add(handler);
+    return () => {
+      this.agentJobUpdatedHandlers.delete(handler);
+    };
+  }
+
+  /** Turn an existing chat into a collaboration room (phase 2d). */
+  createRoom(
+    chatId: string,
+    agentIds: string[],
+    title: string,
+    goal?: string,
+  ): Promise<RoomState> {
+    return this.sendRoomCommand("create_room_result", (requestId) => ({
+      type: "create_room",
+      chat_id: chatId,
+      agent_ids: agentIds,
+      title,
+      ...(goal ? { goal } : {}),
+      request_id: requestId,
+    }));
+  }
+
+  /** Edit room title / goal / membership. */
+  updateRoom(chatId: string, updates: RoomUpdate): Promise<RoomState> {
+    return this.sendRoomCommand("update_room_result", (requestId) => ({
+      type: "update_room",
+      chat_id: chatId,
+      ...(updates.agentIds ? { agent_ids: updates.agentIds } : {}),
+      ...(updates.title !== undefined ? { title: updates.title } : {}),
+      ...(updates.goal !== undefined ? { goal: updates.goal } : {}),
+      request_id: requestId,
+    }));
+  }
+
+  /** Fetch the current room state for a chat. */
+  getRoomState(chatId: string): Promise<RoomState> {
+    return this.sendRoomCommand("room_state_result", (requestId) => ({
+      type: "get_room_state",
+      chat_id: chatId,
+      request_id: requestId,
+    }));
+  }
+
+  /** Cancel a queued/running room job. */
+  cancelAgentJob(chatId: string, jobId: string, reason?: string): Promise<AgentJobSummary> {
+    return this.sendRoomCommandRaw("cancel_agent_job_result", (requestId) => ({
+      type: "cancel_agent_job",
+      chat_id: chatId,
+      job_id: jobId,
+      ...(reason ? { reason } : {}),
+      request_id: requestId,
+    })).then((result) => {
+      const job = (result as { job?: AgentJobSummary }).job;
+      if (!job) {
+        throw new Error("malformed cancel_agent_job result");
+      }
+      return job;
+    });
   }
 
   connect(): void {
@@ -642,11 +730,80 @@ export class MonaClient {
       return;
     }
 
+    if (
+      parsed.event === "create_room_result" ||
+      parsed.event === "update_room_result" ||
+      parsed.event === "room_state_result" ||
+      parsed.event === "cancel_agent_job_result"
+    ) {
+      this.handleRoomCommandResult(parsed);
+      return;
+    }
+
+    if (parsed.event === "room_updated") {
+      for (const handler of this.roomUpdatedHandlers) {
+        handler(parsed.chat_id, {
+          conversation: parsed.conversation,
+          agents: parsed.agents,
+        });
+      }
+      return;
+    }
+
+    if (parsed.event === "agent_job_updated") {
+      for (const handler of this.agentJobUpdatedHandlers) {
+        handler(parsed.chat_id, parsed.job);
+      }
+      return;
+    }
+
     const chatId = (parsed as { chat_id?: string }).chat_id;
     if (chatId) {
       this.recordGoalStatusForRunStrip(chatId, parsed);
       this.recordGoalStateSnapshot(chatId, parsed);
       this.dispatch(chatId, parsed);
+    }
+  }
+
+  /** Send a room command envelope and await its correlated ``*_result``. */
+  private sendRoomCommand(
+    resultEvent: string,
+    build: (requestId: string) => Outbound,
+  ): Promise<RoomState> {
+    return this.sendRoomCommandRaw(resultEvent, build).then((result) => {
+      if (!result.conversation || !result.agents) {
+        throw new Error(`malformed ${resultEvent}`);
+      }
+      return { conversation: result.conversation, agents: result.agents };
+    });
+  }
+
+  private sendRoomCommandRaw(
+    resultEvent: string,
+    build: (requestId: string) => Outbound,
+  ): Promise<RoomCommandResult> {
+    const requestId = `room_${Date.now().toString(36)}_${(this.roomCommandSeq++).toString(36)}`;
+    return new Promise<RoomCommandResult>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingRoomCommands.delete(requestId);
+        reject(new Error(`${resultEvent} timed out`));
+      }, 10_000);
+      this.pendingRoomCommands.set(requestId, { resolve, reject, timer });
+      this.queueSend(build(requestId));
+    });
+  }
+
+  private handleRoomCommandResult(ev: InboundEvent): void {
+    const result = ev as RoomCommandResult & { event: string };
+    const requestId = result.request_id;
+    const pending = requestId ? this.pendingRoomCommands.get(requestId) : undefined;
+    if (!pending) return;
+    this.pendingRoomCommands.delete(requestId!);
+    clearTimeout(pending.timer);
+    if (result.ok) {
+      pending.resolve(result);
+    } else {
+      pending.reject(new Error(result.detail || result.code || "room command failed"));
     }
   }
 

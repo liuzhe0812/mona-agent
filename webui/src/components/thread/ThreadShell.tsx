@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { PanelRightOpen } from "lucide-react";
 
 import { AgentLogo } from "@/components/AgentLogo";
+import { RoomContextPanel } from "@/components/room/RoomContextPanel";
 import { ThreadComposer } from "@/components/thread/ThreadComposer";
 import { ThreadHeader } from "@/components/thread/ThreadHeader";
 import { StreamErrorNotice } from "@/components/thread/StreamErrorNotice";
@@ -753,7 +754,20 @@ export function ThreadShell({
   const hasPreviewTarget = hasFiles || !!previewFile;
   const rightVisible =
     !isHome && !workspaceCollapsed && (hasPreviewTarget || emptyPanelExpanded);
-  const showWorkspaceToggle = !isHome && !rightVisible;
+
+  // Multi-agent phase 2d: rooms get a context panel (goal / members /
+  // workflow summary) sharing the right-hand pane with the workspace panel.
+  // It opens by default when a room is entered so the collaboration state
+  // stays discoverable; closing it falls back to the workspace panel rules.
+  const conversation = session?.conversation ?? null;
+  const isRoomSession = conversation?.type === "room";
+  const [roomPanelOpen, setRoomPanelOpen] = useState(false);
+  useEffect(() => {
+    setRoomPanelOpen(conversation?.type === "room");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [historyKey, conversation?.type]);
+  const showRoomPanel = !!isRoomSession && roomPanelOpen && !previewFile;
+  const showWorkspaceToggle = !isHome && !rightVisible && !showRoomPanel;
 
   // New-artifact feedback while collapsed: when the deliverable count
   // grows and the panel is hidden, highlight the edge button until the
@@ -816,6 +830,10 @@ export function ThreadShell({
               onToggleTheme={onToggleTheme}
               hideSidebarToggleOnDesktop={hideSidebarToggleOnDesktop}
               minimal={!session && !loading}
+              conversation={conversation}
+              onToggleRoomPanel={
+                isRoomSession ? () => setRoomPanelOpen((open) => !open) : undefined
+              }
             />
           ) : null}
           <ThreadViewport
@@ -859,6 +877,12 @@ export function ThreadShell({
       right={
         previewFile ? (
           <FilePreviewPanel files={previewNavFiles} />
+        ) : showRoomPanel && conversation && chatId ? (
+          <RoomContextPanel
+            chatId={chatId}
+            conversation={conversation}
+            onCollapse={() => setRoomPanelOpen(false)}
+          />
         ) : (
           <WorkspacePanel
             files={isProjectSession ? visibleMessageFiles : artifacts.files}
@@ -876,7 +900,7 @@ export function ThreadShell({
       }
       ratio={splitRatio}
       onRatioChange={setSplitRatio}
-      rightVisible={rightVisible}
+      rightVisible={rightVisible || showRoomPanel}
     />
   );
 }

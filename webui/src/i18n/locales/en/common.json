@@ -348,6 +348,21 @@
     "closed": "Disconnected",
     "error": "Connection error"
   },
+  "room": {
+    "header": {
+      "members": "Members ({{count}})"
+    },
+    "panel": {
+      "title": "Collaboration room",
+      "partner": "Partner",
+      "collapse": "Collapse panel",
+      "goal": "Goal",
+      "goalEmpty": "No room goal yet.",
+      "members": "Members",
+      "workflow": "Workflow",
+      "workflowPlaceholder": "No workflow configured yet."
+    }
+  },
   "thread": {
     "loadingConversation": "Loading conversation…",
     "empty": {

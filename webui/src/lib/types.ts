@@ -51,6 +51,18 @@ export interface RoomState {
   agents: RoomAgentInfo[];
 }
 
+/** Shared fields of the ``create_room`` / ``update_room`` / ``get_room_state``
+ * result events (phase 2d). On ``ok: false`` only ``code`` / ``detail`` are set. */
+export interface RoomCommandResult {
+  ok: boolean;
+  chat_id?: string;
+  request_id?: string;
+  code?: string;
+  detail?: string;
+  conversation?: ConversationMeta;
+  agents?: RoomAgentInfo[];
+}
+
 /** Job states mirrored from ``mona/agent/jobs.py`` (guide 5.6). */
 export type AgentJobStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
 
@@ -224,6 +236,9 @@ export interface ChatSummary {
   workspace?: string | null;
   /** Unix epoch seconds when this session currently has a turn in flight. */
   runStartedAt?: number | null;
+  /** Multi-agent conversation shape (phase 2d). Absent on legacy sessions,
+   *  which render as a direct chat with Mona. */
+  conversation?: ConversationMeta | null;
 }
 
 export type SidebarDensity = "comfortable" | "compact";
@@ -531,6 +546,13 @@ export type InboundEvent =
        * webui clients use it to trigger a native system notification. */
       schedule_reminder?: boolean;
       schedule_item_id?: string;
+      /** Multi-agent phase 2d: authoring agent; absent defaults to Mona. */
+      author_id?: string;
+      /** Structured message kind; plain conversation when absent. */
+      message_type?: MessageType;
+      job_id?: string;
+      workflow_run_id?: string;
+      payload?: unknown;
     }
   | {
       event: "file_edit";
@@ -547,6 +569,8 @@ export type InboundEvent =
       chat_id: string;
       text: string;
       stream_id?: string;
+      /** Multi-agent phase 2d: streaming author; absent defaults to Mona. */
+      author_id?: string;
     }
   | {
       event: "stream_end";
@@ -632,6 +656,30 @@ export type InboundEvent =
       files?: { name: string; path: string; size?: number; mime?: string }[];
       chat_id?: string;
       error?: string;
+    }
+  | ({ event: "create_room_result" } & RoomCommandResult)
+  | ({ event: "update_room_result" } & RoomCommandResult)
+  | ({ event: "room_state_result" } & RoomCommandResult)
+  | {
+      event: "room_updated";
+      chat_id: string;
+      conversation: ConversationMeta;
+      agents: RoomAgentInfo[];
+    }
+  | {
+      event: "cancel_agent_job_result";
+      ok: boolean;
+      chat_id?: string;
+      request_id?: string;
+      code?: string;
+      detail?: string;
+      job_id?: string;
+      job?: AgentJobSummary;
+    }
+  | {
+      event: "agent_job_updated";
+      chat_id: string;
+      job: AgentJobSummary;
     };
 
 /** Base64-encoded image attached to an outbound ``message`` envelope.
@@ -702,6 +750,30 @@ export type Outbound =
       type: "doc_upload";
       chat_id: string;
       files: { name: string; data_url: string }[];
+    }
+  | {
+      type: "create_room";
+      chat_id: string;
+      agent_ids: string[];
+      title?: string;
+      goal?: string;
+      request_id?: string;
+    }
+  | {
+      type: "update_room";
+      chat_id: string;
+      agent_ids?: string[];
+      title?: string;
+      goal?: string | null;
+      request_id?: string;
+    }
+  | { type: "get_room_state"; chat_id: string; request_id?: string }
+  | {
+      type: "cancel_agent_job";
+      chat_id: string;
+      job_id: string;
+      reason?: string;
+      request_id?: string;
     };
 
 export interface PptTemplate {

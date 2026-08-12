@@ -687,7 +687,7 @@ class SessionManager:
                                 if not fallback_preview and item.get("role") == "assistant":
                                     fallback_preview = text
                             preview = preview or fallback_preview
-                            sessions.append({
+                            row = {
                                 "key": key,
                                 "created_at": data.get("created_at"),
                                 "updated_at": data.get("updated_at"),
@@ -695,7 +695,15 @@ class SessionManager:
                                 "preview": preview,
                                 "workspace": metadata.get("workspace") if isinstance(metadata, dict) else None,
                                 "path": str(path)
-                            })
+                            }
+                            # Multi-agent conversation shape (phase 2d): stored
+                            # as a camelCase ``to_session_metadata()`` dump;
+                            # absent on legacy sessions, which the UI treats as
+                            # a direct chat with Mona.
+                            conversation = metadata.get("conversation") if isinstance(metadata, dict) else None
+                            if isinstance(conversation, dict):
+                                row["conversation"] = conversation
+                            sessions.append(row)
             except Exception:
                 repaired = self._repair(fallback_key)
                 if repaired is not None:

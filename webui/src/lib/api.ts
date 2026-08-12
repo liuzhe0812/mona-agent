@@ -1,5 +1,7 @@
 import type {
+  AgentSummary,
   ChatSummary,
+  ConversationMeta,
   DeliveredFile,
   ImageGenerationSettingsUpdate,
   PptProject,
@@ -151,6 +153,7 @@ export async function listSessions(
     title?: string;
     preview?: string;
     run_started_at?: number | null;
+    conversation?: ConversationMeta | null;
   };
   const body = await request<{ sessions: Row[] }>(
     `${effectiveBase}/api/sessions`,
@@ -165,7 +168,21 @@ export async function listSessions(
     preview: s.preview ?? "",
     workspace: (s as Row & { workspace?: string | null }).workspace ?? null,
     runStartedAt: s.run_started_at ?? null,
+    conversation: s.conversation ?? null,
   }));
+}
+
+/** List all installed agents (multi-agent phase 2d; ``GET /api/agents``). */
+export async function listAgents(
+  token: string,
+  base?: string,
+): Promise<AgentSummary[]> {
+  const effectiveBase = base ?? (await getApiBase());
+  const body = await request<{ agents: AgentSummary[] }>(
+    `${effectiveBase}/api/agents`,
+    token,
+  );
+  return body.agents;
 }
 
 export async function fetchWebuiThread(
