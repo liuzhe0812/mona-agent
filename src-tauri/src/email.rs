@@ -6981,8 +6981,9 @@ async fn update_local_cache(
 ///
 /// 三段式逻辑：
 /// 1. 本地命中：SQLite body_fetched=true 且 .eml 可读 → mailparse 解析返回（毫秒级）
-/// 2. 本地失败：HEADER-only .eml 或 .eml 缺失 → 调 gateway fetch_body
-/// 3. 落盘回退：gateway 成功后**同步**调用 fetch_raw_and_cache 落盘完整 RFC822，确保下次本地命中
+/// 2. 本地失败：HEADER-only .eml 或 .eml 缺失 → 调 gateway fetch_body（includeRawBytes=true）
+/// 3. 落盘：用响应中的 rawBytes 直接写 .eml（一次 IMAP 传输），
+///    仅在 rawBytes 缺失/写盘失败时回退 fetch_raw_and_cache 二次拉取
 #[tauri::command]
 pub async fn email_fetch_body(
     state: tauri::State<'_, EmailState>,
@@ -7146,28 +7147,92 @@ pub async fn email_fetch_body(
         }
     };
 
-    // 4. 同步落盘完整 RFC822（替代原 spawn 异步）
-    //    Offline-First 要求：gateway 拉取成功后必须立即落盘，确保下次点击本地命中
+    // 正文拉取完成，提前释放抢占标志：
+    // 1) 落盘阶段不再与 prefetch 竞争（prefetch 会让路即可，无需继续置位）
+    // 2) 关键：避免下方 fetch_raw_and_cache 回退路径被自己持有的标志锁住 30s
+    drop(_guard);
+
+    // 4. 同步落盘完整 RFC822（Offline-First：确保下次点击本地命中）
+    //    fetch_body 已随响应带回 rawBytes（一次 IMAP 传输），直接解码写盘；
+    //    仅在 rawBytes 缺失或写盘失败时回退到 fetch_raw_and_cache 二次拉取。
     //    用 resolved_uid（自动修复后可能变化）作为落盘 key
-    if let Err(e) = fetch_raw_and_cache(
-        state.inner(),
-        &gateway_url,
-        &account_id,
-        &resolved_uid,
-        &mailbox,
-    )
-    .await
-    {
-        log::warn!(
-            "[email-fetch-body] 落盘 .eml 失败 account={} uid={}: {}",
-            account_id,
-            resolved_uid,
-            e
-        );
+    let mut body = body;
+    let raw_b64 = body
+        .get("rawBytes")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    // rawBytes 是完整 RFC822 的 base64，体积大且前端不需要，从响应中移除
+    if let Some(obj) = body.as_object_mut() {
+        obj.remove("rawBytes");
+    }
+    let mut cached = false;
+    if !raw_b64.is_empty() {
+        match base64::engine::general_purpose::STANDARD.decode(&raw_b64) {
+            Ok(bytes) => match write_eml_file(&account_id, &mailbox, &resolved_uid, &bytes) {
+                Ok(rel) => {
+                    match state.conn() {
+                        Ok(conn) => {
+                            if let Err(e) = conn.execute(
+                                "UPDATE messages SET body_fetched = 1, eml_path = ?1
+                                 WHERE uid = ?2 AND account_id = ?3 AND folder = ?4",
+                                params![rel, &resolved_uid, &account_id, &mailbox],
+                            ) {
+                                log::warn!(
+                                    "[email-fetch-body] 更新 body_fetched 失败 account={} uid={}: {}",
+                                    account_id,
+                                    resolved_uid,
+                                    e
+                                );
+                            } else {
+                                cached = true;
+                            }
+                        }
+                        Err(e) => {
+                            log::warn!("[email-fetch-body] 打开数据库失败: {}", e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::warn!(
+                        "[email-fetch-body] 落盘 .eml 失败 account={} uid={}: {}",
+                        account_id,
+                        resolved_uid,
+                        e
+                    );
+                }
+            },
+            Err(e) => {
+                log::warn!(
+                    "[email-fetch-body] 解码 rawBytes 失败 account={} uid={}: {}",
+                    account_id,
+                    resolved_uid,
+                    e
+                );
+            }
+        }
+    }
+    if !cached {
+        // 回退路径：rawBytes 缺失/写盘失败时二次拉取落盘（此时 guard 已释放，不会自锁）
+        if let Err(e) = fetch_raw_and_cache(
+            state.inner(),
+            &gateway_url,
+            &account_id,
+            &resolved_uid,
+            &mailbox,
+        )
+        .await
+        {
+            log::warn!(
+                "[email-fetch-body] 回退落盘 .eml 失败 account={} uid={}: {}",
+                account_id,
+                resolved_uid,
+                e
+            );
+        }
     }
 
     // 5. 如果自动修复换了 uid，在响应中返回新 uid，让前端 store 更新本地记录的 uid
-    let mut body = body;
     if resolved_uid != uid {
         if let Some(obj) = body.as_object_mut() {
             obj.insert("_resolvedUid".to_string(), serde_json::Value::String(resolved_uid));
@@ -7206,7 +7271,9 @@ async fn fetch_body_via_gateway(
             "mailbox": mailbox,
             "uid": req_uid,
             "useSsl": account.imap_use_ssl,
-            "includeRawBytes": false,
+            // 返回 rawBytes（base64 RFC822），Rust 侧直接落盘，
+            // 避免原来 fetch_body + fetch_raw 两次完整 IMAP 下载
+            "includeRawBytes": true,
         });
         let resp = client
             .post(url)

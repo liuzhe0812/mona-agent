@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import { X, Loader2, Check } from "lucide-react";
+import { X, Loader2, Check, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { openExternalUrl } from "@/lib/tauri";
 import { useEmailStore } from "./store/emailStore";
 import { testConnection } from "./lib/emailApi";
 import { inferEasUrl } from "./contacts/lib/types";
@@ -55,6 +56,7 @@ export function NewAccountDialog({
   const [error, setError] = useState<string | null>(null);
 
   const isEditMode = !!editAccount;
+  const isGmail = imapHost === "imap.gmail.com";
 
   // 编辑模式：用原账号字段初始化
   useEffect(() => {
@@ -270,9 +272,25 @@ export function NewAccountDialog({
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder="邮箱密码或授权码"
+              placeholder={isGmail ? "应用专用密码" : "邮箱密码或授权码"}
               className="h-8 rounded-full px-3 text-[13px]"
             />
+            {isGmail && (
+              <p className="text-[11px] text-muted-foreground">
+                Gmail 已停用纯密码登录，需开启两步验证后生成应用专用密码填入上方。
+                <a
+                  href="https://myaccount.google.com/apppasswords"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    openExternalUrl("https://myaccount.google.com/apppasswords");
+                  }}
+                  className="ml-1 inline-flex items-center gap-0.5 text-primary hover:underline"
+                >
+                  获取应用专用密码
+                  <ExternalLink className="h-3 w-3" />
+                </a>
+              </p>
+            )}
           </Field>
           <div className="grid grid-cols-2 gap-3">
             <Field label="IMAP 服务器">
