@@ -63,11 +63,7 @@ function isReplied(item: TodoItem): boolean {
   return item.notes.includes("[已回复");
 }
 
-interface TodoInboxProps {
-  onCountChange?: (count: number) => void;
-}
-
-export function TodoInbox({ onCountChange }: TodoInboxProps) {
+export function TodoInbox() {
   const {
     items,
     pendingSchedules,
@@ -80,7 +76,6 @@ export function TodoInbox({ onCountChange }: TodoInboxProps) {
     loadPendingSchedules,
     confirmPendingSchedule,
     discardPendingSchedule,
-    inboxCount,
   } = useTodoStore();
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
@@ -99,11 +94,6 @@ export function TodoInbox({ onCountChange }: TodoInboxProps) {
   useEffect(() => {
     void loadAll();
   }, [loadAll]);
-
-  // Notify parent of total pending count for the badge
-  useEffect(() => {
-    onCountChange?.(inboxCount);
-  }, [inboxCount, onCountChange]);
 
   const handleCreate = async () => {
     const title = draft.trim();

@@ -4,6 +4,9 @@ export type ScheduleKind = "personal" | "ai_task";
 export type ScheduleRecurrence = "none" | "daily" | "weekly" | "monthly" | "cron_expr";
 export type ScheduleLastStatus = "ok" | "error" | "skipped";
 
+/** dataTransfer MIME used when dragging an unscheduled todo onto the calendar. */
+export const TODO_DRAG_MIME = "application/x-mona-todo-id";
+
 export interface ScheduleItem {
   id: string;
   title: string;

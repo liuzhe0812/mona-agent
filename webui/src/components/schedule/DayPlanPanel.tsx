@@ -6,18 +6,18 @@
  * 3. Overdue banner (when any overdue items exist)
  * 4. Time-anchored schedule items for the day
  * 5. Todos for the day (bucket=today OR due_at matches)
- * 6. Unscheduled entry (next / waiting / someday counts)
+ * 6. Unscheduled todos (next / waiting / someday, draggable onto the calendar)
  */
 
 import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, Check, ChevronRight, Pause, Play, Star } from "lucide-react";
+import { AlertTriangle, Bot, Check, GripVertical, Pause, Play, Star } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 import { formatTime, isSameDay, startOfDay, weekdayName } from "./dateUtils";
 import { useTodoStore } from "./todoStore";
-import type { ScheduleItem } from "./types";
+import { TODO_DRAG_MIME, type ScheduleItem } from "./types";
 import type { TodoItem } from "./todoTypes";
 
 interface DayPlanPanelProps {
@@ -26,7 +26,6 @@ interface DayPlanPanelProps {
   onSelectScheduleItem: (item: ScheduleItem) => void;
   onCompleteSchedule: (id: string) => void;
   onToggleSchedule: (id: string, enabled: boolean) => void;
-  onCreateScheduleAt: (date: Date) => void;
 }
 
 function formatDueLabel(ms: number): string {
@@ -58,7 +57,6 @@ export function DayPlanPanel({
   onSelectScheduleItem,
   onCompleteSchedule,
   onToggleSchedule,
-  onCreateScheduleAt,
 }: DayPlanPanelProps) {
   const { items: todos, loadAll: loadTodos, loadBriefing, briefing, completeItem } = useTodoStore();
   const [busyTodo, setBusyTodo] = useState<string | null>(null);
@@ -125,10 +123,12 @@ export function DayPlanPanel({
     [openTodos],
   );
 
-  const nextCount = openTodos.filter((it) => it.bucket === "next").length;
-  const waitingCount = openTodos.filter((it) => it.bucket === "waiting").length;
-  const somedayCount = openTodos.filter((it) => it.bucket === "someday").length;
-  const hasUnscheduled = nextCount + waitingCount + somedayCount > 0;
+  const BUCKET_ORDER: Record<string, number> = { next: 0, waiting: 1, someday: 2 };
+  const unscheduledTodos = openTodos
+    .filter(
+      (it) => it.bucket === "next" || it.bucket === "waiting" || it.bucket === "someday",
+    )
+    .sort((a, b) => (BUCKET_ORDER[a.bucket] ?? 9) - (BUCKET_ORDER[b.bucket] ?? 9));
 
   const top3 = briefing?.top3 ?? [];
   const planCount = daySchedules.length + dayTodos.length;
@@ -147,26 +147,14 @@ export function DayPlanPanel({
     <div className="flex flex-col h-full">
       {/* Date header */}
       <div className="px-4 py-3 border-b border-border/40">
-        <div className="flex items-center justify-between">
-          <div>
-            <div className="text-[14px] font-semibold">
-              {date.getMonth() + 1}月{date.getDate()}日 {weekdayName(date)}
-              {isToday && (
-                <span className="ml-2 text-[11px] text-primary font-normal">今天</span>
-              )}
-            </div>
-            <div className="text-[11px] text-muted-foreground mt-0.5">
-              {planCount} 项计划
-            </div>
-          </div>
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-7 rounded-full text-[12px]"
-            onClick={() => onCreateScheduleAt(date)}
-          >
-            添加
-          </Button>
+        <div className="text-[14px] font-semibold">
+          {date.getMonth() + 1}月{date.getDate()}日 {weekdayName(date)}
+          {isToday && (
+            <span className="ml-2 text-[11px] text-primary font-normal">今天</span>
+          )}
+        </div>
+        <div className="text-[11px] text-muted-foreground mt-0.5">
+          {planCount} 项计划
         </div>
       </div>
 
@@ -232,68 +220,94 @@ export function DayPlanPanel({
           </section>
         )}
 
-        {/* Schedule items */}
-        <section className="mx-3 mt-3">
-          <div className="mb-1.5 text-[12px] font-medium text-muted-foreground">
-            日程 ({daySchedules.length})
+        {/* Schedule items + todos (merged empty state) */}
+        {daySchedules.length === 0 && dayTodos.length === 0 ? (
+          <div className="mx-3 mt-3 py-6 text-center text-[11px] text-muted-foreground">
+            这一天还没有日程或待办
           </div>
-          {daySchedules.length === 0 ? (
-            <div className="rounded-lg border border-dashed border-border/40 p-3 text-center text-[11px] text-muted-foreground">
-              当天没有时间安排
-            </div>
-          ) : (
-            <div className="space-y-1">
-              {daySchedules.map((item) => (
-                <ScheduleRow
-                  key={item.id}
-                  item={item}
-                  onSelect={() => onSelectScheduleItem(item)}
-                  onComplete={() => onCompleteSchedule(item.id)}
-                  onToggle={(enabled) => onToggleSchedule(item.id, enabled)}
-                />
-              ))}
-            </div>
-          )}
-        </section>
+        ) : (
+          <>
+            <section className="mx-3 mt-3">
+              <div className="mb-1.5 text-[12px] font-medium text-muted-foreground">
+                日程 ({daySchedules.length})
+              </div>
+              {daySchedules.length === 0 ? (
+                <div className="px-1 text-[11px] text-muted-foreground">
+                  当天没有日程
+                </div>
+              ) : (
+                <div className="space-y-1">
+                  {daySchedules.map((item) => (
+                    <ScheduleRow
+                      key={item.id}
+                      item={item}
+                      onSelect={() => onSelectScheduleItem(item)}
+                      onComplete={() => onCompleteSchedule(item.id)}
+                      onToggle={(enabled) => onToggleSchedule(item.id, enabled)}
+                    />
+                  ))}
+                </div>
+              )}
+            </section>
 
-        {/* Todos for the day */}
-        <section className="mx-3 mt-3">
-          <div className="mb-1.5 text-[12px] font-medium text-muted-foreground">
-            待办 ({dayTodos.length})
-          </div>
-          {dayTodos.length === 0 ? (
-            <div className="rounded-lg border border-dashed border-border/40 p-3 text-center text-[11px] text-muted-foreground">
-              当天没有待办
-            </div>
-          ) : (
-            <div className="space-y-1">
-              {dayTodos.map((it) => (
-                <TodoRow
-                  key={it.id}
-                  item={it}
-                  busy={busyTodo}
-                  onComplete={() => void handleCompleteTodo(it.id)}
-                />
-              ))}
-            </div>
-          )}
-        </section>
+            <section className="mx-3 mt-3">
+              <div className="mb-1.5 text-[12px] font-medium text-muted-foreground">
+                待办 ({dayTodos.length})
+              </div>
+              {dayTodos.length === 0 ? (
+                <div className="px-1 text-[11px] text-muted-foreground">
+                  当天没有待办
+                </div>
+              ) : (
+                <div className="space-y-1">
+                  {dayTodos.map((it) => (
+                    <TodoRow
+                      key={it.id}
+                      item={it}
+                      busy={busyTodo}
+                      onComplete={() => void handleCompleteTodo(it.id)}
+                    />
+                  ))}
+                </div>
+              )}
+            </section>
+          </>
+        )}
 
-        {/* Unscheduled entry */}
-        {hasUnscheduled && (
+        {/* Unscheduled todos (drag onto the calendar to schedule) */}
+        {unscheduledTodos.length > 0 && (
           <section className="mx-3 mt-3 mb-3">
-            <div className="mb-1.5 text-[12px] font-medium text-muted-foreground">
-              未排期
+            <div className="mb-1.5 flex items-baseline justify-between">
+              <span className="text-[12px] font-medium text-muted-foreground">
+                未排期 ({unscheduledTodos.length})
+              </span>
+              <span className="text-[10px] text-muted-foreground/70">
+                拖到日历上排期
+              </span>
             </div>
             <div className="space-y-0.5">
-              {nextCount > 0 && (
-                <UnscheduledRow label="下一步" count={nextCount} />
-              )}
-              {waitingCount > 0 && (
-                <UnscheduledRow label="等待中" count={waitingCount} />
-              )}
-              {somedayCount > 0 && (
-                <UnscheduledRow label="将来" count={somedayCount} />
+              {unscheduledTodos.slice(0, 6).map((it) => (
+                <div
+                  key={it.id}
+                  draggable
+                  onDragStart={(e) => {
+                    e.dataTransfer.setData(TODO_DRAG_MIME, it.id);
+                    e.dataTransfer.effectAllowed = "move";
+                  }}
+                  className="flex cursor-grab items-center gap-1.5 rounded-md px-2 py-1.5 text-[12px] hover:bg-accent transition-colors"
+                  title="拖到日历上排期"
+                >
+                  <GripVertical className="h-3 w-3 shrink-0 text-muted-foreground/60" />
+                  <span className="flex-1 truncate">{it.title}</span>
+                  <span className="text-[10px] text-muted-foreground">
+                    {it.bucket === "next" ? "下一步" : it.bucket === "waiting" ? "等待" : "将来"}
+                  </span>
+                </div>
+              ))}
+              {unscheduledTodos.length > 6 && (
+                <div className="px-2 text-[10px] text-muted-foreground">
+                  +{unscheduledTodos.length - 6} 项
+                </div>
               )}
             </div>
           </section>
@@ -327,7 +341,7 @@ function ScheduleRow({
       <div
         className={cn(
           "w-0.5 self-stretch rounded-full flex-shrink-0",
-          isAi ? "bg-purple-500" : "bg-blue-500",
+          "bg-primary",
           item.done && "bg-muted",
         )}
       />
@@ -342,6 +356,7 @@ function ScheduleRow({
       </div>
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-1">
+          {isAi && <Bot className="h-3 w-3 flex-shrink-0 text-primary" />}
           <span
             className={cn(
               "truncate text-[12px] font-medium",
@@ -443,20 +458,5 @@ function TodoRow({
         </div>
       </div>
     </div>
-  );
-}
-
-function UnscheduledRow({ label, count }: { label: string; count: number }) {
-  return (
-    <button
-      type="button"
-      className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-[12px] hover:bg-accent transition-colors"
-    >
-      <span className="text-muted-foreground">{label}</span>
-      <span className="flex items-center gap-1 text-muted-foreground">
-        {count}
-        <ChevronRight className="h-3 w-3" />
-      </span>
-    </button>
   );
 }

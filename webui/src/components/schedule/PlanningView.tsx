@@ -7,37 +7,24 @@
  *   │  (top bar: inbox,  │  (selected   │
  *   │   new schedule)    │   date)      │
  *   └────────────────────┴──────────────┘
+ *
+ * Inbox badge count is subscribed directly from todoStore in ScheduleView
+ * and Sidebar, so this component does not need to propagate counts.
  */
 
-import { useCallback, useState } from "react";
+import { useState } from "react";
 
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 
 import { ScheduleView } from "./ScheduleView";
 import { TodoInbox } from "./TodoInbox";
 
-interface PlanningViewProps {
-  onInboxCountChange?: (count: number) => void;
-}
-
-export function PlanningView({ onInboxCountChange }: PlanningViewProps) {
+export function PlanningView() {
   const [inboxOpen, setInboxOpen] = useState(false);
-  const [inboxCount, setInboxCount] = useState(0);
-
-  const handleCountChange = useCallback(
-    (count: number) => {
-      setInboxCount(count);
-      onInboxCountChange?.(count);
-    },
-    [onInboxCountChange],
-  );
 
   return (
     <>
-      <ScheduleView
-        onOpenInbox={() => setInboxOpen(true)}
-        inboxCount={inboxCount}
-      />
+      <ScheduleView onOpenInbox={() => setInboxOpen(true)} />
       <Sheet open={inboxOpen} onOpenChange={setInboxOpen}>
         <SheetContent
           side="right"
@@ -49,7 +36,7 @@ export function PlanningView({ onInboxCountChange }: PlanningViewProps) {
             <SheetTitle className="text-[14px]">收集箱</SheetTitle>
           </SheetHeader>
           <div className="min-h-0 flex-1 overflow-hidden">
-            <TodoInbox onCountChange={handleCountChange} />
+            <TodoInbox />
           </div>
         </SheetContent>
       </Sheet>

@@ -1,9 +1,14 @@
 /** Month calendar grid view. */
 
-import { ChevronLeft, ChevronRight, Plus } from "lucide-react";
-import { useMemo, useState } from "react";
+import { Bot, ChevronDown, ChevronLeft, ChevronRight, Plus } from "lucide-react";
+import { useMemo, useState, type ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 
 import {
@@ -17,20 +22,28 @@ import type { ScheduleItem } from "./types";
 
 interface CalendarMonthProps {
   items: ScheduleItem[];
+  /** Seed for the displayed month (e.g. the currently selected date). */
+  initialCursor?: Date;
   onSelectDate: (date: Date) => void;
   onSelectItem: (item: ScheduleItem) => void;
   onCreateAt: (date: Date) => void;
+  /** Extra actions rendered on the right side of the toolbar row. */
+  toolbarActions?: ReactNode;
 }
 
 const WEEKDAY_HEADERS = ["一", "二", "三", "四", "五", "六", "日"];
 
 export function CalendarMonth({
   items,
+  initialCursor,
   onSelectDate,
   onSelectItem,
   onCreateAt,
+  toolbarActions,
 }: CalendarMonthProps) {
-  const [cursor, setCursor] = useState(() => startOfDay(new Date()));
+  const [cursor, setCursor] = useState(() => startOfDay(initialCursor ?? new Date()));
+  const [monthPickerOpen, setMonthPickerOpen] = useState(false);
+  const [pickerYear, setPickerYear] = useState(() => new Date().getFullYear());
   const today = startOfDay(new Date());
 
   const gridDates = useMemo(() => monthGridDates(cursor), [cursor]);
@@ -61,6 +74,13 @@ export function CalendarMonth({
   };
   const goToday = () => setCursor(startOfDay(new Date()));
 
+  const jumpToMonth = (year: number, month: number) => {
+    const d = new Date(cursor);
+    d.setFullYear(year, month, 1);
+    setCursor(startOfDay(d));
+    setMonthPickerOpen(false);
+  };
+
   return (
     <div className="flex flex-col h-full">
       {/* Toolbar */}
@@ -69,9 +89,64 @@ export function CalendarMonth({
           <Button variant="ghost" size="icon" onClick={goPrev} className="h-6 w-6">
             <ChevronLeft className="h-3.5 w-3.5" />
           </Button>
-          <span className="text-sm font-semibold min-w-[100px] text-center">
-            {monthLabel}
-          </span>
+          <DropdownMenu
+            open={monthPickerOpen}
+            onOpenChange={(open) => {
+              setMonthPickerOpen(open);
+              if (open) setPickerYear(cursor.getFullYear());
+            }}
+          >
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 min-w-[104px] gap-0.5 px-1.5 text-sm font-semibold"
+              >
+                {monthLabel}
+                <ChevronDown className="h-3 w-3 text-muted-foreground" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-[224px] p-2">
+              <div className="flex items-center justify-between px-1 pb-2">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-6 w-6"
+                  onClick={() => setPickerYear((y) => y - 1)}
+                >
+                  <ChevronLeft className="h-3.5 w-3.5" />
+                </Button>
+                <span className="text-sm font-medium">{pickerYear}年</span>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-6 w-6"
+                  onClick={() => setPickerYear((y) => y + 1)}
+                >
+                  <ChevronRight className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+              <div className="grid grid-cols-4 gap-1">
+                {Array.from({ length: 12 }, (_, m) => {
+                  const isCursorMonth =
+                    pickerYear === cursor.getFullYear() && m === cursor.getMonth();
+                  return (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => jumpToMonth(pickerYear, m)}
+                      className={cn(
+                        "rounded-md py-1 text-[12px] hover:bg-accent",
+                        isCursorMonth && "bg-primary/10 font-medium text-primary",
+                      )}
+                    >
+                      {m + 1}月
+                    </button>
+                  );
+                })}
+              </div>
+            </DropdownMenuContent>
+          </DropdownMenu>
           <Button variant="ghost" size="icon" onClick={goNext} className="h-6 w-6">
             <ChevronRight className="h-3.5 w-3.5" />
           </Button>
@@ -79,6 +154,9 @@ export function CalendarMonth({
             今天
           </Button>
         </div>
+        {toolbarActions && (
+          <div className="flex items-center gap-2">{toolbarActions}</div>
+        )}
       </div>
 
       {/* Weekday header */}
@@ -92,12 +170,10 @@ export function CalendarMonth({
 
       {/* Grid */}
       <div className="grid grid-cols-7 flex-1 overflow-hidden">
-        {gridDates.map((date, idx) => {
+        {gridDates.map((date) => {
           const dayItems = itemsByDay.get(startOfDay(date).toISOString()) ?? [];
           const inMonth = isSameMonth(date, cursor);
           const isToday = isSameDay(date, today);
-          const col = idx % 7;
-          const isWeekend = col >= 5;
           return (
             <div
               key={date.toISOString()}
@@ -105,9 +181,8 @@ export function CalendarMonth({
                 onSelectDate(date);
               }}
               className={cn(
-                "group border-r border-b border-border/50 min-h-[80px] p-1 cursor-pointer hover:bg-accent transition-colors overflow-hidden",
-                !inMonth && "bg-muted/30 text-muted-foreground",
-                isWeekend && "bg-muted/20",
+                "group border-b border-border/50 min-h-[80px] p-1 cursor-pointer hover:bg-accent transition-colors overflow-hidden",
+                !inMonth && "text-muted-foreground",
               )}
             >
               <div className="flex items-center justify-between mb-0.5">
@@ -145,21 +220,23 @@ export function CalendarMonth({
                       onSelectItem(item);
                     }}
                     className={cn(
-                      "w-full text-left text-[11px] px-1 py-0.5 rounded truncate flex items-center gap-1",
-                      item.kind === "ai_task"
-                        ? "bg-purple-100 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300"
-                        : "bg-blue-100 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300",
-                      item.done && "opacity-50 line-through",
-                      !item.enabled && "opacity-50",
+                      "flex w-full items-center gap-1 rounded px-1 py-0.5 text-left text-[11px] hover:bg-accent",
+                      (item.done || !item.enabled) && "opacity-50",
                     )}
                     title={item.title}
                   >
+                    <span className="h-3 w-0.5 flex-shrink-0 rounded-full bg-primary" />
                     {!item.allDay && (
-                      <span className="font-mono text-[10px] opacity-70">
+                      <span className="font-mono text-[10px] text-muted-foreground">
                         {formatTime(item.startAtMs)}
                       </span>
                     )}
-                    <span className="truncate">{item.title}</span>
+                    {item.kind === "ai_task" && (
+                      <Bot className="h-3 w-3 flex-shrink-0 text-primary" />
+                    )}
+                    <span className={cn("truncate", item.done && "line-through")}>
+                      {item.title}
+                    </span>
                   </button>
                 ))}
                 {dayItems.length > 3 && (

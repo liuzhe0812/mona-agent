@@ -1,8 +1,10 @@
 /** Schedule module main view: calendar + day list + edit dialog.
  *
- * Receives `onOpenInbox` to trigger the inbox drawer and `inboxCount` to
- * show the badge on the inbox button. Pending email-extracted schedules
- * are no longer shown inline — they are surfaced in the inbox drawer.
+ * Receives `onOpenInbox` to trigger the inbox drawer.
+ * Inbox badge count is subscribed directly from todoStore so it stays
+ * in sync even when the inbox drawer is closed.
+ * Pending email-extracted schedules are no longer shown inline —
+ * they are surfaced in the inbox drawer.
  */
 
 import { useEffect, useState } from "react";
@@ -11,18 +13,21 @@ import { Inbox as InboxIcon, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 import { CalendarMonth } from "./CalendarMonth";
+import { CalendarWeek } from "./CalendarWeek";
 import { DayPlanPanel } from "./DayPlanPanel";
 import { startOfDay } from "./dateUtils";
 import { ScheduleDialog } from "./ScheduleDialog";
 import { useScheduleStore } from "./scheduleStore";
+import { useTodoStore } from "./todoStore";
 import type { ScheduleItem, ScheduleItemInput } from "./types";
+import { isCalendarViewMode, ViewSwitcher, type CalendarViewMode } from "./ViewSwitcher";
 
 interface ScheduleViewProps {
   onOpenInbox: () => void;
-  inboxCount: number;
 }
 
-export function ScheduleView({ onOpenInbox, inboxCount }: ScheduleViewProps) {
+export function ScheduleView({ onOpenInbox }: ScheduleViewProps) {
+  const inboxCount = useTodoStore((s) => s.inboxCount);
   const {
     items,
     error,
@@ -35,9 +40,18 @@ export function ScheduleView({ onOpenInbox, inboxCount }: ScheduleViewProps) {
   } = useScheduleStore();
 
   const [selectedDate, setSelectedDate] = useState<Date>(() => startOfDay(new Date()));
+  const [viewMode, setViewMode] = useState<CalendarViewMode>(() => {
+    const saved = localStorage.getItem("schedule.viewMode");
+    return isCalendarViewMode(saved) ? saved : "week";
+  });
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<ScheduleItem | null>(null);
   const [dialogDefaultStart, setDialogDefaultStart] = useState<Date | undefined>(undefined);
+
+  const handleViewModeChange = (mode: CalendarViewMode) => {
+    setViewMode(mode);
+    localStorage.setItem("schedule.viewMode", mode);
+  };
 
   useEffect(() => {
     void loadItems();
@@ -78,6 +92,36 @@ export function ScheduleView({ onOpenInbox, inboxCount }: ScheduleViewProps) {
   const inboxBadgeText =
     inboxCount > 0 ? (inboxCount > 99 ? "99+" : String(inboxCount)) : null;
 
+  const toolbarActions = (
+    <>
+      <ViewSwitcher mode={viewMode} onChange={handleViewModeChange} />
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        className="relative h-7 gap-1.5 px-2 text-[12px]"
+        onClick={onOpenInbox}
+      >
+        <InboxIcon className="h-3.5 w-3.5" />
+        收集箱
+        {inboxBadgeText && (
+          <span className="pointer-events-none absolute -right-1 -top-1 flex min-w-[16px] h-[16px] items-center justify-center rounded-full bg-red-500 px-1 text-[9px] font-medium leading-none text-white">
+            {inboxBadgeText}
+          </span>
+        )}
+      </Button>
+      <Button
+        type="button"
+        size="sm"
+        className="h-7 gap-1 rounded-full px-2.5 text-[12px]"
+        onClick={() => openCreate(selectedDate)}
+      >
+        <Plus className="h-3.5 w-3.5" />
+        新建日程
+      </Button>
+    </>
+  );
+
   return (
     <div className="flex h-full w-full bg-background">
       {/* Calendar area */}
@@ -88,41 +132,26 @@ export function ScheduleView({ onOpenInbox, inboxCount }: ScheduleViewProps) {
           </div>
         )}
 
-        {/* Top toolbar: month nav is inside CalendarMonth; inbox + new here */}
-        <div className="flex items-center justify-end gap-2 border-b border-border/40 px-3 py-1.5">
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="h-7 gap-1.5 px-2 text-[12px]"
-            onClick={onOpenInbox}
-          >
-            <InboxIcon className="h-3.5 w-3.5" />
-            收集箱
-            {inboxBadgeText && (
-              <span className="ml-0.5 rounded-full bg-primary px-1.5 text-[10px] font-medium text-primary-foreground">
-                {inboxBadgeText}
-              </span>
-            )}
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            className="h-7 gap-1 rounded-full px-2.5 text-[12px]"
-            onClick={() => openCreate(selectedDate)}
-          >
-            <Plus className="h-3.5 w-3.5" />
-            新建日程
-          </Button>
-        </div>
-
         <div className="flex-1 overflow-hidden">
-          <CalendarMonth
-            items={items}
-            onSelectDate={setSelectedDate}
-            onSelectItem={openEdit}
-            onCreateAt={openCreate}
-          />
+          {viewMode === "month" ? (
+            <CalendarMonth
+              items={items}
+              initialCursor={selectedDate}
+              onSelectDate={setSelectedDate}
+              onSelectItem={openEdit}
+              onCreateAt={openCreate}
+              toolbarActions={toolbarActions}
+            />
+          ) : (
+            <CalendarWeek
+              mode={viewMode}
+              items={items}
+              initialCursor={selectedDate}
+              onSelectItem={openEdit}
+              onCreateAt={openCreate}
+              toolbarActions={toolbarActions}
+            />
+          )}
         </div>
       </div>
 
@@ -134,7 +163,6 @@ export function ScheduleView({ onOpenInbox, inboxCount }: ScheduleViewProps) {
           onSelectScheduleItem={openEdit}
           onCompleteSchedule={handleComplete}
           onToggleSchedule={handleToggle}
-          onCreateScheduleAt={openCreate}
         />
       </div>
 

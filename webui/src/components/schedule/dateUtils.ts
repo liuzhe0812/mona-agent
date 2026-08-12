@@ -53,6 +53,18 @@ export function monthGridDates(monthDate: Date): Date[] {
   return dates;
 }
 
+/** Build the 7 dates (Mon-Sun) of the week containing the given date. */
+export function weekGridDates(date: Date): Date[] {
+  const weekStart = startOfWeek(date);
+  const dates: Date[] = [];
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(weekStart);
+    d.setDate(weekStart.getDate() + i);
+    dates.push(d);
+  }
+  return dates;
+}
+
 /** Check if two dates are the same calendar day. */
 export function isSameDay(a: Date, b: Date): boolean {
   return (
