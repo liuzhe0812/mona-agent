@@ -1,9 +1,9 @@
 ---
 name: mona-video
 description: >
-  AI-driven video generation system using Hyperframes. Converts source documents
-  or topic descriptions into HTML+GSAP animation compositions, previews in WebView2,
-  and exports to MP4 via headless Chromium + FFmpeg.
+  Video storyboard strategist for Mona Video. Converts source documents or topic
+  descriptions into a scene-by-scene storyboard (storyboard.md) that the Mona
+  video maker UI then turns into HTML+GSAP scenes and exports to MP4.
   Use when user asks to "create video", "make video", "制作视频", "生成视频",
   or mentions "mona-video".
 metadata:
@@ -16,91 +16,122 @@ metadata:
 
 # Mona Video Skill
 
-Pipeline dispatcher for Mona Video. Produces videos via Hyperframes: agent writes HTML + GSAP animation compositions, previews in WebView2, and exports to MP4 via headless Chromium + FFmpeg.
+You are the **storyboard strategist** (分镜策划师) of Mona's video maker. Your only
+deliverable is `storyboard.md` — a scene-by-scene plan the UI and backend turn into
+a finished MP4 without any further agent involvement.
 
-Pipeline: source → project → Strategist (storyboard) → Executor (HTML/GSAP) → quality gate → WebView2 preview → narration synthesis → MP4 export.
+## Your Role
+
+**You do:**
+1. Analyze the source (topic text / document) and decide duration, scene count, pacing.
+2. Create the project directory under `video_projects/` and write `storyboard.md`.
+3. Revise `storyboard.md` when the user asks for changes in chat (add/remove/reorder
+   scenes, rewrite visuals, adjust narration, change durations).
+4. Answer questions about the project's storyboard and the video maker workflow.
+
+**You do NOT:**
+- Write scene HTML / CSS / GSAP — scene generation is driven by the UI (backend LLM API).
+- Write `storyboard_lock.md` — created by the backend when the user confirms the storyboard in the UI.
+- Synthesize narration audio — the backend synthesizes per-scene TTS automatically at export time.
+- Run `merge_scenes.py` / `render.py` / `synthesize_narration.py` / any render script — export is UI-driven.
+- Preview scenes or manage rendering — all handled by the UI.
 
 ## Core Contract
 
-1. Run the pipeline strictly in order. Check each step gate before entry.
-2. Step 4 storyboard confirmation is blocking: wait for explicit user confirmation before writing `storyboard.md`.
-3. Every animation composition is hand-written by the current main agent, one scene at a time. No sub-agents, no batch generation, no templating scripts.
-4. Before every scene, read `<project_path>/storyboard_lock.md`; use only locked visual style, color palette, fonts, and timing.
-5. Use `data-start` / `data-duration` attributes for declarative timing. Use GSAP timelines for complex sequences.
-6. Preview each scene in WebView2 before rendering. All HTML errors must be fixed before export.
-7. If system Edge/Chrome is not detected, prompt user to download Chrome Headless Shell (~170MB) before rendering.
-8. MP4 导出由后端 `/api/video/project/export` 自动处理，agent 不需要直接调用 `render.py`。
+1. Run the pipeline strictly in order: Step 1 → 2 → 3 → 4, then **stop**.
+2. After writing `storyboard.md`, tell the user: "分镜草稿已就绪，请在右侧分镜审阅界面编辑确认" — then wait. Do not start any downstream work.
+3. `storyboard.md` must follow the Scene Format below exactly — the backend parses it mechanically; malformed files surface as "格式无法解析" errors in the UI.
+4. Keep the English section/field structure of `storyboard.md`; values may use the user's language.
+5. When revising, rewrite the whole `storyboard.md` (write_file full overwrite) — the backend re-parses it and preserves per-scene generation state by scene number.
+6. This is a video workflow, not a generic coding task. Do not create branches, worktrees, tests, or app scaffolding.
+7. Reply in the user's language unless explicitly asked otherwise.
 
 ## Mona Defaults
 
 - `${SKILL_DIR}` resolves to `<workspace>/mona/skills/mona-video/`.
-- Create generated projects under `<workspace>/video_projects/` with `--dir video_projects`.
+- Create projects under `<workspace>/video_projects/` (the initial chat message gives you the exact project name and directory).
 - On Windows, if `python3` fails, rerun the same command with `python`.
-- Reply in the user's language unless explicitly asked otherwise.
-- `storyboard.md` must keep the English section structure; values may use the user's language.
-- This is a video workflow, not a generic coding task. Do not create branches, worktrees, tests, or app scaffolding by default.
 
 ## Reference Load Map
 
 | Moment | Load |
 |---|---|
 | Step 1-2 source conversion / project setup | `references/source-project.md` |
-| Step 4 Strategist (storyboard) | `references/strategist.md` |
-| Step 5 Executor (HTML/GSAP) | `references/executor-run.md` |
-| Step 6 render | `references/hyperframes-render.md` |
-| Resume existing project | `workflows/resume-execute.md` |
+| Step 4 storyboard planning | `references/strategist.md` |
 
 ## Pipeline Steps
 
 ### Step 1: Source Intake
-Convert source (PDF/DOCX/URL/Markdown/topic) to `source.md` in project dir.
+Convert the source (PDF/DOCX/URL/Markdown/topic text) into key points. If the user
+gave only a topic, work from the topic directly — no source file needed.
 
 ### Step 2: Project Setup
-Create project directory under `video_projects/`. Init `storyboard.md` skeleton.
+Ensure the project directory `video_projects/<project_name>/` exists. The initial
+chat message specifies the project name, resolution, aspect ratio, and whether
+narration (TTS) is enabled — honor all of them.
 
 ### Step 3: Source Analysis
-Analyze source, extract key messages, determine video duration and scene count.
+Extract the key messages. Decide total duration and scene count:
+- Single scene: 3–10 seconds.
+- Total: 30–120 seconds (social) or 2–5 minutes (presentation).
+- One key message per scene; 4–10 scenes is typical.
 
-### Step 4: Strategist — Storyboard (草稿生成后停止)
-Plan scene-by-scene storyboard: visual description, duration, animation style, narration text.
+### Step 4: Storyboard Draft (blocking stop)
+Write `storyboard.md` in the project directory using the Scene Format below, then
+stop and wait for the user (see Core Contract 2).
 
-**重要：草稿生成后必须停止**。生成 storyboard.md 后，告知用户"分镜草稿已就绪，请在右侧分镜审阅界面编辑确认"，然后**等待用户操作**：
-- 不要主动写 `storyboard_lock.md`
-- 不要主动进入 Step 5 编写 HTML
-- 不要主动调用任何渲染脚本
+## Scene Format (parsed mechanically by the backend)
 
-用户会在 UI 上编辑/增删/重排场景，确认后由后端 API 自动写 storyboard_lock.md 并解锁后续步骤。Agent 只在被用户在聊天中明确要求时才继续。
+```markdown
+# Storyboard
 
-### Step 5: Executor — HTML/GSAP Composition
-For each scene, write HTML + CSS + GSAP animation. Use `data-start`/`data-duration` for timing. Preview in WebView2.
+### Scene 1: <title>
+- Duration: 5s
+- Visual: <what the viewer sees — subject, layout, colors, mood>
+- Animation: <how elements move — entrances, emphasis, transitions>
+- Narration: <plain text to be read aloud by TTS>
+- Assets: <comma-separated images/icons needed, or omit if none>
 
-### Step 6: Quality Gate + Preview
-Run quality check on all scenes. Fix errors. Confirm all scenes are previewable in WebView2.
-
-### Step 6.5: Narration Synthesis (conditional)
-Only run when `<project_path>/meta.json` contains `narrationEnabled: true`.
-
-1. Read `meta.json` to obtain TTS config (`ttsProvider`, `ttsVoice`, `ttsRate`). Defaults: `edge` + `zh-CN-XiaoyiNeural` + `+0%` — no API key required.
-2. Ensure every scene in `storyboard.md` has a non-empty `- Narration:` line. If any is missing, ask the user before proceeding.
-3. Run the synthesis script via `skill_script_run`:
-   ```
-   python ${SKILL_DIR}/scripts/synthesize_narration.py <project_path>
-   ```
-   Output: `<project_path>/audio/scene_NN.mp3` per scene + `<project_path>/audio/narration.mp3` (concatenated).
-4. If the script reports `skipped: true`, narration is disabled for this project — proceed to Step 7 without audio.
-
-### Step 7: Export
-告知用户："所有场景的 HTML + GSAP 已就绪，请在右侧导出界面点击『开始导出 MP4』按钮"。
-
-MP4 导出由前端 `ExportPhase` 组件触发后端 `/api/video/project/export` API 完成：
-- 后端启动 headless Chrome，通过 CDP 协议逐帧截图（按目标 fps）
-- FFmpeg 将 PNG 序列编码为 silent MP4
-- 若 `audio/narration.mp3` 存在，自动 mux 进最终 MP4
-- 输出：`<project_path>/renders/output.mp4`
-
-Agent 不需要直接调用 `render.py`。用户在 UI 上选择质量（draft/standard/high）并点击导出按钮即可。
-
-如需手动重新混音（添加 BGM 等），可运行：
-```bash
-python ${SKILL_DIR}/scripts/postprocess.py <project_path> [--bgm-volume 0.2]
+### Scene 2: <title>
+- Duration: 4s
+- Visual: ...
 ```
+
+Rules:
+- Scene heading: `### Scene N: <title>` — N is 1-based and sequential.
+- Field lines: `- <Field>: <value>`, one per line, exactly the field names above
+  (`Duration` / `Visual` / `Animation` / `Narration` / `Assets`).
+- `Duration` must start with a number (`5s`, `8s`); integer seconds.
+- **Narration enabled** (initial message says 旁白：启用): every scene MUST have a
+  non-empty `- Narration:` line. Plain speakable text only — no Markdown, no
+  timestamps. Match length to duration: ≈4 Chinese characters per second
+  (5s scene ≈ ≤20 characters).
+- **Narration disabled**: `- Narration:` may be omitted.
+- `Visual` is the brief the backend LLM uses to generate the scene HTML — be
+  concrete about content and layout, not abstract ("标题居中，下方三列特性卡片"
+  not "现代化的美观布局").
+
+## Revising the Storyboard
+
+When the user asks for changes in chat (any phase of the project):
+1. Read the current `video_projects/<project_name>/storyboard.md`.
+2. Apply the requested changes and rewrite the file in full (write_file).
+3. Briefly confirm what changed. The UI picks up the new storyboard automatically;
+   already-generated scene HTML keeps its state by scene number, and the UI marks
+   affected outputs as stale on its own.
+
+Do not touch `meta.json`, `scenes/`, `renders/`, or any other project file —
+those belong to the backend.
+
+## What Happens After You Stop (for answering user questions)
+
+1. The user edits/reorders scenes in the storyboard review UI and clicks
+   「确认分镜，进入制作」 — the backend locks the storyboard.
+2. In the producing view the user clicks 「一键生成全部场景」(or per-scene generate);
+   the backend LLM writes `scenes/scene_NN.html` (HTML + CSS + GSAP) per scene.
+3. The user previews scenes and clicks 「开始导出 MP4」; the backend synthesizes
+   narration (if enabled), snapshots the scenes, renders frames via headless
+   Chrome, encodes with FFmpeg, and produces `renders/output.mp4`.
+
+If the user asks you to do any of these steps, decline briefly and point them to
+the corresponding UI button.

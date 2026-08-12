@@ -69,7 +69,7 @@ function formatRelativeTime(epoch: number): string {
 }
 
 export function VideoHistory({ currentProjectName, collapsed = false, refreshKey = 0, onSelect, onDelete }: VideoHistoryProps) {
-  const { token } = useClient();
+  const { client, token } = useClient();
   const workspacePath = useWorkspaceStore((s) => s.workspacePath);
   const [projects, setProjects] = useState<VideoProject[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -79,8 +79,9 @@ export function VideoHistory({ currentProjectName, collapsed = false, refreshKey
   const [deleteError, setDeleteError] = useState<{ name: string; message: string } | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
-  const loadProjects = useCallback(async () => {
-    setLoading(true);
+  // silent=true: background refresh (WS push) — skip the loading spinner.
+  const loadProjects = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const res = await fetchVideoProjects(token);
       setProjects(res.projects ?? []);
@@ -88,13 +89,21 @@ export function VideoHistory({ currentProjectName, collapsed = false, refreshKey
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : "加载历史项目失败");
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [token]);
 
   useEffect(() => {
     void loadProjects();
   }, [loadProjects, refreshKey]);
+
+  // WS subscription: phase migrations and render completion update the phase
+  // labels / hasVideo badges in place — no manual refresh needed.
+  useEffect(() => {
+    return client.onVideoProjectChanged(({ hint }) => {
+      if (hint === "phase" || hint === "status") void loadProjects(true);
+    });
+  }, [client, loadProjects]);
 
   const handleDelete = async (name: string) => {
     if (deleting) return;

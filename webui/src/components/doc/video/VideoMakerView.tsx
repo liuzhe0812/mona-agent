@@ -23,6 +23,7 @@ import {
   type VideoRuntimeStatus,
 } from "@/lib/api";
 import { EDGE_TTS_VOICES } from "@/lib/constants";
+import { generateProjectName } from "@/lib/project-name";
 import { useBreakpoint } from "@/hooks/useBreakpoint";
 import { cn } from "@/lib/utils";
 import { DocChatPanel } from "../DocChatPanel";
@@ -47,6 +48,17 @@ const TTS_PROVIDERS: Array<{ value: TtsProvider; label: string; hint: string }> 
 ];
 
 const CUSTOM_VOICE_PLACEHOLDER = "alloy";
+
+/** 语速选项（百分比），默认 0 表示正常语速。 */
+const TTS_RATE_OPTIONS = [
+  { value: "+0%", label: "正常" },
+  { value: "+10%", label: "稍快 (+10%)" },
+  { value: "+20%", label: "较快 (+20%)" },
+  { value: "+30%", label: "很快 (+30%)" },
+  { value: "-10%", label: "稍慢 (-10%)" },
+  { value: "-20%", label: "较慢 (-20%)" },
+  { value: "-30%", label: "很慢 (-30%)" },
+] as const;
 
 const RATIO_RESOLUTION_MAP: Record<VideoRatio, string> = {
   "16:9": "1920x1080",
@@ -97,6 +109,9 @@ export function VideoMakerView() {
   const [ttsVoice, setTtsVoice] = useState("");
   const [ttsRate, setTtsRate] = useState("");
   const [phase, setPhase] = useState<VideoPhase>("config");
+  // 视图模式与服务端 phase 解耦：phase 驱动步骤条高亮，viewMode 驱动视图。
+  // 步骤条点击回退只改 viewMode，不回退服务端阶段。
+  const [viewMode, setViewMode] = useState<"storyboard" | "producing">("storyboard");
   const [chatId, setChatId] = useState<string | null>(null);
   const [projectName, setProjectName] = useState<string | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
@@ -164,37 +179,6 @@ export function VideoMakerView() {
     } catch {}
   }, [sidebarWidth]);
 
-  // Poll project status during storyboard phase (AI is generating storyboard.md)
-  useEffect(() => {
-    if (phase !== "storyboard" || !projectName) return;
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout>;
-
-    async function poll() {
-      if (cancelled) return;
-      try {
-        const res = await fetchVideoProject(token, projectName!);
-        if (cancelled) return;
-        if (res.hasStoryboard) {
-          // Storyboard is ready — StoryboardPhase will load and display it
-          return;
-        }
-      } catch {
-        // ignore transient errors
-      }
-      if (!cancelled) {
-        timer = setTimeout(poll, 2000);
-      }
-    }
-
-    poll();
-
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [phase, projectName, token]);
-
   const refreshRuntimeStatus = useCallback(async (): Promise<boolean> => {
     try {
       const status = await fetchVideoRuntimeCheck(token);
@@ -247,7 +231,15 @@ export function VideoMakerView() {
     setCreateError(null);
     generatingRef.current = true;
     try {
-      const name = generateProjectName(topic);
+      // 拉取已有项目名用于重名去重；失败不阻塞创建（服务端 409 兜底）
+      let existingNames: string[] = [];
+      try {
+        const res = await fetchVideoProjects(token);
+        existingNames = res.projects.map((p) => p.name);
+      } catch {
+        // best-effort
+      }
+      const name = generateProjectName(topic, existingNames, "未命名视频");
       setProjectName(name);
       const resolution = RATIO_RESOLUTION_MAP[ratio];
       const ttsConfig = narrationEnabled
@@ -285,6 +277,7 @@ export function VideoMakerView() {
       // 4. Send prompt
       client.sendMessage(newChatId, prompt, undefined, { displayContent: displayText });
       setPhase("storyboard");
+      setViewMode("storyboard");
       setHistoryKey((k) => k + 1);
     } catch (e) {
       console.error("Failed to start video generation", e);
@@ -328,6 +321,8 @@ export function VideoMakerView() {
     setChatId(project.chatId);
     // Route by the server-recorded phase: storyboard → 分镜页,其他均进入制作页
     setPhase(project.phase);
+    // 初始 viewMode 由服务端 phase 推导；之后步骤条点击只改 viewMode
+    setViewMode(project.phase === "storyboard" ? "storyboard" : "producing");
   }, []);
 
   const handleDeleteProject = useCallback(
@@ -346,12 +341,20 @@ export function VideoMakerView() {
 
   const handleNewProject = useCallback(() => {
     setPhase("config");
+    setViewMode("storyboard");
     setProjectName(null);
     setChatId(null);
     setCreateError(null);
     try {
       localStorage.removeItem(ACTIVE_PROJECT_KEY);
     } catch {}
+  }, []);
+
+  // StoryboardPhase 完成回调：首次锁定推进阶段到 producing；已锁定项目回看
+  // 分镜后返回只切视图，不改服务端 phase（done/exportable 不回退）。
+  const handleStoryboardDone = useCallback(() => {
+    setPhase((prev) => (prev === "storyboard" ? "producing" : prev));
+    setViewMode("producing");
   }, []);
 
   // ProducingPhase 阶段回传：驱动步骤条；渲染完成时刷新历史列表状态
@@ -364,6 +367,25 @@ export function VideoMakerView() {
       setHistoryKey((k) => k + 1);
     }
   }, []);
+
+  // WS-driven phase sync: the services process pushes video_project_changed on
+  // phase migrations (lock / export start / render done|error). Replaces the
+  // old 2s storyboard poll (which fetched but never applied anything).
+  useEffect(() => {
+    if (!projectName) return;
+    return client.onVideoProjectChanged(({ projectName: name, hint }) => {
+      if (name !== projectName) return;
+      if (hint !== "phase" && hint !== "status") return;
+      void (async () => {
+        try {
+          const res = await fetchVideoProject(token, projectName);
+          if (res.phase) handleProjectPhaseChange(res.phase);
+        } catch {
+          // ignore transient errors
+        }
+      })();
+    });
+  }, [client, projectName, token, handleProjectPhaseChange]);
 
   // Persist only the active project name; the authoritative phase is always
   // read back from the server on restore.
@@ -546,10 +568,21 @@ export function VideoMakerView() {
         )}
 
         <div className="flex min-h-0 flex-1 flex-col">
-          {/* 步骤条 */}
+          {/* 步骤条：phase 驱动高亮；有项目时「编辑分镜」可点击回退，
+              「制作场景」「导出交付」在分镜锁定后可点击前进（同一视图） */}
           <div className="flex shrink-0 items-center justify-center gap-1 border-b border-border/70 bg-background px-4 py-3">
             {STEPS.map((step, i) => {
               const status = getStepStatus(i, phase);
+              const navTarget =
+                i === 1 ? ("storyboard" as const)
+                : i === 2 || i === 3 ? ("producing" as const)
+                : null;
+              const navEnabled =
+                navTarget === "storyboard"
+                  ? projectName != null
+                  : navTarget === "producing"
+                    ? projectName != null && phase !== "config" && phase !== "storyboard"
+                    : false;
               return (
                 <div key={step.label} className="flex items-center">
                   {i > 0 && (
@@ -560,7 +593,16 @@ export function VideoMakerView() {
                       )}
                     />
                   )}
-                  <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    disabled={!navEnabled}
+                    onClick={navTarget && navEnabled ? () => setViewMode(navTarget) : undefined}
+                    aria-label={navTarget ? `切换到${step.label}` : step.label}
+                    className={cn(
+                      "flex items-center gap-1.5 rounded-md px-1 py-0.5 transition-colors",
+                      navEnabled ? "hover:bg-accent" : "cursor-default",
+                    )}
+                  >
                     <div
                       className={cn(
                         "flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-medium",
@@ -585,7 +627,7 @@ export function VideoMakerView() {
                     >
                       {step.label}
                     </span>
-                  </div>
+                  </button>
                 </div>
               );
             })}
@@ -758,12 +800,18 @@ export function VideoMakerView() {
                           <div className="mb-1 text-[11px] text-muted-foreground">
                             语速
                           </div>
-                          <Input
-                            value={ttsRate}
-                            onChange={(e) => setTtsRate(e.target.value)}
-                            placeholder="+0%"
+                          <select
                             aria-label="语速"
-                          />
+                            className="w-full rounded-lg border border-border/70 bg-transparent px-3 py-1.5 text-[13px] outline-none focus:border-primary"
+                            value={ttsRate || "+0%"}
+                            onChange={(e) => setTtsRate(e.target.value)}
+                          >
+                            {TTS_RATE_OPTIONS.map((r) => (
+                              <option key={r.value} value={r.value}>
+                                {r.label}
+                              </option>
+                            ))}
+                          </select>
                         </div>
                       </div>
                     ) : null}
@@ -798,23 +846,22 @@ export function VideoMakerView() {
                 </div>
               </div>
             </div>
-          ) : phase === "storyboard" ? (
-            <div className="flex min-h-0 flex-1">
-              <div className="min-w-0 flex-1">
-                <StoryboardPhase
-                  projectName={projectName ?? ""}
-                  onLocked={() => setPhase("producing")}
-                  refreshTrigger={aiTurnComplete}
-                />
-              </div>
-              <div className="w-[400px] shrink-0 border-l border-border/70">
-                <DocChatPanel
-                  chatId={chatId}
-                  onSend={handleSendMessage}
-                  onStreamingChange={handleStreamingChange}
-                  placeholder="与视频助手对话调整分镜..."
-                />
-              </div>
+          ) : viewMode === "storyboard" ? (
+            <div className="h-full min-h-0">
+              <StoryboardPhase
+                projectName={projectName ?? ""}
+                onLocked={handleStoryboardDone}
+                refreshTrigger={aiTurnComplete}
+                alreadyLocked={phase !== "storyboard"}
+                chatPanel={
+                  <DocChatPanel
+                    chatId={chatId}
+                    onSend={handleSendMessage}
+                    onStreamingChange={handleStreamingChange}
+                    placeholder="与视频助手对话调整分镜..."
+                  />
+                }
+              />
             </div>
           ) : (
             <ProducingPhase
@@ -835,31 +882,6 @@ export function VideoMakerView() {
       />
     </div>
   );
-}
-
-function generateProjectName(topic: string): string {
-  const now = new Date();
-  const pad = (n: number) => String(n).padStart(2, "0");
-  const ts = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}`;
-  const rand = Math.random().toString(36).slice(2, 6);
-
-  const raw = topic.trim();
-  if (!raw) {
-    return `${ts}-${rand}`;
-  }
-
-  const slug = raw
-    .toLowerCase()
-    .replace(/[^\w一-龥\s-]/g, "")
-    .replace(/\s+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "")
-    .slice(0, 30);
-
-  if (!slug) {
-    return `${ts}-${rand}`;
-  }
-  return `${slug}-${ts}-${rand}`;
 }
 
 function buildVideoPrompt(opts: {

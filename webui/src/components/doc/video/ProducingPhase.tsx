@@ -43,7 +43,6 @@ import {
   ApiError,
   buildVideoDownloadUrl,
   buildVideoPreviewFullUrl,
-  confirmVideoScene,
   downloadVideoRuntime,
   exportVideoProject,
   fetchSceneNarrationBytes,
@@ -168,7 +167,7 @@ function ScenePreviewFrame({
 }
 
 export function ProducingPhase({ projectName, onPhaseChange }: ProducingPhaseProps) {
-  const { token } = useClient();
+  const { client, token } = useClient();
   const workspacePath = useWorkspaceStore((s) => s.workspacePath);
   const [scenes, setScenes] = useState<VideoSceneWithHtml[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(1);
@@ -350,7 +349,26 @@ export function ProducingPhase({ projectName, onPhaseChange }: ProducingPhasePro
     };
   }, [token, projectName]);
 
-  // Poll while rendering
+  // Single refresh path shared by the WS push handler and the backstop poll.
+  const refreshExportStatus = useCallback(async (): Promise<void> => {
+    try {
+      const s = await fetchVideoExportStatus(token, projectName);
+      setExportStatus(s);
+      if (s.stage === "done" && s.hasVideo) {
+        const base = await getApiBase();
+        setExportDownloadUrl(buildVideoDownloadUrl(base, token, projectName));
+        setOutputStale(false);
+        void refreshProjectMeta();
+      } else if (s.stage === "error") {
+        setExportError(s.message ?? "渲染失败");
+      }
+    } catch {
+      // ignore transient errors
+    }
+  }, [token, projectName, refreshProjectMeta]);
+
+  // Poll while rendering — 10s backstop only; live frame-level progress and
+  // the done/error transition arrive via WS video_project_changed pushes.
   useEffect(() => {
     if (exportStatus.stage !== "rendering") {
       if (exportPollRef.current) {
@@ -363,30 +381,12 @@ export function ProducingPhase({ projectName, onPhaseChange }: ProducingPhasePro
     let cancelled = false;
     const poll = async () => {
       if (cancelled) return;
-      try {
-        const s = await fetchVideoExportStatus(token, projectName);
-        if (cancelled) return;
-        setExportStatus(s);
-        if (s.stage === "done" && s.hasVideo) {
-          const base = await getApiBase();
-          if (cancelled) return;
-          setExportDownloadUrl(buildVideoDownloadUrl(base, token, projectName));
-          setOutputStale(false);
-          void refreshProjectMeta();
-          return;
-        }
-        if (s.stage === "error") {
-          setExportError(s.message ?? "渲染失败");
-          return;
-        }
-      } catch {
-        // ignore transient errors
-      }
+      await refreshExportStatus();
       if (!cancelled) {
-        exportPollRef.current = setTimeout(poll, 2000);
+        exportPollRef.current = setTimeout(poll, 10000);
       }
     };
-    exportPollRef.current = setTimeout(poll, 2000);
+    exportPollRef.current = setTimeout(poll, 10000);
     return () => {
       cancelled = true;
       if (exportPollRef.current) {
@@ -394,7 +394,23 @@ export function ProducingPhase({ projectName, onPhaseChange }: ProducingPhasePro
         exportPollRef.current = null;
       }
     };
-  }, [exportStatus.stage, token, projectName, refreshProjectMeta, onPhaseChange]);
+  }, [exportStatus.stage, onPhaseChange, refreshExportStatus]);
+
+  // WS subscription: render progress/status, scene edits and phase migrations
+  // pushed by the services process refresh the relevant slice of state.
+  useEffect(() => {
+    return client.onVideoProjectChanged(({ projectName: name, hint }) => {
+      if (name !== projectName) return;
+      if (hint === "progress" || hint === "status") {
+        void refreshExportStatus();
+      } else if (hint === "scenes") {
+        void loadScenes();
+        void refreshProjectMeta();
+      } else if (hint === "phase") {
+        void refreshProjectMeta();
+      }
+    });
+  }, [client, projectName, refreshExportStatus, loadScenes, refreshProjectMeta]);
 
   const updateSceneStatus = useCallback((index: number, status: string) => {
     setScenes((prev) =>
@@ -539,52 +555,6 @@ export function ProducingPhase({ projectName, onPhaseChange }: ProducingPhasePro
     refreshProjectMeta,
   ]);
 
-  const handleConfirm = useCallback(async () => {
-    if (!selectedScene || actionLoading) return;
-    if ((selectedScene.htmlStatus ?? "pending") !== "previewing") return;
-    setActionLoading(true);
-    setActionLabel("正在确认场景...");
-    setError(null);
-    try {
-      const res = await confirmVideoScene(
-        token,
-        projectName,
-        selectedIndex,
-        selectedScene.htmlMtime,
-      );
-      if (res.ok && res.scene) {
-        setScenes((prev) =>
-          prev.map((s) =>
-            s.index === selectedIndex
-              ? (res.scene as VideoSceneWithHtml)
-              : s,
-          ),
-        );
-      } else {
-        setError(res.error || "确认失败");
-      }
-    } catch (e) {
-      if (e instanceof ApiError && e.status === 409) {
-        // Version changed or not previewable — refresh so the user confirms
-        // against the current HTML version.
-        setError("场景内容已变化，已刷新为最新版本，请重新确认。");
-        await loadScenes();
-      } else {
-        setError(String(e));
-      }
-    } finally {
-      setActionLoading(false);
-      setActionLabel(null);
-    }
-  }, [
-    selectedScene,
-    actionLoading,
-    token,
-    projectName,
-    selectedIndex,
-    loadScenes,
-  ]);
-
   const handlePlayNarration = useCallback(async () => {
     if (!selectedScene || playingIndex !== null) return;
     setPlayingIndex(selectedIndex);
@@ -684,7 +654,7 @@ export function ProducingPhase({ projectName, onPhaseChange }: ProducingPhasePro
       await doExport();
     } catch (e) {
       if (e instanceof ApiError && e.status === 409) {
-        setExportError("所有场景确认后才能导出，请检查场景状态。");
+        setExportError("所有场景生成后才能导出，请检查场景状态。");
       } else {
         setExportError(String(e));
       }
@@ -797,15 +767,12 @@ export function ProducingPhase({ projectName, onPhaseChange }: ProducingPhasePro
     );
   }
 
-  // A scene counts as confirmed only when the confirmation is bound to the
-  // current HTML version (same rule the server enforces).
-  const isSceneConfirmedCurrent = (s: VideoSceneWithHtml) =>
-    s.htmlStatus === "confirmed" &&
-    s.htmlMtime != null &&
-    s.confirmedMtime != null &&
-    s.htmlMtime === s.confirmedMtime;
-  const confirmedCount = scenes.filter(isSceneConfirmedCurrent).length;
-  const allConfirmed = scenes.length > 0 && confirmedCount === scenes.length;
+  // P3: export gates on "ready" (scene HTML generated), not per-scene
+  // confirmation — the render task snapshots scene HTML at start.
+  const isSceneReady = (s: VideoSceneWithHtml) =>
+    s.htmlStatus === "previewing" || s.htmlStatus === "confirmed";
+  const readyCount = scenes.filter(isSceneReady).length;
+  const allReady = scenes.length > 0 && readyCount === scenes.length;
   const isRendering = exportStatus.stage === "rendering";
   const isExportDone = exportStatus.stage === "done" && exportStatus.hasVideo;
   const hasExportError = exportStatus.stage === "error";
@@ -816,16 +783,16 @@ export function ProducingPhase({ projectName, onPhaseChange }: ProducingPhasePro
       <ResizablePanelGroup direction="horizontal" className="min-h-0 flex-1">
         {/* 左:场景状态列表 */}
         <ResizablePanel
-          defaultSize={22}
-          minSize={18}
-          maxSize={32}
+          defaultSize="22%"
+          minSize="18%"
+          maxSize="32%"
           collapsible
           className="flex flex-col"
         >
-          <div className="flex h-full min-h-0 flex-col border-r border-border/70">
+          <div className="flex h-full min-h-0 flex-col">
             <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border/70 px-3 py-2">
               <span className="whitespace-nowrap text-[11px] font-medium text-muted-foreground">
-                场景制作 · {confirmedCount}/{scenes.length} 已确认
+                场景制作 · {readyCount}/{scenes.length} 已生成
               </span>
               {scenes.some(
                 (s) => (s.htmlStatus ?? "pending") === "pending",
@@ -901,7 +868,7 @@ export function ProducingPhase({ projectName, onPhaseChange }: ProducingPhasePro
         <ResizableHandle withHandle />
 
         {/* 中:预览区 */}
-        <ResizablePanel defaultSize={50} minSize={30} className="flex flex-col">
+        <ResizablePanel defaultSize="50%" minSize="30%" className="flex flex-col">
           <div className="flex h-full min-h-0 flex-col">
             <div className="shrink-0 border-b border-border/70 px-4 py-2">
               <div className="flex items-center justify-between">
@@ -1021,12 +988,12 @@ export function ProducingPhase({ projectName, onPhaseChange }: ProducingPhasePro
 
         {/* 右:操作面板 */}
         <ResizablePanel
-          defaultSize={28}
-          minSize={22}
-          maxSize={38}
+          defaultSize="28%"
+          minSize="22%"
+          maxSize="38%"
           className="flex flex-col"
         >
-          <div className="flex h-full min-h-0 flex-col border-l border-border/70 bg-background">
+          <div className="flex h-full min-h-0 flex-col bg-background">
             <div className="min-h-0 flex-1 overflow-y-auto scrollbar-hover p-3">
               {/* 场景操作 */}
               <div className="mb-5">
@@ -1096,39 +1063,20 @@ export function ProducingPhase({ projectName, onPhaseChange }: ProducingPhasePro
                       重写分镜
                     </Button>
                   </div>
-                  <div className="grid grid-cols-2 gap-1.5">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="text-[12px]"
-                      onClick={handlePlayNarration}
-                      disabled={playingIndex !== null || !selectedScene?.narration}
-                    >
-                      {playingIndex === selectedIndex ? (
-                        <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                      ) : (
-                        <Volume2 className="mr-1.5 h-3.5 w-3.5" />
-                      )}
-                      试听旁白
-                    </Button>
-                    <Button
-                      size="sm"
-                      className="text-[12px]"
-                      onClick={handleConfirm}
-                      disabled={
-                        actionLoading ||
-                        !selectedScene ||
-                        selectedStatus !== "previewing"
-                      }
-                    >
-                      {actionLoading ? (
-                        <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                      ) : (
-                        <Check className="mr-1.5 h-3.5 w-3.5" />
-                      )}
-                      确认通过
-                    </Button>
-                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="w-full text-[12px]"
+                    onClick={handlePlayNarration}
+                    disabled={playingIndex !== null || !selectedScene?.narration}
+                  >
+                    {playingIndex === selectedIndex ? (
+                      <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Volume2 className="mr-1.5 h-3.5 w-3.5" />
+                    )}
+                    试听旁白
+                  </Button>
                 </div>
               </div>
 
@@ -1269,7 +1217,7 @@ export function ProducingPhase({ projectName, onPhaseChange }: ProducingPhasePro
                         setExportDialogOpen(true);
                       }}
                       disabled={
-                        isRendering || exportActionLoading || !allConfirmed
+                        isRendering || exportActionLoading || !allReady
                       }
                     >
                       {isRendering || exportActionLoading ? (
@@ -1285,9 +1233,9 @@ export function ProducingPhase({ projectName, onPhaseChange }: ProducingPhasePro
                           ? "渲染中..."
                           : "导出 MP4"}
                     </Button>
-                    {!allConfirmed && !isRendering && (
+                    {!allReady && !isRendering && (
                       <div className="mt-1.5 text-[11px] text-muted-foreground">
-                        确认全部场景后可导出（{confirmedCount}/{scenes.length}）
+                        生成全部场景后可导出（{readyCount}/{scenes.length}）
                       </div>
                     )}
                   </>
@@ -1346,9 +1294,9 @@ export function ProducingPhase({ projectName, onPhaseChange }: ProducingPhasePro
             </div>
 
             {/* 底部全局进度提示 */}
-            {allConfirmed && !isExportDone && !isRendering && (
+            {allReady && !isExportDone && !isRendering && (
               <div className="shrink-0 border-t border-border/70 p-3 text-[11px] text-muted-foreground">
-                全部场景已确认，可以导出 MP4
+                全部场景已生成，可以导出 MP4
               </div>
             )}
           </div>

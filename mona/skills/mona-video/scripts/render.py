@@ -23,11 +23,11 @@ import asyncio
 import base64
 import json
 import os
-import re
 import socket
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -41,6 +41,18 @@ from merge_scenes import (  # noqa: E402
 )
 
 __all__ = ("render_project", "render_project_async")
+
+# Progress callback contract: (stage, percent, message) -> None.
+# stage ∈ "rendering" | "encoding" | "muxing"; percent is 0-100.
+# Called from a worker thread (server wraps render in asyncio.to_thread), so
+# implementations must be thread-safe and non-blocking (file write is fine).
+ProgressCb = Callable[[str, float, str], None]
+
+
+def _frame_progress(done: int, total: int) -> float:
+    """Map global frame progress onto the 15-90% render band."""
+    return round(15 + 75 * min(1.0, done / max(1, total)), 1)
+
 
 # Quality presets: (fps, width_scale, height_scale, crf)
 _QUALITY_PRESETS: dict[str, tuple[int, float, int]] = {
@@ -236,8 +248,13 @@ async def _render_scene(
     height: int,
     frames_dir: Path,
     frame_offset: int,
+    frame_cb: Callable[[int], None] | None = None,
 ) -> int:
-    """Render one scene to a sequence of PNGs. Returns frame count."""
+    """Render one scene to a sequence of PNGs. Returns frame count.
+
+    frame_cb(frames_done_in_scene) fires every 15 frames and on the final
+    frame, so callers can report sub-scene progress (~0.5s @ 30fps).
+    """
     file_url = scene_path.resolve().as_uri()
 
     # Some Chromium builds (e.g. chrome-headless-shell) do not expose the Page
@@ -248,7 +265,7 @@ async def _render_scene(
         page_enabled = True
     except RuntimeError as e:
         if "wasn't found" in str(e):
-            print(f"Warning: Page.enable not supported, using polling fallback", file=sys.stderr)
+            print("Warning: Page.enable not supported, using polling fallback", file=sys.stderr)
         else:
             raise
 
@@ -334,6 +351,8 @@ async def _render_scene(
         frame_idx = frame_offset + i
         out_path = frames_dir / f"frame_{frame_idx:06d}.png"
         out_path.write_bytes(png_bytes)
+        if frame_cb is not None and ((i + 1) % 15 == 0 or i + 1 == total_frames):
+            frame_cb(i + 1)
     return total_frames
 
 
@@ -432,13 +451,23 @@ async def render_project_async(
     project_path: str | Path,
     fps: int = 30,
     quality: str = "standard",
+    progress_cb: ProgressCb | None = None,
+    scenes_dir: str | Path | None = None,
 ) -> dict:
-    """Render all scenes in a project to MP4 via headless Chromium + CDP."""
+    """Render all scenes in a project to MP4 via headless Chromium + CDP.
+
+    progress_cb(stage, percent, message) reports fine-grained progress:
+    15-90% per-frame capture, 90-97% encoding, 97-100% audio muxing.
+
+    scenes_dir optionally points at a snapshot of the project's scenes
+    (e.g. renders/snapshot/scenes) so rendering is isolated from edits
+    made while the render is running. Defaults to <project>/scenes.
+    """
     project = Path(project_path)
     if not project.exists():
         return {"ok": False, "error": f"Project not found: {project_path}"}
 
-    scenes_dir = project / "scenes"
+    scenes_dir = Path(scenes_dir) if scenes_dir is not None else project / "scenes"
     if not scenes_dir.is_dir():
         return {"ok": False, "error": f"Scenes directory not found: {scenes_dir}"}
 
@@ -501,13 +530,32 @@ async def render_project_async(
         except ImportError as e:
             return {"ok": False, "error": f"websockets library required: {e}"}
 
+        # 帧级进度：预计算全局帧预算，逐帧区间占 15-90%
+        total_frames_budget = sum(
+            max(1, int(round(d * fps))) for _, _, _, d in timeline
+        )
+        frames_done = 0
+
+        def _report_frames(scene_pos: int, scene_frames_done: int) -> None:
+            if progress_cb is None:
+                return
+            done = frames_done + scene_frames_done
+            progress_cb(
+                "rendering",
+                _frame_progress(done, total_frames_budget),
+                f"正在渲染场景 {scene_pos}/{len(timeline)} · 帧 {done}/{total_frames_budget}",
+            )
+
         async with websockets.connect(ws_url, max_size=64 * 1024 * 1024) as ws:
             frame_offset = 0
             scene_results: list[dict] = []
-            for num, path, start, duration in timeline:
+            for scene_pos, (num, path, start, duration) in enumerate(
+                timeline, start=1
+            ):
                 count = await _render_scene(
                     ws, path, duration, fps, width, height,
                     frames_dir, frame_offset,
+                    frame_cb=lambda done, pos=scene_pos: _report_frames(pos, done),
                 )
                 scene_results.append({
                     "scene": num,
@@ -516,8 +564,11 @@ async def render_project_async(
                     "frames": count,
                 })
                 frame_offset += count
+                frames_done += count
 
         # Encode silent MP4
+        if progress_cb is not None:
+            progress_cb("encoding", 92, "正在编码 MP4...")
         _encode_mp4(frames_dir, silent_mp4, fps, crf)
 
         # Mux audio if narration exists
@@ -527,8 +578,12 @@ async def render_project_async(
         if not narration_mp3.is_file():
             scene_mp3s = sorted((project / "audio").glob("scene_*.mp3"))
             if scene_mp3s:
+                if progress_cb is not None:
+                    progress_cb("muxing", 97, "正在合成音频...")
                 _concat_scene_audio(scene_mp3s, narration_mp3)
         if narration_mp3.is_file():
+            if progress_cb is not None:
+                progress_cb("muxing", 98, "正在混流音视频...")
             _mux_audio(silent_mp4, narration_mp3, output_mp4)
         else:
             # Rename silent.mp4 to output.mp4
@@ -558,9 +613,23 @@ async def render_project_async(
                 pass
 
 
-def render_project(project_path: str | Path, fps: int = 30, quality: str = "standard") -> dict:
+def render_project(
+    project_path: str | Path,
+    fps: int = 30,
+    quality: str = "standard",
+    progress_cb: ProgressCb | None = None,
+    scenes_dir: str | Path | None = None,
+) -> dict:
     """Sync wrapper around render_project_async."""
-    return asyncio.run(render_project_async(project_path, fps=fps, quality=quality))
+    return asyncio.run(
+        render_project_async(
+            project_path,
+            fps=fps,
+            quality=quality,
+            progress_cb=progress_cb,
+            scenes_dir=scenes_dir,
+        )
+    )
 
 
 def _cli() -> None:

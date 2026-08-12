@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import {
   AlertCircle,
   ArrowDown,
+  ArrowRight,
   ArrowUp,
   Check,
   Loader2,
@@ -21,6 +23,11 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import {
+  ResizableHandle,
+  ResizablePanel,
+  ResizablePanelGroup,
+} from "@/components/ui/resizable";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -42,10 +49,15 @@ interface StoryboardPhaseProps {
   onLocked: () => void;
   /** Incremented by parent when AI finishes a reply (streaming → false). */
   refreshTrigger?: number;
+  /** 项目已过分镜锁定阶段（制作/导出中回看编辑）：底部按钮变为「返回制作」，
+   * 不再重复调用锁定 API，避免服务端 phase 回退。 */
+  alreadyLocked?: boolean;
+  /** 右侧 AI 对话面板，作为第三栏渲染（可拖拽调整宽度）。 */
+  chatPanel?: ReactNode;
 }
 
-export function StoryboardPhase({ projectName, onLocked, refreshTrigger }: StoryboardPhaseProps) {
-  const { token } = useClient();
+export function StoryboardPhase({ projectName, onLocked, refreshTrigger, alreadyLocked = false, chatPanel }: StoryboardPhaseProps) {
+  const { client, token } = useClient();
   const [scenes, setScenes] = useState<VideoScene[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(1);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
@@ -178,15 +190,25 @@ export function StoryboardPhase({ projectName, onLocked, refreshTrigger }: Story
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshTrigger]);
 
-  // Fallback polling — only as backup in case the streaming event is missed
-  // (e.g. component remount while AI is streaming).
+  // WS subscription: scene changes pushed by the services process (AI rewrote
+  // storyboard.md and it got re-parsed, edits from another window, etc).
+  // Server state is merged with unsaved local edits inside loadScenes.
+  useEffect(() => {
+    return client.onVideoProjectChanged(({ projectName: name, hint }) => {
+      if (name !== projectName) return;
+      if (hint === "scenes") void loadScenes(true);
+    });
+  }, [client, projectName, loadScenes]);
+
+  // Fallback polling — pure backstop in case both the streaming event and the
+  // WS push are missed (e.g. component remount while AI is streaming).
   // Stops once scenes appear or a parse error is detected.
   useEffect(() => {
     if (scenes.length > 0) return;
     if (storyboardExists && parseError) return;
     const timer = setInterval(() => {
       loadScenes(true);
-    }, 2000);
+    }, 10000);
     return () => clearInterval(timer);
   }, [scenes.length, storyboardExists, parseError, loadScenes]);
 
@@ -341,10 +363,16 @@ export function StoryboardPhase({ projectName, onLocked, refreshTrigger }: Story
     setLocking(true);
     setError(null);
     try {
-      // Flush pending saves before locking; block when any edit failed.
+      // Flush pending saves before leaving; block when any edit failed.
       const saved = await flushSaves();
       if (!saved || pendingRef.current.size > 0) {
-        setError("有修改尚未保存成功，请先重试保存再锁定分镜");
+        setError("有修改尚未保存成功，请先重试保存");
+        return;
+      }
+      if (alreadyLocked) {
+        // 项目已进入制作阶段：分镜编辑走自动保存生效，这里只切回制作视图，
+        // 不重复锁定（否则服务端 phase 会从 done/exportable 回退到 producing）。
+        onLocked();
         return;
       }
       const res = await lockVideoStoryboard(token, projectName);
@@ -358,14 +386,22 @@ export function StoryboardPhase({ projectName, onLocked, refreshTrigger }: Story
     } finally {
       setLocking(false);
     }
-  }, [token, projectName, onLocked, flushSaves]);
+  }, [token, projectName, onLocked, flushSaves, alreadyLocked]);
 
   // Always render the full layout — empty state shows placeholder inside each pane
   // instead of a full-screen "loading" overlay. AI-generated scenes flow in smoothly.
+  // 三栏尺寸档位与 ProducingPhase 一致：左 22%(18-32) / 中 50(≥30) / 右 28(22-38)。
   return (
-    <div className="flex h-full min-h-0">
+    <ResizablePanelGroup direction="horizontal" className="h-full min-h-0">
       {/* 左:场景卡片列表 */}
-      <div className="flex w-[200px] shrink-0 flex-col border-r border-border/70">
+      <ResizablePanel
+        defaultSize="22%"
+        minSize="18%"
+        maxSize="32%"
+        collapsible
+        className="flex flex-col"
+      >
+        <div className="flex h-full min-h-0 flex-col">
         <div className="shrink-0 border-b border-border/70 px-3 py-2 text-[11px] font-medium text-muted-foreground">
           场景列表 · {scenes.length} 场
         </div>
@@ -421,10 +457,18 @@ export function StoryboardPhase({ projectName, onLocked, refreshTrigger }: Story
             新增场景
           </Button>
         </div>
-      </div>
+        </div>
+      </ResizablePanel>
 
-      {/* 右:详情编辑 */}
-      <div className="flex min-h-0 flex-1 flex-col">
+      <ResizableHandle withHandle />
+
+      {/* 中:详情编辑 */}
+      <ResizablePanel
+        defaultSize={chatPanel ? "50%" : "78%"}
+        minSize="30%"
+        className="flex flex-col"
+      >
+        <div className="flex h-full min-h-0 flex-col">
         {selectedScene ? (
           <>
             <div className="flex shrink-0 items-center justify-between border-b border-border/70 px-4 py-2">
@@ -608,10 +652,12 @@ export function StoryboardPhase({ projectName, onLocked, refreshTrigger }: Story
               >
                 {locking ? (
                   <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                ) : alreadyLocked ? (
+                  <ArrowRight className="mr-1.5 h-4 w-4" />
                 ) : (
                   <Check className="mr-1.5 h-4 w-4" />
                 )}
-                确认分镜，进入制作
+                {alreadyLocked ? "返回制作" : "确认分镜，进入制作"}
               </Button>
             </div>
 
@@ -686,7 +732,25 @@ export function StoryboardPhase({ projectName, onLocked, refreshTrigger }: Story
             )}
           </div>
         )}
-      </div>
-    </div>
+        </div>
+      </ResizablePanel>
+
+      {chatPanel ? (
+        <>
+          <ResizableHandle withHandle />
+          {/* 右:AI 对话面板 */}
+          <ResizablePanel
+            defaultSize="28%"
+            minSize="22%"
+            maxSize="38%"
+            className="flex flex-col"
+          >
+            <div className="flex h-full min-h-0 flex-col">
+              {chatPanel}
+            </div>
+          </ResizablePanel>
+        </>
+      ) : null}
+    </ResizablePanelGroup>
   );
 }
