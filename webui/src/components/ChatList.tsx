@@ -31,9 +31,15 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  ConversationAvatar,
+  MONA_AGENT_ID,
+} from "@/components/room/AgentAvatar";
+import { useAgents } from "@/components/room/useAgents";
 import { deriveTitle, relativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { ChatSummary, SidebarDensity, SidebarSortMode } from "@/lib/types";
+import { useClientContextOrNull } from "@/providers/ClientProvider";
 
 interface ChatSection {
   label: string;
@@ -106,6 +112,8 @@ export const ChatList = memo(function ChatList({
     new Set(defaultProjectExpanded ? ["__all__"] : [])
   );
   const { t } = useTranslation();
+  const clientCtx = useClientContextOrNull();
+  const agentsById = useAgents(clientCtx?.token ?? null);
   const labels = useMemo(() => ({
     pinned: t("chat.groups.pinned"),
     conversations: t("chat.groups.conversations"),
@@ -284,6 +292,13 @@ export const ChatList = memo(function ChatList({
                   : completed.has(s.chatId)
                     ? "complete"
                     : null;
+                // Phase 2d: rooms show a stacked member cluster, partner
+                // direct chats their agent avatar; legacy Mona chats stay bare.
+                const conv = s.conversation ?? null;
+                const showConvAvatar =
+                  !!conv
+                  && (conv.type === "room"
+                    || (!!conv.directAgentId && conv.directAgentId !== MONA_AGENT_ID));
                 return (
                   <li key={s.key} className="min-w-0">
                     <ContextMenu>
@@ -297,6 +312,13 @@ export const ChatList = memo(function ChatList({
                               : "text-sidebar-foreground/82 hover:bg-[hsl(var(--sidebar-hover-surface)/0.04)] hover:text-sidebar-foreground",
                           )}
                         >
+                      {showConvAvatar ? (
+                        <ConversationAvatar
+                          conversation={conv}
+                          agentsById={agentsById}
+                          className="shrink-0 self-center"
+                        />
+                      ) : null}
                       <button
                         type="button"
                         onClick={() => onSelect(s.key)}

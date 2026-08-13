@@ -145,6 +145,8 @@ include = [
     "mona/skills/**/*.js",
     "mona/skills/**/*.ttf",
     "mona/skills/**/*.txt",
+    "mona/agents/**/*.json",
+    "mona/agents/**/*.md",
     "mona/skills/**/*.xml",
     "mona/skills/**/*.xsd",
     "mona/web/dist/**/*",

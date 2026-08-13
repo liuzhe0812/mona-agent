@@ -860,6 +860,51 @@ def _run_gateway(
                 logger.exception("Distill cron job '{}' failed", job.name)
             return None
 
+        # Room workflow trigger (multi-agent phase 4, guide 7.7). The payload
+        # only pins the room; execution reads the then-active revision. An
+        # active run in the room records an explicit skip — never a queue.
+        if job.payload.kind == "workflow_run":
+            from mona.cron.service import CronSkip
+
+            room_id = (job.payload.room_id or "").strip()
+            if not room_id:
+                raise CronSkip("workflow_run payload missing room_id")
+            manager = agent.subagents
+            active = manager.workflow_store_for_room(room_id).get_active(room_id)
+            if active is None:
+                raise CronSkip(f"room {room_id!r} has no active workflow")
+            runner = manager.workflow_runner_for_room(room_id)
+            if runner.active_run_for_room(room_id) is not None:
+                raise CronSkip(f"room {room_id!r} already has an active run")
+            session = session_manager.get_or_create(f"websocket:{room_id}")
+            conversation = session.conversation_metadata
+            if conversation.type != "room":
+                raise CronSkip(f"chat {room_id!r} is no longer a collaboration room")
+
+            async def _drive_workflow_run() -> None:
+                from mona.agent.partners import AgentRegistry
+                from mona.agent.workflow import RunConflictError
+
+                try:
+                    await runner.run(
+                        room_id=room_id,
+                        workflow=active,
+                        trigger_type="cron",
+                        started_by="cron",
+                        conversation=conversation,
+                        registry=AgentRegistry(),
+                    )
+                except RunConflictError:
+                    logger.info(
+                        "Cron workflow run skipped: room {} already has an active run",
+                        room_id,
+                    )
+                except Exception:
+                    logger.exception("Cron workflow run failed for room {}", room_id)
+
+            asyncio.create_task(_drive_workflow_run())
+            return None
+
         from mona.utils.evaluator import evaluate_response
 
         reminder_note = (
@@ -919,6 +964,8 @@ def _run_gateway(
         return response
 
     cron.on_job = on_cron_job
+    # Workflow cron sync (activate/deactivate) writes through the manager.
+    agent.subagents.cron_service = cron
 
     def _webui_runtime_model_name() -> str | None:
         model = getattr(agent, "model", None)
@@ -934,6 +981,7 @@ def _run_gateway(
         bus,
         session_manager=session_manager,
         webui_runtime_model_name=_webui_runtime_model_name,
+        subagent_manager=agent.subagents,
     )
 
     def _pick_heartbeat_target() -> tuple[str, str]:

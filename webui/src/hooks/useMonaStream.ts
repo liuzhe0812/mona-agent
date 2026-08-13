@@ -25,8 +25,8 @@ interface ActiveAssistantCursor {
 }
 
 type PendingStreamEvent =
-  | { kind: "delta"; text: string }
-  | { kind: "reasoning"; text: string };
+  | { kind: "delta"; text: string; authorId?: string }
+  | { kind: "reasoning"; text: string; authorId?: string };
 
 /** Find a still-open streamed assistant turn. Closed stream segments stay visible
  * as streaming until ``turn_end`` for visual continuity, but they must not
@@ -488,8 +488,13 @@ export function useMonaStream(
       const draft = prev.slice();
       for (let i = 0; i < events.length;) {
         const kind = events[i].kind;
+        const authorId = events[i].authorId;
         let text = "";
-        while (i < events.length && events[i].kind === kind) {
+        while (
+          i < events.length
+          && events[i].kind === kind
+          && (events[i].authorId ?? null) === (authorId ?? null)
+        ) {
           text += events[i].text;
           i += 1;
         }
@@ -510,6 +515,7 @@ export function useMonaStream(
               content: "",
               isStreaming: true,
               createdAt: Date.now(),
+              ...(authorId ? { authorId, authorType: "agent" as const } : {}),
             });
             targetIndex = draft.length - 1;
           }
@@ -518,6 +524,9 @@ export function useMonaStream(
             ...target,
             content: target.content + text,
             isStreaming: true,
+            ...(authorId && !target.authorId
+              ? { authorId, authorType: "agent" as const }
+              : {}),
           };
           closedAssistantStreamIdsRef.current.delete(merged.id);
           activeAssistantRef.current = { id: merged.id, index: targetIndex };
@@ -658,7 +667,11 @@ export function useMonaStream(
         if (!chunk) return;
         clearActivitySegment();
         setIsStreaming(true);
-        pendingStreamEventsRef.current.push({ kind: "delta", text: chunk });
+        pendingStreamEventsRef.current.push({
+          kind: "delta",
+          text: chunk,
+          ...(ev.author_id ? { authorId: ev.author_id } : {}),
+        });
         schedulePendingStreamFlush();
         return;
       }
@@ -810,6 +823,9 @@ export function useMonaStream(
                 traces: lines,
                 activitySegmentId: segmentId,
                 createdAt: Date.now(),
+                ...(ev.author_id
+                  ? { authorId: ev.author_id, authorType: "agent" as const }
+                  : {}),
               },
             ];
           });
@@ -840,6 +856,14 @@ export function useMonaStream(
             content,
             ...(hasMedia ? { media } : {}),
             ...(lat !== undefined ? { latencyMs: lat } : {}),
+            ...(ev.author_id
+              ? { authorId: ev.author_id, authorType: "agent" as const }
+              : {}),
+            ...(ev.message_type && ev.message_type !== "message"
+              ? { messageType: ev.message_type }
+              : {}),
+            ...(ev.job_id ? { jobId: ev.job_id } : {}),
+            ...(ev.workflow_run_id ? { workflowRunId: ev.workflow_run_id } : {}),
           });
           if (pendingDeliveredFilesRef.current.length > 0) {
             next = appendDeliveredFilesToLastAssistant(next, pendingDeliveredFilesRef.current);

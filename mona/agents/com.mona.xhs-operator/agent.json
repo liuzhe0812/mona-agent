@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "id": "com.mona.xhs-operator",
+  "displayName": "小红书运营",
+  "description": "小红书内容运营助手：选题策划、笔记文案与发布复盘",
+  "prompt": "prompt.md",
+  "model": "inherit",
+  "toolAllowlist": ["web_search", "web_fetch", "read_file", "write_file", "deliver_file"],
+  "canDelegate": false,
+  "skills": [],
+  "packageId": "com.mona.xhs-operator",
+  "packageVersion": "1.0.0"
+}

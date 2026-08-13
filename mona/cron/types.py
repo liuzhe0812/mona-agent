@@ -21,7 +21,7 @@ class CronSchedule:
 @dataclass
 class CronPayload:
     """What to do when the job runs."""
-    kind: Literal["system_event", "agent_turn"] = "agent_turn"
+    kind: Literal["system_event", "agent_turn", "workflow_run"] = "agent_turn"
     message: str = ""
     # Deliver response to channel
     deliver: bool = False
@@ -29,6 +29,9 @@ class CronPayload:
     to: str | None = None  # e.g. phone number
     channel_meta: dict = field(default_factory=dict)  # channel-specific routing (e.g. Slack thread_ts)
     session_key: str | None = None  # original session key for correct session recording
+    # For "workflow_run": the collaboration room whose active workflow runs.
+    # Only the room id is stored — execution reads the then-active revision.
+    room_id: str | None = None
 
 
 @dataclass

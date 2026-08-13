@@ -38,3 +38,9 @@ class ToolContext:
     image_generation_provider_configs: dict[str, Any] | None = None
     video_generation_provider_configs: dict[str, Any] | None = None
     timezone: str = "UTC"
+    # Multi-agent identity (phase 0): defaults preserve legacy Mona behavior.
+    agent_id: str = "mona"
+    conversation_id: str | None = None
+    room_id: str | None = None
+    job_id: str | None = None
+    workflow_run_id: str | None = None

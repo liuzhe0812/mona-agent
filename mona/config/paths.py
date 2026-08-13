@@ -86,17 +86,73 @@ def get_legacy_sessions_dir() -> Path:
 
 
 # ---------------------------------------------------------------------------
+# Per-agent directories (multi-agent phase 1, guide section 6.1)
+# ---------------------------------------------------------------------------
+
+
+def get_agents_dir() -> Path:
+    """Return the agents root directory (~/.mona/agents/)."""
+    return ensure_dir(get_data_dir() / "agents")
+
+
+def get_agent_dir(agent_id: str) -> Path:
+    """Return the per-agent root directory (~/.mona/agents/<agent_id>/)."""
+    from mona.agent.partners import normalize_agent_id
+    return ensure_dir(get_agents_dir() / normalize_agent_id(agent_id))
+
+
+def get_agent_memory_dir(agent_id: str) -> Path:
+    """Return the agent-private memory directory (~/.mona/agents/<id>/memory/).
+
+    Stores the agent's MEMORY.md, SOUL.md, USER.md, AGENTS.md, history.jsonl.
+    """
+    return ensure_dir(get_agent_dir(agent_id) / "memory")
+
+
+def get_agent_skills_dir(agent_id: str) -> Path:
+    """Return the agent-private skills directory (~/.mona/agents/<id>/skills/).
+
+    Holds skills the agent created itself; package skills stay inside the
+    read-only agent package and are resolved via ``AgentRegistry``.
+    """
+    return ensure_dir(get_agent_dir(agent_id) / "skills")
+
+
+def get_legacy_memory_dir() -> Path:
+    """Return the pre-multi-agent global memory directory (~/.mona/memory/).
+
+    Only used by the one-time migration to Mona's agent-private memory dir.
+    Does NOT create the directory — the migration must not manufacture an
+    empty legacy source on fresh installs.
+    """
+    return get_data_dir() / "memory"
+
+
+def get_legacy_skills_dir() -> Path:
+    """Return the pre-multi-agent global skills directory (~/.mona/skills/).
+
+    Only used by the one-time migration to Mona's agent-private skills dir.
+    Does NOT create the directory — the migration must not manufacture an
+    empty legacy source on fresh installs.
+    """
+    return get_data_dir() / "skills"
+
+
+# ---------------------------------------------------------------------------
 # Global resource directories (stored OUTSIDE workspace for hard boundary)
 # ---------------------------------------------------------------------------
 
 
 def get_memory_dir() -> Path:
-    """Return the global memory directory (~/.mona/memory/).
+    """Return Mona's memory directory (~/.mona/agents/mona/memory/).
 
     Stores MEMORY.md, SOUL.md, USER.md, AGENTS.md, history.jsonl.
-    Moved out of workspace to enforce _FsTool hard boundary.
+    Lives outside the workspace to enforce the _FsTool hard boundary. Since
+    multi-agent phase 1 the canonical location is Mona's agent-private
+    directory; the legacy ``~/.mona/memory/`` is migrated on startup.
     """
-    return ensure_dir(get_data_dir() / "memory")
+    from mona.agent.partners import MONA_AGENT_ID
+    return get_agent_memory_dir(MONA_AGENT_ID)
 
 
 def get_memory_file(name: str) -> Path:
@@ -110,11 +166,14 @@ def get_memory_history_path() -> Path:
 
 
 def get_skills_dir() -> Path:
-    """Return the global user skills directory (~/.mona/skills/).
+    """Return Mona's user skills directory (~/.mona/agents/mona/skills/).
 
-    Moved out of workspace to enforce _FsTool hard boundary.
+    Lives outside the workspace to enforce the _FsTool hard boundary. Since
+    multi-agent phase 1 the canonical location is Mona's agent-private
+    directory; the legacy ``~/.mona/skills/`` is migrated on startup.
     """
-    return ensure_dir(get_data_dir() / "skills")
+    from mona.agent.partners import MONA_AGENT_ID
+    return get_agent_skills_dir(MONA_AGENT_ID)
 
 
 def get_heartbeat_path() -> Path:

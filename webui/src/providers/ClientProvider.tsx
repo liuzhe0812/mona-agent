@@ -38,6 +38,12 @@ export function ClientProvider({
   );
 }
 
+/** Nullable variant for components that may render outside a provider
+ *  (bare unit-test renders); unlike ``useClientOptional`` it never throws. */
+export function useClientContextOrNull(): ClientContextValue | null {
+  return useContext(ClientContext);
+}
+
 export function useClientOptional(): ClientContextValue {
   const ctx = useContext(ClientContext);
   if (!ctx) {

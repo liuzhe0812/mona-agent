@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, Callable, Iterator
 import tiktoken
 from loguru import logger
 
+from mona.agent.partners import MONA_AGENT_ID, normalize_agent_id
 from mona.agent.runner import AgentRunner, AgentRunSpec
 from mona.agent.tools.registry import ToolRegistry
 from mona.session.manager import Session
@@ -47,13 +48,22 @@ class MemoryStore:
         r"^\[\d{4}-\d{2}-\d{2}[^\]]*\]\s+[A-Z][A-Z0-9_]*(?:\s+\[tools:\s*[^\]]+\])?:"
     )
 
-    def __init__(self, workspace: Path, max_history_entries: int = _DEFAULT_MAX_HISTORY):
-        from mona.config.paths import get_memory_dir
+    def __init__(
+        self,
+        workspace: Path,
+        max_history_entries: int = _DEFAULT_MAX_HISTORY,
+        *,
+        agent_id: str = MONA_AGENT_ID,
+    ):
+        from mona.config.paths import get_agent_memory_dir
         self.workspace = workspace
+        self.agent_id = normalize_agent_id(agent_id)
         self.max_history_entries = max_history_entries
-        # Memory files live OUTSIDE workspace (~/.mona/memory/) for hard boundary.
-        # SOUL.md / USER.md / AGENTS.md also live there for unified MemoryStore access.
-        self.memory_dir = get_memory_dir()
+        # Memory files live OUTSIDE workspace for hard boundary, under the
+        # agent-private dir (~/.mona/agents/<agent_id>/memory/) so each agent
+        # gets isolated long-term memory (multi-agent phase 1).
+        # SOUL.md / USER.md / AGENTS.md also live there for unified access.
+        self.memory_dir = get_agent_memory_dir(self.agent_id)
         self.memory_file = self.memory_dir / "MEMORY.md"
         self.history_file = self.memory_dir / "history.jsonl"
         self.legacy_history_file = self.memory_dir / "HISTORY.md"
@@ -947,7 +957,10 @@ class Dream:
         # clock would reset on every Dream cycle and archival would never
         # happen. Pass track_usage=False to opt out of telemetry.
         tools.register(SkillReadTool(track_usage=False))
-        tools.register(SkillCreateTool(max_active_user_skills=self.max_active_user_skills))
+        tools.register(SkillCreateTool(
+            max_active_user_skills=self.max_active_user_skills,
+            agent_id=self.store.agent_id,
+        ))
         # Heartbeat (Dream may add recurring tasks discovered from memory)
         tools.register(HeartbeatUpdateTool())
         return tools
@@ -959,11 +972,11 @@ class Dream:
         import re as _re
 
         from mona.agent.skills import BUILTIN_SKILLS_DIR
-        from mona.config.paths import get_skills_dir
+        from mona.config.paths import get_agent_skills_dir
 
         desc_re = _re.compile(r"^description:\s*(.+)$", _re.MULTILINE | _re.IGNORECASE)
         entries: dict[str, str] = {}
-        for base in (get_skills_dir(), BUILTIN_SKILLS_DIR):
+        for base in (get_agent_skills_dir(self.store.agent_id), BUILTIN_SKILLS_DIR):
             if not base.exists():
                 continue
             for d in base.iterdir():

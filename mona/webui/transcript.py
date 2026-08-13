@@ -11,6 +11,7 @@ from typing import Any, Callable
 
 from loguru import logger
 
+from mona.agent.partners import MONA_AGENT_ID
 from mona.config.paths import get_webui_dir
 from mona.session.manager import SessionManager
 
@@ -499,6 +500,8 @@ def replay_transcript_to_ui_messages(
                 "role": "user",
                 "content": text_s,
                 "createdAt": _ts_base + idx,
+                "authorType": "user",
+                "messageType": "message",
             }
             # IMPORTANT: restore displayContent from transcript so history
             # replay shows the short label (e.g. "健康巡检") instead of the
@@ -538,6 +541,7 @@ def replay_transcript_to_ui_messages(
                     buffer_message_id = adopted
                 else:
                     buffer_message_id = _new_id("buf", idx)
+                    buffer_author_id = rec.get("author_id")
                     messages.append(
                         {
                             "id": buffer_message_id,
@@ -545,6 +549,13 @@ def replay_transcript_to_ui_messages(
                             "content": "",
                             "isStreaming": True,
                             "createdAt": _ts_base + idx,
+                            "authorType": "agent",
+                            "authorId": (
+                                buffer_author_id
+                                if isinstance(buffer_author_id, str) and buffer_author_id
+                                else MONA_AGENT_ID
+                            ),
+                            "messageType": "message",
                         },
                     )
             buffer_parts.append(chunk)
@@ -655,6 +666,19 @@ def replay_transcript_to_ui_messages(
                             },
                         )
             extra: dict[str, Any] = {"content": content_s}
+            rec_author_id = rec.get("author_id")
+            extra["authorType"] = "agent"
+            extra["authorId"] = (
+                rec_author_id
+                if isinstance(rec_author_id, str) and rec_author_id
+                else MONA_AGENT_ID
+            )
+            rec_message_type = rec.get("message_type")
+            extra["messageType"] = (
+                rec_message_type
+                if isinstance(rec_message_type, str) and rec_message_type
+                else "message"
+            )
             if media:
                 extra["media"] = media
             lat = rec.get("latency_ms")

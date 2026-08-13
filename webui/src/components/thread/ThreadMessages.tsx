@@ -3,10 +3,17 @@ import { useTranslation } from "react-i18next";
 
 import { MessageBubble } from "@/components/MessageBubble";
 import {
+  AgentAvatar,
+  MONA_AGENT_ID,
+  resolveAgentDisplayName,
+} from "@/components/room/AgentAvatar";
+import { useAgents } from "@/components/room/useAgents";
+import {
   AgentActivityCluster,
   isAgentActivityMember,
 } from "@/components/thread/AgentActivityCluster";
-import type { UIMessage } from "@/lib/types";
+import { useClientContextOrNull } from "@/providers/ClientProvider";
+import type { AgentSummary, UIMessage } from "@/lib/types";
 
 interface ThreadMessagesProps {
   messages: UIMessage[];
@@ -159,6 +166,27 @@ export function assistantCopyFlags(units: DisplayUnit[]): boolean[] {
   return flags;
 }
 
+/** Author row above partner-agent bubbles (phase 2d): rooms show which
+ *  agent produced each assistant turn; Mona and legacy messages stay bare. */
+function AgentAuthorHeader({
+  message,
+  agentsById,
+}: {
+  message: UIMessage;
+  agentsById: ReadonlyMap<string, AgentSummary>;
+}) {
+  if (message.role !== "assistant") return null;
+  const authorId = message.authorId;
+  if (!authorId || authorId === MONA_AGENT_ID) return null;
+  const name = resolveAgentDisplayName(agentsById, authorId);
+  return (
+    <div className="mb-1 flex items-center gap-1.5">
+      <AgentAvatar agentId={authorId} displayName={name} className="h-4 w-4" />
+      <span className="text-[11.5px] font-medium text-muted-foreground">{name}</span>
+    </div>
+  );
+}
+
 export function ThreadMessages({
   messages,
   isStreaming = false,
@@ -166,6 +194,10 @@ export function ThreadMessages({
   onLoadEarlier,
 }: ThreadMessagesProps) {
   const { t } = useTranslation();
+  // Tolerates bare renders (no ClientProvider in unit tests): agent names
+  // then fall back to the derived display name from the agent id.
+  const clientCtx = useClientContextOrNull();
+  const agentsById = useAgents(clientCtx?.token ?? null);
   const units = useMemo(() => buildDisplayUnits(messages), [messages]);
   const copyFlags = useMemo(() => assistantCopyFlags(units), [units]);
   const liveActivityClusterIndex = useMemo(
@@ -210,14 +242,20 @@ export function ThreadMessages({
                 hasBodyBelow={hasBodyBelow}
               />
             ) : (
-              <MessageBubble
-                message={unit.message}
-                showAssistantCopyAction={
-                  unit.message.role === "assistant"
-                    ? copyFlags[index]
-                    : true
-                }
-              />
+              <>
+                <AgentAuthorHeader
+                  message={unit.message}
+                  agentsById={agentsById}
+                />
+                <MessageBubble
+                  message={unit.message}
+                  showAssistantCopyAction={
+                    unit.message.role === "assistant"
+                      ? copyFlags[index]
+                      : true
+                  }
+                />
+              </>
             )}
           </div>
         );

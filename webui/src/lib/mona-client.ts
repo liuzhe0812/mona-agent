@@ -1,9 +1,20 @@
 import type {
+  AgentJobSummary,
+  ApprovalRequestedPayload,
   ConnectionStatus,
   InboundEvent,
   Outbound,
   OutboundMedia,
   GoalStateWsPayload,
+  RoomCommandResult,
+  RoomState,
+  RoomUpdate,
+  WorkflowCommandResult,
+  WorkflowDefinition,
+  WorkflowRun,
+  WorkflowStep,
+  WorkflowTrigger,
+  WorkflowUpdatedPayload,
 } from "./types";
 
 /** WebSocket readyState constants, referenced by value to stay portable
@@ -56,6 +67,15 @@ type RuntimeModelHandler = (modelName: string | null, modelPreset?: string | nul
 type SessionUpdateScope = "metadata" | "thread" | string;
 type SessionUpdateHandler = (chatId: string, scope?: SessionUpdateScope) => void;
 type RunStatusHandler = (chatId: string, startedAt: number | null) => void;
+type RoomUpdatedHandler = (chatId: string, state: RoomState) => void;
+type AgentJobUpdatedHandler = (chatId: string, job: AgentJobSummary) => void;
+type WorkflowUpdatedHandler = (chatId: string, payload: WorkflowUpdatedPayload) => void;
+/** ``run`` is null on run-conflict error frames (``error`` carries the code). */
+type WorkflowRunUpdatedHandler = (chatId: string, run: WorkflowRun | null, error?: string) => void;
+type ApprovalRequestedHandler = (payload: ApprovalRequestedPayload) => void;
+/** Room-scoped command results share one pending map; workflow commands add
+ *  their optional payload fields via this intersection. */
+type AnyRoomCommandResult = RoomCommandResult & WorkflowCommandResult;
 
 /** Structured connection-level errors surfaced to the UI.
  *
@@ -73,8 +93,27 @@ export type StreamError =
 
 type ErrorHandler = (error: StreamError) => void;
 
+/** Rejection for failed room commands; ``code`` carries the wire-safe
+ *  server error code (e.g. ``approval_expired``) when the failure came from
+ *  a ``*_result`` frame. */
+export class RoomCommandError extends Error {
+  readonly code?: string;
+
+  constructor(message: string, code?: string) {
+    super(message);
+    this.name = "RoomCommandError";
+    this.code = code;
+  }
+}
+
 interface PendingNewChat {
   resolve: (chatId: string) => void;
+  reject: (err: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+interface PendingRoomCommand {
+  resolve: (result: AnyRoomCommandResult) => void;
   reject: (err: Error) => void;
   timer: ReturnType<typeof setTimeout>;
 }
@@ -106,6 +145,11 @@ export class MonaClient {
   private pptPhaseChangedHandlers = new Set<(payload: { projectName: string; phase: string }) => void>();
   private videoProjectChangedHandlers = new Set<(payload: { projectName: string; hint: string }) => void>();
   private runStatusHandlers = new Set<RunStatusHandler>();
+  private roomUpdatedHandlers = new Set<RoomUpdatedHandler>();
+  private agentJobUpdatedHandlers = new Set<AgentJobUpdatedHandler>();
+  private workflowUpdatedHandlers = new Set<WorkflowUpdatedHandler>();
+  private workflowRunUpdatedHandlers = new Set<WorkflowRunUpdatedHandler>();
+  private approvalRequestedHandlers = new Set<ApprovalRequestedHandler>();
   private errorHandlers = new Set<ErrorHandler>();
   private pptUploadHandlers = new Set<(result: { ok: boolean; files?: { name: string; path: string }[]; error?: string }) => void>();
   private pptSaveBrandHandlers = new Set<(result: { ok: boolean; brandId?: string; error?: string }) => void>();
@@ -138,6 +182,8 @@ export class MonaClient {
   /** Latest ``goal_state`` snapshot per ``chat_id`` (multi-session isolation). */
   private goalStateByChatId = new Map<string, GoalStateWsPayload>();
   private pendingNewChat: PendingNewChat | null = null;
+  private pendingRoomCommands = new Map<string, PendingRoomCommand>();
+  private roomCommandSeq = 0;
   // Frames queued while the socket is not yet OPEN
   private sendQueue: Outbound[] = [];
   private reconnectAttempts = 0;
@@ -389,6 +435,220 @@ export class MonaClient {
       current.delete(handler);
       if (current.size === 0) this.chatHandlers.delete(chatId);
     };
+  }
+
+  /** Subscribe to server-pushed ``room_updated`` broadcasts (room metadata
+   *  changed on another client or as a side effect of a room command). */
+  onRoomUpdated(handler: RoomUpdatedHandler): Unsubscribe {
+    this.roomUpdatedHandlers.add(handler);
+    return () => {
+      this.roomUpdatedHandlers.delete(handler);
+    };
+  }
+
+  /** Subscribe to room job state changes (``agent_job_updated``). */
+  onAgentJobUpdated(handler: AgentJobUpdatedHandler): Unsubscribe {
+    this.agentJobUpdatedHandlers.add(handler);
+    return () => {
+      this.agentJobUpdatedHandlers.delete(handler);
+    };
+  }
+
+  /** Subscribe to workflow draft/activation broadcasts (``workflow_updated``). */
+  onWorkflowUpdated(handler: WorkflowUpdatedHandler): Unsubscribe {
+    this.workflowUpdatedHandlers.add(handler);
+    return () => {
+      this.workflowUpdatedHandlers.delete(handler);
+    };
+  }
+
+  /** Subscribe to workflow run state broadcasts (``workflow_run_updated``). */
+  onWorkflowRunUpdated(handler: WorkflowRunUpdatedHandler): Unsubscribe {
+    this.workflowRunUpdatedHandlers.add(handler);
+    return () => {
+      this.workflowRunUpdatedHandlers.delete(handler);
+    };
+  }
+
+  /** Subscribe to approval request broadcasts (``approval_requested``). */
+  onApprovalRequested(handler: ApprovalRequestedHandler): Unsubscribe {
+    this.approvalRequestedHandlers.add(handler);
+    return () => {
+      this.approvalRequestedHandlers.delete(handler);
+    };
+  }
+
+  /** Turn an existing chat into a collaboration room (phase 2d). */
+  createRoom(
+    chatId: string,
+    agentIds: string[],
+    title: string,
+    goal?: string,
+  ): Promise<RoomState> {
+    return this.sendRoomCommand("create_room_result", (requestId) => ({
+      type: "create_room",
+      chat_id: chatId,
+      agent_ids: agentIds,
+      title,
+      ...(goal ? { goal } : {}),
+      request_id: requestId,
+    }));
+  }
+
+  /** Edit room title / goal / membership. */
+  updateRoom(chatId: string, updates: RoomUpdate): Promise<RoomState> {
+    return this.sendRoomCommand("update_room_result", (requestId) => ({
+      type: "update_room",
+      chat_id: chatId,
+      ...(updates.agentIds ? { agent_ids: updates.agentIds } : {}),
+      ...(updates.title !== undefined ? { title: updates.title } : {}),
+      ...(updates.goal !== undefined ? { goal: updates.goal } : {}),
+      request_id: requestId,
+    }));
+  }
+
+  /** Fetch the current room state for a chat. */
+  getRoomState(chatId: string): Promise<RoomState> {
+    return this.sendRoomCommand("room_state_result", (requestId) => ({
+      type: "get_room_state",
+      chat_id: chatId,
+      request_id: requestId,
+    }));
+  }
+
+  /** Cancel a queued/running room job. */
+  cancelAgentJob(chatId: string, jobId: string, reason?: string): Promise<AgentJobSummary> {
+    return this.sendRoomCommandRaw("cancel_agent_job_result", (requestId) => ({
+      type: "cancel_agent_job",
+      chat_id: chatId,
+      job_id: jobId,
+      ...(reason ? { reason } : {}),
+      request_id: requestId,
+    })).then((result) => {
+      const job = (result as { job?: AgentJobSummary }).job;
+      if (!job) {
+        throw new Error("malformed cancel_agent_job result");
+      }
+      return job;
+    });
+  }
+
+  // -- workflow commands (multi-agent phase 3) -----------------------------
+
+  /** Fetch the room's workflow draft + active revision. */
+  getWorkflow(chatId: string): Promise<{
+    draft: WorkflowDefinition | null;
+    active: WorkflowDefinition | null;
+    activeRevision: number | null;
+    revisions: number[];
+  }> {
+    return this.sendRoomCommandRaw("workflow_state_result", (requestId) => ({
+      type: "get_workflow",
+      chat_id: chatId,
+      request_id: requestId,
+    })).then((result) => ({
+      draft: result.draft ?? null,
+      active: result.active ?? null,
+      activeRevision: result.activeRevision ?? null,
+      revisions: result.revisions ?? [],
+    }));
+  }
+
+  /** Save (or replace) the room's workflow draft. */
+  saveWorkflowDraft(
+    chatId: string,
+    goal: string,
+    steps: WorkflowStep[],
+    trigger?: WorkflowTrigger,
+  ): Promise<WorkflowDefinition> {
+    return this.sendRoomCommandRaw("workflow_draft_ready", (requestId) => ({
+      type: "save_workflow_draft",
+      chat_id: chatId,
+      goal,
+      steps,
+      ...(trigger ? { trigger } : {}),
+      request_id: requestId,
+    })).then((result) => {
+      if (!result.workflow) {
+        throw new Error("malformed workflow_draft_ready");
+      }
+      return result.workflow;
+    });
+  }
+
+  /** Promote the room draft to the active revision. */
+  activateWorkflow(chatId: string): Promise<WorkflowDefinition> {
+    return this.sendRoomCommandRaw("activate_workflow_result", (requestId) => ({
+      type: "activate_workflow",
+      chat_id: chatId,
+      request_id: requestId,
+    })).then((result) => {
+      if (!result.workflow) {
+        throw new Error("malformed activate_workflow_result");
+      }
+      return result.workflow;
+    });
+  }
+
+  /** Start a run of the room's active workflow. Run state arrives via
+   *  ``workflow_run_updated`` pushes. */
+  runWorkflow(chatId: string): Promise<void> {
+    return this.sendRoomCommandRaw("run_workflow_result", (requestId) => ({
+      type: "run_workflow",
+      chat_id: chatId,
+      request_id: requestId,
+    })).then(() => undefined);
+  }
+
+  /** Cancel a non-terminal run (defaults to the room's active run);
+   *  resolves with the cancelled run id. */
+  cancelWorkflowRun(chatId: string, runId?: string): Promise<string> {
+    return this.sendRoomCommandRaw("cancel_workflow_run_result", (requestId) => ({
+      type: "cancel_workflow_run",
+      chat_id: chatId,
+      ...(runId ? { run_id: runId } : {}),
+      request_id: requestId,
+    })).then((result) => {
+      if (!result.run_id) {
+        throw new Error("malformed cancel_workflow_run_result");
+      }
+      return result.run_id;
+    });
+  }
+
+  /** Fetch a workflow run (defaults to the room's latest). */
+  getWorkflowRun(chatId: string, runId?: string): Promise<WorkflowRun | null> {
+    return this.sendRoomCommandRaw("workflow_run_state_result", (requestId) => ({
+      type: "get_workflow_run",
+      chat_id: chatId,
+      ...(runId ? { run_id: runId } : {}),
+      request_id: requestId,
+    })).then((result) => result.run ?? null);
+  }
+
+  /** Approve or reject a waiting approval step (phase 4). Rejects with a
+   *  ``RoomCommandError`` whose ``code`` is one of ``conflict`` /
+   *  ``not_waiting`` / ``invalid_token`` / ``approval_expired``; the run
+   *  state refresh arrives via ``workflow_run_updated`` either way. */
+  resolveWorkflowApproval(
+    chatId: string,
+    runId: string,
+    stepId: string,
+    token: string,
+    approve: boolean,
+  ): Promise<void> {
+    return this.sendRoomCommandRaw(
+      "resolve_workflow_approval_result",
+      (requestId) => ({
+        type: "resolve_workflow_approval",
+        chat_id: chatId,
+        run_id: runId,
+        step_id: stepId,
+        token,
+        approve,
+        request_id: requestId,
+      }),
+    ).then(() => undefined);
   }
 
   connect(): void {
@@ -679,11 +939,125 @@ export class MonaClient {
       return;
     }
 
+    if (
+      parsed.event === "create_room_result" ||
+      parsed.event === "update_room_result" ||
+      parsed.event === "room_state_result" ||
+      parsed.event === "cancel_agent_job_result" ||
+      parsed.event === "workflow_draft_ready" ||
+      parsed.event === "activate_workflow_result" ||
+      parsed.event === "workflow_state_result" ||
+      parsed.event === "run_workflow_result" ||
+      parsed.event === "cancel_workflow_run_result" ||
+      parsed.event === "workflow_run_state_result" ||
+      parsed.event === "resolve_workflow_approval_result"
+    ) {
+      this.handleRoomCommandResult(parsed);
+      return;
+    }
+
+    if (parsed.event === "room_updated") {
+      for (const handler of this.roomUpdatedHandlers) {
+        handler(parsed.chat_id, {
+          conversation: parsed.conversation,
+          agents: parsed.agents,
+        });
+      }
+      return;
+    }
+
+    if (parsed.event === "agent_job_updated") {
+      for (const handler of this.agentJobUpdatedHandlers) {
+        handler(parsed.chat_id, parsed.job);
+      }
+      return;
+    }
+
+    if (parsed.event === "workflow_updated") {
+      for (const handler of this.workflowUpdatedHandlers) {
+        handler(parsed.chat_id, {
+          chatId: parsed.chat_id,
+          workflow: parsed.workflow,
+          draft: parsed.draft === true,
+          activeRevision: parsed.activeRevision ?? null,
+        });
+      }
+      return;
+    }
+
+    if (parsed.event === "workflow_run_updated") {
+      // The run snapshot is spread at the top level of the frame; conflict
+      // error frames carry ``error``/``detail`` instead of ``id``.
+      const run = parsed.id ? (parsed as unknown as WorkflowRun) : null;
+      for (const handler of this.workflowRunUpdatedHandlers) {
+        handler(parsed.chat_id, run, parsed.error ?? parsed.detail);
+      }
+      return;
+    }
+
+    if (parsed.event === "approval_requested") {
+      for (const handler of this.approvalRequestedHandlers) {
+        handler({
+          chatId: parsed.chat_id,
+          runId: parsed.run_id,
+          approvals: parsed.approvals ?? [],
+        });
+      }
+      return;
+    }
+
     const chatId = (parsed as { chat_id?: string }).chat_id;
     if (chatId) {
       this.recordGoalStatusForRunStrip(chatId, parsed);
       this.recordGoalStateSnapshot(chatId, parsed);
       this.dispatch(chatId, parsed);
+    }
+  }
+
+  /** Send a room command envelope and await its correlated ``*_result``. */
+  private sendRoomCommand(
+    resultEvent: string,
+    build: (requestId: string) => Outbound,
+  ): Promise<RoomState> {
+    return this.sendRoomCommandRaw(resultEvent, build).then((result) => {
+      if (!result.conversation || !result.agents) {
+        throw new Error(`malformed ${resultEvent}`);
+      }
+      return { conversation: result.conversation, agents: result.agents };
+    });
+  }
+
+  private sendRoomCommandRaw(
+    resultEvent: string,
+    build: (requestId: string) => Outbound,
+  ): Promise<AnyRoomCommandResult> {
+    const requestId = `room_${Date.now().toString(36)}_${(this.roomCommandSeq++).toString(36)}`;
+    return new Promise<AnyRoomCommandResult>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingRoomCommands.delete(requestId);
+        reject(new Error(`${resultEvent} timed out`));
+      }, 10_000);
+      this.pendingRoomCommands.set(requestId, { resolve, reject, timer });
+      this.queueSend(build(requestId));
+    });
+  }
+
+  private handleRoomCommandResult(ev: InboundEvent): void {
+    const result = ev as AnyRoomCommandResult & { event: string };
+    const requestId = result.request_id;
+    const pending = requestId ? this.pendingRoomCommands.get(requestId) : undefined;
+    if (!pending) return;
+    this.pendingRoomCommands.delete(requestId!);
+    clearTimeout(pending.timer);
+    if (result.ok) {
+      pending.resolve(result);
+    } else {
+      pending.reject(
+        new RoomCommandError(
+          result.detail || result.code || "room command failed",
+          result.code,
+        ),
+      );
     }
   }
 

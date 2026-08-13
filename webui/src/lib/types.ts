@@ -4,6 +4,230 @@ export type Role = "user" | "assistant" | "tool" | "system";
  * progress pings) that should not be rendered as conversational replies. */
 export type MessageKind = "message" | "trace";
 
+/** Multi-agent author kinds (phase 0, multi-agent-development-guide 5.3). */
+export type AuthorType = "user" | "agent" | "system";
+
+/** Structured message kinds; plain conversation is ``message``. */
+export type MessageType = "message" | "job_status" | "workflow_run" | "approval" | "artifact";
+
+/** Conversation shapes (multi-agent phase 2, guide 5.2). */
+export type ConversationType = "direct" | "room";
+
+/** Conversation metadata mirrored from ``Session.metadata["conversation"]``
+ * (camelCase, matching the backend ``by_alias=True`` dump). Legacy sessions
+ * without this payload are treated as a direct chat with Mona. */
+export interface ConversationMeta {
+  schemaVersion?: number;
+  type: ConversationType;
+  title: string;
+  goal?: string | null;
+  agentIds: string[];
+  directAgentId?: string | null;
+  activeWorkflowId?: string | null;
+  activeWorkflowRevision?: number | null;
+  archived?: boolean;
+}
+
+/** Agent listing entry (``GET /api/agents``). */
+export interface AgentSummary {
+  id: string;
+  displayName: string;
+  avatarUrl?: string;
+  description: string;
+  enabled: boolean;
+}
+
+/** One member entry inside a room state payload. */
+export interface RoomAgentInfo {
+  id: string;
+  displayName: string;
+  description: string;
+}
+
+/** Room state returned by ``create_room`` / ``update_room`` / ``get_room_state``
+ * results and pushed via ``room_updated`` events. */
+export interface RoomState {
+  conversation: ConversationMeta;
+  agents: RoomAgentInfo[];
+}
+
+/** Shared fields of the ``create_room`` / ``update_room`` / ``get_room_state``
+ * result events (phase 2d). On ``ok: false`` only ``code`` / ``detail`` are set. */
+export interface RoomCommandResult {
+  ok: boolean;
+  chat_id?: string;
+  request_id?: string;
+  code?: string;
+  detail?: string;
+  conversation?: ConversationMeta;
+  agents?: RoomAgentInfo[];
+}
+
+/** Job states mirrored from ``mona/agent/jobs.py`` (guide 5.6). */
+export type AgentJobStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
+
+/** Compact job projection carried by ``agent_job_updated`` events. */
+export interface AgentJobSummary {
+  id: string;
+  roomId: string;
+  requestedBy: string;
+  assignedTo: string;
+  task: string;
+  status: AgentJobStatus;
+  workflowRunId?: string | null;
+  workflowStepId?: string | null;
+  parentJobId?: string | null;
+  attempt?: number;
+  result?: string | null;
+  error?: string | null;
+}
+
+/** Editable room fields accepted by the ``update_room`` command. */
+export interface RoomUpdate {
+  title?: string;
+  goal?: string | null;
+  agentIds?: string[];
+}
+
+// ---------------------------------------------------------------------------
+// Workflow (multi-agent phase 3, guide 5.4/5.5). Wire shapes mirror
+// ``mona/agent/workflow.py`` serialized with ``by_alias=True`` (camelCase).
+// ---------------------------------------------------------------------------
+
+export type WorkflowTriggerType = "manual" | "cron";
+
+export interface WorkflowTrigger {
+  type: WorkflowTriggerType;
+  /** Cron expression when ``type === "cron"`` (phase 4). */
+  expr?: string | null;
+  /** IANA timezone; null = server local. */
+  tz?: string | null;
+}
+
+export type WorkflowStepType = "agent" | "approval";
+
+export interface WorkflowStep {
+  id: string;
+  type: WorkflowStepType;
+  /** Agent steps only; must be a room member. */
+  agentId?: string | null;
+  /** Agent steps only: task brief. */
+  task?: string;
+  /** Agent steps only: what a good result looks like. */
+  expectedOutput?: string;
+  /** Approval steps only: prompt shown to the approver. */
+  message?: string;
+  dependsOn?: string[];
+}
+
+export type WorkflowStatus = "draft" | "active" | "archived";
+
+export interface WorkflowDefinition {
+  schemaVersion: number;
+  id: string;
+  roomId: string;
+  revision: number;
+  status: WorkflowStatus;
+  goal: string;
+  trigger: WorkflowTrigger;
+  steps: WorkflowStep[];
+  createdAt: string;
+  createdBy: string;
+}
+
+export type WorkflowRunStatus =
+  | "queued"
+  | "running"
+  | "waiting_approval"
+  | "succeeded"
+  | "failed"
+  | "cancelled";
+
+export type WorkflowStepStatus =
+  | "queued"
+  | "running"
+  | "waiting_approval"
+  | "succeeded"
+  | "failed"
+  | "cancelled"
+  | "skipped";
+
+/** Per-step state inside a run (``StepRun``). The approval fields are
+ *  only set on approval steps (phase 4). */
+export interface WorkflowStepRun {
+  status: WorkflowStepStatus;
+  jobId?: string | null;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  output?: { summary?: string; artifacts?: string[] } | null;
+  error?: string | null;
+  approvalToken?: string | null;
+  approvalExpiresAt?: string | null;
+  approvalDecision?: "approved" | "rejected" | null;
+  approvalResolvedAt?: string | null;
+  approvalResolvedBy?: string | null;
+}
+
+/** One workflow execution with a full definition snapshot. */
+export interface WorkflowRun {
+  schemaVersion: number;
+  id: string;
+  roomId: string;
+  workflowId: string;
+  workflowRevision: number;
+  workflow: WorkflowDefinition;
+  status: WorkflowRunStatus;
+  triggerType: WorkflowTriggerType;
+  startedBy: string;
+  startedAt: string;
+  finishedAt?: string | null;
+  steps: Record<string, WorkflowStepRun>;
+}
+
+/** Shared envelope of the workflow ``*_result`` events. On ``ok: false``
+ *  only ``code`` / ``detail`` are set. */
+export interface WorkflowCommandResult {
+  ok: boolean;
+  chat_id?: string;
+  request_id?: string;
+  code?: string;
+  detail?: string;
+  workflow?: WorkflowDefinition;
+  /** ``workflow_state_result``: current draft (may be null). */
+  draft?: WorkflowDefinition | null;
+  /** ``workflow_state_result``: active revision snapshot (may be null). */
+  active?: WorkflowDefinition | null;
+  activeRevision?: number | null;
+  revisions?: number[];
+  run?: WorkflowRun | null;
+  run_id?: string;
+  /** ``resolve_workflow_approval_result``: the resolved step id. */
+  step_id?: string;
+}
+
+/** One waiting approval inside an ``approval_requested`` broadcast. */
+export interface ApprovalRequestItem {
+  stepId: string;
+  message: string;
+  token: string | null;
+}
+
+/** ``approval_requested`` broadcast payload (normalized by MonaClient). */
+export interface ApprovalRequestedPayload {
+  chatId: string;
+  runId: string;
+  approvals: ApprovalRequestItem[];
+}
+
+/** ``workflow_updated`` broadcast payload (normalized by MonaClient). */
+export interface WorkflowUpdatedPayload {
+  chatId: string;
+  workflow: WorkflowDefinition;
+  /** True when the pushed workflow is the room draft. */
+  draft: boolean;
+  activeRevision?: number | null;
+}
+
 /** One image attached to a UIMessage.
  *
  * ``url`` can arrive in three different shapes, which the bubble renders
@@ -78,6 +302,21 @@ export interface UIMessage {
    *  queue "append" action) rather than sent as a new conversational turn.
    *  Drives a subtle visual badge so the user knows it was a supplement. */
   isInjected?: boolean;
+  /** Multi-agent phase 0: who authored this message. Absent on
+   *  pre-multi-agent persisted data. */
+  authorType?: AuthorType;
+  /** Agent ID of the author (``mona``, ``com.mona.a-share-analyst``, …).
+   *  Absent on user messages and legacy data; render a missing value on
+   *  assistant messages as Mona. */
+  authorId?: string;
+  /** Structured message kind; plain conversation when absent or ``message``. */
+  messageType?: MessageType;
+  /** Delegated job this message belongs to (``job_status`` / delegated replies). */
+  jobId?: string;
+  /** Workflow run this message belongs to (``workflow_run`` / ``approval``). */
+  workflowRunId?: string;
+  /** Structured payload for non-``message`` kinds (job snapshot, run summary…). */
+  payload?: unknown;
 }
 
 /** Structured UI blob on ``progress`` WS frames; channels may add more ``kind`` values later. */
@@ -136,6 +375,9 @@ export interface ChatSummary {
   workspace?: string | null;
   /** Unix epoch seconds when this session currently has a turn in flight. */
   runStartedAt?: number | null;
+  /** Multi-agent conversation shape (phase 2d). Absent on legacy sessions,
+   *  which render as a direct chat with Mona. */
+  conversation?: ConversationMeta | null;
 }
 
 export type SidebarDensity = "comfortable" | "compact";
@@ -443,6 +685,13 @@ export type InboundEvent =
        * webui clients use it to trigger a native system notification. */
       schedule_reminder?: boolean;
       schedule_item_id?: string;
+      /** Multi-agent phase 2d: authoring agent; absent defaults to Mona. */
+      author_id?: string;
+      /** Structured message kind; plain conversation when absent. */
+      message_type?: MessageType;
+      job_id?: string;
+      workflow_run_id?: string;
+      payload?: unknown;
     }
   | {
       event: "file_edit";
@@ -459,6 +708,8 @@ export type InboundEvent =
       chat_id: string;
       text: string;
       stream_id?: string;
+      /** Multi-agent phase 2d: streaming author; absent defaults to Mona. */
+      author_id?: string;
     }
   | {
       event: "stream_end";
@@ -545,7 +796,58 @@ export type InboundEvent =
       files?: { name: string; path: string; size?: number; mime?: string }[];
       chat_id?: string;
       error?: string;
-    };
+    }
+  | ({ event: "create_room_result" } & RoomCommandResult)
+  | ({ event: "update_room_result" } & RoomCommandResult)
+  | ({ event: "room_state_result" } & RoomCommandResult)
+  | {
+      event: "room_updated";
+      chat_id: string;
+      conversation: ConversationMeta;
+      agents: RoomAgentInfo[];
+    }
+  | {
+      event: "cancel_agent_job_result";
+      ok: boolean;
+      chat_id?: string;
+      request_id?: string;
+      code?: string;
+      detail?: string;
+      job_id?: string;
+      job?: AgentJobSummary;
+    }
+  | {
+      event: "agent_job_updated";
+      chat_id: string;
+      job: AgentJobSummary;
+    }
+  | ({ event: "workflow_draft_ready" } & WorkflowCommandResult)
+  | ({ event: "activate_workflow_result" } & WorkflowCommandResult)
+  | ({ event: "workflow_state_result" } & WorkflowCommandResult)
+  | ({ event: "run_workflow_result" } & WorkflowCommandResult)
+  | ({ event: "cancel_workflow_run_result" } & WorkflowCommandResult)
+  | ({ event: "workflow_run_state_result" } & WorkflowCommandResult)
+  | ({ event: "resolve_workflow_approval_result" } & WorkflowCommandResult)
+  | {
+      event: "approval_requested";
+      chat_id: string;
+      run_id: string;
+      approvals: ApprovalRequestItem[];
+    }
+  | {
+      event: "workflow_updated";
+      chat_id: string;
+      workflow: WorkflowDefinition;
+      draft?: boolean;
+      activeRevision?: number | null;
+    }
+  | ({
+      event: "workflow_run_updated";
+      chat_id: string;
+      /** Present (with ``detail``) on run-conflict frames instead of a run. */
+      error?: string;
+      detail?: string;
+    } & Partial<WorkflowRun>);
 
 /** Base64-encoded image attached to an outbound ``message`` envelope.
  *
@@ -615,6 +917,57 @@ export type Outbound =
       type: "doc_upload";
       chat_id: string;
       files: { name: string; data_url: string }[];
+    }
+  | {
+      type: "create_room";
+      chat_id: string;
+      agent_ids: string[];
+      title?: string;
+      goal?: string;
+      request_id?: string;
+    }
+  | {
+      type: "update_room";
+      chat_id: string;
+      agent_ids?: string[];
+      title?: string;
+      goal?: string | null;
+      request_id?: string;
+    }
+  | { type: "get_room_state"; chat_id: string; request_id?: string }
+  | {
+      type: "cancel_agent_job";
+      chat_id: string;
+      job_id: string;
+      reason?: string;
+      request_id?: string;
+    }
+  | {
+      type: "save_workflow_draft";
+      chat_id: string;
+      goal: string;
+      trigger?: WorkflowTrigger;
+      steps: WorkflowStep[];
+      request_id?: string;
+    }
+  | { type: "activate_workflow"; chat_id: string; request_id?: string }
+  | { type: "get_workflow"; chat_id: string; request_id?: string }
+  | { type: "run_workflow"; chat_id: string; request_id?: string }
+  | {
+      type: "cancel_workflow_run";
+      chat_id: string;
+      run_id?: string;
+      request_id?: string;
+    }
+  | { type: "get_workflow_run"; chat_id: string; run_id?: string; request_id?: string }
+  | {
+      type: "resolve_workflow_approval";
+      chat_id: string;
+      run_id: string;
+      step_id: string;
+      token: string;
+      approve: boolean;
+      request_id?: string;
     };
 
 export interface PptTemplate {

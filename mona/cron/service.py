@@ -71,6 +71,15 @@ def _validate_schedule_for_add(schedule: CronSchedule) -> None:
             raise ValueError(f"unknown timezone '{schedule.tz}'") from None
 
 
+class CronSkip(Exception):  # noqa: N818 - a skip signal, not an error
+    """Raise from ``on_job`` to record the run as an intentional skip.
+
+    Skips are explicit run-history entries (``status="skipped"``), never a
+    queue — e.g. a workflow cron firing while the room already has an
+    active run (guide 7.7).
+    """
+
+
 class CronService:
     """Service for managing and executing scheduled jobs."""
 
@@ -136,6 +145,7 @@ class CronService:
                                 or {}
                             ),
                             session_key=j["payload"].get("sessionKey") or j["payload"].get("session_key"),
+                            room_id=j["payload"].get("roomId") or j["payload"].get("room_id"),
                         ),
                         state=CronJobState(
                             next_run_at_ms=j.get("state", {}).get("nextRunAtMs"),
@@ -266,6 +276,7 @@ class CronService:
                         "to": j.payload.to,
                         "channelMeta": j.payload.channel_meta,
                         "sessionKey": j.payload.session_key,
+                        "roomId": j.payload.room_id,
                     },
                     "state": {
                         "nextRunAtMs": j.state.next_run_at_ms,
@@ -429,6 +440,11 @@ class CronService:
             job.state.last_status = "ok"
             job.state.last_error = None
             logger.debug("Cron: job '{}' completed", job.name)
+
+        except CronSkip as e:
+            job.state.last_status = "skipped"
+            job.state.last_error = str(e) or None
+            logger.info("Cron: job '{}' skipped: {}", job.name, e)
 
         except Exception as e:
             job.state.last_status = "error"

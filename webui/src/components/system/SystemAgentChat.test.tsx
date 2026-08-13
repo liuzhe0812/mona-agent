@@ -11,6 +11,7 @@ const chatMock = vi.hoisted(() => ({
 
 vi.mock("@/providers/ClientProvider", () => ({
   useClientOptional: () => ({ client: { newChat: chatMock.newChat }, token: "test" }),
+  useClientContextOrNull: () => ({ client: { newChat: chatMock.newChat }, token: "test" }),
 }));
 
 vi.mock("@/hooks/useSessions", () => ({
