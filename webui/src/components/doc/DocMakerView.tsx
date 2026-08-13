@@ -66,7 +66,7 @@ export function DocMakerView() {
             key={tab.key}
             variant={activeTab === tab.key ? "secondary" : "ghost"}
             size="sm"
-            className="h-7 rounded-full px-3 text-[13px]"
+            className="h-7 rounded-full px-3 text-caption"
             onClick={() => setActiveTab(tab.key)}
           >
             {tab.label}
@@ -78,7 +78,7 @@ export function DocMakerView() {
       <div className="relative isolate flex-1 overflow-hidden">
         {pptMounted && (
           <div className={cn("absolute inset-0 flex flex-col bg-background", activeTab !== "ppt" && "invisible pointer-events-none")}>
-            <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-muted-foreground">正在打开 PPT 制作...</div>}>
+            <Suspense fallback={<div className="flex h-full items-center justify-center text-body text-muted-foreground">正在打开 PPT 制作...</div>}>
               <PptMakerView />
             </Suspense>
           </div>

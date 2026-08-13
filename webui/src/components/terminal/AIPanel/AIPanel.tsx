@@ -1,6 +1,7 @@
 import { History, ListChecks, RotateCcw } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 import { AIChat } from "./AIChat";
 import { MaintenanceHistory } from "./MaintenanceHistory";
 import { MaintenanceTaskCard } from "./MaintenanceTaskCard";
@@ -51,16 +52,18 @@ export function AIPanel({ sessionId }: Props) {
   return (
     <div className="flex h-full w-full flex-col bg-background">
       <div className="flex h-10 shrink-0 items-center justify-between border-b border-border/65 px-3">
-        <h2 className="truncate text-[12px] font-semibold text-foreground">Mona</h2>
-        <button
+        <h2 className="truncate text-caption font-semibold text-foreground">Mona</h2>
+        <Button
           type="button"
+          variant="ghost"
+          size="icon"
           aria-label="重置会话"
           title="重置会话"
           onClick={handleResetChat}
-          className="grid h-6 w-6 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+          className="h-6 w-6 text-muted-foreground"
         >
           <RotateCcw className="h-3.5 w-3.5" />
-        </button>
+        </Button>
       </div>
       <div className="flex h-8 shrink-0 items-center gap-1 border-b border-border/65 px-2">
         <PanelTabButton
@@ -112,18 +115,20 @@ function PanelTabButton({
   label: string;
 }) {
   return (
-    <button
+    <Button
       type="button"
+      variant="ghost"
+      size="xs"
       onClick={onClick}
       className={cn(
-        "flex items-center gap-1 rounded-md px-2 py-1 text-[11px] transition-colors",
+        "gap-1 text-caption",
         active
-          ? "bg-accent font-medium text-foreground"
-          : "text-muted-foreground hover:bg-accent hover:text-foreground",
+          ? "bg-accent font-medium text-foreground hover:bg-accent"
+          : "text-muted-foreground",
       )}
     >
       {icon}
       {label}
-    </button>
+    </Button>
   );
 }

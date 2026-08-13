@@ -120,22 +120,24 @@ export function SenderPopover({
           <div
             data-sender-popup
             style={popupStyle}
-            className="w-[260px] rounded-lg border border-border bg-popover p-3 shadow-md"
+            className="w-[260px] rounded-md border border-border bg-popover p-3 shadow-lg"
           >
-            <button
+            <Button
               type="button"
+              variant="ghost"
+              size="icon"
               onClick={() => setOpen(false)}
-              className="absolute right-2 top-2 text-muted-foreground transition-colors hover:text-foreground"
+              className="absolute right-2 top-2 h-6 w-6 text-muted-foreground hover:text-foreground"
               aria-label="关闭"
             >
               <X className="h-3.5 w-3.5" />
-            </button>
+            </Button>
 
             <div className="pr-6">
-              <div className="truncate text-sm font-medium text-foreground">
+              <div className="truncate text-body font-medium text-foreground">
                 {displayName || "(未知姓名)"}
               </div>
-              <div className="mt-0.5 truncate text-xs text-muted-foreground">
+              <div className="mt-0.5 truncate text-caption text-muted-foreground">
                 {email}
               </div>
             </div>
@@ -144,7 +146,7 @@ export function SenderPopover({
               <Button
                 variant="outline"
                 size="sm"
-                className="h-7 gap-1.5 px-2 text-xs"
+                className="h-7 gap-1.5 px-2 text-caption"
                 onClick={handleWriteMail}
                 disabled={!accountId}
               >

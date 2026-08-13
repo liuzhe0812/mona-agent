@@ -14,6 +14,9 @@ import { useClient } from "@/providers/ClientProvider";
 import { useTerminalStore } from "../store/terminalStore";
 import { isTauri, openPathWithSystemApp } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { Select } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 
 /** Same MIME whitelist as ThreadComposer (mirrors server-side). */
 const ACCEPT_ATTR = "image/png,image/jpeg,image/webp,image/gif";
@@ -237,36 +240,40 @@ export function AIChat({ sessionId, onStreamingChange }: Props) {
     <div className="flex h-full flex-col">
       <div ref={scrollRef} className="flex-1 overflow-y-auto overflow-x-hidden p-3 space-y-3">
         {messages.length === 0 && reports.length === 0 && (
-          <p className="text-center text-xs text-muted-foreground py-8">
+          <p className="text-center text-caption text-muted-foreground py-8">
             输入问题，AI 将基于终端上下文回答
           </p>
         )}
         <ThreadMessages messages={messages} isStreaming={isStreaming} />
         {reports.map((report, i) => (
-          <button
+          <Button
             key={`report-${i}`}
             type="button"
+            variant="outline"
+            size="xs"
             onClick={() => openPathWithSystemApp(report.path)}
-            className="inline-flex items-center gap-1.5 rounded-md border border-border/70 bg-background px-2.5 py-1.5 text-[11px] text-foreground hover:bg-sidebar-accent/50 transition-colors"
+            className="gap-1.5 text-caption"
           >
-            <FileText className="h-3.5 w-3.5 text-[#1d6feb]" />
+            <FileText className="h-3.5 w-3.5 text-info" />
             <span className="font-medium">{report.title}</span>
             <span className="text-muted-foreground">— 点击查看报告</span>
-          </button>
+          </Button>
         ))}
       </div>
       <div className="shrink-0 p-2">
         {canExec && (
           <div className="flex items-center gap-1.5 px-2.5 pb-1.5">
             <Shield className="h-3 w-3 text-muted-foreground" />
-            <select
+            <Select
               value={execMode}
-              onChange={(e) => setExecMode(e.target.value as "auto" | "approval")}
-              className="bg-transparent text-[11px] text-muted-foreground outline-none cursor-pointer hover:text-foreground transition-colors"
-            >
-              <option value="auto">自动模式（普通步骤自动执行，高风险单独确认）</option>
-              <option value="approval">审批模式（变更计划确认一次）</option>
-            </select>
+              onValueChange={(v) => setExecMode(v as "auto" | "approval")}
+              aria-label="执行模式"
+              options={[
+                { value: "auto", label: "自动模式（普通步骤自动执行，高风险单独确认）" },
+                { value: "approval", label: "审批模式（变更计划确认一次）" },
+              ]}
+              className="h-6 min-w-0 flex-1 border-transparent bg-transparent px-1 text-micro text-muted-foreground shadow-none"
+            />
           </div>
         )}
         <div
@@ -297,19 +304,19 @@ export function AIChat({ sessionId, onStreamingChange }: Props) {
           {inlineError ? (
             <div
               role="alert"
-              className="rounded-md border border-destructive/40 bg-destructive/8 px-2 py-1 text-[11px] font-medium text-destructive"
+              className="rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1 text-micro font-medium text-destructive"
             >
               {inlineError}
             </div>
           ) : null}
           <div className="flex items-end gap-1.5">
-            <textarea
+            <Textarea
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={handleKeyDown}
               onPaste={onPaste}
               placeholder="输入问题，AI 将基于终端上下文回答..."
-              className="min-h-[36px] flex-1 resize-none bg-transparent text-[12px] leading-5 outline-none placeholder:text-muted-foreground"
+              className="min-h-[36px] flex-1 resize-none rounded-none border-0 bg-transparent px-0 py-0 text-caption leading-5 shadow-none focus-visible:ring-0"
               rows={2}
             />
             <input
@@ -320,24 +327,30 @@ export function AIChat({ sessionId, onStreamingChange }: Props) {
               hidden
               onChange={onFilePick}
             />
-            <button
+            <Button
               type="button"
+              variant="ghost"
+              size="icon"
               onClick={() => fileInputRef.current?.click()}
               disabled={full}
               aria-label="添加图片"
-              className="grid h-6 w-6 shrink-0 place-items-center rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              className="h-6 w-6 shrink-0 text-muted-foreground"
             >
               <Plus className="h-3 w-3" />
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
+              variant="ghost"
+              size="icon"
               onClick={isStreaming ? handleStop : handleSend}
               disabled={!canSend}
-              className={`grid h-6 w-6 shrink-0 place-items-center rounded-lg transition-colors ${
+              aria-label={isStreaming ? "停止" : "发送"}
+              className={cn(
+                "h-6 w-6 shrink-0",
                 isStreaming
                   ? "text-destructive hover:bg-destructive/10"
-                  : "bg-foreground text-background hover:bg-foreground/90 disabled:bg-muted disabled:text-muted-foreground"
-              }`}
+                  : "bg-action text-white hover:bg-action-hover hover:text-white disabled:bg-muted disabled:text-muted-foreground",
+              )}
             >
               {isStreaming ? (
                 <Square className="h-3 w-3" />
@@ -346,7 +359,7 @@ export function AIChat({ sessionId, onStreamingChange }: Props) {
               ) : (
                 <Send className="h-3 w-3" />
               )}
-            </button>
+            </Button>
           </div>
         </div>
       </div>
@@ -394,7 +407,7 @@ function AttachmentChip({ image, formatError, onRemove }: AttachmentChipProps) {
           </div>
         ) : null}
       </div>
-      <div className="flex min-w-0 flex-col text-[10.5px] leading-3.5">
+      <div className="flex min-w-0 flex-col text-micro">
         <span className="truncate max-w-[8rem]" title={image.file.name}>
           {image.file.name}
         </span>
@@ -404,14 +417,16 @@ function AttachmentChip({ image, formatError, onRemove }: AttachmentChipProps) {
             : sizeLabel}
         </span>
       </div>
-      <button
+      <Button
         type="button"
+        variant="ghost"
+        size="icon"
         onClick={onRemove}
         aria-label="移除图片"
-        className="ml-0.5 grid h-4 w-4 flex-none place-items-center rounded-full text-muted-foreground/80 hover:bg-foreground/8 hover:text-foreground"
+        className="ml-0.5 h-4 w-4 flex-none rounded-full text-muted-foreground/80 hover:text-foreground"
       >
         <X className="h-3 w-3" aria-hidden />
-      </button>
+      </Button>
     </div>
   );
 }

@@ -1,5 +1,6 @@
 import { X, Save } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
 import { IdeEditor } from "./IdeEditor";
 import { useIdeStore } from "./useIdeStore";
 
@@ -41,7 +42,7 @@ export function IdeEditorPanel() {
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
-                className={`group relative flex h-6 max-w-[160px] shrink-0 items-center gap-1 pl-2.5 pr-1 text-xs transition-colors ${
+                className={`group relative flex h-6 max-w-[160px] shrink-0 items-center gap-1 pl-2.5 pr-1 text-caption transition-colors ${
                   index > 0 ? "border-l border-border" : ""
                 } ${
                   isActive
@@ -56,7 +57,7 @@ export function IdeEditorPanel() {
                   />
                 )}
                 <span className="truncate">{tab.name}</span>
-                {tab.isDirty && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-blue-500" />}
+                {tab.isDirty && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-info" />}
                 <span
                   onClick={(e) => {
                     e.stopPropagation();
@@ -104,9 +105,7 @@ export function IdeEditorPanel() {
             onSave={handleSave}
           />
         ) : (
-          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-            选择一个文件开始编辑
-          </div>
+          <EmptyState className="h-full" title="选择一个文件开始编辑" />
         )}
       </div>
     </div>

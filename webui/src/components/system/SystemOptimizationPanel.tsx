@@ -140,7 +140,7 @@ function SettingSwitch({ item, onAction }: { item: ConfigurationAuditItem; onAct
       aria-label={`${enabled ? "恢复" : "应用"}${featureTitle(item.id, item.title)}`}
       disabled={!canChange}
       onClick={(event) => { event.stopPropagation(); onAction({ item, mode }); }}
-      className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full p-0.5 transition-all duration-300 disabled:cursor-not-allowed disabled:opacity-40 ${enabled ? "bg-primary" : "bg-muted-foreground/25"}`}
+        className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full p-0.5 transition-all duration-300 disabled:cursor-not-allowed disabled:opacity-40 ${enabled ? "bg-action" : "bg-muted-foreground/25"}`}
     >
       <span className={`h-5 w-5 rounded-full bg-white shadow-sm transition-transform duration-300 ${enabled ? "translate-x-5" : "translate-x-0"}`} />
     </button>
@@ -219,7 +219,7 @@ export function SystemOptimizationPanel() {
       <section className="relative overflow-hidden rounded-2xl border border-info/15 bg-gradient-to-r from-info/[0.08] via-card to-primary/[0.06] px-5 py-4 shadow-sm">
         <div className="pointer-events-none absolute -right-8 -top-16 h-36 w-36 rounded-full bg-info/15 blur-3xl" />
         <div className="relative flex flex-wrap items-center gap-3">
-          <span className="flex h-11 w-11 items-center justify-center rounded-lg bg-primary text-primary-foreground"><SlidersHorizontal className="h-5 w-5" /></span>
+          <span className="flex h-11 w-11 items-center justify-center rounded-lg bg-action text-white"><SlidersHorizontal className="h-5 w-5" /></span>
           <div>
             <h2 className="text-title-sm tracking-tight">系统优化</h2>
             <p className="mt-1 text-caption text-muted-foreground">集中管理性能、界面、网络、安全和应用行为。</p>
@@ -248,7 +248,7 @@ export function SystemOptimizationPanel() {
         )}
 
         <div className="flex gap-1 overflow-x-auto border-b border-border/60 px-3 py-2 lg:hidden">
-          {["全部设置", ...categories].map((label) => <button key={label} type="button" aria-label={`${label}（紧凑导航）`} onClick={() => setCategory(label)} className={`whitespace-nowrap rounded-lg px-2.5 py-1.5 text-caption ${category === label ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent"}`}>{label}</button>)}
+          {["全部设置", ...categories].map((label) => <button key={label} type="button" aria-label={`${label}（紧凑导航）`} onClick={() => setCategory(label)} className={`whitespace-nowrap rounded-lg px-2.5 py-1.5 text-caption ${category === label ? "bg-info-soft text-info" : "text-muted-foreground hover:bg-accent"}`}>{label}</button>)}
         </div>
 
         <div className="grid min-h-[470px] lg:grid-cols-[190px_minmax(0,1fr)]">
@@ -256,7 +256,7 @@ export function SystemOptimizationPanel() {
             {["全部设置", ...categories].map((label) => {
               const Icon = label === "全部设置" ? SlidersHorizontal : (categoryIcons[label] ?? CircleHelp);
               const count = label === "全部设置" ? items.length : catalogCategories.has(label) ? (categoryCounts.get(label) ?? items.filter((item) => item.category === label).length) : null;
-              return <button key={label} type="button" aria-label={label} onClick={() => setCategory(label)} className={`mb-0.5 flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-caption transition ${category === label ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent hover:text-foreground"}`}><Icon className="h-3.5 w-3.5 shrink-0" /><span className="min-w-0 flex-1 truncate">{label}</span>{count !== null && <span className={`text-micro ${category === label ? "text-primary-foreground/70" : "text-muted-foreground/70"}`}>{count}</span>}</button>;
+              return <button key={label} type="button" aria-label={label} onClick={() => setCategory(label)} className={`mb-0.5 flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-caption transition ${category === label ? "bg-info-soft text-info" : "text-muted-foreground hover:bg-accent hover:text-foreground"}`}><Icon className="h-3.5 w-3.5 shrink-0" /><span className="min-w-0 flex-1 truncate">{label}</span>{count !== null && <span className={`text-micro ${category === label ? "text-info/70" : "text-muted-foreground/70"}`}>{count}</span>}</button>;
             })}
           </nav>
 
@@ -274,7 +274,7 @@ export function SystemOptimizationPanel() {
                   const groupRiskValue = groupRisk(group, itemById);
                   return <article key={group.id} className="group rounded-lg border border-border/65 bg-background/70 px-3.5 py-3 transition hover:bg-accent">
                     <div className="flex flex-wrap items-center gap-3">
-                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary"><SlidersHorizontal className="h-4 w-4" /></span>
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-info-soft text-info"><SlidersHorizontal className="h-4 w-4" /></span>
                       <div className="min-w-[180px] flex-1"><div className="flex items-center gap-2"><h3 className="text-caption font-semibold">{groupTitle(group.id, group.label)}</h3><StatusPill tone={riskMeta[groupRiskValue].tone}>{riskMeta[groupRiskValue].label}</StatusPill></div><p className="mt-1 truncate text-micro text-muted-foreground">从互斥选项中选择一个 Windows 行为</p></div>
                       <Select value={current} disabled={disabled || applying} onValueChange={(id) => { const item = itemById.get(id); if (item) openPending({ item, mode: "recommended" }); }} placeholder={disabled ? "当前版本不适用" : "选择配置"} options={group.values.map((value) => ({ value: value.featureIds[0], label: optionLabel(value.label) }))} className="h-8 w-auto min-w-[190px] max-w-[280px] text-caption" />
                     </div>
@@ -285,7 +285,7 @@ export function SystemOptimizationPanel() {
                   const riskInfo = riskMeta[item.risk];
                   return <article key={item.id} tabIndex={0} role="button" onClick={() => setDetails(item)} onKeyDown={(event) => { if (event.key === "Enter") setDetails(item); }} className={`group rounded-lg border px-3.5 py-3 transition hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ${item.status === "unavailable" ? "border-border/50 bg-muted/20 opacity-70" : "border-border/65 bg-background/70"}`}>
                     <div className="flex items-center gap-3">
-                      <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${item.risk === "high" ? "bg-destructive/10 text-destructive" : item.status === "configured" ? "bg-success/10 text-success" : "bg-primary/10 text-primary"}`}>{item.status === "configured" ? <Check className="h-4 w-4" /> : <SlidersHorizontal className="h-4 w-4" />}</span>
+              <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${item.risk === "high" ? "bg-destructive/10 text-destructive" : item.status === "configured" ? "bg-success/10 text-success" : "bg-info-soft text-info"}`}>{item.status === "configured" ? <Check className="h-4 w-4" /> : <SlidersHorizontal className="h-4 w-4" />}</span>
                       <div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-1.5"><h3 className="truncate text-caption font-semibold">{featureTitle(item.id, item.title)}</h3><StatusPill tone={meta.tone}>{meta.label}</StatusPill><StatusPill tone={riskInfo.tone}>{riskInfo.label}</StatusPill>{item.requiresRestart && <StatusPill tone="violet">需重启</StatusPill>}{item.requiresAdministrator && <StatusPill tone="orange">管理员</StatusPill>}</div><p className="mt-1 truncate text-micro text-muted-foreground">{displayDescription(item)}</p></div>
                       <SettingSwitch item={item} onAction={openPending} />
                       <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/50 transition group-hover:translate-x-0.5 group-hover:text-primary" />
@@ -323,7 +323,7 @@ export function SystemOptimizationPanel() {
           <AlertDialogHeader><AlertDialogTitle>{pending?.mode === "restore" ? "恢复 Windows 默认设置？" : `应用“${pending ? featureTitle(pending.item.id, pending.item.title) : ""}”？`}</AlertDialogTitle><AlertDialogDescription>{pending?.item ? `${displayDescription(pending.item)}${pending.item.requiresAdministrator ? " Windows 可能要求管理员权限。" : ""}${pending.item.requiresRestart ? " 完成后需要重启。" : ""}${!pending.item.reversible ? " 此项目无法由 Mona 自动恢复。" : ""}` : ""}</AlertDialogDescription></AlertDialogHeader>
           {actionError && <StatusNotice tone="danger">{actionError}</StatusNotice>}
           {pending?.item.risk === "high" && <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-caption leading-5"><Checkbox className="mt-1" checked={acknowledged} onCheckedChange={(value) => setAcknowledged(value === true)} /><span><strong className="text-destructive">我已了解这是高风险设置</strong><br /><span className="text-muted-foreground">可能影响系统组件、安全策略或恢复能力，我确认继续。</span></span></label>}
-          <AlertDialogFooter><AlertDialogCancel disabled={applying}>取消</AlertDialogCancel><AlertDialogAction disabled={applying || (pending?.item.risk === "high" && !acknowledged)} onClick={(event) => { event.preventDefault(); void confirm(); }} className={pending?.item.risk === "high" ? "bg-destructive text-destructive-foreground hover:bg-destructive/90" : "bg-primary text-primary-foreground hover:bg-primary/90"}>{applying && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}{pending?.mode === "restore" ? "确认恢复" : "确认应用"}</AlertDialogAction></AlertDialogFooter>
+          <AlertDialogFooter><AlertDialogCancel disabled={applying}>取消</AlertDialogCancel><AlertDialogAction disabled={applying || (pending?.item.risk === "high" && !acknowledged)} onClick={(event) => { event.preventDefault(); void confirm(); }} className={pending?.item.risk === "high" ? "bg-destructive text-destructive-foreground hover:bg-destructive/90" : "bg-action text-white hover:bg-action-hover hover:text-white"}>{applying && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}{pending?.mode === "restore" ? "确认恢复" : "确认应用"}</AlertDialogAction></AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
     </div>

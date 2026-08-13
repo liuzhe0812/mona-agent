@@ -49,7 +49,7 @@ export function SshPasswordDialog() {
           <DialogTitle>SSH 密码认证</DialogTitle>
         </DialogHeader>
         <div className="space-y-3">
-          <div className="text-sm text-muted-foreground">
+          <div className="text-body text-muted-foreground">
             连接到{" "}
             <span className="font-mono text-foreground">
               {dialog.username}@{dialog.host}
@@ -73,7 +73,7 @@ export function SshPasswordDialog() {
             autoFocus
           />
           {error && (
-            <div className="rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">
+            <div className="rounded-md bg-destructive/10 px-3 py-2 text-caption text-destructive">
               {error}
             </div>
           )}

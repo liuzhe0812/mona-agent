@@ -474,7 +474,7 @@ export const MaterialsSidebar = forwardRef<MaterialsSidebarHandle, MaterialsSide
 
   if (!initialized) {
     return (
-      <div className="flex flex-1 items-center justify-center text-[13px] text-muted-foreground">
+      <div className="flex flex-1 items-center justify-center text-ui text-muted-foreground">
         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
         正在初始化资料库...
       </div>
@@ -499,7 +499,7 @@ export const MaterialsSidebar = forwardRef<MaterialsSidebarHandle, MaterialsSide
             if (e.key === "Escape") setSearchQuery("");
           }}
           placeholder="搜索资料正文和 Wiki..."
-          className="pl-7 pr-7 text-[12px]"
+          className="pl-7 pr-7 text-caption"
         />
         {searchQuery ? (
           <button
@@ -556,7 +556,7 @@ export const MaterialsSidebar = forwardRef<MaterialsSidebarHandle, MaterialsSide
               >
                 <div className="flex items-center gap-1.5">
                   <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                  <span className="min-w-0 flex-1 truncate text-[12.5px]">{r.title}</span>
+                  <span className="min-w-0 flex-1 truncate text-caption">{r.title}</span>
                   {r.locationLabel ? (
                     <span className="shrink-0 rounded-md bg-accent px-1 py-px text-[10px] text-muted-foreground">
                       {r.locationLabel}
@@ -570,7 +570,7 @@ export const MaterialsSidebar = forwardRef<MaterialsSidebarHandle, MaterialsSide
                   </span>
                 </div>
                 {r.snippet ? (
-                  <div className="line-clamp-2 pl-5 text-[11px] text-muted-foreground">
+                  <div className="line-clamp-2 pl-5 text-micro text-muted-foreground">
                     {r.snippet}
                   </div>
                 ) : null}
@@ -655,7 +655,7 @@ export const MaterialsSidebar = forwardRef<MaterialsSidebarHandle, MaterialsSide
                   <button
                     type="button"
                     onClick={() => toggleWikiGroup(dir)}
-                    className="flex w-full items-center gap-1 px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground"
+                    className="flex w-full items-center gap-1 px-2 py-0.5 text-micro text-muted-foreground hover:text-foreground"
                   >
                     <ChevronRight
                       className={cn(
@@ -738,7 +738,7 @@ function GroupHeader({
     <button
       type="button"
       onClick={onToggle}
-      className="flex w-full items-center gap-1 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground"
+      className="flex w-full items-center gap-1 px-2 py-1 text-micro font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground"
     >
       <ChevronRight
         className={cn("h-3 w-3 transition-transform", !collapsed && "rotate-90")}
@@ -864,7 +864,7 @@ function MoveTargetDialog({ open, srcPath, onConfirm, onOpenChange }: MoveTarget
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-[400px] gap-0 rounded-xl border-border/70 p-0">
         <DialogHeader className="border-b border-border/65 px-4 py-3 text-left">
-          <DialogTitle className="text-[14px]">移动到...</DialogTitle>
+          <DialogTitle className="text-body">移动到...</DialogTitle>
         </DialogHeader>
         <div className="px-4 py-3">
           <p className="mb-2 truncate text-[11.5px] text-muted-foreground">
@@ -933,7 +933,7 @@ function MoveTargetDialog({ open, srcPath, onConfirm, onOpenChange }: MoveTarget
                 setSelected("");
               }}
               placeholder="或输入自定义路径（相对 raw/，留空表示根目录）"
-              className="h-8 text-[12.5px]"
+              className="h-8 text-caption"
             />
           </div>
         </div>
@@ -942,7 +942,7 @@ function MoveTargetDialog({ open, srcPath, onConfirm, onOpenChange }: MoveTarget
             type="button"
             variant="ghost"
             size="sm"
-            className="h-7 px-2.5 text-[12px]"
+            className="h-7 px-2.5 text-caption"
             onClick={() => onOpenChange(false)}
           >
             取消
@@ -950,7 +950,7 @@ function MoveTargetDialog({ open, srcPath, onConfirm, onOpenChange }: MoveTarget
           <Button
             type="button"
             size="sm"
-            className="h-7 px-2.5 text-[12px]"
+            className="h-7 px-2.5 text-caption"
             disabled={buttonDisabled}
             onClick={handleConfirm}
           >

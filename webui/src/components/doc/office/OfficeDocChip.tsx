@@ -17,13 +17,13 @@ function formatSize(bytes?: number): string {
 }
 
 /** Compact chip showing an uploaded document in the composer area.
- *  Follows ui-spec.md: rounded-md (small control tier), text-[13px]. */
+ *  Follows ui-spec.md: rounded-md (small control tier), text-caption. */
 export function OfficeDocChip({ name, size, onRemove, onClick }: OfficeDocChipProps) {
   const sizeLabel = formatSize(size);
   return (
     <div
       className={
-        "group flex h-7 items-center gap-1.5 rounded-md border border-border/60 bg-background px-2 text-[12px] shadow-sm " +
+        "group flex h-7 items-center gap-1.5 rounded-md border border-border/60 bg-background px-2 text-caption " +
         (onClick ? "cursor-pointer hover:bg-accent" : "")
       }
       onClick={onClick}

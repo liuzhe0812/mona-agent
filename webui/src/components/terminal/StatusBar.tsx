@@ -19,7 +19,7 @@ export function StatusBar({ sessionId }: Props) {
 
   if (!session) {
     return (
-      <div className="flex h-6 shrink-0 items-center gap-4 border-t bg-sidebar/50 px-3 text-[11px] text-muted-foreground">
+      <div className="flex h-6 shrink-0 items-center gap-4 border-t bg-sidebar/50 px-3 text-micro text-muted-foreground">
         <WifiOff className="h-3 w-3" />
         <span>无活动会话</span>
       </div>
@@ -28,9 +28,9 @@ export function StatusBar({ sessionId }: Props) {
 
   const statusIcon =
     session.status === "connected" ? (
-      <Wifi className="h-3 w-3 text-emerald-500" />
+      <Wifi className="h-3 w-3 text-success-indicator" />
     ) : session.status === "connecting" ? (
-      <Loader2 className="h-3 w-3 animate-spin text-amber-500" />
+      <Loader2 className="h-3 w-3 animate-spin text-warning" />
     ) : session.status === "error" ? (
       <AlertTriangle className="h-3 w-3 text-destructive" />
     ) : (
@@ -63,7 +63,7 @@ export function StatusBar({ sessionId }: Props) {
           : "本地";
 
   return (
-    <div className="flex h-6 shrink-0 items-center gap-3 border-t bg-sidebar/50 px-3 text-[11px] text-muted-foreground">
+    <div className="flex h-6 shrink-0 items-center gap-3 border-t bg-sidebar/50 px-3 text-micro text-muted-foreground">
       <div className="flex items-center gap-1.5">
         {statusIcon}
         <span>{statusText}</span>

@@ -58,7 +58,7 @@ export function SystemView({ initialTab = "overview" }: { initialTab?: SystemTab
               role="tab"
               aria-selected={activeTab === tab.id}
               onClick={() => switchTab(tab.id)}
-              className={`relative flex items-center gap-1.5 whitespace-nowrap rounded-md px-3 py-1.5 text-ui transition-colors ${
+              className={`relative flex items-center gap-1.5 whitespace-nowrap rounded-md px-3 py-1.5 text-caption transition-colors ${
                 activeTab === tab.id
                   ? "font-medium text-foreground"
                   : "text-muted-foreground hover:bg-accent"
@@ -71,7 +71,7 @@ export function SystemView({ initialTab = "overview" }: { initialTab?: SystemTab
                 </span>
               ) : null}
               {activeTab === tab.id ? (
-                <span className="absolute inset-x-3 bottom-0 h-0.5 rounded-full bg-primary" />
+                <span className="absolute inset-x-3 bottom-0 h-px bg-info" />
               ) : null}
             </button>
           ))}

@@ -376,7 +376,7 @@ export function BrowserTabView({
         `JSON.stringify((function() { var doctype = document.doctype ? '<!DOCTYPE ' + document.doctype.name + '>' : ''; return doctype + '\\n' + document.documentElement.outerHTML; })())`
       );
       const encoded = encodeURIComponent(source);
-      const dataUri = `data:text/html;charset=utf-8,<html><head><title>Source of ${tab.url}</title><style>body{font-family:monospace;font-size:12px;padding:8px;white-space:pre-wrap;background:#fff;color:#000;}</style></head><body>${encoded}</body></html>`;
+      const dataUri = `data:text/html;charset=utf-8,<html><head><title>Source of ${tab.url}</title><style>body{font-family:monospace;font-size:12px;padding:8px;white-space:pre-wrap;background:white;color:black;}</style></head><body>${encoded}</body></html>`;
       window.dispatchEvent(new CustomEvent("mona-open-source-tab", { detail: { url: dataUri } }));
     } catch (e) {
       console.error("[BrowserTabView] view source failed:", e);
@@ -502,7 +502,7 @@ export function BrowserTabView({
       <div className="flex flex-1 min-h-0">
         <div ref={webviewContainerRef} className="flex-1 min-w-0 bg-white relative">
           {!tab.webviewCreated && (
-            <div className="flex h-full items-center justify-center text-muted-foreground text-[13px]">
+            <div className="flex h-full items-center justify-center text-muted-foreground text-ui">
               在地址栏输入网址开始浏览
             </div>
           )}

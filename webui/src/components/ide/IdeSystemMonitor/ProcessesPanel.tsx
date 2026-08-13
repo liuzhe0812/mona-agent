@@ -21,6 +21,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
+import { EmptyState } from "@/components/ui/empty-state";
 import {
   ideRemoteGetProcesses,
   ideRemoteKillProcess,
@@ -160,7 +161,7 @@ export function ProcessesPanel({ sessionId }: Props) {
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             placeholder="搜索进程、用户、PID..."
-            className="h-7 rounded-md pl-7 pr-7 text-xs"
+            className="h-7 rounded-md pl-7 pr-7 text-caption"
           />
           {searchTerm && (
             <button
@@ -173,7 +174,7 @@ export function ProcessesPanel({ sessionId }: Props) {
           )}
         </div>
         <div className="flex items-center justify-between">
-          <span className="text-[10px] text-muted-foreground">
+          <span className="text-micro text-muted-foreground">
             共 {processes.length} 个进程
           </span>
           <Button
@@ -189,7 +190,7 @@ export function ProcessesPanel({ sessionId }: Props) {
           </Button>
         </div>
         {error && (
-          <div className="text-[10px] text-destructive">
+          <div className="text-micro text-destructive">
             {error}
             <button
               type="button"
@@ -204,13 +205,13 @@ export function ProcessesPanel({ sessionId }: Props) {
 
       <ScrollArea className="min-h-0 flex-1">
         {loading && processes.length === 0 ? (
-          <div className="flex h-32 items-center justify-center text-xs text-muted-foreground">
+          <div className="flex h-32 items-center justify-center text-caption text-muted-foreground">
             <Loader2 className="mr-2 h-4 w-4 animate-spin" />
             加载中...
           </div>
         ) : (
-          <table className="w-full text-[11px]">
-            <thead className="sticky top-0 bg-sidebar">
+          <table className="w-full text-micro">
+            <thead className="sticky top-0 bg-muted">
               <tr className="border-b text-left text-muted-foreground">
                 <th
                   className="cursor-pointer px-2 py-1.5 font-medium hover:text-foreground"
@@ -264,7 +265,7 @@ export function ProcessesPanel({ sessionId }: Props) {
                   <td className="px-1 py-1.5">{proc.cpuPercent.toFixed(1)}%</td>
                   <td className="px-1 py-1.5">
                     {proc.memPercent.toFixed(1)}%
-                    <div className="text-[9px] text-muted-foreground">
+                    <div className="text-micro text-muted-foreground">
                       {formatBytes(proc.memRss * 1024)}
                     </div>
                   </td>
@@ -289,9 +290,7 @@ export function ProcessesPanel({ sessionId }: Props) {
           </table>
         )}
         {!loading && filteredProcesses.length === 0 && (
-          <div className="flex h-32 items-center justify-center text-xs text-muted-foreground">
-            {searchTerm ? "无匹配结果" : "暂无进程数据"}
-          </div>
+          <EmptyState title={searchTerm ? "无匹配结果" : "暂无进程数据"} />
         )}
       </ScrollArea>
 
@@ -311,7 +310,7 @@ export function ProcessesPanel({ sessionId }: Props) {
                   确定要终止进程 <strong>{killDialog.processName}</strong>（PID: {" "}
                   <code>{killDialog.pid}</code>）吗？
                   <br />
-                  <span className="text-[10px] text-orange-500">
+                  <span className="text-micro text-warning">
                     此操作可能会导致相关服务中断。
                   </span>
                 </AlertDialogDescription>

@@ -781,7 +781,7 @@ export function PptMakerView() {
                       className={cn(
                         "flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-medium",
                         status === "completed" && "bg-emerald-500/15 text-emerald-600",
-                        status === "current" && "bg-primary text-primary-foreground",
+                        status === "current" && "bg-action text-white",
                         status === "pending" && "border border-border bg-background text-muted-foreground",
                       )}
                     >
@@ -810,7 +810,7 @@ export function PptMakerView() {
           {phase === "config" ? (
             <div className="flex min-h-0 flex-1 flex-col items-center overflow-y-auto scrollbar-hover px-4 py-8">
               <div className="w-full max-w-[640px]">
-                <h2 className="mb-6 text-lg font-medium">新建演示文稿</h2>
+                <h2 className="mb-6 text-title-sm font-medium">新建演示文稿</h2>
                 <PptConfigWizard
                   config={config}
                   setConfig={setConfig}

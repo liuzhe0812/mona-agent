@@ -28,6 +28,8 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import { Button } from "@/components/ui/button";
+import { Select } from "@/components/ui/select";
 import {
   terminalMaintenanceDelete,
   terminalMaintenanceGet,
@@ -51,9 +53,9 @@ const STATUS_LABEL: Record<MaintenanceTaskStatus, string> = {
 
 const STATUS_TONE: Record<MaintenanceTaskStatus, string> = {
   planning: "text-muted-foreground border-border/70",
-  waiting_approval: "text-amber-600 border-amber-500/40 bg-amber-500/10",
+  waiting_approval: "text-warning border-warning/40 bg-warning/10",
   running: "text-primary border-primary/40 bg-primary/10",
-  succeeded: "text-emerald-600 border-emerald-500/40 bg-emerald-500/10",
+  succeeded: "text-success border-success/40 bg-success/10",
   failed: "text-destructive border-destructive/40 bg-destructive/10",
   cancelled: "text-muted-foreground border-border/70",
 };
@@ -68,9 +70,9 @@ const RESOLUTION_LABEL: Record<MaintenanceTaskResolution, string> = {
 
 const RESOLUTION_TONE: Record<MaintenanceTaskResolution, string> = {
   "": "",
-  completed_changes: "text-emerald-600 border-emerald-500/40 bg-emerald-500/10",
-  no_changes_needed: "text-emerald-600 border-emerald-500/40 bg-emerald-500/10",
-  partial: "text-amber-600 border-amber-500/40 bg-amber-500/10",
+  completed_changes: "text-success border-success/40 bg-success/10",
+  no_changes_needed: "text-success border-success/40 bg-success/10",
+  partial: "text-warning border-warning/40 bg-warning/10",
   failed: "text-destructive border-destructive/40 bg-destructive/10",
 };
 
@@ -91,6 +93,13 @@ const KIND_LABEL: Record<MaintenanceStep["kind"], string> = {
 };
 
 type StatusFilter = "all" | "succeeded" | "failed" | "cancelled";
+
+const STATUS_FILTER_OPTIONS: { value: StatusFilter; label: string }[] = [
+  { value: "all", label: "全部结果" },
+  { value: "succeeded", label: "成功" },
+  { value: "failed", label: "失败" },
+  { value: "cancelled", label: "已取消" },
+];
 
 function formatTime(ts: number): string {
   const d = new Date(ts);
@@ -114,7 +123,7 @@ function StepStatusIcon({ status }: { status: MaintenanceStepStatus }) {
     case "running":
       return <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-primary" />;
     case "succeeded":
-      return <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-600" />;
+      return <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-success" />;
     case "failed":
       return <XCircle className="h-3.5 w-3.5 shrink-0 text-destructive" />;
     case "skipped":
@@ -169,12 +178,15 @@ export function MaintenanceHistory() {
     load();
   }, [load]);
 
-  const servers = useMemo(() => {
+  const serverOptions = useMemo(() => {
     const map = new Map<string, string>();
     for (const t of tasks) {
       if (!map.has(t.configId)) map.set(t.configId, t.targetLabel);
     }
-    return [...map.entries()];
+    return [
+      { value: "all", label: "全部服务器" },
+      ...[...map.entries()].map(([value, label]) => ({ value, label })),
+    ];
   }, [tasks]);
 
   const filtered = useMemo(
@@ -194,47 +206,39 @@ export function MaintenanceHistory() {
   return (
     <div className="flex h-full flex-col">
       <div className="flex shrink-0 items-center gap-1.5 px-2.5 py-2">
-        <select
+        <Select
           value={serverFilter}
-          onChange={(e) => setServerFilter(e.target.value)}
+          onValueChange={setServerFilter}
+          options={serverOptions}
           aria-label="按服务器筛选"
-          className="min-w-0 flex-1 cursor-pointer rounded-md border border-border/70 bg-background px-1.5 py-1 text-[11px] text-foreground outline-none"
-        >
-          <option value="all">全部服务器</option>
-          {servers.map(([id, label]) => (
-            <option key={id} value={id}>
-              {label}
-            </option>
-          ))}
-        </select>
-        <select
+          className="h-6 min-w-0 flex-1 px-1.5 text-caption"
+        />
+        <Select
           value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
+          onValueChange={(v) => setStatusFilter(v as StatusFilter)}
+          options={STATUS_FILTER_OPTIONS}
           aria-label="按结果筛选"
-          className="shrink-0 cursor-pointer rounded-md border border-border/70 bg-background px-1.5 py-1 text-[11px] text-foreground outline-none"
-        >
-          <option value="all">全部结果</option>
-          <option value="succeeded">成功</option>
-          <option value="failed">失败</option>
-          <option value="cancelled">已取消</option>
-        </select>
-        <button
+          className="h-6 w-auto shrink-0 px-1.5 text-caption"
+        />
+        <Button
           type="button"
+          variant="ghost"
+          size="icon"
           onClick={load}
           aria-label="刷新"
           title="刷新"
-          className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+          className="h-6 w-6 shrink-0 text-muted-foreground"
         >
           <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
-        </button>
+        </Button>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto scrollbar-hover px-2 pb-2">
         {loadError && (
-          <p className="px-1 py-4 text-center text-[11px] text-destructive">{loadError}</p>
+          <p className="px-1 py-4 text-center text-micro text-destructive">{loadError}</p>
         )}
         {!loadError && !loading && filtered.length === 0 && (
-          <p className="px-1 py-8 text-center text-[11px] text-muted-foreground">
+          <p className="px-1 py-8 text-center text-micro text-muted-foreground">
             暂无维护记录
           </p>
         )}
@@ -254,17 +258,17 @@ export function MaintenanceHistory() {
                       <div className="flex items-center gap-1.5">
                         <span
                           className={cn(
-                            "shrink-0 rounded border px-1 py-px text-[9.5px] font-medium",
+                            "shrink-0 rounded border px-1 py-px text-micro font-medium",
                             badge.tone,
                           )}
                         >
                           {badge.label}
                         </span>
-                        <span className="truncate text-[11px] font-medium text-foreground" title={t.goal}>
+                        <span className="truncate text-micro font-medium text-foreground" title={t.goal}>
                           {t.goal}
                         </span>
                       </div>
-                      <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-muted-foreground">
+                      <div className="mt-0.5 flex items-center gap-1.5 text-micro text-muted-foreground">
                         <span className="truncate">{t.targetLabel}</span>
                         <span className="shrink-0">{formatTime(t.createdAt)}</span>
                         {duration != null && (
@@ -281,7 +285,7 @@ export function MaintenanceHistory() {
                       setDeleteError(null);
                       setPendingDelete(t);
                     }}
-                    className="text-[12px] text-destructive focus:text-destructive"
+                    className="text-caption text-destructive focus:text-destructive"
                   >
                     <Trash2 className="mr-2 h-3.5 w-3.5" />
                     删除记录
@@ -307,7 +311,7 @@ export function MaintenanceHistory() {
             </AlertDialogDescription>
           </AlertDialogHeader>
           {deleteError && (
-            <p className="text-[12px] text-destructive">删除失败：{deleteError}</p>
+            <p className="text-caption text-destructive">删除失败：{deleteError}</p>
           )}
           <AlertDialogFooter>
             <AlertDialogCancel disabled={deleting}>取消</AlertDialogCancel>
@@ -356,18 +360,20 @@ function HistoryDetail({ taskId, onBack }: { taskId: string; onBack: () => void 
   return (
     <div className="flex h-full flex-col">
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border/65 px-2.5">
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="xs"
           onClick={onBack}
-          className="flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          className="gap-1 text-caption text-muted-foreground"
         >
           <ArrowLeft className="h-3 w-3" />
           返回列表
-        </button>
+        </Button>
         {detail && (
           <span
             className={cn(
-              "rounded border px-1.5 py-0.5 text-[10px] font-medium",
+              "rounded border px-1.5 py-0.5 text-micro font-medium",
               badgeForTask(detail.task).tone,
             )}
           >
@@ -377,20 +383,20 @@ function HistoryDetail({ taskId, onBack }: { taskId: string; onBack: () => void 
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto scrollbar-hover p-2.5">
-        {loadError && <p className="py-4 text-center text-[11px] text-destructive">{loadError}</p>}
+        {loadError && <p className="py-4 text-center text-micro text-destructive">{loadError}</p>}
         {!detail && !loadError && (
-          <p className="py-8 text-center text-[11px] text-muted-foreground">加载中…</p>
+          <p className="py-8 text-center text-micro text-muted-foreground">加载中…</p>
         )}
         {detail && (
           <div className="space-y-3">
             <section>
-              <h3 className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+              <h3 className="text-micro font-semibold uppercase tracking-wide text-muted-foreground">
                 维护目标
               </h3>
-              <p className="mt-1 whitespace-pre-wrap break-words text-[11.5px] leading-4.5 text-foreground">
+              <p className="mt-1 whitespace-pre-wrap break-words text-caption leading-4.5 text-foreground">
                 {detail.task.goal}
               </p>
-              <p className="mt-1 text-[10px] text-muted-foreground">
+              <p className="mt-1 text-micro text-muted-foreground">
                 {detail.task.targetLabel} · {formatTime(detail.task.createdAt)}
                 {taskDurationMs(detail.task) != null &&
                   ` · 耗时 ${formatDuration(taskDurationMs(detail.task)!)}`}
@@ -399,20 +405,20 @@ function HistoryDetail({ taskId, onBack }: { taskId: string; onBack: () => void 
 
             {detail.task.diagnosis && (
               <section>
-                <h3 className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                <h3 className="flex items-center gap-1.5 text-micro font-semibold uppercase tracking-wide text-muted-foreground">
                   AI 诊断
-                  <span className="rounded border border-primary/40 bg-primary/10 px-1 py-px text-[9px] normal-case text-primary">
+                  <span className="rounded border border-primary/40 bg-primary/10 px-1 py-px text-micro normal-case text-primary">
                     AI 诊断
                   </span>
                 </h3>
-                <p className="mt-1 whitespace-pre-wrap break-words text-[11px] leading-4.5 text-foreground">
+                <p className="mt-1 whitespace-pre-wrap break-words text-micro leading-4.5 text-foreground">
                   {detail.task.diagnosis}
                 </p>
               </section>
             )}
 
             <section>
-              <h3 className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+              <h3 className="text-micro font-semibold uppercase tracking-wide text-muted-foreground">
                 执行步骤
               </h3>
               <div className="mt-1 space-y-1">
@@ -424,7 +430,7 @@ function HistoryDetail({ taskId, onBack }: { taskId: string; onBack: () => void 
                     <StepStatusIcon status={s.status} />
                     <span
                       className={cn(
-                        "min-w-0 flex-1 truncate text-[11px] text-foreground",
+                        "min-w-0 flex-1 truncate text-micro text-foreground",
                         (s.status === "skipped" || s.status === "cancelled") &&
                           "text-muted-foreground/70 line-through",
                       )}
@@ -432,16 +438,16 @@ function HistoryDetail({ taskId, onBack }: { taskId: string; onBack: () => void 
                     >
                       {s.title}
                     </span>
-                    <span className="shrink-0 rounded border border-border/70 px-1 py-px text-[9.5px] text-muted-foreground">
+                    <span className="shrink-0 rounded border border-border/70 px-1 py-px text-micro text-muted-foreground">
                       {KIND_LABEL[s.kind]}
                     </span>
                     {s.exitCode != null && (
-                      <span className="shrink-0 text-[9.5px] text-muted-foreground">
+                      <span className="shrink-0 text-micro text-muted-foreground">
                         exit {s.exitCode}
                       </span>
                     )}
                     {s.durationMs != null && (
-                      <span className="shrink-0 text-[9.5px] text-muted-foreground/70">
+                      <span className="shrink-0 text-micro text-muted-foreground/70">
                         {formatDuration(s.durationMs)}
                       </span>
                     )}
@@ -452,16 +458,16 @@ function HistoryDetail({ taskId, onBack }: { taskId: string; onBack: () => void 
 
             {lastVerify && (
               <section>
-                <h3 className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                <h3 className="text-micro font-semibold uppercase tracking-wide text-muted-foreground">
                   最终复检
                 </h3>
-                <div className="mt-1 flex items-center gap-1.5 rounded-md border border-sky-500/30 bg-sky-500/5 px-2 py-1.5">
+                <div className="mt-1 flex items-center gap-1.5 rounded-md border border-info/30 bg-info/5 px-2 py-1.5">
                   <StepStatusIcon status={lastVerify.status} />
-                  <span className="min-w-0 flex-1 truncate text-[11px] text-foreground" title={lastVerify.title}>
+                  <span className="min-w-0 flex-1 truncate text-micro text-foreground" title={lastVerify.title}>
                     {lastVerify.title}
                   </span>
                   {lastVerify.exitCode != null && (
-                    <span className="shrink-0 text-[9.5px] text-muted-foreground">
+                    <span className="shrink-0 text-micro text-muted-foreground">
                       exit {lastVerify.exitCode}
                     </span>
                   )}
@@ -471,20 +477,20 @@ function HistoryDetail({ taskId, onBack }: { taskId: string; onBack: () => void 
 
             {detail.task.summary && (
               <section>
-                <h3 className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                <h3 className="text-micro font-semibold uppercase tracking-wide text-muted-foreground">
                   最终摘要
                 </h3>
-                <p className="mt-1 whitespace-pre-wrap break-words text-[11px] leading-4.5 text-foreground">
+                <p className="mt-1 whitespace-pre-wrap break-words text-micro leading-4.5 text-foreground">
                   {detail.task.summary}
                 </p>
               </section>
             )}
             {detail.task.error && (
               <section>
-                <h3 className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                <h3 className="text-micro font-semibold uppercase tracking-wide text-muted-foreground">
                   失败原因
                 </h3>
-                <p className="mt-1 whitespace-pre-wrap break-words text-[11px] leading-4.5 text-destructive">
+                <p className="mt-1 whitespace-pre-wrap break-words text-micro leading-4.5 text-destructive">
                   {detail.task.error}
                 </p>
               </section>

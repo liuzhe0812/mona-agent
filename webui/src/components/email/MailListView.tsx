@@ -20,6 +20,7 @@ import {
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { StatusNotice } from "@/components/ui/status-notice";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -240,11 +241,11 @@ export function MailListView({ onReply, onReplyAll, onForward, onAddToPlan }: Ma
   return (
     <div className="flex h-full flex-col bg-background" tabIndex={-1}>
       <div className="flex h-10 shrink-0 items-center border-b border-border bg-muted/20 px-3">
-        <span className="text-[12px] font-semibold text-foreground">
+        <span className="text-caption font-semibold text-foreground">
           {isUnifiedInbox ? "全部收件箱" : getFolderDisplayName(selectedFolder)}
         </span>
         {messages.length > 0 && (
-          <span className="ml-2 text-[11px] text-muted-foreground">
+          <span className="ml-2 text-caption text-muted-foreground">
             {filteredMessages.length}/{messages.length} 封
           </span>
         )}
@@ -256,7 +257,7 @@ export function MailListView({ onReply, onReplyAll, onForward, onAddToPlan }: Ma
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="搜索邮件..."
-            className="h-7 rounded-full pl-7 pr-3 text-[12px]"
+            className="h-7 rounded-full pl-7 pr-3 text-caption"
           />
         </div>
         <div className="flex items-center gap-1">
@@ -267,7 +268,7 @@ export function MailListView({ onReply, onReplyAll, onForward, onAddToPlan }: Ma
                 type="button"
                 variant={filterKey === key ? "secondary" : "ghost"}
                 size="sm"
-                className="h-6 px-2 text-[10.5px]"
+                className="h-6 px-2 text-caption"
                 onClick={() => setFilterKey(key)}
               >
                 {FILTER_LABELS[key]}
@@ -280,7 +281,7 @@ export function MailListView({ onReply, onReplyAll, onForward, onAddToPlan }: Ma
                 type="button"
                 variant="ghost"
                 size="sm"
-                className="h-6 gap-1 px-1.5 text-[10.5px]"
+                className="h-6 gap-1 px-1.5 text-caption"
               >
                 <ArrowDownUp className="h-3 w-3" />
                 {SORT_LABELS[sortKey]}
@@ -291,7 +292,7 @@ export function MailListView({ onReply, onReplyAll, onForward, onAddToPlan }: Ma
                 <DropdownMenuItem
                   key={key}
                   onClick={() => setSortKey(key)}
-                  className="flex items-center justify-between gap-2 text-[12px]"
+                  className="flex items-center justify-between gap-2 text-caption"
                 >
                   {SORT_LABELS[key]}
                   {sortKey === key && <Check className="h-3 w-3" />}
@@ -302,15 +303,18 @@ export function MailListView({ onReply, onReplyAll, onForward, onAddToPlan }: Ma
         </div>
       </div>
       {error && (
-        <div className="shrink-0 border-b border-destructive/30 bg-destructive/10 px-3 py-2 text-[11.5px] text-destructive">
+        <StatusNotice
+          tone="danger"
+          className="shrink-0 rounded-none border-x-0 border-t-0 px-3 py-2"
+        >
           {error}
-        </div>
+        </StatusNotice>
       )}
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto scrollbar-hover">
         {!selectedAccountId ? (
           <EmptyHint text="请先选择账号" />
         ) : loading ? (
-          <div className="flex items-center justify-center gap-2 py-12 text-[12px] text-muted-foreground">
+          <div className="flex items-center justify-center gap-2 py-12 text-caption text-muted-foreground">
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
             加载中...
           </div>
@@ -416,7 +420,7 @@ export function MailListView({ onReply, onReplyAll, onForward, onAddToPlan }: Ma
           </div>
         )}
         {loadingMore && (
-          <div className="flex items-center justify-center gap-2 py-3 text-[11.5px] text-muted-foreground">
+          <div className="flex items-center justify-center gap-2 py-3 text-caption text-muted-foreground">
             <Loader2 className="h-3 w-3 animate-spin" />
             加载更多...
           </div>
@@ -491,15 +495,16 @@ function MailListItem({
     <ContextMenu>
       <ContextMenuTrigger asChild>
         <div
+          data-email-list-item
           className={cn(
             "flex cursor-pointer flex-col gap-0.5 border-b border-border/60 border-l-2 px-3 py-2 transition-colors",
             selected
-              ? "border-l-blue-500 bg-blue-500/15"
+              ? "border-l-info bg-info/15"
               : active
-                ? "border-l-blue-500 bg-blue-500/10"
+                ? "border-l-info bg-info/10"
                 : message.isRead
                   ? "border-l-transparent hover:bg-accent"
-                  : "border-l-blue-400/60 hover:bg-accent",
+                  : "border-l-info/60 hover:bg-accent",
           )}
           onClick={onClick}
         >
@@ -509,7 +514,7 @@ function MailListItem({
                 className={cn(
                   "flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border",
                   selected
-                    ? "border-blue-500 bg-blue-500 text-white"
+                    ? "border-info bg-info text-white"
                     : "border-muted-foreground/40 bg-transparent",
                 )}
               >
@@ -517,7 +522,7 @@ function MailListItem({
               </span>
             )}
             {!message.isRead && !multiSelectMode && (
-              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-blue-500" />
+              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-warning" />
             )}
             {accountColor && (
               <span
@@ -528,7 +533,7 @@ function MailListItem({
             )}
             <span
               className={cn(
-                "min-w-0 flex-1 truncate text-[12.5px]",
+                "min-w-0 flex-1 truncate text-caption",
                 message.isRead
                   ? "font-normal text-muted-foreground"
                   : "font-semibold text-foreground",
@@ -537,18 +542,18 @@ function MailListItem({
               {resolveSenderDisplay(message.fromName, message.fromAddress, contactsByEmail)}
             </span>
             {message.isStarred && (
-              <Star className="h-3 w-3 shrink-0 fill-amber-400 text-amber-400" />
+              <Star className="h-3 w-3 shrink-0 fill-warning text-warning" />
             )}
             {message.hasAttachments && (
               <Paperclip className="h-3 w-3 shrink-0 text-muted-foreground" />
             )}
-            <span className="shrink-0 text-[10.5px] text-muted-foreground">
+            <span className="shrink-0 text-caption text-muted-foreground">
               {formatDate(message.date)}
             </span>
           </div>
           <div
             className={cn(
-              "truncate text-[12.5px]",
+              "truncate text-caption",
               message.isRead
                 ? "font-normal text-muted-foreground"
                 : "font-medium text-foreground",
@@ -561,14 +566,14 @@ function MailListItem({
       <ContextMenuContent className="min-w-[180px]">
         {showBatchMenu ? (
           <>
-            <div className="px-2 py-1 text-[11px] text-muted-foreground">
+            <div className="px-2 py-1 text-caption text-muted-foreground">
               已选中 {selectedUids.size} 封邮件
             </div>
             <ContextMenuSeparator />
             <ContextMenuItem
               onClick={onBatchMarkRead}
               disabled={batchOperating}
-              className="flex items-center gap-2 text-[12px]"
+              className="flex items-center gap-2 text-caption"
             >
               <MailOpen className="h-3.5 w-3.5" />
               标为已读
@@ -576,7 +581,7 @@ function MailListItem({
             <ContextMenuItem
               onClick={onBatchMarkUnread}
               disabled={batchOperating}
-              className="flex items-center gap-2 text-[12px]"
+              className="flex items-center gap-2 text-caption"
             >
               <MailOpen className="h-3.5 w-3.5" />
               标为未读
@@ -585,7 +590,7 @@ function MailListItem({
             <ContextMenuItem
               onClick={onBatchStar}
               disabled={batchOperating}
-              className="flex items-center gap-2 text-[12px]"
+              className="flex items-center gap-2 text-caption"
             >
               <Star className="h-3.5 w-3.5" />
               星标邮件
@@ -593,7 +598,7 @@ function MailListItem({
             <ContextMenuItem
               onClick={onBatchUnstar}
               disabled={batchOperating}
-              className="flex items-center gap-2 text-[12px]"
+              className="flex items-center gap-2 text-caption"
             >
               <Star className="h-3.5 w-3.5" />
               取消星标
@@ -601,7 +606,7 @@ function MailListItem({
             <ContextMenuSeparator />
             {moveTargets.length > 0 && (
               <ContextMenuSub>
-                <ContextMenuSubTrigger className="flex items-center gap-2 text-[12px]">
+                <ContextMenuSubTrigger className="flex items-center gap-2 text-caption">
                   <FolderInput className="h-3.5 w-3.5" />
                   移动到
                 </ContextMenuSubTrigger>
@@ -611,11 +616,11 @@ function MailListItem({
                       key={folder.name}
                       onClick={() => onBatchMove(folder.name)}
                       disabled={batchOperating}
-                      className="flex items-center justify-between gap-2 text-[12px]"
+                      className="flex items-center justify-between gap-2 text-caption"
                     >
                       <span className="truncate">{getFolderDisplayName(folder.name)}</span>
                       {folder.unreadCount ? (
-                        <span className="shrink-0 text-[10px] text-muted-foreground">
+                        <span className="shrink-0 text-caption text-muted-foreground">
                           {folder.unreadCount}
                         </span>
                       ) : null}
@@ -627,7 +632,7 @@ function MailListItem({
             <ContextMenuItem
               onClick={onBatchDelete}
               disabled={batchOperating}
-              className="flex items-center gap-2 text-[12px] text-destructive focus:text-destructive"
+              className="flex items-center gap-2 text-caption text-destructive focus:text-destructive"
             >
               <Trash2 className="h-3.5 w-3.5" />
               删除
@@ -635,45 +640,45 @@ function MailListItem({
           </>
         ) : (
           <>
-            <ContextMenuItem onClick={onReply} className="flex items-center gap-2 text-[12px]">
+            <ContextMenuItem onClick={onReply} className="flex items-center gap-2 text-caption">
               <Reply className="h-3.5 w-3.5" />
               回复
-              <span className="ml-auto text-[11px] text-muted-foreground">Ctrl+R</span>
+              <span className="ml-auto text-caption text-muted-foreground">Ctrl+R</span>
             </ContextMenuItem>
-            <ContextMenuItem onClick={onReplyAll} className="flex items-center gap-2 text-[12px]">
+            <ContextMenuItem onClick={onReplyAll} className="flex items-center gap-2 text-caption">
               <ReplyAll className="h-3.5 w-3.5" />
               回复全部
-              <span className="ml-auto text-[11px] text-muted-foreground">Ctrl+Shift+R</span>
+              <span className="ml-auto text-caption text-muted-foreground">Ctrl+Shift+R</span>
             </ContextMenuItem>
-            <ContextMenuItem onClick={onForward} className="flex items-center gap-2 text-[12px]">
+            <ContextMenuItem onClick={onForward} className="flex items-center gap-2 text-caption">
               <Forward className="h-3.5 w-3.5" />
               转发
             </ContextMenuItem>
             <ContextMenuSeparator />
-            <ContextMenuItem onClick={onAnalyze} className="flex items-center gap-2 text-[12px]">
+            <ContextMenuItem onClick={onAnalyze} className="flex items-center gap-2 text-caption">
               <Sparkles className="h-3.5 w-3.5" />
               AI 内容分析
             </ContextMenuItem>
             {onAddToPlan && (
               <>
                 <ContextMenuSeparator />
-                <ContextMenuItem onClick={onAddToPlan} className="flex items-center gap-2 text-[12px]">
+                <ContextMenuItem onClick={onAddToPlan} className="flex items-center gap-2 text-caption">
                   <ClipboardList className="h-3.5 w-3.5" />
                   加入计划
                 </ContextMenuItem>
               </>
             )}
             <ContextMenuSeparator />
-            <ContextMenuItem onClick={onToggleRead} className="flex items-center gap-2 text-[12px]">
+            <ContextMenuItem onClick={onToggleRead} className="flex items-center gap-2 text-caption">
               <MailOpen className="h-3.5 w-3.5" />
               {message.isRead ? "标为未读" : "标为已读"}
-              <span className="ml-auto text-[11px] text-muted-foreground">Ctrl+U</span>
+              <span className="ml-auto text-caption text-muted-foreground">Ctrl+U</span>
             </ContextMenuItem>
-            <ContextMenuItem onClick={onToggleStar} className="flex items-center gap-2 text-[12px]">
+            <ContextMenuItem onClick={onToggleStar} className="flex items-center gap-2 text-caption">
               <Star
                 className={cn(
                   "h-3.5 w-3.5",
-                  message.isStarred ? "fill-amber-400 text-amber-400" : "",
+                  message.isStarred ? "fill-warning text-warning" : "",
                 )}
               />
               {message.isStarred ? "取消星标" : "星标邮件"}
@@ -681,7 +686,7 @@ function MailListItem({
             <ContextMenuSeparator />
             {moveTargets.length > 0 && (
               <ContextMenuSub>
-                <ContextMenuSubTrigger className="flex items-center gap-2 text-[12px]">
+                <ContextMenuSubTrigger className="flex items-center gap-2 text-caption">
                   <FolderInput className="h-3.5 w-3.5" />
                   移动到
                 </ContextMenuSubTrigger>
@@ -690,11 +695,11 @@ function MailListItem({
                     <ContextMenuItem
                       key={folder.name}
                       onClick={() => onMove(folder.name)}
-                      className="flex items-center justify-between gap-2 text-[12px]"
+                      className="flex items-center justify-between gap-2 text-caption"
                     >
                       <span className="truncate">{getFolderDisplayName(folder.name)}</span>
                       {folder.unreadCount ? (
-                        <span className="shrink-0 text-[10px] text-muted-foreground">
+                        <span className="shrink-0 text-caption text-muted-foreground">
                           {folder.unreadCount}
                         </span>
                       ) : null}
@@ -705,11 +710,11 @@ function MailListItem({
             )}
             <ContextMenuItem
               onClick={onDelete}
-              className="flex items-center gap-2 text-[12px] text-destructive focus:text-destructive"
+              className="flex items-center gap-2 text-caption text-destructive focus:text-destructive"
             >
               <Trash2 className="h-3.5 w-3.5" />
               删除
-              <span className="ml-auto text-[11px] text-muted-foreground">Delete</span>
+              <span className="ml-auto text-caption text-muted-foreground">Delete</span>
             </ContextMenuItem>
           </>
         )}
@@ -722,7 +727,7 @@ function EmptyHint({ text, icon }: { text: string; icon?: React.ReactNode }) {
   return (
     <div className="flex flex-col items-center justify-center gap-2 py-12 text-center">
       {icon ?? null}
-      <p className="text-[12px] text-muted-foreground">{text}</p>
+      <p className="text-caption text-muted-foreground">{text}</p>
     </div>
   );
 }

@@ -2342,11 +2342,11 @@ export const MindMapDocumentEditor = forwardRef<MindMapDocumentEditorHandle, Min
 
         <div className="mx-1 h-4 w-px bg-border" />
 
-        <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={handleAddChild}>
+        <Button variant="ghost" size="sm" className="h-7 px-2 text-caption" onClick={handleAddChild}>
           <CornerDownRight className="mr-1 h-3.5 w-3.5" />
           子节点
         </Button>
-        <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={handleAddSibling}>
+        <Button variant="ghost" size="sm" className="h-7 px-2 text-caption" onClick={handleAddSibling}>
           <Plus className="mr-1 h-3.5 w-3.5" />
           同级
         </Button>
@@ -2372,7 +2372,7 @@ export const MindMapDocumentEditor = forwardRef<MindMapDocumentEditorHandle, Min
           <Button
             variant="ghost"
             size="sm"
-            className="h-7 min-w-[48px] px-1 text-xs tabular-nums"
+            className="h-7 min-w-[48px] px-1 text-caption tabular-nums"
             onClick={handleZoomReset}
             title="重置缩放 (Ctrl+0)"
           >

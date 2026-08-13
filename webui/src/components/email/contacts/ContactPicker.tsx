@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { searchContacts } from "./lib/contactsApi";
@@ -137,7 +138,7 @@ export function ContactPicker({
         }}
         placeholder={placeholder}
         className={cn(
-          "h-7 flex-1 rounded-none border-0 bg-transparent px-0 py-0 text-[13px] shadow-none focus-visible:ring-0",
+          "h-7 flex-1 rounded-none border-0 bg-transparent px-0 py-0 text-ui shadow-none focus-visible:ring-0",
           className,
         )}
       />
@@ -147,22 +148,23 @@ export function ContactPicker({
       {showDropdown && suggestions.length > 0 && (
         <div className="absolute left-0 top-full z-50 mt-1 max-h-[240px] w-full min-w-[280px] overflow-y-auto rounded-md border border-border bg-popover shadow-md">
           {suggestions.map((c, idx) => (
-            <button
+            <Button
               key={c.id}
               type="button"
+              variant="ghost"
               onMouseDown={(e) => {
                 e.preventDefault(); // 防止输入框失焦
                 insertContact(c);
               }}
               onMouseEnter={() => setActiveIndex(idx)}
               className={cn(
-                "flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px]",
+                "h-auto w-full justify-start gap-2 rounded-none px-3 py-1.5 text-left text-caption font-normal",
                 idx === activeIndex
                   ? "bg-accent text-accent-foreground"
                   : "hover:bg-accent",
               )}
             >
-              <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-blue-500/10 text-[10px] font-medium text-blue-600">
+              <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-info/10 text-micro font-medium text-info-strong">
                 {c.displayName.charAt(0).toUpperCase()}
               </div>
               <div className="min-w-0 flex-1">
@@ -170,17 +172,17 @@ export function ContactPicker({
                   {c.displayName}
                 </div>
                 {c.email && (
-                  <div className="truncate text-[11px] text-muted-foreground">
+                  <div className="truncate text-micro text-muted-foreground">
                     {c.email}
                   </div>
                 )}
               </div>
               {c.organization && (
-                <span className="shrink-0 text-[10px] text-muted-foreground">
+                <span className="shrink-0 text-micro text-muted-foreground">
                   {c.organization}
                 </span>
               )}
-            </button>
+            </Button>
           ))}
         </div>
       )}

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { Search, Trash2, Clock, Globe, X, ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import {
   browserListHistory,
@@ -132,31 +133,33 @@ export function HistoryPage({ onNavigate, onBack }: HistoryPageProps) {
           <ArrowLeft className="h-4 w-4" />
         </Button>
         <Clock className="h-4 w-4 text-muted-foreground" />
-        <h1 className="text-[14px] font-semibold">历史记录</h1>
+        <h1 className="text-body font-semibold">历史记录</h1>
         <div className="ml-auto flex items-center gap-2">
           <div className="relative">
             <Search className="absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
             <Input
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="h-7 w-56 rounded-full border-0 bg-muted/50 pl-7 pr-7 text-[12px]"
+              className="h-7 w-56 rounded-full border-0 bg-muted/50 pl-7 pr-7 text-caption"
               placeholder="搜索历史记录..."
             />
             {searchQuery && (
-              <button
+              <Button
                 type="button"
+                variant="ghost"
+                size="icon"
                 onClick={() => setSearchQuery("")}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                className="absolute right-1.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground hover:bg-transparent hover:text-foreground"
               >
                 <X className="h-3 w-3" />
-              </button>
+              </Button>
             )}
           </div>
           {history.length > 0 && (
             <Button
               variant="ghost"
               size="sm"
-              className="h-7 text-[12px] text-destructive hover:text-destructive"
+              className="h-7 text-caption text-destructive hover:text-destructive"
               onClick={handleClearAll}
             >
               <Trash2 className="mr-1.5 h-3 w-3" />
@@ -170,20 +173,19 @@ export function HistoryPage({ onNavigate, onBack }: HistoryPageProps) {
       <div className="flex-1 min-h-0 overflow-y-auto scrollbar-hover">
         <div className="mx-auto max-w-3xl px-4 py-4">
           {loading ? (
-            <div className="flex h-32 items-center justify-center text-muted-foreground text-[13px]">
+            <div className="flex h-32 items-center justify-center text-muted-foreground text-ui">
               加载中...
             </div>
           ) : filteredHistory.length === 0 ? (
-            <div className="flex h-32 flex-col items-center justify-center gap-2 text-muted-foreground">
-              <Clock className="h-8 w-8 opacity-50" />
-              <span className="text-[13px]">
-                {searchQuery ? "未找到匹配的记录" : "暂无历史记录"}
-              </span>
-            </div>
+            <EmptyState
+              icon={<Clock className="h-5 w-5" />}
+              title={searchQuery ? "未找到匹配的记录" : "暂无历史记录"}
+              className="h-32 py-0"
+            />
           ) : (
             Object.entries(groupedHistory).map(([dateLabel, items]) => (
               <div key={dateLabel} className="mb-6">
-                <h2 className="mb-2 text-[12px] font-medium text-muted-foreground">{dateLabel}</h2>
+                <h2 className="mb-2 text-caption font-medium text-muted-foreground">{dateLabel}</h2>
                 <div className="space-y-0.5">
                   {items.map((item) => {
                     const favicon = getFaviconUrl(item.url);
@@ -206,19 +208,20 @@ export function HistoryPage({ onNavigate, onBack }: HistoryPageProps) {
                             <Globe className="h-3.5 w-3.5 text-muted-foreground" />
                           )}
                         </div>
-                        <button
+                        <Button
                           type="button"
+                          variant="ghost"
                           onClick={() => onNavigate(item.url)}
-                          className="flex-1 min-w-0 text-left"
+                          className="h-auto flex-1 min-w-0 flex-col items-start gap-0 rounded-none p-0 text-left font-normal hover:bg-transparent"
                         >
-                          <div className="truncate text-[13px] font-medium">
+                          <div className="w-full truncate text-ui font-medium">
                             {item.title || item.url}
                           </div>
-                          <div className="truncate text-[11px] text-muted-foreground">
+                          <div className="w-full truncate text-micro text-muted-foreground">
                             {getDomain(item.url)}
                           </div>
-                        </button>
-                        <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">
+                        </Button>
+                        <span className="shrink-0 text-micro text-muted-foreground tabular-nums">
                           {formatDate(item.lastVisitedAt)}
                         </span>
                         <Button

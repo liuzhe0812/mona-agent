@@ -330,7 +330,7 @@ export function DbAgentPanel({
               "h-6 w-6 shrink-0 rounded-lg",
               isStreaming
                 ? "text-destructive hover:bg-destructive/10 hover:text-destructive"
-                : "bg-foreground text-background hover:bg-foreground/90 hover:text-background disabled:bg-muted disabled:text-muted-foreground",
+                : "bg-action text-white hover:bg-action-hover hover:text-white disabled:bg-muted disabled:text-muted-foreground",
             )}
           >
             {creatingChat ? (

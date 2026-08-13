@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, CheckCircle2, FileText, Loader2, Upload } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { DocChatPanel } from "@/components/doc/DocChatPanel";
 import { useClient } from "@/providers/ClientProvider";
 import { OfficeDocChip } from "@/components/doc/office/OfficeDocChip";
@@ -234,7 +235,7 @@ export function OfficeWorkbenchView() {
                 />
               ))
             ) : (
-              <span className="text-[12px] text-muted-foreground">
+              <span className="text-caption text-muted-foreground">
                 尚未导入文档
               </span>
             )}
@@ -242,7 +243,7 @@ export function OfficeWorkbenchView() {
               type="button"
               variant="ghost"
               size="sm"
-              className="h-7 gap-1 rounded-md px-2 text-[12px]"
+              className="h-7 gap-1 rounded-md px-2 text-caption"
               disabled={uploading || chatIdCreating}
               onClick={() => fileInputRef.current?.click()}
             >
@@ -256,7 +257,7 @@ export function OfficeWorkbenchView() {
           </div>
 
           {uploadError ? (
-            <div className="border-b border-destructive/30 bg-destructive/5 px-3 py-1.5 text-[11px] text-destructive">
+            <div className="border-b border-destructive/30 bg-destructive/5 px-3 py-1.5 text-caption text-destructive">
               {uploadError}
             </div>
           ) : null}
@@ -265,8 +266,8 @@ export function OfficeWorkbenchView() {
             <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-background/80 backdrop-blur-sm">
               <div className="rounded-2xl border-2 border-dashed border-primary/60 px-8 py-6 text-center">
                 <FileText className="mx-auto mb-2 h-8 w-8 text-primary" />
-                <div className="text-[13px] font-medium">放下文件以导入</div>
-                <div className="mt-0.5 text-[11px] text-muted-foreground">
+                <div className="text-ui font-medium">放下文件以导入</div>
+                <div className="mt-0.5 text-caption text-muted-foreground">
                   支持 PDF / Word / Excel / PPT / CSV / Markdown / JSON
                 </div>
               </div>
@@ -291,7 +292,7 @@ export function OfficeWorkbenchView() {
         </div>
       )}
 
-      <input
+      <Input
         ref={fileInputRef}
         type="file"
         accept={DOC_ACCEPT_ATTR}
@@ -344,17 +345,17 @@ function OfficeWorkbenchEmpty({
           }
         >
           <FileText className="mx-auto mb-3 h-10 w-10 text-muted-foreground" />
-          <div className="mb-1 text-[14px] font-medium">
+          <div className="mb-1 text-body font-medium">
             拖入文档，立即开始
           </div>
-          <div className="mb-4 text-[12px] text-muted-foreground">
+          <div className="mb-4 text-caption text-muted-foreground">
             支持 PDF / Word / Excel / PPT / CSV / Markdown / JSON
           </div>
           <Button
             type="button"
             variant="default"
             size="sm"
-            className="h-8 gap-1.5 rounded-md px-3 text-[13px]"
+            className="h-8 gap-1.5 rounded-md px-3 text-caption"
             disabled={uploading}
             onClick={onPick}
           >
@@ -366,19 +367,19 @@ function OfficeWorkbenchEmpty({
             {uploading ? "正在上传..." : "选择文件"}
           </Button>
           {uploadError ? (
-            <div className="mt-3 text-[11px] text-destructive">{uploadError}</div>
+            <div className="mt-3 text-caption text-destructive">{uploadError}</div>
           ) : null}
         </div>
 
         <div className="mt-4">
-          <div className="mb-2 text-[11px] uppercase tracking-wide text-muted-foreground">
+          <div className="mb-2 text-micro uppercase tracking-wide text-muted-foreground">
             示例指令
           </div>
           <div className="flex flex-wrap gap-1.5">
             {examples.map((ex) => (
               <span
                 key={ex}
-                className="rounded-md border border-border/50 bg-background px-2 py-1 text-[11px] text-muted-foreground"
+                className="rounded-md border border-border/50 bg-background px-2 py-1 text-caption text-muted-foreground"
               >
                 {ex}
               </span>
@@ -411,7 +412,7 @@ function OfficeRuntimeBanner({
   // Still loading — show a subtle placeholder to reserve space.
   if (health === null) {
     return (
-      <div className="flex items-center gap-1.5 rounded-md border border-border/40 bg-muted/20 px-2.5 py-1.5 text-[11px] text-muted-foreground">
+      <div className="flex items-center gap-1.5 rounded-md border border-border/40 bg-muted/20 px-2.5 py-1.5 text-caption text-muted-foreground">
         <Loader2 className="h-3 w-3 animate-spin" />
         <span>正在检测文档编辑依赖...</span>
       </div>
@@ -422,7 +423,7 @@ function OfficeRuntimeBanner({
   // Platform not supported — show a read-only warning.
   if (!health.supported) {
     return (
-      <div className="flex items-center gap-1.5 rounded-md border border-border/40 bg-muted/30 px-2.5 py-1.5 text-[11px] text-muted-foreground">
+      <div className="flex items-center gap-1.5 rounded-md border border-border/40 bg-muted/30 px-2.5 py-1.5 text-caption text-muted-foreground">
         <AlertCircle className="h-3 w-3 shrink-0" />
         <span>AI 修改文档功能不支持当前系统，仍可拖入文档提问</span>
       </div>
@@ -431,7 +432,7 @@ function OfficeRuntimeBanner({
   // Not installed — offer one-click install.
   return (
     <div className="flex items-center justify-between gap-2 rounded-md border border-primary/20 bg-primary/5 px-2.5 py-1.5">
-      <div className="flex items-center gap-1.5 text-[11px] text-foreground/70">
+      <div className="flex items-center gap-1.5 text-caption text-foreground/70">
         <AlertCircle className="h-3 w-3 shrink-0 text-primary" />
         <span>安装 OfficeCLI 后可让 AI 直接修改 Word/Excel/PPT 文档</span>
       </div>
@@ -439,7 +440,7 @@ function OfficeRuntimeBanner({
         type="button"
         variant="outline"
         size="sm"
-        className="h-6 gap-1 rounded-md px-2 text-[11px]"
+        className="h-6 gap-1 rounded-md px-2 text-caption"
         disabled={installing}
         onClick={onInstall}
       >

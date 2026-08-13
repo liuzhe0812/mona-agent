@@ -8,6 +8,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { cn } from "@/lib/utils";
 import {
   Copy,
   Pencil,
@@ -316,12 +317,12 @@ export function SessionManagerDialog({
                 placeholder="搜索会话..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-8 h-8 text-sm"
+                className="pl-8 h-8 text-body"
               />
             </div>
             <div className="space-y-1 max-h-[360px] overflow-y-auto pr-1">
               {filteredConnections.length === 0 ? (
-                <div className="py-8 text-center text-sm text-muted-foreground">
+                <div className="py-8 text-center text-body text-muted-foreground">
                   {searchQuery ? "未找到匹配的会话" : "暂无已保存的会话"}
                 </div>
               ) : (
@@ -335,7 +336,7 @@ export function SessionManagerDialog({
                       }
                     }}
                   >
-                    <span className="min-w-0 flex-1 text-sm truncate">
+                    <span className="min-w-0 flex-1 text-body truncate">
                       {conn.name}
                     </span>
                     <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -387,7 +388,7 @@ export function SessionManagerDialog({
                               setDeleteConfirmId(null);
                             }}
                           >
-                            <span className="text-[10px]">取消</span>
+                            <span className="text-micro">取消</span>
                           </Button>
                         </>
                       ) : (
@@ -489,7 +490,7 @@ export function SessionManagerDialog({
         )}
 
         {editMode === "none" && deleteConfirmId && (
-          <div className="flex items-center gap-2 rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">
+          <div className="flex items-center gap-2 rounded-md bg-destructive/10 px-3 py-2 text-caption text-destructive">
             <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
             <span>点击垃圾桶图标确认删除，或点击取消</span>
           </div>
@@ -526,16 +527,19 @@ function AuthTypeButton({
   label: string;
 }) {
   return (
-    <button
+    <Button
+      type="button"
+      variant="outline"
       onClick={onClick}
-      className={`flex-1 rounded-md border px-2 py-1.5 text-xs transition-colors ${
+      className={cn(
+        "h-auto flex-1 px-2 py-1.5 text-caption",
         active
-          ? "border-primary bg-primary/10 text-primary"
-          : "border-input bg-background text-muted-foreground hover:bg-accent"
-      }`}
+          ? "border-primary bg-primary/10 text-primary hover:bg-primary/10 hover:text-primary"
+          : "text-muted-foreground",
+      )}
     >
       {label}
-    </button>
+    </Button>
   );
 }
 

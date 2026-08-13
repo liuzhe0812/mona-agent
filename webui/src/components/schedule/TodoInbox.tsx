@@ -328,8 +328,8 @@ function TodoRow({
         className={cn(
           "mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border",
           isDone
-            ? "border-primary bg-primary text-primary-foreground"
-            : "border-muted-foreground/40 hover:border-primary",
+            ? "border-info bg-info text-white"
+            : "border-muted-foreground/40 hover:border-info",
         )}
         aria-label="完成"
       >

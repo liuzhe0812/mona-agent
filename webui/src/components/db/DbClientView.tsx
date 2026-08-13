@@ -169,7 +169,7 @@ export function DbClientView({ onOpenSubscribe }: { onOpenSubscribe?: () => void
         className="relative w-[5px] shrink-0 cursor-col-resize"
         onMouseDown={onLeftDragStart}
       >
-        <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-border transition-colors hover:bg-primary/50" />
+        <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-border/70 transition-colors hover:bg-info/50" />
       </div>
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -194,7 +194,7 @@ export function DbClientView({ onOpenSubscribe }: { onOpenSubscribe?: () => void
 
             <TooltipProvider delayDuration={300}>
               <PageToolbar
-                className="h-10 border-b border-border bg-card px-3.5"
+                className="h-10 border-b border-border/60 bg-muted/20 px-3.5"
                 leading={
                   <>
                 <div className="flex items-center gap-1">
@@ -309,7 +309,7 @@ export function DbClientView({ onOpenSubscribe }: { onOpenSubscribe?: () => void
                 className="relative h-[5px] shrink-0 cursor-row-resize"
                 onMouseDown={onResultDragStart}
               >
-                <div className="absolute inset-x-0 top-1/2 h-px -translate-y-1/2 bg-border transition-colors hover:bg-primary/50" />
+                <div className="absolute inset-x-0 top-1/2 h-px -translate-y-1/2 bg-border/70 transition-colors hover:bg-info/50" />
               </div>
               <div style={{ height: resultHeight }} className="shrink-0">
                 <ResultPanel />
@@ -354,7 +354,7 @@ export function DbClientView({ onOpenSubscribe }: { onOpenSubscribe?: () => void
           </div>
         )}
 
-        <div className="flex items-center justify-between border-t border-border bg-card px-3.5 py-1 text-micro text-muted-foreground">
+        <div className="flex items-center justify-between border-t border-border/60 bg-muted/20 px-3.5 py-1 text-micro text-muted-foreground">
           <div className="flex items-center gap-3">
             {activeConn ? (
               <span className="flex items-center gap-1.5">
@@ -389,7 +389,7 @@ export function DbClientView({ onOpenSubscribe }: { onOpenSubscribe?: () => void
           className="relative w-[5px] shrink-0 cursor-col-resize"
           onMouseDown={onAgentDragStart}
         >
-          <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-border transition-colors hover:bg-primary/50" />
+          <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-border/70 transition-colors hover:bg-info/50" />
         </div>
       )}
 
@@ -488,7 +488,7 @@ function QueryTabBar({
             key={tab.id}
             data-active={tab.id === activeTabId}
             className={cn(
-              "group flex shrink-0 items-center gap-1.5 border-r border-border px-3 py-1.5 text-caption cursor-pointer relative",
+              "group relative flex h-7 shrink-0 cursor-pointer items-center gap-1 border-r border-border px-2.5 text-caption",
               tab.id === activeTabId
                 ? "bg-background text-foreground"
                 : "text-muted-foreground hover:text-foreground hover:bg-accent",
@@ -496,7 +496,7 @@ function QueryTabBar({
             onClick={() => onTabClick(tab.id)}
           >
             {tab.id === activeTabId && (
-              <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-theme" />
+                <span className="absolute bottom-0 left-0 right-0 h-px bg-info" />
             )}
             <span className="truncate max-w-28">{tab.title}</span>
             <Button
@@ -514,6 +514,16 @@ function QueryTabBar({
             </Button>
           </div>
         ))}
+        <Button
+          type="button"
+          variant="ghost"
+          className="h-7 shrink-0 rounded-none px-2 text-muted-foreground hover:text-foreground"
+          onClick={onAddTab}
+          title="新建查询"
+          aria-label="新建查询"
+        >
+          <Plus className="h-3.5 w-3.5" />
+        </Button>
       </div>
       {canScrollRight && (
         <Button
@@ -525,16 +535,6 @@ function QueryTabBar({
           <ChevronRight className="h-3.5 w-3.5" />
         </Button>
       )}
-      <Button
-        type="button"
-        variant="ghost"
-        className="h-auto shrink-0 rounded-none px-2 py-1.5 text-muted-foreground hover:text-foreground"
-        onClick={onAddTab}
-        title="新建查询"
-      >
-        <Plus className="h-3.5 w-3.5" />
-      </Button>
-      <div className="flex-1" />
       <Button
         type="button"
         variant="ghost"

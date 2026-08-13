@@ -316,7 +316,7 @@ function ListHeader({
   return (
     <div className="flex h-9 shrink-0 items-center justify-between border-b border-border/55 px-2">
       <div className="flex min-w-0 items-center gap-1.5 px-1">
-        <span className="text-micro font-semibold uppercase tracking-wide text-muted-foreground">
+        <span className="text-caption font-semibold text-muted-foreground">
           笔记
         </span>
         <span className="rounded-full bg-muted/50 px-1.5 py-px text-micro text-muted-foreground">
@@ -345,7 +345,7 @@ function ListHeader({
               type="button"
               variant="ghost"
               title={`排序：${SORT_LABELS[sortMode]}`}
-              className="h-6 gap-1 rounded-md px-1.5 text-micro font-normal text-muted-foreground hover:bg-accent hover:text-foreground"
+              className="h-6 gap-1 rounded-md px-1.5 text-caption font-normal text-muted-foreground hover:bg-accent hover:text-foreground"
             >
               <ArrowDownUp className="h-3 w-3" />
               <span className="hidden sm:inline">{SORT_LABELS[sortMode]}</span>

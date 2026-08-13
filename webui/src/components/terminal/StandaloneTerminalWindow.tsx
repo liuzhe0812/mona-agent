@@ -88,11 +88,11 @@ export function StandaloneTerminalWindow() {
   return (
     <div className="h-full bg-[#1a1a1a] text-white">
       {error ? (
-        <div className="flex h-full items-center justify-center text-sm text-red-400">
+        <div className="flex h-full items-center justify-center text-body text-red-400">
           {error}
         </div>
       ) : !sessionId ? (
-        <div className="flex h-full items-center justify-center text-sm text-white/50">
+        <div className="flex h-full items-center justify-center text-body text-white/50">
           正在连接...
         </div>
       ) : (

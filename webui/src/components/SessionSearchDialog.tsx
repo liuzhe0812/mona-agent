@@ -128,7 +128,7 @@ export function SessionSearchDialog({
             onKeyDown={handleKeyDown}
             placeholder={t("sidebar.searchPlaceholder")}
             aria-label={t("sidebar.searchAria")}
-            className="h-full min-w-0 flex-1 bg-transparent text-[15px] font-medium text-foreground outline-none placeholder:text-muted-foreground/75"
+            className="h-full min-w-0 flex-1 bg-transparent text-body font-medium text-foreground outline-none placeholder:text-muted-foreground/75"
           />
           <kbd className="hidden h-6 shrink-0 items-center rounded-md border border-border/70 bg-muted/60 px-2 text-[11px] font-medium text-muted-foreground sm:inline-flex">
             {shortcutLabel}

@@ -250,11 +250,11 @@ function AuthForm({
         className="flex w-full max-w-sm flex-col gap-4"
       >
         <div className="flex flex-col items-center gap-1 text-center">
-          <p className="text-lg font-semibold">{t("app.auth.title")}</p>
-          <p className="text-sm text-muted-foreground">{t("app.auth.hint")}</p>
+          <p className="text-title-sm">{t("app.auth.title")}</p>
+          <p className="text-body text-muted-foreground">{t("app.auth.hint")}</p>
         </div>
         {failed && (
-          <p className="text-center text-sm text-destructive">
+          <p className="text-center text-body text-destructive">
             {t("app.auth.invalid")}
           </p>
         )}
@@ -2023,14 +2023,14 @@ function RuntimePlaceholder({
   return (
     <div className="flex h-full w-full items-center justify-center px-4 text-center">
       <div className="flex max-w-md flex-col items-center gap-3">
-        <p className="text-lg font-semibold">{t("app.error.title")}</p>
+        <p className="text-title-sm">{t("app.error.title")}</p>
         {message ? (
-          <p className="text-sm text-muted-foreground">{message}</p>
+          <p className="text-body text-muted-foreground">{message}</p>
         ) : null}
-        <p className="text-xs text-muted-foreground">
+        <p className="text-caption text-muted-foreground">
           {t("app.error.gatewayHint")}
         </p>
-        <p className="text-xs text-muted-foreground">
+        <p className="text-caption text-muted-foreground">
           {t("app.error.otherFeaturesHint")}
         </p>
         <div className="flex items-center gap-2">
@@ -2102,7 +2102,7 @@ function GatewayLogDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex max-h-[80vh] w-[680px] max-w-[92vw] flex-col gap-0 overflow-hidden rounded-2xl border-border/70 bg-popover p-0 shadow-lg">
         <DialogHeader className="border-b border-border/60 px-5 py-4 text-left">
-          <DialogTitle className="flex items-center gap-2 text-base">
+          <DialogTitle className="flex items-center gap-2 text-body-lg">
             <FileText className="h-4 w-4 text-muted-foreground" />
             {t("app.error.logTitle")}
           </DialogTitle>

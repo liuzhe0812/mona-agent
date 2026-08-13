@@ -13,11 +13,12 @@ import {
   Edit3,
   X,
   Check,
-  AlertCircle,
   Upload,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
+import { StatusNotice } from "@/components/ui/status-notice";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { useEmailStore } from "../store/emailStore";
@@ -234,7 +235,7 @@ export function ContactsView({ gatewayUrl }: ContactsViewProps) {
           size="sm"
           disabled={!selectedAccount || syncing || !gatewayUrl}
           onClick={() => void handleSync()}
-          className="h-7 gap-1.5 px-2.5 text-[12px] text-blue-600 hover:bg-blue-500/10 hover:text-blue-700 dark:text-blue-400"
+          className="h-7 gap-1.5 px-2.5 text-caption text-info-strong hover:bg-info/10 hover:text-info-strong"
         >
           {syncing ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -248,7 +249,7 @@ export function ContactsView({ gatewayUrl }: ContactsViewProps) {
           variant="ghost"
           size="sm"
           onClick={handleAdd}
-          className="h-7 gap-1.5 px-2.5 text-[12px] text-muted-foreground hover:text-foreground"
+          className="h-7 gap-1.5 px-2.5 text-caption text-muted-foreground hover:text-foreground"
         >
           <Plus className="h-3.5 w-3.5" />
           新建
@@ -259,7 +260,7 @@ export function ContactsView({ gatewayUrl }: ContactsViewProps) {
           size="sm"
           disabled={!selectedAccount || importing}
           onClick={() => void handleImportCsv()}
-          className="h-7 gap-1.5 px-2.5 text-[12px] text-muted-foreground hover:text-foreground"
+          className="h-7 gap-1.5 px-2.5 text-caption text-muted-foreground hover:text-foreground"
         >
           {importing ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -270,20 +271,31 @@ export function ContactsView({ gatewayUrl }: ContactsViewProps) {
         </Button>
         <div className="flex-1" />
         {selectedAccount && syncStates[selectedAccount.id] && (
-          <span className="text-[11px] text-muted-foreground">
+          <span className="text-micro text-muted-foreground">
             上次同步：{formatSyncTime(syncStates[selectedAccount.id].lastSyncedAt)}
           </span>
         )}
       </div>
 
       {error && (
-        <div className="flex items-center gap-2 border-b border-destructive/30 bg-destructive/5 px-3 py-1.5 text-[11px] text-destructive">
-          <AlertCircle className="h-3 w-3 shrink-0" />
-          <span className="flex-1 truncate">{error}</span>
-          <button onClick={() => setError(null)} className="shrink-0 hover:opacity-70">
-            <X className="h-3 w-3" />
-          </button>
-        </div>
+        <StatusNotice
+          tone="danger"
+          className="shrink-0 rounded-none border-x-0 border-t-0 px-3 py-1.5"
+          action={
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              onClick={() => setError(null)}
+              className="h-5 w-5 text-muted-foreground hover:text-foreground"
+              aria-label="关闭"
+            >
+              <X className="h-3 w-3" />
+            </Button>
+          }
+        >
+          {error}
+        </StatusNotice>
       )}
 
       <div className="flex min-h-0 flex-1">
@@ -296,67 +308,69 @@ export function ContactsView({ gatewayUrl }: ContactsViewProps) {
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="搜索联系人..."
-                className="h-7 rounded-full pl-7 text-[13px]"
+                className="h-7 rounded-full pl-7 text-ui"
               />
             </div>
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto">
             {loading ? (
-              <div className="flex items-center justify-center py-8 text-[12px] text-muted-foreground">
+              <div className="flex items-center justify-center py-8 text-caption text-muted-foreground">
                 <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
                 加载中...
               </div>
             ) : filtered.length === 0 ? (
-              <div className="flex flex-col items-center justify-center gap-2 px-3 py-8 text-center">
-                <BookUser className="h-6 w-6 text-muted-foreground/50" />
-                <p className="text-[12px] text-muted-foreground">
-                  {searchQuery ? "没有匹配的联系人" : "还没有联系人"}
-                </p>
-                {!searchQuery && (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={handleAdd}
-                    className="h-7 gap-1 text-[11px] text-blue-600"
-                  >
-                    <Plus className="h-3 w-3" />
-                    新建联系人
-                  </Button>
-                )}
-              </div>
+              <EmptyState
+                className="py-8"
+                icon={<BookUser className="h-5 w-5" />}
+                title={searchQuery ? "没有匹配的联系人" : "还没有联系人"}
+                action={
+                  !searchQuery ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={handleAdd}
+                      className="h-7 gap-1 text-caption text-info-strong hover:bg-info/10 hover:text-info-strong"
+                    >
+                      <Plus className="h-3 w-3" />
+                      新建联系人
+                    </Button>
+                  ) : undefined
+                }
+              />
             ) : (
               <div className="flex flex-col">
                 {filtered.map((c) => {
                   const isSelected = c.id === selectedId;
                   return (
-                    <button
+                    <Button
                       key={c.id}
                       type="button"
+                      variant="ghost"
                       onClick={() => {
                         setSelectedId(c.id);
                         setEditing(false);
                       }}
                       className={cn(
-                        "flex items-center gap-2 border-b border-border/40 px-3 py-2 text-left",
-                        isSelected ? "bg-blue-500/10" : "hover:bg-accent",
+                        "h-auto w-full justify-start gap-2 rounded-none border-b border-border/40 px-3 py-2 text-left font-normal",
+                        isSelected ? "bg-info/10 hover:bg-info/10" : "hover:bg-accent",
                       )}
                     >
                       <Avatar name={c.displayName} />
                       <div className="min-w-0 flex-1">
-                        <div className="truncate text-[12px] font-medium text-foreground">
+                        <div className="truncate text-caption font-medium text-foreground">
                           {c.displayName}
                         </div>
-                        <div className="truncate text-[11px] text-muted-foreground">
+                        <div className="truncate text-micro text-muted-foreground">
                           {c.email || c.phone || "—"}
                         </div>
                       </div>
                       {(c.source === "carddav" || c.source === "auto") && (
-                        <span className="shrink-0 rounded bg-blue-500/10 px-1 py-0.5 text-[9px] text-blue-600">
+                        <span className="shrink-0 rounded-md bg-info/10 px-1 py-0.5 text-micro font-medium text-info-strong">
                           {c.source === "auto" ? "自动" : "同步"}
                         </span>
                       )}
-                    </button>
+                    </Button>
                   );
                 })}
               </div>
@@ -380,12 +394,11 @@ export function ContactsView({ gatewayUrl }: ContactsViewProps) {
               onDelete={() => void handleDelete()}
             />
           ) : (
-            <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
-              <BookUser className="h-8 w-8 text-muted-foreground/40" />
-              <p className="text-[12px] text-muted-foreground">
-                选择左侧联系人查看详情，或点击"新建"添加
-              </p>
-            </div>
+            <EmptyState
+              className="h-full"
+              icon={<BookUser className="h-5 w-5" />}
+              title='选择左侧联系人查看详情，或点击"新建"添加'
+            />
           )}
         </div>
       </div>
@@ -415,11 +428,11 @@ function ContactDetail({
         <div className="flex items-center gap-3">
           <Avatar name={contact.displayName} size={40} />
           <div>
-            <div className="text-[14px] font-semibold text-foreground">
+            <div className="text-body font-semibold text-foreground">
               {contact.displayName}
             </div>
             {contact.organization && (
-              <div className="text-[11px] text-muted-foreground">
+              <div className="text-micro text-muted-foreground">
                 {contact.organization}
                 {contact.title ? ` · ${contact.title}` : ""}
               </div>
@@ -432,7 +445,7 @@ function ContactDetail({
             variant="ghost"
             size="sm"
             onClick={onEdit}
-            className="h-7 gap-1.5 px-2 text-[12px] text-muted-foreground hover:text-foreground"
+            className="h-7 gap-1.5 px-2 text-caption text-muted-foreground hover:text-foreground"
           >
             <Edit3 className="h-3.5 w-3.5" />
             编辑
@@ -442,7 +455,7 @@ function ContactDetail({
             variant="ghost"
             size="sm"
             onClick={onDelete}
-            className="h-7 gap-1.5 px-2 text-[12px] text-destructive hover:bg-destructive/10"
+            className="h-7 gap-1.5 px-2 text-caption text-destructive hover:bg-destructive/10"
           >
             <Trash2 className="h-3.5 w-3.5" />
             删除
@@ -454,9 +467,9 @@ function ContactDetail({
           {allEmails.length > 0 && (
             <Field icon={Mail} label="邮箱">
               <div className="flex flex-col gap-1">
-                <div className="text-[13px] text-foreground">{contact.email}</div>
+                <div className="text-ui text-foreground">{contact.email}</div>
                 {otherEmails.map((e) => (
-                  <div key={e} className="text-[13px] text-muted-foreground">
+                  <div key={e} className="text-ui text-muted-foreground">
                     {e}
                   </div>
                 ))}
@@ -465,27 +478,27 @@ function ContactDetail({
           )}
           {contact.phone && (
             <Field icon={Phone} label="电话">
-              <div className="text-[13px] text-foreground">{contact.phone}</div>
+              <div className="text-ui text-foreground">{contact.phone}</div>
             </Field>
           )}
           {contact.organization && (
             <Field icon={Building2} label="公司">
-              <div className="text-[13px] text-foreground">{contact.organization}</div>
+              <div className="text-ui text-foreground">{contact.organization}</div>
             </Field>
           )}
           {contact.title && (
             <Field icon={Briefcase} label="职务">
-              <div className="text-[13px] text-foreground">{contact.title}</div>
+              <div className="text-ui text-foreground">{contact.title}</div>
             </Field>
           )}
           {contact.note && (
             <Field label="备注">
-              <div className="whitespace-pre-wrap text-[13px] text-foreground">
+              <div className="whitespace-pre-wrap text-ui text-foreground">
                 {contact.note}
               </div>
             </Field>
           )}
-          <div className="mt-2 text-[11px] text-muted-foreground">
+          <div className="mt-2 text-micro text-muted-foreground">
             来源：{contact.source === "carddav" ? "CardDAV 同步" : "手动添加"}
             {contact.updatedAt && ` · 更新于 ${formatSyncTime(contact.updatedAt)}`}
           </div>
@@ -506,7 +519,7 @@ function Field({
 }) {
   return (
     <div className="flex gap-3 border-b border-border/40 pb-3">
-      <div className="flex w-20 shrink-0 items-center gap-1.5 text-[11px] text-muted-foreground">
+      <div className="flex w-20 shrink-0 items-center gap-1.5 text-micro text-muted-foreground">
         {Icon && <Icon className="h-3 w-3" />}
         {label}
       </div>
@@ -537,7 +550,7 @@ function ContactEditor({
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between border-b border-border/60 px-4 py-3">
-        <span className="text-[13px] font-medium text-foreground">
+        <span className="text-ui font-medium text-foreground">
           {form.id ? "编辑联系人" : "新建联系人"}
         </span>
         <div className="flex gap-1">
@@ -546,7 +559,7 @@ function ContactEditor({
             variant="ghost"
             size="sm"
             onClick={onSave}
-            className="h-7 gap-1.5 px-2 text-[12px] text-blue-600 hover:bg-blue-500/10"
+            className="h-7 gap-1.5 px-2 text-caption text-info-strong hover:bg-info/10"
           >
             <Check className="h-3.5 w-3.5" />
             保存
@@ -556,7 +569,7 @@ function ContactEditor({
             variant="ghost"
             size="sm"
             onClick={onCancel}
-            className="h-7 gap-1.5 px-2 text-[12px] text-muted-foreground hover:text-foreground"
+            className="h-7 gap-1.5 px-2 text-caption text-muted-foreground hover:text-foreground"
           >
             <X className="h-3.5 w-3.5" />
             取消
@@ -570,7 +583,7 @@ function ContactEditor({
               value={form.displayName ?? ""}
               onChange={(e) => update("displayName", e.target.value)}
               placeholder="张三"
-              className="h-8 text-[13px]"
+              className="h-8 text-ui"
             />
           </EditField>
           <EditField label="邮箱">
@@ -578,7 +591,7 @@ function ContactEditor({
               value={form.email ?? ""}
               onChange={(e) => update("email", e.target.value)}
               placeholder="zhangsan@example.com"
-              className="h-8 text-[13px]"
+              className="h-8 text-ui"
             />
           </EditField>
           <EditField label="电话">
@@ -586,7 +599,7 @@ function ContactEditor({
               value={form.phone ?? ""}
               onChange={(e) => update("phone", e.target.value)}
               placeholder="13800138000"
-              className="h-8 text-[13px]"
+              className="h-8 text-ui"
             />
           </EditField>
           <EditField label="公司">
@@ -594,7 +607,7 @@ function ContactEditor({
               value={form.organization ?? ""}
               onChange={(e) => update("organization", e.target.value)}
               placeholder="公司名称"
-              className="h-8 text-[13px]"
+              className="h-8 text-ui"
             />
           </EditField>
           <EditField label="职务">
@@ -602,7 +615,7 @@ function ContactEditor({
               value={form.title ?? ""}
               onChange={(e) => update("title", e.target.value)}
               placeholder="工程师"
-              className="h-8 text-[13px]"
+              className="h-8 text-ui"
             />
           </EditField>
           <EditField label="备注">
@@ -610,7 +623,7 @@ function ContactEditor({
               value={form.note ?? ""}
               onChange={(e) => update("note", e.target.value)}
               placeholder="备注信息"
-              className="min-h-[60px] text-[13px]"
+              className="min-h-[60px] text-ui"
             />
           </EditField>
         </div>
@@ -630,7 +643,7 @@ function EditField({
 }) {
   return (
     <div className="flex flex-col gap-1">
-      <label className="text-[11px] text-muted-foreground">
+      <label className="text-micro text-muted-foreground">
         {label}
         {required && <span className="ml-0.5 text-destructive">*</span>}
       </label>

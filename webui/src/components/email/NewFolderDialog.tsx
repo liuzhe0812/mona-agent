@@ -3,6 +3,7 @@ import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { StatusNotice } from "@/components/ui/status-notice";
 import {
   Dialog,
   DialogContent,
@@ -60,11 +61,11 @@ export function NewFolderDialog({
     >
       <DialogContent className="max-w-sm">
         <DialogHeader>
-          <DialogTitle className="text-base font-semibold">新建文件夹</DialogTitle>
+          <DialogTitle>新建文件夹</DialogTitle>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-2">
-            <Label htmlFor="folder-name" className="text-[12px]">
+            <Label htmlFor="folder-name" className="text-caption">
               文件夹名称
             </Label>
             <Input
@@ -72,20 +73,20 @@ export function NewFolderDialog({
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="请输入文件夹名称"
-              className="h-8 text-[13px]"
+              className="h-8 text-ui"
               autoFocus
               disabled={submitting}
             />
           </div>
           {error ? (
-            <div className="text-[12px] text-destructive">{error}</div>
+            <StatusNotice tone="danger">{error}</StatusNotice>
           ) : null}
           <DialogFooter>
             <Button
               type="button"
               variant="outline"
               size="sm"
-              className="h-8 text-[12px]"
+              className="h-8 text-caption"
               disabled={submitting}
               onClick={() => onOpenChange(false)}
             >
@@ -94,7 +95,7 @@ export function NewFolderDialog({
             <Button
               type="submit"
               size="sm"
-              className="h-8 text-[12px]"
+              className="h-8 text-caption"
               disabled={submitting || !name.trim()}
             >
               {submitting ? (

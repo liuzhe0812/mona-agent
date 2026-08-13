@@ -448,7 +448,7 @@ function EditorToolbar({
             type="button"
             variant="ghost"
             size="sm"
-            className="h-7 gap-1 px-2 text-[12px] text-muted-foreground hover:text-foreground"
+            className="h-7 gap-1 px-2 text-caption text-muted-foreground hover:text-foreground"
             disabled={!editor}
           >
             <Type className="h-3.5 w-3.5" />
@@ -463,7 +463,6 @@ function EditorToolbar({
             <DropdownMenuItem
               key={font.label}
               onClick={() => setFontFamily(font.value)}
-              className="text-[12px]"
               style={font.value ? { fontFamily: font.value } : undefined}
             >
               {font.label}
@@ -479,7 +478,7 @@ function EditorToolbar({
             type="button"
             variant="ghost"
             size="sm"
-            className="h-7 gap-1 px-2 text-[12px] text-muted-foreground hover:text-foreground"
+            className="h-7 gap-1 px-2 text-caption text-muted-foreground hover:text-foreground"
             disabled={!editor}
           >
             <span className="max-w-[30px] truncate">
@@ -493,7 +492,6 @@ function EditorToolbar({
             <DropdownMenuItem
               key={size.value}
               onClick={() => setFontSize(size.value)}
-              className="text-[12px]"
             >
               {size.label}
             </DropdownMenuItem>
@@ -548,13 +546,16 @@ function EditorToolbar({
         <DropdownMenuContent align="start" className="min-w-[160px]">
           <div className="grid grid-cols-5 gap-1 p-1">
             {TEXT_COLORS.map((color) => (
-              <button
+              <Button
                 key={color}
                 type="button"
+                variant="ghost"
+                size="icon"
                 onClick={() => setTextColor(color)}
                 className="h-6 w-6 rounded border border-border/40 hover:scale-110 hover:border-border"
                 style={{ backgroundColor: color }}
                 title={color}
+                aria-label={`文字颜色 ${color}`}
               />
             ))}
           </div>
@@ -579,9 +580,11 @@ function EditorToolbar({
         <DropdownMenuContent align="start" className="min-w-[160px]">
           <div className="grid grid-cols-4 gap-1 p-1">
             {HIGHLIGHT_COLORS.map((color) => (
-              <button
+              <Button
                 key={color}
                 type="button"
+                variant="ghost"
+                size="icon"
                 onClick={() => setHighlight(color)}
                 className={cn(
                   "h-6 w-6 rounded border border-border/40 hover:scale-110 hover:border-border",
@@ -589,6 +592,7 @@ function EditorToolbar({
                 )}
                 style={color !== "transparent" ? { backgroundColor: color } : undefined}
                 title={color === "transparent" ? "清除背景" : color}
+                aria-label={color === "transparent" ? "清除背景" : `背景颜色 ${color}`}
               />
             ))}
           </div>

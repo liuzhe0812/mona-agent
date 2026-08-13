@@ -2,22 +2,22 @@
 
 export const PROFILE_COLORS = {
   // 主色系
-  emerald: "#10b981", // 翡翠绿 - 成长
+  emerald: "#0e9f6e", // 继承首屏成功绿
   emeraldSoft: "#34d399",
-  emeraldDeep: "#059669",
+  emeraldDeep: "#0b8a5e",
 
-  amber: "#f59e0b", // 琥珀金 - 成就
-  amberSoft: "#fbbf24",
-  amberDeep: "#d97706",
+  amber: "#d8852d", // 继承首屏提醒橙
+  amberSoft: "#f0b273",
+  amberDeep: "#c2741f",
 
-  coral: "#fb7185", // 珊瑚橙 - 活力
-  coralSoft: "#fda4af",
-  coralDeep: "#e11d48",
+  coral: "#4f9de8", // 继承首屏信息蓝
+  coralSoft: "#8dc1f1",
+  coralDeep: "#347fca",
 
   // 中性
-  cyan: "#06b6d4", // 青蓝 - 辅助
-  violet: "#a78bfa", // 淡紫 - 仅作辅助点缀
-  rose: "#f43f5e",
+  cyan: "#4f9de8", // 信息蓝辅助
+  violet: "#7e91c8",
+  rose: "#d8852d",
 
   // 等级色（从低到高）
   levels: [
@@ -112,9 +112,9 @@ export const PROFILE_ANIMATIONS = `
 
 /** 通用卡片样式 */
 export const CARD_BASE =
-  "relative overflow-hidden rounded-2xl border border-border/40 bg-card/40 backdrop-blur-md";
+  "relative overflow-hidden rounded-lg border border-border/60 bg-card";
 export const CARD_HOVER =
-  "transition-all duration-300 hover:border-border/80 hover:bg-card/60 hover:shadow-overlay";
+  "transition-colors duration-fast hover:border-border";
 
 /** 等级颜色 */
 export function levelColor(level: number): string {
@@ -150,4 +150,3 @@ export function hourlyToHeatmap(
   }
   return grid;
 }
-

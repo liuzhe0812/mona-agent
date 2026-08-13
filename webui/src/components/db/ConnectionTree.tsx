@@ -852,7 +852,7 @@ function TreeItem({
         {badge && (
           <span
             className={cn(
-              "shrink-0 rounded-full px-1.5 py-0.5 text-micro font-medium",
+              "shrink-0 rounded-full px-1.5 py-0.5 text-caption font-normal",
               badgeVariant === "success"
                 ? "bg-success/15 text-success"
                 : badgeVariant === "warning"

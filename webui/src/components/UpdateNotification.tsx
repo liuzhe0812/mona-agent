@@ -243,7 +243,7 @@ export function UpdateNotification({
                 <AlertCircle className="h-5 w-5" />
               </span>
               <div>
-                <DialogTitle className="text-[17px] font-semibold tracking-[-0.01em]">
+                <DialogTitle className="text-body-lg font-semibold tracking-[-0.01em]">
                   自动下载失败
                 </DialogTitle>
                 <DialogDescription className="mt-0.5 text-[12px]">
@@ -317,7 +317,7 @@ export function UpdateNotification({
                 )}
               </span>
               <div className="min-w-0">
-                <DialogTitle className="text-[17px] font-semibold tracking-[-0.01em]">
+                <DialogTitle className="text-body-lg font-semibold tracking-[-0.01em]">
                   {view.kind === "checking"
                     ? "正在检查更新"
                     : view.kind === "available"

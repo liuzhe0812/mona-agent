@@ -46,7 +46,7 @@ export function TransferPanel({ task, onCancel, onClear }: TransferPanelProps) {
   return (
     <div className="border-t bg-secondary/30">
       <div className="flex items-center justify-between px-3 py-1.5 border-b">
-        <div className="flex items-center gap-2 text-xs">
+        <div className="flex items-center gap-2 text-caption">
           <span className="font-medium">传输任务</span>
           <span className="text-muted-foreground">
             ({completedFiles}/{task.totalFiles})
@@ -57,7 +57,7 @@ export function TransferPanel({ task, onCancel, onClear }: TransferPanelProps) {
             <Button
               variant="ghost"
               size="sm"
-              className="h-6 text-xs gap-1 text-destructive hover:text-destructive"
+              className="h-6 text-caption gap-1 text-destructive hover:text-destructive"
               onClick={onCancel}
             >
               <X className="h-3 w-3" />
@@ -68,7 +68,7 @@ export function TransferPanel({ task, onCancel, onClear }: TransferPanelProps) {
             <Button
               variant="ghost"
               size="sm"
-              className="h-6 text-xs gap-1"
+              className="h-6 text-caption gap-1"
               onClick={onClear}
             >
               清理
@@ -79,14 +79,14 @@ export function TransferPanel({ task, onCancel, onClear }: TransferPanelProps) {
 
       <div className="px-3 py-2">
         <div className="flex items-center justify-between mb-1.5">
-          <div className="flex items-center gap-1.5 text-xs min-w-0">
+          <div className="flex items-center gap-1.5 text-caption min-w-0">
             {task.type === "upload" ? (
               <Upload className="h-3.5 w-3.5 text-primary shrink-0" />
             ) : (
               <Download className="h-3.5 w-3.5 text-primary shrink-0" />
             )}
             {isActive && <Loader2 className="h-3.5 w-3.5 text-primary animate-spin shrink-0" />}
-            {isCompleted && <CheckCircle className="h-3.5 w-3.5 text-green-500 shrink-0" />}
+            {isCompleted && <CheckCircle className="h-3.5 w-3.5 text-success shrink-0" />}
             {isError && <XCircle className="h-3.5 w-3.5 text-destructive shrink-0" />}
             {isCancelled && <XCircle className="h-3.5 w-3.5 text-muted-foreground shrink-0" />}
             <span className="truncate">
@@ -103,7 +103,7 @@ export function TransferPanel({ task, onCancel, onClear }: TransferPanelProps) {
                       : task.currentFile}
             </span>
           </div>
-          <div className="text-xs text-muted-foreground shrink-0 ml-2">
+          <div className="text-caption text-muted-foreground shrink-0 ml-2">
             {isActive && task.status === "transferring" ? task.speed : ""}
           </div>
         </div>
@@ -115,7 +115,7 @@ export function TransferPanel({ task, onCancel, onClear }: TransferPanelProps) {
               className={cn(
                 "flex-1 h-1.5",
                 isActive && "[&>div]:bg-theme",
-                isCompleted && "[&>div]:bg-green-500",
+                isCompleted && "[&>div]:bg-success",
                 isError && "[&>div]:bg-destructive",
                 isCancelled && "[&>div]:bg-muted-foreground",
               )}
@@ -127,20 +127,22 @@ export function TransferPanel({ task, onCancel, onClear }: TransferPanelProps) {
               )}
             </div>
           )}
-          <span className="text-xs font-medium min-w-[2.5rem] text-right">
+          <span className="text-caption font-medium min-w-[2.5rem] text-right">
             {task.totalBytes > 0 ? `${task.progress}%` : ""}
           </span>
         </div>
 
         {task.totalBytes > 0 && isActive && (
-          <div className="text-[10px] text-muted-foreground mt-1">
+          <div className="text-micro text-muted-foreground mt-1">
             {formatSize(task.bytesTransferred)} / {formatSize(task.totalBytes)}
           </div>
         )}
 
         {task.files.length > 1 && (
-          <button
-            className="flex items-center gap-1 text-[10px] text-muted-foreground mt-1 hover:text-foreground"
+          <Button
+            variant="ghost"
+            size="xs"
+            className="mt-1 h-auto gap-1 px-0 text-micro text-muted-foreground hover:bg-transparent hover:text-foreground"
             onClick={() => setExpanded(!expanded)}
           >
             {expanded ? (
@@ -149,15 +151,15 @@ export function TransferPanel({ task, onCancel, onClear }: TransferPanelProps) {
               <ChevronRight className="h-3 w-3" />
             )}
             文件列表
-          </button>
+          </Button>
         )}
 
         {expanded && (
           <div className="mt-1 space-y-0.5 max-h-32 overflow-y-auto">
             {task.files.map((file, i) => (
-              <div key={i} className="flex items-center gap-1.5 text-[10px]">
+              <div key={i} className="flex items-center gap-1.5 text-micro">
                 {file.status === "completed" ? (
-                  <CheckCircle className="h-3 w-3 text-green-500 shrink-0" />
+                  <CheckCircle className="h-3 w-3 text-success shrink-0" />
                 ) : file.status === "transferring" ? (
                   <Loader2 className="h-3 w-3 text-primary animate-spin shrink-0" />
                 ) : file.status === "error" ? (

@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
+import { StatusNotice } from "@/components/ui/status-notice";
 import {
   Dialog,
   DialogContent,
@@ -378,36 +379,36 @@ export function AccountSettingsDialog({
         onInteractOutside={(e) => e.preventDefault()}
       >
         <DialogHeader>
-          <DialogTitle className="text-base font-semibold">邮箱设置</DialogTitle>
+          <DialogTitle>邮箱设置</DialogTitle>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-5">
           <Tabs defaultValue="basic" className="w-full">
             <TabsList className="grid w-full grid-cols-5">
-              <TabsTrigger value="basic" className="text-[12px]">基础</TabsTrigger>
-              <TabsTrigger value="password" className="text-[12px]">密码</TabsTrigger>
-              <TabsTrigger value="signatures" className="text-[12px]">签名</TabsTrigger>
-              <TabsTrigger value="rules" className="text-[12px]">规则</TabsTrigger>
-              <TabsTrigger value="schedule" className="text-[12px]">AI日程</TabsTrigger>
+              <TabsTrigger value="basic" className="text-caption">基础</TabsTrigger>
+              <TabsTrigger value="password" className="text-caption">密码</TabsTrigger>
+              <TabsTrigger value="signatures" className="text-caption">签名</TabsTrigger>
+              <TabsTrigger value="rules" className="text-caption">规则</TabsTrigger>
+              <TabsTrigger value="schedule" className="text-caption">AI日程</TabsTrigger>
             </TabsList>
             <TabsContent value="basic" className="mt-4 max-h-[60vh] space-y-5 overflow-y-auto pr-1">
           {/* 基础 */}
           <section className="space-y-3">
-            <h3 className="text-[12px] font-medium text-muted-foreground">基础</h3>
+            <h3 className="text-caption font-medium text-muted-foreground">基础</h3>
             <div className="space-y-2">
               <div className="space-y-1">
-                <Label htmlFor="acct-email" className="text-[12px]">
+                <Label htmlFor="acct-email" className="text-caption">
                   邮箱地址
                 </Label>
                 <Input
                   id="acct-email"
                   value={emailAddress}
                   onChange={(e) => setEmailAddress(e.target.value)}
-                  className="h-8 rounded-lg text-[13px]"
+                  className="h-8 text-ui"
                   disabled={submitting}
                 />
               </div>
               <div className="space-y-1">
-                <Label htmlFor="acct-display" className="text-[12px]">
+                <Label htmlFor="acct-display" className="text-caption">
                   显示名称（前端显示）
                 </Label>
                 <Input
@@ -415,12 +416,12 @@ export function AccountSettingsDialog({
                   value={displayName}
                   onChange={(e) => setDisplayName(e.target.value)}
                   placeholder="邮箱树中显示的名字"
-                  className="h-8 rounded-lg text-[13px]"
+                  className="h-8 text-ui"
                   disabled={submitting}
                 />
               </div>
               <div className="space-y-1">
-                <Label htmlFor="acct-from-name" className="text-[12px]">
+                <Label htmlFor="acct-from-name" className="text-caption">
                   发信名称
                 </Label>
                 <Input
@@ -428,7 +429,7 @@ export function AccountSettingsDialog({
                   value={fromName}
                   onChange={(e) => setFromName(e.target.value)}
                   placeholder="发邮件时收件人看到的发件人名字（留空则用邮箱地址）"
-                  className="h-8 rounded-lg text-[13px]"
+                  className="h-8 text-ui"
                   disabled={submitting}
                 />
               </div>
@@ -437,10 +438,10 @@ export function AccountSettingsDialog({
 
           {/* 服务器 */}
           <section className="space-y-3">
-            <h3 className="text-[12px] font-medium text-muted-foreground">服务器</h3>
+            <h3 className="text-caption font-medium text-muted-foreground">服务器</h3>
             <div className="space-y-2">
               <div className="space-y-1">
-                <Label htmlFor="acct-username" className="text-[12px]">
+                <Label htmlFor="acct-username" className="text-caption">
                   账号
                 </Label>
                 <Input
@@ -448,29 +449,29 @@ export function AccountSettingsDialog({
                   value={imapUsername}
                   onChange={(e) => setImapUsername(e.target.value)}
                   placeholder="IMAP/SMTP 登录用户名，留空则用邮箱地址"
-                  className="h-8 rounded-lg text-[13px]"
+                  className="h-8 text-ui"
                   disabled={submitting}
                 />
               </div>
 
               <div className="space-y-1.5">
-                <Label className="text-[12px]">收件服务器（IMAP）</Label>
+                <Label className="text-caption">收件服务器（IMAP）</Label>
                 <div className="flex items-center gap-2">
                   <Input
                     value={imapHost}
                     onChange={(e) => setImapHost(e.target.value)}
                     placeholder="imap.example.com"
-                    className="h-8 rounded-lg text-[13px]"
+                    className="h-8 text-ui"
                     disabled={submitting}
                   />
                   <Input
                     value={imapPort}
                     onChange={(e) => setImapPort(e.target.value)}
-                    className="h-8 w-20 rounded-lg text-[13px]"
+                    className="h-8 w-20 text-ui"
                     disabled={submitting}
                   />
                 </div>
-                <label className="flex items-center gap-2 text-[12px] text-muted-foreground">
+                <label className="flex items-center gap-2 text-caption text-muted-foreground">
                   <Checkbox
                     checked={imapSsl}
                     onCheckedChange={(v) => handleImapSslChange(v === true)}
@@ -481,23 +482,23 @@ export function AccountSettingsDialog({
               </div>
 
               <div className="space-y-1.5">
-                <Label className="text-[12px]">发件服务器（SMTP）</Label>
+                <Label className="text-caption">发件服务器（SMTP）</Label>
                 <div className="flex items-center gap-2">
                   <Input
                     value={smtpHost}
                     onChange={(e) => setSmtpHost(e.target.value)}
                     placeholder="smtp.example.com"
-                    className="h-8 rounded-lg text-[13px]"
+                    className="h-8 text-ui"
                     disabled={submitting}
                   />
                   <Input
                     value={smtpPort}
                     onChange={(e) => setSmtpPort(e.target.value)}
-                    className="h-8 w-20 rounded-lg text-[13px]"
+                    className="h-8 w-20 text-ui"
                     disabled={submitting}
                   />
                 </div>
-                <label className="flex items-center gap-2 text-[12px] text-muted-foreground">
+                <label className="flex items-center gap-2 text-caption text-muted-foreground">
                   <Checkbox
                     checked={smtpSsl}
                     onCheckedChange={(v) => handleSmtpSslChange(v === true)}
@@ -512,10 +513,10 @@ export function AccountSettingsDialog({
             <TabsContent value="password" className="mt-4 max-h-[60vh] space-y-5 overflow-y-auto pr-1">
           {/* 密码 */}
           <section className="space-y-3">
-            <h3 className="text-[12px] font-medium text-muted-foreground">登录密码</h3>
+            <h3 className="text-caption font-medium text-muted-foreground">登录密码</h3>
             <div className="space-y-2">
               <div className="space-y-1">
-                <Label htmlFor="acct-password" className="text-[12px]">
+                <Label htmlFor="acct-password" className="text-caption">
                   修改密码（留空表示不修改）
                 </Label>
                 <Input
@@ -524,11 +525,11 @@ export function AccountSettingsDialog({
                   value={newPassword}
                   onChange={(e) => setNewPassword(e.target.value)}
                   placeholder="留空保留原密码；腾讯企业邮需填客户端专用密码"
-                  className="h-8 rounded-lg text-[13px]"
+                  className="h-8 text-ui"
                   disabled={submitting}
                   autoComplete="new-password"
                 />
-                <p className="text-[11px] text-muted-foreground">
+                <p className="text-micro text-muted-foreground">
                   腾讯企业邮需在网页版「设置 → 客户端专用密码」生成密码，IMAP/SMTP 共用
                 </p>
               </div>
@@ -539,12 +540,12 @@ export function AccountSettingsDialog({
           {/* 签名管理 */}
           <section className="space-y-3">
             <div className="flex items-center justify-between">
-              <h3 className="text-[12px] font-medium text-muted-foreground">签名</h3>
+              <h3 className="text-caption font-medium text-muted-foreground">签名</h3>
               <Button
                 type="button"
                 variant="ghost"
                 size="sm"
-                className="h-6 gap-1 px-2 text-[11px] text-muted-foreground hover:text-foreground"
+                className="h-6 gap-1 px-2 text-micro text-muted-foreground hover:text-foreground"
                 onClick={handleAddSignature}
                 disabled={submitting}
               >
@@ -554,10 +555,10 @@ export function AccountSettingsDialog({
             </div>
             <div className="space-y-2">
               {signatures.length === 0 && (
-                <p className="text-[11px] text-muted-foreground">暂无签名，点击"添加"创建</p>
+                <p className="text-micro text-muted-foreground">暂无签名，点击"添加"创建</p>
               )}
               {signatures.map((sig) => (
-                <div key={sig.id} className="rounded-lg border border-border/60 bg-muted/20 p-2">
+                <div key={sig.id} className="rounded-md border border-border/60 bg-muted/20 p-2">
                   {editingSigId === sig.id && sigDraft ? (
                     <div className="space-y-2">
                       <div className="flex items-center gap-2">
@@ -565,9 +566,9 @@ export function AccountSettingsDialog({
                           value={sigDraft.name}
                           onChange={(e) => setSigDraft({ ...sigDraft, name: e.target.value })}
                           placeholder="签名名称"
-                          className="h-7 flex-1 rounded-lg text-[12px]"
+                          className="h-7 flex-1 text-caption"
                         />
-                        <label className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                        <label className="flex items-center gap-1 text-micro text-muted-foreground">
                           <Checkbox
                             checked={sigDraft.isDefault ?? false}
                             onCheckedChange={(v) => setSigDraft({ ...sigDraft, isDefault: v === true })}
@@ -579,13 +580,13 @@ export function AccountSettingsDialog({
                         value={sigDraft.content}
                         onChange={(e) => setSigDraft({ ...sigDraft, content: e.target.value })}
                         placeholder="签名内容（支持 HTML）"
-                        className="min-h-[80px] rounded-lg text-[12px]"
+                        className="min-h-[80px] text-caption"
                       />
                       {sigDraft.content && (
-                        <div className="rounded-lg border border-border/40 bg-white p-2">
-                          <div className="mb-1 text-[10px] text-muted-foreground">预览</div>
+                        <div className="rounded-md border border-border/40 bg-white p-2">
+                          <div className="mb-1 text-micro text-muted-foreground">预览</div>
                           <div
-                            className="text-[12px] leading-relaxed text-gray-700 [&_a]:text-[#2f7fca] [&_a]:underline [&_img]:max-w-full"
+                            className="text-caption leading-relaxed text-gray-700 [&_a]:text-[#2f7fca] [&_a]:underline [&_img]:max-w-full"
                             dangerouslySetInnerHTML={{ __html: sigDraft.content }}
                           />
                         </div>
@@ -595,7 +596,7 @@ export function AccountSettingsDialog({
                           type="button"
                           variant="ghost"
                           size="sm"
-                          className="h-6 px-2 text-[11px]"
+                          className="h-6 px-2 text-micro"
                           onClick={handleCancelEditSignature}
                         >
                           <XIcon className="h-3 w-3" />
@@ -604,7 +605,7 @@ export function AccountSettingsDialog({
                         <Button
                           type="button"
                           size="sm"
-                          className="h-6 px-2 text-[11px]"
+                          className="h-6 px-2 text-micro"
                           onClick={handleSaveSignature}
                         >
                           <Check className="h-3 w-3" />
@@ -616,39 +617,48 @@ export function AccountSettingsDialog({
                     <div className="flex items-center gap-2">
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-1.5">
-                          <span className="truncate text-[12px] font-medium">{sig.name || "未命名"}</span>
+                          <span className="truncate text-caption font-medium">{sig.name || "未命名"}</span>
                           {sig.isDefault && (
-                            <span className="rounded bg-blue-500/10 px-1 text-[10px] text-blue-600">默认</span>
+                            <span className="rounded bg-info/10 px-1 text-micro text-info-strong">默认</span>
                           )}
                         </div>
-                        <p className="truncate text-[11px] text-muted-foreground">
+                        <p className="truncate text-micro text-muted-foreground">
                           {sig.content ? sig.content.replace(/<[^>]*>/g, "").slice(0, 50) || "（空）" : "（空）"}
                         </p>
                       </div>
-                      <button
+                      <Button
                         type="button"
+                        variant="ghost"
+                        size="icon"
                         onClick={() => handleSetDefault(sig.id)}
-                        className="text-muted-foreground hover:text-blue-600"
+                        className="h-7 w-7 text-muted-foreground hover:text-info-strong"
                         title="设为默认"
+                        aria-label="设为默认"
                       >
-                        <Star className={cn("h-3.5 w-3.5", sig.isDefault && "fill-blue-500 text-blue-500")} />
-                      </button>
-                      <button
+                        <Star className={cn("h-3.5 w-3.5", sig.isDefault && "fill-info text-info")} />
+                      </Button>
+                      <Button
                         type="button"
+                        variant="ghost"
+                        size="icon"
                         onClick={() => handleEditSignature(sig)}
-                        className="text-muted-foreground hover:text-foreground"
+                        className="h-7 w-7 text-muted-foreground hover:text-foreground"
                         title="编辑"
+                        aria-label="编辑签名"
                       >
                         <Edit3 className="h-3.5 w-3.5" />
-                      </button>
-                      <button
+                      </Button>
+                      <Button
                         type="button"
+                        variant="ghost"
+                        size="icon"
                         onClick={() => handleDeleteSignature(sig.id)}
-                        className="text-muted-foreground hover:text-destructive"
+                        className="h-7 w-7 text-muted-foreground hover:text-destructive"
                         title="删除"
+                        aria-label="删除签名"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
-                      </button>
+                      </Button>
                     </div>
                   )}
                 </div>
@@ -659,7 +669,7 @@ export function AccountSettingsDialog({
             <TabsContent value="rules" className="mt-4 max-h-[60vh] space-y-5 overflow-y-auto pr-1">
           <section className="space-y-3">
             <div className="flex items-center justify-between">
-              <h3 className="flex items-center gap-1 text-[12px] font-medium text-muted-foreground">
+              <h3 className="flex items-center gap-1 text-caption font-medium text-muted-foreground">
                 <Filter className="h-3 w-3" />
                 规则
               </h3>
@@ -668,7 +678,7 @@ export function AccountSettingsDialog({
                   type="button"
                   variant="ghost"
                   size="sm"
-                  className="h-6 gap-1 px-2 text-[11px] text-muted-foreground hover:text-foreground"
+                  className="h-6 gap-1 px-2 text-micro text-muted-foreground hover:text-foreground"
                   onClick={() => void handleApplyRules()}
                   disabled={applyingRules || submitting || rules.filter((r) => r.enabled).length === 0 || !gatewayUrl}
                   title="对账号 INBOX 中已有邮件批量应用规则"
@@ -684,7 +694,7 @@ export function AccountSettingsDialog({
                   type="button"
                   variant="ghost"
                   size="sm"
-                  className="h-6 gap-1 px-2 text-[11px] text-muted-foreground hover:text-foreground"
+                  className="h-6 gap-1 px-2 text-micro text-muted-foreground hover:text-foreground"
                   onClick={handleAddRule}
                   disabled={submitting}
                 >
@@ -695,29 +705,31 @@ export function AccountSettingsDialog({
             </div>
             <div className="space-y-2">
               {rules.length === 0 && (
-                <p className="text-[11px] text-muted-foreground">暂无规则，新邮件将不会被自动分类</p>
+                <p className="text-micro text-muted-foreground">暂无规则，新邮件将不会被自动分类</p>
               )}
               {rules.map((rule) => (
-                <div key={rule.id} className="rounded-lg border border-border/60 bg-muted/20 p-2">
+                <div key={rule.id} className="rounded-md border border-border/60 bg-muted/20 p-2">
                   {editingRuleId === rule.id && ruleDraft ? (
                     <div className="space-y-2">
                       <Input
                         value={ruleDraft.name}
                         onChange={(e) => setRuleDraft({ ...ruleDraft, name: e.target.value })}
                         placeholder="规则名称"
-                        className="h-7 rounded-lg text-[12px]"
+                        className="h-7 text-caption"
                       />
                       <div className="flex items-center gap-2">
-                        <span className="text-[11px] text-muted-foreground">当</span>
+                        <span className="text-micro text-muted-foreground">当</span>
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
-                            <button
+                            <Button
                               type="button"
-                              className="h-7 rounded-lg border border-border bg-background px-2 text-[11px]"
+                              variant="outline"
+                              size="sm"
+                              className="h-7 px-2 text-micro font-normal"
                             >
                               {ruleDraft.conditionField === "from_contains" ? "发件人包含" :
                                 ruleDraft.conditionField === "subject_contains" ? "主题包含" : "收件人包含"}
-                            </button>
+                            </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent>
                             <DropdownMenuItem onClick={() => setRuleDraft({ ...ruleDraft, conditionField: "from_contains" })}>发件人包含</DropdownMenuItem>
@@ -729,21 +741,23 @@ export function AccountSettingsDialog({
                           value={ruleDraft.conditionValue}
                           onChange={(e) => setRuleDraft({ ...ruleDraft, conditionValue: e.target.value })}
                           placeholder="关键词"
-                          className="h-7 flex-1 rounded-lg text-[11px]"
+                          className="h-7 flex-1 text-micro"
                         />
                       </div>
                       <div className="flex items-center gap-2">
-                        <span className="text-[11px] text-muted-foreground">则</span>
+                        <span className="text-micro text-muted-foreground">则</span>
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
-                            <button
+                            <Button
                               type="button"
-                              className="h-7 rounded-lg border border-border bg-background px-2 text-[11px]"
+                              variant="outline"
+                              size="sm"
+                              className="h-7 px-2 text-micro font-normal"
                             >
                               {ruleDraft.action === "move" ? "移动到" :
                                 ruleDraft.action === "mark_read" ? "标记已读" :
                                 ruleDraft.action === "star" ? "加星标" : "删除"}
-                            </button>
+                            </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent>
                             <DropdownMenuItem onClick={() => setRuleDraft({ ...ruleDraft, action: "mark_read" })}>标记已读</DropdownMenuItem>
@@ -758,12 +772,14 @@ export function AccountSettingsDialog({
                             return (
                               <DropdownMenu>
                                 <DropdownMenuTrigger asChild>
-                                  <button
+                                  <Button
                                     type="button"
-                                    className="h-7 flex-1 rounded-lg border border-border bg-background px-2 text-left text-[11px] truncate"
+                                    variant="outline"
+                                    size="sm"
+                                    className="h-7 flex-1 justify-start px-2 text-micro font-normal truncate"
                                   >
                                     {ruleDraft.actionTarget || "选择文件夹"}
-                                  </button>
+                                  </Button>
                                 </DropdownMenuTrigger>
                                 <DropdownMenuContent>
                                   {folders.length === 0 ? (
@@ -785,10 +801,10 @@ export function AccountSettingsDialog({
                         )}
                       </div>
                       <div className="flex justify-end gap-1">
-                        <Button type="button" variant="ghost" size="sm" className="h-6 px-2 text-[11px]" onClick={() => { setEditingRuleId(null); setRuleDraft(null); }}>
+                        <Button type="button" variant="ghost" size="sm" className="h-6 px-2 text-micro" onClick={() => { setEditingRuleId(null); setRuleDraft(null); }}>
                           <XIcon className="h-3 w-3" />取消
                         </Button>
-                        <Button type="button" size="sm" className="h-6 px-2 text-[11px]" onClick={() => void handleSaveRule()}>
+                        <Button type="button" size="sm" className="h-6 px-2 text-micro" onClick={() => void handleSaveRule()}>
                           <Check className="h-3 w-3" />保存
                         </Button>
                       </div>
@@ -800,21 +816,21 @@ export function AccountSettingsDialog({
                         onCheckedChange={() => void handleToggleRuleEnabled(rule)}
                       />
                       <div className="min-w-0 flex-1">
-                        <span className={cn("text-[12px] font-medium", !rule.enabled && "text-muted-foreground line-through")}>
+                        <span className={cn("text-caption font-medium", !rule.enabled && "text-muted-foreground line-through")}>
                           {rule.name}
                         </span>
-                        <p className="truncate text-[11px] text-muted-foreground">
+                        <p className="truncate text-micro text-muted-foreground">
                           {rule.conditionField === "from_contains" ? "发件人" : rule.conditionField === "subject_contains" ? "主题" : "收件人"}包含"{rule.conditionValue}"
                           {" → "}
                           {rule.action === "move" ? `移动到${rule.actionTarget ?? ""}` : rule.action === "mark_read" ? "标记已读" : rule.action === "star" ? "加星标" : "删除"}
                         </p>
                       </div>
-                      <button type="button" onClick={() => { setEditingRuleId(rule.id); setRuleDraft({ ...rule }); }} className="text-muted-foreground hover:text-foreground" title="编辑">
+                      <Button type="button" variant="ghost" size="icon" onClick={() => { setEditingRuleId(rule.id); setRuleDraft({ ...rule }); }} className="h-7 w-7 text-muted-foreground hover:text-foreground" title="编辑" aria-label="编辑规则">
                         <Edit3 className="h-3.5 w-3.5" />
-                      </button>
-                      <button type="button" onClick={() => void handleDeleteRule(rule.id)} className="text-muted-foreground hover:text-destructive" title="删除">
+                      </Button>
+                      <Button type="button" variant="ghost" size="icon" onClick={() => void handleDeleteRule(rule.id)} className="h-7 w-7 text-muted-foreground hover:text-destructive" title="删除" aria-label="删除规则">
                         <Trash2 className="h-3.5 w-3.5" />
-                      </button>
+                      </Button>
                     </div>
                   )}
                 </div>
@@ -825,26 +841,26 @@ export function AccountSettingsDialog({
             <TabsContent value="schedule" className="mt-4 max-h-[60vh] space-y-5 overflow-y-auto pr-1">
           <section className="space-y-3">
             <div className="flex items-center justify-between">
-              <h3 className="flex items-center gap-1 text-[12px] font-medium text-muted-foreground">
+              <h3 className="flex items-center gap-1 text-caption font-medium text-muted-foreground">
                 <CalendarClock className="h-3 w-3" />
                 AI 日程提取
               </h3>
             </div>
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-micro text-muted-foreground">
               配置全局生效。新邮件到达所选文件夹时，AI 自动分析邮件内容并提取日程信息。
             </p>
             {scheduleSaveError && (
-              <div className="text-[11px] text-destructive">{scheduleSaveError}</div>
+              <StatusNotice tone="danger">{scheduleSaveError}</StatusNotice>
             )}
             {!scheduleConfig ? (
-              <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+              <div className="flex items-center gap-2 text-micro text-muted-foreground">
                 <Loader2 className="h-3 w-3 animate-spin" />
                 加载配置中…
               </div>
             ) : (
               <>
                 {/* 总开关 */}
-                <label className="flex items-center gap-2 text-[12px]">
+                <label className="flex items-center gap-2 text-caption">
                   <Checkbox
                     checked={scheduleConfig.enabled}
                     onCheckedChange={(v) => updateScheduleField("enabled", v === true)}
@@ -854,7 +870,7 @@ export function AccountSettingsDialog({
 
                 {/* 文件夹多选 */}
                 <div className="space-y-2">
-                  <Label className="text-[12px]">启用提取的文件夹（当前账号）</Label>
+                  <Label className="text-caption">启用提取的文件夹（当前账号）</Label>
                   {(() => {
                     const folders = (account && foldersByAccount[account.id]) || [];
                     // 过滤掉垃圾邮件、已删除、草稿箱等系统文件夹
@@ -876,20 +892,20 @@ export function AccountSettingsDialog({
                     const visibleFolders = folders.filter((f) => !excludeFolders(f.name));
                     if (visibleFolders.length === 0) {
                       return (
-                        <p className="text-[11px] text-muted-foreground">
+                        <p className="text-micro text-muted-foreground">
                           请先同步文件夹
                         </p>
                       );
                     }
                     return (
-                      <div className="space-y-1.5 rounded-lg border border-border/60 bg-muted/20 p-2">
+                      <div className="space-y-1.5 rounded-md border border-border/60 bg-muted/20 p-2">
                         {visibleFolders.map((f) => {
                           const folderKey = `${account!.id}:${f.name}`;
                           const checked = scheduleConfig.folders.includes(folderKey);
                           return (
                             <label
                               key={f.name}
-                              className="flex items-center gap-2 text-[12px]"
+                              className="flex items-center gap-2 text-caption"
                             >
                               <Checkbox
                                 checked={checked}
@@ -899,7 +915,7 @@ export function AccountSettingsDialog({
                               />
                               <span className="truncate">{getFolderDisplayName(f.name)}</span>
                               {(f.unreadCount ?? 0) > 0 && (
-                                <span className="ml-auto text-[10px] text-muted-foreground">
+                                <span className="ml-auto text-micro text-muted-foreground">
                                   {f.unreadCount} 未读
                                 </span>
                               )}
@@ -913,40 +929,42 @@ export function AccountSettingsDialog({
 
                 {/* 创建模式 */}
                 <div className="space-y-1.5">
-                  <Label className="text-[12px]">创建模式</Label>
+                  <Label className="text-caption">创建模式</Label>
                   <div className="grid grid-cols-2 gap-2">
-                    <button
+                    <Button
                       type="button"
+                      variant="outline"
                       onClick={() => updateScheduleField("createMode", "auto")}
                       className={cn(
-                        "rounded-lg border px-2 py-1.5 text-left text-[12px] transition-colors",
+                        "h-auto flex-col items-start gap-0 rounded-md px-2 py-1.5 text-left text-caption font-normal transition-colors",
                         scheduleConfig.createMode === "auto"
-                          ? "border-primary bg-primary/10 text-foreground"
-                          : "border-border bg-background text-muted-foreground hover:bg-muted/40"
+                          ? "border-primary bg-primary/10 text-foreground hover:bg-primary/10 hover:text-foreground"
+                          : "border-border bg-background text-muted-foreground hover:bg-muted/40 hover:text-muted-foreground"
                       )}
                     >
                       <div className="font-medium">直接创建</div>
-                      <div className="text-[10px] text-muted-foreground">AI 解析成功后自动创建</div>
-                    </button>
-                    <button
+                      <div className="text-micro text-muted-foreground">AI 解析成功后自动创建</div>
+                    </Button>
+                    <Button
                       type="button"
+                      variant="outline"
                       onClick={() => updateScheduleField("createMode", "confirm")}
                       className={cn(
-                        "rounded-lg border px-2 py-1.5 text-left text-[12px] transition-colors",
+                        "h-auto flex-col items-start gap-0 rounded-md px-2 py-1.5 text-left text-caption font-normal transition-colors",
                         scheduleConfig.createMode === "confirm"
-                          ? "border-primary bg-primary/10 text-foreground"
-                          : "border-border bg-background text-muted-foreground hover:bg-muted/40"
+                          ? "border-primary bg-primary/10 text-foreground hover:bg-primary/10 hover:text-foreground"
+                          : "border-border bg-background text-muted-foreground hover:bg-muted/40 hover:text-muted-foreground"
                       )}
                     >
                       <div className="font-medium">确认后创建</div>
-                      <div className="text-[10px] text-muted-foreground">弹通知让你确认</div>
-                    </button>
+                      <div className="text-micro text-muted-foreground">弹通知让你确认</div>
+                    </Button>
                   </div>
                 </div>
 
                 {/* 提前提醒量 */}
                 <div className="space-y-1">
-                  <Label htmlFor="sched-lead" className="text-[12px]">
+                  <Label htmlFor="sched-lead" className="text-caption">
                     提前提醒量（分钟）
                   </Label>
                   <Input
@@ -960,16 +978,16 @@ export function AccountSettingsDialog({
                         updateScheduleField("leadMinutes", n);
                       }
                     }}
-                    className="h-8 rounded-lg text-[13px]"
+                    className="h-8 text-ui"
                   />
-                  <p className="text-[11px] text-muted-foreground">
+                  <p className="text-micro text-muted-foreground">
                     日程开始时间 = 邮件中提到的事件时间 - 提前提醒量
                   </p>
                 </div>
 
                 {/* 跳过发件人 */}
                 <div className="space-y-1">
-                  <Label htmlFor="sched-skip" className="text-[12px]">
+                  <Label htmlFor="sched-skip" className="text-caption">
                     跳过的发件人（逗号分隔）
                   </Label>
                   <Textarea
@@ -983,9 +1001,9 @@ export function AccountSettingsDialog({
                       updateScheduleField("skipSenders", list);
                     }}
                     placeholder="noreply.github.com, notifications@slack.com"
-                    className="min-h-[60px] rounded-lg text-[12px]"
+                    className="min-h-[60px] text-caption"
                   />
-                  <p className="text-[11px] text-muted-foreground">
+                  <p className="text-micro text-muted-foreground">
                     匹配发件人邮箱地址，避免自动化邮件反复触发
                   </p>
                 </div>
@@ -996,7 +1014,7 @@ export function AccountSettingsDialog({
           </Tabs>
 
           {error ? (
-            <div className="text-[12px] text-destructive">{error}</div>
+            <StatusNotice tone="danger">{error}</StatusNotice>
           ) : null}
 
           <DialogFooter>
@@ -1004,7 +1022,7 @@ export function AccountSettingsDialog({
               type="button"
               variant="outline"
               size="sm"
-              className="h-8 text-[12px]"
+              className="h-8 text-caption"
               disabled={submitting}
               onClick={() => onOpenChange(false)}
             >
@@ -1013,7 +1031,7 @@ export function AccountSettingsDialog({
             <Button
               type="submit"
               size="sm"
-              className="h-8 text-[12px]"
+              className="h-8 text-caption"
               disabled={submitting}
             >
               {submitting ? (
@@ -1029,15 +1047,15 @@ export function AccountSettingsDialog({
       <AlertDialog open={applyConfirmOpen} onOpenChange={setApplyConfirmOpen}>
         <AlertDialogContent className="max-w-md">
           <AlertDialogHeader>
-            <AlertDialogTitle className="text-base">应用规则到已有邮件</AlertDialogTitle>
-            <AlertDialogDescription className="text-[13px]">
+            <AlertDialogTitle>应用规则到已有邮件</AlertDialogTitle>
+            <AlertDialogDescription className="text-ui">
               将对账号「{account.displayName}」下 INBOX 中已缓存的邮件应用规则，可能需要一些时间。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel className="h-8 text-[12px]">取消</AlertDialogCancel>
+            <AlertDialogCancel className="h-8 text-caption">取消</AlertDialogCancel>
             <AlertDialogAction
-              className="h-8 text-[12px]"
+              className="h-8 text-caption"
               onClick={() => void runApplyRules()}
               disabled={applyingRules}
             >
@@ -1054,13 +1072,13 @@ export function AccountSettingsDialog({
       <AlertDialog open={applyResultOpen} onOpenChange={setApplyResultOpen}>
         <AlertDialogContent className="max-w-md">
           <AlertDialogHeader>
-            <AlertDialogTitle className="text-base">应用完成</AlertDialogTitle>
-            <AlertDialogDescription className="whitespace-pre-line text-[13px]">
+            <AlertDialogTitle>应用完成</AlertDialogTitle>
+            <AlertDialogDescription className="whitespace-pre-line text-ui">
               {applyResultText}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogAction className="h-8 text-[12px]">知道了</AlertDialogAction>
+            <AlertDialogAction className="h-8 text-caption">知道了</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

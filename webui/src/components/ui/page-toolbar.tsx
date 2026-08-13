@@ -19,7 +19,7 @@ interface PageToolbarProps {
 
 export function PageToolbar({ leading, children, actions, className }: PageToolbarProps) {
   return (
-    <div className={cn("flex h-11 items-center gap-2", className)}>
+    <div className={cn("flex h-11 items-center gap-2 text-caption [&_button]:text-caption", className)}>
       {leading ? <div className="flex min-w-0 items-center gap-2">{leading}</div> : null}
       {children ? (
         <div className="flex min-w-0 flex-1 items-center justify-center gap-2">{children}</div>

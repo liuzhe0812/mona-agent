@@ -530,7 +530,7 @@ function FlowchartPatchCard({
           <button
             type="button"
             onClick={onApply}
-            className="inline-flex h-7 items-center gap-1 rounded-md bg-foreground px-2.5 text-[11px] font-medium text-background hover:bg-foreground/90"
+            className="inline-flex h-7 items-center gap-1 rounded-md bg-action px-2.5 text-micro font-medium text-white hover:bg-action-hover hover:text-white"
           >
             <Check className="h-3 w-3" />
             应用到流程图

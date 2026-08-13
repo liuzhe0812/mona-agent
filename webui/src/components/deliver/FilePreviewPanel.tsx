@@ -16,6 +16,8 @@ import { useClient } from "@/providers/ClientProvider";
 import { fetchFilePreviewBlob } from "@/lib/api";
 import { OfficePreview, isOfficePreviewable } from "@/components/common/OfficePreview";
 import MarkdownTextRenderer from "@/components/MarkdownTextRenderer";
+import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
 import type { DeliveredFile } from "@/lib/types";
 
 const PREVIEWABLE_TEXT_EXTS = new Set([
@@ -190,45 +192,53 @@ export function FilePreviewPanel({ files = [] }: { files?: DeliveredFile[] }) {
 
   const header = (
     <div className="flex items-center gap-2 border-b border-border/60 px-3 py-2">
-      <button
+      <Button
         type="button"
+        variant="ghost"
         onClick={close}
         title="返回列表"
-        className="rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+        aria-label="返回列表"
+        className="h-6 w-6 rounded-sm p-0 text-muted-foreground hover:bg-muted hover:text-foreground"
       >
         <ChevronLeft className="h-4 w-4" />
-      </button>
+      </Button>
       <FileIcon file={file} />
-      <span className="flex-1 truncate text-sm font-medium">{file.name}</span>
-      <span className="shrink-0 text-[11px] text-muted-foreground">{file.size_human}</span>
+      <span className="flex-1 truncate text-body font-medium">{file.name}</span>
+      <span className="shrink-0 text-micro text-muted-foreground">{file.size_human}</span>
       {canNav ? (
         <>
-          <button
+          <Button
             type="button"
+            variant="ghost"
             onClick={() => navTo(-1)}
             title="上一个文件"
-            className="rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+            aria-label="上一个文件"
+            className="h-6 w-6 rounded-sm p-0 text-muted-foreground hover:bg-muted hover:text-foreground"
           >
             <ChevronUp className="h-4 w-4" />
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
+            variant="ghost"
             onClick={() => navTo(1)}
             title="下一个文件"
-            className="rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+            aria-label="下一个文件"
+            className="h-6 w-6 rounded-sm p-0 text-muted-foreground hover:bg-muted hover:text-foreground"
           >
             <ChevronDown className="h-4 w-4" />
-          </button>
+          </Button>
         </>
       ) : null}
-      <button
+      <Button
         type="button"
+        variant="ghost"
         onClick={toggleFullscreen}
         title={fullscreen ? "退出全屏 (Esc)" : "全屏显示"}
-        className="ml-1 rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+        aria-label={fullscreen ? "退出全屏" : "全屏显示"}
+        className="ml-1 h-6 w-6 rounded-sm p-0 text-muted-foreground hover:bg-muted hover:text-foreground"
       >
         {fullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
-      </button>
+      </Button>
     </div>
   );
 
@@ -252,7 +262,7 @@ export function FilePreviewPanel({ files = [] }: { files?: DeliveredFile[] }) {
   ) : (
     <div className="flex min-h-0 flex-1 flex-col">
       {blobError ? (
-        <div className="flex h-full flex-col items-center justify-center gap-2 p-4 text-xs text-destructive">
+        <div className="flex h-full flex-col items-center justify-center gap-2 p-4 text-caption text-destructive">
           <File className="h-10 w-10 opacity-40" />
           <span>加载预览失败：{blobError}</span>
         </div>
@@ -266,11 +276,11 @@ export function FilePreviewPanel({ files = [] }: { files?: DeliveredFile[] }) {
           sandbox="allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads"
         />
       ) : isMarkdown(file) && textSource !== null ? (
-        <div className="markdown-content scrollbar-hover h-full w-full overflow-auto px-4 py-2 text-sm">
+        <div className="markdown-content scrollbar-hover h-full w-full overflow-auto px-4 py-2 text-body">
           <MarkdownTextRenderer>{textSource}</MarkdownTextRenderer>
         </div>
       ) : isPreviewableText(file) && textSource !== null ? (
-        <pre className="scrollbar-thin h-full w-full overflow-auto whitespace-pre-wrap break-words p-4 font-mono text-xs text-foreground">
+        <pre className="scrollbar-thin h-full w-full overflow-auto whitespace-pre-wrap break-words p-4 font-mono text-caption text-foreground">
           {textSource}
         </pre>
       ) : isPreviewableImage(file) && blobUrl ? (
@@ -321,29 +331,32 @@ function NoPreview({ file }: { file: DeliveredFile }) {
   }, [file.absolute_path]);
 
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-3 text-muted-foreground">
-      <File className="h-12 w-12 opacity-40" />
-      <p className="text-sm">此文件类型不支持预览</p>
-      <div className="flex gap-2">
-        {isTauri() && (
-          <>
-            <button
+    <EmptyState
+      className="h-full"
+      icon={<File className="h-6 w-6 opacity-40" />}
+      title="此文件类型不支持预览"
+      action={
+        isTauri() ? (
+          <div className="flex gap-2">
+            <Button
               type="button"
+              variant="outline"
+              size="sm"
               onClick={handleOpen}
-              className="rounded-md border border-border/70 px-3 py-1.5 text-xs hover:bg-muted"
             >
               系统程序打开
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
+              variant="outline"
+              size="sm"
               onClick={handleReveal}
-              className="rounded-md border border-border/70 px-3 py-1.5 text-xs hover:bg-muted"
             >
               打开所在目录
-            </button>
-          </>
-        )}
-      </div>
-    </div>
+            </Button>
+          </div>
+        ) : undefined
+      }
+    />
   );
 }

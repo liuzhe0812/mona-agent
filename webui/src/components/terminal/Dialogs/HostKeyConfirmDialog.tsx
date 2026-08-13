@@ -118,7 +118,7 @@ export function HostKeyConfirmDialog() {
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-3 text-sm">
+        <div className="space-y-3 text-body">
           <div className="rounded-md bg-muted p-3 space-y-2">
             <div className="flex justify-between">
               <span className="text-muted-foreground">主机</span>
@@ -128,14 +128,14 @@ export function HostKeyConfirmDialog() {
             </div>
             <div className="flex justify-between">
               <span className="text-muted-foreground">密钥指纹</span>
-              <span className="font-mono text-xs break-all">
+              <span className="font-mono text-caption break-all">
                 {dialog.fingerprint}
               </span>
             </div>
             {isChanged && (
               <div className="flex justify-between">
                 <span className="text-muted-foreground">原指纹</span>
-                <span className="font-mono text-xs break-all">
+                <span className="font-mono text-caption break-all">
                   {dialog.expectedFingerprint}
                 </span>
               </div>
@@ -150,7 +150,7 @@ export function HostKeyConfirmDialog() {
         </div>
 
         {error && (
-          <div className="rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">
+          <div className="rounded-md bg-destructive/10 px-3 py-2 text-caption text-destructive">
             {error}
           </div>
         )}

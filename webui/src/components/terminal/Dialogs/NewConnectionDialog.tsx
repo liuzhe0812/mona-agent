@@ -9,6 +9,9 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
+import { cn } from "@/lib/utils";
 import { sshConnectWithId, vncConnect } from "../ipc";
 import { useTerminalStore } from "../store/terminalStore";
 import type { AuthConfig, ConnectionConfig } from "../types/terminal";
@@ -267,20 +270,24 @@ export function NewConnectionDialog() {
                 }
               />
               <div className="space-y-2 rounded-md border p-3">
-                <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
-                  <input
-                    type="checkbox"
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    id="vnc-save-session"
                     checked={vncForm.saveSession}
-                    onChange={(e) =>
+                    onCheckedChange={(v) =>
                       setVncForm((f) => ({
                         ...f,
-                        saveSession: e.target.checked,
+                        saveSession: v === true,
                       }))
                     }
-                    className="h-4 w-4 rounded border-input accent-primary"
                   />
-                  <span>保存会话</span>
-                </label>
+                  <Label
+                    htmlFor="vnc-save-session"
+                    className="text-body cursor-pointer select-none"
+                  >
+                    保存会话
+                  </Label>
+                </div>
                 {vncForm.saveSession && (
                   <Input
                     placeholder={`会话名称（默认：VNC ${vncForm.host || "主机"}）`}
@@ -369,20 +376,24 @@ export function NewConnectionDialog() {
                 </div>
               )}
               <div className="space-y-2 rounded-md border p-3">
-                <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
-                  <input
-                    type="checkbox"
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    id="ssh-save-session"
                     checked={sshForm.saveSession}
-                    onChange={(e) =>
+                    onCheckedChange={(v) =>
                       setSshForm((f) => ({
                         ...f,
-                        saveSession: e.target.checked,
+                        saveSession: v === true,
                       }))
                     }
-                    className="h-4 w-4 rounded border-input accent-primary"
                   />
-                  <span>保存会话</span>
-                </label>
+                  <Label
+                    htmlFor="ssh-save-session"
+                    className="text-body cursor-pointer select-none"
+                  >
+                    保存会话
+                  </Label>
+                </div>
                 {sshForm.saveSession && (
                   <Input
                     placeholder={`会话名称（默认：${sshForm.username ? sshForm.username + "@" : ""}${sshForm.host || "主机"}）`}
@@ -423,16 +434,19 @@ function ConnectionTypeButton({
   label: string;
 }) {
   return (
-    <button
+    <Button
+      type="button"
+      variant="outline"
       onClick={onClick}
-      className={`flex-1 rounded-md border px-3 py-2 text-sm transition-colors ${
+      className={cn(
+        "h-auto flex-1 px-3 py-2 text-body",
         active
-          ? "border-primary bg-primary/10 text-primary"
-          : "border-input bg-background text-muted-foreground hover:bg-accent"
-      }`}
+          ? "border-primary bg-primary/10 text-primary hover:bg-primary/10 hover:text-primary"
+          : "text-muted-foreground",
+      )}
     >
       {label}
-    </button>
+    </Button>
   );
 }
 
@@ -446,16 +460,19 @@ function AuthTypeButton({
   label: string;
 }) {
   return (
-    <button
+    <Button
+      type="button"
+      variant="outline"
       onClick={onClick}
-      className={`flex-1 rounded-md border px-2 py-1.5 text-xs transition-colors ${
+      className={cn(
+        "h-auto flex-1 px-2 py-1.5 text-caption",
         active
-          ? "border-primary bg-primary/10 text-primary"
-          : "border-input bg-background text-muted-foreground hover:bg-accent"
-      }`}
+          ? "border-primary bg-primary/10 text-primary hover:bg-primary/10 hover:text-primary"
+          : "text-muted-foreground",
+      )}
     >
       {label}
-    </button>
+    </Button>
   );
 }
 

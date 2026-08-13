@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { ChevronDown, ChevronRight, Sparkles, Reply, FileText } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import type { EmailAnalysis, EmailMessage } from "./lib/types";
 import { openComposeWindow } from "./lib/emailApi";
 
@@ -10,9 +11,9 @@ interface Props {
 }
 
 const URGENCY_STYLES: Record<string, string> = {
-  high: "bg-red-500/10 text-red-600 dark:text-red-400",
-  medium: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
-  low: "bg-blue-500/10 text-blue-600 dark:text-blue-400",
+  high: "bg-destructive/10 text-destructive",
+  medium: "bg-warning/10 text-warning",
+  low: "bg-info/10 text-info-strong",
   default: "bg-muted text-muted-foreground",
 };
 
@@ -35,14 +36,15 @@ export function EmailAnalysisCard({ analysis, message, accountId }: Props) {
   };
 
   return (
-    <div className="mb-2 overflow-hidden rounded-xl border border-border/70 bg-popover shadow-sm">
-      <button
+    <div className="mb-2 overflow-hidden rounded-lg border border-border/70 bg-popover shadow-sm">
+      <Button
         type="button"
+        variant="ghost"
         onClick={() => setCollapsed((v) => !v)}
-        className="flex w-full items-center justify-between border-b border-border/60 px-3 py-2"
+        className="flex h-auto w-full items-center justify-between rounded-none border-b border-border/60 px-3 py-2 hover:bg-transparent"
       >
-        <span className="inline-flex items-center gap-1.5 text-[11.5px] font-semibold text-foreground">
-          <Sparkles className="h-3.5 w-3.5 text-violet-500" />
+        <span className="inline-flex items-center gap-1.5 text-caption font-semibold text-foreground">
+          <Sparkles className="h-3.5 w-3.5 text-primary" />
           邮件分析
         </span>
         {collapsed ? (
@@ -50,11 +52,11 @@ export function EmailAnalysisCard({ analysis, message, accountId }: Props) {
         ) : (
           <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
         )}
-      </button>
+      </Button>
 
       {!collapsed ? (
         <div className="px-3 py-2.5">
-          <p className="mb-2 text-[11.5px] leading-5 text-foreground/90">{analysis.summary}</p>
+          <p className="mb-2 text-caption leading-5 text-foreground/90">{analysis.summary}</p>
 
           <div className="mb-2 flex flex-wrap gap-1.5">
             {analysis.category ? (
@@ -73,14 +75,16 @@ export function EmailAnalysisCard({ analysis, message, accountId }: Props) {
           ) : null}
 
           <div className="mt-2 flex gap-1.5">
-            <button
+            <Button
               type="button"
+              variant="outline"
+              size="sm"
               onClick={() => void handleDraftReply()}
-              className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-border/70 bg-background px-2.5 text-[11px] font-medium text-foreground/82 transition-colors hover:bg-accent hover:text-foreground"
+              className="h-7 gap-1.5 px-2.5 text-micro font-medium"
             >
               <Reply className="h-3 w-3" />
               草拟回复
-            </button>
+            </Button>
           </div>
         </div>
       ) : null}
@@ -91,7 +95,7 @@ export function EmailAnalysisCard({ analysis, message, accountId }: Props) {
 function Tag({ label, className }: { label: string; className?: string }) {
   return (
     <span
-      className={`inline-flex h-5 items-center rounded-md px-1.5 text-[10px] font-medium ${
+      className={`inline-flex h-5 items-center rounded-md px-1.5 text-micro font-medium ${
         className ?? "bg-muted text-muted-foreground"
       }`}
     >
@@ -120,14 +124,14 @@ function KeyInfoDisplay({ keyInfo }: { keyInfo: string }) {
   if (items.length === 0) return null;
 
   return (
-    <div className="mb-2 rounded-lg bg-muted/30 px-2.5 py-1.5">
-      <div className="mb-1 flex items-center gap-1 text-[10px] font-medium text-muted-foreground">
+    <div className="mb-2 rounded-md bg-muted/30 px-2.5 py-1.5">
+      <div className="mb-1 flex items-center gap-1 text-micro font-medium text-muted-foreground">
         <FileText className="h-3 w-3" />
         关键信息
       </div>
       <div className="space-y-0.5">
         {items.map((item, idx) => (
-          <div key={idx} className="flex gap-1.5 text-[10.5px] leading-4">
+          <div key={idx} className="flex gap-1.5 text-micro leading-4">
             <span className="shrink-0 text-muted-foreground">{item.label}:</span>
             <span className="min-w-0 flex-1 text-foreground/85">{item.value}</span>
           </div>

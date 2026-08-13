@@ -168,7 +168,7 @@ export function ComposeAiButton({ mode, baseMessage, bodyText, onResult, disable
           type="button"
           variant="ghost"
           size="sm"
-          className="h-7 gap-1 px-2 text-[12px] text-muted-foreground hover:text-foreground"
+          className="h-7 gap-1 px-2 text-caption text-muted-foreground hover:text-foreground"
           disabled={disabled || isLoading}
         >
           {isLoading ? (

@@ -64,8 +64,8 @@ function TodoCard({
         className={cn(
           "mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border",
           item.state === "done"
-            ? "border-primary bg-primary text-primary-foreground"
-            : "border-muted-foreground/40 hover:border-primary",
+            ? "border-info bg-info text-white"
+            : "border-muted-foreground/40 hover:border-info",
         )}
         aria-label="完成"
       >
@@ -218,7 +218,7 @@ export function TodayView() {
                 key={it.id}
                 className="flex items-center gap-2 rounded-lg bg-background/60 p-2"
               >
-                <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary text-micro font-semibold text-primary-foreground">
+                <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-info text-micro font-semibold text-white">
                   {it.focusRank ?? idx + 1}
                 </span>
                 <span className="flex-1 truncate text-ui">{it.title}</span>

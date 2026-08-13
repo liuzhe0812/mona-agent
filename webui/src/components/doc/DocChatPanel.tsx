@@ -96,7 +96,7 @@ export function DocChatPanel({ chatId, onSend, placeholder, onStreamingChange }:
 
   if (!chatId) {
     return (
-      <div className="flex h-full items-center justify-center text-[12px] text-muted-foreground">
+      <div className="flex h-full items-center justify-center text-caption text-muted-foreground">
         选择历史项目或开始新生成
       </div>
     );
@@ -107,16 +107,16 @@ export function DocChatPanel({ chatId, onSend, placeholder, onStreamingChange }:
       <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden p-3 scrollbar-thin">
         <div className="space-y-3">
           {historyError ? (
-            <div className="text-[11px] text-destructive">会话历史加载失败：{historyError}</div>
+            <div className="text-caption text-destructive">会话历史加载失败：{historyError}</div>
           ) : null}
           {streamError ? (
-            <div className="flex items-center justify-between text-[11px] text-destructive">
+            <div className="flex items-center justify-between text-caption text-destructive">
               <span>消息过大或连接异常，请缩短内容后重试。</span>
               <Button
                 type="button"
                 variant="ghost"
                 onClick={dismissStreamError}
-                className="h-auto p-0 text-[11px] text-foreground/65 hover:text-foreground"
+                className="h-auto p-0 text-caption text-foreground/65 hover:bg-transparent hover:text-foreground"
               >
                 关闭
               </Button>
@@ -124,7 +124,7 @@ export function DocChatPanel({ chatId, onSend, placeholder, onStreamingChange }:
           ) : null}
 
           {loading ? (
-            <div className="flex items-center gap-1.5 text-[12px] text-muted-foreground">
+            <div className="flex items-center gap-1.5 text-caption text-muted-foreground">
               <Loader2 className="h-3 w-3 animate-spin" />
               <span>正在加载会话...</span>
             </div>
@@ -148,7 +148,7 @@ export function DocChatPanel({ chatId, onSend, placeholder, onStreamingChange }:
               }
             }}
             disabled={!chatId || busy}
-            className="min-h-[36px] flex-1 resize-none rounded-lg border-0 bg-transparent px-0 text-[13px] leading-5 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
+            className="min-h-[36px] flex-1 resize-none rounded-lg border-0 bg-transparent px-0 text-ui leading-5 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
             rows={2}
             placeholder={placeholder ?? "输入消息..."}
           />

@@ -95,7 +95,7 @@ export function CookieManagerDialog({ open, onOpenChange, tabId }: CookieManager
               placeholder="搜索 Cookie..."
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
-              className="h-8 pl-9 text-[13px] rounded-full"
+              className="h-8 pl-9 text-ui rounded-full"
             />
           </div>
           <Button
@@ -122,7 +122,7 @@ export function CookieManagerDialog({ open, onOpenChange, tabId }: CookieManager
           {filteredCookies.length === 0 ? (
             <div className="flex h-full flex-col items-center justify-center gap-2 p-8 text-muted-foreground">
               <Shield className="h-8 w-8 opacity-50" />
-              <p className="text-sm">
+              <p className="text-body">
                 {loading ? "加载中..." : cookies.length === 0 ? "没有可用的 Cookie" : "没有匹配的 Cookie"}
               </p>
             </div>
@@ -132,10 +132,10 @@ export function CookieManagerDialog({ open, onOpenChange, tabId }: CookieManager
                 <div key={idx} className="flex items-start gap-3 p-3 hover:bg-muted/50">
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className="font-medium text-sm truncate">{cookie.name}</span>
-                      <span className="text-xs text-muted-foreground truncate">{cookie.domain}</span>
+                      <span className="font-medium text-body truncate">{cookie.name}</span>
+                      <span className="text-caption text-muted-foreground truncate">{cookie.domain}</span>
                     </div>
-                    <p className="text-xs text-muted-foreground mt-1 break-all">
+                    <p className="text-caption text-muted-foreground mt-1 break-all">
                       {cookie.value}
                     </p>
                   </div>
@@ -144,7 +144,7 @@ export function CookieManagerDialog({ open, onOpenChange, tabId }: CookieManager
             </div>
           )}
         </div>
-        <p className="text-xs text-muted-foreground">
+        <p className="text-caption text-muted-foreground">
           注：仅显示非 HttpOnly 的 Cookie。HttpOnly Cookie 无法通过 JS 访问。
         </p>
       </DialogContent>

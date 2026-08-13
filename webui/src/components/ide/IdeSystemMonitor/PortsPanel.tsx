@@ -21,6 +21,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
+import { EmptyState } from "@/components/ui/empty-state";
 import {
   ideRemoteGetPorts,
   ideRemoteKillProcess,
@@ -158,7 +159,7 @@ export function PortsPanel({ sessionId }: Props) {
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             placeholder="搜索端口、进程、PID..."
-            className="h-7 rounded-md pl-7 pr-7 text-xs"
+            className="h-7 rounded-md pl-7 pr-7 text-caption"
           />
           {searchTerm && (
             <button
@@ -176,9 +177,8 @@ export function PortsPanel({ sessionId }: Props) {
               <Button
                 key={filter}
                 variant={protocolFilter === filter ? "secondary" : "ghost"}
-                size="sm"
+                size="xs"
                 onClick={() => setProtocolFilter(filter)}
-                className="h-6 px-2 text-[10px]"
               >
                 {filter === "all" ? "全部" : filter.toUpperCase()}
               </Button>
@@ -197,7 +197,7 @@ export function PortsPanel({ sessionId }: Props) {
           </Button>
         </div>
         {error && (
-          <div className="text-[10px] text-destructive">
+          <div className="text-micro text-destructive">
             {error}
             <button
               type="button"
@@ -212,13 +212,13 @@ export function PortsPanel({ sessionId }: Props) {
 
       <ScrollArea className="min-h-0 flex-1">
         {loading && ports.length === 0 ? (
-          <div className="flex h-32 items-center justify-center text-xs text-muted-foreground">
+          <div className="flex h-32 items-center justify-center text-caption text-muted-foreground">
             <Loader2 className="mr-2 h-4 w-4 animate-spin" />
             加载中...
           </div>
         ) : (
-          <table className="w-full text-[11px]">
-            <thead className="sticky top-0 bg-sidebar">
+          <table className="w-full text-micro">
+            <thead className="sticky top-0 bg-muted">
               <tr className="border-b text-left text-muted-foreground">
                 <th
                   className="cursor-pointer px-2 py-1.5 font-medium hover:text-foreground"
@@ -258,10 +258,10 @@ export function PortsPanel({ sessionId }: Props) {
                   <td className="px-1 py-1.5">
                     <span
                       className={cn(
-                        "rounded px-1 py-0.5 text-[9px]",
+                        "rounded-xs px-1 py-0.5 text-micro",
                         port.protocol === "tcp"
-                          ? "bg-blue-500/15 text-blue-500"
-                          : "bg-green-500/15 text-green-500",
+                          ? "bg-info/15 text-info"
+                          : "bg-success/15 text-success",
                       )}
                     >
                       {port.protocol.toUpperCase()}
@@ -304,13 +304,11 @@ export function PortsPanel({ sessionId }: Props) {
           </table>
         )}
         {!loading && filteredPorts.length === 0 && (
-          <div className="flex h-32 items-center justify-center text-xs text-muted-foreground">
-            {searchTerm ? "无匹配结果" : "暂无端口数据"}
-          </div>
+          <EmptyState title={searchTerm ? "无匹配结果" : "暂无端口数据"} />
         )}
       </ScrollArea>
 
-      <div className="shrink-0 border-t px-2 py-1 text-[10px] text-muted-foreground">
+      <div className="shrink-0 border-t px-2 py-1 text-micro text-muted-foreground">
         共 {ports.length} 个端口，显示 {filteredPorts.length} 个
       </div>
 
@@ -330,7 +328,7 @@ export function PortsPanel({ sessionId }: Props) {
                   确定要终止进程 <strong>{killDialog.processName}</strong>（PID: {" "}
                   <code>{killDialog.pid}</code>）吗？
                   <br />
-                  <span className="text-[10px] text-orange-500">
+                  <span className="text-micro text-warning">
                     此操作可能会导致相关服务中断。
                   </span>
                 </AlertDialogDescription>

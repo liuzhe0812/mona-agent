@@ -20,7 +20,7 @@ export function IdeConflictDialog() {
         <DialogHeader>
           <DialogTitle>文件已被外部修改</DialogTitle>
         </DialogHeader>
-        <p className="text-sm text-muted-foreground">
+        <p className="text-body text-muted-foreground">
           远程文件在编辑期间被修改。您要覆盖远程版本，还是放弃本地修改？
         </p>
         <div className="mt-4 flex justify-end gap-2">

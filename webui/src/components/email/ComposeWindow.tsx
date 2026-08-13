@@ -85,7 +85,7 @@ export function ComposeWindow() {
 
   if (loading) {
     return (
-      <div className="flex h-full items-center justify-center bg-background text-[13px] text-muted-foreground">
+      <div className="flex h-full items-center justify-center bg-background text-ui text-muted-foreground">
         正在加载...
       </div>
     );
@@ -93,7 +93,7 @@ export function ComposeWindow() {
 
   if (error) {
     return (
-      <div className="flex h-full items-center justify-center bg-background text-[13px] text-destructive">
+      <div className="flex h-full items-center justify-center bg-background text-ui text-destructive">
         {error}
       </div>
     );

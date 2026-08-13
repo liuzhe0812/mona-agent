@@ -15,6 +15,7 @@ import {
 import { useTerminalStore } from "./store/terminalStore";
 import type { ConnectionConfig } from "./types/terminal";
 import { Loader2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 
 interface Props {
   sessionId: string;
@@ -333,12 +334,12 @@ export function XtermTerminal({ sessionId }: Props) {
         <div className="absolute inset-0 flex items-center justify-center bg-[#1a1a1a]">
           <div className="flex items-center gap-2 text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" />
-            <span className="text-sm">连接中…</span>
+            <span className="text-body">连接中…</span>
           </div>
         </div>
       ) : sessionStatus === "error" ? (
         <div className="absolute inset-0 flex items-center justify-center bg-[#1a1a1a]">
-          <span className="text-sm text-red-500">连接失败</span>
+          <span className="text-body text-red-500">连接失败</span>
         </div>
       ) : null}
       <div
@@ -348,16 +349,16 @@ export function XtermTerminal({ sessionId }: Props) {
       />
       {disconnected && (
         <div className="absolute inset-x-0 top-0 flex items-center justify-center bg-background/80 py-2">
-          <span className="mr-3 text-sm text-muted-foreground">
+          <span className="mr-3 text-body text-muted-foreground">
             连接已断开
           </span>
-          <button
+          <Button
             onClick={handleReconnect}
             disabled={reconnecting}
-            className="rounded-md bg-primary px-3 py-1 text-sm text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+            className="h-auto px-3 py-1 text-body"
           >
             {reconnecting ? "重连中…" : "重新连接"}
-          </button>
+          </Button>
         </div>
       )}
     </div>

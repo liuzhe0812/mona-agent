@@ -3,6 +3,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -83,7 +84,7 @@ const TransferFileItem = memo(function TransferFileItem({
   speed: string;
 }) {
   return (
-    <div className="flex items-center gap-2 text-xs text-muted-foreground w-full min-w-0">
+    <div className="flex items-center gap-2 text-caption text-muted-foreground w-full min-w-0">
       {getStatusIcon(status)}
       <span className="truncate flex-1 min-w-0">{filename}</span>
       <span className="shrink-0">{speed}</span>
@@ -113,12 +114,12 @@ function formatSize(bytes: number | null): string {
 
 function getStatusIcon(status: string) {
   switch (status) {
-    case "completed": return <CheckCircle className="h-3.5 w-3.5 text-emerald-500" />;
-    case "error": return <XCircle className="h-3.5 w-3.5 text-red-500" />;
-    case "cancelled": return <XCircle className="h-3.5 w-3.5 text-gray-400" />;
-    case "transferring": return <Loader2 className="h-3.5 w-3.5 text-blue-500 animate-spin" />;
-    case "paused": return <Pause className="h-3.5 w-3.5 text-amber-500" />;
-    default: return <Clock className="h-3.5 w-3.5 text-gray-400" />;
+    case "completed": return <CheckCircle className="h-3.5 w-3.5 text-success" />;
+    case "error": return <XCircle className="h-3.5 w-3.5 text-destructive" />;
+    case "cancelled": return <XCircle className="h-3.5 w-3.5 text-muted-foreground" />;
+    case "transferring": return <Loader2 className="h-3.5 w-3.5 text-info animate-spin" />;
+    case "paused": return <Pause className="h-3.5 w-3.5 text-warning" />;
+    default: return <Clock className="h-3.5 w-3.5 text-muted-foreground" />;
   }
 }
 
@@ -558,10 +559,10 @@ export function BatchModeView() {
 
   const getStatusColor = (status: BatchSession["status"]) => {
     switch (status) {
-      case "connected": return "bg-emerald-500";
-      case "connecting": return "bg-amber-500 animate-pulse";
-      case "error": return "bg-red-500";
-      default: return "bg-gray-400";
+      case "connected": return "bg-success-indicator";
+      case "connecting": return "bg-warning animate-pulse";
+      case "error": return "bg-destructive";
+      default: return "bg-muted-foreground/40";
     }
   };
 
@@ -927,17 +928,21 @@ export function BatchModeView() {
           )}
         >
           <div className="flex items-center justify-between">
-            <h3 className="text-xs font-medium">批量连接配置</h3>
-            <button
+            <h3 className="text-caption font-medium">批量连接配置</h3>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label={configCollapsed ? "展开配置" : "收起配置"}
+              title={configCollapsed ? "展开配置" : "收起配置"}
               onClick={() => setConfigCollapsed(!configCollapsed)}
-              className="p-1 hover:bg-accent rounded"
+              className="h-6 w-6"
             >
               {configCollapsed ? (
                 <ChevronDown className="h-3 w-3" />
               ) : (
                 <ChevronUp className="h-3 w-3" />
               )}
-            </button>
+            </Button>
           </div>
           <div
             className={cn(
@@ -947,34 +952,34 @@ export function BatchModeView() {
           >
             <div className="grid grid-cols-[1fr_70px] gap-2">
               <div>
-                <Label className="text-xs">起始IP</Label>
-                <Input value={startIp} onChange={(e) => setStartIp(e.target.value)} className="h-7 text-xs" />
+                <Label className="text-caption">起始IP</Label>
+                <Input value={startIp} onChange={(e) => setStartIp(e.target.value)} className="h-7 text-caption" />
               </div>
               <div>
-                <Label className="text-xs">数量</Label>
-                <Input type="number" min={1} max={100} value={count} onChange={(e) => setCount(parseInt(e.target.value) || 1)} className="h-7 text-xs px-2" />
+                <Label className="text-caption">数量</Label>
+                <Input type="number" min={1} max={100} value={count} onChange={(e) => setCount(parseInt(e.target.value) || 1)} className="h-7 text-caption px-2" />
               </div>
             </div>
             <div className="grid grid-cols-[1fr_70px] gap-2">
               <div>
-                <Label className="text-xs">用户名</Label>
-                <Input value={username} onChange={(e) => setUsername(e.target.value)} className="h-7 text-xs" />
+                <Label className="text-caption">用户名</Label>
+                <Input value={username} onChange={(e) => setUsername(e.target.value)} className="h-7 text-caption" />
               </div>
               <div>
-                <Label className="text-xs">端口</Label>
-                <Input type="number" value={port} onChange={(e) => setPort(parseInt(e.target.value) || 22)} className="h-7 text-xs px-2" />
+                <Label className="text-caption">端口</Label>
+                <Input type="number" value={port} onChange={(e) => setPort(parseInt(e.target.value) || 22)} className="h-7 text-caption px-2" />
               </div>
             </div>
             <div>
-              <Label className="text-xs">密码</Label>
-              <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="h-7 text-xs" />
+              <Label className="text-caption">密码</Label>
+              <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="h-7 text-caption" />
             </div>
             <div className="flex gap-2">
-              <Button size="sm" className="flex-1 h-7 text-xs" onClick={handleBatchConnect} disabled={isConnecting || connectedCount > 0}>
+              <Button size="sm" className="flex-1 h-7 text-caption" onClick={handleBatchConnect} disabled={isConnecting || connectedCount > 0}>
                 <Play className="mr-1 h-3 w-3" />
                 {isConnecting ? "连接中..." : "开始连接"}
               </Button>
-              <Button size="sm" variant="destructive" className="h-7 text-xs" onClick={handleDisconnectAll} disabled={connectedCount === 0}>
+              <Button size="sm" variant="destructive" className="h-7 text-caption" onClick={handleDisconnectAll} disabled={connectedCount === 0}>
                 <Square className="h-3 w-3" />
               </Button>
             </div>
@@ -983,13 +988,13 @@ export function BatchModeView() {
 
         <div className="flex-1 overflow-hidden">
           <div className="flex items-center justify-between border-b px-2 py-1.5">
-            <span className="text-xs font-medium text-muted-foreground">
+            <span className="text-caption font-medium text-muted-foreground">
               会话 ({connectedCount}/{sessions.length})
             </span>
             <div className="flex gap-1">
-              <button onClick={selectAllSessions} className="text-xs text-primary hover:underline">全选</button>
-              <span className="text-xs text-muted-foreground">|</span>
-              <button onClick={deselectAllSessions} className="text-xs text-primary hover:underline">取消</button>
+              <Button variant="link" size="xs" onClick={selectAllSessions} className="h-auto px-1 py-0">全选</Button>
+              <span className="text-caption text-muted-foreground">|</span>
+              <Button variant="link" size="xs" onClick={deselectAllSessions} className="h-auto px-1 py-0">取消</Button>
             </div>
           </div>
           <ScrollArea className="h-[calc(100%-32px)]">
@@ -999,8 +1004,8 @@ export function BatchModeView() {
                   <ContextMenuTrigger asChild>
                     <div
                       className={cn(
-                        "flex items-center gap-2 rounded px-2 py-1 text-xs cursor-pointer transition-colors",
-                        activeSessionId === session.id ? "bg-primary/10" : "hover:bg-secondary",
+                        "flex items-center gap-2 rounded px-2 py-1 text-caption cursor-pointer transition-colors",
+                        activeSessionId === session.id ? "bg-primary/10" : "hover:bg-accent",
                       )}
                       onClick={() => setActiveSessionId(session.id)}
                     >
@@ -1014,7 +1019,7 @@ export function BatchModeView() {
                       <div className={cn("h-1.5 w-1.5 rounded-full shrink-0", getStatusColor(session.status))} />
                       <span className="truncate flex-1" title={session.error || session.host}>{session.host}</span>
                       {session.status === "error" && session.error && (
-                        <span className="truncate max-w-[80px] text-red-400 text-[10px]" title={session.error}>
+                        <span className="truncate max-w-[80px] text-destructive text-micro" title={session.error}>
                           {session.error.length > 20 ? session.error.slice(0, 20) + "..." : session.error}
                         </span>
                       )}
@@ -1035,7 +1040,7 @@ export function BatchModeView() {
                     <ContextMenuItem
                       onClick={() => handleDeleteSession(session.id)}
                       disabled={session.status === "connected"}
-                      className={session.status !== "connected" ? "text-red-600" : "text-muted-foreground"}
+                      className={session.status !== "connected" ? "text-destructive" : "text-muted-foreground"}
                     >
                       <Trash2 className="mr-2 h-3 w-3" /> 删除
                     </ContextMenuItem>
@@ -1050,7 +1055,7 @@ export function BatchModeView() {
                 </ContextMenu>
               ))}
               {sessions.length === 0 && (
-                <div className="py-6 text-center text-xs text-muted-foreground">
+                <div className="py-6 text-center text-caption text-muted-foreground">
                   配置IP范围后点击"开始连接"
                 </div>
               )}
@@ -1062,26 +1067,30 @@ export function BatchModeView() {
       <div className="flex flex-1 flex-col min-w-0">
         <div className="border-b bg-card px-3 py-1">
           <div className="flex items-center rounded-lg border border-border/70 bg-muted/30 p-0.5">
-            <button
+            <Button
               type="button"
+              variant="ghost"
+              size="sm"
               onClick={() => setActiveTab("terminal")}
               className={cn(
-                "h-7 rounded-md px-2.5 text-[11.5px] font-medium transition-colors flex items-center gap-1",
-                activeTab === "terminal" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground",
+                "h-7 gap-1 rounded-md px-2.5 text-caption font-medium",
+                activeTab === "terminal" ? "bg-background text-foreground shadow-sm hover:bg-background" : "text-muted-foreground",
               )}
             >
               <TerminalIcon className="w-3 h-3" /> 终端
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
+              variant="ghost"
+              size="sm"
               onClick={() => setActiveTab("sftp")}
               className={cn(
-                "h-7 rounded-md px-2.5 text-[11.5px] font-medium transition-colors flex items-center gap-1",
-                activeTab === "sftp" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground",
+                "h-7 gap-1 rounded-md px-2.5 text-caption font-medium",
+                activeTab === "sftp" ? "bg-background text-foreground shadow-sm hover:bg-background" : "text-muted-foreground",
               )}
             >
               <FolderOpen className="w-3 h-3" /> 文件传输
-            </button>
+            </Button>
           </div>
         </div>
 
@@ -1097,7 +1106,7 @@ export function BatchModeView() {
                 <div className="flex items-center justify-between border-b border-border/20 bg-[#1a1a1a] px-4 py-1.5">
                   <div className="flex items-center gap-2">
                     <TerminalIcon className="h-4 w-4 text-slate-400" />
-                    <span className="text-sm text-slate-200">
+                    <span className="text-body text-slate-200">
                       {activeSession.username}@{activeSession.host}
                     </span>
                   </div>
@@ -1117,15 +1126,15 @@ export function BatchModeView() {
                         <div className="absolute inset-0 z-20 flex items-center justify-center bg-[#0d0d0d]/80">
                           <div className="text-center max-w-sm">
                             <XCircle className="h-10 w-10 text-red-500 mx-auto mb-3" />
-                            <p className="text-sm text-red-400 font-medium mb-1">连接失败</p>
-                            <p className="text-xs text-muted-foreground mb-3">{session.host}</p>
-                            <p className="text-xs text-red-400/80 bg-red-500/10 rounded px-3 py-2 font-mono break-all">
+                            <p className="text-body text-red-400 font-medium mb-1">连接失败</p>
+                            <p className="text-caption text-muted-foreground mb-3">{session.host}</p>
+                            <p className="text-caption text-red-400/80 bg-red-500/10 rounded px-3 py-2 font-mono break-all">
                               {session.error || "未知错误"}
                             </p>
                             <Button
                               size="sm"
                               variant="outline"
-                              className="mt-3 h-7 text-xs"
+                              className="mt-3 h-7 text-caption"
                               onClick={() => handleReconnectSession(session.id)}
                             >
                               <RefreshCw className="mr-1 h-3 w-3" /> 重新连接
@@ -1149,7 +1158,7 @@ export function BatchModeView() {
                 ) : (
                   <div className="flex h-full flex-col items-center justify-center text-muted-foreground">
                     <TerminalIcon className="mb-4 h-16 w-16 opacity-20" />
-                    <p className="text-sm">选择一个会话查看终端</p>
+                    <p className="text-body">选择一个会话查看终端</p>
                   </div>
                 )}
               </div>
@@ -1157,11 +1166,11 @@ export function BatchModeView() {
             {connectedCount > 0 && (
               <div className="border-t bg-card p-3">
                 <div className="flex items-center gap-2 mb-1.5">
-                  <span className="text-xs font-medium">批量发送</span>
-                  <span className="text-xs text-muted-foreground">(已选择 {selectedCount} 个会话)</span>
+                  <span className="text-caption font-medium">批量发送</span>
+                  <span className="text-caption text-muted-foreground">(已选择 {selectedCount} 个会话)</span>
                 </div>
                 <div className="flex gap-2">
-                  <textarea
+                  <Textarea
                     value={commandInput}
                     onChange={(e) => setCommandInput(e.target.value)}
                     onKeyDown={(e) => {
@@ -1171,13 +1180,13 @@ export function BatchModeView() {
                       }
                     }}
                     placeholder="输入命令... (Ctrl+Enter 发送)"
-                    className="w-full h-16 px-3 py-2 text-xs font-mono bg-background border border-input rounded-md resize-none focus:outline-none focus:ring-2 focus:ring-ring"
+                    className="h-16 min-h-0 w-full resize-none px-3 py-2 font-mono text-caption"
                   />
                   <div className="flex flex-col gap-1.5">
-                    <Button size="sm" className="h-7 text-xs" onClick={handleSendCommand} disabled={selectedCount === 0 || !commandInput.trim()}>
+                    <Button size="sm" className="h-7 text-caption" onClick={handleSendCommand} disabled={selectedCount === 0 || !commandInput.trim()}>
                       <Send className="mr-1 h-3 w-3" /> 发送
                     </Button>
-                    <Button size="sm" variant="secondary" className="h-7 text-xs" onClick={() => setCommandInput("")} disabled={!commandInput.trim()}>
+                    <Button size="sm" variant="secondary" className="h-7 text-caption" onClick={() => setCommandInput("")} disabled={!commandInput.trim()}>
                       清空
                     </Button>
                   </div>
@@ -1204,7 +1213,7 @@ export function BatchModeView() {
                     <div className="absolute inset-0 z-50 flex items-center justify-center bg-primary/10 border-2 border-dashed border-primary/60 rounded pointer-events-none">
                       <div className="flex flex-col items-center gap-2 text-primary">
                         <Upload className="h-8 w-8" />
-                        <span className="text-sm font-medium">松开以上传到 {remotePath}</span>
+                        <span className="text-body font-medium">松开以上传到 {remotePath}</span>
                       </div>
                     </div>
                   )}
@@ -1215,7 +1224,7 @@ export function BatchModeView() {
                     <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => { const parent = remotePath.substring(0, remotePath.lastIndexOf("/")) || "/"; loadRemoteFiles(parent); }} disabled={remotePath === "/"}>
                       <ArrowUp className="h-3 w-3" />
                     </Button>
-                    <Input value={remotePath} onChange={(e) => setRemotePath(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") loadRemoteFiles(remotePath); }} className="h-6 text-xs flex-1" />
+                    <Input value={remotePath} onChange={(e) => setRemotePath(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") loadRemoteFiles(remotePath); }} className="h-6 text-caption flex-1" />
                     <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => loadRemoteFiles("/")}>
                       <Home className="h-3 w-3" />
                     </Button>
@@ -1223,7 +1232,7 @@ export function BatchModeView() {
                       <RefreshCw className={cn("h-3 w-3", loadingFiles && "animate-spin")} />
                     </Button>
                     <div className="border-l pl-2 flex gap-1">
-                      <Button variant="outline" size="sm" className="h-6 text-xs gap-1" onClick={handleUpload} disabled={sessions.filter((s) => s.selected).length === 0}>
+                      <Button variant="outline" size="sm" className="h-6 text-caption gap-1" onClick={handleUpload} disabled={sessions.filter((s) => s.selected).length === 0}>
                         <Upload className="h-3 w-3" /> 上传
                       </Button>
                     </div>
@@ -1232,16 +1241,16 @@ export function BatchModeView() {
                     <ContextMenu>
                       <ContextMenuTrigger asChild>
                         <div className="min-w-[400px]" onClick={() => clearFileSelection()}>
-                          <div className="flex text-xs font-medium text-muted-foreground bg-secondary border-b sticky top-0">
+                          <div className="flex text-caption font-medium text-muted-foreground bg-secondary border-b sticky top-0">
                             <div className="px-2 py-1 w-[200px] shrink-0">名称</div>
                             <div className="px-2 py-1 w-20 shrink-0 text-right">大小</div>
                             <div className="px-2 py-1 w-16 shrink-0 text-right">类型</div>
                           </div>
                           {mkdirEditing && (
-                            <div className="flex items-center text-xs" style={{ height: 26 }}>
+                            <div className="flex items-center text-caption" style={{ height: 26 }}>
                               <div className="px-2 w-[200px] shrink-0 flex items-center gap-1.5">
-                                <Folder className="h-3.5 w-3.5 text-yellow-500 shrink-0" />
-                                <input
+                                <Folder className="h-3.5 w-3.5 text-primary shrink-0" />
+                                <Input
                                   autoFocus
                                   value={mkdirValue}
                                   onChange={(e) => setMkdirValue(e.target.value)}
@@ -1260,7 +1269,7 @@ export function BatchModeView() {
                                   }}
                                   onClick={(e) => e.stopPropagation()}
                                   placeholder="新文件夹"
-                                  className="h-5 px-1 text-xs bg-background border border-input rounded flex-1 min-w-0 outline-none focus:ring-1 focus:ring-ring"
+                                  className="h-5 min-w-0 flex-1 px-1 text-caption"
                                 />
                               </div>
                               <div className="px-2 w-20 shrink-0 text-right text-muted-foreground">-</div>
@@ -1272,7 +1281,7 @@ export function BatchModeView() {
                               <ContextMenuTrigger asChild>
                                 <div
                                   className={cn(
-                                    "flex items-center text-xs cursor-pointer hover:bg-blue-500/10",
+                                    "flex items-center text-caption cursor-pointer hover:bg-blue-500/10",
                                     selectedFilePaths.has(file.path) && "bg-blue-500/20 hover:bg-blue-500/20",
                                   )}
                                   style={{ height: 26 }}
@@ -1281,7 +1290,7 @@ export function BatchModeView() {
                                   <div className="px-2 w-[200px] shrink-0 flex items-center gap-1.5">
                                     {file.isDir ? <Folder className="h-3.5 w-3.5 text-yellow-500 shrink-0" /> : <File className="h-3.5 w-3.5 text-gray-400 shrink-0" />}
                                     {renameTarget?.filePath === file.path ? (
-                                      <input
+                                      <Input
                                         autoFocus
                                         value={renameValue}
                                         onChange={(e) => setRenameValue(e.target.value)}
@@ -1299,7 +1308,7 @@ export function BatchModeView() {
                                           handleRenameFile();
                                         }}
                                         onClick={(e) => e.stopPropagation()}
-                                        className="h-5 px-1 text-xs bg-background border border-input rounded flex-1 min-w-0 outline-none focus:ring-1 focus:ring-ring"
+                                        className="h-5 flex-1 min-w-0 rounded px-1 py-0 text-caption"
                                       />
                                     ) : (
                                       <span className="truncate">{file.name}</span>
@@ -1333,7 +1342,7 @@ export function BatchModeView() {
                                             </ContextMenuItem>
                                           )}
                                           <ContextMenuSeparator />
-                                          <ContextMenuItem onClick={() => handleDeleteFile(file)} className="text-red-600">
+                                          <ContextMenuItem onClick={() => handleDeleteFile(file)} className="text-destructive">
                                             <Trash2 className="mr-2 h-3.5 w-3.5" /> 删除 ({selectedCount}项)
                                           </ContextMenuItem>
                                         </>
@@ -1365,7 +1374,7 @@ export function BatchModeView() {
                                           <ContextMenuItem onClick={() => startRename(file.path, file.name)}>
                                             <Pencil className="mr-2 h-3.5 w-3.5" /> 重命名
                                           </ContextMenuItem>
-                                          <ContextMenuItem onClick={() => handleDeleteFile(file)} className="text-red-600">
+                                          <ContextMenuItem onClick={() => handleDeleteFile(file)} className="text-destructive">
                                             <Trash2 className="mr-2 h-3.5 w-3.5" /> 删除
                                           </ContextMenuItem>
                                         </>
@@ -1377,7 +1386,7 @@ export function BatchModeView() {
                             </ContextMenu>
                           ))}
                           {remoteFiles.length === 0 && !loadingFiles && (
-                            <div className="py-8 text-center text-xs text-muted-foreground">空文件夹</div>
+                            <div className="py-8 text-center text-caption text-muted-foreground">空文件夹</div>
                           )}
                         </div>
                       </ContextMenuTrigger>
@@ -1400,7 +1409,7 @@ export function BatchModeView() {
                       </ContextMenuContent>
                     </ContextMenu>
                   </ScrollArea>
-                  <div className="flex items-center justify-between px-3 py-1 border-t text-xs text-muted-foreground">
+                  <div className="flex items-center justify-between px-3 py-1 border-t text-caption text-muted-foreground">
                     <span>{remoteFiles.filter((f) => f.isDir).length} 个文件夹, {remoteFiles.filter((f) => !f.isDir).length} 个文件</span>
                   </div>
                 </div>
@@ -1409,10 +1418,10 @@ export function BatchModeView() {
 
                 <div className="flex flex-col w-72 min-h-0">
                   <div className="flex items-center justify-between px-2 py-1.5 border-b">
-                    <span className="text-xs font-medium">传输任务</span>
+                    <span className="text-caption font-medium">传输任务</span>
                     <div className="flex items-center gap-1">
-                      <Label className="text-xs text-muted-foreground">并发</Label>
-                      <Input type="number" min={1} max={10} value={maxConcurrent} onChange={(e) => setMaxConcurrent(parseInt(e.target.value) || 3)} className="h-5 w-12 text-xs px-1 text-center" />
+                      <Label className="text-caption text-muted-foreground">并发</Label>
+                      <Input type="number" min={1} max={10} value={maxConcurrent} onChange={(e) => setMaxConcurrent(parseInt(e.target.value) || 3)} className="h-5 w-12 text-caption px-1 text-center" />
                     </div>
                   </div>
                   {transferSessions.length > 0 ? (
@@ -1422,7 +1431,7 @@ export function BatchModeView() {
                           <div key={session.id} className="rounded border bg-card w-full min-w-0">
                             <button
                               onClick={() => setCollapsedTransfer((prev) => { const next = new Set(prev); next.has(session.id) ? next.delete(session.id) : next.add(session.id); return next; })}
-                              className="flex w-full items-center gap-2 px-2 py-1 text-xs hover:bg-accent min-w-0"
+                              className="flex w-full items-center gap-2 px-2 py-1 text-caption hover:bg-accent min-w-0"
                             >
                               {collapsedTransfer.has(session.id) ? <ChevronRight className="h-3 w-3 shrink-0" /> : <ChevronDown className="h-3 w-3 shrink-0" />}
                               {getStatusIcon(session.status)}
@@ -1431,7 +1440,7 @@ export function BatchModeView() {
                             </button>
                             {!collapsedTransfer.has(session.id) && (
                               <div className="border-t px-2 py-1 w-full min-w-0">
-                                <Progress value={session.progress} className={cn("h-1 mb-1 max-w-full", session.status === "completed" ? "[&>div]:bg-emerald-500" : "[&>div]:bg-blue-500")} />
+                                <Progress value={session.progress} className={cn("h-1 mb-1 max-w-full", session.status === "completed" && "[&>div]:bg-success")} />
                                 <div className="space-y-0.5 w-full min-w-0">
                                   {session.files.map((file) => (
                                     <TransferFileItem
@@ -1449,7 +1458,7 @@ export function BatchModeView() {
                       </div>
                     </ScrollArea>
                   ) : (
-                    <div className="flex-1 flex items-center justify-center text-xs text-muted-foreground">上传文件后查看进度</div>
+                    <div className="flex-1 flex items-center justify-center text-caption text-muted-foreground">上传文件后查看进度</div>
                   )}
                   {transferSessions.length > 0 && (
                     <div className="border-t px-2 py-1.5">
@@ -1463,12 +1472,12 @@ export function BatchModeView() {
                         const totalProgress = totalBytes > 0 ? Math.round((transferredBytes / totalBytes) * 100) : 0;
                         return (
                           <>
-                            <Progress value={totalProgress} className={cn("h-1.5 mb-1", completedSessions === transferSessions.length && errorSessions === 0 ? "[&>div]:bg-emerald-500" : "[&>div]:bg-blue-500")} />
-                            <div className="flex items-center justify-between text-xs text-muted-foreground">
+                            <Progress value={totalProgress} className={cn("h-1.5 mb-1", completedSessions === transferSessions.length && errorSessions === 0 && "[&>div]:bg-success")} />
+                            <div className="flex items-center justify-between text-caption text-muted-foreground">
                               <span>总进度 {totalProgress}%</span>
                               <span>{completedFiles}/{totalFiles} 文件</span>
                             </div>
-                            <div className="flex items-center justify-between text-xs text-muted-foreground mt-0.5">
+                            <div className="flex items-center justify-between text-caption text-muted-foreground mt-0.5">
                               <span>{completedSessions} 成功{errorSessions > 0 ? ` ${errorSessions} 失败` : ""}</span>
                               <span>{formatSize(transferredBytes)}/{formatSize(totalBytes)}</span>
                             </div>
@@ -1479,13 +1488,13 @@ export function BatchModeView() {
                   )}
                   {activeBatchId && transferSessions.some((s) => s.status === "transferring" || s.status === "paused") && (
                     <div className="flex items-center gap-1 px-2 py-1.5 border-t">
-                      <Button variant="ghost" size="sm" className="h-6 text-xs gap-1" onClick={() => sftpBatchPause(activeBatchId)}>
+                      <Button variant="ghost" size="sm" className="h-6 text-caption gap-1" onClick={() => sftpBatchPause(activeBatchId)}>
                         <Pause className="h-3 w-3" /> 暂停
                       </Button>
-                      <Button variant="ghost" size="sm" className="h-6 text-xs gap-1" onClick={() => sftpBatchResume(activeBatchId)}>
+                      <Button variant="ghost" size="sm" className="h-6 text-caption gap-1" onClick={() => sftpBatchResume(activeBatchId)}>
                         <Play className="h-3 w-3" /> 恢复
                       </Button>
-                      <Button variant="ghost" size="sm" className="h-6 text-xs gap-1 text-red-500" onClick={() => sftpBatchCancel(activeBatchId)}>
+                      <Button variant="ghost" size="sm" className="h-6 text-caption gap-1 text-destructive" onClick={() => sftpBatchCancel(activeBatchId)}>
                         <X className="h-3 w-3" /> 取消
                       </Button>
                     </div>
@@ -1493,7 +1502,7 @@ export function BatchModeView() {
                 </div>
               </div>
             ) : (
-              <div className="flex-1 flex items-center justify-center text-xs text-muted-foreground">请先连接至少一个会话</div>
+              <div className="flex-1 flex items-center justify-center text-caption text-muted-foreground">请先连接至少一个会话</div>
             )}
           </div>
         </div>

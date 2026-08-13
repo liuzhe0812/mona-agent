@@ -3,6 +3,7 @@ import {
   Pencil,
   Copy,
   FolderOpen,
+  Plus,
   X,
   XCircle,
   ArrowRightFromLine,
@@ -274,31 +275,30 @@ export function SessionTabBar() {
             <ContextMenu key={session.id}>
               <ContextMenuTrigger asChild>
                 <div
-                  className={`flex items-center gap-1.5 px-2.5 py-1 text-xs transition-colors cursor-pointer select-none relative ${
+                  className={`relative flex h-7 cursor-pointer select-none items-center gap-1 px-2 text-caption transition-colors ${
                     index > 0 ? "border-l border-border" : ""
                   } ${
                     isActive
                       ? "bg-background text-foreground"
-                      : "text-muted-foreground hover:bg-sidebar-accent/50"
+                      : "text-muted-foreground hover:bg-accent"
                   }`}
                   onClick={() => setActiveSession(session.id)}
                 >
                   {isActive && (
                     <span
-                      className="absolute bottom-0 left-0 right-0 h-0.5"
-                      style={{ backgroundColor: "hsl(var(--theme))" }}
+                      className="absolute bottom-0 left-0 right-0 h-px bg-info"
                     />
                   )}
                   <span
                     className={`h-1.5 w-1.5 rounded-full shrink-0 ${
                       session.type === "local"
-                        ? "bg-amber-500"
+                        ? "bg-warning"
                         : session.status === "connected"
-                          ? "bg-emerald-500"
+                          ? "bg-success-indicator"
                           : session.status === "connecting"
-                            ? "bg-amber-500"
+                            ? "bg-warning"
                             : session.status === "error"
-                              ? "bg-red-500"
+                              ? "bg-destructive"
                               : "bg-muted-foreground/40"
                     }`}
                   />
@@ -355,13 +355,16 @@ export function SessionTabBar() {
             </ContextMenu>
           );
         })}
-        <button
+        <Button
+          variant="ghost"
+          size="icon"
           onClick={handleNewShell}
-          className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-sidebar-accent/50"
+          className="h-6 w-6 shrink-0 text-muted-foreground"
+          aria-label="新建 Shell"
           title="新建 Shell"
         >
-          <span className="text-sm leading-none">+</span>
-        </button>
+          <Plus className="h-3.5 w-3.5" />
+        </Button>
       </div>
 
       <Dialog open={renameOpen} onOpenChange={(open) => { if (!open) { setRenameOpen(false); setRenameTarget(null); } }}>
@@ -374,7 +377,6 @@ export function SessionTabBar() {
             value={renameValue}
             onChange={(e) => setRenameValue(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") handleRenameConfirm(); }}
-            className="rounded-full h-8 text-[13px]"
             autoFocus
           />
           <DialogFooter>

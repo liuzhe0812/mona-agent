@@ -3,6 +3,7 @@ import { PanelRight } from "lucide-react";
 
 import { AgentLogo } from "@/components/AgentLogo";
 import { MarkdownEditor } from "@/components/common/MarkdownEditor";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { MdOutlinePanel } from "./MdOutlinePanel";
 import { MdAiPanel } from "./MdAiPanel";
@@ -87,7 +88,7 @@ export function MdFileView({ filePath }: MdFileViewProps) {
 
   if (!tab) {
     return (
-      <div className="flex flex-1 items-center justify-center text-[13px] text-muted-foreground">
+      <div className="flex flex-1 items-center justify-center text-ui text-muted-foreground">
         正在加载...
       </div>
     );
@@ -95,7 +96,7 @@ export function MdFileView({ filePath }: MdFileViewProps) {
 
   if (tab.loading) {
     return (
-      <div className="flex flex-1 items-center justify-center text-[13px] text-muted-foreground">
+      <div className="flex flex-1 items-center justify-center text-ui text-muted-foreground">
         正在加载 {tab.fileName}...
       </div>
     );
@@ -104,8 +105,8 @@ export function MdFileView({ filePath }: MdFileViewProps) {
   if (tab.error) {
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-3 px-8 text-center">
-        <p className="text-sm font-medium text-destructive">加载失败</p>
-        <p className="text-[12px] text-muted-foreground">{tab.error}</p>
+        <p className="text-body font-medium text-destructive">加载失败</p>
+        <p className="text-caption text-muted-foreground">{tab.error}</p>
       </div>
     );
   }
@@ -125,41 +126,43 @@ export function MdFileView({ filePath }: MdFileViewProps) {
           getNoteTitle={() => tab.fileName}
           statsExtra={
             tab.dirty ? (
-              <span className="text-[#eba45d]">未保存</span>
+              <span className="text-warning">未保存</span>
             ) : (
               <span>已保存</span>
             )
           }
           toolbarTrailingExtra={
             <>
-              <button
+              <Button
                 type="button"
+                variant="ghost"
                 title={aiPanelOpen ? "收起 AI" : "展开 AI"}
                 aria-label={aiPanelOpen ? "收起 AI" : "展开 AI"}
                 onClick={() => setAiPanelOpen((v) => !v)}
                 className={cn(
-                  "grid h-7 w-7 place-items-center rounded-md transition-colors",
+                  "h-7 w-7 rounded-md p-0",
                   aiPanelOpen
                     ? "bg-accent text-foreground"
                     : "text-muted-foreground hover:bg-accent hover:text-foreground",
                 )}
               >
                 <AgentLogo state={aiStreaming ? "working" : "idle"} className="h-4 w-4" />
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
+                variant="ghost"
                 title={outlineOpen ? "收起目录" : "展开目录"}
                 aria-label={outlineOpen ? "收起目录" : "展开目录"}
                 onClick={() => setOutlineOpen((v) => !v)}
                 className={cn(
-                  "grid h-7 w-7 place-items-center rounded-md transition-colors",
+                  "h-7 w-7 rounded-md p-0",
                   outlineOpen
                     ? "bg-accent text-foreground"
                     : "text-muted-foreground hover:bg-accent hover:text-foreground",
                 )}
               >
                 <PanelRight className="h-4 w-4" />
-              </button>
+              </Button>
             </>
           }
           className="min-h-0 flex-1"

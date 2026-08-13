@@ -883,7 +883,7 @@ function McpServerEditor({
                 className={cn(
                   "h-auto rounded-full px-3 py-1 font-normal",
                   draft.transport === opt.key
-                    ? "bg-foreground text-background hover:bg-foreground hover:text-background"
+                    ? "bg-info/[0.10] text-info hover:bg-info/[0.14]"
                     : "text-muted-foreground hover:bg-accent",
                 )}
               >

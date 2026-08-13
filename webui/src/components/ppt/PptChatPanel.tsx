@@ -158,7 +158,7 @@ export const PptChatPanel = forwardRef<PptChatPanelHandle, PptChatPanelProps>(fu
               "grid h-6 w-6 shrink-0 place-items-center rounded-lg transition-colors",
               isStreaming
                 ? "text-destructive hover:bg-destructive/10"
-                : "bg-foreground text-background hover:bg-foreground/90 disabled:bg-muted disabled:text-muted-foreground",
+                : "bg-action text-white hover:bg-action-hover hover:text-white disabled:bg-muted disabled:text-muted-foreground",
             )}
           >
             {isStreaming ? (

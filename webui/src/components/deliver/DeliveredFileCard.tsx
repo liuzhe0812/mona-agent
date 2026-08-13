@@ -6,6 +6,7 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import { Button } from "@/components/ui/button";
 import { isTauri, openPathWithSystemApp, revealItemInDir } from "@/lib/tauri";
 import { useFilePreviewStore, type PreviewScope } from "./filePreviewStore";
 import { cn } from "@/lib/utils";
@@ -62,25 +63,25 @@ export function DeliveredFileCard({
   }, [file.absolute_path]);
 
   const card = (
-    <button
+    <Button
       type="button"
+      variant="ghost"
       onClick={handleClick}
       className={cn(
-        "inline-flex items-center gap-2 rounded-lg border border-border/60 bg-muted/30",
-        "px-3 py-2 text-left transition-colors",
-        "hover:bg-muted/60 hover:border-border",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        "h-auto justify-start gap-2 rounded-lg border border-border/60 bg-muted/30",
+        "px-3 py-2 text-left font-normal",
+        "hover:bg-muted/60 hover:border-border hover:text-foreground",
         className,
       )}
     >
       <KindIcon name={file.name} />
-      <span className="min-w-0 truncate text-[13px] font-medium text-foreground">
+      <span className="min-w-0 truncate text-ui font-medium text-foreground">
         {file.name}
       </span>
-      <span className="shrink-0 text-[11px] text-muted-foreground">
+      <span className="shrink-0 text-micro text-muted-foreground">
         {file.size_human}
       </span>
-    </button>
+    </Button>
   );
 
   if (!isTauri()) {

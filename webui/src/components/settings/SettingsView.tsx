@@ -2296,7 +2296,7 @@ function AgnesSetupDialog({
           }}
         >
           <DialogHeader className="text-left">
-            <DialogTitle className="flex items-center gap-2 text-base">
+            <DialogTitle className="flex items-center gap-2 text-body-lg">
               <Sparkles className="h-4 w-4 text-primary" aria-hidden />
               {tx("settings.agnesSetup.dialogTitle", "一键配置 Agnes AI")}
             </DialogTitle>
@@ -4005,7 +4005,7 @@ function ToggleSwitch({
         "relative h-6 w-11 shrink-0 cursor-pointer justify-start rounded-full border-2 border-transparent p-0 transition-colors",
         "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
         "disabled:cursor-not-allowed",
-        checked ? "bg-primary hover:bg-primary" : "bg-muted hover:bg-muted",
+        checked ? "bg-info hover:bg-info" : "bg-muted hover:bg-muted",
       )}
     >
       <span
@@ -4456,7 +4456,7 @@ function AboutSettings() {
                 </div>
                 <div className="h-1.5 overflow-hidden rounded-full bg-muted">
                   <div
-                    className="h-full rounded-full bg-primary transition-all duration-300"
+                    className="h-full rounded-full bg-info transition-all duration-300"
                     style={{ width: `${updateProgress.percent}%` }}
                   />
                 </div>
@@ -4729,11 +4729,11 @@ function AgentScopeSettings() {
                       className={cn(
                         "mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border",
                         selected
-                          ? "border-foreground bg-foreground"
+                          ? "border-info bg-info"
                           : "border-muted-foreground/45 bg-transparent",
                       )}
                     >
-                      {selected ? <span className="h-1.5 w-1.5 rounded-full bg-background" /> : null}
+                      {selected ? <span className="h-1.5 w-1.5 rounded-full bg-white" /> : null}
                     </span>
                     <div className="min-w-0">
                       <div className="text-body font-medium leading-5 text-foreground">{opt.label}</div>
@@ -4807,11 +4807,11 @@ function AgentScopeSettings() {
                       className={cn(
                         "mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border",
                         selected
-                          ? "border-foreground bg-foreground"
+                          ? "border-info bg-info"
                           : "border-muted-foreground/45 bg-transparent",
                       )}
                     >
-                      {selected ? <span className="h-1.5 w-1.5 rounded-full bg-background" /> : null}
+                      {selected ? <span className="h-1.5 w-1.5 rounded-full bg-white" /> : null}
                     </span>
                     <div className="min-w-0">
                       <div className="text-body font-medium leading-5 text-foreground">{opt.label}</div>
@@ -4916,7 +4916,7 @@ function ProviderPicker({
               className={cn(
                 "flex cursor-default items-center justify-between gap-2 rounded-lg px-3 py-2 text-ui",
                 "focus:bg-muted focus:text-foreground",
-                selected && "bg-primary/10 text-primary focus:bg-primary/12 focus:text-primary",
+                selected && "bg-info-soft text-info focus:bg-info-soft focus:text-info",
               )}
             >
               <span className="truncate">{provider.label}</span>
@@ -5002,7 +5002,7 @@ function ImageModelInput({
                   className={cn(
                     "flex cursor-default items-center justify-between gap-2 rounded-lg px-3 py-2 text-ui",
                     "focus:bg-muted focus:text-foreground",
-                    selected && "bg-primary/10 text-primary focus:bg-primary/12 focus:text-primary",
+                    selected && "bg-info-soft text-info focus:bg-info-soft focus:text-info",
                   )}
                 >
                   <span className="truncate font-mono">{model}</span>
@@ -5406,7 +5406,7 @@ function ToggleButton({
       className={cn(
         "h-8 min-w-[64px] rounded-full px-3 text-caption font-medium",
         checked
-          ? "bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground"
+          ? "bg-info-soft text-info hover:bg-info-soft hover:text-info"
           : "bg-muted text-muted-foreground hover:bg-muted hover:text-foreground",
       )}
     >
@@ -5806,7 +5806,7 @@ function ShortcutsSettings() {
                 className={cn(
                   "h-auto rounded-full px-3 py-1 text-ui font-normal",
                   quickAskMode === "compact"
-                    ? "bg-foreground text-background hover:bg-foreground hover:text-background"
+                    ? "bg-info/[0.10] text-info hover:bg-info/[0.14]"
                     : "text-muted-foreground hover:bg-transparent hover:text-foreground",
                 )}
               >
@@ -5820,7 +5820,7 @@ function ShortcutsSettings() {
                 className={cn(
                   "h-auto rounded-full px-3 py-1 text-ui font-normal",
                   quickAskMode === "full"
-                    ? "bg-foreground text-background hover:bg-foreground hover:text-background"
+                    ? "bg-info/[0.10] text-info hover:bg-info/[0.14]"
                     : "text-muted-foreground hover:bg-transparent hover:text-foreground",
                 )}
               >

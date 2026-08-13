@@ -413,10 +413,10 @@ export function CalendarWeek({
               key={day.toISOString()}
               className="flex-1 py-1 text-center text-micro"
             >
-              <span className={cn(isToday ? "font-medium text-primary" : "text-muted-foreground")}>
+              <span className={cn(isToday ? "font-semibold text-info" : "text-muted-foreground")}>
                 {weekdayName(day).replace("周", "")} {day.getDate()}
               </span>
-              {isToday && <span className="ml-1 text-micro text-primary">今天</span>}
+              {isToday && <span className="ml-1 rounded-full bg-info/[0.07] px-1.5 py-0.5 text-micro font-medium text-info">今天</span>}
             </div>
           );
         })}
@@ -432,7 +432,7 @@ export function CalendarWeek({
             key={day.toISOString()}
             className={cn(
               "min-h-[28px] flex-1 space-y-0.5 border-l border-border/30 p-0.5 first:border-l-0",
-              drag?.allDay && drag.dayIdx === dayIdx && "bg-primary/5",
+              drag?.allDay && drag.dayIdx === dayIdx && "bg-info/[0.05]",
             )}
           >
             {(allDayByDay.get(dayIdx) ?? []).map((item) => (
@@ -448,18 +448,18 @@ export function CalendarWeek({
                 onPointerUp={handleDragEnd}
                 onPointerCancel={cancelDrag}
                 className={cn(
-                  "flex cursor-grab touch-none items-center gap-1 truncate rounded-xs border-l-2 border-primary bg-primary/10 px-1.5 py-0.5 text-micro",
+                  "flex cursor-grab touch-none items-center gap-1 truncate rounded-md border border-info/15 border-l-2 border-l-info bg-info/[0.08] px-1.5 py-0.5 text-micro",
                   (item.done || !item.enabled) && "opacity-50",
                   drag?.item.id === item.id && drag.mode === "move" && "opacity-40",
                 )}
                 title={item.title}
               >
-                {item.kind === "ai_task" && <Bot className="h-3 w-3 flex-shrink-0 text-primary" />}
+                {item.kind === "ai_task" && <Bot className="h-3 w-3 flex-shrink-0 text-info" />}
                 <span className={cn("truncate", item.done && "line-through")}>{item.title}</span>
               </div>
             ))}
             {drag?.allDay && drag.dayIdx === dayIdx && (
-              <div className="truncate rounded-xs border border-dashed border-primary bg-primary/10 px-1.5 py-0.5 text-micro text-primary">
+              <div className="truncate rounded-md border border-dashed border-info bg-info/[0.08] px-1.5 py-0.5 text-micro text-info">
                 {drag.item.title}
               </div>
             )}
@@ -494,7 +494,7 @@ export function CalendarWeek({
                 onDrop={(e) => handleColumnDrop(e, dayIdx)}
                 className={cn(
                   "relative flex-1 border-l border-border/30 first:border-l-0",
-                  isSameDay(day, today) && "bg-primary/[0.02]",
+                  isSameDay(day, today) && "bg-info/[0.025]",
                 )}
               >
                 {/* Hour lines */}
@@ -525,7 +525,7 @@ export function CalendarWeek({
                       onPointerUp={handleDragEnd}
                       onPointerCancel={cancelDrag}
                       className={cn(
-                        "absolute cursor-grab touch-none overflow-hidden rounded-md border-l-2 border-primary bg-primary/10 px-1.5 py-0.5",
+                        "absolute cursor-grab touch-none overflow-hidden rounded-lg border border-info/15 border-l-2 border-l-info bg-info/[0.08] px-2 py-1 shadow-surface",
                         (ev.item.done || !ev.item.enabled) && "opacity-50",
                         isDragSource && drag.mode === "move" && "opacity-40",
                       )}
@@ -540,7 +540,7 @@ export function CalendarWeek({
                       <div className="flex items-center gap-1 text-micro text-muted-foreground">
                         {formatTime(new Date(day).setHours(0, startMin, 0, 0))}
                         {ev.item.kind === "ai_task" && (
-                          <Bot className="h-3 w-3 flex-shrink-0 text-primary" />
+                          <Bot className="h-3 w-3 flex-shrink-0 text-info" />
                         )}
                       </div>
                       <div
@@ -566,7 +566,7 @@ export function CalendarWeek({
                 {/* Move ghost */}
                 {drag && drag.mode === "move" && !drag.allDay && drag.dayIdx === dayIdx && (
                   <div
-                    className="pointer-events-none absolute z-30 rounded-md border border-dashed border-primary bg-primary/10 px-1.5 py-0.5 text-micro text-primary"
+                    className="pointer-events-none absolute z-30 rounded-md border border-dashed border-info bg-info/[0.08] px-1.5 py-0.5 text-micro text-info"
                     style={{
                       top: (drag.startMin / 60) * HOUR_PX,
                       height: Math.max(((drag.endMin - drag.startMin) / 60) * HOUR_PX, 18),
@@ -582,7 +582,7 @@ export function CalendarWeek({
                 {/* Todo drop hint */}
                 {dropHint && dropHint.dayIdx === dayIdx && (
                   <div
-                    className="pointer-events-none absolute z-30 rounded-md border border-dashed border-primary bg-primary/10 px-1.5 py-0.5 text-micro text-primary"
+                    className="pointer-events-none absolute z-30 rounded-md border border-dashed border-info bg-info/[0.08] px-1.5 py-0.5 text-micro text-info"
                     style={{
                       top: (dropHint.startMin / 60) * HOUR_PX,
                       height: (DEFAULT_DURATION_MIN / 60) * HOUR_PX,
@@ -599,11 +599,11 @@ export function CalendarWeek({
             {/* Now line */}
             {todayIdx >= 0 && (
               <div
-                className="pointer-events-none absolute z-20 h-0.5 bg-primary"
+                className="pointer-events-none absolute z-20 h-px bg-info"
                 style={{ top: (nowMin / 60) * HOUR_PX, left: 0, right: 0 }}
               >
                 <div
-                  className="absolute -top-[3px] h-2 w-2 rounded-full bg-primary"
+                  className="absolute -top-[3px] h-2 w-2 rounded-full bg-info ring-[3px] ring-info-strong/10"
                   style={{ left: `calc(${(todayIdx / colCount) * 100}% - 4px)` }}
                 />
               </div>

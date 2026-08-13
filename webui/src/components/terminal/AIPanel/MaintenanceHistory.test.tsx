@@ -14,6 +14,34 @@ vi.mock("../ipc", () => ({
   terminalMaintenanceDelete: deleteTask,
 }));
 
+// Select（Button + DropdownMenu 组合）的轻量测试替身：渲染为原生 <select>，
+// 保留 aria-label 与选项值，筛选逻辑仍由被测组件自身的 onValueChange 驱动。
+vi.mock("@/components/ui/select", () => ({
+  Select: ({
+    value,
+    onValueChange,
+    options,
+    "aria-label": ariaLabel,
+  }: {
+    value?: string;
+    onValueChange?: (value: string) => void;
+    options: { value: string; label: string }[];
+    "aria-label"?: string;
+  }) => (
+    <select
+      aria-label={ariaLabel}
+      value={value}
+      onChange={(e) => onValueChange?.(e.target.value)}
+    >
+      {options.map((o) => (
+        <option key={o.value} value={o.value}>
+          {o.label}
+        </option>
+      ))}
+    </select>
+  ),
+}));
+
 // Radix ContextMenu 的轻量测试替身：菜单项直接内联渲染，
 // 删除确认行为（AlertDialog、API 门控、错误重试）与被测组件自身逻辑保持不变。
 vi.mock("@/components/ui/context-menu", () => ({

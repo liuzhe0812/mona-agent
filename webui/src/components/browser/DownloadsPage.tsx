@@ -14,6 +14,7 @@ import {
   Loader2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { useDownloads } from "@/hooks/useDownloads";
 import type { DownloadInfo } from "@/lib/browser-ipc";
@@ -99,7 +100,7 @@ function DownloadItem({
       {/* 文件图标 */}
       <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-muted/50">
         {isInProgress ? (
-          <Loader2 className="h-4 w-4 animate-spin text-blue-500" />
+          <Loader2 className="h-4 w-4 animate-spin text-info" />
         ) : isCompleted ? (
           <FileText className="h-4 w-4 text-muted-foreground" />
         ) : (
@@ -110,14 +111,14 @@ function DownloadItem({
       {/* 文件信息 */}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
-          <span className="truncate text-[13px] font-medium">{filename}</span>
+          <span className="truncate text-ui font-medium">{filename}</span>
           {ext && (
-            <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] uppercase text-muted-foreground">
+            <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-micro uppercase text-muted-foreground">
               {ext}
             </span>
           )}
         </div>
-        <div className="mt-0.5 flex items-center gap-2 text-[11px] text-muted-foreground">
+        <div className="mt-0.5 flex items-center gap-2 text-micro text-muted-foreground">
           {isInProgress ? (
             <>
               <span>{formatBytes(download.receivedBytes)} / {formatBytes(download.totalBytes)}</span>
@@ -139,12 +140,12 @@ function DownloadItem({
               <span>{formatBytes(download.totalBytes || download.receivedBytes)}</span>
               <span>·</span>
               <span className="flex items-center gap-0.5">
-                <CheckCircle2 className="h-3 w-3 text-emerald-500" />
+                <CheckCircle2 className="h-3 w-3 text-success" />
                 {getStatusLabel(download.state)}
               </span>
             </>
           ) : isInterrupted ? (
-            <span className="flex items-center gap-0.5 text-amber-500">
+            <span className="flex items-center gap-0.5 text-warning">
               <AlertCircle className="h-3 w-3" />
               {getStatusLabel(download.state)}
             </span>
@@ -156,7 +157,7 @@ function DownloadItem({
         {isInProgress && (
           <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-muted">
             <div
-              className="h-full rounded-full bg-blue-500 transition-all duration-300"
+              className="h-full rounded-full bg-info transition-all duration-300"
               style={{ width: `${progress}%` }}
             />
           </div>
@@ -285,9 +286,9 @@ export function DownloadsPage({ onBack }: DownloadsPageProps) {
           <ArrowLeft className="h-4 w-4" />
         </Button>
         <Download className="h-4 w-4 text-muted-foreground" />
-        <h1 className="text-[14px] font-semibold">下载记录</h1>
+        <h1 className="text-body font-semibold">下载记录</h1>
         {inProgressCount > 0 && (
-          <span className="rounded-full bg-blue-500/15 px-2 py-0.5 text-[11px] text-blue-500">
+          <span className="rounded-full bg-info/15 px-2 py-0.5 text-micro text-info">
             {inProgressCount} 个进行中
           </span>
         )}
@@ -297,17 +298,19 @@ export function DownloadsPage({ onBack }: DownloadsPageProps) {
             <Input
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="h-7 w-56 rounded-full border-0 bg-muted/50 pl-7 pr-7 text-[12px]"
+              className="h-7 w-56 rounded-full border-0 bg-muted/50 pl-7 pr-7 text-caption"
               placeholder="搜索下载..."
             />
             {searchQuery && (
-              <button
+              <Button
                 type="button"
+                variant="ghost"
+                size="icon"
                 onClick={() => setSearchQuery("")}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                className="absolute right-1.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground hover:bg-transparent hover:text-foreground"
               >
                 <X className="h-3 w-3" />
-              </button>
+              </Button>
             )}
           </div>
         </div>
@@ -317,12 +320,11 @@ export function DownloadsPage({ onBack }: DownloadsPageProps) {
       <div className="flex-1 min-h-0 overflow-y-auto scrollbar-hover">
         <div className="mx-auto max-w-3xl px-4 py-4">
           {sortedDownloads.length === 0 ? (
-            <div className="flex h-32 flex-col items-center justify-center gap-2 text-muted-foreground">
-              <Download className="h-8 w-8 opacity-50" />
-              <span className="text-[13px]">
-                {searchQuery ? "未找到匹配的下载" : "暂无下载记录"}
-              </span>
-            </div>
+            <EmptyState
+              icon={<Download className="h-5 w-5" />}
+              title={searchQuery ? "未找到匹配的下载" : "暂无下载记录"}
+              className="h-32 py-0"
+            />
           ) : (
             <div className="space-y-0.5">
               {sortedDownloads.map((download) => (

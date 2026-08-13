@@ -236,7 +236,7 @@ export function MailPreviewWindow() {
   if (error || !message) {
     return (
       <div className="flex h-screen flex-col items-center justify-center gap-4">
-        <p className="text-sm text-muted-foreground">
+        <p className="text-body text-muted-foreground">
           {error || "邮件不存在"}
         </p>
         <Button variant="outline" size="sm" onClick={handleClose}>
@@ -255,10 +255,10 @@ export function MailPreviewWindow() {
       <div className="shrink-0 border-b border-border px-6 py-4">
         <div className="flex items-start gap-3">
           <div className="min-w-0 flex-1">
-            <h1 className="truncate text-base font-semibold">
+            <h1 className="truncate text-body-lg font-semibold">
               {message.subject || "(无主题)"}
             </h1>
-            <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-0.5 text-xs text-muted-foreground">
+            <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-0.5 text-caption text-muted-foreground">
               <span>
                 <span className="text-foreground/70">发件人：</span>
                 {fromName}{" "}
@@ -271,7 +271,7 @@ export function MailPreviewWindow() {
                 {message.date}
               </span>
             </div>
-            <div className="mt-0.5 text-xs text-muted-foreground">
+            <div className="mt-0.5 text-caption text-muted-foreground">
               <span className="text-foreground/70">收件人：</span>
               {message.toAddresses}
             </div>
@@ -291,12 +291,12 @@ export function MailPreviewWindow() {
                           <Paperclip className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                         )}
                         <span
-                          className="min-w-0 flex-1 truncate text-[12px] text-foreground"
+                          className="min-w-0 flex-1 truncate text-caption text-foreground"
                           title={att.filename}
                         >
                           {att.filename}
                         </span>
-                        <span className="shrink-0 text-[11px] text-muted-foreground">
+                        <span className="shrink-0 text-micro text-muted-foreground">
                           {formatSize(att.size)}
                         </span>
                       </div>
@@ -323,13 +323,13 @@ export function MailPreviewWindow() {
       <div className="min-h-0 flex-1 overflow-auto px-6 py-4 scrollbar-hover">
         {message.bodyError ? (
           <div className="flex h-full min-h-[200px] flex-col items-center justify-center gap-2 text-muted-foreground">
-            <span className="text-[13px] text-destructive">正文加载失败</span>
-            <span className="max-w-md text-center text-[12px] text-muted-foreground">{message.bodyError}</span>
+            <span className="text-ui text-destructive">正文加载失败</span>
+            <span className="max-w-md text-center text-caption text-muted-foreground">{message.bodyError}</span>
           </div>
         ) : !message.bodyFetched ? (
           <div className="flex h-full min-h-[200px] items-center justify-center text-muted-foreground">
             <Loader2 className="h-5 w-5 animate-spin" />
-            <span className="ml-2 text-[13px]">{bodyLoadingText}</span>
+            <span className="ml-2 text-ui">{bodyLoadingText}</span>
           </div>
         ) : message.bodyHtml ? (
           <SafeHtmlFrame html={message.bodyHtml} />
@@ -341,7 +341,7 @@ export function MailPreviewWindow() {
           // fetchEmailBody 已完成但 bodyText/bodyHtml 都空：合法空正文
           // skill 第四节：合法空正文不得反复请求网络
           <div className="flex h-full min-h-[200px] items-center justify-center text-muted-foreground">
-            <span className="text-[13px]">此邮件无可显示正文</span>
+            <span className="text-ui">此邮件无可显示正文</span>
           </div>
         )}
       </div>

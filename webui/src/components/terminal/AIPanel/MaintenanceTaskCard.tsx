@@ -9,6 +9,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 import {
   terminalMaintenanceAuthorize,
   terminalMaintenanceCancel,
@@ -29,9 +30,9 @@ const TASK_STATUS_LABEL: Record<MaintenanceTaskStatus, string> = {
 
 const TASK_STATUS_TONE: Record<MaintenanceTaskStatus, string> = {
   planning: "text-muted-foreground border-border/70",
-  waiting_approval: "text-amber-600 border-amber-500/40 bg-amber-500/10",
+  waiting_approval: "text-warning border-warning/40 bg-warning/10",
   running: "text-primary border-primary/40 bg-primary/10",
-  succeeded: "text-emerald-600 border-emerald-500/40 bg-emerald-500/10",
+  succeeded: "text-success border-success/40 bg-success/10",
   failed: "text-destructive border-destructive/40 bg-destructive/10",
   cancelled: "text-muted-foreground border-border/70",
 };
@@ -41,7 +42,7 @@ function StepStatusIcon({ status }: { status: MaintenanceStepStatus }) {
     case "running":
       return <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-primary" />;
     case "succeeded":
-      return <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-600" />;
+      return <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-success" />;
     case "failed":
       return <XCircle className="h-3.5 w-3.5 shrink-0 text-destructive" />;
     case "skipped":
@@ -113,16 +114,16 @@ export function MaintenanceTaskCard({ detail }: Props) {
       <div className="flex items-center gap-2">
         <span
           className={cn(
-            "shrink-0 rounded-md border px-1.5 py-0.5 text-[10px] font-medium",
+            "shrink-0 rounded-md border px-1.5 py-0.5 text-micro font-medium",
             TASK_STATUS_TONE[task.status],
           )}
         >
           {TASK_STATUS_LABEL[task.status]}
         </span>
-        <span className="min-w-0 flex-1 truncate text-[11.5px] font-medium text-foreground" title={task.goal}>
+        <span className="min-w-0 flex-1 truncate text-caption font-medium text-foreground" title={task.goal}>
           {task.goal}
         </span>
-        <span className="shrink-0 text-[10px] text-muted-foreground">
+        <span className="shrink-0 text-micro text-muted-foreground">
           {doneCount}/{steps.length}
         </span>
       </div>
@@ -134,47 +135,50 @@ export function MaintenanceTaskCard({ detail }: Props) {
       </div>
 
       {task.status === "waiting_approval" && (
-        <div className="mt-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-2 py-1.5">
-          <p className="text-[10.5px] text-muted-foreground">
+        <div className="mt-2 rounded-md border border-warning/30 bg-warning/5 px-2 py-1.5">
+          <p className="text-micro text-muted-foreground">
             审批模式：只读检查已自动执行，确认后按计划连续执行变更与复检步骤。
           </p>
-          <button
+          <Button
             type="button"
+            size="xs"
             disabled={busy || pendingApprovalSteps.length === 0}
             onClick={handleAuthorize}
-            className="mt-1.5 flex w-full items-center justify-center gap-1.5 rounded-md bg-foreground px-2.5 py-1.5 text-[11px] font-medium text-background transition-colors hover:bg-foreground/90 disabled:opacity-50"
+            className="mt-1.5 w-full gap-1.5 text-caption"
           >
             <ShieldCheck className="h-3 w-3" />
             批准变更计划（{pendingApprovalSteps.length} 个步骤）
-          </button>
+          </Button>
         </div>
       )}
 
       {task.status === "succeeded" && task.summary && (
-        <p className="mt-2 whitespace-pre-wrap break-words text-[10.5px] leading-4 text-muted-foreground">
+        <p className="mt-2 whitespace-pre-wrap break-words text-micro leading-4 text-muted-foreground">
           {task.summary}
         </p>
       )}
       {task.status === "failed" && task.error && (
-        <p className="mt-2 whitespace-pre-wrap break-words text-[10.5px] leading-4 text-destructive">
+        <p className="mt-2 whitespace-pre-wrap break-words text-micro leading-4 text-destructive">
           {task.error}
         </p>
       )}
       {actionError && (
-        <p className="mt-1.5 text-[10.5px] text-destructive">{actionError}</p>
+        <p className="mt-1.5 text-micro text-destructive">{actionError}</p>
       )}
 
       {isActive(task.status) && (
         <div className="mt-2 flex justify-end">
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="xs"
             disabled={busy}
             onClick={handleCancel}
-            className="flex items-center gap-1 rounded-md px-2 py-1 text-[10.5px] text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
+            className="gap-1 text-caption text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
           >
             <Ban className="h-3 w-3" />
             停止维护
-          </button>
+          </Button>
         </div>
       )}
     </div>
@@ -192,7 +196,7 @@ function StepRow({ step, highlighted }: { step: MaintenanceStep; highlighted: bo
       <StepStatusIcon status={step.status} />
       <span
         className={cn(
-          "min-w-0 flex-1 truncate text-[11px]",
+          "min-w-0 flex-1 truncate text-micro",
           step.status === "skipped" || step.status === "cancelled"
             ? "text-muted-foreground/70 line-through"
             : "text-foreground",
@@ -202,17 +206,17 @@ function StepRow({ step, highlighted }: { step: MaintenanceStep; highlighted: bo
         {step.title}
       </span>
       {step.kind === "verify" && (
-        <span className="shrink-0 rounded border border-sky-500/40 bg-sky-500/10 px-1 py-px text-[9.5px] text-sky-600">
+        <span className="shrink-0 rounded border border-info/40 bg-info/10 px-1 py-px text-micro text-info-strong">
           复检
         </span>
       )}
       {step.exitCode != null && step.status !== "succeeded" && (
-        <span className="shrink-0 text-[9.5px] text-muted-foreground">
+        <span className="shrink-0 text-micro text-muted-foreground">
           exit {step.exitCode}
         </span>
       )}
       {step.durationMs != null && (
-        <span className="shrink-0 text-[9.5px] text-muted-foreground/70">
+        <span className="shrink-0 text-micro text-muted-foreground/70">
           {formatDuration(step.durationMs)}
         </span>
       )}

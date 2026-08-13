@@ -95,28 +95,27 @@ export function ProfileTab({
 
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-3">
-      <Panel className="p-5">
-        <div className="grid gap-5 lg:grid-cols-[1fr_260px]">
-          <div className="flex min-w-0 items-center gap-5">
+      <Panel className="border-info/20 bg-info/[0.025] p-5">
+        <div className="grid gap-5 lg:grid-cols-[1fr_220px]">
+          <div className="flex min-w-0 items-center gap-4">
             <div
-              className="relative flex h-24 w-24 shrink-0 items-center justify-center rounded-2xl text-white shadow-overlay"
-              style={{ background: `linear-gradient(145deg, ${PROFILE_COLORS.coralSoft}, ${PROFILE_COLORS.coral})` }}
+              className="relative flex h-16 w-16 shrink-0 items-center justify-center rounded-xl border border-info/20 bg-info/[0.08] text-info"
             >
-              <UserRound className="h-12 w-12" />
-              <span className="absolute right-3 top-3 h-5 w-5 rounded-full border-2 border-white bg-success-indicator" />
+              <UserRound className="h-8 w-8" />
+              <span className="absolute right-2 top-2 h-3 w-3 rounded-full border-2 border-background bg-success-indicator" />
             </div>
             <div className="min-w-0">
               <div className="mb-2 flex flex-wrap items-center gap-2">
                 <h2 className="truncate text-title tracking-tight">
                   {identity.primary_role || "尚未确定角色"}
                 </h2>
-                <span className="rounded-full border border-success/30 bg-success/10 px-2 py-0.5 text-caption font-medium text-success">
+                <span className="rounded-full border border-info/25 bg-info/[0.07] px-2 py-0.5 text-caption font-medium text-info">
                   主角色
                 </span>
               </div>
               <div className="mb-3 flex flex-wrap gap-1.5">
                 {(identity.secondary_roles ?? []).map((role) => (
-                  <span key={role} className="rounded-full border bg-background px-2.5 py-1 text-caption text-muted-foreground">
+                  <span key={role} className="rounded-full bg-muted/70 px-2.5 py-1 text-caption text-muted-foreground">
                     {role}
                   </span>
                 ))}
@@ -323,7 +322,7 @@ function Panel({
   className?: string;
 }) {
   return (
-    <div className={cn(CARD_BASE, CARD_HOVER, "profile-card rounded-lg bg-card/70", className)}>
+    <div className={cn(CARD_BASE, CARD_HOVER, "profile-card", className)}>
       {children}
     </div>
   );

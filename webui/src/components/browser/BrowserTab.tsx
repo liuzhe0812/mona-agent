@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { FileText, X, Pin, PinOff, Copy, CopyX, ArrowRightToLine, Clock, VolumeX, Volume2, Eye, Moon, FolderOpen, NotebookPen } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { isTauri } from "@/lib/tauri";
 import type { MenuOptions } from "@tauri-apps/api/menu";
@@ -139,8 +140,9 @@ export function BrowserTabItem({
   };
 
   const tabContent = (
-    <button
+    <Button
       type="button"
+      variant="ghost"
       onClick={onClick}
       draggable={tab.type !== "mona"}
       onDragStart={handleDragStart}
@@ -148,11 +150,12 @@ export function BrowserTabItem({
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
       className={cn(
-        "group flex h-7 items-center gap-1.5 rounded-md px-2 text-[12px] transition-colors",
+        "group flex h-7 items-center justify-start gap-1.5 rounded-md px-2 text-caption font-normal transition-colors",
+        "hover:bg-[hsl(var(--sidebar-hover-surface)/0.04)] hover:text-foreground active:bg-[hsl(var(--sidebar-hover-surface)/0.04)]",
         isPinned ? "max-w-[40px] justify-center" : "max-w-[180px]",
         active
-          ? "bg-primary/15 text-foreground font-medium"
-          : "text-muted-foreground hover:bg-sidebar-accent/50 hover:text-foreground",
+          ? "bg-[hsl(var(--sidebar-active-surface)/0.07)] text-foreground font-medium"
+          : "text-muted-foreground",
         isDragOver && "ring-2 ring-primary/40 ring-offset-1"
       )}
       title={isPinned ? tab.title : undefined}
@@ -160,11 +163,11 @@ export function BrowserTabItem({
       {faviconUrl ? (
         <img src={faviconUrl} alt="" className="shrink-0 h-4 w-4 rounded-sm" onError={(e) => { e.currentTarget.style.display = "none"; }} />
       ) : tab.type === "md-reader" ? (
-        <FileText className="shrink-0 h-3.5 w-3.5 text-[#eba45d]" />
+        <FileText className="shrink-0 h-3.5 w-3.5 text-warning" />
       ) : tab.type === "history" ? (
         <Clock className="shrink-0 h-3.5 w-3.5 text-muted-foreground" />
       ) : tab.type !== "mona" ? (
-        <span className="shrink-0 text-[11px]">{tab.isAiControlled ? "🤖" : "🌐"}</span>
+        <span className="shrink-0 text-micro">{tab.isAiControlled ? "🤖" : "🌐"}</span>
       ) : null}
       {!isPinned && <span className="truncate">{tab.title}</span>}
       {!isPinned && tab.isIncognito && (
@@ -192,7 +195,7 @@ export function BrowserTabItem({
           <X className="h-2.5 w-2.5" />
         </span>
       )}
-    </button>
+    </Button>
   );
 
   // Mona 标签或无上下文菜单处理器时直接返回

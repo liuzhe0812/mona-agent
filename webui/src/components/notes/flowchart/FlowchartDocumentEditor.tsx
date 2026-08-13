@@ -2502,7 +2502,7 @@ export function FlowchartDocumentEditor({
                 <Button
                   variant="outline"
                   size="sm"
-                  className="h-7 px-2 text-xs"
+                  className="h-7 px-2 text-caption"
                   onClick={handleRequestWriteLease}
                 >
                   在此编辑
@@ -2727,7 +2727,7 @@ function NodeFormatToolbar({ style, onChange, disabled }: NodeFormatToolbarProps
       <ToolbarDropdown
         label="字体"
         trigger={
-          <Button variant="ghost" size="sm" className="h-7 px-2 text-[11px]" disabled={disabled}>
+          <Button variant="ghost" size="sm" className="h-7 px-2 text-caption" disabled={disabled}>
             {FONT_FAMILY_OPTIONS.find((o) => o.value === (s?.fontFamily ?? ""))?.label ?? "默认"}
           </Button>
         }
@@ -2750,7 +2750,7 @@ function NodeFormatToolbar({ style, onChange, disabled }: NodeFormatToolbarProps
       <ToolbarDropdown
         label="字号"
         trigger={
-          <Button variant="ghost" size="sm" className="h-7 px-2 text-[11px]" disabled={disabled}>
+          <Button variant="ghost" size="sm" className="h-7 px-2 text-caption" disabled={disabled}>
             {s?.fontSize ?? 13}
           </Button>
         }
@@ -2797,7 +2797,7 @@ function NodeFormatToolbar({ style, onChange, disabled }: NodeFormatToolbarProps
       <ToolbarDropdown
         label="边框宽度"
         trigger={
-          <Button variant="ghost" size="sm" className="h-7 px-2 text-[11px]" disabled={disabled}>
+          <Button variant="ghost" size="sm" className="h-7 px-2 text-caption" disabled={disabled}>
             {s?.borderWidth ?? 1.5}px
           </Button>
         }
@@ -2820,7 +2820,7 @@ function NodeFormatToolbar({ style, onChange, disabled }: NodeFormatToolbarProps
       <ToolbarDropdown
         label="边框样式"
         trigger={
-          <Button variant="ghost" size="sm" className="h-7 px-2 text-[11px]" disabled={disabled}>
+          <Button variant="ghost" size="sm" className="h-7 px-2 text-caption" disabled={disabled}>
             {s?.borderStyle === "dashed" ? "虚线" : s?.borderStyle === "dotted" ? "点线" : "实线"}
           </Button>
         }
@@ -2845,7 +2845,7 @@ function NodeFormatToolbar({ style, onChange, disabled }: NodeFormatToolbarProps
           <Button
             variant="ghost"
             size="icon"
-            className={`h-7 w-7 text-[11px] font-bold ${s?.bold ? "bg-accent text-foreground" : "text-muted-foreground"}`}
+            className={`h-7 w-7 text-caption font-bold ${s?.bold ? "bg-accent text-foreground" : "text-muted-foreground"}`}
             disabled={disabled}
             onClick={() => onChange({ bold: !s?.bold })}
           >
@@ -2859,7 +2859,7 @@ function NodeFormatToolbar({ style, onChange, disabled }: NodeFormatToolbarProps
           <Button
             variant="ghost"
             size="icon"
-            className={`h-7 w-7 text-[11px] italic ${s?.italic ? "bg-accent text-foreground" : "text-muted-foreground"}`}
+            className={`h-7 w-7 text-caption italic ${s?.italic ? "bg-accent text-foreground" : "text-muted-foreground"}`}
             disabled={disabled}
             onClick={() => onChange({ italic: !s?.italic })}
           >
@@ -2873,7 +2873,7 @@ function NodeFormatToolbar({ style, onChange, disabled }: NodeFormatToolbarProps
           <Button
             variant="ghost"
             size="icon"
-            className={`h-7 w-7 text-[11px] underline ${s?.underline ? "bg-accent text-foreground" : "text-muted-foreground"}`}
+            className={`h-7 w-7 text-caption underline ${s?.underline ? "bg-accent text-foreground" : "text-muted-foreground"}`}
             disabled={disabled}
             onClick={() => onChange({ underline: !s?.underline })}
           >
@@ -2936,7 +2936,7 @@ function EdgeFormatToolbar({ style, onChange, disabled }: EdgeFormatToolbarProps
       <ToolbarDropdown
         label="线条宽度"
         trigger={
-          <Button variant="ghost" size="sm" className="h-7 px-2 text-[11px]" disabled={disabled}>
+          <Button variant="ghost" size="sm" className="h-7 px-2 text-caption" disabled={disabled}>
             {s?.strokeWidth ?? 1.5}px
           </Button>
         }
@@ -2959,7 +2959,7 @@ function EdgeFormatToolbar({ style, onChange, disabled }: EdgeFormatToolbarProps
       <ToolbarDropdown
         label="线条样式"
         trigger={
-          <Button variant="ghost" size="sm" className="h-7 px-2 text-[11px]" disabled={disabled}>
+          <Button variant="ghost" size="sm" className="h-7 px-2 text-caption" disabled={disabled}>
             {s?.strokeDasharray === "dashed" ? "虚线" : s?.strokeDasharray === "dotted" ? "点线" : "实线"}
           </Button>
         }
@@ -2984,7 +2984,7 @@ function EdgeFormatToolbar({ style, onChange, disabled }: EdgeFormatToolbarProps
       <ToolbarDropdown
         label="连接类型"
         trigger={
-          <Button variant="ghost" size="sm" className="h-7 px-2 text-[11px]" disabled={disabled}>
+          <Button variant="ghost" size="sm" className="h-7 px-2 text-caption" disabled={disabled}>
             {s?.route === "bezier" ? "曲线" : s?.route === "straight" ? "直线" : "折线"}
           </Button>
         }
@@ -3007,7 +3007,7 @@ function EdgeFormatToolbar({ style, onChange, disabled }: EdgeFormatToolbarProps
       <ToolbarDropdown
         label="起点样式"
         trigger={
-          <Button variant="ghost" size="sm" className="h-7 px-2 text-[11px]" disabled={disabled}>
+          <Button variant="ghost" size="sm" className="h-7 px-2 text-caption" disabled={disabled}>
             {s?.markerStart === "arrow" ? "起点箭头" : s?.markerStart === "arrowclosed" ? "起点实心" : "起点无"}
           </Button>
         }
@@ -3030,7 +3030,7 @@ function EdgeFormatToolbar({ style, onChange, disabled }: EdgeFormatToolbarProps
       <ToolbarDropdown
         label="终点样式"
         trigger={
-          <Button variant="ghost" size="sm" className="h-7 px-2 text-[11px]" disabled={disabled}>
+          <Button variant="ghost" size="sm" className="h-7 px-2 text-caption" disabled={disabled}>
             {s?.markerEnd === "none" ? "终点无" : s?.markerEnd === "arrow" ? "终点箭头" : "终点实心"}
           </Button>
         }

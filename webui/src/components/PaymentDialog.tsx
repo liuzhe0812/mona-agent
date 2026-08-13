@@ -162,7 +162,7 @@ export function PaymentDialog({
           {status === "paid" && (
             <div className="flex flex-col items-center gap-3 py-8">
               <CheckCircle2 className="h-16 w-16 text-green-500" />
-              <p className="text-lg font-medium">支付成功</p>
+              <p className="text-title-sm font-medium">支付成功</p>
               <p className="text-sm text-muted-foreground">订阅已开通，正在刷新...</p>
             </div>
           )}
@@ -170,7 +170,7 @@ export function PaymentDialog({
           {(status === "failed" || status === "timeout") && (
             <div className="flex flex-col items-center gap-3 py-8">
               <XCircle className="h-16 w-16 text-destructive" />
-              <p className="text-lg font-medium">支付未完成</p>
+              <p className="text-title-sm font-medium">支付未完成</p>
               <p className="text-sm text-muted-foreground">{errorMsg}</p>
             </div>
           )}

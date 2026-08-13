@@ -56,7 +56,7 @@ function DownloadProgressRing({ progress }: { progress: number | null }) {
         cy="9"
         r={r}
         fill="none"
-        className="stroke-blue-500"
+        className="stroke-info"
         strokeWidth="1.5"
         strokeLinecap="round"
         strokeDasharray={progress === null ? `${c * 0.3} ${c * 0.7}` : c}
@@ -572,7 +572,7 @@ export function BrowserToolbar({
             onChange={(e) => handleInputChange(e.target.value)}
             onFocus={handleFocus}
             onBlur={handleBlur}
-            className="h-6 rounded-full border-0 bg-muted/50 text-[12px] px-2 focus-visible:ring-2 focus-visible:ring-blue-500/50 focus-visible:ring-offset-0"
+            className="h-6 rounded-full border-0 bg-muted/50 text-caption px-2"
             placeholder="输入网址或搜索..."
           />
         )}
@@ -581,11 +581,11 @@ export function BrowserToolbar({
         {editorOpen && (
           <div
             ref={suggestionsRef}
-            className="absolute left-0 right-0 top-0 z-50 -translate-y-4 rounded-lg border border-border bg-popover shadow-lg overflow-hidden"
+            className="absolute left-0 right-0 top-0 z-50 -translate-y-4 rounded-lg border border-border bg-popover shadow-overlay overflow-hidden"
           >
             <div className="flex items-center gap-1.5 px-2 h-8 border-b border-border/50">
               <Search className="h-3 w-3 shrink-0 text-muted-foreground" />
-              <input
+              <Input
                 ref={editorInputRef}
                 value={editorValue}
                 onChange={(e) => handleEditorChange(e.target.value)}
@@ -598,17 +598,18 @@ export function BrowserToolbar({
                   }, 150);
                 }}
                 autoFocus
-                className="h-6 flex-1 bg-transparent text-[12px] outline-none border-0 px-0"
+                className="h-6 flex-1 rounded-none border-0 bg-transparent text-caption px-0 focus-visible:ring-0"
                 placeholder="输入网址或搜索..."
               />
             </div>
             {suggestions.length > 0 && (
               <div className="overflow-y-auto scrollbar-thin max-h-[60vh]">
                 {suggestions.map((s, i) => (
-                  <button
+                  <Button
                     key={s.url}
                     type="button"
-                    className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] hover:bg-accent transition-colors ${
+                    variant="ghost"
+                    className={`h-auto w-full justify-start gap-2 rounded-none px-3 py-1.5 text-caption font-normal ${
                       i === selectedIdx ? "bg-accent" : ""
                     }`}
                     onMouseDown={(e) => {
@@ -618,7 +619,7 @@ export function BrowserToolbar({
                     onMouseEnter={() => setSelectedIdx(i)}
                   >
                     {s.isBookmark ? (
-                      <Star className="h-3 w-3 shrink-0 fill-yellow-500 text-yellow-500" />
+                      <Star className="h-3 w-3 shrink-0 fill-current text-warning" />
                     ) : (
                       <Search className="h-3 w-3 shrink-0 text-muted-foreground" />
                     )}
@@ -626,7 +627,7 @@ export function BrowserToolbar({
                       <div className="truncate font-medium">{s.title || s.url}</div>
                       <div className="truncate text-muted-foreground">{s.url}</div>
                     </div>
-                  </button>
+                  </Button>
                 ))}
               </div>
             )}
@@ -642,7 +643,7 @@ export function BrowserToolbar({
         onClick={toggleBookmark}
       >
         <Star
-          className={`h-3 w-3 ${isBookmarked ? "fill-yellow-500 text-yellow-500" : ""}`}
+          className={`h-3 w-3 ${isBookmarked ? "fill-current text-warning" : ""}`}
         />
       </Button>
 
@@ -837,22 +838,22 @@ export function BrowserToolbar({
 
       {/* 无痕模式指示器 */}
       {isIncognito && (
-        <div className="flex items-center gap-1 px-2 text-xs text-muted-foreground" title="无痕模式">
+        <div className="flex items-center gap-1 px-2 text-muted-foreground" title="无痕模式">
           <Eye className="h-3.5 w-3.5" />
         </div>
       )}
 
       {/* AI 按钮 */}
-      <button
+      <Button
         type="button"
+        variant="ghost"
+        size="icon"
         onClick={onToggleAiPanel}
         title="Mona"
-        className={`flex h-6 w-6 items-center justify-center rounded-md transition-colors ${
-          isAiPanelOpen ? "bg-primary/15" : "hover:bg-muted/60"
-        }`}
+        className={`h-6 w-6 ${isAiPanelOpen ? "bg-primary/15" : ""}`}
       >
         <AgentLogo state={isAiControlled ? "working" : "idle"} className="h-5 w-5" />
-      </button>
+      </Button>
     </div>
   );
 }

@@ -70,7 +70,7 @@ function InlineInput({
         if (value.trim()) onSubmit(value.trim());
         else onCancel();
       }}
-      className="h-6 rounded-sm px-1.5 py-0 text-[13px]"
+      className="h-6 rounded-sm px-1.5 py-0 text-ui"
     />
   );
 }
@@ -104,9 +104,9 @@ function FileIcon({ node, expanded }: { node: FileTreeNode; expanded: boolean })
 
   if (node.isDir) {
     return expanded ? (
-      <FolderOpen className="mr-1.5 h-4 w-4 shrink-0 text-yellow-500" />
+      <FolderOpen className="mr-1.5 h-4 w-4 shrink-0 text-warning" />
     ) : (
-      <Folder className="mr-1.5 h-4 w-4 shrink-0 text-yellow-500" />
+      <Folder className="mr-1.5 h-4 w-4 shrink-0 text-warning" />
     );
   }
 
@@ -193,7 +193,7 @@ function TreeNode({ node, depth }: TreeNodeProps) {
         <div
           role="treeitem"
           aria-expanded={node.isDir ? expanded : undefined}
-          className={`flex cursor-pointer select-none items-center py-[3px] pr-2 text-[13px] ${
+          className={`flex cursor-pointer select-none items-center py-1 pr-2 text-ui ${
             isSelected
               ? "bg-primary/10 text-foreground"
               : "text-foreground hover:bg-accent"
@@ -333,14 +333,17 @@ function IconBtn({
   children: React.ReactNode;
 }) {
   return (
-    <button
+    <Button
       type="button"
+      variant="ghost"
+      size="icon"
       title={title}
+      aria-label={title}
       onClick={onClick}
-      className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+      className="h-7 w-7 text-muted-foreground hover:text-foreground"
     >
       {children}
-    </button>
+    </Button>
   );
 }
 
@@ -380,7 +383,7 @@ function IdeTransferPanel() {
     <div className="shrink-0 border-t border-border bg-muted/30">
       {/* Header */}
       <div className="flex items-center justify-between px-2 py-1 border-b border-border">
-        <div className="flex items-center gap-1.5 text-[11px]">
+        <div className="flex items-center gap-1.5 text-micro">
           <TypeIcon className="h-3 w-3 text-primary shrink-0" />
           <span className="font-medium">{typeLabel}</span>
           <span className="text-muted-foreground">
@@ -392,7 +395,7 @@ function IdeTransferPanel() {
             <Button
               variant="ghost"
               size="sm"
-              className="h-5 gap-1 px-1.5 text-[10px] text-destructive hover:text-destructive"
+              className="h-5 gap-1 px-1.5 text-micro text-destructive hover:text-destructive"
               onClick={cancelTransfer}
             >
               <X className="h-2.5 w-2.5" />
@@ -403,7 +406,7 @@ function IdeTransferPanel() {
             <Button
               variant="ghost"
               size="sm"
-              className="h-5 gap-1 px-1.5 text-[10px]"
+              className="h-5 gap-1 px-1.5 text-micro"
               onClick={clearTransfer}
             >
               清理
@@ -415,9 +418,9 @@ function IdeTransferPanel() {
       {/* Progress */}
       <div className="px-2 py-1.5">
         <div className="flex items-center justify-between mb-1">
-          <div className="flex items-center gap-1.5 text-[11px] min-w-0">
+          <div className="flex items-center gap-1.5 text-micro min-w-0">
             {isActive && <Loader2 className="h-3 w-3 text-primary animate-spin shrink-0" />}
-            {isCompleted && <CheckCircle className="h-3 w-3 text-green-500 shrink-0" />}
+            {isCompleted && <CheckCircle className="h-3 w-3 text-success shrink-0" />}
             {isError && <XCircle className="h-3 w-3 text-destructive shrink-0" />}
             {isCancelled && <XCircle className="h-3 w-3 text-muted-foreground shrink-0" />}
             <span className="truncate">
@@ -432,7 +435,7 @@ function IdeTransferPanel() {
                       : task.currentFile}
             </span>
           </div>
-          <div className="text-[11px] text-muted-foreground shrink-0 ml-2">
+          <div className="text-micro text-muted-foreground shrink-0 ml-2">
             {isActive && task.status === "transferring" ? task.speed : ""}
           </div>
         </div>
@@ -450,13 +453,13 @@ function IdeTransferPanel() {
               )}
             </div>
           )}
-          <span className="text-[10px] font-medium min-w-[2rem] text-right">
+          <span className="text-micro font-medium min-w-[2rem] text-right">
             {task.totalBytes > 0 ? `${task.progress}%` : ""}
           </span>
         </div>
 
         {task.totalBytes > 0 && isActive && (
-          <div className="text-[10px] text-muted-foreground mt-0.5">
+          <div className="text-micro text-muted-foreground mt-0.5">
             {formatSize(task.bytesTransferred)} / {formatSize(task.totalBytes)}
           </div>
         )}
@@ -630,7 +633,7 @@ export function IdeFileTree() {
     >
       {/* Toolbar */}
       <div className="flex h-8 shrink-0 items-center gap-0.5 border-b border-border px-1.5">
-        <span className="mr-auto px-1 text-xs font-medium text-foreground">文件</span>
+        <span className="mr-auto px-1 text-caption font-medium text-foreground">文件</span>
         <IconBtn title="上传文件" onClick={handleUploadByPicker}>
           <Upload className="h-4 w-4" />
         </IconBtn>
@@ -667,7 +670,7 @@ export function IdeFileTree() {
             if (e.key === "Enter") handleAddressSubmit();
           }}
           placeholder="输入路径..."
-          className="h-6 rounded-sm px-1.5 py-0 text-[13px]"
+          className="h-6 rounded-sm px-1.5 py-0 text-ui"
         />
         <IconBtn title="前往" onClick={handleAddressSubmit}>
           <ArrowRight className="h-3.5 w-3.5" />
@@ -690,8 +693,8 @@ export function IdeFileTree() {
             </div>
             {/* Drag overlay */}
             {isDragOver && (
-              <div className="absolute inset-0 z-10 flex items-center justify-center bg-primary/5 border-2 border-dashed border-primary/40 rounded">
-                <span className="text-sm font-medium text-primary">拖放文件到此处上传</span>
+              <div className="absolute inset-0 z-10 flex items-center justify-center bg-primary/5 border-2 border-dashed border-primary/40 rounded-xs">
+                <span className="text-body font-medium text-primary">拖放文件到此处上传</span>
               </div>
             )}
           </div>

@@ -58,9 +58,9 @@ export default {
         ui: ["0.8125rem", { lineHeight: "1.25rem" }], // 13/20 桌面控件、列表
         body: ["0.875rem", { lineHeight: "1.375rem" }], // 14/22 默认正文
         "body-lg": ["1rem", { lineHeight: "1.625rem" }], // 16/26 对话/阅读正文
-        "title-sm": ["1.25rem", { lineHeight: "1.75rem", fontWeight: "600" }], // 20/28 弹窗/区块标题
-        title: ["1.5rem", { lineHeight: "2rem", fontWeight: "600" }], // 24/32 页面标题
-        "display-sm": ["2rem", { lineHeight: "2.5rem" }], // 32/40 欢迎语/重点数字
+        "title-sm": ["1rem", { lineHeight: "1.5rem", fontWeight: "600" }], // 16/24 弹窗/区块标题
+        title: ["1.25rem", { lineHeight: "1.75rem", fontWeight: "600" }], // 20/28 页面标题
+        "display-sm": ["1.75rem", { lineHeight: "2.25rem" }], // 28/36 少量重点数字
         clock: ["3.375rem", { lineHeight: "3.75rem", fontWeight: "300" }], // 54/60 首页时间专用
       },
       // 语义阴影（design §7.3）：surface/float/overlay 与 shadow-sm/md/lg 同值，
@@ -117,6 +117,11 @@ export default {
         input: "hsl(var(--input))",
         ring: "hsl(var(--ring))",
         theme: "hsl(var(--theme))",
+        action: {
+          DEFAULT: "hsl(var(--action))",
+          hover: "hsl(var(--action-hover))",
+          foreground: "hsl(var(--action-foreground))",
+        },
         // 语义状态色（design §4.4）：alpha 修饰符可用（如 bg-info-strong/[0.07]）
         info: {
           DEFAULT: "hsl(var(--info))",

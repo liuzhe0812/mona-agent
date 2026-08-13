@@ -382,9 +382,9 @@ function ToolbarButton({
       disabled={disabled || loading}
       onClick={onClick}
       className={cn(
-        "h-7 gap-1.5 px-2.5 text-[12px]",
+        "h-7 gap-1.5 px-2.5 text-caption",
         variant === "primary"
-          ? "text-blue-600 hover:bg-blue-500/10 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
+          ? "text-info-strong hover:bg-info/10 hover:text-info-strong"
           : "text-muted-foreground hover:text-foreground",
         disabled && "opacity-50 hover:bg-transparent hover:text-muted-foreground",
       )}

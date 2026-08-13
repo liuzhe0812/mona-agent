@@ -230,7 +230,7 @@ export function ScheduleDialog({
                 className={cn(
                   "h-auto rounded-full px-2 py-0.5",
                   allDay
-                    ? "bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground"
+                    ? "bg-info-soft text-info hover:bg-info-soft hover:text-info"
                     : "text-muted-foreground",
                 )}
               >
@@ -278,7 +278,7 @@ export function ScheduleDialog({
                   className={cn(
                     "h-auto rounded-full px-2.5 py-1",
                     recurrence === opt.value
-                      ? "bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground"
+                      ? "bg-info-soft text-info hover:bg-info-soft hover:text-info"
                       : "bg-accent text-accent-foreground",
                   )}
                 >
@@ -315,7 +315,7 @@ export function ScheduleDialog({
                 className={cn(
                   "h-auto rounded-full px-2 py-1",
                   aiDeliver
-                    ? "bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground"
+                    ? "bg-info-soft text-info hover:bg-info-soft hover:text-info"
                     : "text-muted-foreground",
                 )}
               >

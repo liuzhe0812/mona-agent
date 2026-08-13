@@ -74,7 +74,6 @@ export function ShareDialog({ open, onOpenChange, tabId, url, title }: ShareDial
       type: "svg",
       width: 200,
       margin: 1,
-      color: { dark: "#000000", light: "#ffffff" },
       errorCorrectionLevel: "M",
     })
       .then((svg) => {
@@ -125,16 +124,16 @@ export function ShareDialog({ open, onOpenChange, tabId, url, title }: ShareDial
             {qrSvg ? (
               <div dangerouslySetInnerHTML={{ __html: qrSvg }} />
             ) : (
-              <span className="text-xs text-muted-foreground">生成二维码...</span>
+              <span className="text-caption text-muted-foreground">生成二维码...</span>
             )}
           </div>
-          <p className="text-xs text-muted-foreground text-center">
+          <p className="text-caption text-muted-foreground text-center">
             扫描二维码访问此页面
           </p>
 
           {/* 页面标题 */}
           {shareTitle && (
-            <p className="text-sm font-medium text-center line-clamp-2">{shareTitle}</p>
+            <p className="text-body font-medium text-center line-clamp-2">{shareTitle}</p>
           )}
 
           {/* URL 输入框 */}
@@ -142,7 +141,7 @@ export function ShareDialog({ open, onOpenChange, tabId, url, title }: ShareDial
             <Input
               value={shareUrl}
               readOnly
-              className="h-8 text-[13px] rounded-full"
+              className="h-8 text-ui rounded-full"
             />
             <Button
               variant="outline"
@@ -152,7 +151,7 @@ export function ShareDialog({ open, onOpenChange, tabId, url, title }: ShareDial
               title="复制链接"
             >
               {copied ? (
-                <Check className="h-3.5 w-3.5 text-green-600" />
+                <Check className="h-3.5 w-3.5 text-success" />
               ) : (
                 <Copy className="h-3.5 w-3.5" />
               )}

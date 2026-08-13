@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2, Send, Square, RotateCcw, Zap, MessagesSquare, Sparkles, FolderInput, X } from "lucide-react";
 import { AgentLogo } from "@/components/AgentLogo";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Textarea } from "@/components/ui/textarea";
 import { ThreadMessages } from "@/components/thread/ThreadMessages";
 import { useMonaStream, type SendOptions } from "@/hooks/useMonaStream";
 import { useSessionHistory } from "@/hooks/useSessions";
@@ -314,31 +316,35 @@ export function MailAgentPanel() {
       <div className="flex h-10 shrink-0 items-center justify-between border-b border-border/70 px-2.5">
         <div className="flex items-center gap-1.5">
           <MessagesSquare className="h-3.5 w-3.5 text-muted-foreground" />
-          <span className="text-[12px] font-medium text-foreground">邮件 AI 助手</span>
+          <span className="text-caption font-medium text-foreground">邮件 AI 助手</span>
         </div>
         <div className="flex items-center gap-0.5">
           {chatId ? (
-            <button
+            <Button
               type="button"
+              variant="ghost"
+              size="icon"
               aria-label="重置会话"
               title="重置会话"
               disabled={isStreaming || creatingChat}
               onClick={handleResetChat}
-              className="grid h-6 w-6 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+              className="h-6 w-6 text-muted-foreground hover:text-foreground"
             >
               <RotateCcw className="h-3.5 w-3.5" />
-            </button>
+            </Button>
           ) : null}
           {isStreaming ? (
-            <button
+            <Button
               type="button"
+              variant="ghost"
+              size="icon"
               aria-label="停止生成"
               title="停止生成"
               onClick={stop}
-              className="grid h-6 w-6 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+              className="h-6 w-6 text-muted-foreground hover:text-foreground"
             >
               <Square className="h-3 w-3" />
-            </button>
+            </Button>
           ) : null}
         </div>
       </div>
@@ -346,31 +352,35 @@ export function MailAgentPanel() {
       {/* 快捷操作 */}
       <div className="shrink-0 border-b border-border/65 px-2.5 py-2">
         <div className="flex gap-1.5">
-          <button
+          <Button
             type="button"
+            variant="outline"
+            size="sm"
             disabled={!selectedMessage || analysisLoading}
             onClick={() => void handleRunAnalysis()}
-            className="flex h-8 flex-1 items-center justify-center gap-1.5 rounded-lg border border-border/70 bg-background px-2.5 text-[11.5px] font-medium text-foreground/82 transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+            className="h-8 flex-1 gap-1.5 px-2.5 text-caption font-medium"
           >
             {analysisLoading ? (
               <Loader2 className="h-3 w-3 animate-spin" />
             ) : (
-              <Sparkles className="h-3 w-3 text-violet-500" />
+              <Sparkles className="h-3 w-3 text-primary" />
             )}
             内容分析
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
+            variant="outline"
+            size="sm"
             disabled={creatingChat || isStreaming}
             onClick={() => {
               setAllowCreateFolder(false);
               setShowArchiveDialog(true);
             }}
-            className="flex h-8 flex-1 items-center justify-center gap-1.5 rounded-lg border border-border/70 bg-background px-2.5 text-[11.5px] font-medium text-foreground/82 transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+            className="h-8 flex-1 gap-1.5 px-2.5 text-caption font-medium"
           >
-            <FolderInput className="h-3 w-3 text-blue-500" />
+            <FolderInput className="h-3 w-3 text-info" />
             自动归档
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -405,22 +415,22 @@ export function MailAgentPanel() {
 
       {/* 操作建议确认 */}
       {actionSuggestion && !isStreaming ? (
-        <div className="shrink-0 border-t border-border/70 bg-amber-50/50 px-3 py-2.5 dark:bg-amber-950/20">
-          <div className="mb-1.5 flex items-center gap-1.5 text-[11.5px] font-medium text-foreground">
-            <Zap className="h-3.5 w-3.5 text-amber-500" />
+        <div className="shrink-0 border-t border-border/70 bg-warning/10 px-3 py-2.5">
+          <div className="mb-1.5 flex items-center gap-1.5 text-caption font-medium text-foreground">
+            <Zap className="h-3.5 w-3.5 text-warning" />
             AI 建议操作：{ACTION_LABELS[actionSuggestion.action] ?? actionSuggestion.action}
             {actionSuggestion.destFolder ? ` → ${actionSuggestion.destFolder}` : ""}
             {" "}
             （{actionSuggestion.count} 封）
           </div>
           {actionResult ? (
-            <p className="text-[11px] text-muted-foreground">{actionResult}</p>
+            <p className="text-micro text-muted-foreground">{actionResult}</p>
           ) : (
             <div className="flex gap-1.5">
               <Button
                 type="button"
                 size="sm"
-                className="h-7 gap-1 text-[11px]"
+                className="h-7 gap-1 text-micro"
                 disabled={executingAction}
                 onClick={() => void handleConfirmAction()}
               >
@@ -431,7 +441,7 @@ export function MailAgentPanel() {
                 type="button"
                 variant="outline"
                 size="sm"
-                className="h-7 text-[11px]"
+                className="h-7 text-micro"
                 disabled={executingAction}
                 onClick={() => setActionResult("已取消")}
               >
@@ -445,10 +455,10 @@ export function MailAgentPanel() {
       {/* 输入框 */}
       <div className="shrink-0 border-t border-border/70 p-2">
         {notice ? (
-          <div className="mb-1.5 text-[10px] text-muted-foreground">{notice}</div>
+          <div className="mb-1.5 text-micro text-muted-foreground">{notice}</div>
         ) : null}
-        <div className="flex min-h-9 items-end gap-1.5 rounded-xl border border-border/75 bg-background px-2.5 py-1.5 shadow-sm">
-          <textarea
+        <div className="flex min-h-9 items-end gap-1.5 rounded-lg border border-border/75 bg-background px-2.5 py-1.5 shadow-sm">
+          <Textarea
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {
@@ -458,7 +468,7 @@ export function MailAgentPanel() {
               }
             }}
             disabled={creatingChat}
-            className="min-h-5 flex-1 resize-none bg-transparent text-[12px] leading-5 outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
+            className="min-h-5 flex-1 resize-none rounded-none border-0 bg-transparent px-0 py-0 text-caption leading-5 shadow-none focus-visible:ring-0"
             rows={1}
             placeholder="输入问题，如「找上个月张总发的关于预算的邮件」..."
           />
@@ -469,7 +479,7 @@ export function MailAgentPanel() {
             title="发送消息"
             disabled={!draft.trim() || creatingChat || isStreaming}
             onClick={sendDraft}
-            className="h-6 w-6 rounded-lg bg-foreground text-background hover:bg-foreground/90 disabled:bg-muted disabled:text-muted-foreground"
+            className="h-6 w-6 rounded-lg bg-action text-white hover:bg-action-hover hover:text-white disabled:bg-muted disabled:text-muted-foreground"
           >
             {creatingChat ? (
               <Loader2 className="h-3 w-3 animate-spin" />
@@ -482,39 +492,41 @@ export function MailAgentPanel() {
 
       {/* 自动归档确认弹窗 */}
       {showArchiveDialog ? (
-        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setShowArchiveDialog(false)}>
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/40 dark:bg-black/60 backdrop-blur-sm" onClick={() => setShowArchiveDialog(false)}>
           <div
-            className="mx-4 w-full max-w-sm rounded-xl border border-border/70 bg-background p-4 shadow-lg"
+            className="mx-4 w-full max-w-sm rounded-2xl border border-border/70 bg-background p-4 shadow-lg"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="mb-3 flex items-center justify-between">
               <div className="flex items-center gap-1.5">
-                <FolderInput className="h-4 w-4 text-blue-500" />
-                <span className="text-[13px] font-medium text-foreground">自动归档邮件</span>
+                <FolderInput className="h-4 w-4 text-info" />
+                <span className="text-ui font-medium text-foreground">自动归档邮件</span>
               </div>
-              <button
+              <Button
                 type="button"
+                variant="ghost"
+                size="icon"
                 onClick={() => setShowArchiveDialog(false)}
-                className="grid h-6 w-6 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+                className="h-6 w-6 text-muted-foreground hover:text-foreground"
+                aria-label="关闭"
               >
                 <X className="h-3.5 w-3.5" />
-              </button>
+              </Button>
             </div>
 
-            <p className="mb-3 text-[11.5px] leading-relaxed text-muted-foreground">
+            <p className="mb-3 text-caption leading-relaxed text-muted-foreground">
               AI 将读取已分析邮件的内容，智能判断每封邮件应归入的文件夹。不匹配的邮件将归入「其他」文件夹。
             </p>
 
-            <label className="mb-3 flex cursor-pointer items-start gap-2 rounded-lg border border-border/60 bg-muted/30 px-3 py-2">
-              <input
-                type="checkbox"
+            <label className="mb-3 flex cursor-pointer items-start gap-2 rounded-md border border-border/60 bg-muted/30 px-3 py-2">
+              <Checkbox
                 checked={allowCreateFolder}
-                onChange={(e) => setAllowCreateFolder(e.target.checked)}
-                className="mt-0.5 h-3.5 w-3.5 rounded border-border accent-blue-500"
+                onCheckedChange={(v) => setAllowCreateFolder(v === true)}
+                className="mt-0.5"
               />
-              <span className="text-[11.5px] leading-relaxed text-foreground">
+              <span className="text-caption leading-relaxed text-foreground">
                 允许 AI 自动创建文件夹
-                <span className="ml-1 text-[10.5px] text-muted-foreground">（不勾选则不匹配的邮件归入「其他」）</span>
+                <span className="ml-1 text-micro text-muted-foreground">（不勾选则不匹配的邮件归入「其他」）</span>
               </span>
             </label>
 
@@ -522,7 +534,7 @@ export function MailAgentPanel() {
               <Button
                 type="button"
                 size="sm"
-                className="h-8 flex-1 gap-1 text-[12px]"
+                className="h-8 flex-1 gap-1 text-caption"
                 disabled={creatingChat || isStreaming}
                 onClick={() => {
                   setShowArchiveDialog(false);
@@ -538,7 +550,7 @@ export function MailAgentPanel() {
                 type="button"
                 variant="outline"
                 size="sm"
-                className="h-8 px-3 text-[12px]"
+                className="h-8 px-3 text-caption"
                 onClick={() => setShowArchiveDialog(false)}
               >
                 取消
@@ -602,7 +614,7 @@ function EmailChat({
 
 function AssistantHint({ text, loading = false }: { text: string; loading?: boolean }) {
   return (
-    <p className="text-center text-xs text-muted-foreground py-8">
+    <p className="text-center text-caption text-muted-foreground py-8">
       <span className="inline-flex items-center gap-2">
         {loading ? (
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -623,16 +635,18 @@ function InlineNotice({
   onClose?: () => void;
 }) {
   return (
-    <div className="flex items-start gap-2 rounded-lg border border-border/70 bg-background px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+    <div className="flex items-start gap-2 rounded-md border border-border/70 bg-background px-3 py-2 text-caption leading-relaxed text-muted-foreground">
       <span className="min-w-0 flex-1">{children}</span>
       {onClose ? (
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="xs"
           onClick={onClose}
-          className="shrink-0 text-foreground/65 hover:text-foreground"
+          className="shrink-0 text-foreground/65 hover:bg-transparent hover:text-foreground"
         >
           关闭
-        </button>
+        </Button>
       ) : null}
     </div>
   );

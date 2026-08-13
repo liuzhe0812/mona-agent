@@ -478,7 +478,7 @@ export function FilePane({
       onDrop={handleDrop}
     >
       <div className="flex h-8 shrink-0 items-center gap-1 border-b px-2 bg-muted/20">
-        <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider shrink-0">
+        <span className="text-micro font-medium text-muted-foreground uppercase tracking-wider shrink-0">
           {label}
         </span>
         <div className="flex-1" />
@@ -488,7 +488,7 @@ export function FilePane({
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="搜索..."
-            className="h-6 w-20 pl-6 pr-1.5 py-0 text-xs"
+            className="h-6 w-20 pl-6 pr-1.5 py-0 text-caption"
           />
         </div>
         <Button
@@ -508,7 +508,7 @@ export function FilePane({
           <Button
             variant="ghost"
             size="sm"
-            className="h-6 gap-1 px-1.5 text-xs"
+            className="h-6 gap-1 px-1.5 text-caption"
             onClick={onUploadByPicker}
             title="上传文件"
           >
@@ -518,7 +518,7 @@ export function FilePane({
         <Button
           variant="ghost"
           size="sm"
-          className="h-6 gap-1 px-1.5 text-xs"
+          className="h-6 gap-1 px-1.5 text-caption"
           onClick={onCreateFolder}
           title="新建文件夹"
         >
@@ -578,13 +578,13 @@ export function FilePane({
                 onKeyDown={(e) => {
                   if (e.key === "Escape") setEditing(false);
                 }}
-                className="h-5 px-1.5 py-0 text-xs"
+                className="h-5 px-1.5 py-0 text-caption"
                 autoFocus
               />
             </form>
           ) : (
             <div
-              className="flex items-center gap-0.5 overflow-x-auto text-xs text-muted-foreground scrollbar-none"
+              className="flex items-center gap-0.5 overflow-x-auto text-caption text-muted-foreground scrollbar-none"
               onDoubleClick={handleStartEdit}
             >
               {side === "local" ? (
@@ -629,13 +629,13 @@ export function FilePane({
 
       <div className="flex-1 min-h-0 overflow-auto">
         {loading ? (
-          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+          <div className="flex h-full items-center justify-center text-body text-muted-foreground">
             加载中…
           </div>
         ) : displayFiles.length === 0 ? (
           <ContextMenu>
             <ContextMenuTrigger asChild>
-              <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+              <div className="flex h-full items-center justify-center text-body text-muted-foreground">
                 空目录
               </div>
             </ContextMenuTrigger>
@@ -686,7 +686,7 @@ export function FilePane({
                 }}
               >
               <table
-                className="w-full text-xs"
+                className="w-full text-caption"
                 style={{ tableLayout: "fixed", minWidth: side === "remote" ? 544 : 448 }}
                 onClick={(e) => {
                   if (
@@ -857,7 +857,7 @@ export function FilePane({
         )}
       </div>
 
-      <div className="h-6 shrink-0 border-t px-2 flex items-center text-[10px] text-muted-foreground bg-muted/10">
+      <div className="h-6 shrink-0 border-t px-2 flex items-center text-micro text-muted-foreground bg-muted/10">
         <span>{displayFiles.length} 项</span>
         {selectedPaths.size > 0 && (
           <>
@@ -868,7 +868,7 @@ export function FilePane({
       </div>
       {isDragOver && (
         <div className="absolute inset-0 z-20 flex items-center justify-center bg-primary/10 border-2 border-dashed border-primary/40 rounded-sm pointer-events-none">
-          <span className="text-sm font-medium text-primary">
+          <span className="text-body font-medium text-primary">
             {side === "remote" ? "拖放以上传" : "拖放以下载"}
           </span>
         </div>

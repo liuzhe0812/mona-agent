@@ -16,6 +16,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { StatusNotice } from "@/components/ui/status-notice";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -484,7 +485,7 @@ export function MailComposer({
       <Button
         type="button"
         size="sm"
-        className="h-7 gap-1.5 px-3 text-[12px]"
+        className="h-7 gap-1.5 px-3 text-caption"
         disabled={sending || savingDraft || !account}
         onClick={handleSend}
       >
@@ -495,7 +496,7 @@ export function MailComposer({
         type="button"
         variant="ghost"
         size="sm"
-        className="h-7 gap-1.5 px-2 text-[12px] text-muted-foreground hover:text-foreground"
+        className="h-7 gap-1.5 px-2 text-caption text-muted-foreground hover:text-foreground"
         disabled={savingDraft || sending || !account}
         onClick={handleSaveDraft}
       >
@@ -506,7 +507,7 @@ export function MailComposer({
         type="button"
         variant="ghost"
         size="sm"
-        className="h-7 gap-1.5 px-2 text-[12px] text-muted-foreground hover:text-foreground"
+        className="h-7 gap-1.5 px-2 text-caption text-muted-foreground hover:text-foreground"
         disabled={sending || savingDraft || !account}
         onClick={() => void handleScheduleSend()}
         title="定时发送"
@@ -519,7 +520,7 @@ export function MailComposer({
         type="button"
         variant="ghost"
         size="sm"
-        className="h-7 gap-1 px-2 text-[12px] text-muted-foreground hover:text-foreground"
+        className="h-7 gap-1 px-2 text-caption text-muted-foreground hover:text-foreground"
         disabled={!account}
         onClick={handleAttach}
       >
@@ -530,7 +531,7 @@ export function MailComposer({
         type="button"
         variant="ghost"
         size="sm"
-        className="h-7 gap-1 px-2 text-[12px] text-muted-foreground hover:text-foreground"
+        className="h-7 gap-1 px-2 text-caption text-muted-foreground hover:text-foreground"
         disabled={!account}
         onClick={() => editorRef.current?.insertImage()}
       >
@@ -541,7 +542,7 @@ export function MailComposer({
         type="button"
         variant="ghost"
         size="sm"
-        className="h-7 gap-1 px-2 text-[12px] text-muted-foreground hover:text-foreground"
+        className="h-7 gap-1 px-2 text-caption text-muted-foreground hover:text-foreground"
         disabled={!account}
         onClick={handleScreenshot}
       >
@@ -566,7 +567,7 @@ export function MailComposer({
               type="button"
               variant="ghost"
               size="sm"
-              className="h-7 gap-1 px-2 text-[12px] text-muted-foreground hover:text-foreground"
+              className="h-7 gap-1 px-2 text-caption text-muted-foreground hover:text-foreground"
               disabled={!account}
             >
               <FileText className="h-3.5 w-3.5" />
@@ -588,7 +589,7 @@ export function MailComposer({
               >
                 {sig.name}
                 {sig.isDefault && (
-                  <span className="ml-1 text-[10px] text-blue-600">默认</span>
+                  <span className="ml-1 text-micro text-info-strong">默认</span>
                 )}
               </DropdownMenuItem>
             ))}
@@ -596,7 +597,7 @@ export function MailComposer({
         </DropdownMenu>
       )}
       <div className="flex-1" />
-      <div className="flex items-center gap-1 text-[12px] text-muted-foreground">
+      <div className="flex items-center gap-1 text-caption text-muted-foreground">
         <span className="truncate max-w-[180px]">
           {account ? `${account.displayName} <${account.fromAddress}>` : "未选择账号"}
         </span>
@@ -625,20 +626,24 @@ export function MailComposer({
           onChange={setToAddresses}
           placeholder="recipient@example.com"
         />
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="sm"
           onClick={() => setShowCc((v) => !v)}
-          className="ml-2 text-[12px] text-muted-foreground hover:text-foreground"
+          className="ml-2 h-6 px-1.5 text-caption text-muted-foreground hover:bg-transparent hover:text-foreground"
         >
           抄送
-        </button>
-        <button
+        </Button>
+        <Button
           type="button"
+          variant="ghost"
+          size="sm"
           onClick={() => setShowBcc((v) => !v)}
-          className="ml-2 text-[12px] text-muted-foreground hover:text-foreground"
+          className="ml-2 h-6 px-1.5 text-caption text-muted-foreground hover:bg-transparent hover:text-foreground"
         >
           密送
-        </button>
+        </Button>
       </FieldRow>
       {showCc && (
         <FieldRow label="抄送">
@@ -663,7 +668,7 @@ export function MailComposer({
           value={subject}
           onChange={(e) => setSubject(e.target.value)}
           placeholder="邮件主题"
-          className="h-7 flex-1 rounded-none border-0 bg-transparent px-0 py-0 text-[13px] shadow-none focus-visible:ring-0"
+          className="h-7 flex-1 rounded-none border-0 bg-transparent px-0 py-0 text-ui shadow-none focus-visible:ring-0"
         />
       </FieldRow>
       {attachments.length > 0 && (
@@ -671,27 +676,29 @@ export function MailComposer({
           {attachments.map((att, idx) => (
             <div
               key={`${att.filename}-${idx}`}
-              className="flex items-center gap-1.5 rounded border border-border/60 bg-muted/30 px-2 py-0.5 text-[11px] text-muted-foreground"
+              className="flex items-center gap-1.5 rounded-xs border border-border/60 bg-muted/30 px-2 py-0.5 text-micro text-muted-foreground"
             >
               <FileIcon className="h-3 w-3 shrink-0" />
               <span className="max-w-[160px] truncate">{att.filename}</span>
               <span className="shrink-0">{formatFileSize(Math.ceil(att.data.length * 0.75))}</span>
-              <button
+              <Button
                 type="button"
+                variant="ghost"
+                size="sm"
                 onClick={() => setAttachments((prev) => prev.filter((_, i) => i !== idx))}
-                className="ml-0.5 text-muted-foreground hover:text-destructive"
+                className="ml-0.5 h-4 w-4 p-0 text-muted-foreground hover:bg-transparent hover:text-destructive"
                 aria-label="移除附件"
               >
                 <X className="h-3 w-3" />
-              </button>
+              </Button>
             </div>
           ))}
         </div>
       )}
       {error && (
-        <div className="mt-1 rounded bg-destructive/10 px-2 py-1 text-[11px] text-destructive">
+        <StatusNotice tone="danger" className="mt-1 px-2 py-1">
           {error}
-        </div>
+        </StatusNotice>
       )}
     </div>
   );
@@ -747,7 +754,7 @@ function FieldRow({
 }) {
   return (
     <div className="flex min-h-[30px] items-center gap-2">
-      <Label className="w-12 shrink-0 text-[12px] text-muted-foreground">
+      <Label className="w-12 shrink-0 text-caption text-muted-foreground">
         {label}
       </Label>
       {children}

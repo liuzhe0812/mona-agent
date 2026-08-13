@@ -16,6 +16,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Progress } from "@/components/ui/progress";
 import {
   DropdownMenu,
@@ -65,11 +66,11 @@ function getStateLabel(state: string): string {
 function getStateIcon(state: string) {
   switch (state) {
     case "in_progress":
-      return <Loader2 className="h-3 w-3 animate-spin text-blue-500" />;
+      return <Loader2 className="h-3 w-3 animate-spin text-info" />;
     case "interrupted":
-      return <Pause className="h-3 w-3 text-amber-500" />;
+      return <Pause className="h-3 w-3 text-warning" />;
     case "completed":
-      return <CheckCircle2 className="h-3 w-3 text-green-500" />;
+      return <CheckCircle2 className="h-3 w-3 text-success" />;
     case "cancelled":
       return <AlertCircle className="h-3 w-3 text-muted-foreground" />;
     default:
@@ -116,7 +117,7 @@ function DownloadCardItem({
 
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
-          <span className="truncate text-[12px] font-medium" title={filename}>
+          <span className="truncate text-caption font-medium" title={filename}>
             {filename}
           </span>
           {getStateIcon(state)}
@@ -127,7 +128,7 @@ function DownloadCardItem({
           ) : (
             <div className="h-1 flex-1" />
           )}
-          <span className="shrink-0 text-[10px] text-muted-foreground tabular-nums">
+          <span className="shrink-0 text-micro text-muted-foreground tabular-nums">
             {isFinished
               ? getStateLabel(state)
               : `${formatBytes(receivedBytes)} / ${totalBytes > 0 ? formatBytes(totalBytes) : "?"} · ${percent}%${eta ? ` · 剩余 ${eta}` : ""}`}
@@ -253,7 +254,7 @@ export function DownloadsWindow() {
     >
       {/* 标题栏 */}
       <div className="flex items-center justify-between border-b border-border bg-muted/30 px-3 py-2">
-        <span className="text-[13px] font-medium">
+        <span className="text-ui font-medium">
           {fullMode ? "下载记录" : "近期的下载记录"}
         </span>
         <Button
@@ -269,10 +270,11 @@ export function DownloadsWindow() {
       {/* 下载列表 */}
       <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin">
         {visibleDownloads.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
-            <Download className="mb-2 h-8 w-8 opacity-50" />
-            <span className="text-[12px]">暂无下载记录</span>
-          </div>
+          <EmptyState
+            icon={<Download className="h-5 w-5" />}
+            title="暂无下载记录"
+            className="py-8"
+          />
         ) : (
           visibleDownloads.map((download) => (
             <DownloadCardItem
@@ -291,14 +293,15 @@ export function DownloadsWindow() {
 
       {/* 底部：完整的下载记录 */}
       {!fullMode && downloads.length > 0 && (
-        <button
+        <Button
           type="button"
-          className="flex items-center justify-between border-t border-border px-3 py-2 text-[12px] text-foreground transition-colors hover:bg-muted/40"
+          variant="ghost"
+          className="h-auto w-full justify-between rounded-none border-t border-border px-3 py-2 text-caption font-normal text-foreground hover:bg-muted/40"
           onClick={() => setFullMode(true)}
         >
           <span>完整的下载记录</span>
           <ExternalLink className="h-3.5 w-3.5 text-muted-foreground" />
-        </button>
+        </Button>
       )}
     </div>
   );

@@ -169,14 +169,14 @@ export function OverviewPanel({ sessionId }: Props) {
     return (
       <div className="flex h-full items-center justify-center text-muted-foreground">
         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-        <span className="text-xs">加载中...</span>
+        <span className="text-caption">加载中...</span>
       </div>
     );
   }
 
   if (error && !systemData) {
     return (
-      <div className="flex h-full items-center justify-center px-4 text-center text-xs text-destructive">
+      <div className="flex h-full items-center justify-center px-4 text-center text-caption text-destructive">
         {error}
       </div>
     );
@@ -198,19 +198,20 @@ export function OverviewPanel({ sessionId }: Props) {
 
   return (
     <ScrollArea className="h-full">
+      {/* 卡片图标色与 Sparkline 曲线色为数据可视化系列色（design §4.5 例外），同一指标保持同色 */}
       <div className="space-y-2 p-2">
         {/* CPU */}
         <div className="rounded-lg border bg-card p-2">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-1.5">
               <Cpu className="h-3.5 w-3.5 text-blue-500" />
-              <span className="text-xs">CPU</span>
+              <span className="text-caption">CPU</span>
             </div>
             <div className="flex items-center gap-1.5">
-              <span className="text-sm font-semibold">
+              <span className="text-body font-semibold">
                 {systemData.cpu.load.toFixed(1)}%
               </span>
-              <span className="text-[10px] text-muted-foreground">
+              <span className="text-micro text-muted-foreground">
                 {systemData.cpu.cores}核
               </span>
             </div>
@@ -218,7 +219,7 @@ export function OverviewPanel({ sessionId }: Props) {
           <div className="mt-1 h-10">
             <Sparkline data={history.cpu} color="#3b82f6" maxValue={100} />
           </div>
-          <div className="mt-1 truncate text-[10px] text-muted-foreground">
+          <div className="mt-1 truncate text-micro text-muted-foreground">
             {systemData.cpu.brand}
           </div>
         </div>
@@ -228,13 +229,13 @@ export function OverviewPanel({ sessionId }: Props) {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-1.5">
               <Activity className="h-3.5 w-3.5 text-green-500" />
-              <span className="text-xs">内存</span>
+              <span className="text-caption">内存</span>
             </div>
             <div className="flex items-center gap-1.5">
-              <span className="text-sm font-semibold">
+              <span className="text-body font-semibold">
                 {systemData.memory.usedPercent.toFixed(1)}%
               </span>
-              <span className="text-[10px] text-muted-foreground">
+              <span className="text-micro text-muted-foreground">
                 {formatBytes(systemData.memory.used)}
               </span>
             </div>
@@ -242,7 +243,7 @@ export function OverviewPanel({ sessionId }: Props) {
           <div className="mt-1 h-10">
             <Sparkline data={history.memory} color="#22c55e" maxValue={100} />
           </div>
-          <div className="mt-1 text-[10px] text-muted-foreground">
+          <div className="mt-1 text-micro text-muted-foreground">
             共 {formatBytes(systemData.memory.total)}
           </div>
         </div>
@@ -258,7 +259,7 @@ export function OverviewPanel({ sessionId }: Props) {
                     <Button
                       variant="ghost"
                       size="sm"
-                      className="h-5 px-1 text-xs font-normal"
+                      className="h-5 px-1 text-caption font-normal"
                     >
                       {selectedDiskData?.fs}
                       <ChevronDown className="ml-1 h-3 w-3" />
@@ -276,10 +277,10 @@ export function OverviewPanel({ sessionId }: Props) {
                   </DropdownMenuContent>
                 </DropdownMenu>
               ) : (
-                <span className="text-xs">{selectedDiskData?.fs}</span>
+                <span className="text-caption">{selectedDiskData?.fs}</span>
               )}
             </div>
-            <span className="text-sm font-semibold">
+            <span className="text-body font-semibold">
               {(selectedDiskData?.busyPercent || 0).toFixed(1)}%
             </span>
           </div>
@@ -293,7 +294,7 @@ export function OverviewPanel({ sessionId }: Props) {
               maxValue={100}
             />
           </div>
-          <div className="mt-1 flex gap-2 text-[10px] text-muted-foreground">
+          <div className="mt-1 flex gap-2 text-micro text-muted-foreground">
             <span>读 {formatBytes(selectedDiskData?.rIoSec || 0)}/s</span>
             <span>写 {formatBytes(selectedDiskData?.wIoSec || 0)}/s</span>
           </div>
@@ -310,7 +311,7 @@ export function OverviewPanel({ sessionId }: Props) {
                     <Button
                       variant="ghost"
                       size="sm"
-                      className="h-5 px-1 text-xs font-normal"
+                      className="h-5 px-1 text-caption font-normal"
                     >
                       {selectedNetworkData?.iface}
                       <ChevronDown className="ml-1 h-3 w-3" />
@@ -328,10 +329,10 @@ export function OverviewPanel({ sessionId }: Props) {
                   </DropdownMenuContent>
                 </DropdownMenu>
               ) : (
-                <span className="text-xs">{selectedNetworkData?.iface}</span>
+                <span className="text-caption">{selectedNetworkData?.iface}</span>
               )}
             </div>
-            <span className="text-sm font-semibold">
+            <span className="text-body font-semibold">
               {formatBytes(
                 (selectedNetworkData?.rxSec || 0) +
                   (selectedNetworkData?.txSec || 0),
@@ -349,7 +350,7 @@ export function OverviewPanel({ sessionId }: Props) {
               maxValue={networkMax}
             />
           </div>
-          <div className="mt-1 flex gap-2 text-[10px] text-muted-foreground">
+          <div className="mt-1 flex gap-2 text-micro text-muted-foreground">
             <span>↓ {formatBytes(selectedNetworkData?.rxSec || 0)}/s</span>
             <span>↑ {formatBytes(selectedNetworkData?.txSec || 0)}/s</span>
           </div>
@@ -360,9 +361,9 @@ export function OverviewPanel({ sessionId }: Props) {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-1.5">
               <Zap className="h-3.5 w-3.5 text-yellow-500" />
-              <span className="text-xs">负载</span>
+              <span className="text-caption">负载</span>
             </div>
-            <span className="text-sm font-semibold">
+            <span className="text-body font-semibold">
               {systemData.cpu.load.toFixed(2)}
             </span>
           </div>
@@ -377,7 +378,7 @@ export function OverviewPanel({ sessionId }: Props) {
               )}
             />
           </div>
-          <div className="mt-1 text-[10px] text-muted-foreground">
+          <div className="mt-1 text-micro text-muted-foreground">
             1m:{systemData.cpu.load1.toFixed(2)} 5m:
             {systemData.cpu.load5.toFixed(2)} 15m:
             {systemData.cpu.load15.toFixed(2)}
@@ -386,7 +387,7 @@ export function OverviewPanel({ sessionId }: Props) {
 
         {/* Processes */}
         <div className="rounded-lg border bg-card p-2">
-          <div className="flex items-center justify-between text-xs">
+          <div className="flex items-center justify-between text-caption">
             <span>进程</span>
             <span className="font-semibold">
               {systemData.processes.all} / {systemData.processes.running} 运行中

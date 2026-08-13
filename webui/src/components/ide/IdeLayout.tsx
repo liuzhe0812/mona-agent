@@ -102,7 +102,7 @@ export function IdeLayout({ sessionId }: IdeLayoutProps) {
       <div className="flex h-full items-center justify-center bg-background">
         <div className="flex items-center gap-2 text-muted-foreground">
           <Loader2 className="h-4 w-4 animate-spin" />
-          <span className="text-sm">连接中…</span>
+          <span className="text-body">连接中…</span>
         </div>
       </div>
     );
@@ -111,7 +111,7 @@ export function IdeLayout({ sessionId }: IdeLayoutProps) {
   if (sessionStatus === "error") {
     return (
       <div className="flex h-full items-center justify-center bg-background">
-        <span className="text-sm text-red-500">连接失败</span>
+        <span className="text-body text-destructive">连接失败</span>
       </div>
     );
   }

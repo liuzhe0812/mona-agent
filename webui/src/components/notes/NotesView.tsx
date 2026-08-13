@@ -2319,7 +2319,7 @@ export function NotesView({
                           title={label}
                           onClick={() => setModuleView(key)}
                           className={cn(
-                            "flex h-auto items-center rounded-md py-1.5 text-micro font-medium transition-all duration-300",
+                            "flex h-6 items-center rounded-md py-0.5 text-caption font-normal leading-4 transition-colors duration-fast",
                             active
                               ? "bg-muted px-2.5 text-foreground hover:bg-muted"
                               : "px-1.5 text-muted-foreground opacity-70 hover:bg-muted hover:text-foreground hover:opacity-100",
@@ -2329,7 +2329,7 @@ export function NotesView({
                           <span
                             className={cn(
                               "overflow-hidden whitespace-nowrap transition-all duration-300",
-                              active ? "ml-1.5 max-w-[60px] opacity-100" : "ml-0 max-w-0 opacity-0",
+                              active ? "ml-1 max-w-[44px] opacity-100" : "ml-0 max-w-0 opacity-0",
                             )}
                           >
                             {label}

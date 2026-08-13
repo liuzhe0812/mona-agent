@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Loader2, RotateCcw, Send, Sparkles, Square, X } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ThreadMessages } from "@/components/thread/ThreadMessages";
 import { useMonaStream, type SendOptions } from "@/hooks/useMonaStream";
@@ -151,9 +152,9 @@ export function AiAssistantPanel({
       {/* Header */}
       <div className="flex h-10 shrink-0 items-center justify-between border-b border-border/65 px-3">
         <div className="flex min-w-0 items-center gap-2">
-          <h2 className="truncate text-[12px] font-semibold text-foreground">Mona</h2>
+          <h2 className="truncate text-caption font-semibold text-foreground">Mona</h2>
           {isAiActive && (
-            <span className="flex items-center gap-1 text-[10px] text-primary/80">
+            <span className="flex items-center gap-1 text-micro text-primary/80">
               <span className="inline-block h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />
               操作中
             </span>
@@ -161,58 +162,66 @@ export function AiAssistantPanel({
         </div>
         <div className="flex items-center gap-1">
           {notice ? (
-            <span className="max-w-28 truncate text-[10px] text-muted-foreground">{notice}</span>
+            <span className="max-w-28 truncate text-micro text-muted-foreground">{notice}</span>
           ) : null}
           {chatId ? (
-            <button
+            <Button
               type="button"
+              variant="ghost"
+              size="icon"
               aria-label="重置会话"
               title="重置会话"
               disabled={isStreaming || creatingChat}
               onClick={handleResetChat}
-              className="grid h-6 w-6 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+              className="h-6 w-6 text-muted-foreground hover:text-foreground"
             >
               <RotateCcw className="h-3.5 w-3.5" />
-            </button>
+            </Button>
           ) : null}
           {isStreaming ? (
-            <button
+            <Button
               type="button"
+              variant="ghost"
+              size="icon"
               aria-label="停止生成"
               title="停止生成"
               onClick={stop}
-              className="grid h-6 w-6 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+              className="h-6 w-6 text-muted-foreground hover:text-foreground"
             >
               <Square className="h-3 w-3" />
-            </button>
+            </Button>
           ) : null}
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="icon"
             onClick={handleClose}
-            className="grid h-6 w-6 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+            className="h-6 w-6 text-muted-foreground hover:text-foreground"
           >
             <X className="h-3.5 w-3.5" />
-          </button>
+          </Button>
         </div>
       </div>
 
       {/* Messages */}
       <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-2.5 py-2 scrollbar-hover">
         {streamError ? (
-          <div className="flex items-start gap-2 rounded-lg border border-border/70 bg-background px-3 py-2 text-xs leading-relaxed text-muted-foreground mb-2">
+          <div className="flex items-start gap-2 rounded-lg border border-border/70 bg-background px-3 py-2 text-caption leading-relaxed text-muted-foreground mb-2">
             <span className="min-w-0 flex-1">消息过大或连接异常，请缩短内容后重试。</span>
-            <button
+            <Button
               type="button"
+              variant="ghost"
+              size="xs"
               onClick={dismissStreamError}
               className="shrink-0 text-foreground/65 hover:text-foreground"
             >
               关闭
-            </button>
+            </Button>
           </div>
         ) : null}
 
         {!hasMessages && !loading ? (
-          <div className="flex items-center justify-center h-full text-muted-foreground text-[12px]">
+          <div className="flex items-center justify-center h-full text-muted-foreground text-caption">
             <span className="inline-flex items-center gap-2">
               <Sparkles className="h-3.5 w-3.5" />
               {isAiActive ? "AI 正在操作浏览器..." : "输入消息与 AI 对话"}
@@ -221,7 +230,7 @@ export function AiAssistantPanel({
         ) : null}
 
         {loading ? (
-          <div className="flex items-center justify-center py-8 text-muted-foreground text-[12px]">
+          <div className="flex items-center justify-center py-8 text-muted-foreground text-caption">
             <span className="inline-flex items-center gap-2">
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
               正在读取会话历史...
@@ -232,7 +241,7 @@ export function AiAssistantPanel({
         <ThreadMessages messages={displayMessages} isStreaming={isStreaming} />
 
         {creatingChat ? (
-          <div className="flex items-center justify-center py-4 text-muted-foreground text-[12px]">
+          <div className="flex items-center justify-center py-4 text-muted-foreground text-caption">
             <span className="inline-flex items-center gap-2">
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
               正在创建会话...
@@ -240,7 +249,7 @@ export function AiAssistantPanel({
           </div>
         ) : null}
         {isStreaming ? (
-          <div className="flex items-center justify-center py-4 text-muted-foreground text-[12px]">
+          <div className="flex items-center justify-center py-4 text-muted-foreground text-caption">
             <span className="inline-flex items-center gap-2">
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
               AI 正在处理...
@@ -263,20 +272,21 @@ export function AiAssistantPanel({
             }}
             disabled={creatingChat}
             placeholder="输入消息..."
-            className="flex-1 h-5 border-0 bg-transparent text-[12px] leading-5 px-0 focus-visible:ring-0 focus-visible:ring-offset-0"
+            className="flex-1 h-5 border-0 bg-transparent text-caption leading-5 px-0 focus-visible:ring-0 focus-visible:ring-offset-0"
           />
-          <button
+          <Button
             type="button"
+            size="icon"
             onClick={sendDraft}
             disabled={!draft.trim() || creatingChat || isStreaming}
-            className="grid h-6 w-6 shrink-0 place-items-center rounded-lg bg-foreground text-background hover:bg-foreground/90 transition-colors disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed"
+            className="h-6 w-6 shrink-0 rounded-lg bg-action text-white hover:bg-action-hover hover:text-white active:bg-action-hover/90 disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100"
           >
             {creatingChat ? (
               <Loader2 className="h-3 w-3 animate-spin" />
             ) : (
               <Send className="h-3 w-3" />
             )}
-          </button>
+          </Button>
         </div>
       </div>
     </aside>

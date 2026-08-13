@@ -14,6 +14,7 @@ import { FileManager } from "./FileManager/FileManager";
 import { BatchModeView } from "./BatchMode/BatchModeView";
 import { DesktopMode } from "./Desktop/DesktopMode";
 import { IdeLayout } from "../ide/IdeLayout";
+import { EmptyState } from "@/components/ui/empty-state";
 import { useTerminalStore } from "./store/terminalStore";
 import { useLicense } from "@/hooks/useLicense";
 import { shellSpawn, vncReconnect } from "./ipc";
@@ -224,10 +225,9 @@ export function TerminalView({ onOpenSubscribe }: { onOpenSubscribe?: () => void
 
 function TerminalEmptyState() {
   return (
-    <div className="flex h-full items-center justify-center text-muted-foreground">
-      <div className="text-center">
-        <p className="text-sm">点击「新建」创建一个终端会话</p>
-      </div>
-    </div>
+    <EmptyState
+      className="h-full"
+      title="点击「新建」创建一个终端会话"
+    />
   );
 }

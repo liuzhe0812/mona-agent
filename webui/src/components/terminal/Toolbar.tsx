@@ -112,7 +112,7 @@ export function Toolbar({ onOpenSubscribe }: { onOpenSubscribe?: () => void }) {
       <Button
         variant="ghost"
         size="sm"
-        className="h-7 gap-1.5 text-xs"
+        className="gap-1.5"
         onClick={handleNew}
       >
         <Plus className="h-3.5 w-3.5" />
@@ -121,20 +121,20 @@ export function Toolbar({ onOpenSubscribe }: { onOpenSubscribe?: () => void }) {
       <Button
         variant="ghost"
         size="sm"
-        className="h-7 gap-1.5 text-xs"
+        className="gap-1.5"
         onClick={() => setSessionManagerOpen(true)}
       >
         <FolderOpen className="h-3.5 w-3.5" />
         打开
       </Button>
-      <Button variant="ghost" size="sm" className="h-7 gap-1.5 text-xs" onClick={handleBatch}>
+      <Button variant="ghost" size="sm" className="gap-1.5" onClick={handleBatch}>
         <Server className="h-3.5 w-3.5" />
         批量
       </Button>
       <Button
         variant="ghost"
         size="sm"
-        className="h-7 gap-1.5 text-xs"
+        className="gap-1.5"
         onClick={handleOpenSftp}
       >
         <HardDrive className="h-3.5 w-3.5" />
@@ -143,7 +143,7 @@ export function Toolbar({ onOpenSubscribe }: { onOpenSubscribe?: () => void }) {
       <Button
         variant="ghost"
         size="sm"
-        className="h-7 gap-1.5 text-xs"
+        className="gap-1.5"
         onClick={handleOpenDesktop}
       >
         <Monitor className="h-3.5 w-3.5" />
@@ -152,7 +152,7 @@ export function Toolbar({ onOpenSubscribe }: { onOpenSubscribe?: () => void }) {
       <Button
         variant="ghost"
         size="sm"
-        className="h-7 gap-1.5 text-xs"
+        className="gap-1.5"
         onClick={() => setSettingsDialogOpen(true)}
       >
         <Settings className="h-3.5 w-3.5" />
@@ -163,24 +163,26 @@ export function Toolbar({ onOpenSubscribe }: { onOpenSubscribe?: () => void }) {
         <>
           <Button
             variant="ghost"
-            size="sm"
+            size="icon"
             className={cn(
-              "h-7 w-7 p-0",
+              "h-7 w-7",
               fileTreeVisible && "bg-accent text-accent-foreground",
             )}
             onClick={toggleFileTree}
+            aria-label={fileTreeVisible ? "隐藏文件树" : "显示文件树"}
             title={fileTreeVisible ? "隐藏文件树" : "显示文件树"}
           >
             <FolderTree className="h-4 w-4" />
           </Button>
           <Button
             variant="ghost"
-            size="sm"
+            size="icon"
             className={cn(
-              "h-7 w-7 p-0",
+              "h-7 w-7",
               systemMonitorVisible && "bg-accent text-accent-foreground",
             )}
             onClick={toggleSystemMonitor}
+            aria-label={systemMonitorVisible ? "隐藏系统监控" : "显示系统监控"}
             title={systemMonitorVisible ? "隐藏系统监控" : "显示系统监控"}
           >
             <Activity className="h-4 w-4" />
@@ -190,9 +192,10 @@ export function Toolbar({ onOpenSubscribe }: { onOpenSubscribe?: () => void }) {
       {licenseActive ? (
         <Button
           variant="ghost"
-          size="sm"
-          className="h-7 w-7 p-0"
+          size="icon"
+          className="h-7 w-7"
           onClick={toggleAIPanel}
+          aria-label={aiPanelVisible ? "隐藏 AI 面板" : "显示 AI 面板"}
           title={aiPanelVisible ? "隐藏 AI 面板" : "显示 AI 面板"}
         >
           <AgentLogo
@@ -203,9 +206,10 @@ export function Toolbar({ onOpenSubscribe }: { onOpenSubscribe?: () => void }) {
       ) : (
         <Button
           variant="ghost"
-          size="sm"
-          className="h-7 w-7 p-0 text-muted-foreground"
+          size="icon"
+          className="h-7 w-7 text-muted-foreground"
           onClick={onOpenSubscribe}
+          aria-label="升级 Pro 解锁终端 AI"
           title="升级 Pro 解锁终端 AI"
         >
           <LockKeyhole className="h-4 w-4" />

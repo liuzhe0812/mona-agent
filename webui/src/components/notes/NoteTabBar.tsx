@@ -84,14 +84,14 @@ export function NoteTabBar({
                 variant="ghost"
                 onClick={() => onSelect(note.id)}
                 className={cn(
-                  "group relative h-full w-[140px] shrink-0 justify-start gap-1.5 rounded-none border-r border-border/40 px-3 text-caption font-normal",
+                  "group relative h-7 w-[124px] shrink-0 justify-start gap-1 self-end rounded-none border-r border-border/40 px-2 text-caption font-normal leading-4",
                   isActive
                     ? "bg-background text-foreground hover:bg-background hover:text-foreground"
                     : "bg-transparent text-muted-foreground hover:bg-accent hover:text-foreground",
                 )}
               >
                 {isActive ? (
-                  <span className="absolute inset-x-0 top-0 h-[2px] bg-primary" />
+                  <span className="absolute inset-x-0 top-0 h-px bg-info" />
                 ) : null}
                 <span className="min-w-0 flex-1 truncate text-left">{note.title || "未命名笔记"}</span>
                 <span

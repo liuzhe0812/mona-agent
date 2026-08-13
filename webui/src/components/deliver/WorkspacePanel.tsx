@@ -31,6 +31,8 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
 import { useFilePreviewStore, type PreviewScope } from "./filePreviewStore";
 import { isTauri, openPathWithSystemApp, revealItemInDir } from "@/lib/tauri";
 import {
@@ -367,77 +369,86 @@ export function WorkspacePanel({
     <div className={cn("flex h-full flex-col bg-background", className)}>
       <div className="flex items-center gap-2 border-b border-border/60 px-3 py-2">
         <Package className="h-4 w-4 text-muted-foreground" />
-        <span className="text-sm font-medium">{panelLabel}</span>
+        <span className="text-body font-medium">{panelLabel}</span>
         {!isEmpty && (
-          <span className="rounded-full bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
+          <span className="rounded-full bg-muted px-1.5 py-0.5 text-micro text-muted-foreground">
             {totalCount}
           </span>
         )}
         <div className="flex-1" />
         {onRefresh && (
-          <button
+          <Button
             type="button"
+            variant="ghost"
             onClick={onRefresh}
             disabled={loading}
             title="刷新"
+            aria-label="刷新"
             className={cn(
-              "rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground",
+              "h-6 w-6 rounded-sm p-0 text-muted-foreground hover:bg-muted hover:text-foreground",
               "disabled:opacity-40 disabled:hover:bg-transparent",
             )}
           >
             <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
-          </button>
+          </Button>
         )}
-        <button
+        <Button
           type="button"
+          variant="ghost"
           onClick={toggleCollapsed}
           title="折叠工作区"
-          className="rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+          aria-label="折叠工作区"
+          className="h-6 w-6 rounded-sm p-0 text-muted-foreground hover:bg-muted hover:text-foreground"
         >
           <PanelRightClose className="h-4 w-4" />
-        </button>
+        </Button>
       </div>
 
       {error ? (
-        <div className="flex flex-col items-center gap-2 px-4 py-6 text-center text-xs text-destructive">
+        <div className="flex flex-col items-center gap-2 px-4 py-6 text-center text-caption text-destructive">
           <AlertTriangle className="h-5 w-5 opacity-70" />
           <span>加载{panelLabel}失败：{error}</span>
           {onRefresh && (
-            <button
+            <Button
               type="button"
+              variant="outline"
+              size="xs"
               onClick={onRefresh}
-              className="rounded-md border border-border/60 px-2 py-1 text-[11px] hover:bg-muted"
             >
               重试
-            </button>
+            </Button>
           )}
         </div>
       ) : isEmpty ? (
-        <div className="flex h-full flex-col items-center justify-center gap-2 px-4 py-6 text-center text-xs text-muted-foreground">
-          <FolderOpenIcon className="h-6 w-6 opacity-40" />
-          <span>
-            {scope === "shared"
+        <EmptyState
+          className="h-full py-6"
+          icon={<FolderOpenIcon className="h-6 w-6 opacity-40" />}
+          title={
+            scope === "shared"
               ? "还没有产物。AI 创建的文件会出现在这里。"
-              : "项目目录里还没有文件。"}
-          </span>
-          {isTauri() && scope === "shared" && outputDir && (
-            <button
-              type="button"
-              onClick={handleOpenOutputDir}
-              className="rounded-md border border-border/60 px-2 py-1 text-[11px] hover:bg-muted"
-            >
-              打开 output 目录
-            </button>
-          )}
-        </div>
+              : "项目目录里还没有文件。"
+          }
+          action={
+            isTauri() && scope === "shared" && outputDir ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={handleOpenOutputDir}
+              >
+                打开 output 目录
+              </Button>
+            ) : undefined
+          }
+        />
       ) : (
         <>
           {sessionFiles.length > 0 && (
             <div className="shrink-0 border-b border-border/60 px-2 py-1.5">
-              <div className="px-1 pb-1 text-[11px] font-medium text-muted-foreground">
+              <div className="px-1 pb-1 text-micro font-medium text-muted-foreground">
                 本次会话
               </div>
-              <ul className="flex flex-col text-[13px]">
+              <ul className="flex flex-col text-ui">
                 {sessionFiles.map((f) => {
                   const key = fileKey(f);
                   return (
@@ -462,13 +473,13 @@ export function WorkspacePanel({
           )}
           {tree.length > 0 && (
             <div className="shrink-0 px-2 pt-1.5 pb-1">
-              <div className="px-1 text-[11px] font-medium text-muted-foreground">
+              <div className="px-1 text-micro font-medium text-muted-foreground">
                 {scope === "shared" ? "全部产物" : "全部文件"}
               </div>
             </div>
           )}
           <div className="flex-1 overflow-y-auto scrollbar-hover py-1">
-            <ul className="flex flex-col text-[13px]">
+            <ul className="flex flex-col text-ui">
               {tree.map((node) => (
                 <TreeRow
                   key={`${node.isDir ? "d" : "f"}-${node.path}`}
@@ -487,18 +498,19 @@ export function WorkspacePanel({
               ))}
             </ul>
             {truncated && (
-              <div className="mt-2 rounded-md border border-border/50 bg-muted/30 px-2 py-1.5 text-[11px] text-muted-foreground">
+              <div className="mt-2 rounded-md border border-border/50 bg-muted/30 px-2 py-1.5 text-micro text-muted-foreground">
                 仅显示最近 1000 个文件。
                 {isTauri() && outputDir && (
-                  <button
+                  <Button
                     type="button"
+                    variant="link"
                     onClick={handleOpenOutputDir}
-                    className="ml-1 underline-offset-2 hover:underline"
+                    className="ml-1 h-auto p-0 font-normal text-micro text-muted-foreground underline-offset-2"
                   >
                     {scope === "shared"
                       ? "打开 output 目录查看全部"
                       : "打开项目目录查看全部"}
-                  </button>
+                  </Button>
                 )}
               </div>
             )}
@@ -522,26 +534,26 @@ export function WorkspacePanel({
                 <Trash2 className="h-5 w-5" strokeWidth={2.4} aria-hidden />
               </div>
             </div>
-            <AlertDialogTitle className="text-center text-[20px] font-semibold leading-tight tracking-[-0.02em] text-foreground">
+            <AlertDialogTitle className="text-center text-title-sm tracking-[-0.02em] text-foreground">
               {deleteTarget?.isDir ? "删除这个文件夹？" : "删除这个文件？"}
             </AlertDialogTitle>
-            <AlertDialogDescription className="mt-3 max-w-[17rem] text-center text-[14px] leading-6 text-muted-foreground">
+            <AlertDialogDescription className="mt-3 max-w-[17rem] text-center text-body leading-6 text-muted-foreground">
               「{deleteTarget?.file.name ?? ""}」将被移至系统回收站，需要时可以从回收站恢复。
             </AlertDialogDescription>
             {deleteError ? (
-              <p className="mt-3 max-w-[17rem] text-center text-[13px] leading-5 text-destructive">
+              <p className="mt-3 max-w-[17rem] text-center text-ui leading-5 text-destructive">
                 移至回收站失败：{deleteError}
               </p>
             ) : null}
           </AlertDialogHeader>
           <AlertDialogFooter className="mt-7 grid grid-cols-2 gap-3 space-x-0">
-            <AlertDialogCancel className="mt-0 h-11 rounded-full border-0 bg-muted/70 px-5 text-[15px] font-semibold text-foreground shadow-none hover:bg-muted">
+            <AlertDialogCancel className="mt-0 h-11 rounded-full border-0 bg-muted/70 px-5 text-body-lg font-semibold text-foreground shadow-none hover:bg-muted">
               取消
             </AlertDialogCancel>
             <AlertDialogAction
               onClick={handleDeleteConfirm}
               disabled={deletePending}
-              className="h-11 rounded-full bg-destructive px-5 text-[15px] font-semibold text-destructive-foreground shadow-none hover:bg-destructive/90"
+              className="h-11 rounded-full bg-destructive px-5 text-body-lg font-semibold text-destructive-foreground shadow-none hover:bg-destructive/90"
             >
               移至回收站
             </AlertDialogAction>
@@ -591,12 +603,13 @@ function TreeRow({
     const isCollapsed = collapsed.has(node.path);
     const childCount = node.children?.length ?? 0;
     const dirButton = (
-      <button
+      <Button
         type="button"
+        variant="ghost"
         onClick={() => onToggle(node.path)}
         className={cn(
-          "flex w-full items-center gap-1 rounded-sm py-1 pr-2 text-left",
-          "text-foreground/90 hover:bg-muted/60",
+          "h-auto w-full justify-start gap-1 rounded-sm py-1 pr-2 text-left font-normal",
+          "text-foreground/90 hover:bg-muted/60 hover:text-foreground",
         )}
         style={{ paddingLeft: indent }}
       >
@@ -611,10 +624,10 @@ function TreeRow({
           <FolderOpen className="h-4 w-4 shrink-0 text-amber-500" />
         )}
         <span className="min-w-0 truncate font-medium">{node.name}</span>
-        <span className="shrink-0 text-[11px] text-muted-foreground">
+        <span className="shrink-0 text-micro text-muted-foreground">
           {childCount}
         </span>
-      </button>
+      </Button>
     );
 
     // Directory rows resolve their absolute path against the panel root so
@@ -709,13 +722,14 @@ function TreeRow({
 
   const row = (
     <li>
-      <button
+      <Button
         type="button"
+        variant="ghost"
         onClick={handleClick}
         onDoubleClick={handleDoubleClick}
         className={cn(
-          "flex w-full items-center gap-1.5 rounded-sm py-1 pr-2 text-left",
-          "hover:bg-muted/60",
+          "h-auto w-full justify-start gap-1.5 rounded-sm py-1 pr-2 text-left font-normal",
+          "hover:bg-muted/60 hover:text-foreground",
           isActive && "bg-primary/8",
         )}
         style={{ paddingLeft: indent + 18 }}
@@ -745,11 +759,11 @@ function TreeRow({
           {file.name}
         </span>
         {file.size_human && (
-          <span className="shrink-0 text-[11px] text-muted-foreground">
+          <span className="shrink-0 text-micro text-muted-foreground">
             {file.size_human}
           </span>
         )}
-      </button>
+      </Button>
     </li>
   );
 

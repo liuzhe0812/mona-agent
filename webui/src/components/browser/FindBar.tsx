@@ -210,10 +210,10 @@ export function FindBar({ tabId, visible, onClose }: FindBarProps) {
         value={query}
         onChange={(e) => void doFind(e.target.value)}
         onKeyDown={handleKeyDown}
-        className="h-6 w-48 rounded-full border-0 bg-muted/50 text-[12px] px-2"
+        className="h-6 w-48 rounded-full border-0 bg-muted/50 text-caption px-2"
         placeholder="查找..."
       />
-      <span className="text-[11px] text-muted-foreground tabular-nums min-w-[60px] text-center">
+      <span className="text-micro text-muted-foreground tabular-nums min-w-[60px] text-center">
         {matchCount > 0 ? `${currentMatch + 1}/${matchCount}` : "0/0"}
       </span>
       <Button

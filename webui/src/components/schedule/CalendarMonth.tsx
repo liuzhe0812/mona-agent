@@ -193,7 +193,7 @@ export function CalendarMonth({
                   className={cn(
                     "text-caption w-5 h-5 flex items-center justify-center rounded-full",
                     isToday
-                      ? "bg-primary text-primary-foreground font-semibold"
+                      ? "bg-info text-white font-semibold"
                       : inMonth
                         ? "text-foreground"
                         : "text-muted-foreground",

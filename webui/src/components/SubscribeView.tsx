@@ -160,7 +160,7 @@ export function SubscribeView({
       )}
 
       <div className="text-center">
-        <p className="text-lg font-semibold">升级至 Mona Pro</p>
+        <p className="text-title-sm font-semibold">升级至 Mona Pro</p>
         <p className="text-sm text-muted-foreground">
           {isPaidUser ? "当前订阅已生效" : "选择订阅方案，扫码即可开通"}
         </p>
@@ -190,7 +190,7 @@ export function SubscribeView({
               }`}
             >
               {plan.badge && (
-                <span className="absolute right-2 top-2 rounded-full bg-primary px-2 py-0.5 text-[10px] text-primary-foreground">
+                <span className="absolute right-2 top-2 rounded-full bg-info-soft px-2 py-0.5 text-micro text-info">
                   {plan.badge}
                 </span>
               )}
@@ -208,7 +208,7 @@ export function SubscribeView({
               <div className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
                 <span
                   className={`h-3.5 w-3.5 rounded-full border ${
-                    selectedPlanId === plan.id ? "border-primary bg-primary" : "border-muted-foreground"
+                    selectedPlanId === plan.id ? "border-info bg-info" : "border-muted-foreground"
                   }`}
                 />
                 选择

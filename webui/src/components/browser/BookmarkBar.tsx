@@ -324,7 +324,7 @@ export function BookmarkBar({ onNavigate, visible }: BookmarkBarProps) {
           />
         ))}
         {bookmarks.length === 0 && (
-          <span className="text-[11px] text-muted-foreground/60 select-none">
+          <span className="text-micro text-muted-foreground/60 select-none">
             收藏栏为空
           </span>
         )}
@@ -338,20 +338,20 @@ export function BookmarkBar({ onNavigate, visible }: BookmarkBarProps) {
           </DialogHeader>
           <div className="grid gap-3 py-2">
             <div className="grid gap-1">
-              <label className="text-[12px] text-muted-foreground">标题</label>
+              <label className="text-caption text-muted-foreground">标题</label>
               <Input
                 value={editTitle}
                 onChange={(e) => setEditTitle(e.target.value)}
-                className="h-8 text-[13px]"
+                className="h-8"
               />
             </div>
             <div className="grid gap-1">
-              <label className="text-[12px] text-muted-foreground">文件夹</label>
+              <label className="text-caption text-muted-foreground">文件夹</label>
               <Input
                 value={editFolder}
                 onChange={(e) => setEditFolder(e.target.value)}
                 placeholder="留空为根目录"
-                className="h-8 text-[13px]"
+                className="h-8"
               />
             </div>
           </div>
@@ -376,7 +376,7 @@ export function BookmarkBar({ onNavigate, visible }: BookmarkBarProps) {
             <Input
               value={editFolderName}
               onChange={(e) => setEditFolderName(e.target.value)}
-              className="h-8 text-[13px]"
+              className="h-8 text-ui"
               autoFocus
             />
           </div>
@@ -413,8 +413,9 @@ function BookmarkItem({
 }) {
   if (isTauri()) {
     return (
-      <button
+      <Button
         type="button"
+        variant="ghost"
         draggable
         onDragStart={(e) => {
           e.dataTransfer.setData("text/bookmark-url", bookmark.url);
@@ -424,33 +425,34 @@ function BookmarkItem({
           e.preventDefault();
           void showNativeBookmarkMenu(bookmark, onDelete, onEdit, folderNames);
         }}
-        className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[11px] hover:bg-accent transition-colors max-w-[140px] cursor-grab active:cursor-grabbing"
+        className="h-auto max-w-[140px] shrink-0 cursor-grab gap-1 rounded px-1.5 py-0.5 text-micro font-normal active:cursor-grabbing"
         onClick={() => onNavigate(bookmark.url)}
         title={bookmark.url}
       >
         <Globe className="h-3 w-3 shrink-0 text-muted-foreground" />
         <span className="truncate">{bookmark.title || bookmark.url}</span>
-      </button>
+      </Button>
     );
   }
 
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
-        <button
+        <Button
           type="button"
+          variant="ghost"
           draggable
           onDragStart={(e) => {
             e.dataTransfer.setData("text/bookmark-url", bookmark.url);
             e.dataTransfer.effectAllowed = "move";
           }}
-          className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[11px] hover:bg-accent transition-colors max-w-[140px] cursor-grab active:cursor-grabbing"
+          className="h-auto max-w-[140px] shrink-0 cursor-grab gap-1 rounded px-1.5 py-0.5 text-micro font-normal active:cursor-grabbing"
           onClick={() => onNavigate(bookmark.url)}
           title={bookmark.url}
         >
           <Globe className="h-3 w-3 shrink-0 text-muted-foreground" />
           <span className="truncate">{bookmark.title || bookmark.url}</span>
-        </button>
+        </Button>
       </ContextMenuTrigger>
       <BookmarkContextMenu
         bookmark={bookmark}
@@ -502,12 +504,13 @@ function FolderItem({
 
   if (isTauri()) {
     return (
-      <button
+      <Button
         ref={triggerRef}
         type="button"
+        variant="ghost"
         className={cn(
-          "flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[11px] transition-colors",
-          dragOver ? "bg-accent ring-1 ring-primary/50" : "hover:bg-accent",
+          "h-auto shrink-0 gap-1 rounded px-1.5 py-0.5 text-micro font-normal",
+          dragOver && "bg-accent ring-1 ring-primary/50",
         )}
         onClick={() => void showNativeFolderMenu(items, onNavigate, onDelete, onEdit, folderNames)}
         onContextMenu={(e) => {
@@ -536,21 +539,20 @@ function FolderItem({
       >
         <Folder className="h-3 w-3 shrink-0 text-muted-foreground" />
         <span className="truncate">{folder}</span>
-      </button>
+      </Button>
     );
   }
 
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
-        <button
+        <Button
           ref={triggerRef}
           type="button"
+          variant="ghost"
           className={cn(
-            "flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[11px] transition-colors",
-            dragOver
-              ? "bg-accent ring-1 ring-primary/50"
-              : "hover:bg-accent",
+            "h-auto shrink-0 gap-1 rounded px-1.5 py-0.5 text-micro font-normal",
+            dragOver && "bg-accent ring-1 ring-primary/50",
           )}
           onClick={handleToggle}
           onDragOver={(e) => {
@@ -574,7 +576,7 @@ function FolderItem({
         >
           <Folder className="h-3 w-3 shrink-0 text-muted-foreground" />
           <span className="truncate">{folder}</span>
-        </button>
+        </Button>
       </ContextMenuTrigger>
       <FolderContextMenu
         onRename={() => onRenameFolder(folder)}
@@ -639,20 +641,21 @@ function DropdownBookmarkItem({
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
-        <button
+        <Button
           type="button"
+          variant="ghost"
           draggable
           onDragStart={(e) => {
             e.dataTransfer.setData("text/bookmark-url", bookmark.url);
             e.dataTransfer.effectAllowed = "move";
           }}
-          className="flex w-full items-center gap-1.5 px-2.5 py-1 text-[11px] hover:bg-accent transition-colors text-left cursor-grab active:cursor-grabbing"
+          className="h-auto w-full cursor-grab justify-start gap-1.5 rounded-none px-2.5 py-1 text-micro font-normal active:cursor-grabbing"
           onClick={() => onNavigate(bookmark.url)}
           title={bookmark.url}
         >
           <Globe className="h-3 w-3 shrink-0 text-muted-foreground" />
           <span className="truncate">{bookmark.title || bookmark.url}</span>
-        </button>
+        </Button>
       </ContextMenuTrigger>
       <BookmarkContextMenu
         bookmark={bookmark}
@@ -680,7 +683,6 @@ function BookmarkContextMenu({
   return (
     <ContextMenuContent className="w-48 z-[9999]">
       <ContextMenuItem
-        className="text-[12px] gap-2"
         onClick={() => onEdit(bookmark)}
       >
         <Pencil className="h-3.5 w-3.5" />
@@ -689,13 +691,12 @@ function BookmarkContextMenu({
       <ContextMenuSeparator />
       {folderNames.length > 0 && (
         <ContextMenuSub>
-          <ContextMenuSubTrigger className="text-[12px] gap-2">
+          <ContextMenuSubTrigger>
             <Folder className="h-3.5 w-3.5" />
             移动到文件夹
           </ContextMenuSubTrigger>
           <ContextMenuSubContent>
             <ContextMenuItem
-              className="text-[12px]"
               onClick={() => {
                 browserUpdateBookmark(bookmark.url, undefined, "");
                 window.dispatchEvent(new Event("bookmark-changed"));
@@ -708,7 +709,6 @@ function BookmarkContextMenu({
               .map((f) => (
                 <ContextMenuItem
                   key={f}
-                  className="text-[12px]"
                   onClick={() => {
                     browserUpdateBookmark(bookmark.url, undefined, f);
                     window.dispatchEvent(new Event("bookmark-changed"));
@@ -722,7 +722,7 @@ function BookmarkContextMenu({
       )}
       <ContextMenuSeparator />
       <ContextMenuItem
-        className="text-[12px] gap-2 text-destructive focus:text-destructive"
+        className="text-destructive focus:text-destructive"
         onClick={() => onDelete(bookmark.url)}
       >
         <Trash2 className="h-3.5 w-3.5" />
@@ -743,13 +743,13 @@ function FolderContextMenu({
 }) {
   return (
     <ContextMenuContent className="w-48 z-[9999]">
-      <ContextMenuItem className="text-[12px] gap-2" onClick={onRename}>
+      <ContextMenuItem onClick={onRename}>
         <Pencil className="h-3.5 w-3.5" />
         重命名
       </ContextMenuItem>
       <ContextMenuSeparator />
       <ContextMenuItem
-        className="text-[12px] gap-2 text-destructive focus:text-destructive"
+        className="text-destructive focus:text-destructive"
         onClick={onDelete}
       >
         <Trash2 className="h-3.5 w-3.5" />

@@ -21,6 +21,7 @@ import {
   Pencil,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -253,32 +254,36 @@ export function FolderTree({ gatewayUrl, view = "mail", onViewChange }: FolderTr
   return (
     <div className="flex h-full flex-col bg-sidebar">
       <div className="flex h-10 shrink-0 items-center justify-between border-b border-border bg-sidebar-accent/40 px-3">
-        <span className="text-[12px] font-semibold text-foreground">邮箱</span>
-        <button
+        <span className="text-caption font-semibold text-foreground">邮箱</span>
+        <Button
           type="button"
-          className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
+          variant="ghost"
+          size="sm"
+          className="h-5 w-5 p-0 text-muted-foreground hover:bg-accent hover:text-foreground"
           onClick={() => setNewAccountOpen(true)}
           aria-label="添加邮箱"
           title="添加邮箱"
         >
           <Plus className="h-3.5 w-3.5" />
-        </button>
+        </Button>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-1.5 scrollbar-hover">
         {accounts.length === 0 ? (
           <div className="flex flex-col items-center justify-center gap-2 px-3 py-8 text-center">
             <Mail className="h-6 w-6 text-muted-foreground/50" />
-            <p className="text-[12px] text-muted-foreground">
+            <p className="text-caption text-muted-foreground">
               还没有邮箱账号
             </p>
-            <button
+            <Button
               type="button"
-              className="flex items-center gap-1 rounded-full border border-border px-2.5 py-1 text-[12px] text-muted-foreground hover:bg-accent hover:text-foreground"
+              variant="outline"
+              size="sm"
+              className="gap-1 rounded-full px-2.5 text-caption text-muted-foreground"
               onClick={() => setNewAccountOpen(true)}
             >
               <Plus className="h-3 w-3" />
               添加邮箱
-            </button>
+            </Button>
           </div>
         ) : (
           <div className="flex flex-col gap-0.5">
@@ -295,7 +300,7 @@ export function FolderTree({ gatewayUrl, view = "mail", onViewChange }: FolderTr
             >
               <Inbox className="h-3.5 w-3.5 shrink-0" />
               <div className="min-w-0 flex-1">
-                <div className="truncate text-[12px] font-medium">
+                <div className="truncate text-caption font-medium">
                   全部收件箱
                 </div>
               </div>
@@ -340,7 +345,7 @@ export function FolderTree({ gatewayUrl, view = "mail", onViewChange }: FolderTr
                         <Chevron className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                         <img src={sidebarEmailIcon} className="h-3.5 w-3.5 shrink-0 object-contain" alt="" draggable={false} />
                         <div className="min-w-0 flex-1">
-                          <div className="truncate text-[12px] font-medium">
+                          <div className="truncate text-caption font-medium">
                             {account.displayName}
                           </div>
                         </div>
@@ -348,7 +353,7 @@ export function FolderTree({ gatewayUrl, view = "mail", onViewChange }: FolderTr
                     </ContextMenuTrigger>
                     <ContextMenuContent className="w-40">
                       <ContextMenuItem
-                        className="text-[12px]"
+                        className="text-caption"
                         disabled={!gatewayUrl}
                         onClick={() => {
                           selectAccount(account.id);
@@ -359,7 +364,7 @@ export function FolderTree({ gatewayUrl, view = "mail", onViewChange }: FolderTr
                         收取
                       </ContextMenuItem>
                       <ContextMenuItem
-                        className="text-[12px]"
+                        className="text-caption"
                         disabled={!gatewayUrl}
                         onClick={() => {
                           setContextAccount(account);
@@ -372,7 +377,7 @@ export function FolderTree({ gatewayUrl, view = "mail", onViewChange }: FolderTr
                       </ContextMenuItem>
                       <ContextMenuSeparator />
                       <ContextMenuItem
-                        className="text-[12px]"
+                        className="text-caption"
                         onClick={() => {
                           setContextAccount(account);
                           setStatsOpen(true);
@@ -382,7 +387,7 @@ export function FolderTree({ gatewayUrl, view = "mail", onViewChange }: FolderTr
                         邮件统计...
                       </ContextMenuItem>
                       <ContextMenuItem
-                        className="text-[12px]"
+                        className="text-caption"
                         onClick={() => {
                           setContextAccount(account);
                           setSettingsOpen(true);
@@ -393,7 +398,7 @@ export function FolderTree({ gatewayUrl, view = "mail", onViewChange }: FolderTr
                       </ContextMenuItem>
                       <ContextMenuSeparator />
                       <ContextMenuItem
-                        className="text-[12px] text-destructive focus:text-destructive"
+                        className="text-caption text-destructive focus:text-destructive"
                         onClick={() => {
                           if (window.confirm(`确定要删除邮箱「${account.displayName}」吗？本地缓存的邮件也会被清除。`)) {
                             void removeAccount(account.id);
@@ -408,15 +413,15 @@ export function FolderTree({ gatewayUrl, view = "mail", onViewChange }: FolderTr
                   {isExpanded && (
                     <div className="ml-3 flex flex-col gap-0.5 border-l border-border/60 pl-1.5">
                       {isSelected && foldersLoading && accountFolders.length === 0 ? (
-                        <div className="px-2 py-1 text-[11px] text-muted-foreground">
+                        <div className="px-2 py-1 text-micro text-muted-foreground">
                           加载中...
                         </div>
                       ) : isSelected && foldersError && accountFolders.length === 0 ? (
-                        <div className="px-2 py-1 text-[11px] text-destructive">
+                        <div className="px-2 py-1 text-micro text-destructive">
                           {foldersError}
                         </div>
                       ) : accountFolders.length === 0 ? (
-                        <div className="px-2 py-1 text-[11px] text-muted-foreground">
+                        <div className="px-2 py-1 text-micro text-muted-foreground">
                           没有文件夹
                         </div>
                       ) : (
@@ -435,7 +440,7 @@ export function FolderTree({ gatewayUrl, view = "mail", onViewChange }: FolderTr
                                   className={cn(
                                     "flex items-center gap-2 rounded-md px-2 py-1.5 cursor-pointer",
                                     isFolderSelected
-                                      ? "bg-blue-500/10 text-foreground"
+                                      ? "bg-info/10 text-foreground"
                                       : "text-muted-foreground hover:bg-accent hover:text-foreground",
                                   )}
                                   onClick={() => {
@@ -445,7 +450,7 @@ export function FolderTree({ gatewayUrl, view = "mail", onViewChange }: FolderTr
                                   <FolderIcon className="h-3.5 w-3.5 shrink-0" />
                                   {isRenaming ? (
                                     <Input
-                                      className="h-6 flex-1 rounded px-1 py-0 text-[12px]"
+                                      className="h-6 flex-1 rounded-xs px-1 py-0 text-caption"
                                       value={renameValue}
                                       autoFocus
                                       disabled={actionLoading}
@@ -467,12 +472,12 @@ export function FolderTree({ gatewayUrl, view = "mail", onViewChange }: FolderTr
                                       }}
                                     />
                                   ) : (
-                                    <span className="min-w-0 flex-1 truncate text-[12px]">
+                                    <span className="min-w-0 flex-1 truncate text-caption">
                                       {getFolderDisplayName(decodedName)}
                                     </span>
                                   )}
                                   {!isRenaming && folder.unreadCount && folder.unreadCount > 0 ? (
-                                    <span className="shrink-0 rounded-full bg-blue-500 px-1.5 py-0.5 text-[10px] font-medium text-white">
+                                    <span className="shrink-0 rounded-full bg-warning px-1.5 py-0.5 text-caption font-medium text-background">
                                       {folder.unreadCount > 99 ? "99+" : folder.unreadCount}
                                     </span>
                                   ) : null}
@@ -480,7 +485,7 @@ export function FolderTree({ gatewayUrl, view = "mail", onViewChange }: FolderTr
                               </ContextMenuTrigger>
                               <ContextMenuContent className="w-44">
                                 <ContextMenuItem
-                                  className="text-[12px]"
+                                  className="text-caption"
                                   disabled={actionLoading || !gatewayUrl}
                                   onClick={() => void handleMarkAllRead(folder.name)}
                                 >
@@ -493,7 +498,7 @@ export function FolderTree({ gatewayUrl, view = "mail", onViewChange }: FolderTr
                                 </ContextMenuItem>
                                 <ContextMenuSeparator />
                                 <ContextMenuItem
-                                  className="text-[12px]"
+                                  className="text-caption"
                                   disabled={actionLoading || !gatewayUrl || isSystem}
                                   onClick={() => handleStartRename(folder.name)}
                                 >
@@ -504,7 +509,7 @@ export function FolderTree({ gatewayUrl, view = "mail", onViewChange }: FolderTr
                                   <>
                                     <ContextMenuSeparator />
                                     <ContextMenuItem
-                                      className="text-[12px] text-destructive focus:text-destructive"
+                                      className="text-caption text-destructive focus:text-destructive"
                                       disabled={actionLoading || !gatewayUrl}
                                       onClick={() => void handleEmptyFolder(folder.name)}
                                     >
@@ -519,7 +524,7 @@ export function FolderTree({ gatewayUrl, view = "mail", onViewChange }: FolderTr
                                 )}
                                 <ContextMenuSeparator />
                                 <ContextMenuItem
-                                  className="text-[12px] text-destructive focus:text-destructive"
+                                  className="text-caption text-destructive focus:text-destructive"
                                   disabled={actionLoading || !gatewayUrl || isSystem}
                                   onClick={() => void handleDeleteFolder(account, folder.name)}
                                 >
@@ -547,13 +552,14 @@ export function FolderTree({ gatewayUrl, view = "mail", onViewChange }: FolderTr
       {/* 底部导航：通讯录入口 */}
       {onViewChange && (
         <div className="shrink-0 border-t border-border bg-sidebar-accent/30 p-1.5">
-          <button
+          <Button
             type="button"
+            variant="ghost"
             onClick={() => onViewChange(view === "contacts" ? "mail" : "contacts")}
             className={cn(
-              "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[12px] transition-colors",
+              "h-auto w-full justify-start gap-2 rounded-md px-2 py-1.5 text-caption font-normal transition-colors",
               view === "contacts"
-                ? "bg-blue-500/10 text-blue-600 dark:text-blue-400"
+                ? "bg-info/10 text-info-strong hover:bg-info/15 hover:text-info-strong"
                 : "text-muted-foreground hover:bg-accent hover:text-foreground",
             )}
             title={view === "contacts" ? "返回邮件" : "通讯录"}
@@ -566,7 +572,7 @@ export function FolderTree({ gatewayUrl, view = "mail", onViewChange }: FolderTr
             <span className="flex-1 text-left">
               {view === "contacts" ? "返回邮件" : "通讯录"}
             </span>
-          </button>
+          </Button>
         </div>
       )}
 

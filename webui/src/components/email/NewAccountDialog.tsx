@@ -3,6 +3,7 @@ import { X, Loader2, Check, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { StatusNotice } from "@/components/ui/status-notice";
 import { openExternalUrl } from "@/lib/tauri";
 import { useEmailStore } from "./store/emailStore";
 import { testConnection } from "./lib/emailApi";
@@ -210,15 +211,15 @@ export function NewAccountDialog({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 dark:bg-black/60 backdrop-blur-sm"
       onClick={handleClose}
     >
       <div
-        className="w-full max-w-[460px] rounded-lg border border-border bg-background p-5 shadow-lg"
+        className="w-full max-w-[460px] rounded-2xl border border-border bg-background p-5 shadow-lg"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-[15px] font-semibold text-foreground">
+          <h2 className="text-title-sm text-foreground">
             {isEditMode ? "编辑邮箱账号" : "添加邮箱账号"}
           </h2>
           <Button
@@ -241,7 +242,7 @@ export function NewAccountDialog({
                 type="button"
                 variant="outline"
                 size="sm"
-                className="h-7 px-2.5 text-[11.5px]"
+                className="h-7 px-2.5 text-caption"
                 onClick={() => applyPreset(preset)}
               >
                 {preset.label}
@@ -256,7 +257,7 @@ export function NewAccountDialog({
               value={displayName}
               onChange={(e) => setDisplayName(e.target.value)}
               placeholder="可选"
-              className="h-8 rounded-full px-3 text-[13px]"
+              className="h-8 px-3 text-ui"
             />
           </Field>
           <Field label="邮箱地址">
@@ -264,7 +265,7 @@ export function NewAccountDialog({
               value={emailAddress}
               onChange={(e) => setEmailAddress(e.target.value)}
               placeholder="you@example.com"
-              className="h-8 rounded-full px-3 text-[13px]"
+              className="h-8 px-3 text-ui"
             />
           </Field>
           <Field label={isEditMode ? "密码（留空则不修改）" : "密码"}>
@@ -273,10 +274,10 @@ export function NewAccountDialog({
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder={isGmail ? "应用专用密码" : "邮箱密码或授权码"}
-              className="h-8 rounded-full px-3 text-[13px]"
+              className="h-8 px-3 text-ui"
             />
             {isGmail && (
-              <p className="text-[11px] text-muted-foreground">
+              <p className="text-micro text-muted-foreground">
                 Gmail 已停用纯密码登录，需开启两步验证后生成应用专用密码填入上方。
                 <a
                   href="https://myaccount.google.com/apppasswords"
@@ -298,14 +299,14 @@ export function NewAccountDialog({
                 value={imapHost}
                 onChange={(e) => setImapHost(e.target.value)}
                 placeholder="imap.example.com"
-                className="h-8 rounded-full px-3 text-[13px]"
+                className="h-8 px-3 text-ui"
               />
             </Field>
             <Field label="IMAP 端口">
               <Input
                 value={imapPort}
                 onChange={(e) => setImapPort(e.target.value)}
-                className="h-8 rounded-full px-3 text-[13px]"
+                className="h-8 px-3 text-ui"
               />
             </Field>
           </div>
@@ -315,14 +316,14 @@ export function NewAccountDialog({
                 value={smtpHost}
                 onChange={(e) => setSmtpHost(e.target.value)}
                 placeholder="smtp.example.com"
-                className="h-8 rounded-full px-3 text-[13px]"
+                className="h-8 px-3 text-ui"
               />
             </Field>
             <Field label="SMTP 端口">
               <Input
                 value={smtpPort}
                 onChange={(e) => setSmtpPort(e.target.value)}
-                className="h-8 rounded-full px-3 text-[13px]"
+                className="h-8 px-3 text-ui"
               />
             </Field>
           </div>
@@ -331,7 +332,7 @@ export function NewAccountDialog({
               value={carddavUrl}
               onChange={(e) => setCarddavUrl(e.target.value)}
               placeholder="QQ/Gmail/iCloud 填，如 https://dav.qq.com/"
-              className="h-8 rounded-full px-3 text-[13px]"
+              className="h-8 px-3 text-ui"
             />
           </Field>
           <Field label="ActiveSync 通讯录地址（可选，企业邮用）">
@@ -339,25 +340,18 @@ export function NewAccountDialog({
               value={easUrl}
               onChange={(e) => setEasUrl(e.target.value)}
               placeholder="腾讯企业邮填 https://ex.exmail.qq.com/Microsoft-Server-ActiveSync"
-              className="h-8 rounded-full px-3 text-[13px]"
+              className="h-8 px-3 text-ui"
             />
           </Field>
           {testResult && (
-            <div
-              className={
-                testResult === "ok"
-                  ? "flex items-center gap-1.5 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-[12px] text-emerald-600"
-                  : "rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-[12px] text-destructive"
-              }
-            >
-              {testResult === "ok" && <Check className="h-3.5 w-3.5 shrink-0" />}
+            <StatusNotice tone={testResult === "ok" ? "success" : "danger"} className="p-2 text-caption">
               {testMsg}
-            </div>
+            </StatusNotice>
           )}
           {error && (
-            <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-[12px] text-destructive">
+            <StatusNotice tone="danger" className="p-2 text-caption">
               {error}
-            </div>
+            </StatusNotice>
           )}
         </div>
 
@@ -366,7 +360,7 @@ export function NewAccountDialog({
             type="button"
             variant="outline"
             size="sm"
-            className="h-8 px-3 text-[12px]"
+            className="h-8 px-3 text-caption"
             onClick={handleClose}
           >
             取消
@@ -375,7 +369,7 @@ export function NewAccountDialog({
             type="button"
             variant="outline"
             size="sm"
-            className="h-8 gap-1.5 px-3 text-[12px]"
+            className="h-8 gap-1.5 px-3 text-caption"
             disabled={testing || submitting}
             onClick={handleTest}
           >
@@ -389,7 +383,7 @@ export function NewAccountDialog({
           <Button
             type="button"
             size="sm"
-            className="h-8 px-3 text-[12px]"
+            className="h-8 px-3 text-caption"
             disabled={submitting || testing}
             onClick={handleSubmit}
           >
@@ -404,7 +398,7 @@ export function NewAccountDialog({
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex flex-col gap-1">
-      <Label className="text-[11.5px] text-muted-foreground">{label}</Label>
+      <Label className="text-caption text-muted-foreground">{label}</Label>
       {children}
     </div>
   );

@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2, RotateCcw, Send, Sparkles, Square, X } from "lucide-react";
 
 import { ThreadMessages } from "@/components/thread/ThreadMessages";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 import { useMonaStream } from "@/hooks/useMonaStream";
 import { useSessionHistory } from "@/hooks/useSessions";
 import { useClientOptional } from "@/providers/ClientProvider";
@@ -196,62 +198,67 @@ export function MdAiPanel({
       {/* Header */}
       <div className="flex h-10 shrink-0 items-center justify-between border-b border-border/65 px-3">
         <div className="flex min-w-0 items-center gap-2">
-          <h2 className="truncate text-[12px] font-semibold text-foreground">Mona</h2>
+          <h2 className="truncate text-ui font-semibold text-foreground">Mona</h2>
         </div>
         <div className="flex items-center gap-1">
           {notice ? (
-            <span className="max-w-28 truncate text-[10px] text-muted-foreground">{notice}</span>
+            <span className="max-w-28 truncate text-micro text-muted-foreground">{notice}</span>
           ) : null}
           {chatId ? (
-            <button
+            <Button
               type="button"
+              variant="ghost"
               aria-label="重置会话"
               title="重置会话"
               disabled={isStreaming || creatingChat}
               onClick={handleReset}
-              className="grid h-6 w-6 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+              className="h-6 w-6 rounded-md p-0 text-muted-foreground hover:bg-accent hover:text-foreground"
             >
               <RotateCcw className="h-3.5 w-3.5" />
-            </button>
+            </Button>
           ) : null}
           {isStreaming ? (
-            <button
+            <Button
               type="button"
+              variant="ghost"
               aria-label="停止生成"
               title="停止生成"
               onClick={stop}
-              className="grid h-6 w-6 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+              className="h-6 w-6 rounded-md p-0 text-muted-foreground hover:bg-accent hover:text-foreground"
             >
               <Square className="h-3 w-3" />
-            </button>
+            </Button>
           ) : null}
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            aria-label="关闭面板"
             onClick={onClose}
-            className="grid h-6 w-6 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+            className="h-6 w-6 rounded-md p-0 text-muted-foreground hover:bg-accent hover:text-foreground"
           >
             <X className="h-3.5 w-3.5" />
-          </button>
+          </Button>
         </div>
       </div>
 
       {/* Messages */}
       <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-2.5 py-2 scrollbar-hover">
         {streamError ? (
-          <div className="mb-2 flex items-start gap-2 rounded-lg border border-border/70 bg-background px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+          <div className="mb-2 flex items-start gap-2 rounded-lg border border-border/70 bg-background px-3 py-2 text-caption leading-relaxed text-muted-foreground">
             <span className="min-w-0 flex-1">消息过大或连接异常，请缩短内容后重试。</span>
-            <button
+            <Button
               type="button"
+              variant="ghost"
               onClick={dismissStreamError}
-              className="shrink-0 text-foreground/65 hover:text-foreground"
+              className="h-auto shrink-0 p-0 text-caption text-foreground/65 hover:bg-transparent hover:text-foreground"
             >
               关闭
-            </button>
+            </Button>
           </div>
         ) : null}
 
         {!hasMessages && !loading ? (
-          <div className="flex h-full items-center justify-center text-[12px] text-muted-foreground">
+          <div className="flex h-full items-center justify-center text-caption text-muted-foreground">
             <span className="inline-flex items-center gap-2">
               <Sparkles className="h-3.5 w-3.5" />
               输入消息让 AI 编辑文档
@@ -260,7 +267,7 @@ export function MdAiPanel({
         ) : null}
 
         {loading ? (
-          <div className="flex items-center justify-center py-8 text-[12px] text-muted-foreground">
+          <div className="flex items-center justify-center py-8 text-caption text-muted-foreground">
             <span className="inline-flex items-center gap-2">
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
               正在读取会话历史...
@@ -271,7 +278,7 @@ export function MdAiPanel({
         <ThreadMessages messages={messages} isStreaming={isStreaming} />
 
         {creatingChat ? (
-          <div className="flex items-center justify-center py-4 text-[12px] text-muted-foreground">
+          <div className="flex items-center justify-center py-4 text-caption text-muted-foreground">
             <span className="inline-flex items-center gap-2">
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
               正在创建会话...
@@ -279,7 +286,7 @@ export function MdAiPanel({
           </div>
         ) : null}
         {isStreaming ? (
-          <div className="flex items-center justify-center py-4 text-[12px] text-muted-foreground">
+          <div className="flex items-center justify-center py-4 text-caption text-muted-foreground">
             <span className="inline-flex items-center gap-2">
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
               AI 正在处理...
@@ -291,7 +298,7 @@ export function MdAiPanel({
       {/* Input */}
       <div className="shrink-0 p-2">
         <div className="flex min-h-9 items-end gap-1.5 rounded-xl border border-border/75 bg-background px-2.5 py-1.5 shadow-sm">
-          <textarea
+          <Textarea
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
@@ -303,17 +310,19 @@ export function MdAiPanel({
             disabled={creatingChat}
             placeholder="输入消息让 AI 编辑..."
             rows={1}
-            className="min-h-[24px] flex-1 resize-none bg-transparent text-[12px] leading-5 outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
+            className="min-h-[24px] flex-1 resize-none rounded-none border-0 bg-transparent px-0 py-0 text-caption leading-5 focus-visible:ring-0 disabled:cursor-not-allowed disabled:opacity-60"
           />
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            aria-label="发送"
             onClick={sendDraft}
             disabled={!draft.trim() || creatingChat || isStreaming}
             className={cn(
-              "grid h-6 w-6 shrink-0 place-items-center rounded-lg transition-colors",
+              "h-6 w-6 shrink-0 rounded-lg p-0",
               isStreaming
-                ? "text-destructive hover:bg-destructive/10"
-                : "bg-foreground text-background hover:bg-foreground/90 disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed",
+                ? "text-destructive hover:bg-destructive/10 hover:text-destructive"
+                : "bg-action text-white hover:bg-action-hover hover:text-white disabled:bg-muted disabled:text-muted-foreground",
             )}
           >
             {creatingChat ? (
@@ -323,7 +332,7 @@ export function MdAiPanel({
             ) : (
               <Send className="h-3 w-3" />
             )}
-          </button>
+          </Button>
         </div>
       </div>
     </aside>

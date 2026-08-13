@@ -184,10 +184,10 @@ export function SoftwarePanel({ onHandoff }: SoftwarePanelProps) {
             role="tab"
             aria-selected={activeSection === section.id}
             onClick={() => setActiveSection(section.id)}
-            className={`relative whitespace-nowrap px-1 pb-2.5 text-body font-medium transition ${activeSection === section.id ? "text-primary" : "text-muted-foreground hover:text-foreground"}`}
+            className={`relative whitespace-nowrap px-1 pb-2.5 text-caption font-medium transition ${activeSection === section.id ? "text-foreground" : "text-muted-foreground hover:text-foreground"}`}
           >
             {section.label}
-            {activeSection === section.id && <span className="absolute inset-x-0 bottom-0 h-0.5 rounded-full bg-primary" />}
+            {activeSection === section.id && <span className="absolute inset-x-0 bottom-0 h-px bg-info" />}
           </button>
         ))}
       </div>
