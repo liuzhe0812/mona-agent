@@ -40,6 +40,13 @@ class PartnerAgentLoop(AgentLoop):
         # base constructor and needs the partner identity + manifest.
         self._partner_agent_id = normalize_agent_id(agent_id)
         self._agent_registry = registry or AgentRegistry()
+        # Manifest model: "inherit" follows the main loop's current model;
+        # any other value pins this partner to its own model for every turn
+        # (LLMRuntime reads ``self.model`` per call).
+        definition = self._agent_registry.require(self._partner_agent_id)
+        manifest_model = (definition.model or "").strip()
+        if manifest_model and manifest_model.lower() != "inherit":
+            kwargs["model"] = manifest_model
         super().__init__(**kwargs)
         from mona.agent.context import ContextBuilder
 

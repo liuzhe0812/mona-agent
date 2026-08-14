@@ -37,7 +37,7 @@ from mona.providers.factory import ProviderSnapshot
 from mona.session.goal_state import (
     runner_wall_llm_timeout_s,
 )
-from mona.session.manager import Session, SessionManager
+from mona.session.manager import Session, SessionManager, normalize_message_author
 from mona.session.webui_turns import (
     WebuiTurnCoordinator,
     build_bus_progress_callback,
@@ -554,8 +554,8 @@ class AgentLoop:
         """Lazily construct a partner agent loop for a direct chat.
 
         Returns None when the agent is no longer registered (e.g. uninstalled
-        after the conversation was created) — the caller then falls back to
-        the main Mona loop for resilience.
+        after the conversation was created) — the caller must answer with an
+        explicit unavailable notice; identity never falls back to Mona.
         """
         cached = self._partner_loops.get(agent_id)
         if cached is not None:
@@ -564,7 +564,8 @@ class AgentLoop:
         registry = AgentRegistry()
         if agent_id not in registry:
             logger.warning(
-                "Direct-chat agent {!r} not found; falling back to Mona", agent_id
+                "Direct-chat agent {!r} not found; answering with unavailable notice",
+                agent_id,
             )
             return None
         from mona.agent.partner_loop import PartnerAgentLoop
@@ -1458,7 +1459,8 @@ class AgentLoop:
         # prompt, private memory/skills and manifest-filtered tools — instead
         # of the reserved Mona identity. Partner loops carry
         # ``_partner_agent_id`` and skip this branch, so delegation never
-        # recurses. Unknown agent IDs fall back to the Mona loop.
+        # recurses. When the agent is uninstalled/disabled the turn is answered
+        # with an explicit unavailable notice — identity never falls back to Mona.
         from mona.agent.partners import MONA_AGENT_ID
         conversation = session.conversation_metadata
         if (
@@ -1477,6 +1479,13 @@ class AgentLoop:
                     on_stream_end=on_stream_end,
                     pending_queue=pending_queue,
                 )
+            return await self._partner_unavailable_notice(
+                msg,
+                session,
+                conversation.direct_agent_id,
+                on_stream=on_stream,
+                on_stream_end=on_stream_end,
+            )
 
         ctx = TurnContext(
             msg=msg,
@@ -1846,6 +1855,49 @@ class AgentLoop:
 
         return filtered
 
+    async def _partner_unavailable_notice(
+        self,
+        msg: InboundMessage,
+        session: Session,
+        agent_id: str,
+        *,
+        on_stream: Callable[[str], Awaitable[None]] | None = None,
+        on_stream_end: Callable[..., Awaitable[None]] | None = None,
+    ) -> OutboundMessage:
+        """Answer a direct-chat turn when the bound partner agent is gone.
+
+        The conversation stays bound to the missing agent — identity must not
+        silently fall back to Mona. The notice is persisted so it survives
+        history reloads, and streamed like a normal reply when possible.
+        """
+        notice = (
+            f"The partner agent '{agent_id}' is unavailable (uninstalled or disabled). "
+            "This conversation is bound to that agent and cannot be answered by Mona — "
+            "please reinstall the agent or start a new chat."
+        )
+        self._save_turn(
+            session,
+            [
+                {"role": "user", "content": msg.content},
+                {"role": "assistant", "content": notice},
+            ],
+            0,
+        )
+        self.sessions.save(session)
+        if on_stream is not None:
+            await on_stream(notice)
+            if on_stream_end is not None:
+                await on_stream_end(resuming=False)
+        meta = dict(msg.metadata or {})
+        if on_stream is not None:
+            meta["_streamed"] = True
+        return OutboundMessage(
+            channel=msg.channel,
+            chat_id=msg.chat_id,
+            content=notice,
+            metadata=meta,
+        )
+
     def _save_turn(
         self,
         session: Session,
@@ -1893,7 +1945,9 @@ class AgentLoop:
             partner_id = getattr(self, "_partner_agent_id", None)
             if partner_id and role in ("assistant", "tool"):
                 entry["author_id"] = partner_id
+            normalize_message_author(entry)
             session.messages.append(entry)
+            session.update_ui_summary(entry)
             if role == "assistant":
                 last_assistant_idx = len(session.messages) - 1
         if turn_latency_ms is not None and last_assistant_idx is not None:
@@ -2016,6 +2070,9 @@ class AgentLoop:
                 overlap = size
                 break
         session.messages.extend(restored_messages[overlap:])
+        for restored in restored_messages[overlap:]:
+            normalize_message_author(restored)
+            session.update_ui_summary(restored)
 
         self._clear_pending_user_turn(session)
         self._clear_runtime_checkpoint(session)
@@ -2029,13 +2086,14 @@ class AgentLoop:
             return False
 
         if session.messages and session.messages[-1].get("role") == "user":
-            session.messages.append(
-                {
-                    "role": "assistant",
-                    "content": "Error: Task interrupted before a response was generated.",
-                    "timestamp": datetime.now().isoformat(),
-                }
-            )
+            entry = {
+                "role": "assistant",
+                "content": "Error: Task interrupted before a response was generated.",
+                "timestamp": datetime.now().isoformat(),
+            }
+            normalize_message_author(entry)
+            session.messages.append(entry)
+            session.update_ui_summary(entry)
             session.updated_at = datetime.now()
 
         self._clear_pending_user_turn(session)
