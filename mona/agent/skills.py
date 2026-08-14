@@ -137,13 +137,26 @@ class SkillsLoader:
         Returns:
             Skill content or None if not found.
         """
+        skill_dir = self.resolve_skill_dir(name)
+        if skill_dir is None:
+            return None
+        path = skill_dir / "SKILL.md"
+        return path.read_text(encoding="utf-8")
+
+    def resolve_skill_dir(self, name: str) -> Path | None:
+        """Resolve a skill's directory by priority.
+
+        Order: agent-private > agent package > platform builtin (guide 7.3).
+        Returns the first directory that contains ``<name>/SKILL.md``, or
+        None when the skill does not exist in any layer.
+        """
         roots = [self.workspace_skills, *self.package_skill_dirs]
         if self.builtin_skills:
             roots.append(self.builtin_skills)
         for root in roots:
-            path = root / name / "SKILL.md"
-            if path.exists():
-                return path.read_text(encoding="utf-8")
+            skill_dir = root / name
+            if (skill_dir / "SKILL.md").exists():
+                return skill_dir
         return None
 
     def load_skills_for_context(self, skill_names: list[str]) -> str:
@@ -167,7 +180,7 @@ class SkillsLoader:
             markdown = self.load_skill(name)
             if markdown is None:
                 continue
-            skill_usage.bump_access(name)
+            skill_usage.bump_access(name, agent_id=self.agent_id)
             parts.append(f"### Skill: {name}\n\n{self._strip_frontmatter(markdown)}")
         return "\n\n---\n\n".join(parts)
 

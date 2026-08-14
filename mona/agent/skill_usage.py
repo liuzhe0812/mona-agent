@@ -1,7 +1,10 @@
 """Skill lifecycle sidecar: access telemetry + archive/restore primitives.
 
 Design (see docs/design/skill-lifecycle-design.md):
-  - Sidecar JSON at ~/.mona/skills/.usage.json keyed by skill name.
+  - Sidecar JSON at <agent skills dir>/.usage.json keyed by skill name.
+    Every agent (Mona + partner agents) gets its own sidecar, archive dir
+    and lock file under ``~/.mona/agents/<agent_id>/skills/`` — records are
+    isolated per (agent_id, skill_name) by directory (multi-agent phase 4).
   - Directory location is the source of truth for active vs archived; the
     sidecar's ``archived_at`` field is display-only and reconciled on scan.
   - Only real session accesses bump counters; metadata reads, summary builds
@@ -26,7 +29,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
-from mona.config.paths import get_skills_dir
+from mona.agent.partners import MONA_AGENT_ID, normalize_agent_id
+from mona.config.paths import get_agent_skills_dir
 
 logger = logging.getLogger(__name__)
 
@@ -50,20 +54,20 @@ except ImportError:  # pragma: no cover - platform-specific
         pass
 
 
-def _skills_dir() -> Path:
-    return get_skills_dir()
+def _skills_dir(agent_id: str = MONA_AGENT_ID) -> Path:
+    return get_agent_skills_dir(normalize_agent_id(agent_id))
 
 
-def _usage_file() -> Path:
-    return _skills_dir() / ".usage.json"
+def _usage_file(agent_id: str = MONA_AGENT_ID) -> Path:
+    return _skills_dir(agent_id) / ".usage.json"
 
 
-def _lock_file() -> Path:
-    return _skills_dir() / ".usage.json.lock"
+def _lock_file(agent_id: str = MONA_AGENT_ID) -> Path:
+    return _skills_dir(agent_id) / ".usage.json.lock"
 
 
-def _archive_dir() -> Path:
-    return _skills_dir() / ".archive"
+def _archive_dir(agent_id: str = MONA_AGENT_ID) -> Path:
+    return _skills_dir(agent_id) / ".archive"
 
 
 def _now_iso() -> str:
@@ -94,23 +98,27 @@ def _empty_record() -> dict[str, Any]:
 
 
 @contextmanager
-def _lifecycle_lock() -> Iterator[None]:
+def _lifecycle_lock(agent_id: str = MONA_AGENT_ID) -> Iterator[None]:
     """Cross-process lock for the entire read-modify-write cycle.
 
     Only protects the sidecar file; skill directory moves rely on filesystem
     atomicity. Windows uses msvcrt.locking on a 1-byte lock file, Unix uses
-    fcntl.flock. Re-entrant within a single thread (see _lock_state).
+    fcntl.flock. Re-entrant within a single thread (see _lock_state); depth
+    is tracked per agent since each agent has its own lock file.
     """
-    depth = getattr(_lock_state, "depth", 0)
+    agent_id = normalize_agent_id(agent_id)
+    depths: dict[str, int] = getattr(_lock_state, "depths", None) or {}
+    depth = depths.get(agent_id, 0)
     if depth:
-        _lock_state.depth = depth + 1
+        depths[agent_id] = depth + 1
+        _lock_state.depths = depths
         try:
             yield
         finally:
-            _lock_state.depth = depth
+            depths[agent_id] = depth
         return
 
-    lock_path = _lock_file()
+    lock_path = _lock_file(agent_id)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
 
     if fcntl is None and msvcrt is None:
@@ -129,10 +137,11 @@ def _lifecycle_lock() -> Iterator[None]:
         else:
             fd.seek(0)
             msvcrt.locking(fd.fileno(), msvcrt.LK_LOCK, 1)
-        _lock_state.depth = 1
+        depths[agent_id] = 1
+        _lock_state.depths = depths
         yield
     finally:
-        _lock_state.depth = 0
+        depths[agent_id] = 0
         if fcntl is not None:
             try:
                 fcntl.flock(fd, fcntl.LOCK_UN)
@@ -152,13 +161,13 @@ def _lifecycle_lock() -> Iterator[None]:
 # ---------------------------------------------------------------------------
 
 
-def load_usage() -> dict[str, dict[str, Any]]:
+def load_usage(agent_id: str = MONA_AGENT_ID) -> dict[str, dict[str, Any]]:
     """Read .usage.json. Returns empty dict on missing file.
 
     Raises ValueError on corrupt JSON so callers can fail closed instead of
     silently treating corruption as "no records".
     """
-    path = _usage_file()
+    path = _usage_file(agent_id)
     if not path.exists():
         return {}
     try:
@@ -174,9 +183,9 @@ def load_usage() -> dict[str, dict[str, Any]]:
     return clean
 
 
-def save_usage(data: dict[str, dict[str, Any]]) -> None:
+def save_usage(data: dict[str, dict[str, Any]], agent_id: str = MONA_AGENT_ID) -> None:
     """Atomically write the usage map. Best-effort: logs on failure."""
-    path = _usage_file()
+    path = _usage_file(agent_id)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp_path = tempfile.mkstemp(
@@ -199,10 +208,10 @@ def save_usage(data: dict[str, dict[str, Any]]) -> None:
         raise
 
 
-def get_record(name: str) -> dict[str, Any]:
+def get_record(name: str, agent_id: str = MONA_AGENT_ID) -> dict[str, Any]:
     """Return the record for *name*, backfilling missing keys with defaults."""
     try:
-        data = load_usage()
+        data = load_usage(agent_id)
     except ValueError:
         # Caller asked for a single record; surface a fresh empty one and let
         # the caller decide whether to escalate. Mutations will re-raise.
@@ -216,18 +225,18 @@ def get_record(name: str) -> dict[str, Any]:
     return rec
 
 
-def _mutate(name: str, mutator: Any) -> None:
+def _mutate(name: str, mutator: Any, agent_id: str = MONA_AGENT_ID) -> None:
     """Load (lock) → mutate record → save, all inside the lifecycle lock."""
     if not name:
         return
-    with _lifecycle_lock():
-        data = load_usage()
+    with _lifecycle_lock(agent_id):
+        data = load_usage(agent_id)
         rec = data.get(name)
         if not isinstance(rec, dict):
             rec = _empty_record()
         mutator(rec)
         data[name] = rec
-        save_usage(data)
+        save_usage(data, agent_id)
 
 
 # ---------------------------------------------------------------------------
@@ -235,7 +244,7 @@ def _mutate(name: str, mutator: Any) -> None:
 # ---------------------------------------------------------------------------
 
 
-def record_agent_created(name: str) -> None:
+def record_agent_created(name: str, agent_id: str = MONA_AGENT_ID) -> None:
     """Mark a skill as agent-created and anchor its creation time.
 
     Called by SkillCreateTool after writing SKILL.md. Failure propagates so
@@ -249,10 +258,10 @@ def record_agent_created(name: str) -> None:
             rec["created_at"] = _now_iso()
         rec["archived_at"] = None
 
-    _mutate(name, _apply)
+    _mutate(name, _apply, agent_id)
 
 
-def bump_access(name: str) -> None:
+def bump_access(name: str, agent_id: str = MONA_AGENT_ID) -> None:
     """Best-effort: bump access_count and last_accessed_at for *name*.
 
     Failures only log at DEBUG; they must never break the underlying tool
@@ -263,24 +272,24 @@ def bump_access(name: str) -> None:
             rec["access_count"] = int(rec.get("access_count") or 0) + 1
             rec["last_accessed_at"] = _now_iso()
 
-        _mutate(name, _apply)
+        _mutate(name, _apply, agent_id)
     except Exception as e:
         logger.debug("bump_access(%s) failed: %s", name, e, exc_info=True)
 
 
-def set_pinned(name: str, pinned: bool) -> None:
+def set_pinned(name: str, pinned: bool, agent_id: str = MONA_AGENT_ID) -> None:
     def _apply(rec: dict[str, Any]) -> None:
         rec["pinned"] = bool(pinned)
 
-    _mutate(name, _apply)
+    _mutate(name, _apply, agent_id)
 
 
-def set_archived_at(name: str, archived_at: str | None) -> None:
+def set_archived_at(name: str, archived_at: str | None, agent_id: str = MONA_AGENT_ID) -> None:
     """Display-only field; directory location is the source of truth."""
     def _apply(rec: dict[str, Any]) -> None:
         rec["archived_at"] = archived_at
 
-    _mutate(name, _apply)
+    _mutate(name, _apply, agent_id)
 
 
 # ---------------------------------------------------------------------------
@@ -294,7 +303,7 @@ def is_builtin(name: str) -> bool:
     return (BUILTIN_SKILLS_DIR / name / "SKILL.md").exists()
 
 
-def get_provenance(name: str) -> str:
+def get_provenance(name: str, agent_id: str = MONA_AGENT_ID) -> str:
     """Return 'agent' | 'bundled' | 'unknown'.
 
     'agent' — created by Dream via SkillCreateTool (has a usage record with
@@ -306,7 +315,7 @@ def get_provenance(name: str) -> str:
     if is_builtin(name):
         return "bundled"
     try:
-        data = load_usage()
+        data = load_usage(agent_id)
     except ValueError:
         return "unknown"
     rec = data.get(name)
@@ -320,19 +329,19 @@ def get_provenance(name: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def is_archived(name: str) -> bool:
+def is_archived(name: str, agent_id: str = MONA_AGENT_ID) -> bool:
     """Whether *name* currently lives under .archive/."""
-    return (_archive_dir() / name / "SKILL.md").exists()
+    return (_archive_dir(agent_id) / name / "SKILL.md").exists()
 
 
-def is_active(name: str) -> bool:
+def is_active(name: str, agent_id: str = MONA_AGENT_ID) -> bool:
     """Whether *name* currently lives as an active top-level skill."""
-    return (_skills_dir() / name / "SKILL.md").exists()
+    return (_skills_dir(agent_id) / name / "SKILL.md").exists()
 
 
-def list_active_user_skill_names() -> list[str]:
+def list_active_user_skill_names(agent_id: str = MONA_AGENT_ID) -> list[str]:
     """List active user skill directory names (excludes .archive and builtin)."""
-    base = _skills_dir()
+    base = _skills_dir(agent_id)
     if not base.exists():
         return []
     names: list[str] = []
@@ -347,8 +356,8 @@ def list_active_user_skill_names() -> list[str]:
     return sorted(names)
 
 
-def list_archived_skill_names() -> list[str]:
-    archive = _archive_dir()
+def list_archived_skill_names(agent_id: str = MONA_AGENT_ID) -> list[str]:
+    archive = _archive_dir(agent_id)
     if not archive.exists():
         return []
     return sorted(
@@ -367,6 +376,7 @@ def plan_automatic_archives(
     archive_after_days: int,
     disabled_skills: set[str] | None = None,
     now: datetime | None = None,
+    agent_id: str = MONA_AGENT_ID,
 ) -> list[str]:
     """Return candidate skill names eligible for automatic archival.
 
@@ -386,13 +396,13 @@ def plan_automatic_archives(
     disabled = disabled_skills or set()
 
     try:
-        data = load_usage()
+        data = load_usage(agent_id)
     except ValueError:
         # Fail closed: surface corruption instead of silently skipping.
         raise
 
     candidates: list[str] = []
-    for name in list_active_user_skill_names():
+    for name in list_active_user_skill_names(agent_id):
         rec = data.get(name)
         if not isinstance(rec, dict):
             # Unknown user skill (no provenance record) — never auto-archive.
@@ -422,8 +432,8 @@ def _days(n: int) -> timedelta:
 # ---------------------------------------------------------------------------
 
 
-def archive_skill(name: str, *, automatic: bool) -> tuple[bool, str]:
-    """Move ``~/.mona/skills/<name>/`` to ``~/.mona/skills/.archive/<name>/``.
+def archive_skill(name: str, *, automatic: bool, agent_id: str = MONA_AGENT_ID) -> tuple[bool, str]:
+    """Move ``<agent skills>/<name>/`` to ``<agent skills>/.archive/<name>/``.
 
     Returns (ok, message). Refuses to operate on builtin skills or unknown
     user skills when ``automatic=True``. Refuses to overwrite an existing
@@ -431,17 +441,17 @@ def archive_skill(name: str, *, automatic: bool) -> tuple[bool, str]:
     """
     if is_builtin(name):
         return False, f"skill '{name}' is builtin; builtin skills are never archived"
-    if automatic and get_provenance(name) != "agent":
+    if automatic and get_provenance(name, agent_id) != "agent":
         return False, (
             f"skill '{name}' is not agent-created; only agent-created skills "
             "are eligible for automatic archival"
         )
 
-    src = _skills_dir() / name
+    src = _skills_dir(agent_id) / name
     if not src.exists() or not (src / "SKILL.md").exists():
         return False, f"skill '{name}' not found at {src}"
 
-    archive_root = _archive_dir()
+    archive_root = _archive_dir(agent_id)
     try:
         archive_root.mkdir(parents=True, exist_ok=True)
     except OSError as e:
@@ -461,21 +471,21 @@ def archive_skill(name: str, *, automatic: bool) -> tuple[bool, str]:
         except Exception as e:
             return False, f"failed to archive: {e}"
 
-    set_archived_at(name, _now_iso())
+    set_archived_at(name, _now_iso(), agent_id)
     return True, f"archived to {dest}"
 
 
-def restore_skill(name: str) -> tuple[bool, str]:
-    """Move ``~/.mona/skills/.archive/<name>/`` back to ``~/.mona/skills/<name>/``.
+def restore_skill(name: str, agent_id: str = MONA_AGENT_ID) -> tuple[bool, str]:
+    """Move ``<agent skills>/.archive/<name>/`` back to ``<agent skills>/<name>/``.
 
     Refuses to overwrite an existing active skill. Clears ``archived_at``.
     """
-    archive_root = _archive_dir()
+    archive_root = _archive_dir(agent_id)
     src = archive_root / name
     if not src.exists() or not (src / "SKILL.md").exists():
         return False, f"skill '{name}' not found in archive"
 
-    dest = _skills_dir() / name
+    dest = _skills_dir(agent_id) / name
     if dest.exists():
         return False, f"destination already exists: {dest} (refusing to overwrite)"
 
@@ -488,7 +498,7 @@ def restore_skill(name: str) -> tuple[bool, str]:
         except Exception as e:
             return False, f"failed to restore: {e}"
 
-    set_archived_at(name, None)
+    set_archived_at(name, None, agent_id)
     return True, f"restored to {dest}"
 
 
@@ -497,7 +507,7 @@ def restore_skill(name: str) -> tuple[bool, str]:
 # ---------------------------------------------------------------------------
 
 
-def reconcile_archived_at() -> None:
+def reconcile_archived_at(agent_id: str = MONA_AGENT_ID) -> None:
     """Fix ``archived_at`` fields that disagree with directory location.
 
     - Skill in .archive/ but archived_at is None → stamp now.
@@ -505,11 +515,11 @@ def reconcile_archived_at() -> None:
     - Skill missing entirely → leave record alone (could be restored later).
     """
     try:
-        with _lifecycle_lock():
-            data = load_usage()
+        with _lifecycle_lock(agent_id):
+            data = load_usage(agent_id)
             changed = False
-            archived_names = set(list_archived_skill_names())
-            active_user_names = set(list_active_user_skill_names())
+            archived_names = set(list_archived_skill_names(agent_id))
+            active_user_names = set(list_active_user_skill_names(agent_id))
             now_iso = _now_iso()
             for name, rec in data.items():
                 if not isinstance(rec, dict):
@@ -521,7 +531,7 @@ def reconcile_archived_at() -> None:
                     rec["archived_at"] = None
                     changed = True
             if changed:
-                save_usage(data)
+                save_usage(data, agent_id)
     except Exception as e:
         logger.debug("reconcile_archived_at failed: %s", e, exc_info=True)
 
@@ -531,17 +541,17 @@ def reconcile_archived_at() -> None:
 # ---------------------------------------------------------------------------
 
 
-def usage_report() -> list[dict[str, Any]]:
+def usage_report(agent_id: str = MONA_AGENT_ID) -> list[dict[str, Any]]:
     """Return a row per skill on disk (active + archived), with provenance."""
     rows: list[dict[str, Any]] = []
     try:
-        data = load_usage()
+        data = load_usage(agent_id)
     except ValueError:
         # Corrupt sidecar — surface what we can from the filesystem.
         data = {}
 
     seen: set[str] = set()
-    for name in list_active_user_skill_names() + list_archived_skill_names():
+    for name in list_active_user_skill_names(agent_id) + list_archived_skill_names(agent_id):
         if name in seen:
             continue
         seen.add(name)
@@ -552,8 +562,8 @@ def usage_report() -> list[dict[str, Any]]:
         row = {
             "name": name,
             **rec,
-            "provenance": get_provenance(name),
-            "location": "archived" if is_archived(name) else "active",
+            "provenance": get_provenance(name, agent_id),
+            "location": "archived" if is_archived(name, agent_id) else "active",
         }
         rows.append(row)
     return sorted(rows, key=lambda r: r["name"])

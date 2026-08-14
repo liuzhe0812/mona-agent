@@ -21,13 +21,42 @@ from mona.agent.tools.schema import (
 )
 
 
-def _skills_loader():
-    """Lazy accessor for SkillsLoader (avoids circular import at module load)."""
+def _coerce_agent_id(value: Any) -> str:
+    """Best-effort agent id for direct constructor injection.
+
+    Test doubles and partially-mocked contexts may hand us non-string values;
+    fall back to Mona rather than crashing tool construction.
+    """
+    if isinstance(value, str) and value.strip():
+        return normalize_agent_id(value)
+    return MONA_AGENT_ID
+
+
+def _agent_id_from_ctx(ctx: Any) -> str:
+    """Executing-agent identity from the tool-construction context."""
+    return _coerce_agent_id(getattr(ctx, "agent_id", None))
+
+
+def _skills_loader(agent_id: str = MONA_AGENT_ID):
+    """Build a SkillsLoader scoped to *agent_id* (lazy to avoid circular imports).
+
+    Resolution order: agent-private skills > agent package skills > platform
+    builtin skills (multi-agent guide 7.3). Mona's loader has no package
+    layer and matches the legacy global behavior.
+    """
+    from mona.agent.partners import AgentRegistry
     from mona.agent.skills import BUILTIN_SKILLS_DIR, SkillsLoader
     from mona.config.paths import get_skills_dir
+
+    agent_id = normalize_agent_id(agent_id)
+    package_dirs: list[Path] = []
+    if agent_id != MONA_AGENT_ID:
+        package_dirs = AgentRegistry().resolve_skill_dirs(agent_id)
     return SkillsLoader(
-        workspace=get_skills_dir(),  # workspace arg is legacy; loader uses get_skills_dir() internally
+        workspace=get_skills_dir(),  # workspace arg is legacy; loader uses get_agent_skills_dir() internally
         builtin_skills_dir=BUILTIN_SKILLS_DIR,
+        agent_id=agent_id,
+        package_skill_dirs=package_dirs,
     )
 
 
@@ -36,15 +65,16 @@ class SkillReadTool(Tool):
 
     _scopes = {"core", "subagent", "memory"}
 
-    def __init__(self, *, track_usage: bool = True) -> None:
+    def __init__(self, *, track_usage: bool = True, agent_id: str = MONA_AGENT_ID) -> None:
         # When Dream reads skills for dedup/maintenance, it must NOT bump
         # access counters — otherwise maintenance would reset the inactivity
         # clock and archival would never happen.
         self._track_usage = track_usage
+        self._agent_id = _coerce_agent_id(agent_id)
 
     @classmethod
     def create(cls, ctx: Any) -> Tool:
-        return cls()
+        return cls(agent_id=_agent_id_from_ctx(ctx))
 
     @property
     def name(self) -> str:
@@ -66,7 +96,7 @@ class SkillReadTool(Tool):
     def parameters(self) -> dict[str, Any]:
         return tool_parameters_schema(
             name=StringSchema(
-                description="Skill name (directory name under ~/.mona/skills/ or builtin).",
+                description="Skill name (directory name under the executing agent's skills dir, its package, or builtin).",
             ),
             required=["name"],
         )
@@ -74,13 +104,13 @@ class SkillReadTool(Tool):
     async def execute(self, name: str | None = None, **kwargs: Any) -> str:
         if not name:
             return "Error: name parameter is required."
-        loader = _skills_loader()
+        loader = _skills_loader(self._agent_id)
         content = loader.load_skill(name)
         if content is None:
             return f"Error: skill '{name}' not found."
         if self._track_usage:
             from mona.agent import skill_usage
-            skill_usage.bump_access(name)
+            skill_usage.bump_access(name, agent_id=self._agent_id)
         return content
 
 
@@ -107,7 +137,7 @@ class SkillCreateTool(Tool):
         )
         # New skills land in the executing agent's private skills dir
         # (~/.mona/agents/<agent_id>/skills/) — multi-agent phase 1.
-        self._agent_id = normalize_agent_id(agent_id)
+        self._agent_id = _coerce_agent_id(agent_id)
 
     @classmethod
     def create(cls, ctx: Any) -> Tool:
@@ -163,8 +193,8 @@ class SkillCreateTool(Tool):
         # lifecycle lock through directory creation + provenance write so two
         # concurrent Dream forks cannot both pass the cap and overshoot.
         try:
-            with skill_usage._lifecycle_lock():  # noqa: SLF001 — same-module lock
-                active = skill_usage.list_active_user_skill_names()
+            with skill_usage._lifecycle_lock(self._agent_id):  # noqa: SLF001 — same-module lock
+                active = skill_usage.list_active_user_skill_names(self._agent_id)
                 if name not in active and len(active) >= self._max_active:
                     return (
                         f"Error: active user skill count ({len(active)}) has "
@@ -185,7 +215,7 @@ class SkillCreateTool(Tool):
                     # Provenance write is part of the same critical section.
                     # If it fails, roll back the directory we just created
                     # so the next attempt starts clean.
-                    skill_usage.record_agent_created(name)
+                    skill_usage.record_agent_created(name, self._agent_id)
                 except Exception as provenance_err:
                     if created_dir:
                         import shutil as _shutil
@@ -207,12 +237,13 @@ class SkillScriptRunTool(Tool):
 
     _scopes = {"core", "subagent", "memory"}
 
-    def __init__(self, *, track_usage: bool = True) -> None:
+    def __init__(self, *, track_usage: bool = True, agent_id: str = MONA_AGENT_ID) -> None:
         self._track_usage = track_usage
+        self._agent_id = _coerce_agent_id(agent_id)
 
     @classmethod
     def create(cls, ctx: Any) -> Tool:
-        return cls()
+        return cls(agent_id=_agent_id_from_ctx(ctx))
 
     @property
     def name(self) -> str:
@@ -254,11 +285,8 @@ class SkillScriptRunTool(Tool):
         # Prevent path traversal in script name
         if "/" in script or "\\" in script or ".." in script:
             return f"Error: invalid script name '{script}'."
-        # Find the skill directory
-        from mona.agent.skills import BUILTIN_SKILLS_DIR
-        from mona.config.paths import get_skills_dir
-        candidates = [get_skills_dir() / skill, BUILTIN_SKILLS_DIR / skill]
-        skill_dir = next((p for p in candidates if p.exists()), None)
+        # Find the skill directory (agent-private > package > builtin)
+        skill_dir = _skills_loader(self._agent_id).resolve_skill_dir(skill)
         if skill_dir is None:
             return f"Error: skill '{skill}' not found."
         script_path = skill_dir / "scripts" / script
@@ -286,7 +314,7 @@ class SkillScriptRunTool(Tool):
             output += f"\n[exit code: {result.returncode}]"
             if self._track_usage:
                 from mona.agent import skill_usage
-                skill_usage.bump_access(skill)
+                skill_usage.bump_access(skill, agent_id=self._agent_id)
             return output.strip() or f"(script completed with exit code {result.returncode})"
         except subprocess.TimeoutExpired:
             return f"Error: script '{script}' timed out after 120s."
@@ -299,12 +327,13 @@ class SkillReferenceReadTool(Tool):
 
     _scopes = {"core", "subagent", "memory"}
 
-    def __init__(self, *, track_usage: bool = True) -> None:
+    def __init__(self, *, track_usage: bool = True, agent_id: str = MONA_AGENT_ID) -> None:
         self._track_usage = track_usage
+        self._agent_id = _coerce_agent_id(agent_id)
 
     @classmethod
     def create(cls, ctx: Any) -> Tool:
-        return cls()
+        return cls(agent_id=_agent_id_from_ctx(ctx))
 
     @property
     def name(self) -> str:
@@ -346,10 +375,7 @@ class SkillReferenceReadTool(Tool):
         # Prevent path traversal
         if ".." in ref_path:
             return f"Error: invalid ref_path '{ref_path}'."
-        from mona.agent.skills import BUILTIN_SKILLS_DIR
-        from mona.config.paths import get_skills_dir
-        candidates = [get_skills_dir() / skill, BUILTIN_SKILLS_DIR / skill]
-        skill_dir = next((p for p in candidates if p.exists()), None)
+        skill_dir = _skills_loader(self._agent_id).resolve_skill_dir(skill)
         if skill_dir is None:
             return f"Error: skill '{skill}' not found."
         ref_file = skill_dir / "references" / ref_path
@@ -359,7 +385,7 @@ class SkillReferenceReadTool(Tool):
             content = ref_file.read_text(encoding="utf-8")
             if self._track_usage:
                 from mona.agent import skill_usage
-                skill_usage.bump_access(skill)
+                skill_usage.bump_access(skill, agent_id=self._agent_id)
             return content
         except Exception as e:
             return f"Error reading reference '{ref_path}': {e}"
@@ -370,12 +396,13 @@ class SkillAssetCopyTool(Tool):
 
     _scopes = {"core", "subagent", "memory"}
 
-    def __init__(self, *, track_usage: bool = True) -> None:
+    def __init__(self, *, track_usage: bool = True, agent_id: str = MONA_AGENT_ID) -> None:
         self._track_usage = track_usage
+        self._agent_id = _coerce_agent_id(agent_id)
 
     @classmethod
     def create(cls, ctx: Any) -> Tool:
-        return cls()
+        return cls(agent_id=_agent_id_from_ctx(ctx))
 
     @property
     def name(self) -> str:
@@ -414,10 +441,7 @@ class SkillAssetCopyTool(Tool):
             return "Error: skill, asset, and dest parameters are required."
         if ".." in asset:
             return f"Error: invalid asset path '{asset}'."
-        from mona.agent.skills import BUILTIN_SKILLS_DIR
-        from mona.config.paths import get_skills_dir
-        candidates = [get_skills_dir() / skill, BUILTIN_SKILLS_DIR / skill]
-        skill_dir = next((p for p in candidates if p.exists()), None)
+        skill_dir = _skills_loader(self._agent_id).resolve_skill_dir(skill)
         if skill_dir is None:
             return f"Error: skill '{skill}' not found."
         asset_file = skill_dir / "assets" / asset
@@ -438,7 +462,7 @@ class SkillAssetCopyTool(Tool):
             shutil.copy2(asset_file, dest_path)
             if self._track_usage:
                 from mona.agent import skill_usage
-                skill_usage.bump_access(skill)
+                skill_usage.bump_access(skill, agent_id=self._agent_id)
             return f"Successfully copied {asset_file} to {dest_path}."
         except Exception as e:
             return f"Error copying asset '{asset}': {e}"

@@ -956,7 +956,7 @@ class Dream:
         # reads must NOT bump access counters — otherwise the inactivity
         # clock would reset on every Dream cycle and archival would never
         # happen. Pass track_usage=False to opt out of telemetry.
-        tools.register(SkillReadTool(track_usage=False))
+        tools.register(SkillReadTool(track_usage=False, agent_id=self.store.agent_id))
         tools.register(SkillCreateTool(
             max_active_user_skills=self.max_active_user_skills,
             agent_id=self.store.agent_id,
@@ -1056,15 +1056,18 @@ class Dream:
         #      are never auto-archived.
         # Failures here are non-fatal — Dream proceeds with Phase 1/2.
         try:
-            skill_usage.reconcile_archived_at()
+            skill_usage.reconcile_archived_at(self.store.agent_id)
             if self.skill_prune_enabled:
                 disabled = set(self.disabled_skills)
                 candidates = skill_usage.plan_automatic_archives(
                     archive_after_days=self.archive_after_days,
                     disabled_skills=disabled,
+                    agent_id=self.store.agent_id,
                 )
                 for name in candidates:
-                    ok, msg = skill_usage.archive_skill(name, automatic=True)
+                    ok, msg = skill_usage.archive_skill(
+                        name, automatic=True, agent_id=self.store.agent_id
+                    )
                     if ok:
                         logger.info("Dream: auto-archived skill '{}' ({})", name, msg)
                     else:
