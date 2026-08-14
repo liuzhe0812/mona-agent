@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import {
   LogIn,
   LogOut,
@@ -37,7 +37,8 @@ import { cn } from "@/lib/utils";
 
 /**
  * 企业微信式窄功能栏（阶段 4.5）：固定 64px，无展开/折叠态。
- * 头像置顶，消息/伙伴在前，其余模块跟随其后，设置与账号置底。
+ * 头像置顶，消息/伙伴在前，其余模块跟随其后，账号置底。
+ * 高度不足时模块从尾部收进「更多」，底部区域 shrink-0 永不压缩。
  */
 interface AppRailProps {
   /** 当前主视图 id（chat / partners / note / email / ...）。 */
@@ -138,31 +139,28 @@ export function AppRail(props: AppRailProps) {
     .filter((d): d is NonNullable<typeof d> => Boolean(d))
     .filter((d) => !isMacOS() || !d.windowsOnly);
 
-  // 直出槽位容量按窗口高度动态计算：中间区可用高度 ÷ 单槽位高度，
-  // 扣除「消息/伙伴」两个固定槽位后，放不下的模块收进「更多」（其自身
-  // 占一个槽位，只在放不下时出现）。无布局环境（jsdom）不收敛，全部直出。
+  // 直出槽位容量 = 中间区可用高度 ÷ 单槽位高度。中间区 flex-1 min-h-0，
+  // 其 clientHeight 即真实可用高度，用 ResizeObserver 跟踪（窗口缩放、
+  // 底部区域内容变化都会触发）。useLayoutEffect 保证首帧绘制前完成首测，
+  // 无「先全直出再收敛」的闪烁。无布局环境（jsdom，高度为 0）不收敛，全部直出。
+  const UNLIMITED = Number.MAX_SAFE_INTEGER;
   const middleRef = useRef<HTMLDivElement>(null);
-  const [slotCapacity, setSlotCapacity] = useState(visible.length + 2);
-  useEffect(() => {
+  const [slotCapacity, setSlotCapacity] = useState(UNLIMITED);
+  useLayoutEffect(() => {
     const el = middleRef.current;
     if (!el) return;
     const update = () => {
-      const nav = el.parentElement;
-      if (!nav) return;
-      const navRect = nav.getBoundingClientRect();
-      if (navRect.height === 0) return;
-      let reserved = 8; // nav pb-2
-      let sibling = el.nextElementSibling;
-      while (sibling) {
-        reserved += (sibling as HTMLElement).offsetHeight;
-        sibling = sibling.nextElementSibling;
+      const h = el.clientHeight;
+      if (h === 0) {
+        setSlotCapacity(UNLIMITED);
+        return;
       }
-      const available = navRect.bottom - el.getBoundingClientRect().top - reserved;
-      setSlotCapacity(Math.max(3, Math.floor(available / RAIL_ITEM_PITCH_PX)));
+      setSlotCapacity(Math.max(2, Math.floor(h / RAIL_ITEM_PITCH_PX)));
     };
     update();
-    window.addEventListener("resize", update);
-    return () => window.removeEventListener("resize", update);
+    const observer = new ResizeObserver(update);
+    observer.observe(el);
+    return () => observer.disconnect();
   }, []);
 
   // 槽位分配：「消息/伙伴」固定 2 槽，其余给模块；放不下时留 1 槽给「更多」
@@ -192,7 +190,7 @@ export function AppRail(props: AppRailProps) {
           <TooltipContent side="right">{t("rail.home")}</TooltipContent>
         </Tooltip>
 
-        <div ref={middleRef} className="mt-3 flex w-full flex-col gap-0.5 px-2">
+        <div ref={middleRef} className="mt-3 flex min-h-0 w-full flex-1 flex-col gap-0.5 overflow-hidden px-2">
           <RailItem
             label={t("rail.messages")}
             icon={<MessageSquareText className="h-5 w-5" />}
@@ -253,7 +251,7 @@ export function AppRail(props: AppRailProps) {
           )}
         </div>
 
-        <div className="mt-auto flex w-full flex-col items-center gap-0.5 px-2">
+        <div className="flex w-full shrink-0 flex-col items-center gap-0.5 px-2">
           {props.updateAvailable && (
             <Tooltip>
               <TooltipTrigger asChild>
@@ -270,12 +268,6 @@ export function AppRail(props: AppRailProps) {
               <TooltipContent side="right">{t("rail.updateAvailable")}</TooltipContent>
             </Tooltip>
           )}
-          <RailItem
-            label={t("rail.settings")}
-            icon={<Settings className="h-5 w-5" />}
-            active={props.activeView === "settings"}
-            onClick={() => props.onOpenSettings()}
-          />
           {loggedIn ? (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>

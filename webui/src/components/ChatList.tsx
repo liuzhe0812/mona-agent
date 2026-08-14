@@ -293,19 +293,13 @@ export const ChatList = memo(function ChatList({
                   : completed.has(s.chatId)
                     ? "complete"
                     : null;
-                // 企业微信式列表项：伙伴私聊/房间显示大头像 + 「智能体/房间
-                // 名称 + 会话标题」两行；Mona 私聊保持单行无头像。
+                // 企业微信式列表项：私聊/房间显示大头像 + 「智能体/房间
+                // 名称 + 会话标题」两行；无 conversation 的旧会话按 Mona 私聊处理。
                 const conv = s.conversation ?? null;
-                const showConvAvatar =
-                  !!conv
-                  && (conv.type === "room"
-                    || (!!conv.directAgentId && conv.directAgentId !== MONA_AGENT_ID));
                 const convName =
-                  showConvAvatar && conv
-                    ? conv.type === "room"
-                      ? conv.title || title
-                      : resolveAgentDisplayName(agentsById, conv.directAgentId!)
-                    : null;
+                  conv?.type === "room"
+                    ? conv.title || title
+                    : resolveAgentDisplayName(agentsById, conv?.directAgentId ?? MONA_AGENT_ID);
                 return (
                   <li key={s.key} className="min-w-0">
                     <ContextMenu>
