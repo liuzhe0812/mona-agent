@@ -1,5 +1,6 @@
 """Base LLM provider interface."""
 
+import ast
 import asyncio
 import json
 import re
@@ -362,6 +363,40 @@ class LLMProvider(ABC):
             code_value = error_obj.get("code") or code_value
 
         return cls._normalize_error_token(type_value), cls._normalize_error_token(code_value)
+
+    @classmethod
+    def _extract_error_message(cls, payload: Any) -> str | None:
+        """Pull the human-readable ``message`` out of an upstream error body.
+
+        Handles dict bodies (e.g. the OpenAI SDK's ``e.body``), JSON strings,
+        and single-quoted dict reprs some relays return instead of JSON.
+        """
+        data: dict[str, Any] | None = None
+        if isinstance(payload, dict):
+            data = payload
+        elif isinstance(payload, str):
+            text = payload.strip()
+            if text:
+                parsed: Any = None
+                try:
+                    parsed = json.loads(text)
+                except Exception:
+                    try:
+                        parsed = ast.literal_eval(text)
+                    except Exception:
+                        parsed = None
+                if isinstance(parsed, dict):
+                    data = parsed
+        if not isinstance(data, dict):
+            return None
+
+        message = data.get("message")
+        error_obj = data.get("error")
+        if not isinstance(message, str) and isinstance(error_obj, dict):
+            message = error_obj.get("message")
+        if isinstance(message, str) and message.strip():
+            return message.strip()[:500]
+        return None
 
     @classmethod
     def _is_retryable_429_response(cls, response: LLMResponse) -> bool:
