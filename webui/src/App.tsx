@@ -6,6 +6,15 @@ import { Check, Copy, FileText, X } from "lucide-react";
 import { DeleteConfirm } from "@/components/DeleteConfirm";
 import { RenameChatDialog } from "@/components/RenameChatDialog";
 import { Sidebar } from "@/components/Sidebar";
+import { AppRail } from "@/components/shell/AppRail";
+import { SessionListPanel } from "@/components/shell/SessionListPanel";
+import { PartnersView } from "@/components/shell/PartnersView";
+import {
+  NewDirectDialog,
+  NewRoomDialog,
+} from "@/components/shell/ConversationDialogs";
+import { MONA_AGENT_ID } from "@/components/room/AgentAvatar";
+import { useAgents } from "@/components/room/useAgents";
 import { useMaterialsOpenStore } from "@/lib/materials-open-store";
 import { SessionSearchDialog } from "@/components/SessionSearchDialog";
 import { QuickAskWindow } from "@/components/quick/QuickAskWindow";
@@ -72,10 +81,9 @@ const SIDEBAR_STORAGE_KEY = "mona-webui.sidebar";
 const COMPLETED_RUNS_STORAGE_KEY = "mona-webui.sidebar.completed-runs.v1";
 const RESTART_STARTED_KEY = "mona-webui.restartStartedAt";
 const SIDEBAR_WIDTH = 220;
-const SIDEBAR_RAIL_WIDTH = 56;
 const TOKEN_REFRESH_MARGIN_MS = 30_000;
 const TOKEN_REFRESH_MIN_DELAY_MS = 5_000;
-type ShellView = "chat" | "settings" | "note" | "ssh" | "db" | "doc" | "email" | "schedule" | "system" | "profile";
+type ShellView = "chat" | "partners" | "settings" | "note" | "ssh" | "db" | "doc" | "email" | "schedule" | "system" | "profile";
 
 export function openNewBrowserTab(
   setView: (view: ShellView) => void,
@@ -553,6 +561,12 @@ function Shell({
   const { sessions, loading, refresh, createChat, deleteChat } = useSessions();
   const { state: sidebarState, update: updateSidebarState } =
     useSidebarState(sessions, !loading);
+  const agentsById = useAgents(token);
+  const partnerAgents = useMemo(() => [...agentsById.values()], [agentsById]);
+  const [directDialogOpen, setDirectDialogOpen] = useState(false);
+  const [roomDialogOpen, setRoomDialogOpen] = useState(false);
+  const [roomInitialAgents, setRoomInitialAgents] = useState<string[] | undefined>(undefined);
+  const [creatingConversation, setCreatingConversation] = useState(false);
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [createNoteOnOpen, setCreateNoteOnOpen] = useState(false);
   const [view, setView] = useState<ShellView>(
@@ -899,14 +913,6 @@ function Shell({
     });
   }, [client, loading, sessions]);
 
-  const closeDesktopSidebar = useCallback(() => {
-    setDesktopSidebarOpen(false);
-  }, []);
-
-  const openDesktopSidebar = useCallback(() => {
-    setDesktopSidebarOpen(true);
-  }, []);
-
   const closeMobileSidebar = useCallback(() => {
     setMobileSidebarOpen(false);
   }, []);
@@ -1032,6 +1038,12 @@ function Shell({
     setMobileSidebarOpen(false);
   }, [switchToMonaTab]);
 
+  const onOpenPartners = useCallback(() => {
+    setView("partners");
+    switchToMonaTab();
+    setMobileSidebarOpen(false);
+  }, [switchToMonaTab]);
+
   const onCreateChat = useCallback(async (workspace?: string | null) => {
     try {
       const chatId = await createChat(workspace);
@@ -1074,6 +1086,57 @@ function Shell({
     setView("chat");
     switchToMonaTab();
     setMobileSidebarOpen(false);
+  }, []);
+
+  /** 开始私聊：新建会话并标记为目标 agent 的私聊（Mona 私聊即普通新会话）。 */
+  const onStartDirect = useCallback(
+    async (agentId: string) => {
+      if (creatingConversation) return;
+      if (agentId === MONA_AGENT_ID) {
+        setDirectDialogOpen(false);
+        onNewChat();
+        return;
+      }
+      if (!client) return;
+      setCreatingConversation(true);
+      try {
+        const chatId = await onCreateChat();
+        if (!chatId) return;
+        await client.createDirectConversation(chatId, agentId);
+        await refresh();
+        setDirectDialogOpen(false);
+      } catch (e) {
+        console.error("Failed to create direct conversation", e);
+      } finally {
+        setCreatingConversation(false);
+      }
+    },
+    [client, creatingConversation, onCreateChat, onNewChat, refresh],
+  );
+
+  /** 创建协作房间：新建会话后调用 createRoom 命令。 */
+  const onSubmitRoom = useCallback(
+    async (input: { agentIds: string[]; title: string; goal?: string }) => {
+      if (creatingConversation || !client) return;
+      setCreatingConversation(true);
+      try {
+        const chatId = await onCreateChat();
+        if (!chatId) return;
+        await client.createRoom(chatId, input.agentIds, input.title, input.goal);
+        await refresh();
+        setRoomDialogOpen(false);
+      } catch (e) {
+        console.error("Failed to create room", e);
+      } finally {
+        setCreatingConversation(false);
+      }
+    },
+    [client, creatingConversation, onCreateChat, refresh],
+  );
+
+  const onOpenNewRoom = useCallback((agentId?: string) => {
+    setRoomInitialAgents(agentId ? [agentId] : undefined);
+    setRoomDialogOpen(true);
   }, []);
 
   const onSelectChat = useCallback(
@@ -1238,7 +1301,7 @@ function Shell({
       // 启动默认模块：仅在初次启动且没有 ?noteId 深链时应用
       if (!new URLSearchParams(window.location.search).get("noteId")) {
         const dv = typeof s.default_view === "string" ? s.default_view : "";
-        const VALID_VIEWS: ShellView[] = ["chat", "note", "doc", "ssh", "email", "schedule", "db", "system", "profile", "settings"];
+        const VALID_VIEWS: ShellView[] = ["chat", "partners", "note", "doc", "ssh", "email", "schedule", "db", "system", "profile", "settings"];
         if (dv && VALID_VIEWS.includes(dv as ShellView)) {
           setView(dv as ShellView);
         }
@@ -1644,38 +1707,34 @@ function Shell({
 
         {/* 标题栏下方：Sidebar + 主内容区 */}
         <div className="flex min-h-0 flex-1 overflow-hidden">
-          {/* 侧边栏（浏览器全屏时隐藏） */}
+          {/* 企微式窄功能栏（浏览器全屏时隐藏；无展开/折叠态） */}
           {!browserFullscreen && showMainSidebar ? (
-            <aside
-              className={cn(
-                "relative z-20 shrink-0 overflow-hidden",
-                activeBrowserTab.type !== "browser" && "transition-[width] duration-300 ease-out",
-              )}
-              style={{
-                width: desktopSidebarOpen ? SIDEBAR_WIDTH : SIDEBAR_RAIL_WIDTH,
-              }}
-            >
-              <div
-                className="absolute inset-y-0 left-0 h-full w-full overflow-hidden"
-              >
-                <Sidebar
-                  {...sidebarProps}
-                  collapsed={!desktopSidebarOpen}
-                  onCollapse={closeDesktopSidebar}
-                  onExpand={() => {
-                    const isDesktop =
-                      typeof window !== "undefined" &&
-                      window.matchMedia("(min-width: 1024px)").matches;
-                    if (isDesktop) {
-                      openDesktopSidebar();
-                    } else {
-                      setMobileSidebarOpen(true);
-                    }
-                  }}
-                />
-              </div>
+            <aside className="relative z-20 w-16 shrink-0 overflow-hidden">
+              <AppRail
+                activeView={view}
+                onGoHome={onGoHome}
+                onOpenMessages={onGoHome}
+                onOpenPartners={onOpenPartners}
+                onOpenNote={onOpenNote}
+                onOpenDoc={onOpenDoc}
+                onOpenSSH={onOpenSSH}
+                onOpenDb={onOpenDb}
+                onOpenEmail={onOpenEmail}
+                onOpenSchedule={onOpenSchedule}
+                onOpenSystem={onOpenSystem}
+                onOpenProfile={onOpenProfile}
+                onOpenSettings={onOpenSettings}
+                onOpenLogin={onOpenLogin}
+                onOpenSubscribe={onOpenSubscribe}
+                onStartUpdate={() => setUpdateDialogTrigger((n) => n + 1)}
+                updateAvailable={!!updateAvailable}
+                runningChatIds={runningChatIdList}
+                modules={sidebarModules ?? undefined}
+              />
             </aside>
           ) : null}
+
+          {/* 消息会话列表列 / 伙伴视图移入主内容圆角卡片内（见下方 surface） */}
 
           {!browserFullscreen && showMainSidebar ? (
             <Sheet
@@ -1707,11 +1766,54 @@ function Shell({
                   "m-px mr-2 mb-2 rounded-2xl border border-border/60 shadow-sm",
               )}
             >
-              <main className="relative isolate flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-background">
+              {/* 消息 Tab 的会话列表列（仅 chat 视图显示，包在圆角卡片内） */}
+              {!browserFullscreen && showMainSidebar && view === "chat" ? (
+                <SessionListPanel
+                  sessions={sessions}
+                  activeKey={activeKey}
+                  loading={loading}
+                  onSelect={onSelectChat}
+                  onRequestDelete={(key, label) => setPendingDelete({ key, label })}
+                  onTogglePin={onTogglePin}
+                  onRequestRename={onRequestRename}
+                  onToggleArchive={onToggleArchive}
+                  pinnedKeys={sidebarState.pinned_keys}
+                  archivedKeys={sidebarState.archived_keys}
+                  titleOverrides={sidebarState.title_overrides}
+                  runningChatIds={runningChatIdList}
+                  completedChatIds={completedChatIdList}
+                  viewState={sidebarState.view}
+                  showArchived={sidebarState.view.show_archived}
+                  archivedCount={sidebarState.archived_keys.length}
+                  onToggleArchived={onToggleArchived}
+                  onRemoveProject={onRemoveProject}
+                  onCreateTask={onCreateTask}
+                  onOpenSearch={onOpenSessionSearch}
+                  onNewChat={onNewChat}
+                  onNewDirect={() => setDirectDialogOpen(true)}
+                  onNewRoom={() => onOpenNewRoom()}
+                />
+              ) : null}
+
+              {/* 伙伴视图：列表列 + 详情主区（包在圆角卡片内） */}
+              {!browserFullscreen && view === "partners" ? (
+                <PartnersView
+                  agents={partnerAgents}
+                  onStartDirect={(agentId) => void onStartDirect(agentId)}
+                  onCreateRoom={(agentId) => onOpenNewRoom(agentId)}
+                />
+              ) : null}
+
+              <main
+                className={cn(
+                  "relative isolate flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-background",
+                  view === "partners" && !browserFullscreen && "hidden",
+                )}
+              >
               <div
                 className={cn(
                   "absolute inset-0 flex flex-col bg-background",
-                  (view === "settings" || view === "note" || view === "ssh" || view === "db" || view === "doc" || view === "email" || view === "schedule" || view === "system" || view === "profile" || activeBrowserTab.type !== "mona") &&
+                  (view === "settings" || view === "note" || view === "ssh" || view === "db" || view === "doc" || view === "email" || view === "schedule" || view === "system" || view === "profile" || view === "partners" || activeBrowserTab.type !== "mona") &&
                     "invisible pointer-events-none",
                 )}
               >
@@ -1962,6 +2064,21 @@ function Shell({
           title={pendingRename?.label ?? ""}
           onCancel={() => setPendingRename(null)}
           onConfirm={onConfirmRename}
+        />
+        <NewDirectDialog
+          open={directDialogOpen}
+          onOpenChange={setDirectDialogOpen}
+          agents={partnerAgents}
+          submitting={creatingConversation}
+          onSubmit={(agentId) => void onStartDirect(agentId)}
+        />
+        <NewRoomDialog
+          open={roomDialogOpen}
+          onOpenChange={setRoomDialogOpen}
+          agents={partnerAgents}
+          initialSelected={roomInitialAgents}
+          submitting={creatingConversation}
+          onSubmit={(input) => void onSubmitRoom(input)}
         />
         {runtimeStatus === "auth" ? (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm">

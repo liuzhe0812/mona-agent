@@ -59,6 +59,44 @@
     "startingGateway": "正在启动网关...",
     "skip": "跳过 — 稍后在设置中配置"
   },
+  "rail": {
+    "navigation": "主导航",
+    "home": "首页",
+    "messages": "消息",
+    "partners": "伙伴",
+    "more": "更多",
+    "settings": "设置",
+    "account": "账号",
+    "manageAccount": "管理账号",
+    "logout": "退出登录",
+    "login": "登录",
+    "updateAvailable": "有新版本可用",
+    "modules": {
+      "note": "笔记",
+      "doc": "AI文档",
+      "ssh": "终端",
+      "email": "邮件",
+      "schedule": "计划",
+      "db": "数据库",
+      "system": "系统",
+      "profile": "画像"
+    }
+  },
+  "partners": {
+    "empty": "暂无可用伙伴",
+    "detailAria": "伙伴详情",
+    "noDescription": "这个伙伴还没有简介。",
+    "startDirect": "开始私聊",
+    "createRoom": "创建房间",
+    "newDirectTitle": "新建私聊",
+    "newDirectHint": "选择一个伙伴开始一对一对话。",
+    "newRoomTitle": "新建协作房间",
+    "newRoomHint": "选择参与协作的伙伴，并设置房间标题与目标。",
+    "roomTitleLabel": "房间标题",
+    "roomTitlePlaceholder": "房间标题（留空按成员自动生成）",
+    "roomGoalLabel": "房间目标",
+    "roomGoalPlaceholder": "这次协作要达成什么目标？（可选）"
+  },
   "nav": {
     "wiki": "Wiki",
     "sources": "来源",
@@ -327,6 +365,9 @@
     "hideArchived": "隐藏归档",
     "delete": "删除",
     "newChat": "新建对话",
+    "createMenu": "创建",
+    "newDirect": "新建私聊",
+    "newRoom": "新建房间",
     "groups": {
       "pinned": "置顶",
       "conversations": "会话",
@@ -551,6 +592,10 @@
         "deepResearch": "深度研究",
         "voice": "语音输入"
       },
+      "mention": {
+        "ariaLabel": "@ 一位伙伴",
+        "label": "@ 伙伴"
+      },
       "slash": {
         "ariaLabel": "斜杠命令",
         "label": "命令",
@@ -665,7 +710,8 @@
     "copied": "已复制"
   },
   "common": {
-    "dismiss": "关闭"
+    "dismiss": "关闭",
+    "cancel": "取消"
   },
   "errors": {
     "messageTooBig": {

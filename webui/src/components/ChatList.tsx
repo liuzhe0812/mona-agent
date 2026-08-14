@@ -34,6 +34,7 @@ import {
 import {
   ConversationAvatar,
   MONA_AGENT_ID,
+  resolveAgentDisplayName,
 } from "@/components/room/AgentAvatar";
 import { useAgents } from "@/components/room/useAgents";
 import { deriveTitle, relativeTime } from "@/lib/format";
@@ -292,13 +293,19 @@ export const ChatList = memo(function ChatList({
                   : completed.has(s.chatId)
                     ? "complete"
                     : null;
-                // Phase 2d: rooms show a stacked member cluster, partner
-                // direct chats their agent avatar; legacy Mona chats stay bare.
+                // 企业微信式列表项：伙伴私聊/房间显示大头像 + 「智能体/房间
+                // 名称 + 会话标题」两行；Mona 私聊保持单行无头像。
                 const conv = s.conversation ?? null;
                 const showConvAvatar =
                   !!conv
                   && (conv.type === "room"
                     || (!!conv.directAgentId && conv.directAgentId !== MONA_AGENT_ID));
+                const convName =
+                  showConvAvatar && conv
+                    ? conv.type === "room"
+                      ? conv.title || title
+                      : resolveAgentDisplayName(agentsById, conv.directAgentId!)
+                    : null;
                 return (
                   <li key={s.key} className="min-w-0">
                     <ContextMenu>
@@ -306,17 +313,18 @@ export const ChatList = memo(function ChatList({
                         <div
                           className={cn(
                             "group flex min-w-0 max-w-full items-center gap-2 rounded-xl px-2 text-[13px] transition-colors",
-                            compact ? "min-h-7" : "min-h-8",
+                            convName ? "min-h-11 gap-2.5" : compact ? "min-h-7" : "min-h-8",
                             active
                               ? "bg-[hsl(var(--sidebar-active-surface)/0.07)] text-sidebar-foreground"
                               : "text-sidebar-foreground/82 hover:bg-[hsl(var(--sidebar-hover-surface)/0.04)] hover:text-sidebar-foreground",
                           )}
                         >
-                      {showConvAvatar ? (
+                      {convName ? (
                         <ConversationAvatar
                           conversation={conv}
                           agentsById={agentsById}
                           className="shrink-0 self-center"
+                          avatarClassName="h-8 w-8 text-xs"
                         />
                       ) : null}
                       <button
@@ -325,11 +333,17 @@ export const ChatList = memo(function ChatList({
                         title={tooltipTitle}
                         className={cn(
                           "min-w-0 flex-1 overflow-hidden text-left",
-                          compact ? "py-1" : "py-1.5",
+                          compact && !convName ? "py-1" : "py-1.5",
                         )}
                       >
-                        <span className="block w-full truncate font-medium leading-5">{title}</span>
-                        {showPreview ? (
+                        <span className="block w-full truncate font-medium leading-5">
+                          {convName ?? title}
+                        </span>
+                        {convName ? (
+                          <span className="block w-full truncate text-[11.5px] leading-4 text-muted-foreground/72">
+                            {title}
+                          </span>
+                        ) : showPreview ? (
                           <span className="block w-full truncate text-[11.5px] leading-4 text-muted-foreground/72">
                             {preview}
                           </span>

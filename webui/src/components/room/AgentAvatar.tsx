@@ -93,6 +93,8 @@ interface ConversationAvatarProps {
   conversation?: ConversationMeta | null;
   agentsById?: ReadonlyMap<string, AgentSummary>;
   className?: string;
+  /** Per-member avatar classes; defaults to the compact ``h-4 w-4``. */
+  avatarClassName?: string;
 }
 
 /** Session-list avatar: a single agent avatar for direct chats, a stacked
@@ -101,8 +103,10 @@ export function ConversationAvatar({
   conversation,
   agentsById,
   className,
+  avatarClassName,
 }: ConversationAvatarProps) {
   const agents = agentsById ?? EMPTY_AGENTS;
+  const memberCls = avatarClassName ?? "h-4 w-4";
   if (conversation?.type === "room") {
     const memberIds = conversation.agentIds;
     const visible = memberIds.slice(0, 2);
@@ -115,7 +119,8 @@ export function ConversationAvatar({
             agentId={id}
             displayName={resolveAgentDisplayName(agents, id)}
             className={cn(
-              "h-4 w-4 ring-1 ring-background",
+              memberCls,
+              "ring-1 ring-background",
               index > 0 && "-ml-1.5",
             )}
           />
@@ -133,7 +138,7 @@ export function ConversationAvatar({
     <AgentAvatar
       agentId={directId}
       displayName={resolveAgentDisplayName(agents, directId)}
-      className={cn("h-4 w-4", className)}
+      className={cn(memberCls, className)}
     />
   );
 }

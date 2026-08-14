@@ -47,6 +47,44 @@
       "description": "mona web UI — chat with your mona workspace."
     }
   },
+  "rail": {
+    "navigation": "Primary navigation",
+    "home": "Home",
+    "messages": "Messages",
+    "partners": "Partners",
+    "more": "More",
+    "settings": "Settings",
+    "account": "Account",
+    "manageAccount": "Manage account",
+    "logout": "Log out",
+    "login": "Log in",
+    "updateAvailable": "Update available",
+    "modules": {
+      "note": "Notes",
+      "doc": "AI Docs",
+      "ssh": "Terminal",
+      "email": "Mail",
+      "schedule": "Plan",
+      "db": "Database",
+      "system": "System",
+      "profile": "Profile"
+    }
+  },
+  "partners": {
+    "empty": "No partners available",
+    "detailAria": "Partner details",
+    "noDescription": "This partner has no description yet.",
+    "startDirect": "Start direct chat",
+    "createRoom": "Create room",
+    "newDirectTitle": "New direct chat",
+    "newDirectHint": "Pick a partner to start a one-on-one conversation.",
+    "newRoomTitle": "New collaboration room",
+    "newRoomHint": "Choose the partners to collaborate with and set a room title and goal.",
+    "roomTitleLabel": "Room title",
+    "roomTitlePlaceholder": "Room title (auto-generated from members if empty)",
+    "roomGoalLabel": "Room goal",
+    "roomGoalPlaceholder": "What should this collaboration achieve? (optional)"
+  },
   "nav": {
     "wiki": "Wiki",
     "sources": "Sources",
@@ -312,6 +350,9 @@
     "hideArchived": "Hide archived",
     "delete": "Delete",
     "newChat": "New chat",
+    "createMenu": "Create",
+    "newDirect": "New direct chat",
+    "newRoom": "New room",
     "groups": {
       "pinned": "Pinned",
       "conversations": "Conversations",
@@ -537,6 +578,10 @@
         "deepResearch": "Deep research",
         "voice": "Voice input"
       },
+      "mention": {
+        "ariaLabel": "Mention an agent",
+        "label": "Mention agent"
+      },
       "slash": {
         "ariaLabel": "Slash commands",
         "label": "commands",
@@ -650,7 +695,8 @@
     "copied": "Copied"
   },
   "common": {
-    "dismiss": "Dismiss"
+    "dismiss": "Dismiss",
+    "cancel": "Cancel"
   },
   "errors": {
     "messageTooBig": {

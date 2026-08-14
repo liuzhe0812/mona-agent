@@ -35,6 +35,44 @@
       "description": "mona Web UI —— 與你的 mona 工作區對話。"
     }
   },
+  "rail": {
+    "navigation": "主導覽",
+    "home": "首頁",
+    "messages": "訊息",
+    "partners": "夥伴",
+    "more": "更多",
+    "settings": "設定",
+    "account": "帳號",
+    "manageAccount": "管理帳號",
+    "logout": "登出",
+    "login": "登入",
+    "updateAvailable": "有新版本可用",
+    "modules": {
+      "note": "筆記",
+      "doc": "AI文件",
+      "ssh": "終端機",
+      "email": "郵件",
+      "schedule": "計畫",
+      "db": "資料庫",
+      "system": "系統",
+      "profile": "畫像"
+    }
+  },
+  "partners": {
+    "empty": "暫無可用夥伴",
+    "detailAria": "夥伴詳情",
+    "noDescription": "這個夥伴還沒有簡介。",
+    "startDirect": "開始私聊",
+    "createRoom": "建立房間",
+    "newDirectTitle": "新增私聊",
+    "newDirectHint": "選擇一個夥伴開始一對一對話。",
+    "newRoomTitle": "新增協作房間",
+    "newRoomHint": "選擇參與協作的夥伴，並設定房間標題與目標。",
+    "roomTitleLabel": "房間標題",
+    "roomTitlePlaceholder": "房間標題（留空依成員自動產生）",
+    "roomGoalLabel": "房間目標",
+    "roomGoalPlaceholder": "這次協作要達成什麼目標？（可選）"
+  },
   "nav": {
     "wiki": "Wiki",
     "sources": "來源",
@@ -260,6 +298,9 @@
     "hideArchived": "隱藏封存",
     "delete": "刪除",
     "newChat": "新增對話",
+    "createMenu": "建立",
+    "newDirect": "新增私聊",
+    "newRoom": "新增房間",
     "groups": {
       "pinned": "置頂",
       "conversations": "會話",
@@ -508,6 +549,10 @@
         "too_large": "圖片太大，請換一張小一點的",
         "io": "無法讀取這個檔案"
       },
+      "mention": {
+        "ariaLabel": "@ 一位夥伴",
+        "label": "@ 夥伴"
+      },
       "slash": {
         "ariaLabel": "斜線命令",
         "label": "命令",
@@ -599,7 +644,8 @@
     "copied": "已複製"
   },
   "common": {
-    "dismiss": "關閉"
+    "dismiss": "關閉",
+    "cancel": "取消"
   },
   "errors": {
     "messageTooBig": {
