@@ -3802,6 +3802,71 @@ class WebSocketChannel(BaseChannel):
         )
         await self.send_room_updated(chat_id, self._room_state_payload(conversation))
 
+    async def _handle_create_direct_conversation_envelope(
+        self, connection: Any, envelope: dict[str, Any]
+    ) -> None:
+        """Mark a chat as a direct conversation with a named agent (shell phase).
+
+        Mirrors ``create_room``: the client creates the chat first
+        (``new_chat``), then stamps the conversation metadata. Idempotent for
+        the same agent; converting a room back to a direct chat is rejected.
+        """
+        from mona.agent.partners import (
+            CONVERSATION_METADATA_KEY,
+            ConversationMetadata,
+            normalize_agent_id,
+        )
+
+        request_id = self._room_request_id(envelope)
+        chat_id = envelope.get("chat_id")
+        if not _is_valid_chat_id(chat_id):
+            await self._send_event(
+                connection, "create_direct_conversation_result", ok=False,
+                code="invalid_chat_id", detail="invalid chat_id", request_id=request_id,
+            )
+            return
+        raw_agent_id = envelope.get("agent_id")
+        try:
+            agent_id = normalize_agent_id(raw_agent_id) if isinstance(raw_agent_id, str) else None
+        except ValueError:
+            agent_id = None
+        registry = self._room_agent_registry()
+        if agent_id is None or registry.get(agent_id) is None:
+            await self._send_event(
+                connection, "create_direct_conversation_result", ok=False,
+                code="unknown_agent", detail="agent is not installed",
+                chat_id=chat_id, request_id=request_id,
+            )
+            return
+        if self._session_manager is None:
+            await self._send_event(
+                connection, "create_direct_conversation_result", ok=False,
+                code="unavailable", detail="session manager unavailable",
+                chat_id=chat_id, request_id=request_id,
+            )
+            return
+        session = self._session_manager.get_or_create(f"websocket:{chat_id}")
+        existing = session.conversation_metadata
+        if existing.type == "room":
+            await self._send_event(
+                connection, "create_direct_conversation_result", ok=False,
+                code="already_a_room", detail="chat is already a collaboration room",
+                chat_id=chat_id, request_id=request_id,
+            )
+            return
+        definition = registry.get(agent_id)
+        title = envelope.get("title")
+        if not isinstance(title, str) or not title.strip():
+            title = definition.display_name if definition is not None else agent_id
+        conversation = ConversationMetadata.direct(agent_id, title=title.strip())
+        session.metadata[CONVERSATION_METADATA_KEY] = conversation.to_session_metadata()
+        self._session_manager.save(session)
+        await self._send_event(
+            connection, "create_direct_conversation_result", ok=True,
+            chat_id=chat_id, request_id=request_id,
+            conversation=conversation.to_session_metadata(),
+        )
+
     async def _handle_update_room_envelope(
         self, connection: Any, envelope: dict[str, Any]
     ) -> None:
@@ -3999,6 +4064,127 @@ class WebSocketChannel(BaseChannel):
             connection, "cancel_agent_job_result", ok=True, chat_id=chat_id,
             job_id=job.id, request_id=request_id, job=serialize_job(job),
         )
+
+    async def _route_room_agent_mentions(
+        self,
+        connection: Any,
+        *,
+        sender_id: str,
+        chat_id: str,
+        content: str,
+        media_paths: list[str],
+        metadata: dict[str, Any],
+        raw_targets: Any,
+    ) -> bool:
+        """Route structured ``@Agent`` targets in a room to AgentJobs (guide 7.5).
+
+        Returns True when the envelope was fully handled here: every targeted
+        partner agent runs as a tracked job and the user message is persisted
+        once. Returns False to fall through to the normal message flow (no
+        partner targets — e.g. only Mona was mentioned, so she also answers).
+        """
+        from mona.agent.partners import MONA_AGENT_ID
+        from mona.agent.room import RoomError, resolve_target_agents
+
+        if not isinstance(raw_targets, list) or any(
+            not isinstance(t, str) for t in raw_targets
+        ):
+            await self._send_event(connection, "error", detail="invalid target_agent_ids")
+            return True
+        if not raw_targets:
+            return False
+        if self._session_manager is None:
+            await self._send_event(
+                connection, "error", detail="session manager unavailable"
+            )
+            return True
+        session = self._session_manager.get_or_create(f"websocket:{chat_id}")
+        conversation = session.conversation_metadata
+        try:
+            targets = resolve_target_agents(conversation, raw_targets)
+        except RoomError as exc:
+            await self._send_event(connection, "error", detail=str(exc))
+            return True
+        partner_targets = [t for t in targets if t != MONA_AGENT_ID]
+        mona_targeted = MONA_AGENT_ID in targets
+        if not partner_targets:
+            return False
+        if self._subagent_manager is None:
+            await self._send_event(
+                connection, "error", detail="agent routing unavailable"
+            )
+            return True
+
+        # Live-echo the user message for webui clients, mirroring
+        # _handle_message (the normal flow is bypassed on the mention path).
+        display_content = metadata.get("display_content")
+        if metadata.get("webui"):
+            user_obj: dict[str, Any] = {
+                "event": "user",
+                "chat_id": chat_id,
+                "text": content,
+            }
+            if isinstance(display_content, str) and display_content:
+                user_obj["display_content"] = display_content
+            if media_paths:
+                user_obj["media_paths"] = list(media_paths)
+            self._try_append_webui_transcript(chat_id, user_obj)
+
+        # Persist the user message once. When Mona is also targeted the
+        # normal flow persists it, so skip here to avoid a duplicate.
+        if not mona_targeted:
+            extra: dict[str, Any] = {}
+            if media_paths:
+                extra["media"] = list(media_paths)
+            if isinstance(display_content, str) and display_content:
+                extra["display_content"] = display_content
+            if sender_id:
+                extra["sender_id"] = sender_id
+            session.add_message("user", content, **extra)
+            self._session_manager.save(session)
+
+        task_text = content.strip()
+        if media_paths:
+            attachments = "\n".join(f"- {p}" for p in media_paths)
+            task_text = (
+                f"{task_text}\n\n[Attachments]\n{attachments}"
+                if task_text
+                else f"[Attachments]\n{attachments}"
+            )
+        job_store = self._subagent_manager.job_store_for_room(chat_id)
+        registry = self._room_agent_registry()
+        delegated: list[str] = []
+        failures: list[str] = []
+        for target in partner_targets:
+            result = await self._subagent_manager.delegate(
+                agent_id=target,
+                task=task_text,
+                success_criteria="Address the user's request and report the outcome.",
+                room_id=chat_id,
+                requested_by="user",
+                origin_channel="websocket",
+                origin_chat_id=chat_id,
+                session_key=f"websocket:{chat_id}",
+                job_store=job_store,
+                registry=registry,
+            )
+            if result.startswith("Cannot delegate"):
+                failures.append(result)
+            else:
+                delegated.append(target)
+        if failures and not delegated:
+            await self._send_event(connection, "error", detail="; ".join(failures))
+            return True
+        await self._send_event(
+            connection,
+            "agent_mentions_routed",
+            chat_id=chat_id,
+            agents=delegated,
+            failures=failures or None,
+        )
+        # When Mona is also a target the normal flow runs too, so she answers
+        # alongside the delegated partner jobs.
+        return not mona_targeted
 
     # ------------------------------------------------------------------
     # Workflow commands (multi-agent phase 3, guide 8.2)
@@ -4578,6 +4764,9 @@ class WebSocketChannel(BaseChannel):
         if t == "create_room":
             await self._handle_create_room_envelope(connection, envelope)
             return
+        if t == "create_direct_conversation":
+            await self._handle_create_direct_conversation_envelope(connection, envelope)
+            return
         if t == "update_room":
             await self._handle_update_room_envelope(connection, envelope)
             return
@@ -4757,6 +4946,19 @@ class WebSocketChannel(BaseChannel):
                         doc_meta.append({"name": abs_p.name, "path": dp})
                 if doc_meta:
                     metadata["doc_paths"] = doc_meta
+            target_agent_ids = envelope.get("target_agent_ids")
+            if target_agent_ids is not None:
+                routed = await self._route_room_agent_mentions(
+                    connection,
+                    sender_id=client_id,
+                    chat_id=cid,
+                    content=content,
+                    media_paths=media_paths,
+                    metadata=metadata,
+                    raw_targets=target_agent_ids,
+                )
+                if routed:
+                    return
             await self._handle_message(
                 sender_id=client_id,
                 chat_id=cid,

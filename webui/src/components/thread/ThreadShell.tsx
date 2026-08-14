@@ -4,6 +4,7 @@ import { PanelRightOpen } from "lucide-react";
 
 import { AgentLogo } from "@/components/AgentLogo";
 import { RoomContextPanel } from "@/components/room/RoomContextPanel";
+import { useAgents } from "@/components/room/useAgents";
 import { ThreadComposer } from "@/components/thread/ThreadComposer";
 import { ThreadHeader } from "@/components/thread/ThreadHeader";
 import { StreamErrorNotice } from "@/components/thread/StreamErrorNotice";
@@ -18,7 +19,7 @@ import { usePendingQueue } from "@/hooks/usePendingQueue";
 import { useSessionHistory } from "@/hooks/useSessions";
 import { useArtifacts } from "@/hooks/useArtifacts";
 import { fetchSettings, fetchZenFreeModels, listSlashCommands, updateSettings } from "@/lib/api";
-import type { ChatSummary, DeliveredFile, SlashCommand, UIMessage } from "@/lib/types";
+import type { ChatSummary, DeliveredFile, RoomAgentInfo, SlashCommand, UIMessage } from "@/lib/types";
 import { useWorkspaceStore } from "@/lib/workspace-store";
 import { normalizeLegacyLongTaskMessages } from "@/lib/thread-display-compat";
 import { scrubSubagentUiMessages } from "@/lib/subagent-channel-display";
@@ -437,6 +438,22 @@ export function ThreadShell({
     [token, onModelNameChange],
   );
 
+  // Multi-agent: room members offered by the composer ``@`` picker. The
+  // registry provides display names; unknown ids degrade to the raw id.
+  const agentsById = useAgents(token);
+  const mentionableAgents = useMemo<RoomAgentInfo[]>(() => {
+    const conv = session?.conversation;
+    if (!conv || conv.type !== "room") return [];
+    return conv.agentIds.map((id) => {
+      const summary = agentsById.get(id);
+      return {
+        id,
+        displayName: summary?.displayName ?? id,
+        description: summary?.description ?? "",
+      };
+    });
+  }, [session?.conversation, agentsById]);
+
   const handleWelcomeSend = useCallback(
     async (content: string, images?: SendImage[], options?: SendOptions) => {
       if (booting) return;
@@ -522,6 +539,7 @@ export function ThreadShell({
           onPendingRemove={pendingQueue.remove}
           onPendingEdit={pendingQueue.update}
           isPendingFull={pendingQueue.messages.length >= 3}
+          mentionableAgents={mentionableAgents}
           onOpenSettings={onOpenSettings}
         />
       ) : (

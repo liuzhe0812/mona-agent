@@ -329,6 +329,9 @@ class AgentLoop:
             max_completion_tokens=provider.generation.max_tokens,
             consolidation_ratio=consolidation_ratio,
         )
+        # Kept for loops that re-bind memory helpers (PartnerAgentLoop).
+        self._consolidation_ratio = consolidation_ratio
+        self._session_ttl_minutes = session_ttl_minutes
         self.auto_compact = AutoCompact(
             sessions=self.sessions,
             consolidator=self.consolidator,
@@ -348,6 +351,10 @@ class AgentLoop:
         # Shares this loop's provider/sessions/bus but has its own tool whitelist
         # and DocumentContextBuilder. See _ensure_document_loop().
         self._doc_loops: dict[str, AgentLoop] = {}
+        # Partner agent loops for direct chats (lazy, one per agent_id).
+        # Shares this loop's provider/sessions/bus but executes under the
+        # partner identity with a manifest-filtered tool registry.
+        self._partner_loops: dict[str, AgentLoop] = {}
         self._runtime_vars: dict[str, Any] = {}
         self._current_iteration: int = 0
         self.commands = CommandRouter()
@@ -543,6 +550,48 @@ class AgentLoop:
         logger.info("DocumentAgentLoop({}) initialized with tool whitelist", agent_kind)
         return loop
 
+    def _ensure_partner_loop(self, agent_id: str) -> AgentLoop | None:
+        """Lazily construct a partner agent loop for a direct chat.
+
+        Returns None when the agent is no longer registered (e.g. uninstalled
+        after the conversation was created) — the caller then falls back to
+        the main Mona loop for resilience.
+        """
+        cached = self._partner_loops.get(agent_id)
+        if cached is not None:
+            return cached
+        from mona.agent.partners import AgentRegistry
+        registry = AgentRegistry()
+        if agent_id not in registry:
+            logger.warning(
+                "Direct-chat agent {!r} not found; falling back to Mona", agent_id
+            )
+            return None
+        from mona.agent.partner_loop import PartnerAgentLoop
+        loop = PartnerAgentLoop(
+            agent_id=agent_id,
+            registry=registry,
+            bus=self.bus,
+            provider=self.provider,
+            workspace=self.workspace,
+            model=self.model,
+            context_window_tokens=self.context_window_tokens,
+            max_tool_result_chars=self.max_tool_result_chars,
+            restrict_to_workspace=self.restrict_to_workspace,
+            session_manager=self.sessions,
+            timezone=self.context.timezone,
+            max_messages=self._max_messages,
+            disabled_skills=None,
+            tools_config=self.tools_config,
+            hooks=list(self._extra_hooks) if self._extra_hooks else None,
+            unified_session=self._unified_session,
+            consolidation_ratio=self._consolidation_ratio,
+            session_ttl_minutes=self._session_ttl_minutes,
+        )
+        self._partner_loops[agent_id] = loop
+        logger.info("PartnerAgentLoop({}) initialized for direct chat", agent_id)
+        return loop
+
     def _register_default_tools(self) -> None:
         """Register the default set of tools via plugin loader."""
         from mona.agent.tools.context import ToolContext
@@ -606,9 +655,11 @@ class AgentLoop:
         from mona.agent.tools.context import ContextAware, RequestContext
 
         # Multi-agent identity (phase 2): refresh the shared ToolContext
-        # before tools read it in set_context. The main loop always executes
-        # as the reserved Mona agent; room_id is set only for collaboration
-        # rooms, so delegate_agent stays hidden elsewhere.
+        # before tools read it in set_context. ``agent_id`` is fixed at
+        # registry construction time — the reserved Mona agent for the main
+        # loop, the partner agent for PartnerAgentLoop — so only the
+        # per-request fields are refreshed here. room_id is set only for
+        # collaboration rooms, so delegate_agent stays hidden elsewhere.
         if self._tool_ctx is not None:
             self._tool_ctx.conversation_id = chat_id
             self._tool_ctx.job_id = None
@@ -1402,6 +1453,31 @@ class AgentLoop:
                 pending_queue=pending_queue,
             )
 
+        # Partner agent routing: a direct chat with a partner agent executes
+        # under that agent's own identity (PartnerAgentLoop) — its package
+        # prompt, private memory/skills and manifest-filtered tools — instead
+        # of the reserved Mona identity. Partner loops carry
+        # ``_partner_agent_id`` and skip this branch, so delegation never
+        # recurses. Unknown agent IDs fall back to the Mona loop.
+        from mona.agent.partners import MONA_AGENT_ID
+        conversation = session.conversation_metadata
+        if (
+            conversation.type == "direct"
+            and conversation.direct_agent_id is not None
+            and conversation.direct_agent_id != MONA_AGENT_ID
+            and not hasattr(self, "_partner_agent_id")
+        ):
+            partner_loop = self._ensure_partner_loop(conversation.direct_agent_id)
+            if partner_loop is not None:
+                return await partner_loop._process_message(
+                    msg,
+                    session_key=key,
+                    on_progress=on_progress,
+                    on_stream=on_stream,
+                    on_stream_end=on_stream_end,
+                    pending_queue=pending_queue,
+                )
+
         ctx = TurnContext(
             msg=msg,
             session=session,
@@ -1810,6 +1886,13 @@ class AgentLoop:
                         continue
                     entry["content"] = filtered
             entry.setdefault("timestamp", datetime.now().isoformat())
+            # Multi-agent authorship: turns executed by a PartnerAgentLoop are
+            # stamped with the partner's agent_id so room/direct history
+            # projects the true author; the Mona loop leaves the legacy
+            # default (back-filled as Mona on load).
+            partner_id = getattr(self, "_partner_agent_id", None)
+            if partner_id and role in ("assistant", "tool"):
+                entry["author_id"] = partner_id
             session.messages.append(entry)
             if role == "assistant":
                 last_assistant_idx = len(session.messages) - 1

@@ -1,8 +1,10 @@
-"""Dedicated tools for accessing global memory resources.
+"""Dedicated tools for accessing the current agent's memory resources.
 
 These tools replace direct file access (read_file/write_file/edit_file/grep)
-to memory files stored OUTSIDE the workspace at ~/.mona/memory/. The _FsTool
-hard boundary prevents direct file access, so agents must use these tools.
+to memory files stored OUTSIDE the workspace at ~/.mona/agents/<agent_id>/memory/.
+The _FsTool hard boundary prevents direct file access, so agents must use
+these tools. Paths resolve per executing agent: Mona uses her own directory,
+named agents use their private memory directory.
 """
 from __future__ import annotations
 
@@ -27,18 +29,26 @@ _FILE_MAP = {
 }
 
 
-def _memory_file_path(file: str) -> Path:
-    from mona.config.paths import get_memory_file
+def _agent_id_from_ctx(ctx: Any) -> str:
+    from mona.agent.partners import MONA_AGENT_ID
+    agent_id = getattr(ctx, "agent_id", None)
+    if isinstance(agent_id, str) and agent_id.strip():
+        return agent_id
+    return MONA_AGENT_ID
+
+
+def _memory_file_path(file: str, agent_id: str) -> Path:
+    from mona.config.paths import get_agent_memory_dir
     if file not in _VALID_FILES:
         raise ValueError(
             f"Invalid file '{file}'. Must be one of: {sorted(_VALID_FILES)}"
         )
-    return get_memory_file(_FILE_MAP[file])
+    return get_agent_memory_dir(agent_id) / _FILE_MAP[file]
 
 
-def _history_path() -> Path:
-    from mona.config.paths import get_memory_history_path
-    return get_memory_history_path()
+def _history_path(agent_id: str) -> Path:
+    from mona.config.paths import get_agent_memory_dir
+    return get_agent_memory_dir(agent_id) / "history.jsonl"
 
 
 class MemoryReadTool(Tool):
@@ -46,9 +56,12 @@ class MemoryReadTool(Tool):
 
     _scopes = {"core", "subagent", "memory"}
 
+    def __init__(self, agent_id: str) -> None:
+        self._agent_id = agent_id
+
     @classmethod
     def create(cls, ctx: Any) -> Tool:
-        return cls()
+        return cls(_agent_id_from_ctx(ctx))
 
     @property
     def name(self) -> str:
@@ -82,7 +95,7 @@ class MemoryReadTool(Tool):
         if not file:
             return "Error: file parameter is required."
         try:
-            path = _memory_file_path(file)
+            path = _memory_file_path(file, self._agent_id)
         except ValueError as e:
             return f"Error: {e}"
         if not path.exists():
@@ -97,18 +110,21 @@ class MemoryReadTool(Tool):
 
 
 class MemoryEditTool(Tool):
-    """Edit a memory file (Dream agent only).
+    """Edit the current agent's own memory file.
 
     Supports two modes:
     - replace (default): replace entire file content
     - append: append content to end of file
     """
 
-    _scopes = {"memory"}
+    _scopes = {"memory", "subagent"}
+
+    def __init__(self, agent_id: str) -> None:
+        self._agent_id = agent_id
 
     @classmethod
     def create(cls, ctx: Any) -> Tool:
-        return cls()
+        return cls(_agent_id_from_ctx(ctx))
 
     @property
     def name(self) -> str:
@@ -117,8 +133,7 @@ class MemoryEditTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Edit a memory file stored outside the workspace. "
-            "Dream agent only. "
+            "Edit your own memory file stored outside the workspace. "
             "Use mode='replace' to replace entire content (default), "
             "or mode='append' to add content to the end. "
             "file='memory' → MEMORY.md, 'soul' → SOUL.md, "
@@ -154,7 +169,7 @@ class MemoryEditTool(Tool):
         if content is None:
             return "Error: content parameter is required."
         try:
-            path = _memory_file_path(file)
+            path = _memory_file_path(file, self._agent_id)
         except ValueError as e:
             return f"Error: {e}"
         try:
@@ -178,9 +193,12 @@ class MemorySearchTool(Tool):
     _DEFAULT_LIMIT = 50
     _MAX_LIMIT = 500
 
+    def __init__(self, agent_id: str) -> None:
+        self._agent_id = agent_id
+
     @classmethod
     def create(cls, ctx: Any) -> Tool:
-        return cls()
+        return cls(_agent_id_from_ctx(ctx))
 
     @property
     def name(self) -> str:
@@ -227,7 +245,7 @@ class MemorySearchTool(Tool):
         if not query:
             return "Error: query parameter is required."
         limit = max(1, min(limit, self._MAX_LIMIT))
-        history_path = _history_path()
+        history_path = _history_path(self._agent_id)
         if not history_path.exists():
             return "No history found (history.jsonl does not exist yet)."
 

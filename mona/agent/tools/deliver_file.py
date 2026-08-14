@@ -48,6 +48,8 @@ def _mime_from_ext(path: Path) -> str:
 class DeliverFileTool(Tool, ContextAware):
     """Submit generated files as deliverables shown prominently in chat."""
 
+    _scopes = {"core", "subagent"}
+
     def __init__(
         self,
         send_callback: Callable[[OutboundMessage], Awaitable[None]] | None = None,

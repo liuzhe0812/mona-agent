@@ -495,6 +495,18 @@ export class MonaClient {
     }));
   }
 
+  /** Mark an existing chat as a direct conversation with a named agent
+   *  (shell phase). The chat is created first via ``newChat``; this stamps
+   *  the conversation metadata so the backend resolves the agent identity. */
+  createDirectConversation(chatId: string, agentId: string): Promise<void> {
+    return this.sendRoomCommandRaw("create_direct_conversation_result", (requestId) => ({
+      type: "create_direct_conversation",
+      chat_id: chatId,
+      agent_id: agentId,
+      request_id: requestId,
+    })).then(() => undefined);
+  }
+
   /** Edit room title / goal / membership. */
   updateRoom(chatId: string, updates: RoomUpdate): Promise<RoomState> {
     return this.sendRoomCommand("update_room_result", (requestId) => ({
@@ -752,6 +764,10 @@ export class MonaClient {
        *  extract_documents(), which injects the extracted text into the user
        *  message so the agent can answer questions about the documents. */
       docPaths?: string[];
+      /** Structured ``@Agent`` targets in a room (multi-agent guide 7.5).
+       *  The backend re-validates every ID against room membership and
+       *  routes partner targets to tracked AgentJobs. */
+      targetAgentIds?: string[];
     },
   ): void {
     this.knownChats.add(chatId);
@@ -773,6 +789,9 @@ export class MonaClient {
       ...(options?.browserPageUrl ? { browser_page_url: options.browserPageUrl } : {}),
       ...(options?.browserPageTitle ? { browser_page_title: options.browserPageTitle } : {}),
       ...(options?.docPaths && options.docPaths.length > 0 ? { doc_paths: options.docPaths } : {}),
+      ...(options?.targetAgentIds && options.targetAgentIds.length > 0
+        ? { target_agent_ids: options.targetAgentIds }
+        : {}),
       webui: true,
     };
     this.queueSend(frame);
@@ -941,6 +960,7 @@ export class MonaClient {
 
     if (
       parsed.event === "create_room_result" ||
+      parsed.event === "create_direct_conversation_result" ||
       parsed.event === "update_room_result" ||
       parsed.event === "room_state_result" ||
       parsed.event === "cancel_agent_job_result" ||

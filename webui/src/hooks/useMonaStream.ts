@@ -353,6 +353,8 @@ export interface SendOptions {
   dbLastError?: string;
   browserPageUrl?: string;
   browserPageTitle?: string;
+  /** Structured ``@Agent`` targets in a room (multi-agent guide 7.5). */
+  targetAgentIds?: string[];
 }
 
 export function useMonaStream(
@@ -1028,6 +1030,7 @@ export function useMonaStream(
           dbLastError: options.dbLastError,
           browserPageUrl: options.browserPageUrl,
           browserPageTitle: options.browserPageTitle,
+          targetAgentIds: options.targetAgentIds,
         });
       } else {
         client.sendMessage(chatId, content, wireMedia);

@@ -800,6 +800,7 @@ export type InboundEvent =
   | ({ event: "create_room_result" } & RoomCommandResult)
   | ({ event: "update_room_result" } & RoomCommandResult)
   | ({ event: "room_state_result" } & RoomCommandResult)
+  | ({ event: "create_direct_conversation_result" } & RoomCommandResult)
   | {
       event: "room_updated";
       chat_id: string;
@@ -924,6 +925,13 @@ export type Outbound =
       agent_ids: string[];
       title?: string;
       goal?: string;
+      request_id?: string;
+    }
+  | {
+      type: "create_direct_conversation";
+      chat_id: string;
+      agent_id: string;
+      title?: string;
       request_id?: string;
     }
   | {

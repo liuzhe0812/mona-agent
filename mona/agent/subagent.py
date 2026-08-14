@@ -626,6 +626,33 @@ class SubagentManager:
         ))
         return "\n\n---\n\n".join(parts)
 
+    def _record_agent_job_history(
+        self,
+        definition: AgentDefinition,
+        job: AgentJob,
+        outcome: str,
+        result: str,
+    ) -> None:
+        """Append a compact run record to the agent's private history.jsonl.
+
+        Named agents build long-term memory from their own execution history:
+        every finished job leaves a trace that later runs (and future memory
+        consolidation) can draw on.
+        """
+        from mona.agent.memory import MemoryStore
+
+        try:
+            store = MemoryStore(self.workspace, agent_id=definition.id)
+            task_summary = " ".join(job.task.split())[:200]
+            result_summary = " ".join(result.split())[:400]
+            store.append_history(
+                f"Job {job.id} ({outcome}) task: {task_summary} | result: {result_summary}"
+            )
+        except Exception:
+            logger.exception(
+                "Failed to record job history for agent {}", definition.id
+            )
+
     async def _run_named_agent(
         self,
         task_id: str,
@@ -731,6 +758,7 @@ class SubagentManager:
                 partial = self._format_partial_progress(result)
                 if not _fail(partial):
                     return
+                self._record_agent_job_history(definition, job, "failed", partial)
                 self._post_agent_room_message(origin, job, definition, partial)
                 await _announce(
                     task_id, label, job.task, partial, origin, "error",
@@ -740,6 +768,7 @@ class SubagentManager:
                 error = result.error or "Error: agent execution failed."
                 if not _fail(error):
                     return
+                self._record_agent_job_history(definition, job, "failed", error)
                 self._post_agent_room_message(origin, job, definition, error)
                 await _announce(
                     task_id, label, job.task, error, origin, "error",
@@ -750,6 +779,7 @@ class SubagentManager:
                 logger.info("Named agent job [{}] completed successfully", task_id)
                 if not _finish("succeeded", result=final_result):
                     return
+                self._record_agent_job_history(definition, job, "succeeded", final_result)
                 self._post_agent_room_message(origin, job, definition, final_result)
                 await _announce(
                     task_id, label, job.task, final_result, origin, "ok",

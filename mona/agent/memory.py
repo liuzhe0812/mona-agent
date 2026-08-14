@@ -949,9 +949,9 @@ class Dream:
 
         tools = ToolRegistry()
         # Memory access (MEMORY.md / SOUL.md / USER.md / AGENTS.md / history.jsonl)
-        tools.register(MemoryReadTool())
-        tools.register(MemoryEditTool())
-        tools.register(MemorySearchTool())
+        tools.register(MemoryReadTool(self.store.agent_id))
+        tools.register(MemoryEditTool(self.store.agent_id))
+        tools.register(MemorySearchTool(self.store.agent_id))
         # Skill access (read existing + create new). Dream's maintenance
         # reads must NOT bump access counters — otherwise the inactivity
         # clock would reset on every Dream cycle and archival would never

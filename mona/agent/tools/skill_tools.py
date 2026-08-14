@@ -85,9 +85,9 @@ class SkillReadTool(Tool):
 
 
 class SkillCreateTool(Tool):
-    """Create a new user skill (Dream agent only)."""
+    """Create a new user skill in the executing agent's private skills dir."""
 
-    _scopes = {"memory"}
+    _scopes = {"memory", "subagent"}
 
     # Hard cap on active user skills. Applies to all active user skills
     # (agent-created + unknown); builtin skills live in a separate read-only
@@ -122,7 +122,6 @@ class SkillCreateTool(Tool):
         return (
             "Create a new user skill under the executing agent's private skills dir "
             "(~/.mona/agents/<agent_id>/skills/<name>/SKILL.md). "
-            "Dream agent only. "
             "Fails if the skill already exists (use skill_read to inspect first) "
             "or if the active user skill count has reached the configured cap."
         )

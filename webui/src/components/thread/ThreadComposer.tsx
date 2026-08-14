@@ -13,6 +13,7 @@ import { MarkdownText, preloadMarkdownText } from "@/components/MarkdownText";
 import {
   Activity,
   ArrowUp,
+  AtSign,
   BookOpen,
   ChevronDown,
   ChevronUp,
@@ -54,7 +55,7 @@ import {
 import { useClipboardAndDrop } from "@/hooks/useClipboardAndDrop";
 import type { SendImage, SendOptions } from "@/hooks/useMonaStream";
 import type { PendingMessage } from "@/hooks/usePendingQueue";
-import type { SlashCommand, GoalStateWsPayload } from "@/lib/types";
+import type { RoomAgentInfo, SlashCommand, GoalStateWsPayload } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { PendingQueueStrip } from "@/components/thread/PendingQueueStrip";
 
@@ -98,6 +99,9 @@ interface ThreadComposerProps {
   onPendingRemove?: (id: string) => void;
   onPendingEdit?: (id: string, content: string) => void;
   isPendingFull?: boolean;
+  /** Room members offered by the ``@`` picker (multi-agent guide 7.5). When
+   * empty the picker is disabled (direct chats). */
+  mentionableAgents?: RoomAgentInfo[];
 }
 
 const COMMAND_ICONS: Record<string, LucideIcon> = {
@@ -426,12 +430,20 @@ export function ThreadComposer({
   workspace,
   onWorkspaceChange,
   onOpenSettings,
+  mentionableAgents = [],
 }: ThreadComposerProps) {
   const { t } = useTranslation();
   const [value, setValue] = useState("");
   const [inlineError, setInlineError] = useState<string | null>(null);
   const [slashMenuDismissed, setSlashMenuDismissed] = useState(false);
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(0);
+  /** ``@`` picker state: anchor = index of the ``@`` char, query = text after
+   * it up to the caret. ``null`` closes the palette. */
+  const [mention, setMention] = useState<{ anchor: number; query: string } | null>(null);
+  const [selectedMentionIndex, setSelectedMentionIndex] = useState(0);
+  /** Inserted ``@DisplayName`` tokens → agent id. Stale tokens (user deleted
+   * the text) are filtered out at submit time. */
+  const mentionedRef = useRef(new Map<string, string>());
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const formRef = useRef<HTMLFormElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -632,6 +644,78 @@ export function ThreadComposer({
     });
   }, []);
 
+  const filteredMentionAgents = useMemo(() => {
+    if (!mention) return [];
+    const q = mention.query.toLowerCase();
+    return mentionableAgents
+      .filter(
+        (agent) =>
+          !q
+          || agent.displayName.toLowerCase().includes(q)
+          || agent.id.toLowerCase().includes(q),
+      )
+      .slice(0, 8);
+  }, [mention, mentionableAgents]);
+
+  const showMentionMenu = mention !== null && filteredMentionAgents.length > 0;
+
+  useEffect(() => {
+    setSelectedMentionIndex(0);
+  }, [mention?.query]);
+
+  useEffect(() => {
+    if (selectedMentionIndex >= filteredMentionAgents.length) {
+      setSelectedMentionIndex(0);
+    }
+  }, [filteredMentionAgents.length, selectedMentionIndex]);
+
+  /** Detect an active ``@query`` token at the caret and open/close the
+   * picker accordingly. The ``@`` must start a token (start of text or
+   * preceded by whitespace) and contain no whitespace before the caret. */
+  const trackMention = useCallback(
+    (text: string, caret: number) => {
+      if (mentionableAgents.length === 0) {
+        setMention(null);
+        return;
+      }
+      let anchor = -1;
+      for (let i = caret - 1; i >= 0; i--) {
+        const ch = text[i];
+        if (ch === "@") {
+          if (i === 0 || /\s/.test(text[i - 1])) anchor = i;
+          break;
+        }
+        if (/\s/.test(ch)) break;
+      }
+      setMention(anchor >= 0 ? { anchor, query: text.slice(anchor + 1, caret) } : null);
+    },
+    [mentionableAgents.length],
+  );
+
+  const chooseMention = useCallback(
+    (agent: RoomAgentInfo) => {
+      if (!mention) return;
+      const el = textareaRef.current;
+      const caret = el ? el.selectionStart : mention.anchor + 1 + mention.query.length;
+      const end = Math.max(caret, mention.anchor + 1 + mention.query.length);
+      const token = `@${agent.displayName}`;
+      const next = `${value.slice(0, mention.anchor)}${token} ${value.slice(end)}`;
+      mentionedRef.current.set(token, agent.id);
+      setValue(next);
+      setMention(null);
+      const pos = mention.anchor + token.length + 1;
+      requestAnimationFrame(() => {
+        const ta = textareaRef.current;
+        if (!ta) return;
+        ta.style.height = "auto";
+        ta.style.height = `${Math.min(ta.scrollHeight, 260)}px`;
+        ta.focus();
+        ta.setSelectionRange(pos, pos);
+      });
+    },
+    [mention, value],
+  );
+
   const submit = useCallback(() => {
     if (!canSend) return;
     const trimmed = value.trim();
@@ -649,17 +733,57 @@ export function ThreadComposer({
             preview: { url: img.dataUrl, name: img.file.name },
           }))
         : undefined;
-    onSend(trimmed, payload);
+    const targetAgentIds = [
+      ...new Set(
+        [...mentionedRef.current.entries()]
+          .filter(([token]) => trimmed.includes(token))
+          .map(([, id]) => id),
+      ),
+    ];
+    onSend(
+      trimmed,
+      payload,
+      targetAgentIds.length > 0 ? { targetAgentIds } : undefined,
+    );
+    mentionedRef.current.clear();
     setValue("");
     setInlineError(null);
     // Bubble owns the data URL copy; safe to revoke every staged blob
     // preview here without affecting the rendered message.
     clear();
     setSlashMenuDismissed(false);
+    setMention(null);
     resizeTextarea();
   }, [canSend, clear, onSend, readyImages, resizeTextarea, value]);
 
   const onKeyDown = (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+    if (showMentionMenu) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setSelectedMentionIndex((idx) => (idx + 1) % filteredMentionAgents.length);
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setSelectedMentionIndex(
+          (idx) => (idx - 1 + filteredMentionAgents.length) % filteredMentionAgents.length,
+        );
+        return;
+      }
+      if (
+        e.key === "Tab"
+        || (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing)
+      ) {
+        e.preventDefault();
+        chooseMention(filteredMentionAgents[selectedMentionIndex]);
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setMention(null);
+        return;
+      }
+    }
     if (showSlashMenu) {
       if (e.key === "ArrowDown") {
         e.preventDefault();
@@ -759,6 +883,63 @@ export function ThreadComposer({
           onChoose={chooseSlashCommand}
         />
       ) : null}
+      {showMentionMenu ? (
+        <div
+          role="listbox"
+          aria-label={t("thread.composer.mention.ariaLabel")}
+          className={cn(
+            "absolute left-1/2 z-30 w-[calc(100%-0.5rem)] -translate-x-1/2 overflow-hidden rounded-md border",
+            "bottom-full mb-2",
+            "border-border/65 bg-popover p-1.5 text-popover-foreground shadow-lg",
+            "dark:border-white/10",
+            isHero ? "max-w-[58rem]" : "max-w-[49.5rem]",
+          )}
+        >
+          <div className="px-2 pb-1 pt-1 text-[11px] font-medium tracking-[0.08em] text-muted-foreground/70">
+            {t("thread.composer.mention.label")}
+          </div>
+          <div className="max-h-56 overflow-y-auto pr-0.5">
+            {filteredMentionAgents.map((agent, index) => {
+              const selected = index === selectedMentionIndex;
+              return (
+                <button
+                  key={agent.id}
+                  type="button"
+                  role="option"
+                  aria-selected={selected}
+                  onMouseEnter={() => setSelectedMentionIndex(index)}
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    chooseMention(agent);
+                  }}
+                  className={cn(
+                    "flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors",
+                    selected
+                      ? "bg-primary/10 text-foreground"
+                      : "text-foreground/86 hover:bg-accent",
+                  )}
+                >
+                  <span
+                    className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border/60 bg-muted/50"
+                  >
+                    <AtSign className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-medium">
+                      {agent.displayName}
+                    </span>
+                    {agent.description ? (
+                      <span className="block truncate text-xs text-muted-foreground">
+                        {agent.description}
+                      </span>
+                    ) : null}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
       {isHero ? (
         <div className="mx-auto mb-2.5 flex w-full max-w-[58rem] flex-wrap gap-2">
           {HERO_PROMPT_CHIPS.map((chip) => {
@@ -847,6 +1028,7 @@ export function ThreadComposer({
           onChange={(e) => {
             setValue(e.target.value);
             setSlashMenuDismissed(false);
+            trackMention(e.target.value, e.target.selectionStart);
           }}
           onInput={onInput}
           onKeyDown={onKeyDown}
