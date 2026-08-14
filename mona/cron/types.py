@@ -32,6 +32,9 @@ class CronPayload:
     # For "workflow_run": the collaboration room whose active workflow runs.
     # Only the room id is stored — execution reads the then-active revision.
     room_id: str | None = None
+    # For "system_event" dream jobs named "dream-<agent_id>": the partner agent
+    # whose PRIVATE Dream runs. None / "mona" = the main assistant's Dream.
+    agent_id: str | None = None
 
 
 @dataclass

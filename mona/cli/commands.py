@@ -8,7 +8,10 @@ import sys
 from collections.abc import Callable
 from contextlib import nullcontext, suppress
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from mona.cron.types import CronJob
 
 # Force UTF-8 encoding for Windows console
 if sys.platform == "win32":
@@ -717,6 +720,52 @@ def gateway(
     _run_gateway(cfg, port=port)
 
 
+async def _run_partner_dream(
+    job: "CronJob",
+    *,
+    agent: AgentLoop,
+    dream_cfg: Any,
+    disabled_skills: list[str],
+) -> None:
+    """Run a partner agent's private Dream for a ``dream-<agent_id>`` job.
+
+    Builds a lightweight Dream on the agent's private MemoryStore — no full
+    PartnerAgentLoop is needed since Dream never enters the agent loop.
+    Shares Mona's DreamConfig (maintenance knobs) and provider.
+    """
+    from mona.agent.memory import Dream, MemoryStore
+    from mona.agent.partners import MONA_AGENT_ID, AgentRegistry
+
+    partner_id = (job.payload.agent_id or job.name.removeprefix("dream-")).strip()
+    if not partner_id or partner_id == MONA_AGENT_ID:
+        await agent.dream.run()
+        return
+    definition = AgentRegistry().get(partner_id)
+    if definition is None:
+        logger.warning("Partner dream skipped: agent '{}' is not installed", partner_id)
+        return
+    # Manifest model pinning mirrors PartnerAgentLoop: "inherit" follows the
+    # gateway's current model; any other value pins the partner's Dream.
+    manifest_model = (definition.model or "").strip()
+    if manifest_model and manifest_model.lower() != "inherit":
+        model = manifest_model
+    else:
+        model = dream_cfg.model_override or agent.model
+    partner_dream = Dream(
+        store=MemoryStore(agent.workspace, agent_id=partner_id),
+        provider=agent.provider,
+        model=model,
+        max_batch_size=dream_cfg.max_batch_size,
+        max_iterations=dream_cfg.max_iterations,
+        annotate_line_ages=dream_cfg.annotate_line_ages,
+        skill_prune_enabled=dream_cfg.skill_prune_enabled,
+        archive_after_days=dream_cfg.archive_after_days,
+        max_active_user_skills=dream_cfg.max_active_user_skills,
+        disabled_skills=disabled_skills,
+    )
+    await partner_dream.run()
+
+
 def _run_gateway(
     config: Config,
     *,
@@ -841,12 +890,25 @@ def _run_gateway(
     async def on_cron_job(job: CronJob) -> str | None:
         """Execute a cron job through the agent."""
         # Dream is an internal job — run directly, not through the agent loop.
-        if job.name == "dream":
+        # Partner dreams ("dream-<agent_id>") run that agent's PRIVATE Dream so
+        # its history.jsonl is consolidated into its own MEMORY.md, instead of
+        # only Mona's memory being maintained (multi-agent phase 3).
+        if job.name == "dream" or job.name.startswith("dream-"):
             try:
-                await agent.dream.run()
-                logger.info("Dream cron job completed")
+                if job.name == "dream":
+                    await agent.dream.run()
+                else:
+                    await _run_partner_dream(
+                        job,
+                        agent=agent,
+                        dream_cfg=dream_cfg,
+                        disabled_skills=list(
+                            config.agents.defaults.disabled_skills or []
+                        ),
+                    )
+                logger.info("Dream cron job '{}' completed", job.name)
             except Exception:
-                logger.exception("Dream cron job failed")
+                logger.exception("Dream cron job '{}' failed", job.name)
             return None
 
         # Distillation jobs — run directly without agent loop
@@ -1131,6 +1193,27 @@ def _run_gateway(
         payload=CronPayload(kind="system_event"),
     ))
     console.print(f"[green]✓[/green] Dream: {dream_cfg.describe_schedule()}")
+
+    # Register one Dream job per partner agent so each agent's private
+    # history.jsonl is consolidated into its own MEMORY.md on the same
+    # schedule (multi-agent phase 3). Idempotent on restart like Mona's job;
+    # agents installed later pick up their job at the next gateway start.
+    from mona.agent.partners import MONA_AGENT_ID, AgentRegistry
+    partner_dream_ids: list[str] = []
+    for definition in AgentRegistry().list_agents():
+        if definition.id == MONA_AGENT_ID:
+            continue
+        cron.register_system_job(CronJob(
+            id=f"dream-{definition.id}",
+            name=f"dream-{definition.id}",
+            schedule=dream_cfg.build_schedule(config.agents.defaults.timezone),
+            payload=CronPayload(kind="system_event", agent_id=definition.id),
+        ))
+        partner_dream_ids.append(definition.id)
+    if partner_dream_ids:
+        console.print(
+            f"[green]✓[/green] Partner dreams: {', '.join(partner_dream_ids)}"
+        )
 
     # Register distillation system jobs (weekly, Sunday 03:00 local time)
     from mona.distill.service import register_distill_jobs
