@@ -370,6 +370,20 @@ export interface ChatSummary {
   updatedAt: string | null;
   title?: string;
   preview: string;
+  /** Timestamp of the preview message (IM plan 12.1); ``preview`` and
+   *  ``previewAt`` always come from the same user-visible message. */
+  previewAt?: string | null;
+  /** Author of the preview message; legacy assistant messages count as the
+   *  Mona agent. */
+  previewAuthorType?: AuthorType | null;
+  previewAuthorId?: string | null;
+  previewMessageType?: MessageType | null;
+  /** Latest persisted workflow run status for room sessions (IM plan 12.1). */
+  workflowRunStatus?: WorkflowRunStatus | null;
+  /** True while a persisted run waits on an approval step. */
+  waitingApproval?: boolean;
+  /** True when the room's active workflow has a live cron trigger. */
+  scheduled?: boolean;
   /** Project workspace directory bound to this session. ``null`` (or omitted)
    *  means the session belongs to the default "会话" section (default workspace). */
   workspace?: string | null;
@@ -379,6 +393,15 @@ export interface ChatSummary {
    *  which render as a direct chat with Mona. */
   conversation?: ConversationMeta | null;
 }
+
+/** Attention badge for a conversation row (IM plan 12.3), derived on the UI
+ *  layer from ``ChatSummary`` — never persisted into a React store. */
+export type ConversationListStatus =
+  | "waiting_approval"
+  | "failed"
+  | "running"
+  | "scheduled"
+  | null;
 
 export type SidebarDensity = "comfortable" | "compact";
 export type SidebarSortMode = "updated_desc" | "created_desc" | "title_asc";
@@ -396,6 +419,9 @@ export interface SidebarStatePayload {
   pinned_keys: string[];
   archived_keys: string[];
   title_overrides: Record<string, string>;
+  /** IM unread derivation (schema v2, IM plan 12.4): last-read marker per
+   *  session key, compared against ``ChatSummary.previewAt``. */
+  last_read_at_by_key: Record<string, string>;
   tags_by_key: Record<string, string[]>;
   collapsed_groups: Record<string, boolean>;
   view: SidebarViewState;

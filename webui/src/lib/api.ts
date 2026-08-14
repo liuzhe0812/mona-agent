@@ -1,9 +1,11 @@
 import type {
   AgentSummary,
+  AuthorType,
   ChatSummary,
   ConversationMeta,
   DeliveredFile,
   ImageGenerationSettingsUpdate,
+  MessageType,
   PptProject,
   PptTemplatesResponse,
   ProviderSettingsUpdate,
@@ -16,6 +18,7 @@ import type {
   WebSearchSettingsUpdate,
   WeixinLoginStatus,
   WebuiThreadPersistedPayload,
+  WorkflowRunStatus,
 } from "./types";
 import { isTauri, getGatewayStatus, getServicesStatus, httpFetch } from "./tauri";
 
@@ -152,6 +155,13 @@ export async function listSessions(
     updated_at: string | null;
     title?: string;
     preview?: string;
+    preview_at?: string | null;
+    preview_author_type?: AuthorType | null;
+    preview_author_id?: string | null;
+    preview_message_type?: MessageType | null;
+    workflow_run_status?: WorkflowRunStatus | null;
+    waiting_approval?: boolean;
+    scheduled?: boolean;
     run_started_at?: number | null;
     conversation?: ConversationMeta | null;
   };
@@ -166,6 +176,13 @@ export async function listSessions(
     updatedAt: s.updated_at,
     title: s.title ?? "",
     preview: s.preview ?? "",
+    previewAt: s.preview_at ?? null,
+    previewAuthorType: s.preview_author_type ?? null,
+    previewAuthorId: s.preview_author_id ?? null,
+    previewMessageType: s.preview_message_type ?? null,
+    workflowRunStatus: s.workflow_run_status ?? null,
+    waitingApproval: s.waiting_approval ?? false,
+    scheduled: s.scheduled ?? false,
     workspace: (s as Row & { workspace?: string | null }).workspace ?? null,
     runStartedAt: s.run_started_at ?? null,
     conversation: s.conversation ?? null,

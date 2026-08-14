@@ -8,10 +8,11 @@ import {
 import type { ChatSummary, SidebarStatePayload } from "@/lib/types";
 
 export const DEFAULT_SIDEBAR_STATE: SidebarStatePayload = {
-  schema_version: 1,
+  schema_version: 2,
   pinned_keys: [],
   archived_keys: [],
   title_overrides: {},
+  last_read_at_by_key: {},
   tags_by_key: {},
   collapsed_groups: {},
   view: {
@@ -86,10 +87,11 @@ export function normalizeSidebarState(raw: unknown): SidebarStatePayload {
     ? view.sort
     : "updated_desc";
   return {
-    schema_version: 1,
+    schema_version: 2,
     pinned_keys: uniqueStrings(value.pinned_keys),
     archived_keys: uniqueStrings(value.archived_keys),
     title_overrides: stringMap(value.title_overrides),
+    last_read_at_by_key: stringMap(value.last_read_at_by_key),
     tags_by_key: tagsMap(value.tags_by_key),
     collapsed_groups: boolMap(value.collapsed_groups),
     view: {
@@ -121,12 +123,50 @@ function pruneMissingSessions(
     pinned_keys: filterKeys(state.pinned_keys),
     archived_keys: filterKeys(state.archived_keys),
     title_overrides: filterMap(state.title_overrides),
+    last_read_at_by_key: filterMap(state.last_read_at_by_key),
     tags_by_key: filterMap(state.tags_by_key),
   };
 }
 
 function sameState(a: SidebarStatePayload, b: SidebarStatePayload): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/** IM plan 11.1: a session is unread when its latest user-visible activity
+ *  was produced by an agent or system business event after the local
+ *  last-read marker. The user's own messages never create unread state.
+ *
+ *  Timestamps are ISO strings from the same server source, so plain string
+ *  comparison matches chronological order. A missing marker counts as unread
+ *  for non-user activity — v2 migration seeds markers from ``previewAt``, so
+ *  an absent marker means the activity arrived before any read happened. */
+export function isSessionUnread(
+  session: Pick<ChatSummary, "previewAt" | "previewAuthorType">,
+  lastReadAt: string | null | undefined,
+): boolean {
+  if (!session.previewAt) return false;
+  if (session.previewAuthorType === "user") return false;
+  if (!lastReadAt) return true;
+  return session.previewAt > lastReadAt;
+}
+
+/** IM plan 11.2: advance the last-read marker to a seen ``previewAt``.
+ *
+ *  The marker only moves forward and only to a timestamp the client actually
+ *  rendered — never to the wall-clock now — so a concurrent new message is
+ *  not swallowed. Returns the input state unchanged when no advance is due. */
+export function markSessionRead(
+  state: SidebarStatePayload,
+  key: string,
+  previewAt: string | null | undefined,
+): SidebarStatePayload {
+  if (!previewAt) return state;
+  const existing = state.last_read_at_by_key[key];
+  if (existing && existing >= previewAt) return state;
+  return {
+    ...state,
+    last_read_at_by_key: { ...state.last_read_at_by_key, [key]: previewAt },
+  };
 }
 
 export function useSidebarState(

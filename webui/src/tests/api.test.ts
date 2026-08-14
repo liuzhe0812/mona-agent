@@ -209,6 +209,62 @@ describe("webui API helpers", () => {
     ]);
   });
 
+  it("maps IM session summary and attention fields from the sessions list", async () => {
+    // IM plan 12.1/12.3: snake_case wire fields map onto the camelCase
+    // ChatSummary contract the list UI derives unread/attention state from.
+    vi.mocked(fetch).mockResolvedValueOnce({
+      ok: true,
+      headers: jsonHeaders,
+      json: async () => ({
+        sessions: [
+          {
+            key: "websocket:chat-1",
+            created_at: "2026-08-14T10:00:00+08:00",
+            updated_at: "2026-08-14T10:05:00+08:00",
+            title: "每日市场简报",
+            preview: "分析已完成，等待你确认后发布",
+            preview_at: "2026-08-14T10:05:00+08:00",
+            preview_author_type: "agent",
+            preview_author_id: "com.mona.a-share-analyst",
+            preview_message_type: "approval",
+            workflow_run_status: "waiting_approval",
+            waiting_approval: true,
+            scheduled: true,
+          },
+          {
+            key: "websocket:chat-2",
+            created_at: "2026-08-14T09:00:00+08:00",
+            updated_at: "2026-08-14T09:01:00+08:00",
+            preview: "hello",
+          },
+        ],
+      }),
+    } as Response);
+
+    const rows = await listSessions("tok");
+    expect(rows[0]).toMatchObject({
+      key: "websocket:chat-1",
+      preview: "分析已完成，等待你确认后发布",
+      previewAt: "2026-08-14T10:05:00+08:00",
+      previewAuthorType: "agent",
+      previewAuthorId: "com.mona.a-share-analyst",
+      previewMessageType: "approval",
+      workflowRunStatus: "waiting_approval",
+      waitingApproval: true,
+      scheduled: true,
+    });
+    // Legacy rows without the new fields map to safe defaults.
+    expect(rows[1]).toMatchObject({
+      previewAt: null,
+      previewAuthorType: null,
+      previewAuthorId: null,
+      previewMessageType: null,
+      workflowRunStatus: null,
+      waitingApproval: false,
+      scheduled: false,
+    });
+  });
+
   it("maps slash command metadata from the commands endpoint", async () => {
     vi.mocked(fetch).mockResolvedValueOnce({
       ok: true,

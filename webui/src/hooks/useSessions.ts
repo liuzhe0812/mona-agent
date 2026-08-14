@@ -11,7 +11,11 @@ import {
 } from "@/lib/api";
 import { deriveTitle } from "@/lib/format";
 import { resolveUIImageUrls, resolveMediaAttachmentUrls } from "@/lib/media";
-import type { ChatSummary, UIMessage } from "@/lib/types";
+import type {
+  ChatSummary,
+  ConversationListStatus,
+  UIMessage,
+} from "@/lib/types";
 
 const EMPTY_MESSAGES: UIMessage[] = [];
 
@@ -31,6 +35,8 @@ export function useSessions(): {
   const [error, setError] = useState<string | null>(null);
   const tokenRef = useRef(token);
   const optimisticKeysRef = useRef<Set<string>>(new Set());
+  const refreshingRef = useRef(false);
+  const refreshPendingRef = useRef(false);
   tokenRef.current = token;
 
   const refresh = useCallback(async () => {
@@ -38,28 +44,43 @@ export function useSessions(): {
       setLoading(false);
       return;
     }
+    // IM plan 12.5: bursts of session_updated events coalesce into one
+    // in-flight refresh plus at most one trailing refresh, so concurrent
+    // requests never overwrite newer data with stale responses.
+    if (refreshingRef.current) {
+      refreshPendingRef.current = true;
+      return;
+    }
+    refreshingRef.current = true;
     try {
-      setLoading(true);
-      const rows = await listSessions(tokenRef.current);
-      const serverKeys = new Set(rows.map((row) => row.key));
-      setSessions((prev) => [
-        ...rows,
-        ...prev.filter(
-          (session) =>
-            optimisticKeysRef.current.has(session.key) &&
-            !serverKeys.has(session.key),
-        ),
-      ]);
-      for (const key of Array.from(optimisticKeysRef.current)) {
-        if (serverKeys.has(key)) optimisticKeysRef.current.delete(key);
-      }
-      setError(null);
-    } catch (e) {
-      const msg =
-        e instanceof ApiError ? `HTTP ${e.status}` : (e as Error).message;
-      setError(msg);
+      do {
+        refreshPendingRef.current = false;
+        try {
+          setLoading(true);
+          const rows = await listSessions(tokenRef.current);
+          const serverKeys = new Set(rows.map((row) => row.key));
+          setSessions((prev) => [
+            ...rows,
+            ...prev.filter(
+              (session) =>
+                optimisticKeysRef.current.has(session.key) &&
+                !serverKeys.has(session.key),
+            ),
+          ]);
+          for (const key of Array.from(optimisticKeysRef.current)) {
+            if (serverKeys.has(key)) optimisticKeysRef.current.delete(key);
+          }
+          setError(null);
+        } catch (e) {
+          const msg =
+            e instanceof ApiError ? `HTTP ${e.status}` : (e as Error).message;
+          setError(msg);
+        } finally {
+          setLoading(false);
+        }
+      } while (refreshPendingRef.current);
     } finally {
-      setLoading(false);
+      refreshingRef.current = false;
     }
   }, [client]);
 
@@ -282,4 +303,26 @@ export function sessionTitle(
     session.title || firstUserMessage || session.preview,
     i18n.t("chat.newChat"),
   );
+}
+
+/** Attention state for a conversation row (IM plan 12.3), derived from the
+ *  server-provided workflow fields — never persisted into a store. Priority:
+ *  waiting approval > failed > running > scheduled. */
+export function conversationListStatus(
+  session: Pick<
+    ChatSummary,
+    "waitingApproval" | "workflowRunStatus" | "runStartedAt" | "scheduled"
+  >,
+): ConversationListStatus {
+  if (session.waitingApproval) return "waiting_approval";
+  if (session.workflowRunStatus === "failed") return "failed";
+  if (
+    session.workflowRunStatus === "running" ||
+    session.workflowRunStatus === "queued" ||
+    session.runStartedAt != null
+  ) {
+    return "running";
+  }
+  if (session.scheduled) return "scheduled";
+  return null;
 }

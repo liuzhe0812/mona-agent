@@ -1,8 +1,13 @@
-﻿import { act, renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { sessionTitle, useSessionHistory, useSessions } from "@/hooks/useSessions";
+import {
+  conversationListStatus,
+  sessionTitle,
+  useSessionHistory,
+  useSessions,
+} from "@/hooks/useSessions";
 import * as api from "@/lib/api";
 import { ClientProvider } from "@/providers/ClientProvider";
 
@@ -414,5 +419,109 @@ describe("useSessions", () => {
     ).rejects.toThrow("boom");
 
     expect(result.current.sessions.map((s) => s.key)).toEqual(["websocket:chat-a"]);
+  });
+
+  it("coalesces a burst of session updates into one trailing refresh", async () => {
+    // IM plan 12.5: rapid session_updated events merge into the in-flight
+    // refresh plus at most one follow-up, never one request per event.
+    let resolveFirst: ((rows: unknown[]) => void) | null = null;
+    vi.mocked(api.listSessions)
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve as (rows: unknown[]) => void;
+          }),
+      )
+      .mockResolvedValue([]);
+    const client = fakeClient();
+
+    const { result } = renderHook(() => useSessions(), {
+      wrapper: wrap(client),
+    });
+
+    // The initial refresh is in flight; events arriving during it must queue
+    // a single trailing refresh instead of starting concurrent requests.
+    await waitFor(() => expect(api.listSessions).toHaveBeenCalledTimes(1));
+    act(() => {
+      client.emitSessionUpdate("chat-a");
+      client.emitSessionUpdate("chat-b");
+      client.emitSessionUpdate("chat-c");
+    });
+    expect(api.listSessions).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveFirst?.([]);
+    });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(api.listSessions).toHaveBeenCalledTimes(2);
+
+    // No further refresh fires once the queue has drained.
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(api.listSessions).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("conversationListStatus", () => {
+  it("prioritizes waiting approval over other attention states", () => {
+    expect(
+      conversationListStatus({
+        waitingApproval: true,
+        workflowRunStatus: "waiting_approval",
+        scheduled: true,
+      }),
+    ).toBe("waiting_approval");
+    expect(
+      conversationListStatus({
+        waitingApproval: false,
+        workflowRunStatus: "failed",
+        scheduled: true,
+      }),
+    ).toBe("failed");
+    expect(
+      conversationListStatus({
+        waitingApproval: false,
+        workflowRunStatus: "running",
+        scheduled: true,
+      }),
+    ).toBe("running");
+    expect(
+      conversationListStatus({
+        waitingApproval: false,
+        workflowRunStatus: "queued",
+        scheduled: true,
+      }),
+    ).toBe("running");
+    // An in-flight websocket turn also counts as running.
+    expect(
+      conversationListStatus({
+        waitingApproval: false,
+        workflowRunStatus: "succeeded",
+        runStartedAt: 1_700_000_000,
+        scheduled: true,
+      }),
+    ).toBe("running");
+    expect(
+      conversationListStatus({
+        waitingApproval: false,
+        workflowRunStatus: "succeeded",
+        scheduled: true,
+      }),
+    ).toBe("scheduled");
+    expect(
+      conversationListStatus({
+        waitingApproval: false,
+        workflowRunStatus: "succeeded",
+        scheduled: false,
+      }),
+    ).toBeNull();
+    expect(
+      conversationListStatus({
+        waitingApproval: false,
+        workflowRunStatus: null,
+        scheduled: false,
+      }),
+    ).toBeNull();
   });
 });
