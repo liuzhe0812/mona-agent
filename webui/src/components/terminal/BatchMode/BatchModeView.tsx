@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/context-menu";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { isTauri } from "@/lib/tauri";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
@@ -815,6 +816,7 @@ export function BatchModeView() {
   };
 
   useEffect(() => {
+    if (!isTauri()) return;
     let unlisten: (() => void) | null = null;
 
     const isInsideSftpArea = (pos: { x: number; y: number }) => {
