@@ -439,6 +439,55 @@ class SubagentManager:
             payload=CronPayload(kind="workflow_run", room_id=room_id),
         ))
 
+    def workflow_attention_for_rooms(
+        self, room_ids: list[str]
+    ) -> dict[str, dict[str, Any]]:
+        """Batch IM session-list workflow state for room sessions (IM plan 12.1).
+
+        Returns ``{room_id: {"workflow_run_status", "waiting_approval",
+        "scheduled"}}`` sourced from persisted runs and the active workflow
+        definition — never from in-flight UI state. Rooms are grouped by
+        workspace root so run files are scanned once per root instead of
+        once per room. A room whose state cannot be read degrades to empty
+        values rather than breaking the whole sessions list.
+        """
+        state: dict[str, dict[str, Any]] = {
+            room_id: {
+                "workflow_run_status": None,
+                "waiting_approval": False,
+                "scheduled": False,
+            }
+            for room_id in room_ids
+        }
+        by_root: dict[Path, list[str]] = {}
+        for room_id in room_ids:
+            try:
+                root = self._workspace_root_for_room(room_id)
+            except Exception:
+                logger.exception("Cannot resolve workspace for room {}", room_id)
+                continue
+            by_root.setdefault(root, []).append(room_id)
+        for root, ids in by_root.items():
+            try:
+                latest_runs = self._run_store_for_root(root).latest_by_room()
+            except Exception:
+                logger.exception("Cannot scan workflow runs under {}", root)
+                latest_runs = {}
+            for room_id in ids:
+                run = latest_runs.get(room_id)
+                if run is not None:
+                    entry = state[room_id]
+                    entry["workflow_run_status"] = run.status
+                    entry["waiting_approval"] = run.status == RUN_STATUS_WAITING_APPROVAL
+                try:
+                    active = self.workflow_store_for_room(room_id).get_active(room_id)
+                except Exception:
+                    logger.exception("Cannot load active workflow for room {}", room_id)
+                    continue
+                if active is not None and active.trigger.type == "cron" and active.trigger.expr:
+                    state[room_id]["scheduled"] = True
+        return state
+
     def propose_workflow_draft(
         self,
         *,

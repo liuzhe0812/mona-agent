@@ -682,6 +682,18 @@ class WorkflowRunStore:
         runs.reverse()
         return runs[:limit] if limit else runs
 
+    def latest_by_room(self) -> dict[str, WorkflowRun]:
+        """Latest run per room id from one directory scan (IM sessions list).
+
+        ``_scan`` orders ascending by ``(started_at, id)`` so the last write
+        per room wins; callers get the persisted current state without one
+        directory rescan per room.
+        """
+        latest: dict[str, WorkflowRun] = {}
+        for run in self._scan():
+            latest[run.room_id] = run
+        return latest
+
     def list_non_terminal(self) -> list[WorkflowRun]:
         """Runs not in a terminal state, for restart recovery (guide 7.6)."""
         return [r for r in self._scan() if r.status not in TERMINAL_RUN_STATUSES]

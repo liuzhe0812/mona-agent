@@ -62,6 +62,7 @@ from mona.webui.settings_api import (
 )
 from mona.webui.sidebar_state import (
     read_webui_sidebar_state,
+    remove_webui_sidebar_session,
     write_webui_sidebar_state,
 )
 from mona.webui.thread_disk import delete_webui_thread
@@ -697,6 +698,9 @@ class WebSocketChannel(BaseChannel):
         self._workflow_tasks: dict[str, asyncio.Task] = {}
         # run_id -> notified waiting-approval signature (dedupe approval_requested)
         self._approval_notified: dict[str, str] = {}
+        # run_id -> last run-level status that triggered a session_updated push
+        # (IM plan 11.5: list attention state follows persisted run status).
+        self._run_status_notified: dict[str, str] = {}
         self._runtime_model_name = runtime_model_name
         self._settings_restart_sections: set[str] = set()
         # Process-local WeChat QR login session (single-use, replaced on each start).
@@ -1140,6 +1144,31 @@ class WebSocketChannel(BaseChannel):
             if started_at is not None:
                 row["run_started_at"] = started_at
             cleaned.append(row)
+        # IM list attention state (IM plan 12.1): workflow run status,
+        # waiting-approval and scheduled come from persisted workflow state,
+        # batched per workspace root so runs are not rescanned per room.
+        room_chat_ids = [
+            row["key"].split(":", 1)[1]
+            for row in cleaned
+            if isinstance(row.get("conversation"), dict)
+            and row["conversation"].get("type") == "room"
+        ]
+        attention = (
+            self._subagent_manager.workflow_attention_for_rooms(room_chat_ids)
+            if room_chat_ids and self._subagent_manager is not None
+            else {}
+        )
+        for row in cleaned:
+            chat_id = row["key"].split(":", 1)[1]
+            state = attention.get(chat_id)
+            if state is None:
+                row["workflow_run_status"] = None
+                row["waiting_approval"] = False
+                row["scheduled"] = False
+            else:
+                row["workflow_run_status"] = state["workflow_run_status"]
+                row["waiting_approval"] = state["waiting_approval"]
+                row["scheduled"] = state["scheduled"]
         return _http_json_response({"sessions": cleaned})
 
     def _handle_agents_list(self, request: WsRequest) -> Response:
@@ -1201,7 +1230,27 @@ class WebSocketChannel(BaseChannel):
     def _handle_webui_sidebar_state(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
-        return _http_json_response(read_webui_sidebar_state())
+        # Seed data for the one-time sidebar-state v1→v2 migration (IM plan
+        # 12.4): existing sessions start read at their current preview.
+        return _http_json_response(
+            read_webui_sidebar_state(session_preview_at=self._session_preview_at_by_key())
+        )
+
+    def _session_preview_at_by_key(self) -> dict[str, str]:
+        if self._session_manager is None:
+            return {}
+        try:
+            rows = self._session_manager.list_sessions()
+        except Exception:
+            self.logger.exception("failed to list sessions for sidebar state migration")
+            return {}
+        out: dict[str, str] = {}
+        for row in rows:
+            key = row.get("key")
+            preview_at = row.get("preview_at")
+            if isinstance(key, str) and isinstance(preview_at, str) and preview_at:
+                out[key] = preview_at
+        return out
 
     def _handle_webui_sidebar_state_update(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):
@@ -3018,6 +3067,9 @@ class WebSocketChannel(BaseChannel):
             return _http_error(404, "session not found")
         deleted = self._session_manager.delete_session(decoded_key)
         delete_webui_thread(decoded_key)
+        # IM sidebar state (IM plan 12.4): drop the deleted session's pin /
+        # archive / title override / last-read marker alongside the session.
+        remove_webui_sidebar_session(decoded_key)
         return _http_json_response({"deleted": bool(deleted)})
 
     def _serve_static(self, request_path: str) -> Response | None:
@@ -3813,6 +3865,7 @@ class WebSocketChannel(BaseChannel):
         """
         from mona.agent.partners import (
             CONVERSATION_METADATA_KEY,
+            MONA_AGENT_ID,
             ConversationMetadata,
             normalize_agent_id,
         )
@@ -3851,6 +3904,20 @@ class WebSocketChannel(BaseChannel):
             await self._send_event(
                 connection, "create_direct_conversation_result", ok=False,
                 code="already_a_room", detail="chat is already a collaboration room",
+                chat_id=chat_id, request_id=request_id,
+            )
+            return
+        # Idempotent only for the same agent: rebinding an existing partner
+        # direct chat to a different partner would mix its history across
+        # identities. Binding a fresh (default Mona) chat to a partner is the
+        # normal creation flow and stays allowed.
+        if existing.direct_agent_id not in (None, MONA_AGENT_ID) and (
+            existing.direct_agent_id != agent_id
+        ):
+            await self._send_event(
+                connection, "create_direct_conversation_result", ok=False,
+                code="agent_mismatch",
+                detail="chat is already a direct conversation with another agent",
                 chat_id=chat_id, request_id=request_id,
             )
             return
@@ -4115,10 +4182,11 @@ class WebSocketChannel(BaseChannel):
             )
             return True
 
-        # Live-echo the user message for webui clients, mirroring
-        # _handle_message (the normal flow is bypassed on the mention path).
+        # Live-echo the user message for webui clients.
+        # When Mona is also targeted the normal flow persists and echoes it,
+        # so skip here to avoid a duplicate transcript entry.
         display_content = metadata.get("display_content")
-        if metadata.get("webui"):
+        if metadata.get("webui") and not mona_targeted:
             user_obj: dict[str, Any] = {
                 "event": "user",
                 "chat_id": chat_id,
@@ -4226,6 +4294,15 @@ class WebSocketChannel(BaseChannel):
         if not isinstance(run_id, str) or not run_id:
             return
         status = payload.get("status")
+        # IM list contract (plan 11.5/12.1): run-level status changes move the
+        # sessions-list attention state (running / waiting_approval / failed /
+        # ...), so push a session refresh once per distinct status per run.
+        # Step-level observer replays share the same status and are deduped.
+        if isinstance(status, str) and self._run_status_notified.get(run_id) != status:
+            self._run_status_notified[run_id] = status
+            asyncio.create_task(self.send_session_updated(chat_id, scope="workflow"))
+            if status in ("succeeded", "failed", "cancelled"):
+                self._run_status_notified.pop(run_id, None)
         if status == "waiting_approval":
             steps = payload.get("steps")
             waiting = sorted(
@@ -4411,6 +4488,8 @@ class WebSocketChannel(BaseChannel):
             request_id=request_id, **payload,
         )
         await self.send_workflow_updated(chat_id, {**payload, "draft": False})
+        # Activation can flip the IM list ``scheduled`` flag (cron trigger).
+        await self.send_session_updated(chat_id, scope="workflow")
 
     async def _handle_get_workflow_envelope(
         self, connection: Any, envelope: dict[str, Any]

@@ -1,4 +1,4 @@
-﻿"""Session turn helpers for WebUI-capable WebSocket sessions.
+"""Session turn helpers for WebUI-capable WebSocket sessions.
 
 AgentLoop uses these without importing a concrete channel plugin; only
 ``channel == "websocket"`` messages are affected.
@@ -313,6 +313,19 @@ class WebuiTurnCoordinator:
             chat_id=msg.chat_id,
             content="",
             metadata=turn_metadata,
+        ))
+        # IM list contract (IM plan 11.5): a finished turn always persists new
+        # user-visible messages, so the sessions list must refresh its preview
+        # even when no title was (re)generated.
+        await self.bus.publish_outbound(OutboundMessage(
+            channel=msg.channel,
+            chat_id=msg.chat_id,
+            content="",
+            metadata={
+                **msg.metadata,
+                "_session_updated": True,
+                "_session_update_scope": "thread",
+            },
         ))
         self._schedule_title_update(msg, session_key=session_key)
 

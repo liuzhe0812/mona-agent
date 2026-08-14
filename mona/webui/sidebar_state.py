@@ -1,4 +1,4 @@
-﻿"""Persisted WebUI sidebar workspace state.
+"""Persisted WebUI sidebar workspace state.
 
 This state is UI-only metadata, scoped to the active mona instance data
 directory (the directory containing the current config.json). It deliberately
@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -17,13 +18,14 @@ from loguru import logger
 
 from mona.config.paths import get_webui_dir
 
-WEBUI_SIDEBAR_STATE_SCHEMA_VERSION = 1
+WEBUI_SIDEBAR_STATE_SCHEMA_VERSION = 2
 _MAX_STATE_FILE_BYTES = 256 * 1024
 _MAX_LIST_ITEMS = 2_000
 _MAX_MAP_ITEMS = 2_000
 _MAX_KEY_LEN = 512
 _MAX_TITLE_LEN = 160
 _MAX_TAG_LEN = 40
+_MAX_READ_AT_LEN = 64
 _ALLOWED_DENSITIES = {"comfortable", "compact"}
 _ALLOWED_SORTS = {"updated_desc", "created_desc", "title_asc"}
 
@@ -38,6 +40,9 @@ def default_webui_sidebar_state() -> dict[str, Any]:
         "pinned_keys": [],
         "archived_keys": [],
         "title_overrides": {},
+        # IM unread derivation (IM plan 12.4): last-read marker per session key,
+        # compared against the session ``preview_at`` on the client.
+        "last_read_at_by_key": {},
         "tags_by_key": {},
         "collapsed_groups": {},
         "view": {
@@ -99,6 +104,19 @@ def _clean_title_overrides(value: Any) -> dict[str, str]:
     return out
 
 
+def _clean_last_read_at_by_key(value: Any) -> dict[str, str]:
+    if not isinstance(value, Mapping):
+        return {}
+    out: dict[str, str] = {}
+    for key, raw_ts in list(value.items())[:_MAX_MAP_ITEMS]:
+        cleaned_key = _clean_string(key)
+        cleaned_ts = _clean_string(raw_ts, max_len=_MAX_READ_AT_LEN)
+        if cleaned_key is None or cleaned_ts is None:
+            continue
+        out[cleaned_key] = cleaned_ts
+    return out
+
+
 def _clean_tags_by_key(value: Any) -> dict[str, list[str]]:
     if not isinstance(value, dict):
         return {}
@@ -128,8 +146,18 @@ def _clean_view(value: Any) -> dict[str, Any]:
     }
 
 
-def normalize_webui_sidebar_state(raw: Any) -> dict[str, Any]:
-    """Return a schema-v1 sidebar state from any older/partial input."""
+def normalize_webui_sidebar_state(
+    raw: Any,
+    *,
+    session_preview_at: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    """Return a schema-v2 sidebar state from any older/partial input.
+
+    v1 → v2 migration (IM plan 12.4): pinned/archived/renamed data carries
+    over untouched; ``last_read_at_by_key`` is seeded from each existing
+    session's current ``preview_at`` so upgrading does not flip every
+    historical session to unread.
+    """
     if not isinstance(raw, dict):
         raw = {}
     state = default_webui_sidebar_state()
@@ -141,13 +169,38 @@ def normalize_webui_sidebar_state(raw: Any) -> dict[str, Any]:
     state["view"] = _clean_view(raw.get("view"))
     updated_at = raw.get("updated_at")
     state["updated_at"] = updated_at if isinstance(updated_at, str) else None
+    if "last_read_at_by_key" in raw:
+        # Present markers always win, even when the writer omitted the schema
+        # version — otherwise a stale client write would wipe read state.
+        state["last_read_at_by_key"] = _clean_last_read_at_by_key(
+            raw.get("last_read_at_by_key")
+        )
+    elif raw.get("schema_version") == WEBUI_SIDEBAR_STATE_SCHEMA_VERSION:
+        state["last_read_at_by_key"] = {}
+    else:
+        # Fresh installs pass no seed data and simply start with no markers;
+        # new sessions are initialized as read by the client on creation.
+        state["last_read_at_by_key"] = _clean_last_read_at_by_key(session_preview_at)
     return state
 
 
-def read_webui_sidebar_state() -> dict[str, Any]:
+def read_webui_sidebar_state(
+    session_preview_at: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
     path = webui_sidebar_state_path()
     if not path.is_file():
-        return default_webui_sidebar_state()
+        state = default_webui_sidebar_state()
+        seeded = _clean_last_read_at_by_key(session_preview_at)
+        if seeded:
+            # Upgraded install whose state file is missing: existing sessions
+            # still start read, and the seed persists so a later client write
+            # cannot wipe it.
+            state["last_read_at_by_key"] = seeded
+            try:
+                write_webui_sidebar_state(state)
+            except (OSError, ValueError) as e:
+                logger.warning("seed webui sidebar state failed {}: {}", path, e)
+        return state
     try:
         if path.stat().st_size > _MAX_STATE_FILE_BYTES:
             logger.warning("webui sidebar state too large, ignoring: {}", path)
@@ -157,7 +210,43 @@ def read_webui_sidebar_state() -> dict[str, Any]:
     except (OSError, json.JSONDecodeError) as e:
         logger.warning("read webui sidebar state failed {}: {}", path, e)
         return default_webui_sidebar_state()
-    return normalize_webui_sidebar_state(raw)
+    state = normalize_webui_sidebar_state(raw, session_preview_at=session_preview_at)
+    if not isinstance(raw, dict) or raw.get("schema_version") != WEBUI_SIDEBAR_STATE_SCHEMA_VERSION:
+        # Persist the migration so the seeding above runs exactly once; later
+        # reads keep the client's own last-read markers.
+        try:
+            write_webui_sidebar_state(state)
+        except (OSError, ValueError) as e:
+            logger.warning("persist webui sidebar state migration failed {}: {}", path, e)
+    return state
+
+
+def remove_webui_sidebar_session(session_key: str) -> None:
+    """Drop all per-session sidebar state for a deleted session (IM plan 12.4).
+
+    Clears the last-read marker, pin, archive flag and title override for the
+    session key; unrelated keys and view settings stay untouched.
+    """
+    cleaned = _clean_string(session_key)
+    if cleaned is None:
+        return
+    state = read_webui_sidebar_state()
+    changed = False
+    for list_name in ("pinned_keys", "archived_keys"):
+        items = state[list_name]
+        if cleaned in items:
+            items.remove(cleaned)
+            changed = True
+    for map_name in ("title_overrides", "last_read_at_by_key"):
+        if cleaned in state[map_name]:
+            del state[map_name][cleaned]
+            changed = True
+    if not changed:
+        return
+    try:
+        write_webui_sidebar_state(state)
+    except (OSError, ValueError) as e:
+        logger.warning("prune webui sidebar state for {} failed: {}", cleaned, e)
 
 
 def write_webui_sidebar_state(raw: dict[str, Any]) -> dict[str, Any]:

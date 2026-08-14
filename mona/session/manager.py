@@ -120,6 +120,76 @@ def _message_preview_text(message: dict[str, Any]) -> str:
     return _text_preview(content)
 
 
+# IM list summary cache (IM plan 12.2): persisted inside session metadata so
+# ``/api/sessions`` never replays transcripts to find the last visible message.
+UI_SUMMARY_SCHEMA_VERSION = 1
+_UI_SUMMARY_KEY = "ui_summary"
+
+_IMAGE_PREVIEW_SUFFIXES = frozenset({
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg", ".heic", ".heif", ".avif",
+})
+
+
+def _media_preview_text(media: Any) -> str:
+    """Localized placeholder summary for attachments, e.g. "[图片]" / "[文件] 报告.pdf"."""
+    if not isinstance(media, list):
+        return ""
+    parts: list[str] = []
+    for raw in media:
+        if not isinstance(raw, str) or not raw.strip():
+            continue
+        name = raw.replace("\\", "/").rsplit("/", 1)[-1].strip()
+        suffix = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+        if f".{suffix}" in _IMAGE_PREVIEW_SUFFIXES:
+            placeholder = "[图片]"
+        else:
+            placeholder = f"[文件] {name}" if name else "[文件]"
+        if placeholder not in parts:
+            parts.append(placeholder)
+    return " ".join(parts)
+
+
+def build_ui_summary(message: dict[str, Any]) -> dict[str, Any] | None:
+    """Build the cached session-list summary from one persisted message.
+
+    Only user-visible content may feed the IM list preview (IM plan 10.5):
+    user text/media and agent final text are eligible; system prompts, tool
+    results, reasoning/thinking, trace lines and protocol-only records never
+    become previews. Subagent announce blobs are scrubbed to their
+    user-readable job summary by ``_message_preview_text``.
+    """
+    if message.get("_command") or message.get("_ui_only"):
+        return None
+    if message.get("role") not in ("user", "assistant"):
+        return None
+    text = _message_preview_text(message)
+    if not text:
+        text = _media_preview_text(message.get("media"))
+    if not text:
+        return None
+    timestamp = message.get("timestamp")
+    return {
+        "schema_version": UI_SUMMARY_SCHEMA_VERSION,
+        "preview": text,
+        "preview_at": timestamp if isinstance(timestamp, str) else None,
+        "preview_author_type": message.get("author_type"),
+        "preview_author_id": message.get("author_id"),
+        "preview_message_type": message.get("message_type") or MESSAGE_TYPE_MESSAGE,
+    }
+
+
+def _valid_ui_summary(value: Any) -> dict[str, Any] | None:
+    """Return the cached summary dict when present and on the current schema."""
+    if (
+        isinstance(value, dict)
+        and value.get("schema_version") == UI_SUMMARY_SCHEMA_VERSION
+        and isinstance(value.get("preview"), str)
+        and value["preview"]
+    ):
+        return value
+    return None
+
+
 @dataclass
 class Session:
     """A conversation session."""
@@ -174,6 +244,35 @@ class Session:
         normalize_message_author(msg)
         self.messages.append(msg)
         self.updated_at = datetime.now()
+        self.update_ui_summary(msg)
+
+    def update_ui_summary(self, message: dict[str, Any]) -> None:
+        """Refresh the cached IM list summary from a newly persisted message.
+
+        Shared write path (IM plan 12.2): every user-visible message entering
+        the session funnels through here so callers never duplicate preview
+        logic. Non-visible messages leave the cache untouched.
+        """
+        summary = build_ui_summary(message)
+        if summary is not None:
+            self.metadata[_UI_SUMMARY_KEY] = summary
+
+    def ui_summary(self) -> dict[str, Any]:
+        """Return the cached IM list summary; legacy sessions fall back to scanning.
+
+        Sessions saved before the cache existed derive the summary from their
+        last user-visible message; the result is cached in memory here and
+        persisted by the next normal save.
+        """
+        cached = _valid_ui_summary(self.metadata.get(_UI_SUMMARY_KEY))
+        if cached is not None:
+            return cached
+        for message in reversed(self.messages):
+            summary = build_ui_summary(message)
+            if summary is not None:
+                self.metadata[_UI_SUMMARY_KEY] = summary
+                return summary
+        return {}
 
     def get_history(
         self,
@@ -275,6 +374,7 @@ class Session:
         self.last_consolidated = 0
         self.updated_at = datetime.now()
         self.metadata.pop("_last_summary", None)
+        self.metadata.pop(_UI_SUMMARY_KEY, None)
 
     def retain_recent_legal_suffix(self, max_messages: int) -> None:
         """Keep a legal recent suffix constrained by a hard message cap."""
@@ -661,7 +761,7 @@ class SessionManager:
         for path in self.sessions_dir.glob("*.jsonl"):
             fallback_key = path.stem.replace("_", ":", 1)
             try:
-                # Read the metadata line and a small preview for WebUI/session lists.
+                # Read the metadata line and the IM summary for WebUI/session lists.
                 with open(path, encoding="utf-8") as f:
                     first_line = f.readline().strip()
                     if first_line:
@@ -669,44 +769,51 @@ class SessionManager:
                         if data.get("_type") == "metadata":
                             key = data.get("key") or path.stem.replace("_", ":", 1)
                             metadata = data.get("metadata", {})
-                            title = metadata.get("title") if isinstance(metadata, dict) else None
-                            preview = ""
-                            fallback_preview = ""
-                            for line in f:
-                                if not line.strip():
-                                    continue
-                                item = json.loads(line)
-                                if item.get("_type") == "metadata":
-                                    continue
-                                text = _message_preview_text(item)
-                                if not text:
-                                    continue
-                                if item.get("role") == "user":
-                                    preview = text
-                                    break
-                                if not fallback_preview and item.get("role") == "assistant":
-                                    fallback_preview = text
-                            preview = preview or fallback_preview
+                            if not isinstance(metadata, dict):
+                                metadata = {}
+                            title = metadata.get("title")
+                            summary = _valid_ui_summary(metadata.get(_UI_SUMMARY_KEY))
+                            if summary is None:
+                                # Legacy session without a cached summary: scan
+                                # for the LAST user-visible message (IM plan
+                                # 12.2 fallback; the cache is written by the
+                                # next normal save, not by this read path).
+                                for line in f:
+                                    if not line.strip():
+                                        continue
+                                    item = json.loads(line)
+                                    if item.get("_type") == "metadata":
+                                        continue
+                                    normalize_message_author(item)
+                                    candidate = build_ui_summary(item)
+                                    if candidate is not None:
+                                        summary = candidate
+                            summary = summary or {}
                             row = {
                                 "key": key,
                                 "created_at": data.get("created_at"),
                                 "updated_at": data.get("updated_at"),
                                 "title": title if isinstance(title, str) else "",
-                                "preview": preview,
-                                "workspace": metadata.get("workspace") if isinstance(metadata, dict) else None,
+                                "preview": summary.get("preview", ""),
+                                "preview_at": summary.get("preview_at"),
+                                "preview_author_type": summary.get("preview_author_type"),
+                                "preview_author_id": summary.get("preview_author_id"),
+                                "preview_message_type": summary.get("preview_message_type"),
+                                "workspace": metadata.get("workspace"),
                                 "path": str(path)
                             }
                             # Multi-agent conversation shape (phase 2d): stored
                             # as a camelCase ``to_session_metadata()`` dump;
                             # absent on legacy sessions, which the UI treats as
                             # a direct chat with Mona.
-                            conversation = metadata.get("conversation") if isinstance(metadata, dict) else None
+                            conversation = metadata.get("conversation")
                             if isinstance(conversation, dict):
                                 row["conversation"] = conversation
                             sessions.append(row)
             except Exception:
                 repaired = self._repair(fallback_key)
                 if repaired is not None:
+                    summary = repaired.ui_summary()
                     sessions.append({
                         "key": repaired.key,
                         "created_at": repaired.created_at.isoformat(),
@@ -716,17 +823,20 @@ class SessionManager:
                             if isinstance(repaired.metadata.get("title"), str)
                             else ""
                         ),
-                        "preview": next(
-                            (
-                                text
-                                for msg in repaired.messages
-                                if (text := _message_preview_text(msg))
-                            ),
-                            "",
-                        ),
+                        "preview": summary.get("preview", ""),
+                        "preview_at": summary.get("preview_at"),
+                        "preview_author_type": summary.get("preview_author_type"),
+                        "preview_author_id": summary.get("preview_author_id"),
+                        "preview_message_type": summary.get("preview_message_type"),
                         "workspace": repaired.metadata.get("workspace"),
                         "path": str(path)
                     })
                 continue
 
-        return sorted(sessions, key=lambda x: x.get("updated_at", ""), reverse=True)
+        # IM list ordering (IM plan 12.1): sort by the last visible message
+        # time, falling back to the session timestamps for legacy rows.
+        return sorted(
+            sessions,
+            key=lambda x: x.get("preview_at") or x.get("updated_at") or x.get("created_at") or "",
+            reverse=True,
+        )
