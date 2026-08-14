@@ -27,8 +27,29 @@ mona-auth/
 scripts/
 design-assets/
 tests/
-docs/
 hardware/
+
+# docs/ 默认忽略；为多 Agent 交付文档保留版本管理例外
+# （git 不允许在被忽略的目录内直接取反，需逐级展开）
+docs/*
+!docs/design/
+!docs/plans/
+docs/design/*
+docs/plans/*
+!docs/design/multi-agent-functional-design.md
+!docs/design/multi-agent-development-guide.md
+!docs/plans/multi-agent-completion-plan.md
+!docs/plans/im-ui-interaction-dev-plan.md
+
+# 多 Agent 开发临时产物（baseline 对比目录、patch/scratch 中转，禁止入库）
+.baseline_check/
+.im1b_baseline/
+_ma_xfer/
+_phase2c_scratch/
+/.patch_*.py
+/_ma_patch_*.py
+/patch_*.py
+/node_modules/
 %TEMP%/
 
 # 清理：根目录非代码/项目配置文件
@@ -54,9 +75,8 @@ docs/archive/system-module/
 .idea/
 .fleet/
 
-# Claude / AI assistant artifacts
-docs/superpowers/
-docs/plans/
+# Claude / AI assistant artifacts（docs/ 子树统一由上方 docs/* 规则处理）
+.superpowers/
 
 # webui (monorepo frontend)
 webui/node_modules/
