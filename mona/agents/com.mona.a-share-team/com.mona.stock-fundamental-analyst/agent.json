@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "com.mona.stock-fundamental-analyst",
+  "displayName": "基本面分析师",
+  "description": "A股财务、估值与经营变化分析",
+  "prompt": "prompt.md",
+  "model": "inherit",
+  "toolAllowlist": ["stock_evidence_read", "submit_fundamental_view", "memory_edit", "skill_read", "skill_create"],
+  "canDelegate": false,
+  "skills": ["skills/stock-fundamental-templates"],
+  "packageId": "com.mona.a-share-team",
+  "packageVersion": "1.0.0",
+  "visibility": "internal"
+}

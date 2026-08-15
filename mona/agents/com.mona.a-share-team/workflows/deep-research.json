@@ -1,0 +1,59 @@
+{
+  "schemaVersion": 1,
+  "id": "stock-deep-research",
+  "roomId": "stock_research",
+  "revision": 1,
+  "status": "active",
+  "goal": "六 Agent 深度投研：对运行输入中的单只标的产出可追溯研究报告",
+  "trigger": { "type": "manual" },
+  "steps": [
+    {
+      "id": "technical",
+      "type": "agent",
+      "agentId": "com.mona.stock-tech-analyst",
+      "task": "对 [Run inputs] 中 symbols 的第一只标的做技术面分析。先用 stock_evidence_read 读取本次运行的证据包（行情快照、K 线摘要、确定性指标），再按你的分析框架评估趋势结构、量价配合、指标区间与关键支撑压力位。所有数值必须来自证据包并携带 source_id；证据不足时 stance 取 insufficient_data 并注明缺失字段。",
+      "expectedOutput": "调用 submit_technical_view 提交结构化技术观点（产出 technical.json Artifact），含 stance、summary 与带 source_ids 的 points。",
+      "dependsOn": []
+    },
+    {
+      "id": "fundamental",
+      "type": "agent",
+      "agentId": "com.mona.stock-fundamental-analyst",
+      "task": "对 [Run inputs] 中 symbols 的第一只标的做基本面分析。先用 stock_evidence_read 读取本次运行的证据包（财务快照、估值、行业字段），按标的类型套用股票或 ETF 模板评估经营质量、财务安全与估值水平。所有数值必须来自证据包并携带 source_id；证据不足时 stance 取 insufficient_data 并注明缺失字段。",
+      "expectedOutput": "调用 submit_fundamental_view 提交结构化基本面观点（产出 fundamental.json Artifact），含 stance、summary 与带 source_ids 的 points。",
+      "dependsOn": []
+    },
+    {
+      "id": "news",
+      "type": "agent",
+      "agentId": "com.mona.stock-news-analyst",
+      "task": "对 [Run inputs] 中 symbols 的第一只标的做资讯核验。先用 stock_evidence_read 读取本次运行的证据包（带来源记录的公告与新闻），需要原文细节时用 stock_source_open 核对。按影响力排序列出事件清单，逐条给出影响方向与持续性，交叉验证多来源报道，注明信息缺口。所有引用必须携带 source_id；无可核验资讯时 stance 取 insufficient_data。",
+      "expectedOutput": "调用 submit_news_view 提交结构化资讯观点（产出 news.json Artifact），含 stance、summary 与带 source_ids 的 points。",
+      "dependsOn": []
+    },
+    {
+      "id": "bull",
+      "type": "agent",
+      "agentId": "com.mona.stock-bull-researcher",
+      "task": "基于 [Upstream results] 中三份分析师观点（technical、fundamental、news），用 artifact_read 读取对应 Artifact 与证据包，构建最强正面论证：提炼做多主线，按共振强度组织核心论点，每条论点注明关键假设与引用的 source_ids，并对已知利空给出多头回应。",
+      "expectedOutput": "调用 submit_bull_case 提交结构化正面论证（产出 bull.json Artifact），含 summary 与带 source_ids 的 points。",
+      "dependsOn": ["technical", "fundamental", "news"]
+    },
+    {
+      "id": "bear",
+      "type": "agent",
+      "agentId": "com.mona.stock-bear-researcher",
+      "task": "基于 [Upstream results] 中三份分析师观点（technical、fundamental、news），用 artifact_read 读取对应 Artifact 与证据包，寻找反证、风险与遗漏：攻击脆弱假设、列出观点间及观点与证据间的矛盾、检查信息缺口、评估下行触发条件。每条质疑附引用的 source_ids；找不到实质反证时如实说明。",
+      "expectedOutput": "调用 submit_bear_case 提交结构化风险反证（产出 bear.json Artifact），含 summary 与带 source_ids 的 points。",
+      "dependsOn": ["technical", "fundamental", "news"]
+    },
+    {
+      "id": "referee",
+      "type": "agent",
+      "agentId": "com.mona.stock-referee",
+      "task": "用 artifact_read 读取本次运行的全部上游 Artifact（technical、fundamental、news、bull、bear）与证据包，权衡多空论证并显性裁决冲突，产出最终研究报告：research_stance 由证据强度决定，data_quality 如实标注并在 missing_fields 列出缺口，风险、催化与待解问题分栏陈述。证据不足时输出 research_stance=insufficient_data 的中性报告。",
+      "expectedOutput": "调用 submit_stock_report 提交最终研究报告（产出 report.json 与 report.md Artifact），引用全部来源 source_ids。",
+      "dependsOn": ["bull", "bear"]
+    }
+  ]
+}

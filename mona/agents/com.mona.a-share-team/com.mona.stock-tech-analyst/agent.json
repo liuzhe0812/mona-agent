@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "com.mona.stock-tech-analyst",
+  "displayName": "技术分析师",
+  "description": "A股量价、趋势与技术结构分析",
+  "prompt": "prompt.md",
+  "model": "inherit",
+  "toolAllowlist": ["stock_evidence_read", "submit_technical_view", "memory_edit", "skill_read", "skill_create"],
+  "canDelegate": false,
+  "skills": ["skills/a-share-volume-price"],
+  "packageId": "com.mona.a-share-team",
+  "packageVersion": "1.0.0",
+  "visibility": "internal"
+}

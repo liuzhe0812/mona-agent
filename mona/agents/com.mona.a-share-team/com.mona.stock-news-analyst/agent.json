@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "com.mona.stock-news-analyst",
+  "displayName": "资讯分析师",
+  "description": "A股公告、新闻与事件影响核验",
+  "prompt": "prompt.md",
+  "model": "inherit",
+  "toolAllowlist": ["stock_evidence_read", "stock_source_open", "submit_news_view", "memory_edit", "skill_read", "skill_create"],
+  "canDelegate": false,
+  "skills": ["skills/stock-news-verification"],
+  "packageId": "com.mona.a-share-team",
+  "packageVersion": "1.0.0",
+  "visibility": "internal"
+}

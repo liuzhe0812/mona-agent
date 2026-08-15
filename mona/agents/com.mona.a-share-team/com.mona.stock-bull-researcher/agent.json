@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "com.mona.stock-bull-researcher",
+  "displayName": "多头研究员",
+  "description": "构建正面论证并引用证据",
+  "prompt": "prompt.md",
+  "model": "inherit",
+  "toolAllowlist": ["artifact_read", "submit_bull_case", "memory_edit", "skill_read", "skill_create"],
+  "canDelegate": false,
+  "skills": ["skills/bull-case-building"],
+  "packageId": "com.mona.a-share-team",
+  "packageVersion": "1.0.0",
+  "visibility": "internal"
+}

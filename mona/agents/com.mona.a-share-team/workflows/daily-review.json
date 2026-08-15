@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "id": "stock-daily-review",
+  "roomId": "stock_research",
+  "revision": 1,
+  "status": "active",
+  "goal": "每日复盘：一次运行覆盖全部自选股，产出复盘简报",
+  "trigger": { "type": "manual" },
+  "steps": [
+    {
+      "id": "technical",
+      "type": "agent",
+      "agentId": "com.mona.stock-tech-analyst",
+      "task": "每日复盘批量模式：对 [Run inputs] 中 symbols 列出的全部标的（为空时表示当前全部自选股，由数据层注入证据）逐只用 stock_evidence_read 读取证据包，给出简版技术面结论。每只标的一条：趋势方向 + 量价状态 + 一句风险/亮点，全部数值携带 source_id。",
+      "expectedOutput": "调用 submit_technical_view 以 items 批量模式提交全部标的的简版技术观点（产出 technical.json Artifact）。",
+      "dependsOn": []
+    },
+    {
+      "id": "fundamental",
+      "type": "agent",
+      "agentId": "com.mona.stock-fundamental-analyst",
+      "task": "每日复盘批量模式：对 [Run inputs] 中 symbols 列出的全部标的（为空时表示当前全部自选股，由数据层注入证据）逐只用 stock_evidence_read 读取证据包，按标的类型给出简版基本面结论。每只标的一条：经营/估值要点 + 数据新鲜度标记，全部数值携带 source_id。",
+      "expectedOutput": "调用 submit_fundamental_view 以 items 批量模式提交全部标的的简版基本面观点（产出 fundamental.json Artifact）。",
+      "dependsOn": []
+    },
+    {
+      "id": "news",
+      "type": "agent",
+      "agentId": "com.mona.stock-news-analyst",
+      "task": "每日复盘批量模式：对 [Run inputs] 中 symbols 列出的全部标的（为空时表示当前全部自选股，由数据层注入证据）逐只用 stock_evidence_read 读取证据包，核验当日公告与新闻。每只标的一条：最重要事件 + 影响方向，无可核验资讯时如实标注；全部引用携带 source_id。",
+      "expectedOutput": "调用 submit_news_view 以 items 批量模式提交全部标的的简版资讯观点（产出 news.json Artifact）。",
+      "dependsOn": []
+    },
+    {
+      "id": "referee",
+      "type": "agent",
+      "agentId": "com.mona.stock-referee",
+      "task": "每日复盘汇总：用 artifact_read 读取本次运行三份分析师的批量观点（technical、fundamental、news），跳过独立多空辩论步骤，直接为每只标的给出评分倾向一行结论、数据质量标记和核心多空要点，按置信度排序，证据不足的标的排最后并注明缺口。",
+      "expectedOutput": "调用 submit_stock_report 以 items 批量模式提交复盘简报（产出 digest.json 与 digest.md Artifact）。",
+      "dependsOn": ["technical", "fundamental", "news"]
+    }
+  ]
+}

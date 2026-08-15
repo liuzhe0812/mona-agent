@@ -137,6 +137,10 @@ class AgentDefinition(Base):
     skills: list[str] = Field(default_factory=list)
     package_id: str = ""
     package_version: str = ""
+    # Product visibility only: "internal" agents are hidden from the global
+    # partner list/store but remain fully executable room members (stock
+    # module design 4.1). Registry loading and room validation ignore it.
+    visibility: Literal["partner", "internal"] = "partner"
 
     @field_validator("schema_version")
     @classmethod
@@ -198,6 +202,12 @@ class ConversationMetadata(Base):
     active_workflow_id: str | None = None
     active_workflow_revision: int | None = None
     archived: bool = False
+    # Product visibility only (stock-module design §4.4): a hidden room is an
+    # invisible execution container — excluded from the session list and
+    # rejecting rename/delete from UI surfaces, while remaining fully
+    # executable (workflow runs, job archival). Legacy payloads without the
+    # key load as False without a schema_version bump.
+    hidden: bool = False
 
     @field_validator("schema_version")
     @classmethod
@@ -248,9 +258,12 @@ class ConversationMetadata(Base):
         *,
         title: str = "",
         goal: str | None = None,
+        hidden: bool = False,
     ) -> ConversationMetadata:
         """Build a room metadata with the given member agents."""
-        return cls(type="room", title=title, goal=goal, agent_ids=agent_ids)
+        return cls(
+            type="room", title=title, goal=goal, agent_ids=agent_ids, hidden=hidden
+        )
 
     def to_session_metadata(self) -> dict[str, Any]:
         """Serialize for storage under ``Session.metadata["conversation"]``."""
@@ -356,26 +369,37 @@ class AgentRegistry:
         if not base.is_dir():
             return
         for child in sorted(base.iterdir()):
-            manifest = child / "agent.json"
-            if not child.is_dir() or not manifest.is_file():
+            if not child.is_dir():
                 continue
-            try:
-                definition = self._load_manifest(manifest, package_root=child)
-            except AgentDefinitionError as exc:
-                if strict:
-                    raise
-                logger.error("Skipping broken {} agent manifest {}: {}", source, manifest, exc)
+            if (child / "agent.json").is_file():
+                self._load_agent(child, source=source, strict=strict)
                 continue
-            if definition.id in self._agents:
-                message = f"duplicate agent id {definition.id!r} in {manifest}"
-                if strict:
-                    raise AgentDefinitionError(message)
-                logger.warning("{}; keeping the earlier definition", message)
-                continue
-            self._agents[definition.id] = ResolvedAgent(
-                definition=definition, package_root=child
-            )
-            logger.debug("Loaded {} agent {!r} from {}", source, definition.id, manifest)
+            # Package dir: a product may group its agents one level deeper
+            # (<base>/<package_id>/<agent_id>/agent.json — stock-module design
+            # 2.3). Exactly one extra level; deeper nesting is never scanned.
+            for grandchild in sorted(child.iterdir()):
+                if grandchild.is_dir() and (grandchild / "agent.json").is_file():
+                    self._load_agent(grandchild, source=source, strict=strict)
+
+    def _load_agent(self, package_root: Path, *, source: str, strict: bool) -> None:
+        manifest = package_root / "agent.json"
+        try:
+            definition = self._load_manifest(manifest, package_root=package_root)
+        except AgentDefinitionError as exc:
+            if strict:
+                raise
+            logger.error("Skipping broken {} agent manifest {}: {}", source, manifest, exc)
+            return
+        if definition.id in self._agents:
+            message = f"duplicate agent id {definition.id!r} in {manifest}"
+            if strict:
+                raise AgentDefinitionError(message)
+            logger.warning("{}; keeping the earlier definition", message)
+            return
+        self._agents[definition.id] = ResolvedAgent(
+            definition=definition, package_root=package_root
+        )
+        logger.debug("Loaded {} agent {!r} from {}", source, definition.id, manifest)
 
     def _load_manifest(self, manifest: Path, *, package_root: Path) -> AgentDefinition:
         try:
@@ -428,6 +452,14 @@ class AgentRegistry:
                 logger.warning(
                     "Agent {!r} skill dir {} does not exist", definition.id, skill_dir
                 )
+            elif not (skill_dir / "SKILL.md").is_file():
+                # Manifest skills[] entries are concrete skill directories
+                # (completion guide 8.1) — a directory without SKILL.md is a
+                # manifest bug, not a skill root to enumerate.
+                logger.warning(
+                    "Agent {!r} skill dir {} has no SKILL.md; it will not load",
+                    definition.id, skill_dir,
+                )
 
     # ------------------------------------------------------------------
     # Queries
@@ -459,14 +491,19 @@ class AgentRegistry:
         return entry.package_root if entry else None
 
     def resolve_skill_dirs(self, agent_id: str) -> list[Path]:
-        """Resolve the agent package skill directories (existing dirs only)."""
+        """Resolve the agent's concrete package skill directories.
+
+        Each manifest ``skills[]`` entry points at ONE skill directory that
+        must contain ``SKILL.md`` (completion guide 8.1); entries without it
+        are skipped so downstream loaders never see a skill root.
+        """
         entry = self._agents.get(normalize_agent_id(agent_id))
         if entry is None or entry.package_root is None:
             return []
         dirs: list[Path] = []
         for skill_rel in entry.definition.skills:
             skill_dir = _resolve_within(entry.package_root, skill_rel, field_name="skills[]")
-            if skill_dir.is_dir():
+            if skill_dir.is_dir() and (skill_dir / "SKILL.md").is_file():
                 dirs.append(skill_dir)
         return dirs
 

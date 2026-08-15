@@ -111,9 +111,22 @@ class SkillsLoader:
         self._append_with_priority(
             skills, self._skill_entries_from_dir(self.workspace_skills, "workspace"), seen
         )
-        for package_dir in self.package_skill_dirs:
+        for skill_dir in self.package_skill_dirs:
+            # Manifest ``skills[]`` entries are CONCRETE skill directories
+            # (completion guide 8.1): each entry contributes exactly one
+            # skill named after the directory itself.
+            skill_file = skill_dir / "SKILL.md"
+            if not skill_file.exists():
+                if skill_dir.exists():
+                    logger.warning(
+                        "Package skill dir {} has no SKILL.md; skipped for agent {!r}",
+                        skill_dir, self.agent_id,
+                    )
+                continue
             self._append_with_priority(
-                skills, self._skill_entries_from_dir(package_dir, "package"), seen
+                skills,
+                [{"name": skill_dir.name, "path": str(skill_file), "source": "package"}],
+                seen,
             )
         if self.builtin_skills and self.builtin_skills.exists():
             self._append_with_priority(
@@ -147,16 +160,23 @@ class SkillsLoader:
         """Resolve a skill's directory by priority.
 
         Order: agent-private > agent package > platform builtin (guide 7.3).
+        The agent-private and builtin layers are root directories addressed
+        by skill name; each package entry is itself one concrete skill
+        directory (manifest ``skills[]`` — completion guide 8.1), so it
+        matches when its own directory name equals *name*.
         Returns the first directory that contains ``<name>/SKILL.md``, or
         None when the skill does not exist in any layer.
         """
-        roots = [self.workspace_skills, *self.package_skill_dirs]
+        private = self.workspace_skills / name
+        if (private / "SKILL.md").exists():
+            return private
+        for package_dir in self.package_skill_dirs:
+            if package_dir.name == name and (package_dir / "SKILL.md").exists():
+                return package_dir
         if self.builtin_skills:
-            roots.append(self.builtin_skills)
-        for root in roots:
-            skill_dir = root / name
-            if (skill_dir / "SKILL.md").exists():
-                return skill_dir
+            builtin = self.builtin_skills / name
+            if (builtin / "SKILL.md").exists():
+                return builtin
         return None
 
     def load_skills_for_context(self, skill_names: list[str]) -> str:

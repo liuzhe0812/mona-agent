@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "com.mona.a-share-analyst",
+  "displayName": "A股分析师",
+  "description": "分析A股公开信息并标记数据时间与来源",
+  "prompt": "prompt.md",
+  "model": "inherit",
+  "toolAllowlist": ["web_search", "read_file", "deliver_file", "memory_edit", "skill_read", "skill_create", "stock_quote", "stock_report_read"],
+  "canDelegate": false,
+  "skills": ["skills/stock-report-explaining"],
+  "packageId": "com.mona.a-share-team",
+  "packageVersion": "1.0.0",
+  "visibility": "partner"
+}
