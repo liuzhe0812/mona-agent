@@ -8,6 +8,8 @@ import {
 import {
   Archive,
   ArchiveRestore,
+  CircleAlert,
+  Clock3,
   Folder,
   FolderOpen,
   MoreHorizontal,
@@ -15,6 +17,7 @@ import {
   Pin,
   PinOff,
   Plus,
+  TriangleAlert,
   Trash2,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -37,9 +40,15 @@ import {
   resolveAgentDisplayName,
 } from "@/components/room/AgentAvatar";
 import { useAgents } from "@/components/room/useAgents";
+import { conversationListStatus } from "@/hooks/useSessions";
 import { deriveTitle, relativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import type { ChatSummary, SidebarDensity, SidebarSortMode } from "@/lib/types";
+import type {
+  ChatSummary,
+  ConversationListStatus,
+  SidebarDensity,
+  SidebarSortMode,
+} from "@/lib/types";
 import { useClientContextOrNull } from "@/providers/ClientProvider";
 
 interface ChatSection {
@@ -66,6 +75,7 @@ interface ChatListProps {
   titleOverrides?: Record<string, string>;
   runningChatIds?: string[];
   completedChatIds?: string[];
+  unreadKeys?: string[];
   density?: SidebarDensity;
   showPreviews?: boolean;
   showTimestamps?: boolean;
@@ -97,8 +107,8 @@ export const ChatList = memo(function ChatList({
   titleOverrides = {},
   runningChatIds = [],
   completedChatIds = [],
+  unreadKeys = [],
   density = "comfortable",
-  showPreviews = false,
   sort = "updated_desc",
   showArchived = false,
   loading,
@@ -195,6 +205,7 @@ export const ChatList = memo(function ChatList({
   const archived = new Set(archivedKeys);
   const running = new Set(runningChatIds);
   const completed = new Set(completedChatIds);
+  const unread = new Set(unreadKeys);
   const compact = density === "compact";
 
   return (
@@ -285,21 +296,33 @@ export const ChatList = memo(function ChatList({
                   deriveTitle(s.preview, fallbackTitle);
                 const isPinned = pinned.has(s.key);
                 const isArchived = archived.has(s.key);
+                const isUnread = unread.has(s.key);
                 const preview = s.preview.trim();
-                const showPreview = showPreviews && preview && preview !== title;
-                const timestamp = relativeTime(s.updatedAt ?? s.createdAt);
-                const activityState = running.has(s.chatId)
-                  ? "running"
-                  : completed.has(s.chatId)
-                    ? "complete"
-                    : null;
-                // 企业微信式列表项：私聊/房间显示大头像 + 「智能体/房间
-                // 名称 + 会话标题」两行；无 conversation 的旧会话按 Mona 私聊处理。
+                const timestamp = relativeTime(s.previewAt ?? s.updatedAt ?? s.createdAt);
+                const persistedStatus = conversationListStatus(s);
+                const activityState = persistedStatus ?? (
+                  running.has(s.chatId)
+                    ? "running"
+                    : completed.has(s.chatId)
+                      ? "complete"
+                      : null
+                );
+                // 企业微信式列表项：私聊/房间显示大头像 + 「显示标题 + 消息预览」
+                // 两行；无 conversation 的旧会话按 Mona 私聊处理。显示标题优先级
+                // （IM 规范 10.3）：手动重命名 → 房间标题 → 会话生成标题 →
+                // Agent 显示名称 → 兜底标题。
                 const conv = s.conversation ?? null;
-                const convName =
+                const agentName =
                   conv?.type === "room"
-                    ? conv.title || title
+                    ? ""
                     : resolveAgentDisplayName(agentsById, conv?.directAgentId ?? MONA_AGENT_ID);
+                const rowTitle =
+                  titleOverrides[s.key]?.trim() ||
+                  (conv?.type === "room" ? conv.title?.trim() || "" : "") ||
+                  generatedTitle ||
+                  agentName ||
+                  title;
+                const showRowPreview = Boolean(preview && preview !== rowTitle);
                 return (
                   <li key={s.key} className="min-w-0">
                     <ContextMenu>
@@ -307,19 +330,27 @@ export const ChatList = memo(function ChatList({
                         <div
                           className={cn(
                             "group flex min-w-0 max-w-full items-center gap-2 rounded-xl px-2 text-[13px] transition-colors",
-                            convName ? "min-h-11 gap-2.5" : compact ? "min-h-7" : "min-h-8",
+                            rowTitle ? "min-h-11 gap-2.5" : compact ? "min-h-7" : "min-h-8",
                             active
                               ? "bg-[hsl(var(--sidebar-active-surface)/0.07)] text-sidebar-foreground"
                               : "text-sidebar-foreground/82 hover:bg-[hsl(var(--sidebar-hover-surface)/0.04)] hover:text-sidebar-foreground",
                           )}
                         >
-                      {convName ? (
-                        <ConversationAvatar
-                          conversation={conv}
-                          agentsById={agentsById}
-                          className="shrink-0 self-center"
-                          avatarClassName="h-8 w-8 text-xs"
-                        />
+                      {rowTitle ? (
+                        <span className="relative shrink-0 self-center">
+                          <ConversationAvatar
+                            conversation={conv}
+                            agentsById={agentsById}
+                            avatarClassName="h-9 w-9 text-xs"
+                          />
+                          {isUnread ? (
+                            <span
+                              aria-label={t("chat.unread")}
+                              title={t("chat.unread")}
+                              className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border-2 border-background bg-destructive"
+                            />
+                          ) : null}
+                        </span>
                       ) : null}
                       <button
                         type="button"
@@ -327,17 +358,16 @@ export const ChatList = memo(function ChatList({
                         title={tooltipTitle}
                         className={cn(
                           "min-w-0 flex-1 overflow-hidden text-left",
-                          compact && !convName ? "py-1" : "py-1.5",
+                          compact && !rowTitle ? "py-1" : "py-1.5",
                         )}
                       >
-                        <span className="block w-full truncate font-medium leading-5">
-                          {convName ?? title}
+                        <span className={cn(
+                          "block w-full truncate leading-5",
+                          isUnread ? "font-semibold text-sidebar-foreground" : "font-medium",
+                        )}>
+                          {rowTitle}
                         </span>
-                        {convName ? (
-                          <span className="block w-full truncate text-[11.5px] leading-4 text-muted-foreground/72">
-                            {title}
-                          </span>
-                        ) : showPreview ? (
+                        {showRowPreview ? (
                           <span className="block w-full truncate text-[11.5px] leading-4 text-muted-foreground/72">
                             {preview}
                           </span>
@@ -422,7 +452,7 @@ export const ChatList = memo(function ChatList({
 function SessionActivityIndicator({
   state,
 }: {
-  state: "running" | "complete" | null;
+  state: ConversationListStatus | "complete";
 }) {
   const { t } = useTranslation();
 
@@ -448,6 +478,33 @@ function SessionActivityIndicator({
         className="grid h-4 w-4 shrink-0 place-items-center"
       >
         <span className="h-1.5 w-1.5 rounded-full bg-blue-500 shadow-[0_0_0_3px_rgba(59,130,246,0.14)] dark:bg-blue-400 dark:shadow-[0_0_0_3px_rgba(96,165,250,0.18)]" />
+      </span>
+    );
+  }
+
+  if (state === "waiting_approval") {
+    const label = t("chat.activity.waitingApproval");
+    return (
+      <span aria-label={label} title={label} className="grid h-4 w-4 shrink-0 place-items-center text-amber-500">
+        <CircleAlert className="h-3.5 w-3.5" aria-hidden />
+      </span>
+    );
+  }
+
+  if (state === "failed") {
+    const label = t("chat.activity.failed");
+    return (
+      <span aria-label={label} title={label} className="grid h-4 w-4 shrink-0 place-items-center text-destructive">
+        <TriangleAlert className="h-3.5 w-3.5" aria-hidden />
+      </span>
+    );
+  }
+
+  if (state === "scheduled") {
+    const label = t("chat.activity.scheduled");
+    return (
+      <span aria-label={label} title={label} className="grid h-4 w-4 shrink-0 place-items-center text-muted-foreground">
+        <Clock3 className="h-3.5 w-3.5" aria-hidden />
       </span>
     );
   }
