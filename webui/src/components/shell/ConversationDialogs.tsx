@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { AgentAvatar, MONA_AGENT_ID } from "@/components/room/AgentAvatar";
+import { AgentAvatar } from "@/components/room/AgentAvatar";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -18,26 +18,27 @@ import type { AgentSummary } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 /**
- * 阶段 4.5 壳层对话框：新建私聊（单选 agent）与新建协作房间
- * （多选成员 + 标题 + 目标）。两个对话框共享伙伴列表渲染。
+ * 阶段 4.5 壳层对话框：新建协作房间（多选成员 + 标题 + 目标）。
  */
 
 interface AgentRowProps {
   agent: AgentSummary;
   selected: boolean;
   onToggle: () => void;
-  mode: "radio" | "checkbox";
+  /** 紧凑单行：只显示头像 + 名称，不显示描述，行高 36px。 */
+  compact?: boolean;
 }
 
-function AgentRow({ agent, selected, onToggle, mode }: AgentRowProps) {
+function AgentRow({ agent, selected, onToggle, compact }: AgentRowProps) {
   return (
     <button
       type="button"
-      role={mode === "radio" ? "radio" : "checkbox"}
+      role="checkbox"
       aria-checked={selected}
       onClick={onToggle}
       className={cn(
-        "flex w-full items-center gap-3 rounded-lg border px-3 py-2 text-left transition-colors",
+        "flex w-full items-center rounded-lg border text-left transition-colors",
+        compact ? "gap-2.5 px-2.5 py-1.5" : "gap-3 px-3 py-2",
         selected
           ? "border-primary/50 bg-primary/5"
           : "border-transparent hover:bg-muted/60",
@@ -46,104 +47,25 @@ function AgentRow({ agent, selected, onToggle, mode }: AgentRowProps) {
       <AgentAvatar
         agentId={agent.id}
         displayName={agent.displayName}
-        className="h-8 w-8"
+        className={compact ? "h-6 w-6" : "h-8 w-8"}
       />
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-[13px] font-medium text-foreground">
+        <span className="block truncate text-ui font-medium text-foreground">
           {agent.displayName}
         </span>
-        {agent.description ? (
-          <span className="block truncate text-xs text-muted-foreground">
+        {!compact && agent.description ? (
+          <span className="block truncate text-caption text-muted-foreground">
             {agent.description}
           </span>
         ) : null}
       </span>
-      {mode === "checkbox" ? (
-        <Checkbox
-          checked={selected}
-          tabIndex={-1}
-          aria-hidden
-          className="pointer-events-none"
-        />
-      ) : (
-        <span
-          aria-hidden
-          className={cn(
-            "flex h-4 w-4 shrink-0 items-center justify-center rounded-full border",
-            selected ? "border-primary" : "border-muted-foreground/40",
-          )}
-        >
-          {selected ? <span className="h-2 w-2 rounded-full bg-primary" /> : null}
-        </span>
-      )}
+      <Checkbox
+        checked={selected}
+        tabIndex={-1}
+        aria-hidden
+        className="pointer-events-none"
+      />
     </button>
-  );
-}
-
-interface NewDirectDialogProps {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  agents: AgentSummary[];
-  submitting?: boolean;
-  onSubmit: (agentId: string) => void;
-}
-
-/** 新建私聊：选择一个伙伴 agent。Mona 的私聊即普通新会话，不出现在列表。 */
-export function NewDirectDialog({
-  open,
-  onOpenChange,
-  agents,
-  submitting,
-  onSubmit,
-}: NewDirectDialogProps) {
-  const { t } = useTranslation();
-  const partners = useMemo(
-    () => agents.filter((a) => a.id !== MONA_AGENT_ID && a.enabled),
-    [agents],
-  );
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (open) setSelectedId(null);
-  }, [open]);
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-sm">
-        <DialogHeader>
-          <DialogTitle>{t("partners.newDirectTitle")}</DialogTitle>
-          <DialogDescription>{t("partners.newDirectHint")}</DialogDescription>
-        </DialogHeader>
-        <div className="flex max-h-72 flex-col gap-1 overflow-y-auto py-1">
-          {partners.length === 0 ? (
-            <p className="px-1 py-6 text-center text-[13px] text-muted-foreground">
-              {t("partners.empty")}
-            </p>
-          ) : (
-            partners.map((agent) => (
-              <AgentRow
-                key={agent.id}
-                agent={agent}
-                mode="radio"
-                selected={selectedId === agent.id}
-                onToggle={() => setSelectedId(agent.id)}
-              />
-            ))
-          )}
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
-            {t("common.cancel")}
-          </Button>
-          <Button
-            disabled={!selectedId || submitting}
-            onClick={() => selectedId && onSubmit(selectedId)}
-          >
-            {t("partners.startDirect")}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   );
 }
 
@@ -167,7 +89,12 @@ export function NewRoomDialog({
   onSubmit,
 }: NewRoomDialogProps) {
   const { t } = useTranslation();
-  const candidates = useMemo(() => agents.filter((a) => a.enabled), [agents]);
+  // internal 股票 Agent（visibility=internal）仅服务股票研究房间的工作流，
+  // 不进入用户新建房间的成员候选。
+  const candidates = useMemo(
+    () => agents.filter((a) => a.enabled && a.visibility !== "internal"),
+    [agents],
+  );
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [title, setTitle] = useState("");
   const [goal, setGoal] = useState("");
@@ -206,38 +133,67 @@ export function NewRoomDialog({
           <DialogTitle>{t("partners.newRoomTitle")}</DialogTitle>
           <DialogDescription>{t("partners.newRoomHint")}</DialogDescription>
         </DialogHeader>
-        <div className="flex flex-col gap-3 py-1">
-          <div className="flex max-h-56 flex-col gap-1 overflow-y-auto rounded-lg border border-border/60 p-1.5">
-            {candidates.map((agent) => (
-              <AgentRow
-                key={agent.id}
-                agent={agent}
-                mode="checkbox"
-                selected={selectedIds.includes(agent.id)}
-                onToggle={() => toggle(agent.id)}
-              />
-            ))}
+        <div className="flex min-w-0 flex-col gap-4 py-1">
+          <div className="flex min-w-0 flex-col gap-1.5">
+            <div className="flex max-h-56 flex-col gap-1 overflow-y-auto rounded-lg border border-border/60 p-1.5">
+              {candidates.length === 0 ? (
+                <p className="px-1 py-6 text-center text-ui text-muted-foreground">
+                  {t("partners.empty")}
+                </p>
+              ) : (
+                candidates.map((agent) => (
+                  <AgentRow
+                    key={agent.id}
+                    agent={agent}
+                    compact
+                    selected={selectedIds.includes(agent.id)}
+                    onToggle={() => toggle(agent.id)}
+                  />
+                ))
+              )}
+            </div>
           </div>
-          <Input
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder={t("partners.roomTitlePlaceholder")}
-            aria-label={t("partners.roomTitleLabel")}
-          />
-          <Textarea
-            value={goal}
-            onChange={(e) => setGoal(e.target.value)}
-            placeholder={t("partners.roomGoalPlaceholder")}
-            aria-label={t("partners.roomGoalLabel")}
-            rows={3}
-            className="resize-none"
-          />
+          <div className="flex min-w-0 flex-col gap-1.5">
+            <label
+              htmlFor="new-room-title"
+              className="text-caption font-medium text-foreground"
+            >
+              {t("partners.roomTitleLabel")}
+            </label>
+            <Input
+              id="new-room-title"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder={t("partners.roomTitlePlaceholder")}
+            />
+          </div>
+          <div className="flex min-w-0 flex-col gap-1.5">
+            <label
+              htmlFor="new-room-goal"
+              className="text-caption font-medium text-foreground"
+            >
+              {t("partners.roomGoalLabel")}
+            </label>
+            <Textarea
+              id="new-room-goal"
+              value={goal}
+              onChange={(e) => setGoal(e.target.value)}
+              placeholder={t("partners.roomGoalPlaceholder")}
+              rows={3}
+              className="resize-none"
+            />
+          </div>
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+          <Button
+            variant="outline"
+            className="w-20"
+            onClick={() => onOpenChange(false)}
+          >
             {t("common.cancel")}
           </Button>
           <Button
+            className="w-20"
             disabled={selectedIds.length === 0 || submitting}
             onClick={handleSubmit}
           >
