@@ -526,12 +526,12 @@ class WebFetchTool(Tool):
                 r.raise_for_status()
 
             data = r.json().get("data", {})
-            title = data.get("title", "")
-            text = data.get("content", "")
+            title = str(data.get("title") or "").strip()
+            text = str(data.get("content") or "").strip()
             if not text:
                 return None
 
-            if title:
+            if title.casefold() != "[no-title]":
                 text = f"# {title}\n\n{text}"
             truncated = len(text) > max_chars
             if truncated:

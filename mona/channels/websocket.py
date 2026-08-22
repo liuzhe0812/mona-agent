@@ -20,6 +20,7 @@ import sys
 import time
 import uuid
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Self
 from urllib.parse import parse_qs, unquote, urlparse
@@ -56,6 +57,7 @@ from mona.webui.settings_api import (
     update_channel_settings,
     update_image_generation_settings,
     update_provider_settings,
+    update_stock_settings,
     update_tts_settings,
     update_video_generation_settings,
     update_web_search_settings,
@@ -170,7 +172,10 @@ def _http_json_response(data: dict[str, Any], *, status: int = 200) -> Response:
             ("Content-Type", "application/json; charset=utf-8"),
             ("Access-Control-Allow-Origin", "*"),
             ("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS"),
-            ("Access-Control-Allow-Headers", "Content-Type, Authorization"),
+            (
+                "Access-Control-Allow-Headers",
+                "Content-Type, Authorization, X-Mona-Provider-Key",
+            ),
         ]
     )
     reason = http.HTTPStatus(status).phrase
@@ -432,7 +437,10 @@ def _http_response(
         ("Content-Type", content_type),
         ("Access-Control-Allow-Origin", "*"),
         ("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS"),
-        ("Access-Control-Allow-Headers", "Content-Type, Authorization"),
+        (
+            "Access-Control-Allow-Headers",
+            "Content-Type, Authorization, X-Mona-Provider-Key",
+        ),
     ]
     if extra_headers:
         headers.extend(extra_headers)
@@ -682,6 +690,14 @@ class WebSocketChannel(BaseChannel):
         self._server_task: asyncio.Task[None] | None = None
         self._artifact_watch_task: asyncio.Task[None] | None = None
         self._session_manager = session_manager
+        from mona.config.paths import get_workspace_path
+
+        manager_workspace = getattr(session_manager, "workspace", None)
+        self.workspace = (
+            Path(manager_workspace).expanduser().resolve()
+            if isinstance(manager_workspace, (str, Path))
+            else get_workspace_path()
+        )
         self._subagent_manager = subagent_manager
         if subagent_manager is not None:
             # Tool-proposed workflow drafts surface as workflow_updated pushes.
@@ -701,6 +717,11 @@ class WebSocketChannel(BaseChannel):
         # run_id -> last run-level status that triggered a session_updated push
         # (IM plan 11.5: list attention state follows persisted run status).
         self._run_status_notified: dict[str, str] = {}
+        # run_id -> step_id -> last observed step status. Seeded on the first
+        # observed payload per run so steps that went terminal before this
+        # process watched the run (gateway restart mid-run) never re-post
+        # their conversation message.
+        self._run_step_message_state: dict[str, dict[str, Any]] = {}
         self._runtime_model_name = runtime_model_name
         self._settings_restart_sections: set[str] = set()
         # Process-local WeChat QR login session (single-use, replaced on each start).
@@ -866,6 +887,12 @@ class WebSocketChannel(BaseChannel):
         if got == "/api/agents":
             return self._handle_agents_list(request)
 
+        if got.startswith("/api/agents/"):
+            return self._handle_agent_management_get(request, got)
+
+        if got.startswith("/api/agent-change-proposals/"):
+            return self._handle_agent_change_proposal_get(request, got)
+
         if got == "/api/settings":
             return self._handle_settings(request)
 
@@ -904,6 +931,9 @@ class WebSocketChannel(BaseChannel):
 
         if got == "/api/settings/tts/update":
             return self._handle_settings_tts_update(request)
+
+        if got == "/api/settings/stock/update":
+            return self._handle_settings_stock_update(request)
 
         if got == "/api/channels/weixin/login/start":
             return self._handle_weixin_login_start(request)
@@ -1011,10 +1041,31 @@ class WebSocketChannel(BaseChannel):
                 scope=_query_first(query, "scope") or "",
                 session_key=_query_first(query, "session_key") or "",
                 path=_query_first(query, "path") or "",
+                room=_query_first(query, "room") or "",
+                artifact_id=_query_first(query, "artifact_id") or "",
             )
 
         if got == "/api/artifacts":
             return self._handle_artifacts_list(request)
+
+        # Stock module report queries (design §10.2, dev plan T16). Detail
+        # matches by document content, never by path — see reports.py.
+        if got == "/api/stock/reports":
+            return self._handle_stock_reports(request)
+
+        if got.startswith("/api/stock/reports/"):
+            return self._handle_stock_report_detail(
+                request, got[len("/api/stock/reports/") :]
+            )
+
+        # Manual report cleanup (design §9). A GET here follows the channel's
+        # process_request constraint (no reliable POST body), same as the
+        # video delete-project route.
+        if got == "/api/stock/report-delete":
+            return self._handle_stock_report_delete(request)
+
+        if got == "/api/stock/dashboard":
+            return self._handle_stock_dashboard(request)
 
         if got == "/api/project-files":
             return self._handle_project_files_list(
@@ -1115,9 +1166,7 @@ class WebSocketChannel(BaseChannel):
         # from the sidebar (each maker view has its own history panel).
         hidden_chat_ids: set[str] = set()
         try:
-            from mona.config.paths import get_workspace_path
-
-            workspace_path = get_workspace_path()
+            workspace_path = self.workspace
             # Video and PPT sessions are hidden from the main sidebar — each
             # has its own history panel inside the dedicated maker view.
             for kind in ("video_projects", "ppt_projects"):
@@ -1138,6 +1187,12 @@ class WebSocketChannel(BaseChannel):
                 continue
             chat_id = key.split(":", 1)[1]
             if chat_id in hidden_chat_ids:
+                continue
+            # Hidden rooms (stock-module design §4.4) are invisible execution
+            # containers — never listed in the sidebar, same discipline as the
+            # video/PPT-owned chats above.
+            conversation = s.get("conversation")
+            if isinstance(conversation, dict) and conversation.get("hidden") is True:
                 continue
             row = {k: v for k, v in s.items() if k != "path"}
             started_at = websocket_turn_wall_started_at(chat_id)
@@ -1174,24 +1229,113 @@ class WebSocketChannel(BaseChannel):
     def _handle_agents_list(self, request: WsRequest) -> Response:
         """List all loaded agents (multi-agent phase 2d).
 
-        Broken installed manifests are skipped at registry load time, so every
-        listed agent is usable; ``enabled`` is always true and kept only for
-        forward compatibility with an enable/disable toggle.
+        Broken installed manifests are skipped at registry load time. User
+        configuration is resolved here so the session list can show the same
+        name/state that the runtime will use on its next turn.
         """
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         registry = self._room_agent_registry()
-        agents = [
-            {
-                "id": definition.id,
-                "displayName": definition.display_name,
-                "description": definition.description,
-                "avatarUrl": definition.avatar,
-                "enabled": True,
-            }
-            for definition in registry.list_agents()
-        ]
+        agents = [self._agent_summary(definition) for definition in registry.list_agents()]
         return _http_json_response({"agents": agents})
+
+    @staticmethod
+    def _agent_summary(definition: Any) -> dict[str, Any]:
+        from mona.agent.user_config import load_agent_user_config, resolve_effective_agent_config
+
+        config = load_agent_user_config(definition.id)
+        effective = resolve_effective_agent_config(definition, config)
+        return {
+            "id": definition.id,
+            "displayName": effective.display_name,
+            "avatarUrl": effective.avatar,
+            "enabled": effective.enabled,
+            "visibility": definition.visibility,
+            "packageId": definition.package_id,
+            "packageVersion": definition.package_version,
+            "configRevision": config.revision,
+        }
+
+    def _handle_agent_management_get(self, request: WsRequest, path: str) -> Response:
+        """Read-only Agent management endpoints served beside the WebSocket."""
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        parts = path.split("/")
+        # /api/agents/<id>[/instructions[/<key>[/history]]|/skills|/proposals]
+        if len(parts) < 4 or not parts[3]:
+            return _http_error(404, "Not Found")
+        from mona.agent.partners import normalize_agent_id
+
+        try:
+            agent_id = normalize_agent_id(parts[3])
+        except ValueError:
+            return _http_error(400, "invalid agent id")
+        registry = self._room_agent_registry()
+        definition = registry.get(agent_id)
+        if definition is None:
+            return _http_error(404, "agent not found")
+        suffix = parts[4:]
+        try:
+            if not suffix:
+                from mona.agent.agent_management import agent_data_summary
+                from mona.agent.user_config import (
+                    load_agent_user_config,
+                    resolve_effective_agent_config,
+                )
+
+                config = load_agent_user_config(agent_id)
+                return _http_json_response({
+                    "agent": self._agent_summary(definition),
+                    "definition": {
+                        "id": definition.id,
+                        "model": definition.model,
+                        "toolAllowlist": definition.tool_allowlist,
+                        "canDelegate": definition.can_delegate,
+                        "skills": definition.skills,
+                        "packageId": definition.package_id,
+                        "packageVersion": definition.package_version,
+                    },
+                    "config": config.model_dump(by_alias=True),
+                    "effective": resolve_effective_agent_config(definition, config).model_dump(by_alias=True),
+                    "data": agent_data_summary(agent_id),
+                })
+            if suffix == ["instructions"]:
+                from mona.agent.agent_management import list_instructions
+
+                return _http_json_response({"instructions": list_instructions(agent_id)})
+            if len(suffix) == 2 and suffix[0] == "instructions":
+                from mona.agent.agent_management import read_instruction
+
+                return _http_json_response({"instruction": read_instruction(agent_id, suffix[1])})
+            if len(suffix) == 3 and suffix[0] == "instructions" and suffix[2] == "history":
+                from mona.agent.agent_management import instruction_history
+
+                return _http_json_response({"history": instruction_history(agent_id, suffix[1])})
+            if suffix == ["skills"]:
+                from mona.agent.agent_management import SkillManager
+
+                return _http_json_response({"skills": SkillManager(agent_id, registry=registry).list()})
+            if suffix == ["proposals"]:
+                from mona.agent.agent_management import list_change_proposals
+
+                return _http_json_response({"proposals": list_change_proposals(agent_id)})
+        except ValueError as exc:
+            return _http_error(400, str(exc))
+        return _http_error(404, "Not Found")
+
+    def _handle_agent_change_proposal_get(self, request: WsRequest, path: str) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        proposal_id = path.rsplit("/", 1)[-1]
+        agent_id = _query_first(_parse_query(request.path), "agent_id")
+        if not agent_id:
+            return _http_error(400, "agent_id is required")
+        try:
+            from mona.agent.agent_management import get_change_proposal
+
+            return _http_json_response({"proposal": get_change_proposal(agent_id, proposal_id)})
+        except ValueError as exc:
+            return _http_error(400, str(exc))
 
     def _handle_settings(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):
@@ -1230,8 +1374,9 @@ class WebSocketChannel(BaseChannel):
     def _handle_webui_sidebar_state(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
-        # Seed data for the one-time sidebar-state v1→v2 migration (IM plan
-        # 12.4): existing sessions start read at their current preview.
+        # Seed data for the one-time sidebar-state migration: existing
+        # sessions start read at their current preview while genuine markers
+        # remain untouched.
         return _http_json_response(
             read_webui_sidebar_state(session_preview_at=self._session_preview_at_by_key())
         )
@@ -1290,6 +1435,11 @@ class WebSocketChannel(BaseChannel):
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         query = _parse_query(request.path)
+        provider_key = request.headers.get("X-Mona-Provider-Key")
+        if provider_key is not None:
+            # Header wins for new clients; query remains a compatibility path
+            # for older WebUI builds and is never used by the current client.
+            query["api_key"] = [provider_key]
         try:
             payload = update_provider_settings(query)
         except WebUISettingsError as e:
@@ -1305,7 +1455,9 @@ class WebSocketChannel(BaseChannel):
             return _http_error(400, "provider is required")
         # Allow callers to override api_key / api_base (e.g. when the user is
         # editing the form but hasn't saved yet). Fall back to saved config.
-        api_key = _query_first(query, "api_key") or _query_first(query, "apiKey")
+        api_key = request.headers.get("X-Mona-Provider-Key")
+        if api_key is None:
+            api_key = _query_first(query, "api_key") or _query_first(query, "apiKey")
         api_base = _query_first(query, "api_base") or _query_first(query, "apiBase")
         try:
             models = await probe_provider_models(
@@ -1363,6 +1515,46 @@ class WebSocketChannel(BaseChannel):
         query = _parse_query(request.path)
         try:
             payload = update_tts_settings(query)
+        except WebUISettingsError as e:
+            return _http_error(e.status, e.message)
+        return _http_json_response(self._with_settings_restart_state(payload))
+
+    def _handle_settings_stock_update(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        query = _parse_query(request.path)
+        # The review cron lives on the agent runtime's CronService, reached
+        # through the subagent manager (cli/commands.py wires it there).
+        cron_service = (
+            getattr(self._subagent_manager, "cron_service", None)
+            if self._subagent_manager is not None
+            else None
+        )
+
+        def _bootstrap(stock) -> None:
+            """Idempotent pack bootstrap on enable (stock-module T21)."""
+            if self._session_manager is None or self._subagent_manager is None:
+                return
+            try:
+                from mona.agent.pack_bootstrap import STOCK_ROOM_ID, ensure_stock_pack
+                from mona.agent.partners import AgentRegistry
+
+                ensure_stock_pack(
+                    self._session_manager,
+                    self._subagent_manager.workflow_store_for_room(STOCK_ROOM_ID),
+                    cron_service,
+                    AgentRegistry(),
+                    review_time=stock.review_time,
+                    enabled=True,
+                    auto_review_enabled=stock.auto_review_enabled,
+                )
+            except Exception:
+                logger.exception("Stock pack bootstrap failed")
+
+        try:
+            payload = update_stock_settings(
+                query, cron_service=cron_service, bootstrap=_bootstrap
+            )
         except WebUISettingsError as e:
             return _http_error(e.status, e.message)
         return _http_json_response(self._with_settings_restart_state(payload))
@@ -1665,9 +1857,7 @@ class WebSocketChannel(BaseChannel):
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         try:
-            from mona.config.paths import get_workspace_path
-
-            workspace = get_workspace_path()
+            workspace = self.workspace
             query = _parse_query(request.path)
             sources_str = _query_first(query, "sources") or ""
             if not sources_str:
@@ -1720,8 +1910,6 @@ class WebSocketChannel(BaseChannel):
             import subprocess
 
             from mona.agent.skills import BUILTIN_SKILLS_DIR
-            from mona.config.paths import get_workspace_path
-
             query = _parse_query(request.path)
             url = _query_first(query, "url") or ""
             project_name = _query_first(query, "project") or ""
@@ -1731,7 +1919,7 @@ class WebSocketChannel(BaseChannel):
             if not url.startswith("http://") and not url.startswith("https://"):
                 return _http_error(400, "url must start with http:// or https://")
 
-            workspace = get_workspace_path()
+            workspace = self.workspace
             script = (
                 BUILTIN_SKILLS_DIR
                 / "mona-ppt"
@@ -1792,9 +1980,7 @@ class WebSocketChannel(BaseChannel):
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         try:
-            from mona.config.paths import get_workspace_path
-
-            workspace = get_workspace_path()
+            workspace = self.workspace
             projects_dir = workspace / "ppt_projects"
             if not projects_dir.exists():
                 return _http_json_response({"projects": []})
@@ -1842,8 +2028,6 @@ class WebSocketChannel(BaseChannel):
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         try:
-            from mona.config.paths import get_workspace_path
-
             query = _parse_query(request.path)
             project_name = _query_first(query, "project") or ""
             if (
@@ -1854,7 +2038,7 @@ class WebSocketChannel(BaseChannel):
             ):
                 return _http_error(400, "invalid project name")
 
-            workspace = get_workspace_path()
+            workspace = self.workspace
             project_dir = workspace / "ppt_projects" / project_name
 
             # Try exports/ first (legacy + Step 7.3 copy), then output/ (new pipeline)
@@ -1891,8 +2075,6 @@ class WebSocketChannel(BaseChannel):
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         try:
-            from mona.config.paths import get_workspace_path
-
             query = _parse_query(request.path)
             project_name = _query_first(query, "project") or ""
             if (
@@ -1903,7 +2085,7 @@ class WebSocketChannel(BaseChannel):
             ):
                 return _http_error(400, "invalid project name")
 
-            workspace = get_workspace_path()
+            workspace = self.workspace
             lock_file = workspace / "ppt_projects" / project_name / ".live_preview.lock"
 
             if not lock_file.exists():
@@ -1920,8 +2102,6 @@ class WebSocketChannel(BaseChannel):
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         try:
-            from mona.config.paths import get_workspace_path
-
             query = _parse_query(request.path)
             project_name = _query_first(query, "project") or ""
             if (
@@ -1932,7 +2112,7 @@ class WebSocketChannel(BaseChannel):
             ):
                 return _http_error(400, "invalid project name")
 
-            workspace = get_workspace_path()
+            workspace = self.workspace
             projects_dir = workspace / "ppt_projects"
             project_dir = projects_dir / project_name
             if not project_dir.is_dir():
@@ -1995,8 +2175,6 @@ class WebSocketChannel(BaseChannel):
             return _http_error(401, "Unauthorized")
         try:
             from mona.agent.skills import BUILTIN_SKILLS_DIR
-            from mona.config.paths import get_workspace_path
-
             query = _parse_query(request.path)
             project_name = _query_first(query, "project") or ""
             if (
@@ -2007,7 +2185,7 @@ class WebSocketChannel(BaseChannel):
             ):
                 return _http_error(400, "invalid project name")
 
-            workspace = get_workspace_path()
+            workspace = self.workspace
             pptx_path = workspace / "ppt_projects" / project_name / "output" / "output.pptx"
             if not pptx_path.exists():
                 return _http_error(404, "output.pptx not found")
@@ -2113,8 +2291,6 @@ class WebSocketChannel(BaseChannel):
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         try:
-            from mona.config.paths import get_workspace_path
-
             query = _parse_query(request.path)
             project_name = _query_first(query, "project") or ""
             action = _query_first(query, "action") or "start"
@@ -2127,7 +2303,7 @@ class WebSocketChannel(BaseChannel):
             ):
                 return _http_error(400, "invalid project name")
 
-            workspace = get_workspace_path()
+            workspace = self.workspace
             project_dir = workspace / "ppt_projects" / project_name
             marker = project_dir / ".generating"
 
@@ -2148,8 +2324,6 @@ class WebSocketChannel(BaseChannel):
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         try:
-            from mona.config.paths import get_workspace_path
-
             query = _parse_query(request.path)
             project_name = _query_first(query, "project") or ""
             chat_id = _query_first(query, "chatId") or ""
@@ -2162,7 +2336,7 @@ class WebSocketChannel(BaseChannel):
             ):
                 return _http_error(400, "invalid project name")
 
-            workspace = get_workspace_path()
+            workspace = self.workspace
             project_dir = workspace / "ppt_projects" / project_name
             if not project_dir.is_dir():
                 return _http_error(404, "project not found")
@@ -2183,8 +2357,6 @@ class WebSocketChannel(BaseChannel):
         try:
             import shutil
 
-            from mona.config.paths import get_workspace_path
-
             query = _parse_query(request.path)
             project_name = _query_first(query, "project") or ""
 
@@ -2196,7 +2368,7 @@ class WebSocketChannel(BaseChannel):
             ):
                 return _http_error(400, "invalid project name")
 
-            workspace = get_workspace_path()
+            workspace = self.workspace
             project_dir = workspace / "ppt_projects" / project_name
             if not project_dir.is_dir():
                 return _http_error(404, "project not found")
@@ -2212,8 +2384,6 @@ class WebSocketChannel(BaseChannel):
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         try:
-            from mona.config.paths import get_workspace_path
-
             query = _parse_query(request.path)
             project_name = _query_first(query, "name") or _query_first(query, "project") or ""
             if (
@@ -2224,7 +2394,7 @@ class WebSocketChannel(BaseChannel):
             ):
                 return _http_error(400, "invalid project name")
 
-            workspace = get_workspace_path()
+            workspace = self.workspace
             project_dir = workspace / "video_projects" / project_name
 
             # Prefer renders/output.mp4 (new pipeline), fallback to any mp4 in output/.
@@ -2255,8 +2425,6 @@ class WebSocketChannel(BaseChannel):
         try:
             import shutil
 
-            from mona.config.paths import get_workspace_path
-
             query = _parse_query(request.path)
             project_name = _query_first(query, "name") or _query_first(query, "project") or ""
 
@@ -2268,7 +2436,7 @@ class WebSocketChannel(BaseChannel):
             ):
                 return _http_error(400, "invalid project name")
 
-            workspace = get_workspace_path()
+            workspace = self.workspace
             project_dir = workspace / "video_projects" / project_name
             if not project_dir.is_dir():
                 return _http_error(404, "project not found")
@@ -2284,8 +2452,6 @@ class WebSocketChannel(BaseChannel):
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         try:
-            from mona.config.paths import get_workspace_path
-
             query = _parse_query(request.path)
             project_name = _query_first(query, "project") or ""
             if (
@@ -2296,7 +2462,7 @@ class WebSocketChannel(BaseChannel):
             ):
                 return _http_error(400, "invalid project name")
 
-            workspace = get_workspace_path()
+            workspace = self.workspace
             plan_path = workspace / "ppt_projects" / project_name / "page_visual_plan.json"
             if not plan_path.is_file():
                 return _http_json_response({"pages": []})
@@ -2313,8 +2479,6 @@ class WebSocketChannel(BaseChannel):
         try:
             from urllib.parse import quote
 
-            from mona.config.paths import get_workspace_path
-
             query = _parse_query(request.path)
             project_name = _query_first(query, "project") or ""
             if (
@@ -2325,7 +2489,7 @@ class WebSocketChannel(BaseChannel):
             ):
                 return _http_error(400, "invalid project name")
 
-            workspace = get_workspace_path()
+            workspace = self.workspace
             project_dir = workspace / "ppt_projects" / project_name
             if not project_dir.is_dir():
                 return _http_json_response({"slides": []})
@@ -2403,8 +2567,6 @@ class WebSocketChannel(BaseChannel):
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         try:
-            from mona.config.paths import get_workspace_path
-
             query = _parse_query(request.path)
             project_name = _query_first(query, "project") or ""
             file_name = _query_first(query, "file") or ""
@@ -2419,7 +2581,7 @@ class WebSocketChannel(BaseChannel):
             if not file_name or "/" in file_name or "\\" in file_name or ".." in file_name:
                 return _http_error(400, "invalid file name")
 
-            workspace = get_workspace_path()
+            workspace = self.workspace
             project_dir = workspace / "ppt_projects" / project_name
 
             # Determine which directory to read from
@@ -2586,8 +2748,6 @@ class WebSocketChannel(BaseChannel):
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         try:
-            from mona.config.paths import get_workspace_path
-
             query = _parse_query(request.path)
             project_name = _query_first(query, "project") or ""
             file_path = _query_first(query, "path") or ""
@@ -2601,7 +2761,7 @@ class WebSocketChannel(BaseChannel):
             if not file_path or ".." in file_path:
                 return _http_error(400, "invalid file path")
 
-            workspace = get_workspace_path()
+            workspace = self.workspace
             project_dir = workspace / "ppt_projects" / project_name
 
             # Resolve and verify the path stays within the project directory
@@ -2854,6 +3014,227 @@ class WebSocketChannel(BaseChannel):
             ],
         )
 
+    @staticmethod
+    def _artifact_file_payload(ref: Any, workspace: Path) -> dict[str, Any] | None:
+        """Hydrate one persisted ArtifactRef into a previewable UI row."""
+        from mona.agent.artifacts import coerce_artifact_ref
+
+        artifact = coerce_artifact_ref(ref)
+        if artifact is None:
+            return None
+        try:
+            payload = artifact.as_file(workspace)
+            target = artifact.resolve(workspace)
+            payload["absolute_path"] = str(target)
+            return payload
+        except (OSError, ValueError):
+            return {
+                "path": artifact.relative_path,
+                "absolute_path": "",
+                "name": Path(artifact.relative_path).name,
+                "size": artifact.size or 0,
+                "size_human": "",
+                "mime": artifact.mime or "application/octet-stream",
+                "modified_at": artifact.modified_at.isoformat() if artifact.modified_at else None,
+                "missing": True,
+                "artifact_ref": artifact.model_dump(mode="json"),
+            }
+
+    def _artifact_refs_from_session(self, session_key: str) -> list[Any]:
+        """Read explicit delivery references from the session projection."""
+        from mona.agent.artifacts import coerce_artifact_ref
+        from mona.webui.transcript import read_transcript_lines
+
+        refs: list[Any] = []
+        seen: set[str] = set()
+        records = read_transcript_lines(session_key)
+        for record in records:
+            if record.get("event") not in {"deliver_files", "file_edit"}:
+                continue
+            raw_files = record.get("files")
+            if not isinstance(raw_files, list):
+                edits = record.get("edits")
+                raw_files = edits if isinstance(edits, list) else []
+            for item in raw_files:
+                raw_ref = item.get("artifact_ref") if isinstance(item, dict) else None
+                ref = coerce_artifact_ref(raw_ref)
+                if ref is None and isinstance(item, dict):
+                    # Existing transcripts predate ArtifactRef and only carry
+                    # ``path``/``absolute_path``. Convert those records in
+                    # memory, bounded by the session's resolved Agent root;
+                    # never persist or trust the legacy absolute path.
+                    ref = self._legacy_session_artifact_ref(session_key, item)
+                if ref is None or ref.id in seen:
+                    continue
+                seen.add(ref.id)
+                refs.append(ref)
+        return refs
+
+    def _legacy_session_artifact_ref(
+        self,
+        session_key: str,
+        item: dict[str, Any],
+    ) -> Any | None:
+        """Convert one pre-ArtifactRef delivery record safely for replay.
+
+        Old WebUI transcripts contain only a relative path and often an
+        absolute path. The latter is used solely to follow the migration
+        manifest when the file moved; the returned reference never stores it.
+        Records that cannot be proven to belong to this session's Agent root
+        are ignored rather than guessed into a different owner.
+        """
+        from mona.agent.artifacts import ArtifactRef
+        from mona.config.paths import get_agent_output_dir
+
+        owner = self._session_artifact_owner(session_key)
+        if owner is None:
+            return None
+        base, agent_id = owner
+        try:
+            root = get_agent_output_dir(base, agent_id).resolve()
+        except (OSError, ValueError):
+            return None
+
+        raw_absolute = item.get("absolute_path")
+        candidate: Path | None = None
+        if isinstance(raw_absolute, str) and raw_absolute.strip():
+            candidate = Path(raw_absolute).expanduser()
+            try:
+                candidate = candidate.resolve()
+            except OSError:
+                candidate = None
+            if candidate is not None and not candidate.is_relative_to(root):
+                # A legacy loose-output path may have been moved by startup;
+                # use the recorded map only when it points into this Agent.
+                try:
+                    from mona.config.migrate_global import resolve_legacy_path
+
+                    migrated = resolve_legacy_path(candidate)
+                    candidate = migrated.resolve() if migrated is not None else None
+                except (OSError, ValueError):
+                    candidate = None
+        raw_relative = item.get("path")
+        if candidate is None and isinstance(raw_relative, str) and raw_relative.strip():
+            relative = Path(raw_relative)
+            if relative.is_absolute() or ".." in relative.parts:
+                return None
+            try:
+                candidate = (root / relative).resolve()
+            except OSError:
+                return None
+        if candidate is None:
+            return None
+        try:
+            relative_path = candidate.relative_to(root).as_posix()
+        except ValueError:
+            return None
+        if not relative_path or relative_path == ".":
+            return None
+
+        room_id: str | None = None
+        if self._session_manager is not None:
+            try:
+                session = self._session_manager.get_or_create(session_key)
+                if session.conversation_metadata.type == "room":
+                    room_id = session_key.removeprefix("websocket:")
+            except Exception:
+                logger.exception("Cannot resolve legacy artifact room for {}", session_key)
+        size = item.get("size")
+        if not isinstance(size, int) or size < 0:
+            size = None
+        modified_at: datetime | None = None
+        raw_modified = item.get("modified_at")
+        if isinstance(raw_modified, str) and raw_modified:
+            try:
+                modified_at = datetime.fromisoformat(raw_modified.replace("Z", "+00:00"))
+            except ValueError:
+                modified_at = None
+        mime = item.get("mime") if isinstance(item.get("mime"), str) else None
+        try:
+            return ArtifactRef(
+                owner_kind="agent",
+                owner_id=agent_id,
+                relative_path=relative_path,
+                created_by_agent_id=agent_id,
+                session_id=session_key,
+                room_id=room_id,
+                size=size,
+                modified_at=modified_at,
+                mime=mime,
+            )
+        except ValueError:
+            return None
+
+    def _session_artifact_owner(self, session_key: str) -> tuple[Path, str] | None:
+        if self._session_manager is None:
+            return None
+        data = self._session_manager.read_session_file(session_key)
+        if data is None:
+            return None
+        metadata = data.get("metadata") or {}
+        workspace = metadata.get("workspace")
+        base = Path(workspace).expanduser() if isinstance(workspace, str) and workspace.strip() else None
+        if base is None:
+            base = self.workspace
+        conversation = metadata.get("conversation")
+        agent_id = "mona"
+        if isinstance(conversation, dict):
+            direct = conversation.get("directAgentId") or conversation.get("direct_agent_id")
+            if isinstance(direct, str) and direct.strip():
+                agent_id = direct.strip()
+        return base.resolve(), agent_id
+
+    def _room_artifact_ref(self, room_id: str, path: str) -> Any | None:
+        """Find a room-owned reference by relative path without scanning roots."""
+        for ref in self._artifact_refs_for_room(room_id):
+            if getattr(ref, "relative_path", None) == path:
+                return ref
+        return None
+
+    def _artifact_refs_for_room(self, room_id: str) -> list[Any]:
+        """Aggregate explicit room deliveries from transcript, Jobs and Runs.
+
+        A room is only a projection. This method never walks an Agent output
+        directory; it follows the structured references persisted by each
+        producer and de-duplicates them by reference id.
+        """
+        from mona.agent.artifacts import coerce_artifact_ref
+        from mona.agent.jobs import AgentJobStore
+        from mona.agent.workflow import WorkflowRunStore
+        from mona.config.paths import get_agent_jobs_dir, get_workflow_runs_dir
+
+        refs: list[Any] = []
+        seen: set[str] = set()
+
+        def add(raw: Any) -> None:
+            ref = coerce_artifact_ref(raw)
+            if ref is None or ref.id in seen:
+                return
+            # A room view must never accidentally expose a reference carried
+            # by a different room/run projection.
+            if ref.room_id and ref.room_id != room_id:
+                return
+            seen.add(ref.id)
+            refs.append(ref)
+
+        for ref in self._artifact_refs_from_session(f"websocket:{room_id}"):
+            add(ref)
+        try:
+            for job in AgentJobStore(get_agent_jobs_dir()).list_for_room(room_id):
+                for raw in job.artifacts:
+                    add(raw)
+        except Exception:
+            logger.exception("Failed to load room job artifacts for {}", room_id)
+        try:
+            for run in WorkflowRunStore(get_workflow_runs_dir()).list_for_room(room_id):
+                for step in run.steps.values():
+                    step_output = step.output or {}
+                    for raw in step_output.get("artifacts", []):
+                        add(raw)
+        except Exception:
+            logger.exception("Failed to load room workflow artifacts for {}", room_id)
+        return refs
+
     def _handle_file_preview(
         self,
         request: WsRequest,
@@ -2861,6 +3242,8 @@ class WebSocketChannel(BaseChannel):
         scope: str,
         session_key: str,
         path: str,
+        room: str = "",
+        artifact_id: str = "",
     ) -> Response:
         # 1. Auth: every file-preview request must carry a valid API token.
         if not self._check_api_token(request):
@@ -2878,9 +3261,44 @@ class WebSocketChannel(BaseChannel):
 
         # 3. Resolve the workspace root by scope.
         if scope == "shared":
-            from mona.config.paths import get_shared_output_dir, get_workspace_path
+            if not session_key:
+                return _http_error(400, "missing session_key")
+            decoded_key = _decode_api_key(session_key)
+            if decoded_key is None or not self._is_websocket_channel_session_key(decoded_key):
+                return _http_error(404, "session not found")
+            owner = self._session_artifact_owner(decoded_key)
+            if owner is None:
+                return _http_error(404, "session not found")
+            base, agent_id = owner
+            if artifact_id:
+                ref = next(
+                    (item for item in self._artifact_refs_from_session(decoded_key)
+                     if getattr(item, "id", None) == artifact_id),
+                    None,
+                )
+                if ref is None or ref.owner_kind != "agent" or ref.owner_id != agent_id:
+                    return _http_error(404, "artifact not found")
+                path = ref.relative_path
+            from mona.config.paths import get_agent_output_dir
 
-            root = get_shared_output_dir(get_workspace_path())
+            root = get_agent_output_dir(base, agent_id)
+        elif scope == "room":
+            if not room:
+                return _http_error(400, "missing room id")
+            ref = next(
+                (item for item in self._artifact_refs_for_room(room)
+                 if artifact_id and getattr(item, "id", None) == artifact_id),
+                None,
+            ) if artifact_id else self._room_artifact_ref(room, path)
+            if ref is None:
+                return _http_error(404, "room not found")
+            try:
+                owner = self._session_artifact_owner(f"websocket:{room}")
+                if owner is None:
+                    return _http_error(404, "room not found")
+                root = ref.owner_root(owner[0])
+            except (OSError, ValueError):
+                return _http_error(400, "invalid artifact reference")
         elif scope == "project":
             if not session_key:
                 return _http_error(400, "missing session_key")
@@ -2908,22 +3326,6 @@ class WebSocketChannel(BaseChannel):
             target.relative_to(root_resolved)
         except (ValueError, OSError):
             return _http_error(400, "invalid path")
-
-        # 4a. Fallback: deliver_file sends paths relative to workspace (e.g.
-        # "output/report.docx"), while listArtifacts sends paths relative to
-        # output dir (e.g. "report.docx"). If the direct resolve misses, try
-        # resolving from the workspace root for shared scope.
-        if not target.is_file() and scope == "shared":
-            try:
-                from mona.config.paths import get_workspace_path
-
-                ws_root = get_workspace_path().resolve()
-                target2 = (ws_root / path).resolve()
-                target2.relative_to(ws_root)
-                if target2.is_file():
-                    target = target2
-            except (ValueError, OSError):
-                pass
 
         # 5. File existence and read.
         if not target.is_file():
@@ -2962,25 +3364,53 @@ class WebSocketChannel(BaseChannel):
         )
 
     def _handle_artifacts_list(self, request: WsRequest) -> Response:
-        """List shared artifacts under ``<workspace>/output``.
-
-        Requires API token. The root is fixed to the configured workspace's
-        ``output/`` directory; clients cannot pass an arbitrary root.
-        """
+        """List explicit session/room references plus an Agent workspace scan."""
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
-        from mona.config.paths import get_shared_output_dir, get_workspace_path
+        from mona.config.paths import get_agent_output_dir
         from mona.utils.artifact_listing import list_artifacts
 
-        output_dir = get_shared_output_dir(get_workspace_path())
-        try:
-            result = list_artifacts(output_dir)
-        except Exception:
-            logger.exception("Failed to list artifacts in {}", output_dir)
-            return _http_error(500, "scan failed")
-        payload = {
-            "files": [
-                {
+        query = _parse_query(request.path)
+        room_id = _query_first(query, "room") or ""
+        session_key = _query_first(query, "session_key") or ""
+        if room_id:
+            owner = self._session_artifact_owner(f"websocket:{room_id}")
+            if owner is None:
+                return _http_error(404, "room not found")
+            base = owner[0]
+            refs = self._artifact_refs_for_room(room_id)
+            files: list[dict[str, Any]] = []
+            seen: set[str] = set()
+            for ref in sorted(refs, key=lambda item: item.created_at, reverse=True):
+                if ref.id in seen:
+                    continue
+                item = self._artifact_file_payload(ref, base)
+                if item is None:
+                    continue
+                seen.add(ref.id)
+                files.append(item)
+            # A room is a flat projection of explicit references.  It has no
+            # session/workspace split, so do not expose a second alias of the
+            # same list to clients.
+            payload = {"files": files, "truncated": False}
+        else:
+            if not session_key:
+                return _http_error(400, "missing session_key")
+            decoded_key = _decode_api_key(session_key)
+            if decoded_key is None or not self._is_websocket_channel_session_key(decoded_key):
+                return _http_error(404, "session not found")
+            owner = self._session_artifact_owner(decoded_key)
+            if owner is None:
+                return _http_error(404, "session not found")
+            base, agent_id = owner
+            output_dir = get_agent_output_dir(base, agent_id)
+            try:
+                result = list_artifacts(output_dir)
+            except Exception:
+                logger.exception("Failed to list artifacts in {}", output_dir)
+                return _http_error(500, "scan failed")
+            scanned = {
+                f.path: {
                     "path": f.path,
                     "absolute_path": f.absolute_path,
                     "name": f.name,
@@ -2988,17 +3418,126 @@ class WebSocketChannel(BaseChannel):
                     "size_human": f.size_human,
                     "mime": f.mime,
                     "modified_at": f.modified_at,
+                    "missing": False,
                 }
                 for f in result.files
-            ],
-            "truncated": result.truncated,
-        }
+            }
+            session_refs = [
+                ref for ref in self._artifact_refs_from_session(decoded_key)
+                if ref.owner_kind == "agent" and ref.owner_id == agent_id
+            ]
+            session_files: list[dict[str, Any]] = []
+            session_paths: set[str] = set()
+            for ref in sorted(session_refs, key=lambda item: item.created_at, reverse=True):
+                if ref.relative_path in session_paths:
+                    continue
+                item = self._artifact_file_payload(ref, base)
+                if item is None:
+                    continue
+                session_paths.add(ref.relative_path)
+                if ref.relative_path in scanned:
+                    item = {**scanned[ref.relative_path], "artifact_ref": ref.model_dump(mode="json")}
+                session_files.append(item)
+            payload = {
+                "files": [item for path, item in scanned.items() if path not in session_paths],
+                "session_files": session_files,
+                "truncated": result.truncated,
+            }
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         return _http_response(
             body,
             content_type="application/json; charset=utf-8",
             extra_headers=[("Cache-Control", "no-store")],
         )
+
+    def _room_root_for_artifacts(self, room_id: str) -> Path | None:
+        """Resolve a room's artifacts root: the room session's workspace
+        override when bound, else the Mona workspace root. ``None`` when the
+        room session does not exist."""
+        if self._session_manager is None:
+            return None
+        decoded = _decode_api_key(f"websocket:{room_id}")
+        if decoded is None:
+            return None
+        data = self._session_manager.read_session_file(decoded)
+        if data is None:
+            return None
+        metadata = data.get("metadata") or {}
+        workspace = metadata.get("workspace")
+        if isinstance(workspace, str) and workspace.strip():
+            return Path(workspace).expanduser()
+        return self.workspace
+
+    def _handle_stock_reports(self, request: WsRequest) -> Response:
+        """List stock reports/digests under ``<workspace>/stock_projects``.
+
+        Requires API token. Empty/missing directory yields an empty list.
+        """
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        from mona.config.paths import get_stock_projects_dir, get_workspace_path
+        from mona.services.stock.reports import scan_reports
+
+        stock_dir = get_stock_projects_dir(self.workspace)
+        try:
+            reports = scan_reports(stock_dir)
+        except Exception:
+            logger.exception("Failed to scan stock reports in {}", stock_dir)
+            return _http_error(500, "scan failed")
+        return _http_json_response({"reports": reports})
+
+    def _handle_stock_report_detail(self, request: WsRequest, report_id: str) -> Response:
+        """Return one report's JSON document plus its markdown rendering."""
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        from mona.services.stock.reports import load_report, valid_report_id
+
+        # The id is matched against document content (never joined into a
+        # path), but reject anything outside the id alphabet anyway.
+        if not valid_report_id(report_id):
+            return _http_error(400, "invalid report id")
+        from mona.config.paths import get_stock_projects_dir, get_workspace_path
+
+        stock_dir = get_stock_projects_dir(self.workspace)
+        result = load_report(stock_dir, report_id)
+        if result is None:
+            return _http_error(404, "report not found")
+        doc, markdown = result
+        return _http_json_response({"report": doc, "markdown": markdown})
+
+    def _handle_stock_report_delete(self, request: WsRequest) -> Response:
+        """Delete one report's run directory (manual cleanup, design §9)."""
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        from mona.services.stock.reports import delete_report, valid_report_id
+
+        report_id = _query_first(_parse_query(request.path), "id") or ""
+        if not valid_report_id(report_id):
+            return _http_error(400, "invalid report id")
+        from mona.config.paths import get_stock_projects_dir, get_workspace_path
+
+        stock_dir = get_stock_projects_dir(self.workspace)
+        if not delete_report(stock_dir, report_id):
+            return _http_error(404, "report not found")
+        return _http_json_response({"deleted": True})
+
+    def _handle_stock_dashboard(self, request: WsRequest) -> Response:
+        """Global watchlist × latest report in the current workspace."""
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        from mona.config.paths import get_stock_projects_dir, get_workspace_path
+        from mona.services.stock import reports as stock_reports
+        from mona.services.stock.storage import WatchlistCorruptError
+
+        try:
+            watchlist = stock_reports.default_watchlist()
+        except WatchlistCorruptError as exc:
+            return _http_json_response(
+                {"error": {"code": "watchlist_corrupt", "message": str(exc)}},
+                status=500,
+            )
+        stock_dir = get_stock_projects_dir(self.workspace)
+        return _http_json_response({"items": stock_reports.build_dashboard(stock_dir, watchlist)})
 
     def _handle_project_files_list(self, request: WsRequest, key: str) -> Response:
         """List all files of a project session's bound workspace directory.
@@ -3065,6 +3604,14 @@ class WebSocketChannel(BaseChannel):
         # websocket-channel sessions; deletion unlinks local JSONL — keep scope narrow.
         if not self._is_websocket_channel_session_key(decoded_key):
             return _http_error(404, "session not found")
+        # Hidden rooms (stock-module design §4.4) are system-managed execution
+        # containers — deletion from the UI surface is rejected.
+        data = self._session_manager.read_session_file(decoded_key)
+        if data is not None:
+            metadata = data.get("metadata") or {}
+            conversation = metadata.get("conversation")
+            if isinstance(conversation, dict) and conversation.get("hidden") is True:
+                return _http_error(403, "hidden rooms are system-managed")
         deleted = self._session_manager.delete_session(decoded_key)
         delete_webui_thread(decoded_key)
         # IM sidebar state (IM plan 12.4): drop the deleted session's pin /
@@ -3191,14 +3738,13 @@ class WebSocketChannel(BaseChannel):
         await self._server_task
 
     async def _watch_artifacts(self) -> None:
-        """Poll the shared output dir signature; broadcast on change.
+        """Poll Agent output signatures; broadcast on change.
 
         Runs only while at least one websocket connection is open; the
         scan is a metadata-only aggregate hash (no file content reads).
         The first observation after startup (or after all clients went
         away) becomes the baseline and is not broadcast.
         """
-        from mona.config.paths import get_shared_output_dir, get_workspace_path
         from mona.utils.artifact_listing import artifact_signature
 
         last: str | None = None
@@ -3207,10 +3753,19 @@ class WebSocketChannel(BaseChannel):
             if not self._conn_chats:
                 continue
             try:
-                signature = await asyncio.to_thread(
-                    artifact_signature,
-                    get_shared_output_dir(get_workspace_path()),
-                )
+                workspace = self.workspace
+
+                def _agent_outputs_signature() -> str:
+                    roots = [workspace / "agent-workspaces" / "mona" / "output"]
+                    agents_root = workspace / "agent-workspaces"
+                    if agents_root.is_dir():
+                        for agent_dir in agents_root.iterdir():
+                            if agent_dir.is_dir() and agent_dir.name != "mona":
+                                roots.append(agent_dir / "output")
+                    parts = [f"{root}:{artifact_signature(root)}" for root in sorted(roots)]
+                    return "|".join(parts)
+
+                signature = await asyncio.to_thread(_agent_outputs_signature)
             except Exception:
                 logger.exception("artifact watch scan failed")
                 continue
@@ -3227,7 +3782,6 @@ class WebSocketChannel(BaseChannel):
         Covers generating → outline (page_visual_plan.json) and other
         transitions that lack an explicit server-side push source.
         """
-        from mona.config.paths import get_workspace_path
         from mona.utils.artifact_listing import artifact_signature
 
         last: str | None = None
@@ -3236,7 +3790,7 @@ class WebSocketChannel(BaseChannel):
             if not self._conn_chats:
                 continue
             try:
-                projects_dir = get_workspace_path() / "ppt_projects"
+                projects_dir = self.workspace / "ppt_projects"
                 if not projects_dir.is_dir():
                     continue
                 signature = await asyncio.to_thread(
@@ -3400,7 +3954,6 @@ class WebSocketChannel(BaseChannel):
                 connection, "ppt_import_native_result", ok=False, error="no file",
             )
             return
-
         name = file_info.get("name", "")
         data_url = file_info.get("data_url", "")
         mime = _extract_data_url_mime(data_url)
@@ -3626,9 +4179,7 @@ class WebSocketChannel(BaseChannel):
             await self._send_event(connection, "ppt_upload_result", ok=False, error="no files")
             return
         try:
-            from mona.config.paths import get_workspace_path
-
-            workspace = get_workspace_path()
+            workspace = self.workspace
             sources_dir = workspace / "ppt_projects" / "_sources"
             sources_dir.mkdir(parents=True, exist_ok=True)
 
@@ -3686,9 +4237,7 @@ class WebSocketChannel(BaseChannel):
             await self._send_event(connection, "doc_upload_result", ok=False, error="invalid chat_id")
             return
         try:
-            from mona.config.paths import get_workspace_path
-
-            workspace = get_workspace_path()
+            workspace = self.workspace
             # Sanitize chat_id for folder name: strip "ephemeral:" prefix and
             # keep only filesystem-safe characters.
             safe_chat = str(chat_id).replace("ephemeral:", "eph_")
@@ -3782,6 +4331,11 @@ class WebSocketChannel(BaseChannel):
         unknown = [a for a in normalized if registry.get(a) is None]
         if unknown:
             return None, "unknown_agent", f"unknown or disabled agents: {', '.join(unknown)}"
+        from mona.agent.user_config import load_agent_user_config
+
+        disabled = [a for a in normalized if not load_agent_user_config(a).enabled]
+        if disabled:
+            return None, "agent_disabled", f"disabled agents cannot be added: {', '.join(disabled)}"
         return normalized, None, None
 
     def _room_state_payload(self, conversation: Any) -> dict[str, Any]:
@@ -3789,10 +4343,10 @@ class WebSocketChannel(BaseChannel):
         agents = []
         for agent_id in conversation.agent_ids:
             definition = registry.get(agent_id)
+            summary = self._agent_summary(definition) if definition else None
             agents.append({
                 "id": agent_id,
-                "displayName": definition.display_name if definition else agent_id,
-                "description": definition.description if definition else "",
+                "displayName": summary["displayName"] if summary else agent_id,
             })
         return {
             "conversation": conversation.to_session_metadata(),
@@ -3891,6 +4445,15 @@ class WebSocketChannel(BaseChannel):
                 chat_id=chat_id, request_id=request_id,
             )
             return
+        from mona.agent.user_config import load_agent_user_config
+
+        if not load_agent_user_config(agent_id).enabled:
+            await self._send_event(
+                connection, "create_direct_conversation_result", ok=False,
+                code="agent_disabled", detail="agent is disabled",
+                chat_id=chat_id, request_id=request_id,
+            )
+            return
         if self._session_manager is None:
             await self._send_event(
                 connection, "create_direct_conversation_result", ok=False,
@@ -3934,6 +4497,222 @@ class WebSocketChannel(BaseChannel):
             conversation=conversation.to_session_metadata(),
         )
 
+    async def _broadcast_agent_event(self, event: str, *, agent_id: str, **fields: Any) -> None:
+        """Broadcast small cache-invalidation events to all open WebUI clients."""
+        conns = list(self._conn_chats)
+        if not conns:
+            return
+        raw = json.dumps({"event": event, "agent_id": agent_id, **fields}, ensure_ascii=False)
+        for connection in conns:
+            await self._safe_send_to(connection, raw, label=f" {event} ")
+
+    async def _handle_agent_config_update_envelope(
+        self, connection: Any, envelope: dict[str, Any]
+    ) -> None:
+        request_id = self._room_request_id(envelope)
+        try:
+            from mona.agent.partners import normalize_agent_id
+            from mona.agent.user_config import save_agent_user_config
+
+            agent_id = normalize_agent_id(str(envelope.get("agent_id", "")))
+            definition = self._room_agent_registry().get(agent_id)
+            if definition is None:
+                raise ValueError("agent is not installed")
+            update = envelope.get("config")
+            if not isinstance(update, dict):
+                raise ValueError("config must be an object")
+            if definition.id == MONA_AGENT_ID and update.get("enabled") is False:
+                raise ValueError("Mona cannot be disabled")
+            if "script_enabled_skills" in update:
+                raise ValueError("script permissions must be changed from a skill action")
+            granted = update.get("granted_tools")
+            if definition.id != MONA_AGENT_ID and isinstance(granted, list):
+                unknown = sorted(set(granted) - set(definition.tool_allowlist))
+                if unknown:
+                    raise ValueError(f"tools exceed the agent package boundary: {', '.join(unknown)}")
+            preset = update.get("model_preset")
+            if isinstance(preset, str) and preset.strip():
+                from mona.agent import model_presets
+                from mona.config.loader import load_config
+
+                if preset.strip() not in model_presets.configured_model_presets(load_config()):
+                    raise ValueError("model preset is not configured")
+            expected = envelope.get("expected_revision")
+            if expected is not None and not isinstance(expected, int):
+                raise ValueError("expected_revision must be an integer")
+            saved = save_agent_user_config(agent_id, update, expected_revision=expected)
+            await self._send_event(
+                connection,
+                "agent_config_update_result",
+                ok=True,
+                agent_id=agent_id,
+                request_id=request_id,
+                config=saved.model_dump(by_alias=True),
+                agent=self._agent_summary(definition),
+            )
+            await self._broadcast_agent_event("agents_updated", agent_id=agent_id)
+        except Exception as exc:
+            await self._send_event(
+                connection, "agent_config_update_result", ok=False,
+                request_id=request_id, detail=str(exc),
+            )
+
+    async def _handle_agent_instruction_save_envelope(
+        self, connection: Any, envelope: dict[str, Any]
+    ) -> None:
+        request_id = self._room_request_id(envelope)
+        try:
+            from mona.agent.agent_management import write_instruction
+            from mona.agent.partners import normalize_agent_id
+
+            agent_id = normalize_agent_id(str(envelope.get("agent_id", "")))
+            if self._room_agent_registry().get(agent_id) is None:
+                raise ValueError("agent is not installed")
+            key = envelope.get("key")
+            content = envelope.get("content")
+            if not isinstance(key, str) or not isinstance(content, str):
+                raise ValueError("key and content are required")
+            instruction = write_instruction(agent_id, key, content, message=f"manual edit: {key}")
+            await self._send_event(
+                connection, "agent_instruction_save_result", ok=True,
+                agent_id=agent_id, instruction=instruction, request_id=request_id,
+            )
+            await self._broadcast_agent_event("agent_instructions_updated", agent_id=agent_id, key=key)
+        except Exception as exc:
+            await self._send_event(
+                connection, "agent_instruction_save_result", ok=False,
+                request_id=request_id, detail=str(exc),
+            )
+
+    async def _handle_agent_instruction_restore_envelope(
+        self, connection: Any, envelope: dict[str, Any]
+    ) -> None:
+        request_id = self._room_request_id(envelope)
+        try:
+            from mona.agent.agent_management import restore_instruction
+            from mona.agent.partners import normalize_agent_id
+
+            agent_id = normalize_agent_id(str(envelope.get("agent_id", "")))
+            key = envelope.get("key")
+            commit = envelope.get("commit")
+            if self._room_agent_registry().get(agent_id) is None:
+                raise ValueError("agent is not installed")
+            if not isinstance(key, str) or not isinstance(commit, str):
+                raise ValueError("key and commit are required")
+            instruction = restore_instruction(agent_id, key, commit)
+            await self._send_event(
+                connection, "agent_instruction_restore_result", ok=True,
+                agent_id=agent_id, instruction=instruction, request_id=request_id,
+            )
+            await self._broadcast_agent_event("agent_instructions_updated", agent_id=agent_id, key=key)
+        except Exception as exc:
+            await self._send_event(
+                connection, "agent_instruction_restore_result", ok=False,
+                request_id=request_id, detail=str(exc),
+            )
+
+    async def _handle_agent_skill_stage_envelope(
+        self, connection: Any, envelope: dict[str, Any]
+    ) -> None:
+        request_id = self._room_request_id(envelope)
+        try:
+            from mona.agent.agent_management import SkillManager
+            from mona.agent.partners import normalize_agent_id
+
+            agent_id = normalize_agent_id(str(envelope.get("agent_id", "")))
+            registry = self._room_agent_registry()
+            if registry.get(agent_id) is None:
+                raise ValueError("agent is not installed")
+            name = envelope.get("name")
+            files = envelope.get("files")
+            content = envelope.get("content")
+            if not isinstance(name, str):
+                raise ValueError("skill name is required")
+            if files is None:
+                if not isinstance(content, str):
+                    raise ValueError("skill content is required")
+                files = {"SKILL.md": content}
+            if not isinstance(files, dict):
+                raise ValueError("skill files must be an object")
+            if not all(isinstance(path, str) and isinstance(text, str) for path, text in files.items()):
+                raise ValueError("skill files must contain text values")
+            proposal = SkillManager(agent_id, registry=registry).stage(
+                name=name,
+                files=files,
+                source="user:webui",
+            )
+            await self._send_event(
+                connection, "agent_skill_stage_result", ok=True,
+                agent_id=agent_id, proposal=proposal, request_id=request_id,
+            )
+            await self._broadcast_agent_event(
+                "agent_change_proposal_created", agent_id=agent_id,
+                proposal_id=proposal["id"], kind="skill_install",
+            )
+        except Exception as exc:
+            await self._send_event(
+                connection, "agent_skill_stage_result", ok=False,
+                request_id=request_id, detail=str(exc),
+            )
+
+    async def _handle_agent_skill_action_envelope(
+        self, connection: Any, envelope: dict[str, Any]
+    ) -> None:
+        request_id = self._room_request_id(envelope)
+        try:
+            from mona.agent.agent_management import SkillManager
+            from mona.agent.partners import normalize_agent_id
+
+            agent_id = normalize_agent_id(str(envelope.get("agent_id", "")))
+            name = envelope.get("name")
+            action = envelope.get("action")
+            if not isinstance(name, str) or not isinstance(action, str):
+                raise ValueError("skill name and action are required")
+            SkillManager(agent_id, registry=self._room_agent_registry()).action(name, action)
+            await self._send_event(
+                connection, "agent_skill_action_result", ok=True,
+                agent_id=agent_id, name=name, action=action, request_id=request_id,
+            )
+            await self._broadcast_agent_event("agent_skills_updated", agent_id=agent_id)
+        except Exception as exc:
+            await self._send_event(
+                connection, "agent_skill_action_result", ok=False,
+                request_id=request_id, detail=str(exc),
+            )
+
+    async def _handle_resolve_agent_change_envelope(
+        self, connection: Any, envelope: dict[str, Any]
+    ) -> None:
+        request_id = self._room_request_id(envelope)
+        try:
+            from mona.agent.agent_management import resolve_change_proposal
+            from mona.agent.partners import normalize_agent_id
+
+            agent_id = normalize_agent_id(str(envelope.get("agent_id", "")))
+            proposal_id = envelope.get("proposal_id")
+            token = envelope.get("token")
+            approve = envelope.get("approve")
+            if not isinstance(proposal_id, str) or not isinstance(token, str) or not isinstance(approve, bool):
+                raise ValueError("proposal_id, token and approve are required")
+            proposal = resolve_change_proposal(
+                agent_id, proposal_id, token=token, approve=approve,
+            )
+            await self._send_event(
+                connection, "resolve_agent_change_result", ok=True,
+                agent_id=agent_id, proposal=proposal, request_id=request_id,
+            )
+            event = "agent_instructions_updated" if proposal.get("kind") == "instruction_patch" else "agent_skills_updated"
+            await self._broadcast_agent_event(event, agent_id=agent_id)
+            await self._broadcast_agent_event(
+                "agent_change_proposal_resolved", agent_id=agent_id,
+                proposal_id=proposal_id, status=proposal.get("status"),
+            )
+        except Exception as exc:
+            await self._send_event(
+                connection, "resolve_agent_change_result", ok=False,
+                request_id=request_id, detail=str(exc),
+            )
+
     async def _handle_update_room_envelope(
         self, connection: Any, envelope: dict[str, Any]
     ) -> None:
@@ -3960,6 +4739,15 @@ class WebSocketChannel(BaseChannel):
             await self._send_event(
                 connection, "update_room_result", ok=False,
                 code="not_a_room", detail="chat is not a collaboration room",
+                chat_id=chat_id, request_id=request_id,
+            )
+            return
+        # Hidden rooms (stock-module design §4.4) are system-managed execution
+        # containers — the UI must not rename/re-member them.
+        if conversation.hidden:
+            await self._send_event(
+                connection, "update_room_result", ok=False,
+                code="hidden_room", detail="hidden rooms are system-managed",
                 chat_id=chat_id, request_id=request_id,
             )
             return
@@ -4172,15 +4960,129 @@ class WebSocketChannel(BaseChannel):
         except RoomError as exc:
             await self._send_event(connection, "error", detail=str(exc))
             return True
+        # Keep the structured target order stable even if a resolver or a
+        # legacy caller returns duplicates.  The UI uses this order for
+        # deterministic result placement and the same target must never get
+        # two jobs from one user turn.
+        targets = list(dict.fromkeys(targets))
         partner_targets = [t for t in targets if t != MONA_AGENT_ID]
         mona_targeted = MONA_AGENT_ID in targets
+        from mona.agent import collaboration
+
+        # A single direct mention keeps the legacy direct-job path.  Natural
+        # language collaboration modes require at least two structured
+        # targets; the collaboration planner owns that bound and validation.
+        if len(targets) >= 2:
+            try:
+                collaboration_mode = collaboration.infer_collaboration_mode(
+                    content, targets
+                )
+            except ValueError as exc:
+                await self._send_event(connection, "error", detail=str(exc))
+                return True
+        else:
+            collaboration_mode = collaboration.CollaborationMode.PARALLEL
+
+        # A summary is a coordinated Mona turn.  Without Mona explicitly
+        # targeted, keep the existing independent partner fan-out semantics;
+        # words such as "总结" in a partner-only request must not change it.
+        if (
+            collaboration_mode is collaboration.CollaborationMode.SUMMARY
+            and not mona_targeted
+        ):
+            collaboration_mode = collaboration.CollaborationMode.PARALLEL
+
+        if collaboration_mode is not collaboration.CollaborationMode.PARALLEL:
+            if self._subagent_manager is None:
+                await self._send_event(
+                    connection, "error", detail="agent routing unavailable"
+                )
+                return True
+
+            # Collaboration workflows receive the same room message snapshot
+            # as every other routed turn.  Attachments are included in the
+            # transient goal/task while the original user message is stored
+            # once below and remains the UI-visible representation.
+            collaboration_content = content.strip()
+            if media_paths:
+                attachments = "\n".join(f"- {p}" for p in media_paths)
+                collaboration_content = (
+                    f"{collaboration_content}\n\n[Attachments]\n{attachments}"
+                    if collaboration_content
+                    else f"[Attachments]\n{attachments}"
+                )
+
+            display_content = metadata.get("display_content")
+            if metadata.get("webui"):
+                user_obj: dict[str, Any] = {
+                    "event": "user",
+                    "chat_id": chat_id,
+                    "text": content,
+                }
+                if isinstance(display_content, str) and display_content:
+                    user_obj["display_content"] = display_content
+                if media_paths:
+                    user_obj["media_paths"] = list(media_paths)
+                self._try_append_webui_transcript(chat_id, user_obj)
+
+            extra: dict[str, Any] = {}
+            if media_paths:
+                extra["media"] = list(media_paths)
+            if isinstance(display_content, str) and display_content:
+                extra["display_content"] = display_content
+            if sender_id:
+                extra["sender_id"] = sender_id
+            session.add_message("user", content, **extra)
+            self._session_manager.save(session)
+
+            registry = self._room_agent_registry()
+            from mona.agent.workflow import RunConflictError, WorkflowValidationError
+
+            try:
+                workflow = collaboration.build_collaboration_workflow(
+                    room_id=chat_id,
+                    content=collaboration_content,
+                    ordered_target_ids=targets,
+                    mode=collaboration_mode,
+                )
+                launch_id = await self._subagent_manager.launch_collaboration(
+                    room_id=chat_id,
+                    goal=collaboration_content,
+                    workflow=workflow,
+                    conversation=conversation,
+                    registry=registry,
+                    started_by="user",
+                )
+            except (RunConflictError, WorkflowValidationError, ValueError) as exc:
+                # Startup validation/conflict is a handled routing result. Do
+                # not fall through to the legacy path, which would duplicate
+                # jobs or start Mona a second time.
+                await self._send_event(connection, "error", detail=str(exc))
+                return True
+
+            await self._send_event(
+                connection,
+                "agent_mentions_routed",
+                chat_id=chat_id,
+                agents=list(targets),
+                failures=None,
+                mode=collaboration_mode.value,
+                collaboration_id=launch_id,
+            )
+            return True
+
+        if mona_targeted:
+            metadata["_direct_target_agent_ids"] = list(targets)
+            metadata["_partner_jobs_dispatched"] = []
         if not partner_targets:
             return False
         if self._subagent_manager is None:
             await self._send_event(
                 connection, "error", detail="agent routing unavailable"
             )
-            return True
+            # Mona can still answer its direct mention through the normal
+            # flow; only partner dispatch is unavailable.
+            return not mona_targeted
 
         # Live-echo the user message for webui clients.
         # When Mona is also targeted the normal flow persists and echoes it,
@@ -4221,28 +5123,59 @@ class WebSocketChannel(BaseChannel):
             )
         job_store = self._subagent_manager.job_store_for_room(chat_id)
         registry = self._room_agent_registry()
+        # Capture the room once before launching this @ batch. Each target
+        # receives the same start-of-message snapshot, so a fast Agent A
+        # cannot become an implicit dependency for sibling Agent B.
+        batch_context: str | None = None
+        capture_context = getattr(
+            self._subagent_manager, "capture_room_context_snapshot", None
+        )
+        if callable(capture_context):
+            captured = capture_context(chat_id, registry)
+            if isinstance(captured, str):
+                batch_context = captured
         delegated: list[str] = []
         failures: list[str] = []
         for target in partner_targets:
+            partner_task = (
+                f"{task_text}\n\n[Direct mention scope]\n"
+                f"你是本次被直接 @ 的成员（{target}）。"
+                "只以自己的身份回答分配给你的部分；不要代表、介绍或代答其他被 @ 的成员；"
+                "不要再次委派已经被用户直接 @ 的成员。"
+            )
+            delegate_kwargs: dict[str, Any] = {
+                "agent_id": target,
+                "task": partner_task,
+                "success_criteria": "Address the user's request and report the outcome.",
+                "room_id": chat_id,
+                "requested_by": "user",
+                "origin_channel": "websocket",
+                "origin_chat_id": chat_id,
+                "session_key": f"websocket:{chat_id}",
+                "room_context_snapshot": batch_context,
+                "job_store": job_store,
+                "registry": registry,
+            }
+            # Preserve a caller-provided stable message identity for job
+            # correlation.  Never synthesize one in the routing layer.
+            origin_message_id = metadata.get("origin_message_id")
+            if not isinstance(origin_message_id, str) or not origin_message_id.strip():
+                origin_message_id = metadata.get("message_id")
+            if isinstance(origin_message_id, str) and origin_message_id.strip():
+                delegate_kwargs["origin_message_id"] = origin_message_id
             result = await self._subagent_manager.delegate(
-                agent_id=target,
-                task=task_text,
-                success_criteria="Address the user's request and report the outcome.",
-                room_id=chat_id,
-                requested_by="user",
-                origin_channel="websocket",
-                origin_chat_id=chat_id,
-                session_key=f"websocket:{chat_id}",
-                job_store=job_store,
-                registry=registry,
+                **delegate_kwargs,
             )
             if result.startswith("Cannot delegate"):
                 failures.append(result)
             else:
                 delegated.append(target)
+        if mona_targeted:
+            metadata["_direct_target_agent_ids"] = list(targets)
+            metadata["_partner_jobs_dispatched"] = list(delegated)
         if failures and not delegated:
             await self._send_event(connection, "error", detail="; ".join(failures))
-            return True
+            return not mona_targeted
         await self._send_event(
             connection,
             "agent_mentions_routed",
@@ -4293,6 +5226,17 @@ class WebSocketChannel(BaseChannel):
         run_id = payload.get("id")
         if not isinstance(run_id, str) or not run_id:
             return
+        # Project the run into the room conversation (IM group-chat parity):
+        # the snapshot lands in the webui transcript as a status card and
+        # each agent step's final summary/error posts as that agent's
+        # message. Transcript appends are unconditional — runs triggered by
+        # cron or finished while the room is closed still leave a record.
+        self._try_append_webui_transcript(chat_id, {
+            "event": "workflow_run_updated",
+            "chat_id": chat_id,
+            **payload,
+        })
+        self._post_workflow_step_messages(chat_id, run_id, payload)
         status = payload.get("status")
         # IM list contract (plan 11.5/12.1): run-level status changes move the
         # sessions-list attention state (running / waiting_approval / failed /
@@ -4318,6 +5262,103 @@ class WebSocketChannel(BaseChannel):
                 )
         elif status in ("succeeded", "failed", "cancelled"):
             self._approval_notified.pop(run_id, None)
+            self._run_step_message_state.pop(run_id, None)
+
+    def _post_workflow_step_messages(
+        self, chat_id: str, run_id: str, payload: dict[str, Any]
+    ) -> None:
+        """Post one room-conversation message per newly terminal agent step.
+
+        The observer fires on every run transition; a step's summary (or
+        error) is posted exactly once, authored by the step's agent, so the
+        room reads like an IM group chat (guide 5.3). The per-run state map
+        is seeded on first observation, which keeps steps that finished
+        before a gateway restart from posting twice on resume.
+        """
+        steps = payload.get("steps")
+        if not isinstance(steps, dict):
+            return
+        workflow = payload.get("workflow")
+        step_defs = {
+            step.get("id"): step
+            for step in (
+                workflow.get("steps", []) if isinstance(workflow, dict) else []
+            )
+            if isinstance(step, dict)
+        }
+        seen = self._run_step_message_state.get(run_id)
+        if seen is None:
+            # First observation of this run in-process: seed the tracker and
+            # post nothing. A fresh run is always first seen with every step
+            # queued (the create notify fires before any step executes), so
+            # anything already terminal here finished before a gateway
+            # restart and must never re-post its conversation message.
+            self._run_step_message_state[run_id] = {
+                sid: (state.get("status") if isinstance(state, dict) else None)
+                for sid, state in steps.items()
+            }
+            return
+        for step_id, step_state in steps.items():
+            status = (
+                step_state.get("status") if isinstance(step_state, dict) else None
+            )
+            previous = seen.get(step_id)
+            seen[step_id] = status
+            if status not in ("succeeded", "failed"):
+                continue
+            if previous in ("succeeded", "failed"):
+                continue
+            step_def = step_defs.get(step_id) or {}
+            if step_def.get("type") != "agent":
+                continue
+            if status == "succeeded":
+                output = step_state.get("output")
+                text = output.get("summary") if isinstance(output, dict) else None
+            else:
+                text = step_state.get("error")
+            if not isinstance(text, str) or not text.strip():
+                continue
+            agent_id = step_def.get("agentId")
+            tool_events: list[dict[str, Any]] = []
+            if self._subagent_manager is not None:
+                pop = getattr(self._subagent_manager, "pop_step_tool_events", None)
+                if callable(pop):
+                    tool_events = pop(run_id, step_id) or []
+            asyncio.create_task(
+                self._broadcast_workflow_step_message(
+                    chat_id,
+                    run_id,
+                    agent_id
+                    if isinstance(agent_id, str) and agent_id
+                    else MONA_AGENT_ID,
+                    text,
+                    tool_events=tool_events,
+                )
+            )
+
+    async def _broadcast_workflow_step_message(
+        self,
+        chat_id: str,
+        run_id: str,
+        author_id: str,
+        text: str,
+        tool_events: list[dict[str, Any]] | None = None,
+    ) -> None:
+        """Append a workflow step result to the room transcript and broadcast it."""
+        body: dict[str, Any] = {
+            "event": "message",
+            "chat_id": chat_id,
+            "text": text,
+            "author_id": author_id,
+            "message_type": "message",
+            "workflow_run_id": run_id,
+        }
+        if tool_events:
+            body["tool_events"] = tool_events
+        self._try_append_webui_transcript(chat_id, body)
+        raw = json.dumps(body, ensure_ascii=False)
+        for connection in list(self._subs.get(chat_id, ())):
+            await self._safe_send_to(connection, raw, label=" workflow step ")
 
     async def send_approval_requested(
         self, chat_id: str, run: dict[str, Any], step_ids: list[str]
@@ -4520,7 +5561,7 @@ class WebSocketChannel(BaseChannel):
     async def _handle_run_workflow_envelope(
         self, connection: Any, envelope: dict[str, Any]
     ) -> None:
-        from mona.agent.workflow import RunConflictError
+        from mona.agent.workflow import RunConflictError, validate_run_inputs
 
         ctx = await self._workflow_room_context(
             connection, envelope, result_event="run_workflow_result"
@@ -4529,12 +5570,55 @@ class WebSocketChannel(BaseChannel):
             return
         chat_id, conversation, request_id = ctx
         store = self._subagent_manager.workflow_store_for_room(chat_id)
-        active = store.get_active(chat_id)
+        template_ref = envelope.get("template_ref")
+        if template_ref is not None and not isinstance(template_ref, str):
+            await self._send_event(
+                connection, "run_workflow_result", ok=False,
+                code="invalid_template_ref", detail="template_ref must be a string",
+                chat_id=chat_id, request_id=request_id,
+            )
+            return
+        if isinstance(template_ref, str) and template_ref.strip():
+            # Packaged templates are read-only resources. The loader validates
+            # the package URI and rejects path traversal; room membership is
+            # still checked by WorkflowRunner against the current conversation.
+            try:
+                from mona.agent.pack_templates import load_pack_template
+
+                active = load_pack_template(template_ref)
+            except Exception as exc:
+                await self._send_event(
+                    connection, "run_workflow_result", ok=False,
+                    code="invalid_template", detail=str(exc),
+                    chat_id=chat_id, request_id=request_id,
+                )
+                return
+            if active.room_id != chat_id:
+                await self._send_event(
+                    connection, "run_workflow_result", ok=False,
+                    code="template_room_mismatch",
+                    detail="template does not belong to this room",
+                    chat_id=chat_id, request_id=request_id,
+                )
+                return
+        else:
+            # Backward-compatible path: ordinary rooms still run their active
+            # revision exactly as before.
+            active = store.get_active(chat_id)
         if active is None:
             await self._send_event(
                 connection, "run_workflow_result", ok=False,
                 code="no_active_workflow",
                 detail="room has no active workflow; activate a draft first",
+                chat_id=chat_id, request_id=request_id,
+            )
+            return
+        try:
+            inputs = validate_run_inputs(envelope.get("inputs"))
+        except ValueError as exc:
+            await self._send_event(
+                connection, "run_workflow_result", ok=False,
+                code="invalid_inputs", detail=str(exc),
                 chat_id=chat_id, request_id=request_id,
             )
             return
@@ -4554,14 +5638,24 @@ class WebSocketChannel(BaseChannel):
                     workflow=active,
                     conversation=conversation,
                     registry=self._room_agent_registry(),
+                    inputs=inputs,
                 )
             except RunConflictError:
                 await self.send_workflow_run_updated(chat_id, {
                     "error": "run_conflict",
                     "detail": "room already has an active run",
                 })
-            except Exception:
+            except Exception as exc:
+                # Validation failures land here (the run is never created);
+                # executor crashes additionally flip the persisted run to
+                # failed inside ``WorkflowRunner.run``. Either way the room
+                # must see the failure — a silent log line leaves the panel
+                # showing a phantom "running" state.
                 logger.exception("Workflow run failed for room {}", chat_id)
+                await self.send_workflow_run_updated(chat_id, {
+                    "error": "run_failed",
+                    "detail": str(exc),
+                })
 
         task = asyncio.create_task(_drive())
         self._workflow_tasks[chat_id] = task
@@ -4569,6 +5663,108 @@ class WebSocketChannel(BaseChannel):
         await self._send_event(
             connection, "run_workflow_result", ok=True, chat_id=chat_id,
             request_id=request_id,
+        )
+
+    async def _handle_sync_stock_selection_schedule_envelope(
+        self, connection: Any, envelope: dict[str, Any]
+    ) -> None:
+        """Sync a persisted SelectionStrategy schedule into the shared cron.
+
+        The browser may request a strategy id, but schedule fields are read
+        from the durable service record so a client cannot smuggle arbitrary
+        cron expressions into the system.  Only the hidden stock room can
+        address this command.
+        """
+        from mona.agent.pack_bootstrap import STOCK_ROOM_ID, sync_stock_selection_cron
+
+        ctx = await self._workflow_room_context(
+            connection, envelope, result_event="sync_stock_selection_schedule_result"
+        )
+        if ctx is None:
+            return
+        chat_id, _conversation, request_id = ctx
+        if chat_id != STOCK_ROOM_ID:
+            await self._send_event(
+                connection,
+                "sync_stock_selection_schedule_result",
+                ok=False,
+                code="invalid_room",
+                detail="stock selection schedules must use the hidden stock room",
+                chat_id=chat_id,
+                request_id=request_id,
+            )
+            return
+        strategy_id = envelope.get("strategy_id")
+        if not isinstance(strategy_id, str) or not re.fullmatch(
+            r"^[a-z][a-z0-9_-]{1,63}$", strategy_id.strip()
+        ):
+            await self._send_event(
+                connection,
+                "sync_stock_selection_schedule_result",
+                ok=False,
+                code="invalid_strategy_id",
+                detail="malformed strategy_id",
+                chat_id=chat_id,
+                request_id=request_id,
+            )
+            return
+        strategy_id = strategy_id.strip()
+        try:
+            from mona.services.stock.api import _provider
+            from mona.services.stock.screening import default_screening_service
+
+            service = default_screening_service(
+                provider=_provider(), workspace=self.workspace
+            )
+            strategy = next(
+                (item for item in service.strategies() if item.strategy_id == strategy_id),
+                None,
+            )
+        except Exception as exc:
+            await self._send_event(
+                connection,
+                "sync_stock_selection_schedule_result",
+                ok=False,
+                code="service_unavailable",
+                detail=str(exc),
+                chat_id=chat_id,
+                request_id=request_id,
+            )
+            return
+        if strategy is None:
+            await self._send_event(
+                connection,
+                "sync_stock_selection_schedule_result",
+                ok=False,
+                code="strategy_not_found",
+                detail="saved strategy not found",
+                chat_id=chat_id,
+                request_id=request_id,
+            )
+            return
+        cron_service = getattr(self._subagent_manager, "cron_service", None)
+        schedule = strategy.schedule.model_dump(mode="json")
+        result = sync_stock_selection_cron(cron_service, strategy_id, schedule)
+        ok = result.get("status") in {"registered", "disabled"}
+        payload = dict(result)
+        payload.update(
+            {
+                "ok": ok,
+                "code": result.get("code") if not ok else None,
+                "detail": (
+                    "selection schedule synchronized"
+                    if ok
+                    else "selection schedule unavailable"
+                ),
+                "chat_id": chat_id,
+                "request_id": request_id,
+                "strategy_id": strategy_id,
+            }
+        )
+        await self._send_event(
+            connection,
+            "sync_stock_selection_schedule_result",
+            **payload,
         )
 
     async def _handle_cancel_workflow_run_envelope(
@@ -4652,6 +5848,134 @@ class WebSocketChannel(BaseChannel):
         await self.send_workflow_run_updated(
             chat_id, serialize_run(run_store.load(run_id))
         )
+
+    async def _handle_retry_workflow_step_envelope(
+        self, connection: Any, envelope: dict[str, Any]
+    ) -> None:
+        """Retry one failed agent step and resume the run in the background."""
+        from mona.agent.workflow import (
+            WorkflowNotFoundError,
+            WorkflowRetryError,
+            serialize_run,
+        )
+
+        ctx = await self._workflow_room_context(
+            connection, envelope, result_event="retry_workflow_step_result"
+        )
+        if ctx is None:
+            return
+        chat_id, _conversation, request_id = ctx
+        run_id = envelope.get("run_id")
+        step_id = envelope.get("step_id")
+        if (
+            not isinstance(run_id, str)
+            or not run_id
+            or not isinstance(step_id, str)
+            or not step_id
+        ):
+            await self._send_event(
+                connection,
+                "retry_workflow_step_result",
+                ok=False,
+                code="invalid_request",
+                detail="run_id and step_id are required",
+                chat_id=chat_id,
+                request_id=request_id,
+            )
+            return
+
+        run_store = self._subagent_manager.run_store_for_room(chat_id)
+        try:
+            current = run_store.load(run_id)
+        except (WorkflowNotFoundError, ValueError):
+            current = None
+        if current is None or current.room_id != chat_id:
+            await self._send_event(
+                connection,
+                "retry_workflow_step_result",
+                ok=False,
+                code="run_not_found",
+                detail="run not found in this room",
+                chat_id=chat_id,
+                request_id=request_id,
+            )
+            return
+        if step_id not in current.steps:
+            await self._send_event(
+                connection,
+                "retry_workflow_step_result",
+                ok=False,
+                code="step_not_found",
+                detail="step not found in this run",
+                chat_id=chat_id,
+                request_id=request_id,
+            )
+            return
+
+        runner = self._workflow_runner_for(chat_id)
+        if runner.active_run_for_room(chat_id) is not None:
+            await self._send_event(
+                connection,
+                "retry_workflow_step_result",
+                ok=False,
+                code="run_active",
+                detail="room already has an active workflow run",
+                chat_id=chat_id,
+                request_id=request_id,
+            )
+            return
+        try:
+            run = run_store.retry_step(run_id, step_id)
+        except WorkflowNotFoundError:
+            await self._send_event(
+                connection,
+                "retry_workflow_step_result",
+                ok=False,
+                code="step_not_found",
+                detail="step not found in this run",
+                chat_id=chat_id,
+                request_id=request_id,
+            )
+            return
+        except WorkflowRetryError as exc:
+            await self._send_event(
+                connection,
+                "retry_workflow_step_result",
+                ok=False,
+                code=exc.code,
+                detail=exc.detail,
+                chat_id=chat_id,
+                request_id=request_id,
+            )
+            return
+
+        # Acknowledge the durable reset before starting LLM work.  The queued
+        # snapshot is also pushed immediately so every client can render the
+        # retry attempt without waiting for the first step transition.
+        await self._send_event(
+            connection,
+            "retry_workflow_step_result",
+            ok=True,
+            chat_id=chat_id,
+            request_id=request_id,
+            run_id=run_id,
+            step_id=step_id,
+        )
+        await self.send_workflow_run_updated(chat_id, serialize_run(run))
+
+        async def _resume() -> None:
+            try:
+                await runner.resume(run_id)
+            except Exception:
+                logger.exception(
+                    "Workflow retry resume failed for run {} step {}",
+                    run_id,
+                    step_id,
+                )
+
+        task = asyncio.create_task(_resume())
+        self._workflow_tasks[chat_id] = task
+        task.add_done_callback(lambda _t: self._workflow_tasks.pop(chat_id, None))
 
     async def _handle_resolve_workflow_approval_envelope(
         self, connection: Any, envelope: dict[str, Any]
@@ -4846,6 +6170,24 @@ class WebSocketChannel(BaseChannel):
         if t == "create_direct_conversation":
             await self._handle_create_direct_conversation_envelope(connection, envelope)
             return
+        if t == "agent_config_update":
+            await self._handle_agent_config_update_envelope(connection, envelope)
+            return
+        if t == "agent_instruction_save":
+            await self._handle_agent_instruction_save_envelope(connection, envelope)
+            return
+        if t == "agent_instruction_restore":
+            await self._handle_agent_instruction_restore_envelope(connection, envelope)
+            return
+        if t == "agent_skill_stage":
+            await self._handle_agent_skill_stage_envelope(connection, envelope)
+            return
+        if t == "agent_skill_action":
+            await self._handle_agent_skill_action_envelope(connection, envelope)
+            return
+        if t == "resolve_agent_change":
+            await self._handle_resolve_agent_change_envelope(connection, envelope)
+            return
         if t == "update_room":
             await self._handle_update_room_envelope(connection, envelope)
             return
@@ -4867,8 +6209,14 @@ class WebSocketChannel(BaseChannel):
         if t == "run_workflow":
             await self._handle_run_workflow_envelope(connection, envelope)
             return
+        if t == "sync_stock_selection_schedule":
+            await self._handle_sync_stock_selection_schedule_envelope(connection, envelope)
+            return
         if t == "cancel_workflow_run":
             await self._handle_cancel_workflow_run_envelope(connection, envelope)
+            return
+        if t == "retry_workflow_step":
+            await self._handle_retry_workflow_step_envelope(connection, envelope)
             return
         if t == "resolve_workflow_approval":
             await self._handle_resolve_workflow_approval_envelope(connection, envelope)
@@ -4912,9 +6260,7 @@ class WebSocketChannel(BaseChannel):
                 if not isinstance(raw_doc_paths, list):
                     raw_doc_paths = None
             if raw_doc_paths:
-                from mona.config.paths import get_workspace_path
-
-                workspace = get_workspace_path()
+                workspace = self.workspace
                 for dp in raw_doc_paths:
                     if not isinstance(dp, str) or not dp:
                         continue
@@ -5008,9 +6354,7 @@ class WebSocketChannel(BaseChannel):
             # stored — file bytes live in workspace/uploads/.
             if raw_doc_paths:
                 doc_meta: list[dict[str, str]] = []
-                from mona.config.paths import get_workspace_path as _gwp
-
-                ws = _gwp()
+                ws = self.workspace
                 for dp in raw_doc_paths:
                     if not isinstance(dp, str) or not dp:
                         continue
@@ -5106,6 +6450,11 @@ class WebSocketChannel(BaseChannel):
             "files": files,
         }
         self._try_append_webui_transcript(chat_id, payload)
+        # The room panel is a reference projection rather than a filesystem
+        # scan. Carry the source chat id so it can refresh only when this room
+        # receives an explicit delivery; ordinary global watcher hints remain
+        # chat-less and continue to refresh all Agent panels.
+        await self.send_artifacts_changed(chat_id=chat_id)
         raw = json.dumps(payload, ensure_ascii=False)
         self.logger.debug(
             "deliver_files: sending to {} subscribers for chat_id={}, files={}",
@@ -5113,6 +6462,61 @@ class WebSocketChannel(BaseChannel):
         )
         for connection in conns:
             await self._safe_send_to(connection, raw, label=" ")
+
+    def _attach_file_edit_artifact_refs(
+        self,
+        chat_id: str,
+        edits: list[Any],
+        metadata: dict[str, Any],
+    ) -> bool:
+        """Attach refs only to successful edits inside the owning Agent root."""
+        from mona.agent.artifacts import ArtifactRef
+        from mona.config.paths import get_agent_output_dir
+
+        owner = self._session_artifact_owner(f"websocket:{chat_id}")
+        if owner is None:
+            return False
+        base, default_agent_id = owner
+        agent_id = str(metadata.get("_artifact_agent_id") or default_agent_id)
+        try:
+            root = get_agent_output_dir(base, agent_id).resolve()
+        except (OSError, ValueError):
+            return False
+        room_id: str | None = None
+        if self._session_manager is not None:
+            try:
+                session = self._session_manager.get_or_create(f"websocket:{chat_id}")
+                if session.conversation_metadata.type == "room":
+                    room_id = chat_id
+            except Exception:
+                logger.exception("Cannot resolve file-edit room owner for {}", chat_id)
+        attached = False
+        for item in edits:
+            if not isinstance(item, dict) or item.get("status") != "done":
+                continue
+            if item.get("artifact_ref"):
+                continue
+            raw_path = item.get("absolute_path")
+            if not isinstance(raw_path, str) or not raw_path:
+                continue
+            try:
+                ref = ArtifactRef.for_path(
+                    owner_kind="agent",
+                    owner_id=agent_id,
+                    root=root,
+                    path=Path(raw_path),
+                    created_by_agent_id=agent_id,
+                    session_id=f"websocket:{chat_id}",
+                    room_id=room_id,
+                    job_id=metadata.get("job_id"),
+                )
+            except (OSError, ValueError):
+                # Project sessions and edits outside the owner output are not
+                # session artifacts; their project scan remains authoritative.
+                continue
+            item["artifact_ref"] = ref.model_dump(mode="json")
+            attached = True
+        return attached
 
     async def send(self, msg: OutboundMessage) -> None:
         if msg.metadata.get("_runtime_model_updated"):
@@ -5125,6 +6529,21 @@ class WebSocketChannel(BaseChannel):
         # Snapshot the subscriber set so ConnectionClosed cleanups mid-iteration are safe.
         conns = list(self._subs.get(msg.chat_id, ()))
         if not conns:
+            # Named @ results are durable room messages even when the UI is
+            # closed.  Persist the same wire shape used by the live branch so
+            # the next thread hydration can replay the real author.
+            if msg.metadata.get("_agent_job_result") and msg.content:
+                closed_payload: dict[str, Any] = {
+                    "event": "message",
+                    "chat_id": msg.chat_id,
+                    "text": msg.content,
+                    "author_id": msg.metadata.get("author_id") or MONA_AGENT_ID,
+                    "message_type": msg.metadata.get("message_type") or "message",
+                }
+                job_id = msg.metadata.get("job_id")
+                if isinstance(job_id, str) and job_id:
+                    closed_payload["job_id"] = job_id
+                self._try_append_webui_transcript(msg.chat_id, closed_payload)
             if (
                 msg.metadata.get("_progress")
                 or msg.metadata.get("_file_edit_events")
@@ -5133,10 +6552,28 @@ class WebSocketChannel(BaseChannel):
                 or msg.metadata.get("_goal_status")
                 or msg.metadata.get("_goal_state_sync")
                 or msg.metadata.get("_deliver_files")
+                or msg.metadata.get("_workflow_step_activity")
             ):
                 self.logger.debug("no active subscribers for chat_id={}", msg.chat_id)
             else:
                 self.logger.warning("no active subscribers for chat_id={}", msg.chat_id)
+            return
+        if msg.metadata.get("_workflow_step_activity"):
+            # Live tool-activity stream of a workflow step job. Fanned out to
+            # room subscribers only — persistence happens when the step's
+            # result message is posted (it carries the same payloads).
+            payload: dict[str, Any] = {
+                "event": "workflow_step_activity",
+                "chat_id": msg.chat_id,
+                "run_id": msg.metadata.get("workflow_run_id"),
+                "step_id": msg.metadata.get("workflow_step_id"),
+                "job_id": msg.metadata.get("job_id"),
+                "author_id": msg.metadata.get("author_id") or MONA_AGENT_ID,
+                "tool_events": msg.metadata.get("tool_events") or [],
+            }
+            raw = json.dumps(payload, ensure_ascii=False)
+            for connection in conns:
+                await self._safe_send_to(connection, raw, label=" ")
             return
         if msg.metadata.get("_goal_state_sync"):
             blob = msg.metadata.get("goal_state")
@@ -5168,12 +6605,20 @@ class WebSocketChannel(BaseChannel):
             )
             return
         if msg.metadata.get("_file_edit_events"):
+            edits = msg.metadata["_file_edit_events"]
+            attached = self._attach_file_edit_artifact_refs(
+                msg.chat_id,
+                edits if isinstance(edits, list) else [],
+                msg.metadata,
+            )
             payload: dict[str, Any] = {
                 "event": "file_edit",
                 "chat_id": msg.chat_id,
-                "edits": msg.metadata["_file_edit_events"],
+                "edits": edits,
             }
             self._try_append_webui_transcript(msg.chat_id, payload)
+            if attached:
+                await self.send_artifacts_changed(chat_id=msg.chat_id)
             raw = json.dumps(payload, ensure_ascii=False)
             for connection in conns:
                 await self._safe_send_to(connection, raw, label=" ")
@@ -5199,6 +6644,12 @@ class WebSocketChannel(BaseChannel):
         message_type = msg.metadata.get("message_type")
         if isinstance(message_type, str) and message_type:
             payload["message_type"] = message_type
+        job_id = msg.metadata.get("job_id")
+        if isinstance(job_id, str) and job_id:
+            payload["job_id"] = job_id
+        workflow_run_id = msg.metadata.get("workflow_run_id")
+        if isinstance(workflow_run_id, str) and workflow_run_id:
+            payload["workflow_run_id"] = workflow_run_id
         # Schedule reminders carry a flag so webui clients can fire a native
         # system notification in addition to rendering the message bubble.
         if msg.metadata.get("_schedule_reminder"):
@@ -5423,12 +6874,19 @@ class WebSocketChannel(BaseChannel):
         for connection in conns:
             await self._safe_send_to(connection, raw, label=" workflow_run_updated ")
 
-    async def send_artifacts_changed(self) -> None:
-        """Broadcast a shared-output change hint to every open websocket connection."""
+    async def send_artifacts_changed(self, *, chat_id: str | None = None) -> None:
+        """Broadcast an artifact change hint to every open websocket connection.
+
+        ``chat_id`` is attached to explicit delivery events. A missing id is a
+        global filesystem watcher hint and is intentionally broader.
+        """
         conns = list(self._conn_chats)
         if not conns:
             return
-        raw = json.dumps({"event": "artifacts_changed"}, ensure_ascii=False)
+        payload: dict[str, Any] = {"event": "artifacts_changed"}
+        if chat_id:
+            payload["chat_id"] = chat_id
+        raw = json.dumps(payload, ensure_ascii=False)
         for connection in conns:
             await self._safe_send_to(connection, raw, label=" artifacts_changed ")
 

@@ -146,6 +146,10 @@ def _env_replace(match: re.Match[str]) -> str:
 
 def _migrate_config(data: dict) -> dict:
     """Migrate old config formats to current."""
+    defaults = data.get("agents", {}).get("defaults", {})
+    if defaults.get("maxToolIterations") == 200:
+        defaults["maxToolIterations"] = 100
+
     # Move tools.exec.restrictToWorkspace → tools.restrictToWorkspace
     tools = data.get("tools", {})
     exec_cfg = tools.get("exec", {})

@@ -77,6 +77,12 @@ documents the general tool contract and non-obvious usage patterns.
 - When sending an existing local file, attach it through the message/media mechanism instead of pasting file contents unless the user asked for text.
 - Use `deliver_file` after creating new files (reports, images, data exports, configuration files, etc.) that the user should be aware of. This makes the files appear as clickable cards in the conversation. Do NOT call `deliver_file` for temporary or intermediate files.
 
+### Charts
+
+- Use `chart` for precise numeric charts instead of `generate_image`.
+- Preserve the complete `chart` fenced block returned by the tool in the final reply; the conversation renders it as a chart with PNG, SVG, and CSV export controls.
+- Match the requested chart type. In particular, never replace a scatter plot with a connected line chart.
+
 ## Scheduling and Background Work
 
 - Use `cron` for scheduled reminders or recurring jobs; do not run `mona cron` through `exec`.

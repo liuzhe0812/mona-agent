@@ -171,7 +171,7 @@ class VideoGenerationTool(Tool):
             )
             raw = await download_video_bytes(response.video_url)
             # Store generated videos under the active session workspace so they
-            # appear in the shared output artifact panel for normal sessions.
+            # appear in the active Agent output panel for normal sessions.
             artifact_root = self._active_workspace()
             artifact = store_generated_video_artifact(
                 raw,

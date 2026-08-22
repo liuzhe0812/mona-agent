@@ -5,6 +5,7 @@ Pure-Python SVG generation — no external dependencies. Supports:
     - line   : line chart with optional markers
     - pie    : pie chart
     - area   : area chart (line chart with filled area)
+    - scatter: numeric x/y scatter plot
 
 Input data is a list of (label, value) pairs or a list of (label, [series1, series2, ...])
 for multi-series bar/line charts. Output is an SVG file saved to the workspace
@@ -13,6 +14,7 @@ media directory, returned as an artifact path.
 
 from __future__ import annotations
 
+import json
 import math
 import re
 from datetime import datetime
@@ -34,7 +36,7 @@ from mona.agent.tools.schema import (
 from mona.config.schema import Base
 from mona.utils.helpers import ensure_dir
 
-_CHART_TYPES = ("bar", "line", "pie", "area")
+_CHART_TYPES = ("bar", "line", "pie", "area", "scatter")
 _DEFAULT_WIDTH = 720
 _DEFAULT_HEIGHT = 480
 _DEFAULT_PALETTE = [
@@ -300,6 +302,135 @@ def _render_line(
     return "\n".join(parts)
 
 
+def _normalize_scatter_data(data: list[Any]) -> list[tuple[str, float, float, str]]:
+    """Normalize scatter points into ``(label, x, y, series_name)`` tuples."""
+    points: list[tuple[str, float, float, str]] = []
+    for index, item in enumerate(data):
+        if isinstance(item, dict):
+            if "x" not in item or "y" not in item:
+                raise ValueError("scatter points require numeric x and y fields")
+            label = str(item.get("label", item.get("name", f"P{index + 1}")))
+            series_name = str(item.get("series", "Series 1"))
+            points.append((label, float(item["x"]), float(item["y"]), series_name))
+        elif isinstance(item, (list, tuple)) and len(item) >= 2:
+            if len(item) == 2:
+                label = f"P{index + 1}"
+                x, y = item
+            else:
+                label, x, y = item[:3]
+            points.append((str(label), float(x), float(y), "Series 1"))
+        else:
+            raise ValueError("scatter points must be {label, x, y}, [x, y], or [label, x, y]")
+    return points
+
+
+def _render_scatter(
+    points: list[tuple[str, float, float, str]],
+    width: int,
+    height: int,
+    title: str,
+    x_label: str,
+    y_label: str,
+) -> str:
+    margin_l, margin_r, margin_t, margin_b = 70, 24, 44, 66
+    plot_w = width - margin_l - margin_r
+    plot_h = height - margin_t - margin_b
+    x_values = [point[1] for point in points]
+    y_values = [point[2] for point in points]
+    x_min, x_max = min(x_values), max(x_values)
+    y_min, y_max = min(y_values), max(y_values)
+    x_pad = (x_max - x_min) * 0.06 or 1
+    y_pad = (y_max - y_min) * 0.08 or 1
+    x_min, x_max = x_min - x_pad, x_max + x_pad
+    y_min, y_max = y_min - y_pad, y_max + y_pad
+    x_ticks = _nice_ticks(x_min, x_max, 6)
+    y_ticks = _nice_ticks(y_min, y_max, 6)
+
+    def sx(value: float) -> float:
+        return margin_l + (value - x_min) / (x_max - x_min or 1) * plot_w
+
+    def sy(value: float) -> float:
+        return margin_t + plot_h - (value - y_min) / (y_max - y_min or 1) * plot_h
+
+    series_order = list(dict.fromkeys(point[3] for point in points))
+    series_colors = {
+        name: _DEFAULT_PALETTE[index % len(_DEFAULT_PALETTE)]
+        for index, name in enumerate(series_order)
+    }
+    parts: list[str] = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
+        f'viewBox="0 0 {width} {height}" font-family="sans-serif" font-size="12">'
+    ]
+    if title:
+        parts.append(
+            f'<text x="{width / 2:.0f}" y="22" text-anchor="middle" '
+            f'font-size="16" font-weight="bold">{_escape_xml(title)}</text>'
+        )
+
+    for tick in y_ticks:
+        y = sy(tick)
+        parts.append(
+            f'<line x1="{margin_l}" y1="{y:.1f}" x2="{margin_l + plot_w}" '
+            f'y2="{y:.1f}" stroke="#e5e5e5" stroke-width="1"/>'
+        )
+        parts.append(
+            f'<text x="{margin_l - 8}" y="{y + 4:.1f}" text-anchor="end" '
+            f'fill="#666">{_format_number(tick)}</text>'
+        )
+    for tick in x_ticks:
+        x = sx(tick)
+        parts.append(
+            f'<line x1="{x:.1f}" y1="{margin_t}" x2="{x:.1f}" '
+            f'y2="{margin_t + plot_h}" stroke="#f0f0f0" stroke-width="1"/>'
+        )
+        parts.append(
+            f'<text x="{x:.1f}" y="{margin_t + plot_h + 20}" text-anchor="middle" '
+            f'fill="#666">{_format_number(tick)}</text>'
+        )
+
+    parts.append(
+        f'<line x1="{margin_l}" y1="{margin_t}" x2="{margin_l}" '
+        f'y2="{margin_t + plot_h}" stroke="#333" stroke-width="1"/>'
+    )
+    parts.append(
+        f'<line x1="{margin_l}" y1="{margin_t + plot_h}" x2="{margin_l + plot_w}" '
+        f'y2="{margin_t + plot_h}" stroke="#333" stroke-width="1"/>'
+    )
+    for label, x_value, y_value, series_name in points:
+        color = series_colors[series_name]
+        parts.append(
+            f'<circle cx="{sx(x_value):.1f}" cy="{sy(y_value):.1f}" r="5" '
+            f'fill="{color}" fill-opacity="0.85"><title>{_escape_xml(label)}: '
+            f'({_format_number(x_value)}, {_format_number(y_value)})</title></circle>'
+        )
+
+    if x_label:
+        parts.append(
+            f'<text x="{margin_l + plot_w / 2:.1f}" y="{height - 10}" '
+            f'text-anchor="middle" fill="#333">{_escape_xml(x_label)}</text>'
+        )
+    if y_label:
+        parts.append(
+            f'<text x="16" y="{margin_t + plot_h / 2:.1f}" text-anchor="middle" '
+            f'transform="rotate(-90 16 {margin_t + plot_h / 2:.1f})" '
+            f'fill="#333">{_escape_xml(y_label)}</text>'
+        )
+
+    if len(series_order) > 1:
+        for index, name in enumerate(series_order):
+            lx = margin_l + plot_w - 112
+            ly = margin_t + 8 + index * 18
+            parts.append(
+                f'<circle cx="{lx + 5}" cy="{ly + 5}" r="4" fill="{series_colors[name]}"/>'
+            )
+            parts.append(
+                f'<text x="{lx + 16}" y="{ly + 9}" fill="#333">{_escape_xml(name)}</text>'
+            )
+
+    parts.append("</svg>")
+    return "\n".join(parts)
+
+
 def _render_pie(
     labels: list[str],
     values: list[float],
@@ -387,6 +518,8 @@ def _render_pie(
             StringSchema("Series name (for legend)"),
             description="Optional names for each series (multi-series charts).",
         ),
+        x_label=StringSchema("Optional x-axis label"),
+        y_label=StringSchema("Optional y-axis label"),
         width=IntegerSchema(
             720,
             description="SVG width in pixels (200-2400).",
@@ -414,10 +547,12 @@ class ChartTool(Tool):
 
     name = "chart"
     description = (
-        "Render data as an SVG chart (bar/line/pie/area) and save it as an artifact. "
-        "Input is a list of {label, value} points (or {label, values:[...]} for multi-series). "
-        "Returns the saved SVG file path. Use this for data visualization instead of generate_image "
-        "when you need precise data-driven charts."
+        "Render precise data as a chart (bar/line/pie/area/scatter) and save an SVG artifact. "
+        "Bar, line, pie, and area accept {label, value} points or {label, values:[...]} for "
+        "multi-series. Scatter accepts {label, x, y, series?} points. The result includes a "
+        "```chart JSON block; include that block verbatim in the final answer so the conversation "
+        "renders the chart with PNG, SVG, and CSV export controls. Never substitute a line chart "
+        "when the user requested a scatter plot."
     )
 
     @classmethod
@@ -464,6 +599,8 @@ class ChartTool(Tool):
         data: list[Any],
         title: str = "",
         series_names: list[str] | None = None,
+        x_label: str = "",
+        y_label: str = "",
         width: int | None = None,
         height: int | None = None,
         output: str | None = None,
@@ -477,11 +614,15 @@ class ChartTool(Tool):
             return "Error: data must be a non-empty list"
 
         try:
-            labels, series = _normalize_data(data)
+            scatter_points = _normalize_scatter_data(data) if chart_type == "scatter" else None
+            labels, series = _normalize_data(data) if chart_type != "scatter" else ([], [])
         except (ValueError, TypeError) as e:
             return f"Error: failed to parse data: {e}"
 
-        if not labels:
+        if chart_type == "scatter":
+            if not scatter_points:
+                return "Error: no data points after parsing"
+        elif not labels:
             return "Error: no data points after parsing"
 
         w = width or self.config.default_width
@@ -500,6 +641,8 @@ class ChartTool(Tool):
                 # Pie uses only the first series
                 values = [row[0] for row in series]
                 svg = _render_pie(labels, values, w, h, title)
+            elif chart_type == "scatter":
+                svg = _render_scatter(scatter_points or [], w, h, title, x_label, y_label)
             else:
                 return f"Error: unsupported chart type '{chart_type}'"
         except Exception as e:
@@ -507,7 +650,7 @@ class ChartTool(Tool):
             return f"Error rendering chart: {type(e).__name__}: {e}"
 
         # Resolve output path against the active session workspace so charts
-        # land in ``workspace/output/`` for normal sessions instead of the
+        # land in the active Agent output for normal sessions instead of the
         # global media directory.
         active_ws = self._active_workspace()
         if output:
@@ -540,4 +683,22 @@ class ChartTool(Tool):
         except ValueError:
             display_path = str(out_path)
 
-        return f"Chart saved to: {display_path}\nAbsolute path: {out_path}\nType: {chart_type}, Points: {len(labels)}"
+        chart_spec: dict[str, Any] = {
+            "type": chart_type,
+            "title": title,
+            "data": data,
+        }
+        if series_names:
+            chart_spec["series_names"] = series_names
+        if x_label:
+            chart_spec["x_label"] = x_label
+        if y_label:
+            chart_spec["y_label"] = y_label
+        chart_json = json.dumps(chart_spec, ensure_ascii=False, indent=2)
+        point_count = len(scatter_points or []) if chart_type == "scatter" else len(labels)
+        return (
+            f"Chart saved to: {display_path}\nAbsolute path: {out_path}\n"
+            f"Type: {chart_type}, Points: {point_count}\n\n"
+            "Include this exact block in the final response to render the chart inline:\n"
+            f"```chart\n{chart_json}\n```"
+        )

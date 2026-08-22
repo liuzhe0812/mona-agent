@@ -46,6 +46,7 @@ def _skills_loader(agent_id: str = MONA_AGENT_ID):
     """
     from mona.agent.partners import AgentRegistry
     from mona.agent.skills import BUILTIN_SKILLS_DIR, SkillsLoader
+    from mona.agent.user_config import load_agent_user_config
     from mona.config.paths import get_skills_dir
 
     agent_id = normalize_agent_id(agent_id)
@@ -55,6 +56,7 @@ def _skills_loader(agent_id: str = MONA_AGENT_ID):
     return SkillsLoader(
         workspace=get_skills_dir(),  # workspace arg is legacy; loader uses get_agent_skills_dir() internally
         builtin_skills_dir=BUILTIN_SKILLS_DIR,
+        disabled_skills=set(load_agent_user_config(agent_id).disabled_skills),
         agent_id=agent_id,
         package_skill_dirs=package_dirs,
     )
@@ -115,7 +117,7 @@ class SkillReadTool(Tool):
 
 
 class SkillCreateTool(Tool):
-    """Create a new user skill in the executing agent's private skills dir."""
+    """Stage a new private skill for user approval in the executing agent."""
 
     _scopes = {"memory", "subagent"}
 
@@ -150,10 +152,10 @@ class SkillCreateTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Create a new user skill under the executing agent's private skills dir "
-            "(~/.mona/agents/<agent_id>/skills/<name>/SKILL.md). "
-            "Fails if the skill already exists (use skill_read to inspect first) "
-            "or if the active user skill count has reached the configured cap."
+            "Propose a new private skill for the executing agent. The content is "
+            "validated and staged under that agent only; it is not active until "
+            "the user approves it in Agent management. SKILL.md must include YAML "
+            "frontmatter with matching name and a description."
         )
 
     @property
@@ -178,58 +180,28 @@ class SkillCreateTool(Tool):
             return "Error: name parameter is required."
         if content is None:
             return "Error: content parameter is required."
-        # Sanitize skill name
-        if not all(c.isalnum() or c in "-_" for c in name):
-            return f"Error: invalid skill name '{name}' (only alphanumeric, dash, underscore allowed)."
-        from mona.agent import skill_usage
-        from mona.config.paths import get_agent_skills_dir
-
-        skill_dir = get_agent_skills_dir(self._agent_id) / name
-        skill_file = skill_dir / "SKILL.md"
-        if skill_file.exists():
-            return f"Error: skill '{name}' already exists at {skill_file}."
-
-        # Capacity check: count active user skills before creating. Hold the
-        # lifecycle lock through directory creation + provenance write so two
-        # concurrent Dream forks cannot both pass the cap and overshoot.
         try:
-            with skill_usage._lifecycle_lock(self._agent_id):  # noqa: SLF001 — same-module lock
-                active = skill_usage.list_active_user_skill_names(self._agent_id)
-                if name not in active and len(active) >= self._max_active:
-                    return (
-                        f"Error: active user skill count ({len(active)}) has "
-                        f"reached the cap ({self._max_active}). Archive or "
-                        f"merge existing skills before creating new ones "
-                        f"(use `mona skill prune --apply` or `mona skill archive <name>`)."
-                    )
-                # Only create the directory if it does not yet exist (the
-                # earlier skill_file.exists() check covered SKILL.md; the
-                # directory itself might exist as an empty stub from a failed
-                # prior run — only rmtree if WE created it this call).
-                created_dir = False
-                if not skill_dir.exists():
-                    skill_dir.mkdir(parents=True, exist_ok=True)
-                    created_dir = True
-                try:
-                    skill_file.write_text(content, encoding="utf-8")
-                    # Provenance write is part of the same critical section.
-                    # If it fails, roll back the directory we just created
-                    # so the next attempt starts clean.
-                    skill_usage.record_agent_created(name, self._agent_id)
-                except Exception as provenance_err:
-                    if created_dir:
-                        import shutil as _shutil
-                        try:
-                            _shutil.rmtree(skill_dir)
-                        except OSError:
-                            pass
-                    return (
-                        f"Error creating skill '{name}': provenance write failed "
-                        f"and directory was rolled back: {provenance_err}"
-                    )
-            return f"Successfully created skill '{name}' ({len(content)} chars) at {skill_file}."
+            from mona.agent import skill_usage
+            from mona.agent.agent_management import stage_skill_content
+
+            active = skill_usage.list_active_user_skill_names(self._agent_id)
+            if len(active) >= self._max_active:
+                return (
+                    f"Error: active user skill count ({len(active)}) has reached "
+                    f"the cap ({self._max_active}). Archive or merge existing skills first."
+                )
+            proposal = stage_skill_content(
+                self._agent_id,
+                name=name,
+                content=content,
+                source="agent:skill_create",
+            )
+            return (
+                f"Skill '{name}' is staged for user approval (proposal {proposal['id']}). "
+                "It is not active yet. Ask the user to approve it in this Agent's Skills page."
+            )
         except Exception as e:
-            return f"Error creating skill '{name}': {e}"
+            return f"Error staging skill '{name}': {e}"
 
 
 class SkillScriptRunTool(Tool):
@@ -289,6 +261,15 @@ class SkillScriptRunTool(Tool):
         skill_dir = _skills_loader(self._agent_id).resolve_skill_dir(skill)
         if skill_dir is None:
             return f"Error: skill '{skill}' not found."
+        from mona.agent.agent_management import is_skill_script_enabled
+        from mona.config.paths import get_agent_skills_dir
+
+        private_dir = get_agent_skills_dir(self._agent_id) / skill
+        if skill_dir == private_dir and not is_skill_script_enabled(self._agent_id, skill):
+            return (
+                f"Error: scripts for private skill '{skill}' are disabled. "
+                "The user must explicitly enable them in Agent management after review."
+            )
         script_path = skill_dir / "scripts" / script
         if not script_path.exists():
             return f"Error: script '{script}' not found in skill '{skill}' (expected at {script_path})."
@@ -449,7 +430,7 @@ class SkillAssetCopyTool(Tool):
             return f"Error: asset '{asset}' not found in skill '{skill}' (expected at {asset_file})."
         # Resolve destination (allow absolute or relative to the active
         # session workspace). Using the contextvar-aware helper ensures that
-        # normal sessions copy assets into ``workspace/output/`` rather than
+        # normal sessions copy assets into the active Agent output rather than
         # the workspace root.
         dest_path = Path(dest).expanduser()
         if not dest_path.is_absolute():

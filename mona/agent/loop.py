@@ -7,6 +7,7 @@ import dataclasses
 import os
 import time
 from contextlib import AsyncExitStack, nullcontext, suppress
+from copy import copy
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from pathlib import Path
@@ -44,7 +45,7 @@ from mona.session.webui_turns import (
     mark_webui_session,
 )
 from mona.utils.document import extract_documents
-from mona.utils.helpers import image_placeholder_text
+from mona.utils.helpers import estimate_message_tokens, image_placeholder_text
 from mona.utils.helpers import truncate_text as truncate_text_fn
 from mona.utils.image_generation_intent import image_generation_prompt
 from mona.utils.llm_runtime import LLMRuntime
@@ -270,6 +271,7 @@ class AgentLoop:
         self._pending_turn_latency_ms: dict[str, int] = {}
         self._extra_hooks: list[AgentHook] = hooks or []
 
+        self._base_disabled_skills = set(disabled_skills or [])
         self.context = ContextBuilder(workspace, timezone=timezone, disabled_skills=disabled_skills)
         self.sessions = session_manager or SessionManager(workspace)
         self._webui_turns = WebuiTurnCoordinator(
@@ -298,6 +300,7 @@ class AgentLoop:
             max_iterations=self.max_iterations,
             llm_wall_timeout_for_session=lambda sk: runner_wall_llm_timeout_s(self.sessions, sk),
             session_manager=self.sessions,
+            agent_runtime_resolver=self._resolve_named_agent_runtime,
         )
         self._unified_session = unified_session
         self._max_messages = max_messages if max_messages > 0 else 120
@@ -344,8 +347,17 @@ class AgentLoop:
         )
         self.model_presets: dict[str, ModelPresetConfig] = model_presets or {}
         self._active_preset: str | None = None
+        self._base_model_preset = model_preset
         if model_preset:
             self.set_model_preset(model_preset, publish_update=False)
+        self._mona_config_revision = -1
+        self._mona_effective_config: Any | None = None
+        self._mona_generation_overrides: tuple[float | None, int | None, str | None] = (
+            None,
+            None,
+            None,
+        )
+        self._refresh_mona_user_config()
         self._register_default_tools()
         # Document agent loops (lazy-initialized on first session of each kind).
         # Shares this loop's provider/sessions/bus but has its own tool whitelist
@@ -418,6 +430,67 @@ class AgentLoop:
     def _sync_subagent_runtime_limits(self) -> None:
         """Keep subagent runtime limits aligned with mutable loop settings."""
         self.subagents.max_iterations = self.max_iterations
+
+    def _refresh_mona_user_config(self) -> None:
+        """Apply Mona's mutable settings before the next turn without a restart."""
+        if hasattr(self, "_partner_agent_id"):
+            return
+        from mona.agent.partners import MONA_AGENT_ID, AgentRegistry
+        from mona.agent.user_config import load_agent_user_config, resolve_effective_agent_config
+
+        config = load_agent_user_config(MONA_AGENT_ID)
+        if config.revision == self._mona_config_revision:
+            return
+        definition = AgentRegistry().require(MONA_AGENT_ID)
+        effective = resolve_effective_agent_config(definition, config)
+        self.context.skills.disabled_skills = self._base_disabled_skills | set(effective.disabled_skills)
+        self.subagents.disabled_skills = self._base_disabled_skills | set(effective.disabled_skills)
+        self.tools.set_allowed_tool_names(
+            set(effective.allowed_tools) if effective.allowed_tools is not None else None
+        )
+        self._mona_generation_overrides = (
+            effective.temperature,
+            effective.max_tokens,
+            effective.reasoning_effort,
+        )
+        if effective.model_preset and effective.model_preset != self._active_preset:
+            self.set_model_preset(effective.model_preset, publish_update=False)
+        elif not effective.model_preset and self._base_model_preset and self._active_preset != self._base_model_preset:
+            self.set_model_preset(self._base_model_preset, publish_update=False)
+        self._mona_effective_config = effective
+        self._mona_config_revision = config.revision
+
+    def _resolve_named_agent_runtime(self, definition: Any) -> tuple[LLMProvider, str, Any]:
+        """Resolve a room agent's model and generation overrides for one job.
+
+        The returned provider is job-local when a model preset is selected, so
+        concurrent room agents never mutate Mona's active provider.
+        """
+        from mona.agent.user_config import load_agent_user_config, resolve_effective_agent_config
+
+        effective = resolve_effective_agent_config(
+            definition, load_agent_user_config(definition.id)
+        )
+        provider = self.provider
+        model = self.model
+        if effective.model_preset:
+            try:
+                snapshot = preset_helpers.build_runtime_preset_snapshot(
+                    name=effective.model_preset,
+                    presets=self.model_presets,
+                    provider=copy(self.provider),
+                    loader=self._preset_snapshot_loader,
+                )
+                provider, model = snapshot.provider, snapshot.model
+            except Exception:
+                logger.exception(
+                    "Failed to resolve model preset {} for agent {}",
+                    effective.model_preset,
+                    definition.id,
+                )
+        elif (definition.model or "").strip().lower() != "inherit":
+            model = definition.model
+        return provider, model, effective
 
     def _apply_provider_snapshot(
         self,
@@ -498,24 +571,142 @@ class AgentLoop:
 
         - Session with ``metadata.workspace`` set to an absolute path: that
           path (resolved) — project session keeps its own root.
+        - Room sessions are views over the executing Agent's output; room
+          membership does not create a physical artifact directory.
         - Session with ``metadata.agent_kind`` in ``DOCUMENT_PROFILES``: the
           configured workspace root — dedicated agents keep their existing
           workspace semantics (ppt_projects/, video_projects/).
-        - Default session or no session: ``<workspace>/output`` — the shared
-          artifacts directory for non-project sessions.
+        - Default session or no session: the active Agent's
+          ``agent-workspaces/<agent_id>/output`` directory.
         """
-        from mona.config.paths import get_shared_output_dir
+        from mona.agent.partners import MONA_AGENT_ID
+        from mona.config.paths import get_agent_output_dir
 
-        if session is None:
-            return get_shared_output_dir(self.workspace)
-        ws_override = session.metadata.get("workspace")
-        if isinstance(ws_override, str) and ws_override.strip():
-            return Path(ws_override).expanduser().resolve()
+        base_workspace = self.workspace
+        ws_override = session.metadata.get("workspace") if session is not None else None
+        has_override = isinstance(ws_override, str) and ws_override.strip()
+        if has_override:
+            base_workspace = Path(ws_override).expanduser().resolve()
+            # An explicit workspace belongs to a project/direct session and
+            # must remain the project's own root.  Rooms are the one
+            # exception: their workspace override only selects the base from
+            # which the executing Agent's isolated output is resolved.
+            is_room = (
+                session is not None
+                and session.conversation_metadata.type == "room"
+            )
+            if not is_room:
+                return base_workspace
         from mona.agent.document_loop import DOCUMENT_PROFILES
-        agent_kind = session.metadata.get("agent_kind")
+        agent_kind = session.metadata.get("agent_kind") if session is not None else None
         if isinstance(agent_kind, str) and agent_kind in DOCUMENT_PROFILES:
-            return self.workspace
-        return get_shared_output_dir(self.workspace)
+            return base_workspace
+        owner_id = getattr(self, "_partner_agent_id", MONA_AGENT_ID)
+        return get_agent_output_dir(base_workspace, owner_id)
+
+    def _build_model_history(
+        self,
+        session: Session,
+        *,
+        max_messages: int,
+        max_tokens: int = 0,
+        include_timestamps: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Build model-visible history, preserving room speaker identity.
+
+        Room sessions are shared conversations, so the normal Session replay
+        (which intentionally strips persistence metadata) would collapse all
+        assistant messages into one anonymous speaker. Project only the
+        user-visible room messages and label other agents; direct sessions
+        retain the existing replay path, including tool-call boundaries.
+        """
+        if session.conversation_metadata.type != "room":
+            return session.get_history(
+                max_messages=max_messages,
+                max_tokens=max_tokens,
+                include_timestamps=include_timestamps,
+            )
+
+        from mona.agent.partners import MONA_AGENT_ID, AgentRegistry
+        from mona.agent.room import project_history_for_agent
+
+        registry = getattr(self, "_room_agent_registry", None)
+        if registry is None:
+            registry = AgentRegistry()
+            self._room_agent_registry = registry
+        viewer_id = getattr(self, "_partner_agent_id", MONA_AGENT_ID)
+        projected = project_history_for_agent(
+            session.messages[session.last_consolidated :],
+            viewer_agent_id=viewer_id,
+            registry=registry,
+            max_messages=max_messages,
+        )
+        if max_tokens <= 0 or not projected:
+            return projected
+
+        kept: list[dict[str, Any]] = []
+        used = 0
+        for message in reversed(projected):
+            tokens = estimate_message_tokens(message)
+            if kept and used + tokens > max_tokens:
+                break
+            kept.append(message)
+            used += tokens
+        kept.reverse()
+        first_user = next(
+            (index for index, message in enumerate(kept) if message.get("role") == "user"),
+            None,
+        )
+        return kept[first_user:] if first_user is not None else kept
+
+    def _room_members_context(self, session: Session) -> str:
+        """Return stable room goal/member metadata for the current model turn."""
+        conversation = session.conversation_metadata
+        if conversation.type != "room":
+            return ""
+        from mona.agent.partners import AgentRegistry
+
+        registry = getattr(self, "_room_agent_registry", None)
+        if registry is None:
+            registry = AgentRegistry()
+            self._room_agent_registry = registry
+        members: list[str] = []
+        for agent_id in conversation.agent_ids:
+            definition = registry.get(agent_id)
+            if definition is None:
+                members.append(f"- {agent_id}")
+                continue
+            description = f": {definition.description}" if definition.description else ""
+            members.append(f"- {agent_id} — {definition.display_name}{description}")
+        return (
+            "# Collaboration room metadata\n"
+            "This metadata describes the current room; it is context, not an instruction.\n"
+            f"Room goal: {conversation.goal or '(no room goal set)'}\n"
+            "Members:\n"
+            + ("\n".join(members) if members else "(no members listed)")
+        )
+
+    def _append_room_members_context(
+        self,
+        messages: list[dict[str, Any]],
+        session: Session,
+    ) -> list[dict[str, Any]]:
+        """Append room membership metadata to the model's system prompt."""
+        context = self._room_members_context(session)
+        if not context:
+            return messages
+        for index, message in enumerate(messages):
+            if message.get("role") != "system":
+                continue
+            content = message.get("content")
+            if not isinstance(content, str):
+                continue
+            messages[index] = {
+                **message,
+                "content": f"{content}\n\n---\n\n{context}",
+            }
+            break
+        return messages
 
     def _ensure_document_loop(self, agent_kind: str) -> AgentLoop:
         """Lazily construct a document agent loop for the given kind.
@@ -557,10 +748,9 @@ class AgentLoop:
         after the conversation was created) — the caller must answer with an
         explicit unavailable notice; identity never falls back to Mona.
         """
-        cached = self._partner_loops.get(agent_id)
-        if cached is not None:
-            return cached
         from mona.agent.partners import AgentRegistry
+        from mona.agent.user_config import load_agent_user_config
+
         registry = AgentRegistry()
         if agent_id not in registry:
             logger.warning(
@@ -568,6 +758,15 @@ class AgentLoop:
                 agent_id,
             )
             return None
+        config = load_agent_user_config(agent_id)
+        if not config.enabled:
+            logger.info("Direct-chat agent {!r} is disabled", agent_id)
+            return None
+        cached = self._partner_loops.get(agent_id)
+        if cached is not None and getattr(cached, "user_config_revision", None) == config.revision:
+            return cached
+        if cached is not None:
+            self._partner_loops.pop(agent_id, None)
         from mona.agent.partner_loop import PartnerAgentLoop
         loop = PartnerAgentLoop(
             agent_id=agent_id,
@@ -588,6 +787,10 @@ class AgentLoop:
             unified_session=self._unified_session,
             consolidation_ratio=self._consolidation_ratio,
             session_ttl_minutes=self._session_ttl_minutes,
+            provider_snapshot_loader=self._provider_snapshot_loader,
+            provider_signature=self._provider_signature,
+            model_presets=self.model_presets,
+            preset_snapshot_loader=self._preset_snapshot_loader,
         )
         self._partner_loops[agent_id] = loop
         logger.info("PartnerAgentLoop({}) initialized for direct chat", agent_id)
@@ -611,6 +814,7 @@ class AgentLoop:
             image_generation_provider_configs=self._image_generation_provider_configs,
             video_generation_provider_configs=self._video_generation_provider_configs,
             timezone=self.context.timezone or "UTC",
+            agent_id=getattr(self, "_partner_agent_id", "mona"),
         )
         self._tool_ctx = ctx
         loader = ToolLoader()
@@ -708,7 +912,11 @@ class AgentLoop:
         self, msg: InboundMessage
     ) -> Callable[..., Awaitable[None]]:
         """Build a progress callback that publishes to the message bus."""
-        return build_bus_progress_callback(self.bus, msg)
+        return build_bus_progress_callback(
+            self.bus,
+            msg,
+            agent_id=getattr(self, "_partner_agent_id", "mona"),
+        )
 
     async def _build_retry_wait_callback(
         self, msg: InboundMessage
@@ -759,7 +967,7 @@ class AgentLoop:
         pending_summary: str | None,
     ) -> list[dict[str, Any]]:
         """Build the initial message list for the LLM turn."""
-        return self.context.build_messages(
+        messages = self.context.build_messages(
             history=history,
             current_message=video_generation_prompt(
                 image_generation_prompt(msg.content, msg.metadata),
@@ -774,6 +982,73 @@ class AgentLoop:
             session_metadata=session.metadata,
             message_metadata=msg.metadata,
         )
+        messages = self._append_room_members_context(messages, session)
+        return self._append_mona_direct_mention_boundary(messages, msg, session)
+
+    @staticmethod
+    def _routing_agent_ids(value: Any) -> set[str]:
+        """Normalize router-owned agent ID metadata without trusting its shape."""
+        if not isinstance(value, (list, tuple, set, frozenset)):
+            return set()
+        from mona.agent.partners import normalize_agent_id
+
+        normalized: set[str] = set()
+        for raw in value:
+            if not isinstance(raw, str):
+                continue
+            try:
+                normalized.add(normalize_agent_id(raw))
+            except ValueError:
+                continue
+        return normalized
+
+    def _append_mona_direct_mention_boundary(
+        self,
+        messages: list[dict[str, Any]],
+        msg: InboundMessage,
+        session: Session,
+    ) -> list[dict[str, Any]]:
+        """Scope Mona when partners were already dispatched from this turn.
+
+        The boundary is added only to the ephemeral model input. The original
+        user message and its persisted representation remain unchanged.
+        """
+        if (
+            not messages
+            or getattr(self, "_partner_agent_id", None) is not None
+            or session.conversation_metadata.type != "room"
+        ):
+            return messages
+        from mona.agent.partners import MONA_AGENT_ID
+        from mona.agent.tools.context import (
+            DIRECT_TARGET_AGENT_IDS_META,
+            PARTNER_JOBS_DISPATCHED_META,
+        )
+
+        metadata = msg.metadata if isinstance(msg.metadata, dict) else {}
+        direct_targets = self._routing_agent_ids(
+            metadata.get(DIRECT_TARGET_AGENT_IDS_META)
+        )
+        dispatched_targets = self._routing_agent_ids(
+            metadata.get(PARTNER_JOBS_DISPATCHED_META)
+        )
+        if MONA_AGENT_ID not in direct_targets or not dispatched_targets:
+            return messages
+        first = messages[0]
+        if first.get("role") != "system" or not isinstance(first.get("content"), str):
+            return messages
+        result = list(messages)
+        result[0] = {
+            **first,
+            "content": (
+                f"{first['content']}\n\n"
+                "# Internal direct-mention boundary\n"
+                "本轮用户同时直接 @ 了多个群成员。你当前只以 Mona 身份回答属于 Mona 的部分；"
+                "不要介绍、代答或模拟其他被直接 @ 的成员。已由路由器直接派发的成员正在独立回答，"
+                "不要再次委派这些成员。"
+            ),
+        }
+        return result
 
     async def _dispatch_command_inline(
         self,
@@ -928,12 +1203,16 @@ class AgentLoop:
         from mona.agent.tools.path_utils import get_current_workspace
         effective_ws = get_current_workspace(self.workspace)
         try:
+            temperature, max_tokens, reasoning_effort = self._mona_generation_overrides
             result = await self.runner.run(AgentRunSpec(
                 initial_messages=initial_messages,
                 tools=self.tools,
                 model=self.model,
                 max_iterations=self.max_iterations,
                 max_tool_result_chars=self.max_tool_result_chars,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                reasoning_effort=reasoning_effort,
                 hook=hook,
                 error_message="Sorry, I encountered an error calling the AI model.",
                 concurrent_tools=True,
@@ -958,8 +1237,11 @@ class AgentLoop:
         finally:
             reset_file_states(file_state_token)
         self._last_usage = result.usage
-        if result.stop_reason == "max_iterations":
-            logger.warning("Max iterations ({}) reached", self.max_iterations)
+        if result.stop_reason in {"max_iterations", "loop_detected"}:
+            if result.stop_reason == "max_iterations":
+                logger.warning("Max iterations ({}) reached", self.max_iterations)
+            else:
+                logger.warning("Tool loop detected; forced tool-free finalization")
             # Push final content through stream so streaming channels (e.g. Feishu)
             # update the card instead of leaving it empty.
             if on_stream and on_stream_end:
@@ -1355,7 +1637,7 @@ class AgentLoop:
             "max_tokens": self._replay_token_budget(),
             "include_timestamps": True,
         }
-        history = session.get_history(**_hist_kwargs)
+        history = self._build_model_history(session, **_hist_kwargs)
         current_role = "assistant" if is_subagent else "user"
 
         ws_token = set_current_workspace(self._effective_workspace(session))
@@ -1371,6 +1653,8 @@ class AgentLoop:
                 session_metadata=session.metadata,
                 message_metadata=msg.metadata,
             )
+            messages = self._append_room_members_context(messages, session)
+            messages = self._append_mona_direct_mention_boundary(messages, msg, session)
             t_wall = time.time()
             final_content, _, all_msgs, stop_reason, _ = await self._run_agent_loop(
                 messages, session=session, channel=channel, chat_id=chat_id,
@@ -1419,6 +1703,7 @@ class AgentLoop:
     ) -> OutboundMessage | None:
         """Process a single inbound message and return the response."""
         self._refresh_provider_snapshot()
+        self._refresh_mona_user_config()
 
         if msg.channel == "system":
             return await self._process_system_message(
@@ -1677,7 +1962,7 @@ class AgentLoop:
             "max_tokens": self._replay_token_budget(),
             "include_timestamps": True,
         }
-        ctx.history = ctx.session.get_history(**_hist_kwargs)
+        ctx.history = self._build_model_history(ctx.session, **_hist_kwargs)
         self._webui_turns.capture_title_context(
             ctx.session_key,
             ctx.msg,
@@ -1965,7 +2250,11 @@ class AgentLoop:
             return False
         task_id = msg.metadata.get("subagent_task_id") if isinstance(msg.metadata, dict) else None
         if task_id and any(
-            m.get("injected_event") == "subagent_result" and m.get("subagent_task_id") == task_id
+            (
+                m.get("injected_event") == "subagent_result"
+                and m.get("subagent_task_id") == task_id
+            )
+            or m.get("job_id") == task_id
             for m in session.messages
         ):
             return False

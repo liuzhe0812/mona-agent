@@ -146,6 +146,7 @@ class CronService:
                             ),
                             session_key=j["payload"].get("sessionKey") or j["payload"].get("session_key"),
                             room_id=j["payload"].get("roomId") or j["payload"].get("room_id"),
+                            template_ref=j["payload"].get("templateRef") or j["payload"].get("template_ref"),
                         ),
                         state=CronJobState(
                             next_run_at_ms=j.get("state", {}).get("nextRunAtMs"),
@@ -277,6 +278,7 @@ class CronService:
                         "channelMeta": j.payload.channel_meta,
                         "sessionKey": j.payload.session_key,
                         "roomId": j.payload.room_id,
+                        "templateRef": j.payload.template_ref,
                     },
                     "state": {
                         "nextRunAtMs": j.state.next_run_at_ms,

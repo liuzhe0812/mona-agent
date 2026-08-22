@@ -14,6 +14,20 @@ from mona.agent.partners import MONA_AGENT_ID, normalize_agent_id
 # Default builtin skills directory (relative to this file)
 BUILTIN_SKILLS_DIR = Path(__file__).parent.parent / "skills"
 
+# Platform skills intentionally shared with named agents.  Mona retains access
+# to the complete builtin tree; partner loaders use this exact allowlist.
+PARTNER_VISIBLE_BUILTIN_SKILLS = frozenset({
+    "long-goal",
+    "memory",
+    "my",
+    "summarize",
+    "doc-writing-guide",
+    "docx",
+    "pdf",
+    "html-report",
+    "mona-office",
+})
+
 # Opening ---, YAML body (group 1), closing --- on its own line; supports CRLF.
 _STRIP_SKILL_FRONTMATTER = re.compile(
     r"^---\s*\r?\n(.*?)\r?\n---\s*\r?\n?",
@@ -54,6 +68,10 @@ class SkillsLoader:
         # Same-name skills shadowed by a higher-priority layer get one
         # warning per loader instance (guide 7.3).
         self._shadow_warned: set[str] = set()
+
+    def _is_builtin_visible(self, name: str) -> bool:
+        """Return whether this loader may resolve a platform builtin skill."""
+        return self.agent_id == MONA_AGENT_ID or name in PARTNER_VISIBLE_BUILTIN_SKILLS
 
     def _skill_entries_from_dir(self, base: Path, source: str) -> list[dict[str, str]]:
         if not base.exists():
@@ -130,7 +148,13 @@ class SkillsLoader:
             )
         if self.builtin_skills and self.builtin_skills.exists():
             self._append_with_priority(
-                skills, self._skill_entries_from_dir(self.builtin_skills, "builtin"), seen
+                skills,
+                [
+                    entry
+                    for entry in self._skill_entries_from_dir(self.builtin_skills, "builtin")
+                    if self._is_builtin_visible(entry["name"])
+                ],
+                seen,
             )
 
         if self.disabled_skills:
@@ -173,7 +197,7 @@ class SkillsLoader:
         for package_dir in self.package_skill_dirs:
             if package_dir.name == name and (package_dir / "SKILL.md").exists():
                 return package_dir
-        if self.builtin_skills:
+        if self.builtin_skills and self._is_builtin_visible(name):
             builtin = self.builtin_skills / name
             if (builtin / "SKILL.md").exists():
                 return builtin

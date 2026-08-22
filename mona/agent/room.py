@@ -134,7 +134,10 @@ def project_history_for_agent(
     if max_messages <= 0:
         max_messages = _DEFAULT_MAX_MESSAGES
     projected: list[dict[str, Any]] = []
-    for message in messages[-max_messages:]:
+    # Filter internal/tool records before applying the cap. Session history
+    # can contain many tool calls between two visible turns; slicing first
+    # would otherwise hide the older shared messages that matter to the room.
+    for message in messages:
         if message.get("_ui_only") or message.get("injected_event"):
             continue
         message_type = message.get("message_type") or "message"
@@ -155,4 +158,4 @@ def project_history_for_agent(
         else:
             label = author_label(author, registry)
             projected.append({"role": "assistant", "content": f"[{label}] {content}"})
-    return projected
+    return projected[-max_messages:]

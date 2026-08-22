@@ -20,7 +20,12 @@ from mona.agent.partners import (
 )
 from mona.agent.room import RoomError, require_room, require_room_member
 from mona.agent.tools.base import Tool, tool_parameters
-from mona.agent.tools.context import ContextAware, RequestContext
+from mona.agent.tools.context import (
+    DIRECT_TARGET_AGENT_IDS_META,
+    PARTNER_JOBS_DISPATCHED_META,
+    ContextAware,
+    RequestContext,
+)
 from mona.agent.tools.schema import StringSchema, tool_parameters_schema
 
 if TYPE_CHECKING:
@@ -56,6 +61,14 @@ class DelegateAgentTool(Tool, ContextAware):
             "delegate_origin_message_id",
             default=None,
         )
+        self._direct_target_agent_ids: ContextVar[frozenset[str]] = ContextVar(
+            "delegate_direct_target_agent_ids",
+            default=frozenset(),
+        )
+        self._partner_jobs_dispatched: ContextVar[frozenset[str]] = ContextVar(
+            "delegate_partner_jobs_dispatched",
+            default=frozenset(),
+        )
 
     @classmethod
     def create(cls, ctx: Any) -> Tool:
@@ -67,8 +80,38 @@ class DelegateAgentTool(Tool, ContextAware):
         self._origin_chat_id.set(ctx.chat_id)
         self._session_key.set(ctx.session_key or f"{ctx.channel}:{ctx.chat_id}")
         self._origin_message_id.set(ctx.message_id)
-        # Only visible to the model inside collaboration rooms.
-        self.is_available = getattr(self._tool_ctx, "room_id", None) is not None
+        # These are router-owned, per-turn hints.  Normalize only well-formed
+        # string IDs and replace the previous values on every request so a
+        # later turn cannot inherit an earlier turn's dispatch set.
+        metadata = ctx.metadata if isinstance(ctx.metadata, dict) else {}
+        self._direct_target_agent_ids.set(
+            self._read_agent_ids(metadata.get(DIRECT_TARGET_AGENT_IDS_META))
+        )
+        self._partner_jobs_dispatched.set(
+            self._read_agent_ids(metadata.get(PARTNER_JOBS_DISPATCHED_META))
+        )
+        # Only visible to the model inside collaboration rooms. Once the
+        # router has already launched direct partner jobs for this turn, hide
+        # delegation from Mona so it cannot start a redundant tool-call turn.
+        self.is_available = (
+            getattr(self._tool_ctx, "room_id", None) is not None
+            and not self._partner_jobs_dispatched.get()
+        )
+
+    @staticmethod
+    def _read_agent_ids(value: Any) -> frozenset[str]:
+        """Read router metadata without trusting its shape or its values."""
+        if not isinstance(value, (list, tuple, set, frozenset)):
+            return frozenset()
+        normalized: set[str] = set()
+        for raw in value:
+            if not isinstance(raw, str):
+                continue
+            try:
+                normalized.add(normalize_agent_id(raw))
+            except ValueError:
+                continue
+        return frozenset(normalized)
 
     @property
     def name(self) -> str:
@@ -106,6 +149,11 @@ class DelegateAgentTool(Tool, ContextAware):
             return f"Invalid agent id {agent_id!r}."
         if target == requested_by:
             return f"Cannot delegate to {target!r}: an agent cannot delegate to itself."
+        if target in self._partner_jobs_dispatched.get():
+            return (
+                f"Not delegated: agent {target!r} was already directly dispatched "
+                "for this turn; no duplicate job was created."
+            )
         if not task.strip():
             return "Cannot delegate: task must be non-empty."
         if not success_criteria.strip():

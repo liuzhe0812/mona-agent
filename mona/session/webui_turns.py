@@ -197,6 +197,8 @@ async def publish_turn_run_status(bus: MessageBus, msg: InboundMessage, status: 
 def build_bus_progress_callback(
     bus: MessageBus,
     msg: InboundMessage,
+    *,
+    agent_id: str | None = None,
 ) -> Callable[..., Awaitable[None]]:
     """Return the bus progress callback for agent runtime events."""
 
@@ -210,6 +212,8 @@ def build_bus_progress_callback(
         reasoning_end: bool = False,
     ) -> None:
         meta = dict(msg.metadata or {})
+        if agent_id:
+            meta["_artifact_agent_id"] = agent_id
         meta["_progress"] = True
         meta["_tool_hint"] = tool_hint
         if reasoning:

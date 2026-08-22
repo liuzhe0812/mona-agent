@@ -6,6 +6,8 @@ from typing import Any, Awaitable, Callable
 
 from loguru import logger
 
+from mona.agent.artifacts import ArtifactRef
+from mona.agent import run_artifacts
 from mona.agent.tools.base import Tool, tool_parameters
 from mona.agent.tools.context import ContextAware, RequestContext
 from mona.agent.tools.path_utils import get_current_workspace, resolve_workspace_path
@@ -61,6 +63,10 @@ class DeliverFileTool(Tool, ContextAware):
             Path(workspace).expanduser() if workspace is not None else get_workspace_path()
         )
         self._restrict_to_workspace = restrict_to_workspace
+        self._agent_id = "mona"
+        self._workflow_run_id: str | None = None
+        self._job_id: str | None = None
+        self._room_id: str | None = None
         self._default_channel: ContextVar[str] = ContextVar(
             "deliver_file_default_channel", default=""
         )
@@ -74,15 +80,23 @@ class DeliverFileTool(Tool, ContextAware):
     @classmethod
     def create(cls, ctx: Any) -> Tool:
         send_callback = ctx.bus.publish_outbound if ctx.bus else None
-        return cls(
+        tool = cls(
             send_callback=send_callback,
             workspace=ctx.workspace,
             restrict_to_workspace=ctx.config.restrict_to_workspace,
         )
+        tool._agent_id = str(getattr(ctx, "agent_id", "mona") or "mona")
+        tool._workflow_run_id = getattr(ctx, "workflow_run_id", None)
+        tool._job_id = getattr(ctx, "job_id", None)
+        tool._room_id = getattr(ctx, "room_id", None)
+        return tool
 
     def set_context(self, ctx: RequestContext) -> None:
         self._default_channel.set(ctx.channel)
         self._default_chat_id.set(ctx.chat_id)
+        self._session_key = ctx.session_key
+        if ctx.metadata.get("room_id"):
+            self._room_id = str(ctx.metadata["room_id"])
         pending_files = ctx.metadata.get(DELIVER_FILES_PENDING_META)
         self._pending_files.set(pending_files if isinstance(pending_files, list) else None)
 
@@ -142,6 +156,31 @@ class DeliverFileTool(Tool, ContextAware):
             except ValueError:
                 display_path = resolved.as_posix()
 
+            owner_kind = "product" if (
+                self._workflow_run_id
+                and active_workspace.name == self._workflow_run_id
+                and active_workspace.parent.name == "stock_projects"
+            ) else "agent"
+            owner_id = self._workflow_run_id if owner_kind == "product" else self._agent_id
+            try:
+                ref = ArtifactRef.for_path(
+                    owner_kind=owner_kind,
+                    owner_id=owner_id or self._agent_id,
+                    product="stock" if owner_kind == "product" else None,
+                    root=active_workspace,
+                    path=resolved,
+                    created_by_agent_id=self._agent_id,
+                    session_id=getattr(self, "_session_key", None),
+                    room_id=self._room_id,
+                    job_id=self._job_id,
+                    workflow_run_id=self._workflow_run_id,
+                )
+                ref_payload = ref.model_dump(mode="json")
+                if self._job_id:
+                    run_artifacts.append(self._job_id, ref)
+            except (OSError, ValueError):
+                return "Error: file is outside the active artifact owner"
+
             files.append({
                 "path": display_path,
                 "absolute_path": str(resolved),
@@ -150,6 +189,7 @@ class DeliverFileTool(Tool, ContextAware):
                 "size_human": _human_size(size),
                 "mime": _mime_from_ext(resolved),
                 "summary": summary,
+                "artifact_ref": ref_payload,
             })
 
         if not files:

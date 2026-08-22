@@ -68,6 +68,64 @@ def get_shared_output_dir(workspace: str | Path) -> Path:
     return ensure_dir(root / "output")
 
 
+def get_agent_workspace_dir(workspace: str | Path, agent_id: str) -> Path:
+    """Return the durable workspace owned by one agent.
+
+    Sessions are views over this directory; they never get a physical copy.
+    Keep the identifier validation in ``normalize_agent_id`` so callers cannot
+    turn an agent id into a path escape.
+    """
+    from mona.agent.partners import normalize_agent_id
+
+    root = Path(workspace).expanduser().resolve()
+    return ensure_dir(root / "agent-workspaces" / normalize_agent_id(agent_id))
+
+
+def get_agent_output_dir(workspace: str | Path, agent_id: str) -> Path:
+    """Return ``<workspace>/agent-workspaces/<agent_id>/output``."""
+    return ensure_dir(get_agent_workspace_dir(workspace, agent_id) / "output")
+
+
+_STORAGE_ID_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789-_")
+
+
+def get_stock_projects_dir(workspace: str | Path) -> Path:
+    """Return the product-owned stock run root."""
+    candidate = Path(workspace).expanduser().resolve()
+    if candidate.name == "stock_projects":
+        return ensure_dir(candidate)
+    if candidate.parent.name == "stock_projects":
+        return ensure_dir(candidate.parent)
+    return ensure_dir(candidate / "stock_projects")
+
+
+def get_stock_project_dir(workspace: str | Path, run_id: str) -> Path:
+    """Return one run-scoped stock product directory."""
+    if not run_id or any(ch not in _STORAGE_ID_CHARS for ch in run_id):
+        raise ValueError(f"Invalid stock run id {run_id!r}")
+    candidate = Path(workspace).expanduser().resolve()
+    if candidate.name == run_id and candidate.parent.name == "stock_projects":
+        return ensure_dir(candidate)
+    return ensure_dir(get_stock_projects_dir(candidate) / run_id)
+
+
+def get_runtime_dir() -> Path:
+    """Return the runtime state root outside user-visible workspaces."""
+    return get_runtime_subdir("runtime")
+
+
+def get_agent_jobs_dir() -> Path:
+    return ensure_dir(get_runtime_dir() / "agent-jobs")
+
+
+def get_workflows_dir() -> Path:
+    return ensure_dir(get_runtime_dir() / "workflows")
+
+
+def get_workflow_runs_dir() -> Path:
+    return ensure_dir(get_runtime_dir() / "workflow-runs")
+
+
 def is_default_workspace(workspace: str | Path | None) -> bool:
     """Return whether a workspace resolves to mona's default workspace path."""
     current = Path(workspace).expanduser() if workspace is not None else Path.home() / ".mona" / "workspace"
@@ -106,7 +164,7 @@ def get_agent_memory_dir(agent_id: str) -> Path:
 
     Stores the agent's MEMORY.md, SOUL.md, USER.md, AGENTS.md, history.jsonl.
     """
-    return ensure_dir(get_agent_dir(agent_id) / "memory")
+    return _get_agent_resource_dir(agent_id, "memory")
 
 
 def get_agent_skills_dir(agent_id: str) -> Path:
@@ -115,7 +173,23 @@ def get_agent_skills_dir(agent_id: str) -> Path:
     Holds skills the agent created itself; package skills stay inside the
     read-only agent package and are resolved via ``AgentRegistry``.
     """
-    return ensure_dir(get_agent_dir(agent_id) / "skills")
+    return _get_agent_resource_dir(agent_id, "skills")
+
+
+def _get_agent_resource_dir(agent_id: str, name: str) -> Path:
+    """Resolve an agent-private directory, preserving Mona's legacy fallback."""
+    from mona.agent.partners import MONA_AGENT_ID, normalize_agent_id
+
+    agent = normalize_agent_id(agent_id)
+    path = get_agent_dir(agent) / name
+    try:
+        ensure_dir(path)
+        next(path.iterdir(), None)  # Windows can allow stat but deny child access.
+        return path
+    except PermissionError:
+        if agent != MONA_AGENT_ID:
+            raise
+        return ensure_dir(get_data_dir() / name)
 
 
 def get_legacy_memory_dir() -> Path:

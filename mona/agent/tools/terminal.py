@@ -97,16 +97,16 @@ def _resolve_terminal_session(preferred_id: str | None) -> str | None:
         for s in sessions:
             if s.get("id") == preferred_id:
                 return preferred_id
-    # Fall back to the first connected ssh/local session.
+    # Fall back to the first connected terminal session.
     for s in sessions:
         stype = (s.get("sessionType") or s.get("session_type") or "").lower()
         status = (s.get("status") or "").lower()
-        if stype in ("ssh", "local") and "connected" in status:
+        if stype in ("ssh", "local", "desktop") and "connected" in status:
             return s.get("id")
-    # Last resort: any ssh/local session regardless of status.
+    # Last resort: any terminal session regardless of status.
     for s in sessions:
         stype = (s.get("sessionType") or s.get("session_type") or "").lower()
-        if stype in ("ssh", "local"):
+        if stype in ("ssh", "local", "desktop"):
             return s.get("id")
     return None
 
@@ -221,7 +221,7 @@ class TerminalTaskTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Manage a terminal maintenance task on the user's current SSH session. "
+            "Manage a terminal maintenance task on the user's current SSH or desktop session. "
             "Workflow: start (user goal + the COMPLETE step plan, inspect → change → "
             "verify) → execute each step with terminal_exec/terminal_upload (exactly "
             "one action per step, in order) → finish (diagnosis + summary) or fail "
@@ -341,11 +341,11 @@ class TerminalTaskTool(Tool):
         ),
         command=StringSchema("Shell command to execute as this step"),
         task_id=StringSchema(
-            "Maintenance task ID from terminal_task (required for SSH sessions)",
+            "Maintenance task ID from terminal_task (required for SSH or desktop sessions)",
             nullable=True,
         ),
         step_id=StringSchema(
-            "Step ID within the task — each step executes exactly one command (required for SSH sessions)",
+            "Step ID within the task — each step executes exactly one command (required for SSH or desktop sessions)",
             nullable=True,
         ),
         timeout_secs=IntegerSchema(
@@ -379,7 +379,7 @@ class TerminalExecTool(Tool):
     def description(self) -> str:
         return (
             "Execute one shell command as a step of the active maintenance task on the "
-            "user's current SSH terminal session. Requires task_id and step_id from "
+            "user's current SSH or desktop terminal session. Requires task_id and step_id from "
             "terminal_task — a step can only be executed once and the task plan cannot "
             "be extended after start, so run the planned steps in order. Returns "
             "structured results: exit_code, stdout, stderr, "
@@ -579,7 +579,7 @@ class TerminalUploadTool(Tool):
     def description(self) -> str:
         return (
             "Upload a file to the remote server as a change step of the active maintenance "
-            "task (SSH sessions). Requires task_id and step_id from terminal_task. "
+            "task (SSH or desktop sessions). Requires task_id and step_id from terminal_task. "
             "Use encoding='text' (default) for text files, encoding='base64' for binary data. "
             "Reuses the existing SSH connection, no additional authentication needed. "
             "After an upload you must add and run a verify step confirming the file works "

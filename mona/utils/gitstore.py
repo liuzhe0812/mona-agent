@@ -318,6 +318,26 @@ class GitStore:
                 return c, diff
         return None
 
+    def read_file_at_commit(self, short_sha: str, file_path: str) -> str | None:
+        """Return one tracked file from a commit without modifying the worktree."""
+        if not self.is_initialized() or Path(file_path).is_absolute() or ".." in Path(file_path).parts:
+            return None
+        try:
+            from dulwich.repo import Repo
+
+            sha = self._resolve_sha(short_sha)
+            if not sha:
+                return None
+            with Repo(str(self._workspace)) as repo:
+                commit = repo[sha]
+                tree = repo[commit.tree]
+                _mode, blob_sha = tree[file_path.encode("utf-8")]
+                blob = repo[blob_sha]
+                return blob.data.decode("utf-8", errors="replace")
+        except Exception:
+            logger.exception("Git read_file_at_commit failed for {}", file_path)
+            return None
+
     # -- restore ---------------------------------------------------------------
 
     def revert(self, commit: str) -> str | None:

@@ -14,12 +14,14 @@ DocumentAgentLoop) so the partner agent itself executes the turn:
 
 from __future__ import annotations
 
+from copy import copy
 from typing import Any
 
 from loguru import logger
 
 from mona.agent.loop import AgentLoop
 from mona.agent.partners import AgentRegistry, normalize_agent_id
+from mona.agent.user_config import load_agent_user_config, resolve_effective_agent_config
 
 
 class PartnerAgentLoop(AgentLoop):
@@ -44,16 +46,24 @@ class PartnerAgentLoop(AgentLoop):
         # any other value pins this partner to its own model for every turn
         # (LLMRuntime reads ``self.model`` per call).
         definition = self._agent_registry.require(self._partner_agent_id)
+        self._user_config = load_agent_user_config(self._partner_agent_id)
+        self._effective_config = resolve_effective_agent_config(definition, self._user_config)
+        self.user_config_revision = self._user_config.revision
         manifest_model = (definition.model or "").strip()
-        if manifest_model and manifest_model.lower() != "inherit":
+        preset_name = self._effective_config.model_preset
+        available_presets = kwargs.get("model_presets") or {}
+        if preset_name and preset_name in available_presets:
+            kwargs["model_preset"] = preset_name
+        elif manifest_model and manifest_model.lower() != "inherit":
             kwargs["model"] = manifest_model
         super().__init__(**kwargs)
+        self._apply_user_generation_overrides()
         from mona.agent.context import ContextBuilder
 
         self.context = ContextBuilder(
             self.workspace,
             timezone=self.context.timezone,
-            disabled_skills=None,
+            disabled_skills=self._effective_config.disabled_skills,
             agent_id=self._partner_agent_id,
             agent_registry=self._agent_registry,
         )
@@ -84,6 +94,34 @@ class PartnerAgentLoop(AgentLoop):
             model=self.model,
         )
 
+    def _apply_user_generation_overrides(self) -> None:
+        """Apply per-agent generation values without mutating Mona's provider."""
+        config = self._effective_config
+        if (
+            config.temperature is None
+            and config.max_tokens is None
+            and config.reasoning_effort is None
+        ):
+            return
+        try:
+            provider = copy(self.provider)
+            provider.generation = copy(self.provider.generation)
+            if config.temperature is not None:
+                provider.generation.temperature = config.temperature
+            if config.max_tokens is not None:
+                provider.generation.max_tokens = config.max_tokens
+            if config.reasoning_effort is not None and hasattr(provider.generation, "reasoning_effort"):
+                provider.generation.reasoning_effort = config.reasoning_effort
+            self.provider = provider
+            self.runner.provider = provider
+            self.subagents.provider = provider
+            # ``PartnerAgentLoop`` applies its override before it replaces the
+            # memory helpers below; a base loop may already have one.
+            if hasattr(self, "consolidator"):
+                self.consolidator.provider = provider
+        except Exception:
+            logger.exception("Failed to apply runtime overrides for {}", self._partner_agent_id)
+
     @property
     def partner_agent_id(self) -> str:
         return self._partner_agent_id
@@ -99,7 +137,6 @@ class PartnerAgentLoop(AgentLoop):
         from mona.agent.tools.context import ToolContext
         from mona.agent.tools.loader import ToolLoader
 
-        definition = self._agent_registry.require(self._partner_agent_id)
         ctx = ToolContext(
             config=self.tools_config,
             workspace=str(self.workspace),
@@ -114,7 +151,7 @@ class PartnerAgentLoop(AgentLoop):
             ctx,
             self.tools,
             scope="subagent",
-            tool_allowlist=definition.tool_allowlist,
+            tool_allowlist=self._effective_config.allowed_tools,
         )
         logger.info(
             "PartnerAgentLoop({}) registered {} tools: {}",

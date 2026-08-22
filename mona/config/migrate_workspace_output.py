@@ -1,11 +1,9 @@
-"""One-time migration: move loose artifacts into ``<workspace>/output/``.
+"""Migrate legacy workspace artifacts into the final ownership layout.
 
-Per shared-output-workspace-execution-plan §8.2-§8.3, after global resources
-have moved out of the workspace root, any remaining top-level files and
-directories that are NOT in the reserved set must be moved into
-``<workspace>/output/`` so that the workspace root stays clean and the
-shared output directory is the single source of artifacts for ordinary
-sessions.
+The historical loose-output pass is retained as an interruption-safe first
+step for old installations. ``migrate_final_artifact_layout`` then moves
+those entries to Agent-owned output, product-owned stock runs and Mona's
+runtime state; all new code targets the latter layout.
 
 Reserved top-level entries that stay at the workspace root:
 
@@ -38,7 +36,15 @@ from mona.config.migrate_global import (
     _now_iso,
     _save_manifest,
 )
-from mona.config.paths import get_shared_output_dir, get_workspace_path
+from mona.config.paths import (
+    get_agent_output_dir,
+    get_agent_jobs_dir,
+    get_shared_output_dir,
+    get_stock_projects_dir,
+    get_workspace_path,
+    get_workflow_runs_dir,
+    get_workflows_dir,
+)
 
 # Reserved top-level entries that must NOT be moved into output/.
 RESERVED_TOP_LEVEL: frozenset[str] = frozenset({
@@ -51,7 +57,154 @@ RESERVED_TOP_LEVEL: frozenset[str] = frozenset({
     ".git",            # user/version control
     ".gitignore",      # user/version control
     ".mona",           # mona internal state
+    "rooms",           # legacy room artifacts, handled by final migration
+    "agent-workspaces",  # final Agent-owned artifact roots
+    "stock_projects",  # final product-owned artifact roots
+    "agent-jobs",      # legacy runtime state, handled by final migration
+    "workflows",       # legacy runtime state, handled by final migration
+    "workflow-runs",   # legacy runtime state, handled by final migration
 })
+
+FINAL_LAYOUT_SECTION = "artifact_layout"
+
+
+def _ensure_layout_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
+    """Add the final-layout section without invalidating old manifests."""
+    section = manifest.setdefault(
+        FINAL_LAYOUT_SECTION,
+        {
+            "migrated": [],
+            "skipped": [],
+            "conflicts": [],
+            "errors": [],
+            "manual_required": False,
+        },
+    )
+    return section
+
+
+def _move_layout_entry(
+    src: Path,
+    dest: Path,
+    *,
+    manifest: dict[str, Any],
+    description: str,
+) -> None:
+    _move_with_conflict_backup(
+        src,
+        dest,
+        manifest=manifest,
+        section=FINAL_LAYOUT_SECTION,
+        description=description,
+    )
+
+
+def migrate_final_artifact_layout(workspace: str | Path | None = None) -> bool:
+    """Move legacy output/room/runtime entries into final owner roots.
+
+    This is intentionally a second, separately recorded pass after the old
+    loose-output migration. Existing installations may already have
+    ``workspace/output`` populated; moving its children keeps the migration
+    resumable while making the final layout the only new-write contract.
+    """
+    manifest = _load_or_create_manifest()
+    section = _ensure_layout_manifest(manifest)
+    if manifest.get("artifact_layout_completed") and not section.get("errors"):
+        return True
+    # A prior attempt may have recorded a transient filesystem error while
+    # still (incorrectly) setting the completion flag. Preserve the failed
+    # attempt for audit, but allow a later startup to retry the unresolved
+    # sources instead of short-circuiting forever.
+    if section.get("errors"):
+        section.setdefault("error_history", []).extend(section["errors"])
+        section["errors"] = []
+
+    workspace = Path(workspace).expanduser().resolve() if workspace is not None else get_workspace_path()
+    agent_output = get_agent_output_dir(workspace, "mona")
+    stock_root = get_stock_projects_dir(workspace)
+
+    # Runtime state is not an artifact owner and must leave the workspace.
+    runtime_sources = {
+        workspace / "agent-jobs": get_agent_jobs_dir(),
+        workspace / "workflows": get_workflows_dir(),
+        workspace / "workflow-runs": get_workflow_runs_dir(),
+        workspace / "output" / "agent-jobs": get_agent_jobs_dir(),
+        workspace / "output" / "workflows": get_workflows_dir(),
+        workspace / "output" / "workflow-runs": get_workflow_runs_dir(),
+    }
+    for source, target in runtime_sources.items():
+        if source.exists():
+            _move_layout_entry(
+                source,
+                target,
+                manifest=manifest,
+                description=f"runtime/{source.name}",
+            )
+
+    # Stock runs are product-owned and keep their run id as the boundary.
+    legacy_stock = workspace / "output" / "stock"
+    if legacy_stock.is_dir():
+        for run_dir in list(legacy_stock.iterdir()):
+            if run_dir.name.startswith("."):
+                continue
+            try:
+                target = stock_root / run_dir.name
+                _move_layout_entry(
+                    run_dir,
+                    target,
+                    manifest=manifest,
+                    description=f"stock/{run_dir.name}",
+                )
+            except OSError:
+                logger.exception("Failed to prepare stock migration for {}", run_dir)
+
+    # A legacy room directory has no trustworthy owner metadata at this
+    # layer. Preserve it under Mona's output with an explicit legacy marker;
+    # never guess that it belongs to another Agent.
+    legacy_rooms = workspace / "rooms"
+    if legacy_rooms.is_dir():
+        legacy_target_root = agent_output / "legacy-rooms"
+        for room_dir in list(legacy_rooms.iterdir()):
+            _move_layout_entry(
+                room_dir,
+                legacy_target_root / room_dir.name,
+                manifest=manifest,
+                description=f"legacy-rooms/{room_dir.name}",
+            )
+
+    # Every remaining old shared-output entry becomes Mona-owned. The old
+    # output directory itself is left in place as an empty tombstone so an
+    # interrupted older process cannot recreate state under it silently.
+    legacy_output = workspace / "output"
+    if legacy_output.is_dir():
+        for entry in list(legacy_output.iterdir()):
+            if entry.name in {"stock", "agent-jobs", "workflows", "workflow-runs"}:
+                continue
+            _move_layout_entry(
+                entry,
+                agent_output / entry.name,
+                manifest=manifest,
+                description=f"agent/mona/{entry.name}",
+            )
+
+    has_errors = bool(section.get("errors"))
+    manifest["artifact_layout_completed"] = not has_errors
+    # Keep the legacy completion flags for callers and old manifests, but
+    # only claim the overall migration complete after this final pass.
+    if not has_errors and manifest.get("global_resources_completed") and manifest.get("loose_artifacts_completed"):
+        manifest["completed_at"] = _now_iso()
+        manifest["completed"] = True
+    elif has_errors:
+        manifest["completed_at"] = None
+        manifest["completed"] = False
+    _save_manifest(manifest)
+    if has_errors:
+        logger.warning(
+            "Final artifact layout migration completed with {} error(s); see {}",
+            len(section["errors"]),
+            _manifest_path(),
+        )
+    return not has_errors
 
 
 def _is_reserved(entry: Path) -> bool:
@@ -111,7 +264,7 @@ def _move_loose_entry(
     )
 
 
-def migrate_workspace_output() -> bool:
+def migrate_workspace_output(workspace: str | Path | None = None) -> bool:
     """Move loose top-level workspace entries into ``<workspace>/output/``.
 
     Returns True if the loose-artifact migration is complete (already or
@@ -131,7 +284,7 @@ def migrate_workspace_output() -> bool:
         logger.debug("Loose artifact migration already complete, skipping")
         return True
 
-    workspace = get_workspace_path()
+    workspace = Path(workspace).expanduser().resolve() if workspace is not None else get_workspace_path()
     output_dir = get_shared_output_dir(workspace)
 
     logger.info(
@@ -192,7 +345,11 @@ def migrate_workspace_output() -> bool:
     return not has_errors
 
 
-def run_startup_migrations(*, skip_loose_artifacts: bool = False) -> None:
+def run_startup_migrations(
+    workspace: str | Path | None = None,
+    *,
+    skip_loose_artifacts: bool = False,
+) -> None:
     """Run the consolidated startup migration sequence.
 
     Per shared-output-workspace-execution-plan §8.1, the order is:
@@ -214,13 +371,13 @@ def run_startup_migrations(*, skip_loose_artifacts: bool = False) -> None:
     """
     from mona.utils.helpers import sync_global_templates
 
-    workspace = get_workspace_path()
+    workspace = Path(workspace).expanduser().resolve() if workspace is not None else get_workspace_path()
     workspace.mkdir(parents=True, exist_ok=True)
 
     # 2. Global resource migration (move semantics + manifest).
     try:
         from mona.config.migrate_global import migrate_global_resources
-        migrate_global_resources()
+        migrate_global_resources(workspace)
     except Exception:
         logger.exception("Global resource migration failed; continuing startup")
 
@@ -245,12 +402,20 @@ def run_startup_migrations(*, skip_loose_artifacts: bool = False) -> None:
     except Exception:
         logger.exception("Failed to create shared output dir; continuing startup")
 
-    # 5. Loose artifact migration (one-time, idempotent).
+    # 5. Legacy loose-artifact migration (kept as an interruption-safe first
+    # pass for existing manifests).
     if not skip_loose_artifacts:
         try:
-            migrate_workspace_output()
+            migrate_workspace_output(workspace)
         except Exception:
             logger.exception("Loose artifact migration failed; continuing startup")
+        # 6. Final ownership migration. This pass is what establishes the
+        # current contract: Agent output, product runs and runtime state are
+        # physically separate.
+        try:
+            migrate_final_artifact_layout(workspace)
+        except Exception:
+            logger.exception("Final artifact layout migration failed; continuing startup")
 
 
 def restore_workspace_output_migration(manifest: dict[str, Any] | None = None) -> int:
@@ -269,9 +434,13 @@ def restore_workspace_output_migration(manifest: dict[str, Any] | None = None) -
     if manifest is None:
         return 0
 
+    # Final-layout moves are the second hop (output → Agent/product/runtime).
+    # Reverse them first so the original loose-artifact destinations exist
+    # before the first migration pass is rolled back.
+    restored = restore_final_artifact_layout(manifest)
+
     loose = manifest.get("loose_artifacts") or {}
     migrated = loose.get("migrated") or []
-    restored = 0
     for entry in migrated:
         src = Path(entry["dest"])
         dest = Path(entry["src"])
@@ -286,4 +455,38 @@ def restore_workspace_output_migration(manifest: dict[str, Any] | None = None) -
             restored += 1
         except Exception:
             logger.exception("Failed to restore {} → {}", src, dest)
+    return restored
+
+
+def restore_final_artifact_layout(manifest: dict[str, Any] | None = None) -> int:
+    """Reverse successful final-layout moves without overwriting user data.
+
+    Records are processed newest-first because later moves may have used a
+    directory created by an earlier move. Existing sources are treated as a
+    conflict and left untouched; restoration is therefore safe to retry.
+    """
+    if manifest is None:
+        manifest = _load_or_create_manifest()
+    if not manifest:
+        return 0
+    section = manifest.get(FINAL_LAYOUT_SECTION) or {}
+    restored = 0
+    for entry in reversed(section.get("migrated") or []):
+        src = Path(entry.get("src", ""))
+        dest = Path(entry.get("dest", ""))
+        if not src or not dest or not dest.exists():
+            continue
+        if src.exists():
+            continue
+        try:
+            src.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(dest), str(src))
+            restored += 1
+        except Exception:
+            logger.exception("Failed to restore final artifact {} → {}", dest, src)
+    if restored:
+        manifest["artifact_layout_completed"] = False
+        manifest["completed"] = False
+        manifest["completed_at"] = None
+        _save_manifest(manifest)
     return restored

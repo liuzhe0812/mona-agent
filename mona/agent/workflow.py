@@ -33,6 +33,7 @@ from typing import Any, Awaitable, Callable, Literal
 from loguru import logger
 from pydantic import Field, field_validator, model_validator
 
+from mona.agent import run_artifacts
 from mona.agent.partners import (
     AgentRegistry,
     ConversationMetadata,
@@ -115,6 +116,16 @@ _WORKFLOW_ID_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789-_")
 # Cap on the upstream digest injected into a downstream step's task (guide
 # 7.6: structured summaries only, never full tool traces).
 MAX_UPSTREAM_DIGEST_CHARS = 4000
+# Debate and referee stock agents must read the upstream artifacts themselves.
+# Key this by agent identity rather than generic step IDs so another workflow
+# can still use a step named ``bull``/``bear``/``referee`` normally.
+_ARTIFACT_ONLY_DOWNSTREAM_AGENT_IDS = frozenset(
+    {
+        "com.mona.stock-bull-researcher",
+        "com.mona.stock-bear-researcher",
+        "com.mona.stock-referee",
+    }
+)
 
 
 class WorkflowValidationError(ValueError):
@@ -131,6 +142,15 @@ class WorkflowStorageError(RuntimeError):
 
 class WorkflowTransitionError(ValueError):
     """Raised when a compare-and-set run transition is not allowed."""
+
+
+class WorkflowRetryError(WorkflowTransitionError):
+    """Raised when a failed workflow step cannot be retried."""
+
+    def __init__(self, code: str, detail: str):
+        super().__init__(detail)
+        self.code = code
+        self.detail = detail
 
 
 class RunConflictError(RuntimeError):
@@ -195,6 +215,8 @@ class WorkflowStep(Base):
     expected_output: str = ""
     message: str = ""  # approval prompt shown to the user
     depends_on: list[str] = Field(default_factory=list)
+    # Canvas node coordinates ({"x": .., "y": ..}); None = auto-layout.
+    position: dict[str, float] | None = None
 
     @field_validator("id")
     @classmethod
@@ -286,6 +308,9 @@ class StepRun(Base):
     """Per-step state inside a WorkflowRun (guide 5.5)."""
 
     status: StepStatus = STEP_STATUS_QUEUED
+    # Number of durable execution attempts for this step.  Missing values in
+    # older run files load as the initial attempt.
+    attempt: int = Field(default=1, ge=1)
     job_id: str | None = None
     started_at: datetime | None = None
     finished_at: datetime | None = None
@@ -317,6 +342,10 @@ class WorkflowRun(Base):
     started_at: datetime = Field(default_factory=datetime.now)
     finished_at: datetime | None = None
     steps: dict[str, StepRun] = Field(default_factory=dict)
+    # Run-input snapshot (stock-module design 4.2). Written once at create
+    # time and never mutated afterwards; legacy run files without the field
+    # load as empty inputs without a schema_version bump.
+    inputs: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("schema_version")
     @classmethod
@@ -458,8 +487,10 @@ class WorkflowStore:
 
     @staticmethod
     def default_dir(workspace: Path) -> Path:
-        """Default workflows directory for a workspace (guide 6.1)."""
-        return Path(workspace) / "workflows"
+        """Default workflow-definition directory in Mona runtime state."""
+        from mona.config.paths import get_workflows_dir
+
+        return get_workflows_dir()
 
     def _path(self, room_id: str) -> Path:
         return self.workflows_dir / f"{_room_id_path_fragment(room_id)}.json"
@@ -595,8 +626,10 @@ class WorkflowRunStore:
 
     @staticmethod
     def default_dir(workspace: Path) -> Path:
-        """Default runs directory for a workspace (guide 6.1)."""
-        return Path(workspace) / "workflow-runs"
+        """Default workflow-run directory in Mona runtime state."""
+        from mona.config.paths import get_workflow_runs_dir
+
+        return get_workflow_runs_dir()
 
     def _path(self, run_id: str) -> Path:
         if not run_id or any(ch not in _WORKFLOW_ID_CHARS for ch in run_id):
@@ -618,6 +651,7 @@ class WorkflowRunStore:
         workflow: WorkflowDefinition,
         trigger_type: str = TRIGGER_MANUAL,
         started_by: str = "user",
+        inputs: dict[str, Any] | None = None,
     ) -> WorkflowRun:
         """Persist a new ``queued`` run with the full workflow snapshot."""
         self.runs_dir.mkdir(parents=True, exist_ok=True)
@@ -633,6 +667,7 @@ class WorkflowRunStore:
             trigger_type=trigger_type,  # type: ignore[arg-type]
             started_by=started_by,
             steps={step.id: StepRun() for step in workflow.steps},
+            inputs=inputs or {},
         )
         self._save(run)
         return run
@@ -754,6 +789,70 @@ class WorkflowRunStore:
                 step.output = output
             if error is not None:
                 step.error = error
+            self._save(run)
+            return run
+
+    def retry_step(self, run_id: str, step_id: str) -> WorkflowRun:
+        """Queue one failed agent step for a new attempt.
+
+        Only a terminal ``failed`` run and its failed agent step are eligible.
+        Successful steps and unrelated failed branches are left untouched;
+        every queued/skipped branch is made runnable again so the normal
+        dependency scheduler can decide what is safe to execute.
+        """
+        with self._lock_for(run_id):
+            run = self.load(run_id)
+            if run.status != RUN_STATUS_FAILED:
+                code = "retry_in_progress" if run.status in {
+                    RUN_STATUS_QUEUED,
+                    RUN_STATUS_RUNNING,
+                    RUN_STATUS_WAITING_APPROVAL,
+                } else "run_not_retryable"
+                raise WorkflowRetryError(
+                    code,
+                    f"run {run_id} is {run.status!r}; only failed runs can retry",
+                )
+            step = run.steps.get(step_id)
+            if step is None:
+                raise WorkflowNotFoundError(f"run {run_id} has no step {step_id!r}")
+            definition = run.workflow.step_map().get(step_id)
+            if definition is None:
+                raise WorkflowNotFoundError(f"run {run_id} has no step {step_id!r}")
+            if definition.type != STEP_TYPE_AGENT:
+                raise WorkflowRetryError(
+                    "step_not_retryable",
+                    f"step {step_id!r} is not an agent step",
+                )
+            if step.status != STEP_STATUS_FAILED:
+                raise WorkflowRetryError(
+                    "step_not_retryable",
+                    f"step {step_id!r} is {step.status!r}; only failed steps can retry",
+                )
+
+            reset_ids = {
+                candidate.id
+                for candidate in run.workflow.steps
+                if run.steps[candidate.id].status
+                in {STEP_STATUS_QUEUED, STEP_STATUS_SKIPPED}
+            }
+            reset_ids.add(step_id)
+
+            for candidate_id in reset_ids:
+                candidate = run.steps[candidate_id]
+                candidate.status = STEP_STATUS_QUEUED
+                candidate.job_id = None
+                candidate.started_at = None
+                candidate.finished_at = None
+                candidate.error = None
+                candidate.output = None
+                candidate.approval_token = None
+                candidate.approval_expires_at = None
+                candidate.approval_decision = None
+                candidate.approval_resolved_at = None
+                candidate.approval_resolved_by = None
+            step.attempt += 1
+            run.status = RUN_STATUS_QUEUED
+            run.finished_at = None
             self._save(run)
             return run
 
@@ -888,39 +987,79 @@ StepExecutor = Callable[
 # Called after every persisted run change (UI projection / events).
 RunObserver = Callable[[WorkflowRun], None]
 
+# Optional per-run bootstrap hook (stock-module T21): invoked once right
+# after the run snapshot is created and before the first step executes —
+# e.g. building the evidence bundle for ``run.inputs["symbols"]``. Raising
+# fails the run (queued -> failed) and propagates to the caller, so a
+# missing prerequisite never silently produces an evidence-free run.
+RunInitializer = Callable[[WorkflowRun], Awaitable[None]]
+
 
 def compose_step_task(
     step: WorkflowStep,
     upstream: dict[str, dict[str, Any] | None],
     *,
     max_chars: int = MAX_UPSTREAM_DIGEST_CHARS,
+    inputs: dict[str, Any] | None = None,
 ) -> str:
     """Build the downstream task text with a capped upstream digest.
 
     Only structured summaries and artifact references flow downstream —
-    never full tool traces (guide 7.6).
+    never full tool traces (guide 7.6). Run inputs (stock-module design
+    4.2) ride along as a read-only ``[Run inputs]`` section; the model
+    receives them as context and can never modify the stored snapshot.
     """
     task = step.task
-    if not upstream:
+    sections: list[str] = []
+    if upstream:
+        lines: list[str] = []
+        for step_id, output in upstream.items():
+            summary = ""
+            artifacts: list[str] = []
+            if output:
+                raw_summary = output.get("summary")
+                summary = raw_summary if isinstance(raw_summary, str) else ""
+                raw_artifacts = output.get("artifacts")
+                if isinstance(raw_artifacts, list):
+                    from mona.agent.artifacts import coerce_artifact_ref
+
+                    for raw in raw_artifacts:
+                        ref = coerce_artifact_ref(raw)
+                        artifacts.append(ref.uri if ref is not None else str(raw))
+            entry = (
+                f"### {step_id}"
+                if step.agent_id in _ARTIFACT_ONLY_DOWNSTREAM_AGENT_IDS
+                else f"### {step_id}\n{summary}"
+            ).rstrip()
+            if artifacts:
+                entry += "\nArtifacts: " + ", ".join(artifacts)
+            lines.append(entry)
+        sections.append("[Upstream results]\n" + "\n\n".join(lines))
+    if inputs:
+        sections.append("[Run inputs]\n" + json.dumps(inputs, ensure_ascii=False))
+    if not sections:
         return task
-    lines: list[str] = []
-    for step_id, output in upstream.items():
-        summary = ""
-        artifacts: list[str] = []
-        if output:
-            raw_summary = output.get("summary")
-            summary = raw_summary if isinstance(raw_summary, str) else ""
-            raw_artifacts = output.get("artifacts")
-            if isinstance(raw_artifacts, list):
-                artifacts = [str(a) for a in raw_artifacts]
-        entry = f"### {step_id}\n{summary}".rstrip()
-        if artifacts:
-            entry += "\nArtifacts: " + ", ".join(artifacts)
-        lines.append(entry)
-    digest = "\n\n".join(lines)
+    digest = "\n\n".join(sections)
     if len(digest) > max_chars:
         digest = digest[: max_chars - 1] + "…"
-    return f"{task}\n\n[Upstream results]\n{digest}"
+    return f"{task}\n\n{digest}"
+
+
+MAX_RUN_INPUTS_CHARS = 16_384
+
+
+def validate_run_inputs(raw: Any) -> dict[str, Any]:
+    """Validate caller-supplied run inputs: a JSON object within a size cap.
+
+    Returns ``{}`` for ``None`` so existing call sites stay unchanged.
+    """
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ValueError("workflow inputs must be a JSON object")
+    if len(json.dumps(raw, ensure_ascii=False)) > MAX_RUN_INPUTS_CHARS:
+        raise ValueError("workflow inputs exceed the 16 KiB limit")
+    return raw
 
 
 class WorkflowRunner:
@@ -939,12 +1078,14 @@ class WorkflowRunner:
         run_store: WorkflowRunStore,
         step_executor: StepExecutor,
         observer: RunObserver | None = None,
+        run_initializer: RunInitializer | None = None,
         max_parallel: int = 2,
         approval_ttl_seconds: float = 72 * 3600,
     ):
         self._runs = run_store
         self._execute = step_executor
         self._observer = observer
+        self._run_initializer = run_initializer
         self._max_parallel = max(1, max_parallel)
         # Approvals outlive this TTL are failed on resolution or at startup
         # recovery, so a forgotten gate cannot pause a run forever.
@@ -1070,6 +1211,7 @@ class WorkflowRunner:
         started_by: str = "user",
         conversation: ConversationMetadata | None = None,
         registry: AgentRegistry | None = None,
+        inputs: dict[str, Any] | None = None,
     ) -> WorkflowRun:
         """Run a workflow to a terminal state (or waiting_approval pause).
 
@@ -1087,12 +1229,39 @@ class WorkflowRunner:
                 workflow=workflow,
                 trigger_type=trigger_type,
                 started_by=started_by,
+                inputs=inputs,
             )
+            self._notify(run)
+            if self._run_initializer is not None:
+                try:
+                    await self._run_initializer(run)
+                except Exception:
+                    logger.exception(
+                        "Workflow run initializer failed for run {}", run.id
+                    )
+                    failed = self._runs.transition(run.id, RUN_STATUS_FAILED)
+                    self._notify(failed)
+                    raise
             cancel_event = asyncio.Event()
             self._cancel_events[run.id] = cancel_event
             self._active[room_id] = run.id
             try:
                 return await self._drive(run, cancel_event)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # A crashing drive loop must not strand the persisted run in
+                # a non-terminal state — the room UI keys off the stored
+                # status and would show the workflow as "running" forever.
+                logger.exception("Workflow run {} crashed", run.id)
+                try:
+                    crashed = self._runs.transition(run.id, RUN_STATUS_FAILED)
+                    self._notify(crashed)
+                except Exception:
+                    logger.exception(
+                        "Failed to mark workflow run {} failed", run.id
+                    )
+                raise
             finally:
                 self._cancel_events.pop(run.id, None)
                 self._active.pop(room_id, None)
@@ -1117,8 +1286,46 @@ class WorkflowRunner:
             if cancel_event.is_set():
                 run = self._cancel_remaining(run.id, "Cancelled by user.")
                 return current()
-            ready = [sid for sid in layer
-                     if current().steps[sid].status == STEP_STATUS_QUEUED]
+            state = current()
+            ready: list[str] = []
+            blocked: list[tuple[str, list[str]]] = []
+            for sid in layer:
+                if state.steps[sid].status != STEP_STATUS_QUEUED:
+                    continue
+                dependencies = step_map[sid].depends_on
+                dependency_states = {
+                    dep: state.steps[dep].status for dep in dependencies
+                }
+                failed_dependencies = [
+                    dep
+                    for dep, status in dependency_states.items()
+                    if status
+                    in {
+                        STEP_STATUS_FAILED,
+                        STEP_STATUS_SKIPPED,
+                        STEP_STATUS_CANCELLED,
+                    }
+                ]
+                if failed_dependencies:
+                    blocked.append((sid, failed_dependencies))
+                elif all(
+                    status == STEP_STATUS_SUCCEEDED
+                    for status in dependency_states.values()
+                ):
+                    ready.append(sid)
+            for sid, dependencies in blocked:
+                try:
+                    runs.transition_step(
+                        run.id,
+                        sid,
+                        STEP_STATUS_SKIPPED,
+                        error=(
+                            "upstream step(s) cannot proceed: "
+                            + ", ".join(dependencies)
+                        ),
+                    )
+                except WorkflowTransitionError:
+                    pass
             if not ready:
                 # A resumed run can re-encounter a sibling approval that is
                 # still waiting: pause again instead of walking past it.
@@ -1168,7 +1375,20 @@ class WorkflowRunner:
 
         state = current()
         if state.status == RUN_STATUS_RUNNING:
-            runs.transition(run.id, RUN_STATUS_SUCCEEDED)
+            if any(step.status == STEP_STATUS_FAILED for step in state.steps.values()):
+                runs.transition(run.id, RUN_STATUS_FAILED)
+            elif any(
+                step.status
+                in {
+                    STEP_STATUS_QUEUED,
+                    STEP_STATUS_RUNNING,
+                    STEP_STATUS_WAITING_APPROVAL,
+                }
+                for step in state.steps.values()
+            ):
+                runs.transition(run.id, RUN_STATUS_FAILED)
+            else:
+                runs.transition(run.id, RUN_STATUS_SUCCEEDED)
         self._notify(current())
         return current()
 
@@ -1194,11 +1414,14 @@ class WorkflowRunner:
                 runs.transition_step(run.id, step_id, STEP_STATUS_RUNNING)
                 self._notify(self._runs.load(run.id))
                 upstream = outputs_of(step.depends_on)
+                run_artifacts.begin(run.id, step_id)
                 try:
                     summary = await self._execute(run, step, upstream)
                 except asyncio.CancelledError:
+                    run_artifacts.discard(run.id, step_id)
                     raise
                 except StepExecutionError as exc:
+                    run_artifacts.discard(run.id, step_id)
                     failed[step_id] = str(exc)
                     try:
                         runs.transition_step(
@@ -1209,6 +1432,7 @@ class WorkflowRunner:
                     self._notify(self._runs.load(run.id))
                     return
                 except Exception as exc:  # executor bugs fail the step, not the run loop
+                    run_artifacts.discard(run.id, step_id)
                     logger.exception("Workflow step {} of run {} crashed", step_id, run.id)
                     failed[step_id] = str(exc)
                     try:
@@ -1224,7 +1448,10 @@ class WorkflowRunner:
                         run.id,
                         step_id,
                         STEP_STATUS_SUCCEEDED,
-                        output={"summary": summary, "artifacts": []},
+                        output={
+                            "summary": summary,
+                            "artifacts": run_artifacts.collect(run.id, step_id),
+                        },
                     )
                 except WorkflowTransitionError:
                     pass

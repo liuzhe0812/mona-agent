@@ -147,7 +147,7 @@ class AgentDefaults(Base):
     context_block_limit: int | None = None
     temperature: float = 0.1
     fallback_models: list[FallbackCandidate] = Field(default_factory=list)
-    max_tool_iterations: int = 200
+    max_tool_iterations: int = 100
     max_concurrent_subagents: int = Field(default=1, ge=1)
     max_tool_result_chars: int = 16_000
     provider_retry_mode: Literal["standard", "persistent"] = "standard"
@@ -193,9 +193,15 @@ class AgentsConfig(Base):
 class ProviderConfig(Base):
     """LLM provider configuration."""
 
+    # Display name for user-created Cindy-compatible chat providers.
+    display_name: str | None = None
     api_key: str | None = None
     api_base: str | None = None
     model: str | None = None  # Last-used model for this provider
+    # Chat settings only: an empty value follows the provider catalog defaults;
+    # a populated list is the user's explicit visible-model selection.
+    enabled_models: list[str] | None = None
+    discovered_models: list[dict[str, Any]] | None = None
     extra_headers: dict[str, str] | None = None  # Custom headers (e.g. APP-Code for AiHubMix)
     extra_body: dict[str, Any] | None = None  # Extra fields merged into every request body
 
@@ -250,6 +256,44 @@ class ProvidersConfig(Base):
     qianfan: ProviderConfig = Field(default_factory=ProviderConfig)  # Qianfan (百度千帆)
     nvidia: ProviderConfig = Field(default_factory=ProviderConfig)  # NVIDIA NIM (nvapi- keys)
     zen: ProviderConfig = Field(default_factory=ProviderConfig)  # OpenCode Zen (free, no API key)
+    # Cindy presets use hyphenated IDs, so they live in a keyed map instead of
+    # becoming one Python field per preset.
+    cindy: dict[str, ProviderConfig] = Field(default_factory=dict)
+
+    def get_provider_config(self, name: str) -> ProviderConfig | None:
+        """Return a built-in or Cindy chat provider config by public ID."""
+        dynamic = self.cindy.get(name)
+        if isinstance(dynamic, ProviderConfig):
+            return dynamic
+        value = getattr(self, name, None)
+        if isinstance(value, ProviderConfig):
+            return value
+        return None
+
+
+class StockConfig(Base):
+    """Stock module configuration (design §13).
+
+    The watchlist is user data stored under ``~/.mona/stock/`` and never
+    enters ``config.json``.
+    """
+
+    # On by default (design §13): the module must be reachable out of the
+    # box — a shipped feature hidden behind a switch reads as "not built".
+    # Users who never want it flip the toggle once in Settings → Stock.
+    enabled: bool = True
+    # Automatic daily review is opt-in; enabling the stock module only makes
+    # the workspace and manual research features available.
+    auto_review_enabled: bool = False
+    review_time: str = Field(
+        default="15:30", pattern=r"^([01]\d|2[0-3]):[0-5]\d$"
+    )  # Asia/Shanghai, daily review trigger time
+    # Daily-review coverage (design §11): all watchlist instruments or only
+    # focus-marked ones — never silently widens the analysis scope.
+    review_scope: Literal["all", "focus"] = "focus"
+    push_notification: bool = True  # desktop notification for review digest
+    push_email: bool = False  # optional email delivery for review digest
+    quote_refresh_sec: int = Field(default=30, ge=5, le=3600)
 
 
 class HeartbeatConfig(Base):
@@ -432,6 +476,7 @@ class Config(BaseSettings):
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     services: ServicesConfig = Field(default_factory=ServicesConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
+    stock: StockConfig = Field(default_factory=StockConfig)
     model_presets: dict[str, ModelPresetConfig] = Field(
         default_factory=dict,
         validation_alias=AliasChoices("modelPresets", "model_presets"),
@@ -485,14 +530,19 @@ class Config(BaseSettings):
         preset: ModelPresetConfig | None = None,
     ) -> tuple["ProviderConfig | None", str | None]:
         """Match provider config and its registry name. Returns (config, spec_name)."""
-        from mona.providers.registry import PROVIDERS, find_by_name
+        from mona.providers.registry import (
+            PROVIDERS,
+            custom_provider_spec,
+            find_by_name,
+            is_custom_provider_name,
+        )
 
         resolved = preset or self.resolve_preset()
         forced = resolved.provider
         if forced != "auto":
             spec = find_by_name(forced)
             if spec:
-                p = getattr(self.providers, spec.name, None)
+                p = self.providers.get_provider_config(spec.name)
                 return (p, spec.name) if p else (None, None)
             return None, None
 
@@ -505,16 +555,34 @@ class Config(BaseSettings):
             kw = kw.lower()
             return kw in model_lower or kw.replace("-", "_") in model_normalized
 
+        dynamic_specs = []
+        for name, provider_config in self.providers.cindy.items():
+            if not is_custom_provider_name(name):
+                continue
+            keywords = [name]
+            if provider_config.display_name:
+                keywords.append(provider_config.display_name)
+            keywords.extend(provider_config.enabled_models or [])
+            keywords.extend(
+                str(item.get("id"))
+                for item in provider_config.discovered_models or []
+                if isinstance(item, dict) and item.get("id")
+            )
+            spec = custom_provider_spec(name, keywords=tuple(dict.fromkeys(keywords)))
+            if spec is not None:
+                dynamic_specs.append(spec)
+        registry_specs = PROVIDERS + tuple(dynamic_specs)
+
         # Explicit provider prefix wins — prevents `github-copilot/...codex` matching openai_codex.
-        for spec in PROVIDERS:
-            p = getattr(self.providers, spec.name, None)
+        for spec in registry_specs:
+            p = self.providers.get_provider_config(spec.name)
             if p and model_prefix and normalized_prefix == spec.name:
                 if spec.is_oauth or spec.is_local or spec.is_direct or p.api_key or not spec.api_key_required:
                     return p, spec.name
 
         # Match by keyword (order follows PROVIDERS registry)
-        for spec in PROVIDERS:
-            p = getattr(self.providers, spec.name, None)
+        for spec in registry_specs:
+            p = self.providers.get_provider_config(spec.name)
             if p and any(_kw_matches(kw) for kw in spec.keywords):
                 if spec.is_oauth or spec.is_local or spec.is_direct or p.api_key or not spec.api_key_required:
                     return p, spec.name
@@ -524,10 +592,10 @@ class Config(BaseSettings):
         # Prefer providers whose detect_by_base_keyword matches the configured api_base
         # (e.g. Ollama's "11434" in "http://localhost:11434") over plain registry order.
         local_fallback: tuple[ProviderConfig, str] | None = None
-        for spec in PROVIDERS:
+        for spec in registry_specs:
             if not spec.is_local:
                 continue
-            p = getattr(self.providers, spec.name, None)
+            p = self.providers.get_provider_config(spec.name)
             if not (p and p.api_base):
                 continue
             if spec.detect_by_base_keyword and spec.detect_by_base_keyword in p.api_base:
@@ -539,10 +607,10 @@ class Config(BaseSettings):
 
         # Fallback: gateways first, then others (follows registry order)
         # OAuth providers are NOT valid fallbacks — they require explicit model selection
-        for spec in PROVIDERS:
+        for spec in registry_specs:
             if spec.is_oauth:
                 continue
-            p = getattr(self.providers, spec.name, None)
+            p = self.providers.get_provider_config(spec.name)
             if p and (p.api_key or not spec.api_key_required):
                 return p, spec.name
 

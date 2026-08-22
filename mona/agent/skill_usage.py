@@ -94,6 +94,12 @@ def _empty_record() -> dict[str, Any]:
         "last_accessed_at": None,
         "pinned": False,
         "archived_at": None,
+        "origin": None,
+        "source": None,
+        "content_hash": None,
+        "installed_at": None,
+        "approved_at": None,
+        "scripts_approved": False,
     }
 
 
@@ -257,6 +263,46 @@ def record_agent_created(name: str, agent_id: str = MONA_AGENT_ID) -> None:
         if not rec.get("created_at"):
             rec["created_at"] = _now_iso()
         rec["archived_at"] = None
+
+    _mutate(name, _apply, agent_id)
+
+
+def record_install(
+    name: str,
+    *,
+    agent_id: str = MONA_AGENT_ID,
+    origin: str,
+    source: str,
+    content_hash: str,
+    scripts_approved: bool,
+) -> None:
+    """Record a user-approved private-skill installation in the existing ledger."""
+    def _apply(rec: dict[str, Any]) -> None:
+        now = _now_iso()
+        rec["created_by"] = "agent" if origin == "agent" else "user"
+        rec["created_at"] = rec.get("created_at") or now
+        rec["archived_at"] = None
+        rec["origin"] = origin
+        rec["source"] = source
+        rec["content_hash"] = content_hash
+        rec["installed_at"] = now
+        rec["approved_at"] = now
+        rec["scripts_approved"] = bool(scripts_approved)
+
+    _mutate(name, _apply, agent_id)
+
+
+def set_scripts_approved(
+    name: str,
+    approved: bool,
+    *,
+    agent_id: str = MONA_AGENT_ID,
+) -> None:
+    """Persist an explicit user decision that enables a skill's scripts."""
+    def _apply(rec: dict[str, Any]) -> None:
+        rec["scripts_approved"] = bool(approved)
+        if approved:
+            rec["approved_at"] = _now_iso()
 
     _mutate(name, _apply, agent_id)
 

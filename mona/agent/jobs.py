@@ -89,6 +89,10 @@ class AgentJob(Base):
     attempt: int = 1
     result: str | None = None
     error: str | None = None
+    # Structured references explicitly submitted by this job. The file
+    # itself remains in its Agent/product owner root; this is only a durable
+    # projection for room aggregation and restart recovery.
+    artifacts: list[dict[str, Any]] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=datetime.now)
     started_at: datetime | None = None
     finished_at: datetime | None = None
@@ -131,8 +135,14 @@ class AgentJobStore:
 
     @staticmethod
     def default_dir(workspace: Path) -> Path:
-        """Default jobs directory for a workspace (guide 6.1)."""
-        return Path(workspace) / "agent-jobs"
+        """Default jobs directory in Mona runtime state.
+
+        ``workspace`` remains in the signature for callers from the older
+        store API; job state is deliberately independent of it.
+        """
+        from mona.config.paths import get_agent_jobs_dir
+
+        return get_agent_jobs_dir()
 
     # ------------------------------------------------------------------
     # Paths and locks
@@ -168,6 +178,7 @@ class AgentJobStore:
         workflow_run_id: str | None = None,
         workflow_step_id: str | None = None,
         parent_job_id: str | None = None,
+        attempt: int = 1,
     ) -> AgentJob:
         """Build and persist a new ``queued`` job."""
         self.jobs_dir.mkdir(parents=True, exist_ok=True)
@@ -184,6 +195,7 @@ class AgentJobStore:
             workflow_run_id=workflow_run_id,
             workflow_step_id=workflow_step_id,
             parent_job_id=parent_job_id,
+            attempt=attempt,
         )
         self._save(job)
         return job
@@ -307,6 +319,26 @@ class AgentJobStore:
 
     def mark_cancelled(self, job_id: str, *, error: str | None = None) -> AgentJob:
         return self.transition(job_id, JOB_STATUS_CANCELLED, error=error)
+
+    def append_artifacts(
+        self,
+        job_id: str,
+        refs: list[dict[str, Any]],
+    ) -> AgentJob:
+        """Persist structured artifact references produced by a job."""
+        from mona.agent.artifacts import coerce_artifact_ref
+
+        with self._lock_for(job_id):
+            job = self.load(job_id)
+            existing = {item.get("id") for item in job.artifacts if isinstance(item, dict)}
+            for raw in refs:
+                ref = coerce_artifact_ref(raw)
+                if ref is None or ref.id in existing:
+                    continue
+                job.artifacts.append(ref.model_dump(mode="json"))
+                existing.add(ref.id)
+            self._save(job)
+            return job
 
     def cancel_job(self, job_id: str, *, reason: str | None = None) -> AgentJob:
         """Cancel a queued/running job (CAS); terminal jobs reject it.

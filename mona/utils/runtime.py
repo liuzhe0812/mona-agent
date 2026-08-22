@@ -21,7 +21,8 @@ EMPTY_FINAL_RESPONSE_MESSAGE = (
 )
 
 FINALIZATION_RETRY_PROMPT = (
-    "Please provide your response to the user based on the conversation above."
+    "Do not call tools. Provide the best final response based on the conversation "
+    "and tool results above. Clearly state any material uncertainty or unfinished work."
 )
 
 LENGTH_RECOVERY_PROMPT = (

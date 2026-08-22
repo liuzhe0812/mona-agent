@@ -254,7 +254,7 @@ def _migrate_dir_contents(
         )
 
 
-def migrate_global_resources() -> bool:
+def migrate_global_resources(workspace: str | Path | None = None) -> bool:
     """Migrate global resources from workspace to ``~/.mona/`` (idempotent).
 
     Returns True if the global-resource section of the migration is complete
@@ -275,7 +275,7 @@ def migrate_global_resources() -> bool:
         logger.debug("Global resource migration already complete, skipping")
         return True
 
-    workspace = get_workspace_path()
+    workspace = Path(workspace).expanduser().resolve() if workspace is not None else get_workspace_path()
     memory_dir = get_memory_dir()
     skills_dir = get_skills_dir()
     heartbeat_path = get_heartbeat_path()
@@ -361,4 +361,19 @@ def resolve_legacy_path(old_path: str | Path) -> Path | None:
     if new is None:
         # Also try the un-expanded form in case the manifest stored a raw path.
         new = path_map.get(str(old_path))
-    return Path(new) if new else None
+    if not new:
+        return None
+    # A final-layout migration can legitimately have two hops (legacy loose
+    # path -> output -> Agent/product owner). Follow the manifest chain while
+    # guarding against malformed cycles written by an interrupted process.
+    seen = {key, str(old_path)}
+    for _ in range(8):
+        candidate = str(new)
+        if candidate in seen:
+            break
+        seen.add(candidate)
+        chained = path_map.get(candidate)
+        if not chained:
+            break
+        new = chained
+    return Path(new)

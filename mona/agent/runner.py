@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import inspect
+import json
 import os
+import re
 from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -58,6 +61,39 @@ _MAX_INJECTION_CYCLES = 5
 _SNIP_SAFETY_BUFFER = 1024
 _MICROCOMPACT_KEEP_RECENT = 10
 _MICROCOMPACT_MIN_CHARS = 500
+# ponytail: fixed web-only budget; make it configurable only if real tasks need it.
+_MAX_WEB_LOOKUP_STREAK = 12
+_WEB_LOOKUP_TOOLS = frozenset({"web_search", "web_fetch"})
+_LOOP_DETECTED_MESSAGE = (
+    "I stopped a repeating tool loop and could not produce a reliable final answer "
+    "from the results collected so far."
+)
+_INLINE_CHART_BLOCK_RE = re.compile(r"```chart[ \t]*\r?\n.*?\r?\n```", re.DOTALL | re.IGNORECASE)
+
+
+def _extract_inline_chart_blocks(result: Any) -> list[str]:
+    """Return complete inline chart fences emitted by the chart tool."""
+    if not isinstance(result, str):
+        return []
+    return [match.group(0).strip() for match in _INLINE_CHART_BLOCK_RE.finditer(result)]
+
+
+def _append_missing_inline_charts(
+    content: str | None,
+    blocks: list[str],
+) -> tuple[str | None, str]:
+    """Append chart fences the model omitted and return ``(content, streamed_suffix)``."""
+    if not blocks:
+        return content, ""
+    text = content or ""
+    present_count = len(_INLINE_CHART_BLOCK_RE.findall(text))
+    missing = blocks[present_count:]
+    if not missing:
+        return content, ""
+    suffix = "\n\n".join(missing)
+    separator = "\n\n" if text.strip() else ""
+    streamed_suffix = f"{separator}{suffix}"
+    return f"{text}{streamed_suffix}", streamed_suffix
 
 
 def _definition_matches(definition: Any, names: set[str]) -> bool:
@@ -112,6 +148,7 @@ class AgentRunSpec:
     checkpoint_callback: Any | None = None
     injection_callback: Any | None = None
     llm_timeout_s: float | None = None
+    enforce_llm_timeout_for_streaming: bool = False
 
 
 @dataclass(slots=True)
@@ -277,6 +314,9 @@ class AgentRunner:
         # Per-turn consecutive-failure counter for tool circuit-breaking.
         tool_failure_counts: dict[str, int] = {}
         disabled_tools: set[str] = set()
+        recent_tool_steps: list[str] = []
+        inline_chart_blocks: list[str] = []
+        web_lookup_streak = 0
         empty_content_retries = 0
         length_recovery_count = 0
         had_injections = False
@@ -375,19 +415,33 @@ class AgentRunner:
                 )
                 completed_tool_results: list[dict[str, Any]] = []
                 for tool_call, result in zip(response.tool_calls, results):
+                    if tool_call.name == "chart":
+                        for block in _extract_inline_chart_blocks(result):
+                            if block not in inline_chart_blocks:
+                                inline_chart_blocks.append(block)
+                    normalized_result = self._normalize_tool_result(
+                        spec,
+                        tool_call.id,
+                        tool_call.name,
+                        result,
+                    )
                     tool_message = {
                         "role": "tool",
                         "tool_call_id": tool_call.id,
                         "name": tool_call.name,
-                        "content": self._normalize_tool_result(
-                            spec,
-                            tool_call.id,
-                            tool_call.name,
-                            result,
-                        ),
+                        "content": normalized_result,
                     }
                     messages.append(tool_message)
                     completed_tool_results.append(tool_message)
+                    recent_tool_steps.append(self._tool_step_signature(
+                        tool_call,
+                        result,
+                    ))
+                    del recent_tool_steps[:-9]
+                    if tool_call.name in _WEB_LOOKUP_TOOLS:
+                        web_lookup_streak += 1
+                    else:
+                        web_lookup_streak = 0
                 if fatal_error is not None:
                     error = f"Error: {type(fatal_error).__name__}: {fatal_error}"
                     final_content = error
@@ -425,6 +479,30 @@ class AgentRunner:
                 )
                 if _drained:
                     had_injections = True
+                    recent_tool_steps.clear()
+                    web_lookup_streak = 0
+                loop_reason = self._tool_loop_reason(
+                    recent_tool_steps,
+                    web_lookup_streak,
+                )
+                if loop_reason and not _drained:
+                    logger.warning(
+                        "Tool loop detected for {}: {}",
+                        spec.session_key or "default",
+                        loop_reason,
+                    )
+                    stop_reason = "loop_detected"
+                    final_content, finalization_usage = await self._finalize_without_tools(
+                        spec,
+                        messages,
+                    )
+                    self._accumulate_usage(usage, finalization_usage)
+                    final_content = final_content or _LOOP_DETECTED_MESSAGE
+                    self._append_final_message(messages, final_content)
+                    context.final_content = final_content
+                    context.stop_reason = stop_reason
+                    await hook.after_iteration(context)
+                    break
                 await hook.after_iteration(context)
                 continue
 
@@ -487,6 +565,11 @@ class AgentRunner:
                     messages.append(build_length_recovery_message())
                     await hook.after_iteration(context)
                     continue
+
+            clean, chart_suffix = _append_missing_inline_charts(clean, inline_chart_blocks)
+            if chart_suffix and hook.wants_streaming():
+                context.streamed_content = True
+                await hook.on_stream(context, chart_suffix)
 
             assistant_message: dict[str, Any] | None = None
             if response.finish_reason != "error" and not is_blank_text(clean):
@@ -572,16 +655,21 @@ class AgentRunner:
             break
         else:
             stop_reason = "max_iterations"
-            if spec.max_iterations_message:
-                final_content = spec.max_iterations_message.format(
-                    max_iterations=spec.max_iterations,
-                )
-            else:
-                final_content = render_template(
+            fallback_content = (
+                spec.max_iterations_message.format(max_iterations=spec.max_iterations)
+                if spec.max_iterations_message
+                else render_template(
                     "agent/max_iterations_message.md",
                     strip=True,
                     max_iterations=spec.max_iterations,
                 )
+            )
+            final_content, finalization_usage = await self._finalize_without_tools(
+                spec,
+                messages,
+            )
+            self._accumulate_usage(usage, finalization_usage)
+            final_content = final_content or fallback_content
             self._append_final_message(messages, final_content)
             # Drain any remaining injections so they are appended to the
             # conversation history instead of being re-published as
@@ -740,11 +828,12 @@ class AgentRunner:
         else:
             coro = self.provider.chat_with_retry(**kwargs)
 
-        # Streaming requests already have provider-level idle timeouts
-        # (mona_STREAM_IDLE_TIMEOUT_S). Do not also apply the outer wall-clock
-        # LLM timeout here, or healthy long reasoning streams can be killed just
-        # because total elapsed time exceeded mona_LLM_TIMEOUT_S.
-        outer_timeout_s = None if (wants_streaming or wants_progress_streaming) else timeout_s
+        # Regular streaming requests rely on provider-level idle timeouts
+        # (mona_STREAM_IDLE_TIMEOUT_S), so healthy long reasoning streams are
+        # not killed just because total elapsed time exceeded mona_LLM_TIMEOUT_S.
+        # Workflow steps opt into a finite per-call wall-clock cap as well.
+        is_streaming = wants_streaming or wants_progress_streaming
+        outer_timeout_s = None if is_streaming and not spec.enforce_llm_timeout_for_streaming else timeout_s
         try:
             response = (
                 await coro if outer_timeout_s is None
@@ -783,6 +872,57 @@ class AgentRunner:
         retry_messages.append(build_finalization_retry_message())
         kwargs = self._build_request_kwargs(spec, retry_messages, tools=None)
         return await self.provider.chat_with_retry(**kwargs)
+
+    async def _finalize_without_tools(
+        self,
+        spec: AgentRunSpec,
+        messages: list[dict[str, Any]],
+    ) -> tuple[str | None, dict[str, int]]:
+        try:
+            response = await self._request_finalization_retry(
+                spec,
+                self._snip_history(spec, self._microcompact(messages)),
+            )
+            usage = self._usage_dict(response.usage)
+            _, clean = extract_reasoning(
+                response.reasoning_content,
+                response.thinking_blocks,
+                response.content,
+            )
+            if (
+                response.finish_reason != "error"
+                and not response.has_tool_calls
+                and not is_blank_text(clean)
+            ):
+                return clean, usage
+            return None, usage
+        except Exception:
+            logger.exception(
+                "Tool-free finalization failed for {}",
+                spec.session_key or "default",
+            )
+            return None, {}
+
+    @staticmethod
+    def _tool_step_signature(tool_call: ToolCallRequest, result: Any) -> str:
+        payload = json.dumps(
+            [tool_call.name, tool_call.arguments, result],
+            sort_keys=True,
+            ensure_ascii=False,
+            default=str,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(payload.encode()).hexdigest()
+
+    @staticmethod
+    def _tool_loop_reason(recent_steps: list[str], web_lookup_streak: int) -> str | None:
+        for period in (1, 2, 3):
+            tail = recent_steps[-period * 3:]
+            if len(tail) == period * 3 and tail == tail[:period] * 3:
+                return f"tool sequence with period {period} repeated 3 times"
+        if web_lookup_streak >= _MAX_WEB_LOOKUP_STREAK:
+            return f"{web_lookup_streak} consecutive web lookups"
+        return None
 
     @staticmethod
     def _usage_dict(usage: dict[str, Any] | None) -> dict[str, int]:
@@ -913,8 +1053,10 @@ class AgentRunner:
                 "status": "error",
                 "detail": "repeated external lookup blocked",
             }
-            if spec.fail_on_tool_error:
-                return lookup_error + hint, event, RuntimeError(lookup_error)
+            # Throttling is a guidance signal, not a tool failure: the model
+            # is told to answer with the results it already has, so even
+            # fail_on_tool_error runs must get the chance to recover instead
+            # of being killed mid-task.
             return lookup_error + hint, event, None
         prepare_call = getattr(spec.tools, "prepare_call", None)
         tool, params, prep_error = None, tool_call.arguments, None

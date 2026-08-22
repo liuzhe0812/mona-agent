@@ -201,7 +201,7 @@ class ImageGenerationTool(Tool):
             if not model:
                 return "Error: no image model configured. Set the image model in Image settings."
             # Store generated images under the active session workspace so they
-            # appear in the shared output artifact panel for normal sessions.
+            # appear in the active Agent output panel for normal sessions.
             artifact_root = self._active_workspace()
             artifacts: list[dict[str, Any]] = []
             while len(artifacts) < requested:

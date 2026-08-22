@@ -4,6 +4,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol, runtime_checkable
 
+# Internal routing metadata is written by the room router.  Keep these names
+# in one place so tools do not duplicate string literals or accidentally
+# expose them as user-facing parameters.
+DIRECT_TARGET_AGENT_IDS_META = "_direct_target_agent_ids"
+PARTNER_JOBS_DISPATCHED_META = "_partner_jobs_dispatched"
+
 
 @dataclass(frozen=True)
 class RequestContext:

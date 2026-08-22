@@ -20,6 +20,10 @@ class ToolRegistry:
     def __init__(self):
         self._tools: dict[str, Tool] = {}
         self._cached_definitions: list[dict[str, Any]] | None = None
+        # Optional user-level narrowing. Registration remains unchanged so a
+        # later config edit can re-enable a permitted tool without rebuilding
+        # plugin/MCP state.
+        self._allowed_tool_names: set[str] | None = None
         # Fail closed until the AgentLoop refreshes the trusted license state.
         self._has_subscription_access: bool = False
 
@@ -53,6 +57,14 @@ class ToolRegistry:
         self._has_subscription_access = has_access
         if changed:
             self._cached_definitions = None
+
+    def set_allowed_tool_names(self, names: set[str] | None) -> None:
+        """Narrow model-visible and executable tools without unregistering them."""
+        normalized = set(names) if names is not None else None
+        if normalized == self._allowed_tool_names:
+            return
+        self._allowed_tool_names = normalized
+        self._cached_definitions = None
 
     def invalidate_definitions_cache(self) -> None:
         """Clear the cached tool definitions.
@@ -105,6 +117,8 @@ class ToolRegistry:
 
         definitions: list[dict[str, Any]] = []
         for tool in self._tools.values():
+            if self._allowed_tool_names is not None and tool.name not in self._allowed_tool_names:
+                continue
             if (
                 not self._has_subscription_access
                 and getattr(tool, "subscription_required", False)
@@ -134,6 +148,8 @@ class ToolRegistry:
         params: dict[str, Any],
     ) -> tuple[Tool | None, dict[str, Any], str | None]:
         """Resolve, cast, and validate one tool call."""
+        if self._allowed_tool_names is not None and name not in self._allowed_tool_names:
+            return None, params, f"Error: Tool '{name}' is not permitted for this agent."
         # Guard against invalid parameter types (e.g., list instead of dict)
         if not isinstance(params, dict) and name in ('write_file', 'read_file'):
             return None, params, (
@@ -182,19 +198,19 @@ class ToolRegistry:
 
     async def execute(self, name: str, params: dict[str, Any]) -> Any:
         """Execute a tool by name with given parameters."""
-        _HINT = "\n\n[Analyze the error above and try a different approach.]"
+        hint = "\n\n[Analyze the error above and try a different approach.]"
         tool, params, error = self.prepare_call(name, params)
         if error:
-            return error + _HINT
+            return error + hint
 
         try:
             assert tool is not None  # guarded by prepare_call()
             result = await tool.execute(**params)
             if isinstance(result, str) and result.startswith("Error"):
-                return result + _HINT
+                return result + hint
             return result
         except Exception as e:
-            return f"Error executing {name}: {str(e)}" + _HINT
+            return f"Error executing {name}: {str(e)}" + hint
 
     @property
     def tool_names(self) -> list[str]:

@@ -16,6 +16,7 @@ from loguru import logger
 from pydantic import Field
 
 from mona.agent.tools.base import Tool, tool_parameters
+from mona.agent.tools.context import RequestContext
 from mona.agent.tools.exec_session import (
     DEFAULT_MAX_OUTPUT_CHARS,
     DEFAULT_YIELD_MS,
@@ -191,6 +192,10 @@ class ExecTool(Tool):
     @property
     def name(self) -> str:
         return "exec"
+
+    def set_context(self, ctx: RequestContext) -> None:
+        # A terminal-bound chat must operate on that terminal, not Mona's host shell.
+        self.is_available = not bool(ctx.terminal_session_id)
 
     _MAX_TIMEOUT = 600
     _MAX_OUTPUT = 10_000

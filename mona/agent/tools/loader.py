@@ -19,7 +19,12 @@ _SKIP_MODULES = frozenset({
 
 # Tools reserved for the reserved Mona agent. A package agent must never get
 # them, even if its manifest allowlist names them (multi-agent guide 7.2).
-_MONA_ONLY_TOOLS = frozenset({"spawn", "delegate_agent", "propose_workflow"})
+_MONA_ONLY_TOOLS = frozenset({
+    "spawn",
+    "delegate_agent",
+    "propose_workflow",
+    "run_collaboration",
+})
 
 
 class ToolLoader:
@@ -113,6 +118,16 @@ class ToolLoader:
                     if not tool_cls.enabled(ctx):
                         continue
                     tool = tool_cls.create(ctx)
+                    # A package/partner agent must not acquire orchestration
+                    # capabilities through a broad loader call or an
+                    # over-permissive manifest allowlist.  The request-scoped
+                    # tool availability flag is still refreshed by AgentLoop,
+                    # but rejecting registration here is the hard boundary.
+                    if (
+                        tool.name in _MONA_ONLY_TOOLS
+                        and getattr(ctx, "agent_id", "mona") != "mona"
+                    ):
+                        continue
                     if allow is not None and (
                         tool.name not in allow or tool.name in _MONA_ONLY_TOOLS
                     ):

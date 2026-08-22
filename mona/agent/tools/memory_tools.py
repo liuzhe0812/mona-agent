@@ -137,7 +137,9 @@ class MemoryEditTool(Tool):
             "Use mode='replace' to replace entire content (default), "
             "or mode='append' to add content to the end. "
             "file='memory' → MEMORY.md, 'soul' → SOUL.md, "
-            "'user' → USER.md, 'agents' → AGENTS.md."
+            "'user' → USER.md, 'agents' → AGENTS.md. Changes to soul, user, "
+            "and agents are proposed for user approval; MEMORY.md remains the "
+            "agent's controlled long-term memory."
         )
 
     @property
@@ -173,14 +175,26 @@ class MemoryEditTool(Tool):
         except ValueError as e:
             return f"Error: {e}"
         try:
-            path.parent.mkdir(parents=True, exist_ok=True)
             if mode == "append" and path.exists():
                 existing = path.read_text(encoding="utf-8")
                 if existing and not existing.endswith("\n"):
                     content = existing + "\n" + content
                 else:
                     content = existing + content
-            path.write_text(content, encoding="utf-8")
+            from mona.agent.agent_management import propose_instruction_patch, write_instruction
+
+            if file in {"soul", "user", "agents"}:
+                proposal = propose_instruction_patch(self._agent_id, file, content)
+                return (
+                    f"Proposed update to {path.name} (proposal {proposal['id']}). "
+                    "It will take effect only after the user approves it in Agent management."
+                )
+            write_instruction(
+                self._agent_id,
+                file,
+                content,
+                message=f"agent memory update: {path.name}",
+            )
             return f"Successfully {'appended to' if mode == 'append' else 'wrote'} {path.name} ({len(content)} chars)."
         except Exception as e:
             return f"Error editing {path.name}: {e}"
