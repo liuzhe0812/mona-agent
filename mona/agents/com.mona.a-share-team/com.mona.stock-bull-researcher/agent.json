@@ -5,7 +5,7 @@
   "description": "构建正面论证并引用证据",
   "prompt": "prompt.md",
   "model": "inherit",
-  "toolAllowlist": ["artifact_read", "submit_bull_case", "memory_edit", "skill_read", "skill_create"],
+  "toolAllowlist": ["artifact_read", "stock_evidence_read", "submit_bull_case", "memory_edit", "skill_read", "skill_create"],
   "canDelegate": false,
   "skills": ["skills/bull-case-building"],
   "packageId": "com.mona.a-share-team",

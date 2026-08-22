@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "id": "com.mona.stock-selection-analyst",
+  "displayName": "选股分析师",
+  "description": "先用确定性条件筛选候选，再基于候选证据生成可反驳、可继续研究的机会线索",
+  "prompt": "prompt.md",
+  "model": "inherit",
+  "toolAllowlist": [
+    "stock_screen_run",
+    "stock_screen_read",
+    "stock_screen_compare",
+    "stock_screen_strategy_save",
+    "stock_screen_validation_read",
+    "stock_context_read",
+    "stock_source_open",
+    "stock_opportunity_submit",
+    "memory_edit",
+    "skill_read",
+    "skill_create"
+  ],
+  "canDelegate": false,
+  "skills": ["skills/stock-screening"],
+  "packageId": "com.mona.a-share-team",
+  "packageVersion": "1.0.0",
+  "visibility": "internal"
+}

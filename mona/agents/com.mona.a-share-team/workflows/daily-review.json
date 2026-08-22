@@ -11,7 +11,7 @@
       "id": "technical",
       "type": "agent",
       "agentId": "com.mona.stock-tech-analyst",
-      "task": "每日复盘批量模式：对 [Run inputs] 中 symbols 列出的全部标的（为空时表示当前全部自选股，由数据层注入证据）逐只用 stock_evidence_read 读取证据包，给出简版技术面结论。每只标的一条：趋势方向 + 量价状态 + 一句风险/亮点，全部数值携带 source_id。",
+      "task": "每日复盘批量模式：对 [Run inputs] 中 symbols 列出的标的（为空时才由数据层注入当前自选股）逐只先用 stock_evidence_read(sections=[evidence_coverage]) 查看覆盖，再按不超过4个分区一批读取 stock_evidence_read(sections=[market_regime, capital_positioning, tradeability, kline]) 和需要的 stock_evidence_read(sections=[quote])；按 technical-analysis 给出简版技术面结论。每只标的一条：趋势方向 + 量价状态 + 一句风险/亮点，全部数值携带 source_id 和 as_of；字段缺失时该 item 设为 insufficient_data 并列缺口。",
       "expectedOutput": "调用 submit_technical_view 以 items 批量模式提交全部标的的简版技术观点（产出 technical.json Artifact）。",
       "dependsOn": []
     },
@@ -19,7 +19,7 @@
       "id": "fundamental",
       "type": "agent",
       "agentId": "com.mona.stock-fundamental-analyst",
-      "task": "每日复盘批量模式：对 [Run inputs] 中 symbols 列出的全部标的（为空时表示当前全部自选股，由数据层注入证据）逐只用 stock_evidence_read 读取证据包，按标的类型给出简版基本面结论。每只标的一条：经营/估值要点 + 数据新鲜度标记，全部数值携带 source_id。",
+      "task": "每日复盘批量模式：对 [Run inputs] 中 symbols 列出的标的（为空时才由数据层注入当前自选股）逐只先用 stock_evidence_read(sections=[evidence_coverage]) 查看覆盖，再按不超过4个分区一批读取 stock_evidence_read(sections=[company_quality, fundamentals, fundamentals_history, macro_documents])；按 fundamental-analysis 与 valuation-quality 的标的类型模板给出简版基本面结论。每只标的一条：经营/估值要点 + 数据新鲜度标记，全部数值携带 source_id 和报告期；字段缺失时该 item 设为 insufficient_data 并列缺口。",
       "expectedOutput": "调用 submit_fundamental_view 以 items 批量模式提交全部标的的简版基本面观点（产出 fundamental.json Artifact）。",
       "dependsOn": []
     },
@@ -27,7 +27,7 @@
       "id": "news",
       "type": "agent",
       "agentId": "com.mona.stock-news-analyst",
-      "task": "每日复盘批量模式：对 [Run inputs] 中 symbols 列出的全部标的（为空时表示当前全部自选股，由数据层注入证据）逐只用 stock_evidence_read 读取证据包，核验当日公告与新闻。每只标的一条：最重要事件 + 影响方向，无可核验资讯时如实标注；全部引用携带 source_id。",
+      "task": "每日复盘批量模式：对 [Run inputs] 中 symbols 列出的标的（为空时才由数据层注入当前自选股）逐只先用 stock_evidence_read(sections=[evidence_coverage]) 查看覆盖，再按不超过4个分区一批读取 stock_evidence_read(sections=[industry_context, policy_context, cycle_context, event_calendar])；按 news-verification 核验当日公告与新闻，并在有证据时补充 event-theme-mapping 的直接影响。每只标的一条：最重要事件 + 影响方向；无可核验资讯时设为 insufficient_data 并如实标注；全部引用携带 source_id。",
       "expectedOutput": "调用 submit_news_view 以 items 批量模式提交全部标的的简版资讯观点（产出 news.json Artifact）。",
       "dependsOn": []
     },
@@ -35,8 +35,8 @@
       "id": "referee",
       "type": "agent",
       "agentId": "com.mona.stock-referee",
-      "task": "每日复盘汇总：用 artifact_read 读取本次运行三份分析师的批量观点（technical、fundamental、news），跳过独立多空辩论步骤，直接为每只标的给出评分倾向一行结论、数据质量标记和核心多空要点，按置信度排序，证据不足的标的排最后并注明缺口。",
-      "expectedOutput": "调用 submit_stock_report 以 items 批量模式提交复盘简报（产出 digest.json 与 digest.md Artifact）。",
+      "task": "每日复盘汇总：用 artifact_read 读取本次运行 technical、fundamental、news 三份批量观点及其 source_ids，按 research-synthesis 逐只核对事实、缺口和核心多空要点；不执行独立多空辩论，不输出不透明评分。按证据完整度排序，证据不足的标的排最后并在 missing 中注明缺口。完成后调用 submit_stock_report_staged(section=daily_digest, payload={as_of, items})，再调用 section=finalize（无 payload）产出简报；不要与 deep_dimensions/deep_decision/deep_context 混用。",
+      "expectedOutput": "依次调用 submit_stock_report_staged 的 daily_digest、finalize，产出 digest.json 与 digest.md Artifact；每只标的保留研究倾向、一行结论、数据质量和缺口。",
       "dependsOn": ["technical", "fundamental", "news"]
     }
   ]

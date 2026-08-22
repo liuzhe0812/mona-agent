@@ -5,9 +5,9 @@
   "description": "权衡多空冲突，产出最终研究报告",
   "prompt": "prompt.md",
   "model": "inherit",
-  "toolAllowlist": ["artifact_read", "submit_stock_report", "memory_edit", "skill_read", "skill_create"],
+  "toolAllowlist": ["artifact_read", "stock_evidence_read", "submit_stock_report_staged", "memory_edit", "skill_read", "skill_create"],
   "canDelegate": false,
-  "skills": ["skills/research-report-standard"],
+  "skills": ["skills/research-synthesis"],
   "packageId": "com.mona.a-share-team",
   "packageVersion": "1.0.0",
   "visibility": "internal"

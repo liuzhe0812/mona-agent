@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "id": "stock-selection",
+  "roomId": "stock_research",
+  "revision": 1,
+  "status": "active",
+  "goal": "机会发现：先完成确定性筛选，再对 Top 候选生成可反驳、可追溯的机会研究",
+  "trigger": { "type": "manual" },
+  "steps": [
+    {
+      "id": "screening",
+      "type": "agent",
+      "agentId": "com.mona.stock-selection-analyst",
+      "task": "读取 [Run inputs] 中的 strategy、strategy_id、user_question 和 limit。这里的 limit 只表示确定性筛选输出数量，沿用服务的 1–100 范围，不得为了第二步研究上限而改成 8。若 strategy_id=combined_discovery，校验 included_strategy_ids 后直接调用 stock_screen_run；服务会将各方向独立召回、取并集、去重并统一排序，不得改成交集或自行重排。若 strategy_id=natural_language，或 strategy_id 不是 combined_discovery 且 strategy 没有有效 filters/ranking，则先按 stock-screening Skill 将自然语言转换成完整、可审计的 allowlist strategy；无法确认阈值、范围、观察周期或股票池时返回待确认/不可运行，绝不以空条件扫描全市场。默认语义（如估值不过高）只能映射到已声明的内置策略并在 strategy 中显式记录。确认后调用 stock_screen_run。工具负责确定性筛选、因子计算、排序、风险检查和验证；不要自行计算、编造候选或修改确定性排名。若 strategy_id=recent_catalyst 或 combined_discovery 包含 recent_catalyst，服务从近7个自然日的结构化材料事件中生成候选；候选的 snapshot.catalyst_events、事件类型、标题、公开时间和 source_ids 是事实，必须原样保留 data_quality.event_capture 的窗口、complete、cache_status 和 data_cutoff_at。事件源 unavailable、partial/stale 与窗口无命中必须分别说明。执行完成后简要说明结果状态、候选数量、数据时间与质量，并引用产出的 selection.json Artifact。",
+      "expectedOutput": "调用 stock_screen_run 并提交 stock_selection_<run_id> 报告 Artifact（selection.json），结果包含候选、命中/未命中条件、理由、风险、数据时间、质量和来源；recent_catalyst 候选额外包含最多3条可追溯触发事件及事件覆盖元数据。",
+      "dependsOn": []
+    },
+    {
+      "id": "opportunity_research",
+      "type": "agent",
+      "agentId": "com.mona.stock-selection-analyst",
+      "task": "读取本次 [Upstream results] 的 selection.json 和 [Run inputs] 的 research_limit，按 actual_research_count=min(research_limit, selection_candidate_count) 计算实际研究数量。research_limit 默认 1，只接受 1–8 的整数，非整数或越界必须拒绝，禁止把它当成 screening 的 limit；候选少于配置数量时只研究实际候选。selection 为 0 时如实返回无候选，不调用 stock_context_read 或 stock_opportunity_submit，不生成伪造 opportunity.json，也不把本步骤标为失败。实际数量大于 0 时只研究本次确定性筛选排名 Top N（前 N）候选，禁止添加 selection 之外的股票或修改排名/因子。使用 stock_screen_read 获取当前 run 的 selection；对每只实际候选只调用一次 stock_context_read，默认读取 quote、kline、fundamentals、news；需要核对时只能对当前候选 context 中的 source_id 调用 stock_source_open。按 stock-screening Skill 为每只候选生成方向化研究计划：单方向使用 selection.strategy.strategy_id；combined_discovery 只使用该候选 snapshot.matched_strategies 中实际命中的经营稳健、业绩成长、趋势机会或近期催化方向；自然语言和用户策略从已确认的 filters、ranking 与观察周期提取目标。只重点研究实际命中方向，不机械输出未命中方向的完整检查表。多方向命中时分别取证，将相互强化项写入 supporting_evidence，将冲突项写入 counter_evidence 和 invalidation_conditions，命中方向多不得自动提高 research_priority。若 strategy_id=recent_catalyst，或 combined_discovery 候选包含 snapshot.catalyst_events，必须在当前 context 的 event_calendar 中逐条核对事件的 instrument_id、source_id、公开时间和标题；匹配失败时 why_now 只能为 unknown/数据缺口且 research_priority=low，不能以标题或涨幅替代事件证据。事件影响只能写成结合其他证据的 inference，并给出影响窗口、反证和失效条件；partial/stale 必须披露 data_cutoff_at。为每只候选填写 why_now、thesis、supporting_evidence、counter_evidence、relative_edge、watch_items、invalidation_conditions、data_gaps 和 context_id，所有声明标注 claim_type=fact/inference/unknown；fact 必须有来源，inference 必须有支持来源，unknown 用于缺失/待验证。所有方向共同执行数据时效与质量、支持证据、反对证据、相对候选特点和失效条件审计；没有至少一条支持证据和一条反对证据时 research_priority 只能为 low。对用户展示必须使用中文业务名称，不输出 major_matter、shareholder_change 等内部事件代码。禁止用新闻标题、涨跌幅或模型常识伪造热点、催化、产业链、预期差或风险，禁止买卖建议、目标价、仓位、收益承诺和黑盒评分。完成跨候选比较后调用 stock_opportunity_submit 提交 candidates 与 comparison_summary，由工具生成 opportunity.json；提交失败必须如实返回，不伪造 completed。",
+      "expectedOutput": "当实际研究数量大于 0 时，调用 stock_opportunity_submit，提交当前 selection 实际 Top N 的结构化机会研究并产出 opportunity.json Artifact；每只候选按实际命中方向形成差异化内容，同时包含统一的 why_now、支持证据、反证、相对候选优势、后续观察、失效条件、数据缺口、claim_type、context_id 和 source_ids。多方向候选必须披露强化项与冲突项；recent_catalyst 候选必须能将触发事件 source_id 贯通到 event_calendar，无法贯通时明确 unknown/low。selection 为 0 时返回无候选状态，不生成 opportunity.json，步骤保持非失败。",
+      "dependsOn": ["screening"]
+    }
+  ]
+}

@@ -11,48 +11,48 @@
       "id": "technical",
       "type": "agent",
       "agentId": "com.mona.stock-tech-analyst",
-      "task": "对 [Run inputs] 中 symbols 的第一只标的做技术面分析。先用 stock_evidence_read 读取本次运行的证据包（行情快照、K 线摘要、确定性指标），再按你的分析框架评估趋势结构、量价配合、指标区间与关键支撑压力位。所有数值必须来自证据包并携带 source_id；证据不足时 stance 取 insufficient_data 并注明缺失字段。",
-      "expectedOutput": "调用 submit_technical_view 提交结构化技术观点（产出 technical.json Artifact），含 stance、summary 与带 source_ids 的 points。",
+      "task": "对 [Run inputs] 中 symbols 的第一只标的做市场与交易分析（内部 technical ID）。先调用 stock_evidence_read(sections=[evidence_coverage]) 读取覆盖状态，再按不超过4个分区一批调用 stock_evidence_read(sections=[market_regime, capital_positioning, tradeability, kline])，需要报价时在同一上限内另读 stock_evidence_read(sections=[quote])，只消费本次运行的当前标的证据。按 technical-analysis 评估市场环境、资金位置、可交易性和 1—10 个交易日量价时点；区分 research_cutoff_at 与 market_as_of，只使用研究截止前公开的信息，排除未来数据。单标必须提交 market_regime、capital_positioning、tradeability、short_term_timing 四个命名数组；每个声明必须声明 claim_type：fact 带 source_ids，inference 带 source_ids 和 basis，hypothesis 只能作为待验证假设；不重新计算或补写缺失指标，不补写因果、WACC、目标价或裸阈值。Evidence 的 short_term coverage 为 insufficient_data 时 stance 必须为 insufficient_data，summary 说明缺口。",
+      "expectedOutput": "调用 submit_technical_view 提交 V3 结构化市场与交易观点（产出 technical.json Artifact），含四个命名 sections、stance、summary、source_ids 和 claim_type 声明。",
       "dependsOn": []
     },
     {
       "id": "fundamental",
       "type": "agent",
       "agentId": "com.mona.stock-fundamental-analyst",
-      "task": "对 [Run inputs] 中 symbols 的第一只标的做基本面分析。先用 stock_evidence_read 读取本次运行的证据包（财务快照、估值、行业字段），按标的类型套用股票或 ETF 模板评估经营质量、财务安全与估值水平。所有数值必须来自证据包并携带 source_id；证据不足时 stance 取 insufficient_data 并注明缺失字段。",
-      "expectedOutput": "调用 submit_fundamental_view 提交结构化基本面观点（产出 fundamental.json Artifact），含 stance、summary 与带 source_ids 的 points。",
+      "task": "对 [Run inputs] 中 symbols 的第一只标的做公司与估值分析（内部 fundamental ID）。先调用 stock_evidence_read(sections=[evidence_coverage]) 读取覆盖状态，再按不超过4个分区一批调用 stock_evidence_read(sections=[company_quality, fundamentals, fundamentals_history, macro_documents])，只消费本次运行的当前标的证据；估值上下文从 company_quality 分区读取。按 fundamental-analysis 与 valuation-quality 评估公司质量、多期财务/治理/现金流、同行或历史估值和 6 个月以上长线价值锚。区分 research_cutoff_at 与 market_as_of，只使用研究截止前公开的信息，所有数值来自同一证据包并携带 source_id，注明报告期；不跨口径比较，不因缺失数据补写因果、WACC、目标价或裸阈值。单标必须提交 company_quality、financial_quality、valuation_context、long_term_value 四个命名数组；每个声明声明 claim_type，fact 带 source_ids，inference 带 source_ids 和 basis，hypothesis 只能作为待验证假设。Evidence 的 long_term coverage 为 insufficient_data 时 stance 必须为 insufficient_data，summary 说明缺口。",
+      "expectedOutput": "调用 submit_fundamental_view 提交 V3 结构化公司与估值观点（产出 fundamental.json Artifact），含四个命名 sections、stance、summary、source_ids 和 claim_type 声明。",
       "dependsOn": []
     },
     {
       "id": "news",
       "type": "agent",
       "agentId": "com.mona.stock-news-analyst",
-      "task": "对 [Run inputs] 中 symbols 的第一只标的做资讯核验。先用 stock_evidence_read 读取本次运行的证据包（带来源记录的公告与新闻），需要原文细节时用 stock_source_open 核对。按影响力排序列出事件清单，逐条给出影响方向与持续性，交叉验证多来源报道，注明信息缺口。所有引用必须携带 source_id；无可核验资讯时 stance 取 insufficient_data。",
-      "expectedOutput": "调用 submit_news_view 提交结构化资讯观点（产出 news.json Artifact），含 stance、summary 与带 source_ids 的 points。",
+      "task": "对 [Run inputs] 中 symbols 的第一只标的做行业与周期分析（内部 news ID）。先调用 stock_evidence_read(sections=[evidence_coverage]) 读取覆盖状态，再按不超过4个分区一批调用 stock_evidence_read(sections=[industry_context, policy_context, cycle_context, event_calendar])；需要原文细节时只用当前 run 的 stock_source_open 核对 source_id。区分 research_cutoff_at 与 market_as_of，按 news-verification、event-theme-mapping、market-context 的规则排除未来公告，区分事实、政策传导、四类周期和事件窗口。单标必须提交 industry_context、policy_context、cycle_context、event_calendar 四个命名数组；每个声明声明 claim_type，fact 带 source_ids，inference 带 source_ids 和 basis，hypothesis 只能作为待验证假设；不得因缺失数据补写因果、WACC、目标价或裸阈值。Evidence 的 medium_term coverage 为 insufficient_data 时 stance 必须为 insufficient_data，summary 说明缺口。",
+      "expectedOutput": "调用 submit_news_view 提交 V3 结构化行业与周期观点（产出 news.json Artifact），含四个命名 sections、stance、summary、source_ids 和 claim_type 声明。",
       "dependsOn": []
     },
     {
       "id": "bull",
       "type": "agent",
       "agentId": "com.mona.stock-bull-researcher",
-      "task": "基于 [Upstream results] 中三份分析师观点（technical、fundamental、news），用 artifact_read 读取对应 Artifact 与证据包，构建最强正面论证：提炼做多主线，按共振强度组织核心论点，每条论点注明关键假设与引用的 source_ids，并对已知利空给出多头回应。",
-      "expectedOutput": "调用 submit_bull_case 提交结构化正面论证（产出 bull.json Artifact），含 summary 与带 source_ids 的 points。",
+      "task": "基于 [Upstream results] 中三路结构化观点（technical、fundamental、news），用 artifact_read(detail=compact) 读取对应 Artifact；上游摘要只作定位，不要复述，所有事实以 Artifact 为准。从上游 artifact ref 取得当前 run_id，只调用一次 stock_evidence_read(sections=[evidence_coverage]) 并传 detail=compact，随后立即提交；不要读取任何额外 Evidence 分区，提交工具会依据当前 run 的完整 Evidence 做可信校验与注入。严格只用当前 run 的 Evidence，不引入外部或未来事实。区分 research_cutoff_at 与 market_as_of，按 bull-case-building 对 short_term、medium_term、long_term 分别构建最强正面论证。每个 horizon_case 必须含 status、summary、points、assumptions、confirmation、invalidation、source_ids；status=available 至少一条 points，证据不足用 status=insufficient_data 和空数组。每个声明 claim_type，fact 带 source_ids，inference 带 source_ids 和 basis，hypothesis 只能进入 assumptions；confirmation/invalidation 禁止 hypothesis。不得补写因果、WACC、目标价或裸阈值。",
+      "expectedOutput": "调用 submit_bull_case 提交 V3 三周期正面论证（产出 bull.json Artifact），含精确的 short_term/medium_term/long_term horizon_cases 及嵌套来源。",
       "dependsOn": ["technical", "fundamental", "news"]
     },
     {
       "id": "bear",
       "type": "agent",
       "agentId": "com.mona.stock-bear-researcher",
-      "task": "基于 [Upstream results] 中三份分析师观点（technical、fundamental、news），用 artifact_read 读取对应 Artifact 与证据包，寻找反证、风险与遗漏：攻击脆弱假设、列出观点间及观点与证据间的矛盾、检查信息缺口、评估下行触发条件。每条质疑附引用的 source_ids；找不到实质反证时如实说明。",
-      "expectedOutput": "调用 submit_bear_case 提交结构化风险反证（产出 bear.json Artifact），含 summary 与带 source_ids 的 points。",
+      "task": "基于 [Upstream results] 中三路结构化观点（technical、fundamental、news），用 artifact_read(detail=compact) 读取对应 Artifact；上游摘要只作定位，不要复述，所有事实以 Artifact 为准。从上游 artifact ref 取得当前 run_id，只调用一次 stock_evidence_read(sections=[evidence_coverage]) 并传 detail=compact，随后立即提交；不要读取任何额外 Evidence 分区，提交工具会依据当前 run 的完整 Evidence 做可信校验与注入。严格只用当前 run 的 Evidence，不引入外部或未来事实。区分 research_cutoff_at 与 market_as_of，按 risk-refutation 对 short_term、medium_term、long_term 分别寻找反证、风险和遗漏。每个 horizon_case 必须含 status、summary、points、assumptions、confirmation、invalidation、source_ids；status=available 至少一条 points，证据不足用 status=insufficient_data 和空数组。每个声明 claim_type，fact 带 source_ids，inference 带 source_ids 和 basis，hypothesis 只能进入 assumptions；confirmation/invalidation 禁止 hypothesis。找不到实质反证时如实说明，不使用观点之外的数据，不补写因果、WACC、目标价或裸阈值。",
+      "expectedOutput": "调用 submit_bear_case 提交 V3 三周期风险反证（产出 bear.json Artifact），含精确的 short_term/medium_term/long_term horizon_cases 及嵌套来源。",
       "dependsOn": ["technical", "fundamental", "news"]
     },
     {
       "id": "referee",
       "type": "agent",
       "agentId": "com.mona.stock-referee",
-      "task": "用 artifact_read 读取本次运行的全部上游 Artifact（technical、fundamental、news、bull、bear）与证据包，权衡多空论证并显性裁决冲突，产出最终研究报告：research_stance 由证据强度决定，data_quality 如实标注并在 missing_fields 列出缺口，风险、催化与待解问题分栏陈述。证据不足时输出 research_stance=insufficient_data 的中性报告。",
-      "expectedOutput": "调用 submit_stock_report 提交最终研究报告（产出 report.json 与 report.md Artifact），引用全部来源 source_ids。",
+      "task": "严格按独立工具回合边读边提交，禁止先读取全部 Artifact 或先规划完整报告：任一 artifact_read 成功后，下一次工具调用只能是对应的 submit_stock_report_staged，收到 Saved 后才可读取下一份 Artifact，禁止连续串读多个 Artifact。先调用一次 stock_evidence_read(sections=[evidence_coverage], detail=compact) 查看覆盖（可先 skill_read）；不要读取任何额外 Evidence 分区，提交工具会依据当前 run 的完整 Evidence 做可信校验与注入。随后 artifact_read(detail=compact) 读取 technical，立即单独提交 section=deep_dimensions 的 dimension_views:{market_environment,capital_positioning}（只带这两个刚读取的维度，可选 instrument/summary/source_ids/versions）；读取 fundamental 后立即单独提交 dimension_views:{company_quality,valuation}；读取 news 后立即单独提交 dimension_views:{industry,policy,cycle,event_risk}。读取 bull compact 后，立即单独调用 section=deep_context payload={catalysts:[可追溯催化声明；无则空数组]} 保存其催化；收到 Saved 后才读取 bear compact，再立即单独调用 section=deep_context payload={risks:[可追溯风险声明；无则空数组]} 保存其风险。收到第二次 Saved 后，模型才同时拥有 bull 与 bear 上下文，再按 short_term、medium_term、long_term 分三次调用 section=deep_decision，每次只提交一个周期的 horizon_views 与 debate_resolution，随后单独提交 cross_horizon_conflict。deep_context 后续必须拆成小调用并在每次 Saved 后继续：补提交 cycle_states 四周期；再提交 market_regime_summary 与 industry_policy_summary；再按 short_term、medium_term、long_term 分三次提交 scenario_sets；最后只提交 open_questions，不要重复提交已保存的 risks/catalysts。最后调用 section=finalize（无 payload）。每次只提交已读取证据对应的增量 key，工具响应只看已存/缺失 key。严格只用当前 run、研究截止前公开的证据，保留 claim_type/source_ids、research_cutoff_at 与 market_as_of。完整保留 Report V4 八维、三周期 horizon_views/debate_resolution、四类 cycle_states、三情景、priced_in/benchmark/relative_benchmarks/conditions/coverage；Evidence 对应周期 insufficient_data 时 stance/status=insufficient_data、debate_resolution=missing 且论据/裁决/改变条件/来源为空，不能改写为 neutral。不要生成 composite research_stance、time_horizon、WACC、目标价、仓位比例、不接受裸 threshold、未校准概率；trigger 必须引用当前 Evidence 的不同 observed_metric_ref/threshold_metric_ref，operator 支持 gt/gte/lt/lte/crosses_above/crosses_below，事件日历由最终工具注入。",
+      "expectedOutput": "按 coverage → technical→deep_dimensions → fundamental→deep_dimensions → news→deep_dimensions → bull→deep_context.catalysts → bear→deep_context.risks → short/medium/long deep_decision→cross_horizon_conflict → context remainder 的顺序边读边调用 submit_stock_report_staged 增量保存，最后调用 finalize，产出 Report V4 的 report.json 与 report.md Artifact；只调用一次 stock_evidence_read(sections=[evidence_coverage])，包含八个独立维度、多空裁决、三个独立周期、四类周期、三种情景、冲突解释、证据覆盖、relative_benchmarks、event_calendar、dimension_keys、priced_in_basis、instrument_id 和结果追踪 ID，全部来源可追溯。四类周期语义固定为 policy=宏观与流动性、industry=行业供需与产品价格、earnings=公司盈利与现金流、valuation=市场风格与筹码。每日复盘使用 daily_digest 后 finalize。",
       "dependsOn": ["bull", "bear"]
     }
   ]

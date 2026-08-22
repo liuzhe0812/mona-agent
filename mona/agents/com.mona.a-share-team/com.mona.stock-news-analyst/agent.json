@@ -7,7 +7,7 @@
   "model": "inherit",
   "toolAllowlist": ["stock_evidence_read", "stock_source_open", "submit_news_view", "memory_edit", "skill_read", "skill_create"],
   "canDelegate": false,
-  "skills": ["skills/stock-news-verification"],
+  "skills": ["skills/news-verification", "skills/event-theme-mapping", "skills/market-context"],
   "packageId": "com.mona.a-share-team",
   "packageVersion": "1.0.0",
   "visibility": "internal"

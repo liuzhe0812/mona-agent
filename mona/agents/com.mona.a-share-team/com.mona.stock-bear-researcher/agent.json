@@ -5,9 +5,9 @@
   "description": "寻找反证、风险与遗漏",
   "prompt": "prompt.md",
   "model": "inherit",
-  "toolAllowlist": ["artifact_read", "submit_bear_case", "memory_edit", "skill_read", "skill_create"],
+  "toolAllowlist": ["artifact_read", "stock_evidence_read", "submit_bear_case", "memory_edit", "skill_read", "skill_create"],
   "canDelegate": false,
-  "skills": ["skills/bear-risk-refutation"],
+  "skills": ["skills/risk-refutation"],
   "packageId": "com.mona.a-share-team",
   "packageVersion": "1.0.0",
   "visibility": "internal"
